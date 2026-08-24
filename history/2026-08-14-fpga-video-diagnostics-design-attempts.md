@@ -1018,6 +1018,27 @@ constant, or inconclusive evidence fails closed.
 The frozen design and next-result decision are in
 [`2026-08-24-raw-scaler-rgb-state-design.md`](2026-08-24-raw-scaler-rgb-state-design.md).
 
+## Design 8: completed-frame scaler pipeline state
+
+Design 7 reproduced a persistent physical black screen while the authoritative
+framebuffer stayed correct and three coherent completed active frames reported
+exactly black raw scaler RGB. Design 8 therefore removes the schema-4 RGB
+observer rather than stacking it and follows the minimum internal stage ladder:
+accepted read, current/nonzero Avalon return, completion creation/delivery,
+copy/nonzero DPRAM word, line-buffer write/nonzero pixel, and active/nonzero raw
+output.
+
+Command `0x67` becomes `scaler-pipeline-state-v1`, schema 5. A second state word
+retains the existing two-entry levels, queued completion handshake, reset-return
+drain/accounting, scaler run/new-resolution, and read-active context. Three
+valid completed-frame records select only the earliest absent or zero stage;
+harmless queue phase changes do not make otherwise coherent evidence invalid.
+Healthy activation accepts only full pipeline activity. No classification
+claims physical visibility.
+
+The design and exact encoding are in
+[`2026-08-24-scaler-pipeline-state-design.md`](2026-08-24-scaler-pipeline-state-design.md).
+
 ## Facts established despite the failed implementations
 
 The work was not diagnostically empty. It established the following facts:

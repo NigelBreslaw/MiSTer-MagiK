@@ -243,47 +243,16 @@ def main() -> None:
         fail("diagnostic control source contains an unexpected design unit")
     if "captured_state" in control_source:
         fail("diagnostic responder retains a redundant snapshot register")
-    if control_source.count("(* preserve *) reg [47:0] snapshot_state") != 1:
+    if control_source.count("(* preserve *) reg [31:0] snapshot_state") != 1:
         fail("diagnostic bundled-data snapshot is not preserved")
-    if control_source.count("(* preserve *) reg [47:0] source_state") != 1:
-        fail("raw scaler source state is not preserved for bundled-data capture")
-    if control_source.count("(* preserve *) reg source_generation") != 1:
-        fail("raw scaler frame generation is not preserved as a distinct CDC source")
-    for staged_input in (
-        "(* preserve *) reg [23:0] raw_rgb_staged",
-        "(* preserve *) reg raw_de_staged",
-        "(* preserve *) reg raw_vs_staged",
-        "raw_rgb_staged <= raw_rgb;",
-        "raw_de_staged <= raw_de;",
-        "raw_vs_staged <= raw_vs;",
+    for exact_input in (
+        "input  wire [31:0] pipeline_state",
+        "input  wire        pipeline_generation",
+        "generation_meta <= pipeline_generation;",
+        "snapshot_state <= pipeline_state;",
     ):
-        if control_source.count(staged_input) != 1:
-            fail(f"raw scaler timing-isolation stage is missing or ambiguous: {staged_input}")
-    for exact_probe in (
-        "input  wire [23:0] raw_rgb",
-        "input  wire        raw_de",
-        "input  wire        raw_vs",
-        "wire frame_start = raw_vs_staged && !raw_vs_previous;",
-        "wire active_sample = raw_de_staged;",
-        "raw_rgb_staged != first_active_rgb",
-    ):
-        if control_source.count(exact_probe) != 1:
-            fail(f"raw scaler diagnostic probe is missing or ambiguous: {exact_probe}")
-    if control_source.count("raw_rgb_staged != 24'h000000") != 2:
-        fail("raw scaler black comparison is missing or ambiguous")
-    for direct_production_use in (
-        "wire frame_start = raw_vs &&",
-        "wire active_sample = raw_de;",
-        "raw_rgb != 24'h000000",
-        "raw_rgb != first_active_rgb",
-    ):
-        if direct_production_use in control_source:
-            fail(
-                "raw scaler comparison bypasses the timing-isolation stage: "
-                f"{direct_production_use}"
-            )
-    if control_source.count("source_generation <= ~source_generation;") != 1:
-        fail("raw scaler completed-frame publication toggle is missing or ambiguous")
+        if control_source.count(exact_input) != 1:
+            fail(f"scaler pipeline responder input is missing or ambiguous: {exact_input}")
     for retired_control_observer in (
         "control_crc",
         "candidate_streak",
@@ -293,9 +262,16 @@ def main() -> None:
         "mismatch_latched",
         "raw_ce",
         "raw_hs",
+        "raw_rgb",
+        "raw_de",
+        "raw_vs",
+        "source_state",
+        "source_generation",
+        "first_active_rgb",
+        "variation_seen",
     ):
         if retired_control_observer in control_source:
-            fail(f"retired schema-3 control observer remains: {retired_control_observer}")
+            fail(f"retired pre-schema-5 observer remains: {retired_control_observer}")
     for forbidden_rgb_probe in (
         "hdmi_data",
         "rgb_in",
@@ -384,8 +360,8 @@ def main() -> None:
     timing_commands = re.findall(
         r"(?m)^\s*(set_[A-Za-z0-9_]+\b[^\n]*)$", diagnostics_sdc_text
     )
-    if timing_commands != ["set_net_delay -max 10.0 \\"] * 4:
-        fail("repair SDC must contain only the four exact completion and diagnostic bounds")
+    if timing_commands != ["set_net_delay -max 10.0 \\"] * 6:
+        fail("repair SDC must contain only the six exact completion and diagnostic bounds")
     for fragment in (
         "{*ascal:ascal|avl_readdataack} 1",
         "{*ascal:ascal|o_readdataack_sync} 1",
@@ -397,14 +373,18 @@ def main() -> None:
         "-to $magik_scaler_completion_ack_meta",
         "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack",
         "*ascal:ascal|o_readdataack_sync2*",
-        "*magik_raw_scaler_diagnostic|source_generation",
+        "*ascal:ascal|avl_magik_generation",
+        "*ascal:ascal|o_magik_generation_meta",
+        "*ascal:ascal|avl_magik_bundle[*]",
+        "*ascal:ascal|o_magik_diag_generation",
         "*magik_raw_scaler_diagnostic|generation_meta",
-        "*magik_raw_scaler_diagnostic|source_state[*]",
         "*magik_raw_scaler_diagnostic|snapshot_state[*]",
-        "raw_scaler_state",
+        "scaler_pipeline_state",
     ):
         if diagnostics_sdc_text.count(fragment) != 1:
             fail(f"scaler completion request/ack constraint is missing or ambiguous: {fragment}")
+    if diagnostics_sdc_text.count("*ascal:ascal|o_magik_diag_state[*]") != 2:
+        fail("scaler pipeline state capture endpoints are missing or ambiguous")
     for forbidden_sdc in ("set_false_path", "magik_require_data_pin", "control_pll_lock"):
         if forbidden_sdc in diagnostics_sdc_text:
             fail(f"retired HDMI lock constraint remains: {forbidden_sdc}")
@@ -484,17 +464,27 @@ def main() -> None:
         ]
         if mismatches:
             fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
-        for raw_binding in (
+        for pipeline_binding in (
+            ".magik_diag_state (magik_scaler_pipeline_state)",
+            ".magik_diag_generation(magik_scaler_pipeline_generation)",
+            ".pipeline_state(magik_scaler_pipeline_state)",
+            ".pipeline_generation(magik_scaler_pipeline_generation)",
+        ):
+            if patched.count(pipeline_binding) != 1:
+                fail(
+                    "scaler pipeline diagnostic binding is missing or ambiguous: "
+                    f"{pipeline_binding}"
+                )
+        for retired_binding in (
             ".clk_hdmi(clk_hdmi)",
             ".raw_rgb(hdmi_data)",
             ".raw_de(hdmi_de)",
             ".raw_vs(hdmi_vs)",
+            ".raw_ce(scaler_out)",
+            ".raw_hs(hdmi_hs)",
         ):
-            if patched.count(raw_binding) != 1:
-                fail(f"raw scaler boundary binding is missing or ambiguous: {raw_binding}")
-        for retired_binding in (".raw_ce(scaler_out)", ".raw_hs(hdmi_hs)"):
             if retired_binding in patched:
-                fail(f"retired schema-3 boundary binding remains: {retired_binding}")
+                fail(f"retired external observer binding remains: {retired_binding}")
         for fragment in (
             "magik_scaler_completion_gray",
             "magik_scaler_completion_pulse",
@@ -515,6 +505,8 @@ def main() -> None:
             "FUNCTION return_accounting_invalid(": 2,
             "FUNCTION read_obligation_accept(": 2,
             "FUNCTION return_drain_ready(": 2,
+            "FUNCTION magik_avl_flags_next(": 2,
+            "FUNCTION magik_output_flags_next(": 2,
             "state_v:=request_toggle & completion_pending;": 1,
             "state_v(0):=completion;": 1,
             "RETURN request_toggle/=completion_ack AND": 1,
@@ -528,13 +520,13 @@ def main() -> None:
             "SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;": 1,
             "SYNCHRONIZER_IDENTIFICATION FORCED\";": 1,
             "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS\";": 1,
-            "SYNCHRONIZER_IDENTIFICATION FORCED; -name PRESERVE_REGISTER ON\";": 1,
-            "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS; -name PRESERVE_REGISTER ON\";": 1,
+            "SYNCHRONIZER_IDENTIFICATION FORCED; -name PRESERVE_REGISTER ON\";": 2,
+            "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS; -name PRESERVE_REGISTER ON\";": 2,
             "avl_completion_ack_meta<=o_readdataack_sync2; -- <ASYNC>": 1,
             "avl_completion_ack_sync<=avl_completion_ack_meta;": 1,
             "AvalonReturnAccounting:PROCESS(avl_clk) IS": 1,
             "issued_v:=read_obligation_accept(": 1,
-            "avl_read_i,avl_read_accepted,avl_waitrequest,": 1,
+            "avl_read_i,avl_read_accepted,avl_waitrequest,": 2,
             "avl_reset_na='0' OR avl_state=sREAD);": 1,
             "returned_v:=avl_readdatavalid='1';": 1,
             "ASSERT NOT return_accounting_invalid(": 1,
@@ -565,6 +557,20 @@ def main() -> None:
             "o_readdataack<=o_readdataack_sync XOR o_readdataack_sync2;": 1,
             "IF lev_dec_v='1' AND o_readdataack='0' THEN": 1,
             "ELSIF lev_dec_v='0' AND o_readdataack='1' THEN": 1,
+            "magik_diag_state      : OUT std_logic_vector(31 DOWNTO 0);": 1,
+            "magik_diag_generation : OUT std_logic;": 1,
+            "SIGNAL avl_magik_frame_flags : std_logic_vector(3 DOWNTO 0):=(OTHERS=>'0');": 1,
+            "SIGNAL avl_magik_bundle : std_logic_vector(15 DOWNTO 0):=(OTHERS=>'0');": 1,
+            "SIGNAL avl_magik_generation : std_logic:='0';": 1,
+            "o_magik_generation_meta<=avl_magik_generation; -- <ASYNC>": 1,
+            "o_magik_generation_sync<=o_magik_generation_meta;": 1,
+            "MagiKScalerPipelineDiagnostic:PROCESS(o_clk,o_reset_na) IS": 1,
+            "diag_flags_v:=magik_avl_flags_next(": 2,
+            "events_v:=magik_output_flags_next(": 1,
+            "o_magik_diag_state<=state_v & flags_v;": 1,
+            "o_magik_diag_generation<=NOT o_magik_diag_generation;": 1,
+            "magik_diag_state<=o_magik_diag_state;": 1,
+            "magik_diag_generation<=o_magik_diag_generation;": 1,
         }
         for fragment, expected_count in required_completion_counts.items():
             if patched_ascal.count(fragment) != expected_count:
@@ -591,11 +597,12 @@ def main() -> None:
             if forbidden_repair in patched_ascal:
                 fail(f"superseded completion repair state remains: {forbidden_repair}")
         for retired_observer_fragment in (
-            "magik_diag_state",
-            "magik_diag_generation",
-            "MagiKScalerDiagnostic",
             "scheduler_diagnostic_candidate",
             "scheduler_diagnostic_word",
+            "raw_rgb_staged",
+            "raw_de_staged",
+            "first_active_rgb",
+            "variation_seen",
         ):
             if retired_observer_fragment in patched_ascal:
                 fail(
@@ -603,11 +610,34 @@ def main() -> None:
                     f"{retired_observer_fragment}"
                 )
         assignment_text = patched_ascal.replace(";", ";\n")
-        if re.search(
-            r"(?m)^\s*(?!magik_diag_)[A-Za-z0-9_]+\s*<=[^;\n]*magik_diag_",
+        diagnostic_rhs_assignments = re.findall(
+            r"(?m)^\s*([A-Za-z0-9_]+)\s*<=[^;\n]*(?:avl_magik_|o_magik_|magik_diag_)[^;\n]*;",
             assignment_text,
-        ):
-            fail("minimal scaler diagnostic feeds a production ascal assignment")
+        )
+        allowed_diagnostic_rhs_targets = {
+            "avl_magik_bundle",
+            "avl_magik_generation",
+            "avl_magik_frame_flags",
+            "o_magik_generation_meta",
+            "o_magik_generation_sync",
+            "o_magik_generation_seen",
+            "o_magik_capture_pending",
+            "o_magik_frame_flags",
+            "o_magik_completed_flags",
+            "o_magik_frame_valid",
+            "o_magik_diag_state",
+            "o_magik_diag_generation",
+            "magik_diag_state",
+            "magik_diag_generation",
+        }
+        unexpected_diagnostic_rhs_targets = sorted(
+            set(diagnostic_rhs_assignments) - allowed_diagnostic_rhs_targets
+        )
+        if unexpected_diagnostic_rhs_targets:
+            fail(
+                "scaler diagnostic feeds production ascal assignments: "
+                + ", ".join(unexpected_diagnostic_rhs_targets)
+            )
         for reset_fragment in (
             "avl_readdataack<='0';",
             "avl_completion_pending<='0';",
@@ -630,6 +660,16 @@ def main() -> None:
             fail("Avalon reset branch is missing")
         if "avl_wad<=2*BLEN-1;" in avalon_reset.group("body"):
             fail("Avalon write phase must not use a nonzero asynchronous reset preset")
+        for diagnostic_reset in (
+            "avl_magik_frame_flags<=(OTHERS=>'0');",
+            "avl_magik_bundle<=(OTHERS=>'0');",
+            "avl_magik_generation<='0';",
+        ):
+            if avalon_reset.group("body").count(diagnostic_reset) != 1:
+                fail(
+                    "Avalon diagnostic reset is missing or ambiguous: "
+                    f"{diagnostic_reset}"
+                )
         for retained_accounting in (
             "avl_return_credits",
             "avl_return_phase",
@@ -639,6 +679,31 @@ def main() -> None:
                 fail(
                     "Avalon reset branch must retain return accounting: "
                     f"{retained_accounting}"
+                )
+        output_diagnostic_reset = re.search(
+            r"MagiKScalerPipelineDiagnostic:PROCESS\(o_clk,o_reset_na\) IS"
+            r".*?IF o_reset_na='0' THEN(?P<body>.*?)"
+            r"ELSIF rising_edge\(o_clk\) THEN",
+            patched_ascal,
+            re.S,
+        )
+        if output_diagnostic_reset is None:
+            fail("HDMI-domain scaler diagnostic reset branch is missing")
+        for diagnostic_reset in (
+            "o_magik_generation_meta<='0';",
+            "o_magik_generation_sync<='0';",
+            "o_magik_generation_seen<='0';",
+            "o_magik_capture_pending<='0';",
+            "o_magik_frame_flags<=(OTHERS=>'0');",
+            "o_magik_completed_flags<=(OTHERS=>'0');",
+            "o_magik_frame_valid<='0';",
+            "o_magik_diag_state<=(OTHERS=>'0');",
+            "o_magik_diag_generation<='0';",
+        ):
+            if output_diagnostic_reset.group("body").count(diagnostic_reset) != 1:
+                fail(
+                    "HDMI-domain diagnostic reset is missing or ambiguous: "
+                    f"{diagnostic_reset}"
                 )
         vs_release = re.search(
             r"IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN\s*"

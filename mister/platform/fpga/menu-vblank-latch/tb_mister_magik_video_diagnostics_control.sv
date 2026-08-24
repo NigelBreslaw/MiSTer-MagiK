@@ -5,31 +5,29 @@
 `default_nettype none
 
 module tb_mister_magik_video_diagnostics_control;
-	reg clk_hdmi = 1'b0;
 	reg clk_sys = 1'b0;
 	reg reset_active = 1'b1;
-	reg [23:0] raw_rgb = 24'd0;
-	reg raw_de = 1'b0;
-	reg raw_vs = 1'b0;
+	reg [31:0] pipeline_state = 32'd0;
+	reg pipeline_generation = 1'b0;
 	reg io_uio = 1'b0;
 	reg io_strobe = 1'b0;
 	reg [15:0] io_din = 16'd0;
 	wire response_valid;
 	wire [15:0] response_data;
-	reg [15:0] record [0:4];
-	reg [15:0] saved [0:4];
+	reg [15:0] record [0:3];
+	reg [15:0] saved [0:3];
 	reg [15:0] expected_crc;
 	integer command;
 	integer index;
 
-	always #7 clk_hdmi = ~clk_hdmi;
 	always #5 clk_sys = ~clk_sys;
 
 	`include "mister_magik_video_diagnostics_protocol.svh"
 
 	mister_magik_raw_scaler_diagnostic dut (
-		.clk_hdmi(clk_hdmi), .clk_sys(clk_sys), .reset_active(reset_active),
-		.raw_rgb(raw_rgb), .raw_de(raw_de), .raw_vs(raw_vs),
+		.clk_sys(clk_sys), .reset_active(reset_active),
+		.pipeline_state(pipeline_state),
+		.pipeline_generation(pipeline_generation),
 		.io_uio(io_uio), .io_strobe(io_strobe), .io_din(io_din),
 		.response_valid(response_valid), .response_data(response_data)
 	);
@@ -55,59 +53,14 @@ module tb_mister_magik_video_diagnostics_control;
 		end
 	endfunction
 
-	task automatic hdmi_sample;
-		input de;
-		input vs;
-		input [23:0] rgb;
+	task automatic publish_record;
+		input [15:0] flags;
+		input [15:0] state;
 		begin
-			@(negedge clk_hdmi);
-			raw_de = de;
-			raw_vs = vs;
-			raw_rgb = rgb;
-			@(posedge clk_hdmi);
-		end
-	endtask
-
-	task automatic frame_boundary;
-		begin
-			hdmi_sample(1'b0, 1'b1, 24'd0);
-			hdmi_sample(1'b0, 1'b0, 24'd0);
-		end
-	endtask
-
-	// 0 varied, 1 all black, 2 constant nonblack, 3 varied with a different
-	// first sample, and 4 empty/no-DE.
-	task automatic complete_frame;
-		input integer pattern;
-		begin
-			case(pattern)
-				0: begin
-					hdmi_sample(1, 0, 24'h112233);
-					hdmi_sample(1, 0, 24'h112233);
-					hdmi_sample(1, 0, 24'h445566);
-				end
-				1: begin
-					hdmi_sample(1, 0, 24'h000000);
-					hdmi_sample(1, 0, 24'h000000);
-					hdmi_sample(1, 0, 24'h000000);
-				end
-				2: begin
-					hdmi_sample(1, 0, 24'habcdef);
-					hdmi_sample(1, 0, 24'habcdef);
-					hdmi_sample(1, 0, 24'habcdef);
-				end
-				3: begin
-					hdmi_sample(1, 0, 24'h010203);
-					hdmi_sample(1, 0, 24'h040506);
-					hdmi_sample(1, 0, 24'h070809);
-				end
-				default: begin
-					hdmi_sample(0, 0, 24'hffffff);
-					hdmi_sample(0, 0, 24'h123456);
-				end
-			endcase
-			frame_boundary();
-			repeat(5) @(posedge clk_hdmi);
+			@(negedge clk_sys);
+			pipeline_state = {state, flags};
+			#2 pipeline_generation = ~pipeline_generation;
+			repeat(6) @(posedge clk_sys);
 		end
 	endtask
 
@@ -142,16 +95,17 @@ module tb_mister_magik_video_diagnostics_control;
 	endtask
 
 	task automatic read_record;
+		integer word_index;
 		begin
 			io_uio = 1'b1;
 			strobe_word(16'h0067, 1'b1, 16'h4d57);
-			for(index = 0; index < 5; index = index + 1) begin
+			for(word_index = 0; word_index < 4; word_index = word_index + 1) begin
 				@(negedge clk_sys);
 				io_din = 16'd0;
 				io_strobe = 1'b1;
 				#1;
-				if(!response_valid) $fatal(1, "missing response word %0d", index);
-				record[index] = response_data;
+				if(!response_valid) $fatal(1, "missing response word %0d", word_index);
+				record[word_index] = response_data;
 				@(posedge clk_sys);
 				@(negedge clk_sys);
 				io_strobe = 1'b0;
@@ -160,36 +114,24 @@ module tb_mister_magik_video_diagnostics_control;
 			end_command();
 			expected_crc = 16'hffff;
 			expected_crc = crc_word(expected_crc, 16'h0067);
-			expected_crc = crc_word(expected_crc, 16'h0004);
-			expected_crc = crc_word(expected_crc, 16'd4);
-			for(index = 0; index < 4; index = index + 1)
-				expected_crc = crc_word(expected_crc, record[index]);
-			if(record[0] != 16'd4 || record[4] != expected_crc)
+			expected_crc = crc_word(expected_crc, 16'h0005);
+			expected_crc = crc_word(expected_crc, 16'd3);
+			for(word_index = 0; word_index < 3; word_index = word_index + 1)
+				expected_crc = crc_word(expected_crc, record[word_index]);
+			if(record[0] != 16'd5 || record[3] != expected_crc)
 				$fatal(1, "schema/CRC mismatch schema=%h crc=%h expected=%h",
-					record[0], record[4], expected_crc);
-		end
-	endtask
-
-	task automatic apply_reset;
-		begin
-			reset_active = 1'b1;
-			repeat(2) @(posedge clk_sys);
-			reset_active = 1'b0;
-			repeat(3) @(posedge clk_sys);
-			frame_boundary();
-			repeat(5) @(posedge clk_hdmi);
+					record[0], record[3], expected_crc);
 		end
 	endtask
 
 	task automatic expect_record;
 		input [15:0] flags;
-		input [23:0] first_rgb;
+		input [15:0] state;
 		begin
 			read_record();
-			if(record[1] != flags || record[2] != first_rgb[15:0] ||
-			   record[3] != {8'd0, first_rgb[23:16]})
-				$fatal(1, "record mismatch flags=%h rgb=%h/%h expected=%h/%h",
-					record[1], record[3], record[2], flags, first_rgb);
+			if(record[1] != flags || record[2] != state)
+				$fatal(1, "record mismatch flags=%h state=%h expected=%h/%h",
+					record[1], record[2], flags, state);
 		end
 	endtask
 
@@ -197,8 +139,7 @@ module tb_mister_magik_video_diagnostics_control;
 		repeat(3) @(posedge clk_sys);
 		reset_active = 1'b0;
 
-		// Commands retired from this experimental responder and all latch-v5
-		// commands remain untouched.
+		// Retired diagnostic commands and all latch-v5 commands are untouched.
 		for(command = 8'h60; command <= 8'h66; command = command + 1) begin
 			io_uio = 1'b1; strobe_word(command[15:0], 1'b0, 16'd0); end_command();
 		end
@@ -206,73 +147,50 @@ module tb_mister_magik_video_diagnostics_control;
 			io_uio = 1'b1; strobe_word(command[15:0], 1'b0, 16'd0); end_command();
 		end
 
-		// Partial reads are abortable and reset starts with no completed frame.
+		// Partial reads are abortable and reset starts with no captured record.
 		io_uio = 1'b1;
 		strobe_word(16'h0067, 1'b1, 16'h4d57);
-		strobe_word(16'd0, 1'b1, 16'h0004);
+		strobe_word(16'd0, 1'b1, 16'h0005);
 		end_command();
-		apply_reset();
-		expect_record(16'h0000, 24'h000000);
+		expect_record(16'h0000, 16'h0000);
 
-		// Empty/no-DE frames explicitly invalidate active-frame evidence.
-		complete_frame(4);
-		expect_record(16'h0001, 24'h000000);
+		// Exact healthy stage flags and queue/reset state are transported intact.
+		publish_record(16'h0fff, 16'h5759);
+		expect_record(16'h0fff, 16'h5759);
 
-		// A black frame is classifiable from the first completed active frame.
-		apply_reset();
-		complete_frame(1);
-		expect_record(16'h0003, 24'h000000);
+		// Every diagnostic stage can independently remain absent without the
+		// responder altering the immutable production record.
+		for(index = 1; index < 12; index = index + 1) begin
+			publish_record(16'h0fff & ~(16'h0001 << index), 16'h1000 | index);
+			expect_record(16'h0fff & ~(16'h0001 << index), 16'h1000 | index);
+		end
 
-		// Constant nonblack and varied frames retain the exact first RGB sample.
-		complete_frame(2);
-		expect_record(16'h0007, 24'habcdef);
-		complete_frame(0);
-		expect_record(16'h000f, 24'h112233);
-		complete_frame(3);
-		expect_record(16'h000f, 24'h010203);
-
-		// Active accumulation cannot leak before the completed-frame boundary.
-		for(index = 0; index < 5; index = index + 1) saved[index] = record[index];
-		hdmi_sample(1, 0, 24'h999999);
-		hdmi_sample(1, 0, 24'haaaaaa);
-		repeat(7) @(posedge clk_sys);
+		// A command snapshot remains immutable while a new frame arrives.
+		publish_record(16'h0fff, 16'h1234);
 		read_record();
-		for(index = 0; index < 5; index = index + 1)
-			if(record[index] != saved[index]) $fatal(1, "partial frame leaked into export");
-		frame_boundary();
-		repeat(7) @(posedge clk_sys);
-		expect_record(16'h000f, 24'h999999);
-
-		// A transaction remains immutable while a new completed frame arrives.
-		for(index = 0; index < 5; index = index + 1) saved[index] = record[index];
+		for(index = 0; index < 4; index = index + 1) saved[index] = record[index];
 		io_uio = 1'b1;
 		strobe_word(16'h0067, 1'b1, 16'h4d57);
 		strobe_word(16'd0, 1'b1, saved[0]);
-		complete_frame(1);
-		for(index = 1; index < 5; index = index + 1)
+		pipeline_state = {16'h2222, 16'h0555};
+		pipeline_generation = ~pipeline_generation;
+		for(index = 1; index < 4; index = index + 1)
 			strobe_word(16'd0, 1'b1, saved[index]);
 		strobe_word(16'd0, 1'b0, 16'd0);
 		end_command();
-		repeat(7) @(posedge clk_sys);
-		expect_record(16'h0003, 24'h000000);
+		repeat(6) @(posedge clk_sys);
+		expect_record(16'h0555, 16'h2222);
 
-		// Reset during accumulation and during a responder transaction is coherent.
-		hdmi_sample(1, 0, 24'hffffff);
-		reset_active = 1'b1;
-		repeat(2) @(posedge clk_sys);
-		reset_active = 1'b0;
-		frame_boundary();
-		complete_frame(2);
-		expect_record(16'h0007, 24'habcdef);
+		// Reset during a transaction clears transport and response state.
 		io_uio = 1'b1;
 		strobe_word(16'h0067, 1'b1, 16'h4d57);
 		reset_active = 1'b1;
 		repeat(2) @(posedge clk_sys);
 		reset_active = 1'b0;
 		end_command();
-		expect_record(16'h0000, 24'h000000);
+		expect_record(16'h0000, 16'h0000);
 
-		$display("PASS: minimal raw-scaler RGB state observer and responder");
+		$display("PASS: passive scaler pipeline state responder");
 		$finish;
 	end
 endmodule

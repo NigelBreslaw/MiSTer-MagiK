@@ -218,6 +218,13 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
         lines.append(
             f"localparam [15:0] {prefix}_{upper(word_name)}_RESERVED_ZERO_MASK = 16'h{reserved_mask:04X};"
         )
+    for name, field in raw_scaler.get("fields", {}).items():
+        lines.append(
+            f"localparam [3:0] {prefix}_{upper(name)}_BIT = 4'd{field['bit']};"
+        )
+        lines.append(
+            f"localparam [15:0] {prefix}_{upper(name)}_MASK = 16'h{((1 << field['width']) - 1):04X};"
+        )
     return "\n".join(lines) + "\n"
 
 

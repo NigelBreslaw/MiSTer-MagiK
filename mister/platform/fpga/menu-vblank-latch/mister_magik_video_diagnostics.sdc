@@ -38,29 +38,43 @@ set_net_delay -max 10.0 \
 	-from $magik_scaler_completion_ack_route \
 	-to $magik_scaler_completion_ack_meta
 
-# The most recently completed raw-RGB frame state is a bundled-data crossing.
-# It is registered and held stable before the frame-generation toggle changes; the receiver
-# synchronizes that toggle and waits one additional clk_sys edge before
-# sampling the word. Both routes are bounded explicitly because the existing
-# asynchronous clock groups cut normal setup/hold analysis.
+# The Avalon activity bucket is registered and held stable before its
+# generation changes. The o_clk receiver synchronizes that toggle and waits an
+# additional edge before combining the stable bundle with output-domain frame
+# activity.
+set magik_scaler_avl_diag_generation [magik_require_registers avl_diagnostic_generation \
+	{*ascal:ascal|avl_magik_generation} 1]
+set magik_scaler_avl_diag_generation_meta [magik_require_registers avl_diagnostic_generation_meta \
+	{*ascal:ascal|o_magik_generation_meta} 1]
+set_net_delay -max 10.0 \
+	-from $magik_scaler_avl_diag_generation \
+	-to $magik_scaler_avl_diag_generation_meta
+
+set magik_scaler_avl_diag_word [magik_require_registers avl_diagnostic_word \
+	{*ascal:ascal|avl_magik_bundle[*]} 16]
+set magik_scaler_avl_diag_capture [magik_require_registers avl_diagnostic_capture \
+	{*ascal:ascal|o_magik_diag_state[*]} 32]
+set_net_delay -max 10.0 \
+	-from $magik_scaler_avl_diag_word \
+	-to $magik_scaler_avl_diag_capture
+
+# The completed o_clk record repeats the same toggle-plus-stable-bundle
+# protocol into clk_sys. Existing asynchronous clock groups cut normal
+# setup/hold analysis, so both routes are bounded explicitly.
 set magik_scaler_diag_generation [magik_require_registers diagnostic_generation \
-	{*magik_raw_scaler_diagnostic|source_generation} 1]
+	{*ascal:ascal|o_magik_diag_generation} 1]
 set magik_scaler_diag_generation_meta [magik_require_registers diagnostic_generation_meta \
 	{*magik_raw_scaler_diagnostic|generation_meta} 1]
 set_net_delay -max 10.0 \
 	-from $magik_scaler_diag_generation \
 	-to $magik_scaler_diag_generation_meta
 
-set magik_scaler_diag_word [get_registers -nowarn \
-	{*magik_raw_scaler_diagnostic|source_state[*]}]
-if {[get_collection_size $magik_scaler_diag_word] != 48} {
-	post_message -type error "MagiK diagnostic bundled routed source is incomplete"
-	error "MagiK diagnostic bundled routed source is incomplete"
-}
+set magik_scaler_diag_word [magik_require_registers diagnostic_word \
+	{*ascal:ascal|o_magik_diag_state[*]} 32]
 set magik_scaler_diag_capture [magik_require_registers diagnostic_capture \
-	{*magik_raw_scaler_diagnostic|snapshot_state[*]} 48]
+	{*magik_raw_scaler_diagnostic|snapshot_state[*]} 32]
 set_net_delay -max 10.0 \
 	-from $magik_scaler_diag_word \
 	-to $magik_scaler_diag_capture
 
-post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack raw_scaler_state"
+post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_pipeline_state"

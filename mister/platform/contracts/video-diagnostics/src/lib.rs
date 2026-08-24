@@ -146,21 +146,100 @@ impl RawScalerState {
         self.flags() & RAW_SCALER_STATE_FLAG_FRAME_VALID != 0
     }
 
-    pub fn active_seen(&self) -> bool {
-        self.flags() & RAW_SCALER_STATE_FLAG_ACTIVE_SEEN != 0
+    pub fn flag(&self, mask: u16) -> bool {
+        self.flags() & mask != 0
     }
 
-    pub fn any_nonblack(&self) -> bool {
-        self.flags() & RAW_SCALER_STATE_FLAG_ANY_NONBLACK != 0
+    pub fn state(&self) -> u16 {
+        self.words[RAW_SCALER_STATE_STATE_WORD]
     }
 
-    pub fn variation_seen(&self) -> bool {
-        self.flags() & RAW_SCALER_STATE_FLAG_VARIATION_SEEN != 0
+    fn state_field(&self, bit: usize, mask: u16) -> u16 {
+        (self.state() >> bit) & mask
     }
 
-    pub fn first_active_rgb(&self) -> u32 {
-        u32::from(self.words[RAW_SCALER_STATE_FIRST_ACTIVE_RGB_LOW_WORD])
-            | (u32::from(self.words[RAW_SCALER_STATE_FIRST_ACTIVE_RGB_HIGH_WORD]) << 16)
+    pub fn read_level(&self) -> u8 {
+        self.state_field(
+            RAW_SCALER_STATE_READ_LEVEL_BIT,
+            RAW_SCALER_STATE_READ_LEVEL_MASK,
+        ) as u8
+    }
+
+    pub fn copy_level(&self) -> u8 {
+        self.state_field(
+            RAW_SCALER_STATE_COPY_LEVEL_BIT,
+            RAW_SCALER_STATE_COPY_LEVEL_MASK,
+        ) as u8
+    }
+
+    pub fn completion_request(&self) -> bool {
+        self.state_field(
+            RAW_SCALER_STATE_COMPLETION_REQUEST_BIT,
+            RAW_SCALER_STATE_COMPLETION_REQUEST_MASK,
+        ) != 0
+    }
+
+    pub fn completion_pending(&self) -> bool {
+        self.state_field(
+            RAW_SCALER_STATE_COMPLETION_PENDING_BIT,
+            RAW_SCALER_STATE_COMPLETION_PENDING_MASK,
+        ) != 0
+    }
+
+    pub fn completion_source_ack(&self) -> bool {
+        self.state_field(
+            RAW_SCALER_STATE_COMPLETION_SOURCE_ACK_BIT,
+            RAW_SCALER_STATE_COMPLETION_SOURCE_ACK_MASK,
+        ) != 0
+    }
+
+    pub fn completion_destination_seen(&self) -> bool {
+        self.state_field(
+            RAW_SCALER_STATE_COMPLETION_DESTINATION_SEEN_BIT,
+            RAW_SCALER_STATE_COMPLETION_DESTINATION_SEEN_MASK,
+        ) != 0
+    }
+
+    pub fn return_drain_active(&self) -> bool {
+        self.state_field(
+            RAW_SCALER_STATE_RETURN_DRAIN_ACTIVE_BIT,
+            RAW_SCALER_STATE_RETURN_DRAIN_ACTIVE_MASK,
+        ) != 0
+    }
+
+    pub fn return_credits(&self) -> u8 {
+        self.state_field(
+            RAW_SCALER_STATE_RETURN_CREDITS_BIT,
+            RAW_SCALER_STATE_RETURN_CREDITS_MASK,
+        ) as u8
+    }
+
+    pub fn return_phase_nonzero(&self) -> bool {
+        self.state_field(
+            RAW_SCALER_STATE_RETURN_PHASE_NONZERO_BIT,
+            RAW_SCALER_STATE_RETURN_PHASE_NONZERO_MASK,
+        ) != 0
+    }
+
+    pub fn scaler_running(&self) -> bool {
+        self.state_field(
+            RAW_SCALER_STATE_SCALER_RUNNING_BIT,
+            RAW_SCALER_STATE_SCALER_RUNNING_MASK,
+        ) != 0
+    }
+
+    pub fn new_resolution_active(&self) -> bool {
+        self.state_field(
+            RAW_SCALER_STATE_NEW_RESOLUTION_ACTIVE_BIT,
+            RAW_SCALER_STATE_NEW_RESOLUTION_ACTIVE_MASK,
+        ) != 0
+    }
+
+    pub fn read_active(&self) -> bool {
+        self.state_field(
+            RAW_SCALER_STATE_READ_ACTIVE_BIT,
+            RAW_SCALER_STATE_READ_ACTIVE_MASK,
+        ) != 0
     }
 }
 
@@ -676,12 +755,32 @@ pub fn decode_raw_scaler_state(words: &[u16]) -> Result<RawScalerState, String> 
             "raw scaler state CRC mismatch expected=0x{expected:04x} actual=0x{actual:04x}"
         ));
     }
-    if words[RAW_SCALER_STATE_FLAGS_WORD] & !RAW_SCALER_STATE_FLAGS_MASK != 0
-        || words[RAW_SCALER_STATE_FIRST_ACTIVE_RGB_HIGH_WORD]
-            & RAW_SCALER_STATE_FIRST_ACTIVE_RGB_HIGH_RESERVED_ZERO_MASK
-            != 0
+    if words[RAW_SCALER_STATE_FLAGS_WORD] & RAW_SCALER_STATE_FLAGS_RESERVED_ZERO_MASK != 0
+        || words[RAW_SCALER_STATE_STATE_WORD] & RAW_SCALER_STATE_STATE_RESERVED_ZERO_MASK != 0
     {
-        return Err("raw scaler RGB state record contains nonzero reserved bits".to_string());
+        return Err("raw scaler pipeline state record contains nonzero reserved bits".to_string());
+    }
+    let state = words[RAW_SCALER_STATE_STATE_WORD];
+    for (name, bit, mask) in [
+        (
+            "read level",
+            RAW_SCALER_STATE_READ_LEVEL_BIT,
+            RAW_SCALER_STATE_READ_LEVEL_MASK,
+        ),
+        (
+            "copy level",
+            RAW_SCALER_STATE_COPY_LEVEL_BIT,
+            RAW_SCALER_STATE_COPY_LEVEL_MASK,
+        ),
+        (
+            "return credits",
+            RAW_SCALER_STATE_RETURN_CREDITS_BIT,
+            RAW_SCALER_STATE_RETURN_CREDITS_MASK,
+        ),
+    ] {
+        if (state >> bit) & mask > 2 {
+            return Err(format!("raw scaler pipeline {name} is outside 0..2"));
+        }
     }
     let mut owned = [0; RAW_SCALER_STATE_WORDS];
     owned.copy_from_slice(words);
@@ -838,17 +937,24 @@ mod tests {
     }
 
     #[test]
-    fn raw_scaler_state_decodes_rgb_state() {
+    fn raw_scaler_state_decodes_pipeline_state() {
         let mut words = zero_hdmi_words::<RAW_SCALER_STATE_WORDS>(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
         );
         words[RAW_SCALER_STATE_FLAGS_WORD] = RAW_SCALER_STATE_FLAG_FRAME_VALID
-            | RAW_SCALER_STATE_FLAG_ACTIVE_SEEN
-            | RAW_SCALER_STATE_FLAG_ANY_NONBLACK
-            | RAW_SCALER_STATE_FLAG_VARIATION_SEEN;
-        words[RAW_SCALER_STATE_FIRST_ACTIVE_RGB_LOW_WORD] = 0xcdef;
-        words[RAW_SCALER_STATE_FIRST_ACTIVE_RGB_HIGH_WORD] = 0x00ab;
+            | RAW_SCALER_STATE_FLAG_READ_ACCEPT_SEEN
+            | RAW_SCALER_STATE_FLAG_CURRENT_RETURN_SEEN
+            | RAW_SCALER_STATE_FLAG_RETURN_NONZERO_SEEN
+            | RAW_SCALER_STATE_FLAG_COMPLETION_CREATED_SEEN
+            | RAW_SCALER_STATE_FLAG_DESTINATION_COMPLETION_SEEN
+            | RAW_SCALER_STATE_FLAG_COPY_READ_SEEN
+            | RAW_SCALER_STATE_FLAG_COPY_NONZERO_SEEN
+            | RAW_SCALER_STATE_FLAG_LINE_WRITE_SEEN
+            | RAW_SCALER_STATE_FLAG_LINE_NONZERO_SEEN
+            | RAW_SCALER_STATE_FLAG_RAW_ACTIVE_SEEN
+            | RAW_SCALER_STATE_FLAG_RAW_NONZERO_SEEN;
+        words[RAW_SCALER_STATE_STATE_WORD] = 0x75e6;
         words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
@@ -856,10 +962,19 @@ mod tests {
         );
         let decoded = decode_raw_scaler_state(&words).unwrap();
         assert!(decoded.frame_valid());
-        assert!(decoded.active_seen());
-        assert!(decoded.any_nonblack());
-        assert!(decoded.variation_seen());
-        assert_eq!(decoded.first_active_rgb(), 0x00ab_cdef);
+        assert!(decoded.flag(RAW_SCALER_STATE_FLAG_RAW_NONZERO_SEEN));
+        assert_eq!(decoded.read_level(), 2);
+        assert_eq!(decoded.copy_level(), 1);
+        assert!(!decoded.completion_request());
+        assert!(decoded.completion_pending());
+        assert!(decoded.completion_source_ack());
+        assert!(decoded.completion_destination_seen());
+        assert!(decoded.return_drain_active());
+        assert_eq!(decoded.return_credits(), 2);
+        assert!(!decoded.return_phase_nonzero());
+        assert!(decoded.scaler_running());
+        assert!(decoded.new_resolution_active());
+        assert!(decoded.read_active());
     }
 
     #[test]
@@ -880,7 +995,7 @@ mod tests {
         assert!(decode_raw_scaler_state(&words).is_err());
 
         words[RAW_SCALER_STATE_FLAGS_WORD] = 0;
-        words[RAW_SCALER_STATE_FIRST_ACTIVE_RGB_HIGH_WORD] = 0x0100;
+        words[RAW_SCALER_STATE_STATE_WORD] = 0x8000;
         words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,

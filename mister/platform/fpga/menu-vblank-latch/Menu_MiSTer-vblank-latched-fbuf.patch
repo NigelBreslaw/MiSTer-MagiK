@@ -1,8 +1,8 @@
 diff --git a/sys/ascal.vhd b/sys/ascal.vhd
-index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee71169a28b0c 100644
+index a735e6b..f5bfbab 100644
 --- a/sys/ascal.vhd
 +++ b/sys/ascal.vhd
-@@ -75,6 +75,174 @@ LIBRARY ieee;
+@@ -75,6 +75,244 @@ LIBRARY ieee;
  USE ieee.std_logic_1164.ALL;
  USE ieee.numeric_std.ALL;
  
@@ -54,6 +54,23 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +		credits : natural;
 +		phase   : natural)
 +		RETURN boolean;
++	FUNCTION magik_avl_flags_next(
++		flags              : std_logic_vector(3 DOWNTO 0);
++		read_accept        : boolean;
++		current_return     : boolean;
++		return_nonzero     : boolean;
++		completion_created : boolean)
++		RETURN std_logic_vector;
++	FUNCTION magik_output_flags_next(
++		flags              : std_logic_vector(6 DOWNTO 0);
++		dest_completion    : boolean;
++		copy_read          : boolean;
++		copy_nonzero       : boolean;
++		line_write         : boolean;
++		line_nonzero       : boolean;
++		raw_active         : boolean;
++		raw_nonzero        : boolean)
++		RETURN std_logic_vector;
 +END PACKAGE mister_magik_scaler_completion_queue;
 +
 +LIBRARY ieee;
@@ -179,6 +196,47 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +		RETURN credits=0 AND phase=0;
 +	END FUNCTION return_drain_ready;
 +
++	-- Exact accumulator shared by synthesis and the GHDL observer proof. Each
++	-- argument denotes activity accepted by the named production stage on this
++	-- clock edge; flags are sticky only within the current frame bucket.
++	FUNCTION magik_avl_flags_next(
++		flags              : std_logic_vector(3 DOWNTO 0);
++		read_accept        : boolean;
++		current_return     : boolean;
++		return_nonzero     : boolean;
++		completion_created : boolean)
++		RETURN std_logic_vector IS
++		VARIABLE next_flags : std_logic_vector(3 DOWNTO 0):=flags;
++	BEGIN
++		IF read_accept THEN next_flags(0):='1'; END IF;
++		IF current_return THEN next_flags(1):='1'; END IF;
++		IF return_nonzero THEN next_flags(2):='1'; END IF;
++		IF completion_created THEN next_flags(3):='1'; END IF;
++		RETURN next_flags;
++	END FUNCTION magik_avl_flags_next;
++
++	FUNCTION magik_output_flags_next(
++		flags              : std_logic_vector(6 DOWNTO 0);
++		dest_completion    : boolean;
++		copy_read          : boolean;
++		copy_nonzero       : boolean;
++		line_write         : boolean;
++		line_nonzero       : boolean;
++		raw_active         : boolean;
++		raw_nonzero        : boolean)
++		RETURN std_logic_vector IS
++		VARIABLE next_flags : std_logic_vector(6 DOWNTO 0):=flags;
++	BEGIN
++		IF dest_completion THEN next_flags(0):='1'; END IF;
++		IF copy_read THEN next_flags(1):='1'; END IF;
++		IF copy_nonzero THEN next_flags(2):='1'; END IF;
++		IF line_write THEN next_flags(3):='1'; END IF;
++		IF line_nonzero THEN next_flags(4):='1'; END IF;
++		IF raw_active THEN next_flags(5):='1'; END IF;
++		IF raw_nonzero THEN next_flags(6):='1'; END IF;
++		RETURN next_flags;
++	END FUNCTION magik_output_flags_next;
++
 +END PACKAGE BODY mister_magik_scaler_completion_queue;
 +
 +LIBRARY ieee;
@@ -189,7 +247,19 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
  -- MODE[2:0]
  -- 000 : Nearest
  -- 001 : Bilinear
-@@ -335,6 +503,8 @@ ARCHITECTURE rtl OF ascal IS
+@@ -252,6 +490,11 @@ ENTITY ascal IS
+ 		avl_read           : OUT   std_logic;
+ 		avl_byteenable     : OUT   std_logic_vector(N_DW/8-1 DOWNTO 0);
+ 
++		------------------------------------
++		-- Disposable passive MagiK diagnostic
++		magik_diag_state      : OUT std_logic_vector(31 DOWNTO 0);
++		magik_diag_generation : OUT std_logic;
++
+ 		------------------------------------
+ 		reset_na           : IN    std_logic
+ 		);
+@@ -335,6 +578,8 @@ ARCHITECTURE rtl OF ascal IS
  	TYPE arr_pix IS ARRAY (natural RANGE <>) OF type_pix;
  	TYPE arr_pixq IS ARRAY(natural RANGE <>) OF arr_pix(0 TO 3);
  	ATTRIBUTE ramstyle : string;
@@ -198,7 +268,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
  
  	SUBTYPE uint12 IS natural RANGE 0 TO 4095;
  	SUBTYPE uint13 IS natural RANGE 0 TO 8191;
-@@ -418,7 +588,16 @@ ARCHITECTURE rtl OF ascal IS
+@@ -418,13 +663,29 @@ ARCHITECTURE rtl OF ascal IS
  	SIGNAL avl_walt,avl_wline,avl_rline : std_logic;
  	SIGNAL avl_dw,avl_dr : unsigned(N_DW-1 DOWNTO 0);
  	SIGNAL avl_wr : std_logic;
@@ -218,7 +288,18 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
  	SIGNAL avl_radrs,avl_wadrs : unsigned(31 DOWNTO 0);
  	SIGNAL avl_i_offset0,avl_o_offset0 : unsigned(31 DOWNTO 0);
  	SIGNAL avl_i_offset1,avl_o_offset1 : unsigned(31 DOWNTO 0);
-@@ -481,6 +661,11 @@ ARCHITECTURE rtl OF ascal IS
+ 	SIGNAL avl_reset_na : std_logic;
+ 	SIGNAL avl_o_vs_sync,avl_o_vs : std_logic;
+ 	SIGNAL avl_fb_ena : std_logic;
++	SIGNAL avl_magik_frame_flags : std_logic_vector(3 DOWNTO 0):=(OTHERS=>'0');
++	SIGNAL avl_magik_bundle : std_logic_vector(15 DOWNTO 0):=(OTHERS=>'0');
++	SIGNAL avl_magik_generation : std_logic:='0';
++	ATTRIBUTE preserve OF avl_magik_bundle : SIGNAL IS true;
++	ATTRIBUTE preserve OF avl_magik_generation : SIGNAL IS true;
+ 
+ 	FUNCTION buf_next(a,b : natural RANGE 0 TO 2; freeze : std_logic := '0') RETURN natural IS
+ 	BEGIN
+@@ -481,6 +742,10 @@ ARCHITECTURE rtl OF ascal IS
  	SIGNAL o_pshift : natural RANGE 0 TO 15;
  	SIGNAL o_readack,o_readack_sync,o_readack_sync2 : std_logic;
  	SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;
@@ -229,7 +310,28 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
  	SIGNAL o_copyv : unsigned(0 TO 14);
  	SIGNAL o_adrs : unsigned(31 DOWNTO 0); -- Avalon address
  	SIGNAL o_adrs_pre : natural RANGE 0 TO 2**24-1;
-@@ -1160,6 +1345,23 @@ BEGIN
+@@ -557,6 +822,19 @@ ARCHITECTURE rtl OF ascal IS
+ 	SIGNAL o_hacpt,o_vacpt : unsigned(11 DOWNTO 0);
+ 	SIGNAL o_vacptl : unsigned(1 DOWNTO 0);
+ 	signal o_newres : integer range 0 to 3;
++	SIGNAL o_magik_generation_meta,o_magik_generation_sync : std_logic:='0';
++	ATTRIBUTE altera_attribute OF o_magik_generation_meta : SIGNAL IS
++		"-name SYNCHRONIZER_IDENTIFICATION FORCED; -name PRESERVE_REGISTER ON";
++	ATTRIBUTE altera_attribute OF o_magik_generation_sync : SIGNAL IS
++		"-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS; -name PRESERVE_REGISTER ON";
++	SIGNAL o_magik_generation_seen,o_magik_capture_pending : std_logic:='0';
++	SIGNAL o_magik_frame_flags : std_logic_vector(6 DOWNTO 0):=(OTHERS=>'0');
++	SIGNAL o_magik_completed_flags : std_logic_vector(6 DOWNTO 0):=(OTHERS=>'0');
++	SIGNAL o_magik_frame_valid : std_logic:='0';
++	SIGNAL o_magik_diag_state : std_logic_vector(31 DOWNTO 0):=(OTHERS=>'0');
++	SIGNAL o_magik_diag_generation : std_logic:='0';
++	ATTRIBUTE preserve OF o_magik_diag_state : SIGNAL IS true;
++	ATTRIBUTE preserve OF o_magik_diag_generation : SIGNAL IS true;
+ 
+ 	-----------------------------------------------------------------------------
+ 	FUNCTION shift_ishift(shift : unsigned(0 TO 119);
+@@ -1159,6 +1437,41 @@ BEGIN
+ 	i_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(i_clk);
  	o_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(o_clk);
  	avl_reset_na<='0' WHEN reset_na='0' ELSE '1' WHEN rising_edge(avl_clk);
 +	-- These radix-BLEN accounting fields deliberately have no core-reset branch.
@@ -270,13 +372,15 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
  
  	-----------------------------------------------------------------------------
  	-- Input pixels FIFO and shreg
- 	InAT:PROCESS(i_clk,i_reset_na) IS
-@@ -1672,15 +1880,29 @@ BEGIN
+@@ -1672,15 +1985,39 @@ BEGIN
  	-- AVALON interface
  	Avaloir:PROCESS(avl_clk,avl_reset_na) IS
  		VARIABLE adr_v : unsigned(31 DOWNTO 0);
 +		VARIABLE completion_v : std_logic;
 +		VARIABLE completion_state_v : std_logic_vector(1 DOWNTO 0);
++		VARIABLE read_accept_v : boolean;
++		VARIABLE diag_flags_v : std_logic_vector(3 DOWNTO 0);
++		VARIABLE diag_bundle_v : std_logic_vector(15 DOWNTO 0);
  	BEGIN
  		IF avl_reset_na='0' THEN
  			avl_state<=sIDLE;
@@ -288,15 +392,27 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +			avl_completion_ack_sync<='0';
 +			avl_return_drain<='1';
  			avl_readack<='0';
++			avl_magik_frame_flags<=(OTHERS=>'0');
++			avl_magik_bundle<=(OTHERS=>'0');
++			avl_magik_generation<='0';
  
  		ELSIF rising_edge(avl_clk) THEN
 +			completion_v:='0';
++			read_accept_v:=read_obligation_accept(
++				avl_read_i,avl_read_accepted,avl_waitrequest,avl_state=sREAD);
++			diag_flags_v:=magik_avl_flags_next(
++				avl_magik_frame_flags,
++				read_accept_v,
++				avl_readdatavalid='1' AND avl_return_drain='0',
++				avl_readdatavalid='1' AND avl_return_drain='0' AND
++					unsigned(avl_readdata)/=0,
++				false);
 +			avl_completion_ack_meta<=o_readdataack_sync2; -- <ASYNC>
 +			avl_completion_ack_sync<=avl_completion_ack_meta;
  			----------------------------------
  			avl_write_sync<=i_write; -- <ASYNC>
  			avl_write_sync2<=avl_write_sync;
-@@ -1774,29 +1996,50 @@ BEGIN
+@@ -1774,34 +2111,83 @@ BEGIN
  					END IF;
  					avl_address<=std_logic_vector(adr_v(N_AW+NB_LA-1 DOWNTO NB_LA));
  
@@ -322,11 +438,9 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 -			IF avl_readdatavalid='1' THEN
 +			IF avl_readdatavalid='1' AND avl_return_drain='0' THEN
  				avl_wr<='1';
--				avl_wad<=(avl_wad+1) MOD (2*BLEN);
--				IF (avl_wad MOD BLEN)=BLEN-2 THEN
+ 				avl_wad<=(avl_wad+1) MOD (2*BLEN);
+ 				IF (avl_wad MOD BLEN)=BLEN-2 THEN
 -					avl_readdataack<=NOT avl_readdataack;
-+				avl_wad<=(avl_wad+1) MOD (2*BLEN);
-+				IF (avl_wad MOD BLEN)=BLEN-2 THEN
 +					completion_v:='1';
  				END IF;
  			END IF;
@@ -338,8 +452,8 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +					avl_wad<=2*BLEN-1;
 +					avl_return_drain<='0';
 +				END IF;
- 			END IF;
- 
++			END IF;
++
 +			completion_state_v:=completion_queue_next(
 +				avl_readdataack,
 +				avl_completion_pending,
@@ -347,6 +461,8 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +				completion_v);
 +			avl_readdataack<=completion_state_v(1);
 +			avl_completion_pending<=completion_state_v(0);
++			diag_flags_v:=magik_avl_flags_next(
++				diag_flags_v,false,false,false,completion_v='1');
 +			-- synthesis translate_off
 +			ASSERT NOT completion_queue_overflow(
 +				avl_readdataack,
@@ -356,6 +472,29 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +				REPORT "scaler completion queue overflow" SEVERITY failure;
 +			-- synthesis translate_on
 +
++			-- The synchronized output-VS falling edge closes this Avalon
++			-- activity bucket. Edge-coincident events are included. Queue
++			-- request/pending use the just-computed transition; retained
++			-- credit/phase and acknowledgement fields are pre-edge state.
++			IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN
++				diag_bundle_v:=(OTHERS=>'0');
++				diag_bundle_v(3 DOWNTO 0):=diag_flags_v;
++				diag_bundle_v(4):=completion_state_v(1);
++				diag_bundle_v(5):=completion_state_v(0);
++				diag_bundle_v(6):=avl_completion_ack_sync;
++				diag_bundle_v(7):=avl_return_drain;
++				diag_bundle_v(9 DOWNTO 8):=
++					std_logic_vector(to_unsigned(avl_return_credits,2));
++				diag_bundle_v(10):=to_std_logic(avl_return_phase/=0);
++				diag_bundle_v(11):=avl_read_i;
++				diag_bundle_v(12):='1';
++				avl_magik_bundle<=diag_bundle_v;
++				avl_magik_generation<=NOT avl_magik_generation;
++				avl_magik_frame_flags<=(OTHERS=>'0');
++			ELSE
++				avl_magik_frame_flags<=diag_flags_v;
+ 			END IF;
+ 
  			--------------------------------------------
  		END IF;
  	END PROCESS Avaloir;
@@ -364,7 +503,9 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +	avl_read<=avl_read_i AND NOT avl_read_accepted
 +		WHEN avl_reset_na='0' OR avl_state=sREAD ELSE '0';
  	avl_write<=avl_write_i;
-@@ -1877,6 +2120,9 @@ BEGIN
+ 	avl_writedata<=std_logic_vector(swap(avl_dr));
+ 	avl_burstcount<=std_logic_vector(to_unsigned(BLEN,8));
+@@ -1877,6 +2263,9 @@ BEGIN
  			o_readlev<=0;
  			o_copylev<=0;
  			o_hsp<='0';
@@ -374,11 +515,94 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
  
  		ELSIF rising_edge(o_clk) THEN
  			------------------------------------------------------
+@@ -3017,6 +3406,82 @@ BEGIN
+ 		END IF;
+ 	END PROCESS VSCAL;
+ 
++	-----------------------------------------------------------------------------
++	-- Disposable passive scaler pipeline observer. The Avalon bundle is stable
++	-- before its generation changes; this output-domain receiver waits one
++	-- additional o_clk after the two-stage generation synchronizer before
++	-- sampling it. Copy and line-write observations use the same registered
++	-- values consumed by Scalaire/OLBUF on this edge. Raw output is observed one
++	-- o_clk after VSCAL registers it, preserving frame membership.
++	MagiKScalerPipelineDiagnostic:PROCESS(o_clk,o_reset_na) IS
++		VARIABLE events_v : std_logic_vector(6 DOWNTO 0);
++		VARIABLE flags_v,state_v : std_logic_vector(15 DOWNTO 0);
++	BEGIN
++		IF o_reset_na='0' THEN
++			o_magik_generation_meta<='0';
++			o_magik_generation_sync<='0';
++			o_magik_generation_seen<='0';
++			o_magik_capture_pending<='0';
++			o_magik_frame_flags<=(OTHERS=>'0');
++			o_magik_completed_flags<=(OTHERS=>'0');
++			o_magik_frame_valid<='0';
++			o_magik_diag_state<=(OTHERS=>'0');
++			o_magik_diag_generation<='0';
++		ELSIF rising_edge(o_clk) THEN
++			o_magik_generation_meta<=avl_magik_generation; -- <ASYNC>
++			o_magik_generation_sync<=o_magik_generation_meta;
++
++			events_v:=magik_output_flags_next(
++				o_magik_frame_flags,
++				o_readdataack='1',
++				o_sh3='1',
++				o_sh3='1' AND o_dr/=0,
++				o_wr/="0000",
++				o_wr/="0000" AND (o_ldw.r/=0 OR o_ldw.g/=0 OR o_ldw.b/=0),
++				o_de='1',
++				o_de='1' AND (o_r/=0 OR o_g/=0 OR o_b/=0));
++
++			IF o_vsv(1)='1' AND o_vsv(0)='0' THEN
++				o_magik_completed_flags<=events_v;
++				o_magik_frame_flags<=(OTHERS=>'0');
++				o_magik_frame_valid<='1';
++			ELSE
++				o_magik_frame_flags<=events_v;
++			END IF;
++
++			IF o_magik_generation_sync/=o_magik_generation_seen THEN
++				o_magik_generation_seen<=o_magik_generation_sync;
++				o_magik_capture_pending<='1';
++			ELSIF o_magik_capture_pending='1' THEN
++				flags_v:=(OTHERS=>'0');
++				flags_v(0):=avl_magik_bundle(12) AND o_magik_frame_valid;
++				flags_v(4 DOWNTO 1):=avl_magik_bundle(3 DOWNTO 0);
++				flags_v(11 DOWNTO 5):=o_magik_completed_flags;
++
++				state_v:=(OTHERS=>'0');
++				state_v(1 DOWNTO 0):=std_logic_vector(to_unsigned(o_readlev,2));
++				state_v(3 DOWNTO 2):=std_logic_vector(to_unsigned(o_copylev,2));
++				state_v(4):=avl_magik_bundle(4);
++				state_v(5):=avl_magik_bundle(5);
++				state_v(6):=avl_magik_bundle(6);
++				state_v(7):=o_readdataack_sync2;
++				state_v(8):=avl_magik_bundle(7);
++				state_v(10 DOWNTO 9):=avl_magik_bundle(9 DOWNTO 8);
++				state_v(11):=avl_magik_bundle(10);
++				state_v(12):=o_run;
++				state_v(13):=to_std_logic(o_newres>0);
++				state_v(14):=avl_magik_bundle(11);
++
++				o_magik_diag_state<=state_v & flags_v;
++				o_magik_diag_generation<=NOT o_magik_diag_generation;
++				o_magik_capture_pending<='0';
++			END IF;
++		END IF;
++	END PROCESS MagiKScalerPipelineDiagnostic;
++
++	magik_diag_state<=o_magik_diag_state;
++	magik_diag_generation<=o_magik_diag_generation;
++
+ 	-----------------------------------------------------------------------------
+ 	-- Low Lag syntoniser interface
+ 	o_lltune<=(0 => i_vss,
 diff --git a/sys/sys_top.v b/sys/sys_top.v
-index a4168795b68bed4b655b00cb7ced5cf5b4f32741..4d81fc6df5732b81d71a78ad650f41ed1e49087d 100644
+index a416879..5284932 100644
 --- a/sys/sys_top.v
 +++ b/sys/sys_top.v
-@@ -351,6 +351,68 @@ reg [12:0] arc2x = 0;
+@@ -351,6 +351,72 @@ reg [12:0] arc2x = 0;
  reg [12:0] arc2y = 0;
  reg [15:0] io_dout_sys;
  
@@ -386,6 +610,8 @@ index a4168795b68bed4b655b00cb7ced5cf5b4f32741..4d81fc6df5732b81d71a78ad650f41ed
 +wire [15:0] magik_response_data;
 +wire        magik_diag_response_valid;
 +wire [15:0] magik_diag_response_data;
++wire [31:0] magik_scaler_pipeline_state;
++wire        magik_scaler_pipeline_generation;
 +wire        magik_lfb_apply_accepted;
 +wire        magik_lfb_en;
 +wire        magik_lfb_flt;
@@ -449,7 +675,7 @@ index a4168795b68bed4b655b00cb7ced5cf5b4f32741..4d81fc6df5732b81d71a78ad650f41ed
  always@(posedge clk_sys) begin
  	reg  [7:0] cmd;
  	reg        has_cmd;
-@@ -360,6 +422,19 @@ always@(posedge clk_sys) begin
+@@ -360,6 +426,19 @@ always@(posedge clk_sys) begin
  	reg  [7:0] fb_crc;
  	reg  [1:0] sl_r;
  
@@ -469,7 +695,7 @@ index a4168795b68bed4b655b00cb7ced5cf5b4f32741..4d81fc6df5732b81d71a78ad650f41ed
  	coef_wr <= 0;
  	sl_r <= FB_EN ? 2'b00 : scanlines;
  
-@@ -407,6 +482,7 @@ always@(posedge clk_sys) begin
+@@ -407,6 +486,8 @@ always@(posedge clk_sys) begin
  			if(io_din[7:0] == 'h40) io_dout_sys <= fb_crc;
  `endif
  			if(io_din[7:0] == 'h42) io_dout_sys <= {1'b1, frame_cnt};
@@ -478,7 +704,7 @@ index a4168795b68bed4b655b00cb7ced5cf5b4f32741..4d81fc6df5732b81d71a78ad650f41ed
  			if(io_din[7:0] == 'h44) io_dout_sys <= 1;
  		end
  		else begin
-@@ -462,6 +538,7 @@ always@(posedge clk_sys) begin
+@@ -462,6 +543,8 @@ always@(posedge clk_sys) begin
  					9: LFB_STRIDE      <= io_din[13:0];
  				endcase
  			end
@@ -487,21 +713,22 @@ index a4168795b68bed4b655b00cb7ced5cf5b4f32741..4d81fc6df5732b81d71a78ad650f41ed
  			if(cmd == 'h25) {led_overtake, led_state} <= io_din;
  			if(cmd == 'h26) vol_att <= io_din[4:0];
  			if(cmd == 'h27) VSET <= io_din[11:0];
-@@ -825,6 +963,22 @@ wire         freeze;
+@@ -826,8 +909,23 @@ wire         bob_deint;
  		.avl_address      (vbuf_address),
  		.avl_write        (vbuf_write),
  		.avl_read         (vbuf_read),
- 		.avl_byteenable   (vbuf_byteenable)
+-		.avl_byteenable   (vbuf_byteenable)
++		.avl_byteenable   (vbuf_byteenable),
++		.magik_diag_state (magik_scaler_pipeline_state),
++		.magik_diag_generation(magik_scaler_pipeline_generation)
  	);
 +
 +mister_magik_raw_scaler_diagnostic magik_raw_scaler_diagnostic
 +(
-+	.clk_hdmi(clk_hdmi),
 +	.clk_sys(clk_sys),
 +	.reset_active(reset_req),
-+	.raw_rgb(hdmi_data),
-+	.raw_de(hdmi_de),
-+	.raw_vs(hdmi_vs),
++	.pipeline_state(magik_scaler_pipeline_state),
++	.pipeline_generation(magik_scaler_pipeline_generation),
 +	.io_uio(io_uio),
 +	.io_strobe(io_strobe),
 +	.io_din(io_din),
@@ -509,7 +736,9 @@ index a4168795b68bed4b655b00cb7ced5cf5b4f32741..4d81fc6df5732b81d71a78ad650f41ed
 +	.response_data(magik_diag_response_data)
 +);
  `endif
-@@ -1380,15 +1535,30 @@ assign HDMI_TX_D  = hdmi_out_d;
+ 
+ reg        LFB_EN     = 0;
+@@ -1380,15 +1478,30 @@ assign HDMI_TX_D  = hdmi_out_d;
  
  wire [23:0] vga_data_sl;
  wire        vga_de_sl, vga_ce_sl, vga_vs_sl, vga_hs_sl;

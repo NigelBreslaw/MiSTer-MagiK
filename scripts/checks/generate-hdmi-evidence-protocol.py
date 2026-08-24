@@ -152,6 +152,16 @@ def render_rust(spec: dict) -> str:
             f"pub const RAW_SCALER_STATE_{word_name.upper()}_RESERVED_ZERO_MASK: u16 = "
             f"0x{reserved_mask:04x};"
         )
+    for name, field in raw_scaler.get("fields", {}).items():
+        lines.append(
+            f"pub const RAW_SCALER_STATE_{name.upper()}_WORD: usize = "
+            f"RAW_SCALER_STATE_{field['word'].upper()}_WORD;"
+        )
+        lines.append(f"pub const RAW_SCALER_STATE_{name.upper()}_BIT: usize = {field['bit']};")
+        lines.append(
+            f"pub const RAW_SCALER_STATE_{name.upper()}_MASK: u16 = "
+            f"0x{((1 << field['width']) - 1):04x};"
+        )
     lines.append(
         "pub const RAW_SCALER_STATE_ZERO_GOLDEN_CRC: u16 = "
         f"0x{zero_golden_crc(raw_scaler, spec['crc']):04x};"
@@ -232,6 +242,18 @@ def main() -> None:
             raise SystemExit(f"raw scaler state reserved mask {word_name} is invalid")
         if word_name == "flags" and mask & used_mask:
             raise SystemExit("raw scaler state flag and reserved masks overlap")
+        for field_name, field in raw_scaler.get("fields", {}).items():
+            if field["word"] == word_name:
+                field_mask = ((1 << field["width"]) - 1) << field["bit"]
+                if field_mask & mask:
+                    raise SystemExit(
+                        f"raw scaler state field {field_name} overlaps reserved-zero bits"
+                    )
+    for field_name, field in raw_scaler.get("fields", {}).items():
+        if field["word"] not in raw_scaler["words"]:
+            raise SystemExit(f"raw scaler state field {field_name} names an unknown word")
+        if field["bit"] < 0 or field["width"] <= 0 or field["bit"] + field["width"] > 16:
+            raise SystemExit(f"raw scaler state field {field_name} is outside one word")
     write_or_check(RUST_PATH, render_rust(spec), args.check)
 
 

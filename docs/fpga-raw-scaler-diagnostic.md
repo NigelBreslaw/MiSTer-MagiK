@@ -1,145 +1,130 @@
-# Experimental raw-scaler RGB-state diagnostic
+# Experimental scaler pipeline-state diagnostic
 
-This disposable RBF observer answers one question during the next persistent
-physical MagiK black screen: is the raw scaler RGB itself black, constant, or
-varied? It is evidence only, not a production feature or recovery mechanism.
+This disposable RBF observer answers the next narrow question raised by the
+schema-4 black-screen result: at which scaler pipeline boundary does activity
+or nonzero data first disappear? It is evidence only, not a production feature
+or recovery mechanism.
 
-The queued completion repair and latch-v5 remain unchanged. The schema-3
-CE/DE/HS/VS control-CRC observer is removed rather than retained or stacked.
+The queued completion repair and latch-v5 remain unchanged. The schema-4 raw
+RGB observer is removed rather than retained or stacked. The observer is built
+inside production `ascal.vhd` so each event uses the exact registered signal at
+the stage that consumes it. Every diagnostic output flows only to the read-only
+responder beside the latch bridge.
 
-## Passive boundary
+## Per-frame activity record
 
-Production `sys_top` maps the direct ascal output to `hdmi_data[23:0]` as
-`R[23:16]`, `G[15:8]`, and `B[7:0]`. Its exact black value is `24'h000000`.
-The observer reads only that raw RGB bus, raw DE, and raw VS for completed-frame
-delimiting. It does not read scheduler/completion state, framebuffer data or
-addresses, latch or route state, reset control, PLL, mux control, post-OSD/final
-pixels, or TMDS. Its outputs reach only the read-only UIO responder.
+Bits `11:0` are sticky within one completed frame:
 
-One explicitly preserved `clk_hdmi` input stage captures RGB, DE, and VS as a
-coherent bundle. The production ascal outputs therefore drive only shallow
-diagnostic flip-flop inputs; black/variation comparisons and frame delimiting
-use the consistently one-cycle-delayed bundle. This timing isolation does not
-change the sampled frame or the ABI.
+| Bit | Exact event observed |
+| --- | --- |
+| 0 | completed-frame record valid |
+| 1 | read obligation accepted: production `read_obligation_accept(...)` |
+| 2 | `avl_readdatavalid` accepted while reset-return drain is inactive |
+| 3 | that accepted 128-bit Avalon return was nonzero |
+| 4 | returned beat created a BLEN completion |
+| 5 | destination completion pulse `o_readdataack` |
+| 6 | copy/DPRAM read stage `o_sh3` |
+| 7 | copied DPRAM word `o_dr` was nonzero on an `o_sh3` edge |
+| 8 | line-buffer write enable `o_wr` was nonzero |
+| 9 | line-buffer write pixel `o_ldw` was nonzero on an `o_wr` edge |
+| 10 | raw output DE `o_de` was active |
+| 11 | registered raw output RGB was nonzero on an active `o_de` edge |
 
-For the current frame the HDMI-domain logic retains only:
+Copy and line-write observations use the same registered values consumed by
+`Scalaire` and `OLBUF` on that edge. Raw RGB is observed one `o_clk` after
+`VSCAL` registers it and remains within the same frame. The accumulator
+functions live in the package compiled from patched production `ascal.vhd`;
+the GHDL test and synthesis call those same functions.
 
-- whether an active DE sample was seen;
-- whether any active pixel differed from exact black;
-- whether any active pixel differed from the first active RGB sample;
-- the exact first active 24-bit RGB sample.
+The Avalon bucket closes on the existing synchronized output-VS boundary. Its
+stable 16-bit bundle is published with a generation toggle. The HDMI receiver
+uses an explicit two-stage generation synchronizer and waits one further edge
+before capture. It combines that Avalon record with the completed HDMI-domain
+bucket and publishes one stable 32-bit bundle into `clk_sys` through the same
+toggle, two-stage synchronizer, and one-edge settling pattern. A UIO
+transaction snapshots the bundle immutably.
 
-At rising raw VS, the previous completed frame is atomically published. An
-empty/no-DE frame is published as invalid so stale evidence cannot be reused.
-The next frame starts immediately with cleared state. There is no content
-baseline or sticky comparison: the RBF reloads on return, black may occur from
-its first complete frame, and healthy UI pixels legitimately change.
+The high state word is:
+
+| Bits | Meaning |
+| --- | --- |
+| 1:0 | `o_readlev` |
+| 3:2 | `o_copylev` |
+| 4 | completion request toggle |
+| 5 | completion pending |
+| 6 | synchronized source acknowledgement |
+| 7 | HDMI destination-observed request |
+| 8 | reset-return drain active |
+| 10:9 | retained Avalon return credits |
+| 11 | retained return phase nonzero |
+| 12 | scaler running |
+| 13 | new-resolution transition active |
+| 14 | Avalon read active |
+| 15 | reserved zero |
+
+Request and pending are the just-computed queue state at the Avalon frame
+boundary. Acknowledgement, drain, credits, phase, and read-active are pre-edge
+state. HDMI read/copy levels and run/new-resolution are sampled when the stable
+Avalon bundle is captured. These fields refine a stage classification; they do
+not independently prove a cause.
 
 ## Read-only ABI
 
-Command `0x67` exposes `raw-scaler-rgb-state-v1`, schema `4`. Commands `0x60`
+Command `0x67` exposes `scaler-pipeline-state-v1`, schema `5`. Commands `0x60`
 through `0x66` remain unsupported. Latch protocol `5` and capabilities `0x03ff`
-are unchanged.
+are unchanged. After magic `0x4d57`, the fixed four-word response is schema,
+flags, state, and the existing framed CRC-16. There is no write, clear, arm,
+freeze, reset, or recovery operation.
 
-After magic `0x4d57`, the fixed five-word response is:
+The device agent reads three CRC-valid completed-frame records at bounded
+intervals. Records need not be bit-identical when harmless queue phase or
+toggle fields change, but all three must select the same earliest missing or
+zero stage while owner and launcher context remains stable.
 
-| Word | Meaning |
+| Classification | Conservative meaning |
 | --- | --- |
-| 0 | schema `4` |
-| 1 | flags: completed-frame valid, active seen, any nonblack, variation seen |
-| 2 | first active RGB bits `15:0` (`G`, `B`) |
-| 3 | first active RGB bits `23:16` (`R`); high byte reserved zero |
-| 4 | existing framed CRC-16 |
+| `scaler_pipeline_active` | every activity and nonzero stage was seen |
+| `scaler_read_scheduler_stall` | no accepted read obligation |
+| `scaler_memory_return_stall` | a read was accepted but no current return arrived |
+| `scaler_returned_zero_data` | returns arrived but no returned word was nonzero |
+| `scaler_copy_buffer_stall_or_zero` | completion/copy activity or copied nonzero data disappeared |
+| `scaler_linebuffer_write_zero` | copy data was nonzero but line-buffer write/nonzero data disappeared |
+| `scaler_vertical_or_output_zero` | line-buffer data was nonzero but active/nonzero raw output disappeared |
+| `scaler_pipeline_evidence_inconclusive` | invalid, malformed, transitional, or mixed evidence |
 
-The complete 48-bit HDMI bundle is registered before its generation toggle
-changes. The `clk_sys` receiver synchronizes only that toggle through two
-explicit stages, waits one additional edge, and copies the stable bundle. Each
-UIO transaction uses an immutable snapshot. The generation is transport state,
-not part of the record and does not need to remain unchanged across host reads.
+Healthy experimental activation accepts only coherent
+`scaler_pipeline_active`. Every result retains
+`sink_visibility: "unobserved"`; internal activity never proves correct pixels
+or a visible sink.
 
-## Host classification
+## Local gates and risk
 
-The device agent reads three records at bounded 25 ms intervals. All three must
-be CRC-valid completed active frames with stable classification fields.
+- The production patch must compile under GHDL, and the shared exact activity
+  accumulators must prove empty, individual-stage, sticky, and reset behavior.
+- The existing completion queue GHDL, BMC, non-vacuity covers, and induction
+  remain unchanged and passing.
+- Icarus must prove schema-5 framing, immutable transaction snapshots, CRC,
+  malformed/partial reads, `0x60–0x66`, and latch-v5 non-interference.
+- Structural proof rejects retained schema-4 taps and any observer fanout into
+  completion, framebuffer, latch, route, reset, PLL, mux, or final-output cones.
+- Both bundled-data crossings and their generation synchronizers have explicit
+  endpoints and bounded net delay under the existing MTBF policy.
+- No RAM, DSP, or PLL is expected. The record uses small sticky flag buckets,
+  two 16-bit stable bundles, one 32-bit bundle, synchronizers, and responder
+  snapshot state; Quartus resource and timing signoff remains mandatory before
+  device installation.
 
-| Classification | Exact requirement | Decision after a confirmed physical black |
-| --- | --- | --- |
-| `raw_rgb_black` | no nonblack and no variation; first RGB exactly `0x000000` in all samples | investigate scaler fetch, pixel-data, or reset-epoch behavior |
-| `raw_rgb_constant` | no variation; one stable nonblack first RGB in all samples | investigate scaler fetch, pixel-data, or reset-epoch behavior |
-| `raw_rgb_varied` | variation and nonblack observed in all samples; first RGB may change | move downstream to a minimal final-output probe |
-| `raw_rgb_evidence_inconclusive` | empty, invalid, malformed, mixed, or unstable evidence | repair only this sampling or transport |
+## Why schema 5 is next
 
-Healthy experimental activation is fail-closed: only coherent
-`raw_rgb_varied` evidence is accepted. Black, constant, and inconclusive
-evidence reject activation. Every result retains
-`sink_visibility: "unobserved"`; varied internal RGB does not prove correct
-pixels or a visible sink.
+Schema 3 reproduced physical black with stable CE/DE/HS/VS timing. Schema 4
+then reproduced a persistent physical MagiK black screen with correct
+framebuffer content and three coherent completed active frames whose raw scaler
+RGB was exactly black. That places the black frame at or before the raw ascal
+output but does not distinguish a scheduler stall, absent returns, zero memory
+data, copy/line-buffer loss, or vertical/output zeroing. Schema 5 follows those
+boundaries in order without exporting any pixel bus or wide content digest.
 
-## Local gates before synthesis
-
-- Apply the production patch and compile patched production `ascal.vhd`.
-- Keep the exact completion-queue GHDL simulation, BMC, required covers, and
-  induction unchanged and passing.
-- Simulate varied, all-black-from-first-frame, constant nonblack, changing-first
-  sample, empty/no-DE, reset during accumulation and response, atomic
-  completed-frame publication, immutable transaction snapshots, CRC, malformed
-  reads, `0x60–0x66`, and latch-v5 non-interference.
-- Structurally reject the schema-3 control CRC/baseline, any production fanout,
-  and any new completion, framebuffer, latch, route, reset-control, PLL, mux,
-  final-pixel, or TMDS tap.
-- Require exact generation synchronizer endpoints and bounded generation and
-  48-bit bundled-data paths under the existing MTBF policy.
-- Infer no RAM, DSP, or PLL and remain comfortably below the disposable
-  schema-3 cap of `+208` ALMs and `+224` registers.
-- Do not run CI or install this RBF until the committed candidate later passes
-  cached Apple-container signoff. No seed sweep, waiver, fitter change,
-  LogicLock, or direct Quartus command is permitted.
-
-## Why schema 4 is next
-
-The schema-3 RBF reproduced a persistent physical black screen while its raw
-CE/DE/HS/VS fingerprint remained at the healthy baseline in two independent
-three-sample records. The framebuffer remained correct and latch ownership and
-counters remained healthy. That result excludes a raw control-waveform change
-within the probe's coverage, but schema 3 deliberately did not observe RGB.
-
-The preserved unrecovered incident and exact candidate identity are in
-[`history/2026-08-24-frame-integrity-black-result.md`](../history/2026-08-24-frame-integrity-black-result.md).
-
-## Signoff and first device result
-
-The first schema-4 fit was rejected at `0.289 ns` setup slack. One forward
-revision isolated the production RGB/DE/VS taps behind preserved HDMI-domain
-registers. At the same seed and settings, the exact candidate passed with
-`0.671 ns` setup, `0.223 ns` hold, zero TNS, `+136` ALMs, `+111` registers,
-and unchanged RAM/DSP/PLL identity.
-
-The installed candidate completed 46 visible Phase 2 returns across three boot
-epochs. Overall attempt 47 reproduced the known transient physical corruption:
-two byte-identical healthy frames followed by the known corrupt frame, while
-the authoritative framebuffer stayed correct. Failure-time and later live
-schema-4 records were coherent `raw_rgb_varied` and byte-identical to healthy
-attempts. This excludes black or constant raw RGB for that corruption event,
-but the deliberately coarse state does not prove every raw pixel was correct.
-
-After changing the supervised reboot cadence to every ten valid attempts, the
-campaign reproduced a genuine persistent MagiK black screen on boot epoch 7,
-attempt 8, after 74 valid clean returns. The physical still was byte-identical
-to the earlier black incidents and the authoritative framebuffer remained the
-same correct Arcade frame. Both failure-time and later live schema-4 records
-were coherent `raw_rgb_black`: active video remained present, but three
-completed frames contained no nonblack or varying raw RGB pixels.
-
-The black frame therefore already exists at the ascal output. Combined with
-the earlier stable raw-control result, this narrows the fault to scaler
-framebuffer fetch, returned pixel data, or reset/traffic epoch handling rather
-than a defect introduced only after the raw scaler boundary. The next probe
-should distinguish missing/stalled memory-return activity from returned or
-selected zero pixel data without changing latch-v5 or the queued completion
-repair.
-
-See
-[`history/2026-08-24-raw-rgb-transient-corruption-result.md`](../history/2026-08-24-raw-rgb-transient-corruption-result.md).
-
-The decisive persistent-black record is in
+The frozen implementation rationale is recorded in
+[`history/2026-08-24-scaler-pipeline-state-design.md`](../history/2026-08-24-scaler-pipeline-state-design.md).
+The decisive schema-4 result remains in
 [`history/2026-08-24-raw-rgb-black-result.md`](../history/2026-08-24-raw-rgb-black-result.md).

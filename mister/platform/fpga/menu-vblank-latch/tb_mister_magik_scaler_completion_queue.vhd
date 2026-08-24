@@ -90,6 +90,8 @@ BEGIN
 		VARIABLE vs_edge_v : boolean;
 		VARIABLE read_asserted_v,read_accepted_v,waitrequest_v : std_logic;
 		VARIABLE acceptance_count_v : natural;
+		VARIABLE avl_flags_v : std_logic_vector(3 DOWNTO 0);
+		VARIABLE output_flags_v : std_logic_vector(6 DOWNTO 0);
 		PROCEDURE produce IS
 		BEGIN
 			WAIT UNTIL falling_edge(source_clk);
@@ -99,6 +101,52 @@ BEGIN
 			produced<=produced+1;
 		END PROCEDURE;
 	BEGIN
+		-- Exercise the exact observer accumulators compiled from patched
+		-- production ascal. An empty frame bucket stays empty.
+		avl_flags_v:=magik_avl_flags_next(
+			"0000",false,false,false,false);
+		output_flags_v:=magik_output_flags_next(
+			"0000000",false,false,false,false,false,false,false);
+		ASSERT avl_flags_v="0000" AND output_flags_v="0000000"
+			REPORT "empty pipeline frame gained activity" SEVERITY failure;
+
+		-- Every Avalon stage maps to exactly one bit and accumulation is sticky.
+		FOR stage IN 0 TO 3 LOOP
+			avl_flags_v:=(OTHERS=>'0');
+			CASE stage IS
+				WHEN 0 => avl_flags_v:=magik_avl_flags_next(
+					avl_flags_v,true,false,false,false);
+				WHEN 1 => avl_flags_v:=magik_avl_flags_next(
+					avl_flags_v,false,true,false,false);
+				WHEN 2 => avl_flags_v:=magik_avl_flags_next(
+					avl_flags_v,false,false,true,false);
+				WHEN OTHERS => avl_flags_v:=magik_avl_flags_next(
+					avl_flags_v,false,false,false,true);
+			END CASE;
+			ASSERT avl_flags_v=std_logic_vector(shift_left(to_unsigned(1,4),stage))
+				REPORT "Avalon pipeline flag mapping changed" SEVERITY failure;
+		END LOOP;
+		avl_flags_v:=magik_avl_flags_next(
+			avl_flags_v,true,true,true,true);
+		ASSERT avl_flags_v="1111"
+			REPORT "Avalon pipeline flags were not sticky" SEVERITY failure;
+
+		-- The output-domain stages similarly retain the first activity through
+		-- the completed-frame boundary, including zero/nonzero distinctions.
+		FOR stage IN 0 TO 6 LOOP
+			output_flags_v:=(OTHERS=>'0');
+			output_flags_v:=magik_output_flags_next(
+				output_flags_v,
+				stage=0,stage=1,stage=2,stage=3,stage=4,stage=5,stage=6);
+			ASSERT output_flags_v=
+				std_logic_vector(shift_left(to_unsigned(1,7),stage))
+				REPORT "output pipeline flag mapping changed" SEVERITY failure;
+		END LOOP;
+		output_flags_v:=magik_output_flags_next(
+			output_flags_v,true,true,true,true,true,true,true);
+		ASSERT output_flags_v="1111111"
+			REPORT "output pipeline flags were not sticky" SEVERITY failure;
+
 		-- Exhaust the exact production transition function truth table.
 		FOR request_i IN 0 TO 1 LOOP
 			FOR pending_i IN 0 TO 1 LOOP

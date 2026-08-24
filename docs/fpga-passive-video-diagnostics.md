@@ -35,10 +35,15 @@ coherent `0x0da3` samples. It ruled out the completion queue and the specified
 credit-accounting stall for that occurrence, so the scheduler observer is
 retired from the next candidate.
 
+Schema 4 then reproduced persistent physical black with correct framebuffer
+content and coherent completed active frames whose raw scaler RGB was exactly
+black. That observer is now retired rather than stacked.
+
 The current disposable experiment is
-[Experimental raw-scaler RGB-state diagnostic](fpga-raw-scaler-diagnostic.md).
-It reuses only `0x67` with schema 4 and replaces the retired control CRC with a
-completed-frame raw RGB class and exact first active sample.
+[Experimental scaler pipeline-state diagnostic](fpga-raw-scaler-diagnostic.md).
+It reuses only `0x67` with schema 5 and follows accepted reads, returned data,
+completion, copy, line-buffer, and raw-output activity/nonzero state. It keeps
+the same passive, read-only, sink-unobserved contract.
 
 The complete attempt history and retained measurements are in
 [FPGA video diagnostics: two attempted designs and their retirement](../history/2026-08-14-fpga-video-diagnostics-design-attempts.md).
