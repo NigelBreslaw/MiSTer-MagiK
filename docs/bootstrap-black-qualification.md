@@ -56,7 +56,8 @@ The platform candidate must retain:
 
 ## Attended device evidence
 
-Record four continuous 60-second 1920x1080 at 30 fps `USB Video` movies:
+Record four continuous 60-second 1920x1080 `USB Video` movies, configured at
+the device's native 30 fps ceiling:
 
 1. supervised cold reboot;
 2. active launcher restart without reloading the RBF;
@@ -73,7 +74,10 @@ rollback to the original timing when applicable, and stable stock Menu rather
 than a persistent black screen. A physical HDMI-only failure is tracked and
 investigated separately from this readiness qualification.
 
-Start each movie before triggering the typed, attended operation. Use only
+Start each movie with `scripts/agent capture usb-video --seconds 60 --output
+PATH.mov` before triggering the typed, attended operation. This is the only
+supported capture path; its native AVAssetReader validation must pass before
+the artifact is accepted. Use only
 repository-owned `mister` commands or the attended release workflow for device
 mutation; do not use raw SSH. The preflight fault must be volatile,
 self-cleaning, bounded to the qualification session, and must be verified
@@ -81,7 +85,7 @@ cleared before the next case.
 
 For each movie retain, in one evidence directory:
 
-- the `.mov` artifact at the `USB Video` device's native 30 fps ceiling;
+- the natively frame-by-frame validated `.mov` artifact;
 - `/tmp/mister-magik/events.jsonl`;
 - `/tmp/mister-magik/main-status.json`;
 - latch readiness/status and the exact platform candidate identity;

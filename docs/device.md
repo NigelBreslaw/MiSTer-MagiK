@@ -212,15 +212,23 @@ Press Start 2P is not used on CRT routes. CRT240 Arcade game titles default to
 the pixel-perfect 32px Yesterday 10 resource, while Arcade metadata uses native
 Terminus. Typography selection does not refresh or modify the catalog.
 
-On macOS, `scripts/agent capture usb-video [--output PATH]` captures the first
-nonblank 1920x1080 frame from the fixed `USB Video` input. The native
-AVFoundation path writes JPEG, refuses to overwrite an explicit output, and
-otherwise saves a unique file under the same temporary capture directory before
-printing a Markdown link. `--seconds N` selects a bounded 1–60 second native
-AVFoundation movie capture at the same 1920x1080 format and the `USB Video`
-device's 30 fps ceiling; its output is a `.mov` file and is intended for
-attended motion diagnosis. Both are sink evidence, not a replacement for the
-authoritative framebuffer capture.
+On macOS, `scripts/agent capture usb-video [--output PATH]` is the sole
+supported host capture interface for the fixed `USB Video` input. With no
+duration it captures the first nonblank 1920x1080 frame and writes JPEG.
+`--seconds N` records a bounded 1–60 second 1920x1080 QuickTime movie at the
+device's native 30 fps ceiling. Both operations use the same native
+AVFoundation device discovery and format configuration, refuse to overwrite an
+explicit output, and otherwise allocate a unique temporary path.
+
+Movie success is fail-closed: after AVFoundation finalizes the file, an
+independent AVAssetReader pass must decode every video sample, confirm strictly
+advancing timestamps, exact 1920x1080 geometry, bounded duration, and a useful
+delivered-frame count. A file that fails validation is removed and is never
+printed as an artifact. Errors identify the failing AVFoundation stage and
+include its domain, code, reason, and underlying error where available. Do not
+substitute FFmpeg, QuickTime UI automation, ScreenCaptureKit, OBS, or an ad-hoc
+camera script; fix this single native path if capture fails. Stills and movies
+are sink evidence, not replacements for the authoritative framebuffer capture.
 
 Qualified-black platform candidates also require the attended evidence set in
 `docs/bootstrap-black-qualification.md`. It covers cold reboot, active launcher

@@ -15,6 +15,8 @@ const JPEG_WIDTH: u32 = 1920;
 const JPEG_HEIGHT: u32 = 1080;
 const MOVIE_MIN_SECONDS: u64 = 1;
 const MOVIE_MAX_SECONDS: u64 = 60;
+const MOVIE_DURATION_TOLERANCE_SECONDS: f64 = 0.5;
+const MOVIE_MIN_DECODED_FRAMES_PER_SECOND: u64 = 5;
 // Calibrated against the fixed Phase 2 launcher scene using native capture
 // luma: a known-good return measured 25 permille and all 732 frames from the
 // preserved corruption movie measured 60..=622 permille. Forty-five keeps
@@ -54,6 +56,60 @@ struct EncodedFrame {
     width: u32,
     height: u32,
     luma: Option<LumaAnalysis>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MovieObservation {
+    frames: u64,
+    width: u32,
+    height: u32,
+    decoded_duration_seconds: f64,
+}
+
+fn validate_movie_observation(
+    observation: MovieObservation,
+    requested_duration: Duration,
+) -> AgentResult<()> {
+    if observation.width != JPEG_WIDTH || observation.height != JPEG_HEIGHT {
+        return Err(classified(
+            "camera_movie_validation_failed",
+            format!(
+                "AVFoundation decoded {}x{} video; expected {JPEG_WIDTH}x{JPEG_HEIGHT}",
+                observation.width, observation.height
+            ),
+        ));
+    }
+    let requested_seconds = requested_duration.as_secs_f64();
+    let minimum_seconds = (requested_seconds - MOVIE_DURATION_TOLERANCE_SECONDS).max(0.1);
+    let maximum_seconds = requested_seconds + MOVIE_DURATION_TOLERANCE_SECONDS;
+    if !observation.decoded_duration_seconds.is_finite()
+        || !(minimum_seconds..=maximum_seconds).contains(&observation.decoded_duration_seconds)
+    {
+        return Err(classified(
+            "camera_movie_validation_failed",
+            format!(
+                "AVFoundation decoded duration {:.3}s; expected {:.3}s..={:.3}s for a requested {:.3}s recording",
+                observation.decoded_duration_seconds,
+                minimum_seconds,
+                maximum_seconds,
+                requested_seconds
+            ),
+        ));
+    }
+    let minimum_frames = requested_duration
+        .as_secs()
+        .saturating_mul(MOVIE_MIN_DECODED_FRAMES_PER_SECOND)
+        .max(1);
+    if observation.frames < minimum_frames {
+        return Err(classified(
+            "camera_movie_validation_failed",
+            format!(
+                "AVFoundation decoded {} frames; expected at least {minimum_frames} for a requested {:.3}s recording",
+                observation.frames, requested_seconds
+            ),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -163,8 +219,8 @@ pub fn execute_movie(output: Option<&Path>, seconds: u64) -> AgentResult<Capture
     if bytes == 0 {
         let _ = fs::remove_file(&destination);
         return Err(classified(
-            "camera_recording_failed",
-            "USB Video movie is empty",
+            "camera_movie_validation_failed",
+            "recorded USB Video movie file is empty after AVFoundation finalization",
         ));
     }
     Ok(CaptureArtifact {
@@ -700,6 +756,49 @@ mod tests {
                 .starts_with("camera_output_invalid:")
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn movie_validation_requires_decodable_geometry_duration_and_frames() {
+        let requested = Duration::from_secs(30);
+        let valid = MovieObservation {
+            frames: 728,
+            width: JPEG_WIDTH,
+            height: JPEG_HEIGHT,
+            decoded_duration_seconds: 30.049,
+        };
+        validate_movie_observation(valid, requested).unwrap();
+
+        for (observation, detail) in [
+            (
+                MovieObservation {
+                    width: 1280,
+                    ..valid
+                },
+                "decoded 1280x1080 video",
+            ),
+            (
+                MovieObservation {
+                    decoded_duration_seconds: 2.0,
+                    ..valid
+                },
+                "decoded duration 2.000s",
+            ),
+            (
+                MovieObservation {
+                    frames: 149,
+                    ..valid
+                },
+                "decoded 149 frames",
+            ),
+        ] {
+            assert!(
+                validate_movie_observation(observation, requested)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(detail)
+            );
+        }
     }
 
     #[cfg(not(target_os = "macos"))]
