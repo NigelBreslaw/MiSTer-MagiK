@@ -292,7 +292,9 @@ def main() -> None:
         "reg snapshot_valid",
         "response_word = snapshot_valid ?",
         "source_generation <= ~source_generation;",
-        "generation_meta <= source_generation;",
+        "(* preserve, dont_replicate *) reg generation_launch = 1'b0;",
+        "generation_launch <= source_generation;",
+        "generation_meta <= generation_launch;",
         "generation_sync <= generation_meta;",
         "source_state, snapshot_state[15:0] + 1'd1",
     ):
@@ -313,6 +315,12 @@ def main() -> None:
                 "production direct-ascal tap must appear only at its port and isolation assignment: "
                 f"{direct_tap}"
             )
+    if control_source.count("generation_launch") != 4 or len(
+        re.findall(r"<=\s*generation_launch\b", control_source)
+    ) != 1:
+        fail("generation_launch must have exactly one data fanout to generation_meta")
+    if "generation_meta <= source_generation;" in control_source:
+        fail("generation_meta bypasses the dedicated stable-bundle launch register")
     for forbidden_observer_input in (
         "LFB_",
         "vbuf_",
@@ -451,9 +459,9 @@ def main() -> None:
         "-to $magik_scaler_completion_request_meta",
         "-from $magik_scaler_completion_ack_route",
         "-to $magik_scaler_completion_ack_meta",
-        "{*mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|source_generation} 1",
+        "{*mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_launch} 1",
         "{*mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta} 1",
-        "-from $magik_raw_frame_generation",
+        "-from $magik_raw_frame_generation_launch",
         "-to $magik_raw_frame_generation_meta",
         "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail raw_scaler_ordered_signature",
         "*ascal:ascal|o_readdataack_sync2*",

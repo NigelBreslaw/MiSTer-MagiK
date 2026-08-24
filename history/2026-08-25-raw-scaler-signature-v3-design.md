@@ -23,3 +23,12 @@ three stable records support downstream origin only with the exact
 same-candidate healthy static scene and independently detected moving physical
 corruption; changing records require byte-stable source proof before supporting
 an at-or-before-`ascal` origin.
+
+After candidate 4 passed timing/resources but Quartus duplicated its CDC source,
+the forward implementation adds one dedicated HDMI-domain
+`generation_launch` register. `source_generation` still toggles only with the
+stable published signature. `generation_launch` follows it one HDMI clock
+later and has exactly one data fanout, the existing `generation_meta` first
+synchronizer stage. The bounded identity is therefore
+`generation_launch -> generation_meta`; the two-stage synchronizer, settle
+cycle, immutable response, schema, and signature datapath are unchanged.

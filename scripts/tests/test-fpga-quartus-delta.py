@@ -137,7 +137,7 @@ EXPERIMENTAL_DIAGNOSTIC_REPORTS = {
         VALID_DIAGNOSTIC_REPORTS["menu.magik-diagnostic-cdc-net-delay.rpt"]
         + "; set_net_delay ; 1.050 ; 10.000 ; 8.950 ; sources ; destinations ; max ;\n"
         + net_delay_detail(
-            "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|source_generation",
+            "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_launch",
             "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta",
         )
     ),
@@ -145,7 +145,7 @@ EXPERIMENTAL_DIAGNOSTIC_REPORTS = {
         VALID_DIAGNOSTIC_REPORTS["menu.magik-diagnostic-metastability.rpt"]
         + metastability_chain(
             3,
-            "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|source_generation",
+            "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_launch",
             "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta",
             (
                 "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta",
@@ -592,6 +592,28 @@ class QuartusDeltaTest(unittest.TestCase):
             "diagnostic_cdc_path_identity_mismatch", payload["invalid_reason"]
         )
 
+    def test_duplicated_raw_scaler_launch_path_fails(self) -> None:
+        reports = dict(EXPERIMENTAL_DIAGNOSTIC_REPORTS)
+        reports["menu.magik-diagnostic-cdc-net-delay.rpt"] = reports[
+            "menu.magik-diagnostic-cdc-net-delay.rpt"
+        ].replace("|generation_launch ;", "|generation_launch~DUPLICATE ;", 1)
+        reports["menu.magik-diagnostic-metastability.rpt"] = reports[
+            "menu.magik-diagnostic-metastability.rpt"
+        ].replace("|generation_launch ;", "|generation_launch~DUPLICATE ;", 1)
+        result, payload = self.run_check(
+            BASE,
+            BASE + EXPERIMENTAL_CUSTOM_SYNC,
+            diagnostic_reports=reports,
+            experimental_diagnostic=True,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "diagnostic_cdc_path_identity_mismatch", payload["invalid_reason"]
+        )
+        self.assertIn(
+            "diagnostic_metastability_chain_missing", payload["invalid_reason"]
+        )
+
     def test_pll_count_drift_fails(self) -> None:
         patched = (BASE + CUSTOM_SYNC).replace(
             "Total PLLs: 3 / 6", "Total PLLs: 4 / 6"
@@ -702,7 +724,7 @@ class QuartusDeltaTest(unittest.TestCase):
             / "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics.sdc"
         ).read_text(encoding="utf-8")
         self.assertIn("get_registers -nowarn -no_duplicates", sdc)
-        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 2)
+        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 3)
         self.assertNotIn("set_max_skew", sdc)
         self.assertNotIn("set_false_path", sdc)
 

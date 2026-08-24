@@ -48,3 +48,29 @@ only the two completion paths and emitted two new warning 17866 instances.
 The retained delta report SHA-256 is
 `965ea7382851780001b5c7aa65b5e51154d8dcd4bbe77621241d77ab028fdf79`.
 This candidate is rejected and was never installed.
+
+## Rejected candidate 4 and exact CDC identity repair
+
+Committed candidate `282cea91372b774e939fa41e17626deff33aad40`
+retained schema 10 and reduced the observer to a 16-bit ordered RGB565
+signature. Its fixed-seed fit passed every timing and resource gate: setup
+`0.602 ns`, hold `0.249 ns`, zero TNS, and matched-baseline growth of 117 ALMs
+and 193 registers with unchanged RAM, DSP, and PLL identity.
+
+It failed only the exact diagnostic CDC identity and warning gates. Quartus
+implemented the requested route as
+`source_generation~DUPLICATE -> generation_meta`, so the required named
+`source_generation -> generation_meta` row was absent. This also added two
+warning 17866 instances. The retained delta report is
+`build/fpga-local-apple/signoff/quartus-delta-signoff.tsv`, SHA-256
+`1f6b9c858c3db8774cf5bf66967b895c060bd6b6ee064d94f7f8899c24085bc1`.
+The rejected RBF `cc2c429a…` and metadata `37f86f85…` must never be installed.
+
+The forward candidate preserves the complete candidate-4 datapath, schema,
+response, resource reduction, constraints, and protected production cones. It
+adds exactly one HDMI-domain `generation_launch` register. Its only data
+fanout is `generation_meta`; `source_generation` toggles with the completed
+signature and `generation_launch` captures it on the following HDMI edge,
+after the source bundle is stable. The exact bounded CDC identity becomes
+`generation_launch -> generation_meta`. No duplicate wildcard, warning waiver,
+gate relaxation, seed change, or fitter change is permitted.

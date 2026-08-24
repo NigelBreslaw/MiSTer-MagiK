@@ -48,6 +48,10 @@ module mister_magik_raw_scaler_ordered_frame (
 
 	reg [15:0] published_signature = 16'd0;
 	(* preserve *) reg source_generation = 1'b0;
+	// Dedicated one-fanout CDC launch point. It follows source_generation one
+	// HDMI clock after the published signature is committed, so the bundled
+	// source data is already stable before this value can reach generation_meta.
+	(* preserve, dont_replicate *) reg generation_launch = 1'b0;
 
 	// Word 3 is the stable source state. The response sequence is advanced only
 	// when the destination coherently captures a newly published signature.
@@ -165,8 +169,10 @@ module mister_magik_raw_scaler_ordered_frame (
 			frame_signature <= SIGNATURE_INITIAL;
 			published_signature <= 16'd0;
 			source_generation <= 1'b0;
+			generation_launch <= 1'b0;
 		end
 		else begin
+			generation_launch <= source_generation;
 			isolated_ce <= raw_ce;
 			isolated_rgb <= {
 				raw_rgb[23:19], raw_rgb[15:10], raw_rgb[7:3]
@@ -239,7 +245,7 @@ module mister_magik_raw_scaler_ordered_frame (
 			tx_crc <= 16'hffff;
 		end
 		else begin
-			generation_meta <= source_generation;
+			generation_meta <= generation_launch;
 			generation_sync <= generation_meta;
 
 			if(!has_command && generation_sync != generation_seen) begin

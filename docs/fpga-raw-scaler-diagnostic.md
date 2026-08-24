@@ -97,6 +97,11 @@ advances the 16-bit response sequence on each coherent capture.
 One destination valid bit reconstructs the unchanged flags word after coherent
 capture, including when the 16-bit sequence wraps to zero. This retains the
 settle cycle and immutable response while avoiding duplicate 16-bit flag words.
+One dedicated `generation_launch` register follows `source_generation` by one
+HDMI edge, after the signature is stable, and has only `generation_meta` as its
+data fanout. The exact constrained CDC identity is
+`generation_launch -> generation_meta`; wildcarded fitter duplicates are not
+accepted.
 
 The local candidate requires:
 

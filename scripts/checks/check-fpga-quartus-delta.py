@@ -104,8 +104,9 @@ EXPECTED_METASTABILITY_CHAINS = {
 }
 EXPERIMENTAL_RAW_SCALER_METASTABILITY_CHAIN = {
     "raw_scaler_generation": {
-        "source": "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|source_generation",
+        "source": "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_launch",
         "synchronization_node": "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta",
+        "allow_source_duplicate": False,
         "registers": (
             "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta",
             "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_sync",
@@ -136,7 +137,7 @@ EXPECTED_NET_DELAY_PATHS = {
 }
 EXPERIMENTAL_RAW_SCALER_NET_DELAY_PATH = {
     "raw_scaler_generation": re.compile(
-        r"source_generation[^\n]*generation_meta", re.IGNORECASE
+        r"generation_launch\s*;[^\n]*generation_meta\s*;", re.IGNORECASE
     )
 }
 
@@ -232,12 +233,15 @@ def parse_expected_metastability_chains(
     for label, expected in expected_chains.items():
         source = str(expected["source"])
         synchronization_node = str(expected["synchronization_node"])
+        source_suffix = (
+            r"(?:~DUPLICATE)?" if expected.get("allow_source_duplicate", True) else ""
+        )
         block = next(
             (
                 candidate
                 for candidate in blocks
                 if re.search(
-                    rf";\s*Source Node\s*;\s*{re.escape(source)}(?:~DUPLICATE)?\s*;",
+                    rf";\s*Source Node\s*;\s*{re.escape(source)}{source_suffix}\s*;",
                     candidate,
                     re.IGNORECASE,
                 )
