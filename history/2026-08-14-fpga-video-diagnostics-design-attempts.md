@@ -1043,6 +1043,19 @@ forward form keeps internal flags 1 through 9 in ascal and merges only raw
 active/nonzero flags from a preserved external HDMI boundary stage; it changes
 neither port modes nor production output cones.
 
+## Design 9: scaler copy retirement
+
+Design 8 immediately reproduced a persistent physical MagiK black with both
+read and copy levels full, no new reads/returns/completions, all completion
+queue fields idle, and continuing copy/line/raw timing with zero data. Design 9
+therefore removes schema 5 rather than stacking it. Schema 6 observes only the
+existing copy FSM terminal predicate and decrement, its component progress,
+address wrap, copied DPRAM nonzero, and repetition/change of the front copy
+metadata signature. This is the smallest probe that separates a lost
+`lev_dec_v`, a terminal-condition stall, and stale/incorrect zero buffer
+selection. Details are in
+[`2026-08-24-scaler-copy-retirement-design.md`](2026-08-24-scaler-copy-retirement-design.md).
+
 ## Facts established despite the failed implementations
 
 The work was not diagnostically empty. It established the following facts:

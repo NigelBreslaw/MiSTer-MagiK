@@ -3643,9 +3643,9 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                     .and_then(Value::as_array)
                     .is_some_and(|samples| samples.len() == 3)
         }
-        Some("scaler-pipeline-state-v1") => {
+        Some("scaler-copy-retirement-v1") => {
             diagnostics.get("classification").and_then(Value::as_str)
-                == Some("scaler_pipeline_active")
+                == Some("scaler_copy_retirement_active")
                 && diagnostics
                     .pointer("/capabilities/passive_video_observer")
                     .and_then(Value::as_bool)
@@ -3653,9 +3653,13 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                 && diagnostics
                     .pointer("/capabilities/scaler_scheduler_state")
                     .and_then(Value::as_bool)
-                    == Some(true)
+                    == Some(false)
                 && diagnostics
                     .pointer("/capabilities/scaler_pipeline_state")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/capabilities/scaler_copy_retirement")
                     .and_then(Value::as_bool)
                     == Some(true)
                 && diagnostics
@@ -3671,7 +3675,7 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                     .and_then(Value::as_bool)
                     == Some(true)
                 && diagnostics
-                    .pointer("/coherence/state_fields_stable")
+                    .pointer("/coherence/classification_stable")
                     .and_then(Value::as_bool)
                     == Some(true)
                 && diagnostics
@@ -4214,6 +4218,8 @@ fn experimental_agent_preload_evidence_accepted(evidence: &Value) -> bool {
                         | "read passive FPGA video diagnostics: unsupported raw scaler state schema 2"
                         | "read passive FPGA video diagnostics: unsupported raw scaler state schema 3"
                         | "read passive FPGA video diagnostics: unsupported raw scaler state schema 4"
+                        | "read passive FPGA video diagnostics: unsupported raw scaler state \
+                           schema 5"
                 )
             ))
 }
@@ -34755,26 +34761,27 @@ H: Handlers=event3 js0"#
         let mut latched_mismatch = frame_integrity.clone();
         latched_mismatch["classification"] = json!("raw_control_mismatch_latched");
         assert!(!experimental_fpga_evidence_is_current(&latched_mismatch));
-        let scaler_pipeline_state = json!({
+        let scaler_copy_retirement = json!({
             "schema": "mister-magik-fpga-video-diagnostics-v2",
-            "diagnostic_architecture": "scaler-pipeline-state-v1",
+            "diagnostic_architecture": "scaler-copy-retirement-v1",
             "available": true,
             "coherent": true,
-            "classification": "scaler_pipeline_active",
+            "classification": "scaler_copy_retirement_active",
             "sink_visibility": "unobserved",
             "owner_epoch_before": 13,
             "owner_epoch_after": 13,
             "coherence": {
                 "three_samples_valid": true,
-                "state_fields_stable": true,
+                "classification_stable": true,
                 "latch_ownership_stable": true,
                 "launcher_state_stable": true,
                 "ownership_check_error": null,
             },
             "capabilities": {
                 "passive_video_observer": true,
-                "scaler_scheduler_state": true,
-                "scaler_pipeline_state": true,
+                "scaler_scheduler_state": false,
+                "scaler_pipeline_state": false,
+                "scaler_copy_retirement": true,
                 "pixel_observer": true,
                 "pll_observer": false,
             },
@@ -34788,31 +34795,29 @@ H: Handlers=event3 js0"#
             },
             "raw_scaler_state": {
                 "raw_samples": [
-                    [5, 0x0fff, 0x1000, 0],
-                    [5, 0x0fff, 0x1011, 0],
-                    [5, 0x0fff, 0x1084, 0],
+                    [6, 0x8867, 0x002a, 0],
+                    [6, 0x8867, 0x003a, 0],
+                    [6, 0x8867, 0x006a, 0],
                 ],
             },
         });
         assert!(experimental_raw_scaler_evidence_available(
-            &scaler_pipeline_state
+            &scaler_copy_retirement
         ));
         assert!(experimental_agent_preload_evidence_accepted(
-            &scaler_pipeline_state
+            &scaler_copy_retirement
         ));
         assert!(experimental_fpga_evidence_is_current(
-            &scaler_pipeline_state
+            &scaler_copy_retirement
         ));
         for rejected in [
-            "scaler_read_scheduler_stall",
-            "scaler_memory_return_stall",
-            "scaler_returned_zero_data",
-            "scaler_copy_buffer_stall_or_zero",
-            "scaler_linebuffer_write_zero",
-            "scaler_vertical_or_output_zero",
-            "scaler_pipeline_evidence_inconclusive",
+            "scaler_copy_lev_dec_missing",
+            "scaler_copy_terminal_condition_stall",
+            "scaler_copy_metadata_or_buffer_repetition",
+            "scaler_copy_buffer_selection_zero",
+            "scaler_copy_retirement_evidence_inconclusive",
         ] {
-            let mut evidence = scaler_pipeline_state.clone();
+            let mut evidence = scaler_copy_retirement.clone();
             evidence["classification"] = json!(rejected);
             assert!(!experimental_raw_scaler_evidence_available(&evidence));
             assert!(!experimental_agent_preload_evidence_accepted(&evidence));
@@ -34820,14 +34825,15 @@ H: Handlers=event3 js0"#
         }
         for (pointer, value) in [
             ("/coherence/three_samples_valid", json!(false)),
-            ("/coherence/state_fields_stable", json!(false)),
+            ("/coherence/classification_stable", json!(false)),
             ("/capabilities/passive_video_observer", json!(false)),
-            ("/capabilities/scaler_scheduler_state", json!(false)),
-            ("/capabilities/scaler_pipeline_state", json!(false)),
+            ("/capabilities/scaler_scheduler_state", json!(true)),
+            ("/capabilities/scaler_pipeline_state", json!(true)),
+            ("/capabilities/scaler_copy_retirement", json!(false)),
             ("/capabilities/pixel_observer", json!(false)),
             ("/capabilities/pll_observer", json!(true)),
         ] {
-            let mut evidence = scaler_pipeline_state.clone();
+            let mut evidence = scaler_copy_retirement.clone();
             *evidence.pointer_mut(pointer).unwrap() = value;
             assert!(!experimental_fpga_evidence_is_current(&evidence));
         }

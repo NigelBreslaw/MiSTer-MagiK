@@ -54,6 +54,12 @@ only enough completed-frame evidence to distinguish:
 3. an incorrect or stale buffer/metadata selection causing a zero copy to
    repeat without retiring.
 
+This decision is implemented as schema 6, `scaler-copy-retirement-v1`. It
+replaces schema 5 and records only the exact copy terminal predicate,
+`lev_dec_v`, FSM progress, address wrap, copied-data nonzero, and front metadata
+signature repetition/change. The frozen design is in
+[`2026-08-24-scaler-copy-retirement-design.md`](2026-08-24-scaler-copy-retirement-design.md).
+
 Do not alter the queued completion repair, latch-v5, routing, reset, PLL, mux,
 or pixel output. Do not add a general observer. Once the failing retirement
 condition is identified, replace diagnostics with the smallest functional

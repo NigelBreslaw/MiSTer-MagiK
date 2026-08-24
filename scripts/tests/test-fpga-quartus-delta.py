@@ -71,21 +71,16 @@ SYNC_NAMES = tuple(
     for name in COMPLETION_SYNC_NAMES
 )
 DIAGNOSTIC_SYS_SYNC_NAMES = ("generation_meta", "generation_sync")
-DIAGNOSTIC_AVALON_SYNC_NAMES = (
-    "o_magik_generation_meta",
-    "o_magik_generation_sync",
-)
 SYNC_ASSIGNMENTS = (
     COMPLETION_SYNC_ASSIGNMENTS
-    + quartus_assignment_section("ascal:ascal", DIAGNOSTIC_AVALON_SYNC_NAMES)
     + quartus_assignment_section(
         "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic",
         DIAGNOSTIC_SYS_SYNC_NAMES,
     )
 )
 CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
-Info (332114): Report Metastability: Found 9 synchronizer chains.
-Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.444444
+Info (332114): Report Metastability: Found 8 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.500000
 Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
 """
 
@@ -106,7 +101,6 @@ def metastability_chain(
 METASTABILITY_CHAINS = [
     ("ascal:ascal|avl_readdataack", "ascal:ascal|o_readdataack_sync", ("ascal:ascal|o_readdataack_sync",)),
     ("ascal:ascal|o_readdataack_sync2", "ascal:ascal|avl_completion_ack_meta", ("ascal:ascal|avl_completion_ack_meta", "ascal:ascal|avl_completion_ack_sync")),
-    ("ascal:ascal|avl_magik_generation", "ascal:ascal|o_magik_generation_meta", ("ascal:ascal|o_magik_generation_meta", "ascal:ascal|o_magik_generation_sync")),
     ("mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|source_generation", "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|generation_meta", ("mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|generation_meta", "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|generation_sync")),
 ]
 
@@ -120,8 +114,6 @@ VALID_DIAGNOSTIC_REPORTS = {
     "menu.magik-diagnostic-cdc-net-delay.rpt": (
         "; set_net_delay ; 1.250 ; 10.000 ; 8.750 ; sources ; destinations ; max ;\n"
         "; set_net_delay ; 1.150 ; 10.000 ; 8.850 ; sources ; destinations ; max ;\n"
-        "; set_net_delay ; 1.100 ; 10.000 ; 8.900 ; sources ; destinations ; max ;\n"
-        "; set_net_delay ; 1.050 ; 10.000 ; 8.950 ; sources ; destinations ; max ;\n"
         "; set_net_delay ; 1.025 ; 10.000 ; 8.975 ; sources ; destinations ; max ;\n"
         "; set_net_delay ; 1.000 ; 10.000 ; 9.000 ; sources ; destinations ; max ;\n"
         + net_delay_detail(
@@ -130,17 +122,6 @@ VALID_DIAGNOSTIC_REPORTS = {
         + net_delay_detail(
             "ascal:ascal|o_readdataack_sync2~DUPLICATE",
             "ascal:ascal|avl_completion_ack_meta",
-        )
-        + net_delay_detail(
-            "ascal:ascal|avl_magik_generation",
-            "ascal:ascal|o_magik_generation_meta",
-        )
-        + "".join(
-            net_delay_detail(
-                f"ascal:ascal|avl_magik_bundle[{bit}]",
-                f"ascal:ascal|o_magik_diag_state[{bit}]",
-            )
-            for bit in range(12)
         )
         + net_delay_detail(
             "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|source_generation",
@@ -243,15 +224,9 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertEqual(payload["invalid_reason"], "ok")
         detailed = payload["diagnostic_cdc_detailed_path_counts"]
         report = "menu.magik-diagnostic-cdc-net-delay.rpt"
-        self.assertEqual(detailed[report], 48)
+        self.assertEqual(detailed[report], 35)
         self.assertEqual(detailed[f"{report}:completion_request"], 1)
         self.assertEqual(detailed[f"{report}:completion_ack"], 1)
-        self.assertEqual(detailed[f"{report}:avalon_diagnostic_generation"], 1)
-        self.assertEqual(detailed[f"{report}:avalon_diagnostic_bundle"], 12)
-        self.assertNotIn(
-            "avl_magik_bundle[12]",
-            VALID_DIAGNOSTIC_REPORTS[report],
-        )
         self.assertEqual(detailed[f"{report}:responder_diagnostic_generation"], 1)
         self.assertEqual(detailed[f"{report}:responder_diagnostic_bundle"], 32)
         self.assertEqual(
@@ -259,7 +234,6 @@ class QuartusDeltaTest(unittest.TestCase):
             {
                 "completion_request",
                 "completion_ack",
-                "avalon_diagnostic_generation",
                 "responder_diagnostic_generation",
             },
         )
@@ -288,18 +262,18 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_unrelated_total_chain_drift_fails(self) -> None:
         patched = CUSTOM_SYNC.replace(
-            "Found 9 synchronizer chains", "Found 10 synchronizer chains"
+            "Found 8 synchronizer chains", "Found 9 synchronizer chains"
         ).replace(
-            "Could Not be Calculated: 0.444444",
             "Could Not be Calculated: 0.500000",
+            "Could Not be Calculated: 0.555556",
         )
         result, payload = self.run_check(BASE, BASE + patched)
         self.assertEqual(result.returncode, 1)
         self.assertIn("synchronizer_chain_count_mismatch", payload["invalid_reason"])
         self.assertEqual(payload["baseline_synchronizer_chains"], 5)
-        self.assertEqual(payload["patched_synchronizer_chains"], 10)
+        self.assertEqual(payload["patched_synchronizer_chains"], 9)
         self.assertEqual(payload["baseline_calculable_synchronizer_chains"], 1)
-        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 5)
+        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 4)
 
     def test_experimental_profile_accepts_bounded_timing_and_aggregate_chain_drift(self) -> None:
         baseline = BASE.replace("setup slack is 0.500", "setup slack is 0.660").replace(
@@ -308,8 +282,8 @@ class QuartusDeltaTest(unittest.TestCase):
         patched = (
             baseline.replace("setup slack is 0.660", "setup slack is 0.389")
             .replace("0.660               0.000", "0.389               0.000")
-            + CUSTOM_SYNC.replace("Found 9 synchronizer chains", "Found 7 synchronizer chains")
-            .replace("Could Not be Calculated: 0.444444", "Could Not be Calculated: 0.285714")
+            + CUSTOM_SYNC.replace("Found 8 synchronizer chains", "Found 6 synchronizer chains")
+            .replace("Could Not be Calculated: 0.500000", "Could Not be Calculated: 0.333333")
         )
         result, payload = self.run_check(
             BASE, patched, baseline, experimental_diagnostic=True
@@ -602,40 +576,6 @@ class QuartusDeltaTest(unittest.TestCase):
             "diagnostic_cdc_path_identity_mismatch", payload["invalid_reason"]
         )
 
-    def test_missing_avalon_generation_net_delay_path_fails(self) -> None:
-        reports = dict(VALID_DIAGNOSTIC_REPORTS)
-        reports["menu.magik-diagnostic-cdc-net-delay.rpt"] = reports[
-            "menu.magik-diagnostic-cdc-net-delay.rpt"
-        ].replace(
-            "ascal:ascal|avl_magik_generation ; ascal:ascal|o_magik_generation_meta",
-            "ascal:ascal|unrelated_generation ; ascal:ascal|unrelated_meta",
-            1,
-        )
-        result, payload = self.run_check(
-            BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports
-        )
-        self.assertEqual(result.returncode, 1)
-        self.assertIn(
-            "diagnostic_cdc_path_identity_mismatch", payload["invalid_reason"]
-        )
-
-    def test_missing_avalon_bundle_net_delay_path_fails(self) -> None:
-        reports = dict(VALID_DIAGNOSTIC_REPORTS)
-        reports["menu.magik-diagnostic-cdc-net-delay.rpt"] = reports[
-            "menu.magik-diagnostic-cdc-net-delay.rpt"
-        ].replace(
-            "ascal:ascal|avl_magik_bundle[11] ; ascal:ascal|o_magik_diag_state[11]",
-            "ascal:ascal|unrelated_bundle[11] ; ascal:ascal|unrelated_state[11]",
-            1,
-        )
-        result, payload = self.run_check(
-            BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports
-        )
-        self.assertEqual(result.returncode, 1)
-        self.assertIn(
-            "diagnostic_cdc_path_identity_mismatch", payload["invalid_reason"]
-        )
-
     def test_pll_count_drift_fails(self) -> None:
         patched = (BASE + CUSTOM_SYNC).replace(
             "Total PLLs: 3 / 6", "Total PLLs: 4 / 6"
@@ -685,26 +625,13 @@ class QuartusDeltaTest(unittest.TestCase):
             "diagnostic_metastability_chain_missing", payload["invalid_reason"]
         )
 
-    def test_avalon_generation_chain_requires_both_synchronization_registers(self) -> None:
-        reports = dict(VALID_DIAGNOSTIC_REPORTS)
-        reports["menu.magik-diagnostic-metastability.rpt"] = reports[
-            "menu.magik-diagnostic-metastability.rpt"
-        ].replace("; ascal:ascal|o_magik_generation_sync ; ;\n", "", 1)
-        result, payload = self.run_check(
-            BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports
-        )
-        self.assertEqual(result.returncode, 1)
-        self.assertIn(
-            "diagnostic_metastability_chain_missing", payload["invalid_reason"]
-        )
-
     def test_combined_mtbf_below_device_hour_gate_fails(self) -> None:
         reports = dict(VALID_DIAGNOSTIC_REPORTS)
         reports["menu.magik-diagnostic-metastability.rpt"] = reports[
             "menu.magik-diagnostic-metastability.rpt"
         ].replace(
             "; Worst-Case MTBF (years) ; Greater than 10 Billion ;",
-            "; Worst-Case MTBF (years) ; 4e+08 ;",
+            "; Worst-Case MTBF (years) ; 3e+08 ;",
         )
         result, payload = self.run_check(
             BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports
@@ -759,7 +686,7 @@ class QuartusDeltaTest(unittest.TestCase):
             / "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics.sdc"
         ).read_text(encoding="utf-8")
         self.assertIn("get_registers -nowarn -no_duplicates", sdc)
-        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 6)
+        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 4)
         self.assertNotIn("set_max_skew", sdc)
         self.assertNotIn("set_false_path", sdc)
 

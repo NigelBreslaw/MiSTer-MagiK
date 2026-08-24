@@ -131,3 +131,15 @@ mistook that older binary for the current one. Agent version 28 supersedes it;
 the protocol version remains 2 because the authenticated transport is
 unchanged. This makes the existing transactional bootstrap install and verify
 the schema-5 decoder before another experimental FPGA activation.
+
+## Result and retirement
+
+The corrected candidate was installed and immediately reproduced a genuine
+persistent MagiK black at epoch 1, attempt 1. Its three coherent records were
+identical (`flags=0x0541`, `state=0x100a`): both scheduler levels were full,
+the completion queue and reset-return accounting were idle, and copy/line/raw
+timing continued while all data-nonzero flags were absent. The physical frame
+was uniformly black and the authoritative framebuffer was correct.
+
+Schema 5 is therefore retired rather than stacked. The next narrow design is
+[`2026-08-24-scaler-copy-retirement-design.md`](2026-08-24-scaler-copy-retirement-design.md).

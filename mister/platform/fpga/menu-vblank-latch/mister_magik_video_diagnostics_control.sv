@@ -4,18 +4,15 @@
 `timescale 1ns/1ps
 `default_nettype none
 
-// Read-only responder for the disposable passive scaler pipeline record built
+// Read-only responder for the disposable passive copy-retirement record built
 // inside production ascal. No responder output feeds scaler, latch, reset,
 // route, PLL, mux, framebuffer, final output, or pixel control/data.
 module mister_magik_raw_scaler_diagnostic (
 	input  wire        clk_hdmi,
 	input  wire        clk_sys,
 	input  wire        reset_active,
-	input  wire [23:0] raw_rgb,
-	input  wire        raw_de,
-	input  wire        raw_vs,
-	input  wire [24:0] pipeline_state,
-	input  wire        pipeline_generation,
+	input  wire [31:0] copy_state,
+	input  wire        copy_generation,
 	input  wire        io_uio,
 	input  wire        io_strobe,
 	input  wire [15:0] io_din,
@@ -25,24 +22,11 @@ module mister_magik_raw_scaler_diagnostic (
 
 `include "mister_magik_video_diagnostics_protocol.svh"
 
-	// Quartus 17 cannot read VHDL OUT ports from inside ascal. Preserve one
-	// coherent boundary stage beside sys_top, as in the qualified schema-4
-	// observer, so production raw outputs drive only shallow diagnostic FFs.
-	(* preserve *) reg [23:0] raw_rgb_staged = 24'd0;
-	(* preserve *) reg raw_de_staged = 1'b0;
-	(* preserve *) reg raw_vs_staged = 1'b0;
-	reg raw_vs_previous = 1'b0;
-	reg raw_frame_open = 1'b0;
-	reg raw_active_seen = 1'b0;
-	reg raw_nonzero_seen = 1'b0;
-	reg raw_completed_valid = 1'b0;
-	reg [1:0] raw_completed_flags = 2'd0;
-
-	// ascal's pipeline bundle and generation are already in clk_hdmi. Wait one
-	// edge after observing its generation, then merge the completed raw-frame
-	// flags into the stable bundle before starting the clk_sys CDC transaction.
-	reg pipeline_generation_seen = 1'b0;
-	reg pipeline_capture_pending = 1'b0;
+	// ascal's completed record and generation are already in clk_hdmi. Wait one
+	// edge after observing its generation before starting the clk_sys CDC
+	// transaction so the complete bundle is stable.
+	reg copy_generation_seen = 1'b0;
+	reg copy_capture_pending = 1'b0;
 	(* preserve *) reg [31:0] source_state = 32'd0;
 	(* preserve *) reg source_generation = 1'b0;
 
@@ -64,17 +48,6 @@ module mister_magik_raw_scaler_diagnostic (
 	wire command_data = io_uio && io_strobe && has_command;
 	wire selected_start = io_din[7:0] == MAGIK_UIO_GET_RAW_SCALER_STATE;
 	wire selected_command = command_selected;
-	wire raw_frame_start = raw_vs_staged && !raw_vs_previous;
-	wire raw_active_sample = raw_de_staged;
-	wire [31:0] completed_pipeline_state = {
-		1'b0,
-		pipeline_state[24:10],
-		4'b0000,
-		raw_completed_valid && raw_completed_flags[1],
-		raw_completed_valid && raw_completed_flags[0],
-		pipeline_state[9:1],
-		pipeline_state[0] && raw_completed_valid
-	};
 
 	assign response_valid =
 		(command_start && selected_start) ||
@@ -123,53 +96,22 @@ module mister_magik_raw_scaler_diagnostic (
 			response_data = response_word;
 	end
 
-	// Rising raw VS closes the preceding frame. Its sample is excluded from the
-	// completed bucket and starts the next frame, matching schema-4 alignment.
 	always @(posedge clk_hdmi or posedge reset_active) begin
 		if(reset_active) begin
-			raw_rgb_staged <= 24'd0;
-			raw_de_staged <= 1'b0;
-			raw_vs_staged <= 1'b0;
-			raw_vs_previous <= 1'b0;
-			raw_frame_open <= 1'b0;
-			raw_active_seen <= 1'b0;
-			raw_nonzero_seen <= 1'b0;
-			raw_completed_valid <= 1'b0;
-			raw_completed_flags <= 2'd0;
-			pipeline_generation_seen <= 1'b0;
-			pipeline_capture_pending <= 1'b0;
+			copy_generation_seen <= 1'b0;
+			copy_capture_pending <= 1'b0;
 			source_state <= 32'd0;
 			source_generation <= 1'b0;
 		end
 		else begin
-			raw_rgb_staged <= raw_rgb;
-			raw_de_staged <= raw_de;
-			raw_vs_staged <= raw_vs;
-			raw_vs_previous <= raw_vs_staged;
-
-			if(raw_frame_start) begin
-				if(raw_frame_open) begin
-					raw_completed_valid <= 1'b1;
-					raw_completed_flags <= {raw_nonzero_seen, raw_active_seen};
-				end
-				raw_frame_open <= 1'b1;
-				raw_active_seen <= raw_active_sample;
-				raw_nonzero_seen <= raw_active_sample && (raw_rgb_staged != 24'd0);
+			if(copy_generation != copy_generation_seen) begin
+				copy_generation_seen <= copy_generation;
+				copy_capture_pending <= 1'b1;
 			end
-			else if(raw_active_sample) begin
-				raw_active_seen <= 1'b1;
-				if(raw_rgb_staged != 24'd0)
-					raw_nonzero_seen <= 1'b1;
-			end
-
-			if(pipeline_generation != pipeline_generation_seen) begin
-				pipeline_generation_seen <= pipeline_generation;
-				pipeline_capture_pending <= 1'b1;
-			end
-			else if(pipeline_capture_pending) begin
-				source_state <= completed_pipeline_state;
+			else if(copy_capture_pending) begin
+				source_state <= copy_state;
 				source_generation <= ~source_generation;
-				pipeline_capture_pending <= 1'b0;
+				copy_capture_pending <= 1'b0;
 			end
 		end
 	end

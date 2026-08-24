@@ -4,10 +4,11 @@
 use serde_json::{Value, json};
 
 pub const PORT: u16 = 7498;
-// Version 28 adds the schema-5 scaler pipeline diagnostics decoder. Version 27
+// Version 29 adds the schema-6 scaler copy-retirement diagnostics decoder.
+// Version 28 added the disposable schema-5 scaler pipeline decoder. Version 27
 // introduced bounded, authenticated Runtime staging over the existing
 // outbound host-to-agent connection.
-pub const AGENT_VERSION: u64 = 28;
+pub const AGENT_VERSION: u64 = 29;
 pub const PROTOCOL_VERSION: u64 = 2;
 pub const FRAMEBUFFER_CAPTURE_CAPABILITY: &str = "framebuffer-capture-v2";
 pub const DEVICE_TELEMETRY_CAPABILITY: &str = "device-telemetry-v2";

@@ -158,6 +158,13 @@ impl RawScalerState {
         (self.state() >> bit) & mask
     }
 
+    pub fn copy_state(&self) -> u8 {
+        self.state_field(
+            RAW_SCALER_STATE_COPY_STATE_BIT,
+            RAW_SCALER_STATE_COPY_STATE_MASK,
+        ) as u8
+    }
+
     pub fn read_level(&self) -> u8 {
         self.state_field(
             RAW_SCALER_STATE_READ_LEVEL_BIT,
@@ -172,73 +179,49 @@ impl RawScalerState {
         ) as u8
     }
 
-    pub fn completion_request(&self) -> bool {
+    pub fn adturn(&self) -> bool {
+        self.state_field(RAW_SCALER_STATE_ADTURN_BIT, RAW_SCALER_STATE_ADTURN_MASK) != 0
+    }
+
+    pub fn front_prim(&self) -> bool {
         self.state_field(
-            RAW_SCALER_STATE_COMPLETION_REQUEST_BIT,
-            RAW_SCALER_STATE_COMPLETION_REQUEST_MASK,
+            RAW_SCALER_STATE_FRONT_PRIM_BIT,
+            RAW_SCALER_STATE_FRONT_PRIM_MASK,
         ) != 0
     }
 
-    pub fn completion_pending(&self) -> bool {
+    pub fn front_last(&self) -> bool {
         self.state_field(
-            RAW_SCALER_STATE_COMPLETION_PENDING_BIT,
-            RAW_SCALER_STATE_COMPLETION_PENDING_MASK,
+            RAW_SCALER_STATE_FRONT_LAST_BIT,
+            RAW_SCALER_STATE_FRONT_LAST_MASK,
         ) != 0
     }
 
-    pub fn completion_source_ack(&self) -> bool {
+    pub fn front_bank(&self) -> bool {
         self.state_field(
-            RAW_SCALER_STATE_COMPLETION_SOURCE_ACK_BIT,
-            RAW_SCALER_STATE_COMPLETION_SOURCE_ACK_MASK,
+            RAW_SCALER_STATE_FRONT_BANK_BIT,
+            RAW_SCALER_STATE_FRONT_BANK_MASK,
         ) != 0
     }
 
-    pub fn completion_destination_seen(&self) -> bool {
+    pub fn front_offset(&self) -> u8 {
         self.state_field(
-            RAW_SCALER_STATE_COMPLETION_DESTINATION_SEEN_BIT,
-            RAW_SCALER_STATE_COMPLETION_DESTINATION_SEEN_MASK,
-        ) != 0
-    }
-
-    pub fn return_drain_active(&self) -> bool {
-        self.state_field(
-            RAW_SCALER_STATE_RETURN_DRAIN_ACTIVE_BIT,
-            RAW_SCALER_STATE_RETURN_DRAIN_ACTIVE_MASK,
-        ) != 0
-    }
-
-    pub fn return_credits(&self) -> u8 {
-        self.state_field(
-            RAW_SCALER_STATE_RETURN_CREDITS_BIT,
-            RAW_SCALER_STATE_RETURN_CREDITS_MASK,
+            RAW_SCALER_STATE_FRONT_OFFSET_BIT,
+            RAW_SCALER_STATE_FRONT_OFFSET_MASK,
         ) as u8
     }
 
-    pub fn return_phase_nonzero(&self) -> bool {
+    pub fn line_last_pipeline(&self) -> bool {
         self.state_field(
-            RAW_SCALER_STATE_RETURN_PHASE_NONZERO_BIT,
-            RAW_SCALER_STATE_RETURN_PHASE_NONZERO_MASK,
+            RAW_SCALER_STATE_LINE_LAST_PIPELINE_BIT,
+            RAW_SCALER_STATE_LINE_LAST_PIPELINE_MASK,
         ) != 0
     }
 
-    pub fn scaler_running(&self) -> bool {
+    pub fn copy_write_active(&self) -> bool {
         self.state_field(
-            RAW_SCALER_STATE_SCALER_RUNNING_BIT,
-            RAW_SCALER_STATE_SCALER_RUNNING_MASK,
-        ) != 0
-    }
-
-    pub fn new_resolution_active(&self) -> bool {
-        self.state_field(
-            RAW_SCALER_STATE_NEW_RESOLUTION_ACTIVE_BIT,
-            RAW_SCALER_STATE_NEW_RESOLUTION_ACTIVE_MASK,
-        ) != 0
-    }
-
-    pub fn read_active(&self) -> bool {
-        self.state_field(
-            RAW_SCALER_STATE_READ_ACTIVE_BIT,
-            RAW_SCALER_STATE_READ_ACTIVE_MASK,
+            RAW_SCALER_STATE_COPY_WRITE_ACTIVE_BIT,
+            RAW_SCALER_STATE_COPY_WRITE_ACTIVE_MASK,
         ) != 0
     }
 }
@@ -755,13 +738,13 @@ pub fn decode_raw_scaler_state(words: &[u16]) -> Result<RawScalerState, String> 
             "raw scaler state CRC mismatch expected=0x{expected:04x} actual=0x{actual:04x}"
         ));
     }
-    if words[RAW_SCALER_STATE_FLAGS_WORD] & RAW_SCALER_STATE_FLAGS_RESERVED_ZERO_MASK != 0
-        || words[RAW_SCALER_STATE_STATE_WORD] & RAW_SCALER_STATE_STATE_RESERVED_ZERO_MASK != 0
-    {
-        return Err("raw scaler pipeline state record contains nonzero reserved bits".to_string());
-    }
     let state = words[RAW_SCALER_STATE_STATE_WORD];
     for (name, bit, mask) in [
+        (
+            "copy state",
+            RAW_SCALER_STATE_COPY_STATE_BIT,
+            RAW_SCALER_STATE_COPY_STATE_MASK,
+        ),
         (
             "read level",
             RAW_SCALER_STATE_READ_LEVEL_BIT,
@@ -772,14 +755,9 @@ pub fn decode_raw_scaler_state(words: &[u16]) -> Result<RawScalerState, String> 
             RAW_SCALER_STATE_COPY_LEVEL_BIT,
             RAW_SCALER_STATE_COPY_LEVEL_MASK,
         ),
-        (
-            "return credits",
-            RAW_SCALER_STATE_RETURN_CREDITS_BIT,
-            RAW_SCALER_STATE_RETURN_CREDITS_MASK,
-        ),
     ] {
         if (state >> bit) & mask > 2 {
-            return Err(format!("raw scaler pipeline {name} is outside 0..2"));
+            return Err(format!("raw scaler copy retirement {name} is outside 0..2"));
         }
     }
     let mut owned = [0; RAW_SCALER_STATE_WORDS];
@@ -937,24 +915,22 @@ mod tests {
     }
 
     #[test]
-    fn raw_scaler_state_decodes_pipeline_state() {
+    fn raw_scaler_state_decodes_copy_retirement_state() {
         let mut words = zero_hdmi_words::<RAW_SCALER_STATE_WORDS>(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
         );
-        words[RAW_SCALER_STATE_FLAGS_WORD] = RAW_SCALER_STATE_FLAG_FRAME_VALID
-            | RAW_SCALER_STATE_FLAG_READ_ACCEPT_SEEN
-            | RAW_SCALER_STATE_FLAG_CURRENT_RETURN_SEEN
-            | RAW_SCALER_STATE_FLAG_RETURN_NONZERO_SEEN
-            | RAW_SCALER_STATE_FLAG_COMPLETION_CREATED_SEEN
-            | RAW_SCALER_STATE_FLAG_DESTINATION_COMPLETION_SEEN
-            | RAW_SCALER_STATE_FLAG_COPY_READ_SEEN
-            | RAW_SCALER_STATE_FLAG_COPY_NONZERO_SEEN
-            | RAW_SCALER_STATE_FLAG_LINE_WRITE_SEEN
-            | RAW_SCALER_STATE_FLAG_LINE_NONZERO_SEEN
-            | RAW_SCALER_STATE_FLAG_RAW_ACTIVE_SEEN
-            | RAW_SCALER_STATE_FLAG_RAW_NONZERO_SEEN;
-        words[RAW_SCALER_STATE_STATE_WORD] = 0x75e6;
+        words[RAW_SCALER_STATE_FLAGS_WORD] = RAW_SCALER_STATE_FLAGS_MASK;
+        words[RAW_SCALER_STATE_STATE_WORD] = 2
+            | (2 << RAW_SCALER_STATE_READ_LEVEL_BIT)
+            | (1 << RAW_SCALER_STATE_COPY_LEVEL_BIT)
+            | (1 << RAW_SCALER_STATE_ADTURN_BIT)
+            | (1 << RAW_SCALER_STATE_FRONT_PRIM_BIT)
+            | (1 << RAW_SCALER_STATE_FRONT_LAST_BIT)
+            | (1 << RAW_SCALER_STATE_FRONT_BANK_BIT)
+            | (9 << RAW_SCALER_STATE_FRONT_OFFSET_BIT)
+            | (1 << RAW_SCALER_STATE_LINE_LAST_PIPELINE_BIT)
+            | (1 << RAW_SCALER_STATE_COPY_WRITE_ACTIVE_BIT);
         words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
@@ -962,40 +938,29 @@ mod tests {
         );
         let decoded = decode_raw_scaler_state(&words).unwrap();
         assert!(decoded.frame_valid());
-        assert!(decoded.flag(RAW_SCALER_STATE_FLAG_RAW_NONZERO_SEEN));
+        assert!(decoded.flag(RAW_SCALER_STATE_FLAG_TERMINAL_CONDITION_SEEN));
+        assert_eq!(decoded.copy_state(), 2);
         assert_eq!(decoded.read_level(), 2);
         assert_eq!(decoded.copy_level(), 1);
-        assert!(!decoded.completion_request());
-        assert!(decoded.completion_pending());
-        assert!(decoded.completion_source_ack());
-        assert!(decoded.completion_destination_seen());
-        assert!(decoded.return_drain_active());
-        assert_eq!(decoded.return_credits(), 2);
-        assert!(!decoded.return_phase_nonzero());
-        assert!(decoded.scaler_running());
-        assert!(decoded.new_resolution_active());
-        assert!(decoded.read_active());
+        assert!(decoded.adturn());
+        assert!(decoded.front_prim());
+        assert!(decoded.front_last());
+        assert!(decoded.front_bank());
+        assert_eq!(decoded.front_offset(), 9);
+        assert!(decoded.line_last_pipeline());
+        assert!(decoded.copy_write_active());
     }
 
     #[test]
-    fn raw_scaler_state_rejects_crc_and_reserved_bit() {
+    fn raw_scaler_state_rejects_crc_and_invalid_copy_state() {
         let mut words = zero_hdmi_words::<RAW_SCALER_STATE_WORDS>(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
         );
         words[RAW_SCALER_STATE_CRC_WORD] ^= 1;
         assert!(decode_raw_scaler_state(&words).is_err());
-
-        words[RAW_SCALER_STATE_FLAGS_WORD] = 1 << 15;
-        words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
-            GET_RAW_SCALER_STATE,
-            RAW_SCALER_STATE_SCHEMA,
-            &words[..RAW_SCALER_STATE_CRC_WORD],
-        );
-        assert!(decode_raw_scaler_state(&words).is_err());
-
         words[RAW_SCALER_STATE_FLAGS_WORD] = 0;
-        words[RAW_SCALER_STATE_STATE_WORD] = 0x8000;
+        words[RAW_SCALER_STATE_STATE_WORD] = 3;
         words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
