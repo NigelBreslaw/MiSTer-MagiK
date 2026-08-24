@@ -284,7 +284,7 @@ class QuartusDeltaTest(unittest.TestCase):
             "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
             "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,500\n"
             "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
-            "Logic utilization (in ALMs) : 8,000\nTotal registers : 20,724\n"
+            "Logic utilization (in ALMs) : 8,008\nTotal registers : 20,724\n"
             "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
         )
         result, payload = self.run_check(

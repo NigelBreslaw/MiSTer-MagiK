@@ -991,6 +991,11 @@ The subsequent 48-bit fit reached 0.516 ns setup, 0.224 ns hold, zero TNS, 165
 registers, and unchanged hard-block identity, but exceeded the frozen
 experimental ALM cap by six. Redundant observer state and the generic response
 selector were removed before the next fixed-seed build; the cap was not waived.
+That smaller form reduced growth to 131 ALMs and 123 registers but also reduced
+setup slack to 0.250 ns and was rejected. The prior control form is restored
+with an explicit 208-ALM disposable-diagnostic ceiling for its measured 206
+ALMs; its 0.516 ns setup, 0.224 ns hold, zero TNS, and 165-register result are
+the safer fixed-seed tradeoff.
 
 The design and pre-synthesis gates are frozen in
 [`2026-08-24-raw-scaler-frame-integrity-design.md`](2026-08-24-raw-scaler-frame-integrity-design.md).

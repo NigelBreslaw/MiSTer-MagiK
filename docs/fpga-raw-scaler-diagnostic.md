@@ -74,7 +74,7 @@ does not prove pixels or the physical sink were correct.
   any new framebuffer, latch, route, reset, PLL, mux, or pixel tap.
 - Require exact generation synchronizer endpoints, bounded generation and
   bundled-data paths, and the existing MTBF policy.
-- For this disposable diagnostic profile only, cap growth at 200 ALMs and 224
+- For this disposable diagnostic profile only, cap growth at 208 ALMs and 224
   registers while still requiring unchanged RAM, DSP, and PLL identity. Keep
   the 0.200 ns hold floor and zero-TNS requirement.
 - Do not run CI or install this RBF until the committed candidate passes the

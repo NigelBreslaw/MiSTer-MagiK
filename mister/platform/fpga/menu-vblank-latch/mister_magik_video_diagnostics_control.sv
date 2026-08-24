@@ -26,11 +26,14 @@ module mister_magik_raw_scaler_diagnostic (
 `include "mister_magik_video_diagnostics_protocol.svh"
 
 	reg raw_vs_previous = 1'b0;
+	reg frame_open = 1'b0;
+	reg ce_seen = 1'b0;
 	reg hs_seen = 1'b0;
 	reg vs_seen = 1'b0;
 	reg de_seen = 1'b0;
 	reg [15:0] control_crc = 16'hffff;
 
+	reg candidate_valid = 1'b0;
 	reg [1:0] candidate_streak = 2'd0;
 
 	// Slots 0..2 are response words 1..3. Before publication the baseline slot
@@ -54,8 +57,8 @@ module mister_magik_raw_scaler_diagnostic (
 	reg [15:0] response_word;
 
 	wire frame_start = raw_ce && raw_vs && !raw_vs_previous;
-	wire completed_frame = frame_start && vs_seen;
-	wire completed_nonempty = hs_seen && vs_seen && de_seen;
+	wire completed_frame = frame_start && frame_open;
+	wire completed_nonempty = ce_seen && hs_seen && vs_seen && de_seen;
 	wire candidate_matches = source_state[31:16] == control_crc;
 	wire baseline_matches = source_state[31:16] == control_crc;
 	wire baseline_valid =
@@ -117,10 +120,13 @@ module mister_magik_raw_scaler_diagnostic (
 	always @(posedge clk_hdmi or posedge reset_active) begin
 		if(reset_active) begin
 			raw_vs_previous <= 1'b0;
+			frame_open <= 1'b0;
+			ce_seen <= 1'b0;
 			hs_seen <= 1'b0;
 			vs_seen <= 1'b0;
 			de_seen <= 1'b0;
 			control_crc <= 16'hffff;
+			candidate_valid <= 1'b0;
 			candidate_streak <= 2'd0;
 			source_state <= 48'd0;
 			source_generation <= 1'b0;
@@ -129,8 +135,10 @@ module mister_magik_raw_scaler_diagnostic (
 			raw_vs_previous <= raw_vs;
 
 			if(frame_start) begin
+				frame_open <= 1'b1;
 				control_crc <= control_crc_update(16'hffff,
 					{raw_ce, raw_de, raw_hs, raw_vs});
+				ce_seen <= raw_ce;
 				hs_seen <= raw_ce && raw_hs;
 				vs_seen <= raw_ce && raw_vs;
 				de_seen <= raw_ce && raw_de;
@@ -138,9 +146,10 @@ module mister_magik_raw_scaler_diagnostic (
 				if(completed_frame) begin
 					if(!baseline_valid) begin
 						if(!completed_nonempty) begin
+							candidate_valid <= 1'b0;
 							candidate_streak <= 2'd0;
 						end
-						else if(candidate_streak != 2'd0 && candidate_matches) begin
+						else if(candidate_valid && candidate_matches) begin
 							if(candidate_streak == 2'd2) begin
 								source_state <= {
 									16'd0, control_crc,
@@ -149,12 +158,14 @@ module mister_magik_raw_scaler_diagnostic (
 									MAGIK_RAW_SCALER_STATE_FLAG_BASELINE_VALID
 								};
 								source_generation <= ~source_generation;
+								candidate_valid <= 1'b0;
 								candidate_streak <= 2'd0;
 							end
 							else
 								candidate_streak <= candidate_streak + 1'd1;
 						end
 						else begin
+							candidate_valid <= 1'b1;
 							candidate_streak <= 2'd1;
 							source_state[31:16] <= control_crc;
 						end
@@ -175,6 +186,7 @@ module mister_magik_raw_scaler_diagnostic (
 			else begin
 				control_crc <= control_crc_update(control_crc,
 					{raw_ce, raw_de, raw_hs, raw_vs});
+				ce_seen <= ce_seen | raw_ce;
 				hs_seen <= hs_seen | (raw_ce && raw_hs);
 				vs_seen <= vs_seen | (raw_ce && raw_vs);
 				de_seen <= de_seen | (raw_ce && raw_de);
@@ -183,19 +195,12 @@ module mister_magik_raw_scaler_diagnostic (
 	end
 
 	always @(*) begin
-		case(word_count)
-			MAGIK_RAW_SCALER_STATE_SCHEMA_WORD:
-				response_word = MAGIK_RAW_SCALER_STATE_SCHEMA;
-			MAGIK_RAW_SCALER_STATE_FLAGS_WORD:
-				response_word = snapshot_state[15:0];
-			MAGIK_RAW_SCALER_STATE_BASELINE_CONTROL_CRC_WORD:
-				response_word = snapshot_state[31:16];
-			MAGIK_RAW_SCALER_STATE_FIRST_BAD_CONTROL_CRC_WORD:
-				response_word = snapshot_state[47:32];
-			MAGIK_RAW_SCALER_STATE_CRC_WORD:
-				response_word = tx_crc;
-			default: response_word = 16'd0;
-		endcase
+		if(word_count == MAGIK_RAW_SCALER_STATE_SCHEMA_WORD)
+			response_word = MAGIK_RAW_SCALER_STATE_SCHEMA;
+		else if(word_count == MAGIK_RAW_SCALER_STATE_CRC_WORD)
+			response_word = tx_crc;
+		else
+			response_word = snapshot_state[(word_count - 1'd1) * 16 +: 16];
 
 		response_data = 16'd0;
 		if(command_start && selected_start)
