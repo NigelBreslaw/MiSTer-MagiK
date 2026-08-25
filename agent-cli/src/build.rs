@@ -102,7 +102,7 @@ impl BuildSpec {
                 BuildMode::Build,
                 "release-device",
                 vec!["ui", "profile"],
-                UiScope::All,
+                UiScope::Production,
                 runtime_artifact("release-device"),
             ),
             BuildCommand::RuntimeCi => (
@@ -118,7 +118,7 @@ impl BuildSpec {
                 BuildMode::Build,
                 "release-device-profile",
                 vec!["ui", "profile"],
-                UiScope::All,
+                UiScope::Production,
                 runtime_artifact("release-device-profile"),
             ),
             BuildCommand::ValidateLauncher | BuildCommand::ValidateRuntime => (
@@ -1867,10 +1867,14 @@ mod tests {
 
     #[test]
     fn runtime_and_validation_intents_infer_fixed_identity() {
-        let runtime = BuildSpec::canonical(UiScope::All);
+        let runtime = BuildSpec::for_command(BuildCommand::RuntimeDevice).unwrap();
         assert_eq!(runtime.profile, "release-device");
         assert_eq!(runtime.features, ["ui", "profile"]);
-        assert_eq!(runtime.ui_scope, UiScope::All);
+        assert_eq!(runtime.ui_scope, UiScope::Production);
+        let analysis = BuildSpec::for_command(BuildCommand::RuntimeAnalysis).unwrap();
+        assert_eq!(analysis.ui_scope, UiScope::Production);
+        let ci = BuildSpec::for_command(BuildCommand::RuntimeCi).unwrap();
+        assert_eq!(ci.ui_scope, UiScope::All);
         let launcher = BuildSpec::for_command(BuildCommand::ValidateLauncher).unwrap();
         assert_eq!(launcher.mode, BuildMode::Check);
         assert_eq!(launcher.ui_scope, UiScope::Launcher);

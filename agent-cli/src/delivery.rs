@@ -756,8 +756,8 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
                 self.decision = reconcile_active_runtime(reconciliation.decision, &active);
                 if self.decision == DeliveryDecision::Platform {
                     self.deployment.kind = DeploymentKind::Platform;
-                    self.deployment.ui_scope = UiScope::All;
-                    self.deployment.build = crate::build::BuildSpec::canonical(UiScope::All);
+                    self.deployment.ui_scope = UiScope::Production;
+                    self.deployment.build = crate::build::BuildSpec::canonical(UiScope::Production);
                 }
                 self.installed_manifest = Some(installed_manifest);
                 Ok(())

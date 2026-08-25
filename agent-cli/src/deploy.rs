@@ -228,7 +228,7 @@ fn platform_components(paths: &[PathBuf]) -> Vec<&'static str> {
 
 fn ui_scope(paths: &[PathBuf]) -> UiScope {
     if paths.is_empty() {
-        return UiScope::All;
+        return UiScope::Production;
     }
     if paths.iter().all(|path| {
         path.starts_with("apps/mister/src/ui_runner") || path.starts_with("apps/mister/ui/launcher")
@@ -495,7 +495,7 @@ mod tests {
 
     #[test]
     fn unknown_or_empty_impact_uses_safe_production_scope() {
-        assert_eq!(ui_scope(&[]), UiScope::All);
+        assert_eq!(ui_scope(&[]), UiScope::Production);
         assert_eq!(
             ui_scope(&[PathBuf::from("docs/architecture.md")]),
             UiScope::Production

@@ -7,7 +7,7 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(mister_bench_scenes)");
 
     let bench_scenes = std::env::var_os("CARGO_FEATURE_BENCH_SCENES").is_some();
-    let scope = std::env::var("MISTER_UI_BUILD_SCOPE").unwrap_or_else(|_| "all".into());
+    let scope = std::env::var("MISTER_UI_BUILD_SCOPE").unwrap_or_else(|_| "production".into());
     let launcher_only = match scope.as_str() {
         "" | "all" => false,
         "launcher" | "arcade" | "production" => true,
@@ -25,11 +25,6 @@ fn main() {
             "../ui/controller_test.slint",
             "../ui/bench/tear_pattern.slint",
             "../ui/bench/video_playback.slint",
-            "../ui/mockups/crt_arcade_list_mockup.slint",
-            "../ui/mockups/crt_launcher_mockup.slint",
-            "../ui/mockups/crt_resolution_combo_mockup.slint",
-            "../ui/mockups/crt_settings_mockup.slint",
-            "../ui/mockups/crt_systems_list_mockup.slint",
         ]);
     }
     if bench_scenes {

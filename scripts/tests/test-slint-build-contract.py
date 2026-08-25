@@ -21,6 +21,7 @@ UI_CRATE = ROOT / "apps/mister/ui-generated"
 
 REQUIRED_BUILD_SCRIPT_FRAGMENTS = (
     'cargo:rerun-if-env-changed=MISTER_UI_BUILD_SCOPE',
+    'unwrap_or_else(|_| "production".into())',
     'std::env::var_os("CARGO_FEATURE_BENCH_SCENES")',
     '"launcher" | "arcade" | "production" => true',
     'cargo:rustc-cfg=mister_ui_scope_launcher',
@@ -29,17 +30,13 @@ REQUIRED_BUILD_SCRIPT_FRAGMENTS = (
     '"../ui/launcher.slint"',
     '"../ui/bench/tear_pattern.slint"',
     '"../ui/bench/video_playback.slint"',
-    '"../ui/mockups/crt_arcade_list_mockup.slint"',
-    '"../ui/mockups/crt_launcher_mockup.slint"',
-    '"../ui/mockups/crt_resolution_combo_mockup.slint"',
-    '"../ui/mockups/crt_settings_mockup.slint"',
-    '"../ui/mockups/crt_systems_list_mockup.slint"',
     '"../ui/experiments/effect_hud.slint"',
     "slint_build::EmbedResourcesKind::EmbedFiles",
     "slint_build::compile_with_config(path, config)",
 )
 
 FORBIDDEN_BUILD_SCRIPT_FRAGMENTS = (
+    '"../ui/mockups/',
     "GENERATOR_CACHE_REVISION",
     "let mut inputs",
     "cargo:rerun-if-changed=",

@@ -35,7 +35,7 @@ fn main() {
         build_timestamp()
     );
 
-    let scope = std::env::var("MISTER_UI_BUILD_SCOPE").unwrap_or_else(|_| "all".into());
+    let scope = std::env::var("MISTER_UI_BUILD_SCOPE").unwrap_or_else(|_| "production".into());
     let launcher_only = match scope.as_str() {
         "" | "all" => false,
         "launcher" | "arcade" | "production" => true,
