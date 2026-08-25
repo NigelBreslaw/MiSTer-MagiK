@@ -1200,3 +1200,21 @@ The frozen encoding, ABI, proof obligations, and decision contract are in
 [`2026-08-24-raw-scaler-ordered-frame-design.md`](2026-08-24-raw-scaler-ordered-frame-design.md).
 This entry records an implementation candidate only. Apple-container signoff,
 device installation, and physical interpretation remain later explicit gates.
+
+The resource-reduced schema-10 implementation subsequently passed all local
+simulation, exact-source proof, structural, CDC, and fixed-seed Apple gates.
+Its final fit had `+0.724 ns` setup, `+0.246 ns` hold, zero TNS, 158/158
+relationships, exact 3/3 diagnostic CDC paths, `+188` ALMs, and `+191`
+registers with unchanged RAM/DSP/PLL identity.
+
+After an initial physical smoke and 44 clean Phase 2 returns, return 45
+reproduced moving physical corruption on the revealed Arcade launcher. The
+RGB565 framebuffer was byte-identical to healthy return 44. Three coherent
+direct-`ascal` frame records advanced while retaining signature `e231`, also
+the exact healthy-reference signature for the same static scene. Native USB
+Video changed by 45 permille against the 8-permille temporal threshold. This
+strongly attributes the observed corruption downstream of direct `ascal` and
+answers Design 11's boundary question. The campaign stopped without recovery;
+the exact identities, records, hashes, and 30-second native movie are indexed
+in
+[`2026-08-25-raw-scaler-signature-v3-corruption-incident-v1.json`](2026-08-25-raw-scaler-signature-v3-corruption-incident-v1.json).

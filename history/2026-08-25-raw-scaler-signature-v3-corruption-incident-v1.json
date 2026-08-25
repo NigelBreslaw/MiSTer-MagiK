@@ -1,0 +1,128 @@
+{
+  "schema": "mister-magik-raw-scaler-signature-v3-corruption-incident-v1",
+  "date": "2026-08-25",
+  "candidate": {
+    "implementation_commit": "f2eb069b2e246c51857e42a14461527339c678cc",
+    "agent_compatibility_commit": "44fa38d184882603c954a2b1d6fe703d9ec987bc",
+    "device_agent_sha256": "2c3d33c0760d0b558fc771c0be08e6062180db5f9ae4f6259fa1ac5d73e9118b",
+    "rbf_sha256": "6c9324ffe52cd6ae10ecac31ef8a37a281dd2882156ecdc4571e5ab5d35a7691",
+    "metadata_sha256": "b462d572f8b9ef69282143d0d85b7a7aebd27b843587f9780ae334ce35eb6bdd",
+    "signoff_report_sha256": "00a38857e5aa601dfb443fa0f5b5f5215c2953e4f889475241022b798ca98d15",
+    "diagnostic_architecture": "raw-scaler-ordered-signature-v3",
+    "diagnostic_schema": 10,
+    "latch_protocol": 5,
+    "latch_capabilities": "0x03ff"
+  },
+  "local_signoff": {
+    "result": "passed",
+    "quartus": "17.0.0 Build 595",
+    "seed": 2,
+    "setup_slack_ns": 0.724,
+    "hold_slack_ns": 0.246,
+    "tns_ns": 0.0,
+    "constrained_relationships": "158/158",
+    "alm_delta": 188,
+    "register_delta": 191,
+    "exact_cdc_paths": "3/3",
+    "combined_observer_mtbf_years": 333333333,
+    "ram_dsp_pll_identity_unchanged": true,
+    "new_warning_class": false
+  },
+  "campaign": {
+    "preinstall_incident_preserved": true,
+    "initial_smoke_passed": true,
+    "game_dwell_ms": 2000,
+    "clean_phase2_returns_before_failure": 44,
+    "failure_transition": 45,
+    "scheduled_reboots_completed_before_failure": 8,
+    "black_screen_observed": false,
+    "physical_corruption_observed": true,
+    "campaign_stopped_on_failure": true,
+    "recovery_performed": false
+  },
+  "failure_state": {
+    "launcher_scene": "launcher",
+    "launcher_screen": "arcade",
+    "effective_view": "arcade",
+    "return_phase": "complete",
+    "input_enabled": true,
+    "revealed": true,
+    "present_backend": "fpga-vblank-latch-hidden",
+    "present_status": "ok",
+    "latch_drop_count": 0,
+    "latch_reject_count": 0,
+    "source_framebuffer_correct": true,
+    "source_framebuffer_sha256": "288f47335560f1169890ee50d02ddf3707ef4b568a22ccb06593a78d275ad250",
+    "source_framebuffer_matches_healthy_reference": true,
+    "physical_visibility": "corrupted",
+    "physical_temporal_luma_delta_permille": 45,
+    "physical_temporal_threshold_permille": 8,
+    "sink_visibility": "unobserved"
+  },
+  "raw_scaler_evidence": {
+    "classification": "raw_scaler_ordered_stable",
+    "coherent": true,
+    "three_samples_valid": true,
+    "classification_stable": true,
+    "owner_epoch_stable": true,
+    "latch_ownership_stable": true,
+    "launcher_state_stable": true,
+    "frame_sequences": [417, 419, 420],
+    "frame_valid": [true, true, true],
+    "ordered_signatures": ["e231", "e231", "e231"],
+    "healthy_reference_transition": 44,
+    "healthy_reference_frame_sequences": [441, 442, 444],
+    "healthy_reference_ordered_signatures": ["e231", "e231", "e231"],
+    "same_static_scene": true
+  },
+  "decision": {
+    "classification": "downstream_of_direct_ascal_supported",
+    "basis": "The exact same static source framebuffer and ordered direct-ascal signature were stable in healthy transition 44 and corrupted transition 45 while native USB Video changed by 45 permille between confirmed physical frames.",
+    "boundary": "The evidence excludes the source framebuffer and strongly argues against ordered raw-scaler RGB changing during the observed corruption. It does not identify which downstream stage is responsible and does not prove sink visibility from FPGA state.",
+    "next_probe": "A separate minimal observer at the final post-OSD/post-shadowmask HDMI pixel boundary, compared against the retained direct-ascal signature, is the next discriminating FPGA diagnostic."
+  },
+  "artifacts": [
+    {
+      "path": "build/raw-scaler-signature-v3-phase2-045/summary.json",
+      "bytes": 443087,
+      "sha256": "de5540e4d70f22db83840770d476df7581d33361079c0f34df83d5b2c37d79e8",
+      "role": "phase2_failure_summary"
+    },
+    {
+      "path": "build/raw-scaler-signature-v3-phase2-045/fpga-video-diagnostics.json",
+      "bytes": 778333,
+      "sha256": "5f6b30bc4b284a5d3ab9aede403095ff7764d9d3b6d7d91ccfe25d368c580d7d",
+      "role": "three_record_fpga_diagnostics"
+    },
+    {
+      "path": "build/raw-scaler-signature-v3-phase2-045/returned-framebuffer.png",
+      "bytes": 119288,
+      "sha256": "288f47335560f1169890ee50d02ddf3707ef4b568a22ccb06593a78d275ad250",
+      "role": "authoritative_rgb565_framebuffer"
+    },
+    {
+      "path": "build/raw-scaler-signature-v3-phase2-045/returned-usb-video.jpg",
+      "bytes": 385836,
+      "sha256": "84068db55c9f625b287b8c37426457d742e6b695a6a7f4050d053348a0a04f38",
+      "role": "healthy_physical_primary"
+    },
+    {
+      "path": "build/raw-scaler-signature-v3-phase2-045/returned-usb-video-confirmation-1.jpg",
+      "bytes": 385836,
+      "sha256": "84068db55c9f625b287b8c37426457d742e6b695a6a7f4050d053348a0a04f38",
+      "role": "healthy_physical_confirmation"
+    },
+    {
+      "path": "build/raw-scaler-signature-v3-phase2-045/returned-usb-video-confirmation-2.jpg",
+      "bytes": 396558,
+      "sha256": "1bcf4b8fbca7a63e384a7c5f3f7ed801128945af7e231b28699433297673a16f",
+      "role": "corrupt_physical_confirmation"
+    },
+    {
+      "path": "build/raw-scaler-signature-v3-phase2-045/live-corruption.mov",
+      "bytes": 9797682,
+      "sha256": "1bfc16eed4723b338ca2897b6b8a122421fb0b550a63752f39a222316b476d3b",
+      "role": "preserved_30_second_native_usb_video_movie"
+    }
+  ]
+}

@@ -41,3 +41,31 @@ stage and returns to candidate 4's timing-clean source topology. The existing
 gate rejects `source_generation~DUPLICATE`. The signature datapath, schema,
 two-stage synchronizer, destination settle cycle, and immutable response do not
 change.
+
+## Qualified implementation and device result
+
+The final candidate adds one further observer-only HDMI pipeline stage after
+the direct isolation boundary. It captures only on isolated scaler CE, so it
+preserves the ordered RGB565 samples while removing unnecessary observer
+switching. This placement passed the unchanged local simulation, exact-source
+completion and copy-tail proofs, structural checks, and fixed-seed Apple
+signoff: setup `+0.724 ns`, hold `+0.246 ns`, zero TNS, 158/158 constrained
+relationships, `+188` ALMs, `+191` registers, exact 3/3 diagnostic CDC paths,
+and unchanged RAM/DSP/PLL identity. The exact artifacts are recorded in the
+[device incident](2026-08-25-raw-scaler-signature-v3-corruption-incident-v1.json).
+
+The installed candidate passed its initial physical smoke and 44 Phase 2
+returns across eight bounded reboot boundaries. Return 45 then produced a real
+moving physical corruption classification on the revealed Arcade launcher.
+The authoritative RGB565 framebuffer remained byte-identical to the healthy
+reference. Three coherent direct-`ascal` records advanced through frames 417,
+419, and 420 while all reported the same ordered signature `e231`; the exact
+same static scene and signature were present in healthy return 44.
+
+This is the result the probe was designed to distinguish. It strongly supports
+an origin downstream of direct `ascal`; it does not identify the downstream
+stage and does not infer sink visibility from internal FPGA state. The campaign
+stopped without reboot or recovery, and a 30-second native USB Video movie was
+preserved. The next discriminating FPGA experiment should compare this retained
+direct-`ascal` evidence with one minimal final post-processing/output-boundary
+signature. It must not modify the completion or copy-tail repairs.
