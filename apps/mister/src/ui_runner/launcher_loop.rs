@@ -5635,7 +5635,14 @@ pub(super) fn run_launcher_loop(
         launcher_config.catalog_paths().sharded_catalog_dir(),
     );
     let capsule_seed_ready = catalog_ready;
-    let sharded_seed = (!capsule_seed_ready)
+    let warm_registry_hydration_pending = defer_warm_registry_hydration(
+        capsule_seed_ready,
+        startup_return_requested,
+        mister_magik_catalog::shard_registry::manifest_slots_present(
+            launcher_config.catalog_paths().sharded_catalog_dir(),
+        ),
+    );
+    let sharded_seed = (!capsule_seed_ready && !warm_registry_hydration_pending)
         .then(|| {
             read_sharded_registry_seed(
                 &arcade_root,
@@ -5760,6 +5767,24 @@ pub(super) fn run_launcher_loop(
         } else {
             catalog_session.mark_refresh_done();
         }
+    } else if warm_registry_hydration_pending {
+        print_startup_event(
+            start,
+            "catalog_v3_registry_deferred",
+            format!(
+                "path={} reveal=first_visible_copy",
+                launcher_config
+                    .catalog_paths()
+                    .sharded_catalog_dir()
+                    .display()
+            ),
+        );
+        catalog_session.defer_catalog_worker(
+            arcade_root.clone(),
+            CatalogWorkerRequest::StrictLoad,
+            CatalogWorkerInitialCache::AlreadyProbedMissing,
+            CatalogExecutionMode::BackgroundInteractive,
+        );
     } else {
         let sqlite_state = catalog_startup_sqlite_state(&sqlite_path);
         match catalog_startup_without_summary_plan(
@@ -5953,7 +5978,7 @@ pub(super) fn run_launcher_loop(
     };
     let startup_mode = if startup_return_requested || launch_return_restored {
         StartupMode::ReturnFromGame
-    } else if catalog_ready {
+    } else if catalog_ready || warm_registry_hydration_pending {
         StartupMode::WarmCatalog
     } else {
         StartupMode::ColdNoCatalog
@@ -14270,6 +14295,14 @@ fn ready_catalog_worker_request(refresh_policy: CatalogRefreshPolicy) -> Catalog
     }
 }
 
+fn defer_warm_registry_hydration(
+    capsule_seed_ready: bool,
+    startup_return_requested: bool,
+    manifest_slots_present: bool,
+) -> bool {
+    !capsule_seed_ready && !startup_return_requested && manifest_slots_present
+}
+
 fn summary_seed_catalog_worker_request(
     refresh_policy: CatalogRefreshPolicy,
     deferred_library_rebuild: bool,
@@ -18536,6 +18569,14 @@ mod tests {
             ready_catalog_worker_request(CatalogRefreshPolicy::Off),
             CatalogWorkerRequest::LoadOnly
         );
+    }
+
+    #[test]
+    pub(super) fn warm_registry_hydration_is_deferred_only_for_normal_boot() {
+        assert!(defer_warm_registry_hydration(false, false, true));
+        assert!(!defer_warm_registry_hydration(true, false, true));
+        assert!(!defer_warm_registry_hydration(false, true, true));
+        assert!(!defer_warm_registry_hydration(false, false, false));
     }
 
     #[test]

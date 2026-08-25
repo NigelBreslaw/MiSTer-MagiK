@@ -596,7 +596,7 @@ impl LauncherLifecycle {
         self.startup_input_enabled_at = None;
         self.startup_reveal_state = match mode {
             StartupMode::ColdNoCatalog => StartupRevealState::SplashVisible,
-            StartupMode::WarmCatalog => StartupRevealState::HoldBlack,
+            StartupMode::WarmCatalog => StartupRevealState::RevealLauncher,
             StartupMode::ReturnFromGame => StartupRevealState::HoldBlackReturn,
         };
         out.startup_event("startup_entry_classified", format!("mode={}", mode.label()));
@@ -604,8 +604,12 @@ impl LauncherLifecycle {
             StartupRevealState::SplashVisible => {
                 out.startup_event("startup_splash_visible", "mode=cold_no_catalog");
             }
-            StartupRevealState::HoldBlack => {
-                out.startup_event("startup_hold_black", "mode=warm_catalog");
+            StartupRevealState::RevealLauncher => {
+                out.startup_event("startup_shell_visible", "mode=warm_catalog");
+                out.startup_event(
+                    "launcher_reveal_ready",
+                    "mode=warm_catalog catalog_state=hydrating",
+                );
             }
             StartupRevealState::HoldBlackReturn => {
                 out.startup_event("startup_hold_black", "mode=return_from_game");
@@ -1433,7 +1437,7 @@ mod tests {
     }
 
     #[test]
-    fn warm_start_holds_black_until_reveal_and_input_enable() {
+    fn warm_start_reveals_shell_before_catalog_hydration() {
         let now = Instant::now();
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
@@ -1441,17 +1445,10 @@ mod tests {
         lifecycle.begin_startup_reveal(StartupMode::WarmCatalog, now, &mut effects);
         assert_eq!(
             lifecycle.startup_status().state,
-            StartupRevealState::HoldBlack
-        );
-        assert!(!lifecycle.startup_can_present_frame());
-        effects.clear();
-
-        lifecycle.tick_startup_reveal(now + Duration::from_millis(10), true, &mut effects);
-        assert_eq!(
-            lifecycle.startup_status().state,
             StartupRevealState::RevealLauncher
         );
         assert!(lifecycle.startup_can_present_frame());
+        assert!(effect_names(&effects).contains(&"startup_shell_visible"));
         assert!(effect_names(&effects).contains(&"launcher_reveal_ready"));
         effects.clear();
 
