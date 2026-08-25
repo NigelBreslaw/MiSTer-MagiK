@@ -89,6 +89,9 @@ ffmpeg-next = { version = "8.1", optional = true, default-features = false, feat
 [build-dependencies]
 cc = "1.4.2"
 
+[dev-dependencies]
+swash = { version = "0.2.7", features = ["scale", "render"] }
+
 [features]
 default = []
 asset-tools = ["dep:swash"]

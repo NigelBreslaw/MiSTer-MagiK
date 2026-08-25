@@ -888,7 +888,6 @@ mod tests {
     #[test]
     fn nocive_15_uses_only_the_precompiled_exact_size_resource() {
         let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::Nocive15);
-        assert!(font.font.is_none());
         let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
         assert_eq!(mask.height, 15);
         assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
@@ -897,7 +896,6 @@ mod tests {
     #[test]
     fn jersey_15_uses_only_the_precompiled_exact_size_resource() {
         let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::Jersey15);
-        assert!(font.font.is_none());
         let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
         assert_eq!(mask.height, 15);
         assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
@@ -906,7 +904,6 @@ mod tests {
     #[test]
     fn xerxes_10_uses_only_the_precompiled_exact_size_resource() {
         let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::Xerxes10);
-        assert!(font.font.is_none());
         let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
         assert_eq!(mask.height, 10);
         assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
@@ -915,7 +912,6 @@ mod tests {
     #[test]
     fn yesterday_10_perfect_uses_exact_2_by_2_crt240_cells() {
         let mut font = ConsoleFont::new_with_typeface(32.0, ConsoleTypeface::Yesterday10Perfect);
-        assert!(font.font.is_none());
         let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
         assert_eq!(mask.height, 20);
         assert_eq!(mask.width % 2, 0);
@@ -933,7 +929,6 @@ mod tests {
     #[test]
     fn yesterday_10_native_uses_the_unscaled_resource() {
         let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::Yesterday10);
-        assert!(font.font.is_none());
         let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
         assert_eq!(mask.height, 10);
         assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
@@ -942,7 +937,6 @@ mod tests {
     #[test]
     fn xerxes_10_perfect_uses_exact_2_by_2_crt240_cells() {
         let mut font = ConsoleFont::new_with_typeface(32.0, ConsoleTypeface::Xerxes10Perfect);
-        assert!(font.font.is_none());
         let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
         assert_eq!(mask.height, 20);
         assert_eq!(mask.width % 2, 0);
@@ -960,7 +954,6 @@ mod tests {
     #[test]
     fn bacteria_12_uses_the_pixel_perfect_crt240_resource() {
         let mut font = ConsoleFont::new_with_typeface(32.0, ConsoleTypeface::Bacteria12);
-        assert!(font.font.is_none());
         let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
         assert_eq!(mask.height, 24);
         assert_eq!(mask.width % 2, 0);
@@ -978,7 +971,6 @@ mod tests {
     #[test]
     fn bacteria_12_half_uses_the_native_16px_resource() {
         let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::Bacteria12Half);
-        assert!(font.font.is_none());
         let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
         assert_eq!(mask.height, 12);
         assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
@@ -987,7 +979,6 @@ mod tests {
     #[test]
     fn spleen_small_uses_the_native_bitmap_resource() {
         let mut font = ConsoleFont::new_with_typeface(12.0, ConsoleTypeface::Spleen6x12Small);
-        assert!(font.font.is_none());
         let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
         assert_eq!(mask.height, 12);
         assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));

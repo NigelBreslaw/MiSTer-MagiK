@@ -379,8 +379,11 @@ mod tests {
         };
         let pixels = [Rgb565Pixel(0x1234); 4];
 
-        assert!(hidden_frame_source_evidence(&pixels, grant, false).is_none());
-        assert!(hidden_frame_source_evidence(&pixels, grant, true).is_some());
+        assert!(hidden_frame_source_evidence(&pixels, grant, None).is_none());
+        assert!(
+            hidden_frame_source_evidence(&pixels, grant, Some(SourceEvidenceRequest::Nonblank),)
+                .is_some()
+        );
     }
 
     #[test]

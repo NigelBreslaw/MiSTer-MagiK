@@ -253,13 +253,15 @@ impl DeliveryDevice for DeviceClient {
     ) -> AgentResult<()> {
         self.mutate(|device| {
             device.deliver_runtime(
-                &delivery.local,
-                &delivery.manifest_local,
-                &delivery.expected_sha256,
-                &delivery.artwork_local,
-                &delivery.artwork_expected_sha256,
-                &delivery.settings_artwork_local,
-                &delivery.settings_artwork_expected_sha256,
+                crate::host::RuntimeDeliveryRequest {
+                    local: &delivery.local,
+                    manifest_local: &delivery.manifest_local,
+                    expected_sha256: &delivery.expected_sha256,
+                    artwork_local: &delivery.artwork_local,
+                    artwork_expected_sha256: &delivery.artwork_expected_sha256,
+                    settings_artwork_local: &delivery.settings_artwork_local,
+                    settings_artwork_expected_sha256: &delivery.settings_artwork_expected_sha256,
+                },
                 timings,
             )
         })

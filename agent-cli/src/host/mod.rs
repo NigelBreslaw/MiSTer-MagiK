@@ -155,6 +155,16 @@ pub struct NativeDevice {
     config: Option<NativeDeviceConfig>,
 }
 
+pub(crate) struct RuntimeDeliveryRequest<'a> {
+    pub(crate) local: &'a Path,
+    pub(crate) manifest_local: &'a Path,
+    pub(crate) expected_sha256: &'a str,
+    pub(crate) artwork_local: &'a Path,
+    pub(crate) artwork_expected_sha256: &'a str,
+    pub(crate) settings_artwork_local: &'a Path,
+    pub(crate) settings_artwork_expected_sha256: &'a str,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ActiveRuntime {
     executable_path: Option<String>,
@@ -644,30 +654,24 @@ impl NativeDevice {
 
     pub(crate) fn deliver_runtime(
         &mut self,
-        local: &Path,
-        manifest_local: &Path,
-        expected_sha256: &str,
-        artwork_local: &Path,
-        artwork_expected_sha256: &str,
-        settings_artwork_local: &Path,
-        settings_artwork_expected_sha256: &str,
+        delivery: RuntimeDeliveryRequest<'_>,
         timings: &mut Vec<DeliveryTimingSample>,
     ) -> std::result::Result<(), DeviceFailure> {
         let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
         deliver_runtime_transaction(
             &prepared.config,
             RuntimeDeliveryBundle {
-                local,
+                local: delivery.local,
                 remote: DEVELOPMENT_GUI_REMOTE,
-                manifest_local,
+                manifest_local: delivery.manifest_local,
                 manifest_remote: LOCAL_MAIN_MANIFEST_REMOTE,
-                expected_sha256,
-                artwork_local,
+                expected_sha256: delivery.expected_sha256,
+                artwork_local: delivery.artwork_local,
                 artwork_remote: DEVELOPMENT_ARTWORK_REMOTE.as_str(),
-                artwork_expected_sha256,
-                settings_artwork_local,
+                artwork_expected_sha256: delivery.artwork_expected_sha256,
+                settings_artwork_local: delivery.settings_artwork_local,
                 settings_artwork_remote: DEVELOPMENT_SETTINGS_ARTWORK_REMOTE.as_str(),
-                settings_artwork_expected_sha256,
+                settings_artwork_expected_sha256: delivery.settings_artwork_expected_sha256,
             },
             timings,
         )

@@ -560,7 +560,7 @@ mod tests {
     #[test]
     fn invalid_or_stale_token_configuration_is_disabled() {
         let fifo = TestFifo::new();
-        let mut readiness = LauncherReadiness::from_config(
+        let readiness = LauncherReadiness::from_config(
             "stale".into(),
             fifo.0.clone(),
             42,
@@ -578,7 +578,7 @@ mod tests {
     #[test]
     fn missing_spawn_context_disables_readiness() {
         let fifo = TestFifo::new();
-        let mut readiness = LauncherReadiness::from_config(
+        let readiness = LauncherReadiness::from_config(
             TOKEN.into(),
             fifo.0.clone(),
             42,
