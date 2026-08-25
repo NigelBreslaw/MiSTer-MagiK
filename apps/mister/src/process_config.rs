@@ -123,6 +123,7 @@ impl EnvironmentSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CommandMode {
     Ui,
+    SupervisedLauncher,
     LatchReadinessReport,
     Other(String),
 }
@@ -131,13 +132,14 @@ impl CommandMode {
     fn from_name(command: &str) -> Self {
         match command {
             "ui" => Self::Ui,
+            "supervised-launcher" => Self::SupervisedLauncher,
             "latch-readiness-report" => Self::LatchReadinessReport,
             other => Self::Other(other.to_owned()),
         }
     }
 
     fn captures_launcher(&self) -> bool {
-        matches!(self, Self::Ui)
+        matches!(self, Self::Ui | Self::SupervisedLauncher)
     }
 }
 
@@ -196,6 +198,18 @@ pub struct LauncherProcessConfig {
 impl LauncherProcessConfig {
     pub fn readiness(&self) -> &LauncherReadinessConfig {
         &self.readiness
+    }
+
+    pub fn with_supervised_owner(
+        mut self,
+        main_pid: u32,
+        main_generation: u64,
+        owner_epoch: u64,
+    ) -> Self {
+        self.readiness.main_pid = main_pid;
+        self.readiness.main_generation = main_generation;
+        self.readiness.owner_epoch = owner_epoch;
+        self
     }
 
     pub fn device_paths(&self) -> &DevicePaths {
@@ -620,6 +634,10 @@ impl LauncherReadinessConfig {
         &self.entry_trace
     }
 
+    pub fn startup_token(&self) -> &str {
+        &self.startup_token
+    }
+
     pub fn into_parts(self) -> (String, PathBuf, u32, u64, u64) {
         (
             self.startup_token,
@@ -968,6 +986,43 @@ mod tests {
             report
                 .instrumentation()
                 .contains(InstrumentationModifier::Json)
+        );
+    }
+
+    #[test]
+    fn supervised_launcher_captures_and_replaces_owner_context() {
+        let environment = EnvironmentSnapshot::from_values([
+            (STARTUP_TOKEN, "0123456789abcdef0123456789abcdef"),
+            (READY_FIFO, "/tmp/ready"),
+        ]);
+        let config = ProcessConfig::from_snapshot(
+            &[
+                "mister-magik-fb".into(),
+                "supervised-launcher".into(),
+                "3".into(),
+                "4".into(),
+            ],
+            "supervised-launcher",
+            &environment,
+        );
+        assert_eq!(config.command(), &CommandMode::SupervisedLauncher);
+        let readiness = config
+            .launcher()
+            .expect("supervised command captures launcher configuration")
+            .clone()
+            .with_supervised_owner(7, 11, 13)
+            .readiness()
+            .clone()
+            .into_parts();
+        assert_eq!(
+            readiness,
+            (
+                "0123456789abcdef0123456789abcdef".into(),
+                PathBuf::from("/tmp/ready"),
+                7,
+                11,
+                13,
+            )
         );
     }
 

@@ -20671,7 +20671,21 @@ fn profile_installed_cold_boot_run(
     let final_main_us = boot_event_us(&events, "main_process_entry", true)?;
     let preflight_begin_us = boot_event_us(&events, "launcher_preflight_begin", true)?;
     let preflight_end_us = boot_event_us(&events, "launcher_preflight_end", true)?;
-    let launcher_exec_us = boot_event_us(&events, "launcher_exec_begin", true)?;
+    let supervised = events.iter().any(|event| {
+        event.get("event").and_then(Value::as_str) == Some("launcher_supervised_exec_begin")
+    });
+    let launcher_exec_us = boot_event_us(
+        &events,
+        if supervised {
+            "launcher_supervised_exec_begin"
+        } else {
+            "launcher_exec_begin"
+        },
+        true,
+    )?;
+    let launcher_continue_us = supervised
+        .then(|| boot_event_us(&events, "launcher_continue_begin", true))
+        .transpose()?;
     let process_start_us = launcher_status
         .get("process_start_monotonic_us")
         .and_then(Value::as_u64)
@@ -20686,15 +20700,28 @@ fn profile_installed_cold_boot_run(
         .unwrap_or(0);
     let first_present_us = boot_event_us(&events, "launcher_first_frame_presented", true)?;
     let startup_clock_origin_us = first_present_us.saturating_sub(first_present_elapsed_us);
-    let ordered = [
-        initial_main_us,
-        final_main_us,
-        preflight_begin_us,
-        preflight_end_us,
-        launcher_exec_us,
-        process_start_us,
-        first_present_us,
-    ];
+    let ordered = if supervised {
+        vec![
+            initial_main_us,
+            final_main_us,
+            preflight_begin_us,
+            launcher_exec_us,
+            process_start_us,
+            preflight_end_us,
+            launcher_continue_us.unwrap_or(0),
+            first_present_us,
+        ]
+    } else {
+        vec![
+            initial_main_us,
+            final_main_us,
+            preflight_begin_us,
+            preflight_end_us,
+            launcher_exec_us,
+            process_start_us,
+            first_present_us,
+        ]
+    };
     if agent_start_us == 0
         || agent_start_us > initial_main_us
         || ordered[0] == 0
@@ -20745,6 +20772,7 @@ fn profile_installed_cold_boot_run(
         "preflight_begin_us": preflight_begin_us,
         "preflight_end_us": preflight_end_us,
         "launcher_exec_us": launcher_exec_us,
+        "launcher_continue_us": launcher_continue_us,
         "magik_process_start_us": process_start_us,
         "first_launcher_present_us": first_present_us,
         "first_launcher_present_resolution_us": 10_000,
@@ -20753,7 +20781,7 @@ fn profile_installed_cold_boot_run(
         "magik_startup_events": startup_events,
         "agent_timeline": agent_timeline,
     });
-    let phases = json!({
+    let mut phases = json!({
         "linux_boot_to_agent_start_us": agent_start_us,
         "agent_start_to_initial_main_us": initial_main_us.saturating_sub(agent_start_us),
         "linux_boot_to_initial_main_us": initial_main_us,
@@ -20767,6 +20795,21 @@ fn profile_installed_cold_boot_run(
         "magik_process_to_first_present_us": first_present_us.saturating_sub(process_start_us),
         "linux_boot_to_first_present_us": first_present_us,
     });
+    if supervised {
+        phases["preflight_to_launcher_exec_us"] =
+            json!(launcher_exec_us.saturating_sub(preflight_begin_us));
+        phases["launcher_exec_to_magik_process_us"] =
+            json!(process_start_us.saturating_sub(launcher_exec_us));
+        phases["magik_process_to_preflight_end_us"] =
+            json!(preflight_end_us.saturating_sub(process_start_us));
+        phases["preflight_end_to_launcher_continue_us"] = json!(
+            launcher_continue_us
+                .unwrap_or(0)
+                .saturating_sub(preflight_end_us)
+        );
+        phases["launcher_continue_to_startup_clock_us"] =
+            json!(startup_clock_origin_us.saturating_sub(launcher_continue_us.unwrap_or(0)));
+    }
     let launcher_ready = main_status.get("launcher_state").and_then(Value::as_str)
         == Some("LauncherActive")
         && launcher_status
@@ -20774,7 +20817,7 @@ fn profile_installed_cold_boot_run(
             .and_then(Value::as_bool)
             == Some(true);
     let summary = json!({
-        "schema": "mister-magik-cold-boot-benchmark-v1",
+        "schema": if supervised { "mister-magik-cold-boot-benchmark-v2" } else { "mister-magik-cold-boot-benchmark-v1" },
         "scenario": if pprof { "cold-boot-pprof" } else { "cold-boot" },
         "timing_class": "device-monotonic-instrumented-installed-dev",
         "timing_authoritative": !pprof,
