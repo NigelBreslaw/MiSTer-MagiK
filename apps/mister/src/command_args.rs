@@ -61,7 +61,6 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("scanout-slots-map-report", CommandKind::PreFpga),
     CommandSpec::new("fpga-latch-report", CommandKind::Fpga),
     CommandSpec::new("latch-readiness-report", CommandKind::Fpga),
-    CommandSpec::new("supervised-launcher", CommandKind::Fpga),
     #[cfg(all(feature = "diagnostics", feature = "ui"))]
     CommandSpec::new("fpga-latch-post-report", CommandKind::Fpga),
     #[cfg(all(feature = "diagnostics", feature = "ui"))]
@@ -161,7 +160,6 @@ pub fn requires_process_exclusive(command: &str) -> bool {
         command,
         "early-black"
             | "ui"
-            | "supervised-launcher"
             | "effect-bench"
             | "library-refresh"
             | "request-library-rebuild"
@@ -236,13 +234,11 @@ mod tests {
         assert!(!requires_display_owner("catalog-v3-inspect"));
         assert!(!requires_display_owner("catalog-v3-registry-report"));
         assert!(!requires_display_owner("read"));
-        assert!(!requires_display_owner("supervised-launcher"));
     }
 
     #[test]
     fn process_exclusive_guard_blocks_managed_commands_only() {
         assert!(requires_process_exclusive("ui"));
-        assert!(requires_process_exclusive("supervised-launcher"));
         assert!(requires_process_exclusive("early-black"));
         assert!(requires_process_exclusive("library-refresh"));
         assert!(requires_process_exclusive("purge-library-data"));

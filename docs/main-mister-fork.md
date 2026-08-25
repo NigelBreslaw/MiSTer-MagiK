@@ -73,13 +73,10 @@ The fork selects its application root from its executable name, then:
 1. Initializes video/menu-core prerequisites.
 2. Enters bootstrap black after `video_init()` by disabling LFB routing while
    the MagiK Menu RBF supplies native black pixels with intact timing.
-3. Re-enters the same idempotent state before every supervised spawn, prepares
-   the scanout device, then starts one `mister-magik-fb supervised-launcher`
-   child on `tty2` while Main still owns the FPGA.
-4. Waits for that child's token- and PID-bound latch preflight over a private
-   pipe, transfers FPGA ownership only after it passes, then sends the exact
-   owner context over a second private pipe so the same process continues into
-   the UI.
+3. Re-enters the same idempotent state before every supervised spawn, runs the
+   runtime latch preflight, and transfers FPGA ownership only after it passes.
+4. Starts the matching public or development `mister-magik-fb ui launcher 0`
+   on `tty2`.
 5. Keeps the child in `LauncherStarting` until a token- and PID-bound ready
    report backed by two completed advancing alternating latch posts arrives.
 6. Enters dormant launcher mode only after that internal readiness boundary.
@@ -90,10 +87,10 @@ Main is the only writer of `UIO_BUT_SW` and the `CONF_VGA_FB` mux bit. Rust
 publishes framebuffer geometry and pixels but does not rebuild the framework
 configuration word. Bootstrap black uses only the canonical `UIO_SET_FBUF`
 disable word and never writes a framebuffer mode or clears `/dev/fb0`. A
-bootstrap or spawn failure restores stock Menu input and OSD over the native
-black background. A child-preflight, ownership, or continuation failure first
-terminates and reaps the supervised child, restores Main's FPGA ownership when
-needed, and then performs the same stock recovery.
+bootstrap, preflight, ownership, or spawn failure before the launcher child
+exists restores stock Menu input and OSD over the native black background;
+those paths remain suppressed for the entire lifetime of a supervised launcher
+child.
 
 The one-way ready report uses one mode-0600 FIFO under `/tmp/mister-magik`; it
 does not share `/dev/MiSTer_cmd`, whose host operation lock may be held while
