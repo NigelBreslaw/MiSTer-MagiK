@@ -451,7 +451,7 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
     use std::cell::Cell;
     use std::sync::OnceLock;
 
-    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 6]> = OnceLock::new();
+    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 4]> = OnceLock::new();
     thread_local! {
         static REGISTERED: Cell<bool> = const { Cell::new(false) };
     }
@@ -460,8 +460,6 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
         [
             leak_font(decode_resource(XERXES_10_RESOURCE).expect("valid Xerxes 10 bitmap font")),
             leak_font(decode_resource(NOCIVE_15_RESOURCE).expect("valid Nocive 15 bitmap font")),
-            leak_font(decode_resource(JERSEY_15_RESOURCE).expect("valid Jersey 15 bitmap font")),
-            leak_font(decode_resource(JERSEY_25_RESOURCE).expect("valid Jersey 25 bitmap font")),
             leak_font_family(vec![
                 decode_resource(SPLEEN_5X8_NATIVE_RESOURCE)
                     .expect("valid native Spleen 5x8 bitmap font"),
@@ -474,6 +472,34 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
                 decode_resource(SPLEEN_6X12_DOUBLED_RESOURCE)
                     .expect("valid doubled Spleen 6x12 bitmap font"),
             ]),
+        ]
+    });
+    REGISTERED.with(|registered| {
+        if !registered.replace(true) {
+            for font in fonts {
+                renderer.register_bitmap_font(font);
+            }
+        }
+    });
+}
+
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+pub fn register_deferred_bitmap_fonts(
+    renderer: &slint::platform::software_renderer::SoftwareRenderer,
+) {
+    use i_slint_core::renderer::RendererSealed;
+    use std::cell::Cell;
+    use std::sync::OnceLock;
+
+    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 2]> = OnceLock::new();
+    thread_local! {
+        static REGISTERED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    let fonts = FONTS.get_or_init(|| {
+        [
+            leak_font(decode_resource(JERSEY_15_RESOURCE).expect("valid Jersey 15 bitmap font")),
+            leak_font(decode_resource(JERSEY_25_RESOURCE).expect("valid Jersey 25 bitmap font")),
         ]
     });
     REGISTERED.with(|registered| {

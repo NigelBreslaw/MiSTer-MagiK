@@ -31,6 +31,10 @@ impl MisterSoftwareWindow {
         self.redraw_pending.get()
     }
 
+    pub fn register_deferred_bitmap_fonts(&self) {
+        crate::bitmap_font_resource::register_deferred_bitmap_fonts(&self.renderer);
+    }
+
     pub fn draw_if_needed(&self, render_callback: impl FnOnce(&SoftwareRenderer)) -> bool {
         if self.redraw_pending.replace(false) {
             render_callback(&self.renderer);

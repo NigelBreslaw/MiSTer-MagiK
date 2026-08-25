@@ -6101,6 +6101,7 @@ pub(super) fn run_launcher_loop(
     let mut first_render_logged = false;
     let mut first_vsync_logged = false;
     let mut first_launcher_frame_logged = false;
+    let mut deferred_fonts_registered = false;
     let mut frame_accounting = LauncherFrameAccounting::new(
         run_start,
         ui.output_route().label(),
@@ -11485,6 +11486,19 @@ pub(super) fn run_launcher_loop(
                 catalog_publication_test.hold_first_launcher_frame(start);
             }
             lifecycle.note_startup_frame_presented(frames, frame_t4, &mut lifecycle_effects);
+            if first_launcher_frame_logged && !deferred_fonts_registered {
+                let deferred_fonts_started = Instant::now();
+                window.register_deferred_bitmap_fonts();
+                deferred_fonts_registered = true;
+                print_startup_event(
+                    start,
+                    "deferred_fonts_registered",
+                    format!(
+                        "elapsed_us={}",
+                        deferred_fonts_started.elapsed().as_micros()
+                    ),
+                );
+            }
             if first_launcher_frame_logged
                 && lifecycle.startup_status().input_enabled
                 && profile_config.cpu().cold_boot_requested()
