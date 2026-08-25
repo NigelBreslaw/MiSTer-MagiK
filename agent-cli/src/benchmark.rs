@@ -1791,12 +1791,9 @@ fn evaluate_cold_boot_summary(
     pprof: bool,
     fresh_catalog: bool,
 ) -> AgentResult<()> {
-    let schema = summary.get("schema").and_then(Value::as_str);
-    if !matches!(
-        schema,
-        Some("mister-magik-cold-boot-benchmark-v1" | "mister-magik-cold-boot-benchmark-v2")
-    ) || summary.get("timing_class").and_then(Value::as_str)
-        != Some("device-monotonic-instrumented-installed-dev")
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-cold-boot-benchmark-v1")
+        || summary.get("timing_class").and_then(Value::as_str)
+            != Some("device-monotonic-instrumented-installed-dev")
     {
         return Err("cold-boot benchmark summary has the wrong evidence schema".into());
     }
@@ -1804,34 +1801,19 @@ fn evaluate_cold_boot_summary(
         .get("timeline")
         .and_then(Value::as_object)
         .ok_or("cold-boot benchmark summary has no timeline")?;
-    let ordered_fields = if schema == Some("mister-magik-cold-boot-benchmark-v2") {
-        vec![
-            "agent_start_us",
-            "initial_main_entry_us",
-            "final_main_entry_us",
-            "preflight_begin_us",
-            "launcher_exec_us",
-            "magik_process_start_us",
-            "preflight_end_us",
-            "launcher_continue_us",
-            "first_launcher_present_us",
-        ]
-    } else {
-        vec![
-            "agent_start_us",
-            "initial_main_entry_us",
-            "final_main_entry_us",
-            "preflight_begin_us",
-            "preflight_end_us",
-            "launcher_exec_us",
-            "magik_process_start_us",
-            "first_launcher_present_us",
-        ]
-    };
-    let ordered = ordered_fields
-        .into_iter()
-        .map(|field| timeline.get(field).and_then(Value::as_u64).unwrap_or(0))
-        .collect::<Vec<_>>();
+    let ordered = [
+        "agent_start_us",
+        "initial_main_entry_us",
+        "final_main_entry_us",
+        "preflight_begin_us",
+        "preflight_end_us",
+        "launcher_exec_us",
+        "magik_process_start_us",
+        "first_launcher_present_us",
+    ]
+    .into_iter()
+    .map(|field| timeline.get(field).and_then(Value::as_u64).unwrap_or(0))
+    .collect::<Vec<_>>();
     if ordered[0] == 0 || ordered.windows(2).any(|pair| pair[0] > pair[1]) {
         return Err(
             format!("cold-boot benchmark timestamps are zero or unordered: {ordered:?}").into(),
@@ -3423,26 +3405,6 @@ mod tests {
             }
         });
         evaluate_cold_boot_summary(&passing, false, false).unwrap();
-
-        let supervised = json!({
-            "schema": "mister-magik-cold-boot-benchmark-v2",
-            "timing_class": "device-monotonic-instrumented-installed-dev",
-            "launcher_ready": true,
-            "capture_verified": true,
-            "fresh_catalog": false,
-            "timeline": {
-                "agent_start_us": 1,
-                "initial_main_entry_us": 2,
-                "final_main_entry_us": 3,
-                "preflight_begin_us": 4,
-                "launcher_exec_us": 5,
-                "magik_process_start_us": 6,
-                "preflight_end_us": 7,
-                "launcher_continue_us": 8,
-                "first_launcher_present_us": 9,
-            }
-        });
-        evaluate_cold_boot_summary(&supervised, false, false).unwrap();
 
         let mut unordered = passing.clone();
         unordered["timeline"]["launcher_exec_us"] = json!(9);

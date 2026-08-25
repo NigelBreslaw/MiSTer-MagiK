@@ -247,7 +247,6 @@ pub fn run() {
 
     dispatch_fpga(
         &cmd,
-        &args,
         &mut f,
         process_entry_cpu_profile,
         fault_config.as_ref(),
@@ -524,7 +523,6 @@ fn run_catalog_v3_registry_report(paths: &mister_magik_catalog::device_layout::C
 
 fn dispatch_fpga(
     cmd: &str,
-    args: &[String],
     f: &mut Fpga,
     process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
     _fault_config: Option<&mister_magik_catalog::fs_fault::FaultConfig>,
@@ -553,15 +551,6 @@ fn dispatch_fpga(
         "latch-readiness-report" => {
             run_latch_readiness_report(f, process_config.diagnostics().latch_readiness_json)
         }
-        "supervised-launcher" => run_supervised_launcher(
-            args,
-            f,
-            process_entry_cpu_profile,
-            process_config
-                .launcher()
-                .expect("supervised launcher captures launcher process configuration")
-                .clone(),
-        ),
         #[cfg(all(feature = "diagnostics", feature = "ui"))]
         "fpga-latch-post-report" => run_fpga_latch_post_report(f),
         #[cfg(all(feature = "diagnostics", feature = "ui"))]
@@ -573,61 +562,6 @@ fn dispatch_fpga(
         ),
         other => unknown_command(other),
     }
-}
-
-fn run_supervised_launcher(
-    args: &[String],
-    fpga: &mut Fpga,
-    process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
-    launcher_config: mister_magik_fb::process_config::LauncherProcessConfig,
-) {
-    let fds = match mister_magik_fb::supervised_launcher::SupervisedLauncherFds::parse(args) {
-        Ok(fds) => fds,
-        Err(error) => {
-            crate::ui_errln!("supervised_launcher\tinvalid_arguments\t{error}");
-            std::process::exit(2);
-        }
-    };
-
-    run_latch_readiness_report(fpga, false);
-    boot_analytics::event("supervised_preflight_ready", "protocol=1");
-    let continuation = match fds.exchange(
-        launcher_config.readiness().startup_token(),
-        std::time::Duration::from_secs(8),
-    ) {
-        Ok(continuation) => continuation,
-        Err(error) => {
-            crate::ui_errln!("supervised_launcher\tcontinuation_failed\t{error}");
-            std::process::exit(51);
-        }
-    };
-    boot_analytics::event(
-        "supervised_continue",
-        format!(
-            "main_pid={} main_generation={} owner_epoch={}",
-            continuation.main_pid, continuation.main_generation, continuation.owner_epoch
-        ),
-    );
-
-    let _display_owner_lock = match DisplayOwnerLock::acquire_default() {
-        Ok(lock) => {
-            crate::ui_logln!("display_owner_lock\tacquired\t{}", lock.path().display());
-            lock
-        }
-        Err(error) => {
-            crate::ui_errln!("display_owner_lock\trefused\t{error}");
-            std::process::exit(13);
-        }
-    };
-    ui_runner::run_supervised_launcher_ui(
-        fpga,
-        process_entry_cpu_profile,
-        launcher_config.with_supervised_owner(
-            continuation.main_pid,
-            continuation.main_generation,
-            continuation.owner_epoch,
-        ),
-    );
 }
 
 fn unknown_command(cmd: &str) -> ! {
