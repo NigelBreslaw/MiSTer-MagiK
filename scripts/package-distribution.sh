@@ -37,6 +37,8 @@ MANAGER="$DEFAULT_MANAGER"
 ASSET_PACK=""
 SNES_ARTWORK="$ROOT/apps/mister/assets/snes/snes-small-v1.rgb565a"
 SNES_ARTWORK_SHA256="7a76993e7e1b0063832b94e9d2ad588549587cf09a14ac2ced72d349ed12f766"
+SETTINGS_ARTWORK="$ROOT/apps/mister/assets/ui/settings-v1.rgb565a"
+SETTINGS_ARTWORK_SHA256="44d657ff706a49fd8c8999b7c02ea4cdb7e4a8488a54dc68e0b79235dc40e8ec"
 MAIN_BIN=""
 MAIN_SOURCE_REVISION=""
 SCANOUT_MODULE=""
@@ -366,6 +368,14 @@ if [[ "$ACTUAL_SNES_ARTWORK_SHA256" != "$SNES_ARTWORK_SHA256" ]]; then
 fi
 mkdir -p "$STAGE/$PUBLIC_ROOT_RELATIVE/assets/snes"
 cp "$SNES_ARTWORK" "$STAGE/$PUBLIC_ROOT_RELATIVE/assets/snes/snes-small-v1.rgb565a"
+
+ACTUAL_SETTINGS_ARTWORK_SHA256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$SETTINGS_ARTWORK")"
+if [[ "$ACTUAL_SETTINGS_ARTWORK_SHA256" != "$SETTINGS_ARTWORK_SHA256" ]]; then
+  echo "ERROR: settings artwork checksum mismatch." >&2
+  exit 1
+fi
+mkdir -p "$STAGE/$PUBLIC_ROOT_RELATIVE/assets/ui"
+cp "$SETTINGS_ARTWORK" "$STAGE/$PUBLIC_ROOT_RELATIVE/assets/ui/settings-v1.rgb565a"
 
 if [[ -n "$ASSET_PACK" ]]; then
   mkdir -p "$STAGE/$PUBLIC_ROOT_RELATIVE/assets"

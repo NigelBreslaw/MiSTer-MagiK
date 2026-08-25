@@ -81,6 +81,10 @@ static DEVELOPMENT_ARTWORK_REMOTE: LazyLock<String> = LazyLock::new(|| {
     installed_layout::app_path(Layout::Development, "assets/snes/snes-small-v1.rgb565a")
         .expect("static installed path")
 });
+static DEVELOPMENT_SETTINGS_ARTWORK_REMOTE: LazyLock<String> = LazyLock::new(|| {
+    installed_layout::app_path(Layout::Development, "assets/ui/settings-v1.rgb565a")
+        .expect("static installed path")
+});
 static DEVELOPMENT_AGENT_REMOTE: LazyLock<String> = LazyLock::new(|| {
     installed_layout::app_path(Layout::Development, "mister-magik-agent")
         .expect("static installed path")
@@ -645,6 +649,8 @@ impl NativeDevice {
         expected_sha256: &str,
         artwork_local: &Path,
         artwork_expected_sha256: &str,
+        settings_artwork_local: &Path,
+        settings_artwork_expected_sha256: &str,
         timings: &mut Vec<DeliveryTimingSample>,
     ) -> std::result::Result<(), DeviceFailure> {
         let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
@@ -659,6 +665,9 @@ impl NativeDevice {
                 artwork_local,
                 artwork_remote: DEVELOPMENT_ARTWORK_REMOTE.as_str(),
                 artwork_expected_sha256,
+                settings_artwork_local,
+                settings_artwork_remote: DEVELOPMENT_SETTINGS_ARTWORK_REMOTE.as_str(),
+                settings_artwork_expected_sha256,
             },
             timings,
         )
@@ -2570,6 +2579,9 @@ struct RuntimeDeliveryActions<'a> {
     artwork_local: &'a Path,
     artwork_remote: &'a str,
     artwork_expected_sha256: &'a str,
+    settings_artwork_local: &'a Path,
+    settings_artwork_remote: &'a str,
+    settings_artwork_expected_sha256: &'a str,
 }
 
 impl RuntimeDeliveryActions<'_> {
@@ -2606,10 +2618,11 @@ impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
             self.session,
             "runtime bundle snapshot",
             &format!(
-                "set -eu; cp -p {0} {0}.delivery-rollback.tmp; mv -f {0}.delivery-rollback.tmp {0}.delivery-rollback; cp -p {1} {1}.delivery-rollback.tmp; mv -f {1}.delivery-rollback.tmp {1}.delivery-rollback; mkdir -p $(dirname {2}); rm -f {2}.delivery-rollback-missing; if test -f {2}; then cp -p {2} {2}.delivery-rollback.tmp; mv -f {2}.delivery-rollback.tmp {2}.delivery-rollback; else touch {2}.delivery-rollback-missing; fi; sync",
+                "set -eu; cp -p {0} {0}.delivery-rollback.tmp; mv -f {0}.delivery-rollback.tmp {0}.delivery-rollback; cp -p {1} {1}.delivery-rollback.tmp; mv -f {1}.delivery-rollback.tmp {1}.delivery-rollback; mkdir -p $(dirname {2}); rm -f {2}.delivery-rollback-missing; if test -f {2}; then cp -p {2} {2}.delivery-rollback.tmp; mv -f {2}.delivery-rollback.tmp {2}.delivery-rollback; else touch {2}.delivery-rollback-missing; fi; mkdir -p $(dirname {3}); rm -f {3}.delivery-rollback-missing; if test -f {3}; then cp -p {3} {3}.delivery-rollback.tmp; mv -f {3}.delivery-rollback.tmp {3}.delivery-rollback; else touch {3}.delivery-rollback-missing; fi; sync",
                 sh(self.remote),
                 sh(self.manifest_remote),
-                sh(self.artwork_remote)
+                sh(self.artwork_remote),
+                sh(self.settings_artwork_remote)
             ),
         )
         .map_err(device_failure)
@@ -2645,6 +2658,32 @@ impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
             ),
         )
         .map_err(device_failure)?;
+        let settings_artwork_upload = format!("{}.upload", self.settings_artwork_remote);
+        let settings_artwork_bytes = fs::metadata(self.settings_artwork_local)
+            .map_err(device_failure)?
+            .len();
+        put_measured(
+            &SshDeployRemote {
+                sess: self.session,
+                agent: None,
+            },
+            self.settings_artwork_local,
+            &settings_artwork_upload,
+            settings_artwork_bytes,
+            metrics,
+        )
+        .map_err(device_failure)?;
+        exec_checked(
+            self.session,
+            "settings artwork activation",
+            &format!(
+                "set -eu; test \"$(sha256sum {0} | awk '{{print $1}}')\" = {1}; mv -f {0} {2}; sync",
+                sh(&settings_artwork_upload),
+                sh(self.settings_artwork_expected_sha256),
+                sh(self.settings_artwork_remote)
+            ),
+        )
+        .map_err(device_failure)?;
         self.deploy_magik_bundle(metrics).map_err(device_failure)
     }
 
@@ -2668,6 +2707,16 @@ impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
             ),
         )
         .map_err(device_failure)?;
+        exec_checked(
+            self.session,
+            "settings artwork smoke",
+            &format!(
+                "test \"$(sha256sum {0} | awk '{{print $1}}')\" = {1}",
+                sh(self.settings_artwork_remote),
+                sh(self.settings_artwork_expected_sha256)
+            ),
+        )
+        .map_err(device_failure)?;
         Ok(output)
     }
 
@@ -2676,10 +2725,11 @@ impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
             self.session,
             "runtime bundle commit",
             &format!(
-                "rm -f {0}.delivery-rollback {1}.delivery-rollback {2}.delivery-rollback {2}.delivery-rollback-missing; sync",
+                "rm -f {0}.delivery-rollback {1}.delivery-rollback {2}.delivery-rollback {2}.delivery-rollback-missing {3}.delivery-rollback {3}.delivery-rollback-missing; sync",
                 sh(self.remote),
                 sh(self.manifest_remote),
-                sh(self.artwork_remote)
+                sh(self.artwork_remote),
+                sh(self.settings_artwork_remote)
             ),
         )
         .map_err(device_failure)
@@ -2698,10 +2748,11 @@ impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
                     self.session,
                     "runtime bundle rollback",
                     &format!(
-                        "set -eu; test -f {0}.delivery-rollback; test -f {1}.delivery-rollback; mv -f {0}.delivery-rollback {0}; chmod 755 {0}; mv -f {1}.delivery-rollback {1}; if test -f {2}.delivery-rollback; then mv -f {2}.delivery-rollback {2}; else test -f {2}.delivery-rollback-missing; rm -f {2} {2}.delivery-rollback-missing; fi; sync",
+                        "set -eu; test -f {0}.delivery-rollback; test -f {1}.delivery-rollback; mv -f {0}.delivery-rollback {0}; chmod 755 {0}; mv -f {1}.delivery-rollback {1}; if test -f {2}.delivery-rollback; then mv -f {2}.delivery-rollback {2}; else test -f {2}.delivery-rollback-missing; rm -f {2} {2}.delivery-rollback-missing; fi; if test -f {3}.delivery-rollback; then mv -f {3}.delivery-rollback {3}; else test -f {3}.delivery-rollback-missing; rm -f {3} {3}.delivery-rollback-missing; fi; sync",
                         sh(self.remote),
                         sh(self.manifest_remote),
-                        sh(self.artwork_remote)
+                        sh(self.artwork_remote),
+                        sh(self.settings_artwork_remote)
                     ),
                 )
                 .map_err(device_failure)
@@ -2731,6 +2782,9 @@ struct RuntimeDeliveryBundle<'a> {
     artwork_local: &'a Path,
     artwork_remote: &'a str,
     artwork_expected_sha256: &'a str,
+    settings_artwork_local: &'a Path,
+    settings_artwork_remote: &'a str,
+    settings_artwork_expected_sha256: &'a str,
 }
 
 fn deliver_runtime_transaction(
@@ -2747,9 +2801,13 @@ fn deliver_runtime_transaction(
         artwork_local,
         artwork_remote,
         artwork_expected_sha256,
+        settings_artwork_local,
+        settings_artwork_remote,
+        settings_artwork_expected_sha256,
     } = bundle;
     require_delivery_sha256(expected_sha256)?;
     require_delivery_sha256(artwork_expected_sha256)?;
+    require_delivery_sha256(settings_artwork_expected_sha256)?;
     validate_delivery_remote(remote).map_err(device_failure)?;
     validate_runtime_manifest_remote(manifest_remote).map_err(device_failure)?;
     if artwork_remote != DEVELOPMENT_ARTWORK_REMOTE.as_str() || !artwork_local.is_file() {
@@ -2757,10 +2815,24 @@ fn deliver_runtime_transaction(
             "runtime delivery requires the canonical external SNES artwork".into(),
         ));
     }
+    if settings_artwork_remote != DEVELOPMENT_SETTINGS_ARTWORK_REMOTE.as_str()
+        || !settings_artwork_local.is_file()
+    {
+        return Err(DeviceFailure::ArtifactMismatch(
+            "runtime delivery requires the canonical external settings artwork".into(),
+        ));
+    }
     let artwork_actual_sha256 = file_sha256(artwork_local.to_path_buf()).map_err(device_failure)?;
     if artwork_actual_sha256 != artwork_expected_sha256 {
         return Err(DeviceFailure::ArtifactMismatch(format!(
             "SNES artwork hash mismatch expected={artwork_expected_sha256} actual={artwork_actual_sha256}"
+        )));
+    }
+    let settings_artwork_actual_sha256 =
+        file_sha256(settings_artwork_local.to_path_buf()).map_err(device_failure)?;
+    if settings_artwork_actual_sha256 != settings_artwork_expected_sha256 {
+        return Err(DeviceFailure::ArtifactMismatch(format!(
+            "settings artwork hash mismatch expected={settings_artwork_expected_sha256} actual={settings_artwork_actual_sha256}"
         )));
     }
     MagikDeployTransaction::validate_bundle(
@@ -2784,6 +2856,9 @@ fn deliver_runtime_transaction(
             artwork_local,
             artwork_remote,
             artwork_expected_sha256,
+            settings_artwork_local,
+            settings_artwork_remote,
+            settings_artwork_expected_sha256,
         },
         false,
         timings,

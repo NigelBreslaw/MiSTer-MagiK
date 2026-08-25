@@ -247,6 +247,7 @@ required = {
     f"{root}/hbmame.sqlite3",
     f"{root}/arcade-updater-index-v1.lz4b",
     f"{root}/assets/snes/snes-small-v1.rgb565a",
+    f"{root}/assets/ui/settings-v1.rgb565a",
     manifest_path,
     f"{root}/platform-bundle-v0.2.json",
     f"{root}/game-databases-manifest.json",
@@ -260,6 +261,7 @@ with zipfile.ZipFile(os.environ["ZIP"]) as archive:
     names = set(archive.namelist())
     manager = archive.read(manager_path)
     snes_artwork = archive.read(f"{root}/assets/snes/snes-small-v1.rgb565a")
+    settings_artwork = archive.read(f"{root}/assets/ui/settings-v1.rgb565a")
     manager_mode = archive.getinfo(manager_path).external_attr >> 16
     manifest = dict(
         line.split("=", 1)
@@ -281,6 +283,9 @@ if hashlib.sha256(manager).hexdigest() != manifest.get("manager_sha256"):
     raise SystemExit(1)
 if hashlib.sha256(snes_artwork).hexdigest() != "7a76993e7e1b0063832b94e9d2ad588549587cf09a14ac2ced72d349ed12f766":
     print("package validation failed: SNES artwork checksum mismatch", file=sys.stderr)
+    raise SystemExit(1)
+if hashlib.sha256(settings_artwork).hexdigest() != "44d657ff706a49fd8c8999b7c02ea4cdb7e4a8488a54dc68e0b79235dc40e8ec":
+    print("package validation failed: settings artwork checksum mismatch", file=sys.stderr)
     raise SystemExit(1)
 forbidden = sorted(
     name for name in names

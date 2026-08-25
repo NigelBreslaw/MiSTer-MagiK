@@ -1,0 +1,19 @@
+Settings launcher artwork
+=========================
+
+Authoritative source: ../../ui/icons/settings.svg
+Source SHA-256: 0d88a8f5a2af24f1432b837841c5ba50214392bebf7b13d96cd231e39bfe33d9
+Dimensions: 24 x 24 pixels
+
+Generated output: settings-v1.rgb565a
+Generated SHA-256: 44d657ff706a49fd8c8999b7c02ea4cdb7e4a8488a54dc68e0b79235dc40e8ec
+Format: MM565A1, little-endian RGB565 colour plane followed by 8-bit alpha
+
+Regenerate from the repository root:
+
+  python3 scripts/media/convert-rgba-to-rgb565a.py \
+    apps/mister/ui/icons/settings.svg \
+    apps/mister/assets/ui/settings-v1.rgb565a
+
+The runtime loads the generated file from the active MagiK directory. Neither
+the SVG nor the RGB565A asset is embedded in the executable.

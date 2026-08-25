@@ -580,8 +580,10 @@ mod macos {
             launcher_nav.display_highlighted = display_profile
                 .settings_display_resolution_index()
                 .unwrap_or(0);
-            if let Ok(artwork) = mister_magik_fb::snes_artwork::SnesArtwork::load(
+            if let Ok(artwork) = mister_magik_fb::snes_artwork::Rgb565aImage::load_exact(
                 &Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/snes/snes-small-v1.rgb565a"),
+                mister_magik_fb::snes_artwork::SNES_ARTWORK_WIDTH,
+                mister_magik_fb::snes_artwork::SNES_ARTWORK_HEIGHT,
             ) {
                 let pixels = artwork.rgba8_bytes();
                 let image = slint::Image::from_rgba8(
@@ -594,6 +596,24 @@ mod macos {
                 let navigation = launcher.global::<NavigationView>();
                 navigation.set_system_artwork(image);
                 navigation.set_system_artwork_available(true);
+            }
+            if let Ok(artwork) = mister_magik_fb::snes_artwork::Rgb565aImage::load_exact(
+                &Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join(mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_RELATIVE_PATH),
+                mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_WIDTH,
+                mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_HEIGHT,
+            ) {
+                let pixels = artwork.rgba8_bytes();
+                let image = slint::Image::from_rgba8(
+                    slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                        &pixels,
+                        artwork.width as u32,
+                        artwork.height as u32,
+                    ),
+                );
+                let navigation = launcher.global::<NavigationView>();
+                navigation.set_settings_artwork(image);
+                navigation.set_settings_artwork_available(true);
             }
             let view_orientation = match orientation {
                 ScreenOrientation::Normal => ViewScreenOrientation::Normal,

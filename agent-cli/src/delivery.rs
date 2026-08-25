@@ -229,6 +229,8 @@ struct RuntimeDelivery {
     expected_sha256: String,
     artwork_local: PathBuf,
     artwork_expected_sha256: String,
+    settings_artwork_local: PathBuf,
+    settings_artwork_expected_sha256: String,
 }
 
 impl DeliveryDevice for DeviceClient {
@@ -256,6 +258,8 @@ impl DeliveryDevice for DeviceClient {
                 &delivery.expected_sha256,
                 &delivery.artwork_local,
                 &delivery.artwork_expected_sha256,
+                &delivery.settings_artwork_local,
+                &delivery.settings_artwork_expected_sha256,
                 timings,
             )
         })
@@ -785,6 +789,12 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
                             artwork_expected_sha256:
                                 "7a76993e7e1b0063832b94e9d2ad588549587cf09a14ac2ced72d349ed12f766"
                                     .into(),
+                            settings_artwork_local: self
+                                .repository
+                                .join("apps/mister/assets/ui/settings-v1.rgb565a"),
+                            settings_artwork_expected_sha256:
+                                "44d657ff706a49fd8c8999b7c02ea4cdb7e4a8488a54dc68e0b79235dc40e8ec"
+                                    .into(),
                         },
                         &mut self.timing_samples,
                     )
@@ -864,6 +874,12 @@ fn prepare_stage_files(
     copy(
         repository.join("apps/mister/assets/snes/snes-small-v1.rgb565a"),
         stage.join("assets/snes/snes-small-v1.rgb565a"),
+    )?;
+    fs::create_dir_all(stage.join("assets/ui"))
+        .map_err(|error| format!("cannot create UI artwork stage: {error}"))?;
+    copy(
+        repository.join("apps/mister/assets/ui/settings-v1.rgb565a"),
+        stage.join("assets/ui/settings-v1.rgb565a"),
     )?;
     Ok(candidate_main_revision.to_owned())
 }

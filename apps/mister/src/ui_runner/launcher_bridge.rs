@@ -18,35 +18,82 @@ macro_rules! set_bridge_string_if_changed {
 
 fn load_snes_artwork_image() -> Option<slint::Image> {
     let active = mister_magik_fb::snes_artwork::active_asset_path();
-    let artwork = mister_magik_fb::snes_artwork::SnesArtwork::load(&active)
-        .or_else(|active_error| {
-            #[cfg(feature = "ui-preview")]
-            {
-                let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("assets/snes/snes-small-v1.rgb565a");
-                return mister_magik_fb::snes_artwork::SnesArtwork::load(&repository).map_err(
-                    |repository_error| {
-                        crate::ui_errln!(
+    let artwork = mister_magik_fb::snes_artwork::Rgb565aImage::load_exact(
+        &active,
+        mister_magik_fb::snes_artwork::SNES_ARTWORK_WIDTH,
+        mister_magik_fb::snes_artwork::SNES_ARTWORK_HEIGHT,
+    )
+    .or_else(|active_error| {
+        #[cfg(feature = "ui-preview")]
+        {
+            let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("assets/snes/snes-small-v1.rgb565a");
+            return mister_magik_fb::snes_artwork::Rgb565aImage::load_exact(
+                &repository,
+                mister_magik_fb::snes_artwork::SNES_ARTWORK_WIDTH,
+                mister_magik_fb::snes_artwork::SNES_ARTWORK_HEIGHT,
+            )
+            .map_err(|repository_error| {
+                crate::ui_errln!(
                     "SNES artwork unavailable: active={active_error}; repository={repository_error}"
                 );
-                        repository_error
-                    },
+                repository_error
+            });
+        }
+        #[cfg(not(feature = "ui-preview"))]
+        {
+            crate::ui_errln!("SNES artwork unavailable: {active_error}");
+            Err(active_error)
+        }
+    })
+    .ok()?;
+    Some(slint_image_from_rgb565a(&artwork))
+}
+
+fn load_settings_artwork_image() -> Option<slint::Image> {
+    let active = mister_magik_catalog::device_layout::current_app_path(
+        mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_RELATIVE_PATH,
+    );
+    let artwork = mister_magik_fb::snes_artwork::Rgb565aImage::load_exact(
+        &active,
+        mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_WIDTH,
+        mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_HEIGHT,
+    )
+    .or_else(|active_error| {
+        #[cfg(feature = "ui-preview")]
+        {
+            let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_RELATIVE_PATH);
+            return mister_magik_fb::snes_artwork::Rgb565aImage::load_exact(
+                &repository,
+                mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_WIDTH,
+                mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_HEIGHT,
+            )
+            .map_err(|repository_error| {
+                crate::ui_errln!(
+                    "settings artwork unavailable: active={active_error}; repository={repository_error}"
                 );
-            }
-            #[cfg(not(feature = "ui-preview"))]
-            {
-                crate::ui_errln!("SNES artwork unavailable: {active_error}");
-                Err(active_error)
-            }
-        })
-        .ok()?;
+                repository_error
+            });
+        }
+        #[cfg(not(feature = "ui-preview"))]
+        {
+            crate::ui_errln!("settings artwork unavailable: {active_error}");
+            Err(active_error)
+        }
+    })
+    .ok()?;
+    Some(slint_image_from_rgb565a(&artwork))
+}
+
+fn slint_image_from_rgb565a(artwork: &mister_magik_fb::snes_artwork::Rgb565aImage) -> slint::Image {
     let pixels = artwork.rgba8_bytes();
     let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
         &pixels,
         artwork.width as u32,
         artwork.height as u32,
     );
-    Some(slint::Image::from_rgba8(buffer))
+    slint::Image::from_rgba8(buffer)
 }
 
 pub(super) fn open_pads() -> PadPool {
@@ -65,6 +112,12 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
         navigation.set_system_artwork_available(true);
     } else {
         navigation.set_system_artwork_available(false);
+    }
+    if let Some(image) = load_settings_artwork_image() {
+        navigation.set_settings_artwork(image);
+        navigation.set_settings_artwork_available(true);
+    } else {
+        navigation.set_settings_artwork_available(false);
     }
     let build_label = SharedString::from(build_label());
     navigation.set_build_label(build_label.clone());

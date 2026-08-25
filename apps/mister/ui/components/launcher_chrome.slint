@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { Spleen6x12, Spleen6x12Size } from "spleen_6x12.slint";
+import { Spleen5x8, Spleen5x8Size } from "spleen_5x8.slint";
 import { Xerxes10, Xerxes10Size } from "xerxes_10.slint";
 import { Nocive15, Nocive15Size } from "nocive_15.slint";
 
-import { CatalogView } from "../api.slint";
+import { CatalogView, NavigationView } from "../api.slint";
 import { MenuItemStatus } from "../launcher_menu.slint";
 
 component ScanningSubtitle inherits VerticalLayout {
@@ -193,12 +194,21 @@ component CogIcon inherits Rectangle {
     background: transparent;
     opacity: focused ? 1.0 : 0.5;
 
-    Rectangle { x: 0; y: 3px; width: root.width; height: 2px; background: white; }
-    Rectangle { x: 5px; y: 0; width: 4px; height: 8px; background: white; }
-    Rectangle { x: 0; y: 11px; width: root.width; height: 2px; background: white; }
-    Rectangle { x: 15px; y: 8px; width: 4px; height: 8px; background: white; }
-    Rectangle { x: 0; y: 19px; width: root.width; height: 2px; background: white; }
-    Rectangle { x: 9px; y: 16px; width: 4px; height: 8px; background: white; }
+    if NavigationView.settings-artwork-available : Image {
+        width: root.width;
+        height: root.height;
+        source: NavigationView.settings-artwork;
+        image-fit: contain;
+    }
+
+    if !NavigationView.settings-artwork-available : Spleen5x8 {
+        width: root.width;
+        height: root.height;
+        text: "SET";
+        size: Spleen5x8Size.px8;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
 }
 
 export component SettingsButton inherits Rectangle {

@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! External SNES hub artwork in a native RGB565 colour plane plus alpha plane.
+//! External artwork in a native RGB565 colour plane plus alpha plane.
 
 use std::fmt;
 use std::fs;
@@ -12,9 +12,12 @@ const HEADER_LEN: usize = 24;
 pub const SNES_ARTWORK_WIDTH: usize = 185;
 pub const SNES_ARTWORK_HEIGHT: usize = 82;
 pub const SNES_ARTWORK_RELATIVE_PATH: &str = "assets/snes/snes-small-v1.rgb565a";
+pub const SETTINGS_ARTWORK_WIDTH: usize = 24;
+pub const SETTINGS_ARTWORK_HEIGHT: usize = 24;
+pub const SETTINGS_ARTWORK_RELATIVE_PATH: &str = "assets/ui/settings-v1.rgb565a";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SnesArtwork {
+pub struct Rgb565aImage {
     pub width: usize,
     pub height: usize,
     pub colours: Vec<u16>,
@@ -22,60 +25,86 @@ pub struct SnesArtwork {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SnesArtworkError {
+pub enum Rgb565aError {
     Io(String),
     Truncated,
     InvalidMagic,
-    InvalidDimensions { width: usize, height: usize },
+    InvalidDimensions {
+        width: usize,
+        height: usize,
+    },
+    UnexpectedDimensions {
+        width: usize,
+        height: usize,
+        expected_width: usize,
+        expected_height: usize,
+    },
     InvalidStride,
     InvalidLength,
     ChecksumMismatch,
 }
 
-impl fmt::Display for SnesArtworkError {
+impl fmt::Display for Rgb565aError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Io(error) => write!(formatter, "read SNES artwork: {error}"),
-            Self::Truncated => formatter.write_str("SNES artwork header is truncated"),
-            Self::InvalidMagic => formatter.write_str("SNES artwork magic is invalid"),
+            Self::Io(error) => write!(formatter, "read RGB565A artwork: {error}"),
+            Self::Truncated => formatter.write_str("RGB565A artwork header is truncated"),
+            Self::InvalidMagic => formatter.write_str("RGB565A artwork magic is invalid"),
             Self::InvalidDimensions { width, height } => {
-                write!(formatter, "SNES artwork dimensions are {width}x{height}")
+                write!(formatter, "RGB565A artwork dimensions are {width}x{height}")
             }
-            Self::InvalidStride => formatter.write_str("SNES artwork stride is invalid"),
-            Self::InvalidLength => formatter.write_str("SNES artwork payload length is invalid"),
-            Self::ChecksumMismatch => formatter.write_str("SNES artwork checksum does not match"),
+            Self::UnexpectedDimensions {
+                width,
+                height,
+                expected_width,
+                expected_height,
+            } => {
+                write!(
+                    formatter,
+                    "RGB565A artwork dimensions are {width}x{height}, expected {expected_width}x{expected_height}"
+                )
+            }
+            Self::InvalidStride => formatter.write_str("RGB565A artwork stride is invalid"),
+            Self::InvalidLength => formatter.write_str("RGB565A artwork payload length is invalid"),
+            Self::ChecksumMismatch => {
+                formatter.write_str("RGB565A artwork checksum does not match")
+            }
         }
     }
 }
 
-impl std::error::Error for SnesArtworkError {}
+impl std::error::Error for Rgb565aError {}
 
-impl SnesArtwork {
-    pub fn load(path: &Path) -> Result<Self, SnesArtworkError> {
-        let bytes = fs::read(path).map_err(|error| SnesArtworkError::Io(error.to_string()))?;
+impl Rgb565aImage {
+    pub fn load(path: &Path) -> Result<Self, Rgb565aError> {
+        let bytes = fs::read(path).map_err(|error| Rgb565aError::Io(error.to_string()))?;
         Self::decode(&bytes)
     }
 
-    pub fn load_from_active_app() -> Result<Self, SnesArtworkError> {
-        Self::load(&active_asset_path())
+    pub fn load_exact(
+        path: &Path,
+        expected_width: usize,
+        expected_height: usize,
+    ) -> Result<Self, Rgb565aError> {
+        Self::load(path)?.require_dimensions(expected_width, expected_height)
     }
 
-    pub fn decode(bytes: &[u8]) -> Result<Self, SnesArtworkError> {
+    pub fn decode(bytes: &[u8]) -> Result<Self, Rgb565aError> {
         if bytes.len() < HEADER_LEN {
-            return Err(SnesArtworkError::Truncated);
+            return Err(Rgb565aError::Truncated);
         }
         if &bytes[..8] != MAGIC {
-            return Err(SnesArtworkError::InvalidMagic);
+            return Err(Rgb565aError::InvalidMagic);
         }
         let width = u16::from_le_bytes([bytes[8], bytes[9]]) as usize;
         let height = u16::from_le_bytes([bytes[10], bytes[11]]) as usize;
-        if width != SNES_ARTWORK_WIDTH || height != SNES_ARTWORK_HEIGHT {
-            return Err(SnesArtworkError::InvalidDimensions { width, height });
+        if width == 0 || height == 0 {
+            return Err(Rgb565aError::InvalidDimensions { width, height });
         }
         let rgb_stride = read_u32(bytes, 12)? as usize;
         let alpha_stride = read_u32(bytes, 16)? as usize;
         if rgb_stride != width * 2 || alpha_stride != width {
-            return Err(SnesArtworkError::InvalidStride);
+            return Err(Rgb565aError::InvalidStride);
         }
         let expected_payload = rgb_stride
             .checked_mul(height)
@@ -84,14 +113,14 @@ impl SnesArtwork {
                     .checked_mul(height)
                     .and_then(|alpha| rgb.checked_add(alpha))
             })
-            .ok_or(SnesArtworkError::InvalidLength)?;
+            .ok_or(Rgb565aError::InvalidLength)?;
         if bytes.len() != HEADER_LEN + expected_payload {
-            return Err(SnesArtworkError::InvalidLength);
+            return Err(Rgb565aError::InvalidLength);
         }
         let expected_crc = read_u32(bytes, 20)?;
         let payload = &bytes[HEADER_LEN..];
         if crc32(payload) != expected_crc {
-            return Err(SnesArtworkError::ChecksumMismatch);
+            return Err(Rgb565aError::ChecksumMismatch);
         }
         let colour_len = rgb_stride * height;
         let colours = payload[..colour_len]
@@ -106,6 +135,22 @@ impl SnesArtwork {
             colours,
             alpha: payload[colour_len..].to_vec(),
         })
+    }
+
+    pub fn require_dimensions(
+        self,
+        expected_width: usize,
+        expected_height: usize,
+    ) -> Result<Self, Rgb565aError> {
+        if self.width != expected_width || self.height != expected_height {
+            return Err(Rgb565aError::UnexpectedDimensions {
+                width: self.width,
+                height: self.height,
+                expected_width,
+                expected_height,
+            });
+        }
+        Ok(self)
     }
 
     pub fn composite_pixel(&self, index: usize, background: u16) -> Option<u16> {
@@ -137,10 +182,18 @@ pub fn active_asset_path() -> PathBuf {
     mister_magik_catalog::device_layout::current_app_path(SNES_ARTWORK_RELATIVE_PATH)
 }
 
-fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, SnesArtworkError> {
+pub fn load_from_active_app() -> Result<Rgb565aImage, Rgb565aError> {
+    Rgb565aImage::load_exact(
+        &active_asset_path(),
+        SNES_ARTWORK_WIDTH,
+        SNES_ARTWORK_HEIGHT,
+    )
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, Rgb565aError> {
     let value = bytes
         .get(offset..offset + 4)
-        .ok_or(SnesArtworkError::Truncated)?;
+        .ok_or(Rgb565aError::Truncated)?;
     Ok(u32::from_le_bytes(
         value.try_into().expect("four-byte slice"),
     ))
@@ -182,9 +235,17 @@ mod tests {
             .expect("repository SNES artwork")
     }
 
+    fn repository_settings_asset() -> Vec<u8> {
+        fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join(SETTINGS_ARTWORK_RELATIVE_PATH))
+            .expect("repository settings artwork")
+    }
+
     #[test]
     fn decodes_authoritative_native_pixel_asset() {
-        let artwork = SnesArtwork::decode(&repository_asset()).unwrap();
+        let artwork = Rgb565aImage::decode(&repository_asset())
+            .unwrap()
+            .require_dimensions(SNES_ARTWORK_WIDTH, SNES_ARTWORK_HEIGHT)
+            .unwrap();
         assert_eq!((artwork.width, artwork.height), (185, 82));
         assert_eq!(artwork.colours.len(), 185 * 82);
         assert_eq!(artwork.alpha.len(), 185 * 82);
@@ -199,14 +260,37 @@ mod tests {
         let last = bytes.len() - 1;
         bytes[last] ^= 1;
         assert_eq!(
-            SnesArtwork::decode(&bytes),
-            Err(SnesArtworkError::ChecksumMismatch)
+            Rgb565aImage::decode(&bytes),
+            Err(Rgb565aError::ChecksumMismatch)
         );
     }
 
     #[test]
+    fn settings_artwork_has_exact_runtime_dimensions() {
+        let artwork = Rgb565aImage::decode(&repository_settings_asset())
+            .unwrap()
+            .require_dimensions(SETTINGS_ARTWORK_WIDTH, SETTINGS_ARTWORK_HEIGHT)
+            .unwrap();
+        assert_eq!((artwork.width, artwork.height), (24, 24));
+        assert_eq!(artwork.colours.len(), 24 * 24);
+        assert_eq!(artwork.alpha.len(), 24 * 24);
+        assert!(artwork.alpha.contains(&0));
+        assert!(artwork.alpha.contains(&255));
+    }
+
+    #[test]
+    fn exact_loader_rejects_wrong_artwork_dimensions() {
+        assert!(matches!(
+            Rgb565aImage::decode(&repository_settings_asset())
+                .unwrap()
+                .require_dimensions(SNES_ARTWORK_WIDTH, SNES_ARTWORK_HEIGHT),
+            Err(Rgb565aError::UnexpectedDimensions { .. })
+        ));
+    }
+
+    #[test]
     fn alpha_compositing_preserves_transparent_and_opaque_pixels() {
-        let artwork = SnesArtwork::decode(&repository_asset()).unwrap();
+        let artwork = Rgb565aImage::decode(&repository_asset()).unwrap();
         let transparent = artwork.alpha.iter().position(|alpha| *alpha == 0).unwrap();
         let opaque = artwork
             .alpha

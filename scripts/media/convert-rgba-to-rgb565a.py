@@ -30,10 +30,28 @@ def dimensions(path: pathlib.Path) -> tuple[int, int]:
 
 
 def rgba_pixels(path: pathlib.Path, expected_size: int) -> bytes:
+    source = str(path)
+    source_bytes = None
+    if path.suffix.lower() == ".svg":
+        source = "svg:-"
+        source_bytes = path.read_text(encoding="utf-8").replace(
+            "currentColor", "#ffffff"
+        ).encode("utf-8")
     result = subprocess.run(
-        ["magick", str(path), "-alpha", "on", "-depth", "8", "rgba:-"],
+        [
+            "magick",
+            "-background",
+            "none",
+            source,
+            "-alpha",
+            "on",
+            "-depth",
+            "8",
+            "rgba:-",
+        ],
         check=True,
         capture_output=True,
+        input=source_bytes,
     )
     if len(result.stdout) != expected_size:
         raise ValueError(
