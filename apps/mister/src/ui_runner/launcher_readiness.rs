@@ -32,6 +32,8 @@ impl SourceFrameEvidence {
         height: usize,
         stride_pixels: usize,
     ) -> Option<Self> {
+        #[cfg(not(test))]
+        let started = std::time::Instant::now();
         if width == 0
             || height == 0
             || stride_pixels < width
@@ -41,12 +43,23 @@ impl SourceFrameEvidence {
         }
         let mut digest = Sha256::new();
         let mut nonzero_pixels = 0u32;
+        let row_byte_len = width.checked_mul(std::mem::size_of::<u16>())?;
+        let mut row_bytes = vec![0u8; row_byte_len];
         for row in pixels.chunks_exact(stride_pixels).take(height) {
-            for pixel in &row[..width] {
-                digest.update(pixel.0.to_le_bytes());
+            for (bytes, pixel) in row_bytes.chunks_exact_mut(2).zip(&row[..width]) {
+                bytes.copy_from_slice(&pixel.0.to_le_bytes());
                 nonzero_pixels = nonzero_pixels.saturating_add(u32::from(pixel.0 != 0));
             }
+            digest.update(&row_bytes);
         }
+        #[cfg(not(test))]
+        mister_magik_mister_runtime::boot_analytics::event(
+            "launcher_readiness_source_hash",
+            format!(
+                "width={width} height={height} row_bytes={row_byte_len} elapsed_us={}",
+                started.elapsed().as_micros()
+            ),
+        );
         Some(Self {
             sha256: encode_hex(&digest.finalize()),
             nonzero_pixels,
@@ -363,6 +376,26 @@ mod tests {
 
     fn evidence() -> SourceFrameEvidence {
         SourceFrameEvidence::from_rgb565_rows(&[Rgb565Pixel(0x1234); 4], 2, 2, 2).unwrap()
+    }
+
+    #[test]
+    fn row_batched_hash_preserves_packed_little_endian_pixels_and_ignores_stride() {
+        let pixels = [
+            Rgb565Pixel(0x1234),
+            Rgb565Pixel(0),
+            Rgb565Pixel(0xabcd),
+            Rgb565Pixel(0xeeee),
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(1),
+            Rgb565Pixel(0),
+            Rgb565Pixel(0xdddd),
+        ];
+        let evidence = SourceFrameEvidence::from_rgb565_rows(&pixels, 3, 2, 4).unwrap();
+        let packed = [
+            0x34, 0x12, 0x00, 0x00, 0xcd, 0xab, 0xff, 0xff, 0x01, 0x00, 0x00, 0x00,
+        ];
+        assert_eq!(evidence.sha256, encode_hex(&Sha256::digest(packed)));
+        assert_eq!(evidence.nonzero_pixels, 4);
     }
 
     fn read_message(reader: &mut fs::File) -> String {
