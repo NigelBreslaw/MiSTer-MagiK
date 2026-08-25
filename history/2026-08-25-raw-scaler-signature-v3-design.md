@@ -65,5 +65,8 @@ range change to a false corruption result.
 The coherent direct-`ascal` records and byte-identical framebuffer remain valid
 identity evidence, but there was no physical failure to classify. The earlier
 downstream-of-`ascal` conclusion is retracted. No post-OSD probe is justified by
-this event. Phase 2 must rerun with the range-normalized static-region detector
-before another FPGA diagnostic is designed.
+this event. The range-normalized static-region detector then completed 75/75
+valid Phase 2 returns and 15 scheduled reboots without a black screen or
+moving/full-raster corruption. Both `16..235` and `0..255` input ranges occurred
+while the corrected temporal result remained zero. Retain the experimental
+schema-10 RBF for observation; this rerun establishes no new FPGA root cause.

@@ -36,3 +36,23 @@ fail closed. The threshold is 2 permille. Native AVFoundation calibration found:
 
 This change repairs only physical-evidence classification. It does not change
 USB capture, the installed RBF, Main, the launcher, latch-v5, or any FPGA logic.
+
+## Corrected Phase 2 result
+
+The unchanged qualified schema-10 RBF completed 75/75 valid launch/return
+attempts with the corrected host detector. Fifteen scheduled attended reboots
+all recovered into healthy `LauncherActive` state. Every valid summary used the
+new grid identity and threshold, classified physical USB Video as visible, and
+reported a maximum temporal delta of zero. Captures included both luma ranges
+`16..235` and `0..255`, proving the corrected range boundary was exercised on
+device without another false stop.
+
+Every valid FPGA record was coherent `raw-scaler-ordered-signature-v3` evidence
+classified `raw_scaler_ordered_stable`. No black screen, moving/full-raster
+corruption, signal loss, or post-return recovery occurred. Two automation lease
+cleanup replies returned transient `EAGAIN`; those runs produced no summary,
+were reconciled with a healthy unarmed launcher, and were not counted. Fresh
+attempts 21 and 61 then passed.
+
+The aggregate is recorded in
+[`2026-08-25-usb-temporal-detector-v2-phase2-result.json`](2026-08-25-usb-temporal-detector-v2-phase2-result.json).

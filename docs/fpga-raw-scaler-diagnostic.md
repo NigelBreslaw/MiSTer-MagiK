@@ -8,9 +8,12 @@ color information. It passed fixed-seed Apple signoff. Phase 2 return 45 was
 initially classified as physical corruption, but native review proved that all
 three stills were normal and the following 749-frame movie was healthy. The
 false positive came from comparing video-range and full-range luma without
-normalization; it supports no FPGA boundary conclusion. Schema 10 remains the
-installed experimental diagnostic while the corrected host detector is rerun.
-The rejected fits, final reduction, and corrected device record are in
+normalization; it supports no FPGA boundary conclusion. The corrected detector
+then completed 75/75 valid physical returns across 15 bounded reboot epochs
+without reproducing a black screen or moving/full-raster corruption. Schema 10
+remains the installed experimental diagnostic; no post-OSD probe is justified
+by the completed rerun. The rejected fits, final reduction, and corrected
+device records are in
 [the storage-reduction receipt](../history/2026-08-25-raw-scaler-signature-storage-reduction.md),
 [the schema-9 design](../history/2026-08-25-raw-scaler-signature-v2-design.md),
 the [schema-10 design](../history/2026-08-25-raw-scaler-signature-v3-design.md),

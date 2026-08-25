@@ -1,0 +1,63 @@
+{
+  "schema": "mister-magik-usb-temporal-detector-v2-phase2-result-v1",
+  "date": "2026-08-25",
+  "detector_commit": "ceefb66ea1f6e54c71880d631bc6262ec639c434",
+  "detector_contract": "8x9-static-left-video-range-v2",
+  "temporal_threshold_permille": 2,
+  "installed_fpga": {
+    "diagnostic_architecture": "raw-scaler-ordered-signature-v3",
+    "rbf_sha256": "6c9324ffe52cd6ae10ecac31ef8a37a281dd2882156ecdc4571e5ab5d35a7691",
+    "metadata_sha256": "b462d572f8b9ef69282143d0d85b7a7aebd27b843587f9780ae334ce35eb6bdd",
+    "signoff_report_sha256": "00a38857e5aa601dfb443fa0f5b5f5215c2953e4f889475241022b798ca98d15"
+  },
+  "campaign": {
+    "valid_returns": 75,
+    "passed_returns": 75,
+    "scheduled_reboots": 15,
+    "successful_reboots": 15,
+    "non_counted_cleanup_response_losses": 2,
+    "non_counted_output_paths": [
+      "build/raw-scaler-signature-v3-detector-v2-phase2-021",
+      "build/raw-scaler-signature-v3-detector-v2-phase2-061"
+    ],
+    "replacement_valid_output_paths": [
+      "build/raw-scaler-signature-v3-detector-v2-phase2-021-retry1",
+      "build/raw-scaler-signature-v3-detector-v2-phase2-061-retry1"
+    ]
+  },
+  "aggregate": {
+    "artifact_statuses": ["passed"],
+    "physical_visibility": ["visible"],
+    "maximum_temporal_delta_permille": 0,
+    "observed_luma_ranges": [[0, 255], [16, 235]],
+    "fpga_classifications": ["raw_scaler_ordered_stable"],
+    "fpga_coherent": [true],
+    "black_or_signal_loss_results": 0,
+    "physical_corruption_results": 0,
+    "summary_manifest_sha256": "408f29bd1ce93ccfae467ed61ce06dc35ead0a44fcf1b64b0039aaf2ba152d81"
+  },
+  "boundary_decision": {
+    "classification": "no_failure_reproduced",
+    "fpga_root_cause_inference": "none",
+    "post_osd_probe_justified": false,
+    "next_action": "retain the qualified raw-scaler diagnostic RBF for observation and preserve immediately on the next genuine physical failure"
+  },
+  "representative_artifacts": [
+    {
+      "path": "build/raw-scaler-signature-v3-detector-v2-phase2-001/summary.json",
+      "sha256": "72e61ad199d084149759e3e7e162440503f2b6ff6d0d6791abe304b3cf0080bc"
+    },
+    {
+      "path": "build/raw-scaler-signature-v3-detector-v2-phase2-021-retry1/summary.json",
+      "sha256": "d9b095422a38a0af92c0227a1831d7595464e6a267ea485bc9608db0458b1f98"
+    },
+    {
+      "path": "build/raw-scaler-signature-v3-detector-v2-phase2-061-retry1/summary.json",
+      "sha256": "8b0c8ec527f0b1e36f7e2c36afd3d4176f0589ed9af6e66063907b5a4c6b41da"
+    },
+    {
+      "path": "build/raw-scaler-signature-v3-detector-v2-phase2-075/summary.json",
+      "sha256": "23160ea571058668d913ef23d4fe781bfb74e34d6ba13e363920023b0da183c7"
+    }
+  ]
+}

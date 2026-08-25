@@ -1217,3 +1217,12 @@ records answer no FPGA boundary question because no physical corruption
 occurred. The earlier downstream-of-`ascal` interpretation is retracted. The
 corrected identities, records, hashes, and movie disposition are indexed in
 [`2026-08-25-raw-scaler-signature-v3-corruption-incident-v1.json`](2026-08-25-raw-scaler-signature-v3-corruption-incident-v1.json).
+
+The corrected `8x9-static-left-video-range-v2` detector subsequently completed
+75/75 valid physical returns across 15 scheduled reboots. Every qualified
+summary reported visible output, zero temporal delta, coherent
+`raw-scaler-ordered-signature-v3` evidence, and no black or signal-loss result.
+Both video-range `16..235` and full-range `0..255` samples occurred, directly
+exercising the false-positive correction. No physical failure was reproduced,
+so Design 11 remains an installed experimental diagnostic and no downstream
+probe is authorized by this campaign.

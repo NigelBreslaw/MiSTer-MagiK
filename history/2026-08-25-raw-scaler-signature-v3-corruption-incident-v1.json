@@ -91,6 +91,19 @@
     "one_second_temporal_delta_permille_range": [0, 0],
     "result": "healthy_static_launcher"
   },
+  "corrected_phase2_rerun": {
+    "detector_commit": "ceefb66ea1f6e54c71880d631bc6262ec639c434",
+    "detector_contract": "8x9-static-left-video-range-v2",
+    "temporal_threshold_permille": 2,
+    "valid_returns": 75,
+    "passed_returns": 75,
+    "scheduled_reboots": 15,
+    "maximum_temporal_delta_permille": 0,
+    "observed_luma_ranges": [[0, 255], [16, 235]],
+    "black_or_signal_loss_results": 0,
+    "physical_corruption_results": 0,
+    "result": "no_failure_reproduced"
+  },
   "decision": {
     "classification": "usb_temporal_detector_false_positive",
     "basis": "All three native stills show the complete normal launcher. The second confirmation changed from video-range luma 16..235 to full-range 0..255 while retaining the same visible scene; the unnormalized detector treated that global range change as 45-permille motion. The following 749-frame native movie is static and healthy with zero temporal delta.",
