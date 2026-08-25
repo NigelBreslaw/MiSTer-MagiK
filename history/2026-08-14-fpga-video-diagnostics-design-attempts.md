@@ -1208,13 +1208,12 @@ relationships, exact 3/3 diagnostic CDC paths, `+188` ALMs, and `+191`
 registers with unchanged RAM/DSP/PLL identity.
 
 After an initial physical smoke and 44 clean Phase 2 returns, return 45
-reproduced moving physical corruption on the revealed Arcade launcher. The
-RGB565 framebuffer was byte-identical to healthy return 44. Three coherent
-direct-`ascal` frame records advanced while retaining signature `e231`, also
-the exact healthy-reference signature for the same static scene. Native USB
-Video changed by 45 permille against the 8-permille temporal threshold. This
-strongly attributes the observed corruption downstream of direct `ascal` and
-answers Design 11's boundary question. The campaign stopped without recovery;
-the exact identities, records, hashes, and 30-second native movie are indexed
-in
+initially tripped the temporal detector at 45 permille. Native review proved all
+three stills were complete normal launcher frames and the following 749-frame
+movie was healthy with zero temporal delta. The second confirmation used
+full-range luma `0..255`; the first two used video-range `16..235`. Comparing
+those unnormalized ranges caused the false positive. The coherent schema-10
+records answer no FPGA boundary question because no physical corruption
+occurred. The earlier downstream-of-`ascal` interpretation is retracted. The
+corrected identities, records, hashes, and movie disposition are indexed in
 [`2026-08-25-raw-scaler-signature-v3-corruption-incident-v1.json`](2026-08-25-raw-scaler-signature-v3-corruption-incident-v1.json).

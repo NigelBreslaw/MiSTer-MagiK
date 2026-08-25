@@ -55,17 +55,15 @@ and unchanged RAM/DSP/PLL identity. The exact artifacts are recorded in the
 [device incident](2026-08-25-raw-scaler-signature-v3-corruption-incident-v1.json).
 
 The installed candidate passed its initial physical smoke and 44 Phase 2
-returns across eight bounded reboot boundaries. Return 45 then produced a real
-moving physical corruption classification on the revealed Arcade launcher.
-The authoritative RGB565 framebuffer remained byte-identical to the healthy
-reference. Three coherent direct-`ascal` records advanced through frames 417,
-419, and 420 while all reported the same ordered signature `e231`; the exact
-same static scene and signature were present in healthy return 44.
+returns across eight bounded reboot boundaries. Return 45 initially failed the
+host temporal detector. Native review then proved that all three stills showed
+the complete normal Arcade launcher and the following 749-frame movie was
+healthy. The second confirmation used full-range luma `0..255` while the first
+two used video-range `16..235`; the unnormalized grid comparison promoted that
+range change to a false corruption result.
 
-This is the result the probe was designed to distinguish. It strongly supports
-an origin downstream of direct `ascal`; it does not identify the downstream
-stage and does not infer sink visibility from internal FPGA state. The campaign
-stopped without reboot or recovery, and a 30-second native USB Video movie was
-preserved. The next discriminating FPGA experiment should compare this retained
-direct-`ascal` evidence with one minimal final post-processing/output-boundary
-signature. It must not modify the completion or copy-tail repairs.
+The coherent direct-`ascal` records and byte-identical framebuffer remain valid
+identity evidence, but there was no physical failure to classify. The earlier
+downstream-of-`ascal` conclusion is retracted. No post-OSD probe is justified by
+this event. Phase 2 must rerun with the range-normalized static-region detector
+before another FPGA diagnostic is designed.

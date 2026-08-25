@@ -1,6 +1,7 @@
 {
   "schema": "mister-magik-raw-scaler-signature-v3-corruption-incident-v1",
   "date": "2026-08-25",
+  "status": "retracted_detector_false_positive",
   "candidate": {
     "implementation_commit": "f2eb069b2e246c51857e42a14461527339c678cc",
     "agent_compatibility_commit": "44fa38d184882603c954a2b1d6fe703d9ec987bc",
@@ -36,7 +37,8 @@
     "failure_transition": 45,
     "scheduled_reboots_completed_before_failure": 8,
     "black_screen_observed": false,
-    "physical_corruption_observed": true,
+    "physical_corruption_observed": false,
+    "detector_false_positive_observed": true,
     "campaign_stopped_on_failure": true,
     "recovery_performed": false
   },
@@ -54,9 +56,14 @@
     "source_framebuffer_correct": true,
     "source_framebuffer_sha256": "288f47335560f1169890ee50d02ddf3707ef4b568a22ccb06593a78d275ad250",
     "source_framebuffer_matches_healthy_reference": true,
-    "physical_visibility": "corrupted",
+    "physical_visibility": "visible",
+    "initial_detector_result": "corrupted",
+    "initial_detector_result_valid": false,
     "physical_temporal_luma_delta_permille": 45,
     "physical_temporal_threshold_permille": 8,
+    "primary_luma_range": [16, 235],
+    "first_confirmation_luma_range": [16, 235],
+    "second_confirmation_luma_range": [0, 255],
     "sink_visibility": "unobserved"
   },
   "raw_scaler_evidence": {
@@ -73,13 +80,22 @@
     "healthy_reference_transition": 44,
     "healthy_reference_frame_sequences": [441, 442, 444],
     "healthy_reference_ordered_signatures": ["e231", "e231", "e231"],
-    "same_static_scene": true
+    "same_static_scene": true,
+    "diagnostic_relevance": "No FPGA boundary inference is valid because physical corruption did not occur."
+  },
+  "post_event_movie": {
+    "frames": 749,
+    "luma_mean_range": [53, 54],
+    "strong_row_discontinuity_permille_range": [69, 73],
+    "previous_frame_temporal_delta_permille_range": [0, 0],
+    "one_second_temporal_delta_permille_range": [0, 0],
+    "result": "healthy_static_launcher"
   },
   "decision": {
-    "classification": "downstream_of_direct_ascal_supported",
-    "basis": "The exact same static source framebuffer and ordered direct-ascal signature were stable in healthy transition 44 and corrupted transition 45 while native USB Video changed by 45 permille between confirmed physical frames.",
-    "boundary": "The evidence excludes the source framebuffer and strongly argues against ordered raw-scaler RGB changing during the observed corruption. It does not identify which downstream stage is responsible and does not prove sink visibility from FPGA state.",
-    "next_probe": "A separate minimal observer at the final post-OSD/post-shadowmask HDMI pixel boundary, compared against the retained direct-ascal signature, is the next discriminating FPGA diagnostic."
+    "classification": "usb_temporal_detector_false_positive",
+    "basis": "All three native stills show the complete normal launcher. The second confirmation changed from video-range luma 16..235 to full-range 0..255 while retaining the same visible scene; the unnormalized detector treated that global range change as 45-permille motion. The following 749-frame native movie is static and healthy with zero temporal delta.",
+    "boundary": "No downstream-of-ascal conclusion can be drawn from this event. The coherent FPGA evidence is retained only as identity evidence for the installed diagnostic RBF.",
+    "next_probe": "none_from_this_event; correct and requalify the native temporal detector before further FPGA diagnosis"
   },
   "artifacts": [
     {
@@ -116,13 +132,13 @@
       "path": "build/raw-scaler-signature-v3-phase2-045/returned-usb-video-confirmation-2.jpg",
       "bytes": 396558,
       "sha256": "1bcf4b8fbca7a63e384a7c5f3f7ed801128945af7e231b28699433297673a16f",
-      "role": "corrupt_physical_confirmation"
+      "role": "normal_full_range_physical_confirmation"
     },
     {
       "path": "build/raw-scaler-signature-v3-phase2-045/live-corruption.mov",
       "bytes": 9797682,
       "sha256": "1bfc16eed4723b338ca2897b6b8a122421fb0b550a63752f39a222316b476d3b",
-      "role": "preserved_30_second_native_usb_video_movie"
+      "role": "preserved_30_second_healthy_native_usb_video_movie_legacy_filename"
     }
   ]
 }

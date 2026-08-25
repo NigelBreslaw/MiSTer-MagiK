@@ -22,11 +22,17 @@ const STRONG_ROW_DISCONTINUITY: u8 = 12;
 const TEMPORAL_LUMA_GRID_COLUMNS: usize = 16;
 const TEMPORAL_LUMA_GRID_ROWS: usize = 9;
 const TEMPORAL_LUMA_GRID_LEN: usize = TEMPORAL_LUMA_GRID_COLUMNS * TEMPORAL_LUMA_GRID_ROWS;
+const TEMPORAL_LUMA_STATIC_COLUMNS: usize = TEMPORAL_LUMA_GRID_COLUMNS / 2;
 const TEMPORAL_LUMA_IGNORED_RIGHT_COLUMNS: usize = 32;
-// Native one-second comparisons over two known-good Phase 2 movies measured
-// zero permille. Every usable comparison from the preserved moving-corruption
-// movie measured 11..=585 permille. Eight leaves margin on both sides.
-pub(crate) const TEMPORAL_LUMA_CORRUPTION_PERMILLE: u16 = 8;
+const TEMPORAL_LUMA_VIDEO_MINIMUM: u8 = 16;
+const TEMPORAL_LUMA_VIDEO_RANGE: u16 = 219;
+const TEMPORAL_LUMA_FULL_RANGE: u16 = 255;
+pub(crate) const TEMPORAL_LUMA_GRID_ID: &str = "8x9-static-left-video-range-v2";
+// Fixed-range normalization plus the static left half measured zero permille
+// across 2,186 one-second comparisons from three known-good native movies.
+// All 708 one-second comparisons from the preserved moving-corruption movie
+// measured 2..=657 permille in the same region.
+pub(crate) const TEMPORAL_LUMA_CORRUPTION_PERMILLE: u16 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CaptureArtifact {
@@ -515,7 +521,7 @@ fn analyze_luma(
     }
     let strong_row_discontinuity_permille =
         strong_row_discontinuity_permille(luma, width, height, row_bytes);
-    let temporal_luma_grid = temporal_luma_grid(luma, width, height, row_bytes)?;
+    let temporal_luma_grid = temporal_luma_grid(luma, width, height, row_bytes, minimum, maximum)?;
     let visibility = if is_capture_card_signal_loss(luma, width, height, row_bytes) {
         CaptureVisibility::SignalLost
     } else if mean > 24 || maximum.saturating_sub(minimum) > 12 {
@@ -540,6 +546,8 @@ fn temporal_luma_grid(
     width: usize,
     height: usize,
     row_bytes: usize,
+    minimum: u8,
+    maximum: u8,
 ) -> Option<[u8; TEMPORAL_LUMA_GRID_LEN]> {
     if width < TEMPORAL_LUMA_GRID_COLUMNS || height < TEMPORAL_LUMA_GRID_ROWS {
         return None;
@@ -556,7 +564,11 @@ fn temporal_luma_grid(
         for x in (0..active_width).step_by(SPATIAL_LUMA_SAMPLE_STEP) {
             let grid_x = x * TEMPORAL_LUMA_GRID_COLUMNS / active_width;
             let index = grid_y * TEMPORAL_LUMA_GRID_COLUMNS + grid_x;
-            totals[index] += u64::from(luma[y * row_bytes + x]);
+            totals[index] += u64::from(canonical_temporal_luma(
+                luma[y * row_bytes + x],
+                minimum,
+                maximum,
+            ));
             samples[index] += 1;
         }
     }
@@ -571,16 +583,29 @@ fn temporal_luma_grid(
 }
 
 #[must_use]
+fn canonical_temporal_luma(value: u8, minimum: u8, maximum: u8) -> u8 {
+    if minimum <= 1 && maximum >= 254 {
+        let scaled = (u16::from(value) * TEMPORAL_LUMA_VIDEO_RANGE + TEMPORAL_LUMA_FULL_RANGE / 2)
+            / TEMPORAL_LUMA_FULL_RANGE;
+        u8::try_from(u16::from(TEMPORAL_LUMA_VIDEO_MINIMUM) + scaled).unwrap_or(u8::MAX)
+    } else {
+        value
+    }
+}
+
+#[must_use]
 fn temporal_luma_delta_permille(
     first: &[u8; TEMPORAL_LUMA_GRID_LEN],
     second: &[u8; TEMPORAL_LUMA_GRID_LEN],
 ) -> u16 {
-    let delta = first
-        .iter()
-        .zip(second)
-        .map(|(first, second)| u64::from(first.abs_diff(*second)))
+    let delta = (0..TEMPORAL_LUMA_GRID_ROWS)
+        .flat_map(|row| {
+            let start = row * TEMPORAL_LUMA_GRID_COLUMNS;
+            (start..start + TEMPORAL_LUMA_STATIC_COLUMNS)
+                .map(|index| u64::from(first[index].abs_diff(second[index])))
+        })
         .sum::<u64>();
-    let maximum = 255_u64 * TEMPORAL_LUMA_GRID_LEN as u64;
+    let maximum = 255_u64 * (TEMPORAL_LUMA_STATIC_COLUMNS * TEMPORAL_LUMA_GRID_ROWS) as u64;
     u16::try_from(delta * 1000 / maximum).unwrap_or(u16::MAX)
 }
 
@@ -747,7 +772,7 @@ mod tests {
     }
 
     #[test]
-    fn temporal_luma_detects_moving_corruption_but_ignores_right_edge_noise() {
+    fn temporal_luma_detects_moving_corruption_but_ignores_preview_and_range() {
         let width = 192;
         let height = 108;
         let baseline_pixels = vec![32; width * height];
@@ -766,6 +791,41 @@ mod tests {
             temporal_luma_delta_permille(
                 &baseline.temporal_luma_grid,
                 &baseline.temporal_luma_grid
+            ),
+            0
+        );
+
+        let mut animated_preview_pixels = vec![32; width * height];
+        for row in animated_preview_pixels.chunks_exact_mut(width) {
+            row[width / 2..].fill(160);
+        }
+        let animated_preview =
+            analyze_luma(&animated_preview_pixels, width, height, width).unwrap();
+        assert_eq!(
+            temporal_luma_delta_permille(
+                &baseline.temporal_luma_grid,
+                &animated_preview.temporal_luma_grid
+            ),
+            0
+        );
+
+        let full_range_pixels = (0..width * height)
+            .map(|index| {
+                let x = index % width;
+                let y = index / width;
+                if (x / 32 + y / 32) % 2 == 0 { 0 } else { 255 }
+            })
+            .collect::<Vec<_>>();
+        let video_range_pixels = full_range_pixels
+            .iter()
+            .map(|value| canonical_temporal_luma(*value, u8::MIN, u8::MAX))
+            .collect::<Vec<_>>();
+        let full_range = analyze_luma(&full_range_pixels, width, height, width).unwrap();
+        let video_range = analyze_luma(&video_range_pixels, width, height, width).unwrap();
+        assert_eq!(
+            temporal_luma_delta_permille(
+                &full_range.temporal_luma_grid,
+                &video_range.temporal_luma_grid
             ),
             0
         );

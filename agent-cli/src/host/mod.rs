@@ -20210,6 +20210,10 @@ fn validate_attended_launch_return_summary(summary: &Value, output_dir: &Path) -
         .and_then(Value::as_str)
         == Some("mister-magik-return-physical-confirmation-v2")
         && summary
+            .pointer("/usb_video_return_confirmation/temporal_luma_grid")
+            .and_then(Value::as_str)
+            == Some(crate::capture::TEMPORAL_LUMA_GRID_ID)
+        && summary
             .pointer("/usb_video_return_confirmation/temporal_luma_corruption_threshold_permille")
             .and_then(Value::as_u64)
             == Some(u64::from(crate::capture::TEMPORAL_LUMA_CORRUPTION_PERMILLE));
@@ -21195,7 +21199,7 @@ fn profile_installed_launch_return_once(
                 "required_confirmations": LAUNCH_RETURN_PHYSICAL_CONFIRMATIONS,
                 "interval_ms": LAUNCH_RETURN_PHYSICAL_CONFIRMATION_INTERVAL.as_millis(),
                 "observation_ms": usb_observation_ms,
-                "temporal_luma_grid": "16x9-active-area-v1",
+                "temporal_luma_grid": crate::capture::TEMPORAL_LUMA_GRID_ID,
                 "temporal_luma_corruption_threshold_permille": crate::capture::TEMPORAL_LUMA_CORRUPTION_PERMILLE,
                 "captures": usb_confirmation,
             },
@@ -32946,6 +32950,7 @@ mod tests {
             "usb_video_effective_visibility": "visible",
             "usb_video_return_confirmation": {
                 "schema": "mister-magik-return-physical-confirmation-v2",
+                "temporal_luma_grid": crate::capture::TEMPORAL_LUMA_GRID_ID,
                 "temporal_luma_corruption_threshold_permille":
                     crate::capture::TEMPORAL_LUMA_CORRUPTION_PERMILLE,
                 "captures": [
@@ -32971,6 +32976,12 @@ mod tests {
             }}
         });
         assert!(validate_attended_launch_return_summary(&summary, output).is_ok());
+
+        summary["usb_video_return_confirmation"]["temporal_luma_grid"] =
+            json!("16x9-active-area-v1");
+        assert!(validate_attended_launch_return_summary(&summary, output).is_err());
+        summary["usb_video_return_confirmation"]["temporal_luma_grid"] =
+            json!(crate::capture::TEMPORAL_LUMA_GRID_ID);
 
         summary["restored_selection"]["semantic"]["launch_state"] = json!("launching");
         assert!(validate_attended_launch_return_summary(&summary, output).is_err());
@@ -33068,6 +33079,19 @@ mod tests {
         assert_eq!(
             launch_return_effective_usb_visibility(Corrupted, &[confirmation(Corrupted, 0)]),
             None
+        );
+        assert_eq!(
+            launch_return_effective_usb_visibility(
+                Visible,
+                &[
+                    confirmation(
+                        Visible,
+                        crate::capture::TEMPORAL_LUMA_CORRUPTION_PERMILLE - 1
+                    ),
+                    confirmation(Visible, 0)
+                ]
+            ),
+            Some(Visible)
         );
         assert_eq!(
             launch_return_effective_usb_visibility(

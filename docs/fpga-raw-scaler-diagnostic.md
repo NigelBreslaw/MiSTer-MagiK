@@ -4,16 +4,17 @@ Status: the functional repair remains unchanged. Schema 7 and both schema-8
 observers failed unchanged local signoff gates and were never installed. The
 disposable schema-10 candidate retains the 16-bit ordered signature, generates
 its response sequence after coherent capture, and samples the native RGB565
-color information. It passed fixed-seed Apple signoff and reproduced real
-moving physical corruption on Phase 2 return 45 while the exact same-scene
-direct-`ascal` signature and authoritative framebuffer remained stable. This
-strongly supports a downstream origin and retires schema 10 as a successful
-boundary diagnostic, not as a production feature. The rejected fits, final
-reduction, and device result are recorded in
+color information. It passed fixed-seed Apple signoff. Phase 2 return 45 was
+initially classified as physical corruption, but native review proved that all
+three stills were normal and the following 749-frame movie was healthy. The
+false positive came from comparing video-range and full-range luma without
+normalization; it supports no FPGA boundary conclusion. Schema 10 remains the
+installed experimental diagnostic while the corrected host detector is rerun.
+The rejected fits, final reduction, and corrected device record are in
 [the storage-reduction receipt](../history/2026-08-25-raw-scaler-signature-storage-reduction.md),
 [the schema-9 design](../history/2026-08-25-raw-scaler-signature-v2-design.md),
 the [schema-10 design](../history/2026-08-25-raw-scaler-signature-v3-design.md),
-and the [preserved incident](../history/2026-08-25-raw-scaler-signature-v3-corruption-incident-v1.json).
+and the [retracted incident](../history/2026-08-25-raw-scaler-signature-v3-corruption-incident-v1.json).
 
 The disposable schema-6 `scaler-copy-retirement-v1` diagnostic is retired.
 Its first genuine persistent-black result isolated a production copy-FSM
