@@ -21,8 +21,14 @@ struct ReadyContext {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct SourceFrameEvidence {
-    sha256: String,
+    sha256: Option<String>,
     nonzero_pixels: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SourceEvidenceRequest {
+    Nonblank,
+    Sha256,
 }
 
 impl SourceFrameEvidence {
@@ -31,6 +37,7 @@ impl SourceFrameEvidence {
         width: usize,
         height: usize,
         stride_pixels: usize,
+        request: SourceEvidenceRequest,
     ) -> Option<Self> {
         #[cfg(not(test))]
         let started = std::time::Instant::now();
@@ -41,6 +48,25 @@ impl SourceFrameEvidence {
         {
             return None;
         }
+        if request == SourceEvidenceRequest::Nonblank {
+            let nonblank = pixels
+                .chunks_exact(stride_pixels)
+                .take(height)
+                .any(|row| row[..width].iter().any(|pixel| pixel.0 != 0));
+            #[cfg(not(test))]
+            mister_magik_mister_runtime::boot_analytics::event(
+                "launcher_readiness_source_scan",
+                format!(
+                    "width={width} height={height} elapsed_us={}",
+                    started.elapsed().as_micros()
+                ),
+            );
+            return Some(Self {
+                sha256: None,
+                nonzero_pixels: u32::from(nonblank),
+            });
+        }
+
         let mut digest = Sha256::new();
         let mut nonzero_pixels = 0u32;
         let row_byte_len = width.checked_mul(std::mem::size_of::<u16>())?;
@@ -61,18 +87,24 @@ impl SourceFrameEvidence {
             ),
         );
         Some(Self {
-            sha256: encode_hex(&digest.finalize()),
+            sha256: Some(encode_hex(&digest.finalize())),
             nonzero_pixels,
         })
     }
 
-    fn valid(&self) -> bool {
-        self.nonzero_pixels != 0
-            && self.sha256.len() == 64
-            && self
-                .sha256
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    fn valid_for(&self, request: SourceEvidenceRequest) -> bool {
+        if self.nonzero_pixels == 0 {
+            return false;
+        }
+        match request {
+            SourceEvidenceRequest::Nonblank => self.sha256.is_none(),
+            SourceEvidenceRequest::Sha256 => self.sha256.as_ref().is_some_and(|sha256| {
+                sha256.len() == 64
+                    && sha256
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            }),
+        }
     }
 }
 
@@ -148,9 +180,15 @@ impl ConfirmedLatchPost {
 enum ReadyPhase {
     Disabled,
     AwaitingFirst,
-    AwaitingSecond(ConfirmedLatchPost, SourceFrameEvidence),
+    AwaitingSecond(ConfirmedLatchPost),
     PendingSend(ConfirmedLatchPost, ConfirmedLatchPost, SourceFrameEvidence),
     Sent,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReadyWireVersion {
+    V2,
+    V3,
 }
 
 pub(super) struct LauncherReadiness {
@@ -159,22 +197,30 @@ pub(super) struct LauncherReadiness {
     fifo: PathBuf,
     pid: u32,
     context: ReadyContext,
+    wire_version: ReadyWireVersion,
 }
 
 impl LauncherReadiness {
     pub(super) fn from_process_config(
         config: mister_magik_fb::process_config::LauncherReadinessConfig,
     ) -> Self {
-        let (token, fifo, main_pid, main_generation, owner_epoch) = config.into_parts();
+        let (token, fifo, wire_version, main_pid, main_generation, owner_epoch) =
+            config.into_parts();
         let context = ReadyContext {
             main_pid,
             main_generation,
             owner_epoch,
         };
-        Self::from_config(token, fifo, std::process::id(), context)
+        Self::from_config(token, fifo, std::process::id(), context, wire_version)
     }
 
-    fn from_config(token: String, fifo: PathBuf, pid: u32, context: ReadyContext) -> Self {
+    fn from_config(
+        token: String,
+        fifo: PathBuf,
+        pid: u32,
+        context: ReadyContext,
+        wire_version: u8,
+    ) -> Self {
         let configured = valid_token(&token)
             && !fifo.as_os_str().is_empty()
             && pid != 0
@@ -191,18 +237,27 @@ impl LauncherReadiness {
             fifo,
             pid,
             context,
+            wire_version: if wire_version == 3 {
+                ReadyWireVersion::V3
+            } else {
+                ReadyWireVersion::V2
+            },
         }
     }
 
     pub(super) fn needs_full_present(&self) -> bool {
-        matches!(self.phase, ReadyPhase::AwaitingSecond(_, _))
+        matches!(self.phase, ReadyPhase::AwaitingSecond(_))
     }
 
-    pub(super) fn needs_source_evidence(&self) -> bool {
-        matches!(
-            self.phase,
-            ReadyPhase::AwaitingFirst | ReadyPhase::AwaitingSecond(_, _)
-        )
+    pub(super) fn source_evidence_request(&self) -> Option<SourceEvidenceRequest> {
+        match self.phase {
+            ReadyPhase::AwaitingFirst => Some(SourceEvidenceRequest::Nonblank),
+            ReadyPhase::AwaitingSecond(_) => Some(match self.wire_version {
+                ReadyWireVersion::V2 => SourceEvidenceRequest::Sha256,
+                ReadyWireVersion::V3 => SourceEvidenceRequest::Nonblank,
+            }),
+            ReadyPhase::Disabled | ReadyPhase::PendingSend(..) | ReadyPhase::Sent => None,
+        }
     }
 
     pub(super) fn poll(&mut self) {
@@ -229,17 +284,20 @@ impl LauncherReadiness {
         source: SourceFrameEvidence,
         intended_for_display: bool,
     ) {
-        if !intended_for_display || !post.valid() || !source.valid() {
+        let Some(request) = self.source_evidence_request() else {
+            return;
+        };
+        if !intended_for_display || !post.valid() || !source.valid_for(request) {
             return;
         }
         match self.phase.clone() {
-            ReadyPhase::AwaitingFirst => self.phase = ReadyPhase::AwaitingSecond(post, source),
-            ReadyPhase::AwaitingSecond(previous, _) => {
+            ReadyPhase::AwaitingFirst => self.phase = ReadyPhase::AwaitingSecond(post),
+            ReadyPhase::AwaitingSecond(previous) => {
                 if post.advances_and_alternates(previous) {
                     self.phase = ReadyPhase::PendingSend(previous, post, source);
                     self.try_send();
                 } else {
-                    self.phase = ReadyPhase::AwaitingSecond(post, source);
+                    self.phase = ReadyPhase::AwaitingSecond(post);
                 }
             }
             ReadyPhase::Disabled | ReadyPhase::PendingSend(..) | ReadyPhase::Sent => {}
@@ -250,8 +308,8 @@ impl LauncherReadiness {
         let ReadyPhase::PendingSend(first, second, source) = &self.phase else {
             return;
         };
-        let line = format!(
-            "ready-v2 token={} pid={} main_pid={} main_generation={} owner_epoch={} protocol={} capabilities={:04x} base={:08x} width={} height={} stride={} first_sequence={} first_route_epoch={} first_slot={} first_receipt_crc={:04x} second_sequence={} second_route_epoch={} second_slot={} second_receipt_crc={:04x} source_sha256={} source_nonzero={}\n",
+        let common = format!(
+            "token={} pid={} main_pid={} main_generation={} owner_epoch={} protocol={} capabilities={:04x} base={:08x} width={} height={} stride={} first_sequence={} first_route_epoch={} first_slot={} first_receipt_crc={:04x} second_sequence={} second_route_epoch={} second_slot={} second_receipt_crc={:04x}",
             self.token,
             self.pid,
             self.context.main_pid,
@@ -271,9 +329,20 @@ impl LauncherReadiness {
             second.route_epoch,
             second.slot,
             second.receipt_crc,
-            source.sha256,
-            source.nonzero_pixels,
         );
+        let line = match self.wire_version {
+            ReadyWireVersion::V2 => {
+                let Some(sha256) = source.sha256.as_deref() else {
+                    self.phase = ReadyPhase::Disabled;
+                    return;
+                };
+                format!(
+                    "ready-v2 {common} source_sha256={sha256} source_nonzero={}\n",
+                    source.nonzero_pixels
+                )
+            }
+            ReadyWireVersion::V3 => format!("ready-v3 {common} source_nonblank=1\n"),
+        };
         if line.len() > 1024 {
             self.phase = ReadyPhase::Disabled;
             return;
@@ -334,6 +403,10 @@ mod tests {
         }
 
         fn controller(&self) -> LauncherReadiness {
+            self.controller_with_version(2)
+        }
+
+        fn controller_with_version(&self, wire_version: u8) -> LauncherReadiness {
             LauncherReadiness::from_config(
                 TOKEN.into(),
                 self.0.clone(),
@@ -343,6 +416,7 @@ mod tests {
                     main_generation: 11,
                     owner_epoch: 13,
                 },
+                wire_version,
             )
         }
 
@@ -374,8 +448,17 @@ mod tests {
         }
     }
 
-    fn evidence() -> SourceFrameEvidence {
-        SourceFrameEvidence::from_rgb565_rows(&[Rgb565Pixel(0x1234); 4], 2, 2, 2).unwrap()
+    fn evidence(request: SourceEvidenceRequest) -> SourceFrameEvidence {
+        SourceFrameEvidence::from_rgb565_rows(&[Rgb565Pixel(0x1234); 4], 2, 2, 2, request).unwrap()
+    }
+
+    fn observe_valid(
+        readiness: &mut LauncherReadiness,
+        post: ConfirmedLatchPost,
+        intended_for_display: bool,
+    ) {
+        let request = readiness.source_evidence_request().unwrap();
+        readiness.observe(post, evidence(request), intended_for_display);
     }
 
     #[test]
@@ -390,12 +473,37 @@ mod tests {
             Rgb565Pixel(0),
             Rgb565Pixel(0xdddd),
         ];
-        let evidence = SourceFrameEvidence::from_rgb565_rows(&pixels, 3, 2, 4).unwrap();
+        let evidence =
+            SourceFrameEvidence::from_rgb565_rows(&pixels, 3, 2, 4, SourceEvidenceRequest::Sha256)
+                .unwrap();
         let packed = [
             0x34, 0x12, 0x00, 0x00, 0xcd, 0xab, 0xff, 0xff, 0x01, 0x00, 0x00, 0x00,
         ];
-        assert_eq!(evidence.sha256, encode_hex(&Sha256::digest(packed)));
+        assert_eq!(evidence.sha256, Some(encode_hex(&Sha256::digest(packed))));
         assert_eq!(evidence.nonzero_pixels, 4);
+    }
+
+    #[test]
+    fn nonblank_scan_ignores_stride_and_does_not_hash() {
+        let pixels = [
+            Rgb565Pixel(0),
+            Rgb565Pixel(1),
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0),
+            Rgb565Pixel(0),
+            Rgb565Pixel(0xeeee),
+        ];
+        let evidence = SourceFrameEvidence::from_rgb565_rows(
+            &pixels,
+            2,
+            2,
+            3,
+            SourceEvidenceRequest::Nonblank,
+        )
+        .unwrap();
+        assert!(evidence.valid_for(SourceEvidenceRequest::Nonblank));
+        assert_eq!(evidence.sha256, None);
+        assert_eq!(evidence.nonzero_pixels, 1);
     }
 
     fn read_message(reader: &mut fs::File) -> String {
@@ -408,20 +516,45 @@ mod tests {
     fn absent_reader_keeps_ready_message_pending_for_retry() {
         let fifo = TestFifo::new();
         let mut readiness = fifo.controller();
-        assert!(readiness.needs_source_evidence());
-        readiness.observe(post(1, 1, 1), evidence(), true);
-        assert!(readiness.needs_source_evidence());
-        readiness.observe(post(2, 2, 2), evidence(), true);
+        assert_eq!(
+            readiness.source_evidence_request(),
+            Some(SourceEvidenceRequest::Nonblank)
+        );
+        observe_valid(&mut readiness, post(1, 1, 1), true);
+        assert_eq!(
+            readiness.source_evidence_request(),
+            Some(SourceEvidenceRequest::Sha256)
+        );
+        observe_valid(&mut readiness, post(2, 2, 2), true);
         assert!(matches!(readiness.phase, ReadyPhase::PendingSend(..)));
-        assert!(!readiness.needs_source_evidence());
+        assert_eq!(readiness.source_evidence_request(), None);
 
         let mut reader = fifo.reader();
         readiness.poll();
         assert_eq!(readiness.phase, ReadyPhase::Sent);
-        assert!(!readiness.needs_source_evidence());
+        assert_eq!(readiness.source_evidence_request(), None);
         let message = read_message(&mut reader);
         assert!(message.starts_with("ready-v2 token=0123456789abcdef0123456789abcdef pid=42 main_pid=7 main_generation=11 owner_epoch=13 protocol=5 capabilities=03ff "));
         assert!(message.contains("source_nonzero=4\n"));
+    }
+
+    #[test]
+    fn v3_uses_nonblank_scans_and_omits_hash_fields() {
+        let fifo = TestFifo::new();
+        let mut reader = fifo.reader();
+        let mut readiness = fifo.controller_with_version(3);
+        observe_valid(&mut readiness, post(1, 1, 1), true);
+        assert_eq!(
+            readiness.source_evidence_request(),
+            Some(SourceEvidenceRequest::Nonblank)
+        );
+        observe_valid(&mut readiness, post(2, 2, 2), true);
+        assert_eq!(readiness.phase, ReadyPhase::Sent);
+        let message = read_message(&mut reader);
+        assert!(message.starts_with("ready-v3 token="));
+        assert!(message.ends_with("source_nonblank=1\n"));
+        assert!(!message.contains("source_sha256"));
+        assert!(!message.contains("source_nonzero"));
     }
 
     #[test]
@@ -436,9 +569,9 @@ mod tests {
                 main_generation: 11,
                 owner_epoch: 13,
             },
+            2,
         );
-        readiness.observe(post(1, 1, 1), evidence(), true);
-        readiness.observe(post(2, 2, 2), evidence(), true);
+        assert_eq!(readiness.source_evidence_request(), None);
         assert_eq!(readiness.phase, ReadyPhase::Disabled);
     }
 
@@ -454,8 +587,9 @@ mod tests {
                 main_generation: 0,
                 owner_epoch: 13,
             },
+            2,
         );
-        readiness.observe(post(1, 1, 1), evidence(), true);
+        assert_eq!(readiness.source_evidence_request(), None);
         assert_eq!(readiness.phase, ReadyPhase::Disabled);
     }
 
@@ -463,7 +597,14 @@ mod tests {
     fn blank_source_frame_cannot_complete_readiness() {
         let fifo = TestFifo::new();
         let mut readiness = fifo.controller();
-        let blank = SourceFrameEvidence::from_rgb565_rows(&[Rgb565Pixel(0); 4], 2, 2, 2).unwrap();
+        let blank = SourceFrameEvidence::from_rgb565_rows(
+            &[Rgb565Pixel(0); 4],
+            2,
+            2,
+            2,
+            SourceEvidenceRequest::Nonblank,
+        )
+        .unwrap();
         readiness.observe(post(1, 1, 1), blank.clone(), true);
         readiness.observe(post(2, 2, 2), blank, true);
         assert_eq!(readiness.phase, ReadyPhase::AwaitingFirst);
@@ -472,7 +613,8 @@ mod tests {
     #[test]
     fn posted_source_evidence_is_bound_to_sequence_and_slot() {
         let expected = post(7, 9, 1);
-        let source = PostedSourceFrameEvidence::new(7, 1, evidence());
+        let source =
+            PostedSourceFrameEvidence::new(7, 1, evidence(SourceEvidenceRequest::Nonblank));
 
         assert!(source.matches(expected));
         assert!(!source.matches(post(8, 10, 1)));
@@ -485,8 +627,13 @@ mod tests {
         let mut readiness = fifo.controller();
         let post = post(7, 9, 1);
 
-        readiness.observe_posted(post, PostedSourceFrameEvidence::new(8, 1, evidence()), true);
-        readiness.observe_posted(post, PostedSourceFrameEvidence::new(7, 2, evidence()), true);
+        let evidence = evidence(SourceEvidenceRequest::Nonblank);
+        readiness.observe_posted(
+            post,
+            PostedSourceFrameEvidence::new(8, 1, evidence.clone()),
+            true,
+        );
+        readiness.observe_posted(post, PostedSourceFrameEvidence::new(7, 2, evidence), true);
 
         assert_eq!(readiness.phase, ReadyPhase::AwaitingFirst);
     }
@@ -496,20 +643,26 @@ mod tests {
         let fifo = TestFifo::new();
         let mut reader = fifo.reader();
         let mut readiness = fifo.controller();
-        let blank_cached =
-            SourceFrameEvidence::from_rgb565_rows(&[Rgb565Pixel(0); 4], 2, 2, 2).unwrap();
-        assert!(!blank_cached.valid());
+        let blank_cached = SourceFrameEvidence::from_rgb565_rows(
+            &[Rgb565Pixel(0); 4],
+            2,
+            2,
+            2,
+            SourceEvidenceRequest::Nonblank,
+        )
+        .unwrap();
+        assert!(!blank_cached.valid_for(SourceEvidenceRequest::Nonblank));
         let first = post(1, 1, 1);
         let second = post(2, 2, 2);
 
         readiness.observe_posted(
             first,
-            PostedSourceFrameEvidence::new(1, 1, evidence()),
+            PostedSourceFrameEvidence::new(1, 1, evidence(SourceEvidenceRequest::Nonblank)),
             true,
         );
         readiness.observe_posted(
             second,
-            PostedSourceFrameEvidence::new(2, 2, evidence()),
+            PostedSourceFrameEvidence::new(2, 2, evidence(SourceEvidenceRequest::Sha256)),
             true,
         );
 
@@ -521,10 +674,10 @@ mod tests {
     fn duplicate_posts_do_not_complete_readiness() {
         let fifo = TestFifo::new();
         let mut readiness = fifo.controller();
-        readiness.observe(post(7, 9, 1), evidence(), true);
-        readiness.observe(post(7, 9, 1), evidence(), true);
+        observe_valid(&mut readiness, post(7, 9, 1), true);
+        observe_valid(&mut readiness, post(7, 9, 1), true);
         assert!(
-            matches!(readiness.phase, ReadyPhase::AwaitingSecond(current, _) if current == post(7, 9, 1))
+            matches!(readiness.phase, ReadyPhase::AwaitingSecond(current) if current == post(7, 9, 1))
         );
         assert!(readiness.needs_full_present());
     }
@@ -534,12 +687,12 @@ mod tests {
         let fifo = TestFifo::new();
         let mut reader = fifo.reader();
         let mut readiness = fifo.controller();
-        readiness.observe(post(1, 1, 1), evidence(), true);
-        readiness.observe(post(2, 2, 1), evidence(), true);
+        observe_valid(&mut readiness, post(1, 1, 1), true);
+        observe_valid(&mut readiness, post(2, 2, 1), true);
         assert!(
-            matches!(readiness.phase, ReadyPhase::AwaitingSecond(current, _) if current == post(2, 2, 1))
+            matches!(readiness.phase, ReadyPhase::AwaitingSecond(current) if current == post(2, 2, 1))
         );
-        readiness.observe(post(3, 3, 2), evidence(), true);
+        observe_valid(&mut readiness, post(3, 3, 2), true);
         assert_eq!(readiness.phase, ReadyPhase::Sent);
         assert!(!read_message(&mut reader).is_empty());
     }
@@ -549,8 +702,8 @@ mod tests {
         let fifo = TestFifo::new();
         let mut reader = fifo.reader();
         let mut readiness = fifo.controller();
-        readiness.observe(post(u16::MAX, u16::MAX, 1), evidence(), true);
-        readiness.observe(post(1, 0, 2), evidence(), true);
+        observe_valid(&mut readiness, post(u16::MAX, u16::MAX, 1), true);
+        observe_valid(&mut readiness, post(1, 0, 2), true);
         assert_eq!(readiness.phase, ReadyPhase::Sent);
         assert!(!read_message(&mut reader).is_empty());
     }
@@ -560,15 +713,19 @@ mod tests {
         let fifo = TestFifo::new();
         let mut reader = fifo.reader();
         let mut readiness = fifo.controller();
-        readiness.observe(post(1, 1, 1), evidence(), false);
+        observe_valid(&mut readiness, post(1, 1, 1), false);
         assert_eq!(readiness.phase, ReadyPhase::AwaitingFirst);
-        readiness.observe(post(1, 1, 1), evidence(), true);
+        observe_valid(&mut readiness, post(1, 1, 1), true);
         assert!(readiness.needs_full_present());
-        readiness.observe(post(2, 2, 2), evidence(), true);
+        observe_valid(&mut readiness, post(2, 2, 2), true);
         assert_eq!(readiness.phase, ReadyPhase::Sent);
         let first = read_message(&mut reader);
         readiness.poll();
-        readiness.observe(post(3, 3, 1), evidence(), true);
+        readiness.observe(
+            post(3, 3, 1),
+            evidence(SourceEvidenceRequest::Nonblank),
+            true,
+        );
         let mut extra = [0u8; 1];
         let second = reader.read(&mut extra);
         assert_eq!(first.matches("ready-v2").count(), 1);

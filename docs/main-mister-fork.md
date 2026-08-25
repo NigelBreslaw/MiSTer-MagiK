@@ -94,17 +94,19 @@ child.
 
 The one-way ready report uses one mode-0600 FIFO under `/tmp/mister-magik`; it
 does not share `/dev/MiSTer_cmd`, whose host operation lock may be held while
-waiting for launcher activation. Each spawn receives a new 32-hex token. Rust
-writes one canonical `ready-v2` record after the two-post condition. The record
-binds the token and supervised PID to Main's PID and generation, the FPGA owner
-epoch, latch protocol-v5 identity, route geometry, both advancing alternating
-post receipts, and a SHA-256/nonzero-pixel summary of the active RGB565 source
-rows. Rust derives that summary from the exact final committed hidden slot,
-whether the frame was composed from cached Slint layers or rendered directly
-by the startup intro. A temporarily unavailable nonblocking FIFO is retried
-until Main's deadline. Main rejects noncanonical fields, stale process or ownership context,
-invalid geometry, blank source evidence, and a changed current FPGA owner. This
-is source and latch readiness, not proof of sink-visible pixels.
+waiting for launcher activation. Each spawn receives a new 32-hex token. Main
+advertises readiness wire version 3, and Rust writes one canonical `ready-v3`
+record after the two-post condition. The record binds the token and supervised
+PID to Main's PID and generation, the FPGA owner epoch, latch protocol-v5
+identity, route geometry, both advancing alternating post receipts, and a
+nonblank active RGB565 source assertion. Rust checks both exact final committed
+hidden slots and short-circuits at the first visible nonzero pixel. Main accepts
+strict `ready-v2` SHA-256/count records for rollback, and Rust emits that legacy
+form when Main does not advertise v3. A temporarily unavailable nonblocking
+FIFO is retried until Main's deadline. Main rejects noncanonical fields, stale
+process or ownership context, invalid geometry, blank source evidence, and a
+changed current FPGA owner. This is source and latch readiness, not proof of
+sink-visible pixels.
 
 Main waits eight seconds per attempt. It stops and reaps the first failed child
 and retries the complete supervised start once. A second failure stops the

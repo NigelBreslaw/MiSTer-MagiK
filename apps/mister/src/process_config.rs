@@ -40,6 +40,7 @@ use std::path::{Path, PathBuf};
 
 const STARTUP_TOKEN: &str = "MISTER_MAGIK_STARTUP_TOKEN";
 const READY_FIFO: &str = "MISTER_MAGIK_READY_FIFO";
+const READY_WIRE_VERSION: &str = "MISTER_MAGIK_READY_WIRE_VERSION";
 const MAIN_PID: &str = "MISTER_MAGIK_MAIN_PID";
 const MAIN_GENERATION: &str = "MISTER_MAGIK_MAIN_GENERATION";
 const OWNER_EPOCH: &str = "MISTER_MAGIK_OWNER_EPOCH";
@@ -586,6 +587,7 @@ impl InputProcessConfig {
 pub struct LauncherReadinessConfig {
     startup_token: String,
     ready_fifo: PathBuf,
+    ready_wire_version: u8,
     main_pid: u32,
     main_generation: u64,
     owner_epoch: u64,
@@ -604,6 +606,10 @@ impl LauncherReadinessConfig {
                 .get_path(READY_FIFO)
                 .map(Path::to_path_buf)
                 .unwrap_or_default(),
+            ready_wire_version: match environment.get(READY_WIRE_VERSION) {
+                Some("3") => 3,
+                _ => 2,
+            },
             main_pid: parse_u32(environment.get(MAIN_PID)),
             main_generation: parse_u64(environment.get(MAIN_GENERATION)),
             owner_epoch: parse_u64(environment.get(OWNER_EPOCH)),
@@ -620,10 +626,11 @@ impl LauncherReadinessConfig {
         &self.entry_trace
     }
 
-    pub fn into_parts(self) -> (String, PathBuf, u32, u64, u64) {
+    pub fn into_parts(self) -> (String, PathBuf, u8, u32, u64, u64) {
         (
             self.startup_token,
             self.ready_fifo,
+            self.ready_wire_version,
             self.main_pid,
             self.main_generation,
             self.owner_epoch,
@@ -919,6 +926,7 @@ mod tests {
         let environment = EnvironmentSnapshot::from_values([
             (STARTUP_TOKEN, "0123456789abcdef0123456789abcdef"),
             (READY_FIFO, "/tmp/ready"),
+            (READY_WIRE_VERSION, "invalid"),
             (MAIN_PID, "7"),
             (MAIN_GENERATION, "11"),
             (OWNER_EPOCH, "invalid"),
@@ -939,10 +947,38 @@ mod tests {
             (
                 "0123456789abcdef0123456789abcdef".into(),
                 PathBuf::from("/tmp/ready"),
+                2,
                 7,
                 11,
                 0,
             )
+        );
+    }
+
+    #[test]
+    fn readiness_capture_accepts_wire_version_three() {
+        let environment = EnvironmentSnapshot::from_values([
+            (STARTUP_TOKEN, "0123456789abcdef0123456789abcdef"),
+            (READY_FIFO, "/tmp/ready"),
+            (READY_WIRE_VERSION, "3"),
+            (MAIN_PID, "7"),
+            (MAIN_GENERATION, "11"),
+            (OWNER_EPOCH, "13"),
+        ]);
+        let config = ProcessConfig::from_snapshot(
+            &["mister-magik-fb".into(), "ui".into()],
+            "ui",
+            &environment,
+        );
+        assert_eq!(
+            config
+                .launcher()
+                .unwrap()
+                .readiness()
+                .clone()
+                .into_parts()
+                .2,
+            3
         );
     }
 

@@ -4,7 +4,7 @@
 //! First-run startup intro presentation over the production hidden-slot latch.
 
 use super::*;
-use crate::ui_runner::launcher_readiness::SourceFrameEvidence;
+use crate::ui_runner::launcher_readiness::{SourceEvidenceRequest, SourceFrameEvidence};
 use mister_magik_fb::launcher_runtime::startup_intro::StartupIntroPlayback;
 use mister_magik_latch_contract::{PresentationTelemetry, validate_presentation_telemetry_window};
 
@@ -86,7 +86,7 @@ impl StartupIntroSession {
         &mut self,
         grant: HiddenSlotRenderGrant,
         pixels: &mut [Rgb565Pixel],
-        capture_readiness_source: bool,
+        readiness_source_request: Option<SourceEvidenceRequest>,
     ) -> Result<Option<SourceFrameEvidence>, String> {
         let geometry = self.playback.geometry();
         if grant.width != geometry.width()
@@ -111,7 +111,7 @@ impl StartupIntroSession {
         Ok(hidden_frame_source_evidence(
             pixels,
             grant,
-            capture_readiness_source,
+            readiness_source_request,
         ))
     }
 
@@ -264,18 +264,17 @@ impl StartupIntroSession {
 fn hidden_frame_source_evidence(
     pixels: &[Rgb565Pixel],
     grant: HiddenSlotRenderGrant,
-    requested: bool,
+    request: Option<SourceEvidenceRequest>,
 ) -> Option<SourceFrameEvidence> {
-    requested
-        .then(|| {
-            SourceFrameEvidence::from_rgb565_rows(
-                pixels,
-                grant.width,
-                grant.height,
-                grant.stride_pixels,
-            )
-        })
-        .flatten()
+    request.and_then(|request| {
+        SourceFrameEvidence::from_rgb565_rows(
+            pixels,
+            grant.width,
+            grant.height,
+            grant.stride_pixels,
+            request,
+        )
+    })
 }
 
 fn snapshot_status(

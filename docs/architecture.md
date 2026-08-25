@@ -1025,7 +1025,7 @@ Current rules:
   lets the CPU0 launcher worker perform the first scan. The invisible Slint UI
   remains dormant until one real launcher frame is needed for the morph. Do not
   use that dormant cache as launcher-readiness evidence: the first confirmed
-  intro slots satisfy `ready-v2` from their exact committed RGB565 rows. Do not
+  intro slots satisfy negotiated readiness from their exact committed RGB565 rows. Do not
   run foreground `library-refresh` before the intro or after an attended purge;
   that regresses to a black HDMI screen while the index is built.
 - Do not count helper payloads as games: BIOS ROMs, raw `.rbf` core binaries,

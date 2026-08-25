@@ -3,7 +3,9 @@
 
 use super::super::*;
 use crate::ui_runner::launcher_pacing::LauncherPacingTrace;
-use crate::ui_runner::launcher_readiness::{PostedSourceFrameEvidence, SourceFrameEvidence};
+use crate::ui_runner::launcher_readiness::{
+    PostedSourceFrameEvidence, SourceEvidenceRequest, SourceFrameEvidence,
+};
 use mister_magik_fb::framebuffer::vsync::VsyncPace;
 use mister_magik_fb::latch_readiness::LatchFailure;
 
@@ -502,7 +504,7 @@ pub(in crate::ui_runner) struct LauncherPresentFrame {
     pub(in crate::ui_runner) stream_motion_active: bool,
     pub(in crate::ui_runner) direct_hidden_mode: bool,
     pub(in crate::ui_runner) completed_hidden_frame: Option<CompletedHiddenFrame>,
-    pub(in crate::ui_runner) capture_readiness_source: bool,
+    pub(in crate::ui_runner) readiness_source_request: Option<SourceEvidenceRequest>,
     pub(in crate::ui_runner) profile_latch_phases: bool,
 }
 
@@ -577,7 +579,7 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
             stream_motion_active: frame.stream_motion_active,
             direct_hidden_mode: frame.direct_hidden_mode,
             completed_hidden_frame: frame.completed_hidden_frame,
-            capture_readiness_source: frame.capture_readiness_source,
+            readiness_source_request: frame.readiness_source_request,
             profile_latch_phases: frame.profile_latch_phases,
         };
         if !frame.startup_can_present {
@@ -804,7 +806,7 @@ struct LivePresentationAdapters<'a, 'target> {
     stream_motion_active: bool,
     direct_hidden_mode: bool,
     completed_hidden_frame: Option<CompletedHiddenFrame>,
-    capture_readiness_source: bool,
+    readiness_source_request: Option<SourceEvidenceRequest>,
     profile_latch_phases: bool,
 }
 
@@ -1062,18 +1064,16 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
             let frame_view = latch.committed_frame_view(stats.buffer_index);
             let _ = mister_magik_fb::framebuffer::stream::publish_latch_snapshot(frame_view, scale);
         }
-        let source_evidence = self
-            .capture_readiness_source
-            .then(|| {
-                let frame = latch.committed_frame_view(stats.buffer_index);
-                SourceFrameEvidence::from_rgb565_rows(
-                    frame.pixels,
-                    frame.width,
-                    frame.height,
-                    frame.stride_pixels,
-                )
-            })
-            .flatten();
+        let source_evidence = self.readiness_source_request.and_then(|request| {
+            let frame = latch.committed_frame_view(stats.buffer_index);
+            SourceFrameEvidence::from_rgb565_rows(
+                frame.pixels,
+                frame.width,
+                frame.height,
+                frame.stride_pixels,
+                request,
+            )
+        });
         let presentation = latch_present_result(
             stats,
             source_evidence,

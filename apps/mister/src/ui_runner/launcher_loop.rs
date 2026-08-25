@@ -9864,7 +9864,7 @@ pub(super) fn run_launcher_loop(
                     |grant, pixels| match intro.render_into(
                         grant,
                         pixels,
-                        launcher_readiness.needs_source_evidence(),
+                        launcher_readiness.source_evidence_request(),
                     ) {
                         Ok(evidence) => {
                             source_evidence = evidence;
@@ -11288,7 +11288,7 @@ pub(super) fn run_launcher_loop(
                 stream_motion_active,
                 direct_hidden_mode: direct_hidden_present_mode,
                 completed_hidden_frame: completed_hidden_frame_for_present,
-                capture_readiness_source: launcher_readiness.needs_source_evidence(),
+                readiness_source_request: launcher_readiness.source_evidence_request(),
                 profile_latch_phases: gui_profiling.active(),
             },
             LauncherPresentTargets {
@@ -12001,7 +12001,7 @@ pub(super) fn run_launcher_loop(
                     request_launcher_redraw!();
                 }
                 if let Some(post) = readiness_post {
-                    if launcher_readiness.needs_source_evidence()
+                    if launcher_readiness.source_evidence_request().is_some()
                         && lifecycle.startup_can_present_frame()
                         && let Some(source) = readiness_source_evidence
                     {

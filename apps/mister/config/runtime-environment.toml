@@ -1953,6 +1953,20 @@ aliases = []
 documentation = { summary = "Controls magik ready fifo behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
+name = "MISTER_MAGIK_READY_WIRE_VERSION"
+owner = "apps/mister/src/process_config.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "uses ready-v2 compatibility when unset or invalid"
+visibility = "internal runtime"
+parser = "u8"
+scope = "process"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Selects the launcher readiness wire version advertised by Main", accepted_values = ["3"], value_policy = "document" }
+
+[[control]]
 name = "MISTER_MAGIK_RELEASE_MARKER"
 owner = "apps/mister/src/ui_runner/update_checker.rs"
 classification = "production"
