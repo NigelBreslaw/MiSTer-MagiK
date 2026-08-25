@@ -107,7 +107,12 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     let navigation = app.global::<slint_ui::launcher::NavigationView>();
     let information = app.global::<slint_ui::launcher::InformationView>();
     navigation.set_screen(slint_ui::launcher::LauncherScreen::Home);
-    navigation.set_system_artwork_available(false);
+    if let Some(image) = load_snes_artwork_image() {
+        navigation.set_system_artwork(image);
+        navigation.set_system_artwork_available(true);
+    } else {
+        navigation.set_system_artwork_available(false);
+    }
     if let Some(image) = load_settings_artwork_image() {
         navigation.set_settings_artwork(image);
         navigation.set_settings_artwork_available(true);
@@ -119,8 +124,10 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     information.set_build_label(build_label);
     navigation.set_present_mode_label("Mode=/dev/fb0".into());
     information.set_present_mode_label("Mode=/dev/fb0".into());
-    information.set_kernel_version("".into());
-    information.set_database_build("".into());
+    let kernel_version = SharedString::from(kernel_version());
+    information.set_kernel_version(kernel_version);
+    let database_build = SharedString::from(last_database_build());
+    information.set_database_build(database_build);
     let overlay = app.global::<slint_ui::launcher::OverlayView>();
     overlay.set_confirmation_kind(slint_ui::launcher::ConfirmationKind::None);
     overlay.set_selected_choice(slint_ui::launcher::DialogChoice::Cancel);
@@ -153,17 +160,6 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     arcade.set_preview_run_label(preview_run_label().into());
     LauncherStatusPresenter::new(app).init();
     sync_bridge_pad_launcher(app, pad);
-}
-
-pub(super) fn hydrate_deferred_launcher_bridge(app: &slint_ui::launcher::Launcher) {
-    let navigation = app.global::<slint_ui::launcher::NavigationView>();
-    if let Some(image) = load_snes_artwork_image() {
-        navigation.set_system_artwork(image);
-        navigation.set_system_artwork_available(true);
-    }
-    let information = app.global::<slint_ui::launcher::InformationView>();
-    information.set_kernel_version(SharedString::from(kernel_version()));
-    information.set_database_build(SharedString::from(last_database_build()));
 }
 
 pub(super) fn sync_settings_bridge(
