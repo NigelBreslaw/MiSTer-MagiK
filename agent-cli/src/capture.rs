@@ -15,17 +15,25 @@ const JPEG_WIDTH: u32 = 1920;
 const JPEG_HEIGHT: u32 = 1080;
 const MOVIE_MIN_SECONDS: u64 = 1;
 const MOVIE_MAX_SECONDS: u64 = 60;
+#[cfg(any(target_os = "macos", test))]
 const MOVIE_DURATION_TOLERANCE_SECONDS: f64 = 0.5;
+#[cfg(any(target_os = "macos", test))]
 const MOVIE_MIN_DECODED_FRAMES_PER_SECOND: u64 = 5;
+#[cfg(any(target_os = "macos", test))]
 const SPATIAL_LUMA_SAMPLE_STEP: usize = 4;
+#[cfg(any(target_os = "macos", test))]
 const STRONG_ROW_DISCONTINUITY: u8 = 12;
 const TEMPORAL_LUMA_GRID_COLUMNS: usize = 16;
 const TEMPORAL_LUMA_GRID_ROWS: usize = 9;
 const TEMPORAL_LUMA_GRID_LEN: usize = TEMPORAL_LUMA_GRID_COLUMNS * TEMPORAL_LUMA_GRID_ROWS;
 const TEMPORAL_LUMA_STATIC_COLUMNS: usize = TEMPORAL_LUMA_GRID_COLUMNS / 2;
+#[cfg(any(target_os = "macos", test))]
 const TEMPORAL_LUMA_IGNORED_RIGHT_COLUMNS: usize = 32;
+#[cfg(any(target_os = "macos", test))]
 const TEMPORAL_LUMA_VIDEO_MINIMUM: u8 = 16;
+#[cfg(any(target_os = "macos", test))]
 const TEMPORAL_LUMA_VIDEO_RANGE: u16 = 219;
+#[cfg(any(target_os = "macos", test))]
 const TEMPORAL_LUMA_FULL_RANGE: u16 = 255;
 pub(crate) const TEMPORAL_LUMA_GRID_ID: &str = "8x9-static-left-video-range-v2";
 // Fixed-range normalization plus the static left half measured zero permille
@@ -67,6 +75,7 @@ struct EncodedFrame {
     luma: Option<LumaAnalysis>,
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct MovieObservation {
     frames: u64,
@@ -75,6 +84,7 @@ struct MovieObservation {
     decoded_duration_seconds: f64,
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn validate_movie_observation(
     observation: MovieObservation,
     requested_duration: Duration,
@@ -583,6 +593,7 @@ fn temporal_luma_grid(
 }
 
 #[must_use]
+#[cfg(any(target_os = "macos", test))]
 fn canonical_temporal_luma(value: u8, minimum: u8, maximum: u8) -> u8 {
     if minimum <= 1 && maximum >= 254 {
         let scaled = (u16::from(value) * TEMPORAL_LUMA_VIDEO_RANGE + TEMPORAL_LUMA_FULL_RANGE / 2)
