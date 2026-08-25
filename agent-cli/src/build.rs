@@ -647,8 +647,6 @@ pub fn execute_runtime_validation(
             "RUSTC_WRAPPER=",
             "--env",
             "RUSTFLAGS=-D warnings -C target-cpu=cortex-a9",
-            "--env",
-            "SLINT_FONT_SIZES=8,16,24,32",
         ])
         .arg("--env")
         .arg(format!("CARGO_BUILD_JOBS={cpus}"));
@@ -1049,8 +1047,7 @@ fn apple_container_cargo_command(
         .arg("--env")
         .arg(format!("MISTER_UI_BUILD_SCOPE={}", spec.ui_scope.label()))
         .args(["--env", "RUSTC_WRAPPER=", "--env"])
-        .arg(format!("RUSTFLAGS={rustflags}"))
-        .args(["--env", "SLINT_FONT_SIZES=8,16,24,32"]);
+        .arg(format!("RUSTFLAGS={rustflags}"));
     for value in metadata.environment() {
         command.arg("--env").arg(value);
     }

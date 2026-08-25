@@ -1,12 +1,11 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "components/start2p.slint";
+import { Spleen6x12, Spleen6x12Size } from "components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "components/nocive_15.slint";
 
 import { InputAvailability, InputView } from "api.slint";
 import { MisterUi } from "mister_window.slint";
-import "fonts/PressStart2P-Regular.ttf";
 
 // Palette — flat fills only (software renderer friendly).
 global ControllerColors {
@@ -443,10 +442,10 @@ export component ControllerPanel inherits Rectangle {
 
             VerticalLayout {
                 spacing: 4px;
-                Start2P {
+                Spleen6x12 {
                     text: InputView.device-name;
                     color: #e8e0f0;
-                    size: Start2PSize.px32;
+                    size: Spleen6x12Size.px32;
                 }
                 Nocive15 {
                     text: "input test";
@@ -557,16 +556,16 @@ export component ControllerPanel inherits Rectangle {
 
         VerticalLayout {
             spacing: 4px;
-            Start2P {
+            Spleen6x12 {
                 text: InputView.device-name;
                 color: #e8e0f0;
-                size: Start2PSize.px24;
+                size: Spleen6x12Size.px24;
                 overflow: elide;
             }
-            Start2P {
+            Spleen6x12 {
                 text: "INPUT TEST  ·  USB " + InputView.usb-port;
                 color: #06d6a0;
-                size: Start2PSize.px8;
+                size: Spleen6x12Size.px8;
                 overflow: elide;
             }
         }
@@ -642,9 +641,9 @@ export component ControllerPanel inherits Rectangle {
             VerticalLayout {
                 padding: 12px;
                 spacing: 8px;
-                Start2P { text: "Pressed  " + InputView.pressed-now; color: #06d6a0; size: Start2PSize.px8; overflow: elide; }
-                Start2P { text: "Last  " + InputView.last-event-label; color: #c8b8d8; size: Start2PSize.px8; overflow: elide; }
-                Start2P { text: InputView.last-raw-event; color: #706080; size: Start2PSize.px8; overflow: elide; }
+                Spleen6x12 { text: "Pressed  " + InputView.pressed-now; color: #06d6a0; size: Spleen6x12Size.px8; overflow: elide; }
+                Spleen6x12 { text: "Last  " + InputView.last-event-label; color: #c8b8d8; size: Spleen6x12Size.px8; overflow: elide; }
+                Spleen6x12 { text: InputView.last-raw-event; color: #706080; size: Spleen6x12Size.px8; overflow: elide; }
             }
         }
     }

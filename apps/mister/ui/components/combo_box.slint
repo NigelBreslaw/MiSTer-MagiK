@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "start2p.slint";
+import { Spleen6x12, Spleen6x12Size } from "spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "nocive_15.slint";
 
 import { FeedbackView, ScreenOrientation, SettingsPopup, SettingsView } from "../api.slint";
@@ -41,10 +41,10 @@ export component ComboBoxOverlay inherits Rectangle {
                 background: option.id == root.highlighted-id ? #2a2236 : transparent;
                 border-width: option.id == root.highlighted-id ? 2px : acknowledged ? 1px : 0px;
                 border-color: acknowledged ? #4e8f80 : #06d6a0;
-                Start2P {
+                Spleen6x12 {
                     text: (option.id == root.selected-id ? "✓ " : "  ") + option.label;
                     color: option.id == root.highlighted-id ? #06d6a0 : #e8e0f0;
-                    size: Start2PSize.px8;
+                    size: Spleen6x12Size.px8;
                     vertical-alignment: center;
                 }
             }

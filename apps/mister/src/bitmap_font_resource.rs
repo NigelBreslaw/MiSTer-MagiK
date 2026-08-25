@@ -14,57 +14,57 @@ const MAX_FAMILY_LEN: usize = 128;
 const MAX_GLYPHS: usize = 2048;
 const MAX_GLYPH_DIMENSION: usize = 256;
 
-const YESTERDAY_10_RESOURCE: &[u8] =
+static YESTERDAY_10_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/yesterday-10/yesterday10-16px.mmbf");
-const YESTERDAY_10_CRT240_RESOURCE: &[u8] =
+static YESTERDAY_10_CRT240_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/yesterday-10/yesterday10-32px.mmbf");
-const XERXES_10_RESOURCE: &[u8] =
+static XERXES_10_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/xerxes-10/xerxes10-16px.mmbf");
-const XERXES_10_CRT240_RESOURCE: &[u8] =
+static XERXES_10_CRT240_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/xerxes-10/xerxes10-32px.mmbf");
-const NOCIVE_15_RESOURCE: &[u8] =
+static NOCIVE_15_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/nocive-15/nocive15-16px.mmbf");
-const BACTERIA_12_RESOURCE: &[u8] =
+static BACTERIA_12_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/bacteria-12/bacteria12-32px.mmbf");
-const BACTERIA_12_NATIVE_RESOURCE: &[u8] =
+static BACTERIA_12_NATIVE_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/bacteria-12/bacteria12-16px.mmbf");
-const JERSEY_15_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey15-27px.mmbf");
-const JERSEY_25_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-41px.mmbf");
+static JERSEY_15_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey15-27px.mmbf");
+static JERSEY_25_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-41px.mmbf");
 #[cfg(not(feature = "asset-tools"))]
-const TERMINUS_8X14_NATIVE_RESOURCE: &[u8] =
+static TERMINUS_8X14_NATIVE_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-normal-1x.mmbf");
 #[cfg(feature = "asset-tools")]
-const TERMINUS_8X14_NATIVE_RESOURCE: &[u8] = &[];
+static TERMINUS_8X14_NATIVE_RESOURCE: &[u8] = &[];
 #[cfg(not(feature = "asset-tools"))]
-const TERMINUS_8X14_NORMAL_RESOURCE: &[u8] =
+static TERMINUS_8X14_NORMAL_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-normal-2x.mmbf");
 #[cfg(feature = "asset-tools")]
-const TERMINUS_8X14_NORMAL_RESOURCE: &[u8] = &[];
+static TERMINUS_8X14_NORMAL_RESOURCE: &[u8] = &[];
 #[cfg(not(feature = "asset-tools"))]
-const TERMINUS_8X14_BOLD_RESOURCE: &[u8] =
+static TERMINUS_8X14_BOLD_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-bold-2x.mmbf");
 #[cfg(feature = "asset-tools")]
-const TERMINUS_8X14_BOLD_RESOURCE: &[u8] = &[];
+static TERMINUS_8X14_BOLD_RESOURCE: &[u8] = &[];
 #[cfg(not(feature = "asset-tools"))]
-const SPLEEN_5X8_NATIVE_RESOURCE: &[u8] =
+static SPLEEN_5X8_NATIVE_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/spleen/spleen-5x8-1x.mmbf");
 #[cfg(feature = "asset-tools")]
-const SPLEEN_5X8_NATIVE_RESOURCE: &[u8] = &[];
+static SPLEEN_5X8_NATIVE_RESOURCE: &[u8] = &[];
 #[cfg(not(feature = "asset-tools"))]
-const SPLEEN_5X8_DOUBLED_RESOURCE: &[u8] =
+static SPLEEN_5X8_DOUBLED_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/spleen/spleen-5x8-2x.mmbf");
 #[cfg(feature = "asset-tools")]
-const SPLEEN_5X8_DOUBLED_RESOURCE: &[u8] = &[];
+static SPLEEN_5X8_DOUBLED_RESOURCE: &[u8] = &[];
 #[cfg(not(feature = "asset-tools"))]
-const SPLEEN_6X12_NATIVE_RESOURCE: &[u8] =
+static SPLEEN_6X12_NATIVE_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/spleen/spleen-6x12-1x.mmbf");
 #[cfg(feature = "asset-tools")]
-const SPLEEN_6X12_NATIVE_RESOURCE: &[u8] = &[];
+static SPLEEN_6X12_NATIVE_RESOURCE: &[u8] = &[];
 #[cfg(not(feature = "asset-tools"))]
-const SPLEEN_6X12_DOUBLED_RESOURCE: &[u8] =
+static SPLEEN_6X12_DOUBLED_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/spleen/spleen-6x12-2x.mmbf");
 #[cfg(feature = "asset-tools")]
-const SPLEEN_6X12_DOUBLED_RESOURCE: &[u8] = &[];
+static SPLEEN_6X12_DOUBLED_RESOURCE: &[u8] = &[];
 
 #[derive(Clone, Debug, PartialEq)]
 struct DecodedGlyph {
@@ -451,29 +451,17 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
     use std::cell::Cell;
     use std::sync::OnceLock;
 
-    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 9]> = OnceLock::new();
+    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 6]> = OnceLock::new();
     thread_local! {
         static REGISTERED: Cell<bool> = const { Cell::new(false) };
     }
 
     let fonts = FONTS.get_or_init(|| {
         [
-            leak_font(
-                decode_resource(YESTERDAY_10_RESOURCE).expect("valid Yesterday 10 bitmap font"),
-            ),
             leak_font(decode_resource(XERXES_10_RESOURCE).expect("valid Xerxes 10 bitmap font")),
             leak_font(decode_resource(NOCIVE_15_RESOURCE).expect("valid Nocive 15 bitmap font")),
-            leak_font(
-                decode_resource(BACTERIA_12_RESOURCE).expect("valid Bacteria 12 bitmap font"),
-            ),
             leak_font(decode_resource(JERSEY_15_RESOURCE).expect("valid Jersey 15 bitmap font")),
             leak_font(decode_resource(JERSEY_25_RESOURCE).expect("valid Jersey 25 bitmap font")),
-            leak_font_family(vec![
-                decode_resource(TERMINUS_8X14_NATIVE_RESOURCE)
-                    .expect("valid native Terminus bitmap font"),
-                decode_resource(TERMINUS_8X14_NORMAL_RESOURCE)
-                    .expect("valid doubled Terminus bitmap font"),
-            ]),
             leak_font_family(vec![
                 decode_resource(SPLEEN_5X8_NATIVE_RESOURCE)
                     .expect("valid native Spleen 5x8 bitmap font"),

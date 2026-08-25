@@ -64,12 +64,15 @@ impl TextGradient {
 }
 
 pub struct ConsoleFont {
+    #[cfg(feature = "asset-tools")]
     font: Option<swash::FontRef<'static>>,
+    #[cfg(feature = "asset-tools")]
     scale_context: swash::scale::ScaleContext,
     glyphs: HashMap<char, ConsoleGlyph>,
     gradient_glyphs: HashMap<(char, TextGradient), ConsoleGradientGlyph>,
     row_filter: ConsoleGlyphRowFilter,
     pixel_size: f32,
+    #[cfg(feature = "asset-tools")]
     units_per_em: f32,
     ascent: f32,
     descent: f32,
@@ -77,6 +80,7 @@ pub struct ConsoleFont {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConsoleTypeface {
+    #[cfg(feature = "asset-tools")]
     PressStart2P,
     Yesterday10,
     Yesterday10Perfect,
@@ -99,7 +103,7 @@ pub enum ConsoleGlyphRowFilter {
 
 impl ConsoleFont {
     pub fn new(pixel_size: f32) -> Self {
-        Self::new_with_typeface(pixel_size, ConsoleTypeface::PressStart2P)
+        Self::new_with_typeface(pixel_size, ConsoleTypeface::Nocive15)
     }
 
     pub fn new_with_typeface(pixel_size: f32, typeface: ConsoleTypeface) -> Self {
@@ -182,7 +186,10 @@ impl ConsoleFont {
                         .expect("valid native Spleen bitmap font resource"),
                 )
             }
-            ConsoleTypeface::PressStart2P => None,
+            #[cfg(feature = "asset-tools")]
+            ConsoleTypeface::PressStart2P => {
+                return Self::new_press_start_2p(pixel_size, row_filter);
+            }
         };
         if let Some(bitmap) = bitmap {
             let glyphs = bitmap
@@ -203,35 +210,28 @@ impl ConsoleFont {
                 })
                 .collect();
             return Self {
+                #[cfg(feature = "asset-tools")]
                 font: None,
+                #[cfg(feature = "asset-tools")]
                 scale_context: swash::scale::ScaleContext::new(),
                 glyphs,
                 gradient_glyphs: HashMap::new(),
                 row_filter,
                 pixel_size,
+                #[cfg(feature = "asset-tools")]
                 units_per_em: 1.0,
                 ascent: bitmap.ascent,
                 descent: bitmap.descent,
             };
         }
 
-        let (data, name): (&'static [u8], &str) = match typeface {
-            ConsoleTypeface::PressStart2P => (
-                include_bytes!("../ui/fonts/PressStart2P-Regular.ttf"),
-                "PressStart2P-Regular.ttf",
-            ),
-            ConsoleTypeface::Jersey15
-            | ConsoleTypeface::Nocive15
-            | ConsoleTypeface::Yesterday10
-            | ConsoleTypeface::Yesterday10Perfect
-            | ConsoleTypeface::Xerxes10
-            | ConsoleTypeface::Xerxes10Perfect
-            | ConsoleTypeface::Bacteria12
-            | ConsoleTypeface::Bacteria12Half
-            | ConsoleTypeface::Spleen6x12Small => {
-                unreachable!()
-            }
-        };
+        unreachable!("every runtime typeface has a bitmap resource")
+    }
+
+    #[cfg(feature = "asset-tools")]
+    fn new_press_start_2p(pixel_size: f32, row_filter: ConsoleGlyphRowFilter) -> Self {
+        let data = include_bytes!("../ui/fonts/PressStart2P-Regular.ttf");
+        let name = "PressStart2P-Regular.ttf";
         let font = swash::FontRef::from_index(data, 0).unwrap_or_else(|| panic!("{name}"));
         let metrics = font.metrics(&[]);
         let units_per_em = metrics.units_per_em as f32;
@@ -386,42 +386,48 @@ impl ConsoleFont {
 
     fn glyph(&mut self, ch: char) -> Option<&ConsoleGlyph> {
         if !self.glyphs.contains_key(&ch) {
-            let font = self.font?;
-            let glyph_id = font.charmap().map(ch);
-            let advance = if glyph_id == 0 {
-                (self.pixel_size * 0.75) as i32
-            } else {
-                let scale = self.pixel_size / self.units_per_em;
-                (font.glyph_metrics(&[]).advance_width(glyph_id) * scale) as i32
-            };
-            let glyph = if glyph_id == 0 || ch == ' ' {
-                ConsoleGlyph {
-                    left: 0,
-                    top: 0,
-                    width: 0,
-                    height: 0,
-                    advance,
-                    data: Vec::new(),
-                }
-            } else {
-                let mut scaler = self
-                    .scale_context
-                    .builder(font)
-                    .size(self.pixel_size)
-                    .build();
-                let image = swash::scale::Render::new(&[swash::scale::Source::Outline])
-                    .format(swash::zeno::Format::Alpha)
-                    .render(&mut scaler, glyph_id)?;
-                ConsoleGlyph {
-                    left: image.placement.left,
-                    top: image.placement.top,
-                    width: image.placement.width as usize,
-                    height: image.placement.height as usize,
-                    advance,
-                    data: image.data,
-                }
-            };
-            self.glyphs.insert(ch, glyph);
+            #[cfg(not(feature = "asset-tools"))]
+            return None;
+
+            #[cfg(feature = "asset-tools")]
+            {
+                let font = self.font?;
+                let glyph_id = font.charmap().map(ch);
+                let advance = if glyph_id == 0 {
+                    (self.pixel_size * 0.75) as i32
+                } else {
+                    let scale = self.pixel_size / self.units_per_em;
+                    (font.glyph_metrics(&[]).advance_width(glyph_id) * scale) as i32
+                };
+                let glyph = if glyph_id == 0 || ch == ' ' {
+                    ConsoleGlyph {
+                        left: 0,
+                        top: 0,
+                        width: 0,
+                        height: 0,
+                        advance,
+                        data: Vec::new(),
+                    }
+                } else {
+                    let mut scaler = self
+                        .scale_context
+                        .builder(font)
+                        .size(self.pixel_size)
+                        .build();
+                    let image = swash::scale::Render::new(&[swash::scale::Source::Outline])
+                        .format(swash::zeno::Format::Alpha)
+                        .render(&mut scaler, glyph_id)?;
+                    ConsoleGlyph {
+                        left: image.placement.left,
+                        top: image.placement.top,
+                        width: image.placement.width as usize,
+                        height: image.placement.height as usize,
+                        advance,
+                        data: image.data,
+                    }
+                };
+                self.glyphs.insert(ch, glyph);
+            }
         }
         self.glyphs.get(&ch)
     }
@@ -756,7 +762,7 @@ mod tests {
 
     #[test]
     fn clipping_uses_measured_advances_and_fits_the_requested_width() {
-        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::PressStart2P);
+        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::Nocive15);
         let clipped = font
             .clipped_text("Cadillacs and Dinosaurs", 80)
             .into_owned();
@@ -767,7 +773,7 @@ mod tests {
 
     #[test]
     fn clipping_never_returns_an_ellipsis_wider_than_the_requested_width() {
-        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::PressStart2P);
+        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::Nocive15);
 
         for max_width in 0..font.text_width("...") {
             let clipped = font.clipped_text("Arcade", max_width).into_owned();
@@ -800,6 +806,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "asset-tools")]
     fn alpha_mask_tightly_contains_press_start_text() {
         let mut font = ConsoleFont::new_with_typeface(128.0, ConsoleTypeface::PressStart2P);
         let mask = font.rasterize_alpha_mask("MagiK").unwrap();
@@ -814,6 +821,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "asset-tools")]
     fn press_start_font_reports_expected_metrics_and_line_pitch() {
         let cases = [(ConsoleTypeface::PressStart2P, 8.0, 1000, 0, 8)];
         for (typeface, pixel_size, expected_ascent, expected_descent, expected_pitch) in cases {
@@ -845,9 +853,6 @@ mod tests {
             (ConsoleTypeface::Bacteria12, 32.0, 32, "MagiK 1984"),
             (ConsoleTypeface::Bacteria12Half, 16.0, 32, "MagiK 1984"),
             (ConsoleTypeface::Spleen6x12Small, 12.0, 32, "MagiK 1984"),
-            (ConsoleTypeface::PressStart2P, 8.0, 32, "128"),
-            (ConsoleTypeface::PressStart2P, 8.0, 19, "128"),
-            (ConsoleTypeface::PressStart2P, 8.0, 39, "128"),
         ] {
             let mut font = ConsoleFont::new_with_typeface(pixel_size, typeface);
             let width = 220;

@@ -166,12 +166,10 @@ design rows by construction.
 scripts/agent device launcher restart --attended --crt-font-experiment bacteria-half
 ```
 
-The production CRT typography uses Jersey 25 for major headings, native
-Terminus 8×14 for settings, status, and small text, and Nocive 15 for footer
-hints. Press Start 2P remains available to HDMI but is not used by the CRT UI.
-CRT240 Arcade game titles use the pixel-perfect 32px Yesterday 10 resource;
-the retained Terminus 28px normal and bold resources are not Arcade title
-selectors.
+The production CRT typography uses Jersey 25 for major headings, Spleen for
+settings, status, and small text, and Nocive 15 for footer hints. Press Start
+2P is not linked into either HDMI or CRT UI. CRT240 Arcade game titles use the
+pixel-perfect 32px Yesterday 10 resource.
 
 Only `STEM-raw.png` is authoritative framebuffer evidence; the two `4x3`
 files are derived host previews and must not be used as HDMI/CRT sink proof.
@@ -185,11 +183,9 @@ axis-specific border tokens, 14-line rows, a 29-line header, and a 24-line
 footer. The 576p route uses 4×5 grid units, 1-line borders, 29-line rows, a
 38-line header, and a 29-line footer. The 60 Hz routes remain unchanged.
 
-PAL text uses OFL-derived Press Start assets with horizontal advances
-unchanged and glyph outlines plus vertical metrics scaled by 3:5 for 288p and
-6:5 for 576p. Slint and the Rust Arcade renderer select the same route-owned
-family. This compensates for the physical PAL pixel aspect without relying on
-an anisotropic Slint software-renderer transform.
+PAL text uses the same route-owned bitmap families as the other CRT modes.
+Their exact native and doubled resources avoid relying on an anisotropic Slint
+software-renderer transform.
 
 Hidden RGB565 slot publication has a strict copy → overlay → publish → latch
 order. On ARM, `publish_writes()` issues a full-system store barrier after

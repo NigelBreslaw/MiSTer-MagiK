@@ -1,10 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "../../components/start2p.slint";
+import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 import { FeedbackView, SettingsView } from "../../api.slint";
-import { ListView } from "std-widgets.slint";
 
 component LicenseRow inherits Rectangle {
     in property <string> label;
@@ -29,7 +28,7 @@ export component LicensesScreen inherits Rectangle {
         HorizontalLayout {
             height: license-title.preferred-height;
             padding-left: 12px;
-            license-title := Start2P { text: "Licenses"; color: #e8e0f0; size: Start2PSize.px24; horizontal-alignment: left; }
+            license-title := Spleen6x12 { text: "Licenses"; color: #e8e0f0; size: Spleen6x12Size.px24; horizontal-alignment: left; }
         }
         for title[index] in SettingsView.license-titles : LicenseRow {
             label: title;
@@ -37,7 +36,7 @@ export component LicensesScreen inherits Rectangle {
             acknowledged: FeedbackView.acknowledged("licenses", index == 0 ? "mister-magik" : index == 1 ? "ffmpeg" : index == 2 ? "press-start-2p" : index == 3 ? "commercial-fonts" : index == 4 ? "jersey-25" : index == 5 ? "jersey-15" : index == 6 ? "terminus-font" : index == 7 ? "spleen" : index == 8 ? "arcade-cabinet" : "slint", FeedbackView.revision);
         }
         Rectangle { vertical-stretch: 1; background: transparent; }
-        Start2P { text: "A: open    B: back"; color: #6f8198; size: Start2PSize.px8; horizontal-alignment: center; }
+        Spleen6x12 { text: "A: open    B: back"; color: #6f8198; size: Spleen6x12Size.px8; horizontal-alignment: center; }
     }
 
     if SettingsView.license-expanded : VerticalLayout {
@@ -54,22 +53,24 @@ export component LicensesScreen inherits Rectangle {
             background: #12101a;
             border-width: 1px;
             border-color: #5c4a72;
-            ListView {
+            Flickable {
                 x: 12px;
                 y: 12px;
                 width: parent.width - 24px;
                 height: parent.height - 24px;
                 viewport-y: -SettingsView.license-scroll-y * 1px;
-                for line in SettingsView.license-lines : Start2P {
-                    text: line;
-                    color: #d8d0e0;
-                    size: Start2PSize.px8;
-                    height: 22px;
-                    overflow: clip;
-                    vertical-alignment: top;
+                VerticalLayout {
+                    for line in SettingsView.license-lines : Spleen6x12 {
+                        text: line;
+                        color: #d8d0e0;
+                        size: Spleen6x12Size.px8;
+                        height: 22px;
+                        overflow: clip;
+                        vertical-alignment: top;
+                    }
                 }
             }
         }
-        Start2P { text: "Up/Down: scroll    A/B: close"; color: #6f8198; size: Start2PSize.px8; horizontal-alignment: center; }
+        Spleen6x12 { text: "Up/Down: scroll    A/B: close"; color: #6f8198; size: Spleen6x12Size.px8; horizontal-alignment: center; }
     }
 }

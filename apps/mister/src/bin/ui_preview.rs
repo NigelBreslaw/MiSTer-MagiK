@@ -3777,10 +3777,36 @@ mod macos {
                         include_bytes!("../../assets/fonts/jersey25-41px.mmbf"),
                     ),
                 ]),
-                font_bundle_sha256: bundle_sha256(&[(
-                    "PressStart2P-Regular.ttf",
-                    include_bytes!("../../ui/fonts/PressStart2P-Regular.ttf"),
-                )]),
+                font_bundle_sha256: bundle_sha256(&[
+                    (
+                        "spleen-5x8-1x.mmbf",
+                        include_bytes!("../../assets/fonts/spleen/spleen-5x8-1x.mmbf"),
+                    ),
+                    (
+                        "spleen-5x8-2x.mmbf",
+                        include_bytes!("../../assets/fonts/spleen/spleen-5x8-2x.mmbf"),
+                    ),
+                    (
+                        "spleen-6x12-1x.mmbf",
+                        include_bytes!("../../assets/fonts/spleen/spleen-6x12-1x.mmbf"),
+                    ),
+                    (
+                        "spleen-6x12-2x.mmbf",
+                        include_bytes!("../../assets/fonts/spleen/spleen-6x12-2x.mmbf"),
+                    ),
+                    (
+                        "nocive15-16px.mmbf",
+                        include_bytes!(
+                            "../../../../private/magik-assets/fonts/nocive-15/nocive15-16px.mmbf"
+                        ),
+                    ),
+                    (
+                        "xerxes10-16px.mmbf",
+                        include_bytes!(
+                            "../../../../private/magik-assets/fonts/xerxes-10/xerxes10-16px.mmbf"
+                        ),
+                    ),
+                ]),
             }
         }
 
@@ -5091,7 +5117,7 @@ mod macos {
         }
 
         #[test]
-        fn start2p_visual_scenarios_are_headless_selectable() {
+        fn bitmap_font_visual_scenarios_are_headless_selectable() {
             for scenario in [
                 "home",
                 "arcade",

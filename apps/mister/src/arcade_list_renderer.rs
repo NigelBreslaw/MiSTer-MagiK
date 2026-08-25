@@ -45,7 +45,7 @@ pub const ARCADE_SEARCH_LIST_W: usize = 464;
 pub const ARCADE_LIST_H: usize = ARCADE_LIST_VISIBLE_H as usize;
 pub const ARCADE_SEARCH_LIST_Y: usize = 56;
 pub const ARCADE_LIST_FONT_PX: f32 = 16.0;
-pub const ARCADE_LIST_META_FONT_PX: f32 = 8.0;
+pub const ARCADE_LIST_META_FONT_PX: f32 = 16.0;
 const CRT_PORTRAIT_TITLE_CLEARANCE_ROWS: usize = 3;
 pub const ARCADE_LIST_BG_COLOR: Pixel = Pixel(0x001a1424);
 pub const ARCADE_LIST_BG_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0x1a, 0x14, 0x24);
@@ -167,7 +167,7 @@ impl ArcadeListStyle {
             title_font_px: ARCADE_LIST_FONT_PX,
             meta_font_px: ARCADE_LIST_META_FONT_PX,
             title_typeface: ConsoleTypeface::Nocive15,
-            meta_typeface: ConsoleTypeface::PressStart2P,
+            meta_typeface: ConsoleTypeface::Xerxes10,
             glyph_row_filter: ConsoleGlyphRowFilter::Native,
             crt_palette: false,
         }
@@ -5137,7 +5137,7 @@ mod tests {
         assert_eq!(crt.style.badge_text.0, 0x0003132d);
         assert_eq!(hdmi.style.row_height, ARCADE_ROW_HEIGHT);
         assert_eq!(hdmi.style.title_typeface, ConsoleTypeface::Nocive15);
-        assert_eq!(hdmi.style.meta_typeface, ConsoleTypeface::PressStart2P);
+        assert_eq!(hdmi.style.meta_typeface, ConsoleTypeface::Xerxes10);
         assert_eq!(hdmi.style.meta_font_px, ARCADE_LIST_META_FONT_PX);
         assert!(!hdmi.style.crt_palette);
         assert_eq!(hdmi.style.background.0, ARCADE_LIST_BG_COLOR.0);

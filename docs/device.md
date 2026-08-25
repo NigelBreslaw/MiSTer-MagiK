@@ -206,11 +206,12 @@ It uses the native 16px Bacteria resource with unchanged centered scanout and
 no row reconstruction. Its 12-row capitals reduce to roughly six CRT
 scanlines; the catalog remains untouched.
 
-CRT UI typography uses Jersey 25 for major headings, the native Terminus 8×14
-resource for settings and compact status text, and Nocive 15 for footer hints.
-Press Start 2P is not used on CRT routes. CRT240 Arcade game titles default to
-the pixel-perfect 32px Yesterday 10 resource, while Arcade metadata uses native
-Terminus. Typography selection does not refresh or modify the catalog.
+CRT UI typography uses Jersey 25 for major headings, Spleen bitmap resources
+for settings and compact status text, and Nocive 15 for footer hints. Press
+Start 2P is not linked into the runtime UI; only its pre-rasterized `MiSTer`
+and `MagiK` particle targets remain. CRT240 Arcade game titles default to the
+pixel-perfect 32px Yesterday 10 resource, while Arcade metadata uses native
+Spleen. Typography selection does not refresh or modify the catalog.
 
 On macOS, `scripts/agent capture usb-video [--output PATH]` is the sole
 supported host capture interface for the fixed `USB Video` input. With no

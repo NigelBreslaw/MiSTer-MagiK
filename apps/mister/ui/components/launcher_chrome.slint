@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "start2p.slint";
+import { Spleen6x12, Spleen6x12Size } from "spleen_6x12.slint";
 import { Xerxes10, Xerxes10Size } from "xerxes_10.slint";
 import { Nocive15, Nocive15Size } from "nocive_15.slint";
 
@@ -17,17 +17,17 @@ component ScanningSubtitle inherits VerticalLayout {
     HorizontalLayout {
         alignment: center;
 
-        Start2P {
+        Spleen6x12 {
             text: "Scanning";
             color: #8ca4b5;
-            size: Start2PSize.px8;
+            size: Spleen6x12Size.px8;
             horizontal-alignment: center;
         }
 
-        Start2P {
+        Spleen6x12 {
             text: ".";
             color: root.detail == "" && CatalogView.progress-dot-visible ? #8ca4b5 : transparent;
-            size: Start2PSize.px8;
+            size: Spleen6x12Size.px8;
             horizontal-alignment: center;
         }
     }
@@ -35,17 +35,17 @@ component ScanningSubtitle inherits VerticalLayout {
     if detail != "" : HorizontalLayout {
         alignment: center;
 
-        Start2P {
+        Spleen6x12 {
             text: root.detail;
             color: #8ca4b5;
-            size: Start2PSize.px8;
+            size: Spleen6x12Size.px8;
             horizontal-alignment: center;
         }
 
-        Start2P {
+        Spleen6x12 {
             text: ".";
             color: CatalogView.progress-dot-visible ? #8ca4b5 : transparent;
-            size: Start2PSize.px8;
+            size: Spleen6x12Size.px8;
             horizontal-alignment: center;
         }
     }
@@ -187,12 +187,18 @@ export component LauncherTile inherits Rectangle {
     }
 }
 
-component CogIcon inherits Image {
+component CogIcon inherits Rectangle {
     in property <bool> focused;
 
-    source: @image-url("../icons/settings.svg");
-    colorize: white;
+    background: transparent;
     opacity: focused ? 1.0 : 0.5;
+
+    Rectangle { x: 0; y: 3px; width: root.width; height: 2px; background: white; }
+    Rectangle { x: 5px; y: 0; width: 4px; height: 8px; background: white; }
+    Rectangle { x: 0; y: 11px; width: root.width; height: 2px; background: white; }
+    Rectangle { x: 15px; y: 8px; width: 4px; height: 8px; background: white; }
+    Rectangle { x: 0; y: 19px; width: root.width; height: 2px; background: white; }
+    Rectangle { x: 9px; y: 16px; width: 4px; height: 8px; background: white; }
 }
 
 export component SettingsButton inherits Rectangle {

@@ -1,16 +1,14 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "../components/start2p.slint";
+import { Spleen6x12, Spleen6x12Size } from "../components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "../components/nocive_15.slint";
-import "../fonts/PressStart2P-Regular.ttf";
 
 export component CrtResolutionComboMockup inherits Window {
     width: 640px;
     height: 480px;
     title: "MiSTer MagiK CRT Resolution Combo Mockup";
     background: #020817;
-    default-font-family: "Press Start 2P";
     forward-focus: focus-scope;
 
     in-out property <[string]> resolutions: [
@@ -52,14 +50,14 @@ export component CrtResolutionComboMockup inherits Window {
             border-width: 2px;
             border-color: #8b94f8;
 
-            Start2P {
+            Spleen6x12 {
                 x: 16px;
                 y: 8px;
                 width: parent.width - 32px;
                 height: 48px;
                 text: "Display resolution";
                 color: #aaa5ff;
-                size: Start2PSize.px32;
+                size: Spleen6x12Size.px32;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -90,13 +88,13 @@ export component CrtResolutionComboMockup inherits Window {
                     border-width: 1px;
                     border-color: index == root.highlighted-index ? #40e5e7 : #5e59aa;
 
-                    Start2P {
+                    Spleen6x12 {
                         x: 8px;
                         width: 24px;
                         height: parent.height;
                         text: index == root.highlighted-index ? ">" : "";
                         color: #03132d;
-                        size: Start2PSize.px24;
+                        size: Spleen6x12Size.px24;
                         vertical-alignment: center;
                     }
 
@@ -111,13 +109,13 @@ export component CrtResolutionComboMockup inherits Window {
                         vertical-alignment: center;
                     }
 
-                    Start2P {
+                    Spleen6x12 {
                         x: parent.width - 40px;
                         width: 24px;
                         height: parent.height;
                         text: index == root.selected-index ? "*" : "";
                         color: index == root.highlighted-index ? #03132d : #40e5e7;
-                        size: Start2PSize.px24;
+                        size: Spleen6x12Size.px24;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }

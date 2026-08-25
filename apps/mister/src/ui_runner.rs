@@ -34,11 +34,14 @@ use crate::arcade_list_renderer::{
     crt_arcade_row_height,
 };
 use crate::boot_analytics;
+#[cfg(not(mister_ui_scope_launcher))]
 use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
 use crate::crt_arcade_overlay::CrtArcadeOverlayState;
 use crate::display_config::{DisplayConfig, detect_runtime_display_geometry};
-use crate::frame_profile::{FrameProfiler, FrameRect, FrameSample, VideoFrameProfile};
+use crate::frame_profile::FrameRect;
+#[cfg(not(mister_ui_scope_launcher))]
+use crate::frame_profile::{FrameProfiler, FrameSample, VideoFrameProfile};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::library_db;
@@ -130,6 +133,7 @@ mod arcade_drawer;
 // lint exception at the ownership leaf instead of the application root.
 #[allow(dead_code)]
 mod catalog_worker;
+#[cfg(not(mister_ui_scope_launcher))]
 mod controller_loop;
 #[cfg(test)]
 mod controller_setup_input_session;
@@ -180,6 +184,7 @@ mod preview_compositor;
 mod raw565_preview_renderer;
 #[allow(dead_code)]
 mod screenshot_media_update_session;
+#[cfg(not(mister_ui_scope_launcher))]
 mod tear_pattern_loop;
 #[doc(hidden)]
 pub mod ui_boot;
@@ -188,10 +193,15 @@ pub(crate) mod ui_frame_target;
 pub(crate) mod ui_platform;
 mod update_checker;
 mod user_state_session;
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
+#[cfg(all(
+    not(mister_ui_scope_launcher),
+    target_os = "linux",
+    target_arch = "arm"
+))]
 mod video_loop;
 
 use catalog_worker::*;
+#[cfg(not(mister_ui_scope_launcher))]
 use controller_loop::*;
 use crt_trial_loop::*;
 #[cfg(mister_experiments)]
@@ -226,13 +236,18 @@ use mister_magik_mister_runtime::framebuffer::latch_state::{
 use preview_compositor::*;
 use raw565_preview_renderer::*;
 use screenshot_media_update_session::*;
+#[cfg(not(mister_ui_scope_launcher))]
 use tear_pattern_loop::*;
 use ui_boot::*;
 use ui_frame_target::*;
 use ui_platform::*;
 use update_checker::*;
 use user_state_session::*;
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
+#[cfg(all(
+    not(mister_ui_scope_launcher),
+    target_os = "linux",
+    target_arch = "arm"
+))]
 use video_loop::*;
 
 const AUTO_CONTROLLER_SETUP_ENABLED: bool = false;
@@ -266,11 +281,17 @@ pub const UI_SCENES: &[&str] = &[
     "raster-effects",
     #[cfg(mister_experiments)]
     "transition-effects",
+    #[cfg(not(mister_ui_scope_launcher))]
     "controller_test",
     "crt_probe", // Bounded attended slot diagnostics; never a production launcher mode.
     "crt_trial",
+    #[cfg(not(mister_ui_scope_launcher))]
     "tear_pattern",
-    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    #[cfg(all(
+        not(mister_ui_scope_launcher),
+        target_os = "linux",
+        target_arch = "arm"
+    ))]
     "video_playback",
 ];
 
@@ -392,6 +413,7 @@ macro_rules! with_scene_app_layout {
     }};
 }
 
+#[cfg(not(mister_ui_scope_launcher))]
 macro_rules! with_scene_app {
     ($module:ident::$ty:ident, $ui:expr, $window:expr, $app:ident, $body:block) => {{
         let layout = UiLayoutGeometry::for_display($ui, ScreenOrientation::Normal);
@@ -489,7 +511,11 @@ pub fn run_ui(
     boot_analytics::event("slint_platform_set", "ok=1");
 
     match scene.as_str() {
-        #[cfg(all(target_os = "linux", target_arch = "arm"))]
+        #[cfg(all(
+            not(mister_ui_scope_launcher),
+            target_os = "linux",
+            target_arch = "arm"
+        ))]
         "video_playback" => {
             let pad = open_pads();
             with_scene_app!(video_playback::VideoPlayback, &ui, &window, app, {
@@ -507,6 +533,7 @@ pub fn run_ui(
                 );
             });
         }
+        #[cfg(not(mister_ui_scope_launcher))]
         "controller_test" => {
             let pad = open_pads();
             with_scene_app!(controller::ControllerTest, &ui, &window, app, {
@@ -516,6 +543,7 @@ pub fn run_ui(
                 run_controller_loop(secs, &ui, &mut disp, &window, pad, app, &animation_clock);
             });
         }
+        #[cfg(not(mister_ui_scope_launcher))]
         "tear_pattern" => {
             with_scene_app!(tear_pattern::TearPattern, &ui, &window, app, {
                 app.show().expect("show");

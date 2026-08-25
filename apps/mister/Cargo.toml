@@ -31,6 +31,11 @@ name = "generate-bitmap-fonts"
 path = "examples/generate_bitmap_fonts.rs"
 required-features = ["asset-tools"]
 
+[[example]]
+name = "generate_magik_mask"
+path = "examples/generate_magik_mask.rs"
+required-features = ["asset-tools"]
+
 [[bin]]
 name = "mister-magik-ui-preview"
 path = "src/bin/ui_preview.rs"
@@ -65,7 +70,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
 quick-xml = "0.41"
-swash = { version = "0.2.7", features = ["scale", "render"] }
+swash = { version = "0.2.7", features = ["scale", "render"], optional = true }
 pprof = { git = "https://github.com/NigelBreslaw/pprof-rs", branch = "armv7-itimer-abi", optional = true, default-features = false, features = ["flamegraph"] }
 mister-magik-catalog = { path = "../../crates/catalog", default-features = false, features = ["builder"] }
 mister-magik-ui = { path = "ui-generated", optional = true }
@@ -86,7 +91,7 @@ cc = "1.4.2"
 
 [features]
 default = []
-asset-tools = []
+asset-tools = ["dep:swash"]
 profile = ["dep:pprof"]
 ui = ["dep:slint", "dep:i-slint-core", "dep:mister-magik-ui", "dep:ffmpeg-next", "mister-magik-mister-runtime/ui"]
 ui-preview = ["dep:slint", "dep:i-slint-core", "dep:mister-magik-ui", "dep:softbuffer", "dep:winit", "mister-magik-mister-runtime/ui", "experiments"]

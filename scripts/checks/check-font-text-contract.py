@@ -19,8 +19,9 @@ RAW_TEXT = re.compile(r"(?<![A-Za-z0-9_])Text\s*\{")
 DIRECT_FONT_SIZE = re.compile(r"(?<![A-Za-z0-9_-])font-size\s*:")
 ENUM_VALUE = re.compile(r"\b(px[0-9]+)\s*,")
 LEGACY_API = re.compile(
-    r"\b(?:PixelText8Metrics|PixelText8|PixelTextSize|JerseyTitleText)\b"
-    r"|pixel_text_8\.slint|jersey_text\.slint"
+    r"\b(?:PixelText8Metrics|PixelText8|PixelTextSize|JerseyTitleText"
+    r"|Start2PMetrics|Start2P|Start2PSize)\b"
+    r"|pixel_text_8\.slint|jersey_text\.slint|start2p\.slint"
 )
 
 
@@ -35,14 +36,6 @@ class PrimitiveContract:
 
 
 CONTRACTS = (
-    PrimitiveContract(
-        UI_ROOT / "components/start2p.slint",
-        "Start2P",
-        "Start2PSize",
-        ("px8", "px16", "px24", "px32"),
-        "Press Start 2P",
-        "8px",
-    ),
     PrimitiveContract(
         UI_ROOT / "components/yesterday_10.slint",
         "Yesterday10",

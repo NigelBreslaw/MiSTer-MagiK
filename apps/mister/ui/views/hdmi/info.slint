@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "../../components/start2p.slint";
+import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
 
 import { InformationView } from "../../api.slint";
 
@@ -15,8 +15,8 @@ component InfoRow inherits Rectangle {
     VerticalLayout {
         padding: 10px;
         spacing: 5px;
-        Start2P { text: label; color: #06d6a0; size: Start2PSize.px8; }
-        Start2P { text: value; color: #e8e0f0; size: Start2PSize.px8; overflow: elide; }
+        Spleen6x12 { text: label; color: #06d6a0; size: Spleen6x12Size.px8; }
+        Spleen6x12 { text: value; color: #e8e0f0; size: Spleen6x12Size.px8; overflow: elide; }
     }
 }
 
@@ -24,12 +24,12 @@ export component InfoScreen inherits Rectangle {
     VerticalLayout {
         padding: 32px;
         spacing: 12px;
-        Start2P { text: "Info"; color: #06d6a0; size: Start2PSize.px24; horizontal-alignment: center; }
+        Spleen6x12 { text: "Info"; color: #06d6a0; size: Spleen6x12Size.px24; horizontal-alignment: center; }
         InfoRow { label: "Build"; value: InformationView.build-label; }
         InfoRow { label: "Display mode"; value: InformationView.present-mode-label; }
         InfoRow { label: "Database build"; value: InformationView.database-build; }
         InfoRow { label: "MiSTer kernel"; value: InformationView.kernel-version; }
         Rectangle { vertical-stretch: 1; background: transparent; }
-        Start2P { text: "B: back"; color: #6f8198; size: Start2PSize.px8; horizontal-alignment: center; }
+        Spleen6x12 { text: "B: back"; color: #6f8198; size: Spleen6x12Size.px8; horizontal-alignment: center; }
     }
 }

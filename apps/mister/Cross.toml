@@ -19,5 +19,4 @@ passthrough = [
     "MISTER_UI_BUILD_SCOPE",
     "PKG_CONFIG_PATH",
     "PKG_CONFIG_ALLOW_CROSS",
-    "SLINT_FONT_SIZES",
 ]

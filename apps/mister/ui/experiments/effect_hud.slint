@@ -1,15 +1,13 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "../components/start2p.slint";
+import { Spleen6x12, Spleen6x12Size } from "../components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "../components/nocive_15.slint";
 import { MisterWindow, MisterUi } from "../mister_window.slint";
 export { MisterUi }
-export { Start2PSize }
-import "../fonts/PressStart2P-Regular.ttf";
+export { Spleen6x12Size }
 
 export component EffectHud inherits MisterWindow {
-    default-font-family: "Press Start 2P";
 
     in property <string> effect-name: "effect";
     in property <string> mode-label: "raw";
@@ -28,11 +26,11 @@ export component EffectHud inherits MisterWindow {
         border-width: 2px;
     }
 
-    Start2P {
+    Spleen6x12 {
         x: 44px;
         y: 40px;
         text: "MiSTer MagiK FX";
-        size: Start2PSize.px24;
+        size: Spleen6x12Size.px24;
         color: #fff2a8;
     }
 

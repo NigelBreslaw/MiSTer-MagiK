@@ -6,7 +6,6 @@ import { Jersey25 } from "../../components/jersey_25.slint";
 import { FeedbackView, SettingsView } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
-import { ListView } from "std-widgets.slint";
 
 export component LicensesScreen inherits Rectangle {
     background: CrtTheme.background;
@@ -43,19 +42,21 @@ export component LicensesScreen inherits Rectangle {
             background: CrtTheme.panel;
             border-width: MisterUi.border;
             border-color: CrtTheme.border;
-            ListView {
+            Flickable {
                 x: 12px;
                 y: 12px;
                 width: parent.width - 24px;
                 height: parent.height - 24px;
                 viewport-y: -SettingsView.license-scroll-y * 1px;
-                for line in SettingsView.license-lines : Spleen6x12 {
-                    text: line;
-                    color: CrtTheme.text;
-                    size: MisterUi.crt-body-font;
-                    height: MisterUi.body-font;
-                    overflow: clip;
-                    vertical-alignment: top;
+                VerticalLayout {
+                    for line in SettingsView.license-lines : Spleen6x12 {
+                        text: line;
+                        color: CrtTheme.text;
+                        size: MisterUi.crt-body-font;
+                        height: MisterUi.body-font;
+                        overflow: clip;
+                        vertical-alignment: top;
+                    }
                 }
             }
         }

@@ -1,15 +1,13 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "../components/start2p.slint";
+import { Spleen6x12, Spleen6x12Size } from "../components/spleen_6x12.slint";
 import { MisterWindow, MisterUi } from "../mister_window.slint";
 export { MisterUi }
-export { Start2PSize }
-import "../fonts/PressStart2P-Regular.ttf";
+export { Spleen6x12Size }
 
 export component TearPattern inherits MisterWindow {
     background: #05070b;
-    default-font-family: "Press Start 2P";
 
     property <duration> tick: animation-tick();
     property <float> phase: Math.mod(tick / 1ms, 1200) / 1200;
@@ -95,27 +93,27 @@ export component TearPattern inherits MisterWindow {
         opacity: 0.82;
     }
 
-    Start2P {
+    Spleen6x12 {
         x: 12px;
         y: 9px;
         text: "tear_pattern phase " + root.phase-ms;
         color: #ffffff;
-        size: Start2PSize.px8;
+        size: Spleen6x12Size.px8;
     }
 
-    Start2P {
+    Spleen6x12 {
         x: 376px;
         y: 9px;
         text: "watch for horizontal step/kink";
         color: #fff06a;
-        size: Start2PSize.px8;
+        size: Spleen6x12Size.px8;
     }
 
-    Start2P {
+    Spleen6x12 {
         x: 12px;
         y: 498px;
         text: "rulers: 16 logical px";
         color: #ffffff;
-        size: Start2PSize.px8;
+        size: Spleen6x12Size.px8;
     }
 }

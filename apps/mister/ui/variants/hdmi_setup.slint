@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "../components/start2p.slint";
+import { Spleen6x12, Spleen6x12Size } from "../components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "../components/nocive_15.slint";
 import { MisterUi } from "../mister_window.slint";
 import { FeedbackView, SetupEntry, SetupField, SetupPhase, SetupView } from "../api.slint";
@@ -57,10 +57,10 @@ export component SetupOverlay inherits Rectangle {
             wrap: word-wrap;
         }
 
-        if !MisterUi.portrait-layout : Start2P {
+        if !MisterUi.portrait-layout : Spleen6x12 {
             text: title;
             color: #e8e0f0;
-            size: Start2PSize.px24;
+            size: Spleen6x12Size.px24;
             horizontal-alignment: center;
             horizontal-stretch: 1;
             wrap: word-wrap;
@@ -194,10 +194,10 @@ export component SetupOverlay inherits Rectangle {
                 spacing: 4px;
                 alignment: center;
 
-                Start2P {
+                Spleen6x12 {
                     text: "Name";
                     color: #9080a8;
-                    size: Start2PSize.px8;
+                    size: Spleen6x12Size.px8;
                     horizontal-alignment: left;
                 }
 
@@ -224,10 +224,10 @@ export component SetupOverlay inherits Rectangle {
                 spacing: 4px;
                 alignment: center;
 
-                Start2P {
+                Spleen6x12 {
                     text: "Type";
                     color: #9080a8;
-                    size: Start2PSize.px8;
+                    size: Spleen6x12Size.px8;
                     horizontal-alignment: left;
                 }
 
@@ -250,7 +250,7 @@ export component SetupOverlay inherits Rectangle {
             }
         }
 
-        Start2P {
+        Spleen6x12 {
             text: phase == SetupPhase.detected ? "Press any button to continue"
                 : phase == SetupPhase.new-or-existing ? "D-pad: choose  ·  A: confirm"
                 : phase == SetupPhase.pick-existing ? "D-pad: choose  ·  A: confirm"
@@ -258,7 +258,7 @@ export component SetupOverlay inherits Rectangle {
                 : phase == SetupPhase.name-kind ? "D-pad: change type  ·  A: save"
                 : "";
             color: #706080;
-            size: Start2PSize.px8;
+            size: Spleen6x12Size.px8;
             horizontal-alignment: center;
         }
     }

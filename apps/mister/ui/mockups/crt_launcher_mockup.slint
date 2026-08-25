@@ -1,8 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "../components/start2p.slint";
-import "../fonts/PressStart2P-Regular.ttf";
+import { Spleen6x12, Spleen6x12Size } from "../components/spleen_6x12.slint";
 
 component LauncherRow inherits Rectangle {
     in property <string> label;
@@ -19,18 +18,18 @@ component LauncherRow inherits Rectangle {
         spacing: 16px;
         cross-axis-alignment: center;
 
-        Start2P {
+        Spleen6x12 {
             width: 32px;
             text: selected ? ">" : "";
             color: #40e5e7;
-            size: Start2PSize.px32;
+            size: Spleen6x12Size.px32;
             vertical-alignment: center;
         }
 
-        Start2P {
+        Spleen6x12 {
             text: label;
             color: selected ? #40e5e7 : #aab0ff;
-            size: Start2PSize.px32;
+            size: Spleen6x12Size.px32;
             vertical-alignment: center;
         }
     }
@@ -41,7 +40,6 @@ export component CrtLauncherMockup inherits Window {
     height: 480px;
     title: "MiSTer MagiK CRT Launcher Mockup";
     background: #020817;
-    default-font-family: "Press Start 2P";
 
     Rectangle {
         x: 16px;
@@ -61,23 +59,23 @@ export component CrtLauncherMockup inherits Window {
             border-width: 2px;
             border-color: #8b94f8;
 
-            Start2P {
+            Spleen6x12 {
                 x: 16px;
                 width: parent.width - 32px;
                 height: parent.height;
                 text: "MiSTer MagiK";
                 color: #aab0ff;
-                size: Start2PSize.px32;
+                size: Spleen6x12Size.px32;
                 vertical-alignment: center;
             }
 
-            Start2P {
+            Spleen6x12 {
                 x: parent.width - 112px;
                 width: 96px;
                 height: parent.height;
                 text: "21:14";
                 color: #aab0ff;
-                size: Start2PSize.px24;
+                size: Spleen6x12Size.px24;
                 horizontal-alignment: right;
                 vertical-alignment: center;
             }

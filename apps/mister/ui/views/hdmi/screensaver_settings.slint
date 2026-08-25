@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "../../components/start2p.slint";
+import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 
 import { FeedbackView, ScreensaverSetting, SettingsView } from "../../api.slint";
@@ -20,7 +20,7 @@ component SaverRow inherits Rectangle {
         padding: 12px;
         spacing: 8px;
         Nocive15 { text: label; color: !enabled ? #686070 : (focused ? #06d6a0 : #e8e0f0); size: Nocive15Size.px15; }
-        Start2P { text: detail; color: enabled ? #a898b8 : #585060; size: Start2PSize.px8; }
+        Spleen6x12 { text: detail; color: enabled ? #a898b8 : #585060; size: Spleen6x12Size.px8; }
     }
 }
 
@@ -28,7 +28,7 @@ export component ScreensaverSettingsScreen inherits Rectangle {
     VerticalLayout {
         padding: 20px;
         spacing: 12px;
-        Start2P { text: "Screensaver"; color: #e8e0f0; size: Start2PSize.px24; horizontal-alignment: center; }
+        Spleen6x12 { text: "Screensaver"; color: #e8e0f0; size: Spleen6x12Size.px24; horizontal-alignment: center; }
         SaverRow {
             label: "Screensaver enabled";
             detail: SettingsView.screensaver-enabled ? "Yes" : "No";

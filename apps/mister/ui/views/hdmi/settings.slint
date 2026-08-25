@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "../../components/start2p.slint";
+import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 
 import { FeedbackView, ScreenOrientation, SettingsSection, SettingsView } from "../../api.slint";
@@ -27,10 +27,10 @@ component SettingsRow inherits Rectangle {
             size: Nocive15Size.px15;
         }
 
-        Start2P {
+        Spleen6x12 {
             text: detail;
             color: #9080a8;
-            size: Start2PSize.px8;
+            size: Spleen6x12Size.px8;
         }
     }
 }
@@ -43,10 +43,10 @@ export component SettingsScreen inherits Rectangle {
             padding: 20px;
             spacing: 8px;
 
-            Start2P {
+            Spleen6x12 {
                 text: "MiSTer MagiK";
                 color: #e8e0f0;
-                size: Start2PSize.px24;
+                size: Spleen6x12Size.px24;
                 horizontal-alignment: center;
             }
 

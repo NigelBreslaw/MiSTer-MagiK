@@ -21,8 +21,6 @@ UI_CRATE = ROOT / "apps/mister/ui-generated"
 
 REQUIRED_BUILD_SCRIPT_FRAGMENTS = (
     'cargo:rerun-if-env-changed=MISTER_UI_BUILD_SCOPE',
-    'cargo:rerun-if-env-changed=SLINT_FONT_SIZES',
-    'std::env::set_var("SLINT_FONT_SIZES", "8,16,24,32")',
     'std::env::var_os("CARGO_FEATURE_BENCH_SCENES")',
     '"launcher" | "arcade" | "production" => true',
     'cargo:rustc-cfg=mister_ui_scope_launcher',
@@ -37,7 +35,7 @@ REQUIRED_BUILD_SCRIPT_FRAGMENTS = (
     '"../ui/mockups/crt_settings_mockup.slint"',
     '"../ui/mockups/crt_systems_list_mockup.slint"',
     '"../ui/experiments/effect_hud.slint"',
-    "slint_build::EmbedResourcesKind::EmbedForSoftwareRenderer",
+    "slint_build::EmbedResourcesKind::EmbedFiles",
     "slint_build::compile_with_config(path, config)",
 )
 
@@ -58,7 +56,6 @@ def run_cargo(manifest: Path, target: Path) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["CARGO_TARGET_DIR"] = str(target)
     environment["MISTER_UI_BUILD_SCOPE"] = "launcher"
-    environment["SLINT_FONT_SIZES"] = "8"
     return subprocess.run(
         [
             "cargo",

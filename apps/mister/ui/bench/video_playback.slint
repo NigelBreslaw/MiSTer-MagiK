@@ -1,16 +1,14 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "../components/start2p.slint";
+import { Spleen6x12, Spleen6x12Size } from "../components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "../components/nocive_15.slint";
 import { MisterWindow, MisterUi } from "../mister_window.slint";
 export { MisterUi }
-export { Start2PSize }
-import "../fonts/PressStart2P-Regular.ttf";
+export { Spleen6x12Size }
 
 export component VideoPlayback inherits MisterWindow {
     background: #090b10;
-    default-font-family: "Press Start 2P";
 
     in-out property <image> frame;
 
@@ -41,11 +39,11 @@ export component VideoPlayback inherits MisterWindow {
         border-radius: 6px;
     }
 
-    Start2P {
+    Spleen6x12 {
         x: 724px;
         y: 104px;
         text: "bench:";
-        size: Start2PSize.px8;
+        size: Spleen6x12Size.px8;
         color: #8fb6ff;
     }
 
@@ -59,12 +57,12 @@ export component VideoPlayback inherits MisterWindow {
         wrap: word-wrap;
     }
 
-    Start2P {
+    Spleen6x12 {
         x: 724px;
         y: 210px;
         width: 172px;
         text: "H.264/AAC MP4 snaps";
-        size: Start2PSize.px8;
+        size: Spleen6x12Size.px8;
         color: #b7c1d6;
         wrap: word-wrap;
     }

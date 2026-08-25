@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "../../components/start2p.slint";
+import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 
 import { AboutSection, FeedbackView, SettingsView } from "../../api.slint";
@@ -21,7 +21,7 @@ component AboutRow inherits Rectangle {
         padding: 10px;
         spacing: 4px;
         Nocive15 { text: label; color: focused ? #06d6a0 : #e8e0f0; size: Nocive15Size.px15; }
-        Start2P { text: detail; color: #9080a8; size: Start2PSize.px8; }
+        Spleen6x12 { text: detail; color: #9080a8; size: Spleen6x12Size.px8; }
     }
 }
 
@@ -29,10 +29,10 @@ export component AboutScreen inherits Rectangle {
     VerticalLayout {
         padding: 48px;
         spacing: 24px;
-        Start2P {
+        Spleen6x12 {
             text: "About";
             color: #06d6a0;
-            size: Start2PSize.px24;
+            size: Spleen6x12Size.px24;
             horizontal-alignment: center;
         }
         Nocive15 {
@@ -71,7 +71,7 @@ export component AboutScreen inherits Rectangle {
             acknowledged: FeedbackView.acknowledged("about", "licenses", FeedbackView.revision);
         }
 
-        Start2P { text: "B: back"; color: #6f8198; size: Start2PSize.px8; horizontal-alignment: center; }
+        Spleen6x12 { text: "B: back"; color: #6f8198; size: Spleen6x12Size.px8; horizontal-alignment: center; }
     }
 
 }

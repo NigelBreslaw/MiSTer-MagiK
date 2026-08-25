@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "components/start2p.slint";
+import { Spleen6x12, Spleen6x12Size } from "components/spleen_6x12.slint";
 
 import { MisterUi } from "mister_window.slint";
 import { FeedbackView, SetupEntry, SetupField, SetupPhase, SetupView } from "api.slint";
@@ -25,7 +25,7 @@ export component SetupOverlay inherits Rectangle {
 
         CrtHeader { title: root.title; subtitle: "Controller setup"; status: ""; }
 
-        if root.phase != SetupPhase.configure : Start2P {
+        if root.phase != SetupPhase.configure : Spleen6x12 {
             text: root.subtitle;
             color: CrtTheme.muted;
             size: MisterUi.crt-body-font;
@@ -61,7 +61,7 @@ export component SetupOverlay inherits Rectangle {
             }
         }
 
-        if root.phase == SetupPhase.configure : Start2P {
+        if root.phase == SetupPhase.configure : Spleen6x12 {
             text: root.subtitle;
             color: CrtTheme.accent;
             size: MisterUi.crt-body-font;

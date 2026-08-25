@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "../components/start2p.slint";
+import { Spleen6x12, Spleen6x12Size } from "../components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "../components/nocive_15.slint";
 
 import { MisterUi } from "../mister_window.slint";
@@ -39,11 +39,11 @@ export component CatalogScanPopup inherits Rectangle {
 
             Rectangle { vertical-stretch: 1; background: transparent; }
 
-            Start2P {
+            Spleen6x12 {
                 width: root.scan-content-width;
                 text: "MiSTer MagiK";
                 color: #06d6a0;
-                size: Start2PSize.px24;
+                size: Spleen6x12Size.px24;
                 horizontal-alignment: center;
             }
 
@@ -56,19 +56,19 @@ export component CatalogScanPopup inherits Rectangle {
                 wrap: word-wrap;
             }
 
-            Start2P {
+            Spleen6x12 {
                 width: root.scan-content-width;
                 text: CatalogView.title;
                 color: #d7eef8;
-                size: Start2PSize.px8;
+                size: Spleen6x12Size.px8;
                 horizontal-alignment: center;
             }
 
-            Start2P {
+            Spleen6x12 {
                 width: root.scan-content-width;
                 text: CatalogView.detail;
                 color: #9080a8;
-                size: Start2PSize.px8;
+                size: Spleen6x12Size.px8;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -77,10 +77,10 @@ export component CatalogScanPopup inherits Rectangle {
                 width: root.scan-progress-width;
                 spacing: 5px;
 
-                Start2P {
+                Spleen6x12 {
                     text: MediaView.summary;
                     color: #d7eef8;
-                    size: Start2PSize.px8;
+                    size: Spleen6x12Size.px8;
                     horizontal-alignment: center;
                 }
 
@@ -112,10 +112,10 @@ export component MediaProgressPopup inherits Rectangle {
         padding-bottom: 8px;
         spacing: 5px;
 
-        Start2P {
+        Spleen6x12 {
             text: MediaView.summary;
             color: #d7eef8;
-            size: Start2PSize.px8;
+            size: Spleen6x12Size.px8;
             horizontal-alignment: center;
         }
 
@@ -133,10 +133,10 @@ export component StartupSplash inherits Rectangle {
         alignment: center;
         spacing: 12px;
 
-        Start2P {
+        Spleen6x12 {
             text: "MiSTer MagiK";
             color: #e8e0f0;
-            size: Start2PSize.px24;
+            size: Spleen6x12Size.px24;
             horizontal-alignment: center;
         }
     }
@@ -156,17 +156,17 @@ export component BackgroundScanBadge inherits Rectangle {
     t := HorizontalLayout {
         alignment: start;
         width: self.preferred-width;
-        Start2P {
+        Spleen6x12 {
             text: "Building library";
             color: #d7eef8;
-            size: Start2PSize.px8;
+            size: Spleen6x12Size.px8;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
-        Start2P {
+        Spleen6x12 {
             text: ".";
             color: CatalogView.progress-dot-visible ? #d7eef8 : transparent;
-            size: Start2PSize.px8;
+            size: Spleen6x12Size.px8;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
@@ -184,10 +184,10 @@ component CompactDialogButton inherits Rectangle {
     border-width: focused ? 2px : 1px;
     border-color: focused ? #06d6a0 : acknowledged ? #4e8f80 : #5a4973;
 
-    Start2P {
+    Spleen6x12 {
         text: root.label;
         color: root.focused ? #06d6a0 : #e8e0f0;
-        size: Start2PSize.px8;
+        size: Spleen6x12Size.px8;
         horizontal-alignment: center;
         vertical-alignment: center;
         wrap: word-wrap;
@@ -220,10 +220,10 @@ export component ConfirmDialog inherits Rectangle {
                 horizontal-alignment: center;
             }
 
-            Start2P {
+            Spleen6x12 {
                 text: OverlayView.confirmation-message;
                 color: #e8e0f0;
-                size: Start2PSize.px8;
+                size: Spleen6x12Size.px8;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -253,18 +253,18 @@ export component ConfirmDialog inherits Rectangle {
             padding: 10px;
             spacing: 8px;
 
-            Start2P {
+            Spleen6x12 {
                 text: OverlayView.confirmation-title;
                 color: #06d6a0;
-                size: Start2PSize.px8;
+                size: Spleen6x12Size.px8;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
 
-            Start2P {
+            Spleen6x12 {
                 text: OverlayView.confirmation-message;
                 color: #e8e0f0;
-                size: Start2PSize.px8;
+                size: Spleen6x12Size.px8;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 wrap: word-wrap;
@@ -305,10 +305,10 @@ export component LoadingOverlay inherits Rectangle {
             horizontal-alignment: center;
         }
 
-        Start2P {
+        Spleen6x12 {
             text: OverlayView.loading-detail != "" ? OverlayView.loading-detail : "Please wait...";
             color: #9080a8;
-            size: Start2PSize.px8;
+            size: Spleen6x12Size.px8;
             horizontal-alignment: center;
         }
     }

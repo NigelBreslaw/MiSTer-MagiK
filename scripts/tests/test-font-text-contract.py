@@ -72,7 +72,7 @@ class ContractTests(unittest.TestCase):
     def test_raw_text_direct_size_and_legacy_api_are_rejected(self) -> None:
         for body, message in (
             ("Text { text: \"bad\"; }", "raw Text is forbidden"),
-            ("Start2P { font-size: 12px; }", "direct font-size is forbidden"),
+            ("Spleen6x12 { font-size: 12px; }", "direct font-size is forbidden"),
             ("PixelText8 { }", "legacy mixed-font text API is forbidden"),
         ):
             with self.assertRaisesRegex(CONTRACT.ContractError, message):

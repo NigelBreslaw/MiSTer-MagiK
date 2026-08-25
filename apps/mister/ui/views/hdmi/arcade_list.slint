@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "../../components/start2p.slint";
+import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
 
 import { MisterUi } from "../../mister_window.slint";
 import { ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane, ArcadeSearchStatus, ArcadeView, FeedbackView, LauncherLayout } from "../../api.slint";
@@ -18,10 +18,10 @@ component SearchKey inherits Rectangle {
     border-color: selected ? (keyboard-focused ? #ffffff : #5c4a72)
         : acknowledged ? #4e8f80 : #352848;
 
-    Start2P {
+    Spleen6x12 {
         text: root.label;
         color: root.selected && root.keyboard-focused ? #101420 : #e8e0f0;
-        size: Start2PSize.px8;
+        size: Spleen6x12Size.px8;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -58,10 +58,10 @@ component SearchKeyboard inherits Rectangle {
         padding: 16px;
         spacing: 10px;
 
-        Start2P {
+        Spleen6x12 {
             text: "Search";
             color: #e8e0f0;
-            size: Start2PSize.px24;
+            size: Spleen6x12Size.px24;
         }
 
         Rectangle {
@@ -70,14 +70,14 @@ component SearchKeyboard inherits Rectangle {
             border-width: ArcadeView.search-pane == ArcadeSearchPane.keyboard ? 2px : 1px;
             border-color: ArcadeView.search-pane == ArcadeSearchPane.keyboard ? #06d6a0 : #352848;
 
-            Start2P {
+            Spleen6x12 {
                 x: 10px;
                 y: 0px;
                 width: parent.width - 20px;
                 height: parent.height;
                 text: ArcadeView.search-query == "" ? "_" : ArcadeView.search-query;
                 color: ArcadeView.search-query == "" ? #706080 : #d7eef8;
-                size: Start2PSize.px8;
+                size: Spleen6x12Size.px8;
                 vertical-alignment: center;
                 overflow: elide;
             }
@@ -101,21 +101,21 @@ component SearchKeyboard inherits Rectangle {
                     border-width: 1px;
                     border-color: ArcadeView.search-suggestion == "" ? #352848 : #ffffff;
 
-                    Start2P {
+                    Spleen6x12 {
                         text: "Y";
                         color: ArcadeView.search-suggestion == "" ? #706080 : #101420;
-                        size: Start2PSize.px8;
+                        size: Spleen6x12Size.px8;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
                 }
 
-                Start2P {
+                Spleen6x12 {
                     text: ArcadeView.search-status == ArcadeSearchStatus.searching ? "Searching..." :
                         (ArcadeView.search-status == ArcadeSearchStatus.failed ? "Search unavailable" :
                         (ArcadeView.search-suggestion == "" ? "" : ArcadeView.search-suggestion));
                     color: ArcadeView.search-suggestion == "" ? #706080 : #d7eef8;
-                    size: Start2PSize.px8;
+                    size: Spleen6x12Size.px8;
                     vertical-alignment: center;
                     overflow: elide;
                     horizontal-stretch: 1;
@@ -202,7 +202,7 @@ export component ArcadeListScreen inherits Rectangle {
                 height: parent.height;
                 background: #131018;
 
-                Start2P {
+                Spleen6x12 {
                     x: 16px;
                     y: 16px;
                     text: ArcadeView.search-status == ArcadeSearchStatus.searching ? "Searching..." :
@@ -210,7 +210,7 @@ export component ArcadeListScreen inherits Rectangle {
                         (count == 0 && ArcadeView.search-status == ArcadeSearchStatus.ready ? "No matches" :
                         count + " matches"));
                     color: ArcadeView.search-pane == ArcadeSearchPane.results ? #06d6a0 : #706080;
-                    size: Start2PSize.px8;
+                    size: Spleen6x12Size.px8;
                 }
 
                 Rectangle {
@@ -223,7 +223,7 @@ export component ArcadeListScreen inherits Rectangle {
                     border-color: ArcadeView.search-pane == ArcadeSearchPane.results ? #06d6a0 : #352848;
                     clip: true;
 
-                    Start2P {
+                    Spleen6x12 {
                         width: parent.width;
                         height: parent.height;
                         visible: ArcadeView.search-status != ArcadeSearchStatus.ready || count == 0;
@@ -231,7 +231,7 @@ export component ArcadeListScreen inherits Rectangle {
                             (ArcadeView.search-status == ArcadeSearchStatus.failed ? "Search unavailable" :
                             (count == 0 ? "No matches" : ""));
                         color: #706080;
-                        size: Start2PSize.px8;
+                        size: Spleen6x12Size.px8;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -285,22 +285,22 @@ export component ArcadeListScreen inherits Rectangle {
         height: LauncherLayout.arcade-list.y * 1px;
         background: #1a1424;
 
-        Start2P {
+        Spleen6x12 {
             x: 16px;
             y: 16px;
             width: parent.width - 32px;
             text: ArcadeView.active-title;
             color: #e8e0f0;
-            size: Start2PSize.px24;
+            size: Spleen6x12Size.px24;
             overflow: elide;
         }
 
-        Start2P {
+        Spleen6x12 {
             x: 16px;
             y: 44px;
             text: root.count + " games";
             color: #706080;
-            size: Start2PSize.px8;
+            size: Spleen6x12Size.px8;
         }
     }
 

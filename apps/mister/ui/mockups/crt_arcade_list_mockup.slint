@@ -1,9 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "../components/start2p.slint";
+import { Spleen6x12, Spleen6x12Size } from "../components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "../components/nocive_15.slint";
-import "../fonts/PressStart2P-Regular.ttf";
 
 component NavHint inherits HorizontalLayout {
     in property <string> button;
@@ -41,7 +40,6 @@ export component CrtArcadeListMockup inherits Window {
     height: 480px;
     title: "MiSTer MagiK CRT Arcade List Mockup";
     background: #020817;
-    default-font-family: "Press Start 2P";
     forward-focus: focus-scope;
 
     in-out property <[string]> games: [
@@ -110,19 +108,19 @@ export component CrtArcadeListMockup inherits Window {
 
                         Rectangle { width: 136px; background: transparent; }
 
-                        Start2P {
+                        Spleen6x12 {
                             text: "Arcade";
                             color: #aaa5ff;
-                            size: Start2PSize.px32;
+                            size: Spleen6x12Size.px32;
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
 
-                        Start2P {
+                        Spleen6x12 {
                             width: 136px;
                             text: "245 / 915";
                             color: #aaa5ff;
-                            size: Start2PSize.px24;
+                            size: Spleen6x12Size.px24;
                             horizontal-alignment: right;
                             vertical-alignment: center;
                         }
@@ -160,13 +158,13 @@ export component CrtArcadeListMockup inherits Window {
                                 border-width: 1px;
                                 border-color: index == root.highlighted-index ? #40e5e7 : #5e59aa;
 
-                                Start2P {
+                                Spleen6x12 {
                                     x: 8px;
                                     width: 24px;
                                     height: parent.height;
                                     text: index == root.highlighted-index ? ">" : "";
                                     color: #03132d;
-                                    size: Start2PSize.px24;
+                                    size: Spleen6x12Size.px24;
                                     vertical-alignment: center;
                                 }
 

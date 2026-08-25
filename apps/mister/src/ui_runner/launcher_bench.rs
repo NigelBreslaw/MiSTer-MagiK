@@ -608,6 +608,7 @@ pub(super) fn sync_setup_bridge(
     }
 }
 
+#[cfg(not(mister_ui_scope_launcher))]
 pub(super) fn sync_bridge_pad_controller(view: &slint_ui::controller::InputView, pad: &PadPool) {
     let state = pad.state();
     let info = pad.info();
@@ -705,6 +706,7 @@ pub(super) fn sync_bridge_pad_launcher(app: &slint_ui::launcher::Launcher, pad: 
     view.set_last_raw_event(state.last_raw.clone().into());
 }
 
+#[cfg(not(mister_ui_scope_launcher))]
 pub(super) fn sync_device_info_controller(
     view: &slint_ui::controller::InputView,
     info: &PadInfo,

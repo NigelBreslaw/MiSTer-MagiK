@@ -491,6 +491,7 @@ fn empty_media_pack_progress_model() -> ModelRc<slint_ui::launcher::MediaPackRow
     ))
 }
 
+#[cfg(not(mister_ui_scope_launcher))]
 pub(super) fn sync_bridge(app: &slint_ui::controller::ControllerTest, pad: &PadPool) {
     sync_bridge_pad_controller(&app.global::<slint_ui::controller::InputView>(), pad);
 }
