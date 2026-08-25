@@ -587,7 +587,7 @@ pub fn run_ui(
                 boot_analytics::event("app_show", "scene=launcher ok=1");
                 window.request_redraw();
                 let mut target = UiFrameTarget::open(frame_target_geometry(&ui));
-                let pad = open_pads();
+                let pad = open_pads_deferred();
                 init_launcher_bridge(&app, &pad);
                 run_launcher_loop(
                     secs,

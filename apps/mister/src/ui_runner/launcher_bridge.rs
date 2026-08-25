@@ -103,6 +103,13 @@ pub(super) fn open_pads() -> PadPool {
     })
 }
 
+pub(super) fn open_pads_deferred() -> PadPool {
+    PadPool::open_deferred().unwrap_or_else(|e| {
+        crate::ui_errln!("failed to initialize deferred gamepad input: {e}");
+        std::process::exit(1);
+    })
+}
+
 pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     let navigation = app.global::<slint_ui::launcher::NavigationView>();
     let information = app.global::<slint_ui::launcher::InformationView>();

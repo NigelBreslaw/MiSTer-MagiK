@@ -136,9 +136,18 @@ pub struct PadPool {
 impl PadPool {
     /// Open joystick and keyboard input nodes and load the controller registry.
     pub fn open_all() -> io::Result<Self> {
+        Self::open_with_initial_discovery(true)
+    }
+
+    /// Start input services without blocking startup on device discovery.
+    pub fn open_deferred() -> io::Result<Self> {
+        Self::open_with_initial_discovery(false)
+    }
+
+    fn open_with_initial_discovery(discover_now: bool) -> io::Result<Self> {
         let mut db = crate::controller_db::ControllerDb::load();
         crate::ui_errln!("controller db: {} entries from {}", db.len(), db.path());
-        let paths = discover_js_devices();
+        let paths = discover_now.then(discover_js_devices).unwrap_or_default();
         let mut pads = Vec::new();
         let mut next_device_generation = 1;
         for path in paths {
@@ -152,12 +161,16 @@ impl PadPool {
                 Err(e) => crate::ui_errln!("pad: skip {path}: {e}"),
             }
         }
-        if pads.is_empty() {
+        if !discover_now {
+            crate::ui_errln!("pad: initial device discovery deferred");
+        } else if pads.is_empty() {
             crate::ui_errln!("pad: no joystick device found; waiting for hotplug");
         } else {
             crate::ui_errln!("pad: listening on {} device(s)", pads.len());
         }
-        let keyboards: Vec<_> = discover_keyboard_devices()
+        let keyboards: Vec<_> = discover_now
+            .then(discover_keyboard_devices)
+            .unwrap_or_default()
             .into_iter()
             .filter_map(|path| match KeyboardReader::open(&path) {
                 Ok(reader) if reader.is_main_proxy => None,
@@ -172,12 +185,16 @@ impl PadPool {
         Ok(Self {
             pads,
             keyboards,
-            mouse: open_mouse_activity(),
+            mouse: discover_now.then(open_mouse_activity).flatten(),
             user_activity: false,
             merged: PadState::default(),
             active_idx: 0,
             db,
-            last_rescan: Instant::now(),
+            last_rescan: if discover_now {
+                Instant::now()
+            } else {
+                Instant::now() - PAD_RESCAN_INTERVAL
+            },
             device_discovery: Some(DeviceDiscovery::start()?),
             input_hub: Some(InputHub::start()),
             next_device_generation,
@@ -365,8 +382,8 @@ impl PadPool {
         let mut changed = false;
         self.user_activity = false;
 
-        self.request_device_discovery_if_due();
         changed |= self.apply_completed_device_discovery();
+        self.request_device_discovery_if_due();
 
         let mut i = 0;
         while i < self.pads.len() {
