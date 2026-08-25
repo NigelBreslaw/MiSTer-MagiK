@@ -426,11 +426,35 @@ pub fn run_ui(
     process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
     launcher_config: mister_magik_fb::process_config::LauncherProcessConfig,
 ) {
+    let (scene, secs) = parse_ui_args();
+    run_ui_scene(f, process_entry_cpu_profile, launcher_config, scene, secs);
+}
+
+pub fn run_supervised_launcher_ui(
+    f: &mut Fpga,
+    process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
+    launcher_config: mister_magik_fb::process_config::LauncherProcessConfig,
+) {
+    run_ui_scene(
+        f,
+        process_entry_cpu_profile,
+        launcher_config,
+        "launcher".to_owned(),
+        0,
+    );
+}
+
+fn run_ui_scene(
+    f: &mut Fpga,
+    process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
+    launcher_config: mister_magik_fb::process_config::LauncherProcessConfig,
+    scene: String,
+    secs: u64,
+) {
     mister_magik_fb::framebuffer::target::configure_dirty_rect_broad_pct(
         launcher_config.display_pacing().dirty_rect_broad_pct(),
     );
     crate::launch_preparation::cleanup_archive_launch_staging();
-    let (scene, secs) = parse_ui_args();
     boot_analytics::event("run_ui_start", format!("scene={scene} secs={secs}"));
     crate::ui_logln!("ui scene={scene} secs={secs}");
     crate::ui_logln!("ui_render_mode=cached");
