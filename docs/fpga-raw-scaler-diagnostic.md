@@ -2,17 +2,20 @@
 
 Status: the functional repair remains unchanged. Schema 7 and both schema-8
 observers failed unchanged local signoff gates and were never installed. The
-disposable schema-10 candidate retains the 16-bit ordered signature, generates
-its response sequence after coherent capture, and samples the native RGB565
-color information. It passed fixed-seed Apple signoff. Phase 2 return 45 was
+schema-10 diagnostic platform candidate retains the 16-bit ordered signature,
+generates its response sequence after coherent capture, and samples the native
+RGB565 color information. It passed fixed-seed Apple signoff and is eligible
+for a numbered platform release under the checked-in
+`experimental_raw_scaler-v1` signoff profile. Phase 2 return 45 was
 initially classified as physical corruption, but native review proved that all
 three stills were normal and the following 749-frame movie was healthy. The
 false positive came from comparing video-range and full-range luma without
 normalization; it supports no FPGA boundary conclusion. The corrected detector
 then completed 75/75 valid physical returns across 15 bounded reboot epochs
 without reproducing a black screen or moving/full-raster corruption. Schema 10
-remains the installed experimental diagnostic; no post-OSD probe is justified
-by the completed rerun. The rejected fits, final reduction, and corrected
+is the platform publication target so ordinary delivery retains the observer
+for the next genuine physical failure. No post-OSD probe was justified by the
+completed rerun. The rejected fits, final reduction, and corrected
 device records are in
 [the storage-reduction receipt](../history/2026-08-25-raw-scaler-signature-storage-reduction.md),
 [the schema-9 design](../history/2026-08-25-raw-scaler-signature-v2-design.md),

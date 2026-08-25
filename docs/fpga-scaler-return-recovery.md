@@ -1,9 +1,12 @@
 # FPGA scaler return recovery design
 
-Status: queued completion repair retained; copy-tail forward repair in local
-proof; not release-qualified.
+Status: queued completion and copy-tail repairs retained; the separately
+qualified schema-10 raw-scaler observer is the platform publication target.
 
-No retired diagnostic RBF is release-qualified. The measured attempts and
+No retired diagnostic RBF is release-qualified. The schema-10
+`raw-scaler-ordered-signature-v3` candidate is not retired: it passed the
+checked-in fixed-seed diagnostic signoff profile and is eligible for numbered
+platform publication so the observer survives ordinary delivery. The measured attempts and
 their disposition remain in
 [FPGA video diagnostics: two attempted designs and their retirement](../history/2026-08-14-fpga-video-diagnostics-design-attempts.md).
 
@@ -168,21 +171,20 @@ gap, reset qualification rejects this candidate.
 
 ## Production diagnostics and readiness
 
-The production RBF contains none of commands `0x60` through `0x67`, no new UIO
-responder, and no repair-health, PLL, pixel, route, or Avalon observer. The latch
-and its protocol-v5 capabilities remain unchanged. Repair-local telemetry may
-return only after a separate factorial build proves it placement-neutral; it is
-not part of this design or a release prerequisite.
+The repair-only platform-v0.29 RBF contains none of commands `0x60` through
+`0x67`, no new UIO responder, and no repair-health, PLL, pixel, route, or Avalon
+observer. The diagnostic-enabled successor adds only read-only `0x67`, schema
+10, `raw-scaler-ordered-signature-v3`; commands `0x60` through `0x66` remain
+unsupported. The latch and its protocol-v5 capabilities remain unchanged.
 
 This deliberately separates correctness proof from field attribution. FPGA
 observers which alter placement cannot qualify the production artifact they are
 meant to describe.
 
-The later experimental `scaler-scheduler-state-v1` attribution candidate is
-not part of this production contract. It preserves this repair unchanged and
-adds only read-only command `0x67`; `0x60` through `0x66` remain unsupported.
-Promotion still requires removing or separately qualifying that observer after
-the captured state identifies the remaining fault.
+The retired `scaler-scheduler-state-v1` attribution candidate is not part of
+this contract. The separately qualified schema-10 raw-scaler ordered-signature
+observer preserves the repair unchanged and is accepted as a platform
+component under its checked-in diagnostic signoff profile.
 
 ### Activation profile
 

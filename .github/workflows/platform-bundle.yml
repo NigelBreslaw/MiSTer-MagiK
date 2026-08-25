@@ -692,6 +692,18 @@ jobs:
         run: |
           set -euo pipefail
           args=()
+          signoff_profile="$(< mister/platform/fpga/menu-vblank-latch/local-signoff-profile.txt)"
+          case "$signoff_profile" in
+            production-v1)
+              ;;
+            experimental_raw_scaler-v1)
+              args+=(--experimental-diagnostic)
+              ;;
+            *)
+              echo "unsupported FPGA signoff profile: $signoff_profile" >&2
+              exit 1
+              ;;
+          esac
           while IFS= read -r -d '' report; do args+=(--stock "$report"); done < <(find build/fpga-signoff/stock -maxdepth 1 -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.summary' \) -print0)
           while IFS= read -r -d '' report; do args+=(--stock "$report"); done < <(find build/fpga-signoff/stock/reports -maxdepth 1 -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.summary' \) -print0)
           while IFS= read -r -d '' report; do args+=(--baseline "$report"); done < <(find build/fpga-signoff/pre-observer -maxdepth 1 -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.summary' \) -print0)

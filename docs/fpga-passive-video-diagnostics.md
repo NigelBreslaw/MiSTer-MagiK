@@ -1,4 +1,4 @@
-# Passive FPGA HDMI evidence (retired production design)
+# Passive FPGA HDMI evidence
 
 The wide and staged FPGA video observers are retired from production. Their
 field evidence was decisive, but every expanded implementation made the dense
@@ -10,23 +10,26 @@ diagnostic opcode removed it still measured `0.072 ns` setup and `0.190 ns`
 hold, below the required `0.428 ns` and `0.200 ns`. It must not be installed or
 published.
 
-Current implementation and qualification policy is
+The repair and qualification policy is documented in
 [FPGA scaler return recovery design](fpga-scaler-return-recovery.md). It selects
 a queued one-bit request/acknowledgement repair which preserves the legacy
-HDMI-side completion cone and keeps all FPGA observer commands out of the
-production RBF.
+HDMI-side completion cone. Platform-v0.29 kept all observer commands out; the
+successor retains the separately qualified schema-10 observer.
 
 The experimental attribution sequence through schema 6 is now retired. Its
 last result isolated a production `sCOPY` line-last tail that could stop before
 the delayed terminal bit reached `o_last2`, permanently preventing `lev_dec_v`.
-The functional repair candidate again exposes no observer: commands `0x60`
-through `0x67` are unsupported, and latch-v5/capabilities `0x03ff` are
-unchanged. The exact repair and proof boundary are in
-[Scaler copy-tail repair](fpga-raw-scaler-diagnostic.md).
+The repair-only platform-v0.29 RBF exposes no observer: commands `0x60`
+through `0x67` are unsupported. The succeeding diagnostic-enabled platform
+candidate adds only the read-only schema-10 `0x67` raw-scaler ordered
+signature; latch-v5 and capabilities `0x03ff` remain unchanged. The exact
+repair, observer, and proof boundary are in
+[Scaler copy-tail repair](fpga-raw-scaler-diagnostic.md). A passing
+`experimental_raw_scaler-v1` Quartus result is a valid numbered platform
+component and is intentionally installed by ordinary delivery.
 
-In archived experimental artifacts, `0x67` is diagnostic evidence, not a
-recovery command or production release requirement. It has no write, clear,
-arm, reset, or freeze operation. The host required three CRC-valid, identical
+`0x67` is diagnostic evidence, not a recovery command. It has no write, clear,
+arm, reset, or freeze operation. The host requires three CRC-valid, identical
 coherent records before classifying completion backlog, idle credit-accounting
 stall, or continuing scheduler progress.
 
