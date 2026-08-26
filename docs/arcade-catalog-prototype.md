@@ -13,13 +13,12 @@ scripts/agent build arcade-catalog-prototype-device
 scripts/agent benchmark arcade-catalog-prototype-cold
 ```
 
-The benchmark is the only authority for timing. Every measured arm performs a
-new supervised Linux reboot, waits for launcher health, suspends the launcher
-through Main's acknowledged command, removes the arm's active output, syncs,
-drops the Linux page, directory-entry, and inode caches, and creates a new
-active catalog. Parallel and single-thread arms must produce byte-identical
-catalogs and equal record counts. Cleanup resumes and health-checks the Dev
-launcher and removes the isolated benchmark root.
+The benchmark is the only authority for timing. It performs a new supervised
+Linux reboot, waits for launcher health, suspends the launcher through Main's
+acknowledged command, removes the active output, syncs, drops the Linux page,
+directory-entry, and inode caches, and creates a new active catalog. Cleanup
+resumes and health-checks the Dev launcher and removes the isolated benchmark
+root.
 
 The runner installs the repository's attended-operation signal guard so an
 interrupt is converted into bounded cleanup rather than terminating after Main
@@ -93,11 +92,11 @@ arcade-catalog-prototype build-active \
 `build` performs both phases and is retained as the stricter end-to-end control.
 `inspect` validates either binary and reports its source checksum and counts.
 
-The cold evidence selects one discovery worker by default. `--parallel-probe`
-is diagnostic: two workers can win in an individual run, but repeated cold
-active builds showed worse and less predictable latency on the measured exFAT
-card. `--full-walk` is the recovery/completeness route for custom MRAs absent
-from Update_All; it is intentionally not the fast default.
+Discovery is unconditionally single-worker. Five reboot-cold comparisons found
+the two-worker implementation slower in every production-shaped active build,
+so it is retained only in the dated evidence and not in the executable.
+`--full-walk` is the recovery/completeness route for custom MRAs absent from
+Update_All; it is intentionally not the fast default.
 
 ## Trust and scope
 

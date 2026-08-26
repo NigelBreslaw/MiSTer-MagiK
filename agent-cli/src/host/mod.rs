@@ -20494,60 +20494,29 @@ fn profile_arcade_catalog_prototype_run(
     }
     drop(session);
 
-    let mut samples = Vec::new();
-    for (arm, parallel_probe) in [("parallel", true), ("single-thread", false)] {
-        samples.push(run_arcade_catalog_prototype_cold_sample(
-            config,
-            output_dir,
-            arm,
-            parallel_probe,
-            &binary_sha256,
-            &base_sha256,
-        )?);
-    }
+    let samples = vec![run_arcade_catalog_prototype_cold_sample(
+        config,
+        output_dir,
+        "single-worker",
+        &binary_sha256,
+        &base_sha256,
+    )?];
     let session = connect_with(&config.connection, 10)?;
     let production_registry_after = catalog_production_registry_identity(&session)?;
     let production_registry_unchanged = production_registry_after == production_registry_before;
     drop(session);
-    let active_outputs_identical = samples
-        .first()
-        .and_then(|sample| sample.get("active_sha256"))
-        == samples
-            .get(1)
-            .and_then(|sample| sample.get("active_sha256"));
-    let record_counts_identical = samples
-        .first()
-        .and_then(|sample| sample.pointer("/report/build/active_records"))
-        == samples
-            .get(1)
-            .and_then(|sample| sample.pointer("/report/build/active_records"));
-    let parallel_total_us = samples
+    let total_us = samples
         .first()
         .and_then(|sample| sample.pointer("/report/total_us"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let single_thread_total_us = samples
-        .get(1)
-        .and_then(|sample| sample.pointer("/report/total_us"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let speedup = if parallel_total_us > 0 {
-        single_thread_total_us as f64 / parallel_total_us as f64
-    } else {
-        0.0
-    };
-    let status = if active_outputs_identical
-        && record_counts_identical
-        && production_registry_unchanged
-        && parallel_total_us > 0
-        && single_thread_total_us > 0
-    {
+    let status = if production_registry_unchanged && total_us > 0 {
         "passed"
     } else {
         "failed"
     };
     let summary = json!({
-        "schema": "mister-magik-arcade-catalog-prototype-cold-v3",
+        "schema": "mister-magik-arcade-catalog-prototype-cold-v4",
         "scenario": "arcade-catalog-prototype-cold",
         "status": status,
         "binary_sha256": binary_sha256,
@@ -20561,15 +20530,13 @@ fn profile_arcade_catalog_prototype_run(
         },
         "samples": samples,
         "validation": {
-            "active_outputs_identical": active_outputs_identical,
-            "record_counts_identical": record_counts_identical,
-            "parallel_over_single_thread_speedup": speedup,
+            "single_worker_policy": true,
         },
     });
     let summary_text = format!("{}\n", serde_json::to_string_pretty(&summary)?);
     fs::write(output_dir.join("summary.json"), &summary_text)?;
     if status != "passed" {
-        return Err("Arcade catalog prototype cold arms did not agree".into());
+        return Err("Arcade catalog prototype cold build did not pass".into());
     }
     Ok(summary_text)
 }
@@ -20578,7 +20545,6 @@ fn run_arcade_catalog_prototype_cold_sample(
     config: &NativeDeviceConfig,
     output_dir: &Path,
     arm: &str,
-    parallel_probe: bool,
     binary_sha256: &str,
     base_sha256: &str,
 ) -> Result<Value> {
@@ -20641,16 +20607,13 @@ fn run_arcade_catalog_prototype_cold_sample(
         &clear_command,
     )?;
     require_catalog_benchmark_active("Arcade prototype active build")?;
-    let mut arguments = vec![
+    let arguments = vec![
         "build-active".to_string(),
         "--base".to_string(),
         ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE.to_string(),
         "--output".to_string(),
         active_remote.clone(),
     ];
-    if parallel_probe {
-        arguments.push("--parallel-probe".to_string());
-    }
     let prototype_command = remote_subcommand(
         ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY,
         &arguments[0],

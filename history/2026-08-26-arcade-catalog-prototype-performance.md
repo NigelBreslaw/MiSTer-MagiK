@@ -10,10 +10,17 @@ Catalog V3 scanner or database writer. On the measured MiSTer corpus it creates
 The strongest complete from-Update_All cold result is 2.311 seconds. The
 production-shaped path, where Update_All knowledge is compiled ahead of boot
 and only the card-specific active catalog is created after reboot, measured
-1.933–2.737 seconds single-threaded across four repeated pairs. Retained
+1.933–2.737 seconds single-threaded across five repeated pairs. Retained
 legacy cold evidence reaches its first Arcade system 8.933–9.575 seconds after
 builder execution begins. The prototype is therefore approximately 3.3–5.0x
 faster depending on which valid cold sample and boundary are compared.
+
+The final v3 assurance run is the delivery authority: 2.617 seconds
+single-threaded versus 2.670 seconds parallel. It additionally proves the exact
+remote artifact hashes, decodes both outputs, binds the result to clean commit
+`6765d9326c37cd651d7f046d3e2d8f8af32d817e`, and confirms that all production
+and Dev Catalog V3 registry manifests are unchanged. Against the retained
+legacy boundary, that final result is 3.41–3.66x faster.
 
 This is a directional comparison, not schema parity. The legacy builder is
 performing broader Catalog V3 discovery and publication, while the prototype
@@ -109,6 +116,7 @@ active-only. The two values are separate reboot arms.
 | Precompiled base, active-only pair 2 | 2.646 s | **2.176 s** | Single worker repeated the production-path win. |
 | Final policy, active-only pair 3 | 2.811 s | **2.737 s** | Exact final commit; 11 ambiguous rows eliminated before card reads. |
 | Hardened final, active-only pair 4 | 2.151 s | **1.933 s** | Exact delivered code; path/type hardening included. |
+| Assurance v3, active-only pair 5 | 2.670 s | **2.617 s** | Exact hashes, decoded outputs, source commit, and Catalog V3 isolation proved. |
 
 The directory-batched complete build reduced the initial 7.209-second parallel
 control by 3.12x. The best single-thread active build reduced the 5.968-second
@@ -133,21 +141,30 @@ known ambiguous rows held join/fallback work to 10 ms, with zero fallbacks and
 the same 1,181 playable records. Total time was 1.933 seconds; the parallel arm
 was 2.151 seconds and produced byte-identical output.
 
+In the v3 assurance pair, the single-thread breakdown was 59.970 ms for base
+decode, 727.453 ms for ROM inventory, 1.593350 seconds for MRA discovery,
+20.096 ms for join, 20.267 ms for selection, and 48.585 ms for the atomic
+write. Total time was 2.616584 seconds, compared with 2.670432 seconds for the
+byte-identical parallel arm.
+
 ## Dual-core conclusion
 
 The Cortex-A9 result is workload-specific. Two directory workers produced one
-excellent complete-build sample, but all four repeated active-only pairs were
+excellent complete-build sample, but all five repeated active-only pairs were
 slower in parallel: 15% slower in pair 1, 22% slower in pair 2, and 3% slower
-in pair 3; the hardened final pair was 11% slower in parallel. Earlier
+in pair 3; the hardened final pair was 11% slower and the v3 assurance pair was
+2% slower in parallel. Earlier
 full-walk and individual-probe controls also favored one worker. The exFAT card
 has enough boot-to-boot latency variance that one favorable pair cannot justify
 a parallel production default.
 
 The selected production policy is one discovery worker. It gives the more
 repeatable cold result and leaves the other core available to Main and the GUI.
-`--parallel-probe` remains available for controlled profiling. Parallelism is
-valuable only where the work is CPU-local or demonstrably independent; adding
-threads to metadata-heavy exFAT access is not inherently an optimization.
+The parallel implementation and command-line option were removed after the
+fifth cold pair; their only remaining value is the historical evidence above.
+Parallelism is valuable only where the work is CPU-local or demonstrably
+independent; adding threads to metadata-heavy exFAT access is not inherently an
+optimization.
 
 ## Size and capability comparison
 
@@ -213,6 +230,7 @@ Evidence directories used by this report:
 - `build/agent-benchmarks/arcade-catalog-prototype-cold/1787727779`
 - `build/agent-benchmarks/arcade-catalog-prototype-cold/1787728394`
 - `build/agent-benchmarks/arcade-catalog-prototype-cold/1787729161`
+- `build/agent-benchmarks/arcade-catalog-prototype-cold/1787730087`
 - `build/agent-benchmarks/cold-boot/1787508360`
 - `build/agent-benchmarks/cold-boot/1787344344`
 - `build/agent-benchmarks/catalog-full-build-rebuild/1787306191`

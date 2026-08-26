@@ -48,7 +48,7 @@ pub struct BuildReport {
     pub base_decode_us: u64,
     pub mra_scan_us: u64,
     pub rom_scan_us: u64,
-    pub parallel_inventory_wall_us: u64,
+    pub inventory_wall_us: u64,
     pub join_and_fallback_us: u64,
     pub selection_us: u64,
     pub fallback_paths: Vec<String>,
@@ -105,7 +105,6 @@ pub fn build_active(
     arcade_root: &Path,
     mame_directories: &[PathBuf],
     hbmame_directories: &[PathBuf],
-    parallel_inventory: bool,
     verify_index_size: bool,
     full_walk: bool,
 ) -> Result<(ActiveCatalog, BuildReport), String> {
@@ -143,17 +142,11 @@ pub fn build_active(
                 })
                 .count();
             let (installed, probe_us) = timed(|| {
-                probe_indexed_candidates(
-                    arcade_root,
-                    &base.candidates,
-                    &roms,
-                    parallel_inventory,
-                    verify_index_size,
-                )
+                probe_indexed_candidates(arcade_root, &base.candidates, &roms, verify_index_size)
             });
             (installed?, probe_us, missing, ambiguous)
         };
-    let parallel_inventory_wall_us = elapsed_us(inventory_started);
+    let inventory_wall_us = elapsed_us(inventory_started);
 
     let join_started = Instant::now();
     let mut fast_path_hits = 0usize;
@@ -250,7 +243,7 @@ pub fn build_active(
         base_decode_us,
         mra_scan_us,
         rom_scan_us,
-        parallel_inventory_wall_us,
+        inventory_wall_us,
         join_and_fallback_us,
         selection_us,
         fallback_paths,
@@ -345,7 +338,6 @@ fn probe_indexed_candidates(
     arcade_root: &Path,
     candidates: &[BaseCandidate],
     roms: &RomInventory,
-    parallel: bool,
     verify_index_size: bool,
 ) -> Result<Vec<InstalledMra>, String> {
     let mut directories = BTreeMap::<PathBuf, Vec<&BaseCandidate>>::new();
@@ -435,25 +427,7 @@ fn probe_indexed_candidates(
         }
         Ok(installed)
     };
-    let mut installed = if parallel && directories.len() > 1 {
-        let middle = directories.len() / 2;
-        let (left, right) = directories.split_at(middle);
-        std::thread::scope(|scope| {
-            let left_worker = scope.spawn(|| probe(left));
-            let right_worker = scope.spawn(|| probe(right));
-            let mut installed = left_worker
-                .join()
-                .map_err(|_| "first updater probe worker panicked".to_string())??;
-            installed.extend(
-                right_worker
-                    .join()
-                    .map_err(|_| "second updater probe worker panicked".to_string())??,
-            );
-            Ok::<_, String>(installed)
-        })?
-    } else {
-        probe(&directories)?
-    };
+    let mut installed = probe(&directories)?;
     installed.sort_by(|left, right| left.path_key.cmp(&right.path_key));
     Ok(installed)
 }

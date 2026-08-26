@@ -2658,11 +2658,11 @@ fn execute_arcade_catalog_prototype_cold(
 
 fn evaluate_arcade_catalog_prototype_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-arcade-catalog-prototype-cold-v3")
+        != Some("mister-magik-arcade-catalog-prototype-cold-v4")
         || summary.get("scenario").and_then(Value::as_str) != Some("arcade-catalog-prototype-cold")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
     {
-        return Err("Arcade catalog prototype benchmark is not a passing v3 report".into());
+        return Err("Arcade catalog prototype benchmark is not a passing v4 report".into());
     }
     let is_digest = |value: Option<&str>| {
         value.is_some_and(|value| {
@@ -2719,11 +2719,9 @@ fn evaluate_arcade_catalog_prototype_summary(summary: &Value) -> AgentResult<()>
         .get("samples")
         .and_then(Value::as_array)
         .ok_or("Arcade catalog prototype benchmark has no samples")?;
-    if samples.len() != 2
-        || samples[0].get("arm").and_then(Value::as_str) != Some("parallel")
-        || samples[1].get("arm").and_then(Value::as_str) != Some("single-thread")
+    if samples.len() != 1 || samples[0].get("arm").and_then(Value::as_str) != Some("single-worker")
     {
-        return Err("Arcade catalog prototype benchmark does not contain both cold arms".into());
+        return Err("Arcade catalog prototype benchmark does not contain its cold build".into());
     }
     for sample in samples {
         if sample.get("reboot_verified").and_then(Value::as_bool) != Some(true)
@@ -2822,15 +2820,11 @@ fn evaluate_arcade_catalog_prototype_summary(summary: &Value) -> AgentResult<()>
         }
     }
     if summary
-        .pointer("/validation/active_outputs_identical")
+        .pointer("/validation/single_worker_policy")
         .and_then(Value::as_bool)
         != Some(true)
-        || summary
-            .pointer("/validation/record_counts_identical")
-            .and_then(Value::as_bool)
-            != Some(true)
     {
-        return Err("Arcade catalog prototype cold arms produced different catalogs".into());
+        return Err("Arcade catalog prototype benchmark did not enforce one worker".into());
     }
     Ok(())
 }
@@ -3177,7 +3171,7 @@ mod tests {
             })
         };
         let passing = json!({
-            "schema": "mister-magik-arcade-catalog-prototype-cold-v3",
+            "schema": "mister-magik-arcade-catalog-prototype-cold-v4",
             "scenario": "arcade-catalog-prototype-cold",
             "status": "passed",
             "source_commit": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
@@ -3193,10 +3187,9 @@ mod tests {
                 "source_sha256": source_sha
             },
             "production_registry": {"unchanged": true},
-            "samples": [sample("parallel"), sample("single-thread")],
+            "samples": [sample("single-worker")],
             "validation": {
-                "active_outputs_identical": true,
-                "record_counts_identical": true
+                "single_worker_policy": true
             }
         });
         assert!(evaluate_arcade_catalog_prototype_summary(&passing).is_ok());
@@ -3210,7 +3203,7 @@ mod tests {
         assert!(evaluate_arcade_catalog_prototype_summary(&invalid).is_err());
 
         let mut invalid = passing;
-        invalid["samples"][1]["remote_binary_sha256_verified"] = json!(false);
+        invalid["samples"][0]["remote_binary_sha256_verified"] = json!(false);
         assert!(evaluate_arcade_catalog_prototype_summary(&invalid).is_err());
     }
 

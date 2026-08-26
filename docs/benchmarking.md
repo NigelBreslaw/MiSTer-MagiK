@@ -18,9 +18,9 @@ correctness stress, not rendering-cadence qualification.
 workflow. Scenarios are a closed typed registry rather than a flag matrix. It
 never builds, deploys, or replaces platform files. The fixed `cold-boot`
 scenario may issue one supervised Linux reboot. The isolated
-`arcade-catalog-prototype-cold` scenario may issue its two hard-coded,
-separately verified reboot arms so parallel and single-thread active builds are
-both cache-cold. All other scenarios must leave the device boot unchanged. The
+`arcade-catalog-prototype-cold` scenario may issue one supervised reboot for a
+fresh single-worker active build. All other scenarios must leave the device
+boot unchanged. The
 installed platform manifest and its hashes are the benchmark identity, and its
 delivery reconciliation against the clean local Git HEAD must be a no-op.
 Host-only benchmark tooling changes therefore do not force an identical runtime
