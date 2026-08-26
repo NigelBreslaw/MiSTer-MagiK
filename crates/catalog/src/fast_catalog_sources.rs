@@ -172,11 +172,10 @@ fn scan_arcade(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<
     let roms = arcade_rom_inventory(storage_root, report);
     let cores = arcade_core_inventory(storage_root, report);
     let mut files = Vec::new();
-    collect_matching_files(
+    collect_arcade_mras(
         &storage_root.join("_Arcade"),
         &mut report.files_visited,
         &mut files,
-        |path| extension_is(path, "mra"),
     );
     let mut games = Vec::new();
     for path in files {
@@ -229,6 +228,59 @@ fn scan_arcade(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<
         games.push(game);
     }
     games
+}
+
+fn collect_arcade_mras(root: &Path, visited: &mut usize, output: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    let mut entries = entries.filter_map(Result::ok).collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
+    for entry in entries {
+        *visited = visited.saturating_add(1);
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if should_ignore_arcade_component(&name) {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if file_type.is_dir() {
+            collect_arcade_mras(&path, visited, output);
+        } else if file_type.is_file()
+            && extension_is(&path, "mra")
+            && !matches!(
+                name.to_ascii_lowercase().as_str(),
+                "neogeo pocket.mra" | "neogeo pocket color.mra"
+            )
+        {
+            output.push(path);
+        }
+    }
+}
+
+fn should_ignore_arcade_component(component: &str) -> bool {
+    (component.len() > 1 && component.starts_with('.'))
+        || [
+            ".____padding_file",
+            "__macosx",
+            "images",
+            "manuals",
+            "media",
+            "cores",
+            "screenshot",
+            "screenshots",
+            "screenshot-magik",
+            "_organized",
+            "boxart",
+        ]
+        .iter()
+        .any(|ignored| component.eq_ignore_ascii_case(ignored))
 }
 
 fn arcade_rom_inventory(

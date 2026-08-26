@@ -527,7 +527,7 @@ pub fn capture_system_watch(
     }
     for root in &specification.scan_roots {
         if root.is_dir() {
-            capture_tree(root, &mut directories, &mut containers)?;
+            capture_tree(root, system_id, &mut directories, &mut containers)?;
         }
     }
     directories.sort_by(|left, right| left.path.cmp(&right.path));
@@ -952,6 +952,7 @@ fn watch_specification(storage_root: &Path, system_id: &str) -> Result<WatchSpec
 
 fn capture_tree(
     root: &Path,
+    system_id: &str,
     directories: &mut Vec<FastWatchedDirectory>,
     containers: &mut Vec<FastWatchedContainer>,
 ) -> Result<(), String> {
@@ -969,12 +970,15 @@ fn capture_tree(
         }
         let path = entry.path();
         if file_type.is_dir() {
-            if let Err(error) = capture_tree(&path, directories, containers)
+            if should_prune_source_directory(&path) {
+                continue;
+            }
+            if let Err(error) = capture_tree(&path, system_id, directories, containers)
                 && path.exists()
             {
                 return Err(error);
             }
-        } else if file_type.is_file() && is_watched_container(&path) {
+        } else if file_type.is_file() && is_watched_container(system_id, &path) {
             match capture_container(&path) {
                 Ok(container) => containers.push(container),
                 Err(error) if path.exists() => return Err(error),
@@ -1059,14 +1063,38 @@ fn core_profile_fingerprint(anchors: &[PathBuf]) -> Result<String, String> {
     Ok(sha256_digest_hex(digest.finalize()))
 }
 
-fn is_watched_container(path: &Path) -> bool {
-    path.extension()
+fn is_watched_container(system_id: &str, path: &Path) -> bool {
+    let extension = path
+        .extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "zip" | "7z" | "mgl" | "mra" | "txt"
-            )
+        .map(str::to_ascii_lowercase);
+    match system_id {
+        "arcade" | "c64" => false,
+        "amiga" => extension.is_some_and(|extension| matches!(extension.as_str(), "7z" | "txt")),
+        "dos" | "x68000" => extension.is_some_and(|extension| extension == "mgl"),
+        _ => extension.is_some_and(|extension| extension == "zip"),
+    }
+}
+
+fn should_prune_source_directory(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            [
+                ".____padding_file",
+                "__macosx",
+                "images",
+                "manuals",
+                "media",
+                "cores",
+                "screenshot",
+                "screenshots",
+                "screenshot-magik",
+                "_organized",
+                "boxart",
+            ]
+            .iter()
+            .any(|ignored| name.eq_ignore_ascii_case(ignored))
         })
 }
 
