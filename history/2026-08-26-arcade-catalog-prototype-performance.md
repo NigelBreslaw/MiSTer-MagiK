@@ -191,6 +191,27 @@ the prototype intentionally omits production features. It demonstrates that a
 small boot-facing Arcade projection is practical, not that Catalog V3 can be
 replaced byte-for-byte.
 
+## Unknown-content recovery test
+
+The v5 cold benchmark copied Update_All, removed `_Arcade/1942 (Revision
+B).mra`, and proved that its MRA, `1942.zip`, and `jt1942` RBF were installed.
+Production Update_All and Catalog V3 files were not changed. Three separate
+reboot-cold arms measured:
+
+| Arm | Time | Records | Result |
+|---|---:|---:|---|
+| Indexed fast | 2.791760 s | 1,181 | Normal control. |
+| Filtered fast | 2.054528 s | 1,180 | Correctly omitted the unknown game. |
+| Filtered full-walk | 3.896135 s | 1,181 | Parsed the unknown MRA and restored the record. |
+
+Full-walk recovery added 1.104375 seconds, or 40%, versus the indexed control;
+it was 1.841607 seconds slower than the filtered fast arm. It found 15 fallback
+MRAs in total, including the deliberately removed target. The recovered output
+was not byte-identical and retained 924 rather than 925 preferred families, so
+discovery is proven but full Catalog V3 family/metadata parity is not. This
+supports a future incremental scan that parses only unknown files instead of a
+whole-tree walk.
+
 ## Promotion gates retained after review
 
 The final independent architecture review found no blocker to retaining or
@@ -242,6 +263,7 @@ Evidence directories used by this report:
 - `build/agent-benchmarks/arcade-catalog-prototype-cold/1787729161`
 - `build/agent-benchmarks/arcade-catalog-prototype-cold/1787730087`
 - `build/agent-benchmarks/arcade-catalog-prototype-cold/1787730871`
+- `build/agent-benchmarks/arcade-catalog-prototype-cold/1787737858`
 - `build/agent-benchmarks/cold-boot/1787508360`
 - `build/agent-benchmarks/cold-boot/1787344344`
 - `build/agent-benchmarks/catalog-full-build-rebuild/1787306191`

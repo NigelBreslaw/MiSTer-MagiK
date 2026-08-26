@@ -132,3 +132,6 @@ production catalog migration.
 
 The dated measurements and legacy comparison are recorded in
 [`history/2026-08-26-arcade-catalog-prototype-performance.md`](../history/2026-08-26-arcade-catalog-prototype-performance.md).
+The retained unknown-content test recovered a deliberately removed installed
+game in 3.896 seconds, 1.104 seconds slower than its reboot-cold indexed
+control. It proves discovery, not identical family/metadata semantics.
