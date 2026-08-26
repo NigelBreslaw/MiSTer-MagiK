@@ -351,11 +351,6 @@ pub fn search_system_shard(
 }
 
 #[cfg(feature = "builder")]
-pub(crate) fn create_schema(connection: &Connection) -> Result<(), PersistedSearchError> {
-    create_schema_with_detail(connection, PersistedSearchDetail::Full)
-}
-
-#[cfg(feature = "builder")]
 pub(crate) fn create_schema_with_detail(
     connection: &Connection,
     detail: PersistedSearchDetail,
@@ -510,14 +505,6 @@ fn merge_autocomplete_words(
         stats.score += source_stats.score;
         stats.source_rank = stats.source_rank.max(source_stats.source_rank);
     }
-}
-
-#[cfg(feature = "builder")]
-pub(crate) fn populate(
-    connection: &Connection,
-    games: &[crate::system_shard::SystemGame],
-) -> Result<PersistedSearchBuildOutcome, PersistedSearchError> {
-    populate_with_options(connection, games, true)
 }
 
 #[cfg(feature = "builder")]
