@@ -166,6 +166,37 @@ library or reconcile changed inputs. Users explicitly request catalog updates
 with Settings → **Rebuild Database**; first-run construction still starts
 automatically when no valid catalog exists.
 
+### Independent fast-catalog refresh prototype
+
+The development fast catalog is an independent nine-system implementation for
+Amiga, Arcade, C64, DOS, Neo Geo, Saturn, SNES, X68000, and ZX Spectrum. It
+does not read Catalog V3 scanner state, builder state, SQLite shards, NavPacks,
+or retired sidecars as source data. Fresh builds obtain rows from Update_All
+plus installed Arcade validation, prepared-collection metadata and launch
+validation, or the generic filesystem adapters.
+
+Each successful system build publishes two separate builder-state files: a
+small watch index and a potentially larger canonical-row snapshot. Their
+checksummed fixed-header postcard envelopes are referenced by a two-slot
+manifest bound to the immutable catalog generation, registry fingerprint, and
+source-adapter version. Catalog SQLite and NavPack artifacts remain the only UI
+and search data; refresh snapshots are disposable builder state.
+
+An explicit update checks all nine watch indexes in two bounded lanes. A true
+no-change result opens no row snapshots and writes no SQLite, NavPack, refresh,
+or catalog manifest. Changed systems are rebuilt independently and only those
+systems receive new SQLite/NavPack artifacts. Unchanged immutable artifact
+references are reused. Catalog publication remains manifest-last, and source
+state is committed afterward; interruption before the source-state commit
+therefore causes conservative reprocessing rather than stale authority.
+
+On exFAT, size and modification time are the stable container identity across
+reboot. Inode and change-time values are retained as diagnostics but are not
+change authority because the device showed that they vary across cold mounts.
+Direct ROM contents are not hashed: their catalog identity is the path. A
+same-path content replacement with preserved metadata requires the explicit
+full-rebuild request.
+
 An update whose public format descriptor is unchanged reuses that published
 catalog directly. An explicitly recognized predecessor format is classified as
 upgrade-required and rebuilt under the current descriptor; incomplete or

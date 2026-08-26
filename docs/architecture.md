@@ -864,6 +864,16 @@ bridge synchronization and drawing. A registered, populated collection may
 never be presented with zero resident rows. The registry's summed counts are
 the full catalog total, while resident rows describe only hydrated memory.
 
+The development fast-catalog path exercises a replacement builder without
+borrowing Catalog V3 discovery state. Its source snapshots sit beside its own
+isolated registry and are never opened by the UI. An explicit update first
+checks versioned per-system watch indexes, then rebuilds and republishes only
+systems whose canonical rows changed. The existing registry stays launchable
+until a manifest-last publication succeeds; the launcher reloads it atomically
+afterward. This prototype preserves the production SQLite-search and
+NavPack-navigation boundary while replacing source discovery and refresh
+planning.
+
 A build without a valid registry enters the first-build lifecycle. Its CPU0
 builder may use the retained Arcade mini-nav to accelerate the first-visible
 projection, but the launcher never treats that index as a catalog seed. A
