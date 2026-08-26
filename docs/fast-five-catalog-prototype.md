@@ -51,3 +51,6 @@ published artifacts.
 Timing comparisons are accepted only from isolated builds after a verified
 supervised reboot. Each old/new sample must build one named system only. Warm,
 forced-rebuild, and whole-card figures are not comparison evidence.
+
+The first exact cold comparison is recorded in
+[`history/2026-08-26-fast-five-cold-comparison.md`](../history/2026-08-26-fast-five-cold-comparison.md).
