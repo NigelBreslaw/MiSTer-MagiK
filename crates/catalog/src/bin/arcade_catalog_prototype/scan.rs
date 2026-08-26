@@ -52,6 +52,43 @@ pub fn scan_installed_mras(
                 continue;
             }
             let path = entry.path();
+            let is_mra = path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("mra"));
+            if is_mra && !is_non_arcade_launcher(&name) {
+                let size = if verify_index_size {
+                    let file_type = entry.file_type().map_err(|error| {
+                        format!("inspect Arcade path {}: {error}", path.display())
+                    })?;
+                    if file_type.is_symlink() || !file_type.is_file() {
+                        continue;
+                    }
+                    Some(
+                        entry
+                            .metadata()
+                            .map_err(|error| {
+                                format!("read Arcade file size {}: {error}", path.display())
+                            })?
+                            .len(),
+                    )
+                } else {
+                    None
+                };
+                let suffix = path
+                    .strip_prefix(arcade_root)
+                    .map_err(|error| format!("make Arcade path relative: {error}"))?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let relative_path = format!("_Arcade/{suffix}");
+                installed.push(InstalledMra {
+                    full_path: path,
+                    path_key: relative_path.to_ascii_lowercase(),
+                    relative_path,
+                    size,
+                });
+                continue;
+            }
             let file_type = entry
                 .file_type()
                 .map_err(|error| format!("inspect Arcade path {}: {error}", path.display()))?;
@@ -67,39 +104,6 @@ pub fn scan_installed_mras(
                 stack.push(path);
                 continue;
             }
-            if !file_type.is_file()
-                || !path
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("mra"))
-                || is_non_arcade_launcher(&name)
-            {
-                continue;
-            }
-            let suffix = path
-                .strip_prefix(arcade_root)
-                .map_err(|error| format!("make Arcade path relative: {error}"))?
-                .to_string_lossy()
-                .replace('\\', "/");
-            let relative_path = format!("_Arcade/{suffix}");
-            let size = if verify_index_size {
-                Some(
-                    entry
-                        .metadata()
-                        .map_err(|error| {
-                            format!("read Arcade file size {}: {error}", path.display())
-                        })?
-                        .len(),
-                )
-            } else {
-                None
-            };
-            installed.push(InstalledMra {
-                full_path: path,
-                path_key: relative_path.to_ascii_lowercase(),
-                relative_path,
-                size,
-            });
         }
     }
     installed.sort_by(|left, right| left.path_key.cmp(&right.path_key));
@@ -140,15 +144,6 @@ fn scan_zip_names(directories: &[PathBuf]) -> Result<HashSet<String>, String> {
             let entry = entry.map_err(|error| {
                 format!("enumerate ROM directory {}: {error}", directory.display())
             })?;
-            let file_type = entry.file_type().map_err(|error| {
-                format!(
-                    "inspect ROM directory entry {}: {error}",
-                    entry.path().display()
-                )
-            })?;
-            if !file_type.is_file() {
-                continue;
-            }
             let path = entry.path();
             if !path
                 .extension()
