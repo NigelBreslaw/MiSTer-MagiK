@@ -13,12 +13,19 @@ scripts/agent build arcade-catalog-prototype-device
 scripts/agent benchmark arcade-catalog-prototype-cold
 ```
 
-The benchmark is the only authority for timing. It performs a new supervised
-Linux reboot, waits for launcher health, suspends the launcher through Main's
-acknowledged command, removes the active output, syncs, drops the Linux page,
-directory-entry, and inode caches, and creates a new active catalog. Cleanup
-resumes and health-checks the Dev launcher and removes the isolated benchmark
-root.
+The benchmark is the only authority for timing. Its normal indexed build,
+filtered fast build, and filtered full-walk recovery each use a separate
+supervised Linux reboot. Every arm waits for launcher health, suspends through
+Main's acknowledged command, removes the active output, syncs, drops the Linux
+page, directory-entry, and inode caches, and creates a new active catalog.
+Cleanup resumes and health-checks the Dev launcher and removes the isolated
+benchmark root.
+
+The recovery test copies the installed Update_All index, removes one game that
+is proved to have an installed MRA, ROM archive, and RBF, and compiles a
+separate filtered base. Fast mode must omit that game. `--full-walk` must parse
+the now-unknown MRA and restore it. Production Update_All and Catalog V3 files
+are never modified.
 
 The runner installs the repository's attended-operation signal guard so an
 interrupt is converted into bounded cleanup rather than terminating after Main
