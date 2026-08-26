@@ -264,7 +264,10 @@ pub fn run_c64_artifact_experiment(
     profile: C64ArtifactExperimentProfile,
     limits: RegistryLimits,
 ) -> Result<C64ArtifactExperimentReport, String> {
-    use crate::shard_registry::publish_system_artifacts;
+    use crate::shard_registry::{
+        publish_prevalidated_system_artifacts_deferred, publish_system_artifacts,
+        sync_artifact_batch,
+    };
     use crate::system_shard::{
         ShardDurability, ShardSqliteTuning, SystemShardData, open_system_shard,
         write_system_shard_with_options,
@@ -337,16 +340,32 @@ pub fn run_c64_artifact_experiment(
         return Err("staged C64 experiment rows differ from the snapshot".to_string());
     }
     let publish_started = Instant::now();
-    let published = publish_system_artifacts(
-        storage_root,
-        &sqlite,
-        &navigation,
-        &system_id,
-        1,
-        source.games.len() as u64,
-        limits,
-    )
-    .map_err(|error| format!("publish C64 experiment shard: {error}"))?;
+    let published = if profile == C64ArtifactExperimentProfile::MediaImmediate {
+        publish_system_artifacts(
+            storage_root,
+            &sqlite,
+            &navigation,
+            &system_id,
+            1,
+            source.games.len() as u64,
+            limits,
+        )
+        .map_err(|error| format!("publish C64 experiment shard: {error}"))?
+    } else {
+        let publication = publish_prevalidated_system_artifacts_deferred(
+            storage_root,
+            &sqlite,
+            &navigation,
+            &system_id,
+            1,
+            source.games.len() as u64,
+            limits,
+        )
+        .map_err(|error| format!("copy C64 experiment shard: {error}"))?;
+        sync_artifact_batch(storage_root)
+            .map_err(|error| format!("sync C64 experiment shard: {error}"))?;
+        publication.generation
+    };
     let publish_us = elapsed_us(publish_started);
     let validate_started = Instant::now();
     let loaded = open_system_shard(
