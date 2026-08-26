@@ -70,7 +70,7 @@ pub struct UpdaterRow {
     pub md5: String,
     pub header: MraHeader,
     pub primary_rom: PrimaryRomRequirement,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_metadata: Option<CatalogMetadata>,
 }
 
