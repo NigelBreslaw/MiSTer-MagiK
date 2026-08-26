@@ -326,11 +326,7 @@ pub fn publish_snapshot(
                 .unwrap_or(u64::MAX),
         });
     }
-    manifest_systems.sort_by(|left, right| {
-        left.order
-            .cmp(&right.order)
-            .then_with(|| left.system_id.cmp(&right.system_id))
-    });
+    manifest_systems.sort_by(|left, right| left.system_id.cmp(&right.system_id));
     let manifest = CatalogManifest {
         format: Some(CatalogFormatDescriptor::current()),
         generation,
