@@ -284,23 +284,32 @@ pub(super) fn catalog_rebuild_started_intent(foreground_update: bool) -> Launche
     ))
 }
 
-pub(super) fn catalog_plan_ready_intent(
-    system_count: usize,
-    all_published_systems: bool,
-) -> LauncherWorkerUiIntent {
+pub(super) fn catalog_system_update_preparing_intent() -> LauncherWorkerUiIntent {
     LauncherWorkerUiIntent::CatalogScan(CatalogScanBridgeStatus::new(
         false,
         true,
         UPDATING_LIBRARY_SCAN_MESSAGE,
-        "Updating library",
-        if all_published_systems {
-            "Updating all library systems".to_string()
+        "Preparing system update",
+        "",
+        -1,
+    ))
+}
+
+pub(super) fn catalog_system_update_progress_intent(
+    completed: usize,
+    total: usize,
+) -> LauncherWorkerUiIntent {
+    let completed = completed.min(total);
+    LauncherWorkerUiIntent::CatalogScan(CatalogScanBridgeStatus::new(
+        false,
+        true,
+        UPDATING_LIBRARY_SCAN_MESSAGE,
+        if total == 0 {
+            "Systems are up to date".to_string()
         } else {
-            format!(
-                "Updating {system_count} system{}",
-                if system_count == 1 { "" } else { "s" }
-            )
+            format!("Updating systems {completed}/{total}")
         },
+        "",
         -1,
     ))
 }

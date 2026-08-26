@@ -9010,10 +9010,7 @@ pub(super) fn run_launcher_loop(
             catalog_view.get_activity() == slint_ui::launcher::CatalogActivity::Foreground;
         let catalog_scan_percent = catalog_view.get_percent();
         let catalog_background_scan_visible = catalog_view.get_background_activity_visible();
-        if let Some(dot_visible) = catalog_scan_blink.update(
-            catalog_scan_visible || catalog_background_scan_visible,
-            loop_start,
-        ) {
+        if let Some(dot_visible) = catalog_scan_blink.update(catalog_scan_visible, loop_start) {
             catalog_view.set_progress_dot_visible(dot_visible);
             request_launcher_redraw!();
         }

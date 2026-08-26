@@ -3,11 +3,13 @@
 
 use super::launcher_worker_intents::{
     CatalogCounterPhase, CatalogProgressUiIntent, CatalogWorkerUiContext, LauncherWorkerUiIntent,
-    cached_catalog_validation_intent, catalog_plan_ready_intent, catalog_rebuild_started_intent,
+    cached_catalog_validation_intent, catalog_rebuild_started_intent,
+    catalog_system_update_preparing_intent, catalog_system_update_progress_intent,
     parse_games_found_detail,
 };
 use super::*;
 use crate::preview_state::SystemEntryPreviewPrelude;
+use std::collections::BTreeSet;
 
 pub(super) struct CatalogWorkerStart {
     pub(super) root: String,
@@ -154,6 +156,8 @@ pub(super) struct LauncherCatalogSession {
     bootstrap_counter_climb_logged: bool,
     bootstrap_counter_sustained_climb_logged: bool,
     full_scan_counter_climb_logged: bool,
+    system_update_total: Option<usize>,
+    completed_system_updates: BTreeSet<String>,
 }
 
 impl LauncherCatalogSession {
@@ -169,6 +173,8 @@ impl LauncherCatalogSession {
             bootstrap_counter_climb_logged: false,
             bootstrap_counter_sustained_climb_logged: false,
             full_scan_counter_climb_logged: false,
+            system_update_total: None,
+            completed_system_updates: BTreeSet::new(),
         }
     }
 
@@ -321,10 +327,9 @@ impl LauncherCatalogSession {
                 system_ids,
                 all_published_systems,
             } => {
-                effects.ui(catalog_plan_ready_intent(
-                    system_ids.len(),
-                    all_published_systems,
-                ));
+                self.system_update_total = Some(system_ids.len());
+                self.completed_system_updates.clear();
+                effects.ui(catalog_system_update_progress_intent(0, system_ids.len()));
                 effects.push(CatalogSessionEffect::CatalogPlanReady {
                     system_ids,
                     all_published_systems,
@@ -346,12 +351,14 @@ impl LauncherCatalogSession {
                 system_id,
                 generation,
             } => {
+                self.note_system_update_terminal(&system_id, &mut effects);
                 effects.push(CatalogSessionEffect::CatalogSystemPrepared {
                     system_id,
                     generation,
                 });
             }
             CatalogWorkerMessage::SystemUpdateFailed { system_id, error } => {
+                self.note_system_update_terminal(&system_id, &mut effects);
                 effects.push(CatalogSessionEffect::CatalogSystemUpdateFailed {
                     system_id: system_id.clone(),
                 });
@@ -570,6 +577,8 @@ impl LauncherCatalogSession {
         self.deferred_worker = None;
         self.refresh_failed = false;
         self.games_found_counter.reset();
+        self.system_update_total = None;
+        self.completed_system_updates.clear();
         effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
         effects
     }
@@ -583,6 +592,8 @@ impl LauncherCatalogSession {
         self.refresh_failed = false;
         self.reset_counter_metrics();
         self.games_found_counter.reset();
+        self.system_update_total = None;
+        self.completed_system_updates.clear();
         effects.push(CatalogSessionEffect::StartCatalogWorker(
             CatalogWorkerStart {
                 root,
@@ -591,7 +602,7 @@ impl LauncherCatalogSession {
                 execution_mode: CatalogExecutionMode::BackgroundInteractive,
             },
         ));
-        effects.ui(catalog_rebuild_started_intent(self.foreground_update));
+        effects.ui(catalog_system_update_preparing_intent());
         effects
     }
 
@@ -607,11 +618,13 @@ impl LauncherCatalogSession {
         self.refresh_failed = false;
         self.reset_counter_metrics();
         self.games_found_counter.reset();
+        self.system_update_total = None;
+        self.completed_system_updates.clear();
         effects.push(CatalogSessionEffect::CatalogPlanReady {
             system_ids: Vec::new(),
             all_published_systems: true,
         });
-        effects.ui(catalog_plan_ready_intent(0, true));
+        effects.ui(catalog_system_update_preparing_intent());
         effects.push(CatalogSessionEffect::StartCatalogWorker(
             CatalogWorkerStart {
                 root,
@@ -669,6 +682,15 @@ impl LauncherCatalogSession {
         if intent.failed {
             self.refresh_failed = true;
         }
+        if !intent.failed
+            && let Some(total) = self.system_update_total
+        {
+            effects.ui(catalog_system_update_progress_intent(
+                self.completed_system_updates.len(),
+                total,
+            ));
+            return;
+        }
         if let Some(counter_target) = intent
             .counter_target
             .filter(|target| counter_climb_target_is_meaningful(target.target))
@@ -703,6 +725,22 @@ impl LauncherCatalogSession {
             .games_found_counter
             .progress_detail(&intent.title, &intent.detail);
         effects.ui(intent.ui_with_detail(detail));
+    }
+
+    fn note_system_update_terminal(
+        &mut self,
+        system_id: &str,
+        effects: &mut CatalogSessionEffects,
+    ) {
+        let Some(total) = self.system_update_total else {
+            return;
+        };
+        if self.completed_system_updates.insert(system_id.to_string()) {
+            effects.ui(catalog_system_update_progress_intent(
+                self.completed_system_updates.len(),
+                total,
+            ));
+        }
     }
 
     fn handle_ready(
@@ -1219,6 +1257,58 @@ mod tests {
                 .into_iter()
                 .any(|effect| matches!(effect, CatalogSessionEffect::CatalogBuildFinished))
         );
+    }
+
+    #[test]
+    fn rebuild_progress_counts_unique_terminal_system_events() {
+        let now = Instant::now();
+        let context = || CatalogWorkerMessageContext {
+            catalog_ready: true,
+            catalog_partial: false,
+            screen: Screen::Home,
+            media_gate: None,
+        };
+        let mut session = LauncherCatalogSession::new(false);
+
+        let planned = catalog_scan_statuses(session.handle_worker_message(
+            context(),
+            CatalogWorkerMessage::ReconciliationPlanReady {
+                system_ids: vec!["neogeo".into(), "snes".into(), "zx-spectrum".into()],
+                all_published_systems: false,
+            },
+            now,
+        ));
+        assert_eq!(planned[0].title(), "Updating systems 0/3");
+
+        let prepared = catalog_scan_statuses(session.handle_worker_message(
+            context(),
+            CatalogWorkerMessage::SystemPrepared {
+                system_id: "snes".into(),
+                generation: 1,
+            },
+            now,
+        ));
+        assert_eq!(prepared[0].title(), "Updating systems 1/3");
+
+        let duplicate = catalog_scan_statuses(session.handle_worker_message(
+            context(),
+            CatalogWorkerMessage::SystemPrepared {
+                system_id: "snes".into(),
+                generation: 1,
+            },
+            now,
+        ));
+        assert!(duplicate.is_empty());
+
+        let failed = catalog_scan_statuses(session.handle_worker_message(
+            context(),
+            CatalogWorkerMessage::SystemUpdateFailed {
+                system_id: "neogeo".into(),
+                error: "bad archive".into(),
+            },
+            now,
+        ));
+        assert_eq!(failed[0].title(), "Updating systems 2/3");
     }
 
     #[test]

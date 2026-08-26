@@ -4227,6 +4227,7 @@ mod macos {
             Scenario::BackgroundScan => {
                 catalog.set_activity(CatalogActivity::Background);
                 catalog.set_background_activity_visible(true);
+                catalog.set_title("Updating systems 12/30".into());
             }
             Scenario::Loading => {
                 overlay.set_loading_state(LoadingState::Active);
