@@ -43,6 +43,8 @@ mod cooperative_work;
 mod core_audit;
 pub mod device_layout;
 mod fallible_log;
+#[cfg(feature = "builder")]
+pub mod fast_catalog_refresh;
 pub mod fast_five_catalog;
 pub mod fs_fault;
 mod game_discovery;
