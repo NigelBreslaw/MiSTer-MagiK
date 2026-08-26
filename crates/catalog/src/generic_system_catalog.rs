@@ -11,7 +11,8 @@
 use crate::catalog_scan::{FoundFile, scan_zip_central_directory};
 use crate::fast_five_catalog::{FastFiveSnapshot, FastFiveSystem, GENERIC_EXAMPLE_SYSTEM_IDS};
 use crate::launch_profiles::{
-    LaunchProfile, MountKind, PayloadDisposition, PayloadRule, ProfilePathClass, ProfileSet,
+    IgnoreReason, IgnoreRule, LaunchProfile, MountKind, MountSpec, PayloadDisposition, PayloadRule,
+    ProfilePathClass, ProfileSet, RuleProvenance,
 };
 use crate::system_shard::{SystemGame, SystemLaunchPlan};
 use serde::Serialize;
@@ -58,19 +59,17 @@ pub fn add_generic_example_systems(
 ) -> Result<(FastFiveSnapshot, GenericSystemScanReport), String> {
     snapshot.validate()?;
     let started = Instant::now();
-    let root_text = storage_root.to_string_lossy().into_owned();
-    let profiles = ProfileSet::for_roots(&[root_text]);
+    let profiles = focused_profiles()?;
     let mut systems = Vec::with_capacity(GENERIC_EXAMPLE_SYSTEM_IDS.len());
     let mut all_signatures = Vec::new();
     let mut reports = Vec::with_capacity(GENERIC_EXAMPLE_SYSTEM_IDS.len());
 
     for system_id in GENERIC_EXAMPLE_SYSTEM_IDS {
-        let matching = profiles
-            .profiles()
+        let profile = profiles
             .iter()
-            .filter(|profile| profile.system_id == system_id)
-            .collect::<Vec<_>>();
-        if matching.is_empty() {
+            .find(|profile| profile.system_id == system_id)
+            .ok_or_else(|| format!("no focused launch profile found for {system_id}"))?;
+        if !core_is_installed(storage_root, profile) {
             return Err(format!(
                 "no installed launch profile found for generic system {system_id}"
             ));
@@ -82,17 +81,15 @@ pub fn add_generic_example_systems(
         };
         let mut scanned = Vec::new();
         let mut visited_roots = BTreeSet::new();
-        for profile in matching.iter().copied() {
-            for game_dir in &profile.game_dirs {
-                let candidate = storage_root.join("games").join(game_dir);
-                if !candidate.is_dir() {
-                    continue;
-                }
-                let root = candidate.canonicalize().unwrap_or(candidate);
-                if visited_roots.insert(root.clone()) {
-                    stats.roots += 1;
-                    scan_directory(&root, profile, &mut stats, &mut scanned);
-                }
+        for game_dir in &profile.game_dirs {
+            let candidate = storage_root.join("games").join(game_dir);
+            if !candidate.is_dir() {
+                continue;
+            }
+            let root = candidate.canonicalize().unwrap_or(candidate);
+            if visited_roots.insert(root.to_string_lossy().to_ascii_lowercase()) {
+                stats.roots += 1;
+                scan_directory(&root, profile, &mut stats, &mut scanned);
             }
         }
         if stats.roots == 0 {
@@ -144,6 +141,98 @@ pub fn add_generic_example_systems(
         systems: reports,
     };
     Ok((snapshot, report))
+}
+
+fn focused_profiles() -> Result<Vec<LaunchProfile>, String> {
+    let all = ProfileSet::all();
+    let mut profiles = Vec::with_capacity(GENERIC_EXAMPLE_SYSTEM_IDS.len());
+    for (system_id, game_dir) in [("neogeo", "NEOGEO"), ("saturn", "Saturn"), ("snes", "SNES")] {
+        let mut profile = all
+            .profiles()
+            .iter()
+            .find(|profile| {
+                profile.system_id == system_id
+                    && profile
+                        .game_dirs
+                        .iter()
+                        .any(|dir| dir.eq_ignore_ascii_case(game_dir))
+            })
+            .cloned()
+            .ok_or_else(|| format!("built-in launch profile is missing for {system_id}"))?;
+        if system_id == "snes" {
+            profile.game_dirs.extend(
+                ["Satellaview", "SGB2", "SNES-Sinden"]
+                    .into_iter()
+                    .map(str::to_string),
+            );
+        }
+        profiles.push(profile);
+    }
+    let spectrum_rule = PayloadRule {
+        extensions: ["sna", "szx", "tap", "tzx", "z80"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        mount: MountSpec::load_file(1),
+        disposition: PayloadDisposition::Playable,
+        provenance: RuleProvenance::conf_str(
+            "Focused ZX Spectrum profile uses the established runtime payload contract",
+        ),
+    };
+    profiles.push(LaunchProfile {
+        id: "runtime-zx-spectrum".to_string(),
+        system_id: "zx-spectrum".to_string(),
+        category: "Computer".to_string(),
+        title: "ZX Spectrum".to_string(),
+        core_name: "ZX-Spectrum".to_string(),
+        core_path: Some("_Computer/ZX-Spectrum".to_string()),
+        game_dirs: vec!["Spectrum".to_string()],
+        payload_rules: vec![spectrum_rule.clone()],
+        archive_entry_rules: vec![spectrum_rule],
+        collection_rules: Vec::new(),
+        ignore_rules: vec![IgnoreRule {
+            file_names: vec!["boot.rom".to_string()],
+            extensions: Vec::new(),
+            reason: IgnoreReason::Bios,
+            provenance: RuleProvenance::magik("boot.rom is Spectrum firmware, not a game"),
+        }],
+        provenance: RuleProvenance::conf_str(
+            "Focused generic scanner profile for the ZX-Spectrum core",
+        ),
+    });
+    Ok(profiles)
+}
+
+fn core_is_installed(storage_root: &Path, profile: &LaunchProfile) -> bool {
+    let Some(core_path) = profile.core_path.as_deref() else {
+        return false;
+    };
+    let relative = Path::new(core_path);
+    let Some(parent) = relative.parent() else {
+        return false;
+    };
+    let Some(expected) = relative.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let Ok(entries) = fs::read_dir(storage_root.join(parent)) else {
+        return false;
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        let path = entry.path();
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("rbf"))
+            && path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(|stem| {
+                    stem.eq_ignore_ascii_case(expected)
+                        || stem
+                            .get(..expected.len())
+                            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(expected))
+                            && stem.as_bytes().get(expected.len()) == Some(&b'_')
+                })
+    })
 }
 
 fn scan_directory(
