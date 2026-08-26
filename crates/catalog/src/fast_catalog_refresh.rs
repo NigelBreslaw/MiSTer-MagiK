@@ -586,13 +586,12 @@ pub fn plan_fast_refresh(
                 "independent-fast-sources-v{}",
                 crate::fast_catalog_sources::FAST_SOURCE_ADAPTER_VERSION
             );
-    let mut references = manifest
+    let references = manifest
         .systems
         .iter()
         .map(|reference| (reference.system_id.as_str(), reference))
         .collect::<std::collections::BTreeMap<_, _>>();
-    let mut checks = Vec::with_capacity(crate::fast_five_catalog::EXPANDED_FAST_SYSTEM_IDS.len());
-    for system_id in crate::fast_five_catalog::EXPANDED_FAST_SYSTEM_IDS {
+    let build_check = |system_id: &'static str| {
         let system_started = std::time::Instant::now();
         let mut check = FastSystemSourceCheck {
             system_id: system_id.to_string(),
@@ -606,7 +605,7 @@ pub fn plan_fast_refresh(
             check.reason = "explicit rebuild-all".to_string();
         } else if !binding_matches {
             check.reason = "refresh state is not bound to the active catalog".to_string();
-        } else if let Some(reference) = references.remove(system_id) {
+        } else if let Some(reference) = references.get(system_id) {
             match read_system_watch(catalog_root, reference) {
                 Ok(watch) => check_watch_index(storage_root, &watch, &mut check),
                 Err(error) => check.reason = format!("watch index unavailable: {error}"),
@@ -619,8 +618,33 @@ pub fn plan_fast_refresh(
             .as_micros()
             .try_into()
             .unwrap_or(u64::MAX);
-        checks.push(check);
-    }
+        check
+    };
+    let systems = crate::fast_five_catalog::EXPANDED_FAST_SYSTEM_IDS;
+    let midpoint = systems.len().div_ceil(2);
+    let checks = std::thread::scope(|scope| {
+        let first = scope.spawn(|| {
+            systems[..midpoint]
+                .iter()
+                .map(|system_id| build_check(system_id))
+                .collect::<Vec<_>>()
+        });
+        let second = scope.spawn(|| {
+            systems[midpoint..]
+                .iter()
+                .map(|system_id| build_check(system_id))
+                .collect::<Vec<_>>()
+        });
+        let mut checks = first
+            .join()
+            .map_err(|_| "first refresh planner lane failed")?;
+        checks.extend(
+            second
+                .join()
+                .map_err(|_| "second refresh planner lane failed")?,
+        );
+        Ok::<_, String>(checks)
+    })?;
     let unchanged = checks
         .iter()
         .filter(|check| check.status == FastSourceCheckStatus::Unchanged)
