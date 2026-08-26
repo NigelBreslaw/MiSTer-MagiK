@@ -530,6 +530,16 @@ pub fn capture_system_watch(
             capture_tree(root, system_id, &mut directories, &mut containers)?;
         }
     }
+    if system_id == "arcade" {
+        for path in [
+            storage_root.join("mister-magik-dev/arcade-updater-index-v1.lz4b"),
+            storage_root.join("mister-magik/arcade-updater-index-v1.lz4b"),
+        ] {
+            if path.is_file() {
+                containers.push(capture_container(&path)?);
+            }
+        }
+    }
     directories.sort_by(|left, right| left.path.cmp(&right.path));
     directories.dedup_by(|left, right| left.path == right.path);
     containers.sort_by(|left, right| left.path.cmp(&right.path));

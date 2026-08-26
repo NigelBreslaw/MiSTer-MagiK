@@ -19,12 +19,12 @@ use crate::prepared_collections::validate_prepared_launch_path;
 use crate::system_shard::{SystemGame, SystemLaunchPlan};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 2;
+pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FastSourceBuildReport {
@@ -173,6 +173,7 @@ fn build_prepared_system(
 fn scan_arcade(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<SystemGame> {
     let roms = arcade_rom_inventory(storage_root, report);
     let cores = arcade_core_inventory(storage_root, report);
+    let updater = arcade_updater_rows(storage_root);
     let mut files = Vec::new();
     collect_arcade_mras(
         &storage_root.join("_Arcade"),
@@ -181,6 +182,63 @@ fn scan_arcade(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<
     );
     let mut games = Vec::new();
     for path in files {
+        let relative = path
+            .strip_prefix(storage_root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/")
+            .to_ascii_lowercase();
+        if let Some(row) = updater.get(&relative) {
+            let valid_rom = match &row.primary_rom {
+                PrimaryRomRequirement::None => true,
+                PrimaryRomRequirement::Archive { namespace, setname } => {
+                    roms.contains(&(rom_namespace_label(namespace), normalize_name(setname)))
+                }
+                PrimaryRomRequirement::Ambiguous => false,
+            };
+            let valid_core = row
+                .header
+                .rbf
+                .as_deref()
+                .map(normalize_name)
+                .filter(|expected| !expected.is_empty())
+                .is_some_and(|expected| cores.iter().any(|core| core.starts_with(&expected)));
+            if !valid_rom || !valid_core {
+                report.invalid += 1;
+                continue;
+            }
+            let title = row
+                .catalog_metadata
+                .as_ref()
+                .map(|metadata| metadata.title.clone())
+                .or_else(|| row.header.name.clone())
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or_else(|| display_name(&path));
+            let mut game = direct_row("arcade", "Arcade", &path, title);
+            game.year = row
+                .catalog_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.year)
+                .or_else(|| {
+                    row.header
+                        .year
+                        .as_deref()
+                        .and_then(|year| year.parse().ok())
+                });
+            game.manufacturer = row
+                .catalog_metadata
+                .as_ref()
+                .map(|metadata| metadata.manufacturer.clone())
+                .or_else(|| row.header.manufacturer.clone())
+                .unwrap_or_default();
+            if let Some(metadata) = &row.catalog_metadata {
+                game.category = metadata.category.clone();
+                game.players = metadata.players;
+                game.control = metadata.control.clone();
+            }
+            games.push(game);
+            continue;
+        }
         let bytes = match fs::read(&path) {
             Ok(bytes) if bytes.len() <= 1024 * 1024 => bytes,
             _ => {
@@ -230,6 +288,25 @@ fn scan_arcade(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<
         games.push(game);
     }
     games
+}
+
+fn arcade_updater_rows(
+    storage_root: &Path,
+) -> BTreeMap<String, crate::arcade_updater_index::ArcadeUpdaterRow> {
+    [
+        storage_root.join("mister-magik-dev/arcade-updater-index-v1.lz4b"),
+        storage_root.join("mister-magik/arcade-updater-index-v1.lz4b"),
+    ]
+    .into_iter()
+    .find_map(|path| crate::arcade_updater_index::ArcadeUpdaterIndex::read(&path).ok())
+    .map(|index| {
+        index
+            .rows
+            .into_iter()
+            .map(|row| (row.path.to_ascii_lowercase(), row))
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 fn collect_arcade_mras(root: &Path, visited: &mut usize, output: &mut Vec<PathBuf>) {
@@ -705,7 +782,7 @@ mod tests {
 
     #[test]
     fn independent_source_set_contains_no_legacy_input_kind() {
-        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 2);
+        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 3);
         assert_eq!(EXPANDED_FAST_SYSTEM_IDS.len(), 9);
     }
 }
