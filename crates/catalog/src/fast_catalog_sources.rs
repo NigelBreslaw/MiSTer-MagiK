@@ -11,7 +11,7 @@ use crate::fast_five_catalog::{
     EXPANDED_FAST_SYSTEM_IDS, FAST_FIVE_SNAPSHOT_SCHEMA, FastFiveSnapshot, FastFiveSystem,
     collapse_c64_cross_source_variants,
 };
-use crate::generic_system_catalog::add_generic_example_systems;
+use crate::generic_system_catalog::{add_generic_example_systems, rebuild_generic_system};
 use crate::mra_header::{PrimaryRomRequirement, RomNamespace};
 use crate::prepared_collections::validate_prepared_launch_path;
 use crate::system_shard::{SystemGame, SystemLaunchPlan};
@@ -91,24 +91,14 @@ pub fn build_independent_fast_snapshot(
 
 pub fn rebuild_independent_system(
     storage_root: &Path,
-    snapshot: &FastFiveSnapshot,
+    _snapshot: &FastFiveSnapshot,
     system_id: &str,
 ) -> Result<(FastFiveSystem, FastSourceSystemReport), String> {
     if !EXPANDED_FAST_SYSTEM_IDS.contains(&system_id) {
         return Err(format!("unsupported fast source system {system_id}"));
     }
     if matches!(system_id, "neogeo" | "saturn" | "snes" | "zx-spectrum") {
-        let (candidate, report) = add_generic_example_systems(storage_root, snapshot.clone())?;
-        let system = candidate
-            .systems
-            .into_iter()
-            .find(|system| system.system_id == system_id)
-            .ok_or_else(|| format!("generic rebuild omitted {system_id}"))?;
-        let report = report
-            .systems
-            .into_iter()
-            .find(|system| system.system_id == system_id)
-            .ok_or_else(|| format!("generic rebuild report omitted {system_id}"))?;
+        let (system, report) = rebuild_generic_system(storage_root, system_id)?;
         return Ok((
             system,
             FastSourceSystemReport {

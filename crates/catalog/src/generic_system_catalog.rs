@@ -43,6 +43,67 @@ pub struct GenericSystemStats {
     pub elapsed_us: u64,
 }
 
+pub fn rebuild_generic_system(
+    storage_root: &Path,
+    system_id: &str,
+) -> Result<(FastFiveSystem, GenericSystemStats), String> {
+    if !GENERIC_EXAMPLE_SYSTEM_IDS.contains(&system_id) {
+        return Err(format!("unsupported generic fast system {system_id}"));
+    }
+    let profiles = focused_profiles()?;
+    let profile = profiles
+        .iter()
+        .find(|profile| profile.system_id == system_id)
+        .ok_or_else(|| format!("no focused launch profile found for {system_id}"))?;
+    if !core_is_installed(storage_root, profile) {
+        return Err(format!(
+            "no installed launch profile found for generic system {system_id}"
+        ));
+    }
+    let started = Instant::now();
+    let mut stats = GenericSystemStats {
+        system_id: system_id.to_string(),
+        ..GenericSystemStats::default()
+    };
+    let mut scanned = Vec::new();
+    let mut visited_roots = BTreeSet::new();
+    for game_dir in &profile.game_dirs {
+        let candidate = storage_root.join("games").join(game_dir);
+        if !candidate.is_dir() {
+            continue;
+        }
+        let root = candidate.canonicalize().unwrap_or(candidate);
+        if visited_roots.insert(root.to_string_lossy().to_ascii_lowercase()) {
+            stats.roots += 1;
+            scan_directory(&root, profile, &mut stats, &mut scanned);
+        }
+    }
+    if stats.roots == 0 {
+        return Err(format!(
+            "generic system {system_id} has an installed profile but no game directory"
+        ));
+    }
+    scanned.sort_by(|left, right| {
+        left.game
+            .title
+            .to_ascii_lowercase()
+            .cmp(&right.game.title.to_ascii_lowercase())
+            .then_with(|| left.game.stable_key.cmp(&right.game.stable_key))
+    });
+    scanned.dedup_by(|left, right| left.game.launch_ref == right.game.launch_ref);
+    stats.games = scanned.len();
+    stats.elapsed_us = started.elapsed().as_micros() as u64;
+    Ok((
+        FastFiveSystem {
+            system_id: system_id.to_string(),
+            display_title: display_title(system_id).to_string(),
+            games: scanned.into_iter().map(|row| row.game).collect(),
+            variants: Vec::new(),
+        },
+        stats,
+    ))
+}
+
 #[derive(Debug)]
 struct ScannedGame {
     game: SystemGame,

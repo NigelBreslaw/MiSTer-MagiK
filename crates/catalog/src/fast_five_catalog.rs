@@ -970,6 +970,34 @@ pub fn publish_snapshot_with_profile(
     limits: RegistryLimits,
     artifact_profile: FastFiveArtifactProfile,
 ) -> Result<FastFivePublishReport, String> {
+    publish_snapshot_selection(storage_root, snapshot, limits, artifact_profile, None)
+}
+
+#[cfg(feature = "builder")]
+pub fn publish_changed_snapshot_with_profile(
+    storage_root: &Path,
+    snapshot: &FastFiveSnapshot,
+    changed_system_ids: &BTreeSet<String>,
+    limits: RegistryLimits,
+    artifact_profile: FastFiveArtifactProfile,
+) -> Result<FastFivePublishReport, String> {
+    publish_snapshot_selection(
+        storage_root,
+        snapshot,
+        limits,
+        artifact_profile,
+        Some(changed_system_ids),
+    )
+}
+
+#[cfg(feature = "builder")]
+fn publish_snapshot_selection(
+    storage_root: &Path,
+    snapshot: &FastFiveSnapshot,
+    limits: RegistryLimits,
+    artifact_profile: FastFiveArtifactProfile,
+    changed_system_ids: Option<&BTreeSet<String>>,
+) -> Result<FastFivePublishReport, String> {
     use crate::catalog_domain::ScanUnitId;
     use crate::catalog_format::CatalogFormatDescriptor;
     use crate::shard_registry::{
@@ -995,6 +1023,46 @@ pub fn publish_snapshot_with_profile(
         }
         Err(_) => None,
     };
+    if changed_system_ids.is_some_and(BTreeSet::is_empty) {
+        let current = current
+            .as_ref()
+            .ok_or_else(|| "selective publication requires an active catalog".to_string())?;
+        return Ok(FastFivePublishReport {
+            artifact_profile,
+            generation: current.generation,
+            systems: snapshot.systems.len(),
+            games: snapshot.game_count(),
+            variants: snapshot.variant_count(),
+            elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+            registry_fingerprint: registry_fingerprint(storage_root, limits)?,
+            copied_bytes: 0,
+            copy_hash_us: 0,
+            system_builds: snapshot
+                .systems
+                .iter()
+                .map(|source| {
+                    let published = current
+                        .systems
+                        .iter()
+                        .find(|system| system.system_id.as_str() == source.system_id)
+                        .ok_or_else(|| format!("active catalog is missing {}", source.system_id))?;
+                    Ok(FastFiveSystemBuildReport {
+                        system_id: source.system_id.clone(),
+                        games: source.games.len(),
+                        variants: source.variants.len(),
+                        sqlite_bytes: published.active.sqlite_bytes,
+                        navigation_bytes: published.active.navigation_bytes,
+                        navpack_bytes: published
+                            .active
+                            .navpack
+                            .as_ref()
+                            .map_or(0, |navpack| navpack.bytes),
+                        elapsed_us: 0,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+        });
+    }
     garbage_collect_unreferenced(
         storage_root,
         current.as_ref().unwrap_or(&CatalogManifest {
@@ -1022,6 +1090,33 @@ pub fn publish_snapshot_with_profile(
         let system_started = Instant::now();
         let system_id = SystemId::parse(&source.system_id)
             .map_err(|error| format!("invalid system {}: {error}", source.system_id))?;
+        if changed_system_ids.is_some_and(|changed| !changed.contains(&source.system_id)) {
+            let published = current
+                .as_ref()
+                .and_then(|manifest| {
+                    manifest
+                        .systems
+                        .iter()
+                        .find(|system| system.system_id == system_id)
+                })
+                .cloned()
+                .ok_or_else(|| format!("active catalog is missing {}", source.system_id))?;
+            system_builds.push(FastFiveSystemBuildReport {
+                system_id: source.system_id.clone(),
+                games: source.games.len(),
+                variants: source.variants.len(),
+                sqlite_bytes: published.active.sqlite_bytes,
+                navigation_bytes: published.active.navigation_bytes,
+                navpack_bytes: published
+                    .active
+                    .navpack
+                    .as_ref()
+                    .map_or(0, |navpack| navpack.bytes),
+                elapsed_us: 0,
+            });
+            manifest_systems.push(published);
+            continue;
+        }
         let stage_all_in_tmpfs = matches!(
             artifact_profile,
             FastFiveArtifactProfile::SinglePass

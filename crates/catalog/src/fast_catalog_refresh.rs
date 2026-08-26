@@ -7,11 +7,11 @@
 //! refresh reads and validates only the manifest and watch indexes; large row
 //! snapshots are opened only after a source change is proven.
 
-use crate::fast_five_catalog::{FastFiveGameVariant, FastFiveSnapshot};
+use crate::fast_five_catalog::{FastFiveGameVariant, FastFiveSnapshot, FastFiveSystem};
 use crate::system_shard::SystemGame;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -138,6 +138,48 @@ pub struct FastRefreshPlanReport {
     pub row_snapshots_opened: usize,
     pub artifact_writes: usize,
     pub checks: Vec<FastSystemSourceCheck>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FastCatalogSystemOutcome {
+    Unchanged,
+    Updated,
+    Removed,
+    FailedRetained,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct FastCatalogSystemRefreshReport {
+    pub system_id: String,
+    pub outcome: FastCatalogSystemOutcome,
+    pub source_status: FastSourceCheckStatus,
+    pub games: u64,
+    pub variants: u64,
+    pub elapsed_us: u64,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct FastCatalogRefreshReport {
+    pub request: FastCatalogRefreshRequest,
+    pub elapsed_us: u64,
+    pub planning_us: u64,
+    pub source_rebuild_us: u64,
+    pub artifact_publish_us: u64,
+    pub snapshot_publish_us: u64,
+    pub systems: usize,
+    pub unchanged: usize,
+    pub updated: usize,
+    pub removed: usize,
+    pub failed_retained: usize,
+    pub row_snapshots_opened: usize,
+    pub artifact_systems_written: usize,
+    pub catalog_generation: u64,
+    pub refresh_generation: u64,
+    pub games: u64,
+    pub system_reports: Vec<FastCatalogSystemRefreshReport>,
+    pub plan: FastRefreshPlanReport,
 }
 
 impl FastRefreshManifest {
@@ -380,6 +422,71 @@ pub fn publish_refresh_state(
     Ok(manifest)
 }
 
+pub fn publish_refresh_update(
+    catalog_root: &Path,
+    previous: &FastRefreshManifest,
+    catalog_generation: u64,
+    catalog_fingerprint: String,
+    updated: &[FastRefreshSystemState],
+) -> Result<FastRefreshManifest, String> {
+    let generation = previous
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| "fast refresh generation overflow".to_string())?;
+    let root = refresh_state_root(catalog_root);
+    fs::create_dir_all(root.join("systems"))
+        .map_err(|error| format!("create refresh state root: {error}"))?;
+    let mut references = previous
+        .systems
+        .iter()
+        .cloned()
+        .map(|reference| (reference.system_id.clone(), reference))
+        .collect::<BTreeMap<_, _>>();
+    for state in updated {
+        state.watch.validate(&state.rows.system_id)?;
+        state.rows.validate(&state.watch.system_id)?;
+        let system_dir = root.join("systems").join(&state.watch.system_id);
+        fs::create_dir_all(&system_dir)
+            .map_err(|error| format!("create {} refresh state: {error}", state.watch.system_id))?;
+        let watch_relative = format!("systems/{}/{generation}.watch", state.watch.system_id);
+        let rows_relative = format!("systems/{}/{generation}.rows", state.watch.system_id);
+        let watch_bytes = encode_envelope(&state.watch, WATCH_MAGIC)?;
+        let rows_bytes = encode_envelope(&state.rows, ROWS_MAGIC)?;
+        write_new_file(&root.join(&watch_relative), &watch_bytes)?;
+        write_new_file(&root.join(&rows_relative), &rows_bytes)?;
+        references.insert(
+            state.watch.system_id.clone(),
+            FastRefreshSystemRef {
+                system_id: state.watch.system_id.clone(),
+                watch_path: watch_relative,
+                watch_sha256: sha256_hex(&watch_bytes),
+                rows_path: rows_relative,
+                rows_sha256: sha256_hex(&rows_bytes),
+                source_fingerprint: source_fingerprint(&state.watch),
+                row_fingerprint: row_fingerprint(&state.rows)?,
+                games: state.rows.games.len().try_into().unwrap_or(u64::MAX),
+                variants: state.rows.variants.len().try_into().unwrap_or(u64::MAX),
+            },
+        );
+    }
+    let manifest = FastRefreshManifest::new(
+        generation,
+        catalog_generation,
+        catalog_fingerprint,
+        previous.builder_identity.clone(),
+        references.into_values().collect(),
+    )?;
+    let bytes = encode_envelope(&manifest, MANIFEST_MAGIC)?;
+    let slot = if generation.is_multiple_of(2) {
+        MANIFEST_A
+    } else {
+        MANIFEST_B
+    };
+    write_replace_file(&root.join(slot), &bytes)?;
+    sync_directory(&root)?;
+    Ok(manifest)
+}
+
 pub fn capture_refresh_state(
     storage_root: &Path,
     snapshot: &FastFiveSnapshot,
@@ -518,6 +625,214 @@ pub fn plan_fast_refresh(
         row_snapshots_opened: 0,
         artifact_writes: 0,
         checks,
+    })
+}
+
+pub fn execute_fast_refresh(
+    storage_root: &Path,
+    catalog_root: &Path,
+    request: FastCatalogRefreshRequest,
+) -> Result<FastCatalogRefreshReport, String> {
+    let started = std::time::Instant::now();
+    let plan = plan_fast_refresh(storage_root, catalog_root, request)?;
+    let planning_us = started.elapsed().as_micros().try_into().unwrap_or(u64::MAX);
+    let previous = read_latest_refresh_manifest(catalog_root)?;
+    let active = crate::shard_registry::read_latest_manifest_lazy(
+        catalog_root,
+        crate::shard_registry::production_registry_limits(),
+    )
+    .map_err(|error| format!("read active fast catalog: {error}"))?;
+    let mut snapshot = FastFiveSnapshot {
+        schema: crate::fast_five_catalog::FAST_FIVE_SNAPSHOT_SCHEMA.to_string(),
+        source_fingerprint: "0".repeat(64),
+        systems: active
+            .systems
+            .iter()
+            .map(|system| FastFiveSystem {
+                system_id: system.system_id.as_str().to_string(),
+                display_title: system.display_title.clone(),
+                games: Vec::new(),
+                variants: Vec::new(),
+            })
+            .collect(),
+    };
+    snapshot
+        .systems
+        .sort_by(|left, right| left.system_id.cmp(&right.system_id));
+    snapshot.validate()?;
+    let previous_refs = previous
+        .systems
+        .iter()
+        .map(|reference| (reference.system_id.as_str(), reference))
+        .collect::<BTreeMap<_, _>>();
+    let source_started = std::time::Instant::now();
+    let mut updated_states = Vec::new();
+    let mut artifact_changes = BTreeSet::new();
+    let mut reports = Vec::with_capacity(plan.systems);
+    for check in &plan.checks {
+        let system_started = std::time::Instant::now();
+        let previous_ref = previous_refs.get(check.system_id.as_str()).copied();
+        if check.status == FastSourceCheckStatus::Unchanged {
+            reports.push(FastCatalogSystemRefreshReport {
+                system_id: check.system_id.clone(),
+                outcome: FastCatalogSystemOutcome::Unchanged,
+                source_status: check.status,
+                games: previous_ref.map_or(0, |reference| reference.games),
+                variants: previous_ref.map_or(0, |reference| reference.variants),
+                elapsed_us: system_started
+                    .elapsed()
+                    .as_micros()
+                    .try_into()
+                    .unwrap_or(u64::MAX),
+                detail: "source identities match".to_string(),
+            });
+            continue;
+        }
+        match crate::fast_catalog_sources::rebuild_independent_system(
+            storage_root,
+            &snapshot,
+            &check.system_id,
+        ) {
+            Ok((system, source_report)) => {
+                let watch = capture_system_watch(storage_root, &check.system_id)?;
+                let rows = FastSystemRowsSnapshot::new(
+                    system.system_id.clone(),
+                    system.games.clone(),
+                    system.variants.clone(),
+                )?;
+                let new_row_fingerprint = row_fingerprint(&rows)?;
+                let rows_changed = previous_ref
+                    .is_none_or(|reference| reference.row_fingerprint != new_row_fingerprint);
+                if rows_changed {
+                    artifact_changes.insert(check.system_id.clone());
+                }
+                if let Some(target) = snapshot
+                    .systems
+                    .iter_mut()
+                    .find(|candidate| candidate.system_id == check.system_id)
+                {
+                    *target = system;
+                }
+                reports.push(FastCatalogSystemRefreshReport {
+                    system_id: check.system_id.clone(),
+                    outcome: if rows_changed {
+                        FastCatalogSystemOutcome::Updated
+                    } else {
+                        FastCatalogSystemOutcome::Unchanged
+                    },
+                    source_status: check.status,
+                    games: rows.games.len().try_into().unwrap_or(u64::MAX),
+                    variants: rows.variants.len().try_into().unwrap_or(u64::MAX),
+                    elapsed_us: system_started
+                        .elapsed()
+                        .as_micros()
+                        .try_into()
+                        .unwrap_or(u64::MAX),
+                    detail: format!(
+                        "rescanned {} files; canonical rows {}",
+                        source_report.files_visited,
+                        if rows_changed { "changed" } else { "unchanged" }
+                    ),
+                });
+                updated_states.push(FastRefreshSystemState { watch, rows });
+            }
+            Err(error) => reports.push(FastCatalogSystemRefreshReport {
+                system_id: check.system_id.clone(),
+                outcome: FastCatalogSystemOutcome::FailedRetained,
+                source_status: check.status,
+                games: previous_ref.map_or(0, |reference| reference.games),
+                variants: previous_ref.map_or(0, |reference| reference.variants),
+                elapsed_us: system_started
+                    .elapsed()
+                    .as_micros()
+                    .try_into()
+                    .unwrap_or(u64::MAX),
+                detail: error,
+            }),
+        }
+    }
+    let source_rebuild_us = source_started
+        .elapsed()
+        .as_micros()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let artifact_started = std::time::Instant::now();
+    if !artifact_changes.is_empty() {
+        crate::fast_five_catalog::publish_changed_snapshot_with_profile(
+            catalog_root,
+            &snapshot,
+            &artifact_changes,
+            crate::shard_registry::production_registry_limits(),
+            crate::fast_five_catalog::FastFiveArtifactProfile::SearchOnly,
+        )?;
+    }
+    let artifact_publish_us = artifact_started
+        .elapsed()
+        .as_micros()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let snapshot_started = std::time::Instant::now();
+    let active = crate::shard_registry::read_latest_manifest_lazy(
+        catalog_root,
+        crate::shard_registry::production_registry_limits(),
+    )
+    .map_err(|error| format!("read refreshed fast catalog: {error}"))?;
+    let refresh_generation = if updated_states.is_empty() {
+        previous.generation
+    } else {
+        publish_refresh_update(
+            catalog_root,
+            &previous,
+            active.generation,
+            crate::fast_five_catalog::registry_fingerprint(
+                catalog_root,
+                crate::shard_registry::production_registry_limits(),
+            )?,
+            &updated_states,
+        )?
+        .generation
+    };
+    let snapshot_publish_us = snapshot_started
+        .elapsed()
+        .as_micros()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let unchanged = reports
+        .iter()
+        .filter(|report| report.outcome == FastCatalogSystemOutcome::Unchanged)
+        .count();
+    let updated = reports
+        .iter()
+        .filter(|report| report.outcome == FastCatalogSystemOutcome::Updated)
+        .count();
+    let removed = reports
+        .iter()
+        .filter(|report| report.outcome == FastCatalogSystemOutcome::Removed)
+        .count();
+    let failed_retained = reports.len().saturating_sub(unchanged + updated + removed);
+    Ok(FastCatalogRefreshReport {
+        request,
+        elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+        planning_us,
+        source_rebuild_us,
+        artifact_publish_us,
+        snapshot_publish_us,
+        systems: reports.len(),
+        unchanged,
+        updated,
+        removed,
+        failed_retained,
+        row_snapshots_opened: 0,
+        artifact_systems_written: artifact_changes.len(),
+        catalog_generation: active.generation,
+        refresh_generation,
+        games: active
+            .systems
+            .iter()
+            .map(|system| system.active.games)
+            .sum(),
+        system_reports: reports,
+        plan,
     })
 }
 
