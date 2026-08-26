@@ -308,7 +308,7 @@ fn c64_search_probe(sqlite_path: &Path, games: &[SystemGame]) -> Result<(u64, St
             fingerprint.update([0]);
         }
     }
-    Ok((elapsed_us(started), hex::encode(fingerprint.finalize())))
+    Ok((elapsed_us(started), hex(&fingerprint.finalize())))
 }
 
 #[cfg(feature = "builder")]
