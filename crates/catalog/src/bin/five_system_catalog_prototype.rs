@@ -11,6 +11,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 fn main() {
     if let Err(error) = run(std::env::args().skip(1).collect()) {
@@ -39,14 +40,34 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
             }))
         }
         "publish" => {
+            let command_started = Instant::now();
             let input = required_path(arguments, "--input")?;
             let output_root = required_path(arguments, "--output-root")?;
             reject_unknown(arguments, &["--input", "--output-root"])?;
-            let snapshot: FastFiveSnapshot = serde_json::from_slice(
-                &fs::read(&input).map_err(|error| format!("read {}: {error}", input.display()))?,
-            )
-            .map_err(|error| format!("decode {}: {error}", input.display()))?;
+            let input_started = Instant::now();
+            let input_bytes =
+                fs::read(&input).map_err(|error| format!("read {}: {error}", input.display()))?;
+            let snapshot: FastFiveSnapshot = serde_json::from_slice(&input_bytes)
+                .map_err(|error| format!("decode {}: {error}", input.display()))?;
+            snapshot.validate()?;
+            let input_read_decode_us = elapsed_us(input_started);
             let report = publish_snapshot(&output_root, &snapshot, production_registry_limits())?;
+            let mut report = serde_json::to_value(report).map_err(|error| error.to_string())?;
+            let object = report
+                .as_object_mut()
+                .ok_or("fast-five publish report is not an object")?;
+            object.insert(
+                "input_bytes".to_string(),
+                serde_json::json!(input_bytes.len()),
+            );
+            object.insert(
+                "input_read_decode_us".to_string(),
+                serde_json::json!(input_read_decode_us),
+            );
+            object.insert(
+                "command_elapsed_us".to_string(),
+                serde_json::json!(elapsed_us(command_started)),
+            );
             print_json(&report)
         }
         "replace-arcade" => {
@@ -204,6 +225,10 @@ fn print_json(value: &impl Serialize) -> Result<(), String> {
         serde_json::to_string(value).map_err(|error| error.to_string())?
     );
     Ok(())
+}
+
+fn elapsed_us(started: Instant) -> u64 {
+    started.elapsed().as_micros().try_into().unwrap_or(u64::MAX)
 }
 
 fn usage() -> String {
