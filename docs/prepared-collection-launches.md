@@ -31,6 +31,28 @@ ORDER BY collection_id, title;
 
 The catalog stamp includes the adapter version and metadata fingerprints for relevant nested MGL, CRT, HDF, and listing files. Runtime preparation validates collection artifacts again before Main handoff so a stale catalog fails safely.
 
+## Prebuilt bundle-helper prototype
+
+The builder feature now contains a standalone exact-release helper model. A
+helper carries precomputed catalog entries, cryptographic receipts for small
+metadata files, size receipts for large owned payloads, and optional inventories
+of launchable paths. An exact match can reuse the precomputed entries without
+re-parsing the collection. Any changed or missing receipt, additional launchable
+file, older layout, partial install, or custom addition rejects the helper and
+calls the normal collection scanner. The helper therefore accelerates only
+content it can positively identify and cannot hide custom content.
+
+AmigaVision can use hashes of its generated game/demo listings and launcher
+MGLs. Neon68K and 0MHz need MGL inventories plus payload receipts. OneLoad64
+needs the primary CRT inventory while continuing to exclude its dump,
+alternative-format, extras, and documentation trees. 0MHz must be treated as a
+per-game manifest rather than a monolithic release because the project is
+explicitly designed for users to pick individual games.
+
+This is not connected to Catalog V3 publication yet. Production integration
+should generate the existing SQLite/NavPack artifacts from helper entries and
+retain the current adapters as the mismatch fallback.
+
 ## Acceptance
 
 Host tests use synthetic payloads only. Device acceptance may launch collections only when they were independently installed by the device owner. It must not download content, reboot the MiSTer, or alter persistent launcher environment files.
