@@ -22,6 +22,42 @@ use std::path::Path;
 
 pub const FAST_FIVE_SNAPSHOT_SCHEMA: &str = "mister-magik-fast-five-snapshot-v1";
 pub const FAST_FIVE_SYSTEM_IDS: [&str; 5] = ["amiga", "arcade", "c64", "dos", "x68000"];
+#[cfg(feature = "builder")]
+const FAST_FIVE_BINARY_MAGIC: &[u8; 8] = b"MGK5SNAP";
+#[cfg(feature = "builder")]
+const FAST_FIVE_BINARY_VERSION: u32 = 1;
+#[cfg(feature = "builder")]
+const FAST_FIVE_BINARY_HEADER_BYTES: usize = 64;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FastFiveSnapshotEncoding {
+    Json,
+    Postcard,
+    PostcardLz4,
+    PostcardMmap,
+}
+
+impl FastFiveSnapshotEncoding {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "json" => Ok(Self::Json),
+            "postcard" => Ok(Self::Postcard),
+            "postcard-lz4" => Ok(Self::PostcardLz4),
+            "postcard-mmap" => Ok(Self::PostcardMmap),
+            _ => Err(format!("unknown fast-five snapshot encoding {value}")),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Postcard => "postcard",
+            Self::PostcardLz4 => "postcard-lz4",
+            Self::PostcardMmap => "postcard-mmap",
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FastFiveSnapshot {
@@ -99,6 +135,104 @@ impl FastFiveSnapshot {
     pub fn game_count(&self) -> usize {
         self.systems.iter().map(|system| system.games.len()).sum()
     }
+}
+
+#[cfg(feature = "builder")]
+pub fn encode_snapshot(
+    snapshot: &FastFiveSnapshot,
+    encoding: FastFiveSnapshotEncoding,
+) -> Result<Vec<u8>, String> {
+    snapshot.validate()?;
+    if encoding == FastFiveSnapshotEncoding::Json {
+        return serde_json::to_vec(snapshot)
+            .map_err(|error| format!("encode snapshot JSON: {error}"));
+    }
+    let payload = postcard::to_allocvec(snapshot)
+        .map_err(|error| format!("encode snapshot postcard: {error}"))?;
+    let stored = if encoding == FastFiveSnapshotEncoding::PostcardLz4 {
+        lz4_flex::compress_prepend_size(&payload)
+    } else {
+        payload.clone()
+    };
+    let stored_len = u64::try_from(stored.len()).map_err(|_| "snapshot is too large")?;
+    let payload_len = u64::try_from(payload.len()).map_err(|_| "snapshot is too large")?;
+    let mut digest = Sha256::new();
+    digest.update(&payload);
+    let mut output = Vec::with_capacity(FAST_FIVE_BINARY_HEADER_BYTES + stored.len());
+    output.extend_from_slice(FAST_FIVE_BINARY_MAGIC);
+    output.extend_from_slice(&FAST_FIVE_BINARY_VERSION.to_le_bytes());
+    output.extend_from_slice(
+        &u32::from(encoding == FastFiveSnapshotEncoding::PostcardLz4).to_le_bytes(),
+    );
+    output.extend_from_slice(&stored_len.to_le_bytes());
+    output.extend_from_slice(&payload_len.to_le_bytes());
+    output.extend_from_slice(&digest.finalize());
+    debug_assert_eq!(output.len(), FAST_FIVE_BINARY_HEADER_BYTES);
+    output.extend_from_slice(&stored);
+    Ok(output)
+}
+
+#[cfg(feature = "builder")]
+pub fn decode_snapshot(
+    bytes: &[u8],
+    encoding: FastFiveSnapshotEncoding,
+) -> Result<FastFiveSnapshot, String> {
+    if encoding == FastFiveSnapshotEncoding::Json {
+        let snapshot = serde_json::from_slice::<FastFiveSnapshot>(bytes)
+            .map_err(|error| format!("decode snapshot JSON: {error}"))?;
+        snapshot.validate()?;
+        return Ok(snapshot);
+    }
+    let header = bytes
+        .get(..FAST_FIVE_BINARY_HEADER_BYTES)
+        .ok_or("fast-five binary snapshot header is truncated")?;
+    if &header[..8] != FAST_FIVE_BINARY_MAGIC {
+        return Err("fast-five binary snapshot magic is invalid".to_string());
+    }
+    if u32::from_le_bytes(header[8..12].try_into().expect("fixed snapshot version"))
+        != FAST_FIVE_BINARY_VERSION
+    {
+        return Err("fast-five binary snapshot version is unsupported".to_string());
+    }
+    let compressed = u32::from_le_bytes(header[12..16].try_into().expect("fixed flags")) == 1;
+    if compressed != (encoding == FastFiveSnapshotEncoding::PostcardLz4) {
+        return Err("fast-five binary snapshot encoding does not match its header".to_string());
+    }
+    let stored_len = usize::try_from(u64::from_le_bytes(
+        header[16..24].try_into().expect("fixed stored length"),
+    ))
+    .map_err(|_| "fast-five binary snapshot stored length is too large")?;
+    let payload_len = usize::try_from(u64::from_le_bytes(
+        header[24..32].try_into().expect("fixed payload length"),
+    ))
+    .map_err(|_| "fast-five binary snapshot payload length is too large")?;
+    let stored = bytes
+        .get(FAST_FIVE_BINARY_HEADER_BYTES..)
+        .ok_or("fast-five binary snapshot payload is truncated")?;
+    if stored.len() != stored_len {
+        return Err("fast-five binary snapshot stored length is inconsistent".to_string());
+    }
+    let decoded;
+    let payload = if compressed {
+        decoded = lz4_flex::decompress_size_prepended(stored)
+            .map_err(|error| format!("decompress snapshot postcard: {error}"))?;
+        decoded.as_slice()
+    } else {
+        stored
+    };
+    if payload.len() != payload_len {
+        return Err("fast-five binary snapshot payload length is inconsistent".to_string());
+    }
+    let mut digest = Sha256::new();
+    digest.update(payload);
+    let actual: [u8; 32] = digest.finalize().into();
+    if actual != header[32..64] {
+        return Err("fast-five binary snapshot checksum differs".to_string());
+    }
+    let snapshot = postcard::from_bytes::<FastFiveSnapshot>(payload)
+        .map_err(|error| format!("decode snapshot postcard: {error}"))?;
+    snapshot.validate()?;
+    Ok(snapshot)
 }
 
 pub fn registry_fingerprint(storage_root: &Path, limits: RegistryLimits) -> Result<String, String> {
@@ -188,11 +322,14 @@ pub fn replace_arcade_from_active(
 #[cfg(feature = "builder")]
 #[derive(Clone, Debug, Serialize)]
 pub struct FastFivePublishReport {
+    pub artifact_profile: FastFiveArtifactProfile,
     pub generation: u64,
     pub systems: usize,
     pub games: usize,
     pub elapsed_us: u64,
     pub registry_fingerprint: String,
+    pub copied_bytes: u64,
+    pub copy_hash_us: u64,
     pub system_builds: Vec<FastFiveSystemBuildReport>,
 }
 
@@ -201,7 +338,57 @@ pub struct FastFivePublishReport {
 pub struct FastFiveSystemBuildReport {
     pub system_id: String,
     pub games: usize,
+    pub sqlite_bytes: u64,
+    pub navigation_bytes: u64,
+    pub navpack_bytes: u64,
     pub elapsed_us: u64,
+}
+
+#[cfg(feature = "builder")]
+#[derive(Clone, Debug, Serialize)]
+pub struct FastFiveVerificationReport {
+    pub status: &'static str,
+    pub systems: usize,
+    pub games: usize,
+    pub changed: usize,
+}
+
+#[cfg(feature = "builder")]
+#[derive(Clone, Debug, Serialize)]
+pub struct FastFiveSearchProbeReport {
+    pub queries: usize,
+    pub elapsed_us: u64,
+    pub fingerprint: String,
+}
+
+#[cfg(feature = "builder")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FastFiveArtifactProfile {
+    #[default]
+    Legacy,
+    SinglePass,
+    NoEmbeddedNavigation,
+    NoAdjacentNavigation,
+    NavpackOnly,
+    SearchOnly,
+    SearchDetailNone,
+}
+
+#[cfg(feature = "builder")]
+impl FastFiveArtifactProfile {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "legacy" => Ok(Self::Legacy),
+            "single-pass" => Ok(Self::SinglePass),
+            "no-embedded-navigation" => Ok(Self::NoEmbeddedNavigation),
+            "no-adjacent-navigation" => Ok(Self::NoAdjacentNavigation),
+            "navpack-only" => Ok(Self::NavpackOnly),
+            "search-only" => Ok(Self::SearchOnly),
+            "search-detail-none" => Ok(Self::SearchDetailNone),
+            _ => Err(format!("unknown fast-five artifact profile {value}")),
+        }
+    }
 }
 
 #[cfg(feature = "builder")]
@@ -483,6 +670,21 @@ pub fn publish_snapshot(
     snapshot: &FastFiveSnapshot,
     limits: RegistryLimits,
 ) -> Result<FastFivePublishReport, String> {
+    publish_snapshot_with_profile(
+        storage_root,
+        snapshot,
+        limits,
+        FastFiveArtifactProfile::Legacy,
+    )
+}
+
+#[cfg(feature = "builder")]
+pub fn publish_snapshot_with_profile(
+    storage_root: &Path,
+    snapshot: &FastFiveSnapshot,
+    limits: RegistryLimits,
+    artifact_profile: FastFiveArtifactProfile,
+) -> Result<FastFivePublishReport, String> {
     use crate::catalog_domain::ScanUnitId;
     use crate::catalog_format::CatalogFormatDescriptor;
     use crate::shard_registry::{
@@ -491,7 +693,8 @@ pub fn publish_snapshot(
         sync_artifact_batch,
     };
     use crate::system_shard::{
-        ShardDurability, SystemShardData, write_system_shard, write_system_shard_with_durability,
+        ShardArtifactProfile, ShardDurability, SystemShardData, write_system_shard,
+        write_system_shard_with_artifact_profile, write_system_shard_with_durability,
     };
     use std::fs;
     use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -528,12 +731,21 @@ pub fn publish_snapshot(
         .as_nanos();
     let mut manifest_systems = Vec::with_capacity(snapshot.systems.len());
     let mut system_builds = Vec::with_capacity(snapshot.systems.len());
+    let mut copied_bytes = 0u64;
+    let mut copy_hash_us = 0u64;
     for source in &snapshot.systems {
         let system_started = Instant::now();
         let system_id = SystemId::parse(&source.system_id)
             .map_err(|error| format!("invalid system {}: {error}", source.system_id))?;
-        let stage_c64_in_tmpfs = cfg!(target_os = "linux") && source.system_id == "c64";
-        let staging_parent = if stage_c64_in_tmpfs {
+        let stage_all_in_tmpfs = matches!(
+            artifact_profile,
+            FastFiveArtifactProfile::SinglePass
+                | FastFiveArtifactProfile::SearchOnly
+                | FastFiveArtifactProfile::SearchDetailNone
+        );
+        let stage_in_tmpfs =
+            cfg!(target_os = "linux") && (stage_all_in_tmpfs || source.system_id == "c64");
+        let staging_parent = if stage_in_tmpfs {
             std::path::PathBuf::from("/tmp/mister-magik/fast-five-catalog")
         } else {
             storage_root.join("staging")
@@ -553,7 +765,21 @@ pub fn publish_snapshot(
             projection_stats: None,
             games: source.games.clone(),
         };
-        if stage_c64_in_tmpfs {
+        let shard_profile = match artifact_profile {
+            FastFiveArtifactProfile::Legacy | FastFiveArtifactProfile::SinglePass => {
+                ShardArtifactProfile::Legacy
+            }
+            FastFiveArtifactProfile::NoEmbeddedNavigation => {
+                ShardArtifactProfile::NoEmbeddedNavigation
+            }
+            FastFiveArtifactProfile::NoAdjacentNavigation => {
+                ShardArtifactProfile::NoAdjacentNavigation
+            }
+            FastFiveArtifactProfile::NavpackOnly => ShardArtifactProfile::NavpackOnly,
+            FastFiveArtifactProfile::SearchOnly => ShardArtifactProfile::SearchOnly,
+            FastFiveArtifactProfile::SearchDetailNone => ShardArtifactProfile::SearchDetailNone,
+        };
+        if artifact_profile == FastFiveArtifactProfile::Legacy && stage_in_tmpfs {
             write_system_shard_with_durability(
                 &sqlite,
                 &navigation,
@@ -561,11 +787,20 @@ pub fn publish_snapshot(
                 limits.shard,
                 ShardDurability::Immediate,
             )
-        } else {
+        } else if artifact_profile == FastFiveArtifactProfile::Legacy {
             write_system_shard(&sqlite, &navigation, &data, limits.shard)
+        } else {
+            write_system_shard_with_artifact_profile(
+                &sqlite,
+                &navigation,
+                data,
+                limits.shard,
+                ShardDurability::Immediate,
+                shard_profile,
+            )
         }
         .map_err(|error| format!("write {} shard: {error}", source.system_id))?;
-        let active = if stage_c64_in_tmpfs {
+        let active = if stage_in_tmpfs || artifact_profile != FastFiveArtifactProfile::Legacy {
             let publication = publish_prevalidated_system_artifacts_deferred(
                 storage_root,
                 &sqlite,
@@ -576,8 +811,14 @@ pub fn publish_snapshot(
                 limits,
             )
             .map_err(|error| format!("publish {} shard: {error}", source.system_id))?;
-            sync_artifact_batch(storage_root)
-                .map_err(|error| format!("sync {} shard: {error}", source.system_id))?;
+            copied_bytes = copied_bytes.saturating_add(publication.copied_bytes);
+            copy_hash_us = copy_hash_us.saturating_add(
+                publication
+                    .copy_hash_time
+                    .as_micros()
+                    .try_into()
+                    .unwrap_or(u64::MAX),
+            );
             publication.generation
         } else {
             publish_system_artifacts(
@@ -600,6 +841,9 @@ pub fn publish_snapshot(
                 .map(|system| system.active.clone())
         });
         let definition = system_definition(&source.system_id);
+        let active_sqlite_bytes = active.sqlite_bytes;
+        let active_navigation_bytes = active.navigation_bytes;
+        let active_navpack_bytes = active.navpack.as_ref().map_or(0, |navpack| navpack.bytes);
         manifest_systems.push(ManifestSystem {
             system_id,
             display_title: source.display_title.clone(),
@@ -623,6 +867,9 @@ pub fn publish_snapshot(
         system_builds.push(FastFiveSystemBuildReport {
             system_id: source.system_id.clone(),
             games: source.games.len(),
+            sqlite_bytes: active_sqlite_bytes,
+            navigation_bytes: active_navigation_bytes,
+            navpack_bytes: active_navpack_bytes,
             elapsed_us: system_started
                 .elapsed()
                 .as_micros()
@@ -630,6 +877,8 @@ pub fn publish_snapshot(
                 .unwrap_or(u64::MAX),
         });
     }
+    sync_artifact_batch(storage_root)
+        .map_err(|error| format!("sync fast-five artifacts: {error}"))?;
     manifest_systems.sort_by(|left, right| left.system_id.cmp(&right.system_id));
     let manifest = CatalogManifest {
         format: Some(CatalogFormatDescriptor::current()),
@@ -641,12 +890,183 @@ pub fn publish_snapshot(
     garbage_collect_unreferenced(storage_root, &manifest)
         .map_err(|error| format!("collect fast-five artifacts: {error}"))?;
     Ok(FastFivePublishReport {
+        artifact_profile,
         generation,
         systems: snapshot.systems.len(),
         games: snapshot.game_count(),
         elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
         registry_fingerprint: registry_fingerprint(storage_root, limits)?,
+        copied_bytes,
+        copy_hash_us,
         system_builds,
+    })
+}
+
+#[cfg(feature = "builder")]
+pub fn verify_snapshot_artifacts(
+    storage_root: &Path,
+    snapshot: &FastFiveSnapshot,
+    limits: RegistryLimits,
+) -> Result<FastFiveVerificationReport, String> {
+    use crate::navpack::MappedNavPack;
+    use crate::system_shard::SystemLaunchPlan;
+    use rusqlite::Connection;
+
+    snapshot.validate()?;
+    let manifest = read_latest_manifest_lazy(storage_root, limits)
+        .map_err(|error| format!("read candidate manifest: {error}"))?;
+    let mut changed = 0usize;
+    let mut games = 0usize;
+    for source in &snapshot.systems {
+        let system_id = SystemId::parse(&source.system_id).map_err(|error| error.to_string())?;
+        let system = manifest
+            .systems
+            .iter()
+            .find(|candidate| candidate.system_id == system_id)
+            .ok_or_else(|| format!("candidate is missing {}", source.system_id))?;
+        let navpack = system
+            .active
+            .navpack
+            .as_ref()
+            .ok_or_else(|| format!("candidate {} has no NavPack", source.system_id))?;
+        let (mapped, _) = MappedNavPack::open(
+            &storage_root.join(&navpack.path),
+            navpack.bytes,
+            &source.system_id,
+            system.active.generation,
+            source.games.len(),
+        )?;
+        let connection = Connection::open(storage_root.join(&system.active.sqlite_path))
+            .map_err(|error| format!("open candidate {} SQLite: {error}", source.system_id))?;
+        let has_full_games: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='games')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("inspect candidate {} SQLite: {error}", source.system_id))?;
+        let identity_sql = if has_full_games {
+            "SELECT stable_key FROM games ORDER BY ordinal"
+        } else {
+            "SELECT stable_key FROM game_identity ORDER BY ordinal"
+        };
+        let mut statement = connection.prepare(identity_sql).map_err(|error| {
+            format!("prepare candidate {} identities: {error}", source.system_id)
+        })?;
+        let stable_keys = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| format!("query candidate {} identities: {error}", source.system_id))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("read candidate {} identities: {error}", source.system_id))?;
+        if stable_keys.len() != source.games.len() {
+            return Err(format!(
+                "candidate {} identity count differs",
+                source.system_id
+            ));
+        }
+        for (ordinal, expected) in source.games.iter().enumerate() {
+            let row = mapped.row(ordinal)?;
+            let metadata = mapped.metadata(ordinal)?;
+            let launch_plan = row
+                .launch_index
+                .map(|index| {
+                    let launch = mapped.launch(index)?;
+                    Ok::<_, String>(SystemLaunchPlan {
+                        launch_ref: launch.launch_ref.to_string(),
+                        title: launch.title.to_string(),
+                        system_id: launch.system_id.to_string(),
+                        core_path: launch.core_path.to_string(),
+                        payload_path: launch.payload_path.to_string(),
+                        mount_kind: launch.mount_kind.to_string(),
+                        mount_index: launch.mount_index,
+                        delay_secs: launch.delay_secs,
+                    })
+                })
+                .transpose()?;
+            let actual = SystemGame {
+                stable_key: stable_keys[ordinal].clone(),
+                title: row.title.to_string(),
+                launch_ref: row.launch_ref.to_string(),
+                preview_archive_path: row.preview_archive_path.to_string(),
+                preview_asset_key: row.preview_asset_key.to_string(),
+                has_preview: row.has_preview,
+                year: metadata.year,
+                manufacturer: metadata.manufacturer.to_string(),
+                category: metadata.category.to_string(),
+                players: metadata.players,
+                control: metadata.control.to_string(),
+                is_new: row.is_new,
+                launch_plan,
+            };
+            changed = changed.saturating_add(usize::from(&actual != expected));
+        }
+        games = games.saturating_add(source.games.len());
+    }
+    Ok(FastFiveVerificationReport {
+        status: if changed == 0 { "exact" } else { "different" },
+        systems: snapshot.systems.len(),
+        games,
+        changed,
+    })
+}
+
+#[cfg(feature = "builder")]
+pub fn fast_five_search_probe(
+    storage_root: &Path,
+    snapshot: &FastFiveSnapshot,
+    limits: RegistryLimits,
+) -> Result<FastFiveSearchProbeReport, String> {
+    use std::time::Instant;
+
+    let started = Instant::now();
+    let manifest = read_latest_manifest_lazy(storage_root, limits)
+        .map_err(|error| format!("read search candidate manifest: {error}"))?;
+    let mut digest = Sha256::new();
+    let mut query_count = 0usize;
+    for source in &snapshot.systems {
+        let system_id = SystemId::parse(&source.system_id).map_err(|error| error.to_string())?;
+        let system = manifest
+            .systems
+            .iter()
+            .find(|candidate| candidate.system_id == system_id)
+            .ok_or_else(|| format!("search candidate is missing {}", source.system_id))?;
+        let mut queries = source
+            .games
+            .iter()
+            .step_by((source.games.len() / 4).max(1))
+            .take(4)
+            .filter_map(|game| {
+                game.title
+                    .split(|character: char| !character.is_alphanumeric())
+                    .find(|word| word.chars().count() >= 3)
+                    .map(str::to_lowercase)
+            })
+            .collect::<Vec<_>>();
+        queries.sort();
+        queries.dedup();
+        for query in queries {
+            let result = crate::persisted_search::search_system_shard(
+                &storage_root.join(&system.active.sqlite_path),
+                &query,
+            )
+            .map_err(|error| format!("search {} for {query}: {error}", source.system_id))?;
+            digest.update(source.system_id.as_bytes());
+            digest.update([0]);
+            digest.update(query.as_bytes());
+            digest.update([0]);
+            for matched in result.matches {
+                digest.update(matched.ordinal.to_le_bytes());
+            }
+            if let Some(autocomplete) = result.autocomplete {
+                digest.update(autocomplete.word.as_bytes());
+            }
+            query_count = query_count.saturating_add(1);
+        }
+    }
+    Ok(FastFiveSearchProbeReport {
+        queries: query_count,
+        elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+        fingerprint: hex(&digest.finalize()),
     })
 }
 
@@ -776,17 +1196,8 @@ mod builder_tests {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
-    fn publishes_only_the_five_expected_systems() {
-        let root = std::env::temp_dir().join(format!(
-            "mister-magik-fast-five-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let snapshot = FastFiveSnapshot {
+    fn empty_snapshot() -> FastFiveSnapshot {
+        FastFiveSnapshot {
             schema: FAST_FIVE_SNAPSHOT_SCHEMA.to_string(),
             source_fingerprint: "0".repeat(64),
             systems: FAST_FIVE_SYSTEM_IDS
@@ -797,7 +1208,65 @@ mod builder_tests {
                     games: Vec::new(),
                 })
                 .collect(),
-        };
+        }
+    }
+
+    #[test]
+    fn binary_snapshot_encodings_round_trip() {
+        let snapshot = empty_snapshot();
+        for encoding in [
+            FastFiveSnapshotEncoding::Postcard,
+            FastFiveSnapshotEncoding::PostcardLz4,
+            FastFiveSnapshotEncoding::PostcardMmap,
+        ] {
+            let encoded = encode_snapshot(&snapshot, encoding).unwrap();
+            assert_eq!(decode_snapshot(&encoded, encoding).unwrap(), snapshot);
+        }
+    }
+
+    #[test]
+    fn artifact_profiles_publish_exact_navpacks() {
+        let snapshot = empty_snapshot();
+        let limits = crate::shard_registry::production_registry_limits();
+        for profile in [
+            FastFiveArtifactProfile::NoEmbeddedNavigation,
+            FastFiveArtifactProfile::NoAdjacentNavigation,
+            FastFiveArtifactProfile::NavpackOnly,
+            FastFiveArtifactProfile::SinglePass,
+            FastFiveArtifactProfile::SearchOnly,
+            FastFiveArtifactProfile::SearchDetailNone,
+        ] {
+            let root = std::env::temp_dir().join(format!(
+                "mister-magik-fast-five-profile-{profile:?}-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let report = publish_snapshot_with_profile(&root, &snapshot, limits, profile).unwrap();
+            assert_eq!(report.artifact_profile, profile);
+            assert_eq!(
+                verify_snapshot_artifacts(&root, &snapshot, limits)
+                    .unwrap()
+                    .status,
+                "exact"
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn publishes_only_the_five_expected_systems() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-fast-five-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let snapshot = empty_snapshot();
         let limits = crate::shard_registry::production_registry_limits();
         let report = publish_snapshot(&root, &snapshot, limits).unwrap();
         assert_eq!(report.systems, 5);

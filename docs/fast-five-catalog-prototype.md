@@ -58,3 +58,28 @@ The focused C64 SQLite/FTS experiments are recorded in
 [`history/2026-08-26-c64-artifact-experiments.md`](../history/2026-08-26-c64-artifact-experiments.md).
 The complete five-system CPU profile is recorded in
 [`history/2026-08-26-fast-five-pprof.md`](../history/2026-08-26-fast-five-pprof.md).
+
+## Optimization experiment matrix
+
+The prototype can publish the same five-system rows through isolated input and
+artifact profiles. Snapshot inputs support JSON, Postcard, LZ4-compressed
+Postcard, and mmap-backed Postcard access. Artifact profiles independently
+exercise removal of the embedded navigation payload, the adjacent navigation
+file, both JSON navigation representations, single-pass tmpfs publication,
+search-only SQLite storage, and reduced FTS detail.
+
+The attended matrix command gives every profile its own supervised reboot and
+clean output root, verifies every row from SQLite identity plus NavPack data,
+compares deterministic search fingerprints, and opens the result in the real
+Dev UI:
+
+```bash
+scripts/agent device catalog fast-five-experiments \
+  --attended --reboot \
+  --binary crates/catalog/target/armv7-unknown-linux-gnueabihf/release-device/five-system-catalog-prototype \
+  --out build/agent-benchmarks/fast-five-experiments/REVISION
+```
+
+SQLite remains the persisted FTS/autocomplete database and NavPack remains the
+canonical low-latency UI representation. The experiment profiles never alter
+the production registry.

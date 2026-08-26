@@ -4,8 +4,10 @@
 //! Standalone interchange and publication tool for the fast five-system catalog.
 
 use mister_magik_catalog::fast_five_catalog::{
-    C64ArtifactExperimentProfile, FastFiveSnapshot, publish_snapshot, replace_arcade_from_active,
-    run_c64_artifact_experiment, snapshot_reference,
+    C64ArtifactExperimentProfile, FastFiveArtifactProfile, FastFiveSnapshot,
+    FastFiveSnapshotEncoding, decode_snapshot, encode_snapshot, fast_five_search_probe,
+    publish_snapshot_with_profile, replace_arcade_from_active, run_c64_artifact_experiment,
+    snapshot_reference, verify_snapshot_artifacts,
 };
 use mister_magik_catalog::shard_registry::production_registry_limits;
 use serde::Serialize;
@@ -29,11 +31,13 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
         "snapshot-reference" => {
             let catalog_root = required_path(arguments, "--catalog-root")?;
             let output = required_path(arguments, "--output")?;
-            reject_unknown(arguments, &["--catalog-root", "--output"])?;
+            let encoding = snapshot_encoding(arguments, "--encoding")?;
+            reject_unknown(arguments, &["--catalog-root", "--output", "--encoding"])?;
             let snapshot = snapshot_reference(&catalog_root, production_registry_limits())?;
-            write_json_atomic(&output, &snapshot)?;
+            write_bytes_atomic(&output, &encode_snapshot(&snapshot, encoding)?)?;
             print_json(&serde_json::json!({
                 "command": "snapshot-reference",
+                "encoding": encoding,
                 "systems": snapshot.systems.len(),
                 "games": snapshot.game_count(),
                 "output": output,
@@ -123,6 +127,36 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
                 "games": snapshot.game_count(),
             }))
         }
+        "verify" => {
+            let input = required_path(arguments, "--input")?;
+            let candidate_root = required_path(arguments, "--candidate-root")?;
+            let encoding = snapshot_encoding(arguments, "--input-encoding")?;
+            reject_unknown(
+                arguments,
+                &["--input", "--candidate-root", "--input-encoding"],
+            )?;
+            let (snapshot, _, _) = read_snapshot_input(&input, encoding)?;
+            print_json(&verify_snapshot_artifacts(
+                &candidate_root,
+                &snapshot,
+                production_registry_limits(),
+            )?)
+        }
+        "search-probe" => {
+            let input = required_path(arguments, "--input")?;
+            let candidate_root = required_path(arguments, "--candidate-root")?;
+            let encoding = snapshot_encoding(arguments, "--input-encoding")?;
+            reject_unknown(
+                arguments,
+                &["--input", "--candidate-root", "--input-encoding"],
+            )?;
+            let (snapshot, _, _) = read_snapshot_input(&input, encoding)?;
+            print_json(&fast_five_search_probe(
+                &candidate_root,
+                &snapshot,
+                production_registry_limits(),
+            )?)
+        }
         "compare" => {
             let reference_root = required_path(arguments, "--reference-root")?;
             let candidate_root = required_path(arguments, "--candidate-root")?;
@@ -201,6 +235,11 @@ fn run_publish(arguments: &[String], profile: bool) -> Result<(), String> {
     let command_started = Instant::now();
     let input = required_path(arguments, "--input")?;
     let output_root = required_path(arguments, "--output-root")?;
+    let input_encoding = snapshot_encoding(arguments, "--input-encoding")?;
+    let artifact_profile = optional_value(arguments, "--artifact-profile")
+        .map_or(Ok(FastFiveArtifactProfile::Legacy), |value| {
+            FastFiveArtifactProfile::parse(&value)
+        })?;
     let known = if profile {
         &[
             "--input",
@@ -208,9 +247,16 @@ fn run_publish(arguments: &[String], profile: bool) -> Result<(), String> {
             "--pprof-svg",
             "--pprof-folded",
             "--pprof-hz",
+            "--input-encoding",
+            "--artifact-profile",
         ][..]
     } else {
-        &["--input", "--output-root"][..]
+        &[
+            "--input",
+            "--output-root",
+            "--input-encoding",
+            "--artifact-profile",
+        ][..]
     };
     reject_unknown(arguments, known)?;
     let profiler = if profile {
@@ -225,27 +271,30 @@ fn run_publish(arguments: &[String], profile: bool) -> Result<(), String> {
         None
     };
     let input_started = Instant::now();
-    let input_bytes =
-        fs::read(&input).map_err(|error| format!("read {}: {error}", input.display()))?;
-    let snapshot: FastFiveSnapshot = serde_json::from_slice(&input_bytes)
-        .map_err(|error| format!("decode {}: {error}", input.display()))?;
-    snapshot.validate()?;
+    let (snapshot, input_bytes, input_access) = read_snapshot_input(&input, input_encoding)?;
     let input_read_decode_us = elapsed_us(input_started);
-    let report = publish_snapshot(&output_root, &snapshot, production_registry_limits())?;
+    let report = publish_snapshot_with_profile(
+        &output_root,
+        &snapshot,
+        production_registry_limits(),
+        artifact_profile,
+    )?;
     let mut report = serde_json::to_value(report).map_err(|error| error.to_string())?;
     let command_elapsed_us = elapsed_us(command_started);
     let profile = profiler.map(finish_cpu_profile).transpose()?;
     let object = report
         .as_object_mut()
         .ok_or("fast-five publish report is not an object")?;
-    object.insert(
-        "input_bytes".to_string(),
-        serde_json::json!(input_bytes.len()),
-    );
+    object.insert("input_bytes".to_string(), serde_json::json!(input_bytes));
     object.insert(
         "input_read_decode_us".to_string(),
         serde_json::json!(input_read_decode_us),
     );
+    object.insert(
+        "input_encoding".to_string(),
+        serde_json::json!(input_encoding),
+    );
+    object.insert("input_access".to_string(), serde_json::json!(input_access));
     object.insert(
         "command_elapsed_us".to_string(),
         serde_json::json!(command_elapsed_us),
@@ -381,6 +430,41 @@ fn required_value(arguments: &[String], name: &str) -> Result<String, String> {
         .ok_or_else(|| format!("missing {name}"))
 }
 
+fn optional_value(arguments: &[String], name: &str) -> Option<String> {
+    arguments
+        .windows(2)
+        .find(|pair| pair[0] == name)
+        .map(|pair| pair[1].clone())
+}
+
+fn snapshot_encoding(
+    arguments: &[String],
+    option: &str,
+) -> Result<FastFiveSnapshotEncoding, String> {
+    optional_value(arguments, option).map_or(Ok(FastFiveSnapshotEncoding::Json), |value| {
+        FastFiveSnapshotEncoding::parse(&value)
+    })
+}
+
+fn read_snapshot_input(
+    input: &Path,
+    encoding: FastFiveSnapshotEncoding,
+) -> Result<(FastFiveSnapshot, usize, &'static str), String> {
+    if encoding == FastFiveSnapshotEncoding::PostcardMmap {
+        let file =
+            fs::File::open(input).map_err(|error| format!("open {}: {error}", input.display()))?;
+        // SAFETY: the immutable benchmark input is not modified while mapped.
+        let mapping = unsafe { memmap2::MmapOptions::new().map(&file) }
+            .map_err(|error| format!("mmap {}: {error}", input.display()))?;
+        Ok((decode_snapshot(&mapping, encoding)?, mapping.len(), "mmap"))
+    } else {
+        let bytes =
+            fs::read(input).map_err(|error| format!("read {}: {error}", input.display()))?;
+        let len = bytes.len();
+        Ok((decode_snapshot(&bytes, encoding)?, len, "read"))
+    }
+}
+
 fn reject_unknown(arguments: &[String], known: &[&str]) -> Result<(), String> {
     let mut index = 0;
     while index < arguments.len() {
@@ -409,6 +493,21 @@ fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> 
     fs::rename(&temporary, path).map_err(|error| format!("publish {}: {error}", path.display()))
 }
 
+fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?;
+    let temporary = parent.join(format!(
+        ".{}.tmp.{}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("snapshot"),
+        std::process::id()
+    ));
+    fs::write(&temporary, bytes)
+        .map_err(|error| format!("write {}: {error}", temporary.display()))?;
+    fs::rename(&temporary, path).map_err(|error| format!("publish {}: {error}", path.display()))
+}
+
 fn print_json(value: &impl Serialize) -> Result<(), String> {
     println!(
         "{}",
@@ -422,6 +521,6 @@ fn elapsed_us(started: Instant) -> u64 {
 }
 
 fn usage() -> String {
-    "Usage:\n  five-system-catalog-prototype snapshot-reference --catalog-root PATH --output PATH\n  five-system-catalog-prototype replace-arcade --input PATH --arcade-active PATH --output PATH\n  five-system-catalog-prototype publish --input PATH --output-root PATH\n  five-system-catalog-prototype publish-profile --input PATH --output-root PATH --pprof-svg PATH --pprof-folded PATH --pprof-hz HZ\n  five-system-catalog-prototype c64-artifact-experiment --input PATH --output-root PATH --scratch-root PATH --profile PROFILE\n  five-system-catalog-prototype inspect --input PATH\n  five-system-catalog-prototype compare --reference-root PATH --candidate-root PATH"
+    "Usage:\n  five-system-catalog-prototype snapshot-reference --catalog-root PATH --output PATH [--encoding json|postcard|postcard-lz4|postcard-mmap]\n  five-system-catalog-prototype replace-arcade --input PATH --arcade-active PATH --output PATH\n  five-system-catalog-prototype publish --input PATH --output-root PATH [--input-encoding ENCODING] [--artifact-profile PROFILE]\n  five-system-catalog-prototype publish-profile --input PATH --output-root PATH --pprof-svg PATH --pprof-folded PATH --pprof-hz HZ [--input-encoding ENCODING] [--artifact-profile PROFILE]\n  five-system-catalog-prototype c64-artifact-experiment --input PATH --output-root PATH --scratch-root PATH --profile PROFILE\n  five-system-catalog-prototype inspect --input PATH\n  five-system-catalog-prototype verify --input PATH --candidate-root PATH [--input-encoding ENCODING]\n  five-system-catalog-prototype compare --reference-root PATH --candidate-root PATH"
         .to_string()
 }

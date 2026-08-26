@@ -590,9 +590,16 @@ impl NativeDevice {
                     CatalogCommand::FastFiveC64Experiments(args) => {
                         run_fast_five_c64_experiments(&prepared.config, &args.binary, &args.out)
                     }
-                    CatalogCommand::FastFivePprof(args) => {
-                        run_fast_five_pprof(&prepared.config, &args.binary, &args.out)
+                    CatalogCommand::FastFiveExperiments(args) => {
+                        run_fast_five_experiments(&prepared.config, &args.binary, &args.out)
                     }
+                    CatalogCommand::FastFivePprof(args) => run_fast_five_pprof(
+                        &prepared.config,
+                        &args.binary,
+                        &args.out,
+                        &args.input_encoding,
+                        &args.artifact_profile,
+                    ),
                     CatalogCommand::FastFiveOldCold(args) => {
                         run_fast_five_old_cold_matrix(&prepared.config, &args.out)
                     }
@@ -31611,6 +31618,12 @@ const FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD: &str =
     "/media/fat/mister-magik-dev/fast-five-tool/.five-system-catalog-prototype.upload";
 const FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT: &str =
     "/media/fat/mister-magik-dev/fast-five-tool/reference.json";
+const FAST_FIVE_POSTCARD_REMOTE_SNAPSHOT: &str =
+    "/media/fat/mister-magik-dev/fast-five-tool/reference.postcard";
+const FAST_FIVE_LZ4_REMOTE_SNAPSHOT: &str =
+    "/media/fat/mister-magik-dev/fast-five-tool/reference.postcard.lz4";
+const FAST_FIVE_MMAP_REMOTE_SNAPSHOT: &str =
+    "/media/fat/mister-magik-dev/fast-five-tool/reference.mmap";
 const FAST_FIVE_PROTOTYPE_REMOTE_ROOT: &str = "/media/fat/mister-magik-dev/fast-five-catalog";
 const FAST_FIVE_PROTOTYPE_REFERENCE_ROOT: &str = "/media/fat/mister-magik-dev/catalog-v3";
 const FAST_FIVE_C64_EXPERIMENT_ROOT: &str = "/media/fat/mister-magik-dev/fast-five-c64-experiments";
@@ -31680,10 +31693,11 @@ fn run_fast_five_catalog_prototype(
         &session,
         "capture five-system reference snapshot",
         &format!(
-            "{} snapshot-reference --catalog-root {} --output {}",
+            "{} snapshot-reference --catalog-root {} --output {} --encoding {}",
             sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
             sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
-            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT)
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+            sh("json"),
         ),
     )?;
     exec_checked(&session, "sync fast-five cold inputs", "sync")?;
@@ -31781,7 +31795,356 @@ fn run_fast_five_catalog_prototype(
     Ok(())
 }
 
-fn run_fast_five_pprof(config: &NativeDeviceConfig, binary: &Path, output: &Path) -> Result<()> {
+fn run_fast_five_experiment_case(
+    config: &NativeDeviceConfig,
+    name: &str,
+    input: &str,
+    input_encoding: &str,
+    artifact_profile: &str,
+) -> Result<Value> {
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "prepare isolated fast-five experiment",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!("rm -rf {}", sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT)),
+            "sync".to_string(),
+        ]),
+    )?;
+    drop(session);
+    agent_reboot_wait(&[])?;
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "fast-five experiment post-reboot safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    let published_output = exec_checked_output(
+        &session,
+        "build reboot-cold fast-five experiment",
+        &format!(
+            "{} publish --input {} --input-encoding {} --artifact-profile {} --output-root {}",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(input),
+            sh(input_encoding),
+            sh(artifact_profile),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+        ),
+    )?;
+    let verified_output = exec_checked_output(
+        &session,
+        "verify fast-five experiment rows",
+        &format!(
+            "{} verify --input {} --candidate-root {}",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+        ),
+    )?;
+    let search_output = exec_checked_output(
+        &session,
+        "probe fast-five experiment search",
+        &format!(
+            "{} search-probe --input {} --candidate-root {}",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+        ),
+    )?;
+    let published =
+        parse_last_json_line("fast-five experiment publication", &published_output.stdout)?;
+    let verified =
+        parse_last_json_line("fast-five experiment verification", &verified_output.stdout)?;
+    let search = parse_last_json_line("fast-five experiment search probe", &search_output.stdout)?;
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_FAST_FIVE_CATALOG".into(), "1".into()),
+                (
+                    "MISTER_SHARDED_CATALOG_DIR".into(),
+                    FAST_FIVE_PROTOTYPE_REMOTE_ROOT.into(),
+                ),
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+            ],
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            timeout_secs: 30,
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    let launcher = read_launcher_status(&session)?;
+    let exact = verified.get("status").and_then(Value::as_str) == Some("exact")
+        && verified.get("changed").and_then(Value::as_u64) == Some(0);
+    let ui_passed = launcher.get("catalog_ready").and_then(Value::as_bool) == Some(true)
+        && launcher.get("catalog_systems").and_then(Value::as_u64) == Some(5);
+    Ok(json!({
+        "name": name,
+        "cold_boot_verified": true,
+        "input_encoding": input_encoding,
+        "artifact_profile": artifact_profile,
+        "published": published,
+        "verification": verified,
+        "search": search,
+        "ui_passed": ui_passed,
+        "launcher": {
+            "catalog_ready": launcher.get("catalog_ready"),
+            "catalog_systems": launcher.get("catalog_systems"),
+            "catalog_games": launcher.get("catalog_games"),
+        },
+        "accepted": exact && ui_passed,
+    }))
+}
+
+fn run_fast_five_experiments(
+    config: &NativeDeviceConfig,
+    binary: &Path,
+    output: &Path,
+) -> Result<()> {
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    if !binary.is_file() {
+        return Err(format!(
+            "five-system catalog prototype binary is missing: {}",
+            binary.display()
+        )
+        .into());
+    }
+    if output.exists() {
+        return Err(format!(
+            "fast-five experiment output already exists: {}",
+            output.display()
+        )
+        .into());
+    }
+    fs::create_dir_all(output)?;
+    let binary_sha256 = file_sha256(binary.to_path_buf())?;
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    exec_checked(
+        &session,
+        "fast-five experiment safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    exec_checked(
+        &session,
+        "prepare fast-five experiment tool",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "rm -rf {} {}",
+                sh("/media/fat/mister-magik-dev/fast-five-tool"),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT)
+            ),
+            format!(
+                "mkdir -p {}",
+                sh("/media/fat/mister-magik-dev/fast-five-tool")
+            ),
+        ]),
+    )?;
+    put(&session, binary, FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)?;
+    exec_checked(
+        &session,
+        "publish exact fast-five experiment binary",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "test \"$(sha256sum {} | cut -d' ' -f1)\" = {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(&binary_sha256)
+            ),
+            format!("chmod 755 {}", sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)),
+            format!(
+                "mv -f {} {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY)
+            ),
+        ]),
+    )?;
+    for (path, encoding) in [
+        (FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT, "json"),
+        (FAST_FIVE_POSTCARD_REMOTE_SNAPSHOT, "postcard"),
+        (FAST_FIVE_LZ4_REMOTE_SNAPSHOT, "postcard-lz4"),
+        (FAST_FIVE_MMAP_REMOTE_SNAPSHOT, "postcard-mmap"),
+    ] {
+        exec_checked_output(
+            &session,
+            "capture fast-five experiment input",
+            &format!(
+                "{} snapshot-reference --catalog-root {} --output {} --encoding {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
+                sh(path),
+                sh(encoding),
+            ),
+        )?;
+    }
+    exec_checked(&session, "sync fast-five experiment inputs", "sync")?;
+    drop(session);
+
+    let cases = [
+        (
+            "baseline",
+            FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT,
+            "json",
+            "legacy",
+        ),
+        (
+            "snapshot-postcard",
+            FAST_FIVE_POSTCARD_REMOTE_SNAPSHOT,
+            "postcard",
+            "legacy",
+        ),
+        (
+            "snapshot-postcard-lz4",
+            FAST_FIVE_LZ4_REMOTE_SNAPSHOT,
+            "postcard-lz4",
+            "legacy",
+        ),
+        (
+            "snapshot-postcard-mmap",
+            FAST_FIVE_MMAP_REMOTE_SNAPSHOT,
+            "postcard-mmap",
+            "legacy",
+        ),
+        (
+            "navigation-no-embedded",
+            FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT,
+            "json",
+            "no-embedded-navigation",
+        ),
+        (
+            "navigation-no-adjacent",
+            FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT,
+            "json",
+            "no-adjacent-navigation",
+        ),
+        (
+            "navigation-navpack-only",
+            FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT,
+            "json",
+            "navpack-only",
+        ),
+        (
+            "publication-single-pass",
+            FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT,
+            "json",
+            "single-pass",
+        ),
+        (
+            "sqlite-search-only",
+            FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT,
+            "json",
+            "search-only",
+        ),
+        (
+            "sqlite-search-detail-none",
+            FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT,
+            "json",
+            "search-detail-none",
+        ),
+    ];
+    let mut results = Vec::with_capacity(cases.len() + 1);
+    for (name, input, encoding, artifact) in cases {
+        results.push(run_fast_five_experiment_case(
+            config, name, input, encoding, artifact,
+        )?);
+    }
+    let baseline_search = results[0]
+        .pointer("/search/fingerprint")
+        .and_then(Value::as_str)
+        .ok_or("fast-five baseline search fingerprint is missing")?
+        .to_string();
+    for result in &mut results {
+        let search_exact = result
+            .pointer("/search/fingerprint")
+            .and_then(Value::as_str)
+            == Some(baseline_search.as_str());
+        result["search_exact"] = json!(search_exact);
+        let accepted =
+            result.get("accepted").and_then(Value::as_bool) == Some(true) && search_exact;
+        result["accepted"] = json!(accepted);
+    }
+    let elapsed = |value: &Value| {
+        value
+            .pointer("/published/command_elapsed_us")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX)
+    };
+    let snapshot_winner = results[..4]
+        .iter()
+        .filter(|value| value.get("accepted").and_then(Value::as_bool) == Some(true))
+        .min_by_key(|value| elapsed(value))
+        .ok_or("no accepted snapshot experiment")?;
+    let artifact_winner = results
+        .iter()
+        .enumerate()
+        .filter(|(index, value)| {
+            *index == 0
+                || *index >= 4 && value.get("accepted").and_then(Value::as_bool) == Some(true)
+        })
+        .map(|(_, value)| value)
+        .min_by_key(|value| elapsed(value))
+        .ok_or("no accepted artifact experiment")?;
+    let winner_encoding = snapshot_winner
+        .get("input_encoding")
+        .and_then(Value::as_str)
+        .ok_or("snapshot winner encoding missing")?
+        .to_string();
+    let winner_input = match winner_encoding.as_str() {
+        "json" => FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT,
+        "postcard" => FAST_FIVE_POSTCARD_REMOTE_SNAPSHOT,
+        "postcard-lz4" => FAST_FIVE_LZ4_REMOTE_SNAPSHOT,
+        "postcard-mmap" => FAST_FIVE_MMAP_REMOTE_SNAPSHOT,
+        _ => return Err("invalid snapshot winner encoding".into()),
+    };
+    let winner_artifact = artifact_winner
+        .get("artifact_profile")
+        .and_then(Value::as_str)
+        .ok_or("artifact winner profile missing")?
+        .to_string();
+    let final_result = run_fast_five_experiment_case(
+        config,
+        "combined-winner",
+        winner_input,
+        &winner_encoding,
+        &winner_artifact,
+    )?;
+    results.push(final_result);
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_after = catalog_production_registry_identity(&session)?;
+    if production_registry_before != production_registry_after {
+        return Err("production registry changed during fast-five experiments".into());
+    }
+    let report = json!({
+        "schema": "mister-magik-fast-five-experiment-matrix-v1",
+        "status": "passed",
+        "binary_sha256": binary_sha256,
+        "production_registry_changed": false,
+        "baseline_search_fingerprint": baseline_search,
+        "winner": {
+            "input_encoding": winner_encoding,
+            "artifact_profile": winner_artifact,
+        },
+        "runs": results,
+    });
+    fs::write(
+        output.join("report.json"),
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    println!(
+        "fast_five_experiment_report={}",
+        output.join("report.json").display()
+    );
+    Ok(())
+}
+
+fn run_fast_five_pprof(
+    config: &NativeDeviceConfig,
+    binary: &Path,
+    output: &Path,
+    input_encoding: &str,
+    artifact_profile: &str,
+) -> Result<()> {
     let _signal_guard = AttendedOperationSignalGuard::install();
     if !binary.is_file() {
         return Err(format!(
@@ -31846,10 +32209,11 @@ fn run_fast_five_pprof(config: &NativeDeviceConfig, binary: &Path, output: &Path
         &session,
         "capture fast-five pprof reference snapshot",
         &format!(
-            "{} snapshot-reference --catalog-root {} --output {}",
+            "{} snapshot-reference --catalog-root {} --output {} --encoding {}",
             sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
             sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
-            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT)
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+            sh(input_encoding)
         ),
     )?;
     let snapshot = parse_last_json_line("fast-five pprof snapshot", &snapshot.stdout)?;
@@ -31868,9 +32232,11 @@ fn run_fast_five_pprof(config: &NativeDeviceConfig, binary: &Path, output: &Path
             &session,
             "profile reboot-cold fast-five publication",
             &format!(
-                "{} publish-profile --input {} --output-root {} --pprof-svg {} --pprof-folded {} --pprof-hz 997",
+                "{} publish-profile --input {} --input-encoding {} --artifact-profile {} --output-root {} --pprof-svg {} --pprof-folded {} --pprof-hz 997",
                 sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
                 sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+                sh(input_encoding),
+                sh(artifact_profile),
                 sh(FAST_FIVE_PPROF_REMOTE_ROOT),
                 sh(FAST_FIVE_PPROF_REMOTE_SVG),
                 sh(FAST_FIVE_PPROF_REMOTE_FOLDED)
@@ -31878,11 +32244,12 @@ fn run_fast_five_pprof(config: &NativeDeviceConfig, binary: &Path, output: &Path
         )?;
         let compared_output = exec_checked_output(
             &session,
-            "compare profiled fast-five catalog",
+            "verify profiled fast-five catalog",
             &format!(
-                "{} compare --reference-root {} --candidate-root {}",
+                "{} verify --input {} --input-encoding {} --candidate-root {}",
                 sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
-                sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+                sh(input_encoding),
                 sh(FAST_FIVE_PPROF_REMOTE_ROOT)
             ),
         )?;
@@ -31942,6 +32309,8 @@ fn run_fast_five_pprof(config: &NativeDeviceConfig, binary: &Path, output: &Path
         "cold_boot_verified": true,
         "timing_authoritative": false,
         "binary_sha256": binary_sha256,
+        "input_encoding": input_encoding,
+        "artifact_profile": artifact_profile,
         "snapshot": snapshot,
         "published": published,
         "comparison": compared,

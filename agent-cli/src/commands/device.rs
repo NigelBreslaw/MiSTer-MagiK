@@ -352,6 +352,8 @@ pub enum CatalogCommand {
     FastFivePrototype(CatalogFastFivePrototypeArgs),
     /// Cold-benchmark isolated C64 artifact-writer strategies.
     FastFiveC64Experiments(CatalogFastFiveC64ExperimentsArgs),
+    /// Cold-benchmark the complete fast-five snapshot and artifact matrix.
+    FastFiveExperiments(CatalogFastFiveExperimentsArgs),
     /// Profile one reboot-cold all-five prototype publication with pprof.
     FastFivePprof(CatalogFastFivePprofArgs),
     /// Cold-build the five systems independently with the existing builder.
@@ -385,6 +387,18 @@ pub struct CatalogFastFiveC64ExperimentsArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct CatalogFastFiveExperimentsArgs {
+    #[arg(long, required = true)]
+    attended: bool,
+    #[arg(long, required = true)]
+    reboot: bool,
+    #[arg(long, value_name = "PATH")]
+    pub(crate) binary: PathBuf,
+    #[arg(long, value_name = "DIRECTORY")]
+    pub(crate) out: PathBuf,
+}
+
+#[derive(Debug, Args)]
 pub struct CatalogFastFivePprofArgs {
     #[arg(long, required = true)]
     attended: bool,
@@ -394,6 +408,10 @@ pub struct CatalogFastFivePprofArgs {
     pub(crate) binary: PathBuf,
     #[arg(long, value_name = "DIRECTORY")]
     pub(crate) out: PathBuf,
+    #[arg(long, default_value = "json")]
+    pub(crate) input_encoding: String,
+    #[arg(long, default_value = "legacy")]
+    pub(crate) artifact_profile: String,
 }
 
 #[derive(Debug, Args)]
@@ -561,6 +579,7 @@ impl DeviceCommand {
                 command,
                 CatalogCommand::FastFivePrototype(_)
                     | CatalogCommand::FastFiveC64Experiments(_)
+                    | CatalogCommand::FastFiveExperiments(_)
                     | CatalogCommand::FastFivePprof(_)
                     | CatalogCommand::FastFiveOldCold(_)
                     | CatalogCommand::Purge(_)

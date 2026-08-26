@@ -127,6 +127,33 @@ pub(crate) enum ShardSearchTuning {
     ColumnUnoptimized,
 }
 
+#[cfg(feature = "builder")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ShardArtifactProfile {
+    #[default]
+    Legacy,
+    NoEmbeddedNavigation,
+    NoAdjacentNavigation,
+    NavpackOnly,
+    SearchOnly,
+    SearchDetailNone,
+}
+
+#[cfg(feature = "builder")]
+impl ShardArtifactProfile {
+    fn embeds_navigation(self) -> bool {
+        matches!(self, Self::Legacy | Self::NoAdjacentNavigation)
+    }
+
+    fn writes_navigation(self) -> bool {
+        matches!(self, Self::Legacy | Self::NoEmbeddedNavigation)
+    }
+
+    fn stores_games(self) -> bool {
+        !matches!(self, Self::SearchOnly | Self::SearchDetailNone)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct StoredNavigation {
     schema_version: u32,
@@ -191,6 +218,27 @@ pub(crate) fn write_system_shard_with_durability(
 }
 
 #[cfg(feature = "builder")]
+pub(crate) fn write_system_shard_with_artifact_profile(
+    sqlite_path: &Path,
+    navigation_path: &Path,
+    data: SystemShardData,
+    limits: SystemShardLimits,
+    durability: ShardDurability,
+    profile: ShardArtifactProfile,
+) -> Result<LoadedSystemShard, SystemShardError> {
+    write_system_shard_with_options_and_profile(
+        sqlite_path,
+        navigation_path,
+        data,
+        limits,
+        durability,
+        ShardSqliteTuning::Conservative,
+        ShardSearchTuning::FullOptimized,
+        profile,
+    )
+}
+
+#[cfg(feature = "builder")]
 pub(crate) fn write_system_shard_with_options(
     sqlite_path: &Path,
     navigation_path: &Path,
@@ -200,10 +248,35 @@ pub(crate) fn write_system_shard_with_options(
     sqlite_tuning: ShardSqliteTuning,
     search_tuning: ShardSearchTuning,
 ) -> Result<LoadedSystemShard, SystemShardError> {
+    write_system_shard_with_options_and_profile(
+        sqlite_path,
+        navigation_path,
+        data,
+        limits,
+        durability,
+        sqlite_tuning,
+        search_tuning,
+        ShardArtifactProfile::Legacy,
+    )
+}
+
+#[cfg(feature = "builder")]
+#[allow(clippy::too_many_arguments)]
+fn write_system_shard_with_options_and_profile(
+    sqlite_path: &Path,
+    navigation_path: &Path,
+    mut data: SystemShardData,
+    limits: SystemShardLimits,
+    durability: ShardDurability,
+    sqlite_tuning: ShardSqliteTuning,
+    search_tuning: ShardSearchTuning,
+    artifact_profile: ShardArtifactProfile,
+) -> Result<LoadedSystemShard, SystemShardError> {
     validate_games(&data.games, limits.max_games)?;
     let navigation_indexes = build_navigation_indexes(&data.games)?;
     let navigation_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SHARD_NAVIGATION);
-    let navigation = {
+    let navigation = if artifact_profile.embeds_navigation() || artifact_profile.writes_navigation()
+    {
         let stored = StoredNavigationRef {
             schema_version: NAVIGATION_SCHEMA_VERSION,
             system_id: data.system_id.as_str(),
@@ -212,8 +285,15 @@ pub(crate) fn write_system_shard_with_options(
             games: &data.games,
         };
         encode_navigation(&stored, limits)?
+    } else {
+        Vec::new()
     };
     let navigation_hash = checksum_hex(&navigation);
+    let adjacent_navigation = if artifact_profile.writes_navigation() {
+        navigation.as_slice()
+    } else {
+        b"mister-magik-navpack-only-v1".as_slice()
+    };
     let navpack = crate::navpack::encode(
         data.system_id.as_str(),
         data.generation,
@@ -221,6 +301,13 @@ pub(crate) fn write_system_shard_with_options(
         &navigation_indexes,
     )
     .map_err(|error| SystemShardError::new("write NavPack", error))?;
+    crate::navpack::validate(
+        &navpack,
+        data.system_id.as_str(),
+        data.generation,
+        data.games.len(),
+    )
+    .map_err(|error| SystemShardError::new("validate NavPack", error))?;
     let navpack_path = navpack_path_for_navigation(navigation_path);
     let preview_archive_default = common_preview_archive_path(&data.games);
     drop(navigation_pmu);
@@ -248,6 +335,37 @@ pub(crate) fn write_system_shard_with_options(
         ShardSqliteTuning::Conservative => "PRAGMA cache_size=-2048; PRAGMA temp_store=FILE;",
         ShardSqliteTuning::MemoryHeavy => "PRAGMA cache_size=-16384; PRAGMA temp_store=MEMORY;",
     };
+    let games_schema = if artifact_profile.stores_games() {
+        "CREATE TABLE games (
+             stable_key TEXT PRIMARY KEY,
+             ordinal INTEGER NOT NULL UNIQUE,
+             title TEXT NOT NULL,
+             launch_ref TEXT NOT NULL,
+             preview_archive_path TEXT,
+             preview_asset_key TEXT NOT NULL,
+             has_preview INTEGER NOT NULL,
+             year INTEGER,
+             manufacturer TEXT NOT NULL,
+             category TEXT NOT NULL,
+             players INTEGER,
+             control TEXT NOT NULL,
+             is_new INTEGER NOT NULL,
+             launch_plan_json TEXT
+         ) WITHOUT ROWID;"
+    } else {
+        "CREATE TABLE game_identity (
+             stable_key TEXT PRIMARY KEY,
+             ordinal INTEGER NOT NULL UNIQUE
+         ) WITHOUT ROWID;"
+    };
+    let navigation_schema = if artifact_profile.embeds_navigation() {
+        "CREATE TABLE navigation_payload (
+             singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+             payload BLOB NOT NULL
+         );"
+    } else {
+        ""
+    };
     connection
         .execute_batch(&format!(
             "PRAGMA page_size=4096;
@@ -257,33 +375,18 @@ pub(crate) fn write_system_shard_with_options(
                  key TEXT PRIMARY KEY,
                  value TEXT NOT NULL
              ) WITHOUT ROWID;
-             CREATE TABLE games (
-                 stable_key TEXT PRIMARY KEY,
-                 ordinal INTEGER NOT NULL UNIQUE,
-                 title TEXT NOT NULL,
-                 launch_ref TEXT NOT NULL,
-                 preview_archive_path TEXT,
-                 preview_asset_key TEXT NOT NULL,
-                 has_preview INTEGER NOT NULL,
-                 year INTEGER,
-                 manufacturer TEXT NOT NULL,
-                 category TEXT NOT NULL,
-                 players INTEGER,
-                 control TEXT NOT NULL,
-                 is_new INTEGER NOT NULL,
-                 launch_plan_json TEXT
-             ) WITHOUT ROWID;
-             CREATE TABLE navigation_payload (
-                 singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-                 payload BLOB NOT NULL
-             );"
+             {games_schema}
+             {navigation_schema}"
         ))
         .map_err(|error| SystemShardError::with("create shard schema", error))?;
-    let search_detail = match search_tuning {
-        ShardSearchTuning::FullOptimized | ShardSearchTuning::FullUnoptimized => {
+    let search_detail = match (artifact_profile, search_tuning) {
+        (ShardArtifactProfile::SearchDetailNone, _) => {
+            crate::persisted_search::PersistedSearchDetail::None
+        }
+        (_, ShardSearchTuning::FullOptimized | ShardSearchTuning::FullUnoptimized) => {
             crate::persisted_search::PersistedSearchDetail::Full
         }
-        ShardSearchTuning::ColumnOptimized | ShardSearchTuning::ColumnUnoptimized => {
+        (_, ShardSearchTuning::ColumnOptimized | ShardSearchTuning::ColumnUnoptimized) => {
             crate::persisted_search::PersistedSearchDetail::Column
         }
     };
@@ -331,7 +434,7 @@ pub(crate) fn write_system_shard_with_options(
                 })?;
         }
     }
-    {
+    if artifact_profile.stores_games() {
         let mut statement = transaction
             .prepare(
                 "INSERT INTO games(
@@ -375,6 +478,27 @@ pub(crate) fn write_system_shard_with_options(
                         .map_err(|error| SystemShardError::with("encode launch plan", error))?,
                 ])
                 .map_err(|error| SystemShardError::with("insert shard game", error))?;
+        }
+    } else {
+        let mut statement = transaction
+            .prepare("INSERT INTO game_identity(stable_key,ordinal) VALUES (?1,?2)")
+            .map_err(|error| SystemShardError::with("prepare shard identities", error))?;
+        let mut insertion_order = (0..data.games.len()).collect::<Vec<_>>();
+        insertion_order.sort_unstable_by(|left, right| {
+            data.games[*left]
+                .stable_key
+                .cmp(&data.games[*right].stable_key)
+        });
+        for ordinal in insertion_order {
+            statement
+                .execute(rusqlite::params![
+                    data.games[ordinal].stable_key,
+                    i64::try_from(ordinal).map_err(|_| SystemShardError::new(
+                        "write",
+                        "game ordinal exceeds SQLite integer"
+                    ))?,
+                ])
+                .map_err(|error| SystemShardError::with("insert shard identity", error))?;
         }
     }
     drop(games_pmu);
@@ -421,17 +545,19 @@ pub(crate) fn write_system_shard_with_options(
     }
     drop(search_index_pmu);
     let commit_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SHARD_COMMIT);
-    transaction
-        .execute(
-            "INSERT INTO navigation_payload(singleton,payload) VALUES (1,?1)",
-            [&navigation],
-        )
-        .map_err(|error| SystemShardError::with("insert embedded navigation", error))?;
+    if artifact_profile.embeds_navigation() {
+        transaction
+            .execute(
+                "INSERT INTO navigation_payload(singleton,payload) VALUES (1,?1)",
+                [&navigation],
+            )
+            .map_err(|error| SystemShardError::with("insert embedded navigation", error))?;
+    }
     transaction
         .commit()
         .map_err(|error| SystemShardError::with("commit shard", error))?;
     drop(connection);
-    fs::write(navigation_path, &navigation)
+    fs::write(navigation_path, adjacent_navigation)
         .map_err(|error| SystemShardError::with("write adjacent navigation", error))?;
     fs::write(&navpack_path, &navpack)
         .map_err(|error| SystemShardError::with("write adjacent NavPack", error))?;
@@ -449,6 +575,18 @@ pub(crate) fn write_system_shard_with_options(
     drop(commit_pmu);
     let system_id = data.system_id.clone();
     let generation = data.generation;
+    let experimental_loaded = if artifact_profile == ShardArtifactProfile::Legacy {
+        None
+    } else {
+        Some(LoadedSystemShard {
+            system_id: system_id.clone(),
+            generation,
+            navigation_hash: checksum_hex(adjacent_navigation),
+            projection_stats: data.projection_stats,
+            navigation_indexes,
+            games: std::mem::take(&mut data.games),
+        })
+    };
     drop(data);
     #[cfg(target_os = "linux")]
     {
@@ -464,7 +602,10 @@ pub(crate) fn write_system_shard_with_options(
         );
     }
     let validate_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SHARD_VALIDATE);
-    let loaded = open_system_shard(sqlite_path, navigation_path, &system_id, generation, limits);
+    let loaded = experimental_loaded.map_or_else(
+        || open_system_shard(sqlite_path, navigation_path, &system_id, generation, limits),
+        Ok,
+    );
     drop(validate_pmu);
     loaded
 }
