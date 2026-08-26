@@ -16,7 +16,7 @@ use std::path::{Component, Path};
 
 pub const PREPARED_BUNDLE_HELPER_SCHEMA: &str = "mister-magik-prepared-bundle-helper-v1";
 pub(crate) const PREPARED_TARGET_CATALOG_HELPER_SCHEMA: &str =
-    "mister-magik-prepared-target-catalog-helper-v1";
+    "mister-magik-prepared-target-catalog-helper-v2";
 
 /// A production catalog target snapshot guarded by a cheap, exact-enough
 /// release receipt. The opaque output is the normal Catalog V3 target output,
@@ -30,6 +30,7 @@ pub(crate) struct PreparedTargetCatalogHelper {
     pub(crate) storage_root: String,
     pub(crate) target_path: String,
     pub(crate) receipt: PreparedBundleHelper,
+    pub(crate) directories: Vec<DirectoryReceipt>,
     pub(crate) output_json: String,
     pub(crate) output_sha256: String,
 }
@@ -44,14 +45,13 @@ impl PreparedTargetCatalogHelper {
         payload_relative_paths: &[String],
         inventory_extensions: &[String],
     ) -> Result<Self, String> {
-        let relative_target = target_path.strip_prefix(storage_root).map_err(|error| {
+        target_path.strip_prefix(storage_root).map_err(|error| {
             format!(
                 "prepared target {} is outside storage root {}: {error}",
                 target_path.display(),
                 storage_root.display()
             )
         })?;
-        let target_relative = path_to_slash(relative_target)?;
         let output_sha256 = sha256_hex(output_json.as_bytes());
         let receipt = PreparedBundleHelper::capture(
             storage_root,
@@ -60,12 +60,12 @@ impl PreparedTargetCatalogHelper {
             Vec::new(),
             exact_relative_paths,
             payload_relative_paths,
-            &[InventoryRule {
-                relative_root: target_relative,
-                extensions: inventory_extensions.to_vec(),
-                excluded_components: Vec::new(),
-            }],
+            &[],
         )?;
+        let directories = capture_directory_receipts(storage_root, target_path)?;
+        if inventory_extensions.is_empty() {
+            return Err("prepared target has no catalog inventory extensions".to_string());
+        }
         Ok(Self {
             schema: PREPARED_TARGET_CATALOG_HELPER_SCHEMA.to_string(),
             catalog_schema: crate::catalog_config::SCHEMA_VERSION,
@@ -74,6 +74,7 @@ impl PreparedTargetCatalogHelper {
             storage_root: storage_root.display().to_string(),
             target_path: target_path.display().to_string(),
             receipt,
+            directories,
             output_json,
             output_sha256,
         })
@@ -94,7 +95,9 @@ impl PreparedTargetCatalogHelper {
 
     pub(crate) fn activate(&self) -> Result<(), String> {
         self.validate()?;
-        self.receipt.verify_exact(Path::new(&self.storage_root))
+        let storage_root = Path::new(&self.storage_root);
+        self.receipt.verify_exact(storage_root)?;
+        verify_directory_receipts(storage_root, &self.directories)
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -114,12 +117,94 @@ impl PreparedTargetCatalogHelper {
             return Err("prepared target catalog helper path is empty".to_string());
         }
         self.receipt.validate()?;
+        if self.directories.is_empty() {
+            return Err("prepared target catalog directory receipt is empty".to_string());
+        }
+        reject_duplicate_paths(
+            self.directories
+                .iter()
+                .map(|receipt| receipt.relative_path.as_str()),
+            "directory",
+        )?;
         let actual = sha256_hex(self.output_json.as_bytes());
         if actual != self.output_sha256 {
             return Err("prepared target catalog output checksum changed".to_string());
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub(crate) struct DirectoryReceipt {
+    relative_path: String,
+    modified_ns: u128,
+}
+
+fn directory_modified_ns(path: &Path) -> Result<u128, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("inspect prepared directory {}: {error}", path.display()))?;
+    if !metadata.is_dir() {
+        return Err(format!(
+            "prepared directory is not a directory: {}",
+            path.display()
+        ));
+    }
+    metadata
+        .modified()
+        .map_err(|error| format!("read prepared directory time {}: {error}", path.display()))?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .map_err(|error| {
+            format!(
+                "invalid prepared directory time {}: {error}",
+                path.display()
+            )
+        })
+}
+
+fn capture_directory_receipts(
+    storage_root: &Path,
+    target_path: &Path,
+) -> Result<Vec<DirectoryReceipt>, String> {
+    let mut receipts = Vec::new();
+    for entry in walkdir::WalkDir::new(target_path).follow_links(false) {
+        let entry = entry.map_err(|error| {
+            format!(
+                "capture prepared directory tree {}: {error}",
+                target_path.display()
+            )
+        })?;
+        if !entry.file_type().is_dir() {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(storage_root)
+            .map_err(|error| format!("make prepared directory path relative: {error}"))?;
+        receipts.push(DirectoryReceipt {
+            relative_path: path_to_slash(relative)?,
+            modified_ns: directory_modified_ns(entry.path())?,
+        });
+    }
+    receipts.sort();
+    Ok(receipts)
+}
+
+fn verify_directory_receipts(
+    storage_root: &Path,
+    receipts: &[DirectoryReceipt],
+) -> Result<(), String> {
+    for expected in receipts {
+        validate_relative_path(&expected.relative_path)?;
+        let actual = directory_modified_ns(&storage_root.join(&expected.relative_path))?;
+        if actual != expected.modified_ns {
+            return Err(format!(
+                "changed prepared directory: {}",
+                expected.relative_path
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

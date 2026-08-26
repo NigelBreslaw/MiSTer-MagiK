@@ -460,7 +460,9 @@ fn capture_prepared_target_helper(
         }
         if matches!(extension.as_str(), "mgl" | "mra" | "txt" | "json") {
             exact_paths.insert(relative);
-        } else {
+        } else if !path.starts_with(&descriptor.path)
+            || matches!(extension.as_str(), "zip" | "7z" | "lha" | "lzh" | "rar")
+        {
             payload_paths.insert(relative);
         }
     }
