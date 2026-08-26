@@ -19,6 +19,13 @@ const SEARCH_WEIGHTS: &str = "10.0,9.0,8.0,7.0,7.0,6.0,6.8,6.5,6.0,4.0,3.5";
 #[cfg(feature = "builder")]
 const SEARCH_PIPELINE_BATCH: usize = 256;
 
+#[cfg(feature = "builder")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PersistedSearchDetail {
+    Full,
+    Column,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PersistedSearchMatch {
     pub ordinal: usize,
@@ -345,8 +352,20 @@ pub fn search_system_shard(
 
 #[cfg(feature = "builder")]
 pub(crate) fn create_schema(connection: &Connection) -> Result<(), PersistedSearchError> {
+    create_schema_with_detail(connection, PersistedSearchDetail::Full)
+}
+
+#[cfg(feature = "builder")]
+pub(crate) fn create_schema_with_detail(
+    connection: &Connection,
+    detail: PersistedSearchDetail,
+) -> Result<(), PersistedSearchError> {
+    let detail = match detail {
+        PersistedSearchDetail::Full => "full",
+        PersistedSearchDetail::Column => "column",
+    };
     connection
-        .execute_batch(
+        .execute_batch(&format!(
             "CREATE VIRTUAL TABLE game_search_fts USING fts5(
                  title,
                  compact_title,
@@ -361,14 +380,15 @@ pub(crate) fn create_schema(connection: &Connection) -> Result<(), PersistedSear
                  compact_path,
                  content='',
                  tokenize='unicode61 remove_diacritics 2',
-                 prefix='1 2 3'
+                 prefix='1 2 3',
+                 detail='{detail}'
              );
              CREATE TABLE autocomplete_words (
                  word TEXT PRIMARY KEY,
                  source_rank INTEGER NOT NULL,
                  score INTEGER NOT NULL
-             ) WITHOUT ROWID;",
-        )
+             ) WITHOUT ROWID;"
+        ))
         .map_err(|error| PersistedSearchError::with("create search schema", error))
 }
 
@@ -496,6 +516,15 @@ fn merge_autocomplete_words(
 pub(crate) fn populate(
     connection: &Connection,
     games: &[crate::system_shard::SystemGame],
+) -> Result<PersistedSearchBuildOutcome, PersistedSearchError> {
+    populate_with_options(connection, games, true)
+}
+
+#[cfg(feature = "builder")]
+pub(crate) fn populate_with_options(
+    connection: &Connection,
+    games: &[crate::system_shard::SystemGame],
+    optimize: bool,
 ) -> Result<PersistedSearchBuildOutcome, PersistedSearchError> {
     use std::collections::HashMap;
 
@@ -626,12 +655,14 @@ pub(crate) fn populate(
     let autocomplete_insert_us = elapsed_us(autocomplete_insert_started);
     let optimize_started = Instant::now();
     let optimize_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SEARCH_OPTIMIZE);
-    connection
-        .execute(
-            "INSERT INTO game_search_fts(game_search_fts) VALUES ('optimize')",
-            [],
-        )
-        .map_err(|error| PersistedSearchError::with("optimize FTS index", error))?;
+    if optimize {
+        connection
+            .execute(
+                "INSERT INTO game_search_fts(game_search_fts) VALUES ('optimize')",
+                [],
+            )
+            .map_err(|error| PersistedSearchError::with("optimize FTS index", error))?;
+    }
     drop(optimize_pmu);
     let optimize_us = elapsed_us(optimize_started);
     let automerge_restore_started = Instant::now();

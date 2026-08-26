@@ -212,6 +212,9 @@ pub enum C64ArtifactExperimentProfile {
     TmpfsImmediate,
     TmpfsDeferred,
     TmpfsDeferredMemory,
+    TmpfsImmediateNoOptimize,
+    TmpfsImmediateFtsColumn,
+    TmpfsImmediateFtsColumnNoOptimize,
 }
 
 #[cfg(feature = "builder")]
@@ -222,6 +225,9 @@ impl C64ArtifactExperimentProfile {
             "tmpfs-immediate" => Ok(Self::TmpfsImmediate),
             "tmpfs-deferred" => Ok(Self::TmpfsDeferred),
             "tmpfs-deferred-memory" => Ok(Self::TmpfsDeferredMemory),
+            "tmpfs-immediate-no-optimize" => Ok(Self::TmpfsImmediateNoOptimize),
+            "tmpfs-immediate-fts-column" => Ok(Self::TmpfsImmediateFtsColumn),
+            "tmpfs-immediate-fts-column-no-optimize" => Ok(Self::TmpfsImmediateFtsColumnNoOptimize),
             _ => Err(format!("unknown C64 artifact experiment profile {value}")),
         }
     }
@@ -232,6 +238,9 @@ impl C64ArtifactExperimentProfile {
             Self::TmpfsImmediate => "tmpfs-immediate",
             Self::TmpfsDeferred => "tmpfs-deferred",
             Self::TmpfsDeferredMemory => "tmpfs-deferred-memory",
+            Self::TmpfsImmediateNoOptimize => "tmpfs-immediate-no-optimize",
+            Self::TmpfsImmediateFtsColumn => "tmpfs-immediate-fts-column",
+            Self::TmpfsImmediateFtsColumnNoOptimize => "tmpfs-immediate-fts-column-no-optimize",
         }
     }
 }
@@ -249,11 +258,57 @@ pub struct C64ArtifactExperimentReport {
     pub sqlite_bytes: u64,
     pub navigation_bytes: u64,
     pub navpack_bytes: u64,
+    pub search_probe_us: u64,
+    pub search_fingerprint: String,
 }
 
 #[cfg(feature = "builder")]
 fn elapsed_us(started: std::time::Instant) -> u64 {
     started.elapsed().as_micros().try_into().unwrap_or(u64::MAX)
+}
+
+#[cfg(feature = "builder")]
+fn c64_search_probe(sqlite_path: &Path, games: &[SystemGame]) -> Result<(u64, String), String> {
+    use crate::persisted_search::search_system_shard;
+    use std::time::Instant;
+
+    let mut queries = BTreeSet::new();
+    let stride = (games.len() / 8).max(1);
+    for game in games.iter().step_by(stride).take(8) {
+        let Some(word) = game
+            .title
+            .split(|character: char| !character.is_alphanumeric())
+            .find(|word| word.chars().count() >= 3)
+        else {
+            continue;
+        };
+        let word = word.to_lowercase();
+        queries.insert(word.clone());
+        queries.insert(word.chars().take(3).collect::<String>());
+    }
+    let started = Instant::now();
+    let mut fingerprint = Sha256::new();
+    for query in queries {
+        let result = search_system_shard(sqlite_path, &query)
+            .map_err(|error| format!("probe C64 search {query}: {error}"))?;
+        fingerprint.update((query.len() as u64).to_le_bytes());
+        fingerprint.update(query.as_bytes());
+        fingerprint.update((result.matches.len() as u64).to_le_bytes());
+        for matched in result.matches {
+            fingerprint.update((matched.ordinal as u64).to_le_bytes());
+            fingerprint.update(matched.rank.to_bits().to_le_bytes());
+        }
+        if let Some(autocomplete) = result.autocomplete {
+            fingerprint.update([1]);
+            fingerprint.update((autocomplete.word.len() as u64).to_le_bytes());
+            fingerprint.update(autocomplete.word.as_bytes());
+            fingerprint.update([autocomplete.source_rank]);
+            fingerprint.update(autocomplete.score.to_le_bytes());
+        } else {
+            fingerprint.update([0]);
+        }
+    }
+    Ok((elapsed_us(started), hex::encode(fingerprint.finalize())))
 }
 
 #[cfg(feature = "builder")]
@@ -269,7 +324,7 @@ pub fn run_c64_artifact_experiment(
         sync_artifact_batch,
     };
     use crate::system_shard::{
-        ShardDurability, ShardSqliteTuning, SystemShardData, open_system_shard,
+        ShardDurability, ShardSearchTuning, ShardSqliteTuning, SystemShardData, open_system_shard,
         write_system_shard_with_options,
     };
     use std::fs;
@@ -283,26 +338,48 @@ pub fn run_c64_artifact_experiment(
         .find(|system| system.system_id == "c64")
         .ok_or("fast-five snapshot has no C64 system")?;
     let system_id = SystemId::parse("c64").map_err(|error| error.to_string())?;
-    let (staging_parent, durability, sqlite_tuning) = match profile {
+    let (staging_parent, durability, sqlite_tuning, search_tuning) = match profile {
         C64ArtifactExperimentProfile::MediaImmediate => (
             storage_root.join("staging"),
             ShardDurability::Immediate,
             ShardSqliteTuning::Conservative,
+            ShardSearchTuning::FullOptimized,
         ),
         C64ArtifactExperimentProfile::TmpfsImmediate => (
             scratch_root.to_path_buf(),
             ShardDurability::Immediate,
             ShardSqliteTuning::Conservative,
+            ShardSearchTuning::FullOptimized,
         ),
         C64ArtifactExperimentProfile::TmpfsDeferred => (
             scratch_root.to_path_buf(),
             ShardDurability::Deferred,
             ShardSqliteTuning::Conservative,
+            ShardSearchTuning::FullOptimized,
         ),
         C64ArtifactExperimentProfile::TmpfsDeferredMemory => (
             scratch_root.to_path_buf(),
             ShardDurability::Deferred,
             ShardSqliteTuning::MemoryHeavy,
+            ShardSearchTuning::FullOptimized,
+        ),
+        C64ArtifactExperimentProfile::TmpfsImmediateNoOptimize => (
+            scratch_root.to_path_buf(),
+            ShardDurability::Immediate,
+            ShardSqliteTuning::Conservative,
+            ShardSearchTuning::FullUnoptimized,
+        ),
+        C64ArtifactExperimentProfile::TmpfsImmediateFtsColumn => (
+            scratch_root.to_path_buf(),
+            ShardDurability::Immediate,
+            ShardSqliteTuning::Conservative,
+            ShardSearchTuning::ColumnOptimized,
+        ),
+        C64ArtifactExperimentProfile::TmpfsImmediateFtsColumnNoOptimize => (
+            scratch_root.to_path_buf(),
+            ShardDurability::Immediate,
+            ShardSqliteTuning::Conservative,
+            ShardSearchTuning::ColumnUnoptimized,
         ),
     };
     let nonce = SystemTime::now()
@@ -333,6 +410,7 @@ pub fn run_c64_artifact_experiment(
         limits.shard,
         durability,
         sqlite_tuning,
+        search_tuning,
     )
     .map_err(|error| format!("build C64 experiment shard: {error}"))?;
     let build_us = elapsed_us(build_started);
@@ -380,6 +458,8 @@ pub fn run_c64_artifact_experiment(
     if loaded.games != source.games {
         return Err("published C64 experiment rows differ from the snapshot".to_string());
     }
+    let (search_probe_us, search_fingerprint) =
+        c64_search_probe(&storage_root.join(&published.sqlite_path), &source.games)?;
     let _ = fs::remove_dir_all(&staging);
     Ok(C64ArtifactExperimentReport {
         status: "exact",
@@ -392,6 +472,8 @@ pub fn run_c64_artifact_experiment(
         sqlite_bytes: published.sqlite_bytes,
         navigation_bytes: published.navigation_bytes,
         navpack_bytes: published.navpack.map_or(0, |navpack| navpack.bytes),
+        search_probe_us,
+        search_fingerprint,
     })
 }
 

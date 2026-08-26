@@ -31779,12 +31779,7 @@ fn run_fast_five_c64_experiments(
     binary: &Path,
     output: &Path,
 ) -> Result<()> {
-    const PROFILES: [&str; 4] = [
-        "media-immediate",
-        "tmpfs-immediate",
-        "tmpfs-deferred",
-        "tmpfs-deferred-memory",
-    ];
+    const PROFILES: [&str; 2] = ["tmpfs-immediate", "tmpfs-immediate-no-optimize"];
 
     let _signal_guard = AttendedOperationSignalGuard::install();
     if !binary.is_file() {
@@ -31909,6 +31904,20 @@ fn run_fast_five_c64_experiments(
             object.insert("cold_boot_verified".into(), Value::Bool(true));
             object.insert("phase_records".into(), serde_json::to_value(phase_records)?);
             samples.push(sample);
+        }
+        let baseline_search = samples
+            .first()
+            .and_then(|sample| sample.get("search_fingerprint"))
+            .and_then(Value::as_str)
+            .ok_or("baseline C64 experiment has no search fingerprint")?
+            .to_string();
+        for sample in &mut samples {
+            let equivalent = sample.get("search_fingerprint").and_then(Value::as_str)
+                == Some(baseline_search.as_str());
+            sample
+                .as_object_mut()
+                .ok_or("C64 experiment sample is not an object")?
+                .insert("search_equivalent".into(), Value::Bool(equivalent));
         }
         Ok(samples)
     })();

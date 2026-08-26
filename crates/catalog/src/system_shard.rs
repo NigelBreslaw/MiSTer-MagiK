@@ -118,6 +118,15 @@ pub(crate) enum ShardSqliteTuning {
     MemoryHeavy,
 }
 
+#[cfg(feature = "builder")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ShardSearchTuning {
+    FullOptimized,
+    FullUnoptimized,
+    ColumnOptimized,
+    ColumnUnoptimized,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct StoredNavigation {
     schema_version: u32,
@@ -177,6 +186,7 @@ pub(crate) fn write_system_shard_with_durability(
         limits,
         durability,
         ShardSqliteTuning::Conservative,
+        ShardSearchTuning::FullOptimized,
     )
 }
 
@@ -188,6 +198,7 @@ pub(crate) fn write_system_shard_with_options(
     limits: SystemShardLimits,
     durability: ShardDurability,
     sqlite_tuning: ShardSqliteTuning,
+    search_tuning: ShardSearchTuning,
 ) -> Result<LoadedSystemShard, SystemShardError> {
     validate_games(&data.games, limits.max_games)?;
     let navigation_indexes = build_navigation_indexes(&data.games)?;
@@ -268,7 +279,15 @@ pub(crate) fn write_system_shard_with_options(
              );"
         ))
         .map_err(|error| SystemShardError::with("create shard schema", error))?;
-    crate::persisted_search::create_schema(&connection)
+    let search_detail = match search_tuning {
+        ShardSearchTuning::FullOptimized | ShardSearchTuning::FullUnoptimized => {
+            crate::persisted_search::PersistedSearchDetail::Full
+        }
+        ShardSearchTuning::ColumnOptimized | ShardSearchTuning::ColumnUnoptimized => {
+            crate::persisted_search::PersistedSearchDetail::Column
+        }
+    };
+    crate::persisted_search::create_schema_with_detail(&connection, search_detail)
         .map_err(|error| SystemShardError::new("write", error.to_string()))?;
     let generation = i64::try_from(data.generation)
         .map_err(|_| SystemShardError::new("write", "generation exceeds SQLite integer"))?;
@@ -361,8 +380,13 @@ pub(crate) fn write_system_shard_with_options(
     drop(games_pmu);
     let search_index_pmu =
         mister_magik_perf_events::sampled_span(crate::pmu_phase::SHARD_SEARCH_INDEX);
-    let search = crate::persisted_search::populate(&transaction, &data.games)
-        .map_err(|error| SystemShardError::new("write", error.to_string()))?;
+    let optimize_search = matches!(
+        search_tuning,
+        ShardSearchTuning::FullOptimized | ShardSearchTuning::ColumnOptimized
+    );
+    let search =
+        crate::persisted_search::populate_with_options(&transaction, &data.games, optimize_search)
+            .map_err(|error| SystemShardError::new("write", error.to_string()))?;
     crate::catalog_logln!(
         "catalog_search_build_tsv\tsystem={}\tdocuments={}\twords={}\tbatches={}\tdocument_build_us={}\tfts_insert_us={}\tpipeline_wait_us={}\trow_loop_us={}\tautocomplete_sort_us={}\tautocomplete_insert_us={}\toptimize_us={}\tautomerge_restore_us={}\tintegrity_us={}\ttotal_us={}",
         data.system_id.as_str(),
