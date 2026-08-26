@@ -755,4 +755,44 @@ mod tests {
             helper.fingerprint().unwrap()
         );
     }
+
+    #[test]
+    fn prepared_target_helper_activates_for_unchanged_tree() {
+        let root = fixture_root("target-exact");
+        write_fixture(&root);
+        let helper = PreparedTargetCatalogHelper::capture(
+            &root,
+            &root.join("_DOS Games"),
+            "0mhz",
+            "{\"discoveries\":[]}".to_string(),
+            &["_DOS Games/Doom.mgl".to_string()],
+            &["games/AO486/Doom.vhd".to_string()],
+            &["mgl".to_string()],
+        )
+        .unwrap();
+
+        assert!(helper.activate().is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepared_target_helper_rejects_added_game() {
+        let root = fixture_root("target-addition");
+        write_fixture(&root);
+        let helper = PreparedTargetCatalogHelper::capture(
+            &root,
+            &root.join("_DOS Games"),
+            "0mhz",
+            "{\"discoveries\":[]}".to_string(),
+            &["_DOS Games/Doom.mgl".to_string()],
+            &["games/AO486/Doom.vhd".to_string()],
+            &["mgl".to_string()],
+        )
+        .unwrap();
+        fs::write(root.join("_DOS Games/Homebrew.mgl"), b"custom").unwrap();
+
+        let error = helper.activate().unwrap_err();
+        fs::remove_dir_all(root).unwrap();
+        assert!(error.contains("changed prepared directory"));
+    }
 }
