@@ -31706,12 +31706,14 @@ fn run_fast_five_catalog_prototype(
         },
     )?;
     let status = read_launcher_status(&session)?;
-    let expected_games = published
-        .get("games")
-        .and_then(Value::as_u64)
-        .ok_or("fast-five publish report has no game count")?;
+    let expected_fingerprint = published
+        .get("registry_fingerprint")
+        .and_then(Value::as_str)
+        .ok_or("fast-five publish report has no registry fingerprint")?;
     if status.get("catalog_systems").and_then(Value::as_u64) != Some(5)
-        || status.get("catalog_games").and_then(Value::as_u64) != Some(expected_games)
+        || status.get("catalog_ready").and_then(Value::as_bool) != Some(true)
+        || status.get("catalog_refresh_policy").and_then(Value::as_str) != Some("off")
+        || status.get("catalog_generation").and_then(Value::as_str) != Some(expected_fingerprint)
     {
         return Err(format!("real UI did not load the fast-five catalog: {status}").into());
     }
@@ -31726,6 +31728,8 @@ fn run_fast_five_catalog_prototype(
             "catalog_systems": status.get("catalog_systems"),
             "catalog_games": status.get("catalog_games"),
             "catalog_ready": status.get("catalog_ready"),
+            "catalog_generation": status.get("catalog_generation"),
+            "selected_system_id": status.get("selected_system_id"),
         },
     });
     if let Some(parent) = output
