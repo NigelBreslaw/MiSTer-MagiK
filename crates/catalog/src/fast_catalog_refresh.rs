@@ -955,7 +955,6 @@ fn capture_tree(
     directories: &mut Vec<FastWatchedDirectory>,
     containers: &mut Vec<FastWatchedContainer>,
 ) -> Result<(), String> {
-    directories.push(capture_directory(root)?);
     let mut entries = fs::read_dir(root)
         .map_err(|error| format!("read watch directory {}: {error}", root.display()))?
         .collect::<Result<Vec<_>, _>>()
@@ -970,10 +969,21 @@ fn capture_tree(
         }
         let path = entry.path();
         if file_type.is_dir() {
-            capture_tree(&path, directories, containers)?;
+            if let Err(error) = capture_tree(&path, directories, containers)
+                && path.exists()
+            {
+                return Err(error);
+            }
         } else if file_type.is_file() && is_watched_container(&path) {
-            containers.push(capture_container(&path)?);
+            match capture_container(&path) {
+                Ok(container) => containers.push(container),
+                Err(error) if path.exists() => return Err(error),
+                Err(_) => {}
+            }
         }
+    }
+    if root.is_dir() {
+        directories.push(capture_directory(root)?);
     }
     Ok(())
 }
