@@ -358,6 +358,8 @@ pub enum CatalogCommand {
     FastFivePprof(CatalogFastFivePprofArgs),
     /// Profile a reboot-cold incremental refresh of the independent fast catalog.
     FastRefreshPprof(CatalogFastRefreshPprofArgs),
+    /// Benchmark a reboot-cold incremental refresh without profiler overhead.
+    FastRefreshBenchmark(CatalogFastRefreshBenchmarkArgs),
     /// Cold-build the five systems independently with the existing builder.
     FastFiveOldCold(CatalogFastFiveOldColdArgs),
     /// Delete the Dev catalog and screenshot packs, then perform one supervised reboot.
@@ -432,6 +434,20 @@ pub struct CatalogFastRefreshPprofArgs {
     #[arg(long, value_name = "PATH")]
     pub(crate) binary: PathBuf,
     #[arg(long, value_name = "DIRECTORY")]
+    pub(crate) out: PathBuf,
+    #[arg(long, default_value = "no-change")]
+    pub(crate) scenario: String,
+}
+
+#[derive(Debug, Args)]
+pub struct CatalogFastRefreshBenchmarkArgs {
+    #[arg(long, required = true)]
+    attended: bool,
+    #[arg(long, required = true)]
+    reboot: bool,
+    #[arg(long, value_name = "PATH")]
+    pub(crate) binary: PathBuf,
+    #[arg(long, value_name = "PATH")]
     pub(crate) out: PathBuf,
     #[arg(long, default_value = "no-change")]
     pub(crate) scenario: String,
@@ -607,6 +623,7 @@ impl DeviceCommand {
                     | CatalogCommand::FastFiveExperiments(_)
                     | CatalogCommand::FastFivePprof(_)
                     | CatalogCommand::FastRefreshPprof(_)
+                    | CatalogCommand::FastRefreshBenchmark(_)
                     | CatalogCommand::FastFiveOldCold(_)
                     | CatalogCommand::Purge(_)
             ),

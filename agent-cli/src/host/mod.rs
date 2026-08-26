@@ -611,6 +611,12 @@ impl NativeDevice {
                         &args.out,
                         &args.scenario,
                     ),
+                    CatalogCommand::FastRefreshBenchmark(args) => run_fast_refresh_benchmark(
+                        &prepared.config,
+                        &args.binary,
+                        &args.out,
+                        &args.scenario,
+                    ),
                     CatalogCommand::FastFiveOldCold(args) => {
                         run_fast_five_old_cold_matrix(&prepared.config, &args.out, &args.target_set)
                     }
@@ -32396,6 +32402,177 @@ fn run_fast_five_pprof(
     )?;
     fs::write(output.join("build.log"), build_log)?;
     println!("fast_five_pprof_report={}", output.display());
+    Ok(())
+}
+
+fn run_fast_refresh_benchmark(
+    config: &NativeDeviceConfig,
+    binary: &Path,
+    output: &Path,
+    scenario: &str,
+) -> Result<()> {
+    const BENCHMARK_DIR: &str = "/media/fat/games/SNES/mister-magik-refresh-benchmark";
+    const BENCHMARK_ROM: &str =
+        "/media/fat/games/SNES/mister-magik-refresh-benchmark/MagiK Refresh Benchmark.sfc";
+
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    if !matches!(scenario, "no-change" | "add-snes") {
+        return Err(format!("unsupported fast refresh benchmark scenario: {scenario}").into());
+    }
+    if !binary.is_file() {
+        return Err(format!(
+            "fast refresh benchmark binary is missing: {}",
+            binary.display()
+        )
+        .into());
+    }
+    if output.exists() {
+        return Err(format!(
+            "fast refresh benchmark output already exists: {}",
+            output.display()
+        )
+        .into());
+    }
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let binary_sha256 = file_sha256(binary.to_path_buf())?;
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    exec_checked(
+        &session,
+        "fast refresh benchmark safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    exec_checked(
+        &session,
+        "prepare fast refresh benchmark tool",
+        &format!(
+            "mkdir -p {}",
+            sh("/media/fat/mister-magik-dev/fast-five-tool")
+        ),
+    )?;
+    put(&session, binary, FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)?;
+    exec_checked(
+        &session,
+        "publish exact fast refresh benchmark binary",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "test \"$(sha256sum {} | cut -d' ' -f1)\" = {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(&binary_sha256)
+            ),
+            format!("chmod 755 {}", sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)),
+            format!(
+                "mv -f {} {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY)
+            ),
+        ]),
+    )?;
+    let preflight = exec_checked_output(
+        &session,
+        "validate fast refresh benchmark state",
+        &format!(
+            "{} plan-refresh --catalog-root {} --storage-root {} --request update",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+            sh("/media/fat")
+        ),
+    )?;
+    let preflight = parse_last_json_line("fast refresh benchmark plan", &preflight.stdout)?;
+    if preflight.get("systems").and_then(Value::as_u64) != Some(9) {
+        return Err("fast refresh benchmark state is not a complete nine-system snapshot".into());
+    }
+    if scenario == "add-snes" {
+        exec_checked(
+            &session,
+            "add isolated SNES refresh benchmark fixture",
+            &shell_sequence([
+                "set -eu".to_string(),
+                format!("mkdir -p {}", sh(BENCHMARK_DIR)),
+                format!("printf x > {}", sh(BENCHMARK_ROM)),
+                "sync".to_string(),
+            ]),
+        )?;
+    } else {
+        exec_checked(&session, "sync fast refresh benchmark inputs", "sync")?;
+    }
+    drop(session);
+
+    let run = (|| -> Result<(Value, String)> {
+        agent_reboot_wait(&[])?;
+        let session = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &session,
+            "fast refresh benchmark post-reboot safety preflight",
+            &cold_boot_profile_preflight_command(),
+        )?;
+        let refreshed = exec_checked_output(
+            &session,
+            "run reboot-cold fast catalog refresh benchmark",
+            &format!(
+                "{} refresh --catalog-root {} --storage-root {} --request update",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+                sh("/media/fat")
+            ),
+        )?;
+        let report = parse_last_json_line("fast refresh benchmark", &refreshed.stdout)?;
+        if report.get("systems").and_then(Value::as_u64) != Some(9) {
+            return Err("fast refresh benchmark is incomplete".into());
+        }
+        Ok((report, refreshed.stdout))
+    })();
+    let cleanup = (|| -> Result<()> {
+        let session = connect_with(&config.connection, 10)?;
+        if scenario == "add-snes" {
+            exec_checked(
+                &session,
+                "remove isolated SNES refresh benchmark fixture",
+                &format!("rm -rf {}", sh(BENCHMARK_DIR)),
+            )?;
+            exec_checked_output(
+                &session,
+                "reconcile removed SNES refresh benchmark fixture",
+                &format!(
+                    "{} refresh --catalog-root {} --storage-root {} --request update",
+                    sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                    sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+                    sh("/media/fat")
+                ),
+            )?;
+        }
+        if catalog_production_registry_identity(&session)? != production_registry_before {
+            return Err("production registry changed during fast refresh benchmark".into());
+        }
+        Ok(())
+    })();
+    let (refresh, build_log) = match (run, cleanup) {
+        (Ok(result), Ok(())) => result,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => return Err(error),
+        (Err(run), Err(cleanup)) => {
+            return Err(format!("{run}; cleanup also failed: {cleanup}").into());
+        }
+    };
+    let report = json!({
+        "schema": "mister-magik-fast-refresh-benchmark-v1",
+        "status": "passed",
+        "cold_boot_verified": true,
+        "timing_authoritative": true,
+        "scenario": scenario,
+        "binary_sha256": binary_sha256,
+        "refresh": refresh,
+        "production_registry_unchanged": true,
+    });
+    fs::write(
+        output,
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    fs::write(output.with_extension("log"), build_log)?;
+    println!("fast_refresh_benchmark_report={}", output.display());
     Ok(())
 }
 
