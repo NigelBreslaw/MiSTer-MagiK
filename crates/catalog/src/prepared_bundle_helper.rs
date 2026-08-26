@@ -52,7 +52,7 @@ impl PreparedTargetCatalogHelper {
             )
         })?;
         let target_relative = path_to_slash(relative_target)?;
-        let output_sha256 = format!("{:x}", Sha256::digest(output_json.as_bytes()));
+        let output_sha256 = sha256_hex(output_json.as_bytes());
         let receipt = PreparedBundleHelper::capture(
             storage_root,
             collection_id,
@@ -114,7 +114,7 @@ impl PreparedTargetCatalogHelper {
             return Err("prepared target catalog helper path is empty".to_string());
         }
         self.receipt.validate()?;
-        let actual = format!("{:x}", Sha256::digest(self.output_json.as_bytes()));
+        let actual = sha256_hex(self.output_json.as_bytes());
         if actual != self.output_sha256 {
             return Err("prepared target catalog output checksum changed".to_string());
         }
@@ -253,7 +253,7 @@ impl PreparedBundleHelper {
 
     pub fn fingerprint(&self) -> Result<String, String> {
         let bytes = self.to_json()?;
-        Ok(format!("{:x}", Sha256::digest(bytes)))
+        Ok(sha256_hex(&bytes))
     }
 
     pub fn activate_with_fallback(
@@ -377,8 +377,19 @@ fn capture_exact_file(root: &Path, relative: &str) -> Result<ExactFileReceipt, S
     Ok(ExactFileReceipt {
         relative_path: normalize_relative_path(relative),
         bytes: len,
-        sha256: format!("{:x}", Sha256::digest(bytes)),
+        sha256: sha256_hex(&bytes),
     })
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = Sha256::digest(bytes);
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        output.push(HEX[usize::from(byte >> 4)] as char);
+        output.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    output
 }
 
 fn capture_payload(root: &Path, relative: &str) -> Result<PayloadReceipt, String> {
