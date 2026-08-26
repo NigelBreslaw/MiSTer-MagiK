@@ -5,7 +5,8 @@
 A standalone Arcade-only builder was implemented without importing the legacy
 Catalog V3 scanner or database writer. On the measured MiSTer corpus it creates
 1,181 active variant records representing 925 preferred families in a
-149,977-byte catalog. Every compared arm produced byte-identical active output.
+149,977-byte catalog. Every historical comparison arm and the final build
+produced the same active-output SHA-256.
 
 The strongest complete from-Update_All cold result is 2.311 seconds. The
 production-shaped path, where Update_All knowledge is compiled ahead of boot
@@ -15,12 +16,13 @@ legacy cold evidence reaches its first Arcade system 8.933–9.575 seconds after
 builder execution begins. The prototype is therefore approximately 3.3–5.0x
 faster depending on which valid cold sample and boundary are compared.
 
-The final v3 assurance run is the delivery authority: 2.617 seconds
-single-threaded versus 2.670 seconds parallel. It additionally proves the exact
-remote artifact hashes, decodes both outputs, binds the result to clean commit
-`6765d9326c37cd651d7f046d3e2d8f8af32d817e`, and confirms that all production
-and Dev Catalog V3 registry manifests are unchanged. Against the retained
-legacy boundary, that final result is 3.41–3.66x faster.
+The final v4 delivery-authority run measured 2.052400 seconds. It proves the
+exact remote artifact hashes, decodes the output, binds the result to clean
+commit `5cde0da306fb28d1dfdc887cf0d92fff6375bf97`, enforces the one-worker
+policy, and confirms that all production and Dev Catalog V3 registry manifests
+are unchanged. Against the retained legacy boundary, the final result is
+4.35–4.67x faster. The preceding v3 run remains the strongest controlled
+parallel-versus-single comparison: 2.616584 versus 2.670432 seconds.
 
 This is a directional comparison, not schema parity. The legacy builder is
 performing broader Catalog V3 discovery and publication, while the prototype
@@ -35,22 +37,23 @@ catalog pipeline, Update_All index, Arcade ROM eligibility, exFAT behavior,
 Cortex-A9 concurrency, publication, and existing benchmark evidence.
 
 Every authoritative prototype timing was taken by the typed
-`arcade-catalog-prototype-cold` scenario. Each arm:
+`arcade-catalog-prototype-cold` scenario. Each retained measurement:
 
 1. verifies the coherent Dev platform and exact focused binary receipt;
 2. performs a supervised reboot and proves that the boot ID changed;
 3. waits for launcher health and suspends through acknowledged Main control;
-4. removes the arm output, syncs, and writes `3` to `drop_caches`;
+4. removes its output, syncs, and writes `3` to `drop_caches`;
 5. creates the active catalog from scratch;
 6. downloads the output/report, resumes the launcher, and verifies health.
 
-The final v3 evidence gate additionally installs interruption-safe cleanup,
-proves the remote executable and source-base hashes after each reboot, decodes
-and cross-checks both retained active outputs, binds the evidence to the clean
-Git commit, and proves the production/Dev Catalog V3 registry manifests are
-unchanged.
+The final v4 evidence gate additionally installs interruption-safe cleanup,
+proves the remote executable and source-base hashes after reboot, decodes and
+cross-checks the retained active output, binds the evidence to the clean Git
+commit, enforces the one-worker policy, and proves the production/Dev Catalog
+V3 registry manifests are unchanged.
 
-Parallel and single-thread arms use separate reboots. No warm rerun is included
+Historical parallel and single-thread comparison arms used separate reboots;
+the final v4 workflow has only one single-worker arm. No warm rerun is included
 as timing authority. The immutable source-base test compiles that base before
 the reboot; the active catalog itself does not exist until after reboot and the
 base is cold after reboot/cache drop.
@@ -117,10 +120,11 @@ active-only. The two values are separate reboot arms.
 | Final policy, active-only pair 3 | 2.811 s | **2.737 s** | Exact final commit; 11 ambiguous rows eliminated before card reads. |
 | Hardened final, active-only pair 4 | 2.151 s | **1.933 s** | Exact delivered code; path/type hardening included. |
 | Assurance v3, active-only pair 5 | 2.670 s | **2.617 s** | Exact hashes, decoded outputs, source commit, and Catalog V3 isolation proved. |
+| Single-worker v4 delivery authority | — | **2.052 s** | Parallel code removed; exact final binary, decoded output, source commit, and Catalog V3 isolation proved. |
 
 The directory-batched complete build reduced the initial 7.209-second parallel
-control by 3.12x. The best single-thread active build reduced the 5.968-second
-initial single-thread control by 2.74x.
+control by 3.12x. The final v4 active build reduced the 5.968-second initial
+single-thread control by 2.91x; the best historical sample was 3.09x faster.
 
 ## Where the final time goes
 
@@ -147,14 +151,20 @@ decode, 727.453 ms for ROM inventory, 1.593350 seconds for MRA discovery,
 write. Total time was 2.616584 seconds, compared with 2.670432 seconds for the
 byte-identical parallel arm.
 
+In the final v4 run, base decode took 59.447 ms, shallow ROM inventory 780.826
+ms, MRA discovery 1.043589 seconds, join 10.454 ms, selection 13.561 ms, and
+the atomic write 17.119 ms. Inventory wall time was 1.830347 seconds and total
+time was 2.052400 seconds. The dominant remaining work is therefore still
+exFAT enumeration rather than CPU-side catalog construction.
+
 ## Dual-core conclusion
 
 The Cortex-A9 result is workload-specific. Two directory workers produced one
 excellent complete-build sample, but all five repeated active-only pairs were
 slower in parallel: 15% slower in pair 1, 22% slower in pair 2, and 3% slower
 in pair 3; the hardened final pair was 11% slower and the v3 assurance pair was
-2% slower in parallel. Earlier
-full-walk and individual-probe controls also favored one worker. The exFAT card
+2% slower in parallel. Earlier full-walk and individual-probe controls also
+favored one worker. The exFAT card
 has enough boot-to-boot latency variance that one favorable pair cannot justify
 a parallel production default.
 
@@ -190,9 +200,9 @@ the timing work does not solve:
 - fast path presence is not proof that an MRA at the expected path still
   matches Update_All; promotion needs size/hash validation or an installer
   receipt bound to updater revision, path, and content;
-- the benchmark proves deterministic output across worker modes, not semantic
-  parity with Catalog V3 launch paths, families, metadata, ordering, or ROM
-  eligibility;
+- the historical A/B evidence proves deterministic output across worker modes,
+  not semantic parity with Catalog V3 launch paths, families, metadata,
+  ordering, or ROM eligibility;
 - the active file has no card-input fingerprint, policy identity, or generation
   proving that a retained output is current;
 - single-file atomic replacement has no alternating prior-valid generation,
@@ -231,6 +241,7 @@ Evidence directories used by this report:
 - `build/agent-benchmarks/arcade-catalog-prototype-cold/1787728394`
 - `build/agent-benchmarks/arcade-catalog-prototype-cold/1787729161`
 - `build/agent-benchmarks/arcade-catalog-prototype-cold/1787730087`
+- `build/agent-benchmarks/arcade-catalog-prototype-cold/1787730871`
 - `build/agent-benchmarks/cold-boot/1787508360`
 - `build/agent-benchmarks/cold-boot/1787344344`
 - `build/agent-benchmarks/catalog-full-build-rebuild/1787306191`

@@ -2625,7 +2625,7 @@ fn execute_arcade_catalog_prototype_cold(
     reporter.emit(
         EventKind::Progress,
         "profile",
-        "benchmarking cold active Arcade builds from an immutable Update_All base after separate controlled reboots",
+        "benchmarking a cold single-worker Arcade build from an immutable Update_All base after a controlled reboot",
         Some(20),
     )?;
     let detail = device.profile_arcade_catalog_prototype(binary, output_dir.clone())?;
