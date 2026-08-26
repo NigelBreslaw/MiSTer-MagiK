@@ -89,7 +89,7 @@ pub fn load_sharded_registry_seed_at(
     })
 }
 
-fn fast_five_catalog_enabled() -> bool {
+pub(crate) fn fast_five_catalog_enabled() -> bool {
     std::env::var("MISTER_FAST_FIVE_CATALOG")
         .ok()
         .is_some_and(|value| matches!(value.as_str(), "1" | "on" | "true" | "yes"))

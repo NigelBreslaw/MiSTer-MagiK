@@ -583,6 +583,17 @@ pub(super) fn start_library_catalog_worker(
                     library_db::CatalogProgress::indexing_building_catalog(),
                 );
             }
+            if crate::launcher_runtime::catalog::fast_five_catalog_enabled()
+                && matches!(plan, CatalogWorkerPlan::Reconcile { .. })
+            {
+                run_fast_catalog_refresh_in_process(
+                    &root,
+                    plan,
+                    catalog_paths.sharded_catalog_dir(),
+                    &tx,
+                );
+                return;
+            }
             if let Some(builder_execution_mode) = dispatch.builder_execution_mode {
                 run_catalog_builder_in_process(
                     &root,
@@ -598,6 +609,124 @@ pub(super) fn start_library_catalog_worker(
         })
         .expect("spawn library-catalog");
     rx
+}
+
+fn run_fast_catalog_refresh_in_process(
+    root: &str,
+    plan: CatalogWorkerPlan,
+    catalog_root: &Path,
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+) {
+    use mister_magik_catalog::fast_catalog_refresh::{
+        FastCatalogRefreshRequest, FastCatalogSystemOutcome, FastSourceCheckStatus,
+    };
+
+    let request = if plan == CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS {
+        FastCatalogRefreshRequest::RebuildAll
+    } else {
+        FastCatalogRefreshRequest::Update
+    };
+    let storage_root = std::env::var_os("MISTER_FAST_CATALOG_STORAGE_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/media/fat"));
+    let planned = match mister_magik_catalog::fast_catalog_refresh::plan_fast_refresh(
+        &storage_root,
+        catalog_root,
+        request,
+    ) {
+        Ok(planned) => planned,
+        Err(error) => {
+            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                error: format!("fast catalog refresh planning failed: {error}"),
+            });
+            return;
+        }
+    };
+    let system_ids = planned
+        .checks
+        .iter()
+        .map(|check| check.system_id.clone())
+        .collect::<Vec<_>>();
+    let _ = tx.send(CatalogWorkerMessage::ReconciliationPlanReady {
+        system_ids,
+        all_published_systems: false,
+    });
+    for check in &planned.checks {
+        if check.status != FastSourceCheckStatus::Unchanged {
+            let _ = tx.send(CatalogWorkerMessage::SystemScanning {
+                system_id: check.system_id.clone(),
+            });
+        }
+    }
+    let report = match mister_magik_catalog::fast_catalog_refresh::execute_fast_refresh(
+        &storage_root,
+        catalog_root,
+        request,
+    ) {
+        Ok(report) => report,
+        Err(error) => {
+            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                error: format!("fast catalog refresh failed: {error}"),
+            });
+            return;
+        }
+    };
+    let mut rebuilt = Vec::new();
+    for system in &report.system_reports {
+        match system.outcome {
+            FastCatalogSystemOutcome::Unchanged => {
+                let _ = tx.send(CatalogWorkerMessage::SystemPrepared {
+                    system_id: system.system_id.clone(),
+                    generation: report.catalog_generation,
+                });
+            }
+            FastCatalogSystemOutcome::Updated => {
+                rebuilt.push(system.system_id.clone());
+                let _ = tx.send(CatalogWorkerMessage::SystemPrepared {
+                    system_id: system.system_id.clone(),
+                    generation: report.catalog_generation,
+                });
+            }
+            FastCatalogSystemOutcome::Removed => {}
+            FastCatalogSystemOutcome::FailedRetained => {
+                let _ = tx.send(CatalogWorkerMessage::SystemUpdateFailed {
+                    system_id: system.system_id.clone(),
+                    error: system.detail.clone(),
+                });
+            }
+        }
+    }
+    let _ = tx.send(CatalogWorkerMessage::Timing {
+        name: "fast_catalog_refresh".to_string(),
+        detail: format!(
+            "elapsed_us={} planning_us={} source_rebuild_us={} artifact_publish_us={} snapshot_publish_us={} systems={} unchanged={} updated={} failed_retained={} artifact_systems_written={} row_snapshots_opened={}",
+            report.elapsed_us,
+            report.planning_us,
+            report.source_rebuild_us,
+            report.artifact_publish_us,
+            report.snapshot_publish_us,
+            report.systems,
+            report.unchanged,
+            report.updated,
+            report.failed_retained,
+            report.artifact_systems_written,
+            report.row_snapshots_opened,
+        ),
+    });
+    if !rebuilt.is_empty() {
+        let _ = tx.send(CatalogWorkerMessage::ManifestPublished {
+            generation: report.catalog_generation,
+            rebuilt,
+            removed: Vec::new(),
+        });
+        if let Err(error) = publish_strict_registry_seed_at(tx, root, catalog_root) {
+            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                error: format!("fast catalog registry reload failed: {error}"),
+            });
+            return;
+        }
+    }
+    let _ = tx.send(CatalogWorkerMessage::Done);
 }
 
 fn run_catalog_builder_in_process(
