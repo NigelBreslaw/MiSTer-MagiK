@@ -31804,7 +31804,7 @@ const FAST_FIVE_OLD_TARGETS: [FastFiveOldTarget; 5] = [
     },
     FastFiveOldTarget {
         system_id: "x68000",
-        roots: "/media/fat/_Computer",
+        roots: "/media/fat",
         allowlist: "/media/fat/_Computer/_X68000 Games",
     },
 ];
