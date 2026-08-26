@@ -42,6 +42,7 @@ lz4_flex = "0.14.0"
 memmap2 = "0.9.11"
 mister-magik-perf-events = { path = "../perf-events" }
 mister-magik-platform-manifest-contract = { path = "../../mister/platform/contracts/manifest" }
+pprof = { git = "https://github.com/NigelBreslaw/pprof-rs", branch = "armv7-itimer-abi", optional = true, default-features = false, features = ["flamegraph"] }
 quick-xml = "0.41"
 rusqlite = { version = "0.40.0", default-features = false, features = ["bundled", "functions", "modern_sqlite"] }
 serde = { version = "1", features = ["derive"] }
@@ -52,6 +53,7 @@ walkdir = "2"
 [features]
 default = []
 builder = []
+profile = ["dep:pprof"]
 
 [profile.release]
 opt-level = 3

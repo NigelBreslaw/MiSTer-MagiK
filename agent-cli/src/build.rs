@@ -55,6 +55,7 @@ pub enum BuildCommand {
     FramebufferSceneLabAnalysis,
     ArcadeCatalogPrototypeDevice,
     FiveSystemCatalogPrototypeDevice,
+    FiveSystemCatalogPrototypeAnalysis,
     ReleaseBinaries,
 }
 
@@ -210,6 +211,14 @@ impl BuildSpec {
                 vec!["builder"],
                 UiScope::All,
                 five_system_catalog_prototype_artifact("release-device"),
+            ),
+            BuildCommand::FiveSystemCatalogPrototypeAnalysis => (
+                BuildTarget::FiveSystemCatalogPrototype,
+                BuildMode::Build,
+                "release-device-profile",
+                vec!["builder", "profile"],
+                UiScope::All,
+                five_system_catalog_prototype_artifact("release-device-profile"),
             ),
             BuildCommand::ReleaseBinaries => return None,
         };
@@ -1999,6 +2008,21 @@ mod tests {
             cargo_args(&spec, false)
                 .windows(2)
                 .any(|pair| pair == ["--bin", "five-system-catalog-prototype"])
+        );
+    }
+
+    #[test]
+    fn five_system_catalog_prototype_analysis_keeps_symbols_and_pprof() {
+        let spec =
+            BuildSpec::for_command(BuildCommand::FiveSystemCatalogPrototypeAnalysis).unwrap();
+        assert_eq!(spec.target, BuildTarget::FiveSystemCatalogPrototype);
+        assert_eq!(spec.features, ["builder", "profile"]);
+        assert_eq!(spec.profile, "release-device-profile");
+        assert_eq!(
+            spec.artifact,
+            PathBuf::from(
+                "crates/catalog/target/armv7-unknown-linux-gnueabihf/release-device-profile/five-system-catalog-prototype"
+            )
         );
     }
 

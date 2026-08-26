@@ -590,6 +590,9 @@ impl NativeDevice {
                     CatalogCommand::FastFiveC64Experiments(args) => {
                         run_fast_five_c64_experiments(&prepared.config, &args.binary, &args.out)
                     }
+                    CatalogCommand::FastFivePprof(args) => {
+                        run_fast_five_pprof(&prepared.config, &args.binary, &args.out)
+                    }
                     CatalogCommand::FastFiveOldCold(args) => {
                         run_fast_five_old_cold_matrix(&prepared.config, &args.out)
                     }
@@ -31612,6 +31615,10 @@ const FAST_FIVE_PROTOTYPE_REMOTE_ROOT: &str = "/media/fat/mister-magik-dev/fast-
 const FAST_FIVE_PROTOTYPE_REFERENCE_ROOT: &str = "/media/fat/mister-magik-dev/catalog-v3";
 const FAST_FIVE_C64_EXPERIMENT_ROOT: &str = "/media/fat/mister-magik-dev/fast-five-c64-experiments";
 const FAST_FIVE_C64_EXPERIMENT_SCRATCH: &str = "/tmp/mister-magik/fast-five-c64-experiments";
+const FAST_FIVE_PPROF_REMOTE_ROOT: &str = "/media/fat/mister-magik-dev/fast-five-pprof-catalog";
+const FAST_FIVE_PPROF_REMOTE_DIR: &str = "/tmp/mister-magik/fast-five-pprof";
+const FAST_FIVE_PPROF_REMOTE_SVG: &str = "/tmp/mister-magik/fast-five-pprof/profile.svg";
+const FAST_FIVE_PPROF_REMOTE_FOLDED: &str = "/tmp/mister-magik/fast-five-pprof/profile.folded";
 
 fn run_fast_five_catalog_prototype(
     config: &NativeDeviceConfig,
@@ -31771,6 +31778,181 @@ fn run_fast_five_catalog_prototype(
         format!("{}\n", serde_json::to_string_pretty(&report)?),
     )?;
     println!("fast_five_catalog_report={}", output.display());
+    Ok(())
+}
+
+fn run_fast_five_pprof(config: &NativeDeviceConfig, binary: &Path, output: &Path) -> Result<()> {
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    if !binary.is_file() {
+        return Err(format!(
+            "five-system catalog profile binary is missing: {}",
+            binary.display()
+        )
+        .into());
+    }
+    if output.exists() {
+        return Err(format!(
+            "fast-five pprof output already exists: {}",
+            output.display()
+        )
+        .into());
+    }
+    fs::create_dir_all(output)?;
+    let binary_sha256 = file_sha256(binary.to_path_buf())?;
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    exec_checked(
+        &session,
+        "fast-five pprof safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    exec_checked(
+        &session,
+        "prepare fast-five pprof inputs",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "rm -rf {} {} {}",
+                sh("/media/fat/mister-magik-dev/fast-five-tool"),
+                sh(FAST_FIVE_PPROF_REMOTE_ROOT),
+                sh(FAST_FIVE_PPROF_REMOTE_DIR)
+            ),
+            format!(
+                "mkdir -p {}",
+                sh("/media/fat/mister-magik-dev/fast-five-tool")
+            ),
+        ]),
+    )?;
+    put(&session, binary, FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)?;
+    exec_checked(
+        &session,
+        "publish exact fast-five pprof binary",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "test \"$(sha256sum {} | cut -d' ' -f1)\" = {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(&binary_sha256)
+            ),
+            format!("chmod 755 {}", sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)),
+            format!(
+                "mv -f {} {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY)
+            ),
+        ]),
+    )?;
+    let snapshot = exec_checked_output(
+        &session,
+        "capture fast-five pprof reference snapshot",
+        &format!(
+            "{} snapshot-reference --catalog-root {} --output {}",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT)
+        ),
+    )?;
+    let snapshot = parse_last_json_line("fast-five pprof snapshot", &snapshot.stdout)?;
+    exec_checked(&session, "sync fast-five pprof inputs", "sync")?;
+    drop(session);
+
+    let run = (|| -> Result<(Value, Value, String)> {
+        agent_reboot_wait(&[])?;
+        let session = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &session,
+            "fast-five pprof post-reboot safety preflight",
+            &cold_boot_profile_preflight_command(),
+        )?;
+        let published_output = exec_checked_output(
+            &session,
+            "profile reboot-cold fast-five publication",
+            &format!(
+                "{} publish-profile --input {} --output-root {} --pprof-svg {} --pprof-folded {} --pprof-hz 997",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+                sh(FAST_FIVE_PPROF_REMOTE_ROOT),
+                sh(FAST_FIVE_PPROF_REMOTE_SVG),
+                sh(FAST_FIVE_PPROF_REMOTE_FOLDED)
+            ),
+        )?;
+        let compared_output = exec_checked_output(
+            &session,
+            "compare profiled fast-five catalog",
+            &format!(
+                "{} compare --reference-root {} --candidate-root {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
+                sh(FAST_FIVE_PPROF_REMOTE_ROOT)
+            ),
+        )?;
+        let published =
+            parse_last_json_line("profiled fast-five publication", &published_output.stdout)?;
+        let compared =
+            parse_last_json_line("profiled fast-five comparison", &compared_output.stdout)?;
+        if published.get("systems").and_then(Value::as_u64) != Some(5)
+            || published
+                .pointer("/pprof/sample_hits")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                <= 0
+            || compared.get("status").and_then(Value::as_str) != Some("exact")
+        {
+            return Err("profiled fast-five publication is incomplete or inexact".into());
+        }
+        get(
+            &session,
+            FAST_FIVE_PPROF_REMOTE_SVG,
+            &output.join("profile.svg"),
+        )?;
+        get(
+            &session,
+            FAST_FIVE_PPROF_REMOTE_FOLDED,
+            &output.join("profile.folded"),
+        )?;
+        Ok((published, compared, published_output.stdout))
+    })();
+    let cleanup = (|| -> Result<()> {
+        let session = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &session,
+            "remove isolated fast-five pprof artifacts",
+            &format!(
+                "rm -rf {} {}",
+                sh(FAST_FIVE_PPROF_REMOTE_ROOT),
+                sh(FAST_FIVE_PPROF_REMOTE_DIR)
+            ),
+        )?;
+        if catalog_production_registry_identity(&session)? != production_registry_before {
+            return Err("production registry changed during fast-five pprof".into());
+        }
+        Ok(())
+    })();
+    let (published, compared, build_log) = match (run, cleanup) {
+        (Ok(result), Ok(())) => result,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => return Err(error),
+        (Err(run), Err(cleanup)) => {
+            return Err(format!("{run}; cleanup also failed: {cleanup}").into());
+        }
+    };
+    let report = json!({
+        "schema": "mister-magik-fast-five-pprof-run-v1",
+        "status": "passed",
+        "cold_boot_verified": true,
+        "timing_authoritative": false,
+        "binary_sha256": binary_sha256,
+        "snapshot": snapshot,
+        "published": published,
+        "comparison": compared,
+        "production_registry_unchanged": true,
+    });
+    fs::write(
+        output.join("report.json"),
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    fs::write(output.join("build.log"), build_log)?;
+    println!("fast_five_pprof_report={}", output.display());
     Ok(())
 }
 

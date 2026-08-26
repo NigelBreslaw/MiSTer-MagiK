@@ -352,6 +352,8 @@ pub enum CatalogCommand {
     FastFivePrototype(CatalogFastFivePrototypeArgs),
     /// Cold-benchmark isolated C64 artifact-writer strategies.
     FastFiveC64Experiments(CatalogFastFiveC64ExperimentsArgs),
+    /// Profile one reboot-cold all-five prototype publication with pprof.
+    FastFivePprof(CatalogFastFivePprofArgs),
     /// Cold-build the five systems independently with the existing builder.
     FastFiveOldCold(CatalogFastFiveOldColdArgs),
     /// Delete the Dev catalog and screenshot packs, then perform one supervised reboot.
@@ -379,6 +381,18 @@ pub struct CatalogFastFiveC64ExperimentsArgs {
     #[arg(long, value_name = "PATH")]
     pub(crate) binary: PathBuf,
     #[arg(long, value_name = "PATH")]
+    pub(crate) out: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct CatalogFastFivePprofArgs {
+    #[arg(long, required = true)]
+    attended: bool,
+    #[arg(long, required = true)]
+    reboot: bool,
+    #[arg(long, value_name = "PATH")]
+    pub(crate) binary: PathBuf,
+    #[arg(long, value_name = "DIRECTORY")]
     pub(crate) out: PathBuf,
 }
 
@@ -547,6 +561,7 @@ impl DeviceCommand {
                 command,
                 CatalogCommand::FastFivePrototype(_)
                     | CatalogCommand::FastFiveC64Experiments(_)
+                    | CatalogCommand::FastFivePprof(_)
                     | CatalogCommand::FastFiveOldCold(_)
                     | CatalogCommand::Purge(_)
             ),
@@ -661,6 +676,18 @@ mod tests {
                 "prototype",
                 "--out",
                 "report.json",
+            ])
+            .is_err()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "catalog",
+                "fast-five-pprof",
+                "--binary",
+                "prototype",
+                "--out",
+                "profile",
             ])
             .is_err()
         );
@@ -849,6 +876,20 @@ mod tests {
         assert!(
             TestCli::try_parse_from([
                 "test",
+                "catalog",
+                "fast-five-pprof",
+                "--attended",
+                "--reboot",
+                "--binary",
+                "prototype",
+                "--out",
+                "profile",
+            ])
+            .is_ok()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
                 "fpga",
                 "install-experimental",
                 "--rbf",
@@ -918,5 +959,18 @@ mod tests {
         ])
         .unwrap();
         assert!(c64_experiments.command.is_mutation());
+        let pprof = TestCli::try_parse_from([
+            "test",
+            "catalog",
+            "fast-five-pprof",
+            "--attended",
+            "--reboot",
+            "--binary",
+            "prototype",
+            "--out",
+            "profile",
+        ])
+        .unwrap();
+        assert!(pprof.command.is_mutation());
     }
 }

@@ -1169,6 +1169,7 @@ mod tests {
             "manager-device",
             "arcade-catalog-prototype-device",
             "five-system-catalog-prototype-device",
+            "five-system-catalog-prototype-analysis",
             "framebuffer-scene-lab-device",
             "framebuffer-scene-lab-analysis",
             "release-binaries",
