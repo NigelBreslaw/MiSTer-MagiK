@@ -4,9 +4,7 @@
 //! Checked-in release knowledge for prepared collections.
 
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -25,7 +23,6 @@ pub(crate) struct ZeroMhzPackage {
     pub(crate) title: String,
     launcher_path: String,
     pub(crate) launcher_bytes: u64,
-    launcher_sha256: String,
     pub(crate) payloads: Vec<ZeroMhzPayload>,
 }
 
@@ -78,18 +75,18 @@ pub(crate) fn known_0mhz_launch(path: &Path) -> Option<KnownZeroMhzLaunch> {
     })
 }
 
-pub(crate) fn launcher_matches(package: &ZeroMhzPackage, path: &Path, size: u64) -> bool {
-    if size != package.launcher_bytes {
-        return false;
+pub(crate) fn launcher_size_matches(package: &ZeroMhzPackage, size: u64) -> bool {
+    size == package.launcher_bytes
+}
+
+pub(crate) fn zero_mhz_packages() -> Option<&'static [ZeroMhzPackage]> {
+    zero_mhz_index().map(|index| index.packages.as_slice())
+}
+
+impl ZeroMhzPackage {
+    pub(crate) fn launcher_relative_path(&self) -> &str {
+        &self.launcher_path
     }
-    std::fs::read(path).ok().is_some_and(|bytes| {
-        let digest = Sha256::digest(bytes);
-        let mut actual = String::with_capacity(64);
-        for byte in digest {
-            let _ = write!(actual, "{byte:02x}");
-        }
-        actual == package.launcher_sha256
-    })
 }
 
 pub(crate) fn zero_mhz_release_id() -> Option<&'static str> {
@@ -125,7 +122,6 @@ mod tests {
         assert!(index.packages.iter().all(|package| {
             package.launcher_bytes > 0
                 && !package.title.is_empty()
-                && package.launcher_sha256.len() == 64
                 && !package.payloads.is_empty()
                 && package
                     .payloads

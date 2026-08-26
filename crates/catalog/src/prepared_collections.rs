@@ -4,7 +4,7 @@
 //! Shared metadata for collections that provide their own one-click launch artifacts.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
@@ -32,11 +32,12 @@ pub(crate) struct PreparedPayloadIndexStats {
 }
 
 impl PreparedPayloadIndex {
-    pub(crate) fn from_library_roots(_roots: &[String]) -> Self {
-        // Release-manifest lookups probe only payloads referenced by an
-        // installed launcher. Unknown/custom launchers retain the same live
-        // filesystem fallback without pre-walking the entire AO486 tree.
-        Self::default()
+    pub(crate) fn from_library_roots(roots: &[String]) -> Self {
+        let mut index = Self::default();
+        for storage_root in storage_roots_for_library_roots(roots) {
+            index.add_known_0mhz_release(&storage_root);
+        }
+        index
     }
 
     pub(crate) fn file_count(&self) -> usize {
@@ -103,6 +104,77 @@ impl PreparedPayloadIndex {
                 .set(self.lookup_missing.get().saturating_add(1));
         }
         present
+    }
+
+    fn add_known_0mhz_release(&mut self, storage_root: &Path) {
+        let Some(packages) = crate::prepared_release_manifest::zero_mhz_packages() else {
+            return;
+        };
+        let launcher_root = storage_root.join("_DOS Games");
+        let Ok(launcher_entries) = std::fs::read_dir(&launcher_root) else {
+            return;
+        };
+        let installed_launchers = launcher_entries
+            .flatten()
+            .filter_map(|entry| {
+                entry
+                    .file_type()
+                    .ok()
+                    .is_some_and(|kind| kind.is_file())
+                    .then(|| {
+                        format!(
+                            "_dos games/{}",
+                            entry.file_name().to_string_lossy().to_ascii_lowercase()
+                        )
+                    })
+            })
+            .collect::<HashSet<_>>();
+        let mut by_parent = HashMap::<PathBuf, Vec<PathBuf>>::new();
+        for package in packages {
+            if !installed_launchers.contains(
+                &package
+                    .launcher_relative_path()
+                    .replace('\\', "/")
+                    .to_ascii_lowercase(),
+            ) {
+                continue;
+            }
+            for payload in &package.payloads {
+                let path = storage_root.join(&payload.relative_path);
+                let Some(parent) = path.parent() else {
+                    continue;
+                };
+                by_parent
+                    .entry(parent.to_path_buf())
+                    .or_default()
+                    .push(path);
+            }
+        }
+        for (index, (parent, expected)) in by_parent.into_iter().enumerate() {
+            if index.is_multiple_of(16) {
+                crate::cooperative_work::checkpoint();
+            }
+            let Ok(entries) = std::fs::read_dir(&parent) else {
+                continue;
+            };
+            let mut expected_by_name = expected
+                .into_iter()
+                .filter_map(|path| {
+                    let name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
+                    self.live_presence.borrow_mut().insert(path.clone(), false);
+                    Some((name, path))
+                })
+                .collect::<HashMap<_, _>>();
+            for entry in entries.flatten() {
+                let key = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                let Some(expected_path) = expected_by_name.remove(&key) else {
+                    continue;
+                };
+                if entry.file_type().ok().is_some_and(|kind| kind.is_file()) {
+                    self.live_presence.borrow_mut().insert(expected_path, true);
+                }
+            }
+        }
     }
 }
 
@@ -688,6 +760,28 @@ mod tests {
             provenance.adapter_version,
             PREPARED_COLLECTION_ADAPTER_VERSION
         );
+    }
+
+    #[test]
+    fn prepared_payload_index_batches_known_0mhz_payload_directories() {
+        let storage = fixture_dir("payload-index-known-release");
+        let launcher_root = storage.join("_DOS Games");
+        let payload = storage.join("games/ao486/media/stunts.mt32/stunts.mt32.vhd");
+        std::fs::create_dir_all(&launcher_root).unwrap();
+        std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
+        std::fs::write(
+            launcher_root.join("4D Sports Driving (MT-32).mgl"),
+            b"known launcher",
+        )
+        .unwrap();
+        std::fs::write(&payload, b"payload").unwrap();
+
+        let index = PreparedPayloadIndex::from_library_roots(&[storage.display().to_string()]);
+
+        assert_eq!(index.file_count(), 1);
+        assert!(index.path_is_file(&payload));
+        assert_eq!(index.lookup_stats().live_fallbacks, 0);
+        let _ = std::fs::remove_dir_all(storage);
     }
 
     #[test]

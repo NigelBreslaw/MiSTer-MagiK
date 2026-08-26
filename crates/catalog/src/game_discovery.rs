@@ -412,7 +412,7 @@ fn discovery_from_known_0mhz_release(
     prepared_index: Option<&prepared_collections::PreparedPayloadIndex>,
 ) -> Option<GameDiscovery> {
     let known = prepared_release_manifest::known_0mhz_launch(&file.path)?;
-    if !prepared_release_manifest::launcher_matches(known.package, &file.path, file.size) {
+    if !prepared_release_manifest::launcher_size_matches(known.package, file.size) {
         return None;
     }
     let profile = if profile.system_id == "dos" {
