@@ -205,6 +205,178 @@ pub struct FastFiveSystemBuildReport {
 }
 
 #[cfg(feature = "builder")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum C64ArtifactExperimentProfile {
+    MediaImmediate,
+    TmpfsImmediate,
+    TmpfsDeferred,
+    TmpfsDeferredMemory,
+}
+
+#[cfg(feature = "builder")]
+impl C64ArtifactExperimentProfile {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "media-immediate" => Ok(Self::MediaImmediate),
+            "tmpfs-immediate" => Ok(Self::TmpfsImmediate),
+            "tmpfs-deferred" => Ok(Self::TmpfsDeferred),
+            "tmpfs-deferred-memory" => Ok(Self::TmpfsDeferredMemory),
+            _ => Err(format!("unknown C64 artifact experiment profile {value}")),
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MediaImmediate => "media-immediate",
+            Self::TmpfsImmediate => "tmpfs-immediate",
+            Self::TmpfsDeferred => "tmpfs-deferred",
+            Self::TmpfsDeferredMemory => "tmpfs-deferred-memory",
+        }
+    }
+}
+
+#[cfg(feature = "builder")]
+#[derive(Clone, Debug, Serialize)]
+pub struct C64ArtifactExperimentReport {
+    pub status: &'static str,
+    pub profile: C64ArtifactExperimentProfile,
+    pub games: usize,
+    pub build_us: u64,
+    pub publish_us: u64,
+    pub published_validate_us: u64,
+    pub elapsed_us: u64,
+    pub sqlite_bytes: u64,
+    pub navigation_bytes: u64,
+    pub navpack_bytes: u64,
+}
+
+#[cfg(feature = "builder")]
+fn elapsed_us(started: std::time::Instant) -> u64 {
+    started.elapsed().as_micros().try_into().unwrap_or(u64::MAX)
+}
+
+#[cfg(feature = "builder")]
+pub fn run_c64_artifact_experiment(
+    storage_root: &Path,
+    scratch_root: &Path,
+    snapshot: &FastFiveSnapshot,
+    profile: C64ArtifactExperimentProfile,
+    limits: RegistryLimits,
+) -> Result<C64ArtifactExperimentReport, String> {
+    use crate::shard_registry::publish_system_artifacts;
+    use crate::system_shard::{
+        ShardDurability, ShardSqliteTuning, SystemShardData, open_system_shard,
+        write_system_shard_with_options,
+    };
+    use std::fs;
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+    let started = Instant::now();
+    snapshot.validate()?;
+    let source = snapshot
+        .systems
+        .iter()
+        .find(|system| system.system_id == "c64")
+        .ok_or("fast-five snapshot has no C64 system")?;
+    let system_id = SystemId::parse("c64").map_err(|error| error.to_string())?;
+    let (staging_parent, durability, sqlite_tuning) = match profile {
+        C64ArtifactExperimentProfile::MediaImmediate => (
+            storage_root.join("staging"),
+            ShardDurability::Immediate,
+            ShardSqliteTuning::Conservative,
+        ),
+        C64ArtifactExperimentProfile::TmpfsImmediate => (
+            scratch_root.to_path_buf(),
+            ShardDurability::Immediate,
+            ShardSqliteTuning::Conservative,
+        ),
+        C64ArtifactExperimentProfile::TmpfsDeferred => (
+            scratch_root.to_path_buf(),
+            ShardDurability::Deferred,
+            ShardSqliteTuning::Conservative,
+        ),
+        C64ArtifactExperimentProfile::TmpfsDeferredMemory => (
+            scratch_root.to_path_buf(),
+            ShardDurability::Deferred,
+            ShardSqliteTuning::MemoryHeavy,
+        ),
+    };
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "clock predates Unix epoch".to_string())?
+        .as_nanos();
+    let staging = staging_parent.join(format!(
+        "c64-artifact-{}-{nonce}-{}",
+        profile.as_str(),
+        std::process::id()
+    ));
+    fs::create_dir_all(&staging)
+        .map_err(|error| format!("create C64 experiment staging: {error}"))?;
+    fs::create_dir_all(storage_root)
+        .map_err(|error| format!("create C64 experiment root: {error}"))?;
+    let sqlite = staging.join("system.sqlite3");
+    let navigation = staging.join("system.nav.lz4b");
+    let build_started = Instant::now();
+    let staged = write_system_shard_with_options(
+        &sqlite,
+        &navigation,
+        SystemShardData {
+            system_id: system_id.clone(),
+            generation: 1,
+            projection_stats: None,
+            games: source.games.clone(),
+        },
+        limits.shard,
+        durability,
+        sqlite_tuning,
+    )
+    .map_err(|error| format!("build C64 experiment shard: {error}"))?;
+    let build_us = elapsed_us(build_started);
+    if staged.games != source.games {
+        return Err("staged C64 experiment rows differ from the snapshot".to_string());
+    }
+    let publish_started = Instant::now();
+    let published = publish_system_artifacts(
+        storage_root,
+        &sqlite,
+        &navigation,
+        &system_id,
+        1,
+        source.games.len() as u64,
+        limits,
+    )
+    .map_err(|error| format!("publish C64 experiment shard: {error}"))?;
+    let publish_us = elapsed_us(publish_started);
+    let validate_started = Instant::now();
+    let loaded = open_system_shard(
+        &storage_root.join(&published.sqlite_path),
+        &storage_root.join(&published.navigation_path),
+        &system_id,
+        1,
+        limits.shard,
+    )
+    .map_err(|error| format!("validate published C64 experiment shard: {error}"))?;
+    let published_validate_us = elapsed_us(validate_started);
+    if loaded.games != source.games {
+        return Err("published C64 experiment rows differ from the snapshot".to_string());
+    }
+    let _ = fs::remove_dir_all(&staging);
+    Ok(C64ArtifactExperimentReport {
+        status: "exact",
+        profile,
+        games: source.games.len(),
+        build_us,
+        publish_us,
+        published_validate_us,
+        elapsed_us: elapsed_us(started),
+        sqlite_bytes: published.sqlite_bytes,
+        navigation_bytes: published.navigation_bytes,
+        navpack_bytes: published.navpack.map_or(0, |navpack| navpack.bytes),
+    })
+}
+
+#[cfg(feature = "builder")]
 pub fn publish_snapshot(
     storage_root: &Path,
     snapshot: &FastFiveSnapshot,

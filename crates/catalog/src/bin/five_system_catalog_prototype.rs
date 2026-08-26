@@ -4,7 +4,8 @@
 //! Standalone interchange and publication tool for the fast five-system catalog.
 
 use mister_magik_catalog::fast_five_catalog::{
-    FastFiveSnapshot, publish_snapshot, replace_arcade_from_active, snapshot_reference,
+    C64ArtifactExperimentProfile, FastFiveSnapshot, publish_snapshot, replace_arcade_from_active,
+    run_c64_artifact_experiment, snapshot_reference,
 };
 use mister_magik_catalog::shard_registry::production_registry_limits;
 use serde::Serialize;
@@ -56,6 +57,48 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
             let object = report
                 .as_object_mut()
                 .ok_or("fast-five publish report is not an object")?;
+            object.insert(
+                "input_bytes".to_string(),
+                serde_json::json!(input_bytes.len()),
+            );
+            object.insert(
+                "input_read_decode_us".to_string(),
+                serde_json::json!(input_read_decode_us),
+            );
+            object.insert(
+                "command_elapsed_us".to_string(),
+                serde_json::json!(elapsed_us(command_started)),
+            );
+            print_json(&report)
+        }
+        "c64-artifact-experiment" => {
+            let command_started = Instant::now();
+            let input = required_path(arguments, "--input")?;
+            let output_root = required_path(arguments, "--output-root")?;
+            let scratch_root = required_path(arguments, "--scratch-root")?;
+            let profile =
+                C64ArtifactExperimentProfile::parse(&required_value(arguments, "--profile")?)?;
+            reject_unknown(
+                arguments,
+                &["--input", "--output-root", "--scratch-root", "--profile"],
+            )?;
+            let input_started = Instant::now();
+            let input_bytes =
+                fs::read(&input).map_err(|error| format!("read {}: {error}", input.display()))?;
+            let snapshot: FastFiveSnapshot = serde_json::from_slice(&input_bytes)
+                .map_err(|error| format!("decode {}: {error}", input.display()))?;
+            let input_read_decode_us = elapsed_us(input_started);
+            let report = run_c64_artifact_experiment(
+                &output_root,
+                &scratch_root,
+                &snapshot,
+                profile,
+                production_registry_limits(),
+            )?;
+            let mut report = serde_json::to_value(report).map_err(|error| error.to_string())?;
+            let object = report
+                .as_object_mut()
+                .ok_or("C64 artifact experiment report is not an object")?;
             object.insert(
                 "input_bytes".to_string(),
                 serde_json::json!(input_bytes.len()),
@@ -184,10 +227,14 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
 }
 
 fn required_path(arguments: &[String], name: &str) -> Result<PathBuf, String> {
+    required_value(arguments, name).map(PathBuf::from)
+}
+
+fn required_value(arguments: &[String], name: &str) -> Result<String, String> {
     arguments
         .windows(2)
         .find(|pair| pair[0] == name)
-        .map(|pair| PathBuf::from(&pair[1]))
+        .map(|pair| pair[1].clone())
         .ok_or_else(|| format!("missing {name}"))
 }
 
@@ -232,6 +279,6 @@ fn elapsed_us(started: Instant) -> u64 {
 }
 
 fn usage() -> String {
-    "Usage:\n  five-system-catalog-prototype snapshot-reference --catalog-root PATH --output PATH\n  five-system-catalog-prototype replace-arcade --input PATH --arcade-active PATH --output PATH\n  five-system-catalog-prototype publish --input PATH --output-root PATH\n  five-system-catalog-prototype inspect --input PATH\n  five-system-catalog-prototype compare --reference-root PATH --candidate-root PATH"
+    "Usage:\n  five-system-catalog-prototype snapshot-reference --catalog-root PATH --output PATH\n  five-system-catalog-prototype replace-arcade --input PATH --arcade-active PATH --output PATH\n  five-system-catalog-prototype publish --input PATH --output-root PATH\n  five-system-catalog-prototype c64-artifact-experiment --input PATH --output-root PATH --scratch-root PATH --profile PROFILE\n  five-system-catalog-prototype inspect --input PATH\n  five-system-catalog-prototype compare --reference-root PATH --candidate-root PATH"
         .to_string()
 }

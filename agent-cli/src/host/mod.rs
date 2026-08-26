@@ -587,6 +587,9 @@ impl NativeDevice {
                     CatalogCommand::FastFivePrototype(args) => {
                         run_fast_five_catalog_prototype(&prepared.config, &args.binary, &args.out)
                     }
+                    CatalogCommand::FastFiveC64Experiments(args) => {
+                        run_fast_five_c64_experiments(&prepared.config, &args.binary, &args.out)
+                    }
                     CatalogCommand::FastFiveOldCold(args) => {
                         run_fast_five_old_cold_matrix(&prepared.config, &args.out)
                     }
@@ -31607,6 +31610,8 @@ const FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT: &str =
     "/media/fat/mister-magik-dev/fast-five-tool/reference.json";
 const FAST_FIVE_PROTOTYPE_REMOTE_ROOT: &str = "/media/fat/mister-magik-dev/fast-five-catalog";
 const FAST_FIVE_PROTOTYPE_REFERENCE_ROOT: &str = "/media/fat/mister-magik-dev/catalog-v3";
+const FAST_FIVE_C64_EXPERIMENT_ROOT: &str = "/media/fat/mister-magik-dev/fast-five-c64-experiments";
+const FAST_FIVE_C64_EXPERIMENT_SCRATCH: &str = "/tmp/mister-magik/fast-five-c64-experiments";
 
 fn run_fast_five_catalog_prototype(
     config: &NativeDeviceConfig,
@@ -31766,6 +31771,190 @@ fn run_fast_five_catalog_prototype(
         format!("{}\n", serde_json::to_string_pretty(&report)?),
     )?;
     println!("fast_five_catalog_report={}", output.display());
+    Ok(())
+}
+
+fn run_fast_five_c64_experiments(
+    config: &NativeDeviceConfig,
+    binary: &Path,
+    output: &Path,
+) -> Result<()> {
+    const PROFILES: [&str; 4] = [
+        "media-immediate",
+        "tmpfs-immediate",
+        "tmpfs-deferred",
+        "tmpfs-deferred-memory",
+    ];
+
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    if !binary.is_file() {
+        return Err(format!(
+            "five-system catalog prototype binary is missing: {}",
+            binary.display()
+        )
+        .into());
+    }
+    let binary_sha256 = file_sha256(binary.to_path_buf())?;
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    exec_checked(
+        &session,
+        "C64 experiment safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    exec_checked(
+        &session,
+        "prepare C64 experiment inputs",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "rm -rf {} {} {}",
+                sh("/media/fat/mister-magik-dev/fast-five-tool"),
+                sh(FAST_FIVE_C64_EXPERIMENT_ROOT),
+                sh(FAST_FIVE_C64_EXPERIMENT_SCRATCH)
+            ),
+            format!(
+                "mkdir -p {}",
+                sh("/media/fat/mister-magik-dev/fast-five-tool")
+            ),
+        ]),
+    )?;
+    put(&session, binary, FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)?;
+    exec_checked(
+        &session,
+        "publish exact C64 experiment binary",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "test \"$(sha256sum {} | cut -d' ' -f1)\" = {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(&binary_sha256)
+            ),
+            format!("chmod 755 {}", sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)),
+            format!(
+                "mv -f {} {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY)
+            ),
+        ]),
+    )?;
+    let snapshot = exec_checked_output(
+        &session,
+        "capture C64 experiment reference snapshot",
+        &format!(
+            "{} snapshot-reference --catalog-root {} --output {}",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT)
+        ),
+    )?;
+    let snapshot = parse_last_json_line("C64 experiment snapshot", &snapshot.stdout)?;
+    exec_checked(&session, "sync C64 experiment inputs", "sync")?;
+    drop(session);
+
+    let run = (|| -> Result<Vec<Value>> {
+        let mut samples = Vec::with_capacity(PROFILES.len());
+        for profile in PROFILES {
+            let session = connect_with(&config.connection, 10)?;
+            exec_checked(
+                &session,
+                "prepare isolated C64 experiment root",
+                &shell_sequence([
+                    "set -eu".to_string(),
+                    format!(
+                        "rm -rf {} {}",
+                        sh(FAST_FIVE_C64_EXPERIMENT_ROOT),
+                        sh(FAST_FIVE_C64_EXPERIMENT_SCRATCH)
+                    ),
+                    "sync".to_string(),
+                ]),
+            )?;
+            drop(session);
+            agent_reboot_wait(&[])?;
+            let session = connect_with(&config.connection, 10)?;
+            exec_checked(
+                &session,
+                "C64 experiment post-reboot safety preflight",
+                &cold_boot_profile_preflight_command(),
+            )?;
+            let result = exec_checked_output(
+                &session,
+                &format!("run cold C64 artifact profile {profile}"),
+                &format!(
+                    "{} c64-artifact-experiment --input {} --output-root {} --scratch-root {} --profile {}",
+                    sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                    sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+                    sh(FAST_FIVE_C64_EXPERIMENT_ROOT),
+                    sh(FAST_FIVE_C64_EXPERIMENT_SCRATCH),
+                    sh(profile)
+                ),
+            )?;
+            let mut sample = parse_last_json_line("C64 artifact experiment", &result.stdout)?;
+            if sample.get("status").and_then(Value::as_str) != Some("exact")
+                || sample.get("profile").and_then(Value::as_str) != Some(profile)
+                || sample.get("games").and_then(Value::as_u64).unwrap_or(0) == 0
+            {
+                return Err(
+                    format!("C64 artifact profile {profile} failed exact validation").into(),
+                );
+            }
+            let phase_records = result
+                .stdout
+                .lines()
+                .filter(|line| line.starts_with("catalog_"))
+                .collect::<Vec<_>>();
+            let object = sample
+                .as_object_mut()
+                .ok_or("C64 artifact experiment report is not an object")?;
+            object.insert("cold_boot_verified".into(), Value::Bool(true));
+            object.insert("phase_records".into(), serde_json::to_value(phase_records)?);
+            samples.push(sample);
+        }
+        Ok(samples)
+    })();
+    let cleanup = (|| -> Result<()> {
+        let session = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &session,
+            "remove isolated C64 experiment artifacts",
+            &format!(
+                "rm -rf {} {}",
+                sh(FAST_FIVE_C64_EXPERIMENT_ROOT),
+                sh(FAST_FIVE_C64_EXPERIMENT_SCRATCH)
+            ),
+        )?;
+        if catalog_production_registry_identity(&session)? != production_registry_before {
+            return Err("production registry changed during C64 artifact experiments".into());
+        }
+        Ok(())
+    })();
+    let samples = match (run, cleanup) {
+        (Ok(samples), Ok(())) => samples,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => return Err(error),
+        (Err(run), Err(cleanup)) => {
+            return Err(format!("{run}; cleanup also failed: {cleanup}").into());
+        }
+    };
+    let report = json!({
+        "schema": "mister-magik-fast-five-c64-artifact-experiments-v1",
+        "status": "passed",
+        "binary_sha256": binary_sha256,
+        "snapshot": snapshot,
+        "samples": samples,
+        "production_registry_unchanged": true,
+    });
+    if let Some(parent) = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(
+        output,
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    println!("fast_five_c64_experiment_report={}", output.display());
     Ok(())
 }
 

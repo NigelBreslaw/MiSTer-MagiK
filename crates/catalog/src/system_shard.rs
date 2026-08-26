@@ -111,6 +111,13 @@ pub(crate) enum ShardDurability {
     Deferred,
 }
 
+#[cfg(feature = "builder")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ShardSqliteTuning {
+    Conservative,
+    MemoryHeavy,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct StoredNavigation {
     schema_version: u32,
@@ -163,6 +170,25 @@ pub(crate) fn write_system_shard_with_durability(
     limits: SystemShardLimits,
     durability: ShardDurability,
 ) -> Result<LoadedSystemShard, SystemShardError> {
+    write_system_shard_with_options(
+        sqlite_path,
+        navigation_path,
+        data,
+        limits,
+        durability,
+        ShardSqliteTuning::Conservative,
+    )
+}
+
+#[cfg(feature = "builder")]
+pub(crate) fn write_system_shard_with_options(
+    sqlite_path: &Path,
+    navigation_path: &Path,
+    data: SystemShardData,
+    limits: SystemShardLimits,
+    durability: ShardDurability,
+    sqlite_tuning: ShardSqliteTuning,
+) -> Result<LoadedSystemShard, SystemShardError> {
     validate_games(&data.games, limits.max_games)?;
     let navigation_indexes = build_navigation_indexes(&data.games)?;
     let navigation_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SHARD_NAVIGATION);
@@ -207,11 +233,14 @@ pub(crate) fn write_system_shard_with_durability(
     connection
         .execute_batch(durability_pragmas)
         .map_err(|error| SystemShardError::with("configure shard durability", error))?;
+    let sqlite_tuning_pragmas = match sqlite_tuning {
+        ShardSqliteTuning::Conservative => "PRAGMA cache_size=-2048; PRAGMA temp_store=FILE;",
+        ShardSqliteTuning::MemoryHeavy => "PRAGMA cache_size=-16384; PRAGMA temp_store=MEMORY;",
+    };
     connection
-        .execute_batch(
+        .execute_batch(&format!(
             "PRAGMA page_size=4096;
-             PRAGMA cache_size=-2048;
-             PRAGMA temp_store=FILE;
+             {sqlite_tuning_pragmas}
              PRAGMA locking_mode=EXCLUSIVE;
              CREATE TABLE shard_meta (
                  key TEXT PRIMARY KEY,
@@ -236,8 +265,8 @@ pub(crate) fn write_system_shard_with_durability(
              CREATE TABLE navigation_payload (
                  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                  payload BLOB NOT NULL
-             );",
-        )
+             );"
+        ))
         .map_err(|error| SystemShardError::with("create shard schema", error))?;
     crate::persisted_search::create_schema(&connection)
         .map_err(|error| SystemShardError::new("write", error.to_string()))?;
