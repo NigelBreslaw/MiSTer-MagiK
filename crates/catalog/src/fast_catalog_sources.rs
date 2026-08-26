@@ -17,6 +17,7 @@ use crate::prepared_collections::validate_prepared_launch_path;
 use crate::system_shard::{SystemGame, SystemLaunchPlan};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -168,6 +169,8 @@ fn build_prepared_system(
 }
 
 fn scan_arcade(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<SystemGame> {
+    let roms = arcade_rom_inventory(storage_root, report);
+    let cores = arcade_core_inventory(storage_root, report);
     let mut files = Vec::new();
     collect_matching_files(
         &storage_root.join("_Arcade"),
@@ -194,11 +197,18 @@ fn scan_arcade(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<
         let valid_rom = match &inspection.primary_rom {
             PrimaryRomRequirement::None => true,
             PrimaryRomRequirement::Archive { namespace, setname } => {
-                arcade_rom_exists(storage_root, namespace, setname)
+                roms.contains(&(rom_namespace_label(namespace), normalize_name(setname)))
             }
             PrimaryRomRequirement::Ambiguous => false,
         };
-        if !valid_rom || !arcade_core_exists(storage_root, inspection.header.rbf.as_deref()) {
+        let valid_core = inspection
+            .header
+            .rbf
+            .as_deref()
+            .map(normalize_name)
+            .filter(|expected| !expected.is_empty())
+            .is_some_and(|expected| cores.iter().any(|core| core.starts_with(&expected)));
+        if !valid_rom || !valid_core {
             report.invalid += 1;
             continue;
         }
@@ -221,36 +231,59 @@ fn scan_arcade(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<
     games
 }
 
-fn arcade_rom_exists(storage_root: &Path, namespace: &RomNamespace, setname: &str) -> bool {
-    let directory = match namespace {
-        RomNamespace::Mame => "mame",
-        RomNamespace::Hbmame => "hbmame",
-    };
-    [
-        storage_root.join("games").join(directory),
-        storage_root.join("_Arcade").join(directory),
-    ]
-    .into_iter()
-    .any(|root| case_insensitive_file_exists(&root, setname, "zip"))
+fn arcade_rom_inventory(
+    storage_root: &Path,
+    report: &mut FastSourceSystemReport,
+) -> BTreeSet<(&'static str, String)> {
+    let mut inventory = BTreeSet::new();
+    for (namespace, directory) in [("mame", "mame"), ("hbmame", "hbmame")] {
+        for root in [
+            storage_root.join("games").join(directory),
+            storage_root.join("_Arcade").join(directory),
+        ] {
+            let Ok(entries) = fs::read_dir(root) else {
+                continue;
+            };
+            for entry in entries.filter_map(Result::ok) {
+                report.files_visited = report.files_visited.saturating_add(1);
+                let path = entry.path();
+                if extension_is(&path, "zip")
+                    && let Some(stem) = path.file_stem().and_then(|stem| stem.to_str())
+                {
+                    inventory.insert((namespace, normalize_name(stem)));
+                }
+            }
+        }
+    }
+    inventory
 }
 
-fn arcade_core_exists(storage_root: &Path, rbf: Option<&str>) -> bool {
-    let Some(expected) = rbf.map(normalize_name).filter(|value| !value.is_empty()) else {
-        return false;
-    };
+fn arcade_core_inventory(
+    storage_root: &Path,
+    report: &mut FastSourceSystemReport,
+) -> BTreeSet<String> {
     let mut files = Vec::new();
-    let mut visited = 0;
     collect_matching_files(
         &storage_root.join("_Arcade/cores"),
-        &mut visited,
+        &mut report.files_visited,
         &mut files,
         |path| extension_is(path, "rbf"),
     );
-    files.into_iter().any(|path| {
-        path.file_stem()
-            .and_then(|stem| stem.to_str())
-            .is_some_and(|stem| normalize_name(stem).starts_with(&expected))
-    })
+    files
+        .into_iter()
+        .filter_map(|path| {
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(normalize_name)
+        })
+        .collect()
+}
+
+fn rom_namespace_label(namespace: &RomNamespace) -> &'static str {
+    match namespace {
+        RomNamespace::Mame => "mame",
+        RomNamespace::Hbmame => "hbmame",
+    }
 }
 
 fn scan_amiga(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<SystemGame> {
@@ -454,19 +487,6 @@ fn display_name(path: &Path) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn case_insensitive_file_exists(root: &Path, stem: &str, extension: &str) -> bool {
-    fs::read_dir(root).is_ok_and(|entries| {
-        entries.filter_map(Result::ok).any(|entry| {
-            let path = entry.path();
-            extension_is(&path, extension)
-                && path
-                    .file_stem()
-                    .and_then(|value| value.to_str())
-                    .is_some_and(|value| value.eq_ignore_ascii_case(stem))
-        })
-    })
 }
 
 fn extension_is(path: &Path, expected: &str) -> bool {
