@@ -84,6 +84,9 @@ The focused C64 SQLite/FTS experiments are recorded in
 [`history/2026-08-26-c64-artifact-experiments.md`](../history/2026-08-26-c64-artifact-experiments.md).
 The complete five-system CPU profile is recorded in
 [`history/2026-08-26-fast-five-pprof.md`](../history/2026-08-26-fast-five-pprof.md).
+The generic ZX Spectrum, SNES, Neo Geo, and Sega Saturn prototype is recorded
+in
+[`history/2026-08-26-generic-system-catalog-prototype.md`](../history/2026-08-26-generic-system-catalog-prototype.md).
 
 ## Optimization experiment matrix
 
