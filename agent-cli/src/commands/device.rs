@@ -356,6 +356,8 @@ pub enum CatalogCommand {
     FastFiveExperiments(CatalogFastFiveExperimentsArgs),
     /// Profile one reboot-cold all-five prototype publication with pprof.
     FastFivePprof(CatalogFastFivePprofArgs),
+    /// Profile a reboot-cold incremental refresh of the independent fast catalog.
+    FastRefreshPprof(CatalogFastRefreshPprofArgs),
     /// Cold-build the five systems independently with the existing builder.
     FastFiveOldCold(CatalogFastFiveOldColdArgs),
     /// Delete the Dev catalog and screenshot packs, then perform one supervised reboot.
@@ -419,6 +421,20 @@ pub struct CatalogFastFivePprofArgs {
     pub(crate) input_encoding: String,
     #[arg(long, default_value = "legacy")]
     pub(crate) artifact_profile: String,
+}
+
+#[derive(Debug, Args)]
+pub struct CatalogFastRefreshPprofArgs {
+    #[arg(long, required = true)]
+    attended: bool,
+    #[arg(long, required = true)]
+    reboot: bool,
+    #[arg(long, value_name = "PATH")]
+    pub(crate) binary: PathBuf,
+    #[arg(long, value_name = "DIRECTORY")]
+    pub(crate) out: PathBuf,
+    #[arg(long, default_value = "no-change")]
+    pub(crate) scenario: String,
 }
 
 #[derive(Debug, Args)]
@@ -590,6 +606,7 @@ impl DeviceCommand {
                     | CatalogCommand::FastFiveC64Experiments(_)
                     | CatalogCommand::FastFiveExperiments(_)
                     | CatalogCommand::FastFivePprof(_)
+                    | CatalogCommand::FastRefreshPprof(_)
                     | CatalogCommand::FastFiveOldCold(_)
                     | CatalogCommand::Purge(_)
             ),

@@ -605,6 +605,12 @@ impl NativeDevice {
                         &args.input_encoding,
                         &args.artifact_profile,
                     ),
+                    CatalogCommand::FastRefreshPprof(args) => run_fast_refresh_pprof(
+                        &prepared.config,
+                        &args.binary,
+                        &args.out,
+                        &args.scenario,
+                    ),
                     CatalogCommand::FastFiveOldCold(args) => {
                         run_fast_five_old_cold_matrix(&prepared.config, &args.out, &args.target_set)
                     }
@@ -32390,6 +32396,208 @@ fn run_fast_five_pprof(
     )?;
     fs::write(output.join("build.log"), build_log)?;
     println!("fast_five_pprof_report={}", output.display());
+    Ok(())
+}
+
+fn run_fast_refresh_pprof(
+    config: &NativeDeviceConfig,
+    binary: &Path,
+    output: &Path,
+    scenario: &str,
+) -> Result<()> {
+    const BENCHMARK_DIR: &str = "/media/fat/games/SNES/mister-magik-refresh-benchmark";
+    const BENCHMARK_ROM: &str =
+        "/media/fat/games/SNES/mister-magik-refresh-benchmark/MagiK Refresh Benchmark.sfc";
+
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    if !matches!(scenario, "no-change" | "add-snes") {
+        return Err(format!("unsupported fast refresh profile scenario: {scenario}").into());
+    }
+    if !binary.is_file() {
+        return Err(format!(
+            "fast refresh profile binary is missing: {}",
+            binary.display()
+        )
+        .into());
+    }
+    if output.exists() {
+        return Err(format!(
+            "fast refresh pprof output already exists: {}",
+            output.display()
+        )
+        .into());
+    }
+    fs::create_dir_all(output)?;
+    let binary_sha256 = file_sha256(binary.to_path_buf())?;
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    exec_checked(
+        &session,
+        "fast refresh pprof safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    exec_checked(
+        &session,
+        "prepare fast refresh profiler",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "mkdir -p {} {}",
+                sh("/media/fat/mister-magik-dev/fast-five-tool"),
+                sh(FAST_FIVE_PPROF_REMOTE_DIR)
+            ),
+            format!(
+                "rm -f {} {} {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(FAST_FIVE_PPROF_REMOTE_SVG),
+                sh(FAST_FIVE_PPROF_REMOTE_FOLDED)
+            ),
+        ]),
+    )?;
+    put(&session, binary, FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)?;
+    exec_checked(
+        &session,
+        "publish exact fast refresh profile binary",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "test \"$(sha256sum {} | cut -d' ' -f1)\" = {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(&binary_sha256)
+            ),
+            format!("chmod 755 {}", sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)),
+            format!(
+                "mv -f {} {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY)
+            ),
+        ]),
+    )?;
+    let preflight = exec_checked_output(
+        &session,
+        "validate fast refresh state",
+        &format!(
+            "{} plan-refresh --catalog-root {} --storage-root {} --request update",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+            sh("/media/fat")
+        ),
+    )?;
+    let preflight = parse_last_json_line("fast refresh plan", &preflight.stdout)?;
+    if preflight.get("systems").and_then(Value::as_u64) != Some(9) {
+        return Err("fast refresh state is not a complete nine-system snapshot".into());
+    }
+    if scenario == "add-snes" {
+        exec_checked(
+            &session,
+            "add isolated SNES refresh fixture",
+            &shell_sequence([
+                "set -eu".to_string(),
+                format!("mkdir -p {}", sh(BENCHMARK_DIR)),
+                format!("printf x > {}", sh(BENCHMARK_ROM)),
+                "sync".to_string(),
+            ]),
+        )?;
+    } else {
+        exec_checked(&session, "sync fast refresh inputs", "sync")?;
+    }
+    drop(session);
+
+    let run = (|| -> Result<(Value, String)> {
+        agent_reboot_wait(&[])?;
+        let session = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &session,
+            "fast refresh post-reboot safety preflight",
+            &cold_boot_profile_preflight_command(),
+        )?;
+        let profiled = exec_checked_output(
+            &session,
+            "profile reboot-cold fast catalog refresh",
+            &format!(
+                "{} refresh-profile --catalog-root {} --storage-root {} --request update --pprof-svg {} --pprof-folded {} --pprof-hz 997",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+                sh("/media/fat"),
+                sh(FAST_FIVE_PPROF_REMOTE_SVG),
+                sh(FAST_FIVE_PPROF_REMOTE_FOLDED)
+            ),
+        )?;
+        let report = parse_last_json_line("profiled fast refresh", &profiled.stdout)?;
+        if report.get("systems").and_then(Value::as_u64) != Some(9)
+            || report
+                .pointer("/pprof/sample_hits")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                <= 0
+        {
+            return Err("profiled fast refresh is incomplete".into());
+        }
+        get(
+            &session,
+            FAST_FIVE_PPROF_REMOTE_SVG,
+            &output.join("profile.svg"),
+        )?;
+        get(
+            &session,
+            FAST_FIVE_PPROF_REMOTE_FOLDED,
+            &output.join("profile.folded"),
+        )?;
+        Ok((report, profiled.stdout))
+    })();
+    let cleanup = (|| -> Result<()> {
+        let session = connect_with(&config.connection, 10)?;
+        if scenario == "add-snes" {
+            exec_checked(
+                &session,
+                "remove isolated SNES refresh fixture",
+                &format!("rm -rf {}", sh(BENCHMARK_DIR)),
+            )?;
+            exec_checked_output(
+                &session,
+                "reconcile removed SNES refresh fixture",
+                &format!(
+                    "{} refresh --catalog-root {} --storage-root {} --request update",
+                    sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                    sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+                    sh("/media/fat")
+                ),
+            )?;
+        }
+        exec_checked(
+            &session,
+            "remove fast refresh profile scratch",
+            &format!("rm -rf {}", sh(FAST_FIVE_PPROF_REMOTE_DIR)),
+        )?;
+        if catalog_production_registry_identity(&session)? != production_registry_before {
+            return Err("production registry changed during fast refresh pprof".into());
+        }
+        Ok(())
+    })();
+    let (profiled, build_log) = match (run, cleanup) {
+        (Ok(result), Ok(())) => result,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => return Err(error),
+        (Err(run), Err(cleanup)) => {
+            return Err(format!("{run}; cleanup also failed: {cleanup}").into());
+        }
+    };
+    let report = json!({
+        "schema": "mister-magik-fast-refresh-pprof-v1",
+        "status": "passed",
+        "cold_boot_verified": true,
+        "timing_authoritative": false,
+        "scenario": scenario,
+        "binary_sha256": binary_sha256,
+        "refresh": profiled,
+        "production_registry_unchanged": true,
+    });
+    fs::write(
+        output.join("report.json"),
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    fs::write(output.join("build.log"), build_log)?;
+    println!("fast_refresh_pprof_report={}", output.display());
     Ok(())
 }
 
