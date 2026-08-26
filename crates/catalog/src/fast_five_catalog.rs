@@ -423,6 +423,7 @@ pub fn snapshot_reference(
     Ok(snapshot)
 }
 
+#[cfg(feature = "builder")]
 fn section_label(section: LauncherSection) -> &'static str {
     match section {
         LauncherSection::Arcade => "Arcade",
