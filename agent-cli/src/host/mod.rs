@@ -581,6 +581,9 @@ impl NativeDevice {
                         &args.sql,
                     ])),
                     CatalogCommand::Cores => core_list(),
+                    CatalogCommand::FastFivePrototype(args) => {
+                        run_fast_five_catalog_prototype(&prepared.config, &args.binary, &args.out)
+                    }
                     CatalogCommand::Purge(_) => purge_development_library_data_and_reboot(),
                 },
                 DeviceCommand::Media { command } => match command {
@@ -31584,6 +31587,158 @@ fn display_route_status(sess: &Session) -> Result<()> {
             return Err(error.into());
         }
     }
+    Ok(())
+}
+
+const FAST_FIVE_PROTOTYPE_REMOTE_BINARY: &str =
+    "/tmp/mister-magik/fast-five/five-system-catalog-prototype";
+const FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD: &str =
+    "/tmp/mister-magik/fast-five/.five-system-catalog-prototype.upload";
+const FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT: &str = "/tmp/mister-magik/fast-five/reference.json";
+const FAST_FIVE_PROTOTYPE_REMOTE_ROOT: &str = "/media/fat/mister-magik-dev/fast-five-catalog";
+const FAST_FIVE_PROTOTYPE_REFERENCE_ROOT: &str = "/media/fat/mister-magik-dev/catalog-v3";
+
+fn run_fast_five_catalog_prototype(
+    config: &NativeDeviceConfig,
+    binary: &Path,
+    output: &Path,
+) -> Result<()> {
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    if !binary.is_file() {
+        return Err(format!(
+            "five-system catalog prototype binary is missing: {}",
+            binary.display()
+        )
+        .into());
+    }
+    let binary_sha256 = file_sha256(binary.to_path_buf())?;
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "fast-five prototype safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    exec_checked(
+        &session,
+        "prepare fast-five prototype staging",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "rm -rf {} {}",
+                sh("/tmp/mister-magik/fast-five"),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT)
+            ),
+            format!("mkdir -p {}", sh("/tmp/mister-magik/fast-five")),
+        ]),
+    )?;
+    put(&session, binary, FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)?;
+    exec_checked(
+        &session,
+        "publish exact fast-five prototype binary",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "test \"$(sha256sum {} | cut -d' ' -f1)\" = {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(&binary_sha256)
+            ),
+            format!("chmod 755 {}", sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)),
+            format!(
+                "mv -f {} {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY)
+            ),
+            "sync".to_string(),
+        ]),
+    )?;
+    let snapshot = exec_checked_output(
+        &session,
+        "capture five-system reference snapshot",
+        &format!(
+            "{} snapshot-reference --catalog-root {} --output {}",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT)
+        ),
+    )?;
+    let published = exec_checked_output(
+        &session,
+        "publish fast-five catalog",
+        &format!(
+            "{} publish --input {} --output-root {}",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT)
+        ),
+    )?;
+    let compared = exec_checked_output(
+        &session,
+        "compare fast-five catalog",
+        &format!(
+            "{} compare --reference-root {} --candidate-root {}",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT)
+        ),
+    )?;
+    let snapshot: Value = serde_json::from_str(snapshot.stdout.trim())?;
+    let published: Value = serde_json::from_str(published.stdout.trim())?;
+    let compared: Value = serde_json::from_str(compared.stdout.trim())?;
+    if compared.get("status").and_then(Value::as_str) != Some("exact")
+        || published.get("systems").and_then(Value::as_u64) != Some(5)
+    {
+        return Err("fast-five publication is not an exact five-system projection".into());
+    }
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_FAST_FIVE_CATALOG".into(), "1".into()),
+                (
+                    "MISTER_SHARDED_CATALOG_DIR".into(),
+                    FAST_FIVE_PROTOTYPE_REMOTE_ROOT.into(),
+                ),
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+            ],
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            timeout_secs: 30,
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    let status = read_launcher_status(&session)?;
+    let expected_games = published
+        .get("games")
+        .and_then(Value::as_u64)
+        .ok_or("fast-five publish report has no game count")?;
+    if status.get("catalog_systems").and_then(Value::as_u64) != Some(5)
+        || status.get("catalog_games").and_then(Value::as_u64) != Some(expected_games)
+    {
+        return Err(format!("real UI did not load the fast-five catalog: {status}").into());
+    }
+    let report = json!({
+        "schema": "mister-magik-fast-five-ui-prototype-v1",
+        "status": "passed",
+        "binary_sha256": binary_sha256,
+        "snapshot": snapshot,
+        "published": published,
+        "comparison": compared,
+        "launcher": {
+            "catalog_systems": status.get("catalog_systems"),
+            "catalog_games": status.get("catalog_games"),
+            "catalog_ready": status.get("catalog_ready"),
+        },
+    });
+    if let Some(parent) = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(
+        output,
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    println!("fast_five_catalog_report={}", output.display());
     Ok(())
 }
 
