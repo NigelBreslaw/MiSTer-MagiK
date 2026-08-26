@@ -584,9 +584,13 @@ impl NativeDevice {
                         &args.sql,
                     ])),
                     CatalogCommand::Cores => core_list(),
-                    CatalogCommand::FastFivePrototype(args) => {
-                        run_fast_five_catalog_prototype(&prepared.config, &args.binary, &args.out)
-                    }
+                    CatalogCommand::FastFivePrototype(args) => run_fast_five_catalog_prototype(
+                        &prepared.config,
+                        &args.binary,
+                        &args.out,
+                        &args.input_encoding,
+                        &args.artifact_profile,
+                    ),
                     CatalogCommand::FastFiveC64Experiments(args) => {
                         run_fast_five_c64_experiments(&prepared.config, &args.binary, &args.out)
                     }
@@ -31637,6 +31641,8 @@ fn run_fast_five_catalog_prototype(
     config: &NativeDeviceConfig,
     binary: &Path,
     output: &Path,
+    input_encoding: &str,
+    artifact_profile: &str,
 ) -> Result<()> {
     let _signal_guard = AttendedOperationSignalGuard::install();
     if !binary.is_file() {
@@ -31697,7 +31703,7 @@ fn run_fast_five_catalog_prototype(
             sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
             sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
             sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
-            sh("json"),
+            sh(input_encoding),
         ),
     )?;
     exec_checked(&session, "sync fast-five cold inputs", "sync")?;
@@ -31713,19 +31719,22 @@ fn run_fast_five_catalog_prototype(
         &session,
         "publish fast-five catalog",
         &format!(
-            "{} publish --input {} --output-root {}",
+            "{} publish --input {} --input-encoding {} --artifact-profile {} --output-root {}",
             sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
             sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+            sh(input_encoding),
+            sh(artifact_profile),
             sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT)
         ),
     )?;
     let compared = exec_checked_output(
         &session,
-        "compare fast-five catalog",
+        "verify fast-five catalog",
         &format!(
-            "{} compare --reference-root {} --candidate-root {}",
+            "{} verify --input {} --input-encoding {} --candidate-root {}",
             sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
-            sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+            sh(input_encoding),
             sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT)
         ),
     )?;
@@ -31770,6 +31779,8 @@ fn run_fast_five_catalog_prototype(
         "status": "passed",
         "cold_boot_verified": true,
         "binary_sha256": binary_sha256,
+        "input_encoding": input_encoding,
+        "artifact_profile": artifact_profile,
         "snapshot": snapshot,
         "published": published,
         "comparison": compared,
@@ -32064,16 +32075,22 @@ fn run_fast_five_experiments(
             result.get("accepted").and_then(Value::as_bool) == Some(true) && search_exact;
         result["accepted"] = json!(accepted);
     }
-    let elapsed = |value: &Value| {
+    let publication_elapsed = |value: &Value| {
         value
-            .pointer("/published/command_elapsed_us")
+            .pointer("/published/elapsed_us")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX)
+    };
+    let input_elapsed = |value: &Value| {
+        value
+            .pointer("/published/input_read_decode_us")
             .and_then(Value::as_u64)
             .unwrap_or(u64::MAX)
     };
     let snapshot_winner = results[..4]
         .iter()
         .filter(|value| value.get("accepted").and_then(Value::as_bool) == Some(true))
-        .min_by_key(|value| elapsed(value))
+        .min_by_key(|value| input_elapsed(value))
         .ok_or("no accepted snapshot experiment")?;
     let artifact_winner = results
         .iter()
@@ -32083,7 +32100,7 @@ fn run_fast_five_experiments(
                 || *index >= 4 && value.get("accepted").and_then(Value::as_bool) == Some(true)
         })
         .map(|(_, value)| value)
-        .min_by_key(|value| elapsed(value))
+        .min_by_key(|value| publication_elapsed(value))
         .ok_or("no accepted artifact experiment")?;
     let winner_encoding = snapshot_winner
         .get("input_encoding")

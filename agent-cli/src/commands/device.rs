@@ -372,6 +372,10 @@ pub struct CatalogFastFivePrototypeArgs {
     pub(crate) binary: PathBuf,
     #[arg(long, value_name = "PATH")]
     pub(crate) out: PathBuf,
+    #[arg(long, default_value = "json")]
+    pub(crate) input_encoding: String,
+    #[arg(long, default_value = "legacy")]
+    pub(crate) artifact_profile: String,
 }
 
 #[derive(Debug, Args)]
