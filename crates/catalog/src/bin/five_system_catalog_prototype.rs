@@ -4,7 +4,8 @@
 //! Standalone interchange and publication tool for the fast five-system catalog.
 
 use mister_magik_catalog::fast_catalog_refresh::{
-    capture_refresh_state, publish_refresh_state, read_latest_refresh_manifest,
+    FastCatalogRefreshRequest, capture_refresh_state, plan_fast_refresh, publish_refresh_state,
+    read_latest_refresh_manifest,
 };
 use mister_magik_catalog::fast_catalog_sources::build_independent_fast_snapshot;
 use mister_magik_catalog::fast_five_catalog::{
@@ -33,6 +34,24 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
         return Err(usage());
     };
     match command.as_str() {
+        "plan-refresh" => {
+            let catalog_root = required_path(arguments, "--catalog-root")?;
+            let storage_root = required_path(arguments, "--storage-root")?;
+            let request = optional_value(arguments, "--request").unwrap_or_else(|| "update".into());
+            reject_unknown(
+                arguments,
+                &["--catalog-root", "--storage-root", "--request"],
+            )?;
+            print_json(&plan_fast_refresh(
+                &storage_root,
+                &catalog_root,
+                match request.as_str() {
+                    "update" => FastCatalogRefreshRequest::Update,
+                    "rebuild-all" => FastCatalogRefreshRequest::RebuildAll,
+                    _ => return Err(format!("unknown refresh request {request}")),
+                },
+            )?)
+        }
         "write-refresh-state" => {
             let input = required_path(arguments, "--input")?;
             let input_encoding = snapshot_encoding(arguments, "--input-encoding")?;

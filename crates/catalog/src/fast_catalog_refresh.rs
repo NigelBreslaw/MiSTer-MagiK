@@ -103,6 +103,43 @@ pub struct FastRefreshCaptureReport {
     pub systems: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FastCatalogRefreshRequest {
+    Update,
+    RebuildAll,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FastSourceCheckStatus {
+    Unchanged,
+    Changed,
+    Rescan,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct FastSystemSourceCheck {
+    pub system_id: String,
+    pub status: FastSourceCheckStatus,
+    pub directories_checked: usize,
+    pub containers_checked: usize,
+    pub elapsed_us: u64,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct FastRefreshPlanReport {
+    pub elapsed_us: u64,
+    pub systems: usize,
+    pub unchanged: usize,
+    pub changed: usize,
+    pub rescans: usize,
+    pub row_snapshots_opened: usize,
+    pub artifact_writes: usize,
+    pub checks: Vec<FastSystemSourceCheck>,
+}
+
 impl FastRefreshManifest {
     pub fn new(
         generation: u64,
@@ -403,6 +440,142 @@ pub fn capture_system_watch(
         directories,
         containers,
     )
+}
+
+pub fn plan_fast_refresh(
+    storage_root: &Path,
+    catalog_root: &Path,
+    request: FastCatalogRefreshRequest,
+) -> Result<FastRefreshPlanReport, String> {
+    let started = std::time::Instant::now();
+    let manifest = read_latest_refresh_manifest(catalog_root)?;
+    let active = crate::shard_registry::read_latest_manifest_lazy(
+        catalog_root,
+        crate::shard_registry::production_registry_limits(),
+    )
+    .map_err(|error| format!("read active fast catalog: {error}"))?;
+    let active_fingerprint = crate::fast_five_catalog::registry_fingerprint(
+        catalog_root,
+        crate::shard_registry::production_registry_limits(),
+    )?;
+    let binding_matches = manifest.catalog_generation == active.generation
+        && manifest.catalog_fingerprint == active_fingerprint
+        && manifest.builder_identity
+            == format!(
+                "independent-fast-sources-v{}",
+                crate::fast_catalog_sources::FAST_SOURCE_ADAPTER_VERSION
+            );
+    let mut references = manifest
+        .systems
+        .iter()
+        .map(|reference| (reference.system_id.as_str(), reference))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut checks = Vec::with_capacity(crate::fast_five_catalog::EXPANDED_FAST_SYSTEM_IDS.len());
+    for system_id in crate::fast_five_catalog::EXPANDED_FAST_SYSTEM_IDS {
+        let system_started = std::time::Instant::now();
+        let mut check = FastSystemSourceCheck {
+            system_id: system_id.to_string(),
+            status: FastSourceCheckStatus::Rescan,
+            directories_checked: 0,
+            containers_checked: 0,
+            elapsed_us: 0,
+            reason: String::new(),
+        };
+        if request == FastCatalogRefreshRequest::RebuildAll {
+            check.reason = "explicit rebuild-all".to_string();
+        } else if !binding_matches {
+            check.reason = "refresh state is not bound to the active catalog".to_string();
+        } else if let Some(reference) = references.remove(system_id) {
+            match read_system_watch(catalog_root, reference) {
+                Ok(watch) => check_watch_index(storage_root, &watch, &mut check),
+                Err(error) => check.reason = format!("watch index unavailable: {error}"),
+            }
+        } else {
+            check.reason = "system source snapshot is missing".to_string();
+        }
+        check.elapsed_us = system_started
+            .elapsed()
+            .as_micros()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        checks.push(check);
+    }
+    let unchanged = checks
+        .iter()
+        .filter(|check| check.status == FastSourceCheckStatus::Unchanged)
+        .count();
+    let changed = checks
+        .iter()
+        .filter(|check| check.status == FastSourceCheckStatus::Changed)
+        .count();
+    let rescans = checks.len().saturating_sub(unchanged + changed);
+    Ok(FastRefreshPlanReport {
+        elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+        systems: checks.len(),
+        unchanged,
+        changed,
+        rescans,
+        row_snapshots_opened: 0,
+        artifact_writes: 0,
+        checks,
+    })
+}
+
+fn check_watch_index(
+    _storage_root: &Path,
+    watch: &FastSystemWatchIndex,
+    check: &mut FastSystemSourceCheck,
+) {
+    let known_directories = watch
+        .directories
+        .iter()
+        .map(|directory| directory.path.as_str())
+        .collect::<BTreeSet<_>>();
+    for root in &watch.roots {
+        if Path::new(root).is_dir() != known_directories.contains(root.as_str()) {
+            check.status = FastSourceCheckStatus::Changed;
+            check.reason = format!("root availability changed: {root}");
+            return;
+        }
+    }
+    for directory in &watch.directories {
+        check.directories_checked = check.directories_checked.saturating_add(1);
+        let metadata = match fs::metadata(&directory.path) {
+            Ok(metadata) if metadata.is_dir() => metadata,
+            _ => {
+                check.status = FastSourceCheckStatus::Changed;
+                check.reason = format!("directory removed: {}", directory.path);
+                return;
+            }
+        };
+        if modified_ns(&metadata) != directory.modified_ns {
+            check.status = FastSourceCheckStatus::Changed;
+            check.reason = format!("directory entries changed: {}", directory.path);
+            return;
+        }
+    }
+    for container in &watch.containers {
+        check.containers_checked = check.containers_checked.saturating_add(1);
+        let metadata = match fs::metadata(&container.path) {
+            Ok(metadata) if metadata.is_file() => metadata,
+            _ => {
+                check.status = FastSourceCheckStatus::Changed;
+                check.reason = format!("container removed: {}", container.path);
+                return;
+            }
+        };
+        if metadata.len() != container.size
+            || modified_ns(&metadata) != container.modified_ns
+            || changed_ns(&metadata) != container.changed_ns
+            || inode(&metadata) != container.inode
+        {
+            check.status = FastSourceCheckStatus::Changed;
+            check.reason = format!("container changed: {}", container.path);
+            return;
+        }
+    }
+    check.status = FastSourceCheckStatus::Unchanged;
+    check.reason = "source identities match".to_string();
 }
 
 #[derive(Debug)]
@@ -907,5 +1080,47 @@ mod tests {
             decode_envelope::<FastRefreshManifest>(&encoded, MANIFEST_MAGIC, MAX_MANIFEST_BYTES)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn watch_check_is_metadata_only_when_sources_are_unchanged() {
+        let root = crate::test_support::unique_temp_dir("fast-refresh-check");
+        let games = root.join("games/SNES");
+        fs::create_dir_all(&games).unwrap();
+        fs::write(games.join("Game.sfc"), b"rom").unwrap();
+        let watch = capture_system_watch(&root, "snes").unwrap();
+        let mut check = FastSystemSourceCheck {
+            system_id: "snes".to_string(),
+            status: FastSourceCheckStatus::Rescan,
+            directories_checked: 0,
+            containers_checked: 0,
+            elapsed_us: 0,
+            reason: String::new(),
+        };
+        check_watch_index(&root, &watch, &mut check);
+        assert_eq!(check.status, FastSourceCheckStatus::Unchanged);
+        assert_eq!(check.directories_checked, watch.directories.len());
+        assert_eq!(check.containers_checked, 0);
+    }
+
+    #[test]
+    fn watch_check_detects_container_replacement_without_row_reads() {
+        let root = crate::test_support::unique_temp_dir("fast-refresh-container-check");
+        let games = root.join("games/SNES");
+        fs::create_dir_all(&games).unwrap();
+        let archive = games.join("Games.zip");
+        fs::write(&archive, b"first").unwrap();
+        let watch = capture_system_watch(&root, "snes").unwrap();
+        fs::write(&archive, b"replacement with a different size").unwrap();
+        let mut check = FastSystemSourceCheck {
+            system_id: "snes".to_string(),
+            status: FastSourceCheckStatus::Rescan,
+            directories_checked: 0,
+            containers_checked: 0,
+            elapsed_us: 0,
+            reason: String::new(),
+        };
+        check_watch_index(&root, &watch, &mut check);
+        assert_eq!(check.status, FastSourceCheckStatus::Changed);
     }
 }
