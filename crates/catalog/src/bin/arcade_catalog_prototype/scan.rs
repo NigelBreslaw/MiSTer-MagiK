@@ -12,7 +12,7 @@ pub struct InstalledMra {
     pub full_path: PathBuf,
     pub relative_path: String,
     pub path_key: String,
-    pub size: u64,
+    pub size: Option<u64>,
 }
 
 #[derive(Debug, Default)]
@@ -21,7 +21,10 @@ pub struct RomInventory {
     pub hbmame: HashSet<String>,
 }
 
-pub fn scan_installed_mras(arcade_root: &Path) -> Result<Vec<InstalledMra>, String> {
+pub fn scan_installed_mras(
+    arcade_root: &Path,
+    verify_index_size: bool,
+) -> Result<Vec<InstalledMra>, String> {
     if !arcade_root.is_dir() {
         return Err(format!(
             "Arcade root is not a directory: {}",
@@ -49,12 +52,13 @@ pub fn scan_installed_mras(arcade_root: &Path) -> Result<Vec<InstalledMra>, Stri
                 continue;
             }
             let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)
+            let file_type = entry
+                .file_type()
                 .map_err(|error| format!("inspect Arcade path {}: {error}", path.display()))?;
-            if metadata.file_type().is_symlink() {
+            if file_type.is_symlink() {
                 continue;
             }
-            if metadata.is_dir() {
+            if file_type.is_dir() {
                 if directory == arcade_root
                     && (name.eq_ignore_ascii_case("media") || name.eq_ignore_ascii_case("cores"))
                 {
@@ -63,7 +67,7 @@ pub fn scan_installed_mras(arcade_root: &Path) -> Result<Vec<InstalledMra>, Stri
                 stack.push(path);
                 continue;
             }
-            if !metadata.is_file()
+            if !file_type.is_file()
                 || !path
                     .extension()
                     .and_then(|extension| extension.to_str())
@@ -78,11 +82,23 @@ pub fn scan_installed_mras(arcade_root: &Path) -> Result<Vec<InstalledMra>, Stri
                 .to_string_lossy()
                 .replace('\\', "/");
             let relative_path = format!("_Arcade/{suffix}");
+            let size = if verify_index_size {
+                Some(
+                    entry
+                        .metadata()
+                        .map_err(|error| {
+                            format!("read Arcade file size {}: {error}", path.display())
+                        })?
+                        .len(),
+                )
+            } else {
+                None
+            };
             installed.push(InstalledMra {
                 full_path: path,
                 path_key: relative_path.to_ascii_lowercase(),
                 relative_path,
-                size: metadata.len(),
+                size,
             });
         }
     }
@@ -199,7 +215,7 @@ mod tests {
         fs::write(root.join("media/Launcher.mra"), "mra").unwrap();
         fs::write(root.join("NeoGeo Pocket.mra"), "mra").unwrap();
 
-        let installed = scan_installed_mras(&root).unwrap();
+        let installed = scan_installed_mras(&root, false).unwrap();
 
         fs::remove_dir_all(root).unwrap();
         assert_eq!(installed.len(), 2);

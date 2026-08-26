@@ -27,6 +27,7 @@ pub struct CompileReport {
 
 #[derive(Debug, Serialize)]
 pub struct BuildReport {
+    pub trust_mode: &'static str,
     pub base_bytes: usize,
     pub base_rows: usize,
     pub installed_mras: usize,
@@ -35,7 +36,8 @@ pub struct BuildReport {
     pub active_records: usize,
     pub preferred_families: usize,
     pub indexed_path_hits: usize,
-    pub exact_path_size_hits: usize,
+    pub fast_path_hits: usize,
+    pub size_mismatches: usize,
     pub fallback_count: usize,
     pub skipped_missing_rom: usize,
     pub skipped_ambiguous: usize,
@@ -101,6 +103,7 @@ pub fn build_active(
     mame_directories: &[PathBuf],
     hbmame_directories: &[PathBuf],
     parallel_inventory: bool,
+    verify_index_size: bool,
 ) -> Result<(ActiveCatalog, BuildReport), String> {
     let base_started = Instant::now();
     let base = crate::model::decode_base(base_bytes)?;
@@ -109,7 +112,8 @@ pub fn build_active(
     let inventory_started = Instant::now();
     let ((installed, mra_scan_us), (roms, rom_scan_us)) = if parallel_inventory {
         std::thread::scope(|scope| {
-            let mra_worker = scope.spawn(|| timed(|| scan_installed_mras(arcade_root)));
+            let mra_worker =
+                scope.spawn(|| timed(|| scan_installed_mras(arcade_root, verify_index_size)));
             let rom_worker =
                 scope.spawn(|| timed(|| scan_rom_inventory(mame_directories, hbmame_directories)));
             let mras = mra_worker
@@ -122,7 +126,7 @@ pub fn build_active(
         })?
     } else {
         (
-            timed(|| scan_installed_mras(arcade_root)),
+            timed(|| scan_installed_mras(arcade_root, verify_index_size)),
             timed(|| scan_rom_inventory(mame_directories, hbmame_directories)),
         )
     };
@@ -131,8 +135,9 @@ pub fn build_active(
     let parallel_inventory_wall_us = elapsed_us(inventory_started);
 
     let join_started = Instant::now();
-    let mut exact_path_size_hits = 0usize;
+    let mut fast_path_hits = 0usize;
     let mut indexed_path_hits = 0usize;
+    let mut size_mismatches = 0usize;
     let mut fallback_paths = Vec::new();
     let mut invalid_paths = Vec::new();
     let mut skipped_missing_rom = 0usize;
@@ -149,12 +154,20 @@ pub fn build_active(
         }
         let mut candidate = match indexed {
             Some(candidate)
-                if candidate.expected_size == installed_mra.size && !candidate.needs_fallback =>
+                if !candidate.needs_fallback
+                    && installed_mra
+                        .size
+                        .is_none_or(|size| candidate.expected_size == size) =>
             {
-                exact_path_size_hits += 1;
+                fast_path_hits += 1;
                 candidate.clone()
             }
             _ => {
+                if let (Some(candidate), Some(size)) = (indexed, installed_mra.size)
+                    && candidate.expected_size != size
+                {
+                    size_mismatches += 1;
+                }
                 fallback_paths.push(installed_mra.relative_path.clone());
                 match fallback_candidate(installed_mra) {
                     Ok(candidate) => candidate,
@@ -180,13 +193,18 @@ pub fn build_active(
     let selection_us = elapsed_us(selection_started);
     let counts = ActiveCounts {
         installed_mras: as_u32(installed.len(), "installed MRA count")?,
-        index_hits: as_u32(exact_path_size_hits, "exact updater-index hit count")?,
+        index_hits: as_u32(fast_path_hits, "updater-index fast-path hit count")?,
         fallbacks: as_u32(fallback_paths.len(), "fallback count")?,
         skipped_missing_rom: as_u32(skipped_missing_rom, "missing ROM count")?,
         skipped_ambiguous: as_u32(skipped_ambiguous, "ambiguous ROM count")?,
         skipped_invalid: as_u32(invalid_paths.len(), "invalid MRA count")?,
     };
     let report = BuildReport {
+        trust_mode: if verify_index_size {
+            "installed-path-and-size"
+        } else {
+            "installed-path-update-all-metadata"
+        },
         base_bytes: base_bytes.len(),
         base_rows: base.candidates.len(),
         installed_mras: installed.len(),
@@ -195,7 +213,8 @@ pub fn build_active(
         active_records: records.len(),
         preferred_families,
         indexed_path_hits,
-        exact_path_size_hits,
+        fast_path_hits,
+        size_mismatches,
         fallback_count: fallback_paths.len(),
         skipped_missing_rom,
         skipped_ambiguous,
@@ -344,7 +363,7 @@ fn fallback_candidate(installed: &InstalledMra) -> Result<BaseCandidate, String>
         control: String::new(),
         setname: setname.to_ascii_lowercase(),
         rom,
-        expected_size: installed.size,
+        expected_size: bytes.len() as u64,
         year: header.year.as_deref().and_then(parse_year),
         players: None,
         needs_fallback: false,
