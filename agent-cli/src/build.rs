@@ -941,6 +941,12 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
                 u8::from(metadata.source_dirty).to_string(),
             )
             .args(cargo_args(self.spec, self.session.cargo_timings));
+        if self.spec.features.contains(&"profile") {
+            command.env(
+                "CFLAGS_armv7_unknown_linux_gnueabihf",
+                "-fno-omit-frame-pointer",
+            );
+        }
         configure_cross_environment(&mut command, self.session.repository)?;
         if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
             command.envs(ffmpeg_cross_env(self.session.repository));
@@ -1083,6 +1089,11 @@ fn apple_container_cargo_command(
         .arg(format!("MISTER_UI_BUILD_SCOPE={}", spec.ui_scope.label()))
         .args(["--env", "RUSTC_WRAPPER=", "--env"])
         .arg(format!("RUSTFLAGS={rustflags}"));
+    if spec.features.contains(&"profile") {
+        command
+            .arg("--env")
+            .arg("CFLAGS_armv7_unknown_linux_gnueabihf=-fno-omit-frame-pointer");
+    }
     for value in metadata.environment() {
         command.arg("--env").arg(value);
     }
