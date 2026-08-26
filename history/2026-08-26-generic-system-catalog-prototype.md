@@ -61,3 +61,27 @@ command overhead; 6.110 seconds of that remained C64 artifact work.
 
 The isolated catalog did not alter the production registry. Device reboot and
 fault arming state was clear after the run. No commit was pushed.
+
+## One-sample old-builder comparison
+
+One independent reboot-cold old-builder sample was run for each generic
+system. `Old builder` is the authoritative-catalog-prepared phase. `New total`
+adds the retained generic discovery and per-system search/NavPack artifact
+build phases.
+
+| System | Old games | New games | Old builder | New total | Ratio |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Neo Geo | 173 | 275 | 11.577 s | 0.640 s | 18.08x |
+| Sega Saturn | 348 | 368 | 11.029 s | 0.729 s | 15.12x |
+| SNES | 1,805 | 2,928 | 10.567 s | 2.367 s | 4.46x |
+| ZX Spectrum | 859 | 860 | 10.602 s | 0.694 s | 15.27x |
+| **Summed phases** | **3,185** | **4,431** | **43.774 s** | **4.431 s** | **9.88x** |
+
+The differing game counts are important: this is an observed end-to-end
+comparison, not an equal-row microbenchmark. The generic prototype completed
+substantially more discovery work, particularly for custom SNES and Neo Geo
+content. The old matrix used isolated roots and did not alter the production
+registry.
+
+Old-builder evidence:
+`build/agent-benchmarks/generic-system-old-cold/2261e27e0.json`.
