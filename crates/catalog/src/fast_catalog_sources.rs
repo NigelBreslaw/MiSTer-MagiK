@@ -7,11 +7,13 @@
 //! contract directly. They never read Catalog V3, its scanner cache, or its
 //! generated sidecars.
 
+use crate::catalog_scan::FoundFile;
 use crate::fast_five_catalog::{
     EXPANDED_FAST_SYSTEM_IDS, FAST_FIVE_SNAPSHOT_SCHEMA, FastFiveSnapshot, FastFiveSystem,
     collapse_c64_cross_source_variants,
 };
 use crate::generic_system_catalog::{add_generic_example_systems, rebuild_generic_system};
+use crate::launch_profiles::CollectionListing;
 use crate::mra_header::{PrimaryRomRequirement, RomNamespace};
 use crate::prepared_collections::validate_prepared_launch_path;
 use crate::system_shard::{SystemGame, SystemLaunchPlan};
@@ -20,9 +22,9 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
-pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 1;
+pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FastSourceBuildReport {
@@ -345,6 +347,7 @@ fn scan_amiga(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<S
         .into_iter()
         .any(|name| amiga.join(name).is_file());
     let mut games = Vec::new();
+    let mut has_collection = false;
     if has_payload {
         for (name, kind) in [("games.txt", "games"), ("demos.txt", "demos")] {
             let path = listings.join(name);
@@ -353,6 +356,7 @@ fn scan_amiga(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<S
                 Err(_) => continue,
             };
             report.files_visited += 1;
+            has_collection = true;
             for title in contents
                 .lines()
                 .map(str::trim)
@@ -362,6 +366,74 @@ fn scan_amiga(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<S
                 games.push(row("amiga", "Computer", title, &launch_ref, None));
             }
         }
+    }
+    if !has_collection {
+        let mut archives = Vec::new();
+        collect_matching_files(&amiga, &mut report.files_visited, &mut archives, |path| {
+            extension_is(path, "7z")
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_ascii_lowercase)
+                    .is_some_and(|name| name.contains("amigavision") || name.contains("megaags"))
+        });
+        for archive in archives {
+            let Ok(metadata) = fs::metadata(&archive) else {
+                report.invalid += 1;
+                continue;
+            };
+            let found = FoundFile {
+                path: archive,
+                ext: "7z".to_string(),
+                size: metadata.len(),
+                mtime_secs: metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                    .map_or(0, |duration| duration.as_secs() as i64),
+            };
+            for (entry_path, kind) in [
+                ("games/Amiga/listings/games.txt", "games"),
+                ("games/Amiga/listings/demos.txt", "demos"),
+            ] {
+                let listing = CollectionListing {
+                    entry_path: entry_path.to_string(),
+                    genre: if kind == "games" {
+                        "AmigaVision"
+                    } else {
+                        "AmigaVision demos"
+                    }
+                    .to_string(),
+                };
+                let Some(contents) = crate::media_metadata::collection_listing_text_with_tool(
+                    &found,
+                    &listing,
+                    Path::new("/media/fat/linux/7za"),
+                    Duration::from_secs(10),
+                ) else {
+                    continue;
+                };
+                has_collection = true;
+                for title in contents
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                {
+                    let launch_ref =
+                        format!("magik-amigavision:{kind}:{}", encode_component(title));
+                    games.push(row("amiga", "Computer", title, &launch_ref, None));
+                }
+            }
+        }
+    }
+    if has_collection {
+        games.push(row(
+            "amiga",
+            "Computer",
+            "AmigaVision",
+            "magik-amigavision-launcher",
+            None,
+        ));
     }
     let mut files = Vec::new();
     collect_matching_files(&amiga, &mut report.files_visited, &mut files, |path| {
@@ -633,7 +705,7 @@ mod tests {
 
     #[test]
     fn independent_source_set_contains_no_legacy_input_kind() {
-        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 1);
+        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 2);
         assert_eq!(EXPANDED_FAST_SYSTEM_IDS.len(), 9);
     }
 }
