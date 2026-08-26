@@ -21,6 +21,16 @@ active catalog. Parallel and single-thread arms must produce byte-identical
 catalogs and equal record counts. Cleanup resumes and health-checks the Dev
 launcher and removes the isolated benchmark root.
 
+The runner installs the repository's attended-operation signal guard so an
+interrupt is converted into bounded cleanup rather than terminating after Main
+has been suspended. The focused binary is uploaded through a temporary path,
+matched to the exact local SHA-256, atomically published, and rehashed after
+every reboot. The precompiled source base is likewise rehashed after every
+reboot. Each active output is decoded with `inspect`, checked against its build
+report, remotely hashed, downloaded, and rehashed. The retained summary is
+bound to the clean source commit and must prove that the production and Dev
+Catalog V3 registry manifests did not change during the isolated run.
+
 ## Data flow
 
 The prototype separates immutable source knowledge from the card-specific

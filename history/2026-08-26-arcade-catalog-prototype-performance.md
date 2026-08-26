@@ -37,6 +37,12 @@ Every authoritative prototype timing was taken by the typed
 5. creates the active catalog from scratch;
 6. downloads the output/report, resumes the launcher, and verifies health.
 
+The final v3 evidence gate additionally installs interruption-safe cleanup,
+proves the remote executable and source-base hashes after each reboot, decodes
+and cross-checks both retained active outputs, binds the evidence to the clean
+Git commit, and proves the production/Dev Catalog V3 registry manifests are
+unchanged.
+
 Parallel and single-thread arms use separate reboots. No warm rerun is included
 as timing authority. The immutable source-base test compiles that base before
 the reboot; the active catalog itself does not exist until after reboot and the

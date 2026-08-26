@@ -423,6 +423,7 @@ fn require_clean_installed_commit(
             prototype_binary
                 .as_deref()
                 .expect("prototype scenarios resolve their exact binary before device access"),
+            &head,
             reporter,
         ),
         BenchmarkScenario::CatalogAttributionControl => execute_catalog_attribution(
@@ -2618,6 +2619,7 @@ fn execute_arcade_catalog_prototype_cold(
     manifest: String,
     output_dir: PathBuf,
     binary: &Path,
+    source_commit: &str,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     reporter.emit(
@@ -2627,7 +2629,15 @@ fn execute_arcade_catalog_prototype_cold(
         Some(20),
     )?;
     let detail = device.profile_arcade_catalog_prototype(binary, output_dir.clone())?;
-    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    let mut summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    summary
+        .as_object_mut()
+        .ok_or("Arcade catalog prototype benchmark summary is not an object")?
+        .insert("source_commit".into(), json!(source_commit));
+    std::fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
     evaluate_arcade_catalog_prototype_summary(&summary)?;
     device.verify_health()?;
     reporter.emit(
@@ -2646,12 +2656,63 @@ fn execute_arcade_catalog_prototype_cold(
 
 fn evaluate_arcade_catalog_prototype_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-arcade-catalog-prototype-cold-v2")
+        != Some("mister-magik-arcade-catalog-prototype-cold-v3")
         || summary.get("scenario").and_then(Value::as_str) != Some("arcade-catalog-prototype-cold")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
     {
-        return Err("Arcade catalog prototype benchmark is not a passing v2 report".into());
+        return Err("Arcade catalog prototype benchmark is not a passing v3 report".into());
     }
+    let is_digest = |value: Option<&str>| {
+        value.is_some_and(|value| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        })
+    };
+    if !is_digest(summary.get("binary_sha256").and_then(Value::as_str))
+        || !is_digest(summary.get("source_base_sha256").and_then(Value::as_str))
+        || summary
+            .get("source_commit")
+            .and_then(Value::as_str)
+            .is_none_or(|revision| {
+                revision.len() != 40
+                    || !revision
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            })
+        || summary
+            .pointer("/production_registry/unchanged")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || summary
+            .pointer("/source_base_inspect/kind")
+            .and_then(Value::as_str)
+            != Some("base")
+        || summary
+            .pointer("/source_base_inspect/records")
+            .and_then(Value::as_u64)
+            != summary
+                .pointer("/source_base_compile/compile/source_rows")
+                .and_then(Value::as_u64)
+        || summary
+            .pointer("/source_base_inspect/source_sha256")
+            .and_then(Value::as_str)
+            != summary
+                .pointer("/source_base_compile/source_sha256")
+                .and_then(Value::as_str)
+    {
+        return Err("Arcade catalog prototype benchmark identity evidence is invalid".into());
+    }
+    let source_sha256 = summary
+        .pointer("/source_base_compile/source_sha256")
+        .and_then(Value::as_str)
+        .filter(|digest| is_digest(Some(digest)))
+        .ok_or("Arcade catalog prototype benchmark source digest is invalid")?;
+    let base_sha256 = summary
+        .get("source_base_sha256")
+        .and_then(Value::as_str)
+        .expect("validated source base digest");
     let samples = summary
         .get("samples")
         .and_then(Value::as_array)
@@ -2665,7 +2726,25 @@ fn evaluate_arcade_catalog_prototype_summary(summary: &Value) -> AgentResult<()>
     for sample in samples {
         if sample.get("reboot_verified").and_then(Value::as_bool) != Some(true)
             || sample.get("cache_drop_verified").and_then(Value::as_bool) != Some(true)
+            || sample
+                .get("remote_binary_sha256_verified")
+                .and_then(Value::as_bool)
+                != Some(true)
+            || sample
+                .get("remote_base_sha256_verified")
+                .and_then(Value::as_bool)
+                != Some(true)
+            || sample
+                .get("remote_active_sha256_verified")
+                .and_then(Value::as_bool)
+                != Some(true)
+            || !is_digest(sample.get("active_sha256").and_then(Value::as_str))
+            || sample.get("base_sha256").and_then(Value::as_str) != Some(base_sha256)
             || sample.pointer("/report/command").and_then(Value::as_str) != Some("build-active")
+            || sample
+                .pointer("/report/source_sha256")
+                .and_then(Value::as_str)
+                != Some(source_sha256)
             || sample
                 .pointer("/report/build/active_records")
                 .and_then(Value::as_u64)
@@ -2676,6 +2755,64 @@ fn evaluate_arcade_catalog_prototype_summary(summary: &Value) -> AgentResult<()>
                 .and_then(Value::as_u64)
                 .unwrap_or(0)
                 == 0
+            || sample.pointer("/inspect/kind").and_then(Value::as_str) != Some("active")
+            || sample
+                .pointer("/inspect/source_sha256")
+                .and_then(Value::as_str)
+                != Some(source_sha256)
+            || sample.pointer("/inspect/bytes").and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/output_bytes")
+                    .and_then(Value::as_u64)
+            || sample.pointer("/inspect/records").and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/build/active_records")
+                    .and_then(Value::as_u64)
+            || sample.pointer("/inspect/preferred").and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/build/preferred_families")
+                    .and_then(Value::as_u64)
+            || sample
+                .pointer("/inspect/preferred")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                == 0
+            || sample
+                .pointer("/inspect/counts/installed_mras")
+                .and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/build/installed_mras")
+                    .and_then(Value::as_u64)
+            || sample
+                .pointer("/inspect/counts/index_hits")
+                .and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/build/fast_path_hits")
+                    .and_then(Value::as_u64)
+            || sample
+                .pointer("/inspect/counts/fallbacks")
+                .and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/build/fallback_count")
+                    .and_then(Value::as_u64)
+            || sample
+                .pointer("/inspect/counts/skipped_missing_rom")
+                .and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/build/skipped_missing_rom")
+                    .and_then(Value::as_u64)
+            || sample
+                .pointer("/inspect/counts/skipped_ambiguous")
+                .and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/build/skipped_ambiguous")
+                    .and_then(Value::as_u64)
+            || sample
+                .pointer("/inspect/counts/skipped_invalid")
+                .and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/build/skipped_invalid")
+                    .and_then(Value::as_u64)
         {
             return Err(
                 "Arcade catalog prototype benchmark contains an invalid cold sample".into(),
@@ -2987,6 +3124,93 @@ fn u64_field(value: &Value, field: &str, default: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arcade_prototype_requires_exact_artifacts_and_decoded_output() {
+        let binary_sha = "1".repeat(64);
+        let base_sha = "2".repeat(64);
+        let active_sha = "3".repeat(64);
+        let source_sha = "4".repeat(64);
+        let sample = |arm: &str| {
+            json!({
+                "arm": arm,
+                "reboot_verified": true,
+                "cache_drop_verified": true,
+                "remote_binary_sha256_verified": true,
+                "remote_base_sha256_verified": true,
+                "remote_active_sha256_verified": true,
+                "base_sha256": base_sha,
+                "active_sha256": active_sha,
+                "report": {
+                    "command": "build-active",
+                    "source_sha256": source_sha,
+                    "output_bytes": 100,
+                    "total_us": 1,
+                    "build": {
+                        "active_records": 10,
+                        "preferred_families": 8,
+                        "installed_mras": 10,
+                        "fast_path_hits": 10,
+                        "fallback_count": 0,
+                        "skipped_missing_rom": 5,
+                        "skipped_ambiguous": 1,
+                        "skipped_invalid": 0
+                    }
+                },
+                "inspect": {
+                    "kind": "active",
+                    "bytes": 100,
+                    "source_sha256": source_sha,
+                    "records": 10,
+                    "preferred": 8,
+                    "counts": {
+                        "installed_mras": 10,
+                        "index_hits": 10,
+                        "fallbacks": 0,
+                        "skipped_missing_rom": 5,
+                        "skipped_ambiguous": 1,
+                        "skipped_invalid": 0
+                    }
+                }
+            })
+        };
+        let passing = json!({
+            "schema": "mister-magik-arcade-catalog-prototype-cold-v3",
+            "scenario": "arcade-catalog-prototype-cold",
+            "status": "passed",
+            "source_commit": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+            "binary_sha256": binary_sha,
+            "source_base_sha256": base_sha,
+            "source_base_compile": {
+                "source_sha256": source_sha,
+                "compile": {"source_rows": 3069}
+            },
+            "source_base_inspect": {
+                "kind": "base",
+                "records": 3069,
+                "source_sha256": source_sha
+            },
+            "production_registry": {"unchanged": true},
+            "samples": [sample("parallel"), sample("single-thread")],
+            "validation": {
+                "active_outputs_identical": true,
+                "record_counts_identical": true
+            }
+        });
+        assert!(evaluate_arcade_catalog_prototype_summary(&passing).is_ok());
+
+        let mut invalid = passing.clone();
+        invalid["samples"][0]["inspect"]["bytes"] = json!(99);
+        assert!(evaluate_arcade_catalog_prototype_summary(&invalid).is_err());
+
+        let mut invalid = passing.clone();
+        invalid["production_registry"]["unchanged"] = json!(false);
+        assert!(evaluate_arcade_catalog_prototype_summary(&invalid).is_err());
+
+        let mut invalid = passing;
+        invalid["samples"][1]["remote_binary_sha256_verified"] = json!(false);
+        assert!(evaluate_arcade_catalog_prototype_summary(&invalid).is_err());
+    }
 
     #[test]
     fn modal_input_requires_held_release_isolation_and_a_fresh_activation() {

@@ -20350,6 +20350,7 @@ const LAUNCH_RETURN_ONCE_STEP_DEADLINE_MS: u64 = 2_000;
 const ARCADE_CATALOG_PROTOTYPE_REMOTE_ROOT: &str =
     "/media/fat/mister-magik-dev/catalog-benchmarks/arcade-catalog-prototype";
 const ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY: &str = "/media/fat/mister-magik-dev/catalog-benchmarks/arcade-catalog-prototype/arcade-catalog-prototype";
+const ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY_UPLOAD: &str = "/media/fat/mister-magik-dev/catalog-benchmarks/arcade-catalog-prototype/arcade-catalog-prototype.upload";
 const ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE: &str =
     "/media/fat/mister-magik-dev/catalog-benchmarks/arcade-catalog-prototype/source-base.bin";
 const ARCADE_CATALOG_PROTOTYPE_UPDATER_INDEX: &str =
@@ -20360,6 +20361,7 @@ fn profile_arcade_catalog_prototype(
     binary: &Path,
     output_dir: &Path,
 ) -> Result<String> {
+    let _signal_guard = AttendedOperationSignalGuard::install();
     let run = profile_arcade_catalog_prototype_run(config, binary, output_dir);
     let cleanup = cleanup_arcade_catalog_prototype(config);
     match (run, cleanup) {
@@ -20396,6 +20398,7 @@ fn profile_arcade_catalog_prototype_run(
         "Arcade catalog prototype safety preflight",
         &cold_boot_profile_preflight_command(),
     )?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
     exec_checked(
         &session,
         "prepare isolated Arcade catalog prototype root",
@@ -20404,13 +20407,19 @@ fn profile_arcade_catalog_prototype_run(
             root = sh(ARCADE_CATALOG_PROTOTYPE_REMOTE_ROOT),
         ),
     )?;
-    put(&session, binary, ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY)?;
+    put(
+        &session,
+        binary,
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY_UPLOAD,
+    )?;
     exec_checked(
         &session,
-        "verify Arcade catalog prototype inputs",
+        "verify and publish exact Arcade catalog prototype binary",
         &format!(
-            "set -eu; chmod 755 {binary}; test -x {binary}; test -s {index}; test -d /media/fat/_Arcade; sync",
+            "set -eu; test \"$(sha256sum {upload} | cut -d' ' -f1)\" = {expected}; chmod 755 {upload}; mv -f {upload} {binary}; sync; test -x {binary}; test \"$(sha256sum {binary} | cut -d' ' -f1)\" = {expected}; test -s {index}; test -d /media/fat/_Arcade",
+            upload = sh(ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY_UPLOAD),
             binary = sh(ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY),
+            expected = sh(&binary_sha256),
             index = sh(ARCADE_CATALOG_PROTOTYPE_UPDATER_INDEX),
         ),
     )?;
@@ -20435,6 +20444,35 @@ fn profile_arcade_catalog_prototype_run(
     if compile_report.get("command").and_then(Value::as_str) != Some("compile-base") {
         return Err("Arcade catalog prototype base output has the wrong command".into());
     }
+    let base_inspect_command = remote_subcommand(
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY,
+        "inspect",
+        &[
+            "--input".to_string(),
+            ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE.to_string(),
+        ],
+    );
+    let base_inspect_output = exec_checked_output(
+        &session,
+        "inspect immutable Arcade prototype source base",
+        &base_inspect_command,
+    )?;
+    let base_inspect: Value =
+        serde_json::from_str(base_inspect_output.stdout.trim()).map_err(|error| {
+            format!("Arcade catalog prototype base inspection is not JSON: {error}")
+        })?;
+    if base_inspect.get("kind").and_then(Value::as_str) != Some("base")
+        || base_inspect.get("records").and_then(Value::as_u64)
+            != compile_report
+                .pointer("/compile/source_rows")
+                .and_then(Value::as_u64)
+        || base_inspect.get("source_sha256").and_then(Value::as_str)
+            != compile_report.get("source_sha256").and_then(Value::as_str)
+    {
+        return Err(
+            "Arcade catalog prototype source base inspection disagrees with compile report".into(),
+        );
+    }
     exec_checked(
         &session,
         "persist immutable Arcade prototype source base",
@@ -20446,6 +20484,14 @@ fn profile_arcade_catalog_prototype_run(
     let base_local = output_dir.join("source-base.bin");
     get(&session, ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE, &base_local)?;
     let base_sha256 = file_sha256(base_local)?;
+    let remote_base_sha256 = streamline_remote_sha256(
+        &session,
+        "Arcade catalog prototype source base",
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE,
+    )?;
+    if remote_base_sha256 != base_sha256 {
+        return Err("downloaded Arcade catalog prototype source base hash changed".into());
+    }
     drop(session);
 
     let mut samples = Vec::new();
@@ -20455,9 +20501,14 @@ fn profile_arcade_catalog_prototype_run(
             output_dir,
             arm,
             parallel_probe,
+            &binary_sha256,
             &base_sha256,
         )?);
     }
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_after = catalog_production_registry_identity(&session)?;
+    let production_registry_unchanged = production_registry_after == production_registry_before;
+    drop(session);
     let active_outputs_identical = samples
         .first()
         .and_then(|sample| sample.get("active_sha256"))
@@ -20487,6 +20538,7 @@ fn profile_arcade_catalog_prototype_run(
     };
     let status = if active_outputs_identical
         && record_counts_identical
+        && production_registry_unchanged
         && parallel_total_us > 0
         && single_thread_total_us > 0
     {
@@ -20495,12 +20547,18 @@ fn profile_arcade_catalog_prototype_run(
         "failed"
     };
     let summary = json!({
-        "schema": "mister-magik-arcade-catalog-prototype-cold-v2",
+        "schema": "mister-magik-arcade-catalog-prototype-cold-v3",
         "scenario": "arcade-catalog-prototype-cold",
         "status": status,
         "binary_sha256": binary_sha256,
         "source_base_sha256": base_sha256,
         "source_base_compile": compile_report,
+        "source_base_inspect": base_inspect,
+        "production_registry": {
+            "before": production_registry_before,
+            "after": production_registry_after,
+            "unchanged": production_registry_unchanged,
+        },
         "samples": samples,
         "validation": {
             "active_outputs_identical": active_outputs_identical,
@@ -20521,6 +20579,7 @@ fn run_arcade_catalog_prototype_cold_sample(
     output_dir: &Path,
     arm: &str,
     parallel_probe: bool,
+    binary_sha256: &str,
     base_sha256: &str,
 ) -> Result<Value> {
     let session = connect_with(&config.connection, 10)?;
@@ -20529,6 +20588,7 @@ fn run_arcade_catalog_prototype_cold_sample(
         "Arcade catalog prototype reboot safety preflight",
         &cold_boot_profile_preflight_command(),
     )?;
+    require_catalog_benchmark_active("Arcade prototype reboot")?;
     let boot_id_before = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("Arcade catalog prototype cannot read the initial boot id")?;
     let host_reboot_started = Instant::now();
@@ -20537,19 +20597,37 @@ fn run_arcade_catalog_prototype_cold_sample(
     if !wait_down_with(&config.connection, 40.0) || wait_up_with(&config.connection, 120.0)? != 0 {
         return Err(format!("Arcade catalog prototype {arm} reboot did not complete").into());
     }
+    require_catalog_benchmark_active("Arcade prototype post-reboot verification")?;
     let host_reboot_elapsed_ms = host_reboot_started.elapsed().as_millis() as u64;
     let session = connect_with(&config.connection, 10)?;
     wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
+    require_catalog_benchmark_active("Arcade prototype launcher suspension")?;
     let boot_id_after = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("Arcade catalog prototype cannot read the final boot id")?;
     if boot_id_after.trim() == boot_id_before.trim() {
         return Err(format!("Arcade catalog prototype {arm} did not observe a new boot").into());
+    }
+    let remote_binary_sha256 = streamline_remote_sha256(
+        &session,
+        "Arcade catalog prototype executable",
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY,
+    )?;
+    let remote_base_sha256 = streamline_remote_sha256(
+        &session,
+        "Arcade catalog prototype source base",
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE,
+    )?;
+    if remote_binary_sha256 != binary_sha256 || remote_base_sha256 != base_sha256 {
+        return Err(
+            format!("Arcade catalog prototype {arm} remote artifact identity changed").into(),
+        );
     }
     exec_checked(
         &session,
         "suspend launcher for isolated Arcade catalog prototype",
         &acknowledged_main_command("mister_magik_suspend"),
     )?;
+    require_catalog_benchmark_active("Arcade prototype cache clearing")?;
 
     let active_remote = format!("{ARCADE_CATALOG_PROTOTYPE_REMOTE_ROOT}/active-{arm}.bin");
     let clear_command = format!(
@@ -20562,6 +20640,7 @@ fn run_arcade_catalog_prototype_cold_sample(
         "clear caches for Arcade catalog prototype cold sample",
         &clear_command,
     )?;
+    require_catalog_benchmark_active("Arcade prototype active build")?;
     let mut arguments = vec![
         "build-active".to_string(),
         "--base".to_string(),
@@ -20587,6 +20666,86 @@ fn run_arcade_catalog_prototype_cold_sample(
     if report.get("command").and_then(Value::as_str) != Some("build-active") {
         return Err(format!("Arcade catalog prototype {arm} output has the wrong command").into());
     }
+    require_catalog_benchmark_active("Arcade prototype output inspection")?;
+    let inspect_command = remote_subcommand(
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY,
+        "inspect",
+        &["--input".to_string(), active_remote.clone()],
+    );
+    let inspect_output = exec_checked_output(
+        &session,
+        &format!("inspect Arcade catalog prototype {arm} output"),
+        &inspect_command,
+    )?;
+    let inspect: Value = serde_json::from_str(inspect_output.stdout.trim()).map_err(|error| {
+        format!("Arcade catalog prototype {arm} inspection is not JSON: {error}")
+    })?;
+    let inspection_matches = inspect.get("kind").and_then(Value::as_str) == Some("active")
+        && inspect.get("bytes").and_then(Value::as_u64)
+            == report.get("output_bytes").and_then(Value::as_u64)
+        && inspect.get("source_sha256").and_then(Value::as_str)
+            == report.get("source_sha256").and_then(Value::as_str)
+        && inspect.get("records").and_then(Value::as_u64)
+            == report
+                .pointer("/build/active_records")
+                .and_then(Value::as_u64)
+        && inspect.get("preferred").and_then(Value::as_u64)
+            == report
+                .pointer("/build/preferred_families")
+                .and_then(Value::as_u64)
+        && inspect
+            .pointer("/counts/installed_mras")
+            .and_then(Value::as_u64)
+            == report
+                .pointer("/build/installed_mras")
+                .and_then(Value::as_u64)
+        && inspect
+            .pointer("/counts/index_hits")
+            .and_then(Value::as_u64)
+            == report
+                .pointer("/build/fast_path_hits")
+                .and_then(Value::as_u64)
+        && inspect.pointer("/counts/fallbacks").and_then(Value::as_u64)
+            == report
+                .pointer("/build/fallback_count")
+                .and_then(Value::as_u64)
+        && inspect
+            .pointer("/counts/skipped_missing_rom")
+            .and_then(Value::as_u64)
+            == report
+                .pointer("/build/skipped_missing_rom")
+                .and_then(Value::as_u64)
+        && inspect
+            .pointer("/counts/skipped_ambiguous")
+            .and_then(Value::as_u64)
+            == report
+                .pointer("/build/skipped_ambiguous")
+                .and_then(Value::as_u64)
+        && inspect
+            .pointer("/counts/skipped_invalid")
+            .and_then(Value::as_u64)
+            == report
+                .pointer("/build/skipped_invalid")
+                .and_then(Value::as_u64);
+    if !inspection_matches
+        || inspect.get("records").and_then(Value::as_u64).unwrap_or(0) == 0
+        || inspect
+            .get("preferred")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            == 0
+    {
+        return Err(format!(
+            "Arcade catalog prototype {arm} inspection disagrees with build report"
+        )
+        .into());
+    }
+    let remote_active_sha256 = streamline_remote_sha256(
+        &session,
+        &format!("Arcade catalog prototype {arm} output"),
+        &active_remote,
+    )?;
+    require_catalog_benchmark_active("Arcade prototype output retrieval")?;
 
     let arm_output_dir = output_dir.join(arm);
     fs::create_dir_all(&arm_output_dir)?;
@@ -20597,6 +20756,9 @@ fn run_arcade_catalog_prototype_cold_sample(
         format!("{}\n", serde_json::to_string_pretty(&report)?),
     )?;
     let active_sha256 = file_sha256(active_local)?;
+    if active_sha256 != remote_active_sha256 {
+        return Err(format!("Arcade catalog prototype {arm} download hash changed").into());
+    }
     exec_checked(
         &session,
         "resume launcher after Arcade catalog prototype",
@@ -20609,9 +20771,13 @@ fn run_arcade_catalog_prototype_cold_sample(
         "reboot_mode": reboot_mode,
         "host_reboot_elapsed_ms": host_reboot_elapsed_ms,
         "cache_drop_verified": true,
+        "remote_binary_sha256_verified": remote_binary_sha256 == binary_sha256,
+        "remote_base_sha256_verified": remote_base_sha256 == base_sha256,
+        "remote_active_sha256_verified": remote_active_sha256 == active_sha256,
         "base_sha256": base_sha256,
         "active_sha256": active_sha256,
         "report": report,
+        "inspect": inspect,
     }))
 }
 
