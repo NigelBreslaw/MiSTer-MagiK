@@ -487,9 +487,12 @@ pub fn publish_snapshot(
     use crate::catalog_format::CatalogFormatDescriptor;
     use crate::shard_registry::{
         ManifestSystem, garbage_collect_unreferenced, manifest_slots_present, publish_manifest,
-        publish_system_artifacts,
+        publish_prevalidated_system_artifacts_deferred, publish_system_artifacts,
+        sync_artifact_batch,
     };
-    use crate::system_shard::{SystemShardData, write_system_shard};
+    use crate::system_shard::{
+        ShardDurability, SystemShardData, write_system_shard, write_system_shard_with_durability,
+    };
     use std::fs;
     use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -529,7 +532,13 @@ pub fn publish_snapshot(
         let system_started = Instant::now();
         let system_id = SystemId::parse(&source.system_id)
             .map_err(|error| format!("invalid system {}: {error}", source.system_id))?;
-        let staging = storage_root.join("staging").join(format!(
+        let stage_c64_in_tmpfs = cfg!(target_os = "linux") && source.system_id == "c64";
+        let staging_parent = if stage_c64_in_tmpfs {
+            std::path::PathBuf::from("/tmp/mister-magik/fast-five-catalog")
+        } else {
+            storage_root.join("staging")
+        };
+        let staging = staging_parent.join(format!(
             "fast-five-{}-{generation}-{nonce}-{}",
             std::process::id(),
             source.system_id
@@ -538,28 +547,50 @@ pub fn publish_snapshot(
             .map_err(|error| format!("create {} staging: {error}", source.system_id))?;
         let sqlite = staging.join("system.sqlite3");
         let navigation = staging.join("system.nav.lz4b");
-        write_system_shard(
-            &sqlite,
-            &navigation,
-            &SystemShardData {
-                system_id: system_id.clone(),
-                generation,
-                projection_stats: None,
-                games: source.games.clone(),
-            },
-            limits.shard,
-        )
-        .map_err(|error| format!("write {} shard: {error}", source.system_id))?;
-        let active = publish_system_artifacts(
-            storage_root,
-            &sqlite,
-            &navigation,
-            &system_id,
+        let data = SystemShardData {
+            system_id: system_id.clone(),
             generation,
-            source.games.len() as u64,
-            limits,
-        )
-        .map_err(|error| format!("publish {} shard: {error}", source.system_id))?;
+            projection_stats: None,
+            games: source.games.clone(),
+        };
+        if stage_c64_in_tmpfs {
+            write_system_shard_with_durability(
+                &sqlite,
+                &navigation,
+                data,
+                limits.shard,
+                ShardDurability::Immediate,
+            )
+        } else {
+            write_system_shard(&sqlite, &navigation, &data, limits.shard)
+        }
+        .map_err(|error| format!("write {} shard: {error}", source.system_id))?;
+        let active = if stage_c64_in_tmpfs {
+            let publication = publish_prevalidated_system_artifacts_deferred(
+                storage_root,
+                &sqlite,
+                &navigation,
+                &system_id,
+                generation,
+                source.games.len() as u64,
+                limits,
+            )
+            .map_err(|error| format!("publish {} shard: {error}", source.system_id))?;
+            sync_artifact_batch(storage_root)
+                .map_err(|error| format!("sync {} shard: {error}", source.system_id))?;
+            publication.generation
+        } else {
+            publish_system_artifacts(
+                storage_root,
+                &sqlite,
+                &navigation,
+                &system_id,
+                generation,
+                source.games.len() as u64,
+                limits,
+            )
+            .map_err(|error| format!("publish {} shard: {error}", source.system_id))?
+        };
         let _ = fs::remove_dir(staging);
         let previous = current.as_ref().and_then(|manifest| {
             manifest

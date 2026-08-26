@@ -54,3 +54,5 @@ forced-rebuild, and whole-card figures are not comparison evidence.
 
 The first exact cold comparison is recorded in
 [`history/2026-08-26-fast-five-cold-comparison.md`](../history/2026-08-26-fast-five-cold-comparison.md).
+The focused C64 SQLite/FTS experiments are recorded in
+[`history/2026-08-26-c64-artifact-experiments.md`](../history/2026-08-26-c64-artifact-experiments.md).
