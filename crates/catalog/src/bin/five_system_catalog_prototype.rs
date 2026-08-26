@@ -3,6 +3,9 @@
 
 //! Standalone interchange and publication tool for the fast five-system catalog.
 
+use mister_magik_catalog::fast_catalog_refresh::{
+    capture_refresh_state, publish_refresh_state, read_latest_refresh_manifest,
+};
 use mister_magik_catalog::fast_catalog_sources::build_independent_fast_snapshot;
 use mister_magik_catalog::fast_five_catalog::{
     C64ArtifactExperimentProfile, FastFiveArtifactProfile, FastFiveSnapshot,
@@ -30,6 +33,51 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
         return Err(usage());
     };
     match command.as_str() {
+        "write-refresh-state" => {
+            let input = required_path(arguments, "--input")?;
+            let input_encoding = snapshot_encoding(arguments, "--input-encoding")?;
+            let catalog_root = required_path(arguments, "--catalog-root")?;
+            let storage_root = required_path(arguments, "--storage-root")?;
+            reject_unknown(
+                arguments,
+                &[
+                    "--input",
+                    "--input-encoding",
+                    "--catalog-root",
+                    "--storage-root",
+                ],
+            )?;
+            let (snapshot, _, _) = read_snapshot_input(&input, input_encoding)?;
+            let (states, capture) = capture_refresh_state(&storage_root, &snapshot)?;
+            let catalog_manifest = mister_magik_catalog::shard_registry::read_latest_manifest_lazy(
+                &catalog_root,
+                production_registry_limits(),
+            )
+            .map_err(|error| format!("read published fast catalog: {error}"))?;
+            let generation = read_latest_refresh_manifest(&catalog_root)
+                .map_or(1, |manifest| manifest.generation.saturating_add(1));
+            let manifest = publish_refresh_state(
+                &catalog_root,
+                generation,
+                catalog_manifest.generation,
+                mister_magik_catalog::fast_five_catalog::registry_fingerprint(
+                    &catalog_root,
+                    production_registry_limits(),
+                )?,
+                format!(
+                    "independent-fast-sources-v{}",
+                    mister_magik_catalog::fast_catalog_sources::FAST_SOURCE_ADAPTER_VERSION
+                ),
+                &states,
+            )?;
+            print_json(&serde_json::json!({
+                "command": "write-refresh-state",
+                "generation": manifest.generation,
+                "catalog_generation": manifest.catalog_generation,
+                "systems": manifest.systems.len(),
+                "capture": capture,
+            }))
+        }
         "build-independent" => {
             let storage_root = required_path(arguments, "--storage-root")?;
             let output = required_path(arguments, "--output")?;

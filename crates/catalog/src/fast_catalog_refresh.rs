@@ -7,7 +7,7 @@
 //! refresh reads and validates only the manifest and watch indexes; large row
 //! snapshots are opened only after a source change is proven.
 
-use crate::fast_five_catalog::FastFiveGameVariant;
+use crate::fast_five_catalog::{FastFiveGameVariant, FastFiveSnapshot};
 use crate::system_shard::SystemGame;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const REFRESH_SCHEMA: u32 = 1;
 const ENVELOPE_VERSION: u32 = 1;
@@ -92,6 +93,14 @@ pub struct FastSystemRowsSnapshot {
 pub struct FastRefreshSystemState {
     pub watch: FastSystemWatchIndex,
     pub rows: FastSystemRowsSnapshot,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct FastRefreshCaptureReport {
+    pub elapsed_us: u64,
+    pub directories: usize,
+    pub containers: usize,
+    pub systems: usize,
 }
 
 impl FastRefreshManifest {
@@ -332,6 +341,280 @@ pub fn publish_refresh_state(
     write_replace_file(&root.join(slot), &bytes)?;
     sync_directory(&root)?;
     Ok(manifest)
+}
+
+pub fn capture_refresh_state(
+    storage_root: &Path,
+    snapshot: &FastFiveSnapshot,
+) -> Result<(Vec<FastRefreshSystemState>, FastRefreshCaptureReport), String> {
+    let started = std::time::Instant::now();
+    snapshot.validate()?;
+    let mut states = Vec::with_capacity(snapshot.systems.len());
+    let mut report = FastRefreshCaptureReport::default();
+    for system in &snapshot.systems {
+        let watch = capture_system_watch(storage_root, &system.system_id)?;
+        report.directories = report.directories.saturating_add(watch.directories.len());
+        report.containers = report.containers.saturating_add(watch.containers.len());
+        states.push(FastRefreshSystemState {
+            watch,
+            rows: FastSystemRowsSnapshot::new(
+                system.system_id.clone(),
+                system.games.clone(),
+                system.variants.clone(),
+            )?,
+        });
+    }
+    report.systems = states.len();
+    report.elapsed_us = started.elapsed().as_micros().try_into().unwrap_or(u64::MAX);
+    Ok((states, report))
+}
+
+pub fn capture_system_watch(
+    storage_root: &Path,
+    system_id: &str,
+) -> Result<FastSystemWatchIndex, String> {
+    let specification = watch_specification(storage_root, system_id)?;
+    let mut directories = Vec::new();
+    let mut containers = Vec::new();
+    for anchor in &specification.anchors {
+        if anchor.is_dir() {
+            directories.push(capture_directory(anchor)?);
+        }
+    }
+    for root in &specification.scan_roots {
+        if root.is_dir() {
+            capture_tree(root, &mut directories, &mut containers)?;
+        }
+    }
+    directories.sort_by(|left, right| left.path.cmp(&right.path));
+    directories.dedup_by(|left, right| left.path == right.path);
+    containers.sort_by(|left, right| left.path.cmp(&right.path));
+    containers.dedup_by(|left, right| left.path == right.path);
+    FastSystemWatchIndex::new(
+        system_id.to_string(),
+        crate::fast_catalog_sources::FAST_SOURCE_ADAPTER_VERSION,
+        core_profile_fingerprint(&specification.anchors)?,
+        specification
+            .scan_roots
+            .iter()
+            .chain(&specification.anchors)
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect(),
+        directories,
+        containers,
+    )
+}
+
+#[derive(Debug)]
+struct WatchSpecification {
+    scan_roots: Vec<PathBuf>,
+    anchors: Vec<PathBuf>,
+}
+
+fn watch_specification(storage_root: &Path, system_id: &str) -> Result<WatchSpecification, String> {
+    let games = storage_root.join("games");
+    let (scan_roots, core_parent) = match system_id {
+        "amiga" => (vec![games.join("Amiga")], storage_root.join("_Computer")),
+        "arcade" => (
+            vec![
+                storage_root.join("_Arcade"),
+                games.join("mame"),
+                games.join("hbmame"),
+            ],
+            storage_root.join("_Arcade/cores"),
+        ),
+        "c64" => (vec![games.join("C64")], storage_root.join("_Computer")),
+        "dos" => (
+            vec![storage_root.join("_DOS Games"), games.join("AO486")],
+            storage_root.join("_Computer"),
+        ),
+        "neogeo" => (vec![games.join("NEOGEO")], storage_root.join("_Console")),
+        "saturn" => (vec![games.join("Saturn")], storage_root.join("_Console")),
+        "snes" => (
+            ["SNES", "Satellaview", "SGB2", "SNES-Sinden"]
+                .into_iter()
+                .map(|name| games.join(name))
+                .collect(),
+            storage_root.join("_Console"),
+        ),
+        "x68000" => (
+            vec![
+                storage_root.join("_Computer/_X68000 Games"),
+                storage_root.join("_Computer/X68000 Games"),
+                games.join("X68000"),
+            ],
+            storage_root.join("_Computer"),
+        ),
+        "zx-spectrum" => (vec![games.join("Spectrum")], storage_root.join("_Computer")),
+        _ => return Err(format!("unsupported fast refresh system {system_id}")),
+    };
+    let mut anchors = vec![games, core_parent];
+    for root in &scan_roots {
+        if let Some(parent) = root.parent() {
+            anchors.push(parent.to_path_buf());
+        }
+    }
+    anchors.sort();
+    anchors.dedup();
+    Ok(WatchSpecification {
+        scan_roots,
+        anchors,
+    })
+}
+
+fn capture_tree(
+    root: &Path,
+    directories: &mut Vec<FastWatchedDirectory>,
+    containers: &mut Vec<FastWatchedContainer>,
+) -> Result<(), String> {
+    directories.push(capture_directory(root)?);
+    let mut entries = fs::read_dir(root)
+        .map_err(|error| format!("read watch directory {}: {error}", root.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("enumerate watch directory {}: {error}", root.display()))?;
+    entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
+    for entry in entries {
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("inspect {}: {error}", entry.path().display()))?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if file_type.is_dir() {
+            capture_tree(&path, directories, containers)?;
+        } else if file_type.is_file() && is_watched_container(&path) {
+            containers.push(capture_container(&path)?);
+        }
+    }
+    Ok(())
+}
+
+fn capture_directory(path: &Path) -> Result<FastWatchedDirectory, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("stat watch directory {}: {error}", path.display()))?;
+    let mut entries = fs::read_dir(path)
+        .map_err(|error| format!("read watch directory {}: {error}", path.display()))?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let kind = entry.file_type().ok()?;
+            let kind = if kind.is_dir() {
+                b'd'
+            } else if kind.is_file() {
+                b'f'
+            } else if kind.is_symlink() {
+                b'l'
+            } else {
+                b'o'
+            };
+            Some((entry.file_name().to_string_lossy().into_owned(), kind))
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| {
+        left.0
+            .to_ascii_lowercase()
+            .cmp(&right.0.to_ascii_lowercase())
+    });
+    let mut digest = Sha256::new();
+    for (name, kind) in entries {
+        digest.update([kind]);
+        digest.update(name.as_bytes());
+        digest.update([0]);
+    }
+    Ok(FastWatchedDirectory {
+        path: path.to_string_lossy().into_owned(),
+        modified_ns: modified_ns(&metadata),
+        entry_fingerprint: sha256_digest_hex(digest.finalize()),
+    })
+}
+
+fn capture_container(path: &Path) -> Result<FastWatchedContainer, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("stat watched container {}: {error}", path.display()))?;
+    let mut digest = Sha256::new();
+    digest.update(path.to_string_lossy().as_bytes());
+    digest.update(metadata.len().to_le_bytes());
+    digest.update(modified_ns(&metadata).to_le_bytes());
+    digest.update(changed_ns(&metadata).to_le_bytes());
+    digest.update(inode(&metadata).to_le_bytes());
+    Ok(FastWatchedContainer {
+        path: path.to_string_lossy().into_owned(),
+        size: metadata.len(),
+        modified_ns: modified_ns(&metadata),
+        changed_ns: changed_ns(&metadata),
+        inode: inode(&metadata),
+        content_directory_fingerprint: sha256_digest_hex(digest.finalize()),
+    })
+}
+
+fn core_profile_fingerprint(anchors: &[PathBuf]) -> Result<String, String> {
+    let mut digest = Sha256::new();
+    digest.update(b"mister-magik-fast-source-adapter-v1\0");
+    for anchor in anchors {
+        digest.update(anchor.to_string_lossy().as_bytes());
+        digest.update([u8::from(anchor.is_dir())]);
+        if anchor.is_dir() {
+            let directory = capture_directory(anchor)?;
+            digest.update(directory.entry_fingerprint.as_bytes());
+        }
+    }
+    Ok(sha256_digest_hex(digest.finalize()))
+}
+
+fn is_watched_container(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "zip" | "7z" | "mgl" | "mra" | "txt"
+            )
+        })
+}
+
+fn modified_ns(metadata: &fs::Metadata) -> i128 {
+    system_time_ns(metadata.modified().ok())
+}
+
+#[cfg(unix)]
+fn changed_ns(metadata: &fs::Metadata) -> i128 {
+    use std::os::unix::fs::MetadataExt;
+    i128::from(metadata.ctime()) * 1_000_000_000 + i128::from(metadata.ctime_nsec())
+}
+
+#[cfg(not(unix))]
+fn changed_ns(_metadata: &fs::Metadata) -> i128 {
+    0
+}
+
+#[cfg(unix)]
+fn inode(metadata: &fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    metadata.ino()
+}
+
+#[cfg(not(unix))]
+fn inode(_metadata: &fs::Metadata) -> u64 {
+    0
+}
+
+fn system_time_ns(value: Option<SystemTime>) -> i128 {
+    value
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |duration| {
+            i128::from(duration.as_secs()) * 1_000_000_000 + i128::from(duration.subsec_nanos())
+        })
+}
+
+fn sha256_digest_hex(bytes: impl AsRef<[u8]>) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let bytes = bytes.as_ref();
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[usize::from(byte >> 4)] as char);
+        output.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    output
 }
 
 pub fn source_fingerprint(watch: &FastSystemWatchIndex) -> String {

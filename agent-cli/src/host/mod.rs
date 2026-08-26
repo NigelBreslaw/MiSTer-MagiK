@@ -31748,6 +31748,22 @@ fn run_fast_five_catalog_prototype(
             sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT)
         ),
     )?;
+    let refresh_state = if generic_examples {
+        Some(exec_checked_output(
+            &session,
+            "publish fast catalog source snapshots",
+            &format!(
+                "{} write-refresh-state --input {} --input-encoding {} --catalog-root {} --storage-root {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+                sh(input_encoding),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+                sh("/media/fat"),
+            ),
+        )?)
+    } else {
+        None
+    };
     let compared = exec_checked_output(
         &session,
         "verify fast-five catalog",
@@ -31817,6 +31833,7 @@ fn run_fast_five_catalog_prototype(
         "independent_sources": generic_examples,
         "snapshot": snapshot,
         "published": published,
+        "refresh_state": refresh_state.as_ref().map(|output| parse_last_json_line("fast catalog source snapshots", &output.stdout)).transpose()?,
         "comparison": compared,
         "launcher": {
             "catalog_systems": status.get("catalog_systems"),
