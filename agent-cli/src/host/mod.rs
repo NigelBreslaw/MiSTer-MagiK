@@ -584,6 +584,9 @@ impl NativeDevice {
                     CatalogCommand::FastFivePrototype(args) => {
                         run_fast_five_catalog_prototype(&prepared.config, &args.binary, &args.out)
                     }
+                    CatalogCommand::FastFiveOldCold(args) => {
+                        run_fast_five_old_cold_matrix(&prepared.config, &args.out)
+                    }
                     CatalogCommand::Purge(_) => purge_development_library_data_and_reboot(),
                 },
                 DeviceCommand::Media { command } => match command {
@@ -23418,7 +23421,7 @@ fn run_catalog_build_rebuild_leg(
             })?;
             validate_catalog_updater_index_evidence(evidence)?;
         }
-        if !catalog_benchmark_presented_home_arcade(&launcher_log) {
+        if exercise_arcade_ui && !catalog_benchmark_presented_home_arcade(&launcher_log) {
             return Err(format!(
                 "{label} catalog benchmark did not present Home with the Arcade system selected"
             )
@@ -31766,6 +31769,212 @@ fn parse_last_json_line(label: &str, output: &str) -> Result<Value> {
         .rev()
         .find_map(|line| serde_json::from_str(line.trim()).ok())
         .ok_or_else(|| format!("{label} produced no JSON record").into())
+}
+
+#[derive(Clone, Copy)]
+struct FastFiveOldTarget {
+    system_id: &'static str,
+    roots: &'static str,
+    allowlist: &'static str,
+}
+
+const FAST_FIVE_OLD_TARGETS: [FastFiveOldTarget; 5] = [
+    FastFiveOldTarget {
+        system_id: "arcade",
+        roots: "/media/fat/_Arcade|/media/fat/games",
+        allowlist: "/media/fat/_Arcade:/media/fat/games/mame:/media/fat/games/hbmame",
+    },
+    FastFiveOldTarget {
+        system_id: "amiga",
+        roots: "/media/fat/games",
+        allowlist: "/media/fat/games/Amiga:/media/fat/games/Amiga500",
+    },
+    FastFiveOldTarget {
+        system_id: "c64",
+        roots: "/media/fat/games",
+        allowlist: "/media/fat/games/C64",
+    },
+    FastFiveOldTarget {
+        system_id: "dos",
+        roots: "/media/fat",
+        allowlist: "/media/fat/_DOS Games",
+    },
+    FastFiveOldTarget {
+        system_id: "x68000",
+        roots: "/media/fat/_Computer",
+        allowlist: "/media/fat/_Computer/_X68000 Games",
+    },
+];
+
+fn run_fast_five_old_cold_matrix(config: &NativeDeviceConfig, output: &Path) -> Result<()> {
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    drop(session);
+    let run = (|| -> Result<Vec<Value>> {
+        let mut samples = Vec::with_capacity(FAST_FIVE_OLD_TARGETS.len());
+        for target in FAST_FIVE_OLD_TARGETS {
+            let session = connect_with(&config.connection, 10)?;
+            prepare_fast_five_old_cold_root(&session)?;
+            drop(session);
+            agent_reboot_wait(&[])?;
+            let session = connect_with(&config.connection, 10)?;
+            let endpoint = config.agent()?.clone();
+            let sample_dir = output
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(format!("old-{}", target.system_id));
+            fs::create_dir_all(&sample_dir)?;
+            let leg = run_catalog_build_rebuild_leg(
+                config,
+                &session,
+                &endpoint,
+                &sample_dir,
+                "cold",
+                None,
+                CatalogBuildRebuildLegOptions {
+                    exercise_arcade_ui: false,
+                    require_updater_index: false,
+                    launcher_env: fast_five_old_launcher_env(target),
+                    runtime_command: catalog_full_build_rebuild_runtime_command,
+                },
+            )?;
+            let builder_elapsed_us =
+                catalog_phase_elapsed_us(&leg, "builder_authoritative_catalog_prepared")
+                    .ok_or_else(|| {
+                        format!(
+                            "{} cold build has no authoritative preparation timing",
+                            target.system_id
+                        )
+                    })?;
+            let games = catalog_system_games(&leg["catalog"], target.system_id)?;
+            samples.push(json!({
+                "system_id": target.system_id,
+                "cold_boot_verified": true,
+                "builder_elapsed_us": builder_elapsed_us,
+                "complete_ms": leg.pointer("/timing/complete_ms"),
+                "games": games,
+                "catalog": leg.get("catalog"),
+                "phase_evidence": leg.get("phase_evidence"),
+            }));
+            launcher_restart(
+                &session,
+                &LauncherRestartOptions {
+                    clear_env: true,
+                    remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+                    timeout_secs: 45,
+                    ..LauncherRestartOptions::default()
+                },
+            )?;
+        }
+        Ok(samples)
+    })();
+    let cleanup = (|| -> Result<()> {
+        let session = connect_with(&config.connection, 10)?;
+        launcher_restart(
+            &session,
+            &LauncherRestartOptions {
+                clear_env: true,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+                timeout_secs: 45,
+                ..LauncherRestartOptions::default()
+            },
+        )?;
+        exec_checked(
+            &session,
+            "remove isolated old fast-five benchmark root",
+            &format!(
+                "rm -rf {} {}",
+                sh(CATALOG_BUILD_REBUILD_REMOTE_DIR),
+                sh(CATALOG_BUILD_REBUILD_SOURCE_DIR)
+            ),
+        )?;
+        let production_registry_after = catalog_production_registry_identity(&session)?;
+        if production_registry_after != production_registry_before {
+            return Err("production registry changed during old fast-five cold matrix".into());
+        }
+        Ok(())
+    })();
+    let samples = match (run, cleanup) {
+        (Ok(samples), Ok(())) => samples,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => return Err(error),
+        (Err(run), Err(cleanup)) => {
+            return Err(format!("{run}; cleanup also failed: {cleanup}").into());
+        }
+    };
+    let report = json!({
+        "schema": "mister-magik-fast-five-old-cold-v1",
+        "status": "passed",
+        "samples": samples,
+        "production_registry_unchanged": true,
+    });
+    if let Some(parent) = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(
+        output,
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    println!("fast_five_old_cold_report={}", output.display());
+    Ok(())
+}
+
+fn prepare_fast_five_old_cold_root(session: &Session) -> Result<()> {
+    exec_checked(
+        session,
+        "prepare isolated old fast-five cold root",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "rm -rf {} {}",
+                sh(CATALOG_BUILD_REBUILD_REMOTE_DIR),
+                sh(CATALOG_BUILD_REBUILD_SOURCE_DIR)
+            ),
+            format!(
+                "mkdir -p {} {} {}",
+                sh(CATALOG_BUILD_REBUILD_REMOTE_DIR),
+                sh(&format!("{CATALOG_BUILD_REBUILD_SOURCE_DIR}/sqlite-build")),
+                sh(&format!("{CATALOG_BUILD_REBUILD_SOURCE_DIR}/diagnostics"))
+            ),
+            platform_safety_script(),
+            "sync".to_string(),
+        ]),
+    )
+}
+
+fn fast_five_old_launcher_env(target: FastFiveOldTarget) -> Vec<(String, String)> {
+    catalog_build_rebuild_launcher_env()
+        .into_iter()
+        .map(|(key, value)| match key.as_str() {
+            "MISTER_LIBRARY_ROOTS" => (key, target.roots.to_string()),
+            "MISTER_LIBRARY_TARGET_ALLOWLIST" => (key, target.allowlist.to_string()),
+            _ => (key, value),
+        })
+        .collect()
+}
+
+fn catalog_phase_elapsed_us(leg: &Value, name: &str) -> Option<u64> {
+    leg.pointer("/phase_evidence/records")?
+        .as_array()?
+        .iter()
+        .find(|record| {
+            record.get("record").and_then(Value::as_str) == Some("startup_timing")
+                && record.get("name").and_then(Value::as_str) == Some(name)
+        })?
+        .pointer("/metrics/elapsed_us")?
+        .as_u64()
 }
 
 fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {

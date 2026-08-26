@@ -350,6 +350,8 @@ pub enum CatalogCommand {
     Cores,
     /// Publish and open the isolated five-system prototype in the Dev UI.
     FastFivePrototype(CatalogFastFivePrototypeArgs),
+    /// Cold-build the five systems independently with the existing builder.
+    FastFiveOldCold(CatalogFastFiveOldColdArgs),
     /// Delete the Dev catalog and screenshot packs, then perform one supervised reboot.
     Purge(CatalogPurgeArgs),
 }
@@ -362,6 +364,16 @@ pub struct CatalogFastFivePrototypeArgs {
     reboot: bool,
     #[arg(long, value_name = "PATH")]
     pub(crate) binary: PathBuf,
+    #[arg(long, value_name = "PATH")]
+    pub(crate) out: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct CatalogFastFiveOldColdArgs {
+    #[arg(long, required = true)]
+    attended: bool,
+    #[arg(long, required = true)]
+    reboot: bool,
     #[arg(long, value_name = "PATH")]
     pub(crate) out: PathBuf,
 }
@@ -519,7 +531,9 @@ impl DeviceCommand {
             Self::Launcher { command } => !matches!(command, LauncherCommand::Status),
             Self::Catalog { command } => matches!(
                 command,
-                CatalogCommand::FastFivePrototype(_) | CatalogCommand::Purge(_)
+                CatalogCommand::FastFivePrototype(_)
+                    | CatalogCommand::FastFiveOldCold(_)
+                    | CatalogCommand::Purge(_)
             ),
             Self::Media { command } => matches!(command, MediaCommand::Download(_)),
             Self::Fpga { .. } => true,
@@ -615,6 +629,17 @@ mod tests {
         assert!(
             TestCli::try_parse_from([
                 "test",
+                "catalog",
+                "fast-five-old-cold",
+                "--attended",
+                "--out",
+                "report.json",
+            ])
+            .is_err()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
                 "fpga",
                 "install-experimental",
                 "--rbf",
@@ -635,6 +660,18 @@ mod tests {
                 "--attended",
                 "--output",
                 "/tmp/launch-return-once",
+            ])
+            .is_ok()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "catalog",
+                "fast-five-old-cold",
+                "--attended",
+                "--reboot",
+                "--out",
+                "report.json",
             ])
             .is_ok()
         );
@@ -816,5 +853,16 @@ mod tests {
         ])
         .unwrap();
         assert!(fast_five.command.is_mutation());
+        let old_cold = TestCli::try_parse_from([
+            "test",
+            "catalog",
+            "fast-five-old-cold",
+            "--attended",
+            "--reboot",
+            "--out",
+            "report.json",
+        ])
+        .unwrap();
+        assert!(old_cold.command.is_mutation());
     }
 }
