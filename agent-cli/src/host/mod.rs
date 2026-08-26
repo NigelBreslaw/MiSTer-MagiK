@@ -606,7 +606,7 @@ impl NativeDevice {
                         &args.artifact_profile,
                     ),
                     CatalogCommand::FastFiveOldCold(args) => {
-                        run_fast_five_old_cold_matrix(&prepared.config, &args.out)
+                        run_fast_five_old_cold_matrix(&prepared.config, &args.out, &args.target_set)
                     }
                     CatalogCommand::Purge(_) => purge_development_library_data_and_reboot(),
                 },
@@ -32602,7 +32602,39 @@ const FAST_FIVE_OLD_TARGETS: [FastFiveOldTarget; 5] = [
     },
 ];
 
-fn run_fast_five_old_cold_matrix(config: &NativeDeviceConfig, output: &Path) -> Result<()> {
+const GENERIC_FOUR_OLD_TARGETS: [FastFiveOldTarget; 4] = [
+    FastFiveOldTarget {
+        system_id: "neogeo",
+        roots: "/media/fat/games",
+        allowlist: "/media/fat/games/NEOGEO:/media/fat/games/NeoGeo",
+    },
+    FastFiveOldTarget {
+        system_id: "saturn",
+        roots: "/media/fat/games",
+        allowlist: "/media/fat/games/Saturn",
+    },
+    FastFiveOldTarget {
+        system_id: "snes",
+        roots: "/media/fat/games",
+        allowlist: "/media/fat/games/SNES:/media/fat/games/Satellaview:/media/fat/games/SGB2:/media/fat/games/SNES-Sinden",
+    },
+    FastFiveOldTarget {
+        system_id: "zx-spectrum",
+        roots: "/media/fat/games",
+        allowlist: "/media/fat/games/Spectrum",
+    },
+];
+
+fn run_fast_five_old_cold_matrix(
+    config: &NativeDeviceConfig,
+    output: &Path,
+    target_set: &str,
+) -> Result<()> {
+    let targets: &[FastFiveOldTarget] = match target_set {
+        "fast-five" => &FAST_FIVE_OLD_TARGETS,
+        "generic-four" => &GENERIC_FOUR_OLD_TARGETS,
+        _ => return Err(format!("unknown old-catalog target set {target_set}").into()),
+    };
     let _signal_guard = AttendedOperationSignalGuard::install();
     let session = connect_with(&config.connection, 10)?;
     let production_registry_before = catalog_production_registry_identity(&session)?;
@@ -32616,8 +32648,8 @@ fn run_fast_five_old_cold_matrix(config: &NativeDeviceConfig, output: &Path) -> 
     )?;
     drop(session);
     let run = (|| -> Result<Vec<Value>> {
-        let mut samples = Vec::with_capacity(FAST_FIVE_OLD_TARGETS.len());
-        for target in FAST_FIVE_OLD_TARGETS {
+        let mut samples = Vec::with_capacity(targets.len());
+        for target in targets.iter().copied() {
             let session = connect_with(&config.connection, 10)?;
             prepare_fast_five_old_cold_root(&session)?;
             drop(session);
@@ -32710,6 +32742,7 @@ fn run_fast_five_old_cold_matrix(config: &NativeDeviceConfig, output: &Path) -> 
     let report = json!({
         "schema": "mister-magik-fast-five-old-cold-v1",
         "status": "passed",
+        "target_set": target_set,
         "samples": samples,
         "production_registry_unchanged": true,
     });

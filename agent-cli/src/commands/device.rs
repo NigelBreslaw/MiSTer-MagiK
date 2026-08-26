@@ -429,6 +429,8 @@ pub struct CatalogFastFiveOldColdArgs {
     reboot: bool,
     #[arg(long, value_name = "PATH")]
     pub(crate) out: PathBuf,
+    #[arg(long, default_value = "fast-five")]
+    pub(crate) target_set: String,
 }
 
 #[derive(Debug, Args)]
