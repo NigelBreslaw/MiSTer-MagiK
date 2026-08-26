@@ -527,7 +527,11 @@ pub fn capture_system_watch(
     }
     for root in &specification.scan_roots {
         if root.is_dir() {
-            capture_tree(root, system_id, &mut directories, &mut containers)?;
+            if system_id == "arcade" && root.ends_with("_Arcade") {
+                directories.push(capture_directory(root)?);
+            } else {
+                capture_tree(root, system_id, &mut directories, &mut containers)?;
+            }
         }
     }
     if system_id == "arcade" {

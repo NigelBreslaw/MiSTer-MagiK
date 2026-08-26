@@ -24,7 +24,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 4;
+pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 5;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FastSourceBuildReport {
@@ -419,20 +419,51 @@ fn rom_namespace_label(namespace: &RomNamespace) -> &'static str {
 
 fn scan_amiga(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<SystemGame> {
     let amiga = storage_root.join("games/Amiga");
-    let listings = amiga.join("listings");
-    let has_payload = ["AmigaVision.hdf", "MegaAGS.hdf"]
-        .into_iter()
-        .any(|name| amiga.join(name).is_file());
+    let mut metadata_files = Vec::new();
+    collect_matching_files(
+        &amiga,
+        &mut report.files_visited,
+        &mut metadata_files,
+        |path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_ascii_lowercase)
+                .is_some_and(|name| {
+                    matches!(
+                        name.as_str(),
+                        "amigavision.hdf" | "megaags.hdf" | "games.txt" | "demos.txt"
+                    )
+                })
+        },
+    );
+    let has_payload = metadata_files.iter().any(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                name.eq_ignore_ascii_case("AmigaVision.hdf")
+                    || name.eq_ignore_ascii_case("MegaAGS.hdf")
+            })
+    });
     let mut games = Vec::new();
     let mut has_collection = false;
     if has_payload {
-        for (name, kind) in [("games.txt", "games"), ("demos.txt", "demos")] {
-            let path = listings.join(name);
+        for path in metadata_files
+            .iter()
+            .filter(|path| extension_is(path, "txt"))
+        {
+            let kind = if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("demos.txt"))
+            {
+                "demos"
+            } else {
+                "games"
+            };
             let contents = match fs::read_to_string(&path) {
                 Ok(contents) => contents,
                 Err(_) => continue,
             };
-            report.files_visited += 1;
             has_collection = true;
             for title in contents
                 .lines()
@@ -797,7 +828,7 @@ mod tests {
 
     #[test]
     fn independent_source_set_contains_no_legacy_input_kind() {
-        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 4);
+        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 5);
         assert_eq!(EXPANDED_FAST_SYSTEM_IDS.len(), 9);
     }
 }
