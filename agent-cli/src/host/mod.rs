@@ -23442,11 +23442,14 @@ fn run_catalog_build_rebuild_leg(
                 telemetry.get(start..interaction_telemetry_end.unwrap_or(telemetry.len()))
             })
             .unwrap_or(&telemetry);
-        let ui = catalog_build_rebuild_ui_summary(
-            &statuses,
-            interaction_telemetry,
-            interaction_started,
-        )?;
+        let ui = if exercise_arcade_ui {
+            catalog_build_rebuild_ui_summary(&statuses, interaction_telemetry, interaction_started)?
+        } else {
+            json!({
+                "status": "not-measured",
+                "reason": "catalog-only-leg",
+            })
+        };
         Ok(json!({
         "launcher_pid": final_status.get("pid"),
         "timing": {
