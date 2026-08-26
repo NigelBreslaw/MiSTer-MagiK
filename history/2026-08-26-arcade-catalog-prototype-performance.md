@@ -157,6 +157,28 @@ the prototype intentionally omits production features. It demonstrates that a
 small boot-facing Arcade projection is practical, not that Catalog V3 can be
 replaced byte-for-byte.
 
+## Promotion gates retained after review
+
+The final independent architecture review found no blocker to retaining or
+merging the isolated prototype, but identified production-promotion gates that
+the timing work does not solve:
+
+- fast path presence is not proof that an MRA at the expected path still
+  matches Update_All; promotion needs size/hash validation or an installer
+  receipt bound to updater revision, path, and content;
+- the benchmark proves deterministic output across worker modes, not semantic
+  parity with Catalog V3 launch paths, families, metadata, ordering, or ROM
+  eligibility;
+- the active file has no card-input fingerprint, policy identity, or generation
+  proving that a retained output is current;
+- single-file atomic replacement has no alternating prior-valid generation,
+  and is therefore weaker than Catalog V3's interruption recovery contract.
+
+Review also found two prototype correctness issues which were fixed before
+delivery: Update_All paths now reject absolute, parent, current-directory,
+empty, backslash, and NUL components, and full-walk discovery now requires a
+regular non-symlink MRA independently of optional size validation.
+
 ## Recommendation
 
 Keep the prototype isolated until semantic parity is proven. The promotion path

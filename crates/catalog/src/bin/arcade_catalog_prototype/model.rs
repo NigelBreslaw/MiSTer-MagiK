@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::path::{Component, Path};
 
 const UPDATER_FORMAT: &str = "mister-magik-arcade-updater-index-v1";
 const MAX_UPDATER_BYTES: usize = 16 * 1024 * 1024;
@@ -432,8 +433,7 @@ fn validate_updater_index(index: &UpdaterIndex) -> Result<(), String> {
         return Err("Arcade updater rows are not uniquely sorted".to_string());
     }
     for row in &index.rows {
-        if !row.path.starts_with("_Arcade/")
-            || !row.path.to_ascii_lowercase().ends_with(".mra")
+        if !is_safe_arcade_mra_path(&row.path)
             || !is_lower_hex(&row.md5, 32)
             || index
                 .sources
@@ -444,6 +444,40 @@ fn validate_updater_index(index: &UpdaterIndex) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn is_safe_arcade_mra_path(value: &str) -> bool {
+    if value.as_bytes().contains(&0)
+        || value.contains('\\')
+        || value
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return false;
+    }
+    let path = Path::new(value);
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mra"))
+    {
+        return false;
+    }
+    let mut components = path.components();
+    if !matches!(
+        components.next(),
+        Some(Component::Normal(component)) if component == "_Arcade"
+    ) {
+        return false;
+    }
+    let mut suffix_components = 0usize;
+    for component in components {
+        if !matches!(component, Component::Normal(_)) {
+            return false;
+        }
+        suffix_components += 1;
+    }
+    suffix_components > 0
 }
 
 fn is_lower_hex(value: &str, length: usize) -> bool {
@@ -666,5 +700,18 @@ mod tests {
         let last = encoded.len() - 1;
         encoded[last] ^= 1;
         assert!(decode_base(&encoded).is_err());
+    }
+
+    #[test]
+    fn updater_paths_cannot_escape_arcade_root() {
+        assert!(is_safe_arcade_mra_path("_Arcade/Puck Man.mra"));
+        assert!(is_safe_arcade_mra_path(
+            "_Arcade/_alternatives/Puck Man.mra"
+        ));
+        assert!(!is_safe_arcade_mra_path("_Arcade/../../games/Puck Man.mra"));
+        assert!(!is_safe_arcade_mra_path("_Arcade/./Puck Man.mra"));
+        assert!(!is_safe_arcade_mra_path("/_Arcade/Puck Man.mra"));
+        assert!(!is_safe_arcade_mra_path("_Arcade\\Puck Man.mra"));
+        assert!(!is_safe_arcade_mra_path("_Arcade/readme.txt"));
     }
 }

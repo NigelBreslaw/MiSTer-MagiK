@@ -99,6 +99,13 @@ Fast mode is deliberately asymmetric:
 - Unindexed custom MRAs require `--full-walk`.
 - No warm-cache timing is accepted.
 
+Before promotion, three additional authority gaps must be closed. A modified
+MRA at an expected path can inherit Update_All metadata unless size/hash or an
+installer receipt proves it is the indexed file. The active binary does not yet
+carry a ROM/MRA inventory fingerprint or generation proving that a retained
+file matches the current card. Publication is one atomic replacement rather
+than Catalog V3's alternating valid-generation recovery contract.
+
 This output is not schema-compatible with Catalog V3 SQLite, NavPack, search,
 scanner cache, resumability, or registry publication. Promotion therefore needs
 an adapter or a new launcher reader plus parity qualification for launch paths,

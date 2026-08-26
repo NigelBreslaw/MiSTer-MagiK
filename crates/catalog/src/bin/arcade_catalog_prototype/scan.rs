@@ -56,14 +56,14 @@ pub fn scan_installed_mras(
                 .extension()
                 .and_then(|extension| extension.to_str())
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("mra"));
+            let file_type = entry
+                .file_type()
+                .map_err(|error| format!("inspect Arcade path {}: {error}", path.display()))?;
             if is_mra && !is_non_arcade_launcher(&name) {
+                if file_type.is_symlink() || !file_type.is_file() {
+                    continue;
+                }
                 let size = if verify_index_size {
-                    let file_type = entry.file_type().map_err(|error| {
-                        format!("inspect Arcade path {}: {error}", path.display())
-                    })?;
-                    if file_type.is_symlink() || !file_type.is_file() {
-                        continue;
-                    }
                     Some(
                         entry
                             .metadata()
@@ -89,9 +89,6 @@ pub fn scan_installed_mras(
                 });
                 continue;
             }
-            let file_type = entry
-                .file_type()
-                .map_err(|error| format!("inspect Arcade path {}: {error}", path.display()))?;
             if file_type.is_symlink() {
                 continue;
             }
@@ -204,6 +201,7 @@ mod tests {
         fs::create_dir_all(root.join("Alternatives")).unwrap();
         fs::create_dir_all(root.join("_Organized")).unwrap();
         fs::create_dir_all(root.join("media")).unwrap();
+        fs::create_dir_all(root.join("Not A Game.mra")).unwrap();
         fs::write(root.join("Puck Man.mra"), "mra").unwrap();
         fs::write(root.join("Alternatives/Other.MRA"), "mra2").unwrap();
         fs::write(root.join("_Organized/Duplicate.mra"), "mra").unwrap();
