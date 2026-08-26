@@ -47,6 +47,8 @@ pub mod fast_five_catalog;
 pub mod fs_fault;
 mod game_discovery;
 #[cfg(feature = "builder")]
+pub mod generic_system_catalog;
+#[cfg(feature = "builder")]
 pub mod incremental_inputs;
 pub mod launch_profiles;
 pub mod lazy_sharded_reader;

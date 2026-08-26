@@ -9,6 +9,7 @@ use mister_magik_catalog::fast_five_catalog::{
     publish_snapshot_with_profile, replace_arcade_from_active, run_c64_artifact_experiment,
     snapshot_reference, verify_snapshot_artifacts,
 };
+use mister_magik_catalog::generic_system_catalog::add_generic_example_systems;
 use mister_magik_catalog::shard_registry::production_registry_limits;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -43,6 +44,29 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
                 "variants": snapshot.variant_count(),
                 "output": output,
                 "source_fingerprint": snapshot.source_fingerprint,
+            }))
+        }
+        "scan-generic-examples" => {
+            let input = required_path(arguments, "--input")?;
+            let output = required_path(arguments, "--output")?;
+            let storage_root = required_path(arguments, "--storage-root")?;
+            let encoding = snapshot_encoding(arguments, "--input-encoding")?;
+            reject_unknown(
+                arguments,
+                &["--input", "--output", "--storage-root", "--input-encoding"],
+            )?;
+            let (snapshot, _, _) = read_snapshot_input(&input, encoding)?;
+            let (snapshot, scan) = add_generic_example_systems(&storage_root, snapshot)?;
+            write_bytes_atomic(&output, &encode_snapshot(&snapshot, encoding)?)?;
+            print_json(&serde_json::json!({
+                "command": "scan-generic-examples",
+                "encoding": encoding,
+                "systems": snapshot.systems.len(),
+                "games": snapshot.game_count(),
+                "variants": snapshot.variant_count(),
+                "output": output,
+                "source_fingerprint": snapshot.source_fingerprint,
+                "scan": scan,
             }))
         }
         "publish" => run_publish(arguments, false),

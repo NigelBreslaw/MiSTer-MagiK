@@ -590,6 +590,7 @@ impl NativeDevice {
                         &args.out,
                         &args.input_encoding,
                         &args.artifact_profile,
+                        args.generic_examples,
                     ),
                     CatalogCommand::FastFiveC64Experiments(args) => {
                         run_fast_five_c64_experiments(&prepared.config, &args.binary, &args.out)
@@ -31643,6 +31644,7 @@ fn run_fast_five_catalog_prototype(
     output: &Path,
     input_encoding: &str,
     artifact_profile: &str,
+    generic_examples: bool,
 ) -> Result<()> {
     let _signal_guard = AttendedOperationSignalGuard::install();
     if !binary.is_file() {
@@ -31695,7 +31697,7 @@ fn run_fast_five_catalog_prototype(
             "sync".to_string(),
         ]),
     )?;
-    let snapshot = exec_checked_output(
+    let base_snapshot = exec_checked_output(
         &session,
         "capture five-system reference snapshot",
         &format!(
@@ -31715,6 +31717,22 @@ fn run_fast_five_catalog_prototype(
         "fast-five post-reboot safety preflight",
         &cold_boot_profile_preflight_command(),
     )?;
+    let generic_scan = if generic_examples {
+        Some(exec_checked_output(
+            &session,
+            "reboot-cold scan of ordinary user-managed systems",
+            &format!(
+                "{} scan-generic-examples --input {} --output {} --storage-root {} --input-encoding {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+                sh("/media/fat"),
+                sh(input_encoding),
+            ),
+        )?)
+    } else {
+        None
+    };
     let published = exec_checked_output(
         &session,
         "publish fast-five catalog",
@@ -31738,13 +31756,18 @@ fn run_fast_five_catalog_prototype(
             sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT)
         ),
     )?;
-    let snapshot = parse_last_json_line("fast-five snapshot", &snapshot.stdout)?;
+    let snapshot = if let Some(scan) = &generic_scan {
+        parse_last_json_line("fast catalog generic scan", &scan.stdout)?
+    } else {
+        parse_last_json_line("fast-five snapshot", &base_snapshot.stdout)?
+    };
     let published = parse_last_json_line("fast-five publish", &published.stdout)?;
     let compared = parse_last_json_line("fast-five comparison", &compared.stdout)?;
+    let expected_systems = if generic_examples { 9 } else { 5 };
     if compared.get("status").and_then(Value::as_str) != Some("exact")
-        || published.get("systems").and_then(Value::as_u64) != Some(5)
+        || published.get("systems").and_then(Value::as_u64) != Some(expected_systems)
     {
-        return Err("fast-five publication is not an exact five-system projection".into());
+        return Err("fast catalog publication is incomplete or inexact".into());
     }
     restart_launcher_with_one_shot_env(
         &session,
@@ -31767,7 +31790,7 @@ fn run_fast_five_catalog_prototype(
         .get("registry_fingerprint")
         .and_then(Value::as_str)
         .ok_or("fast-five publish report has no registry fingerprint")?;
-    if status.get("catalog_systems").and_then(Value::as_u64) != Some(5)
+    if status.get("catalog_systems").and_then(Value::as_u64) != Some(expected_systems)
         || status.get("catalog_ready").and_then(Value::as_bool) != Some(true)
         || status.get("catalog_refresh_policy").and_then(Value::as_str) != Some("off")
         || status.get("catalog_generation").and_then(Value::as_str) != Some(expected_fingerprint)
@@ -31781,6 +31804,7 @@ fn run_fast_five_catalog_prototype(
         "binary_sha256": binary_sha256,
         "input_encoding": input_encoding,
         "artifact_profile": artifact_profile,
+        "generic_examples": generic_examples,
         "snapshot": snapshot,
         "published": published,
         "comparison": compared,

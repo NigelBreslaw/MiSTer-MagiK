@@ -376,6 +376,9 @@ pub struct CatalogFastFivePrototypeArgs {
     pub(crate) input_encoding: String,
     #[arg(long, default_value = "legacy")]
     pub(crate) artifact_profile: String,
+    /// Add ZX Spectrum, SNES, Neo Geo, and Saturn from the live filesystem.
+    #[arg(long)]
+    pub(crate) generic_examples: bool,
 }
 
 #[derive(Debug, Args)]

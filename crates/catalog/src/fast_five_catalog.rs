@@ -25,6 +25,18 @@ use std::path::Path;
 pub const FAST_FIVE_SNAPSHOT_SCHEMA: &str = "mister-magik-fast-five-snapshot-v2";
 const FAST_FIVE_REGISTRY_FINGERPRINT_SCHEMA: &str = "mister-magik-fast-five-snapshot-v1";
 pub const FAST_FIVE_SYSTEM_IDS: [&str; 5] = ["amiga", "arcade", "c64", "dos", "x68000"];
+pub const GENERIC_EXAMPLE_SYSTEM_IDS: [&str; 4] = ["neogeo", "saturn", "snes", "zx-spectrum"];
+pub const EXPANDED_FAST_SYSTEM_IDS: [&str; 9] = [
+    "amiga",
+    "arcade",
+    "c64",
+    "dos",
+    "neogeo",
+    "saturn",
+    "snes",
+    "x68000",
+    "zx-spectrum",
+];
 #[cfg(feature = "builder")]
 const FAST_FIVE_BINARY_MAGIC: &[u8; 8] = b"MGK5SNAP";
 #[cfg(feature = "builder")]
@@ -108,15 +120,16 @@ impl FastFiveSnapshot {
             return Err(format!("unsupported fast-five schema {}", self.schema));
         }
         validate_fingerprint(&self.source_fingerprint)?;
-        let expected = FAST_FIVE_SYSTEM_IDS.into_iter().collect::<BTreeSet<_>>();
         let actual = self
             .systems
             .iter()
             .map(|system| system.system_id.as_str())
             .collect::<BTreeSet<_>>();
-        if actual != expected || self.systems.len() != expected.len() {
+        if !is_supported_fast_system_set(actual.iter().copied())
+            || self.systems.len() != actual.len()
+        {
             return Err(format!(
-                "fast-five snapshot systems differ: expected={expected:?} actual={actual:?}"
+                "unsupported fast catalog system set: actual={actual:?}"
             ));
         }
         for system in &self.systems {
@@ -156,12 +169,6 @@ impl FastFiveSnapshot {
                         ));
                     }
                 }
-            }
-            if system.system_id != "c64" && !system.variants.is_empty() {
-                return Err(format!(
-                    "{} contains C64-only family variants",
-                    system.system_id
-                ));
             }
             for variant in &system.variants {
                 if !stable_keys.contains(variant.family_stable_key.as_str()) {
@@ -205,6 +212,15 @@ impl FastFiveSnapshot {
             .map(|system| system.variants.len())
             .sum()
     }
+}
+
+pub fn is_supported_fast_system_set<'a>(system_ids: impl IntoIterator<Item = &'a str>) -> bool {
+    let actual = system_ids.into_iter().collect::<BTreeSet<_>>();
+    actual == FAST_FIVE_SYSTEM_IDS.into_iter().collect::<BTreeSet<_>>()
+        || actual
+            == EXPANDED_FAST_SYSTEM_IDS
+                .into_iter()
+                .collect::<BTreeSet<_>>()
 }
 
 #[cfg(feature = "builder")]

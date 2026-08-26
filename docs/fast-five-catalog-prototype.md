@@ -26,6 +26,15 @@ AmigaVision, 0MHz, Neon68K, and OneLoad64 release adapters are being completed;
 it is not part of a fast build. `replace-arcade` replaces its Arcade rows with
 the independent Arcade prototype's ROM-validated active output.
 
+The `scan-generic-examples` command adds four ordinary user-managed systems:
+ZX Spectrum, SNES, Neo Geo, and Sega Saturn. This path has no release manifest
+and does not read the old catalog. It recursively walks each profile's game
+directories, accepts only payloads supported by the installed core, reads ZIP
+central directories without extraction, and records direct launch plans.
+Saturn cue-track files and other profile-defined support media are excluded.
+Neo Geo ROM-set ZIPs are treated as one launchable game rather than expanded
+into misleading member rows.
+
 ```bash
 five-system-catalog-prototype snapshot-reference \
   --catalog-root /media/fat/mister-magik-dev/catalog-v3 \
@@ -35,6 +44,12 @@ five-system-catalog-prototype replace-arcade \
   --input /tmp/fast-five-reference.json \
   --arcade-active /tmp/arcade-active.bin \
   --output /tmp/fast-five.json
+
+five-system-catalog-prototype scan-generic-examples \
+  --input /tmp/fast-five.json \
+  --output /tmp/fast-nine.json \
+  --storage-root /media/fat \
+  --input-encoding json
 
 five-system-catalog-prototype publish \
   --input /tmp/fast-five.json \
@@ -50,8 +65,8 @@ MISTER_CATALOG_REFRESH=off \
 /media/fat/mister-magik-dev/mister-magik-fb ui
 ```
 
-Fast-five mode rejects any registry that does not contain exactly the five
-expected systems and forces catalog refresh off. It intentionally bypasses the
+Fast-catalog mode accepts either the exact base five or the exact expanded nine
+systems and forces catalog refresh off. It intentionally bypasses the
 production binding and catalog-state files because the parallel builder does
 not create them. It still validates the current shard format and manifest,
 maps generation-bound NavPacks, and derives a SHA-256 fingerprint from the

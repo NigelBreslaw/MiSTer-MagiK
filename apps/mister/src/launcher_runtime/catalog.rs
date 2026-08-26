@@ -102,17 +102,14 @@ fn validate_fast_five_registry(
         .iter()
         .map(|system| system.system_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    let expected = mister_magik_catalog::fast_five_catalog::FAST_FIVE_SYSTEM_IDS
-        .into_iter()
-        .collect::<std::collections::BTreeSet<_>>();
-    if actual == expected && systems.len() == expected.len() {
+    if mister_magik_catalog::fast_five_catalog::is_supported_fast_system_set(actual.iter().copied())
+        && systems.len() == actual.len()
+    {
         Ok(())
     } else {
         Err(ShardedCatalogSeedLoadError {
             status: "stale",
-            error: format!(
-                "fast-five registry system set differs: expected={expected:?} actual={actual:?}"
-            ),
+            error: format!("unsupported fast catalog registry system set: actual={actual:?}"),
         })
     }
 }
@@ -341,6 +338,12 @@ mod tests {
         assert!(
             validate_fast_five_registry(&summaries(
                 &mister_magik_catalog::fast_five_catalog::FAST_FIVE_SYSTEM_IDS
+            ))
+            .is_ok()
+        );
+        assert!(
+            validate_fast_five_registry(&summaries(
+                &mister_magik_catalog::fast_five_catalog::EXPANDED_FAST_SYSTEM_IDS
             ))
             .is_ok()
         );
