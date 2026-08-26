@@ -358,6 +358,8 @@ pub enum CatalogCommand {
 pub struct CatalogFastFivePrototypeArgs {
     #[arg(long, required = true)]
     attended: bool,
+    #[arg(long, required = true)]
+    reboot: bool,
     #[arg(long, value_name = "PATH")]
     pub(crate) binary: PathBuf,
     #[arg(long, value_name = "PATH")]
@@ -758,6 +760,7 @@ mod tests {
                 "catalog",
                 "fast-five-prototype",
                 "--attended",
+                "--reboot",
                 "--binary",
                 "prototype",
                 "--out",
@@ -805,6 +808,7 @@ mod tests {
             "catalog",
             "fast-five-prototype",
             "--attended",
+            "--reboot",
             "--binary",
             "prototype",
             "--out",

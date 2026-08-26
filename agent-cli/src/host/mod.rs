@@ -31591,10 +31591,11 @@ fn display_route_status(sess: &Session) -> Result<()> {
 }
 
 const FAST_FIVE_PROTOTYPE_REMOTE_BINARY: &str =
-    "/tmp/mister-magik/fast-five/five-system-catalog-prototype";
+    "/media/fat/mister-magik-dev/fast-five-tool/five-system-catalog-prototype";
 const FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD: &str =
-    "/tmp/mister-magik/fast-five/.five-system-catalog-prototype.upload";
-const FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT: &str = "/tmp/mister-magik/fast-five/reference.json";
+    "/media/fat/mister-magik-dev/fast-five-tool/.five-system-catalog-prototype.upload";
+const FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT: &str =
+    "/media/fat/mister-magik-dev/fast-five-tool/reference.json";
 const FAST_FIVE_PROTOTYPE_REMOTE_ROOT: &str = "/media/fat/mister-magik-dev/fast-five-catalog";
 const FAST_FIVE_PROTOTYPE_REFERENCE_ROOT: &str = "/media/fat/mister-magik-dev/catalog-v3";
 
@@ -31625,10 +31626,13 @@ fn run_fast_five_catalog_prototype(
             "set -eu".to_string(),
             format!(
                 "rm -rf {} {}",
-                sh("/tmp/mister-magik/fast-five"),
+                sh("/media/fat/mister-magik-dev/fast-five-tool"),
                 sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT)
             ),
-            format!("mkdir -p {}", sh("/tmp/mister-magik/fast-five")),
+            format!(
+                "mkdir -p {}",
+                sh("/media/fat/mister-magik-dev/fast-five-tool")
+            ),
         ]),
     )?;
     put(&session, binary, FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)?;
@@ -31660,6 +31664,15 @@ fn run_fast_five_catalog_prototype(
             sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
             sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT)
         ),
+    )?;
+    exec_checked(&session, "sync fast-five cold inputs", "sync")?;
+    drop(session);
+    agent_reboot_wait(&[])?;
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "fast-five post-reboot safety preflight",
+        &cold_boot_profile_preflight_command(),
     )?;
     let published = exec_checked_output(
         &session,
@@ -31720,6 +31733,7 @@ fn run_fast_five_catalog_prototype(
     let report = json!({
         "schema": "mister-magik-fast-five-ui-prototype-v1",
         "status": "passed",
+        "cold_boot_verified": true,
         "binary_sha256": binary_sha256,
         "snapshot": snapshot,
         "published": published,
