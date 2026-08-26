@@ -139,6 +139,28 @@ impl FastRefreshManifest {
 }
 
 impl FastSystemWatchIndex {
+    pub fn new(
+        system_id: String,
+        adapter_version: u32,
+        core_profile_fingerprint: String,
+        roots: Vec<String>,
+        directories: Vec<FastWatchedDirectory>,
+        containers: Vec<FastWatchedContainer>,
+    ) -> Result<Self, String> {
+        let watch = Self {
+            schema: REFRESH_SCHEMA,
+            system_id,
+            adapter_version,
+            core_profile_fingerprint,
+            roots,
+            directories,
+            containers,
+        };
+        let system_id = watch.system_id.clone();
+        watch.validate(&system_id)?;
+        Ok(watch)
+    }
+
     pub fn validate(&self, expected_system_id: &str) -> Result<(), String> {
         if self.schema != REFRESH_SCHEMA || self.system_id != expected_system_id {
             return Err(format!("invalid watch index for {expected_system_id}"));
@@ -167,6 +189,22 @@ impl FastSystemWatchIndex {
 }
 
 impl FastSystemRowsSnapshot {
+    pub fn new(
+        system_id: String,
+        games: Vec<SystemGame>,
+        variants: Vec<FastFiveGameVariant>,
+    ) -> Result<Self, String> {
+        let rows = Self {
+            schema: REFRESH_SCHEMA,
+            system_id,
+            games,
+            variants,
+        };
+        let system_id = rows.system_id.clone();
+        rows.validate(&system_id)?;
+        Ok(rows)
+    }
+
     pub fn validate(&self, expected_system_id: &str) -> Result<(), String> {
         if self.schema != REFRESH_SCHEMA || self.system_id != expected_system_id {
             return Err(format!("invalid row snapshot for {expected_system_id}"));

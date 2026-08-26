@@ -31697,17 +31697,21 @@ fn run_fast_five_catalog_prototype(
             "sync".to_string(),
         ]),
     )?;
-    let base_snapshot = exec_checked_output(
-        &session,
-        "capture five-system reference snapshot",
-        &format!(
-            "{} snapshot-reference --catalog-root {} --output {} --encoding {}",
-            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
-            sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
-            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
-            sh(input_encoding),
-        ),
-    )?;
+    let base_snapshot = if generic_examples {
+        None
+    } else {
+        Some(exec_checked_output(
+            &session,
+            "capture five-system reference snapshot",
+            &format!(
+                "{} snapshot-reference --catalog-root {} --output {} --encoding {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+                sh(input_encoding),
+            ),
+        )?)
+    };
     exec_checked(&session, "sync fast-five cold inputs", "sync")?;
     drop(session);
     agent_reboot_wait(&[])?;
@@ -31717,16 +31721,15 @@ fn run_fast_five_catalog_prototype(
         "fast-five post-reboot safety preflight",
         &cold_boot_profile_preflight_command(),
     )?;
-    let generic_scan = if generic_examples {
+    let independent_build = if generic_examples {
         Some(exec_checked_output(
             &session,
-            "reboot-cold scan of ordinary user-managed systems",
+            "reboot-cold independent fast catalog source build",
             &format!(
-                "{} scan-generic-examples --input {} --output {} --storage-root {} --input-encoding {}",
+                "{} build-independent --storage-root {} --output {} --encoding {}",
                 sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
-                sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
-                sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
                 sh("/media/fat"),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
                 sh(input_encoding),
             ),
         )?)
@@ -31756,10 +31759,16 @@ fn run_fast_five_catalog_prototype(
             sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT)
         ),
     )?;
-    let snapshot = if let Some(scan) = &generic_scan {
-        parse_last_json_line("fast catalog generic scan", &scan.stdout)?
+    let snapshot = if let Some(build) = &independent_build {
+        parse_last_json_line("independent fast catalog source build", &build.stdout)?
     } else {
-        parse_last_json_line("fast-five snapshot", &base_snapshot.stdout)?
+        parse_last_json_line(
+            "fast-five snapshot",
+            &base_snapshot
+                .as_ref()
+                .ok_or("missing five-system source snapshot")?
+                .stdout,
+        )?
     };
     let published = parse_last_json_line("fast-five publish", &published.stdout)?;
     let compared = parse_last_json_line("fast-five comparison", &compared.stdout)?;
@@ -31805,6 +31814,7 @@ fn run_fast_five_catalog_prototype(
         "input_encoding": input_encoding,
         "artifact_profile": artifact_profile,
         "generic_examples": generic_examples,
+        "independent_sources": generic_examples,
         "snapshot": snapshot,
         "published": published,
         "comparison": compared,

@@ -224,7 +224,7 @@ pub fn is_supported_fast_system_set<'a>(system_ids: impl IntoIterator<Item = &'a
 }
 
 #[cfg(feature = "builder")]
-fn collapse_c64_cross_source_variants(system: &mut FastFiveSystem) -> usize {
+pub(crate) fn collapse_c64_cross_source_variants(system: &mut FastFiveSystem) -> usize {
     if system.system_id != "c64" || system.games.is_empty() {
         return 0;
     }

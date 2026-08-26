@@ -3,6 +3,7 @@
 
 //! Standalone interchange and publication tool for the fast five-system catalog.
 
+use mister_magik_catalog::fast_catalog_sources::build_independent_fast_snapshot;
 use mister_magik_catalog::fast_five_catalog::{
     C64ArtifactExperimentProfile, FastFiveArtifactProfile, FastFiveSnapshot,
     FastFiveSnapshotEncoding, decode_snapshot, encode_snapshot, fast_five_search_probe,
@@ -29,6 +30,24 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
         return Err(usage());
     };
     match command.as_str() {
+        "build-independent" => {
+            let storage_root = required_path(arguments, "--storage-root")?;
+            let output = required_path(arguments, "--output")?;
+            let encoding = snapshot_encoding(arguments, "--encoding")?;
+            reject_unknown(arguments, &["--storage-root", "--output", "--encoding"])?;
+            let (snapshot, report) = build_independent_fast_snapshot(&storage_root)?;
+            write_bytes_atomic(&output, &encode_snapshot(&snapshot, encoding)?)?;
+            print_json(&serde_json::json!({
+                "command": "build-independent",
+                "encoding": encoding,
+                "systems": snapshot.systems.len(),
+                "games": snapshot.game_count(),
+                "variants": snapshot.variant_count(),
+                "output": output,
+                "source_fingerprint": snapshot.source_fingerprint,
+                "source_build": report,
+            }))
+        }
         "snapshot-reference" => {
             let catalog_root = required_path(arguments, "--catalog-root")?;
             let output = required_path(arguments, "--output")?;
