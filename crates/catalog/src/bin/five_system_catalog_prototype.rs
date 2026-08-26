@@ -40,6 +40,7 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
                 "encoding": encoding,
                 "systems": snapshot.systems.len(),
                 "games": snapshot.game_count(),
+                "variants": snapshot.variant_count(),
                 "output": output,
                 "source_fingerprint": snapshot.source_fingerprint,
             }))
@@ -104,6 +105,7 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
             print_json(&serde_json::json!({
                 "command": "replace-arcade",
                 "games": snapshot.game_count(),
+                "variants": snapshot.variant_count(),
                 "arcade_games": snapshot.systems.iter().find(|system| system.system_id == "arcade").map(|system| system.games.len()),
                 "output": output,
                 "source_fingerprint": snapshot.source_fingerprint,
@@ -123,8 +125,10 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
                 "systems": snapshot.systems.iter().map(|system| serde_json::json!({
                     "system_id": system.system_id,
                     "games": system.games.len(),
+                    "variants": system.variants.len(),
                 })).collect::<Vec<_>>(),
                 "games": snapshot.game_count(),
+                "variants": snapshot.variant_count(),
             }))
         }
         "verify" => {

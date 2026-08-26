@@ -11,6 +11,15 @@ authority. It then commits a dual-slot manifest. The real launcher maps the
 same NavPacks it uses in production, so browsing, search, previews, metadata,
 and structured launch plans exercise the actual UI code.
 
+The C64 snapshot groups conservative cross-source title variants before
+publication. A local row is grouped only when exactly one OneLoad64 row has the
+same title after removing bracketed release metadata and punctuation. OneLoad64
+is the visible family representative; language and formatting editions retain
+their complete launch records in the C64 SQLite
+`fast_five_game_variants` table. They therefore do not occupy NavPack rows or
+inflate the instant first-page sidecar. Local-to-local fuzzy matches remain
+separate because short or similarly named C64 programs are often unrelated.
+
 The optional `snapshot-reference` command reads only the five systems from an
 existing catalog. It is a parity oracle and bootstrap source while independent
 AmigaVision, 0MHz, Neon68K, and OneLoad64 release adapters are being completed;

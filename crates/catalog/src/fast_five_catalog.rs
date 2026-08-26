@@ -17,15 +17,18 @@ use crate::shard_registry::{RegistryLimits, read_latest_manifest_lazy};
 use crate::system_shard::SystemGame;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(feature = "builder")]
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-pub const FAST_FIVE_SNAPSHOT_SCHEMA: &str = "mister-magik-fast-five-snapshot-v1";
+pub const FAST_FIVE_SNAPSHOT_SCHEMA: &str = "mister-magik-fast-five-snapshot-v2";
+const FAST_FIVE_REGISTRY_FINGERPRINT_SCHEMA: &str = "mister-magik-fast-five-snapshot-v1";
 pub const FAST_FIVE_SYSTEM_IDS: [&str; 5] = ["amiga", "arcade", "c64", "dos", "x68000"];
 #[cfg(feature = "builder")]
 const FAST_FIVE_BINARY_MAGIC: &[u8; 8] = b"MGK5SNAP";
 #[cfg(feature = "builder")]
-const FAST_FIVE_BINARY_VERSION: u32 = 1;
+const FAST_FIVE_BINARY_VERSION: u32 = 2;
 #[cfg(feature = "builder")]
 const FAST_FIVE_BINARY_HEADER_BYTES: usize = 64;
 
@@ -71,6 +74,32 @@ pub struct FastFiveSystem {
     pub system_id: String,
     pub display_title: String,
     pub games: Vec<SystemGame>,
+    #[serde(default)]
+    pub variants: Vec<FastFiveGameVariant>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FastFiveVariantRelation {
+    LanguageEdition,
+    TitleFormatting,
+}
+
+#[cfg(feature = "builder")]
+impl FastFiveVariantRelation {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::LanguageEdition => "language-edition",
+            Self::TitleFormatting => "title-formatting",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FastFiveGameVariant {
+    pub family_stable_key: String,
+    pub relation: FastFiveVariantRelation,
+    pub game: SystemGame,
 }
 
 impl FastFiveSnapshot {
@@ -128,6 +157,40 @@ impl FastFiveSnapshot {
                     }
                 }
             }
+            if system.system_id != "c64" && !system.variants.is_empty() {
+                return Err(format!(
+                    "{} contains C64-only family variants",
+                    system.system_id
+                ));
+            }
+            for variant in &system.variants {
+                if !stable_keys.contains(variant.family_stable_key.as_str()) {
+                    return Err(format!(
+                        "{} variant {} has a missing family {}",
+                        system.system_id, variant.game.stable_key, variant.family_stable_key
+                    ));
+                }
+                if !variant
+                    .game
+                    .stable_key
+                    .starts_with(&format!("{}\u{1f}", system.system_id))
+                    || !stable_keys.insert(variant.game.stable_key.as_str())
+                {
+                    return Err(format!(
+                        "{} contains invalid or duplicate variant key {}",
+                        system.system_id, variant.game.stable_key
+                    ));
+                }
+                if let Some(plan) = &variant.game.launch_plan
+                    && (plan.launch_ref != variant.game.launch_ref
+                        || plan.system_id != system.system_id)
+                {
+                    return Err(format!(
+                        "{} variant launch plan is not bound to {}",
+                        system.system_id, variant.game.stable_key
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -135,6 +198,139 @@ impl FastFiveSnapshot {
     pub fn game_count(&self) -> usize {
         self.systems.iter().map(|system| system.games.len()).sum()
     }
+
+    pub fn variant_count(&self) -> usize {
+        self.systems
+            .iter()
+            .map(|system| system.variants.len())
+            .sum()
+    }
+}
+
+#[cfg(feature = "builder")]
+fn collapse_c64_cross_source_variants(system: &mut FastFiveSystem) -> usize {
+    if system.system_id != "c64" || system.games.is_empty() {
+        return 0;
+    }
+    let mut groups = BTreeMap::<String, Vec<usize>>::new();
+    for (index, game) in system.games.iter().enumerate() {
+        let key = compact_c64_family_title(&game.title);
+        if !key.is_empty() {
+            groups.entry(key).or_default().push(index);
+        }
+    }
+    let mut family_for_variant = BTreeMap::<usize, usize>::new();
+    for indexes in groups.values() {
+        let oneload = indexes
+            .iter()
+            .copied()
+            .filter(|index| is_oneload64_game(&system.games[*index]))
+            .collect::<Vec<_>>();
+        if oneload.len() != 1 {
+            continue;
+        }
+        let family = oneload[0];
+        for index in indexes.iter().copied().filter(|index| *index != family) {
+            if !is_oneload64_game(&system.games[index]) {
+                family_for_variant.insert(index, family);
+            }
+        }
+    }
+    if family_for_variant.is_empty() {
+        return 0;
+    }
+    let family_keys = family_for_variant
+        .iter()
+        .map(|(variant, family)| (*variant, system.games[*family].stable_key.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut visible = Vec::with_capacity(system.games.len() - family_for_variant.len());
+    let mut variants = Vec::with_capacity(family_for_variant.len());
+    for (index, game) in system.games.drain(..).enumerate() {
+        if let Some(family_stable_key) = family_keys.get(&index) {
+            variants.push(FastFiveGameVariant {
+                family_stable_key: family_stable_key.clone(),
+                relation: if has_language_annotation(&game.title) {
+                    FastFiveVariantRelation::LanguageEdition
+                } else {
+                    FastFiveVariantRelation::TitleFormatting
+                },
+                game,
+            });
+        } else {
+            visible.push(game);
+        }
+    }
+    variants.sort_by(|left, right| {
+        left.family_stable_key
+            .cmp(&right.family_stable_key)
+            .then_with(|| left.game.stable_key.cmp(&right.game.stable_key))
+    });
+    let collapsed = variants.len();
+    system.games = visible;
+    system.variants.extend(variants);
+    collapsed
+}
+
+#[cfg(feature = "builder")]
+fn compact_c64_family_title(title: &str) -> String {
+    let mut output = String::new();
+    let mut parenthesis_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    for character in title.trim().chars().flat_map(char::to_lowercase) {
+        match character {
+            '(' => parenthesis_depth += 1,
+            ')' => parenthesis_depth = parenthesis_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            value
+                if parenthesis_depth == 0
+                    && bracket_depth == 0
+                    && value.is_ascii_alphanumeric() =>
+            {
+                output.push(value);
+            }
+            _ => {}
+        }
+    }
+    output
+}
+
+#[cfg(feature = "builder")]
+fn is_oneload64_game(game: &SystemGame) -> bool {
+    let contains_marker = |value: &str| value.to_ascii_lowercase().contains("oneload64");
+    contains_marker(&game.launch_ref)
+        || game.launch_plan.as_ref().is_some_and(|plan| {
+            contains_marker(&plan.launch_ref) || contains_marker(&plan.payload_path)
+        })
+}
+
+#[cfg(feature = "builder")]
+fn has_language_annotation(title: &str) -> bool {
+    title
+        .split(['(', '['])
+        .skip(1)
+        .filter_map(|part| part.split([')', ']']).next())
+        .map(str::trim)
+        .any(|annotation| {
+            matches!(
+                annotation.to_ascii_lowercase().as_str(),
+                "de" | "ger"
+                    | "german"
+                    | "deutsch"
+                    | "fr"
+                    | "fre"
+                    | "french"
+                    | "es"
+                    | "spa"
+                    | "spanish"
+                    | "it"
+                    | "ita"
+                    | "italian"
+                    | "nl"
+                    | "dut"
+                    | "dutch"
+            )
+        })
 }
 
 #[cfg(feature = "builder")]
@@ -239,7 +435,10 @@ pub fn registry_fingerprint(storage_root: &Path, limits: RegistryLimits) -> Resu
     let manifest = read_latest_manifest_lazy(storage_root, limits)
         .map_err(|error| format!("read fast-five manifest: {error}"))?;
     let mut digest = Sha256::new();
-    digest.update(FAST_FIVE_SNAPSHOT_SCHEMA.as_bytes());
+    // The launcher fingerprint identifies immutable published artifacts, not
+    // the interchange snapshot version used to build them. Keep this stable so
+    // a newer prototype can be opened by the currently installed Dev UI.
+    digest.update(FAST_FIVE_REGISTRY_FINGERPRINT_SCHEMA.as_bytes());
     digest.update(manifest.generation.to_le_bytes());
     for system in &manifest.systems {
         digest.update(system.system_id.as_str().as_bytes());
@@ -326,6 +525,7 @@ pub struct FastFivePublishReport {
     pub generation: u64,
     pub systems: usize,
     pub games: usize,
+    pub variants: usize,
     pub elapsed_us: u64,
     pub registry_fingerprint: String,
     pub copied_bytes: u64,
@@ -338,6 +538,7 @@ pub struct FastFivePublishReport {
 pub struct FastFiveSystemBuildReport {
     pub system_id: String,
     pub games: usize,
+    pub variants: usize,
     pub sqlite_bytes: u64,
     pub navigation_bytes: u64,
     pub navpack_bytes: u64,
@@ -350,6 +551,7 @@ pub struct FastFiveVerificationReport {
     pub status: &'static str,
     pub systems: usize,
     pub games: usize,
+    pub variants: usize,
     pub changed: usize,
 }
 
@@ -438,6 +640,7 @@ pub struct C64ArtifactExperimentReport {
     pub status: &'static str,
     pub profile: C64ArtifactExperimentProfile,
     pub games: usize,
+    pub variants: usize,
     pub build_us: u64,
     pub publish_us: u64,
     pub published_validate_us: u64,
@@ -591,7 +794,13 @@ pub fn run_c64_artifact_experiment(
         SystemShardData {
             system_id: system_id.clone(),
             generation: 1,
-            projection_stats: None,
+            projection_stats: (!source.variants.is_empty()).then_some(
+                crate::system_shard::SystemShardProjectionStats {
+                    source_games: source.games.len() + source.variants.len(),
+                    visible_families: source.games.len(),
+                    collapsed_variants: source.variants.len(),
+                },
+            ),
             games: source.games.clone(),
         },
         limits.shard,
@@ -600,6 +809,7 @@ pub fn run_c64_artifact_experiment(
         search_tuning,
     )
     .map_err(|error| format!("build C64 experiment shard: {error}"))?;
+    write_fast_five_variants(&sqlite, source)?;
     let build_us = elapsed_us(build_started);
     if staged.games != source.games {
         return Err("staged C64 experiment rows differ from the snapshot".to_string());
@@ -652,6 +862,7 @@ pub fn run_c64_artifact_experiment(
         status: "exact",
         profile,
         games: source.games.len(),
+        variants: source.variants.len(),
         build_us,
         publish_us,
         published_validate_us,
@@ -676,6 +887,64 @@ pub fn publish_snapshot(
         limits,
         FastFiveArtifactProfile::Legacy,
     )
+}
+
+#[cfg(feature = "builder")]
+fn write_fast_five_variants(sqlite_path: &Path, source: &FastFiveSystem) -> Result<(), String> {
+    if source.variants.is_empty() {
+        return Ok(());
+    }
+    let mut connection = rusqlite::Connection::open(sqlite_path)
+        .map_err(|error| format!("open {} variant SQLite: {error}", source.system_id))?;
+    connection
+        .execute_batch(
+            "CREATE TABLE fast_five_game_variants (
+                 variant_stable_key TEXT PRIMARY KEY,
+                 family_stable_key TEXT NOT NULL,
+                 relation TEXT NOT NULL,
+                 title TEXT NOT NULL,
+                 launch_ref TEXT NOT NULL,
+                 game_json TEXT NOT NULL
+             ) WITHOUT ROWID;
+             CREATE INDEX fast_five_game_variants_family
+                 ON fast_five_game_variants(family_stable_key, title);",
+        )
+        .map_err(|error| format!("create {} variant schema: {error}", source.system_id))?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("begin {} variant transaction: {error}", source.system_id))?;
+    {
+        let mut statement = transaction
+            .prepare(
+                "INSERT INTO fast_five_game_variants(
+                     variant_stable_key,family_stable_key,relation,title,launch_ref,game_json
+                 ) VALUES (?1,?2,?3,?4,?5,?6)",
+            )
+            .map_err(|error| format!("prepare {} variants: {error}", source.system_id))?;
+        for variant in &source.variants {
+            let game_json = serde_json::to_string(&variant.game)
+                .map_err(|error| format!("encode {} variant: {error}", source.system_id))?;
+            statement
+                .execute(rusqlite::params![
+                    variant.game.stable_key,
+                    variant.family_stable_key,
+                    variant.relation.as_str(),
+                    variant.game.title,
+                    variant.game.launch_ref,
+                    game_json,
+                ])
+                .map_err(|error| format!("insert {} variant: {error}", source.system_id))?;
+        }
+    }
+    transaction
+        .execute(
+            "INSERT INTO shard_meta(key,value) VALUES ('fast_five_variant_count',?1)",
+            [source.variants.len().to_string()],
+        )
+        .map_err(|error| format!("record {} variant count: {error}", source.system_id))?;
+    transaction
+        .commit()
+        .map_err(|error| format!("commit {} variants: {error}", source.system_id))
 }
 
 #[cfg(feature = "builder")]
@@ -762,7 +1031,13 @@ pub fn publish_snapshot_with_profile(
         let data = SystemShardData {
             system_id: system_id.clone(),
             generation,
-            projection_stats: None,
+            projection_stats: (!source.variants.is_empty()).then_some(
+                crate::system_shard::SystemShardProjectionStats {
+                    source_games: source.games.len() + source.variants.len(),
+                    visible_families: source.games.len(),
+                    collapsed_variants: source.variants.len(),
+                },
+            ),
             games: source.games.clone(),
         };
         let shard_profile = match artifact_profile {
@@ -800,6 +1075,7 @@ pub fn publish_snapshot_with_profile(
             )
         }
         .map_err(|error| format!("write {} shard: {error}", source.system_id))?;
+        write_fast_five_variants(&sqlite, source)?;
         let active = if stage_in_tmpfs || artifact_profile != FastFiveArtifactProfile::Legacy {
             let publication = publish_prevalidated_system_artifacts_deferred(
                 storage_root,
@@ -867,6 +1143,7 @@ pub fn publish_snapshot_with_profile(
         system_builds.push(FastFiveSystemBuildReport {
             system_id: source.system_id.clone(),
             games: source.games.len(),
+            variants: source.variants.len(),
             sqlite_bytes: active_sqlite_bytes,
             navigation_bytes: active_navigation_bytes,
             navpack_bytes: active_navpack_bytes,
@@ -894,6 +1171,7 @@ pub fn publish_snapshot_with_profile(
         generation,
         systems: snapshot.systems.len(),
         games: snapshot.game_count(),
+        variants: snapshot.variant_count(),
         elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
         registry_fingerprint: registry_fingerprint(storage_root, limits)?,
         copied_bytes,
@@ -917,6 +1195,7 @@ pub fn verify_snapshot_artifacts(
         .map_err(|error| format!("read candidate manifest: {error}"))?;
     let mut changed = 0usize;
     let mut games = 0usize;
+    let mut variants = 0usize;
     for source in &snapshot.systems {
         let system_id = SystemId::parse(&source.system_id).map_err(|error| error.to_string())?;
         let system = manifest
@@ -1000,12 +1279,79 @@ pub fn verify_snapshot_artifacts(
             };
             changed = changed.saturating_add(usize::from(&actual != expected));
         }
+        let has_variants: bool = connection
+            .query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM sqlite_master
+                     WHERE type='table' AND name='fast_five_game_variants'
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("inspect candidate {} variants: {error}", source.system_id))?;
+        let stored_variants = if has_variants {
+            let mut statement = connection
+                .prepare(
+                    "SELECT family_stable_key,relation,game_json
+                     FROM fast_five_game_variants
+                     ORDER BY family_stable_key,variant_stable_key",
+                )
+                .map_err(|error| {
+                    format!("prepare candidate {} variants: {error}", source.system_id)
+                })?;
+            statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })
+                .map_err(|error| format!("query candidate {} variants: {error}", source.system_id))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| format!("read candidate {} variants: {error}", source.system_id))?
+                .into_iter()
+                .map(|(family_stable_key, relation, game_json)| {
+                    let relation = match relation.as_str() {
+                        "language-edition" => FastFiveVariantRelation::LanguageEdition,
+                        "title-formatting" => FastFiveVariantRelation::TitleFormatting,
+                        _ => {
+                            return Err(format!(
+                                "candidate {} has unknown variant relation {relation}",
+                                source.system_id
+                            ));
+                        }
+                    };
+                    let game = serde_json::from_str(&game_json).map_err(|error| {
+                        format!("decode candidate {} variant: {error}", source.system_id)
+                    })?;
+                    Ok(FastFiveGameVariant {
+                        family_stable_key,
+                        relation,
+                        game,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?
+        } else {
+            Vec::new()
+        };
+        changed = changed.saturating_add(source.variants.len().abs_diff(stored_variants.len()));
+        changed = changed.saturating_add(
+            source
+                .variants
+                .iter()
+                .zip(&stored_variants)
+                .filter(|(expected, actual)| expected != actual)
+                .count(),
+        );
         games = games.saturating_add(source.games.len());
+        variants = variants.saturating_add(source.variants.len());
     }
     Ok(FastFiveVerificationReport {
         status: if changed == 0 { "exact" } else { "different" },
         systems: snapshot.systems.len(),
         games,
+        variants,
         changed,
     })
 }
@@ -1128,11 +1474,16 @@ pub fn snapshot_reference(
                 }),
             })
             .collect();
-        systems.push(FastFiveSystem {
+        let mut system = FastFiveSystem {
             system_id: id.to_string(),
             display_title: titles.get(id).cloned().unwrap_or_else(|| id.to_string()),
             games,
-        });
+            variants: Vec::new(),
+        };
+        if id == "c64" {
+            collapse_c64_cross_source_variants(&mut system);
+        }
+        systems.push(system);
     }
     let snapshot = FastFiveSnapshot {
         schema: FAST_FIVE_SNAPSHOT_SCHEMA.to_string(),
@@ -1206,9 +1557,91 @@ mod builder_tests {
                     system_id: system_id.to_string(),
                     display_title: system_id.to_string(),
                     games: Vec::new(),
+                    variants: Vec::new(),
                 })
                 .collect(),
         }
+    }
+
+    fn c64_game(title: &str, launch_ref: &str) -> SystemGame {
+        SystemGame {
+            stable_key: format!("c64\u{1f}{title}\u{1f}{launch_ref}"),
+            title: title.to_string(),
+            launch_ref: launch_ref.to_string(),
+            ..SystemGame::default()
+        }
+    }
+
+    #[test]
+    fn c64_cross_source_formatting_and_language_editions_become_variants() {
+        let mut system = FastFiveSystem {
+            system_id: "c64".to_string(),
+            display_title: "C64".to_string(),
+            games: vec![
+                c64_game(
+                    "Night Racer",
+                    "/media/fat/games/C64/OneLoad64-v5/Games/Night Racer.crt",
+                ),
+                c64_game(
+                    "Nightracer (1990)(Markt & Technik)(de)",
+                    "/media/fat/games/C64/German/Nightracer.d64",
+                ),
+                c64_game("Unique Game (de)", "/media/fat/games/C64/Unique.d64"),
+            ],
+            variants: Vec::new(),
+        };
+        assert_eq!(collapse_c64_cross_source_variants(&mut system), 1);
+        assert_eq!(system.games.len(), 2);
+        assert_eq!(system.variants.len(), 1);
+        assert_eq!(
+            system.variants[0].relation,
+            FastFiveVariantRelation::LanguageEdition
+        );
+        assert_eq!(
+            system.variants[0].game.title,
+            "Nightracer (1990)(Markt & Technik)(de)"
+        );
+        assert_eq!(
+            system.variants[0].family_stable_key,
+            system.games[0].stable_key
+        );
+    }
+
+    #[test]
+    fn c64_variants_are_persisted_outside_the_navpack_rows() {
+        let mut snapshot = empty_snapshot();
+        let c64 = snapshot
+            .systems
+            .iter_mut()
+            .find(|system| system.system_id == "c64")
+            .unwrap();
+        c64.games = vec![
+            c64_game(
+                "BoneCruncher",
+                "/media/fat/games/C64/OneLoad64-v5/Games/BoneCruncher.crt",
+            ),
+            c64_game(
+                "Bone Cruncher (1987)(Superior Software)",
+                "/media/fat/games/C64/Bone Cruncher.d64",
+            ),
+        ];
+        assert_eq!(collapse_c64_cross_source_variants(c64), 1);
+        snapshot.validate().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-fast-five-variants-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let limits = crate::shard_registry::production_registry_limits();
+        publish_snapshot(&root, &snapshot, limits).unwrap();
+        let verified = verify_snapshot_artifacts(&root, &snapshot, limits).unwrap();
+        assert_eq!(verified.status, "exact");
+        assert_eq!(verified.games, 1);
+        assert_eq!(verified.variants, 1);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
