@@ -1168,6 +1168,7 @@ mod tests {
             "device-agent-ci",
             "manager-device",
             "arcade-catalog-prototype-device",
+            "five-system-catalog-prototype-device",
             "framebuffer-scene-lab-device",
             "framebuffer-scene-lab-analysis",
             "release-binaries",

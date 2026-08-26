@@ -54,6 +54,7 @@ pub enum BuildCommand {
     FramebufferSceneLabDevice,
     FramebufferSceneLabAnalysis,
     ArcadeCatalogPrototypeDevice,
+    FiveSystemCatalogPrototypeDevice,
     ReleaseBinaries,
 }
 
@@ -66,6 +67,7 @@ pub enum BuildTarget {
     FramebufferLab,
     FramebufferSceneLab,
     ArcadeCatalogPrototype,
+    FiveSystemCatalogPrototype,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -200,6 +202,14 @@ impl BuildSpec {
                 vec!["builder"],
                 UiScope::All,
                 arcade_catalog_prototype_artifact("release-device"),
+            ),
+            BuildCommand::FiveSystemCatalogPrototypeDevice => (
+                BuildTarget::FiveSystemCatalogPrototype,
+                BuildMode::Build,
+                "release-device",
+                vec!["builder"],
+                UiScope::All,
+                five_system_catalog_prototype_artifact("release-device"),
             ),
             BuildCommand::ReleaseBinaries => return None,
         };
@@ -815,6 +825,9 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
             ),
             BuildTarget::ArcadeCatalogPrototype => PathBuf::from(
                 "/private/tmp/mister-magik-arcade-catalog-prototype-apple-container-target",
+            ),
+            BuildTarget::FiveSystemCatalogPrototype => PathBuf::from(
+                "/private/tmp/mister-magik-five-system-catalog-prototype-apple-container-target",
             ),
             _ => PathBuf::from("/private/tmp/mister-magik-apple-container-target"),
         };
@@ -1603,6 +1616,9 @@ fn cargo_args(spec: &BuildSpec, timings: bool) -> Vec<OsString> {
         BuildTarget::ArcadeCatalogPrototype => {
             args.extend(["--bin".into(), "arcade-catalog-prototype".into()]);
         }
+        BuildTarget::FiveSystemCatalogPrototype => {
+            args.extend(["--bin".into(), "five-system-catalog-prototype".into()]);
+        }
     }
     if spec.mode == BuildMode::CheckLibrary {
         args.extend(["--lib".into(), "--no-default-features".into()]);
@@ -1620,6 +1636,7 @@ fn host_workdir(target: BuildTarget) -> &'static str {
         BuildTarget::FramebufferLab => "apps/framebuffer-lab",
         BuildTarget::FramebufferSceneLab => "apps/framebuffer-scene-lab",
         BuildTarget::ArcadeCatalogPrototype => "crates/catalog",
+        BuildTarget::FiveSystemCatalogPrototype => "crates/catalog",
     }
 }
 
@@ -1631,6 +1648,7 @@ fn container_workdir(target: BuildTarget) -> &'static str {
         BuildTarget::FramebufferLab => "/project/apps/framebuffer-lab",
         BuildTarget::FramebufferSceneLab => "/project/apps/framebuffer-scene-lab",
         BuildTarget::ArcadeCatalogPrototype => "/project/crates/catalog",
+        BuildTarget::FiveSystemCatalogPrototype => "/project/crates/catalog",
     }
 }
 
@@ -1642,6 +1660,7 @@ fn lockfile(target: BuildTarget) -> &'static str {
         BuildTarget::FramebufferLab => "apps/framebuffer-lab/Cargo.lock",
         BuildTarget::FramebufferSceneLab => "apps/framebuffer-scene-lab/Cargo.lock",
         BuildTarget::ArcadeCatalogPrototype => "crates/catalog/Cargo.lock",
+        BuildTarget::FiveSystemCatalogPrototype => "crates/catalog/Cargo.lock",
     }
 }
 
@@ -1666,6 +1685,12 @@ fn framebuffer_scene_lab_artifact(profile: &str) -> PathBuf {
 fn arcade_catalog_prototype_artifact(profile: &str) -> PathBuf {
     PathBuf::from(format!(
         "crates/catalog/target/{TARGET}/{profile}/arcade-catalog-prototype"
+    ))
+}
+
+fn five_system_catalog_prototype_artifact(profile: &str) -> PathBuf {
+    PathBuf::from(format!(
+        "crates/catalog/target/{TARGET}/{profile}/five-system-catalog-prototype"
     ))
 }
 
@@ -1954,6 +1979,26 @@ mod tests {
             cargo_args(&spec, false)
                 .windows(2)
                 .any(|pair| pair == ["--bin", "arcade-catalog-prototype"])
+        );
+    }
+
+    #[test]
+    fn five_system_catalog_prototype_build_is_a_focused_arm_binary() {
+        let spec = BuildSpec::for_command(BuildCommand::FiveSystemCatalogPrototypeDevice).unwrap();
+        assert_eq!(spec.target, BuildTarget::FiveSystemCatalogPrototype);
+        assert_eq!(spec.features, ["builder"]);
+        assert_eq!(spec.profile, "release-device");
+        assert_eq!(host_workdir(spec.target), "crates/catalog");
+        assert_eq!(
+            spec.artifact,
+            PathBuf::from(
+                "crates/catalog/target/armv7-unknown-linux-gnueabihf/release-device/five-system-catalog-prototype"
+            )
+        );
+        assert!(
+            cargo_args(&spec, false)
+                .windows(2)
+                .any(|pair| pair == ["--bin", "five-system-catalog-prototype"])
         );
     }
 
