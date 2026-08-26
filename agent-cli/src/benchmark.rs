@@ -2634,10 +2634,12 @@ fn execute_arcade_catalog_prototype_cold(
         .as_object_mut()
         .ok_or("Arcade catalog prototype benchmark summary is not an object")?
         .insert("source_commit".into(), json!(source_commit));
-    std::fs::write(
-        output_dir.join("summary.json"),
-        format!("{}\n", serde_json::to_string_pretty(&summary)?),
-    )?;
+    let retained_summary = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&summary).map_err(|error| error.to_string())?
+    );
+    std::fs::write(output_dir.join("summary.json"), retained_summary)
+        .map_err(|error| error.to_string())?;
     evaluate_arcade_catalog_prototype_summary(&summary)?;
     device.verify_health()?;
     reporter.emit(
