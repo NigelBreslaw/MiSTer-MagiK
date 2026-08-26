@@ -391,11 +391,76 @@ fn prepared_target_collection_ids(discoveries: &[GameDiscovery]) -> BTreeSet<Str
         .collect()
 }
 
+fn path_string_is_within(path: &str, root: &Path) -> bool {
+    Path::new(path).starts_with(root)
+}
+
+fn oneload64_target_output(
+    output: &BorrowedTargetOutput<'_>,
+) -> Result<Option<(PathBuf, TargetOutput)>, String> {
+    let roots = output
+        .discoveries
+        .iter()
+        .filter(|discovery| {
+            discovery.prepared.is_some_and(|prepared| {
+                prepared.collection_id
+                    == crate::prepared_collections::PreparedCollectionId::OneLoad64
+            })
+        })
+        .filter_map(|discovery| {
+            crate::prepared_collections::oneload64_install_root(Path::new(&discovery.source_path))
+                .map(Path::to_path_buf)
+        })
+        .collect::<BTreeSet<_>>();
+    if roots.is_empty() {
+        return Ok(None);
+    }
+    if roots.len() != 1 {
+        return Err("multiple OneLoad64 installation roots share one C64 target".to_string());
+    }
+    let root = roots.into_iter().next().unwrap();
+    let discoveries = output
+        .discoveries
+        .iter()
+        .filter(|discovery| path_string_is_within(&discovery.source_path, &root))
+        .cloned()
+        .collect::<Vec<_>>();
+    if discoveries.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some((
+        root.clone(),
+        TargetOutput {
+            game_dir_facts: Vec::new(),
+            normal_files: output
+                .normal_files
+                .iter()
+                .filter(|file| path_string_is_within(&file.path, &root))
+                .cloned()
+                .collect(),
+            containers: output
+                .containers
+                .iter()
+                .filter(|container| path_string_is_within(&container.file_path, &root))
+                .cloned()
+                .collect(),
+            entries: output
+                .entries
+                .iter()
+                .filter(|entry| path_string_is_within(&entry.file_path, &root))
+                .cloned()
+                .collect(),
+            ignored_files: 0,
+            discoveries,
+        },
+    )))
+}
+
 fn capture_prepared_target_helper(
     cfg: &BenchConfig,
     descriptor: &catalog_scan::ScanTargetDescriptor,
     output: &BorrowedTargetOutput<'_>,
-    output_json: String,
+    mut output_json: String,
 ) -> Result<Option<PathBuf>, String> {
     let Some(directory) = std::env::var_os(PREPARED_HELPER_CAPTURE_DIR_ENV).map(PathBuf::from)
     else {
@@ -405,6 +470,39 @@ fn capture_prepared_target_helper(
     if collection_ids.is_empty() {
         return Ok(None);
     }
+    // 0MHz is now accelerated per game from the checked-in release manifest.
+    // A whole-target DOS snapshot would hide newly added/custom launchers.
+    if collection_ids.contains("0mhz") {
+        return Ok(None);
+    }
+    let partial_oneload = if collection_ids.contains("oneload64") {
+        oneload64_target_output(output)?
+    } else {
+        None
+    };
+    let scan_exclusion_path = partial_oneload.as_ref().map(|(root, _)| root.as_path());
+    if let Some((_, filtered)) = partial_oneload.as_ref() {
+        output_json = serde_json::to_string(filtered)
+            .map_err(|error| format!("encode OneLoad64 target output: {error}"))?;
+    }
+    let discoveries = partial_oneload
+        .as_ref()
+        .map_or(output.discoveries, |(_, filtered)| {
+            filtered.discoveries.as_slice()
+        });
+    let normal_files = partial_oneload
+        .as_ref()
+        .map_or(output.normal_files, |(_, filtered)| {
+            filtered.normal_files.as_slice()
+        });
+    let containers = partial_oneload
+        .as_ref()
+        .map_or(output.containers, |(_, filtered)| {
+            filtered.containers.as_slice()
+        });
+    let entries = partial_oneload
+        .as_ref()
+        .map_or(output.entries, |(_, filtered)| filtered.entries.as_slice());
     let storage_root = crate::prepared_collections::storage_roots_for_library_roots(&cfg.roots)
         .into_iter()
         .filter(|root| descriptor.path.starts_with(root))
@@ -416,7 +514,7 @@ fn capture_prepared_target_helper(
             )
         })?;
     let mut paths = BTreeSet::<String>::new();
-    for discovery in output.discoveries {
+    for discovery in discoveries {
         for value in [
             Some(discovery.source_path.as_str()),
             discovery.covered_payload_path.as_deref(),
@@ -430,15 +528,14 @@ fn capture_prepared_target_helper(
         }
     }
     paths.extend(
-        output
-            .normal_files
+        normal_files
             .iter()
             .filter_map(|file| path_relative_to_storage_root(Path::new(&file.path), &storage_root)),
     );
-    paths.extend(output.containers.iter().filter_map(|container| {
+    paths.extend(containers.iter().filter_map(|container| {
         path_relative_to_storage_root(Path::new(&container.file_path), &storage_root)
     }));
-    paths.extend(output.entries.iter().filter_map(|entry| {
+    paths.extend(entries.iter().filter_map(|entry| {
         path_relative_to_storage_root(Path::new(&entry.file_path), &storage_root)
     }));
 
@@ -487,6 +584,7 @@ fn capture_prepared_target_helper(
     let helper = PreparedTargetCatalogHelper::capture(
         &storage_root,
         &descriptor.path,
+        scan_exclusion_path,
         collection_ids.into_iter().collect::<Vec<_>>().join("+"),
         output_json,
         &exact_paths.into_iter().collect::<Vec<_>>(),
@@ -1462,9 +1560,10 @@ fn scan_library_with_progress_and_events(
         "prepared_payload_index",
         prepared_payload_us,
         format!(
-            "files={} complete_roots={}",
+            "files={} complete_roots={} release={}",
             prepared_payload_index.file_count(),
             prepared_payload_index.complete_root_count(),
+            crate::prepared_release_manifest::zero_mhz_release_id().unwrap_or("unavailable"),
         ),
     );
     let mut prevalidated_targets = resume
@@ -1477,10 +1576,16 @@ fn scan_library_with_progress_and_events(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let pruned_paths = prepared_helpers
+        .reusable
+        .values()
+        .filter_map(|helper| helper.scan_exclusion_path.as_deref().map(PathBuf::from))
+        .collect::<Vec<_>>();
     prevalidated_targets.extend(
         prepared_helpers
             .reusable
             .values()
+            .filter(|helper| helper.scan_exclusion_path.is_none())
             .map(|helper| PathBuf::from(&helper.target_path)),
     );
     let pipeline_started = Instant::now();
@@ -1490,6 +1595,7 @@ fn scan_library_with_progress_and_events(
             plan.clone(),
             excluded_targets,
             prevalidated_targets,
+            pruned_paths,
             crate::runtime_thread::RuntimeThreadRole::LibraryWalker,
         ),
         LibraryScanPriority::Foreground => {
@@ -1498,6 +1604,7 @@ fn scan_library_with_progress_and_events(
                 plan.clone(),
                 excluded_targets,
                 prevalidated_targets,
+                pruned_paths,
             )
         }
     };
@@ -1721,6 +1828,7 @@ fn scan_library_with_progress_and_events(
                     .reusable
                     .remove(&normalized_target_key(&descriptor.path))
                 {
+                    let partial_helper = helper.scan_exclusion_path.is_some();
                     let output_decode_started = Instant::now();
                     resumed_output_decode_bytes =
                         resumed_output_decode_bytes.saturating_add(helper.output_json.len());
@@ -1741,7 +1849,10 @@ fn scan_library_with_progress_and_events(
                                 &mut scanning_systems,
                                 &mut scan_events,
                             );
-                            skip_target = true;
+                            skip_target = !partial_helper;
+                            if partial_helper {
+                                target_checkpointable = false;
+                            }
                             crate::catalog_logln!(
                                 "prepared_bundle_helper_tsv\tstate=activated\tordinal={}\tdiscoveries={}\tpath={}",
                                 descriptor.ordinal,
@@ -2605,6 +2716,45 @@ mod incremental_planning_tests {
     #[test]
     fn corrupt_target_dependencies_force_no_false_exact_match() {
         assert!(target_output_systems("{not-json").is_empty());
+    }
+
+    #[test]
+    fn oneload_helper_output_excludes_personal_c64_and_keeps_bundle_diagnostics() {
+        let mut bundled = crate::test_support::payload(
+            "/media/fat/games/C64/OneLoad64-Games-Collection-v5/Games/Bundled.crt",
+        );
+        bundled.prepared = Some(
+            crate::prepared_collections::PreparedLaunchProvenance::prepared(
+                crate::prepared_collections::PreparedCollectionId::OneLoad64,
+            ),
+        );
+        let diagnostic = crate::test_support::payload(
+            "/media/fat/games/C64/OneLoad64-Games-Collection-v5/Dumps/Diagnostic.crt",
+        );
+        let personal = crate::test_support::payload("/media/fat/games/C64/Personal/Homebrew.crt");
+        let discoveries = vec![bundled, diagnostic, personal];
+        let output = BorrowedTargetOutput {
+            game_dir_facts: &[],
+            normal_files: &[],
+            containers: &[],
+            entries: &[],
+            ignored_files: 0,
+            discoveries: &discoveries,
+        };
+
+        let (root, filtered) = oneload64_target_output(&output).unwrap().unwrap();
+
+        assert_eq!(
+            root,
+            Path::new("/media/fat/games/C64/OneLoad64-Games-Collection-v5")
+        );
+        assert_eq!(filtered.discoveries.len(), 2);
+        assert!(
+            filtered
+                .discoveries
+                .iter()
+                .all(|discovery| discovery.source_path.starts_with(root.to_str().unwrap()))
+        );
     }
 
     #[test]

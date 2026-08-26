@@ -80,6 +80,7 @@ pub mod persisted_search;
 pub mod portable_catalog_builder;
 pub mod prepared_bundle_helper;
 pub mod prepared_collections;
+mod prepared_release_manifest;
 mod preview_archive;
 pub mod preview_worker;
 #[cfg(feature = "builder")]

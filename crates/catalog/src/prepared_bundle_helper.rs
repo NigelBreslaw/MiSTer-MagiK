@@ -16,7 +16,7 @@ use std::path::{Component, Path};
 
 pub const PREPARED_BUNDLE_HELPER_SCHEMA: &str = "mister-magik-prepared-bundle-helper-v1";
 pub(crate) const PREPARED_TARGET_CATALOG_HELPER_SCHEMA: &str =
-    "mister-magik-prepared-target-catalog-helper-v2";
+    "mister-magik-prepared-target-catalog-helper-v3";
 
 /// A production catalog target snapshot guarded by a cheap, exact-enough
 /// release receipt. The opaque output is the normal Catalog V3 target output,
@@ -29,6 +29,7 @@ pub(crate) struct PreparedTargetCatalogHelper {
     pub(crate) prepared_adapter_version: u32,
     pub(crate) storage_root: String,
     pub(crate) target_path: String,
+    pub(crate) scan_exclusion_path: Option<String>,
     pub(crate) receipt: PreparedBundleHelper,
     pub(crate) directories: Vec<DirectoryReceipt>,
     pub(crate) output_json: String,
@@ -39,6 +40,7 @@ impl PreparedTargetCatalogHelper {
     pub(crate) fn capture(
         storage_root: &Path,
         target_path: &Path,
+        scan_exclusion_path: Option<&Path>,
         collection_id: impl Into<String>,
         output_json: String,
         exact_relative_paths: &[String],
@@ -52,6 +54,16 @@ impl PreparedTargetCatalogHelper {
                 storage_root.display()
             )
         })?;
+        if let Some(path) = scan_exclusion_path {
+            path.strip_prefix(target_path).map_err(|error| {
+                format!(
+                    "prepared exclusion {} is outside target {}: {error}",
+                    path.display(),
+                    target_path.display()
+                )
+            })?;
+        }
+        let receipt_path = scan_exclusion_path.unwrap_or(target_path);
         let output_sha256 = sha256_hex(output_json.as_bytes());
         let receipt = PreparedBundleHelper::capture(
             storage_root,
@@ -62,7 +74,7 @@ impl PreparedTargetCatalogHelper {
             payload_relative_paths,
             &[],
         )?;
-        let directories = capture_directory_receipts(storage_root, target_path)?;
+        let directories = capture_directory_receipts(storage_root, receipt_path)?;
         if inventory_extensions.is_empty() {
             return Err("prepared target has no catalog inventory extensions".to_string());
         }
@@ -73,6 +85,7 @@ impl PreparedTargetCatalogHelper {
                 crate::prepared_collections::PREPARED_COLLECTION_ADAPTER_VERSION,
             storage_root: storage_root.display().to_string(),
             target_path: target_path.display().to_string(),
+            scan_exclusion_path: scan_exclusion_path.map(|path| path.display().to_string()),
             receipt,
             directories,
             output_json,
@@ -115,6 +128,16 @@ impl PreparedTargetCatalogHelper {
         }
         if self.storage_root.trim().is_empty() || self.target_path.trim().is_empty() {
             return Err("prepared target catalog helper path is empty".to_string());
+        }
+        if let Some(scan_exclusion_path) = self.scan_exclusion_path.as_deref() {
+            Path::new(scan_exclusion_path)
+                .strip_prefix(Path::new(&self.target_path))
+                .map_err(|error| {
+                    format!(
+                        "prepared exclusion {scan_exclusion_path} is outside target {}: {error}",
+                        self.target_path
+                    )
+                })?;
         }
         self.receipt.validate()?;
         if self.directories.is_empty() {
@@ -763,6 +786,7 @@ mod tests {
         let helper = PreparedTargetCatalogHelper::capture(
             &root,
             &root.join("_DOS Games"),
+            None,
             "0mhz",
             "{\"discoveries\":[]}".to_string(),
             &["_DOS Games/Doom.mgl".to_string()],
@@ -782,6 +806,7 @@ mod tests {
         let helper = PreparedTargetCatalogHelper::capture(
             &root,
             &root.join("_DOS Games"),
+            None,
             "0mhz",
             "{\"discoveries\":[]}".to_string(),
             &["_DOS Games/Doom.mgl".to_string()],

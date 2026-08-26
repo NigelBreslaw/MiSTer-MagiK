@@ -5,9 +5,9 @@ MagiK can reuse launch artifacts supplied by collections that are already instal
 ## Supported adapters
 
 - **AmigaVision / MegaAGS**: discovers complete modern or legacy installations, indexes their game and demo listings, writes the exact selected title to the installation-local `shared/ags_boot`, and launches the real Amiga MGL.
-- **0MHz**: validates AO486 per-game MGL files under `_DOS Games`, including every referenced file and a reset action, then gives the original MGL to Main unchanged.
+- **0MHz**: recognizes 319 v0.04 launchers from a checked-in per-game release manifest and probes only their referenced AO486 payloads. Unknown, changed, and custom MGLs use the existing parser and validation fallback. Launch still gives the original MGL to Main unchanged.
 - **Neon68K**: discovers per-game MGL files under the current `_Computer/_X68000 Games` root and the legacy `_Computer/X68000 Games` root, validates X68000, setname, and HDF references, and preserves compatibility-folder metadata. Either exact launcher root may be a symlink; traversal follows only that root link, ignores every nested symlink, and prunes the real `_Genre` alias tree so MiSTer collection views cannot duplicate discoveries or expand unrelated scans.
-- **OneLoad64**: recognizes signed collection directory layouts, indexes primary and MultiLoad64 CRTs, excludes dump/alternative/extras trees, and loads CRTs through C64 file index 1.
+- **OneLoad64**: recognizes signed collection directory layouts, indexes primary and MultiLoad64 CRTs, excludes dump/alternative/extras trees, and loads CRTs through C64 file index 1. Its reusable helper covers and prunes only the recognized OneLoad64 install directory; other C64 directories remain on the normal scanner.
 
 Raw and generic entries remain visible. When prepared and generic rows have the same title and system, the prepared row sorts first.
 
@@ -31,7 +31,7 @@ ORDER BY collection_id, title;
 
 The catalog stamp includes the adapter version and metadata fingerprints for relevant nested MGL, CRT, HDF, and listing files. Runtime preparation validates collection artifacts again before Main handoff so a stale catalog fails safely.
 
-## Prebuilt bundle-helper prototype
+## Prepared bundle helpers
 
 The builder feature now contains a standalone exact-release helper model. A
 helper carries precomputed catalog entries, cryptographic receipts for small
@@ -42,16 +42,11 @@ file, older layout, partial install, or custom addition rejects the helper and
 calls the normal collection scanner. The helper therefore accelerates only
 content it can positively identify and cannot hide custom content.
 
-AmigaVision can use hashes of its generated game/demo listings and launcher
-MGLs. Neon68K and 0MHz need MGL inventories plus payload receipts. OneLoad64
-needs the primary CRT inventory while continuing to exclude its dump,
-alternative-format, extras, and documentation trees. 0MHz must be treated as a
-per-game manifest rather than a monolithic release because the project is
-explicitly designed for users to pick individual games.
-
-This is not connected to Catalog V3 publication yet. Production integration
-should generate the existing SQLite/NavPack artifacts from helper entries and
-retain the current adapters as the mismatch fallback.
+AmigaVision and Neon68K use exact target helpers. OneLoad64 uses a subtree
+helper so a personal C64 collection never becomes part of its cached output.
+0MHz uses the checked-in per-game manifest rather than a target snapshot because
+users can install any subset of the release. All feed the normal Catalog V3
+projection and retain their existing adapters as the mismatch fallback.
 
 ## Acceptance
 

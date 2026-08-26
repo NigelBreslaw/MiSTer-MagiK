@@ -3,8 +3,8 @@
 
 //! Shared metadata for collections that provide their own one-click launch artifacts.
 
-use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
@@ -12,14 +12,11 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::media_metadata::{MglInspection, inspect_mgl, resolve_mgl_payload_path};
 
-pub const PREPARED_COLLECTION_ADAPTER_VERSION: u32 = 6;
+pub const PREPARED_COLLECTION_ADAPTER_VERSION: u32 = 7;
 
 #[derive(Default)]
 pub(crate) struct PreparedPayloadIndex {
-    exact_files: HashSet<PathBuf>,
-    ascii_files: HashMap<String, PathBuf>,
-    ascii_collisions: HashSet<String>,
-    complete_roots: Vec<CompletePayloadRoot>,
+    live_presence: RefCell<HashMap<PathBuf, bool>>,
     lookup_files: Cell<usize>,
     lookup_missing: Cell<usize>,
     lookup_unknown: Cell<usize>,
@@ -34,38 +31,24 @@ pub(crate) struct PreparedPayloadIndexStats {
     pub(crate) live_fallbacks: usize,
 }
 
-struct CompletePayloadRoot {
-    exact: PathBuf,
-    ascii: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FilePresence {
-    File,
-    NotFile,
-    Unknown,
-}
-
 impl PreparedPayloadIndex {
-    pub(crate) fn from_library_roots(roots: &[String]) -> Self {
-        let mut index = Self::default();
-        for storage_root in storage_roots_for_library_roots(roots) {
-            for root in [
-                storage_root.join("_DOS Games"),
-                storage_root.join("games/AO486"),
-            ] {
-                index.add_complete_root(&root);
-            }
-        }
-        index
+    pub(crate) fn from_library_roots(_roots: &[String]) -> Self {
+        // Release-manifest lookups probe only payloads referenced by an
+        // installed launcher. Unknown/custom launchers retain the same live
+        // filesystem fallback without pre-walking the entire AO486 tree.
+        Self::default()
     }
 
     pub(crate) fn file_count(&self) -> usize {
-        self.exact_files.len()
+        self.live_presence
+            .borrow()
+            .values()
+            .filter(|present| **present)
+            .count()
     }
 
     pub(crate) fn complete_root_count(&self) -> usize {
-        self.complete_roots.len()
+        0
     }
 
     pub(crate) fn lookup_stats(&self) -> PreparedPayloadIndexStats {
@@ -79,13 +62,8 @@ impl PreparedPayloadIndex {
 
     pub(crate) fn resolve_0mhz_payload_path(&self, mgl_path: &Path, payload: &str) -> PathBuf {
         let local = resolve_mgl_payload_path(mgl_path, payload);
-        match self.presence(&local) {
-            FilePresence::File => return local,
-            FilePresence::Unknown => {
-                self.record_live_fallback();
-                return resolve_0mhz_payload_path(mgl_path, payload);
-            }
-            FilePresence::NotFile => {}
+        if self.path_is_file(&local) {
+            return local;
         }
         if payload.starts_with('/') || payload.starts_with("games/") {
             return local;
@@ -93,173 +71,39 @@ impl PreparedPayloadIndex {
         let Some(collection_payload) = zero_mhz_collection_payload_path(mgl_path, payload) else {
             return local;
         };
-        match self.presence(&collection_payload) {
-            FilePresence::File => collection_payload,
-            FilePresence::NotFile => local,
-            FilePresence::Unknown => {
-                self.record_live_fallback();
-                resolve_0mhz_payload_path(mgl_path, payload)
-            }
+        if self.path_is_file(&collection_payload) {
+            collection_payload
+        } else {
+            local
         }
     }
 
     pub(crate) fn path_is_file(&self, path: &Path) -> bool {
-        match self.presence(path) {
-            FilePresence::File => true,
-            FilePresence::NotFile => false,
-            FilePresence::Unknown => {
-                self.record_live_fallback();
-                path.is_file()
+        if let Some(present) = self.live_presence.borrow().get(path).copied() {
+            if present {
+                self.lookup_files
+                    .set(self.lookup_files.get().saturating_add(1));
+            } else {
+                self.lookup_missing
+                    .set(self.lookup_missing.get().saturating_add(1));
             }
+            return present;
         }
-    }
-
-    fn add_complete_root(&mut self, root: &Path) {
-        if std::fs::symlink_metadata(root)
-            .ok()
-            .is_none_or(|metadata| !metadata.file_type().is_dir())
-        {
-            return;
-        }
-        let mut complete = true;
-        let mut ascii_entries = HashMap::<String, PathBuf>::new();
-        for (entry_index, entry) in walkdir::WalkDir::new(root)
-            .follow_links(false)
-            .into_iter()
-            .enumerate()
-        {
-            if entry_index.is_multiple_of(16) {
-                crate::cooperative_work::checkpoint();
-            }
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(_) => {
-                    complete = false;
-                    continue;
-                }
-            };
-            if entry.path() == root {
-                continue;
-            }
-            let normalized = lexically_normalized_path(entry.path());
-            if let Some(key) = ascii_path_key(&normalized)
-                && ascii_entries
-                    .insert(key, normalized.clone())
-                    .is_some_and(|previous| previous != normalized)
-            {
-                complete = false;
-            }
-            let kind = entry.file_type();
-            if kind.is_file() {
-                self.insert_file(normalized);
-            } else if !kind.is_dir() {
-                // Path::is_file follows symlinks and custom library roots may
-                // contain other filesystem types. Keep every negative lookup
-                // under such a root conservative.
-                complete = false;
-            }
-        }
-        if complete {
-            let exact = lexically_normalized_path(root);
-            if !self
-                .complete_roots
-                .iter()
-                .any(|existing| existing.exact == exact)
-            {
-                self.complete_roots.push(CompletePayloadRoot {
-                    ascii: ascii_path_key(&exact),
-                    exact,
-                });
-            }
-        }
-    }
-
-    fn insert_file(&mut self, path: PathBuf) {
-        self.exact_files.insert(path.clone());
-        let Some(key) = ascii_path_key(&path) else {
-            return;
-        };
-        if self
-            .ascii_files
-            .insert(key.clone(), path.clone())
-            .is_some_and(|previous| previous != path)
-        {
-            self.ascii_collisions.insert(key);
-        }
-    }
-
-    fn presence(&self, path: &Path) -> FilePresence {
-        let exact = lexically_normalized_path(path);
-        if self.exact_files.contains(&exact) {
-            return self.record_presence(FilePresence::File);
-        }
-        let Some(ascii) = ascii_path_key(&exact) else {
-            return self.record_presence(FilePresence::Unknown);
-        };
-        if self.ascii_collisions.contains(&ascii) {
-            return self.record_presence(FilePresence::Unknown);
-        }
-        if self.ascii_files.contains_key(&ascii) {
-            // The mounted MiSTer exFAT volume is case-insensitive, while host
-            // fixtures may be case-sensitive. A folded-only match therefore
-            // needs the live filesystem fallback to preserve both contracts.
-            return self.record_presence(FilePresence::Unknown);
-        }
-        if self.complete_roots.iter().any(|root| {
-            root.ascii
-                .as_deref()
-                .is_some_and(|root| ascii_path_is_within(&ascii, root))
-        }) {
-            return self.record_presence(FilePresence::NotFile);
-        }
-        self.record_presence(FilePresence::Unknown)
-    }
-
-    fn record_presence(&self, presence: FilePresence) -> FilePresence {
-        let counter = match presence {
-            FilePresence::File => &self.lookup_files,
-            FilePresence::NotFile => &self.lookup_missing,
-            FilePresence::Unknown => &self.lookup_unknown,
-        };
-        counter.set(counter.get().saturating_add(1));
-        presence
-    }
-
-    fn record_live_fallback(&self) {
         self.live_fallbacks
             .set(self.live_fallbacks.get().saturating_add(1));
-    }
-}
-
-fn lexically_normalized_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::Prefix(prefix) => {
-                normalized.push(prefix.as_os_str());
-            }
-            std::path::Component::RootDir => normalized.push(Path::new("/")),
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                let _ = normalized.pop();
-            }
-            std::path::Component::Normal(value) => normalized.push(value),
+        let present = path.is_file();
+        self.live_presence
+            .borrow_mut()
+            .insert(path.to_path_buf(), present);
+        if present {
+            self.lookup_files
+                .set(self.lookup_files.get().saturating_add(1));
+        } else {
+            self.lookup_missing
+                .set(self.lookup_missing.get().saturating_add(1));
         }
+        present
     }
-    normalized
-}
-
-fn ascii_path_key(path: &Path) -> Option<String> {
-    path.to_str()
-        .filter(|path| path.is_ascii())
-        .map(str::to_ascii_lowercase)
-}
-
-fn ascii_path_is_within(path: &str, root: &str) -> bool {
-    path == root
-        || path
-            .strip_prefix(root)
-            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 pub fn storage_roots_for_library_roots(roots: &[String]) -> Vec<PathBuf> {
@@ -286,41 +130,6 @@ fn storage_root_for_library_root(root: &Path) -> PathBuf {
         prefix.push(component.as_os_str());
     }
     root.to_path_buf()
-}
-
-#[cfg(test)]
-mod cooperative_tests {
-    use super::*;
-    use std::sync::mpsc;
-    use std::time::Duration;
-
-    #[test]
-    fn prepared_payload_walk_respects_background_gate() {
-        let _test_lock = crate::cooperative_work::TEST_LOCK.lock().unwrap();
-        let root = crate::test_support::unique_temp_dir("prepared-payload-gate");
-        let payload_root = root.join("_DOS Games");
-        std::fs::create_dir_all(&payload_root).unwrap();
-        for index in 0..40 {
-            std::fs::write(payload_root.join(format!("game-{index}.vhd")), b"x").unwrap();
-        }
-        crate::cooperative_work::set_background_allowed(false);
-        let (started_tx, started_rx) = mpsc::channel();
-        let (done_tx, done_rx) = mpsc::channel();
-        let worker_root = root.clone();
-        let worker = std::thread::spawn(move || {
-            let _scope = crate::cooperative_work::BackgroundScope::enter();
-            started_tx.send(()).unwrap();
-            let index =
-                PreparedPayloadIndex::from_library_roots(&[worker_root.display().to_string()]);
-            done_tx.send(index.file_count()).unwrap();
-        });
-        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
-        crate::cooperative_work::set_background_allowed(true);
-        assert_eq!(done_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 40);
-        worker.join().unwrap();
-        std::fs::remove_dir_all(root).unwrap();
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -668,12 +477,7 @@ pub(crate) fn oneload64_provenance(path: &Path) -> Option<PreparedLaunchProvenan
     {
         return None;
     }
-    let install_root = path.ancestors().find(|ancestor| {
-        ancestor
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(is_oneload64_install_name)
-    })?;
+    let install_root = oneload64_install_root(path)?;
     if !oneload64_root_has_signature(install_root) || oneload64_path_is_excluded(path, install_root)
     {
         return None;
@@ -681,6 +485,15 @@ pub(crate) fn oneload64_provenance(path: &Path) -> Option<PreparedLaunchProvenan
     Some(PreparedLaunchProvenance::prepared(
         PreparedCollectionId::OneLoad64,
     ))
+}
+
+pub(crate) fn oneload64_install_root(path: &Path) -> Option<&Path> {
+    path.ancestors().find(|ancestor| {
+        ancestor
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(is_oneload64_install_name)
+    })
 }
 
 fn oneload64_root_has_signature(root: &Path) -> bool {
@@ -878,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_payload_index_validates_split_0mhz_layout_without_live_fallback() {
+    fn prepared_payload_index_validates_split_0mhz_layout_with_bounded_probes() {
         let storage = fixture_dir("payload-index-split");
         let launchers = storage.join("_DOS Games");
         let payload = storage.join("games/AO486/media/doom/doom.vhd");
@@ -900,7 +713,7 @@ mod tests {
         let index = PreparedPayloadIndex::from_library_roots(&roots);
         let inspection = inspect_mgl(&mgl).expect("inspect MGL");
 
-        assert_eq!(index.complete_root_count(), 2);
+        assert_eq!(index.complete_root_count(), 0);
         assert_eq!(
             index.resolve_0mhz_payload_path(&mgl, "media/doom/doom.vhd"),
             payload
@@ -910,12 +723,12 @@ mod tests {
         let stats = index.lookup_stats();
         assert!(stats.files >= 3);
         assert_eq!(stats.unknown, 0);
-        assert_eq!(stats.live_fallbacks, 0);
+        assert_eq!(stats.live_fallbacks, 2);
         let _ = std::fs::remove_dir_all(storage);
     }
 
     #[test]
-    fn prepared_payload_index_proves_missing_payload_inside_complete_roots() {
+    fn prepared_payload_index_rejects_missing_payload_with_bounded_probes() {
         let storage = fixture_dir("payload-index-missing");
         let launchers = storage.join("_DOS Games");
         let payload_root = storage.join("games/AO486");
@@ -944,7 +757,7 @@ mod tests {
         let stats = index.lookup_stats();
         assert!(stats.missing >= 2);
         assert_eq!(stats.unknown, 0);
-        assert_eq!(stats.live_fallbacks, 0);
+        assert_eq!(stats.live_fallbacks, 2);
         let _ = std::fs::remove_dir_all(storage);
     }
 
@@ -979,8 +792,8 @@ mod tests {
             .expect("outside payload uses live fallback");
 
         let stats = index.lookup_stats();
-        assert!(stats.unknown >= 2);
-        assert!(stats.live_fallbacks >= 2);
+        assert_eq!(stats.unknown, 0);
+        assert_eq!(stats.live_fallbacks, 1);
         let _ = std::fs::remove_dir_all(storage);
     }
 
