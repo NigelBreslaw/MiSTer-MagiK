@@ -275,9 +275,7 @@ fn scan_directory(
                 if rule.disposition == PayloadDisposition::Playable =>
             {
                 stats.candidate_files += 1;
-                if let Some(scanned) = direct_game(profile, &path, &rule, stats) {
-                    games.push(scanned);
-                }
+                games.push(direct_game(profile, &path, &rule));
             }
             ProfilePathClass::NotMatched
                 if path
@@ -294,31 +292,13 @@ fn scan_directory(
     }
 }
 
-fn direct_game(
-    profile: &LaunchProfile,
-    path: &Path,
-    rule: &PayloadRule,
-    stats: &mut GenericSystemStats,
-) -> Option<ScannedGame> {
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(_) => {
-            stats.read_errors += 1;
-            return None;
-        }
-    };
+fn direct_game(profile: &LaunchProfile, path: &Path, rule: &PayloadRule) -> ScannedGame {
     let launch_ref = path.to_string_lossy().into_owned();
-    let signature = format!(
-        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
-        profile.system_id,
-        launch_ref,
-        metadata.len(),
-        mtime_secs(&metadata)
-    );
-    Some(ScannedGame {
+    let signature = format!("{}\u{1f}{}", profile.system_id, launch_ref);
+    ScannedGame {
         game: system_game(profile, path, &launch_ref, rule),
         signature,
-    })
+    }
 }
 
 fn scan_archive(
@@ -345,10 +325,7 @@ fn scan_archive(
             stats.archive_members += entries.len();
             for entry in entries {
                 let member_path = PathBuf::from(&entry.entry_path);
-                let signature = format!(
-                    "{}\u{1f}{}\u{1f}{}\u{1f}{}",
-                    profile.system_id, entry.launch_ref, found.size, found.mtime_secs
-                );
+                let signature = format!("{}\u{1f}{}", profile.system_id, entry.launch_ref);
                 games.push(ScannedGame {
                     game: system_game(profile, &member_path, &entry.launch_ref, &entry.rule),
                     signature,

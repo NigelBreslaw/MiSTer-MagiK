@@ -33,7 +33,9 @@ directories, accepts only payloads supported by the installed core, reads ZIP
 central directories without extraction, and records direct launch plans.
 Saturn cue-track files and other profile-defined support media are excluded.
 Neo Geo ROM-set ZIPs are treated as one launchable game rather than expanded
-into misleading member rows.
+into misleading member rows. Direct files are not opened, hashed, or statted;
+the catalog fingerprint covers the path-derived rows because replacing ROM
+contents at the same path does not change the catalog or launch plan.
 
 ```bash
 five-system-catalog-prototype snapshot-reference \
