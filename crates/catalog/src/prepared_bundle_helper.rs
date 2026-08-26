@@ -15,6 +15,112 @@ use std::fs;
 use std::path::{Component, Path};
 
 pub const PREPARED_BUNDLE_HELPER_SCHEMA: &str = "mister-magik-prepared-bundle-helper-v1";
+pub(crate) const PREPARED_TARGET_CATALOG_HELPER_SCHEMA: &str =
+    "mister-magik-prepared-target-catalog-helper-v1";
+
+/// A production catalog target snapshot guarded by a cheap, exact-enough
+/// release receipt. The opaque output is the normal Catalog V3 target output,
+/// so activation still goes through the ordinary projection and publication
+/// path.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct PreparedTargetCatalogHelper {
+    pub(crate) schema: String,
+    pub(crate) catalog_schema: u32,
+    pub(crate) prepared_adapter_version: u32,
+    pub(crate) storage_root: String,
+    pub(crate) target_path: String,
+    pub(crate) receipt: PreparedBundleHelper,
+    pub(crate) output_json: String,
+    pub(crate) output_sha256: String,
+}
+
+impl PreparedTargetCatalogHelper {
+    pub(crate) fn capture(
+        storage_root: &Path,
+        target_path: &Path,
+        collection_id: impl Into<String>,
+        output_json: String,
+        exact_relative_paths: &[String],
+        payload_relative_paths: &[String],
+        inventory_extensions: &[String],
+    ) -> Result<Self, String> {
+        let relative_target = target_path.strip_prefix(storage_root).map_err(|error| {
+            format!(
+                "prepared target {} is outside storage root {}: {error}",
+                target_path.display(),
+                storage_root.display()
+            )
+        })?;
+        let target_relative = path_to_slash(relative_target)?;
+        let output_sha256 = format!("{:x}", Sha256::digest(output_json.as_bytes()));
+        let receipt = PreparedBundleHelper::capture(
+            storage_root,
+            collection_id,
+            &output_sha256,
+            Vec::new(),
+            exact_relative_paths,
+            payload_relative_paths,
+            &[InventoryRule {
+                relative_root: target_relative,
+                extensions: inventory_extensions.to_vec(),
+                excluded_components: Vec::new(),
+            }],
+        )?;
+        Ok(Self {
+            schema: PREPARED_TARGET_CATALOG_HELPER_SCHEMA.to_string(),
+            catalog_schema: crate::catalog_config::SCHEMA_VERSION,
+            prepared_adapter_version:
+                crate::prepared_collections::PREPARED_COLLECTION_ADAPTER_VERSION,
+            storage_root: storage_root.display().to_string(),
+            target_path: target_path.display().to_string(),
+            receipt,
+            output_json,
+            output_sha256,
+        })
+    }
+
+    pub(crate) fn from_json(bytes: &[u8]) -> Result<Self, String> {
+        let helper: Self = serde_json::from_slice(bytes)
+            .map_err(|error| format!("decode prepared target catalog helper: {error}"))?;
+        helper.validate()?;
+        Ok(helper)
+    }
+
+    pub(crate) fn to_json(&self) -> Result<Vec<u8>, String> {
+        self.validate()?;
+        serde_json::to_vec(self)
+            .map_err(|error| format!("encode prepared target catalog helper: {error}"))
+    }
+
+    pub(crate) fn activate(&self) -> Result<(), String> {
+        self.validate()?;
+        self.receipt.verify_exact(Path::new(&self.storage_root))
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != PREPARED_TARGET_CATALOG_HELPER_SCHEMA {
+            return Err(format!(
+                "unsupported prepared target catalog helper schema {}",
+                self.schema
+            ));
+        }
+        if self.catalog_schema != crate::catalog_config::SCHEMA_VERSION
+            || self.prepared_adapter_version
+                != crate::prepared_collections::PREPARED_COLLECTION_ADAPTER_VERSION
+        {
+            return Err("prepared target catalog helper software version changed".to_string());
+        }
+        if self.storage_root.trim().is_empty() || self.target_path.trim().is_empty() {
+            return Err("prepared target catalog helper path is empty".to_string());
+        }
+        self.receipt.validate()?;
+        let actual = format!("{:x}", Sha256::digest(self.output_json.as_bytes()));
+        if actual != self.output_sha256 {
+            return Err("prepared target catalog output checksum changed".to_string());
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PreparedBundleHelper {
@@ -177,6 +283,11 @@ impl PreparedBundleHelper {
                 })
             }
         }
+    }
+
+    pub(crate) fn verify_exact(&self, root: &Path) -> Result<(), String> {
+        self.validate()?;
+        self.exact_match(root)
     }
 
     fn validate(&self) -> Result<(), String> {

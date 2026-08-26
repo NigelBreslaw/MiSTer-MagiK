@@ -5960,6 +5960,8 @@ const CATALOG_LIFECYCLE_REMOTE_DIR: &str = "/tmp/mister-magik/catalog-lifecycle-
 const CATALOG_BUILD_REBUILD_REMOTE_DIR: &str =
     "/media/fat/mister-magik-dev/catalog-benchmarks/catalog-build-rebuild";
 const CATALOG_BUILD_REBUILD_SOURCE_DIR: &str = "/tmp/mister-magik/catalog-build-rebuild-source";
+const PREPARED_BUNDLE_HELPER_REMOTE_DIR: &str =
+    "/media/fat/mister-magik-dev/prepared-bundle-helpers";
 const CATALOG_BUILD_REBUILD_ARCADE_ROOT: &str = "/media/fat/_Arcade";
 const CATALOG_BUILD_REBUILD_SNES_ROOT: &str = "/media/fat/games/SNES";
 const CATALOG_BUILD_REBUILD_C64_ROOT: &str = "/media/fat/games/C64";
@@ -23008,13 +23010,27 @@ fn catalog_lifecycle_launcher_env() -> Vec<(String, String)> {
 
 fn catalog_build_rebuild_prepare_command() -> String {
     let safety = platform_safety_script();
+    let helper_setup = match std::env::var("MISTER_PREPARED_BUNDLE_BENCH_MODE").as_deref() {
+        Ok("capture") => format!(
+            "rm -rf {helpers}; mkdir -p {helpers};",
+            helpers = sh(PREPARED_BUNDLE_HELPER_REMOTE_DIR)
+        ),
+        _ => String::new(),
+    };
+    let cold = if std::env::var_os("MISTER_PREPARED_BUNDLE_BENCH_COLD").is_some() {
+        "sync; test -w /proc/sys/vm/drop_caches; echo 3 > /proc/sys/vm/drop_caches;"
+    } else {
+        ""
+    };
     format!(
-        "set -eu; root={root}; source={source}; test -d {arcade}; test -d {snes}; test -r {snes}; test -d {c64}; test -r {c64}; rm -rf \"$root\" \"$source\"; mkdir -p \"$root\" \"$source/fixture/games/SNES\" \"$source/sqlite-build\" \"$source/diagnostics\"; printf '%s\\n' 'MISTER-MAGIK-CATALOG-BENCH-SNES-00000001' > \"$source/fixture/games/SNES/Synthetic SNES 00000001.sfc\"; {safety}",
+        "set -eu; root={root}; source={source}; test -d {arcade}; test -d {snes}; test -r {snes}; test -d {c64}; test -r {c64}; rm -rf \"$root\" \"$source\"; mkdir -p \"$root\" \"$source/fixture/games/SNES\" \"$source/sqlite-build\" \"$source/diagnostics\"; printf '%s\\n' 'MISTER-MAGIK-CATALOG-BENCH-SNES-00000001' > \"$source/fixture/games/SNES/Synthetic SNES 00000001.sfc\"; {helper_setup} {cold} {safety}",
         root = sh(CATALOG_BUILD_REBUILD_REMOTE_DIR),
         source = sh(CATALOG_BUILD_REBUILD_SOURCE_DIR),
         arcade = sh(CATALOG_BUILD_REBUILD_ARCADE_ROOT),
         snes = sh(CATALOG_BUILD_REBUILD_SNES_ROOT),
         c64 = sh(CATALOG_BUILD_REBUILD_C64_ROOT),
+        helper_setup = helper_setup,
+        cold = cold,
         safety = safety,
     )
 }
@@ -23139,12 +23155,24 @@ fn catalog_production_registry_identity(session: &Session) -> Result<String> {
 }
 
 fn catalog_full_build_rebuild_launcher_env() -> Vec<(String, String)> {
-    catalog_build_rebuild_launcher_env()
+    let mut env = catalog_build_rebuild_launcher_env()
         .into_iter()
         .filter(|(key, _)| {
             key != "MISTER_LIBRARY_ROOTS" && key != "MISTER_LIBRARY_TARGET_ALLOWLIST"
         })
-        .collect()
+        .collect::<Vec<_>>();
+    match std::env::var("MISTER_PREPARED_BUNDLE_BENCH_MODE").as_deref() {
+        Ok("capture") => env.push((
+            "MISTER_PREPARED_BUNDLE_CAPTURE_DIR".into(),
+            PREPARED_BUNDLE_HELPER_REMOTE_DIR.into(),
+        )),
+        Ok("helper") => env.push((
+            "MISTER_PREPARED_BUNDLE_HELPER_DIR".into(),
+            PREPARED_BUNDLE_HELPER_REMOTE_DIR.into(),
+        )),
+        _ => {}
+    }
+    env
 }
 
 struct CatalogBuildRebuildLegOptions {
