@@ -2623,7 +2623,7 @@ fn execute_arcade_catalog_prototype_cold(
     reporter.emit(
         EventKind::Progress,
         "profile",
-        "benchmarking parallel and single-thread Arcade-only builds after separate controlled reboots",
+        "benchmarking cold active Arcade builds from an immutable Update_All base after separate controlled reboots",
         Some(20),
     )?;
     let detail = device.profile_arcade_catalog_prototype(binary, output_dir.clone())?;
@@ -2646,11 +2646,11 @@ fn execute_arcade_catalog_prototype_cold(
 
 fn evaluate_arcade_catalog_prototype_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-arcade-catalog-prototype-cold-v1")
+        != Some("mister-magik-arcade-catalog-prototype-cold-v2")
         || summary.get("scenario").and_then(Value::as_str) != Some("arcade-catalog-prototype-cold")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
     {
-        return Err("Arcade catalog prototype benchmark is not a passing v1 report".into());
+        return Err("Arcade catalog prototype benchmark is not a passing v2 report".into());
     }
     let samples = summary
         .get("samples")
@@ -2665,7 +2665,7 @@ fn evaluate_arcade_catalog_prototype_summary(summary: &Value) -> AgentResult<()>
     for sample in samples {
         if sample.get("reboot_verified").and_then(Value::as_bool) != Some(true)
             || sample.get("cache_drop_verified").and_then(Value::as_bool) != Some(true)
-            || sample.pointer("/report/command").and_then(Value::as_str) != Some("build")
+            || sample.pointer("/report/command").and_then(Value::as_str) != Some("build-active")
             || sample
                 .pointer("/report/build/active_records")
                 .and_then(Value::as_u64)

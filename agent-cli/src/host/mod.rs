@@ -20350,6 +20350,8 @@ const LAUNCH_RETURN_ONCE_STEP_DEADLINE_MS: u64 = 2_000;
 const ARCADE_CATALOG_PROTOTYPE_REMOTE_ROOT: &str =
     "/media/fat/mister-magik-dev/catalog-benchmarks/arcade-catalog-prototype";
 const ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY: &str = "/media/fat/mister-magik-dev/catalog-benchmarks/arcade-catalog-prototype/arcade-catalog-prototype";
+const ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE: &str =
+    "/media/fat/mister-magik-dev/catalog-benchmarks/arcade-catalog-prototype/source-base.bin";
 const ARCADE_CATALOG_PROTOTYPE_UPDATER_INDEX: &str =
     "/media/fat/mister-magik-dev/arcade-updater-index-v1.lz4b";
 
@@ -20412,6 +20414,38 @@ fn profile_arcade_catalog_prototype_run(
             index = sh(ARCADE_CATALOG_PROTOTYPE_UPDATER_INDEX),
         ),
     )?;
+    let compile_arguments = [
+        "--updater-index".to_string(),
+        ARCADE_CATALOG_PROTOTYPE_UPDATER_INDEX.to_string(),
+        "--output".to_string(),
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE.to_string(),
+    ];
+    let compile_command = remote_subcommand(
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY,
+        "compile-base",
+        &compile_arguments,
+    );
+    let compile_output = exec_checked_output(
+        &session,
+        "compile immutable Arcade prototype source base",
+        &compile_command,
+    )?;
+    let compile_report: Value = serde_json::from_str(compile_output.stdout.trim())
+        .map_err(|error| format!("Arcade catalog prototype base output is not JSON: {error}"))?;
+    if compile_report.get("command").and_then(Value::as_str) != Some("compile-base") {
+        return Err("Arcade catalog prototype base output has the wrong command".into());
+    }
+    exec_checked(
+        &session,
+        "persist immutable Arcade prototype source base",
+        &format!(
+            "set -eu; test -s {base}; sync",
+            base = sh(ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE),
+        ),
+    )?;
+    let base_local = output_dir.join("source-base.bin");
+    get(&session, ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE, &base_local)?;
+    let base_sha256 = file_sha256(base_local)?;
     drop(session);
 
     let mut samples = Vec::new();
@@ -20421,6 +20455,7 @@ fn profile_arcade_catalog_prototype_run(
             output_dir,
             arm,
             single_thread,
+            &base_sha256,
         )?);
     }
     let active_outputs_identical = samples
@@ -20460,10 +20495,12 @@ fn profile_arcade_catalog_prototype_run(
         "failed"
     };
     let summary = json!({
-        "schema": "mister-magik-arcade-catalog-prototype-cold-v1",
+        "schema": "mister-magik-arcade-catalog-prototype-cold-v2",
         "scenario": "arcade-catalog-prototype-cold",
         "status": status,
         "binary_sha256": binary_sha256,
+        "source_base_sha256": base_sha256,
+        "source_base_compile": compile_report,
         "samples": samples,
         "validation": {
             "active_outputs_identical": active_outputs_identical,
@@ -20484,6 +20521,7 @@ fn run_arcade_catalog_prototype_cold_sample(
     output_dir: &Path,
     arm: &str,
     single_thread: bool,
+    base_sha256: &str,
 ) -> Result<Value> {
     let session = connect_with(&config.connection, 10)?;
     exec_checked(
@@ -20513,12 +20551,11 @@ fn run_arcade_catalog_prototype_cold_sample(
         &acknowledged_main_command("mister_magik_suspend"),
     )?;
 
-    let base_remote = format!("{ARCADE_CATALOG_PROTOTYPE_REMOTE_ROOT}/base-{arm}.bin");
     let active_remote = format!("{ARCADE_CATALOG_PROTOTYPE_REMOTE_ROOT}/active-{arm}.bin");
     let clear_command = format!(
-        "set -eu; rm -f {base} {active}; sync; test -w /proc/sys/vm/drop_caches; echo 3 > /proc/sys/vm/drop_caches",
-        base = sh(&base_remote),
+        "set -eu; rm -f {active}; test -s {base}; sync; test -w /proc/sys/vm/drop_caches; echo 3 > /proc/sys/vm/drop_caches",
         active = sh(&active_remote),
+        base = sh(ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE),
     );
     exec_checked(
         &session,
@@ -20526,12 +20563,10 @@ fn run_arcade_catalog_prototype_cold_sample(
         &clear_command,
     )?;
     let mut arguments = vec![
-        "build".to_string(),
-        "--updater-index".to_string(),
-        ARCADE_CATALOG_PROTOTYPE_UPDATER_INDEX.to_string(),
-        "--base-output".to_string(),
-        base_remote.clone(),
-        "--active-output".to_string(),
+        "build-active".to_string(),
+        "--base".to_string(),
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE.to_string(),
+        "--output".to_string(),
         active_remote.clone(),
     ];
     if single_thread {
@@ -20549,21 +20584,18 @@ fn run_arcade_catalog_prototype_cold_sample(
     )?;
     let report: Value = serde_json::from_str(output.stdout.trim())
         .map_err(|error| format!("Arcade catalog prototype {arm} output is not JSON: {error}"))?;
-    if report.get("command").and_then(Value::as_str) != Some("build") {
+    if report.get("command").and_then(Value::as_str) != Some("build-active") {
         return Err(format!("Arcade catalog prototype {arm} output has the wrong command").into());
     }
 
     let arm_output_dir = output_dir.join(arm);
     fs::create_dir_all(&arm_output_dir)?;
-    let base_local = arm_output_dir.join("base.bin");
     let active_local = arm_output_dir.join("active.bin");
-    get(&session, &base_remote, &base_local)?;
     get(&session, &active_remote, &active_local)?;
     fs::write(
         arm_output_dir.join("report.json"),
         format!("{}\n", serde_json::to_string_pretty(&report)?),
     )?;
-    let base_sha256 = file_sha256(base_local)?;
     let active_sha256 = file_sha256(active_local)?;
     exec_checked(
         &session,
