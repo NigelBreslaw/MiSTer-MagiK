@@ -9,7 +9,7 @@ use crate::model::{
 };
 use crate::scan::{InstalledMra, RomInventory, scan_installed_mras, scan_rom_inventory};
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -334,45 +334,96 @@ fn probe_indexed_candidates(
     parallel: bool,
     verify_index_size: bool,
 ) -> Result<Vec<InstalledMra>, String> {
-    let probe = |slice: &[BaseCandidate]| -> Result<Vec<InstalledMra>, String> {
+    let mut directories = BTreeMap::<PathBuf, Vec<&BaseCandidate>>::new();
+    for candidate in candidates {
+        if matches!(
+            rom_eligibility(&candidate.rom, roms),
+            RomEligibility::Missing
+        ) {
+            continue;
+        }
+        let suffix = candidate
+            .path
+            .strip_prefix("_Arcade/")
+            .ok_or_else(|| format!("invalid updater Arcade path {}", candidate.path))?;
+        let suffix = Path::new(suffix);
+        let parent = suffix.parent().unwrap_or_else(|| Path::new(""));
+        directories
+            .entry(parent.to_path_buf())
+            .or_default()
+            .push(candidate);
+    }
+    let directories = directories.into_iter().collect::<Vec<_>>();
+    let probe = |slice: &[(PathBuf, Vec<&BaseCandidate>)]| -> Result<Vec<InstalledMra>, String> {
         let mut installed = Vec::new();
-        for candidate in slice {
-            if matches!(
-                rom_eligibility(&candidate.rom, roms),
-                RomEligibility::Missing
-            ) {
-                continue;
-            }
-            let suffix = candidate
-                .path
-                .strip_prefix("_Arcade/")
-                .ok_or_else(|| format!("invalid updater Arcade path {}", candidate.path))?;
-            let full_path = arcade_root.join(suffix);
-            let metadata = match fs::symlink_metadata(&full_path) {
-                Ok(metadata) => metadata,
+        for (relative_directory, candidates) in slice {
+            let full_directory = arcade_root.join(relative_directory);
+            let entries = match fs::read_dir(&full_directory) {
+                Ok(entries) => entries,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(error) => {
                     return Err(format!(
-                        "probe updater path {}: {error}",
-                        full_path.display()
+                        "read indexed Arcade directory {}: {error}",
+                        full_directory.display()
                     ));
                 }
             };
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                continue;
+            let mut expected = HashMap::with_capacity(candidates.len());
+            for candidate in candidates {
+                let file_name = Path::new(&candidate.path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| format!("invalid updater Arcade path {}", candidate.path))?;
+                expected.insert(file_name.to_ascii_lowercase(), *candidate);
             }
-            installed.push(InstalledMra {
-                full_path,
-                relative_path: candidate.path.clone(),
-                path_key: candidate.path_key.clone(),
-                size: verify_index_size.then_some(metadata.len()),
-            });
+            for entry in entries {
+                let entry = entry.map_err(|error| {
+                    format!(
+                        "enumerate indexed Arcade directory {}: {error}",
+                        full_directory.display()
+                    )
+                })?;
+                let name_key = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                let Some(candidate) = expected.remove(&name_key) else {
+                    continue;
+                };
+                let file_type = entry.file_type().map_err(|error| {
+                    format!(
+                        "inspect indexed Arcade path {}: {error}",
+                        entry.path().display()
+                    )
+                })?;
+                if file_type.is_symlink() || !file_type.is_file() {
+                    continue;
+                }
+                let size = if verify_index_size {
+                    Some(
+                        entry
+                            .metadata()
+                            .map_err(|error| {
+                                format!(
+                                    "read indexed Arcade size {}: {error}",
+                                    entry.path().display()
+                                )
+                            })?
+                            .len(),
+                    )
+                } else {
+                    None
+                };
+                installed.push(InstalledMra {
+                    full_path: entry.path(),
+                    relative_path: candidate.path.clone(),
+                    path_key: candidate.path_key.clone(),
+                    size,
+                });
+            }
         }
         Ok(installed)
     };
-    let mut installed = if parallel && candidates.len() > 1 {
-        let middle = candidates.len() / 2;
-        let (left, right) = candidates.split_at(middle);
+    let mut installed = if parallel && directories.len() > 1 {
+        let middle = directories.len() / 2;
+        let (left, right) = directories.split_at(middle);
         std::thread::scope(|scope| {
             let left_worker = scope.spawn(|| probe(left));
             let right_worker = scope.spawn(|| probe(right));
@@ -387,7 +438,7 @@ fn probe_indexed_candidates(
             Ok::<_, String>(installed)
         })?
     } else {
-        probe(candidates)?
+        probe(&directories)?
     };
     installed.sort_by(|left, right| left.path_key.cmp(&right.path_key));
     Ok(installed)
