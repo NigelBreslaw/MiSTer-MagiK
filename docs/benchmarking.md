@@ -17,8 +17,10 @@ correctness stress, not rendering-cadence qualification.
 `scripts/agent benchmark [SCENARIO]` is the only agent-facing performance
 workflow. Scenarios are a closed typed registry rather than a flag matrix. It
 never builds, deploys, or replaces platform files. The fixed `cold-boot`
-scenario is the sole benchmark allowed to issue one supervised Linux reboot;
-all other scenarios must leave the device boot unchanged. The
+scenario may issue one supervised Linux reboot. The isolated
+`arcade-catalog-prototype-cold` scenario may issue its two hard-coded,
+separately verified reboot arms so parallel and single-thread active builds are
+both cache-cold. All other scenarios must leave the device boot unchanged. The
 installed platform manifest and its hashes are the benchmark identity, and its
 delivery reconciliation against the clean local Git HEAD must be a no-op.
 Host-only benchmark tooling changes therefore do not force an identical runtime
@@ -53,6 +55,7 @@ Supported scenarios:
 - `particle-profile`
 - `catalog-lifecycle`
 - `catalog-resume-validation`
+- `arcade-catalog-prototype-cold`
 - `launch-return`
 - `launch-return-once`
 - `launch-return-fallback`

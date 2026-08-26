@@ -76,7 +76,7 @@ fn command_build_active(options: &Options) -> Result<(), String> {
             "hbmame-rom-dir",
             "output",
         ],
-        &["single-thread", "verify-index-size", "full-walk"],
+        &["parallel-probe", "verify-index-size", "full-walk"],
     )?;
     let base_path = options.required_path("base")?;
     let output_path = options.required_path("output")?;
@@ -92,7 +92,7 @@ fn command_build_active(options: &Options) -> Result<(), String> {
         &arcade_root,
         &mame_directories,
         &hbmame_directories,
-        !options.flag("single-thread"),
+        options.flag("parallel-probe"),
         options.flag("verify-index-size"),
         options.flag("full-walk"),
     )?;
@@ -104,7 +104,7 @@ fn command_build_active(options: &Options) -> Result<(), String> {
         "output": output_path,
         "output_bytes": encoded.len(),
         "source_sha256": hex(&active.source_sha256),
-        "parallel_inventory": !options.flag("single-thread"),
+        "parallel_inventory": options.flag("parallel-probe"),
         "verify_index_size": options.flag("verify-index-size"),
         "full_walk": options.flag("full-walk"),
         "write_us": elapsed_us(write_started),
@@ -124,7 +124,7 @@ fn command_build(options: &Options) -> Result<(), String> {
             "mame-rom-dir",
             "hbmame-rom-dir",
         ],
-        &["single-thread", "verify-index-size", "full-walk"],
+        &["parallel-probe", "verify-index-size", "full-walk"],
     )?;
     let updater_path = options.required_path("updater-index")?;
     let base_output = options.required_path("base-output")?;
@@ -147,7 +147,7 @@ fn command_build(options: &Options) -> Result<(), String> {
         &arcade_root,
         &mame_directories,
         &hbmame_directories,
-        !options.flag("single-thread"),
+        options.flag("parallel-probe"),
         options.flag("verify-index-size"),
         options.flag("full-walk"),
     )?;
@@ -161,7 +161,7 @@ fn command_build(options: &Options) -> Result<(), String> {
         "active_output": active_output,
         "active_output_bytes": active_bytes.len(),
         "source_sha256": hex(&active.source_sha256),
-        "parallel_inventory": !options.flag("single-thread"),
+        "parallel_inventory": options.flag("parallel-probe"),
         "verify_index_size": options.flag("verify-index-size"),
         "full_walk": options.flag("full-walk"),
         "base_write_us": base_write_us,
@@ -231,7 +231,7 @@ impl Options {
             let name = argument
                 .strip_prefix("--")
                 .ok_or_else(|| format!("expected an option, found {argument}"))?;
-            if matches!(name, "single-thread" | "verify-index-size" | "full-walk") {
+            if matches!(name, "parallel-probe" | "verify-index-size" | "full-walk") {
                 options.flags.insert(name.to_string());
                 index += 1;
                 continue;
@@ -359,7 +359,7 @@ fn elapsed_us(started: Instant) -> u64 {
 }
 
 fn usage() -> String {
-    "Usage:\n  arcade-catalog-prototype compile-base --updater-index PATH --output PATH\n  arcade-catalog-prototype build-active --base PATH --output PATH [--arcade-root PATH] [--mame-rom-dir PATH ...] [--hbmame-rom-dir PATH ...] [--single-thread] [--verify-index-size] [--full-walk]\n  arcade-catalog-prototype build --updater-index PATH --base-output PATH --active-output PATH [inventory options]\n  arcade-catalog-prototype inspect --input PATH"
+    "Usage:\n  arcade-catalog-prototype compile-base --updater-index PATH --output PATH\n  arcade-catalog-prototype build-active --base PATH --output PATH [--arcade-root PATH] [--mame-rom-dir PATH ...] [--hbmame-rom-dir PATH ...] [--parallel-probe] [--verify-index-size] [--full-walk]\n  arcade-catalog-prototype build --updater-index PATH --base-output PATH --active-output PATH [inventory options]\n  arcade-catalog-prototype inspect --input PATH"
         .to_string()
 }
 
@@ -375,14 +375,14 @@ mod tests {
             "/one".to_string(),
             "--mame-rom-dir".to_string(),
             "/two".to_string(),
-            "--single-thread".to_string(),
+            "--parallel-probe".to_string(),
         ];
         let options = Options::parse(&arguments).unwrap();
         assert_eq!(
             options.paths("mame-rom-dir"),
             vec![PathBuf::from("/one"), PathBuf::from("/two")]
         );
-        assert!(options.flag("single-thread"));
+        assert!(options.flag("parallel-probe"));
     }
 
     #[test]

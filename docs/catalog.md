@@ -14,6 +14,10 @@ smallest independently selectable, rebuildable, and lazily loadable unit. The
 checked-in taxonomy may group those systems differently without rewriting
 catalog storage.
 
+The isolated [Arcade-only catalog prototype](arcade-catalog-prototype.md)
+measures an alternative Update_All-driven discovery and compact active format.
+It is benchmark/research code, not a Catalog V3 input, output, or migration.
+
 ## Goals
 
 - Reveal a useful UI as soon as Arcade is available on a first build.

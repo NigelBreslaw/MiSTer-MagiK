@@ -33,6 +33,7 @@ pub struct BuildReport {
     pub base_rows: usize,
     pub installed_mras: usize,
     pub rom_preeliminated_candidates: usize,
+    pub ambiguous_preeliminated_candidates: usize,
     pub mame_archives: usize,
     pub hbmame_archives: usize,
     pub active_records: usize,
@@ -115,31 +116,43 @@ pub fn build_active(
     let inventory_started = Instant::now();
     let (roms, rom_scan_us) = timed(|| scan_rom_inventory(mame_directories, hbmame_directories));
     let roms = roms?;
-    let (installed, mra_scan_us, rom_preeliminated_candidates) = if full_walk {
-        let (installed, scan_us) = timed(|| scan_installed_mras(arcade_root, verify_index_size));
-        (installed?, scan_us, 0)
-    } else {
-        let preeliminated = base
-            .candidates
-            .iter()
-            .filter(|candidate| {
-                matches!(
-                    rom_eligibility(&candidate.rom, &roms),
-                    RomEligibility::Missing
+    let (installed, mra_scan_us, rom_preeliminated_candidates, ambiguous_preeliminated_candidates) =
+        if full_walk {
+            let (installed, scan_us) =
+                timed(|| scan_installed_mras(arcade_root, verify_index_size));
+            (installed?, scan_us, 0, 0)
+        } else {
+            let missing = base
+                .candidates
+                .iter()
+                .filter(|candidate| {
+                    matches!(
+                        rom_eligibility(&candidate.rom, &roms),
+                        RomEligibility::Missing
+                    )
+                })
+                .count();
+            let ambiguous = base
+                .candidates
+                .iter()
+                .filter(|candidate| {
+                    matches!(
+                        rom_eligibility(&candidate.rom, &roms),
+                        RomEligibility::Ambiguous
+                    )
+                })
+                .count();
+            let (installed, probe_us) = timed(|| {
+                probe_indexed_candidates(
+                    arcade_root,
+                    &base.candidates,
+                    &roms,
+                    parallel_inventory,
+                    verify_index_size,
                 )
-            })
-            .count();
-        let (installed, probe_us) = timed(|| {
-            probe_indexed_candidates(
-                arcade_root,
-                &base.candidates,
-                &roms,
-                parallel_inventory,
-                verify_index_size,
-            )
-        });
-        (installed?, probe_us, preeliminated)
-    };
+            });
+            (installed?, probe_us, missing, ambiguous)
+        };
     let parallel_inventory_wall_us = elapsed_us(inventory_started);
 
     let join_started = Instant::now();
@@ -149,7 +162,7 @@ pub fn build_active(
     let mut fallback_paths = Vec::new();
     let mut invalid_paths = Vec::new();
     let mut skipped_missing_rom = rom_preeliminated_candidates;
-    let mut skipped_ambiguous = 0usize;
+    let mut skipped_ambiguous = ambiguous_preeliminated_candidates;
     let mut eligible = Vec::with_capacity(installed.len());
     for installed_mra in &installed {
         let indexed = base
@@ -222,6 +235,7 @@ pub fn build_active(
         base_rows: base.candidates.len(),
         installed_mras: installed.len(),
         rom_preeliminated_candidates,
+        ambiguous_preeliminated_candidates,
         mame_archives: roms.mame.len(),
         hbmame_archives: roms.hbmame.len(),
         active_records: records.len(),
@@ -336,9 +350,9 @@ fn probe_indexed_candidates(
 ) -> Result<Vec<InstalledMra>, String> {
     let mut directories = BTreeMap::<PathBuf, Vec<&BaseCandidate>>::new();
     for candidate in candidates {
-        if matches!(
+        if !matches!(
             rom_eligibility(&candidate.rom, roms),
-            RomEligibility::Missing
+            RomEligibility::Eligible
         ) {
             continue;
         }

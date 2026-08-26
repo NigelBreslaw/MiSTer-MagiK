@@ -1,0 +1,111 @@
+# Arcade-only catalog prototype
+
+The Arcade-only catalog prototype is an isolated production-code experiment. It
+does not replace Catalog V3, import its scanner, publish into its registry, or
+change the launcher. Its purpose is to establish the minimum cold-build cost
+when Update_All metadata is treated as an ahead-of-time source of truth.
+
+The executable is `arcade-catalog-prototype` in the `mister-magik-catalog`
+package. The typed ARM build and hardware benchmark are:
+
+```bash
+scripts/agent build arcade-catalog-prototype-device
+scripts/agent benchmark arcade-catalog-prototype-cold
+```
+
+The benchmark is the only authority for timing. Every measured arm performs a
+new supervised Linux reboot, waits for launcher health, suspends the launcher
+through Main's acknowledged command, removes the arm's active output, syncs,
+drops the Linux page, directory-entry, and inode caches, and creates a new
+active catalog. Parallel and single-thread arms must produce byte-identical
+catalogs and equal record counts. Cleanup resumes and health-checks the Dev
+launcher and removes the isolated benchmark root.
+
+## Data flow
+
+The prototype separates immutable source knowledge from the card-specific
+active catalog:
+
+```text
+Update_All Arcade index
+        |
+        | compile-base (ahead of boot/update time)
+        v
+checksummed source base (3,069 candidates on the measured corpus)
+        |
+        | build-active (fresh after reboot)
+        +---- shallow MAME/HBMAME ZIP-name inventory
+        +---- directory-batched tests of likely installed MRA names
+        +---- deterministic variant/family selection
+        v
+atomic active catalog (1,181 records on the measured corpus)
+```
+
+`compile-base` independently validates the Update_All LZ4 size prefix, format,
+payload checksum, source order, path safety, and row invariants. It compiles
+normalized identity, family, metadata, ROM namespace/set name, expected size,
+and variant score into a fixed-record/string-table binary. The measured source
+base is 703,617 bytes.
+
+`build-active` reads ZIP file names only from the four Main-compatible MAME and
+HBMAME locations. It does not open ROM archives. A missing ROM eliminates its
+candidate before MRA discovery. An ambiguous Update_All ROM requirement fails
+closed in the fast mode and does not cause a card read. Candidates that remain
+are grouped by parent directory. Each relevant exFAT directory is enumerated
+once and names are matched case-insensitively in memory, avoiding one metadata
+lookup per expected MRA. The default route accepts Update_All metadata when the
+indexed path is present and a regular file; `--verify-index-size` adds file-size
+validation.
+
+The active output is a checksummed, versioned, fixed-record/string-table binary.
+It retains every playable variant and marks one deterministic preferred record
+per family. Publication writes a new sibling temporary file, syncs it, renames
+it atomically, then syncs the parent directory.
+
+## Commands
+
+Compile immutable Update_All knowledge outside the boot-critical path:
+
+```bash
+arcade-catalog-prototype compile-base \
+  --updater-index arcade-updater-index-v1.lz4b \
+  --output arcade-source-base.bin
+```
+
+Create a fresh active Arcade catalog from that base:
+
+```bash
+arcade-catalog-prototype build-active \
+  --base arcade-source-base.bin \
+  --output arcade-active.bin
+```
+
+`build` performs both phases and is retained as the stricter end-to-end control.
+`inspect` validates either binary and reports its source checksum and counts.
+
+The cold evidence selects one discovery worker by default. `--parallel-probe`
+is diagnostic: two workers can win in an individual run, but repeated cold
+active builds showed worse and less predictable latency on the measured exFAT
+card. `--full-walk` is the recovery/completeness route for custom MRAs absent
+from Update_All; it is intentionally not the fast default.
+
+## Trust and scope
+
+Fast mode is deliberately asymmetric:
+
+- Update_All supplies likely MRA paths and metadata.
+- The current card proves which indexed paths and ROM archives are present.
+- Ambiguous source rows fail closed.
+- Unindexed custom MRAs require `--full-walk`.
+- No warm-cache timing is accepted.
+
+This output is not schema-compatible with Catalog V3 SQLite, NavPack, search,
+scanner cache, resumability, or registry publication. Promotion therefore needs
+an adapter or a new launcher reader plus parity qualification for launch paths,
+family/variant policy, metadata, search/navigation needs, interrupted
+publication, custom MRAs, and Update_All version skew. The prototype proves the
+discovery and compact-build opportunity; it does not by itself authorize a
+production catalog migration.
+
+The dated measurements and legacy comparison are recorded in
+[`history/2026-08-26-arcade-catalog-prototype-performance.md`](../history/2026-08-26-arcade-catalog-prototype-performance.md).

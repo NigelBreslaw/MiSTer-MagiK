@@ -20449,12 +20449,12 @@ fn profile_arcade_catalog_prototype_run(
     drop(session);
 
     let mut samples = Vec::new();
-    for (arm, single_thread) in [("parallel", false), ("single-thread", true)] {
+    for (arm, parallel_probe) in [("parallel", true), ("single-thread", false)] {
         samples.push(run_arcade_catalog_prototype_cold_sample(
             config,
             output_dir,
             arm,
-            single_thread,
+            parallel_probe,
             &base_sha256,
         )?);
     }
@@ -20520,7 +20520,7 @@ fn run_arcade_catalog_prototype_cold_sample(
     config: &NativeDeviceConfig,
     output_dir: &Path,
     arm: &str,
-    single_thread: bool,
+    parallel_probe: bool,
     base_sha256: &str,
 ) -> Result<Value> {
     let session = connect_with(&config.connection, 10)?;
@@ -20569,8 +20569,8 @@ fn run_arcade_catalog_prototype_cold_sample(
         "--output".to_string(),
         active_remote.clone(),
     ];
-    if single_thread {
-        arguments.push("--single-thread".to_string());
+    if parallel_probe {
+        arguments.push("--parallel-probe".to_string());
     }
     let prototype_command = remote_subcommand(
         ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY,
