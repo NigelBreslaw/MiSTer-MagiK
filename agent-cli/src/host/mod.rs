@@ -388,6 +388,9 @@ impl NativeDevice {
                         | LauncherCommand::CaptureSnesHub(_)
                         | LauncherCommand::ReturnToLauncher(_),
                 }
+                | DeviceCommand::Catalog {
+                    command: CatalogCommand::FastFiveOldCold(_),
+                }
                 | DeviceCommand::Fpga {
                     command: DeviceFpgaCommand::InstallExperimental(_)
                         | DeviceFpgaCommand::InstallExperimentalAgent(_),
