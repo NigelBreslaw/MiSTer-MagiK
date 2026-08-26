@@ -10,9 +10,9 @@ Catalog V3 scanner or database writer. On the measured MiSTer corpus it creates
 The strongest complete from-Update_All cold result is 2.311 seconds. The
 production-shaped path, where Update_All knowledge is compiled ahead of boot
 and only the card-specific active catalog is created after reboot, measured
-2.176–2.737 seconds single-threaded across three repeated pairs. Retained
+1.933–2.737 seconds single-threaded across four repeated pairs. Retained
 legacy cold evidence reaches its first Arcade system 8.933–9.575 seconds after
-builder execution begins. The prototype is therefore approximately 3.3–4.4x
+builder execution begins. The prototype is therefore approximately 3.3–5.0x
 faster depending on which valid cold sample and boundary are compared.
 
 This is a directional comparison, not schema parity. The legacy builder is
@@ -102,6 +102,7 @@ active-only. The two values are separate reboot arms.
 | Precompiled base, active-only pair 1 | 3.074 s | **2.670 s** | Parallel ordering reversed after a fresh reboot. |
 | Precompiled base, active-only pair 2 | 2.646 s | **2.176 s** | Single worker repeated the production-path win. |
 | Final policy, active-only pair 3 | 2.811 s | **2.737 s** | Exact final commit; 11 ambiguous rows eliminated before card reads. |
+| Hardened final, active-only pair 4 | 2.151 s | **1.933 s** | Exact delivered code; path/type hardening included. |
 
 The directory-batched complete build reduced the initial 7.209-second parallel
 control by 3.12x. The best single-thread active build reduced the 5.968-second
@@ -121,17 +122,17 @@ Across the two precompiled-base pairs:
 
 The remaining dominant cost is exFAT directory enumeration, followed by the
 shallow ROM inventory. CPU-side selection and compact serialization are already
-small. In the final exact-commit single-thread arm, pre-eliminating the 11 known
-ambiguous rows reduced join/fallback work to 11 ms, with zero fallbacks and the
-same 1,181 playable records. Total time was 2.737 seconds; the parallel arm was
-2.811 seconds and produced byte-identical output.
+small. In the hardened exact-delivery single-thread arm, pre-eliminating the 11
+known ambiguous rows held join/fallback work to 10 ms, with zero fallbacks and
+the same 1,181 playable records. Total time was 1.933 seconds; the parallel arm
+was 2.151 seconds and produced byte-identical output.
 
 ## Dual-core conclusion
 
 The Cortex-A9 result is workload-specific. Two directory workers produced one
-excellent complete-build sample, but all three repeated active-only pairs were
+excellent complete-build sample, but all four repeated active-only pairs were
 slower in parallel: 15% slower in pair 1, 22% slower in pair 2, and 3% slower
-in the final pair. Earlier
+in pair 3; the hardened final pair was 11% slower in parallel. Earlier
 full-walk and individual-probe controls also favored one worker. The exFAT card
 has enough boot-to-boot latency variance that one favorable pair cannot justify
 a parallel production default.
@@ -205,6 +206,7 @@ Evidence directories used by this report:
 - `build/agent-benchmarks/arcade-catalog-prototype-cold/1787727656`
 - `build/agent-benchmarks/arcade-catalog-prototype-cold/1787727779`
 - `build/agent-benchmarks/arcade-catalog-prototype-cold/1787728394`
+- `build/agent-benchmarks/arcade-catalog-prototype-cold/1787729161`
 - `build/agent-benchmarks/cold-boot/1787508360`
 - `build/agent-benchmarks/cold-boot/1787344344`
 - `build/agent-benchmarks/catalog-full-build-rebuild/1787306191`
