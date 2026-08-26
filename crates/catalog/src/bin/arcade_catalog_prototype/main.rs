@@ -76,7 +76,7 @@ fn command_build_active(options: &Options) -> Result<(), String> {
             "hbmame-rom-dir",
             "output",
         ],
-        &["single-thread", "verify-index-size"],
+        &["single-thread", "verify-index-size", "full-walk"],
     )?;
     let base_path = options.required_path("base")?;
     let output_path = options.required_path("output")?;
@@ -94,6 +94,7 @@ fn command_build_active(options: &Options) -> Result<(), String> {
         &hbmame_directories,
         !options.flag("single-thread"),
         options.flag("verify-index-size"),
+        options.flag("full-walk"),
     )?;
     let encoded = encode_active(&active)?;
     let write_started = Instant::now();
@@ -105,6 +106,7 @@ fn command_build_active(options: &Options) -> Result<(), String> {
         "source_sha256": hex(&active.source_sha256),
         "parallel_inventory": !options.flag("single-thread"),
         "verify_index_size": options.flag("verify-index-size"),
+        "full_walk": options.flag("full-walk"),
         "write_us": elapsed_us(write_started),
         "total_us": elapsed_us(total_started),
         "build": build,
@@ -122,7 +124,7 @@ fn command_build(options: &Options) -> Result<(), String> {
             "mame-rom-dir",
             "hbmame-rom-dir",
         ],
-        &["single-thread", "verify-index-size"],
+        &["single-thread", "verify-index-size", "full-walk"],
     )?;
     let updater_path = options.required_path("updater-index")?;
     let base_output = options.required_path("base-output")?;
@@ -147,6 +149,7 @@ fn command_build(options: &Options) -> Result<(), String> {
         &hbmame_directories,
         !options.flag("single-thread"),
         options.flag("verify-index-size"),
+        options.flag("full-walk"),
     )?;
     let active_bytes = encode_active(&active)?;
     let active_write_started = Instant::now();
@@ -160,6 +163,7 @@ fn command_build(options: &Options) -> Result<(), String> {
         "source_sha256": hex(&active.source_sha256),
         "parallel_inventory": !options.flag("single-thread"),
         "verify_index_size": options.flag("verify-index-size"),
+        "full_walk": options.flag("full-walk"),
         "base_write_us": base_write_us,
         "active_write_us": elapsed_us(active_write_started),
         "total_us": elapsed_us(total_started),
@@ -227,7 +231,7 @@ impl Options {
             let name = argument
                 .strip_prefix("--")
                 .ok_or_else(|| format!("expected an option, found {argument}"))?;
-            if matches!(name, "single-thread" | "verify-index-size") {
+            if matches!(name, "single-thread" | "verify-index-size" | "full-walk") {
                 options.flags.insert(name.to_string());
                 index += 1;
                 continue;
@@ -355,7 +359,7 @@ fn elapsed_us(started: Instant) -> u64 {
 }
 
 fn usage() -> String {
-    "Usage:\n  arcade-catalog-prototype compile-base --updater-index PATH --output PATH\n  arcade-catalog-prototype build-active --base PATH --output PATH [--arcade-root PATH] [--mame-rom-dir PATH ...] [--hbmame-rom-dir PATH ...] [--single-thread] [--verify-index-size]\n  arcade-catalog-prototype build --updater-index PATH --base-output PATH --active-output PATH [inventory options]\n  arcade-catalog-prototype inspect --input PATH"
+    "Usage:\n  arcade-catalog-prototype compile-base --updater-index PATH --output PATH\n  arcade-catalog-prototype build-active --base PATH --output PATH [--arcade-root PATH] [--mame-rom-dir PATH ...] [--hbmame-rom-dir PATH ...] [--single-thread] [--verify-index-size] [--full-walk]\n  arcade-catalog-prototype build --updater-index PATH --base-output PATH --active-output PATH [inventory options]\n  arcade-catalog-prototype inspect --input PATH"
         .to_string()
 }
 

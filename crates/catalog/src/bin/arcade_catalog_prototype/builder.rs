@@ -28,9 +28,11 @@ pub struct CompileReport {
 #[derive(Debug, Serialize)]
 pub struct BuildReport {
     pub trust_mode: &'static str,
+    pub discovery_mode: &'static str,
     pub base_bytes: usize,
     pub base_rows: usize,
     pub installed_mras: usize,
+    pub rom_preeliminated_candidates: usize,
     pub mame_archives: usize,
     pub hbmame_archives: usize,
     pub active_records: usize,
@@ -104,34 +106,40 @@ pub fn build_active(
     hbmame_directories: &[PathBuf],
     parallel_inventory: bool,
     verify_index_size: bool,
+    full_walk: bool,
 ) -> Result<(ActiveCatalog, BuildReport), String> {
     let base_started = Instant::now();
     let base = crate::model::decode_base(base_bytes)?;
     let base_decode_us = elapsed_us(base_started);
 
     let inventory_started = Instant::now();
-    let ((installed, mra_scan_us), (roms, rom_scan_us)) = if parallel_inventory {
-        std::thread::scope(|scope| {
-            let mra_worker =
-                scope.spawn(|| timed(|| scan_installed_mras(arcade_root, verify_index_size)));
-            let rom_worker =
-                scope.spawn(|| timed(|| scan_rom_inventory(mame_directories, hbmame_directories)));
-            let mras = mra_worker
-                .join()
-                .map_err(|_| "Arcade inventory worker panicked".to_string())?;
-            let roms = rom_worker
-                .join()
-                .map_err(|_| "ROM inventory worker panicked".to_string())?;
-            Ok::<_, String>((mras, roms))
-        })?
-    } else {
-        (
-            timed(|| scan_installed_mras(arcade_root, verify_index_size)),
-            timed(|| scan_rom_inventory(mame_directories, hbmame_directories)),
-        )
-    };
-    let installed = installed?;
+    let (roms, rom_scan_us) = timed(|| scan_rom_inventory(mame_directories, hbmame_directories));
     let roms = roms?;
+    let (installed, mra_scan_us, rom_preeliminated_candidates) = if full_walk {
+        let (installed, scan_us) = timed(|| scan_installed_mras(arcade_root, verify_index_size));
+        (installed?, scan_us, 0)
+    } else {
+        let preeliminated = base
+            .candidates
+            .iter()
+            .filter(|candidate| {
+                matches!(
+                    rom_eligibility(&candidate.rom, &roms),
+                    RomEligibility::Missing
+                )
+            })
+            .count();
+        let (installed, probe_us) = timed(|| {
+            probe_indexed_candidates(
+                arcade_root,
+                &base.candidates,
+                &roms,
+                parallel_inventory,
+                verify_index_size,
+            )
+        });
+        (installed?, probe_us, preeliminated)
+    };
     let parallel_inventory_wall_us = elapsed_us(inventory_started);
 
     let join_started = Instant::now();
@@ -140,7 +148,7 @@ pub fn build_active(
     let mut size_mismatches = 0usize;
     let mut fallback_paths = Vec::new();
     let mut invalid_paths = Vec::new();
-    let mut skipped_missing_rom = 0usize;
+    let mut skipped_missing_rom = rom_preeliminated_candidates;
     let mut skipped_ambiguous = 0usize;
     let mut eligible = Vec::with_capacity(installed.len());
     for installed_mra in &installed {
@@ -205,9 +213,15 @@ pub fn build_active(
         } else {
             "installed-path-update-all-metadata"
         },
+        discovery_mode: if full_walk {
+            "full-walk"
+        } else {
+            "update-all-probe"
+        },
         base_bytes: base_bytes.len(),
         base_rows: base.candidates.len(),
         installed_mras: installed.len(),
+        rom_preeliminated_candidates,
         mame_archives: roms.mame.len(),
         hbmame_archives: roms.hbmame.len(),
         active_records: records.len(),
@@ -311,6 +325,72 @@ fn candidate_from_updater(row: &UpdaterRow) -> BaseCandidate {
         players,
         variant_score,
     }
+}
+
+fn probe_indexed_candidates(
+    arcade_root: &Path,
+    candidates: &[BaseCandidate],
+    roms: &RomInventory,
+    parallel: bool,
+    verify_index_size: bool,
+) -> Result<Vec<InstalledMra>, String> {
+    let probe = |slice: &[BaseCandidate]| -> Result<Vec<InstalledMra>, String> {
+        let mut installed = Vec::new();
+        for candidate in slice {
+            if matches!(
+                rom_eligibility(&candidate.rom, roms),
+                RomEligibility::Missing
+            ) {
+                continue;
+            }
+            let suffix = candidate
+                .path
+                .strip_prefix("_Arcade/")
+                .ok_or_else(|| format!("invalid updater Arcade path {}", candidate.path))?;
+            let full_path = arcade_root.join(suffix);
+            let metadata = match fs::symlink_metadata(&full_path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "probe updater path {}: {error}",
+                        full_path.display()
+                    ));
+                }
+            };
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                continue;
+            }
+            installed.push(InstalledMra {
+                full_path,
+                relative_path: candidate.path.clone(),
+                path_key: candidate.path_key.clone(),
+                size: verify_index_size.then_some(metadata.len()),
+            });
+        }
+        Ok(installed)
+    };
+    let mut installed = if parallel && candidates.len() > 1 {
+        let middle = candidates.len() / 2;
+        let (left, right) = candidates.split_at(middle);
+        std::thread::scope(|scope| {
+            let left_worker = scope.spawn(|| probe(left));
+            let right_worker = scope.spawn(|| probe(right));
+            let mut installed = left_worker
+                .join()
+                .map_err(|_| "first updater probe worker panicked".to_string())??;
+            installed.extend(
+                right_worker
+                    .join()
+                    .map_err(|_| "second updater probe worker panicked".to_string())??,
+            );
+            Ok::<_, String>(installed)
+        })?
+    } else {
+        probe(candidates)?
+    };
+    installed.sort_by(|left, right| left.path_key.cmp(&right.path_key));
+    Ok(installed)
 }
 
 fn fallback_candidate(installed: &InstalledMra) -> Result<BaseCandidate, String> {
@@ -430,7 +510,7 @@ fn requirement_from_updater(requirement: &PrimaryRomRequirement) -> RomRequireme
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 enum RomEligibility {
     Eligible,
     Missing,
@@ -442,12 +522,12 @@ fn rom_eligibility(requirement: &RomRequirement, inventory: &RomInventory) -> Ro
         RomRequirement::None => RomEligibility::Eligible,
         RomRequirement::Mame(setname) => inventory
             .mame
-            .contains(&setname.to_ascii_lowercase())
+            .contains(setname)
             .then_some(RomEligibility::Eligible)
             .unwrap_or(RomEligibility::Missing),
         RomRequirement::Hbmame(setname) => inventory
             .hbmame
-            .contains(&setname.to_ascii_lowercase())
+            .contains(setname)
             .then_some(RomEligibility::Eligible)
             .unwrap_or(RomEligibility::Missing),
         RomRequirement::Ambiguous => RomEligibility::Ambiguous,
