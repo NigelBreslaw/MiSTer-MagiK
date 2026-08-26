@@ -347,7 +347,7 @@ pub fn read_system_watch(
     let path = refresh_state_root(catalog_root).join(&reference.watch_path);
     let bytes = fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
     verify_file_checksum(&bytes, &reference.watch_sha256, &path)?;
-    let watch = decode_envelope(&bytes, WATCH_MAGIC, MAX_WATCH_BYTES)?;
+    let watch: FastSystemWatchIndex = decode_envelope(&bytes, WATCH_MAGIC, MAX_WATCH_BYTES)?;
     watch.validate(&reference.system_id)?;
     Ok(watch)
 }
@@ -359,7 +359,7 @@ pub fn read_system_rows(
     let path = refresh_state_root(catalog_root).join(&reference.rows_path);
     let bytes = fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
     verify_file_checksum(&bytes, &reference.rows_sha256, &path)?;
-    let rows = decode_envelope(&bytes, ROWS_MAGIC, MAX_ROWS_BYTES)?;
+    let rows: FastSystemRowsSnapshot = decode_envelope(&bytes, ROWS_MAGIC, MAX_ROWS_BYTES)?;
     rows.validate(&reference.system_id)?;
     Ok(rows)
 }

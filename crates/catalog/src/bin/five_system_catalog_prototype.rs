@@ -34,6 +34,48 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
         return Err(usage());
     };
     match command.as_str() {
+        "refresh-profile" => {
+            let catalog_root = required_path(arguments, "--catalog-root")?;
+            let storage_root = required_path(arguments, "--storage-root")?;
+            let request = optional_value(arguments, "--request").unwrap_or_else(|| "update".into());
+            let svg = required_path(arguments, "--pprof-svg")?;
+            let folded = required_path(arguments, "--pprof-folded")?;
+            let hz = optional_value(arguments, "--pprof-hz").map_or(Ok(997), |value| {
+                value.parse::<i32>().map_err(|error| error.to_string())
+            })?;
+            reject_unknown(
+                arguments,
+                &[
+                    "--catalog-root",
+                    "--storage-root",
+                    "--request",
+                    "--pprof-svg",
+                    "--pprof-folded",
+                    "--pprof-hz",
+                ],
+            )?;
+            let profiler = start_cpu_profile(svg, folded, hz)?;
+            let before = process_metrics();
+            let report = execute_fast_refresh(
+                &storage_root,
+                &catalog_root,
+                match request.as_str() {
+                    "update" => FastCatalogRefreshRequest::Update,
+                    "rebuild-all" => FastCatalogRefreshRequest::RebuildAll,
+                    _ => return Err(format!("unknown refresh request {request}")),
+                },
+            )?;
+            let after = process_metrics();
+            let profile = finish_cpu_profile(profiler)?;
+            let mut value = serde_json::to_value(report).map_err(|error| error.to_string())?;
+            let object = value
+                .as_object_mut()
+                .ok_or("fast refresh report is not an object")?;
+            object.insert("process_before".to_string(), before);
+            object.insert("process_after".to_string(), after);
+            object.insert("pprof".to_string(), profile);
+            print_json(&value)
+        }
         "refresh" => {
             let catalog_root = required_path(arguments, "--catalog-root")?;
             let storage_root = required_path(arguments, "--storage-root")?;
@@ -567,6 +609,27 @@ fn optional_value(arguments: &[String], name: &str) -> Option<String> {
         .windows(2)
         .find(|pair| pair[0] == name)
         .map(|pair| pair[1].clone())
+}
+
+fn process_metrics() -> serde_json::Value {
+    let io = fs::read_to_string("/proc/self/io").unwrap_or_default();
+    let status = fs::read_to_string("/proc/self/status").unwrap_or_default();
+    let field = |contents: &str, name: &str| {
+        contents
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .and_then(|value| value.trim().split_whitespace().next())
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    serde_json::json!({
+        "read_bytes": field(&io, "read_bytes:"),
+        "write_bytes": field(&io, "write_bytes:"),
+        "syscr": field(&io, "syscr:"),
+        "syscw": field(&io, "syscw:"),
+        "vm_hwm_kb": field(&status, "VmHWM:"),
+        "vm_rss_kb": field(&status, "VmRSS:"),
+    })
 }
 
 fn snapshot_encoding(
