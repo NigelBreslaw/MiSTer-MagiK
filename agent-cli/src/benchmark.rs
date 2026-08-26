@@ -44,6 +44,11 @@ trait BenchmarkDevice {
         spec: ArcadeVelocityScrollRunSpec,
         output_dir: PathBuf,
     ) -> AgentResult<String>;
+    fn profile_arcade_catalog_prototype(
+        &mut self,
+        binary: &Path,
+        output_dir: PathBuf,
+    ) -> AgentResult<String>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -276,6 +281,14 @@ impl BenchmarkDevice for DeviceClient {
     ) -> AgentResult<String> {
         self.mutate(|device| device.profile_arcade_velocity_scroll_run(&output_dir, spec))
     }
+
+    fn profile_arcade_catalog_prototype(
+        &mut self,
+        binary: &Path,
+        output_dir: PathBuf,
+    ) -> AgentResult<String> {
+        self.mutate(|device| device.profile_arcade_catalog_prototype(binary, &output_dir))
+    }
 }
 
 fn require_clean_installed_commit(
@@ -319,6 +332,20 @@ fn require_clean_installed_commit(
     if !crate::git::value(repository, &["status", "--porcelain"])?.is_empty() {
         return Err("benchmark requires a clean exact-commit worktree".into());
     }
+    let prototype_binary = if scenario == BenchmarkScenario::ArcadeCatalogPrototypeCold {
+        let spec = crate::build::BuildSpec::for_command(
+            crate::build::BuildCommand::ArcadeCatalogPrototypeDevice,
+        )
+        .expect("the Arcade catalog prototype has one focused build specification");
+        spec.verify(repository).map_err(|error| {
+            format!(
+                "Arcade catalog prototype benchmark requires an exact build receipt; run scripts/agent build arcade-catalog-prototype-device first: {error}"
+            )
+        })?;
+        Some(repository.join(spec.artifact()))
+    } else {
+        None
+    };
     if let Some(command) = particle_scene_lab_command(scenario) {
         reporter.emit(EventKind::Warning, "scene-lab-required", command, Some(100))?;
         return Ok(Outcome::ExternalRequired);
@@ -389,6 +416,15 @@ fn require_clean_installed_commit(
         BenchmarkScenario::CatalogCorpusInventory => {
             execute_catalog_corpus_inventory(&mut device, manifest, output_dir, reporter)
         }
+        BenchmarkScenario::ArcadeCatalogPrototypeCold => execute_arcade_catalog_prototype_cold(
+            &mut device,
+            manifest,
+            output_dir,
+            prototype_binary
+                .as_deref()
+                .expect("prototype scenarios resolve their exact binary before device access"),
+            reporter,
+        ),
         BenchmarkScenario::CatalogAttributionControl => execute_catalog_attribution(
             &mut device,
             manifest,
@@ -1065,6 +1101,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::CatalogResumeValidation
         | BenchmarkScenario::CatalogFullBuildRebuild
         | BenchmarkScenario::CatalogCorpusInventory
+        | BenchmarkScenario::ArcadeCatalogPrototypeCold
         | BenchmarkScenario::CatalogAttributionControl
         | BenchmarkScenario::CatalogAttributionPprof
         | BenchmarkScenario::CatalogAttributionPmu
@@ -2574,6 +2611,89 @@ fn execute_catalog_corpus_inventory(
         Some(100),
     )?;
     Ok(Outcome::Passed)
+}
+
+fn execute_arcade_catalog_prototype_cold(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: PathBuf,
+    binary: &Path,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "benchmarking parallel and single-thread Arcade-only builds after separate controlled reboots",
+        Some(20),
+    )?;
+    let detail = device.profile_arcade_catalog_prototype(binary, output_dir.clone())?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    evaluate_arcade_catalog_prototype_summary(&summary)?;
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn evaluate_arcade_catalog_prototype_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-arcade-catalog-prototype-cold-v1")
+        || summary.get("scenario").and_then(Value::as_str) != Some("arcade-catalog-prototype-cold")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+    {
+        return Err("Arcade catalog prototype benchmark is not a passing v1 report".into());
+    }
+    let samples = summary
+        .get("samples")
+        .and_then(Value::as_array)
+        .ok_or("Arcade catalog prototype benchmark has no samples")?;
+    if samples.len() != 2
+        || samples[0].get("arm").and_then(Value::as_str) != Some("parallel")
+        || samples[1].get("arm").and_then(Value::as_str) != Some("single-thread")
+    {
+        return Err("Arcade catalog prototype benchmark does not contain both cold arms".into());
+    }
+    for sample in samples {
+        if sample.get("reboot_verified").and_then(Value::as_bool) != Some(true)
+            || sample.get("cache_drop_verified").and_then(Value::as_bool) != Some(true)
+            || sample.pointer("/report/command").and_then(Value::as_str) != Some("build")
+            || sample
+                .pointer("/report/build/active_records")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                == 0
+            || sample
+                .pointer("/report/total_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                == 0
+        {
+            return Err(
+                "Arcade catalog prototype benchmark contains an invalid cold sample".into(),
+            );
+        }
+    }
+    if summary
+        .pointer("/validation/active_outputs_identical")
+        .and_then(Value::as_bool)
+        != Some(true)
+        || summary
+            .pointer("/validation/record_counts_identical")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return Err("Arcade catalog prototype cold arms produced different catalogs".into());
+    }
+    Ok(())
 }
 
 fn evaluate_catalog_full_build_rebuild_summary(summary: &Value) -> AgentResult<()> {

@@ -907,6 +907,7 @@ mod tests {
             "catalog-build-rebuild",
             "catalog-resume-validation",
             "catalog-full-build-rebuild",
+            "arcade-catalog-prototype-cold",
             "system-entry",
             "system-entry-critical",
             "system-entry-critical-confirm",

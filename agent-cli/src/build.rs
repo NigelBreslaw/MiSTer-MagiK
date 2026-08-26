@@ -53,6 +53,7 @@ pub enum BuildCommand {
     FramebufferLabDevice,
     FramebufferSceneLabDevice,
     FramebufferSceneLabAnalysis,
+    ArcadeCatalogPrototypeDevice,
     ReleaseBinaries,
 }
 
@@ -64,6 +65,7 @@ pub enum BuildTarget {
     Manager,
     FramebufferLab,
     FramebufferSceneLab,
+    ArcadeCatalogPrototype,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -190,6 +192,14 @@ impl BuildSpec {
                 vec!["profile"],
                 UiScope::All,
                 framebuffer_scene_lab_artifact("release-device-profile"),
+            ),
+            BuildCommand::ArcadeCatalogPrototypeDevice => (
+                BuildTarget::ArcadeCatalogPrototype,
+                BuildMode::Build,
+                "release-device",
+                vec!["builder"],
+                UiScope::All,
+                arcade_catalog_prototype_artifact("release-device"),
             ),
             BuildCommand::ReleaseBinaries => return None,
         };
@@ -802,6 +812,9 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
             }
             BuildTarget::FramebufferSceneLab => PathBuf::from(
                 "/private/tmp/mister-magik-framebuffer-scene-lab-apple-container-target",
+            ),
+            BuildTarget::ArcadeCatalogPrototype => PathBuf::from(
+                "/private/tmp/mister-magik-arcade-catalog-prototype-apple-container-target",
             ),
             _ => PathBuf::from("/private/tmp/mister-magik-apple-container-target"),
         };
@@ -1587,6 +1600,9 @@ fn cargo_args(spec: &BuildSpec, timings: bool) -> Vec<OsString> {
         | BuildTarget::Manager
         | BuildTarget::FramebufferLab
         | BuildTarget::FramebufferSceneLab => {}
+        BuildTarget::ArcadeCatalogPrototype => {
+            args.extend(["--bin".into(), "arcade-catalog-prototype".into()]);
+        }
     }
     if spec.mode == BuildMode::CheckLibrary {
         args.extend(["--lib".into(), "--no-default-features".into()]);
@@ -1603,6 +1619,7 @@ fn host_workdir(target: BuildTarget) -> &'static str {
         BuildTarget::Manager => "mister/tools/manager",
         BuildTarget::FramebufferLab => "apps/framebuffer-lab",
         BuildTarget::FramebufferSceneLab => "apps/framebuffer-scene-lab",
+        BuildTarget::ArcadeCatalogPrototype => "crates/catalog",
     }
 }
 
@@ -1613,6 +1630,7 @@ fn container_workdir(target: BuildTarget) -> &'static str {
         BuildTarget::Manager => "/project/mister/tools/manager",
         BuildTarget::FramebufferLab => "/project/apps/framebuffer-lab",
         BuildTarget::FramebufferSceneLab => "/project/apps/framebuffer-scene-lab",
+        BuildTarget::ArcadeCatalogPrototype => "/project/crates/catalog",
     }
 }
 
@@ -1623,6 +1641,7 @@ fn lockfile(target: BuildTarget) -> &'static str {
         BuildTarget::Manager => "mister/tools/manager/Cargo.lock",
         BuildTarget::FramebufferLab => "apps/framebuffer-lab/Cargo.lock",
         BuildTarget::FramebufferSceneLab => "apps/framebuffer-scene-lab/Cargo.lock",
+        BuildTarget::ArcadeCatalogPrototype => "crates/catalog/Cargo.lock",
     }
 }
 
@@ -1641,6 +1660,12 @@ fn framebuffer_lab_artifact(profile: &str) -> PathBuf {
 fn framebuffer_scene_lab_artifact(profile: &str) -> PathBuf {
     PathBuf::from(format!(
         "apps/framebuffer-scene-lab/target/{TARGET}/{profile}/mister-magik-framebuffer-scene-lab"
+    ))
+}
+
+fn arcade_catalog_prototype_artifact(profile: &str) -> PathBuf {
+    PathBuf::from(format!(
+        "crates/catalog/target/{TARGET}/{profile}/arcade-catalog-prototype"
     ))
 }
 
@@ -1910,6 +1935,26 @@ mod tests {
         assert_eq!(analysis.target, BuildTarget::FramebufferSceneLab);
         assert_eq!(analysis.profile, "release-device-profile");
         assert_eq!(analysis.features, ["profile"]);
+    }
+
+    #[test]
+    fn arcade_catalog_prototype_build_is_a_focused_arm_binary() {
+        let spec = BuildSpec::for_command(BuildCommand::ArcadeCatalogPrototypeDevice).unwrap();
+        assert_eq!(spec.target, BuildTarget::ArcadeCatalogPrototype);
+        assert_eq!(spec.features, ["builder"]);
+        assert_eq!(spec.profile, "release-device");
+        assert_eq!(host_workdir(spec.target), "crates/catalog");
+        assert_eq!(
+            spec.artifact,
+            PathBuf::from(
+                "crates/catalog/target/armv7-unknown-linux-gnueabihf/release-device/arcade-catalog-prototype"
+            )
+        );
+        assert!(
+            cargo_args(&spec, false)
+                .windows(2)
+                .any(|pair| pair == ["--bin", "arcade-catalog-prototype"])
+        );
     }
 
     #[test]

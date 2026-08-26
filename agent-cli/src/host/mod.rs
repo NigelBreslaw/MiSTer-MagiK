@@ -954,6 +954,16 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_arcade_catalog_prototype(
+        &mut self,
+        binary: &Path,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_arcade_catalog_prototype(config, binary, output_dir)
+        })
+    }
+
     pub(crate) fn profile_catalog_attribution_control(
         &mut self,
         output_dir: &Path,
@@ -20336,6 +20346,257 @@ fn validate_attended_launch_return_summary(summary: &Value, output_dir: &Path) -
     }
 }
 const LAUNCH_RETURN_ONCE_STEP_DEADLINE_MS: u64 = 2_000;
+
+const ARCADE_CATALOG_PROTOTYPE_REMOTE_ROOT: &str =
+    "/media/fat/mister-magik-dev/catalog-benchmarks/arcade-catalog-prototype";
+const ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY: &str = "/media/fat/mister-magik-dev/catalog-benchmarks/arcade-catalog-prototype/arcade-catalog-prototype";
+const ARCADE_CATALOG_PROTOTYPE_UPDATER_INDEX: &str =
+    "/media/fat/mister-magik-dev/arcade-updater-index-v1.lz4b";
+
+fn profile_arcade_catalog_prototype(
+    config: &NativeDeviceConfig,
+    binary: &Path,
+    output_dir: &Path,
+) -> Result<String> {
+    let run = profile_arcade_catalog_prototype_run(config, binary, output_dir);
+    let cleanup = cleanup_arcade_catalog_prototype(config);
+    match (run, cleanup) {
+        (Ok(summary), Ok(())) => Ok(summary),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(cleanup)) => Err(format!(
+            "Arcade catalog prototype cleanup failed after a successful run: {cleanup}"
+        )
+        .into()),
+        (Err(run), Err(cleanup)) => Err(format!(
+            "Arcade catalog prototype failed: {run}; cleanup also failed: {cleanup}"
+        )
+        .into()),
+    }
+}
+
+fn profile_arcade_catalog_prototype_run(
+    config: &NativeDeviceConfig,
+    binary: &Path,
+    output_dir: &Path,
+) -> Result<String> {
+    if !binary.is_file() {
+        return Err(format!(
+            "Arcade catalog prototype binary is missing: {}",
+            binary.display()
+        )
+        .into());
+    }
+    fs::create_dir_all(output_dir)?;
+    let binary_sha256 = file_sha256(binary.to_path_buf())?;
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "Arcade catalog prototype safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    exec_checked(
+        &session,
+        "prepare isolated Arcade catalog prototype root",
+        &format!(
+            "set -eu; rm -rf {root}; mkdir -p {root}",
+            root = sh(ARCADE_CATALOG_PROTOTYPE_REMOTE_ROOT),
+        ),
+    )?;
+    put(&session, binary, ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY)?;
+    exec_checked(
+        &session,
+        "verify Arcade catalog prototype inputs",
+        &format!(
+            "set -eu; chmod 755 {binary}; test -x {binary}; test -s {index}; test -d /media/fat/_Arcade; sync",
+            binary = sh(ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY),
+            index = sh(ARCADE_CATALOG_PROTOTYPE_UPDATER_INDEX),
+        ),
+    )?;
+    drop(session);
+
+    let mut samples = Vec::new();
+    for (arm, single_thread) in [("parallel", false), ("single-thread", true)] {
+        samples.push(run_arcade_catalog_prototype_cold_sample(
+            config,
+            output_dir,
+            arm,
+            single_thread,
+        )?);
+    }
+    let active_outputs_identical = samples
+        .first()
+        .and_then(|sample| sample.get("active_sha256"))
+        == samples
+            .get(1)
+            .and_then(|sample| sample.get("active_sha256"));
+    let record_counts_identical = samples
+        .first()
+        .and_then(|sample| sample.pointer("/report/build/active_records"))
+        == samples
+            .get(1)
+            .and_then(|sample| sample.pointer("/report/build/active_records"));
+    let parallel_total_us = samples
+        .first()
+        .and_then(|sample| sample.pointer("/report/total_us"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let single_thread_total_us = samples
+        .get(1)
+        .and_then(|sample| sample.pointer("/report/total_us"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let speedup = if parallel_total_us > 0 {
+        single_thread_total_us as f64 / parallel_total_us as f64
+    } else {
+        0.0
+    };
+    let status = if active_outputs_identical
+        && record_counts_identical
+        && parallel_total_us > 0
+        && single_thread_total_us > 0
+    {
+        "passed"
+    } else {
+        "failed"
+    };
+    let summary = json!({
+        "schema": "mister-magik-arcade-catalog-prototype-cold-v1",
+        "scenario": "arcade-catalog-prototype-cold",
+        "status": status,
+        "binary_sha256": binary_sha256,
+        "samples": samples,
+        "validation": {
+            "active_outputs_identical": active_outputs_identical,
+            "record_counts_identical": record_counts_identical,
+            "parallel_over_single_thread_speedup": speedup,
+        },
+    });
+    let summary_text = format!("{}\n", serde_json::to_string_pretty(&summary)?);
+    fs::write(output_dir.join("summary.json"), &summary_text)?;
+    if status != "passed" {
+        return Err("Arcade catalog prototype cold arms did not agree".into());
+    }
+    Ok(summary_text)
+}
+
+fn run_arcade_catalog_prototype_cold_sample(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    arm: &str,
+    single_thread: bool,
+) -> Result<Value> {
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "Arcade catalog prototype reboot safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    let boot_id_before = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("Arcade catalog prototype cannot read the initial boot id")?;
+    let host_reboot_started = Instant::now();
+    let reboot_mode = issue_reboot(&session, RebootMode::Supervised)?;
+    drop(session);
+    if !wait_down_with(&config.connection, 40.0) || wait_up_with(&config.connection, 120.0)? != 0 {
+        return Err(format!("Arcade catalog prototype {arm} reboot did not complete").into());
+    }
+    let host_reboot_elapsed_ms = host_reboot_started.elapsed().as_millis() as u64;
+    let session = connect_with(&config.connection, 10)?;
+    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
+    let boot_id_after = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("Arcade catalog prototype cannot read the final boot id")?;
+    if boot_id_after.trim() == boot_id_before.trim() {
+        return Err(format!("Arcade catalog prototype {arm} did not observe a new boot").into());
+    }
+    exec_checked(
+        &session,
+        "suspend launcher for isolated Arcade catalog prototype",
+        &acknowledged_main_command("mister_magik_suspend"),
+    )?;
+
+    let base_remote = format!("{ARCADE_CATALOG_PROTOTYPE_REMOTE_ROOT}/base-{arm}.bin");
+    let active_remote = format!("{ARCADE_CATALOG_PROTOTYPE_REMOTE_ROOT}/active-{arm}.bin");
+    let clear_command = format!(
+        "set -eu; rm -f {base} {active}; sync; test -w /proc/sys/vm/drop_caches; echo 3 > /proc/sys/vm/drop_caches",
+        base = sh(&base_remote),
+        active = sh(&active_remote),
+    );
+    exec_checked(
+        &session,
+        "clear caches for Arcade catalog prototype cold sample",
+        &clear_command,
+    )?;
+    let mut arguments = vec![
+        "build".to_string(),
+        "--updater-index".to_string(),
+        ARCADE_CATALOG_PROTOTYPE_UPDATER_INDEX.to_string(),
+        "--base-output".to_string(),
+        base_remote.clone(),
+        "--active-output".to_string(),
+        active_remote.clone(),
+    ];
+    if single_thread {
+        arguments.push("--single-thread".to_string());
+    }
+    let prototype_command = remote_subcommand(
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY,
+        &arguments[0],
+        &arguments[1..],
+    );
+    let output = exec_checked_output(
+        &session,
+        &format!("run Arcade catalog prototype {arm} cold sample"),
+        &format!("MALLOC_ARENA_MAX=2 {prototype_command}"),
+    )?;
+    let report: Value = serde_json::from_str(output.stdout.trim())
+        .map_err(|error| format!("Arcade catalog prototype {arm} output is not JSON: {error}"))?;
+    if report.get("command").and_then(Value::as_str) != Some("build") {
+        return Err(format!("Arcade catalog prototype {arm} output has the wrong command").into());
+    }
+
+    let arm_output_dir = output_dir.join(arm);
+    fs::create_dir_all(&arm_output_dir)?;
+    let base_local = arm_output_dir.join("base.bin");
+    let active_local = arm_output_dir.join("active.bin");
+    get(&session, &base_remote, &base_local)?;
+    get(&session, &active_remote, &active_local)?;
+    fs::write(
+        arm_output_dir.join("report.json"),
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    let base_sha256 = file_sha256(base_local)?;
+    let active_sha256 = file_sha256(active_local)?;
+    exec_checked(
+        &session,
+        "resume launcher after Arcade catalog prototype",
+        &acknowledged_main_command("mister_magik_resume"),
+    )?;
+    wait_delivery_health(&session, "dev", Duration::from_secs(15))?;
+    Ok(json!({
+        "arm": arm,
+        "reboot_verified": true,
+        "reboot_mode": reboot_mode,
+        "host_reboot_elapsed_ms": host_reboot_elapsed_ms,
+        "cache_drop_verified": true,
+        "base_sha256": base_sha256,
+        "active_sha256": active_sha256,
+        "report": report,
+    }))
+}
+
+fn cleanup_arcade_catalog_prototype(config: &NativeDeviceConfig) -> Result<()> {
+    let session = connect_with(&config.connection, 10)?;
+    let _ = exec(
+        &session,
+        &acknowledged_main_command("mister_magik_resume"),
+        true,
+    );
+    exec_checked(
+        &session,
+        "remove isolated Arcade catalog prototype root",
+        &format!("rm -rf {}", sh(ARCADE_CATALOG_PROTOTYPE_REMOTE_ROOT)),
+    )?;
+    wait_delivery_health(&session, "dev", Duration::from_secs(15))
+}
 
 const COLD_BOOT_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/cold-boot-profile";
 const COLD_BOOT_FRESH_ARCADE_INDEX: &str =
