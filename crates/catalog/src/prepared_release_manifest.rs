@@ -22,7 +22,6 @@ struct ZeroMhzManifest {
 pub(crate) struct ZeroMhzPackage {
     pub(crate) title: String,
     launcher_path: String,
-    pub(crate) launcher_bytes: u64,
     pub(crate) payloads: Vec<ZeroMhzPayload>,
 }
 
@@ -75,10 +74,6 @@ pub(crate) fn known_0mhz_launch(path: &Path) -> Option<KnownZeroMhzLaunch> {
     })
 }
 
-pub(crate) fn launcher_size_matches(package: &ZeroMhzPackage, size: u64) -> bool {
-    size == package.launcher_bytes
-}
-
 pub(crate) fn zero_mhz_packages() -> Option<&'static [ZeroMhzPackage]> {
     zero_mhz_index().map(|index| index.packages.as_slice())
 }
@@ -120,8 +115,7 @@ mod tests {
         assert_eq!(index.packages.len(), 319);
         assert_eq!(index.by_launcher.len(), 319);
         assert!(index.packages.iter().all(|package| {
-            package.launcher_bytes > 0
-                && !package.title.is_empty()
+            !package.title.is_empty()
                 && !package.payloads.is_empty()
                 && package
                     .payloads
