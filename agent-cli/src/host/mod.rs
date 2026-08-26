@@ -31681,9 +31681,9 @@ fn run_fast_five_catalog_prototype(
             sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT)
         ),
     )?;
-    let snapshot: Value = serde_json::from_str(snapshot.stdout.trim())?;
-    let published: Value = serde_json::from_str(published.stdout.trim())?;
-    let compared: Value = serde_json::from_str(compared.stdout.trim())?;
+    let snapshot = parse_last_json_line("fast-five snapshot", &snapshot.stdout)?;
+    let published = parse_last_json_line("fast-five publish", &published.stdout)?;
+    let compared = parse_last_json_line("fast-five comparison", &compared.stdout)?;
     if compared.get("status").and_then(Value::as_str) != Some("exact")
         || published.get("systems").and_then(Value::as_u64) != Some(5)
     {
@@ -31740,6 +31740,14 @@ fn run_fast_five_catalog_prototype(
     )?;
     println!("fast_five_catalog_report={}", output.display());
     Ok(())
+}
+
+fn parse_last_json_line(label: &str, output: &str) -> Result<Value> {
+    output
+        .lines()
+        .rev()
+        .find_map(|line| serde_json::from_str(line.trim()).ok())
+        .ok_or_else(|| format!("{label} produced no JSON record").into())
 }
 
 fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
