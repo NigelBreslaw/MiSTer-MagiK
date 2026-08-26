@@ -24,7 +24,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 3;
+pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 4;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FastSourceBuildReport {
@@ -552,12 +552,11 @@ fn scan_prepared_mgl(
 
 fn scan_oneload64(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<SystemGame> {
     let mut files = Vec::new();
-    collect_matching_files(
-        &storage_root.join("games/C64"),
-        &mut report.files_visited,
-        &mut files,
-        |path| extension_is(path, "crt"),
-    );
+    for root in oneload64_roots(storage_root) {
+        collect_matching_files(&root, &mut report.files_visited, &mut files, |path| {
+            extension_is(path, "crt")
+        });
+    }
     files
         .into_iter()
         .filter_map(|path| match validate_prepared_launch_path(&path) {
@@ -569,6 +568,22 @@ fn scan_oneload64(storage_root: &Path, report: &mut FastSourceSystemReport) -> V
             }
         })
         .collect()
+}
+
+pub(crate) fn oneload64_roots(storage_root: &Path) -> Vec<PathBuf> {
+    let base = storage_root.join("games/C64");
+    let mut roots = fs::read_dir(&base)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            (file_type.is_dir() && name.contains("oneload64")).then(|| entry.path())
+        })
+        .collect::<Vec<_>>();
+    roots.sort();
+    roots
 }
 
 fn collect_matching_files(
@@ -782,7 +797,7 @@ mod tests {
 
     #[test]
     fn independent_source_set_contains_no_legacy_input_kind() {
-        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 3);
+        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 4);
         assert_eq!(EXPANDED_FAST_SYSTEM_IDS.len(), 9);
     }
 }

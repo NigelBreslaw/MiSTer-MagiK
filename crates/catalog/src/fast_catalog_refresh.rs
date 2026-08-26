@@ -889,11 +889,7 @@ fn check_watch_index(
                 return;
             }
         };
-        if metadata.len() != container.size
-            || modified_ns(&metadata) != container.modified_ns
-            || changed_ns(&metadata) != container.changed_ns
-            || inode(&metadata) != container.inode
-        {
+        if metadata.len() != container.size || modified_ns(&metadata) != container.modified_ns {
             check.status = FastSourceCheckStatus::Changed;
             check.reason = format!("container changed: {}", container.path);
             return;
@@ -921,7 +917,10 @@ fn watch_specification(storage_root: &Path, system_id: &str) -> Result<WatchSpec
             ],
             storage_root.join("_Arcade/cores"),
         ),
-        "c64" => (vec![games.join("C64")], storage_root.join("_Computer")),
+        "c64" => (
+            crate::fast_catalog_sources::oneload64_roots(storage_root),
+            storage_root.join("_Computer"),
+        ),
         "dos" => (
             vec![storage_root.join("_DOS Games"), games.join("AO486")],
             storage_root.join("_Computer"),
@@ -947,11 +946,6 @@ fn watch_specification(storage_root: &Path, system_id: &str) -> Result<WatchSpec
         _ => return Err(format!("unsupported fast refresh system {system_id}")),
     };
     let mut anchors = vec![games, core_parent];
-    for root in &scan_roots {
-        if let Some(parent) = root.parent() {
-            anchors.push(parent.to_path_buf());
-        }
-    }
     anchors.sort();
     anchors.dedup();
     Ok(WatchSpecification {
