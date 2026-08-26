@@ -74,6 +74,12 @@ impl CatalogRefreshPolicy {
 pub(super) fn catalog_refresh_policy() -> CatalogRefreshPolicy {
     static VALUE: OnceLock<CatalogRefreshPolicy> = OnceLock::new();
     *VALUE.get_or_init(|| {
+        if std::env::var("MISTER_FAST_FIVE_CATALOG")
+            .ok()
+            .is_some_and(|value| matches!(value.as_str(), "1" | "on" | "true" | "yes"))
+        {
+            return CatalogRefreshPolicy::Off;
+        }
         catalog_refresh_policy_from_value(std::env::var("MISTER_CATALOG_REFRESH").ok().as_deref())
     })
 }

@@ -25,6 +25,11 @@ name = "arcade-catalog-prototype"
 path = "src/bin/arcade_catalog_prototype/main.rs"
 required-features = ["builder"]
 
+[[bin]]
+name = "five-system-catalog-prototype"
+path = "src/bin/five_system_catalog_prototype.rs"
+required-features = ["builder"]
+
 [lints.rust]
 warnings = "deny"
 

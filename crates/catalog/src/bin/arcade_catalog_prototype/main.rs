@@ -4,8 +4,11 @@
 //! Standalone, from-scratch Arcade catalog builder prototype.
 
 mod builder;
-mod model;
 mod scan;
+
+mod model {
+    pub use mister_magik_catalog::arcade_catalog_prototype_model::*;
+}
 
 use builder::{build_active, compile_base};
 use model::{decode_active, decode_base, encode_active, encode_base, hex};

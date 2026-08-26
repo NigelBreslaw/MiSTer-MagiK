@@ -6,6 +6,9 @@
 #[cfg(feature = "builder")]
 mod arcade_bootstrap_index;
 pub mod arcade_catalog;
+#[cfg(feature = "builder")]
+#[path = "bin/arcade_catalog_prototype/model.rs"]
+pub mod arcade_catalog_prototype_model;
 mod arcade_rom_inventory;
 pub mod archive_member;
 mod atomic_publish;
@@ -40,6 +43,7 @@ mod cooperative_work;
 mod core_audit;
 pub mod device_layout;
 mod fallible_log;
+pub mod fast_five_catalog;
 pub mod fs_fault;
 mod game_discovery;
 #[cfg(feature = "builder")]

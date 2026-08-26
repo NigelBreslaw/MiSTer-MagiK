@@ -61,7 +61,17 @@ pub fn load_sharded_registry_seed_at(
             error: "catalog registry has no systems".to_owned(),
         });
     }
-    let catalog_fingerprint =
+    let catalog_fingerprint = if fast_five_catalog_enabled() {
+        validate_fast_five_registry(registry.systems())?;
+        mister_magik_catalog::fast_five_catalog::registry_fingerprint(
+            storage,
+            mister_magik_catalog::production_sharded_projection::production_registry_limits(),
+        )
+        .map_err(|error| ShardedCatalogSeedLoadError {
+            status: "stale",
+            error,
+        })?
+    } else {
         mister_magik_catalog::production_sharded_projection::validate_production_binding(
             storage,
             registry.generation(),
@@ -69,13 +79,42 @@ pub fn load_sharded_registry_seed_at(
         .map_err(|error| ShardedCatalogSeedLoadError {
             status: "stale",
             error: error.to_string(),
-        })?;
+        })?
+    };
     let generation = registry.generation();
     Ok(ShardedCatalogSeed {
         catalog: registry_only_catalog(root, registry.systems()),
         catalog_fingerprint,
         generation,
     })
+}
+
+fn fast_five_catalog_enabled() -> bool {
+    std::env::var("MISTER_FAST_FIVE_CATALOG")
+        .ok()
+        .is_some_and(|value| matches!(value.as_str(), "1" | "on" | "true" | "yes"))
+}
+
+fn validate_fast_five_registry(
+    systems: &[mister_magik_catalog::sharded_catalog::SystemSummary],
+) -> Result<(), ShardedCatalogSeedLoadError> {
+    let actual = systems
+        .iter()
+        .map(|system| system.system_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let expected = mister_magik_catalog::fast_five_catalog::FAST_FIVE_SYSTEM_IDS
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    if actual == expected && systems.len() == expected.len() {
+        Ok(())
+    } else {
+        Err(ShardedCatalogSeedLoadError {
+            status: "stale",
+            error: format!(
+                "fast-five registry system set differs: expected={expected:?} actual={actual:?}"
+            ),
+        })
+    }
 }
 
 fn registry_only_catalog(
@@ -279,5 +318,32 @@ mod tests {
             catalog.system_game_count(arcade_catalog::MENU_ARCADE_SYSTEM_ID),
             0
         );
+    }
+
+    #[test]
+    fn fast_five_registry_rejects_extra_or_missing_systems() {
+        use mister_magik_catalog::catalog_classify::SystemId;
+        use mister_magik_catalog::sharded_catalog::SystemSummary;
+
+        let summaries = |ids: &[&str]| {
+            ids.iter()
+                .map(|id| SystemSummary {
+                    system_id: SystemId::parse(id).unwrap(),
+                    display_title: (*id).to_string(),
+                    section: "computers".into(),
+                    family: "computers".into(),
+                    order: 0,
+                    generation: 1,
+                    games: 1,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            validate_fast_five_registry(&summaries(
+                &mister_magik_catalog::fast_five_catalog::FAST_FIVE_SYSTEM_IDS
+            ))
+            .is_ok()
+        );
+        assert!(validate_fast_five_registry(&summaries(&["arcade"])).is_err());
     }
 }
