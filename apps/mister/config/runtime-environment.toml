@@ -425,7 +425,7 @@ documentation = { summary = "Routes catalog protocol output away from standard o
 
 [[control]]
 name = "MISTER_CATALOG_READY_SNAPSHOT"
-owner = "apps/mister/src/pmu_profile.rs"
+owner = "crates/catalog/src/sqlite_catalog.rs"
 classification = "production"
 value_shape = "path"
 default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
