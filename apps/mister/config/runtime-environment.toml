@@ -11,8 +11,8 @@ source_roots = [
 ]
 
 [baseline]
-literal_occurrences = 427
-unique_names = 281
+literal_occurrences = 426
+unique_names = 280
 external_build_names = 7
 
 [[control]]
@@ -620,21 +620,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls effect bench label behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_FAST_FIVE_CATALOG"
-owner = "apps/mister/src/process_config.rs"
-classification = "production"
-value_shape = "boolean token"
-default_behavior = "uses the production catalog when unset or disabled"
-visibility = "internal runtime"
-parser = "bool"
-typed_default = false
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Selects the independent fast catalog and its return-path restoration", accepted_values = ["0", "1", "off", "on", "false", "true", "no", "yes"], value_policy = "document" }
 
 [[control]]
 name = "MISTER_FB_DIAGNOSTIC_RECT"

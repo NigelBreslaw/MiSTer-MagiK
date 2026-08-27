@@ -4936,6 +4936,7 @@ fn compiled_text_cell(text: &str) -> DataTableCell {
         icon_tint: DataTableIconTint::Default,
     }
 }
+#[cfg(feature = "compiled-ui")]
 fn compiled_tree_row(row: &SdTreeRow) -> TreeViewRow {
     TreeViewRow {
         id: row.id.as_str().into(),

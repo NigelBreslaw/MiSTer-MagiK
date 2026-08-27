@@ -44,9 +44,6 @@ const READY_WIRE_VERSION: &str = "MISTER_MAGIK_READY_WIRE_VERSION";
 const MAIN_PID: &str = "MISTER_MAGIK_MAIN_PID";
 const MAIN_GENERATION: &str = "MISTER_MAGIK_MAIN_GENERATION";
 const OWNER_EPOCH: &str = "MISTER_MAGIK_OWNER_EPOCH";
-const RETURN_TO_LAUNCHER: &str = "MISTER_MAGIK_RETURN_TO_LAUNCHER";
-const SHARDED_CATALOG_DIR: &str = "MISTER_SHARDED_CATALOG_DIR";
-const CATALOG_REFRESH: &str = "MISTER_CATALOG_REFRESH";
 const LAUNCHER_RESPONSE_TRACE: &str = "MISTER_LAUNCHER_RESPONSE_TRACE";
 const LAUNCHER_RESPONSE_EXECUTION_TRACE: &str = "MISTER_LAUNCHER_RESPONSE_EXECUTION_TRACE";
 const LAUNCHER_RESPONSE_PMU: &str = "MISTER_LAUNCHER_RESPONSE_PMU";
@@ -111,10 +108,6 @@ impl EnvironmentSnapshot {
 
     pub fn get_path(&self, name: &str) -> Option<&Path> {
         self.values.get(OsStr::new(name)).map(Path::new)
-    }
-
-    fn insert(&mut self, name: &str, value: impl Into<OsString>) {
-        self.values.insert(name.into(), value.into());
     }
 
     #[cfg(test)]

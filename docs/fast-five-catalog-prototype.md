@@ -61,7 +61,6 @@ five-system-catalog-prototype publish \
 The parallel catalog is selected for one development launcher process with:
 
 ```bash
-MISTER_FAST_FIVE_CATALOG=1 \
 MISTER_SHARDED_CATALOG_DIR=/media/fat/mister-magik-dev/fast-five-catalog \
 MISTER_CATALOG_REFRESH=off \
 /media/fat/mister-magik-dev/mister-magik-fb ui
