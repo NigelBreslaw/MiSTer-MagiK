@@ -198,7 +198,7 @@ pub fn rebuild_installed_generic_system(
     system_id: &str,
 ) -> Result<Option<(FastFiveSystem, GenericSystemStats)>, String> {
     let roots = [storage_root.display().to_string()];
-    let profiles = ProfileSet::for_roots(&roots)
+    let profiles = ProfileSet::try_for_roots(&roots)?
         .into_profiles()
         .into_iter()
         .filter(|profile| profile.system_id == system_id)
@@ -230,7 +230,7 @@ pub fn discover_generic_systems_excluding_with_progress(
     mut system_complete: impl FnMut(&str),
 ) -> Result<(Vec<FastFiveSystem>, GenericSystemScanReport), String> {
     let roots = [storage_root.display().to_string()];
-    let profiles = ProfileSet::for_roots(&roots).into_profiles();
+    let profiles = ProfileSet::try_for_roots(&roots)?.into_profiles();
     discover_generic_systems_from_profiles_excluding_with_progress(
         storage_root,
         &profiles,
@@ -353,6 +353,12 @@ fn rebuild_generic_system_from_profiles(
     scanned.dedup_by(|left, right| left.game.launch_ref == right.game.launch_ref);
     stats.games = scanned.len();
     stats.elapsed_us = started.elapsed().as_micros() as u64;
+    if stats.read_errors > 0 {
+        return Err(format!(
+            "incomplete {system_id} scan: {} directory errors",
+            stats.read_errors
+        ));
+    }
     Ok(Some((
         FastFiveSystem {
             system_id: system_id.to_string(),
@@ -822,6 +828,7 @@ fn scan_namespace_borrowed(
     stats.namespace_type_stats = stats
         .namespace_type_stats
         .saturating_add(namespace.type_stats);
+    stats.read_errors = stats.read_errors.saturating_add(namespace.errors);
 }
 
 fn direct_game(profile: &LaunchProfile, path: &Path, rule: &PayloadRule) -> ScannedGame {

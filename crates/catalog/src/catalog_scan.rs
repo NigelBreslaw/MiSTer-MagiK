@@ -2677,6 +2677,7 @@ mod tests {
                         buffer_allocations: 8,
                         fallback_count: usize::from(index == 1),
                         restart_count: usize::from(index == 1),
+                        errors: 0,
                         first_entry_us: Some(9),
                         final_entry_us: Some(10),
                         target_signature: None,

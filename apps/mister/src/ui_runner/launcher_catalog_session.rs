@@ -158,6 +158,7 @@ pub(super) struct LauncherCatalogSession {
     full_scan_counter_climb_logged: bool,
     system_update_total: Option<usize>,
     completed_system_updates: BTreeSet<String>,
+    catalog_seed_partial: bool,
 }
 
 impl LauncherCatalogSession {
@@ -175,6 +176,7 @@ impl LauncherCatalogSession {
             full_scan_counter_climb_logged: false,
             system_update_total: None,
             completed_system_updates: BTreeSet::new(),
+            catalog_seed_partial: false,
         }
     }
 
@@ -192,10 +194,12 @@ impl LauncherCatalogSession {
 
     pub(super) fn note_summary_seed_ready(&mut self) {
         self.summary_only = true;
+        self.catalog_seed_partial = true;
     }
 
     pub(super) fn note_cached_catalog_ready(&mut self) {
         self.summary_only = false;
+        self.catalog_seed_partial = false;
     }
 
     pub(super) fn defer_catalog_worker(
@@ -440,6 +444,7 @@ impl LauncherCatalogSession {
             } => {
                 self.handle_ready(
                     context.catalog_ready,
+                    context.catalog_partial || self.catalog_seed_partial,
                     catalog,
                     summary,
                     load_us,
@@ -746,6 +751,7 @@ impl LauncherCatalogSession {
     fn handle_ready(
         &mut self,
         catalog_ready: bool,
+        catalog_partial: bool,
         ready_catalog: ArcadeCatalog,
         summary: Option<library_db::LibraryRefreshSummary>,
         load_us: u64,
@@ -757,13 +763,23 @@ impl LauncherCatalogSession {
     ) {
         let cached_before_refresh = summary.is_none() && !durable_save_pending;
         let duplicate_cached_catalog = !self.summary_only
-            && duplicate_cached_catalog_ready(catalog_ready, cached_before_refresh);
+            && duplicate_cached_catalog_ready(
+                catalog_ready,
+                catalog_partial,
+                cached_before_refresh,
+            );
         let validation_already_finished = self.refresh_done;
         self.refresh_done =
             validation_already_finished || (!cached_before_refresh && !durable_save_pending);
         let catalog_len = ready_catalog.len();
         if !duplicate_cached_catalog {
             self.summary_only = false;
+            self.catalog_seed_partial = matches!(
+                source,
+                CatalogSource::ReturnCapsule
+                    | CatalogSource::SummaryProjection
+                    | CatalogSource::NavigationProjection
+            );
             effects.push(CatalogSessionEffect::RequestMediaCatalogSeed);
             effects.push(CatalogSessionEffect::UseCatalog {
                 catalog: ready_catalog,
@@ -917,8 +933,12 @@ fn push_catalog_coverage_diagnostic(
     );
 }
 
-fn duplicate_cached_catalog_ready(catalog_ready: bool, cached_before_refresh: bool) -> bool {
-    catalog_ready && cached_before_refresh
+fn duplicate_cached_catalog_ready(
+    catalog_ready: bool,
+    catalog_partial: bool,
+    cached_before_refresh: bool,
+) -> bool {
+    catalog_ready && !catalog_partial && cached_before_refresh
 }
 
 #[derive(Debug, Default)]
@@ -2325,9 +2345,84 @@ mod tests {
 
     #[test]
     pub(super) fn duplicate_cached_catalog_ready_is_skipped_after_sync_load() {
-        assert!(duplicate_cached_catalog_ready(true, true));
-        assert!(!duplicate_cached_catalog_ready(false, true));
-        assert!(!duplicate_cached_catalog_ready(true, false));
+        assert!(duplicate_cached_catalog_ready(true, false, true));
+        assert!(!duplicate_cached_catalog_ready(false, false, true));
+        assert!(!duplicate_cached_catalog_ready(true, true, true));
+        assert!(!duplicate_cached_catalog_ready(true, false, false));
+    }
+
+    #[test]
+    fn authoritative_registry_replaces_arcade_bootstrap_before_duplicate_suppression() {
+        let now = Instant::now();
+        let mut session = LauncherCatalogSession::new(false);
+        let context = |catalog_ready| CatalogWorkerMessageContext {
+            catalog_ready,
+            catalog_partial: false,
+            screen: Screen::Home,
+            media_gate: None,
+        };
+
+        let bootstrap = session.handle_worker_message(
+            context(false),
+            CatalogWorkerMessage::Ready {
+                catalog: catalog_with_games(1),
+                summary: None,
+                load_us: 1,
+                source: CatalogSource::NavigationProjection,
+                durable_save_pending: true,
+                generation_fingerprint: None,
+                publication_ack: None,
+            },
+            now,
+        );
+        assert!(bootstrap.into_effects().into_iter().any(|effect| matches!(
+            effect,
+            CatalogSessionEffect::UseCatalog {
+                source: CatalogSource::NavigationProjection,
+                ..
+            }
+        )));
+
+        let registry = session.handle_worker_message(
+            context(true),
+            CatalogWorkerMessage::Ready {
+                catalog: catalog_with_games(3),
+                summary: None,
+                load_us: 2,
+                source: CatalogSource::ShardedRegistry,
+                durable_save_pending: false,
+                generation_fingerprint: Some("generation-1".to_string()),
+                publication_ack: None,
+            },
+            now,
+        );
+        assert!(registry.into_effects().into_iter().any(|effect| matches!(
+            effect,
+            CatalogSessionEffect::UseCatalog {
+                source: CatalogSource::ShardedRegistry,
+                ..
+            }
+        )));
+
+        let duplicate = session.handle_worker_message(
+            context(true),
+            CatalogWorkerMessage::Ready {
+                catalog: catalog_with_games(3),
+                summary: None,
+                load_us: 3,
+                source: CatalogSource::ShardedRegistry,
+                durable_save_pending: false,
+                generation_fingerprint: Some("generation-1".to_string()),
+                publication_ack: None,
+            },
+            now,
+        );
+        assert!(
+            !duplicate
+                .into_effects()
+                .into_iter()
+                .any(|effect| matches!(effect, CatalogSessionEffect::UseCatalog { .. }))
+        );
     }
 
     #[test]

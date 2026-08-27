@@ -69,6 +69,7 @@ pub(crate) struct NamespaceWalkStats {
     pub(crate) buffer_allocations: usize,
     pub(crate) fallback_count: usize,
     pub(crate) restart_count: usize,
+    pub(crate) errors: usize,
     pub(crate) first_entry_us: Option<u64>,
     pub(crate) final_entry_us: Option<u64>,
     pub(crate) target_signature: Option<(u64, i64)>,
@@ -100,6 +101,7 @@ impl NamespaceWalkStats {
             .saturating_add(other.buffer_allocations);
         self.fallback_count = self.fallback_count.saturating_add(other.fallback_count);
         self.restart_count = self.restart_count.saturating_add(other.restart_count);
+        self.errors = self.errors.saturating_add(other.errors);
         self.first_entry_us = match (self.first_entry_us, other.first_entry_us) {
             (Some(left), Some(right)) => Some(left.min(right)),
             (left, right) => left.or(right),
@@ -315,11 +317,18 @@ fn visit_walkdir(
     let mut first_entry_us = None;
     let mut final_entry_us = None;
     let mut target_signature_before = None;
+    let mut errors = 0usize;
     for entry in builder
         .into_iter()
         .filter_entry(|entry| !ignore(entry.path()))
-        .filter_map(Result::ok)
     {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                errors = errors.saturating_add(1);
+                continue;
+            }
+        };
         if visited_entries.is_multiple_of(16) {
             crate::cooperative_work::checkpoint();
         }
@@ -400,6 +409,7 @@ fn visit_walkdir(
         buffer_allocations: 0,
         fallback_count: usize::from(restarted),
         restart_count: usize::from(restarted),
+        errors,
         first_entry_us,
         final_entry_us,
         target_signature,
@@ -570,6 +580,7 @@ mod linux {
                     buffer_allocations: 0,
                     fallback_count: 0,
                     restart_count: 0,
+                    errors: 0,
                     first_entry_us: None,
                     final_entry_us: None,
                     target_signature: None,
@@ -619,6 +630,7 @@ mod linux {
             buffer_allocations: 0,
             fallback_count: 0,
             restart_count: 0,
+            errors: 0,
             first_entry_us: None,
             final_entry_us: None,
             target_signature: None,

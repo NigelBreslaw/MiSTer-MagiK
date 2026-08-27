@@ -18773,6 +18773,11 @@ mod tests {
                     title: "Arcade".into(),
                     count: 1,
                 },
+                arcade_catalog::GameSystemEntry {
+                    id: "snes".into(),
+                    title: "Super Nintendo".into(),
+                    count: 10,
+                },
             ],
         );
         let game = mister_magik_catalog::system_shard::SystemGame {
@@ -18793,6 +18798,14 @@ mod tests {
             assert!(row.has_preview);
             assert_eq!(row.preview_asset_key.as_ref(), "1943kai");
         }
+        assert_eq!(
+            updated
+                .systems
+                .iter()
+                .find(|system| system.id == "snes")
+                .map(|system| system.count),
+            Some(10)
+        );
     }
 
     #[test]

@@ -125,6 +125,47 @@ pub(crate) fn installed_cores_for_roots(roots: &[String]) -> Vec<InstalledCore> 
     out
 }
 
+#[cfg(feature = "builder")]
+pub(crate) fn installed_cores_for_roots_checked(
+    roots: &[String],
+) -> Result<Vec<InstalledCore>, String> {
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    for search_root in core_search_roots(roots) {
+        let mut directories = vec![search_root.clone()];
+        if path_name_eq(&search_root, "_LLAPI") {
+            directories.push(search_root.join("cores"));
+        }
+        for directory in directories {
+            let Some(entries) = read_dir_entries_checked(&directory)? else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.path();
+                if should_ignore_hidden_path(&path) || !path_ext_eq(&path, "rbf") {
+                    continue;
+                }
+                let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                if stem.eq_ignore_ascii_case("menu") {
+                    continue;
+                }
+                let core_id = launch_profiles::canonical_core_id(stem);
+                let key = format!("{}\t{}", core_id.to_ascii_lowercase(), path.display());
+                if seen.insert(key) {
+                    out.push(InstalledCore {
+                        core_id,
+                        path: path.to_path_buf(),
+                    });
+                }
+            }
+        }
+    }
+    append_mgl_system_descriptors_checked(roots, &mut out, &mut seen)?;
+    Ok(out)
+}
+
 fn append_mgl_system_descriptors(
     roots: &[String],
     out: &mut Vec<InstalledCore>,
@@ -174,6 +215,59 @@ fn append_mgl_system_descriptors(
             }
         }
     }
+}
+
+#[cfg(feature = "builder")]
+fn append_mgl_system_descriptors_checked(
+    roots: &[String],
+    out: &mut Vec<InstalledCore>,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    let physical = out.clone();
+    for search_root in core_search_roots(roots) {
+        let Some(entries) = read_dir_entries_checked(&search_root)? else {
+            continue;
+        };
+        for entry in entries {
+            let descriptor_path = entry.path();
+            if !path_ext_eq(&descriptor_path, "mgl") {
+                continue;
+            }
+            let Some(metadata) = crate::media_metadata::read_mgl_metadata(&descriptor_path) else {
+                continue;
+            };
+            if metadata.file_path.is_some() {
+                continue;
+            }
+            let (Some(setname), Some(rbf)) = (metadata.setname, metadata.rbf) else {
+                continue;
+            };
+            let rbf_name = Path::new(&rbf)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(launch_profiles::canonical_core_id);
+            let Some(target) = rbf_name.and_then(|name| {
+                physical
+                    .iter()
+                    .find(|core| compact_system_name(&core.core_id) == compact_system_name(&name))
+            }) else {
+                continue;
+            };
+            let core_id = launch_profiles::canonical_core_id(&setname);
+            let key = format!(
+                "{}\t{}",
+                core_id.to_ascii_lowercase(),
+                target.path.display()
+            );
+            if seen.insert(key) {
+                out.push(InstalledCore {
+                    core_id,
+                    path: target.path.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn compact_system_name(value: &str) -> String {
@@ -353,6 +447,51 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding(
     out
 }
 
+#[cfg(feature = "builder")]
+pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
+    roots: &[String],
+    excluded_names: &BTreeSet<String>,
+) -> Result<Vec<GameDirHeader>, String> {
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    for game_root in game_roots(roots) {
+        let Some(read_dir) = read_dir_entries_checked(&game_root)? else {
+            continue;
+        };
+        let mut entries = Vec::new();
+        for entry in read_dir {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if should_ignore_game_dir(name) {
+                continue;
+            }
+            if entry
+                .file_type()
+                .map_err(|error| format!("inspect {}: {error}", path.display()))?
+                .is_symlink()
+            {
+                continue;
+            }
+            if excluded_names.contains(&name.to_ascii_lowercase()) {
+                continue;
+            }
+            let key = path.display().to_string().to_ascii_lowercase();
+            if seen.insert(key) {
+                entries.push(GameDirHeader {
+                    name: name.to_string(),
+                    signature: GameDirSignature::Unavailable,
+                    path,
+                });
+            }
+        }
+        entries.sort_by_key(|entry| entry.name.to_ascii_lowercase());
+        out.extend(entries);
+    }
+    Ok(out)
+}
+
 /// Adds compact directory signatures to the name-only cold scan headers.
 /// Linux obtains them by opening each direct child relative to `/games` and
 /// reading metadata from that fd, avoiding one full exFAT path lookup per
@@ -425,6 +564,29 @@ pub(crate) fn game_dir_payload_facts_for_header(header: GameDirHeader) -> GameDi
         nested_probe_signatures,
         payload_extensions,
     }
+}
+
+#[cfg(feature = "builder")]
+pub(crate) fn game_dir_payload_facts_for_header_checked(
+    header: GameDirHeader,
+) -> Result<GameDirFact, String> {
+    let (
+        has_payload_files,
+        has_zip_files,
+        direct_zip_paths,
+        nested_probe_signatures,
+        payload_extensions,
+    ) = game_dir_payload_facts_checked(&header.path)?;
+    Ok(GameDirFact {
+        name: header.name,
+        path: header.path,
+        signature: header.signature,
+        has_payload_files,
+        has_zip_files,
+        direct_zip_paths,
+        nested_probe_signatures,
+        payload_extensions,
+    })
 }
 
 pub(crate) fn game_roots(roots: &[String]) -> Vec<PathBuf> {
@@ -553,6 +715,106 @@ fn game_dir_payload_facts(path: &Path) -> GameDirPayloadFacts {
         nested_probe_signatures,
         payload_extensions,
     )
+}
+
+#[cfg(feature = "builder")]
+fn game_dir_payload_facts_checked(path: &Path) -> Result<GameDirPayloadFacts, String> {
+    let mut last_error = None;
+    for _ in 0..2 {
+        let mut has_payload = false;
+        let mut has_zip = false;
+        let mut direct_zip_paths = Vec::new();
+        let mut nested_probe_signatures = Vec::new();
+        let mut payload_extensions = BTreeSet::new();
+        let mut failed = None;
+        for entry in walkdir::WalkDir::new(path)
+            .follow_links(false)
+            .max_depth(2)
+            .into_iter()
+            .filter_entry(|entry| !should_ignore_path(entry.path()))
+        {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    failed = Some(error.to_string());
+                    break;
+                }
+            };
+            if entry.file_type().is_dir() && entry.depth() == 1 {
+                nested_probe_signatures.push((
+                    entry.path().to_path_buf(),
+                    GameDirSignature::from_path(entry.path()),
+                ));
+            }
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let entry_path = entry.path();
+            if path_ext_eq(entry_path, "zip") {
+                has_zip = true;
+                if entry.depth() == 1 {
+                    direct_zip_paths.push(entry_path.to_path_buf());
+                }
+            } else {
+                has_payload = true;
+                if let Some(ext) = entry_path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext.to_ascii_lowercase())
+                {
+                    payload_extensions.insert(ext);
+                }
+            }
+        }
+        if let Some(error) = failed {
+            last_error = Some(error);
+            crate::cooperative_work::checkpoint();
+            continue;
+        }
+        direct_zip_paths
+            .sort_by_cached_key(|entry_path| entry_path.to_string_lossy().to_ascii_lowercase());
+        nested_probe_signatures.sort_by_cached_key(|(entry_path, _)| {
+            (
+                entry_path.to_string_lossy().to_ascii_lowercase(),
+                entry_path.clone(),
+            )
+        });
+        return Ok((
+            has_payload,
+            has_zip,
+            direct_zip_paths,
+            nested_probe_signatures,
+            payload_extensions,
+        ));
+    }
+    Err(format!(
+        "enumerate {}: {}",
+        path.display(),
+        last_error.unwrap_or_else(|| "unknown directory error".to_string())
+    ))
+}
+
+#[cfg(feature = "builder")]
+fn read_dir_entries_checked(path: &Path) -> Result<Option<Vec<std::fs::DirEntry>>, String> {
+    let mut last_error = None;
+    for _ in 0..2 {
+        match std::fs::read_dir(path) {
+            Ok(entries) => match entries.collect::<Result<Vec<_>, _>>() {
+                Ok(entries) => return Ok(Some(entries)),
+                Err(error) => last_error = Some(error),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => last_error = Some(error),
+        }
+        crate::cooperative_work::checkpoint();
+    }
+    Err(format!(
+        "enumerate {}: {}",
+        path.display(),
+        last_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "unknown directory error".to_string())
+    ))
 }
 
 fn path_name_eq(path: &Path, expected: &str) -> bool {

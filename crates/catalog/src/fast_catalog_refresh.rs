@@ -583,7 +583,7 @@ pub fn capture_refresh_state(
     snapshot: &FastFiveSnapshot,
 ) -> Result<(Vec<FastRefreshSystemState>, FastRefreshCaptureReport), String> {
     let roots = [storage_root.display().to_string()];
-    let profiles = crate::launch_profiles::ProfileSet::for_roots(&roots).into_profiles();
+    let profiles = crate::launch_profiles::ProfileSet::try_for_roots(&roots)?.into_profiles();
     capture_refresh_state_with_profiles(storage_root, snapshot, &profiles)
 }
 
@@ -635,7 +635,7 @@ pub fn capture_system_watch(
     system_id: &str,
 ) -> Result<FastSystemWatchIndex, String> {
     let roots = [storage_root.display().to_string()];
-    let profiles = crate::launch_profiles::ProfileSet::for_roots(&roots).into_profiles();
+    let profiles = crate::launch_profiles::ProfileSet::try_for_roots(&roots)?.into_profiles();
     let specification = watch_specification_from_profiles(storage_root, system_id, &profiles)?;
     capture_system_watch_from_specification(
         storage_root,
@@ -772,7 +772,7 @@ pub fn plan_fast_refresh(
             .unwrap_or(u64::MAX);
         check
     };
-    let mut systems = crate::fast_catalog_sources::discover_independent_system_ids(storage_root);
+    let mut systems = crate::fast_catalog_sources::discover_independent_system_ids(storage_root)?;
     systems.extend(
         active
             .systems

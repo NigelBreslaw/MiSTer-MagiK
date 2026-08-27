@@ -212,6 +212,13 @@ impl ProfileSet {
         }
     }
 
+    #[cfg(feature = "builder")]
+    pub(crate) fn try_for_roots(roots: &[String]) -> Result<Self, String> {
+        Ok(Self {
+            profiles: try_active_profiles_for_roots(roots)?,
+        })
+    }
+
     pub fn profiles(&self) -> &[LaunchProfile] {
         &self.profiles
     }
@@ -508,6 +515,55 @@ impl CatalogScanPlan {
         }
     }
 
+    #[cfg(feature = "builder")]
+    pub(crate) fn try_for_roots(roots: &[String]) -> Result<Self, String> {
+        crate::cooperative_work::checkpoint();
+        let core_started = Instant::now();
+        let installed_cores = catalog_discovery::installed_cores_for_roots_checked(roots)?;
+        let core_us = core_started.elapsed().as_micros() as u64;
+        crate::cooperative_work::checkpoint();
+        let game_headers_started = Instant::now();
+        let all_game_dir_headers =
+            catalog_discovery::top_level_game_dir_headers_for_roots_excluding_checked(
+                roots,
+                &BTreeSet::new(),
+            )?;
+        let game_headers_us = game_headers_started.elapsed().as_micros() as u64;
+        crate::library_db::report_library_scan_timing(
+            "scan_plan_cores",
+            core_us,
+            format!("cores={}", installed_cores.len()),
+        );
+        crate::library_db::report_library_scan_timing(
+            "scan_plan_game_headers",
+            game_headers_us,
+            format!("headers={}", all_game_dir_headers.len()),
+        );
+        let profiles_started = Instant::now();
+        let base_profiles = base_profiles_for_installed_cores(&installed_cores);
+        let active_game_dirs = active_profile_game_dirs(&base_profiles);
+        let game_dir_headers = all_game_dir_headers
+            .iter()
+            .filter(|header| !active_game_dirs.contains(&header.name.to_ascii_lowercase()))
+            .cloned()
+            .collect::<Vec<_>>();
+        crate::library_db::report_library_scan_timing(
+            "scan_plan_profiles",
+            profiles_started.elapsed().as_micros() as u64,
+            format!(
+                "base_profiles={} runtime_headers={}",
+                base_profiles.len(),
+                game_dir_headers.len()
+            ),
+        );
+        Ok(Self {
+            installed_cores,
+            all_game_dir_headers,
+            game_dir_headers,
+            base_profiles,
+        })
+    }
+
     pub(crate) fn installed_cores(&self) -> &[catalog_discovery::InstalledCore] {
         &self.installed_cores
     }
@@ -560,6 +616,20 @@ pub fn active_profiles_for_roots(roots: &[String]) -> Vec<LaunchProfile> {
         .map(catalog_discovery::game_dir_payload_facts_for_header)
         .collect::<Vec<_>>();
     plan.finalize_profiles(&game_dirs)
+}
+
+#[cfg(feature = "builder")]
+pub(crate) fn try_active_profiles_for_roots(
+    roots: &[String],
+) -> Result<Vec<LaunchProfile>, String> {
+    let plan = CatalogScanPlan::try_for_roots(roots)?;
+    let game_dirs = plan
+        .game_dir_headers()
+        .iter()
+        .cloned()
+        .map(catalog_discovery::game_dir_payload_facts_for_header_checked)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(plan.finalize_profiles(&game_dirs))
 }
 
 pub(crate) fn active_profiles_for_roots_with_facts(

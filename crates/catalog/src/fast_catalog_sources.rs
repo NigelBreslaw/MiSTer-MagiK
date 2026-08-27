@@ -92,7 +92,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         &mut system_complete,
     )?;
     let roots = [storage_root.display().to_string()];
-    let profiles = ProfileSet::for_roots(&roots).into_profiles();
+    let profiles = ProfileSet::try_for_roots(&roots)?.into_profiles();
     let planned_system_ids = discover_independent_system_ids_from_profiles(storage_root, &profiles);
     plan_ready(&planned_system_ids);
     for system_id in PREPARED_SYSTEM_IDS
@@ -245,10 +245,13 @@ pub fn rebuild_independent_system(
     Ok((system, report))
 }
 
-pub fn discover_independent_system_ids(storage_root: &Path) -> Vec<String> {
+pub fn discover_independent_system_ids(storage_root: &Path) -> Result<Vec<String>, String> {
     let roots = [storage_root.display().to_string()];
-    let profiles = ProfileSet::for_roots(&roots).into_profiles();
-    discover_independent_system_ids_from_profiles(storage_root, &profiles)
+    let profiles = ProfileSet::try_for_roots(&roots)?.into_profiles();
+    Ok(discover_independent_system_ids_from_profiles(
+        storage_root,
+        &profiles,
+    ))
 }
 
 fn discover_independent_system_ids_from_profiles(
@@ -370,17 +373,17 @@ fn build_prepared_system(
     };
     let (mut games, mut variants) = match system_id {
         "arcade" => {
-            let scan = scan_arcade(storage_root, &mut report);
+            let scan = scan_arcade(storage_root, &mut report)?;
             (scan.games, scan.variants)
         }
-        "amiga" => (scan_amiga(storage_root, &mut report), Vec::new()),
+        "amiga" => (scan_amiga(storage_root, &mut report)?, Vec::new()),
         "dos" => (
             scan_prepared_mgl(
                 &[storage_root.join("_DOS Games")],
                 "dos",
                 "DOS",
                 &mut report,
-            ),
+            )?,
             Vec::new(),
         ),
         "x68000" => (
@@ -392,10 +395,10 @@ fn build_prepared_system(
                 "x68000",
                 "X68000",
                 &mut report,
-            ),
+            )?,
             Vec::new(),
         ),
-        "c64" => (scan_oneload64(storage_root, &mut report), Vec::new()),
+        "c64" => (scan_oneload64(storage_root, &mut report)?, Vec::new()),
         _ => return Err(format!("unsupported prepared fast system {system_id}")),
     };
     games.sort_by(|left, right| {
@@ -447,13 +450,20 @@ pub(crate) struct FastArcadeAuditCandidate {
     pub family_id: String,
 }
 
-fn scan_arcade(storage_root: &Path, report: &mut FastSourceSystemReport) -> ArcadeScan {
-    collapse_arcade_candidates(scan_arcade_candidates(storage_root, report))
+fn scan_arcade(
+    storage_root: &Path,
+    report: &mut FastSourceSystemReport,
+) -> Result<ArcadeScan, String> {
+    Ok(collapse_arcade_candidates(scan_arcade_candidates(
+        storage_root,
+        report,
+    )?))
 }
 
 pub(crate) fn audit_arcade_candidates(storage_root: &Path) -> Vec<FastArcadeAuditCandidate> {
     let mut report = FastSourceSystemReport::default();
     scan_arcade_candidates(storage_root, &mut report)
+        .unwrap_or_default()
         .into_iter()
         .map(|candidate| FastArcadeAuditCandidate {
             title: candidate.game.title,
@@ -466,16 +476,16 @@ pub(crate) fn audit_arcade_candidates(storage_root: &Path) -> Vec<FastArcadeAudi
 fn scan_arcade_candidates(
     storage_root: &Path,
     report: &mut FastSourceSystemReport,
-) -> Vec<ArcadeCandidate> {
-    let roms = arcade_rom_inventory(storage_root, report);
-    let cores = arcade_core_inventory(storage_root, report);
+) -> Result<Vec<ArcadeCandidate>, String> {
+    let roms = arcade_rom_inventory(storage_root, report)?;
+    let cores = arcade_core_inventory(storage_root, report)?;
     let updater = arcade_updater_rows(storage_root);
     let mut files = Vec::new();
     collect_arcade_mras(
         &storage_root.join("_Arcade"),
         &mut report.files_visited,
         &mut files,
-    );
+    )?;
     let mut games = Vec::new();
     for path in files {
         let relative = path
@@ -616,7 +626,7 @@ fn scan_arcade_candidates(
             family_id,
         });
     }
-    games
+    Ok(games)
 }
 
 fn collapse_arcade_candidates(mut candidates: Vec<ArcadeCandidate>) -> ArcadeScan {
@@ -680,11 +690,14 @@ fn arcade_updater_rows(
     .unwrap_or_default()
 }
 
-fn collect_arcade_mras(root: &Path, visited: &mut usize, output: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(root) else {
-        return;
+fn collect_arcade_mras(
+    root: &Path,
+    visited: &mut usize,
+    output: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    let Some(mut entries) = read_dir_entries_checked(root)? else {
+        return Ok(());
     };
-    let mut entries = entries.filter_map(Result::ok).collect::<Vec<_>>();
     entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
     for entry in entries {
         *visited = visited.saturating_add(1);
@@ -693,15 +706,15 @@ fn collect_arcade_mras(root: &Path, visited: &mut usize, output: &mut Vec<PathBu
         if should_ignore_arcade_component(&name) {
             continue;
         }
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("inspect {}: {error}", entry.path().display()))?;
         if file_type.is_symlink() {
             continue;
         }
         let path = entry.path();
         if file_type.is_dir() {
-            collect_arcade_mras(&path, visited, output);
+            collect_arcade_mras(&path, visited, output)?;
         } else if file_type.is_file()
             && extension_is(&path, "mra")
             && !matches!(
@@ -712,6 +725,7 @@ fn collect_arcade_mras(root: &Path, visited: &mut usize, output: &mut Vec<PathBu
             output.push(path);
         }
     }
+    Ok(())
 }
 
 fn should_ignore_arcade_component(component: &str) -> bool {
@@ -736,17 +750,17 @@ fn should_ignore_arcade_component(component: &str) -> bool {
 fn arcade_rom_inventory(
     storage_root: &Path,
     report: &mut FastSourceSystemReport,
-) -> BTreeSet<(&'static str, String)> {
+) -> Result<BTreeSet<(&'static str, String)>, String> {
     let mut inventory = BTreeSet::new();
     for (namespace, directory) in [("mame", "mame"), ("hbmame", "hbmame")] {
         for root in [
             storage_root.join("games").join(directory),
             storage_root.join("_Arcade").join(directory),
         ] {
-            let Ok(entries) = fs::read_dir(root) else {
+            let Some(entries) = read_dir_entries_checked(&root)? else {
                 continue;
             };
-            for entry in entries.filter_map(Result::ok) {
+            for entry in entries {
                 report.files_visited = report.files_visited.saturating_add(1);
                 let path = entry.path();
                 if extension_is(&path, "zip")
@@ -757,28 +771,28 @@ fn arcade_rom_inventory(
             }
         }
     }
-    inventory
+    Ok(inventory)
 }
 
 fn arcade_core_inventory(
     storage_root: &Path,
     report: &mut FastSourceSystemReport,
-) -> BTreeSet<String> {
+) -> Result<BTreeSet<String>, String> {
     let mut files = Vec::new();
     collect_matching_files(
         &storage_root.join("_Arcade/cores"),
         &mut report.files_visited,
         &mut files,
         |path| extension_is(path, "rbf"),
-    );
-    files
+    )?;
+    Ok(files
         .into_iter()
         .filter_map(|path| {
             path.file_stem()
                 .and_then(|stem| stem.to_str())
                 .map(normalize_name)
         })
-        .collect()
+        .collect())
 }
 
 fn rom_namespace_label(namespace: &RomNamespace) -> &'static str {
@@ -788,7 +802,10 @@ fn rom_namespace_label(namespace: &RomNamespace) -> &'static str {
     }
 }
 
-fn scan_amiga(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<SystemGame> {
+fn scan_amiga(
+    storage_root: &Path,
+    report: &mut FastSourceSystemReport,
+) -> Result<Vec<SystemGame>, String> {
     let amiga = storage_root.join("games/Amiga");
     let mut metadata_files = Vec::new();
     collect_matching_files(
@@ -806,7 +823,7 @@ fn scan_amiga(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<S
                     )
                 })
         },
-    );
+    )?;
     let has_payload = metadata_files.iter().any(|path| {
         path.file_name()
             .and_then(|name| name.to_str())
@@ -858,7 +875,7 @@ fn scan_amiga(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<S
                     .and_then(|name| name.to_str())
                     .map(str::to_ascii_lowercase)
                     .is_some_and(|name| name.contains("amigavision") || name.contains("megaags"))
-        });
+        })?;
         for archive in archives {
             let Ok(metadata) = fs::metadata(&archive) else {
                 report.invalid += 1;
@@ -925,13 +942,13 @@ fn scan_amiga(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<S
         ["adf", "cue", "chd", "iso"]
             .into_iter()
             .any(|extension| extension_is(path, extension))
-    });
+    })?;
     games.extend(
         files
             .into_iter()
             .map(|path| direct_row("amiga", "Computer", &path, display_name(&path))),
     );
-    games
+    Ok(games)
 }
 
 fn scan_prepared_mgl(
@@ -939,12 +956,12 @@ fn scan_prepared_mgl(
     system_id: &str,
     category: &str,
     report: &mut FastSourceSystemReport,
-) -> Vec<SystemGame> {
+) -> Result<Vec<SystemGame>, String> {
     let mut files = Vec::new();
     for root in roots {
         collect_matching_files(root, &mut report.files_visited, &mut files, |path| {
             extension_is(path, "mgl")
-        });
+        })?;
     }
     let prepared_index = (system_id == "dos").then(|| {
         PreparedPayloadIndex::from_library_roots(
@@ -954,7 +971,7 @@ fn scan_prepared_mgl(
                 .collect::<Vec<_>>(),
         )
     });
-    files
+    Ok(files
         .into_iter()
         .filter_map(|path| {
             if let Some(index) = &prepared_index
@@ -975,17 +992,20 @@ fn scan_prepared_mgl(
                 }
             }
         })
-        .collect()
+        .collect())
 }
 
-fn scan_oneload64(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<SystemGame> {
+fn scan_oneload64(
+    storage_root: &Path,
+    report: &mut FastSourceSystemReport,
+) -> Result<Vec<SystemGame>, String> {
     let mut files = Vec::new();
-    for root in oneload64_roots(storage_root) {
+    for root in oneload64_roots_checked(storage_root)? {
         collect_matching_files(&root, &mut report.files_visited, &mut files, |path| {
             extension_is(path, "crt")
-        });
+        })?;
     }
-    files
+    Ok(files
         .into_iter()
         .filter_map(|path| match validate_prepared_launch_path(&path) {
             Ok(true) => Some(direct_row("c64", "Computer", &path, display_name(&path))),
@@ -995,7 +1015,7 @@ fn scan_oneload64(storage_root: &Path, report: &mut FastSourceSystemReport) -> V
                 None
             }
         })
-        .collect()
+        .collect())
 }
 
 pub(crate) fn oneload64_roots(storage_root: &Path) -> Vec<PathBuf> {
@@ -1014,32 +1034,73 @@ pub(crate) fn oneload64_roots(storage_root: &Path) -> Vec<PathBuf> {
     roots
 }
 
+fn oneload64_roots_checked(storage_root: &Path) -> Result<Vec<PathBuf>, String> {
+    let base = storage_root.join("games/C64");
+    let Some(entries) = read_dir_entries_checked(&base)? else {
+        return Ok(Vec::new());
+    };
+    let mut roots = Vec::new();
+    for entry in entries {
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("inspect {}: {error}", entry.path().display()))?;
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if file_type.is_dir() && name.contains("oneload64") {
+            roots.push(entry.path());
+        }
+    }
+    roots.sort();
+    Ok(roots)
+}
+
 fn collect_matching_files(
     root: &Path,
     visited: &mut usize,
     output: &mut Vec<PathBuf>,
     matches: impl Fn(&Path) -> bool + Copy,
-) {
-    let Ok(entries) = fs::read_dir(root) else {
-        return;
+) -> Result<(), String> {
+    let Some(mut entries) = read_dir_entries_checked(root)? else {
+        return Ok(());
     };
-    let mut entries = entries.filter_map(Result::ok).collect::<Vec<_>>();
     entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
     for entry in entries {
         *visited += 1;
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("inspect {}: {error}", entry.path().display()))?;
         if file_type.is_symlink() {
             continue;
         }
         let path = entry.path();
         if file_type.is_dir() {
-            collect_matching_files(&path, visited, output, matches);
+            collect_matching_files(&path, visited, output, matches)?;
         } else if file_type.is_file() && matches(&path) {
             output.push(path);
         }
     }
+    Ok(())
+}
+
+fn read_dir_entries_checked(root: &Path) -> Result<Option<Vec<fs::DirEntry>>, String> {
+    let mut last_error = None;
+    for _ in 0..2 {
+        match fs::read_dir(root) {
+            Ok(entries) => match entries.collect::<Result<Vec<_>, _>>() {
+                Ok(entries) => return Ok(Some(entries)),
+                Err(error) => last_error = Some(error),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => last_error = Some(error),
+        }
+        crate::cooperative_work::checkpoint();
+    }
+    Err(format!(
+        "enumerate {}: {}",
+        root.display(),
+        last_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "unknown directory error".to_string())
+    ))
 }
 
 fn direct_row(system_id: &str, category: &str, path: &Path, title: String) -> SystemGame {
@@ -1299,9 +1360,9 @@ mod tests {
         )
         .unwrap();
         let mut report = FastSourceSystemReport::default();
-        assert!(scan_arcade(&root, &mut report).games.is_empty());
+        assert!(scan_arcade(&root, &mut report).unwrap().games.is_empty());
         fs::write(root.join("games/mame/test.zip"), b"rom").unwrap();
-        let games = scan_arcade(&root, &mut report).games;
+        let games = scan_arcade(&root, &mut report).unwrap().games;
         assert_eq!(games.len(), 1);
         assert_eq!(games[0].preview_asset_key, "test");
     }
@@ -1370,7 +1431,7 @@ mod tests {
         )
         .unwrap();
         let mut report = FastSourceSystemReport::default();
-        let games = scan_amiga(&root, &mut report);
+        let games = scan_amiga(&root, &mut report).unwrap();
         assert_eq!(games.len(), 3);
         assert!(games.iter().any(|game| game.title == "AmigaVision"));
         assert_eq!(
@@ -1389,7 +1450,22 @@ mod tests {
         fs::create_dir_all(root.join("games/C64/Personal")).unwrap();
         fs::write(root.join("games/C64/Personal/Game.crt"), b"rom").unwrap();
         let mut report = FastSourceSystemReport::default();
-        assert!(scan_oneload64(&root, &mut report).is_empty());
+        assert!(scan_oneload64(&root, &mut report).unwrap().is_empty());
+    }
+
+    #[test]
+    fn prepared_source_rejects_unreadable_directory_shape() {
+        let root = crate::test_support::unique_temp_dir("fast-source-directory-error");
+        let not_a_directory = root.join("not-a-directory");
+        fs::write(&not_a_directory, b"file").unwrap();
+        let mut visited = 0;
+        let mut files = Vec::new();
+
+        let error = collect_matching_files(&not_a_directory, &mut visited, &mut files, |_| true)
+            .expect_err("a source directory read failure must not become an empty catalog");
+
+        assert!(error.contains("enumerate"));
+        assert!(files.is_empty());
     }
 
     #[test]
@@ -1411,14 +1487,19 @@ mod tests {
             "dos",
             "DOS",
             &mut report,
-        );
+        )
+        .unwrap();
         assert_eq!(games.len(), 1);
         assert_eq!(report.helper_hits, 1);
         assert_eq!(report.fallback_validations, 0);
 
         fs::remove_file(payload).unwrap();
         let mut report = FastSourceSystemReport::default();
-        assert!(scan_prepared_mgl(&[launcher_root], "dos", "DOS", &mut report).is_empty());
+        assert!(
+            scan_prepared_mgl(&[launcher_root], "dos", "DOS", &mut report)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(report.helper_hits, 0);
         assert_eq!(report.fallback_validations, 1);
     }
