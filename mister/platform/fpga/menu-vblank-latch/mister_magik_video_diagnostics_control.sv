@@ -37,19 +37,19 @@ module mister_magik_scaler_fetch_ordered_frame (
 	localparam [15:0] TOKEN_ADDRESS = 16'ha501;
 
 	localparam [6:0] FETCH_FLAG_CAPTURE_VALID =
-		MAGIK_RAW_SCALER_STATE_FLAG_CAPTURE_VALID;
+		MAGIK_RAW_SCALER_STATE_FLAG_CAPTURE_VALID[6:0];
 	localparam [6:0] FETCH_FLAG_FIFO_OVERFLOW =
-		MAGIK_RAW_SCALER_STATE_FLAG_FIFO_OVERFLOW;
+		MAGIK_RAW_SCALER_STATE_FLAG_FIFO_OVERFLOW[6:0];
 	localparam [6:0] FETCH_FLAG_UNEXPECTED_RETURN =
-		MAGIK_RAW_SCALER_STATE_FLAG_UNEXPECTED_RETURN;
+		MAGIK_RAW_SCALER_STATE_FLAG_UNEXPECTED_RETURN[6:0];
 	localparam [6:0] FETCH_FLAG_BAD_BURSTCOUNT =
-		MAGIK_RAW_SCALER_STATE_FLAG_BAD_BURSTCOUNT;
+		MAGIK_RAW_SCALER_STATE_FLAG_BAD_BURSTCOUNT[6:0];
 	localparam [6:0] FETCH_FLAG_BAD_RETURN_PHASE =
-		MAGIK_RAW_SCALER_STATE_FLAG_BAD_RETURN_PHASE;
+		MAGIK_RAW_SCALER_STATE_FLAG_BAD_RETURN_PHASE[6:0];
 	localparam [6:0] FETCH_FLAG_EPOCH_OVERLAP =
-		MAGIK_RAW_SCALER_STATE_FLAG_EPOCH_OVERLAP;
+		MAGIK_RAW_SCALER_STATE_FLAG_EPOCH_OVERLAP[6:0];
 	localparam [6:0] FETCH_FLAG_COUNTER_OVERFLOW =
-		MAGIK_RAW_SCALER_STATE_FLAG_COUNTER_OVERFLOW;
+		MAGIK_RAW_SCALER_STATE_FLAG_COUNTER_OVERFLOW[6:0];
 
 	// Independent accepted-request FIFO. Only a folded address and its epoch
 	// marker are retained; production ascal itself caps outstanding reads at two.
@@ -80,10 +80,15 @@ module mister_magik_scaler_fetch_ordered_frame (
 	reg [15:0] snapshot_signature = 16'd0;
 	reg [15:0] snapshot_sequence = 16'd0;
 	reg [6:0] snapshot_flags = 7'd0;
+	reg [15:0] snapshot_crc = 16'd0;
+	reg [15:0] crc_work = 16'd0;
+	reg [15:0] crc_payload_shift = 16'd0;
+	reg [3:0] crc_bit_count = 4'd0;
+	reg [1:0] crc_word_count = 2'd0;
+	reg crc_busy = 1'b0;
 	reg has_command = 1'b0;
 	reg command_selected = 1'b0;
 	reg [2:0] word_count = 3'd0;
-	reg [15:0] tx_crc = 16'hffff;
 	reg [15:0] response_word;
 
 	wire accepted = vbuf_read && !vbuf_waitrequest;
@@ -112,7 +117,8 @@ module mister_magik_scaler_fetch_ordered_frame (
 
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
-	wire selected_start = io_din[7:0] == MAGIK_UIO_GET_RAW_SCALER_STATE;
+	wire selected_start =
+		io_din[7:0] == MAGIK_UIO_GET_RAW_SCALER_STATE && !crc_busy;
 	wire selected_command = command_selected;
 
 	assign response_valid =
@@ -178,6 +184,17 @@ module mister_magik_scaler_fetch_ordered_frame (
 		end
 	endfunction
 
+	function automatic [15:0] crc16_update_bit;
+		input [15:0] crc_in;
+		input bit_in;
+		reg feedback;
+		begin
+			feedback = crc_in[15] ^ bit_in;
+			crc16_update_bit = {crc_in[14:0], 1'b0} ^
+				(feedback ? 16'h1021 : 16'd0);
+		end
+	endfunction
+
 	localparam [15:0] FETCH_HEADER_CRC = crc16_update_word(
 		crc16_update_word(
 			crc16_update_word(16'hffff,
@@ -186,6 +203,10 @@ module mister_magik_scaler_fetch_ordered_frame (
 		MAGIK_RAW_SCALER_STATE_WORDS - 1'd1);
 	localparam [15:0] FETCH_SCHEMA_CRC =
 		crc16_update_word(FETCH_HEADER_CRC, FETCH_STATE_SCHEMA);
+	localparam [15:0] FETCH_EMPTY_CRC = crc16_update_word(
+		crc16_update_word(
+			crc16_update_word(FETCH_SCHEMA_CRC, 16'd0), 16'd0),
+		16'd0);
 
 	// The actual accept/return events, not DUT credits, own this scoreboard.
 	// A wrap marker reaches the signature only with its accepted transaction's
@@ -299,7 +320,7 @@ module mister_magik_scaler_fetch_ordered_frame (
 		else if(word_count == MAGIK_RAW_SCALER_STATE_CAPTURE_SEQUENCE_WORD)
 			response_word = snapshot_sequence;
 		else if(word_count == MAGIK_RAW_SCALER_STATE_CRC_WORD)
-			response_word = tx_crc;
+			response_word = snapshot_crc;
 		else
 			response_word = snapshot_signature;
 
@@ -323,20 +344,26 @@ module mister_magik_scaler_fetch_ordered_frame (
 			snapshot_signature <= 16'd0;
 			snapshot_sequence <= 16'd0;
 			snapshot_flags <= 7'd0;
+			snapshot_crc <= FETCH_EMPTY_CRC;
+			crc_work <= 16'd0;
+			crc_payload_shift <= 16'd0;
+			crc_bit_count <= 4'd0;
+			crc_word_count <= 2'd0;
+			crc_busy <= 1'b0;
 			has_command <= 1'b0;
 			command_selected <= 1'b0;
 			word_count <= 3'd0;
-			tx_crc <= 16'hffff;
 		end
 		else begin
 			generation_meta <= source_generation;
 			generation_sync <= generation_meta;
 
-			if(!has_command && generation_sync != generation_seen) begin
+			if(!has_command && !crc_busy &&
+			   generation_sync != generation_seen) begin
 				generation_seen <= generation_sync;
 				capture_pending <= 1'b1;
 			end
-			else if(!has_command && capture_pending) begin
+			else if(!has_command && !crc_busy && capture_pending) begin
 				snapshot_signature <= published_signature;
 				snapshot_flags <= published_flags;
 				if(published_flags == FETCH_FLAG_CAPTURE_VALID)
@@ -345,22 +372,47 @@ module mister_magik_scaler_fetch_ordered_frame (
 					snapshot_sequence <= 16'd0;
 					snapshot_signature <= 16'd0;
 				end
+				crc_work <= FETCH_SCHEMA_CRC;
+				crc_payload_shift <= {9'd0, published_flags};
+				crc_bit_count <= 4'd0;
+				crc_word_count <= 2'd0;
+				crc_busy <= 1'b1;
 				capture_pending <= 1'b0;
+			end
+
+			if(crc_busy) begin : snapshot_crc_step
+				reg [15:0] next_crc;
+				next_crc = crc16_update_bit(crc_work,
+					crc_payload_shift[15]);
+				crc_work <= next_crc;
+				crc_payload_shift <= {crc_payload_shift[14:0], 1'b0};
+				if(crc_bit_count == 4'd15) begin
+					crc_bit_count <= 4'd0;
+					if(crc_word_count == 2'd0) begin
+						crc_word_count <= 2'd1;
+						crc_payload_shift <= snapshot_sequence;
+					end
+					else if(crc_word_count == 2'd1) begin
+						crc_word_count <= 2'd2;
+						crc_payload_shift <= snapshot_signature;
+					end
+					else begin
+						snapshot_crc <= next_crc;
+						crc_busy <= 1'b0;
+					end
+				end
+				else
+					crc_bit_count <= crc_bit_count + 1'd1;
 			end
 
 			if(command_start) begin
 				has_command <= 1'b1;
 				command_selected <= selected_start;
 				word_count <= 3'd0;
-				if(selected_start)
-					tx_crc <= FETCH_SCHEMA_CRC;
 			end
 			else if(command_data && selected_command &&
 				(word_count < MAGIK_RAW_SCALER_STATE_WORDS)) begin
 				word_count <= word_count + 1'd1;
-				if(word_count > MAGIK_RAW_SCALER_STATE_SCHEMA_WORD &&
-				   word_count < MAGIK_RAW_SCALER_STATE_CRC_WORD)
-					tx_crc <= crc16_update_word(tx_crc, response_word);
 			end
 
 			if(!io_uio && has_command) begin

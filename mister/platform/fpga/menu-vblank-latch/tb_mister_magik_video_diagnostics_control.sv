@@ -285,7 +285,7 @@ module tb_mister_magik_video_diagnostics_control;
 
 	task automatic wait_capture;
 		begin
-			repeat(8) @(posedge clk_sys);
+			repeat(64) @(posedge clk_sys);
 		end
 	endtask
 
