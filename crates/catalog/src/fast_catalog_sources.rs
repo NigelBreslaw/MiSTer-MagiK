@@ -1018,22 +1018,6 @@ fn scan_oneload64(
         .collect())
 }
 
-pub(crate) fn oneload64_roots(storage_root: &Path) -> Vec<PathBuf> {
-    let base = storage_root.join("games/C64");
-    let mut roots = fs::read_dir(&base)
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let file_type = entry.file_type().ok()?;
-            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-            (file_type.is_dir() && name.contains("oneload64")).then(|| entry.path())
-        })
-        .collect::<Vec<_>>();
-    roots.sort();
-    roots
-}
-
 fn oneload64_roots_checked(storage_root: &Path) -> Result<Vec<PathBuf>, String> {
     let base = storage_root.join("games/C64");
     let Some(entries) = read_dir_entries_checked(&base)? else {
