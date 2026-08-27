@@ -754,7 +754,7 @@ fn validate_manifest_system_with_options(
 /// Fully validates one unpublished system entry before it is retained or
 /// adopted into a manifest. Unlike normal manifest reads, this verifies the
 /// stored hashes and reopens each shard to validate its schema and navigation.
-#[cfg(feature = "builder")]
+#[cfg(test)]
 pub(crate) fn validate_published_system(
     storage_root: &Path,
     system: &ManifestSystem,

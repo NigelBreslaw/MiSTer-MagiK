@@ -2905,6 +2905,7 @@ fn live_text_cell(text: &str) -> slint_interpreter::Value {
         ),
     ]))
 }
+#[cfg(feature = "live-ui")]
 fn live_tree_row_struct(row: &sd_card::SdTreeRow) -> slint_interpreter::Struct {
     use slint::{Image, SharedString};
     use slint_interpreter::{Struct, Value};

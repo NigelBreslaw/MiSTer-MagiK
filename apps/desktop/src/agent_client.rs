@@ -1913,15 +1913,6 @@ fn hex_value(byte: u8) -> Result<u8, String> {
     }
 }
 
-pub(crate) fn fnv64_hex(bytes: &[u8]) -> String {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016x}")
-}
-
 fn parse_sd_entry(value: &Value) -> Result<SdEntry, AgentError> {
     let name = string_at(value, "/name")
         .ok_or_else(|| AgentError::Protocol("missing sd entry name".to_string()))?

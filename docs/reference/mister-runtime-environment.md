@@ -2,7 +2,7 @@
 
 <!-- Generated from apps/mister/config/runtime-environment.toml. Do not edit. -->
 
-Registry format: `mister-magik-runtime-environment-v2`. Baseline: 425 literal occurrences, 279 owned names, 7 external/build-time names.
+Registry format: `mister-magik-runtime-environment-v2`. Baseline: 424 literal occurrences, 278 owned names, 7 external/build-time names.
 
 | Name | Classification | Shape | Default behavior | Parser | Typed default | Scope | Conflicts | Sensitivity | Aliases | Documentation | Visibility | Owner |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -11,7 +11,6 @@ Registry format: `mister-magik-runtime-environment-v2`. Baseline: 425 literal oc
 | `MISTER_AMIGA_PREVIEW_ARCHIVE` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls amiga preview archive behavior; value policy: document | internal runtime | `crates/catalog/src/preview_worker.rs` |
 | `MISTER_ANIMATION_CLOCK` | production | enum token | uses the owner-defined mode when unset or unrecognized | enum | — | command | — | public | — | Controls animation clock behavior; value policy: document | internal runtime | `apps/mister/src/visual_platform.rs` |
 | `MISTER_ARCADE_BENCHMARK_ORIENTATION` | benchmark | enum token | uses persisted launcher orientation when unset or invalid | enum | — | instrumentation | — | public | — | Selects a one-shot in-memory launcher orientation for Arcade benchmarks; values: normal, monitor-clockwise, monitor-counterclockwise; value policy: document | benchmark only | `apps/mister/src/ui_runner.rs` |
-| `MISTER_ARCADE_BOOTSTRAP_INDEX` | production | bounded integer | uses the owner-defined bounded numeric default when unset or invalid | u64 | — | command | — | public | — | Controls arcade bootstrap index behavior; value policy: document | internal runtime | `apps/mister/src/pmu_profile.rs` |
 | `MISTER_ARCADE_ENTRY_RUN_ID` | production | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | command | — | public | — | Controls arcade entry run id behavior; value policy: document | internal runtime | `apps/mister/src/process_config.rs` |
 | `MISTER_ARCADE_ENTRY_TRACE` | diagnostic | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | instrumentation | — | public | — | Controls arcade entry trace behavior; value policy: document | developer diagnostic | `apps/mister/src/process_config.rs` |
 | `MISTER_ARCADE_ROOT` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls arcade root behavior; value policy: document | internal runtime | `apps/mister/src/ui_runner/experiments/effects/effect_loop_support.rs` |

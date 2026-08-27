@@ -11,8 +11,8 @@ source_roots = [
 ]
 
 [baseline]
-literal_occurrences = 425
-unique_names = 279
+literal_occurrences = 424
+unique_names = 278
 external_build_names = 7
 
 [[control]]
@@ -71,20 +71,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls animation clock behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_ARCADE_BOOTSTRAP_INDEX"
-owner = "apps/mister/src/pmu_profile.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls arcade bootstrap index behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_ARCADE_BENCHMARK_ORIENTATION"

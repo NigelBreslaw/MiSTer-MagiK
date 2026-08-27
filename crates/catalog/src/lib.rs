@@ -131,7 +131,7 @@ pub(crate) mod pmu_phase {
     pub const SHARD_ALLOCATOR_TRIM: &str = "catalog.shard.allocator-trim";
     #[cfg(feature = "builder")]
     pub const SHARD_VALIDATE: &str = "catalog.shard.validate";
-    #[cfg(feature = "builder")]
+    #[cfg(all(test, feature = "builder"))]
     pub const PUBLISH_COPY_HASH: &str = "catalog.publish.copy-hash";
 
     #[cfg(all(test, feature = "builder"))]

@@ -32,7 +32,7 @@ impl CatalogWorkMode {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[cfg(any(feature = "builder", test))]
+#[cfg(test)]
 pub struct CatalogWorkGateSnapshot {
     pub mode: CatalogWorkMode,
     pub epoch: u64,
@@ -42,7 +42,7 @@ pub struct CatalogWorkGateSnapshot {
 }
 
 static WORK_MODE: AtomicU8 = AtomicU8::new(CatalogWorkMode::Cpu0 as u8);
-#[cfg(any(feature = "builder", test))]
+#[cfg(test)]
 static WORK_EPOCH: AtomicU64 = AtomicU64::new(0);
 static CHECKPOINTS: AtomicU64 = AtomicU64::new(0);
 static PARK_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -55,7 +55,7 @@ thread_local! {
     static BACKGROUND_SCOPE_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
-#[cfg(any(feature = "builder", test))]
+#[cfg(test)]
 pub(crate) fn set_background_allowed(allowed: bool) {
     set_work_mode(if allowed {
         CatalogWorkMode::Cpu0
@@ -64,7 +64,7 @@ pub(crate) fn set_background_allowed(allowed: bool) {
     });
 }
 
-#[cfg(any(feature = "builder", test))]
+#[cfg(test)]
 pub(crate) fn set_work_mode(mode: CatalogWorkMode) -> u64 {
     let previous = WORK_MODE.swap(mode as u8, Ordering::AcqRel);
     let epoch = if previous == mode as u8 {
@@ -81,7 +81,7 @@ pub(crate) fn set_work_mode(mode: CatalogWorkMode) -> u64 {
     epoch
 }
 
-#[cfg(any(feature = "builder", test))]
+#[cfg(test)]
 pub(crate) fn work_gate_snapshot() -> CatalogWorkGateSnapshot {
     CatalogWorkGateSnapshot {
         mode: CatalogWorkMode::from_raw(WORK_MODE.load(Ordering::Acquire)),
