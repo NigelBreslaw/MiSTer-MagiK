@@ -157,6 +157,15 @@ non-authoritative sources produce only the raw artifact. The deterministic
 Arcade fixture is available through
 `scripts/agent device launcher capture-first-arcade --attended --output STEM`.
 
+Use
+`scripts/agent device launcher verify-neogeo-sdram --attended --output DIRECTORY`
+after installing a Main candidate. It runs the installed Metal Slug 3
+structured plan, a second high-memory NeoGeo plan, a low-memory control, and a
+real `.mgl` entry. Each core is observed through USB video while active and is
+returned through Main's typed launcher recovery path. Passing requires the
+operator to confirm correct title/attract graphics with no memory warning and
+the Main event stream to prove 128 MiB SDRAM was configured before handoff.
+
 For the first CRT font A/B review, use the attended row-phase harness:
 `scripts/agent device launcher capture-crt-font-ab --attended --pair row-phase --output STEM`.
 It switches to 240p for the pair, restores the prior route afterward, and

@@ -47,8 +47,8 @@ The maintained fork repo is `NigelBreslaw/Main_MiSTer`, a real GitHub fork of
 `mister-magik`.
 
 - Upstream project: `MiSTer-devel/Main_MiSTer`
-- Baseline commit: `93d13fb690db4581768389450fb639822ae88333`
-- Baseline release: `Release 20260707.`
+- Baseline commit: `dfb4791bea126afea66025be806651a995f9cfd6`
+- Baseline release: `Release 20260823.`
 - Public device binary: `/media/fat/MiSTer_MagiK`
 - Development device binary: `/media/fat/MiSTer_MagiKDev`
 - Ledger: `MAGIK_PATCHSET.md` in the fork repo
@@ -58,6 +58,14 @@ The maintained fork repo is `NigelBreslaw/Main_MiSTer`, a real GitHub fork of
 approved patch surface, implemented tests, and rebuild-from-scratch checklist.
 If upstream changes massively, rebuild from the upstream release commit and
 reapply only the ledgered MagiK features.
+
+The 20260823 rebuild deliberately retains upstream's HDMI power model and
+unmodified NeoGeo loader. MagiK's only NeoGeo-adjacent requirement is the
+generic pre-handoff SDRAM configuration boundary in `user_io`: a cached result
+is reused, otherwise Main performs its normal menu probe before either direct
+or structured handoff. The fork records `sdram_config_ready` with the decoded
+size before `handoff_launch` or `handoff_launch_plan`; there is no separate
+NeoGeo memory table or game-specific regression guard.
 
 ## Ownership Model
 
@@ -217,6 +225,20 @@ workflow:
 ```bash
 scripts/agent deliver local-main
 ```
+
+After installing a candidate Main, run the attended NeoGeo memory matrix:
+
+```bash
+scripts/agent device launcher verify-neogeo-sdram --attended --output artifacts/neogeo-sdram
+```
+
+The command discovers installed NeoGeo rows and requires Metal Slug 3, another
+high-memory structured plan, a low-memory control, and a real `.mgl` entry. It
+uses the production launcher handoff and typed return path for each run,
+captures USB video while the core is active, requires an operator confirmation
+that title/attract graphics are correct with no memory warning, and verifies a
+preceding `sdram_config_ready size_code=3` event. The JSON report and bounded
+supporting evidence are written below the requested output directory.
 
 It requires clean exact commits in this repository and the sibling
 `Main_MiSTer` checkout (`MISTER_MAIN_DIR` may override the latter), runs the
