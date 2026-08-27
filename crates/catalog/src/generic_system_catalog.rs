@@ -56,30 +56,26 @@ pub fn scan_prepared_system_with_generic_walker(
         "arcade" => profiles
             .profiles()
             .iter()
-            .find(|profile| profile.id == "mra"),
+            .find(|profile| profile.id == "mra")
+            .cloned(),
         "amiga" => profiles
             .profiles()
             .iter()
-            .find(|profile| profile.id == "amiga"),
+            .find(|profile| profile.id == "amiga")
+            .cloned(),
         "dos" => profiles
             .profiles()
             .iter()
-            .find(|profile| profile.id == "dos"),
+            .find(|profile| profile.id == "dos")
+            .cloned(),
         "x68000" => profiles
             .profiles()
             .iter()
-            .find(|profile| profile.id == "neon68k"),
-        "c64" => profiles.profiles().iter().find(|profile| {
-            profile.system_id == "c64"
-                && profile.payload_rules.iter().any(|rule| {
-                    rule.extensions
-                        .iter()
-                        .any(|extension| extension.eq_ignore_ascii_case("crt"))
-                })
-        }),
+            .find(|profile| profile.id == "neon68k")
+            .cloned(),
+        "c64" => Some(generic_c64_baseline_profile()),
         _ => return Err(format!("unsupported prepared generic baseline {system_id}")),
     }
-    .cloned()
     .ok_or_else(|| format!("generic baseline profile is missing for {system_id}"))?;
     let roots = match system_id {
         "arcade" => vec![storage_root.join("_Arcade")],
@@ -136,6 +132,32 @@ pub fn scan_prepared_system_with_generic_walker(
         },
         stats,
     ))
+}
+
+fn generic_c64_baseline_profile() -> LaunchProfile {
+    LaunchProfile {
+        id: "generic-c64-baseline".to_string(),
+        system_id: "c64".to_string(),
+        category: "Computer".to_string(),
+        title: "Commodore 64".to_string(),
+        core_name: "C64".to_string(),
+        core_path: Some("_Computer/C64".to_string()),
+        game_dirs: vec!["C64".to_string()],
+        payload_rules: vec![PayloadRule {
+            extensions: vec!["crt".to_string()],
+            mount: MountSpec::load_file(1),
+            disposition: PayloadDisposition::Playable,
+            provenance: RuleProvenance::conf_str(
+                "Generic A/B baseline treats installed C64 cartridges as primary games",
+            ),
+        }],
+        archive_entry_rules: Vec::new(),
+        collection_rules: Vec::new(),
+        ignore_rules: Vec::new(),
+        provenance: RuleProvenance::conf_str(
+            "Generic A/B baseline for arbitrary C64 cartridge directories",
+        ),
+    }
 }
 
 pub fn rebuild_generic_system(
