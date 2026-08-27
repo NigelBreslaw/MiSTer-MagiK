@@ -35,6 +35,7 @@ pub(crate) enum NamespaceSignatureCapture {
     None,
     Target,
     TargetAndDepthOneDirectories,
+    #[cfg(feature = "builder")]
     AllDirectories,
 }
 
@@ -47,16 +48,19 @@ pub(crate) enum NamespaceRootPolicy {
 
 impl NamespaceSignatureCapture {
     fn target(self) -> bool {
-        matches!(
-            self,
-            Self::Target | Self::TargetAndDepthOneDirectories | Self::AllDirectories
-        )
+        match self {
+            Self::None => false,
+            Self::Target | Self::TargetAndDepthOneDirectories => true,
+            #[cfg(feature = "builder")]
+            Self::AllDirectories => true,
+        }
     }
 
     #[cfg(target_os = "linux")]
     fn directory_at_depth(self, depth: usize) -> bool {
         match self {
             Self::TargetAndDepthOneDirectories => depth == 1,
+            #[cfg(feature = "builder")]
             Self::AllDirectories => true,
             Self::None | Self::Target => false,
         }
