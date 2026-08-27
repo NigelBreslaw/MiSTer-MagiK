@@ -466,7 +466,8 @@ mod linux {
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
     use std::path::Path;
 
-    const GETDENTS_BUFFER_BYTES: usize = 128 * 1024;
+    const GETDENTS_INITIAL_BUFFER_BYTES: usize = 8 * 1024;
+    const GETDENTS_MAX_BUFFER_BYTES: usize = 128 * 1024;
     const DIRENT64_HEADER_BYTES: usize = 19;
     const MAX_CAPTURED_ENTRIES: usize = 65_536;
     const MAX_CAPTURED_PATH_BYTES: usize = 16 * 1024 * 1024;
@@ -684,9 +685,9 @@ mod linux {
     ) -> Result<(), String> {
         let mut buffer = Vec::new();
         buffer
-            .try_reserve_exact(GETDENTS_BUFFER_BYTES)
+            .try_reserve_exact(GETDENTS_INITIAL_BUFFER_BYTES)
             .map_err(|error| format!("capture allocation: getdents buffer: {error}"))?;
-        buffer.resize(GETDENTS_BUFFER_BYTES, 0u8);
+        buffer.resize(GETDENTS_INITIAL_BUFFER_BYTES, 0u8);
         stats.buffer_allocations = stats.buffer_allocations.saturating_add(1);
         loop {
             crate::cooperative_work::checkpoint();
@@ -892,6 +893,15 @@ mod linux {
                             );
                     }
                 }
+            }
+            if read.saturating_add(512) >= buffer.len() && buffer.len() < GETDENTS_MAX_BUFFER_BYTES
+            {
+                let additional = GETDENTS_MAX_BUFFER_BYTES.saturating_sub(buffer.len());
+                buffer.try_reserve_exact(additional).map_err(|error| {
+                    format!("capture allocation: grow getdents buffer: {error}")
+                })?;
+                buffer.resize(GETDENTS_MAX_BUFFER_BYTES, 0u8);
+                stats.buffer_allocations = stats.buffer_allocations.saturating_add(1);
             }
         }
     }
