@@ -62,6 +62,7 @@ struct GenericNamespaceInventory {
     fact: GameDirFact,
     entries: Vec<GenericInventoryEntry>,
     namespace: NamespaceWalkStats,
+    watch: GenericSourceWatchObservations,
     elapsed_us: u64,
 }
 
@@ -77,6 +78,28 @@ struct GenericSystemAccumulator {
     profiles: Vec<LaunchProfile>,
     stats: GenericSystemStats,
     games: Vec<ScannedGame>,
+    watch: GenericSourceWatchObservations,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct GenericSourceWatchObservations {
+    pub(crate) roots: BTreeSet<String>,
+    pub(crate) directories: Vec<GenericWatchedDirectoryObservation>,
+    pub(crate) containers: Vec<PathBuf>,
+    pub(crate) complete: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct GenericWatchedDirectoryObservation {
+    pub(crate) path: PathBuf,
+    pub(crate) modified_ns: i128,
+    pub(crate) entry_fingerprint: String,
+}
+
+#[derive(Debug, Default)]
+struct GenericDirectoryObservationBuilder {
+    signature: Option<(u64, i64)>,
+    entries: Vec<(String, u8)>,
 }
 
 pub const MEDIA_EXPERIMENT_SYSTEM_IDS: [&str; 3] = ["psx", "bbcmicro", "msx"];
@@ -341,6 +364,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
         Vec<FastFiveSystem>,
         GenericSystemScanReport,
         Vec<LaunchProfile>,
+        BTreeMap<String, GenericSourceWatchObservations>,
     ),
     String,
 > {
@@ -362,19 +386,21 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
             if !visited_roots.insert(root_key) {
                 continue;
             }
-            let root_started = Instant::now();
+            let header = GameDirHeader {
+                name: game_dir.clone(),
+                signature: GameDirSignature::from_path(&candidate),
+                path: candidate,
+            };
+            let inventory = collect_generic_namespace_inventory(&header)?;
             let accumulator = accumulator_for_profile(&mut accumulators, profile);
             accumulator.stats.roots = accumulator.stats.roots.saturating_add(1);
-            scan_namespace_borrowed(
-                &candidate,
+            apply_generic_namespace_inventory(
+                inventory,
                 profile,
                 &mut accumulator.stats,
                 &mut accumulator.games,
+                &mut accumulator.watch,
             );
-            accumulator.stats.elapsed_us = accumulator
-                .stats
-                .elapsed_us
-                .saturating_add(root_started.elapsed().as_micros() as u64);
         }
     }
 
@@ -398,11 +424,13 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
             &profile,
             &mut accumulator.stats,
             &mut accumulator.games,
+            &mut accumulator.watch,
         );
     }
 
     let mut systems = Vec::new();
     let mut reports = Vec::new();
+    let mut watch_observations = BTreeMap::new();
     for (system_id, mut accumulator) in accumulators {
         if accumulator.stats.roots == 0 {
             continue;
@@ -451,6 +479,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
         system_complete(&system);
         systems.push(system);
         reports.push(accumulator.stats);
+        watch_observations.insert(system_id, accumulator.watch);
     }
     systems.sort_by(|left, right| left.system_id.cmp(&right.system_id));
     reports.sort_by(|left, right| left.system_id.cmp(&right.system_id));
@@ -462,6 +491,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
             systems: reports,
         },
         profiles,
+        watch_observations,
     ))
 }
 
@@ -475,6 +505,10 @@ fn accumulator_for_profile<'a>(
             stats: GenericSystemStats {
                 system_id: profile.system_id.clone(),
                 ..GenericSystemStats::default()
+            },
+            watch: GenericSourceWatchObservations {
+                complete: true,
+                ..GenericSourceWatchObservations::default()
             },
             ..GenericSystemAccumulator::default()
         });
@@ -517,10 +551,17 @@ fn collect_generic_namespace_inventory(
     let mut direct_zip_paths = Vec::new();
     let mut nested_probe_signatures = Vec::new();
     let mut payload_extensions = BTreeSet::new();
+    let mut watch_builders = BTreeMap::<PathBuf, GenericDirectoryObservationBuilder>::new();
+    watch_builders.insert(
+        header.path.clone(),
+        GenericDirectoryObservationBuilder::default(),
+    );
+    let mut watch_containers = Vec::new();
+    let mut watch_complete = true;
     let namespace = namespace_walk::visit_with_signature_capture(
         &header.path,
         None,
-        NamespaceSignatureCapture::TargetAndDepthOneDirectories,
+        NamespaceSignatureCapture::AllDirectories,
         should_ignore_path,
         |entry| {
             let depth = entry
@@ -561,6 +602,35 @@ fn collect_generic_namespace_inventory(
                     _ => {}
                 }
             }
+            if let (Some(parent), Some(name)) = (entry.path.parent(), entry.path.file_name()) {
+                let kind = match entry.kind {
+                    NamespaceEntryKind::Directory => b'd',
+                    NamespaceEntryKind::File => b'f',
+                    NamespaceEntryKind::Other => {
+                        watch_complete = false;
+                        b'o'
+                    }
+                };
+                watch_builders
+                    .entry(parent.to_path_buf())
+                    .or_default()
+                    .entries
+                    .push((name.to_string_lossy().into_owned(), kind));
+            }
+            if entry.kind == NamespaceEntryKind::Directory {
+                watch_builders
+                    .entry(entry.path.clone())
+                    .or_default()
+                    .signature = entry.directory_signature;
+            } else if entry.kind == NamespaceEntryKind::File
+                && entry
+                    .path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+            {
+                watch_containers.push(entry.path.clone());
+            }
             entries.push(GenericInventoryEntry {
                 path: entry.path.clone(),
                 kind: entry.kind,
@@ -576,6 +646,36 @@ fn collect_generic_namespace_inventory(
             namespace.errors
         ));
     }
+    if let Some(root) = watch_builders.get_mut(&header.path) {
+        root.signature = namespace.target_signature;
+    }
+    let mut watch_directories = Vec::with_capacity(watch_builders.len());
+    for (path, mut builder) in watch_builders {
+        let Some((_, modified_ns)) = builder.signature else {
+            watch_complete = false;
+            continue;
+        };
+        builder.entries.sort_by(|left, right| {
+            left.0
+                .to_ascii_lowercase()
+                .cmp(&right.0.to_ascii_lowercase())
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        let mut digest = Sha256::new();
+        for (name, kind) in builder.entries {
+            digest.update([kind]);
+            digest.update(name.as_bytes());
+            digest.update([0]);
+        }
+        watch_directories.push(GenericWatchedDirectoryObservation {
+            path,
+            modified_ns: i128::from(modified_ns),
+            entry_fingerprint: hex_lower(&digest.finalize()),
+        });
+    }
+    watch_directories.sort_by(|left, right| left.path.cmp(&right.path));
+    watch_containers.sort();
+    watch_containers.dedup();
     direct_zip_paths.sort_by_cached_key(|path| path.to_string_lossy().to_ascii_lowercase());
     nested_probe_signatures.sort_by_cached_key(|(path, _)| {
         (path.to_string_lossy().to_ascii_lowercase(), path.clone())
@@ -593,6 +693,12 @@ fn collect_generic_namespace_inventory(
         },
         entries,
         namespace,
+        watch: GenericSourceWatchObservations {
+            roots: BTreeSet::from([header.path.to_string_lossy().into_owned()]),
+            directories: watch_directories,
+            containers: watch_containers,
+            complete: watch_complete,
+        },
         elapsed_us: started.elapsed().as_micros() as u64,
     })
 }
@@ -602,8 +708,10 @@ fn apply_generic_namespace_inventory(
     profile: &LaunchProfile,
     stats: &mut GenericSystemStats,
     games: &mut Vec<ScannedGame>,
+    watch: &mut GenericSourceWatchObservations,
 ) {
     let classify_started = Instant::now();
+    merge_watch_observations(watch, &inventory.watch);
     stats.elapsed_us = stats.elapsed_us.saturating_add(inventory.elapsed_us);
     stats.inventory_roots = stats.inventory_roots.saturating_add(1);
     stats.inventory_entries = stats
@@ -659,6 +767,26 @@ fn apply_generic_namespace_inventory(
     stats.elapsed_us = stats
         .elapsed_us
         .saturating_add(classify_started.elapsed().as_micros() as u64);
+}
+
+fn merge_watch_observations(
+    target: &mut GenericSourceWatchObservations,
+    source: &GenericSourceWatchObservations,
+) {
+    target.complete &= source.complete;
+    target.roots.extend(source.roots.iter().cloned());
+    target
+        .directories
+        .extend(source.directories.iter().cloned());
+    target.containers.extend(source.containers.iter().cloned());
+    target
+        .directories
+        .sort_by(|left, right| left.path.cmp(&right.path));
+    target
+        .directories
+        .dedup_by(|left, right| left.path == right.path);
+    target.containers.sort();
+    target.containers.dedup();
 }
 
 fn merge_namespace_stats(stats: &mut GenericSystemStats, namespace: &NamespaceWalkStats) {
@@ -1394,7 +1522,7 @@ mod tests {
         )
         .expect("two-pass scan");
         let plan = CatalogScanPlan::try_for_roots(&roots).expect("one-pass plan");
-        let (one_pass, report, resolved) =
+        let (one_pass, report, resolved, observations) =
             discover_generic_systems_from_plan_excluding_with_progress(&root, &plan, &[], |_| {})
                 .expect("one-pass scan");
 
@@ -1413,6 +1541,15 @@ mod tests {
             .expect("runtime report");
         assert_eq!(beta.inventory_roots, 1);
         assert!(beta.inventory_entries >= 4);
+        let watch = observations.get("mybeta").expect("runtime watch");
+        assert_eq!(watch.roots.len(), 1);
+        #[cfg(target_os = "linux")]
+        {
+            assert!(watch.complete);
+            assert!(watch.directories.len() >= 3);
+        }
+        #[cfg(not(target_os = "linux"))]
+        assert!(!watch.complete);
     }
 
     #[test]

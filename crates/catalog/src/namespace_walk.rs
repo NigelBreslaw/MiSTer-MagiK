@@ -35,6 +35,7 @@ pub(crate) enum NamespaceSignatureCapture {
     None,
     Target,
     TargetAndDepthOneDirectories,
+    AllDirectories,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -46,12 +47,19 @@ pub(crate) enum NamespaceRootPolicy {
 
 impl NamespaceSignatureCapture {
     fn target(self) -> bool {
-        matches!(self, Self::Target | Self::TargetAndDepthOneDirectories)
+        matches!(
+            self,
+            Self::Target | Self::TargetAndDepthOneDirectories | Self::AllDirectories
+        )
     }
 
     #[cfg(target_os = "linux")]
-    fn depth_one_directories(self) -> bool {
-        matches!(self, Self::TargetAndDepthOneDirectories)
+    fn directory_at_depth(self, depth: usize) -> bool {
+        match self {
+            Self::TargetAndDepthOneDirectories => depth == 1,
+            Self::AllDirectories => true,
+            Self::None | Self::Target => false,
+        }
     }
 }
 
@@ -796,8 +804,7 @@ mod linux {
                 let should_descend = kind == NamespaceEntryKind::Directory
                     && max_depth.is_none_or(|limit| entry_depth < limit);
                 let capture_directory_signature = kind == NamespaceEntryKind::Directory
-                    && entry_depth == 1
-                    && signature_capture.depth_one_directories();
+                    && signature_capture.directory_at_depth(entry_depth);
                 let mut opened_child = None;
                 let mut child_signature_before = None;
                 if should_descend {

@@ -15,7 +15,8 @@ use crate::fast_five_catalog::{
     FastFiveVariantRelation, collapse_c64_cross_source_variants,
 };
 use crate::generic_system_catalog::{
-    discover_generic_systems_from_plan_excluding_with_progress, rebuild_installed_generic_system,
+    GenericSourceWatchObservations, discover_generic_systems_from_plan_excluding_with_progress,
+    rebuild_installed_generic_system,
 };
 use crate::launch_profiles::{CatalogScanPlan, CollectionListing, LaunchProfile, ProfileSet};
 use crate::media_identity::ScreenshotAssetId;
@@ -87,6 +88,7 @@ pub(crate) struct FastSourceRefreshBuild {
     pub snapshot: FastFiveSnapshot,
     pub report: FastSourceBuildReport,
     pub profiles: Vec<LaunchProfile>,
+    pub generic_watch_observations: BTreeMap<String, GenericSourceWatchObservations>,
 }
 
 pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
@@ -108,7 +110,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
     let phase_started = Instant::now();
     let plan = CatalogScanPlan::try_for_roots(&roots)?;
     let profile_discovery_us = elapsed_us(phase_started);
-    let (mut generic_systems, generic, profiles) =
+    let (mut generic_systems, generic, profiles, generic_watch_observations) =
         discover_generic_systems_from_plan_excluding_with_progress(
             storage_root,
             &plan,
@@ -218,6 +220,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
             legacy_inputs: 0,
         },
         profiles,
+        generic_watch_observations,
     })
 }
 

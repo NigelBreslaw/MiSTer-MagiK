@@ -7,7 +7,9 @@
 //! refresh reads and validates only the manifest and watch indexes; large row
 //! snapshots are opened only after a source change is proven.
 
+use crate::catalog_scan::should_ignore_path;
 use crate::fast_five_catalog::{FastFiveGameVariant, FastFiveSnapshot, FastFiveSystem};
+use crate::generic_system_catalog::GenericSourceWatchObservations;
 use crate::system_shard::SystemGame;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -233,8 +235,12 @@ pub fn build_fresh_catalog_with_progress(
         crate::shard_registry::production_registry_limits(),
         crate::fast_five_catalog::FastFiveArtifactProfile::SearchOnly,
     )?;
-    let (states, capture) =
-        capture_refresh_state_with_profiles(storage_root, &snapshot, &source_build.profiles)?;
+    let (states, capture) = capture_refresh_state_with_profiles(
+        storage_root,
+        &snapshot,
+        &source_build.profiles,
+        Some(&source_build.generic_watch_observations),
+    )?;
     let refresh_generation = read_latest_refresh_manifest(catalog_root)
         .map_or(1, |manifest| manifest.generation.saturating_add(1));
     publish_refresh_state(
@@ -700,13 +706,14 @@ pub fn capture_refresh_state(
 ) -> Result<(Vec<FastRefreshSystemState>, FastRefreshCaptureReport), String> {
     let roots = [storage_root.display().to_string()];
     let profiles = crate::launch_profiles::ProfileSet::try_for_roots(&roots)?.into_profiles();
-    capture_refresh_state_with_profiles(storage_root, snapshot, &profiles)
+    capture_refresh_state_with_profiles(storage_root, snapshot, &profiles, None)
 }
 
 fn capture_refresh_state_with_profiles(
     storage_root: &Path,
     snapshot: &FastFiveSnapshot,
     profiles: &[crate::launch_profiles::LaunchProfile],
+    generic_watch_observations: Option<&BTreeMap<String, GenericSourceWatchObservations>>,
 ) -> Result<(Vec<FastRefreshSystemState>, FastRefreshCaptureReport), String> {
     let started = std::time::Instant::now();
     snapshot.validate()?;
@@ -722,6 +729,7 @@ fn capture_refresh_state_with_profiles(
             &system.system_id,
             specification,
             &mut anchor_cache,
+            generic_watch_observations.and_then(|observations| observations.get(&system.system_id)),
         )?;
         crate::catalog_logln!(
             "fast_catalog_capture_tsv\tsystem={}\telapsed_us={}\tdirectories={}\tcontainers={}",
@@ -758,6 +766,7 @@ pub fn capture_system_watch(
         system_id,
         specification,
         &mut BTreeMap::new(),
+        None,
     )
 }
 
@@ -766,6 +775,7 @@ fn capture_system_watch_from_specification(
     system_id: &str,
     specification: WatchSpecification,
     anchor_cache: &mut BTreeMap<PathBuf, FastWatchedDirectory>,
+    generic_observations: Option<&GenericSourceWatchObservations>,
 ) -> Result<FastSystemWatchIndex, String> {
     let mut directories = Vec::new();
     let mut containers = Vec::new();
@@ -782,15 +792,46 @@ fn capture_system_watch_from_specification(
             directories.push(directory);
         }
     }
-    for root in &specification.scan_roots {
-        if root.is_dir() {
-            if system_id == "arcade" && root.ends_with("_Arcade") {
-                directories.push(capture_directory(root)?);
-            } else {
-                capture_tree(root, system_id, &mut directories, &mut containers)?;
+    let expected_roots = specification
+        .scan_roots
+        .iter()
+        .filter(|root| root.is_dir())
+        .map(|root| root.to_string_lossy().into_owned())
+        .collect::<BTreeSet<_>>();
+    let reused_generic_observations = generic_observations
+        .is_some_and(|observations| observations.complete && observations.roots == expected_roots);
+    if let Some(observations) = generic_observations.filter(|_| reused_generic_observations) {
+        directories.extend(
+            observations
+                .directories
+                .iter()
+                .map(|directory| FastWatchedDirectory {
+                    path: directory.path.to_string_lossy().into_owned(),
+                    modified_ns: directory.modified_ns,
+                    entry_fingerprint: directory.entry_fingerprint.clone(),
+                }),
+        );
+        for path in &observations.containers {
+            if is_watched_container(system_id, path) {
+                containers.push(capture_container(path)?);
+            }
+        }
+    } else {
+        for root in &specification.scan_roots {
+            if root.is_dir() {
+                if system_id == "arcade" && root.ends_with("_Arcade") {
+                    directories.push(capture_directory(root)?);
+                } else {
+                    capture_tree(root, system_id, &mut directories, &mut containers)?;
+                }
             }
         }
     }
+    crate::catalog_logln!(
+        "fast_catalog_capture_source_tsv\tsystem={}\tgeneric_observations_reused={}",
+        system_id,
+        u8::from(reused_generic_observations),
+    );
     if system_id == "arcade" {
         for path in [
             storage_root.join("mister-magik-dev/arcade-updater-index-v1.lz4b"),
@@ -1369,12 +1410,23 @@ fn capture_tree(
         .map_err(|error| format!("read watch directory {}: {error}", root.display()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("enumerate watch directory {}: {error}", root.display()))?;
-    entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
+    entries.sort_by(|left, right| {
+        let left = left.file_name().to_string_lossy().into_owned();
+        let right = right.file_name().to_string_lossy().into_owned();
+        left.to_ascii_lowercase()
+            .cmp(&right.to_ascii_lowercase())
+            .then_with(|| left.cmp(&right))
+    });
     let mut digest = Sha256::new();
     for entry in entries {
+        let path = entry.path();
         let file_type = entry
             .file_type()
-            .map_err(|error| format!("inspect {}: {error}", entry.path().display()))?;
+            .map_err(|error| format!("inspect {}: {error}", path.display()))?;
+        if should_ignore_path(&path) || (file_type.is_dir() && should_prune_source_directory(&path))
+        {
+            continue;
+        }
         let kind = if file_type.is_dir() {
             b'd'
         } else if file_type.is_file() {
@@ -1390,11 +1442,7 @@ fn capture_tree(
         if file_type.is_symlink() {
             continue;
         }
-        let path = entry.path();
         if file_type.is_dir() {
-            if should_prune_source_directory(&path) {
-                continue;
-            }
             if let Err(error) = capture_tree(&path, system_id, directories, containers)
                 && path.exists()
             {
@@ -1423,7 +1471,13 @@ fn capture_directory(path: &Path) -> Result<FastWatchedDirectory, String> {
         .map_err(|error| format!("read watch directory {}: {error}", path.display()))?
         .filter_map(Result::ok)
         .filter_map(|entry| {
+            let entry_path = entry.path();
             let kind = entry.file_type().ok()?;
+            if should_ignore_path(&entry_path)
+                || (kind.is_dir() && should_prune_source_directory(&entry_path))
+            {
+                return None;
+            }
             let kind = if kind.is_dir() {
                 b'd'
             } else if kind.is_file() {
@@ -1440,6 +1494,7 @@ fn capture_directory(path: &Path) -> Result<FastWatchedDirectory, String> {
         left.0
             .to_ascii_lowercase()
             .cmp(&right.0.to_ascii_lowercase())
+            .then_with(|| left.0.cmp(&right.0))
     });
     let mut digest = Sha256::new();
     for (name, kind) in entries {
