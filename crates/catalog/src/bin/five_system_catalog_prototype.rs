@@ -624,10 +624,10 @@ fn run_media_ab(storage_root: &Path, order: &str) -> Result<MediaAbReport, Strin
     let (first, second) = match order {
         "baseline-first" => (
             run_media_implementation(storage_root, GenericScanImplementation::Baseline)?,
-            run_media_implementation(storage_root, GenericScanImplementation::BorrowedUnsorted)?,
+            run_media_implementation(storage_root, GenericScanImplementation::NamespaceBorrowed)?,
         ),
         "optimized-first" => (
-            run_media_implementation(storage_root, GenericScanImplementation::BorrowedUnsorted)?,
+            run_media_implementation(storage_root, GenericScanImplementation::NamespaceBorrowed)?,
             run_media_implementation(storage_root, GenericScanImplementation::Baseline)?,
         ),
         _ => return Err(format!("unknown media A/B order {order}")),
@@ -637,7 +637,7 @@ fn run_media_ab(storage_root: &Path, order: &str) -> Result<MediaAbReport, Strin
     } else {
         &second.systems
     };
-    let optimized = if first.report.implementation == "borrowed-unsorted" {
+    let optimized = if first.report.implementation == "namespace-borrowed" {
         &first.systems
     } else {
         &second.systems

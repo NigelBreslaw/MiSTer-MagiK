@@ -14,6 +14,7 @@ use crate::launch_profiles::{
     BorrowedProfilePathClass, IgnoreReason, IgnoreRule, LaunchProfile, MountKind, MountSpec,
     PayloadDisposition, PayloadRule, ProfilePathClass, ProfileSet, RuleProvenance,
 };
+use crate::namespace_walk::{self, NamespaceEntryKind};
 use crate::system_shard::{SystemGame, SystemLaunchPlan};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -41,6 +42,10 @@ pub struct GenericSystemStats {
     pub ignored_files: usize,
     pub dependency_files: usize,
     pub unmatched_files: usize,
+    pub namespace_backend: String,
+    pub namespace_read_calls: usize,
+    pub namespace_read_bytes: u64,
+    pub namespace_type_stats: usize,
     pub read_errors: usize,
     pub archive_errors: usize,
     pub elapsed_us: u64,
@@ -51,14 +56,14 @@ pub const MEDIA_EXPERIMENT_SYSTEM_IDS: [&str; 3] = ["psx", "bbcmicro", "msx"];
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GenericScanImplementation {
     Baseline,
-    BorrowedUnsorted,
+    NamespaceBorrowed,
 }
 
 impl GenericScanImplementation {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Baseline => "baseline",
-            Self::BorrowedUnsorted => "borrowed-unsorted",
+            Self::NamespaceBorrowed => "namespace-borrowed",
         }
     }
 }
@@ -279,8 +284,8 @@ pub fn scan_media_experiment_system(
                 GenericScanImplementation::Baseline => {
                     scan_directory(&root, profile, &mut stats, &mut scanned)
                 }
-                GenericScanImplementation::BorrowedUnsorted => {
-                    scan_directory_borrowed_unsorted(&root, profile, &mut stats, &mut scanned)
+                GenericScanImplementation::NamespaceBorrowed => {
+                    scan_namespace_borrowed(&root, profile, &mut stats, &mut scanned)
                 }
             }
         }
@@ -575,6 +580,9 @@ fn scan_directory(
     stats: &mut GenericSystemStats,
     games: &mut Vec<ScannedGame>,
 ) {
+    if stats.namespace_backend.is_empty() {
+        stats.namespace_backend = "std-read-dir".to_string();
+    }
     stats.directories += 1;
     let mut entries = match fs::read_dir(root) {
         Ok(entries) => entries.filter_map(Result::ok).collect::<Vec<_>>(),
@@ -633,74 +641,66 @@ fn scan_directory(
     }
 }
 
-fn scan_directory_borrowed_unsorted(
+fn scan_namespace_borrowed(
     root: &Path,
     profile: &LaunchProfile,
     stats: &mut GenericSystemStats,
     games: &mut Vec<ScannedGame>,
 ) {
     stats.directories += 1;
-    let entries = match fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(_) => {
-            stats.read_errors += 1;
-            return;
-        }
-    };
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => {
-                stats.read_errors += 1;
-                continue;
+    let namespace = namespace_walk::visit(
+        root,
+        None,
+        |_| false,
+        |entry| {
+            if entry.kind == NamespaceEntryKind::Directory {
+                stats.directories += 1;
+                return true;
             }
-        };
-        let path = entry.path();
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
-            Err(_) => {
-                stats.read_errors += 1;
-                continue;
+            if entry.kind != NamespaceEntryKind::File {
+                return true;
             }
-        };
-        if file_type.is_symlink() {
-            continue;
-        }
-        if file_type.is_dir() {
-            scan_directory_borrowed_unsorted(&path, profile, stats, games);
-            continue;
-        }
-        if !file_type.is_file() {
-            continue;
-        }
-        stats.files += 1;
-        match profile.classify_path_borrowed(&path) {
-            BorrowedProfilePathClass::Payload { rule }
-                if rule.disposition == PayloadDisposition::Playable =>
-            {
-                stats.candidate_files += 1;
-                games.push(direct_game(profile, &path, rule));
-            }
-            BorrowedProfilePathClass::NotMatched
-                if path
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
-                    && !profile.archive_entry_rules.is_empty() =>
-            {
-                stats.candidate_files += 1;
-                scan_archive(profile, &path, stats, games);
-            }
-            BorrowedProfilePathClass::Ignored { reason } => {
-                stats.ignored_files += 1;
-                if reason == IgnoreReason::CueTrack {
-                    stats.dependency_files += 1;
+            let path = entry.path.as_path();
+            stats.files += 1;
+            match profile.classify_path_borrowed(path) {
+                BorrowedProfilePathClass::Payload { rule }
+                    if rule.disposition == PayloadDisposition::Playable =>
+                {
+                    stats.candidate_files += 1;
+                    games.push(direct_game(profile, path, rule));
                 }
+                BorrowedProfilePathClass::NotMatched
+                    if path
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+                        && !profile.archive_entry_rules.is_empty() =>
+                {
+                    stats.candidate_files += 1;
+                    scan_archive(profile, path, stats, games);
+                }
+                BorrowedProfilePathClass::Ignored { reason } => {
+                    stats.ignored_files += 1;
+                    if reason == IgnoreReason::CueTrack {
+                        stats.dependency_files += 1;
+                    }
+                }
+                BorrowedProfilePathClass::Payload { .. } => stats.dependency_files += 1,
+                _ => stats.unmatched_files += 1,
             }
-            BorrowedProfilePathClass::Payload { .. } => stats.dependency_files += 1,
-            _ => stats.unmatched_files += 1,
-        }
-    }
+            true
+        },
+    );
+    stats.namespace_backend = namespace.backend.to_string();
+    stats.namespace_read_calls = stats
+        .namespace_read_calls
+        .saturating_add(namespace.read_calls);
+    stats.namespace_read_bytes = stats
+        .namespace_read_bytes
+        .saturating_add(namespace.read_bytes);
+    stats.namespace_type_stats = stats
+        .namespace_type_stats
+        .saturating_add(namespace.type_stats);
 }
 
 fn direct_game(profile: &LaunchProfile, path: &Path, rule: &PayloadRule) -> ScannedGame {
@@ -942,7 +942,7 @@ mod tests {
             let (optimized, optimized_stats) = scan_media_experiment_system(
                 &root,
                 system_id,
-                GenericScanImplementation::BorrowedUnsorted,
+                GenericScanImplementation::NamespaceBorrowed,
             )
             .expect("optimized scan");
             assert_eq!(
@@ -964,9 +964,12 @@ mod tests {
                 "{system_id}"
             );
         }
-        let (_, psx_stats) =
-            scan_media_experiment_system(&root, "psx", GenericScanImplementation::BorrowedUnsorted)
-                .expect("PSX scan");
+        let (_, psx_stats) = scan_media_experiment_system(
+            &root,
+            "psx",
+            GenericScanImplementation::NamespaceBorrowed,
+        )
+        .expect("PSX scan");
         assert_eq!(psx_stats.games, 1);
         assert_eq!(psx_stats.ignored_files, 3);
         assert_eq!(psx_stats.dependency_files, 1);
