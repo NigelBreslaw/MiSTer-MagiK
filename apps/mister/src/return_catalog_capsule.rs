@@ -48,19 +48,12 @@ struct CapsuleBinding {
 
 impl CapsuleBinding {
     fn current(catalog_root: &Path) -> Result<Self, String> {
-        let durable_catalog_fingerprint = if fast_catalog_environment_enabled() {
-            let paths = mister_magik_catalog::device_layout::CatalogPaths::capture_process();
+        let paths = mister_magik_catalog::device_layout::CatalogPaths::capture_process();
+        let durable_catalog_fingerprint =
             mister_magik_catalog::fast_five_catalog::registry_fingerprint(
                 paths.sharded_catalog_dir(),
-                mister_magik_catalog::production_sharded_projection::production_registry_limits(),
-            )?
-        } else {
-            mister_magik_catalog::catalog_state::read(
-                &mister_magik_catalog::catalog_state::default_path(),
-            )?
-            .stamp
-            .fingerprint_hex()
-        };
+                mister_magik_catalog::shard_registry::production_registry_limits(),
+            )?;
         Self::for_current_generation(catalog_root, &durable_catalog_fingerprint)
     }
 
@@ -105,12 +98,6 @@ impl CapsuleBinding {
             binary_build: env!("MISTER_MAGIK_BUILD_TIME").to_string(),
         }
     }
-}
-
-fn fast_catalog_environment_enabled() -> bool {
-    std::env::var("MISTER_FAST_FIVE_CATALOG")
-        .ok()
-        .is_some_and(|value| matches!(value.as_str(), "1" | "on" | "true" | "yes"))
 }
 
 #[derive(Clone, Debug)]
