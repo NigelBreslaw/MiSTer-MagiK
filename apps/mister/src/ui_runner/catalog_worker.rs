@@ -278,33 +278,53 @@ fn run_fast_catalog_fresh_build(
     tx: &mpsc::Sender<CatalogWorkerMessage>,
 ) {
     let storage_root = PathBuf::from("/media/fat");
-    let planned_system_ids =
-        mister_magik_catalog::fast_catalog_sources::discover_independent_system_ids(&storage_root);
-    let _ = tx.send(CatalogWorkerMessage::ReconciliationPlanReady {
-        system_ids: planned_system_ids.clone(),
-        all_published_systems: true,
-    });
-    for system_id in &planned_system_ids {
-        let _ = tx.send(CatalogWorkerMessage::SystemScanning {
-            system_id: system_id.clone(),
-        });
-    }
-    let planned_system_set = planned_system_ids
-        .iter()
-        .map(String::as_str)
-        .collect::<std::collections::BTreeSet<_>>();
+    let mut planned_system_ids = Vec::new();
     let mut completed_system_ids = std::collections::BTreeSet::new();
     let report = match mister_magik_catalog::fast_catalog_refresh::build_fresh_catalog_with_progress(
         &storage_root,
         catalog_root,
-        |system_id| {
-            if planned_system_set.contains(system_id)
-                && completed_system_ids.insert(system_id.to_string())
-            {
+        |system_ids| {
+            planned_system_ids = system_ids.to_vec();
+            let _ = tx.send(CatalogWorkerMessage::ReconciliationPlanReady {
+                system_ids: system_ids.to_vec(),
+                all_published_systems: true,
+            });
+            for system_id in system_ids {
+                let _ = tx.send(CatalogWorkerMessage::SystemScanning {
+                    system_id: system_id.clone(),
+                });
+            }
+        },
+        |system| {
+            if completed_system_ids.insert(system.system_id.clone()) {
                 let _ = tx.send(CatalogWorkerMessage::SystemPrepared {
-                    system_id: system_id.to_string(),
+                    system_id: system.system_id.clone(),
                     generation: 0,
                 });
+            }
+            if system.system_id == "arcade" && !system.games.is_empty() {
+                let started = Instant::now();
+                let catalog =
+                    mister_magik_catalog::fast_catalog_sources::launcher_catalog_for_fast_system(
+                        Path::new(root),
+                        system,
+                    );
+                let games = catalog
+                    .system_game_count(mister_magik_catalog::arcade_catalog::MENU_ARCADE_SYSTEM_ID);
+                let load_us = started.elapsed().as_micros() as u64;
+                let _ = tx.send(CatalogWorkerMessage::Timing {
+                    name: "catalog_arcade_bootstrap_ready".to_string(),
+                    detail: format!("games={games} load_us={load_us}"),
+                });
+                send_ready_catalog(
+                    tx,
+                    catalog,
+                    None,
+                    load_us,
+                    CatalogSource::NavigationProjection,
+                    true,
+                    None,
+                );
             }
         },
     ) {

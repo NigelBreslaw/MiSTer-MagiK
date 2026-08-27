@@ -6,16 +6,19 @@
 //! These adapters consume installed files and the dedicated Arcade metadata
 //! contract directly. They never read retired catalog artifacts or scanner state.
 
+use crate::arcade_catalog::{
+    ArcadeCatalog, ArcadeGameEntry, GameSystemEntry, StructuredLaunchPlan,
+};
 use crate::catalog_scan::FoundFile;
 use crate::fast_five_catalog::{
     FAST_FIVE_SNAPSHOT_SCHEMA, FastFiveGameVariant, FastFiveSnapshot, FastFiveSystem,
     FastFiveVariantRelation, collapse_c64_cross_source_variants,
 };
 use crate::generic_system_catalog::{
-    discover_generic_system_ids, discover_generic_systems_excluding_with_progress,
+    discover_generic_systems_from_profiles_excluding_with_progress,
     rebuild_installed_generic_system,
 };
-use crate::launch_profiles::CollectionListing;
+use crate::launch_profiles::{CollectionListing, LaunchProfile, ProfileSet};
 use crate::media_identity::ScreenshotAssetId;
 use crate::mra_header::{PrimaryRomRequirement, RomNamespace};
 use crate::prepared_collections::{PreparedPayloadIndex, validate_prepared_launch_path};
@@ -25,10 +28,11 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 11;
-const PREPARED_SYSTEM_IDS: [&str; 5] = ["amiga", "arcade", "c64", "dos", "x68000"];
+const PREPARED_SYSTEM_IDS: [&str; 5] = ["arcade", "amiga", "c64", "dos", "x68000"];
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FastSourceBuildReport {
@@ -58,43 +62,39 @@ pub fn build_independent_fast_snapshot_with_progress(
     storage_root: &Path,
     mut system_complete: impl FnMut(&str),
 ) -> Result<(FastFiveSnapshot, FastSourceBuildReport), String> {
-    let started = Instant::now();
-    let (generic_systems, generic) = discover_generic_systems_excluding_with_progress(
+    let build = build_independent_fast_snapshot_for_refresh_with_progress(
         storage_root,
-        &PREPARED_SYSTEM_IDS,
-        &mut system_complete,
+        |_| {},
+        |system| system_complete(&system.system_id),
     )?;
-    let mut systems = generic_systems
-        .into_iter()
-        .map(|system| (system.system_id.clone(), system))
-        .collect::<BTreeMap<_, _>>();
-    let mut reports = generic
-        .systems
-        .into_iter()
-        .map(|system| {
-            (
-                system.system_id.clone(),
-                FastSourceSystemReport {
-                    system_id: system.system_id,
-                    files_visited: system.files,
-                    games: system.games,
-                    invalid: system.read_errors.saturating_add(system.archive_errors),
-                    elapsed_us: system.elapsed_us,
-                    helper_hits: 0,
-                    fallback_validations: 0,
-                },
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
+    Ok((build.snapshot, build.report))
+}
+
+pub(crate) struct FastSourceRefreshBuild {
+    pub snapshot: FastFiveSnapshot,
+    pub report: FastSourceBuildReport,
+    pub profiles: Vec<LaunchProfile>,
+}
+
+pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
+    storage_root: &Path,
+    mut plan_ready: impl FnMut(&[String]),
+    mut system_complete: impl FnMut(&FastFiveSystem),
+) -> Result<FastSourceRefreshBuild, String> {
+    let started = Instant::now();
+    let roots = [storage_root.display().to_string()];
+    let profiles = ProfileSet::for_roots(&roots).into_profiles();
+    let planned_system_ids = discover_independent_system_ids_from_profiles(storage_root, &profiles);
+    plan_ready(&planned_system_ids);
+    let mut systems = BTreeMap::new();
+    let mut reports = BTreeMap::new();
     for system_id in PREPARED_SYSTEM_IDS {
         let system_started = Instant::now();
         let (mut system, mut report) = build_prepared_system(storage_root, system_id)?;
-        if let Some(generic) = systems.remove(system_id) {
-            merge_system_rows(&mut system, generic);
-        }
         if system_id == "c64" {
             collapse_c64_cross_source_variants(&mut system);
         }
+        enrich_fast_preview_identities(storage_root, std::slice::from_mut(&mut system));
         report.elapsed_us = elapsed_us(system_started);
         report.games = system.games.len();
         crate::catalog_logln!(
@@ -107,32 +107,54 @@ pub fn build_independent_fast_snapshot_with_progress(
             report.helper_hits,
             report.fallback_validations,
         );
-        system_complete(system_id);
         if !system.games.is_empty() || !system.variants.is_empty() {
+            system_complete(&system);
             systems.insert(system_id.to_string(), system);
-            reports
-                .entry(system_id.to_string())
-                .and_modify(|generic| merge_source_report(generic, &report))
-                .or_insert(report);
+            reports.insert(system_id.to_string(), report);
         }
     }
-    let mut snapshot = FastFiveSnapshot {
+    let (mut generic_systems, generic) =
+        discover_generic_systems_from_profiles_excluding_with_progress(
+            storage_root,
+            &profiles,
+            &PREPARED_SYSTEM_IDS,
+            &mut system_complete,
+        )?;
+    enrich_fast_preview_identities(storage_root, &mut generic_systems);
+    systems.extend(
+        generic_systems
+            .into_iter()
+            .map(|system| (system.system_id.clone(), system)),
+    );
+    reports.extend(generic.systems.into_iter().map(|system| {
+        (
+            system.system_id.clone(),
+            FastSourceSystemReport {
+                system_id: system.system_id,
+                files_visited: system.files,
+                games: system.games,
+                invalid: system.read_errors.saturating_add(system.archive_errors),
+                elapsed_us: system.elapsed_us,
+                helper_hits: 0,
+                fallback_validations: 0,
+            },
+        )
+    }));
+    let snapshot = FastFiveSnapshot {
         schema: FAST_FIVE_SNAPSHOT_SCHEMA.to_string(),
         source_fingerprint: fingerprint_systems(&systems.values().cloned().collect::<Vec<_>>())?,
         systems: systems.into_values().collect(),
     };
     snapshot.validate()?;
-    enrich_fast_preview_identities(storage_root, &mut snapshot.systems);
-    snapshot.source_fingerprint = fingerprint_systems(&snapshot.systems)?;
-    snapshot.validate()?;
-    Ok((
+    Ok(FastSourceRefreshBuild {
         snapshot,
-        FastSourceBuildReport {
+        report: FastSourceBuildReport {
             elapsed_us: elapsed_us(started),
             systems: reports.into_values().collect(),
             legacy_inputs: 0,
         },
-    ))
+        profiles,
+    })
 }
 
 pub fn rebuild_independent_system(
@@ -196,7 +218,25 @@ pub fn rebuild_independent_system(
 }
 
 pub fn discover_independent_system_ids(storage_root: &Path) -> Vec<String> {
-    let mut systems = discover_generic_system_ids(storage_root);
+    let roots = [storage_root.display().to_string()];
+    let profiles = ProfileSet::for_roots(&roots).into_profiles();
+    discover_independent_system_ids_from_profiles(storage_root, &profiles)
+}
+
+fn discover_independent_system_ids_from_profiles(
+    storage_root: &Path,
+    profiles: &[LaunchProfile],
+) -> Vec<String> {
+    let mut systems = profiles
+        .iter()
+        .filter(|profile| {
+            profile
+                .game_dirs
+                .iter()
+                .any(|game_dir| storage_root.join("games").join(game_dir).is_dir())
+        })
+        .map(|profile| profile.system_id.clone())
+        .collect::<BTreeSet<_>>();
     for (system_id, present) in [
         ("amiga", storage_root.join("games/Amiga").is_dir()),
         ("arcade", storage_root.join("_Arcade").is_dir()),
@@ -213,6 +253,56 @@ pub fn discover_independent_system_ids(storage_root: &Path) -> Vec<String> {
         }
     }
     systems.into_iter().collect()
+}
+
+pub fn launcher_catalog_for_fast_system(
+    arcade_root: &Path,
+    system: &FastFiveSystem,
+) -> ArcadeCatalog {
+    let games = system
+        .games
+        .iter()
+        .map(|game| ArcadeGameEntry {
+            title: Arc::from(game.title.as_str()),
+            mra_path: Arc::from(game.launch_ref.as_str()),
+            preview_archive_path: Arc::from(game.preview_archive_path.as_str()),
+            preview_asset_key: Arc::from(game.preview_asset_key.as_str()),
+            has_preview: game.has_preview,
+            system_id: Arc::from(system.system_id.as_str()),
+            year: game.year,
+            manufacturer: Arc::from(game.manufacturer.as_str()),
+            category: Arc::from(game.category.as_str()),
+            players: game.players,
+            control: Arc::from(game.control.as_str()),
+            is_new: game.is_new,
+        })
+        .collect::<Vec<_>>();
+    let launch_plans = system
+        .games
+        .iter()
+        .filter_map(|game| game.launch_plan.as_ref())
+        .map(|plan| StructuredLaunchPlan {
+            launch_ref: Arc::from(plan.launch_ref.as_str()),
+            title: Arc::from(plan.title.as_str()),
+            system_id: Arc::from(plan.system_id.as_str()),
+            core_path: Arc::from(plan.core_path.as_str()),
+            payload_path: Arc::from(plan.payload_path.as_str()),
+            mount_kind: Arc::from(plan.mount_kind.as_str()),
+            mount_index: plan.mount_index,
+            delay_secs: plan.delay_secs,
+        })
+        .collect();
+    let systems = vec![GameSystemEntry {
+        id: system.system_id.clone(),
+        title: system.display_title.clone(),
+        count: games.len(),
+    }];
+    ArcadeCatalog::new_with_deferred_text_indexes(
+        arcade_root.to_path_buf(),
+        games,
+        systems,
+        launch_plans,
+    )
 }
 
 fn merge_system_rows(target: &mut FastFiveSystem, mut additional: FastFiveSystem) {

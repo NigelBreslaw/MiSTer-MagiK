@@ -461,33 +461,18 @@ pub(crate) struct CatalogScanPlan {
 
 impl CatalogScanPlan {
     pub(crate) fn for_roots(roots: &[String]) -> Self {
-        let background = crate::cooperative_work::in_background_scope();
-        let ((installed_cores, core_us), (all_game_dir_headers, game_headers_us)) =
-            std::thread::scope(|scope| {
-                let cores = scope.spawn(|| {
-                    let _background_scope =
-                        background.then(crate::cooperative_work::BackgroundScope::enter);
-                    crate::cooperative_work::checkpoint();
-                    let started = Instant::now();
-                    let cores = catalog_discovery::installed_cores_for_roots(roots);
-                    (cores, started.elapsed().as_micros() as u64)
-                });
-                let game_headers = scope.spawn(|| {
-                    let _background_scope =
-                        background.then(crate::cooperative_work::BackgroundScope::enter);
-                    crate::cooperative_work::checkpoint();
-                    let started = Instant::now();
-                    let headers = catalog_discovery::top_level_game_dir_headers_for_roots_excluding(
-                        roots,
-                        &BTreeSet::new(),
-                    );
-                    (headers, started.elapsed().as_micros() as u64)
-                });
-                (
-                    cores.join().expect("installed-core discovery"),
-                    game_headers.join().expect("game-directory discovery"),
-                )
-            });
+        crate::cooperative_work::checkpoint();
+        let core_started = Instant::now();
+        let installed_cores = catalog_discovery::installed_cores_for_roots(roots);
+        let core_us = core_started.elapsed().as_micros() as u64;
+        crate::cooperative_work::checkpoint();
+        let game_headers_started = Instant::now();
+        let all_game_dir_headers =
+            catalog_discovery::top_level_game_dir_headers_for_roots_excluding(
+                roots,
+                &BTreeSet::new(),
+            );
+        let game_headers_us = game_headers_started.elapsed().as_micros() as u64;
         crate::library_db::report_library_scan_timing(
             "scan_plan_cores",
             core_us,

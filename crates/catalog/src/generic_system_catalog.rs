@@ -229,10 +229,25 @@ pub fn discover_generic_systems_excluding_with_progress(
     excluded_system_ids: &[&str],
     mut system_complete: impl FnMut(&str),
 ) -> Result<(Vec<FastFiveSystem>, GenericSystemScanReport), String> {
-    let started = Instant::now();
     let roots = [storage_root.display().to_string()];
+    let profiles = ProfileSet::for_roots(&roots).into_profiles();
+    discover_generic_systems_from_profiles_excluding_with_progress(
+        storage_root,
+        &profiles,
+        excluded_system_ids,
+        |system| system_complete(&system.system_id),
+    )
+}
+
+pub(crate) fn discover_generic_systems_from_profiles_excluding_with_progress(
+    storage_root: &Path,
+    profiles: &[LaunchProfile],
+    excluded_system_ids: &[&str],
+    mut system_complete: impl FnMut(&FastFiveSystem),
+) -> Result<(Vec<FastFiveSystem>, GenericSystemScanReport), String> {
+    let started = Instant::now();
     let mut grouped = BTreeMap::<String, Vec<LaunchProfile>>::new();
-    for profile in ProfileSet::for_roots(&roots).into_profiles() {
+    for profile in profiles.iter().cloned() {
         if excluded_system_ids.contains(&profile.system_id.as_str()) {
             continue;
         }
@@ -259,7 +274,7 @@ pub fn discover_generic_systems_excluding_with_progress(
                 report.read_errors,
                 report.archive_errors,
             );
-            system_complete(&system_id);
+            system_complete(&system);
             systems.push(system);
             reports.push(report);
         } else {

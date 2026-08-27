@@ -196,27 +196,32 @@ pub fn build_fresh_catalog(
     storage_root: &Path,
     catalog_root: &Path,
 ) -> Result<FastCatalogFreshBuildReport, String> {
-    build_fresh_catalog_with_progress(storage_root, catalog_root, |_| {})
+    build_fresh_catalog_with_progress(storage_root, catalog_root, |_| {}, |_| {})
 }
 
 pub fn build_fresh_catalog_with_progress(
     storage_root: &Path,
     catalog_root: &Path,
-    system_complete: impl FnMut(&str),
+    plan_ready: impl FnMut(&[String]),
+    system_complete: impl FnMut(&FastFiveSystem),
 ) -> Result<FastCatalogFreshBuildReport, String> {
     let started = std::time::Instant::now();
-    let (snapshot, source) =
-        crate::fast_catalog_sources::build_independent_fast_snapshot_with_progress(
+    let source_build =
+        crate::fast_catalog_sources::build_independent_fast_snapshot_for_refresh_with_progress(
             storage_root,
+            plan_ready,
             system_complete,
         )?;
+    let snapshot = source_build.snapshot;
+    let source = source_build.report;
     let publication = crate::fast_five_catalog::publish_snapshot_with_profile(
         catalog_root,
         &snapshot,
         crate::shard_registry::production_registry_limits(),
         crate::fast_five_catalog::FastFiveArtifactProfile::SearchOnly,
     )?;
-    let (states, capture) = capture_refresh_state(storage_root, &snapshot)?;
+    let (states, capture) =
+        capture_refresh_state_with_profiles(storage_root, &snapshot, &source_build.profiles)?;
     let refresh_generation = read_latest_refresh_manifest(catalog_root)
         .map_or(1, |manifest| manifest.generation.saturating_add(1));
     publish_refresh_state(
@@ -577,10 +582,18 @@ pub fn capture_refresh_state(
     storage_root: &Path,
     snapshot: &FastFiveSnapshot,
 ) -> Result<(Vec<FastRefreshSystemState>, FastRefreshCaptureReport), String> {
-    let started = std::time::Instant::now();
-    snapshot.validate()?;
     let roots = [storage_root.display().to_string()];
     let profiles = crate::launch_profiles::ProfileSet::for_roots(&roots).into_profiles();
+    capture_refresh_state_with_profiles(storage_root, snapshot, &profiles)
+}
+
+fn capture_refresh_state_with_profiles(
+    storage_root: &Path,
+    snapshot: &FastFiveSnapshot,
+    profiles: &[crate::launch_profiles::LaunchProfile],
+) -> Result<(Vec<FastRefreshSystemState>, FastRefreshCaptureReport), String> {
+    let started = std::time::Instant::now();
+    snapshot.validate()?;
     let mut anchor_cache = BTreeMap::new();
     let mut states = Vec::with_capacity(snapshot.systems.len());
     let mut report = FastRefreshCaptureReport::default();

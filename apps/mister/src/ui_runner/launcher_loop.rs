@@ -3867,6 +3867,14 @@ fn startup_intro_launcher_ui_plan(
     }
 }
 
+fn startup_catalog_ready_for_reveal(
+    intro_active: bool,
+    catalog_ready: bool,
+    refresh_done: bool,
+) -> bool {
+    catalog_ready && (!intro_active || refresh_done)
+}
+
 fn launcher_bridge_sync_plan(
     launching: bool,
     _startup_input_enabled: bool,
@@ -6250,7 +6258,15 @@ pub(super) fn run_launcher_loop(
         }
         let return_was_waiting = lifecycle.startup_status().mode == StartupMode::ReturnFromGame
             && !lifecycle.startup_can_present_frame();
-        lifecycle.tick_startup_reveal(loop_start, catalog_ready, &mut lifecycle_effects);
+        lifecycle.tick_startup_reveal(
+            loop_start,
+            startup_catalog_ready_for_reveal(
+                startup_intro.is_some(),
+                catalog_ready,
+                catalog_session.refresh_done(),
+            ),
+            &mut lifecycle_effects,
+        );
         if return_black_timeout_requires_home_fallback(return_was_waiting, &lifecycle_effects) {
             launch_return_session.fallback_to_home(&mut nav);
             full_bridge_dirty = true;
@@ -9655,22 +9671,6 @@ pub(super) fn run_launcher_loop(
                 Ok(None) => {}
                 Err(failure) => launcher_presenter.fail_latch_completion(failure),
             }
-        }
-        if lifecycle.startup_hard_deadline_reached(Instant::now())
-            && let Some(intro) = startup_intro.take()
-        {
-            print_startup_event(
-                start,
-                "startup_intro_hard_timeout",
-                format!(
-                    "elapsed_ms={} cabinet_wait_frames={}",
-                    LauncherLifecycle::COLD_STARTUP_MAX_DURATION.as_millis(),
-                    intro.waiting_frames(),
-                ),
-            );
-            launcher_presenter.invalidate_external_hidden_mode();
-            full_frame_present = true;
-            window.request_redraw();
         }
         if let Some(intro) = startup_intro.as_mut() {
             if intro.snapshot_capture_needed() && startup_intro_launcher_frame_ready {
@@ -15995,6 +15995,14 @@ mod tests {
             startup_intro_launcher_ui_plan(false, StartupRevealState::InputEnabled, true),
             StartupIntroLauncherUiPlan::Interactive
         );
+    }
+
+    #[test]
+    fn startup_intro_waits_for_full_refresh_or_the_hard_deadline() {
+        assert!(!startup_catalog_ready_for_reveal(true, true, false));
+        assert!(startup_catalog_ready_for_reveal(true, true, true));
+        assert!(startup_catalog_ready_for_reveal(false, true, false));
+        assert!(!startup_catalog_ready_for_reveal(true, false, true));
     }
 
     #[test]
