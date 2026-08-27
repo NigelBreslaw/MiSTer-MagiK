@@ -6959,7 +6959,7 @@ pub(super) fn run_launcher_loop(
         }
         let media_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         let mut media_message_seen = false;
-        if preview_route.allows_preview_work() && background_work_allowed {
+        if background_work_allowed {
             scheduler.poll_media(&mut media_events);
             for message in media_events.drain() {
                 media_message_seen = true;
@@ -8951,6 +8951,20 @@ pub(super) fn run_launcher_loop(
 
         let media_gate_trace_start = prepare_trace_enabled.then(Instant::now);
         if background_work_allowed {
+            let visible_media_system_id = matches!(nav.screen, Screen::Arcade | Screen::SystemHub)
+                .then(|| {
+                    nav.active_collection()
+                        .map(|collection| {
+                            collection
+                                .system_id
+                                .as_deref()
+                                .unwrap_or(&collection.legacy_system_id)
+                        })
+                        .unwrap_or_else(|| nav.active_collection_scope_id(&catalog))
+                })
+                .filter(|system_id| !system_id.is_empty())
+                .map(str::to_string);
+            media_session.observe_system_entry(visible_media_system_id.as_deref());
             let media_gate = media_session.current_gate(
                 frame_accounting.first_visible_copy_done(),
                 scheduler.has_pending_launch() || launching,
@@ -14003,9 +14017,6 @@ fn apply_screenshot_media_update_effects(
             ScreenshotMediaUpdateEffect::EnsureSystem { system_id } => {
                 scheduler.ensure_media_system(&system_id);
             }
-            ScreenshotMediaUpdateEffect::EnsureCatalogSystems => {
-                ensure_media_for_catalog_systems(catalog, scheduler, start);
-            }
             ScreenshotMediaUpdateEffect::FinishWorker => {
                 scheduler.finish_media_worker();
             }
@@ -14039,46 +14050,6 @@ fn apply_screenshot_media_update_effects(
             }
         }
     }
-}
-
-fn ensure_media_for_catalog_systems(
-    catalog: &ArcadeCatalog,
-    scheduler: &mut LauncherScheduler,
-    start: Instant,
-) {
-    let systems = catalog_media_system_ids(catalog);
-    if systems.is_empty() {
-        return;
-    }
-    scheduler.ensure_media_worker_started(start, "catalog-systems");
-    for system_id in systems {
-        print_startup_event(
-            start,
-            "screenshot_media_catalog_system_present",
-            format!("system={system_id} source=catalog-seed"),
-        );
-        print_startup_event(
-            start,
-            "screenshot_media_catalog_ensure",
-            format!("system={system_id}"),
-        );
-        scheduler.ensure_media_system(&system_id);
-    }
-}
-
-fn catalog_media_system_ids(catalog: &ArcadeCatalog) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    catalog
-        .systems
-        .iter()
-        .filter_map(|system| {
-            let id = system.id.as_str();
-            (mister_magik_fb::media_update::is_supported_pack_id(id)
-                && (system.count > 0 || catalog.system_game_count(id) > 0)
-                && seen.insert(system.id.clone()))
-            .then(|| system.id.clone())
-        })
-        .collect()
 }
 
 fn catalog_background_validation_delay() -> Duration {
@@ -15940,7 +15911,7 @@ mod tests {
     use mister_magik_fb::experiments::effects::framebuffer_effects::EffectSize;
 
     #[test]
-    fn screenshot_media_actions_follow_route_capability() {
+    fn catalog_discovery_never_starts_screenshot_media_downloads() {
         fn dispatched_media_actions(policy: PreviewRoutePolicy) -> Vec<&'static str> {
             let now = Instant::now();
             let mut catalog_session = LauncherCatalogSession::new(false);
@@ -15991,17 +15962,17 @@ mod tests {
             ))
             .is_empty()
         );
-        assert_eq!(
+        assert!(
             dispatched_media_actions(PreviewRoutePolicy::for_output_route(
                 ResolvedOutputRoute::Crt240p60,
-            )),
-            vec!["ensure-worker", "set-interaction", "ensure-system"]
+            ))
+            .is_empty()
         );
-        assert_eq!(
+        assert!(
             dispatched_media_actions(PreviewRoutePolicy::for_output_route(
                 ResolvedOutputRoute::Hdmi,
-            )),
-            vec!["ensure-worker", "set-interaction", "ensure-system"]
+            ))
+            .is_empty()
         );
     }
 
@@ -17701,26 +17672,6 @@ mod tests {
         assert!(!active_system_games_loading(&catalog, &LauncherNav::new()));
         assert!(arcade_catalog_rows_ready(&catalog));
         assert!(!arcade_navigation_ready(false, &catalog));
-    }
-
-    #[test]
-    pub(super) fn catalog_media_system_ids_are_selective_and_supported() {
-        let catalog = catalog_for_media_systems(&["arcade", "pcengine", "neogeo", "arcade"]);
-
-        assert_eq!(
-            catalog_media_system_ids(&catalog),
-            vec!["arcade".to_string(), "neogeo".to_string()]
-        );
-    }
-
-    #[test]
-    pub(super) fn catalog_media_system_ids_use_summary_counts_before_full_hydration() {
-        let catalog = summary_catalog_for_media_systems(&["arcade", "pcengine", "neogeo"]);
-
-        assert_eq!(
-            catalog_media_system_ids(&catalog),
-            vec!["arcade".to_string(), "neogeo".to_string()]
-        );
     }
 
     #[test]

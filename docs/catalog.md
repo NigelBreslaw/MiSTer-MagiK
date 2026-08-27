@@ -415,9 +415,22 @@ temporary file is synced, renamed, and followed by a parent-directory sync.
 Only then may the index and media-state authority publish. Failure before
 rename leaves the previous pack authoritative and removes the incomplete
 sibling. A destination create/write/flush failure may retry through the bounded
-tmpfs staging path; network, size, and hash failures are not replayed. The raw
+tmpfs staging path. Transport failures are retried in a new request episode;
+size, hash, format, and local-storage failures remain terminal. The raw
 `.mmlz4b` production format has no decode phase. Index download remains bounded
 and may overlap the pack transfer, but exFAT publication remains serialized.
+
+Screenshot-pack selection is demand-driven and always begins with a fresh
+network manifest. App startup unconditionally requests only Arcade, independent
+of catalog discovery, installed games, or catalog build state. No other pack is
+seeded by startup or catalog scanning. Entering a system preview or game list
+requests that system; re-entering it starts another fresh-manifest episode so
+installed state is compared with current server authority before any pack bytes
+are requested. Manifest transport retries every second during the initial
+network-startup window and then uses a capped ten-second backoff without an
+attempt limit. A request worker closes after a short quiescent interval, keeping
+later system entries independent while all exFAT pack publication remains
+single-lane.
 
 Selected preview requests use a newest-wins foreground worker while bounded
 prefetch requests use a separate background worker. They share the decoded
