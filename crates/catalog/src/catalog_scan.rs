@@ -411,12 +411,14 @@ pub(crate) fn discover_files_pipelined_foreground_with_plan(
     plan: CatalogScanPlan,
     excluded_targets: Vec<PathBuf>,
     prevalidated_targets: Vec<PathBuf>,
+    pruned_paths: Vec<PathBuf>,
 ) -> mpsc::Receiver<DiscoveryEvent> {
     discover_files_pipelined_with_plan_and_phase(
         roots,
         plan,
         excluded_targets,
         prevalidated_targets,
+        pruned_paths,
         RuntimeThreadRole::LibraryWalkerForeground,
         crate::pmu_phase::WALK_EXECUTION,
     )
@@ -427,6 +429,7 @@ pub(crate) fn discover_files_pipelined_with_plan(
     plan: CatalogScanPlan,
     excluded_targets: Vec<PathBuf>,
     prevalidated_targets: Vec<PathBuf>,
+    pruned_paths: Vec<PathBuf>,
     role: RuntimeThreadRole,
 ) -> mpsc::Receiver<DiscoveryEvent> {
     discover_files_pipelined_with_plan_and_phase(
@@ -434,6 +437,7 @@ pub(crate) fn discover_files_pipelined_with_plan(
         plan,
         excluded_targets,
         prevalidated_targets,
+        pruned_paths,
         role,
         crate::pmu_phase::WALK_EXECUTION,
     )
@@ -485,6 +489,7 @@ fn fingerprint_resume_targets_on_worker(
                     profiles,
                     &candidate_exts,
                     game_dir_header.as_ref(),
+                    &[],
                     |file| {
                         fingerprint.file(&file);
                         true
@@ -496,7 +501,7 @@ fn fingerprint_resume_targets_on_worker(
                 stats
             }
             PlannedScanTarget::Runtime(header) => {
-                let (stats, runtime) = scan_runtime_target_candidates(&header, plan);
+                let (stats, runtime) = scan_runtime_target_candidates(&header, plan, &[]);
                 fingerprint.facts(&runtime.facts);
                 for file in &runtime.files {
                     fingerprint.file(file);
@@ -528,6 +533,7 @@ fn discover_files_pipelined_with_plan_and_phase(
     plan: CatalogScanPlan,
     excluded_targets: Vec<PathBuf>,
     prevalidated_targets: Vec<PathBuf>,
+    pruned_paths: Vec<PathBuf>,
     role: RuntimeThreadRole,
     pmu_phase: &'static str,
 ) -> mpsc::Receiver<DiscoveryEvent> {
@@ -545,6 +551,7 @@ fn discover_files_pipelined_with_plan_and_phase(
                 &plan,
                 &excluded_targets,
                 &prevalidated_targets,
+                &pruned_paths,
                 &tx,
             );
             drop(walk_pmu);
@@ -669,6 +676,7 @@ pub fn catalog_corpus_inventory_tsv(roots: &[String]) -> String {
                     profiles,
                     &candidate_exts,
                     game_dir_header.as_ref(),
+                    &[],
                     |file| {
                         *extensions.entry(file.ext).or_default() += 1;
                         true
@@ -683,7 +691,7 @@ pub fn catalog_corpus_inventory_tsv(roots: &[String]) -> String {
                 )
             }
             PlannedScanTarget::Runtime(header) => {
-                let (stats, candidates) = scan_runtime_target_candidates(&header, &plan);
+                let (stats, candidates) = scan_runtime_target_candidates(&header, &plan, &[]);
                 for file in &candidates.files {
                     *extensions.entry(file.ext.clone()).or_default() += 1;
                 }
@@ -810,6 +818,7 @@ fn walk_index_candidates_with_plan(
     plan: &CatalogScanPlan,
     excluded_targets: &[PathBuf],
     prevalidated_targets: &[PathBuf],
+    pruned_paths: &[PathBuf],
     tx: &mpsc::SyncSender<DiscoveryEvent>,
 ) -> (usize, NamespaceRouteAttribution) {
     let profiles = plan.base_profiles();
@@ -866,6 +875,7 @@ fn walk_index_candidates_with_plan(
                     profiles,
                     &candidate_exts,
                     game_dir_header.as_ref(),
+                    pruned_paths,
                     |file| target_send_stats.send(tx, DiscoveryEvent::File(file)),
                 );
                 let in_target_send_us = target_send_stats.elapsed_us;
@@ -880,7 +890,8 @@ fn walk_index_candidates_with_plan(
                 stats
             }
             PlannedScanTarget::Runtime(header) => {
-                let (stats, candidates) = scan_runtime_target_candidates(&header, plan);
+                let (stats, candidates) =
+                    scan_runtime_target_candidates(&header, plan, pruned_paths);
                 if !target_send_stats.send(tx, DiscoveryEvent::RuntimeDirectory(candidates)) {
                     break;
                 }
@@ -1032,7 +1043,7 @@ fn scan_target_candidates(
     candidate_exts: &HashSet<String>,
     emit: impl FnMut(FoundFile) -> bool,
 ) -> WalkTargetStats {
-    scan_target_candidates_with_facts(target, profiles, candidate_exts, None, emit).0
+    scan_target_candidates_with_facts(target, profiles, candidate_exts, None, &[], emit).0
 }
 
 fn scan_target_candidates_with_facts(
@@ -1040,6 +1051,7 @@ fn scan_target_candidates_with_facts(
     profiles: &[LaunchProfile],
     candidate_exts: &HashSet<String>,
     game_dir_header: Option<&GameDirHeader>,
+    pruned_paths: &[PathBuf],
     mut emit: impl FnMut(FoundFile) -> bool,
 ) -> (WalkTargetStats, Option<GameDirFact>) {
     let target_t = Instant::now();
@@ -1076,6 +1088,7 @@ fn scan_target_candidates_with_facts(
         signature_capture,
         |path| {
             should_ignore_path(path)
+                || pruned_paths.iter().any(|root| path.starts_with(root))
                 || crate::prepared_collections::neon68k_duplicate_alias_path(target, path)
         },
         |entry| {
@@ -1172,6 +1185,7 @@ fn scan_target_candidates_with_facts(
 fn scan_runtime_target_candidates(
     header: &GameDirHeader,
     plan: &CatalogScanPlan,
+    pruned_paths: &[PathBuf],
 ) -> (WalkTargetStats, RuntimeDirectoryCandidates) {
     let target_t = Instant::now();
     let mut dirs = 1usize;
@@ -1188,7 +1202,7 @@ fn scan_runtime_target_candidates(
         &header.path,
         Some(2),
         NamespaceSignatureCapture::TargetAndDepthOneDirectories,
-        should_ignore_path,
+        |path| should_ignore_path(path) || pruned_paths.iter().any(|root| path.starts_with(root)),
         |entry| {
             let path = entry.path.as_path();
             if entry.kind == NamespaceEntryKind::Directory {
@@ -1288,8 +1302,16 @@ fn scan_runtime_target_candidates(
         push_runtime_candidate(&mut files, &mut overflowed, &candidate_exts, &profile, file);
     }
     for root in deep_roots {
-        let deep_namespace_stats =
-            namespace_walk::visit(&root, None, should_ignore_path, |entry| {
+        let deep_namespace_stats = namespace_walk::visit(
+            &root,
+            None,
+            |path| {
+                should_ignore_path(path)
+                    || pruned_paths
+                        .iter()
+                        .any(|excluded| path.starts_with(excluded))
+            },
+            |entry| {
                 let path = entry.path.as_path();
                 if entry.kind == NamespaceEntryKind::Directory {
                     dirs += 1;
@@ -1319,7 +1341,8 @@ fn scan_runtime_target_candidates(
                     file,
                 );
                 true
-            });
+            },
+        );
         namespace_stats.add(&deep_namespace_stats);
     }
     let stats = WalkTargetStats {
@@ -2089,6 +2112,7 @@ mod tests {
             plan.clone(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
             RuntimeThreadRole::LibraryWalkerForeground,
             crate::pmu_phase::WALK_RESUME_VALIDATION,
         );
@@ -2522,7 +2546,8 @@ mod tests {
         let roots = vec![root.display().to_string()];
         let plan = CatalogScanPlan::for_roots(&roots);
         let (tx, rx) = std::sync::mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
-        let (dirs, attribution) = walk_index_candidates_with_plan(&roots, &plan, &[], &[], &tx);
+        let (dirs, attribution) =
+            walk_index_candidates_with_plan(&roots, &plan, &[], &[], &[], &tx);
         drop(tx);
 
         let mut open = None;
@@ -2585,7 +2610,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
 
         let (dirs, attribution) =
-            walk_index_candidates_with_plan(&roots, &plan, &[], &[arcade], &tx);
+            walk_index_candidates_with_plan(&roots, &plan, &[], &[arcade], &[], &tx);
         drop(tx);
         let events = rx.try_iter().collect::<Vec<_>>();
 
@@ -2594,6 +2619,36 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert!(matches!(events[0], DiscoveryEvent::TargetStart(_)));
         assert!(matches!(events[1], DiscoveryEvent::TargetComplete(_)));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn subtree_pruning_keeps_personal_c64_content_visible() {
+        let root = unique_temp_dir("oneload-pruning");
+        let c64 = root.join("games/C64");
+        let oneload = c64.join("OneLoad64-Games-Collection-v5");
+        let personal = c64.join("Personal");
+        std::fs::create_dir_all(&oneload).unwrap();
+        std::fs::create_dir_all(&personal).unwrap();
+        std::fs::write(oneload.join("Bundled.crt"), b"bundle").unwrap();
+        std::fs::write(personal.join("Homebrew.crt"), b"personal").unwrap();
+        let profiles = vec![crate::generic_system_catalog::generic_c64_baseline_profile()];
+        let candidate_exts = source_index_extensions(&profiles);
+        let mut paths = Vec::new();
+
+        let _ = scan_target_candidates_with_facts(
+            &c64,
+            &profiles,
+            &candidate_exts,
+            None,
+            std::slice::from_ref(&oneload),
+            |file| {
+                paths.push(file.path);
+                true
+            },
+        );
+
+        assert_eq!(paths, vec![personal.join("Homebrew.crt")]);
         let _ = std::fs::remove_dir_all(root);
     }
 

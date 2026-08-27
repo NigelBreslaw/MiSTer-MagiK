@@ -132,7 +132,7 @@ pub const DEFAULT_SQLITE_PATH: &str = "/media/fat/mister-magik/library.sqlite3";
 pub const DEFAULT_MAME_SQLITE_PATH: &str = "/media/fat/mister-magik/mame.sqlite3";
 pub const DEFAULT_HBMAME_SQLITE_PATH: &str = "/media/fat/mister-magik/hbmame.sqlite3";
 pub const DEFAULT_SQLITE_BUILD_DIR: &str = "/tmp/mister-magik/sqlite-build";
-pub const DEFAULT_SHARDED_CATALOG_DIR: &str = "/media/fat/mister-magik/catalog-v3";
+pub const DEFAULT_SHARDED_CATALOG_DIR: &str = "/media/fat/mister-magik/catalog-fast-v1";
 pub const DEFAULT_USER_STATE_PATH: &str = "/media/fat/mister-magik/user-state.sqlite3";
 
 pub const SCHEMA_VERSION: u32 = 67;
@@ -162,7 +162,7 @@ pub fn default_hbmame_sqlite_path() -> PathBuf {
 pub fn default_sharded_catalog_path() -> PathBuf {
     std::env::var("MISTER_SHARDED_CATALOG_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| current_app_path("catalog-v3"))
+        .unwrap_or_else(|_| current_app_path("catalog-fast-v1"))
 }
 
 pub fn default_user_state_path() -> PathBuf {

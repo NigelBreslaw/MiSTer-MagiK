@@ -11,13 +11,13 @@ description = "Catalog, library scan, and preview-loading logic for MiSTer MagiK
 license = "GPL-3.0-or-later"
 
 [[bin]]
-name = "mister-magik-catalog-builder"
-path = "src/bin/catalog_builder.rs"
+name = "arcade-catalog-prototype"
+path = "src/bin/arcade_catalog_prototype/main.rs"
 required-features = ["builder"]
 
 [[bin]]
-name = "catalog-lab"
-path = "src/bin/catalog_lab.rs"
+name = "five-system-catalog-prototype"
+path = "src/bin/five_system_catalog_prototype.rs"
 required-features = ["builder"]
 
 [lints.rust]
@@ -32,6 +32,8 @@ lz4_flex = "0.14.0"
 memmap2 = "0.9.11"
 mister-magik-perf-events = { path = "../perf-events" }
 mister-magik-platform-manifest-contract = { path = "../../mister/platform/contracts/manifest" }
+pprof = { git = "https://github.com/NigelBreslaw/pprof-rs", branch = "armv7-itimer-abi", optional = true, default-features = false, features = ["flamegraph"] }
+postcard = { version = "1.1.3", features = ["alloc"] }
 quick-xml = "0.41"
 rusqlite = { version = "0.40.0", default-features = false, features = ["bundled", "functions", "modern_sqlite"] }
 serde = { version = "1", features = ["derive"] }
@@ -42,6 +44,7 @@ walkdir = "2"
 [features]
 default = []
 builder = []
+profile = ["dep:pprof"]
 
 [profile.release]
 opt-level = 3

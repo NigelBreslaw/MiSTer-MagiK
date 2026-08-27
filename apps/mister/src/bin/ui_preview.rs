@@ -15,9 +15,6 @@ mod macos {
         LauncherScene, SceneProfile, SceneScenario, SceneTransitionEdge, launcher_scene_manifest,
     };
     use super::ui_preview_visual_compare::{compare_launcher_matrix, validate_comparison_paths};
-    use mister_magik_catalog::portable_catalog_builder::{
-        PortableCatalogBuild, publish_portable_catalog,
-    };
     use mister_magik_catalog::preview_worker::{
         PreviewPixels as CatalogPreviewPixels, PreviewWorker, load_preview_asset_pixels,
         preview_archive_path_for_system, preview_asset_cache_key, resolved_preview_archive_path,
@@ -367,11 +364,17 @@ mod macos {
             ("mac-cache", layout.catalog_root.clone()),
             (
                 "card-production",
-                layout.card_root.join("mister-magik").join("catalog-v3"),
+                layout
+                    .card_root
+                    .join("mister-magik")
+                    .join("catalog-fast-v1"),
             ),
             (
                 "card-development",
-                layout.card_root.join("mister-magik-dev").join("catalog-v3"),
+                layout
+                    .card_root
+                    .join("mister-magik-dev")
+                    .join("catalog-fast-v1"),
             ),
         ];
         let mut selected: Option<(ShardedCatalogSeed, &'static str)> = None;
@@ -398,7 +401,7 @@ mod macos {
             ));
         }
         eprintln!(
-            "catalog: no valid Catalog V3 seed for {}; {}",
+            "catalog: no valid catalog seed for {}; {}",
             layout.card_root.display(),
             failures.join(" ")
         );
@@ -3642,7 +3645,7 @@ mod macos {
 
     enum CatalogWorkerEvent {
         Progress { title: String, detail: String },
-        Ready(PortableCatalogBuild),
+        Ready(ShardedCatalogSeed),
         Failed(String),
     }
 
@@ -3658,26 +3661,18 @@ mod macos {
         std::thread::Builder::new()
             .name("mac-catalog-scan".into())
             .spawn(move || {
-                let source_roots = mister_magik_catalog::catalog_config::DEFAULT_ROOTS
-                    .iter()
-                    .filter_map(|root| layout.to_card_path(root).ok())
-                    .filter(|root| root.is_dir())
-                    .collect::<Vec<_>>();
-                let progress_sender = sender.clone();
-                let mut progress = move |title: &str, detail: &str| {
-                    let _ = progress_sender.send(CatalogWorkerEvent::Progress {
-                        title: title.to_owned(),
-                        detail: detail.to_owned(),
-                    });
-                };
-                let result = publish_portable_catalog(
-                    source_roots,
+                let _ = sender.send(CatalogWorkerEvent::Progress {
+                    title: "Updating systems".to_owned(),
+                    detail: "Scanning mounted card…".to_owned(),
+                });
+                let result = mister_magik_catalog::fast_catalog_refresh::build_fresh_catalog(
                     &layout.card_root,
-                    Path::new("/media/fat"),
-                    Path::new("/media/fat/_Arcade"),
                     &layout.catalog_root,
-                    &mut progress,
-                );
+                )
+                .and_then(|_| {
+                    load_sharded_registry_seed_at("/media/fat/_Arcade", &layout.catalog_root)
+                        .map_err(|error| error.to_string())
+                });
                 let event = match result {
                     Ok(build) => CatalogWorkerEvent::Ready(build),
                     Err(error) => CatalogWorkerEvent::Failed(error),
@@ -4227,6 +4222,7 @@ mod macos {
             Scenario::BackgroundScan => {
                 catalog.set_activity(CatalogActivity::Background);
                 catalog.set_background_activity_visible(true);
+                catalog.set_title("Updating systems 12/30".into());
             }
             Scenario::Loading => {
                 overlay.set_loading_state(LoadingState::Active);

@@ -332,6 +332,7 @@ impl Evidence {
         fingerprint: &str,
         request_id: &str,
     ) -> Result<bool, String> {
+        self.reclaim_terminated_validation_owner(operation_id, fingerprint)?;
         let now = now_ms();
         let transaction = self
             .connection
@@ -364,6 +365,7 @@ impl Evidence {
                 params![operation_id, fingerprint, now_ms()],
             )
             .map_err(|error| error.to_string())?;
+        self.reclaim_terminated_validation_owner(operation_id, fingerprint)?;
         self.connection
             .query_row(
                 "SELECT owner_request_id FROM operation_leases WHERE operation_id=?1 AND fingerprint=?2",
@@ -372,6 +374,32 @@ impl Evidence {
             )
             .optional()
             .map_err(|error| error.to_string())
+    }
+
+    fn reclaim_terminated_validation_owner(
+        &self,
+        operation_id: &str,
+        fingerprint: &str,
+    ) -> Result<(), String> {
+        let owner = self
+            .connection
+            .query_row(
+                "SELECT owner_request_id FROM operation_leases WHERE operation_id=?1 AND fingerprint=?2",
+                params![operation_id, fingerprint],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        if owner.as_deref().and_then(request_owner_process_is_alive) != Some(false) {
+            return Ok(());
+        }
+        self.connection
+            .execute(
+                "DELETE FROM operation_leases WHERE operation_id=?1 AND fingerprint=?2 AND owner_request_id=?3",
+                params![operation_id, fingerprint, owner],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
     }
 
     pub fn heartbeat_validation(
@@ -614,6 +642,29 @@ impl Evidence {
         }
         Ok(detail)
     }
+}
+
+#[cfg(unix)]
+fn request_owner_process_is_alive(request_id: &str) -> Option<bool> {
+    let (_, pid_hex) = request_id.rsplit_once('-')?;
+    let pid = i32::try_from(u32::from_str_radix(pid_hex, 16).ok()?).ok()?;
+    if pid <= 0 {
+        return None;
+    }
+    // SAFETY: signal 0 performs no mutation; it only probes whether the encoded owner PID exists.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return Some(true);
+    }
+    match std::io::Error::last_os_error().raw_os_error() {
+        Some(libc::ESRCH) => Some(false),
+        Some(libc::EPERM) => Some(true),
+        _ => None,
+    }
+}
+
+#[cfg(not(unix))]
+fn request_owner_process_is_alive(_request_id: &str) -> Option<bool> {
+    None
 }
 
 struct EvidenceMigrationLock(File);
@@ -1271,6 +1322,39 @@ mod tests {
         assert!(
             second
                 .has_cached_validation_success("check.one", "fingerprint")
+                .unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminated_request_owner_lease_is_reclaimed_immediately() {
+        let root = temporary_root("terminated-request-owner");
+        let evidence = Evidence::open_at(&root).unwrap();
+        let active_owner = RawRequest::capture([OsString::from("agent-cli")]);
+        assert!(
+            evidence
+                .claim_validation("check.active", "fingerprint", &active_owner.id)
+                .unwrap()
+        );
+        assert!(
+            !evidence
+                .claim_validation("check.active", "fingerprint", "waiter")
+                .unwrap()
+        );
+
+        let mut child = Command::new("true").spawn().unwrap();
+        let dead_owner = format!("1-{:x}", child.id());
+        child.wait().unwrap();
+        assert!(
+            evidence
+                .claim_validation("check.dead", "fingerprint", &dead_owner)
+                .unwrap()
+        );
+        assert!(
+            evidence
+                .claim_validation("check.dead", "fingerprint", "waiter")
                 .unwrap()
         );
         fs::remove_dir_all(root).unwrap();

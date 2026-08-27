@@ -3,17 +3,16 @@
 
 //! Catalog, library scan, and preview-loading logic for MiSTer MagiK.
 
-#[cfg(feature = "builder")]
-mod arcade_bootstrap_index;
 pub mod arcade_catalog;
+#[cfg(feature = "builder")]
+#[path = "bin/arcade_catalog_prototype/model.rs"]
+pub mod arcade_catalog_prototype_model;
 mod arcade_rom_inventory;
 pub mod archive_member;
 mod atomic_publish;
 mod bounded_lz4;
 pub mod build_progress;
 pub mod builder_protocol;
-#[cfg(feature = "builder")]
-pub mod builder_service;
 #[cfg(feature = "builder")]
 pub mod catalog_acceptance;
 pub mod catalog_build;
@@ -34,14 +33,19 @@ pub mod catalog_stamp;
 pub mod catalog_state;
 pub mod catalog_store;
 pub mod catalog_summary;
-#[cfg(feature = "builder")]
-pub mod catalog_vertical_slice;
 mod cooperative_work;
 mod core_audit;
 pub mod device_layout;
 mod fallible_log;
+#[cfg(feature = "builder")]
+pub mod fast_catalog_refresh;
+#[cfg(feature = "builder")]
+pub mod fast_catalog_sources;
+pub mod fast_five_catalog;
 pub mod fs_fault;
 mod game_discovery;
+#[cfg(feature = "builder")]
+pub mod generic_system_catalog;
 #[cfg(feature = "builder")]
 pub mod incremental_inputs;
 pub mod launch_profiles;
@@ -76,21 +80,12 @@ pub mod multi_system_projection;
 mod namespace_walk;
 pub mod navpack;
 pub mod persisted_search;
-#[cfg(feature = "builder")]
-pub mod portable_catalog_builder;
+pub mod prepared_bundle_helper;
 pub mod prepared_collections;
+mod prepared_release_manifest;
 mod preview_archive;
+pub mod preview_availability;
 pub mod preview_worker;
-#[cfg(feature = "builder")]
-pub mod production_sharded_projection;
-#[cfg(feature = "builder")]
-pub mod progressive_scheduler;
-#[cfg(feature = "builder")]
-pub mod rebuild_benchmark;
-#[cfg(feature = "builder")]
-pub mod reconciliation_executor;
-#[cfg(feature = "builder")]
-pub mod reconciliation_planner;
 pub mod runtime_thread;
 pub mod scanner_cache;
 pub mod shard_registry;
@@ -136,7 +131,7 @@ pub(crate) mod pmu_phase {
     pub const SHARD_ALLOCATOR_TRIM: &str = "catalog.shard.allocator-trim";
     #[cfg(feature = "builder")]
     pub const SHARD_VALIDATE: &str = "catalog.shard.validate";
-    #[cfg(feature = "builder")]
+    #[cfg(all(test, feature = "builder"))]
     pub const PUBLISH_COPY_HASH: &str = "catalog.publish.copy-hash";
 
     #[cfg(all(test, feature = "builder"))]

@@ -11,6 +11,7 @@ use crate::library_db::{
 use crate::media_metadata;
 use crate::prepared_collections::PreparedLaunchProvenance;
 use crate::prepared_collections::{self, PreparedCollectionId};
+use crate::prepared_release_manifest;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -256,6 +257,12 @@ pub(crate) fn discovery_from_profile_file_with_prepared_index_and_mra_metadata(
         };
     }
     if file.ext == "mgl"
+        && let Some(discovery) =
+            discovery_from_known_0mhz_release(file, profile, profiles, prepared_index)
+    {
+        return discovery;
+    }
+    if file.ext == "mgl"
         && let Some(document) = media_metadata::read_mgl_document(&file.path)
     {
         let media_metadata::MglDocument {
@@ -396,6 +403,55 @@ pub(crate) fn discovery_from_profile_file_with_prepared_index_and_mra_metadata(
         prepared,
         confidence: profile_confidence(rule),
     }
+}
+
+fn discovery_from_known_0mhz_release(
+    file: &FoundFile,
+    profile: &LaunchProfile,
+    profiles: &[LaunchProfile],
+    prepared_index: Option<&prepared_collections::PreparedPayloadIndex>,
+) -> Option<GameDiscovery> {
+    let known = prepared_release_manifest::known_0mhz_launch(&file.path)?;
+    let profile = if profile.system_id == "dos" {
+        profile
+    } else {
+        profiles
+            .iter()
+            .find(|candidate| candidate.system_id == "dos")?
+    };
+    let payload_paths = known
+        .package
+        .payloads
+        .iter()
+        .map(|payload| known.storage_root.join(&payload.relative_path))
+        .collect::<Vec<_>>();
+    if payload_paths.iter().any(|path| {
+        !prepared_index.map_or_else(|| path.is_file(), |index| index.path_is_file(path))
+    }) {
+        return None;
+    }
+    let source_path = file.path.display().to_string();
+    Some(GameDiscovery {
+        source_path: source_path.clone(),
+        launch_ref: source_path,
+        source_kind: DiscoverySourceKind::Mgl,
+        title: known.package.title.clone(),
+        category: profile.category.to_string(),
+        platform_id: profile.system_id.to_string(),
+        core_id: profile.core_name.to_string(),
+        hardware_id: profile.system_id.to_string(),
+        manufacturer: None,
+        genre: Some("0MHz".to_string()),
+        year: None,
+        setname: None,
+        parent: None,
+        arcade_updater_metadata: None,
+        covered_payload_path: payload_paths.first().map(|path| path.display().to_string()),
+        prepared: Some(PreparedLaunchProvenance::prepared(
+            PreparedCollectionId::ZeroMhz,
+        )),
+        confidence: DiscoveryConfidence::PayloadPath,
+    })
 }
 
 pub(crate) fn discovery_from_profile_archive_entry(
@@ -657,6 +713,8 @@ mod tests {
     use crate::library_db::mtime_secs;
     use crate::test_support::*;
 
+    const KNOWN_ZERO_MHZ_MGL: &str = "<mistergamedescription>\n    <rbf>_computer/ao486</rbf>\n    <file delay=\"0\" type=\"s\" index=\"2\" path=\"media/stunts.mt32/stunts.mt32.vhd\"/>\n    <reset delay=\"1\"/>\n</mistergamedescription>\n";
+
     #[test]
     fn amiga_500_content_joins_the_amiga_launcher_system() {
         let mut discovery = payload("/media/fat/games/Amiga500/Game.adf");
@@ -720,6 +778,63 @@ mod tests {
             discovery.prepared.map(|value| value.collection_id),
             Some(PreparedCollectionId::ZeroMhz)
         );
+    }
+
+    #[test]
+    fn known_0mhz_release_uses_manifest_without_parsing_launcher() {
+        let root = unique_temp_dir("known-0mhz-manifest");
+        let dos_dir = root.join("_DOS Games");
+        let launcher = dos_dir.join("4D Sports Driving (MT-32).mgl");
+        let payload = root.join("games/ao486/media/stunts.mt32/stunts.mt32.vhd");
+        std::fs::create_dir_all(&dos_dir).unwrap();
+        std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
+        std::fs::write(&launcher, KNOWN_ZERO_MHZ_MGL).unwrap();
+        std::fs::write(&payload, b"payload").unwrap();
+        let metadata = std::fs::metadata(&launcher).unwrap();
+        let file = FoundFile {
+            path: launcher.clone(),
+            ext: "mgl".to_string(),
+            size: metadata.len(),
+            mtime_secs: mtime_secs(&metadata),
+        };
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profile_for_path(&profiles, &launcher).unwrap();
+        let discovery =
+            discovery_from_profile_file(&file, profile, &profile.payload_rules[0], &profiles);
+
+        assert_eq!(discovery.title, "4D Sports Driving (MT-32)");
+        assert_eq!(
+            discovery.covered_payload_path,
+            Some(payload.display().to_string())
+        );
+        assert_eq!(
+            discovery.prepared.map(|value| value.collection_id),
+            Some(PreparedCollectionId::ZeroMhz)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn known_0mhz_release_falls_back_when_payload_is_missing() {
+        let root = unique_temp_dir("known-0mhz-missing");
+        let dos_dir = root.join("_DOS Games");
+        let launcher = dos_dir.join("4D Sports Driving (MT-32).mgl");
+        std::fs::create_dir_all(&dos_dir).unwrap();
+        std::fs::write(&launcher, KNOWN_ZERO_MHZ_MGL).unwrap();
+        let metadata = std::fs::metadata(&launcher).unwrap();
+        let file = FoundFile {
+            path: launcher.clone(),
+            ext: "mgl".to_string(),
+            size: metadata.len(),
+            mtime_secs: mtime_secs(&metadata),
+        };
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profile_for_path(&profiles, &launcher).unwrap();
+        let discovery =
+            discovery_from_profile_file(&file, profile, &profile.payload_rules[0], &profiles);
+
+        assert!(discovery.prepared.is_none());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

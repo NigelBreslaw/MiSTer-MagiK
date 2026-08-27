@@ -1022,11 +1022,6 @@ impl ArcadeCatalog {
         self
     }
 
-    #[cfg(feature = "builder")]
-    pub(crate) fn system_projection_stats(&self, system_id: &str) -> Option<SystemProjectionStats> {
-        self.projection_stats_by_system.get(system_id).copied()
-    }
-
     pub fn platform_kind(&self, system_id: &str) -> PlatformKind {
         self.platform_kinds
             .get(system_id)
@@ -1117,7 +1112,7 @@ impl ArcadeCatalog {
         self.system_game_view(system_id).iter().cloned().collect()
     }
 
-    #[cfg(feature = "builder")]
+    #[cfg(test)]
     pub(crate) fn isolated_system_catalog(&self, system_id: &str) -> Self {
         let games = self.system_games(system_id);
         let retained_refs = games

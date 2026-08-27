@@ -20,10 +20,10 @@ impl CommandSpec {
     }
 }
 
-pub const CATALOG_INSPECT_COMMAND: &str = "catalog-v3-inspect";
+pub const CATALOG_INSPECT_COMMAND: &str = "catalog-inspect";
 pub const CATALOG_ROM_AUDIT_COMMAND: &str = "catalog-arcade-rom-audit";
 pub const CATALOG_CORPUS_INVENTORY_COMMAND: &str = "catalog-corpus-inventory";
-pub const CATALOG_REGISTRY_REPORT_COMMAND: &str = "catalog-v3-registry-report";
+pub const CATALOG_REGISTRY_REPORT_COMMAND: &str = "catalog-registry-report";
 
 pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("read", CommandKind::Fpga),
@@ -231,8 +231,8 @@ mod tests {
         assert!(requires_display_owner("early-black"));
         assert!(requires_display_owner("effect-bench"));
         assert!(!requires_display_owner("library-refresh"));
-        assert!(!requires_display_owner("catalog-v3-inspect"));
-        assert!(!requires_display_owner("catalog-v3-registry-report"));
+        assert!(!requires_display_owner("catalog-inspect"));
+        assert!(!requires_display_owner("catalog-registry-report"));
         assert!(!requires_display_owner("read"));
     }
 
@@ -243,8 +243,8 @@ mod tests {
         assert!(requires_process_exclusive("library-refresh"));
         assert!(requires_process_exclusive("purge-library-data"));
         assert!(!requires_process_exclusive("media-bench-download"));
-        assert!(!requires_process_exclusive("catalog-v3-inspect"));
-        assert!(!requires_process_exclusive("catalog-v3-registry-report"));
+        assert!(!requires_process_exclusive("catalog-inspect"));
+        assert!(!requires_process_exclusive("catalog-registry-report"));
         assert!(!requires_process_exclusive("read"));
         assert!(!requires_process_exclusive("vsync-probe"));
         assert!(!requires_process_exclusive("cpu-profile-smoke"));
@@ -253,8 +253,8 @@ mod tests {
     #[test]
     #[cfg(all(not(feature = "diagnostics"), not(feature = "bench-tools")))]
     fn production_command_list_hides_diagnostics() {
-        assert!(is_known_command("catalog-v3-inspect"));
-        assert!(is_known_command("catalog-v3-registry-report"));
+        assert!(is_known_command("catalog-inspect"));
+        assert!(is_known_command("catalog-registry-report"));
         assert!(is_known_command("benchmark-capabilities"));
         assert!(is_known_command("pmu-probe"));
         assert!(is_known_command("pmu-profile"));
@@ -294,7 +294,7 @@ mod tests {
             "scanout-slots-map-report",
             "fpga-latch-report",
             "input",
-            "catalog-v3-inspect",
+            "catalog-inspect",
             "hbmame-metadata-from-library",
             "library-scan-bench",
             "preview-pack-bench",

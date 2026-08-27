@@ -8,7 +8,6 @@ mod file_icons;
 mod frame_profile;
 #[cfg_attr(not(feature = "compiled-ui"), allow(dead_code))]
 mod framebuffer_cadence;
-mod library;
 #[cfg(target_os = "macos")]
 mod macos_display_clock;
 #[cfg(target_os = "macos")]
@@ -46,7 +45,6 @@ use std::time::{Duration, Instant, SystemTime};
 const SD_FOLDER_LOADING_DELAY: Duration = Duration::from_millis(150);
 
 type SharedSdBrowser = Arc<Mutex<SdCardBrowser>>;
-type SharedLibraryBrowser = Arc<Mutex<LibraryBrowser>>;
 type SharedFramebufferCapture = Arc<Mutex<Option<agent_client::FramebufferCapture>>>;
 type SharedLiveStreamGeneration = Arc<AtomicU64>;
 type SharedFramebufferStreamControl = Arc<Mutex<Option<(u64, FramebufferStreamControl)>>>;
@@ -902,234 +900,6 @@ fn scanout_health_tile(history: &RealtimeHistory) -> RealtimeHealthTileView {
 #[cfg(feature = "compiled-ui")]
 slint::include_modules!();
 
-#[derive(Clone, Debug)]
-struct LibraryBrowser {
-    catalog: Option<library::LibraryCatalog>,
-    query: library::LibraryQuery,
-    selected_game_id: String,
-    status: String,
-    warning: String,
-    last_error: String,
-    loading: bool,
-}
-
-impl LibraryBrowser {
-    fn new() -> Self {
-        Self {
-            catalog: None,
-            query: library::LibraryQuery::default(),
-            selected_game_id: String::new(),
-            status: "Sync the MiSTer library database to browse games.".to_string(),
-            warning: String::new(),
-            last_error: String::new(),
-            loading: false,
-        }
-    }
-
-    fn start_sync(&mut self) {
-        self.loading = true;
-        self.status = "Copying the MagiK library database from the MiSTer...".to_string();
-        self.warning.clear();
-        self.last_error.clear();
-    }
-
-    fn apply_sync_result(&mut self, result: Result<library::LibrarySyncResult, String>) {
-        self.loading = false;
-        match result {
-            Ok(result) => {
-                self.catalog = Some(result.catalog);
-                self.query.page = 1;
-                self.selected_game_id = self
-                    .current_view()
-                    .and_then(|view| view.rows.first().map(|game| game.id.clone()))
-                    .unwrap_or_default();
-                self.status = result.status;
-                self.warning = result.warning;
-                self.last_error.clear();
-            }
-            Err(err) => {
-                self.last_error = err;
-                self.status = "Library sync failed.".to_string();
-                self.warning.clear();
-            }
-        }
-    }
-
-    fn set_sort(&mut self, column_id: &str, direction_id: &str) {
-        let Some(column) = library_sort_column(column_id) else {
-            return;
-        };
-        let direction = library_sort_direction(direction_id);
-        self.query.sort_column = column;
-        self.query.sort_direction = direction;
-        self.query.page = 1;
-        self.normalize_selection();
-    }
-
-    fn set_query(&mut self, search: &str) {
-        self.query.search = search.to_string();
-        self.query.page = 1;
-        self.normalize_selection();
-    }
-
-    fn set_filter(&mut self, filter: &str, value: &str) {
-        match filter {
-            "system" => self.query.system = value.to_string(),
-            "category" => self.query.category = value.to_string(),
-            "region" => self.query.region = value.to_string(),
-            "manufacturer" => self.query.manufacturer = value.to_string(),
-            "preview" => self.query.preview = value.to_string(),
-            "confidence" => self.query.confidence = value.to_string(),
-            _ => return,
-        }
-        self.query.page = 1;
-        self.normalize_selection();
-    }
-
-    fn set_page(&mut self, page: i32) {
-        self.query.page = usize::try_from(page).unwrap_or(1).max(1);
-        self.normalize_selection();
-    }
-
-    fn select_row(&mut self, id: &str) {
-        if let Some(catalog) = &self.catalog {
-            if library::selected_game(catalog, id).is_some() {
-                self.selected_game_id = id.to_string();
-            }
-        }
-    }
-
-    fn selected_game(&self) -> Option<&library::LibraryGame> {
-        self.catalog
-            .as_ref()
-            .and_then(|catalog| library::selected_game(catalog, &self.selected_game_id))
-    }
-
-    fn current_view(&self) -> Option<library::LibraryView> {
-        self.catalog
-            .as_ref()
-            .map(|catalog| library::apply_library_query(catalog, &self.query))
-    }
-
-    fn normalize_selection(&mut self) {
-        let Some(view) = self.current_view() else {
-            self.selected_game_id.clear();
-            return;
-        };
-        if view
-            .rows
-            .iter()
-            .any(|game| game.id == self.selected_game_id)
-        {
-            return;
-        }
-        self.selected_game_id = view
-            .rows
-            .first()
-            .map(|game| game.id.clone())
-            .unwrap_or_default();
-    }
-
-    fn result_summary(&self) -> String {
-        match (&self.catalog, self.current_view()) {
-            (Some(catalog), Some(view)) => {
-                format!(
-                    "{} of {} games in the local library snapshot.",
-                    view.total_count,
-                    catalog.games.len()
-                )
-            }
-            _ => "No library loaded.".to_string(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct LibrarySelectOptionItem {
-    value: String,
-    label: String,
-    enabled: bool,
-}
-
-#[derive(Clone, Debug, Default)]
-struct LibraryDetailSections {
-    overview: Vec<LibraryDetailRow>,
-    system: Vec<LibraryDetailRow>,
-    media: Vec<LibraryDetailRow>,
-    launch: Vec<LibraryDetailRow>,
-    identity: Vec<LibraryDetailRow>,
-    paths: Vec<LibraryDetailRow>,
-}
-
-#[derive(Clone, Debug)]
-struct LibraryDetailRow {
-    field: String,
-    value: String,
-}
-
-fn library_sort_column(column_id: &str) -> Option<library::LibrarySortColumn> {
-    match column_id {
-        "title" => Some(library::LibrarySortColumn::Title),
-        "system" => Some(library::LibrarySortColumn::System),
-        "year" => Some(library::LibrarySortColumn::Year),
-        "manufacturer" => Some(library::LibrarySortColumn::Manufacturer),
-        "category" => Some(library::LibrarySortColumn::Category),
-        "preview" => Some(library::LibrarySortColumn::Preview),
-        "discovered" => Some(library::LibrarySortColumn::Discovered),
-        _ => None,
-    }
-}
-
-fn library_select_options(all_label: &str, values: &[String]) -> Vec<LibrarySelectOptionItem> {
-    let mut options = Vec::with_capacity(values.len() + 1);
-    options.push(LibrarySelectOptionItem {
-        value: String::new(),
-        label: all_label.to_string(),
-        enabled: true,
-    });
-    options.extend(values.iter().map(|value| LibrarySelectOptionItem {
-        value: value.clone(),
-        label: value.clone(),
-        enabled: true,
-    }));
-    options
-}
-
-fn library_preview_options() -> Vec<LibrarySelectOptionItem> {
-    [
-        ("", "All previews"),
-        ("with-preview", "With preview"),
-        ("missing-preview", "Missing preview"),
-    ]
-    .into_iter()
-    .map(|(value, label)| LibrarySelectOptionItem {
-        value: value.to_string(),
-        label: label.to_string(),
-        enabled: true,
-    })
-    .collect()
-}
-
-fn library_option_index(options: &[LibrarySelectOptionItem], value: &str) -> i32 {
-    options
-        .iter()
-        .position(|option| option.value == value)
-        .and_then(|index| i32::try_from(index).ok())
-        .unwrap_or(0)
-}
-
-fn library_discovered_label(value: &str) -> String {
-    if value.is_empty() {
-        "-".to_string()
-    } else {
-        value.to_string()
-    }
-}
-
-fn library_preview_label(has_preview: bool) -> &'static str {
-    if has_preview { "Preview" } else { "Missing" }
-}
-
 fn realtime_view_from_history(
     history: &RealtimeHistory,
     streaming: bool,
@@ -1535,115 +1305,6 @@ fn format_decimal_byte_rate(bytes: u64) -> String {
 fn format_storage_gb(bytes: u64) -> String {
     const GB: f64 = 1_000_000_000.0;
     format!("{:.0}GB", bytes as f64 / GB)
-}
-
-fn library_detail_sections(game: Option<&library::LibraryGame>) -> LibraryDetailSections {
-    let Some(game) = game else {
-        return LibraryDetailSections::default();
-    };
-    let mut sections = LibraryDetailSections::default();
-    push_detail(&mut sections.overview, "Title", &game.title);
-    push_detail(&mut sections.overview, "Category", &game.category);
-    push_detail(&mut sections.overview, "Manufacturer", &game.manufacturer);
-    push_detail(&mut sections.overview, "Year", &game.year);
-    push_detail(&mut sections.overview, "Region", &game.region);
-    push_detail(
-        &mut sections.overview,
-        "Region confidence",
-        &game.region_confidence,
-    );
-    push_detail(&mut sections.overview, "Confidence", &game.confidence);
-    push_detail(
-        &mut sections.overview,
-        "Discovered",
-        &library_discovered_label(&game.discovered_at_unix),
-    );
-
-    push_detail(&mut sections.system, "System", &game.system_title);
-    push_detail(&mut sections.system, "System ID", &game.system_id);
-    push_detail(&mut sections.system, "Core ID", &game.core_id);
-    push_detail(&mut sections.system, "Hardware ID", &game.hardware_id);
-
-    push_detail(
-        &mut sections.media,
-        "Preview",
-        if game.has_preview {
-            "Available"
-        } else {
-            "Missing"
-        },
-    );
-    push_detail(&mut sections.media, "Preview key", &game.preview_asset_key);
-
-    push_detail(&mut sections.launch, "Launch kind", &game.launch_kind);
-    push_detail(&mut sections.launch, "Launch ref", &game.launch_ref);
-    push_detail(
-        &mut sections.launch,
-        "Launch ID",
-        &game.launch_id.to_string(),
-    );
-
-    push_detail(&mut sections.identity, "Setname", &game.setname);
-    push_detail(&mut sections.identity, "Parent", &game.parent);
-    for (index, identity) in game.identities.iter().enumerate() {
-        let mut parts = Vec::new();
-        push_part(&mut parts, &identity.identity_id);
-        push_part(&mut parts, &identity.metadata_title);
-        push_part(&mut parts, &identity.family_id);
-        push_part(&mut parts, &identity.year);
-        push_part(&mut parts, &identity.manufacturer);
-        push_part(&mut parts, &identity.category);
-        push_part(&mut parts, &identity.source);
-        if !parts.is_empty() {
-            let label = if identity.namespace.is_empty() {
-                format!("Identity {}", index + 1)
-            } else {
-                identity.namespace.clone()
-            };
-            push_detail(&mut sections.identity, &label, &parts.join(" / "));
-        }
-    }
-
-    push_detail(&mut sections.paths, "Source path", &game.source_path);
-    push_detail(&mut sections.paths, "Payload path", &game.payload_path);
-    sections
-}
-
-fn push_detail(rows: &mut Vec<LibraryDetailRow>, field: &str, value: &str) {
-    let value = value.trim();
-    if value.is_empty() || value == "-" {
-        return;
-    }
-    rows.push(LibraryDetailRow {
-        field: field.to_string(),
-        value: value.to_string(),
-    });
-}
-
-fn push_part(parts: &mut Vec<String>, value: &str) {
-    let value = value.trim();
-    if !value.is_empty() {
-        parts.push(value.to_string());
-    }
-}
-
-fn library_sort_direction(direction_id: &str) -> library::LibrarySortDirection {
-    match direction_id {
-        "descending" | "Descending" => library::LibrarySortDirection::Descending,
-        _ => library::LibrarySortDirection::Ascending,
-    }
-}
-
-fn library_sort_column_id(column: library::LibrarySortColumn) -> &'static str {
-    match column {
-        library::LibrarySortColumn::Title => "title",
-        library::LibrarySortColumn::System => "system",
-        library::LibrarySortColumn::Year => "year",
-        library::LibrarySortColumn::Manufacturer => "manufacturer",
-        library::LibrarySortColumn::Category => "category",
-        library::LibrarySortColumn::Preview => "preview",
-        library::LibrarySortColumn::Discovered => "discovered",
-    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -2646,7 +2307,6 @@ fn create_live_instance(
         .ok_or("ui/main.slint must export AppWindow")?;
     let instance = definition.create()?;
     let sd_browser = Arc::new(Mutex::new(SdCardBrowser::new()));
-    let library_browser = Arc::new(Mutex::new(LibraryBrowser::new()));
     let framebuffer_capture = Arc::new(Mutex::new(None));
     let framebuffer_render_metrics = Arc::new(FramebufferRenderMetrics::default());
     install_framebuffer_render_notifier(instance.window(), Arc::clone(&framebuffer_render_metrics));
@@ -2989,100 +2649,6 @@ fn create_live_instance(
         Value::Void
     })?;
 
-    let library_sync_instance = instance.as_weak();
-    let library_sync_host = host.to_string();
-    let library_sync_browser = Arc::clone(&library_browser);
-    instance.set_global_callback("Actions", "sync-library", move |_| {
-        if let Ok(mut browser) = library_sync_browser.lock() {
-            if browser.loading {
-                return Value::Void;
-            }
-            browser.start_sync();
-        }
-        if let Some(instance) = library_sync_instance.upgrade() {
-            apply_live_library_state(&instance, &library_sync_browser);
-        }
-        spawn_live_library_sync(
-            library_sync_instance.clone(),
-            Arc::clone(&library_sync_browser),
-            library_sync_host.clone(),
-        );
-        Value::Void
-    })?;
-
-    let library_query_instance = instance.as_weak();
-    let library_query_browser = Arc::clone(&library_browser);
-    instance.set_global_callback("Actions", "library-query-changed", move |args| {
-        if let Some(Value::String(query)) = args.first() {
-            if let Ok(mut browser) = library_query_browser.lock() {
-                browser.set_query(query.as_str());
-            }
-            if let Some(instance) = library_query_instance.upgrade() {
-                apply_live_library_state(&instance, &library_query_browser);
-            }
-        }
-        Value::Void
-    })?;
-    let library_filter_instance = instance.as_weak();
-    let library_filter_browser = Arc::clone(&library_browser);
-    instance.set_global_callback("Actions", "library-filter-changed", move |args| {
-        let (Some(Value::String(filter)), Some(Value::String(value))) = (args.first(), args.get(1))
-        else {
-            return Value::Void;
-        };
-        if let Ok(mut browser) = library_filter_browser.lock() {
-            browser.set_filter(filter.as_str(), value.as_str());
-        }
-        if let Some(instance) = library_filter_instance.upgrade() {
-            apply_live_library_state(&instance, &library_filter_browser);
-        }
-        Value::Void
-    })?;
-    let library_sort_instance = instance.as_weak();
-    let library_sort_browser = Arc::clone(&library_browser);
-    instance.set_global_callback("Actions", "library-sort-toggled", move |args| {
-        let Some(Value::String(column)) = args.first() else {
-            return Value::Void;
-        };
-        let direction = match args.get(1) {
-            Some(Value::EnumerationValue(_, direction)) => direction.as_str(),
-            _ => "ascending",
-        };
-        if let Ok(mut browser) = library_sort_browser.lock() {
-            browser.set_sort(column.as_str(), direction);
-        }
-        if let Some(instance) = library_sort_instance.upgrade() {
-            apply_live_library_state(&instance, &library_sort_browser);
-        }
-        Value::Void
-    })?;
-    let library_page_instance = instance.as_weak();
-    let library_page_browser = Arc::clone(&library_browser);
-    instance.set_global_callback("Actions", "library-page-changed", move |args| {
-        if let Some(Value::Number(page)) = args.first() {
-            if let Ok(mut browser) = library_page_browser.lock() {
-                browser.set_page(*page as i32);
-            }
-            if let Some(instance) = library_page_instance.upgrade() {
-                apply_live_library_state(&instance, &library_page_browser);
-            }
-        }
-        Value::Void
-    })?;
-    let library_row_instance = instance.as_weak();
-    let library_row_browser = Arc::clone(&library_browser);
-    instance.set_global_callback("Actions", "library-row-selected", move |args| {
-        if let Some(Value::String(id)) = args.first() {
-            if let Ok(mut browser) = library_row_browser.lock() {
-                browser.select_row(id.as_str());
-            }
-            if let Some(instance) = library_row_instance.upgrade() {
-                apply_live_library_state(&instance, &library_row_browser);
-            }
-        }
-        Value::Void
-    })?;
-
     let drag_instance = instance.as_weak();
     instance.set_global_callback("WindowActions", "start-window-drag", move |_| {
         if let Some(instance) = drag_instance.upgrade() {
@@ -3098,7 +2664,6 @@ fn create_live_instance(
     };
     apply_live_snapshot(&instance, &snapshot);
     apply_live_sd_state(&instance, &sd_browser);
-    apply_live_library_state(&instance, &library_browser);
     if let Some(fixture) = frame_chart_fixture {
         let _ = instance.set_global_property("AppState", "debug-tab-index", Value::Number(1.0));
         apply_live_realtime_view(
@@ -3312,364 +2877,14 @@ fn apply_live_sd_state(instance: &slint_interpreter::ComponentInstance, browser:
 }
 
 #[cfg(feature = "live-ui")]
-fn apply_live_library_state(
-    instance: &slint_interpreter::ComponentInstance,
-    browser: &SharedLibraryBrowser,
-) {
-    use slint::{ModelRc, SharedString, VecModel};
-    use slint_interpreter::Value;
-
-    let Ok(browser) = browser.lock() else {
-        return;
-    };
-
-    fn set(instance: &slint_interpreter::ComponentInstance, name: &str, value: Value) {
-        let _ = instance.set_global_property("LibraryState", name, value);
-    }
-
-    set(instance, "updating_controls", Value::Bool(true));
-    set(
-        instance,
-        "status",
-        Value::String(SharedString::from(browser.status.as_str())),
-    );
-    set(
-        instance,
-        "warning",
-        Value::String(SharedString::from(browser.warning.as_str())),
-    );
-    set(
-        instance,
-        "last-error",
-        Value::String(SharedString::from(browser.last_error.as_str())),
-    );
-    set(instance, "loading", Value::Bool(browser.loading));
-    set(
-        instance,
-        "query",
-        Value::String(SharedString::from(browser.query.search.as_str())),
-    );
-    set(
-        instance,
-        "system-filter",
-        Value::String(SharedString::from(browser.query.system.as_str())),
-    );
-    set(
-        instance,
-        "category-filter",
-        Value::String(SharedString::from(browser.query.category.as_str())),
-    );
-    set(
-        instance,
-        "region-filter",
-        Value::String(SharedString::from(browser.query.region.as_str())),
-    );
-    set(
-        instance,
-        "manufacturer-filter",
-        Value::String(SharedString::from(browser.query.manufacturer.as_str())),
-    );
-    set(
-        instance,
-        "preview-filter",
-        Value::String(SharedString::from(browser.query.preview.as_str())),
-    );
-    set(
-        instance,
-        "confidence-filter",
-        Value::String(SharedString::from(browser.query.confidence.as_str())),
-    );
-    set(
-        instance,
-        "sort-column",
-        Value::String(SharedString::from(library_sort_column_id(
-            browser.query.sort_column,
-        ))),
-    );
-    set(
-        instance,
-        "sort-direction",
-        Value::EnumerationValue(
-            "DataTableSortDirection".to_string(),
-            match browser.query.sort_direction {
-                library::LibrarySortDirection::Ascending => "ascending".to_string(),
-                library::LibrarySortDirection::Descending => "descending".to_string(),
-            },
-        ),
-    );
-    set(
-        instance,
-        "result-summary",
-        Value::String(SharedString::from(browser.result_summary().as_str())),
-    );
-    let view = browser.current_view().unwrap_or_default();
-    set(instance, "page", Value::Number(view.page as f64));
-    set(
-        instance,
-        "page-count",
-        Value::Number(view.page_count as f64),
-    );
-    set(
-        instance,
-        "selected-game-id",
-        Value::String(SharedString::from(browser.selected_game_id.as_str())),
-    );
-    if let Some(game) = browser.selected_game() {
-        set(
-            instance,
-            "detail-title",
-            Value::String(SharedString::from(game.title.as_str())),
-        );
-        set(
-            instance,
-            "detail-subtitle",
-            Value::String(SharedString::from(
-                format!("{} · {}", game.system_title, game.id).as_str(),
-            )),
-        );
-    } else {
-        set(
-            instance,
-            "detail-title",
-            Value::String(SharedString::from("No game selected")),
-        );
-        set(
-            instance,
-            "detail-subtitle",
-            Value::String(SharedString::from("Select a row to inspect catalog facts.")),
-        );
-    }
-    let detail_sections = library_detail_sections(browser.selected_game());
-    set_live_library_detail_rows(instance, "detail-overview-rows", &detail_sections.overview);
-    set_live_library_detail_rows(instance, "detail-system-rows", &detail_sections.system);
-    set_live_library_detail_rows(instance, "detail-media-rows", &detail_sections.media);
-    set_live_library_detail_rows(instance, "detail-launch-rows", &detail_sections.launch);
-    set_live_library_detail_rows(instance, "detail-identity-rows", &detail_sections.identity);
-    set_live_library_detail_rows(instance, "detail-path-rows", &detail_sections.paths);
-    set(
-        instance,
-        "rows",
-        Value::Model(ModelRc::new(VecModel::from(
-            view.rows
-                .iter()
-                .map(|game| live_library_row_struct(game, false))
-                .collect::<Vec<_>>(),
-        ))),
-    );
-    set(
-        instance,
-        "compact-rows",
-        Value::Model(ModelRc::new(VecModel::from(
-            view.rows
-                .iter()
-                .map(|game| live_library_row_struct(game, true))
-                .collect::<Vec<_>>(),
-        ))),
-    );
-    let (
-        system_options,
-        category_options,
-        region_options,
-        manufacturer_options,
-        confidence_options,
-    ) = match &browser.catalog {
-        Some(catalog) => (
-            library_select_options("All systems", &catalog.systems),
-            library_select_options("All categories", &catalog.categories),
-            library_select_options("All regions", &catalog.regions),
-            library_select_options("All manufacturers", &catalog.manufacturers),
-            library_select_options("All confidence", &catalog.confidences),
-        ),
-        None => (
-            library_select_options("All systems", &[]),
-            library_select_options("All categories", &[]),
-            library_select_options("All regions", &[]),
-            library_select_options("All manufacturers", &[]),
-            library_select_options("All confidence", &[]),
-        ),
-    };
-    let preview_options = library_preview_options();
-    set_live_library_options(instance, "system-options", &system_options);
-    set_live_library_options(instance, "category-options", &category_options);
-    set_live_library_options(instance, "region-options", &region_options);
-    set_live_library_options(instance, "manufacturer-options", &manufacturer_options);
-    set_live_library_options(instance, "preview-options", &preview_options);
-    set_live_library_options(instance, "confidence-options", &confidence_options);
-    set(
-        instance,
-        "system-index",
-        Value::Number(library_option_index(&system_options, &browser.query.system) as f64),
-    );
-    set(
-        instance,
-        "category-index",
-        Value::Number(library_option_index(&category_options, &browser.query.category) as f64),
-    );
-    set(
-        instance,
-        "region-index",
-        Value::Number(library_option_index(&region_options, &browser.query.region) as f64),
-    );
-    set(
-        instance,
-        "manufacturer-index",
-        Value::Number(
-            library_option_index(&manufacturer_options, &browser.query.manufacturer) as f64,
-        ),
-    );
-    set(
-        instance,
-        "preview-index",
-        Value::Number(library_option_index(&preview_options, &browser.query.preview) as f64),
-    );
-    set(
-        instance,
-        "confidence-index",
-        Value::Number(library_option_index(&confidence_options, &browser.query.confidence) as f64),
-    );
-    set(instance, "updating_controls", Value::Bool(false));
-}
-
-#[cfg(feature = "live-ui")]
-fn set_live_library_detail_rows(
-    instance: &slint_interpreter::ComponentInstance,
-    name: &str,
-    rows: &[LibraryDetailRow],
-) {
-    use slint::{ModelRc, VecModel};
-    use slint_interpreter::Value;
-
-    let values = rows
-        .iter()
-        .enumerate()
-        .map(|(index, row)| live_library_detail_row_struct(index, row))
-        .collect::<Vec<_>>();
-    let _ = instance.set_global_property(
-        "LibraryState",
-        name,
-        Value::Model(ModelRc::new(VecModel::from(values))),
-    );
-}
-
-#[cfg(feature = "live-ui")]
-fn live_library_detail_row_struct(
-    index: usize,
-    row: &LibraryDetailRow,
-) -> slint_interpreter::Value {
-    use slint::{ModelRc, SharedString, VecModel};
-    use slint_interpreter::{Struct, Value};
-
-    Value::Struct(Struct::from_iter([
-        (
-            "id".to_string(),
-            Value::String(SharedString::from(format!("detail-{index}").as_str())),
-        ),
-        (
-            "cells".to_string(),
-            Value::Model(ModelRc::new(VecModel::from(vec![
-                live_library_text_cell(&row.field),
-                live_library_text_cell(&row.value),
-            ]))),
-        ),
-    ]))
-}
-
-#[cfg(feature = "live-ui")]
-fn set_live_library_options(
-    instance: &slint_interpreter::ComponentInstance,
-    name: &str,
-    options: &[LibrarySelectOptionItem],
-) {
-    use slint::{ModelRc, VecModel};
-    use slint_interpreter::Value;
-
-    let values = options
-        .iter()
-        .map(live_select_option_struct)
-        .collect::<Vec<_>>();
-    let _ = instance.set_global_property(
-        "LibraryState",
-        name,
-        Value::Model(ModelRc::new(VecModel::from(values))),
-    );
-}
-
-#[cfg(feature = "live-ui")]
-fn live_select_option_struct(option: &LibrarySelectOptionItem) -> slint_interpreter::Value {
-    use slint::SharedString;
-    use slint_interpreter::{Struct, Value};
-
-    Value::Struct(Struct::from_iter([
-        (
-            "value".to_string(),
-            Value::String(SharedString::from(option.value.as_str())),
-        ),
-        (
-            "label".to_string(),
-            Value::String(SharedString::from(option.label.as_str())),
-        ),
-        ("enabled".to_string(), Value::Bool(option.enabled)),
-    ]))
-}
-
-#[cfg(feature = "live-ui")]
-fn live_library_row_struct(game: &library::LibraryGame, compact: bool) -> slint_interpreter::Value {
-    use slint::{ModelRc, SharedString, VecModel};
-    use slint_interpreter::{Struct, Value};
-
-    let cells = if compact {
-        vec![
-            live_library_text_cell(&game.title),
-            live_library_text_cell(&game.system_title),
-            live_library_preview_cell(game.has_preview),
-        ]
-    } else {
-        vec![
-            live_library_text_cell(&game.title),
-            live_library_text_cell(&game.system_title),
-            live_library_text_cell(&game.year),
-            live_library_text_cell(&game.manufacturer),
-            live_library_text_cell(&game.category),
-            live_library_preview_cell(game.has_preview),
-            live_library_text_cell(&library_discovered_label(&game.discovered_at_unix)),
-        ]
-    };
-
-    Value::Struct(Struct::from_iter([
-        (
-            "id".to_string(),
-            Value::String(SharedString::from(game.id.as_str())),
-        ),
-        (
-            "cells".to_string(),
-            Value::Model(ModelRc::new(VecModel::from(cells))),
-        ),
-    ]))
-}
-
-#[cfg(feature = "live-ui")]
-fn live_library_text_cell(text: &str) -> slint_interpreter::Value {
-    live_library_cell("text", text, "default")
-}
-
-#[cfg(feature = "live-ui")]
-fn live_library_preview_cell(has_preview: bool) -> slint_interpreter::Value {
-    live_library_cell(
-        "label",
-        library_preview_label(has_preview),
-        if has_preview { "success" } else { "secondary" },
-    )
-}
-
-#[cfg(feature = "live-ui")]
-fn live_library_cell(kind: &str, text: &str, label_variant: &str) -> slint_interpreter::Value {
+fn live_text_cell(text: &str) -> slint_interpreter::Value {
     use slint::{Image, SharedString};
     use slint_interpreter::{Struct, Value};
 
     Value::Struct(Struct::from_iter([
         (
             "kind".to_string(),
-            Value::EnumerationValue("DataTableCellKind".to_string(), kind.to_string()),
+            Value::EnumerationValue("DataTableCellKind".to_string(), "text".to_string()),
         ),
         (
             "text".to_string(),
@@ -3677,7 +2892,7 @@ fn live_library_cell(kind: &str, text: &str, label_variant: &str) -> slint_inter
         ),
         (
             "label-variant".to_string(),
-            Value::EnumerationValue("LabelVariant".to_string(), label_variant.to_string()),
+            Value::EnumerationValue("LabelVariant".to_string(), "default".to_string()),
         ),
         (
             "label-size".to_string(),
@@ -3690,7 +2905,6 @@ fn live_library_cell(kind: &str, text: &str, label_variant: &str) -> slint_inter
         ),
     ]))
 }
-
 #[cfg(feature = "live-ui")]
 fn live_tree_row_struct(row: &sd_card::SdTreeRow) -> slint_interpreter::Struct {
     use slint::{Image, SharedString};
@@ -3777,7 +2991,6 @@ fn run_compiled_ui(
     let host = std::env::var("MISTER_IP").unwrap_or_else(|_| DEFAULT_HOST.to_string());
     let ui = AppWindow::new()?;
     let sd_browser = Arc::new(Mutex::new(SdCardBrowser::new()));
-    let library_browser = Arc::new(Mutex::new(LibraryBrowser::new()));
     let framebuffer_capture = Arc::new(Mutex::new(None));
     let framebuffer_render_metrics = Arc::new(FramebufferRenderMetrics::default());
     install_framebuffer_render_notifier(ui.window(), Arc::clone(&framebuffer_render_metrics));
@@ -4072,84 +3285,6 @@ fn run_compiled_ui(
             }
         });
 
-    let library_sync_ui = ui.as_weak();
-    let library_sync_host = host.clone();
-    let library_sync_browser = Arc::clone(&library_browser);
-    ui.global::<Actions>().on_sync_library(move || {
-        if let Ok(mut browser) = library_sync_browser.lock() {
-            if browser.loading {
-                return;
-            }
-            browser.start_sync();
-        }
-        if let Some(ui) = library_sync_ui.upgrade() {
-            apply_compiled_library_state(&ui, &library_sync_browser);
-        }
-        spawn_compiled_library_sync(
-            library_sync_ui.clone(),
-            Arc::clone(&library_sync_browser),
-            library_sync_host.clone(),
-        );
-    });
-    let library_query_ui = ui.as_weak();
-    let library_query_browser = Arc::clone(&library_browser);
-    ui.global::<Actions>()
-        .on_library_query_changed(move |query| {
-            if let Ok(mut browser) = library_query_browser.lock() {
-                browser.set_query(query.as_str());
-            }
-            if let Some(ui) = library_query_ui.upgrade() {
-                apply_compiled_library_state(&ui, &library_query_browser);
-            }
-        });
-    let library_filter_ui = ui.as_weak();
-    let library_filter_browser = Arc::clone(&library_browser);
-    ui.global::<Actions>()
-        .on_library_filter_changed(move |filter, value| {
-            if let Ok(mut browser) = library_filter_browser.lock() {
-                browser.set_filter(filter.as_str(), value.as_str());
-            }
-            if let Some(ui) = library_filter_ui.upgrade() {
-                apply_compiled_library_state(&ui, &library_filter_browser);
-            }
-        });
-    let library_sort_ui = ui.as_weak();
-    let library_sort_browser = Arc::clone(&library_browser);
-    ui.global::<Actions>()
-        .on_library_sort_toggled(move |column, direction| {
-            let direction_id = if direction == DataTableSortDirection::Descending {
-                "descending"
-            } else {
-                "ascending"
-            };
-            if let Ok(mut browser) = library_sort_browser.lock() {
-                browser.set_sort(column.as_str(), direction_id);
-            }
-            if let Some(ui) = library_sort_ui.upgrade() {
-                apply_compiled_library_state(&ui, &library_sort_browser);
-            }
-        });
-    let library_page_ui = ui.as_weak();
-    let library_page_browser = Arc::clone(&library_browser);
-    ui.global::<Actions>().on_library_page_changed(move |page| {
-        if let Ok(mut browser) = library_page_browser.lock() {
-            browser.set_page(page);
-        }
-        if let Some(ui) = library_page_ui.upgrade() {
-            apply_compiled_library_state(&ui, &library_page_browser);
-        }
-    });
-    let library_row_ui = ui.as_weak();
-    let library_row_browser = Arc::clone(&library_browser);
-    ui.global::<Actions>().on_library_row_selected(move |id| {
-        if let Ok(mut browser) = library_row_browser.lock() {
-            browser.select_row(id.as_str());
-        }
-        if let Some(ui) = library_row_ui.upgrade() {
-            apply_compiled_library_state(&ui, &library_row_browser);
-        }
-    });
-
     let drag_ui = ui.as_weak();
     ui.global::<WindowActions>().on_start_window_drag(move || {
         if let Some(ui) = drag_ui.upgrade() {
@@ -4164,7 +3299,6 @@ fn run_compiled_ui(
     };
     apply_compiled_snapshot(&ui, &snapshot);
     apply_compiled_sd_state(&ui, &sd_browser);
-    apply_compiled_library_state(&ui, &library_browser);
     if let Some(fixture) = frame_chart_fixture {
         ui.global::<AppState>().set_debug_tab_index(1);
         apply_compiled_realtime_view(
@@ -5608,7 +4742,7 @@ fn set_live_table_rows(
         .map(|(index, row)| {
             let cells = row
                 .iter()
-                .map(|cell| live_library_text_cell(cell))
+                .map(|cell| live_text_cell(cell))
                 .collect::<Vec<_>>();
             Value::Struct(Struct::from_iter([
                 (
@@ -5712,7 +4846,7 @@ fn compiled_profile_table_rows(prefix: &str, rows: &[Vec<String>]) -> slint::Mod
                 id: format!("{prefix}-{index}").into(),
                 cells: ModelRc::new(VecModel::from(
                     row.iter()
-                        .map(|cell| compiled_library_text_cell(cell))
+                        .map(|cell| compiled_text_cell(cell))
                         .collect::<Vec<_>>(),
                 )),
             })
@@ -5793,207 +4927,16 @@ fn compiled_sd_metadata_rows(rows: &[sd_card::SdMetadataRow]) -> Vec<SdMetadataR
 }
 
 #[cfg(feature = "compiled-ui")]
-fn apply_compiled_library_state(ui: &AppWindow, browser: &SharedLibraryBrowser) {
-    use slint::{ModelRc, VecModel};
-
-    let Ok(browser) = browser.lock() else {
-        return;
-    };
-    let state = ui.global::<LibraryState>();
-    state.set_updating_controls(true);
-    state.set_status(browser.status.as_str().into());
-    state.set_warning(browser.warning.as_str().into());
-    state.set_last_error(browser.last_error.as_str().into());
-    state.set_loading(browser.loading);
-    state.set_query(browser.query.search.as_str().into());
-    state.set_system_filter(browser.query.system.as_str().into());
-    state.set_category_filter(browser.query.category.as_str().into());
-    state.set_region_filter(browser.query.region.as_str().into());
-    state.set_manufacturer_filter(browser.query.manufacturer.as_str().into());
-    state.set_preview_filter(browser.query.preview.as_str().into());
-    state.set_confidence_filter(browser.query.confidence.as_str().into());
-    state.set_sort_column(library_sort_column_id(browser.query.sort_column).into());
-    state.set_sort_direction(match browser.query.sort_direction {
-        library::LibrarySortDirection::Ascending => DataTableSortDirection::Ascending,
-        library::LibrarySortDirection::Descending => DataTableSortDirection::Descending,
-    });
-    state.set_result_summary(browser.result_summary().as_str().into());
-    let view = browser.current_view().unwrap_or_default();
-    state.set_page(i32::try_from(view.page).unwrap_or(1));
-    state.set_page_count(i32::try_from(view.page_count).unwrap_or(1));
-    state.set_selected_game_id(browser.selected_game_id.as_str().into());
-    if let Some(game) = browser.selected_game() {
-        state.set_detail_title(game.title.as_str().into());
-        state.set_detail_subtitle(format!("{} · {}", game.system_title, game.id).into());
-    } else {
-        state.set_detail_title("No game selected".into());
-        state.set_detail_subtitle("Select a row to inspect catalog facts.".into());
-    }
-    let detail_sections = library_detail_sections(browser.selected_game());
-    state.set_detail_overview_rows(compiled_library_detail_rows(&detail_sections.overview));
-    state.set_detail_system_rows(compiled_library_detail_rows(&detail_sections.system));
-    state.set_detail_media_rows(compiled_library_detail_rows(&detail_sections.media));
-    state.set_detail_launch_rows(compiled_library_detail_rows(&detail_sections.launch));
-    state.set_detail_identity_rows(compiled_library_detail_rows(&detail_sections.identity));
-    state.set_detail_path_rows(compiled_library_detail_rows(&detail_sections.paths));
-    state.set_rows(ModelRc::new(VecModel::from(
-        view.rows
-            .iter()
-            .map(|game| compiled_library_row(game, false))
-            .collect::<Vec<_>>(),
-    )));
-    state.set_compact_rows(ModelRc::new(VecModel::from(
-        view.rows
-            .iter()
-            .map(|game| compiled_library_row(game, true))
-            .collect::<Vec<_>>(),
-    )));
-    let (
-        system_options,
-        category_options,
-        region_options,
-        manufacturer_options,
-        confidence_options,
-    ) = match &browser.catalog {
-        Some(catalog) => (
-            library_select_options("All systems", &catalog.systems),
-            library_select_options("All categories", &catalog.categories),
-            library_select_options("All regions", &catalog.regions),
-            library_select_options("All manufacturers", &catalog.manufacturers),
-            library_select_options("All confidence", &catalog.confidences),
-        ),
-        None => (
-            library_select_options("All systems", &[]),
-            library_select_options("All categories", &[]),
-            library_select_options("All regions", &[]),
-            library_select_options("All manufacturers", &[]),
-            library_select_options("All confidence", &[]),
-        ),
-    };
-    let preview_options = library_preview_options();
-    state.set_system_options(compiled_select_options(&system_options));
-    state.set_category_options(compiled_select_options(&category_options));
-    state.set_region_options(compiled_select_options(&region_options));
-    state.set_manufacturer_options(compiled_select_options(&manufacturer_options));
-    state.set_preview_options(compiled_select_options(&preview_options));
-    state.set_confidence_options(compiled_select_options(&confidence_options));
-    state.set_system_index(library_option_index(&system_options, &browser.query.system));
-    state.set_category_index(library_option_index(
-        &category_options,
-        &browser.query.category,
-    ));
-    state.set_region_index(library_option_index(&region_options, &browser.query.region));
-    state.set_manufacturer_index(library_option_index(
-        &manufacturer_options,
-        &browser.query.manufacturer,
-    ));
-    state.set_preview_index(library_option_index(
-        &preview_options,
-        &browser.query.preview,
-    ));
-    state.set_confidence_index(library_option_index(
-        &confidence_options,
-        &browser.query.confidence,
-    ));
-    state.set_updating_controls(false);
-}
-
-#[cfg(feature = "compiled-ui")]
-fn compiled_library_detail_rows(rows: &[LibraryDetailRow]) -> slint::ModelRc<DataTableRow> {
-    use slint::{ModelRc, VecModel};
-
-    ModelRc::new(VecModel::from(
-        rows.iter()
-            .enumerate()
-            .map(|(index, row)| DataTableRow {
-                id: format!("detail-{index}").into(),
-                cells: ModelRc::new(VecModel::from(vec![
-                    compiled_library_text_cell(&row.field),
-                    compiled_library_text_cell(&row.value),
-                ])),
-            })
-            .collect::<Vec<_>>(),
-    ))
-}
-
-#[cfg(feature = "compiled-ui")]
-fn compiled_select_options(options: &[LibrarySelectOptionItem]) -> slint::ModelRc<SelectOption> {
-    use slint::{ModelRc, VecModel};
-
-    ModelRc::new(VecModel::from(
-        options
-            .iter()
-            .map(|option| SelectOption {
-                value: option.value.as_str().into(),
-                label: option.label.as_str().into(),
-                enabled: option.enabled,
-            })
-            .collect::<Vec<_>>(),
-    ))
-}
-
-#[cfg(feature = "compiled-ui")]
-fn compiled_library_row(game: &library::LibraryGame, compact: bool) -> DataTableRow {
-    use slint::{ModelRc, VecModel};
-
-    let cells = if compact {
-        vec![
-            compiled_library_text_cell(&game.title),
-            compiled_library_text_cell(&game.system_title),
-            compiled_library_preview_cell(game.has_preview),
-        ]
-    } else {
-        vec![
-            compiled_library_text_cell(&game.title),
-            compiled_library_text_cell(&game.system_title),
-            compiled_library_text_cell(&game.year),
-            compiled_library_text_cell(&game.manufacturer),
-            compiled_library_text_cell(&game.category),
-            compiled_library_preview_cell(game.has_preview),
-            compiled_library_text_cell(&library_discovered_label(&game.discovered_at_unix)),
-        ]
-    };
-
-    DataTableRow {
-        id: game.id.as_str().into(),
-        cells: ModelRc::new(VecModel::from(cells)),
-    }
-}
-
-#[cfg(feature = "compiled-ui")]
-fn compiled_library_text_cell(text: &str) -> DataTableCell {
-    compiled_library_cell(DataTableCellKind::Text, text, LabelVariant::Default)
-}
-
-#[cfg(feature = "compiled-ui")]
-fn compiled_library_preview_cell(has_preview: bool) -> DataTableCell {
-    compiled_library_cell(
-        DataTableCellKind::Label,
-        library_preview_label(has_preview),
-        if has_preview {
-            LabelVariant::Success
-        } else {
-            LabelVariant::Secondary
-        },
-    )
-}
-
-#[cfg(feature = "compiled-ui")]
-fn compiled_library_cell(
-    kind: DataTableCellKind,
-    text: &str,
-    label_variant: LabelVariant,
-) -> DataTableCell {
+fn compiled_text_cell(text: &str) -> DataTableCell {
     DataTableCell {
-        kind,
+        kind: DataTableCellKind::Text,
         text: if text.is_empty() { "-" } else { text }.into(),
-        label_variant,
+        label_variant: LabelVariant::Default,
         label_size: LabelSize::Small,
         icon: slint::Image::default(),
         icon_tint: DataTableIconTint::Default,
     }
 }
-
 #[cfg(feature = "compiled-ui")]
 fn compiled_tree_row(row: &SdTreeRow) -> TreeViewRow {
     TreeViewRow {
@@ -6017,25 +4960,6 @@ fn compiled_tree_row(row: &SdTreeRow) -> TreeViewRow {
         secondary_actions_badge: "".into(),
         loading_children_badge: row.loading_children_badge.as_str().into(),
     }
-}
-
-#[cfg(feature = "live-ui")]
-fn spawn_live_library_sync(
-    instance: slint::Weak<slint_interpreter::ComponentInstance>,
-    browser: SharedLibraryBrowser,
-    host: String,
-) {
-    std::thread::spawn(move || {
-        let result = library::sync_library_catalog(&host);
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Ok(mut browser) = browser.lock() {
-                browser.apply_sync_result(result);
-            }
-            if let Some(instance) = instance.upgrade() {
-                apply_live_library_state(&instance, &browser);
-            }
-        });
-    });
 }
 
 #[cfg(feature = "live-ui")]
@@ -6560,25 +5484,6 @@ fn spawn_live_realtime_stream(
             }
         }
         unregister_realtime_stream(&stream_control, generation);
-    });
-}
-
-#[cfg(feature = "compiled-ui")]
-fn spawn_compiled_library_sync(
-    ui: slint::Weak<AppWindow>,
-    browser: SharedLibraryBrowser,
-    host: String,
-) {
-    std::thread::spawn(move || {
-        let result = library::sync_library_catalog(&host);
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Ok(mut browser) = browser.lock() {
-                browser.apply_sync_result(result);
-            }
-            if let Some(ui) = ui.upgrade() {
-                apply_compiled_library_state(&ui, &browser);
-            }
-        });
     });
 }
 
@@ -7204,41 +6109,6 @@ mod tests {
             ])
             .is_err()
         );
-    }
-
-    #[test]
-    fn library_sync_failure_reducer_clears_transient_state_and_can_retry() {
-        let mut browser = LibraryBrowser::new();
-        browser.warning = "stale warning".to_string();
-
-        browser.start_sync();
-        assert!(browser.loading);
-        assert!(browser.warning.is_empty());
-        assert!(browser.last_error.is_empty());
-
-        browser.apply_sync_result(Err("copy failed".to_string()));
-        assert!(!browser.loading);
-        assert_eq!(browser.status, "Library sync failed.");
-        assert_eq!(browser.last_error, "copy failed");
-        assert!(browser.warning.is_empty());
-
-        browser.start_sync();
-        assert!(browser.loading);
-        assert!(browser.last_error.is_empty());
-    }
-
-    #[test]
-    fn empty_library_query_reducer_handles_invalid_actions_without_selection() {
-        let mut browser = LibraryBrowser::new();
-
-        browser.set_sort("unknown", "descending");
-        browser.set_filter("unknown", "value");
-        browser.set_page(-10);
-        browser.select_row("missing");
-
-        assert_eq!(browser.query.page, 1);
-        assert!(browser.selected_game().is_none());
-        assert_eq!(browser.result_summary(), "No library loaded.");
     }
 
     fn telemetry_sample(seq: u64) -> DeviceTelemetrySample {

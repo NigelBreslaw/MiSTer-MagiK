@@ -11,8 +11,8 @@ source_roots = [
 ]
 
 [baseline]
-literal_occurrences = 417
-unique_names = 278
+literal_occurrences = 396
+unique_names = 277
 external_build_names = 7
 
 [[control]]
@@ -71,20 +71,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls animation clock behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_ARCADE_BOOTSTRAP_INDEX"
-owner = "apps/mister/src/pmu_profile.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls arcade bootstrap index behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_ARCADE_BENCHMARK_ORIENTATION"
@@ -382,20 +368,6 @@ aliases = []
 documentation = { summary = "Controls catalog background delay ms behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_CATALOG_BUILDER_LOCK"
-owner = "apps/mister/src/pmu_profile.rs"
-classification = "production"
-value_shape = "path"
-default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
-visibility = "internal runtime"
-parser = "path"
-scope = "command"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Controls catalog builder lock behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_CATALOG_CONTENTION_QUIET_PREVIEWS"
 owner = "apps/mister/src/ui_runner/launcher_loop.rs"
 classification = "production"
@@ -439,7 +411,7 @@ documentation = { summary = "Controls catalog durable resume behavior", accepted
 
 [[control]]
 name = "MISTER_CATALOG_PROTOCOL_STDOUT"
-owner = "crates/catalog/src/bin/catalog_builder.rs"
+owner = "crates/catalog/src/fallible_log.rs"
 classification = "production"
 value_shape = "boolean token"
 default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
@@ -449,11 +421,11 @@ scope = "command"
 conflicts = []
 sensitivity = "public"
 aliases = []
-documentation = { summary = "Controls catalog protocol stdout behavior", accepted_values = [], value_policy = "document" }
+documentation = { summary = "Routes catalog protocol output away from standard output", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_CATALOG_READY_SNAPSHOT"
-owner = "apps/mister/src/pmu_profile.rs"
+owner = "crates/catalog/src/sqlite_catalog.rs"
 classification = "production"
 value_shape = "path"
 default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
@@ -478,21 +450,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Selects catalog startup policy; force is an explicit diagnostic/stress override and off disables the worker", accepted_values = ["default", "force", "off", "load-only"], value_policy = "document" }
-
-[[control]]
-name = "MISTER_CATALOG_SHARD_STAGING"
-owner = "crates/catalog/src/reconciliation_executor.rs"
-classification = "benchmark"
-value_shape = "enum token"
-default_behavior = "automatically selects tmpfs when supported and sufficiently sized, otherwise generation-private on-media staging"
-visibility = "benchmark only"
-parser = "enum"
-typed_default = "auto"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Selects the catalog shard staging route for benchmark comparison", accepted_values = ["auto", "tmpfs", "on-media"], value_policy = "document" }
 
 [[control]]
 name = "MISTER_CATALOG_TRACE"
@@ -1646,7 +1603,7 @@ documentation = { summary = "Controls library refresh lock behavior", accepted_v
 
 [[control]]
 name = "MISTER_LIBRARY_ROOTS"
-owner = "apps/mister/src/pmu_profile.rs"
+owner = "crates/catalog/src/catalog_config.rs"
 classification = "production"
 value_shape = "path or path list"
 default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
@@ -1688,7 +1645,7 @@ documentation = { summary = "Controls library software hash behavior", accepted_
 
 [[control]]
 name = "MISTER_LIBRARY_SQLITE"
-owner = "apps/mister/src/pmu_profile.rs"
+owner = "crates/catalog/src/device_layout.rs"
 classification = "production"
 value_shape = "path or path list"
 default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
@@ -2667,6 +2624,34 @@ aliases = []
 documentation = { summary = "Controls pprof warmup secs behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
+name = "MISTER_PREPARED_BUNDLE_CAPTURE_DIR"
+owner = "crates/catalog/src/library_indexer.rs"
+classification = "diagnostic"
+value_shape = "path or path list"
+default_behavior = "prepared helper capture is disabled when unset"
+visibility = "developer diagnostic"
+parser = "path"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Output directory for capturing prepared collection helper fixtures", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_PREPARED_BUNDLE_HELPER_DIR"
+owner = "crates/catalog/src/library_indexer.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "prepared collection acceleration is disabled when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Directory containing receipt-guarded prepared collection helpers", accepted_values = [], value_policy = "document" }
+
+[[control]]
 name = "MISTER_PRESENT_BACKEND"
 owner = "apps/mister/src/process_config.rs"
 classification = "diagnostic"
@@ -3354,7 +3339,7 @@ documentation = { summary = "Controls settings navigation evidence dir behavior"
 
 [[control]]
 name = "MISTER_SHARDED_CATALOG_DIR"
-owner = "apps/mister/src/pmu_profile.rs"
+owner = "crates/catalog/src/device_layout.rs"
 classification = "production"
 value_shape = "path or path list"
 default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"

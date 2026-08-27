@@ -1,0 +1,837 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Prototype exact-release helpers for prepared computer-game collections.
+//!
+//! A helper contains precomputed catalog rows plus a bounded receipt for the
+//! installed collection. Exact receipts can publish those rows directly. Any
+//! disagreement is fail-open only toward the normal collection scanner: the
+//! helper never hides custom, older, partial, or newly added content.
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Component, Path};
+
+pub const PREPARED_BUNDLE_HELPER_SCHEMA: &str = "mister-magik-prepared-bundle-helper-v1";
+pub(crate) const PREPARED_TARGET_CATALOG_HELPER_SCHEMA: &str =
+    "mister-magik-prepared-target-catalog-helper-v3";
+
+/// A production catalog target snapshot guarded by a cheap, exact-enough
+/// release receipt. The opaque output is the normal fast-catalog target output,
+/// so activation still goes through the ordinary projection and publication
+/// path.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct PreparedTargetCatalogHelper {
+    pub(crate) schema: String,
+    pub(crate) catalog_schema: u32,
+    pub(crate) prepared_adapter_version: u32,
+    pub(crate) storage_root: String,
+    pub(crate) target_path: String,
+    pub(crate) scan_exclusion_path: Option<String>,
+    pub(crate) receipt: PreparedBundleHelper,
+    pub(crate) directories: Vec<DirectoryReceipt>,
+    pub(crate) output_json: String,
+    pub(crate) output_sha256: String,
+}
+
+pub(crate) struct PreparedTargetCatalogCapture<'a> {
+    pub(crate) storage_root: &'a Path,
+    pub(crate) target_path: &'a Path,
+    pub(crate) scan_exclusion_path: Option<&'a Path>,
+    pub(crate) collection_id: String,
+    pub(crate) output_json: String,
+    pub(crate) exact_relative_paths: &'a [String],
+    pub(crate) payload_relative_paths: &'a [String],
+    pub(crate) inventory_extensions: &'a [String],
+}
+
+impl PreparedTargetCatalogHelper {
+    pub(crate) fn capture(request: PreparedTargetCatalogCapture<'_>) -> Result<Self, String> {
+        let PreparedTargetCatalogCapture {
+            storage_root,
+            target_path,
+            scan_exclusion_path,
+            collection_id,
+            output_json,
+            exact_relative_paths,
+            payload_relative_paths,
+            inventory_extensions,
+        } = request;
+        target_path.strip_prefix(storage_root).map_err(|error| {
+            format!(
+                "prepared target {} is outside storage root {}: {error}",
+                target_path.display(),
+                storage_root.display()
+            )
+        })?;
+        if let Some(path) = scan_exclusion_path {
+            path.strip_prefix(target_path).map_err(|error| {
+                format!(
+                    "prepared exclusion {} is outside target {}: {error}",
+                    path.display(),
+                    target_path.display()
+                )
+            })?;
+        }
+        let receipt_path = scan_exclusion_path.unwrap_or(target_path);
+        let output_sha256 = sha256_hex(output_json.as_bytes());
+        let receipt = PreparedBundleHelper::capture(
+            storage_root,
+            collection_id,
+            &output_sha256,
+            Vec::new(),
+            exact_relative_paths,
+            payload_relative_paths,
+            &[],
+        )?;
+        let directories = capture_directory_receipts(storage_root, receipt_path)?;
+        if inventory_extensions.is_empty() {
+            return Err("prepared target has no catalog inventory extensions".to_string());
+        }
+        Ok(Self {
+            schema: PREPARED_TARGET_CATALOG_HELPER_SCHEMA.to_string(),
+            catalog_schema: crate::catalog_config::SCHEMA_VERSION,
+            prepared_adapter_version:
+                crate::prepared_collections::PREPARED_COLLECTION_ADAPTER_VERSION,
+            storage_root: storage_root.display().to_string(),
+            target_path: target_path.display().to_string(),
+            scan_exclusion_path: scan_exclusion_path.map(|path| path.display().to_string()),
+            receipt,
+            directories,
+            output_json,
+            output_sha256,
+        })
+    }
+
+    pub(crate) fn from_json(bytes: &[u8]) -> Result<Self, String> {
+        let helper: Self = serde_json::from_slice(bytes)
+            .map_err(|error| format!("decode prepared target catalog helper: {error}"))?;
+        helper.validate()?;
+        Ok(helper)
+    }
+
+    pub(crate) fn to_json(&self) -> Result<Vec<u8>, String> {
+        self.validate()?;
+        serde_json::to_vec(self)
+            .map_err(|error| format!("encode prepared target catalog helper: {error}"))
+    }
+
+    pub(crate) fn activate(&self) -> Result<(), String> {
+        self.validate()?;
+        let storage_root = Path::new(&self.storage_root);
+        self.receipt.verify_exact(storage_root)?;
+        verify_directory_receipts(storage_root, &self.directories)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != PREPARED_TARGET_CATALOG_HELPER_SCHEMA {
+            return Err(format!(
+                "unsupported prepared target catalog helper schema {}",
+                self.schema
+            ));
+        }
+        if self.catalog_schema != crate::catalog_config::SCHEMA_VERSION
+            || self.prepared_adapter_version
+                != crate::prepared_collections::PREPARED_COLLECTION_ADAPTER_VERSION
+        {
+            return Err("prepared target catalog helper software version changed".to_string());
+        }
+        if self.storage_root.trim().is_empty() || self.target_path.trim().is_empty() {
+            return Err("prepared target catalog helper path is empty".to_string());
+        }
+        if let Some(scan_exclusion_path) = self.scan_exclusion_path.as_deref() {
+            Path::new(scan_exclusion_path)
+                .strip_prefix(Path::new(&self.target_path))
+                .map_err(|error| {
+                    format!(
+                        "prepared exclusion {scan_exclusion_path} is outside target {}: {error}",
+                        self.target_path
+                    )
+                })?;
+        }
+        self.receipt.validate()?;
+        if self.directories.is_empty() {
+            return Err("prepared target catalog directory receipt is empty".to_string());
+        }
+        reject_duplicate_paths(
+            self.directories
+                .iter()
+                .map(|receipt| receipt.relative_path.as_str()),
+            "directory",
+        )?;
+        let actual = sha256_hex(self.output_json.as_bytes());
+        if actual != self.output_sha256 {
+            return Err("prepared target catalog output checksum changed".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub(crate) struct DirectoryReceipt {
+    relative_path: String,
+    modified_ns: u128,
+}
+
+fn directory_modified_ns(path: &Path) -> Result<u128, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("inspect prepared directory {}: {error}", path.display()))?;
+    if !metadata.is_dir() {
+        return Err(format!(
+            "prepared directory is not a directory: {}",
+            path.display()
+        ));
+    }
+    metadata
+        .modified()
+        .map_err(|error| format!("read prepared directory time {}: {error}", path.display()))?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .map_err(|error| {
+            format!(
+                "invalid prepared directory time {}: {error}",
+                path.display()
+            )
+        })
+}
+
+fn capture_directory_receipts(
+    storage_root: &Path,
+    target_path: &Path,
+) -> Result<Vec<DirectoryReceipt>, String> {
+    let mut receipts = Vec::new();
+    for entry in walkdir::WalkDir::new(target_path).follow_links(false) {
+        let entry = entry.map_err(|error| {
+            format!(
+                "capture prepared directory tree {}: {error}",
+                target_path.display()
+            )
+        })?;
+        if !entry.file_type().is_dir() {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(storage_root)
+            .map_err(|error| format!("make prepared directory path relative: {error}"))?;
+        receipts.push(DirectoryReceipt {
+            relative_path: path_to_slash(relative)?,
+            modified_ns: directory_modified_ns(entry.path())?,
+        });
+    }
+    receipts.sort();
+    Ok(receipts)
+}
+
+fn verify_directory_receipts(
+    storage_root: &Path,
+    receipts: &[DirectoryReceipt],
+) -> Result<(), String> {
+    for expected in receipts {
+        validate_relative_path(&expected.relative_path)?;
+        let actual = directory_modified_ns(&storage_root.join(&expected.relative_path))?;
+        if actual != expected.modified_ns {
+            return Err(format!(
+                "changed prepared directory: {}",
+                expected.relative_path
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PreparedBundleHelper {
+    pub schema: String,
+    pub collection_id: String,
+    pub release_id: String,
+    pub entries: Vec<PreparedBundleEntry>,
+    pub exact_files: Vec<ExactFileReceipt>,
+    pub payloads: Vec<PayloadReceipt>,
+    pub inventories: Vec<InventoryReceipt>,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct PreparedBundleEntry {
+    pub system_id: String,
+    pub title: String,
+    pub launch_ref: String,
+    pub category: String,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct ExactFileReceipt {
+    pub relative_path: String,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct PayloadReceipt {
+    pub relative_path: String,
+    pub bytes: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct InventoryReceipt {
+    pub relative_root: String,
+    pub extensions: Vec<String>,
+    pub excluded_components: Vec<String>,
+    pub relative_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InventoryRule {
+    pub relative_root: String,
+    pub extensions: Vec<String>,
+    pub excluded_components: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PreparedBundlePath {
+    Exact,
+    Fallback,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PreparedBundleActivation {
+    pub path: PreparedBundlePath,
+    pub collection_id: String,
+    pub release_id: String,
+    pub reason: Option<String>,
+    pub entries: Vec<PreparedBundleEntry>,
+}
+
+impl PreparedBundleHelper {
+    pub fn capture(
+        root: &Path,
+        collection_id: impl Into<String>,
+        release_id: impl Into<String>,
+        mut entries: Vec<PreparedBundleEntry>,
+        exact_relative_paths: &[String],
+        payload_relative_paths: &[String],
+        inventory_rules: &[InventoryRule],
+    ) -> Result<Self, String> {
+        entries.sort();
+        reject_duplicate_entries(&entries)?;
+
+        let mut exact_files = exact_relative_paths
+            .iter()
+            .map(|relative| capture_exact_file(root, relative))
+            .collect::<Result<Vec<_>, _>>()?;
+        exact_files.sort();
+        reject_duplicate_paths(
+            exact_files
+                .iter()
+                .map(|receipt| receipt.relative_path.as_str()),
+            "exact file",
+        )?;
+
+        let mut payloads = payload_relative_paths
+            .iter()
+            .map(|relative| capture_payload(root, relative))
+            .collect::<Result<Vec<_>, _>>()?;
+        payloads.sort();
+        reject_duplicate_paths(
+            payloads
+                .iter()
+                .map(|receipt| receipt.relative_path.as_str()),
+            "payload",
+        )?;
+
+        let inventories = inventory_rules
+            .iter()
+            .map(|rule| capture_inventory(root, rule))
+            .collect::<Result<Vec<_>, _>>()?;
+        let helper = Self {
+            schema: PREPARED_BUNDLE_HELPER_SCHEMA.to_string(),
+            collection_id: collection_id.into(),
+            release_id: release_id.into(),
+            entries,
+            exact_files,
+            payloads,
+            inventories,
+        };
+        helper.validate()?;
+        Ok(helper)
+    }
+
+    pub fn from_json(bytes: &[u8]) -> Result<Self, String> {
+        let helper: Self = serde_json::from_slice(bytes)
+            .map_err(|error| format!("decode prepared bundle helper: {error}"))?;
+        helper.validate()?;
+        Ok(helper)
+    }
+
+    pub fn to_json(&self) -> Result<Vec<u8>, String> {
+        self.validate()?;
+        serde_json::to_vec(self).map_err(|error| format!("encode prepared bundle helper: {error}"))
+    }
+
+    pub fn fingerprint(&self) -> Result<String, String> {
+        let bytes = self.to_json()?;
+        Ok(sha256_hex(&bytes))
+    }
+
+    pub fn activate_with_fallback(
+        &self,
+        root: &Path,
+        fallback: impl FnOnce() -> Result<Vec<PreparedBundleEntry>, String>,
+    ) -> Result<PreparedBundleActivation, String> {
+        self.validate()?;
+        match self.exact_match(root) {
+            Ok(()) => Ok(PreparedBundleActivation {
+                path: PreparedBundlePath::Exact,
+                collection_id: self.collection_id.clone(),
+                release_id: self.release_id.clone(),
+                reason: None,
+                entries: self.entries.clone(),
+            }),
+            Err(reason) => {
+                let mut entries = fallback()?;
+                entries.sort();
+                reject_duplicate_entries(&entries)?;
+                Ok(PreparedBundleActivation {
+                    path: PreparedBundlePath::Fallback,
+                    collection_id: self.collection_id.clone(),
+                    release_id: self.release_id.clone(),
+                    reason: Some(reason),
+                    entries,
+                })
+            }
+        }
+    }
+
+    pub(crate) fn verify_exact(&self, root: &Path) -> Result<(), String> {
+        self.validate()?;
+        self.exact_match(root)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != PREPARED_BUNDLE_HELPER_SCHEMA {
+            return Err(format!(
+                "unsupported prepared bundle helper schema {}",
+                self.schema
+            ));
+        }
+        if self.collection_id.trim().is_empty() || self.release_id.trim().is_empty() {
+            return Err("prepared bundle helper identity is empty".to_string());
+        }
+        reject_duplicate_entries(&self.entries)?;
+        reject_duplicate_paths(
+            self.exact_files
+                .iter()
+                .map(|receipt| receipt.relative_path.as_str()),
+            "exact file",
+        )?;
+        reject_duplicate_paths(
+            self.payloads
+                .iter()
+                .map(|receipt| receipt.relative_path.as_str()),
+            "payload",
+        )?;
+        for receipt in &self.exact_files {
+            validate_relative_path(&receipt.relative_path)?;
+            if receipt.sha256.len() != 64
+                || !receipt.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(format!(
+                    "prepared bundle exact-file hash is invalid: {}",
+                    receipt.relative_path
+                ));
+            }
+        }
+        for receipt in &self.payloads {
+            validate_relative_path(&receipt.relative_path)?;
+        }
+        for inventory in &self.inventories {
+            validate_relative_path(&inventory.relative_root)?;
+            reject_duplicate_paths(
+                inventory.relative_paths.iter().map(String::as_str),
+                "inventory",
+            )?;
+            for relative in &inventory.relative_paths {
+                validate_relative_path(relative)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn exact_match(&self, root: &Path) -> Result<(), String> {
+        for expected in &self.exact_files {
+            let actual = capture_exact_file(root, &expected.relative_path)?;
+            if actual != *expected {
+                return Err(format!("changed exact file: {}", expected.relative_path));
+            }
+        }
+        for expected in &self.payloads {
+            let actual = capture_payload(root, &expected.relative_path)?;
+            if actual != *expected {
+                return Err(format!("changed payload: {}", expected.relative_path));
+            }
+        }
+        for expected in &self.inventories {
+            let rule = InventoryRule {
+                relative_root: expected.relative_root.clone(),
+                extensions: expected.extensions.clone(),
+                excluded_components: expected.excluded_components.clone(),
+            };
+            let actual = capture_inventory(root, &rule)?;
+            if actual.relative_paths != expected.relative_paths {
+                return Err(format!("changed {} inventory", expected.relative_root));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn capture_exact_file(root: &Path, relative: &str) -> Result<ExactFileReceipt, String> {
+    validate_relative_path(relative)?;
+    let path = root.join(relative);
+    let bytes = fs::read(&path)
+        .map_err(|error| format!("read exact bundle file {}: {error}", path.display()))?;
+    let len = u64::try_from(bytes.len()).map_err(|error| error.to_string())?;
+    Ok(ExactFileReceipt {
+        relative_path: normalize_relative_path(relative),
+        bytes: len,
+        sha256: sha256_hex(&bytes),
+    })
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = Sha256::digest(bytes);
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        output.push(HEX[usize::from(byte >> 4)] as char);
+        output.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    output
+}
+
+fn capture_payload(root: &Path, relative: &str) -> Result<PayloadReceipt, String> {
+    validate_relative_path(relative)?;
+    let path = root.join(relative);
+    let metadata = fs::metadata(&path)
+        .map_err(|error| format!("inspect bundle payload {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("bundle payload is not a file: {}", path.display()));
+    }
+    Ok(PayloadReceipt {
+        relative_path: normalize_relative_path(relative),
+        bytes: metadata.len(),
+    })
+}
+
+fn capture_inventory(root: &Path, rule: &InventoryRule) -> Result<InventoryReceipt, String> {
+    validate_relative_path(&rule.relative_root)?;
+    let inventory_root = root.join(&rule.relative_root);
+    let extensions = rule
+        .extensions
+        .iter()
+        .map(|extension| extension.trim_start_matches('.').to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
+    if extensions.is_empty() {
+        return Err(format!(
+            "prepared bundle inventory has no extensions: {}",
+            rule.relative_root
+        ));
+    }
+    let excluded = rule
+        .excluded_components
+        .iter()
+        .map(|component| component.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
+    let mut relative_paths = Vec::new();
+    for entry in walkdir::WalkDir::new(&inventory_root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            entry.path() == inventory_root
+                || !entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| excluded.contains(&name.to_ascii_lowercase()))
+        })
+    {
+        let entry = entry.map_err(|error| {
+            format!(
+                "scan prepared bundle inventory {}: {error}",
+                inventory_root.display()
+            )
+        })?;
+        if entry.path() == inventory_root || !entry.file_type().is_file() {
+            continue;
+        }
+        let matches = entry
+            .path()
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extensions.contains(&extension.to_ascii_lowercase()));
+        if !matches {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(root)
+            .map_err(|error| format!("make prepared bundle inventory path relative: {error}"))?;
+        relative_paths.push(path_to_slash(relative)?);
+    }
+    relative_paths.sort_by_cached_key(|path| path.to_ascii_lowercase());
+    reject_case_folded_duplicates(&relative_paths, "inventory")?;
+    Ok(InventoryReceipt {
+        relative_root: normalize_relative_path(&rule.relative_root),
+        extensions: extensions.into_iter().collect(),
+        excluded_components: excluded.into_iter().collect(),
+        relative_paths,
+    })
+}
+
+fn validate_relative_path(relative: &str) -> Result<(), String> {
+    let path = Path::new(relative);
+    if relative.trim().is_empty()
+        || path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(format!("invalid prepared bundle relative path: {relative}"));
+    }
+    Ok(())
+}
+
+fn normalize_relative_path(relative: &str) -> String {
+    relative
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_string()
+}
+
+fn path_to_slash(path: &Path) -> Result<String, String> {
+    path.to_str()
+        .map(normalize_relative_path)
+        .ok_or_else(|| format!("prepared bundle path is not UTF-8: {}", path.display()))
+}
+
+fn reject_duplicate_entries(entries: &[PreparedBundleEntry]) -> Result<(), String> {
+    let mut keys = BTreeSet::new();
+    for entry in entries {
+        let key = format!(
+            "{}\0{}\0{}",
+            entry.system_id.to_ascii_lowercase(),
+            entry.title.to_ascii_lowercase(),
+            entry.launch_ref.to_ascii_lowercase()
+        );
+        if !keys.insert(key) {
+            return Err(format!(
+                "duplicate prepared bundle entry: {} / {}",
+                entry.system_id, entry.title
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn reject_duplicate_paths<'a>(
+    paths: impl IntoIterator<Item = &'a str>,
+    label: &str,
+) -> Result<(), String> {
+    let paths = paths.into_iter().map(str::to_string).collect::<Vec<_>>();
+    reject_case_folded_duplicates(&paths, label)
+}
+
+fn reject_case_folded_duplicates(paths: &[String], label: &str) -> Result<(), String> {
+    let mut folded = BTreeSet::new();
+    for path in paths {
+        validate_relative_path(path)?;
+        if !folded.insert(path.to_ascii_lowercase()) {
+            return Err(format!("duplicate {label} path: {path}"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn fixture_root(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "prepared-bundle-helper-{label}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
+
+    fn entry(title: &str) -> PreparedBundleEntry {
+        PreparedBundleEntry {
+            system_id: "dos".to_string(),
+            title: title.to_string(),
+            launch_ref: format!("_DOS Games/{title}.mgl"),
+            category: "Computer".to_string(),
+        }
+    }
+
+    fn helper(root: &Path) -> PreparedBundleHelper {
+        PreparedBundleHelper::capture(
+            root,
+            "0mhz",
+            "2026.04.26",
+            vec![entry("Doom")],
+            &["_DOS Games/Doom.mgl".to_string()],
+            &["games/AO486/Doom.vhd".to_string()],
+            &[InventoryRule {
+                relative_root: "_DOS Games".to_string(),
+                extensions: vec!["mgl".to_string()],
+                excluded_components: Vec::new(),
+            }],
+        )
+        .unwrap()
+    }
+
+    fn write_fixture(root: &Path) {
+        fs::create_dir_all(root.join("_DOS Games")).unwrap();
+        fs::create_dir_all(root.join("games/AO486")).unwrap();
+        fs::write(
+            root.join("_DOS Games/Doom.mgl"),
+            b"<mistergamedescription/>",
+        )
+        .unwrap();
+        fs::write(root.join("games/AO486/Doom.vhd"), b"payload").unwrap();
+    }
+
+    #[test]
+    fn exact_release_uses_precomputed_entries_without_fallback() {
+        let root = fixture_root("exact");
+        write_fixture(&root);
+        let helper = helper(&root);
+        let activation = helper
+            .activate_with_fallback(&root, || panic!("fallback must not run"))
+            .unwrap();
+        fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(activation.path, PreparedBundlePath::Exact);
+        assert_eq!(activation.entries, vec![entry("Doom")]);
+    }
+
+    #[test]
+    fn changed_known_file_uses_fallback() {
+        let root = fixture_root("changed");
+        write_fixture(&root);
+        let helper = helper(&root);
+        fs::write(root.join("_DOS Games/Doom.mgl"), b"changed").unwrap();
+        let activation = helper
+            .activate_with_fallback(&root, || Ok(vec![entry("Custom Doom")]))
+            .unwrap();
+        fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(activation.path, PreparedBundlePath::Fallback);
+        assert_eq!(activation.entries, vec![entry("Custom Doom")]);
+        assert!(activation.reason.unwrap().contains("changed exact file"));
+    }
+
+    #[test]
+    fn additional_game_uses_fallback_so_custom_content_is_not_hidden() {
+        let root = fixture_root("additional");
+        write_fixture(&root);
+        let helper = helper(&root);
+        fs::write(root.join("_DOS Games/Homebrew.mgl"), b"custom").unwrap();
+        let activation = helper
+            .activate_with_fallback(&root, || Ok(vec![entry("Doom"), entry("Homebrew")]))
+            .unwrap();
+        fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(activation.path, PreparedBundlePath::Fallback);
+        assert_eq!(activation.entries.len(), 2);
+        assert!(
+            activation
+                .reason
+                .unwrap()
+                .contains("changed _DOS Games inventory")
+        );
+    }
+
+    #[test]
+    fn missing_payload_uses_fallback() {
+        let root = fixture_root("missing-payload");
+        write_fixture(&root);
+        let helper = helper(&root);
+        fs::remove_file(root.join("games/AO486/Doom.vhd")).unwrap();
+        let activation = helper
+            .activate_with_fallback(&root, || Ok(Vec::new()))
+            .unwrap();
+        fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(activation.path, PreparedBundlePath::Fallback);
+        assert!(activation.reason.unwrap().contains("bundle payload"));
+    }
+
+    #[test]
+    fn helper_round_trips_with_a_stable_fingerprint() {
+        let root = fixture_root("round-trip");
+        write_fixture(&root);
+        let helper = helper(&root);
+        let bytes = helper.to_json().unwrap();
+        let decoded = PreparedBundleHelper::from_json(&bytes).unwrap();
+        fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(decoded, helper);
+        assert_eq!(
+            decoded.fingerprint().unwrap(),
+            helper.fingerprint().unwrap()
+        );
+    }
+
+    #[test]
+    fn prepared_target_helper_activates_for_unchanged_tree() {
+        let root = fixture_root("target-exact");
+        write_fixture(&root);
+        let helper = PreparedTargetCatalogHelper::capture(PreparedTargetCatalogCapture {
+            storage_root: &root,
+            target_path: &root.join("_DOS Games"),
+            scan_exclusion_path: None,
+            collection_id: "0mhz".to_string(),
+            output_json: "{\"discoveries\":[]}".to_string(),
+            exact_relative_paths: &["_DOS Games/Doom.mgl".to_string()],
+            payload_relative_paths: &["games/AO486/Doom.vhd".to_string()],
+            inventory_extensions: &["mgl".to_string()],
+        })
+        .unwrap();
+
+        assert!(helper.activate().is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepared_target_helper_rejects_added_game() {
+        let root = fixture_root("target-addition");
+        write_fixture(&root);
+        let helper = PreparedTargetCatalogHelper::capture(PreparedTargetCatalogCapture {
+            storage_root: &root,
+            target_path: &root.join("_DOS Games"),
+            scan_exclusion_path: None,
+            collection_id: "0mhz".to_string(),
+            output_json: "{\"discoveries\":[]}".to_string(),
+            exact_relative_paths: &["_DOS Games/Doom.mgl".to_string()],
+            payload_relative_paths: &["games/AO486/Doom.vhd".to_string()],
+            inventory_extensions: &["mgl".to_string()],
+        })
+        .unwrap();
+        fs::write(root.join("_DOS Games/Homebrew.mgl"), b"custom").unwrap();
+
+        let error = helper.activate().unwrap_err();
+        fs::remove_dir_all(root).unwrap();
+        assert!(error.contains("changed prepared directory"));
+    }
+}

@@ -158,20 +158,12 @@ export component BackgroundScanBadge inherits Rectangle {
         alignment: start;
         width: self.preferred-width;
         Spleen6x12 {
-            text: "Building library";
+            text: CatalogView.title == "" ? "Preparing system update" : CatalogView.title;
             color: #d7eef8;
             size: Spleen6x12Size.px8;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
-        Spleen6x12 {
-            text: ".";
-            color: CatalogView.progress-dot-visible ? #d7eef8 : transparent;
-            size: Spleen6x12Size.px8;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
-
     }
 }
 

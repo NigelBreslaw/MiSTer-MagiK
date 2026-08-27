@@ -11,10 +11,6 @@
 //! zero-based SET payload word once per process, only from the development
 //! installation, so receiver rejection evidence can be validated end to end.
 //!
-//! `catalog-lab latch-load-scenario OUTPUT` creates a bounded 500K-game
-//! reproduction manifest. Resulting support evidence is retained at
-//! `diagnostics/latch/latest.json` under the active MagiK installation.
-
 use super::super::*;
 use crate::ui_runner::launcher_readiness::SourceFrameEvidence;
 use mister_magik_fb::framebuffer::downsample::Rgb565FrameView;

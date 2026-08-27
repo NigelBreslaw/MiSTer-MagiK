@@ -11,12 +11,12 @@ use crate::media_update::{
     parse_manifest_json, size_qualified_pack_path, state_path, valid_image_size,
 };
 use mister_magik_catalog::media_identity::preferred_screenshot_image_size;
-use mister_magik_catalog::preview_worker::invalidate_preview_archive_metadata_cache;
-use mister_magik_catalog::production_sharded_projection::{
-    PreviewAvailabilityReconciliationOutcome, production_registry_limits,
-    reconcile_production_preview_availability,
+use mister_magik_catalog::preview_availability::{
+    PreviewAvailabilityReconciliationOutcome, reconcile_preview_availability,
 };
+use mister_magik_catalog::preview_worker::invalidate_preview_archive_metadata_cache;
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
+use mister_magik_catalog::shard_registry::production_registry_limits;
 use mister_magik_media_contract::{MEDIA_CONNECT_TIMEOUT_SECS, MEDIA_TRANSFER_TIMEOUT_SECS};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -31,11 +31,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS: usize = 1;
 #[cfg(test)]
 const MAX_CONCURRENT_MEDIA_DOWNLOADS: usize = 1;
-const MANIFEST_FETCH_ATTEMPTS: usize = 30;
+const MANIFEST_FETCH_ATTEMPTS: usize = 0;
 const MANIFEST_FETCH_FAST_RETRY: Duration = Duration::from_secs(1);
 const MANIFEST_FETCH_FAST_RETRY_WINDOW: Duration = Duration::from_secs(20);
 const MANIFEST_FETCH_INITIAL_BACKOFF: Duration = Duration::from_secs(2);
 const MANIFEST_FETCH_MAX_RETRY: Duration = Duration::from_secs(10);
+const MEDIA_REQUEST_QUIESCENCE: Duration = Duration::from_millis(500);
 const MEDIA_DOWNLOAD_WORK_DIR: &str = "/tmp/mister-magik-media-download";
 
 pub struct MediaWorkerHandle {
@@ -177,6 +178,7 @@ fn run_screenshot_media_worker(
     let mut interaction_reason = "idle".to_string();
     let mut defer_logged = false;
     let mut benchmark_quiescent_since = None;
+    let mut request_received = false;
     loop {
         if interaction_active {
             if !defer_logged && !queue.pending.is_empty() {
@@ -208,17 +210,18 @@ fn run_screenshot_media_worker(
         for (_system, (pack, local_path)) in
             take_pending_reconciliations(!interaction_active, &mut pending_reconciliation)
         {
-            reconcile_pack_preview_availability(&config.catalog_root, &pack, &local_path, &tx);
+            reconcile_pack_preview_availability(&config, &pack, &local_path, &tx);
         }
-        if config.benchmark_auto_finish
-            && queue.requested_count > 0
-            && active.is_empty()
-            && queue.pending.is_empty()
-        {
+        if request_received && active.is_empty() && queue.pending.is_empty() {
             let quiescent_since = benchmark_quiescent_since.get_or_insert_with(Instant::now);
-            if quiescent_since.elapsed() >= Duration::from_millis(500) {
+            if quiescent_since.elapsed() >= MEDIA_REQUEST_QUIESCENCE {
                 let _ = tx.send(MediaWorkerMessage::Timing {
-                    name: "screenshot_media_benchmark_auto_finish".to_string(),
+                    name: if config.benchmark_auto_finish {
+                        "screenshot_media_benchmark_auto_finish"
+                    } else {
+                        "screenshot_media_request_complete"
+                    }
+                    .to_string(),
                     detail: format!(
                         "requested={} quiescent_ms={}",
                         queue.requested_count,
@@ -234,13 +237,14 @@ fn run_screenshot_media_worker(
             for (_system, (pack, local_path)) in
                 take_pending_reconciliations(true, &mut pending_reconciliation)
             {
-                reconcile_pack_preview_availability(&config.catalog_root, &pack, &local_path, &tx);
+                reconcile_pack_preview_availability(&config, &pack, &local_path, &tx);
             }
             break;
         }
         match command_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(MediaWorkerCommand::EnsureSystem { system_id }) => {
                 benchmark_quiescent_since = None;
+                request_received = true;
                 match queue.enqueue(&system_id, &packs_by_system) {
                     MediaEnqueueResult::Queued { pack_index } => {
                         let _ = tx.send(MediaWorkerMessage::Timing {
@@ -262,6 +266,12 @@ fn run_screenshot_media_worker(
                         let _ = tx.send(MediaWorkerMessage::Timing {
                             name: "screenshot_media_system_ignored".to_string(),
                             detail: format!("system={system_id} reason=no-pack"),
+                        });
+                        let _ = tx.send(MediaWorkerMessage::PackStatus {
+                            system: system_id,
+                            image_size: config.image_size.clone(),
+                            status: "unavailable".to_string(),
+                            detail: "reason=no-pack-in-latest-manifest".to_string(),
                         });
                     }
                 }
@@ -532,6 +542,12 @@ fn start_ready_downloads(
                     .with_done_bytes(pack.raw.bytes),
                 );
             }
+            let _ = tx.send(MediaWorkerMessage::PackStatus {
+                system: pack.id.clone(),
+                image_size: pack.image_size.clone(),
+                status: "checked".to_string(),
+                detail: format!("result={} policy={}", status.label(), config.policy.label()),
+            });
             continue;
         }
         let (result_tx, result_rx) = mpsc::channel();
@@ -614,6 +630,11 @@ fn poll_active_downloads(
             Ok(Err(error)) => {
                 let failed = active.remove(idx);
                 counts.failed += 1;
+                let status = if retryable_media_download_error(&error) {
+                    "retryable-failed"
+                } else {
+                    "failed"
+                };
                 send_progress(
                     tx,
                     MediaProgressEvent::for_pack(
@@ -628,7 +649,7 @@ fn poll_active_downloads(
                 let _ = tx.send(MediaWorkerMessage::PackStatus {
                     system: failed.pack.id,
                     image_size: failed.pack.image_size,
-                    status: "failed".to_string(),
+                    status: status.to_string(),
                     detail: error,
                 });
             }
@@ -650,7 +671,7 @@ fn poll_active_downloads(
                 let _ = tx.send(MediaWorkerMessage::PackStatus {
                     system: failed.pack.id,
                     image_size: failed.pack.image_size,
-                    status: "failed".to_string(),
+                    status: "retryable-failed".to_string(),
                     detail,
                 });
             }
@@ -659,6 +680,14 @@ fn poll_active_downloads(
             }
         }
     }
+}
+
+fn retryable_media_download_error(error: &str) -> bool {
+    error.contains("curl exited")
+        || error.contains("spawn curl")
+        || error.contains("read curl stdout")
+        || error.contains("wait curl")
+        || error.contains("download worker disconnected")
 }
 
 fn download_pack_assets(
@@ -1686,23 +1715,27 @@ where
     F: FnMut(&str) -> Result<(String, HttpCacheMetadata), String>,
     S: FnMut(Duration),
 {
-    let attempts = attempts.max(1);
+    let unlimited = attempts == 0;
     let started = Instant::now();
     let mut retry_policy = ManifestRetryPolicy::new(initial_backoff);
-    let mut last_error = String::new();
-    for attempt in 1..=attempts {
+    let mut attempt = 1usize;
+    loop {
         match fetch(manifest_url) {
             Ok(fetched) => return Ok(fetched),
             Err(error) => {
-                last_error = error;
-                if attempt == attempts {
-                    break;
+                if !unlimited && attempt >= attempts.max(1) {
+                    return Err(error);
                 }
                 let retry = retry_policy.next_delay(started.elapsed());
                 let _ = tx.send(MediaWorkerMessage::Timing {
                     name: "screenshot_media_manifest_retry".to_string(),
                     detail: format!(
-                        "attempt={attempt} attempts={attempts} elapsed_ms={} retry_ms={} error={last_error}",
+                        "attempt={attempt} attempts={} elapsed_ms={} retry_ms={} error={error}",
+                        if unlimited {
+                            "unlimited".to_string()
+                        } else {
+                            attempts.max(1).to_string()
+                        },
                         started.elapsed().as_millis(),
                         retry.as_millis()
                     ),
@@ -1710,10 +1743,10 @@ where
                 if !retry.is_zero() {
                     sleep(retry);
                 }
+                attempt = attempt.saturating_add(1);
             }
         }
     }
-    Err(last_error)
 }
 
 #[derive(Clone, Debug)]
@@ -1870,7 +1903,7 @@ pub enum MediaWorkerMessage {
 }
 
 fn reconcile_pack_preview_availability(
-    catalog_root: &Path,
+    config: &MediaWorkerConfig,
     pack: &MediaPack,
     local_path: &Path,
     tx: &mpsc::Sender<MediaWorkerMessage>,
@@ -1885,12 +1918,13 @@ fn reconcile_pack_preview_availability(
             return;
         }
     };
-    match reconcile_production_preview_availability(
-        catalog_root,
+    let result = reconcile_preview_availability(
+        &config.catalog_root,
         &system_id,
         local_path,
         production_registry_limits(),
-    ) {
+    );
+    match result {
         Ok(outcome) => {
             let _ = tx.send(MediaWorkerMessage::PreviewAvailabilityUpdated { outcome });
         }
@@ -2478,6 +2512,35 @@ mod tests {
     }
 
     #[test]
+    fn unlimited_manifest_retry_waits_past_the_old_attempt_limit() {
+        let (tx, _rx) = mpsc::channel();
+        let mut calls = 0usize;
+
+        let (body, _) = fetch_manifest_text_with_retry_and_sleep(
+            DEFAULT_MANIFEST_URL,
+            0,
+            Duration::ZERO,
+            &tx,
+            |_| {
+                calls += 1;
+                if calls <= 30 {
+                    Err("network-not-ready".to_string())
+                } else {
+                    Ok((
+                        "{\"schema\":1,\"generated_at\":\"now\",\"packs\":[]}".to_string(),
+                        HttpCacheMetadata::default(),
+                    ))
+                }
+            },
+            |_| {},
+        )
+        .expect("network availability after thirty attempts must still recover");
+
+        assert_eq!(calls, 31);
+        assert!(body.contains("\"schema\""));
+    }
+
+    #[test]
     fn manifest_retry_policy_uses_fast_start_then_exponential_backoff() {
         let mut policy = ManifestRetryPolicy::new(Duration::from_secs(2));
 
@@ -2506,6 +2569,22 @@ mod tests {
             policy.next_delay(MANIFEST_FETCH_FAST_RETRY_WINDOW + Duration::from_secs(4)),
             Duration::from_secs(10)
         );
+    }
+
+    #[test]
+    fn only_transport_download_failures_are_retried() {
+        assert!(retryable_media_download_error(
+            "curl exited with exit status: 6"
+        ));
+        assert!(retryable_media_download_error(
+            "read curl stdout: connection reset"
+        ));
+        assert!(!retryable_media_download_error(
+            "sha256 mismatch expected=abc actual=def"
+        ));
+        assert!(!retryable_media_download_error(
+            "write pack destination: no space left"
+        ));
     }
 
     #[test]

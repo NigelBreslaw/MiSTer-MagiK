@@ -7,7 +7,7 @@
 //!   Production:
 //!     ui [scene] [secs]  Slint UI (default `launcher`, infinite when secs=0)
 //!     early-black        route a black launcher framebuffer before full UI
-//!     library-refresh    build/update the SQLite library cache
+//!     library-refresh    update the installed catalog or build it when missing
 //!     request-library-rebuild
 //!                        write rebuild-on-next-boot marker for fault tests
 //!     toggle-simple-joystick-setting
@@ -28,9 +28,9 @@
 //!                        fill one scanout slot and post it through FPGA latch
 //!     fpga-latch-pattern
 //!                        fill scanout slots and vblank-latch them in FPGA
-//!     catalog-v3-inspect validate the registry, shards, state, and scanner cache
+//!     catalog-inspect    validate the registry, system artifacts, and source snapshot
 //!     catalog-corpus-inventory inventory production-planned scan targets only
-//!     catalog-v3-registry-report list system counts without opening system shards
+//!     catalog-registry-report list system counts without opening system artifacts
 //!     search-bench       benchmark persisted Arcade FTS5 search
 //!     rom-identity-bench benchmark production ROM identity hashing
 //!     hbmame-metadata-from-library
@@ -364,10 +364,7 @@ fn dispatch_pre_fpga(
         "fb-map-bandwidth" => run_fb_map_bandwidth(),
         #[cfg(feature = "diagnostics")]
         "scanout-slots-map-report" => run_scanout_slots_map_report(),
-        "library-refresh" => run_library_refresh(
-            process_config.catalog_paths(),
-            process_config.archive_cache(),
-        ),
+        "library-refresh" => run_library_refresh(process_config.catalog_paths()),
         "request-library-rebuild" => run_request_library_rebuild(),
         "toggle-simple-joystick-setting" => run_toggle_simple_joystick_setting(),
         "display-persist" => run_display_persist(args),
@@ -388,14 +385,14 @@ fn dispatch_pre_fpga(
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         "preview-index-refresh-bench" => run_preview_index_refresh_bench(),
         command_args::CATALOG_INSPECT_COMMAND => {
-            run_catalog_v3_inspect(process_config.catalog_paths())
+            run_catalog_inspect(process_config.catalog_paths())
         }
         command_args::CATALOG_ROM_AUDIT_COMMAND => run_catalog_arcade_rom_audit(
             process_config.catalog_paths(),
             process_config.archive_cache(),
         ),
         command_args::CATALOG_REGISTRY_REPORT_COMMAND => {
-            run_catalog_v3_registry_report(process_config.catalog_paths())
+            run_catalog_registry_report(process_config.catalog_paths())
         }
         #[cfg(feature = "diagnostics")]
         "hbmame-metadata-from-library" => run_hbmame_metadata_from_library(),
@@ -488,11 +485,11 @@ fn benchmark_capabilities() -> serde_json::Value {
     capabilities
 }
 
-fn run_catalog_v3_inspect(paths: &mister_magik_catalog::device_layout::CatalogPaths) {
+fn run_catalog_inspect(paths: &mister_magik_catalog::device_layout::CatalogPaths) {
     match mister_magik_catalog::catalog_acceptance::inspect_catalog(paths.sharded_catalog_dir()) {
         Ok(report) => crate::ui_log!("{report}"),
         Err(error) => {
-            crate::ui_errln!("catalog_v3_summary_tsv\tvalid=0\terror={error}");
+            crate::ui_errln!("catalog_summary_tsv\tvalid=0\terror={error}");
             std::process::exit(1);
         }
     }
@@ -511,11 +508,11 @@ fn run_catalog_arcade_rom_audit(
     }
 }
 
-fn run_catalog_v3_registry_report(paths: &mister_magik_catalog::device_layout::CatalogPaths) {
+fn run_catalog_registry_report(paths: &mister_magik_catalog::device_layout::CatalogPaths) {
     match mister_magik_catalog::catalog_acceptance::inspect_registry(paths.sharded_catalog_dir()) {
         Ok(report) => crate::ui_log!("{report}"),
         Err(error) => {
-            crate::ui_errln!("catalog_v3_registry_summary_tsv\tvalid=0\terror={error}");
+            crate::ui_errln!("catalog_registry_summary_tsv\tvalid=0\terror={error}");
             std::process::exit(1);
         }
     }
@@ -603,21 +600,32 @@ fn print_experiment_capabilities() {
     }
 }
 
-fn run_library_refresh(
-    paths: &mister_magik_catalog::device_layout::CatalogPaths,
-    archive_cache: &mister_magik_catalog::catalog_config::ArchiveCacheConfig,
-) {
-    let result = mister_magik_catalog::builder_service::run_with_execution_policy_and_fault_control_and_paths(
-        mister_magik_catalog::builder_service::BuilderOperation::Rebuild,
-        mister_magik_catalog::builder_service::BuilderExecutionPolicy::ForegroundUntilFirstVisible,
-        Box::new(mister_magik_mister_runtime::direct_reset_fault::process_fault_control()),
-        paths,
-        archive_cache,
-        |event| crate::ui_logln!("{}", serde_json::to_string(&event).unwrap_or_default()),
-    );
-    if let Err(error) = result {
-        crate::ui_errln!("library_refresh\tfailed\t{error}");
-        std::process::exit(1);
+fn run_library_refresh(paths: &mister_magik_catalog::device_layout::CatalogPaths) {
+    let storage_root = Path::new("/media/fat");
+    let catalog_root = paths.sharded_catalog_dir();
+    let result =
+        if mister_magik_catalog::fast_catalog_refresh::read_latest_refresh_manifest(catalog_root)
+            .is_ok()
+        {
+            mister_magik_catalog::fast_catalog_refresh::execute_fast_refresh(
+                storage_root,
+                catalog_root,
+                mister_magik_catalog::fast_catalog_refresh::FastCatalogRefreshRequest::Update,
+            )
+            .and_then(|report| serde_json::to_string(&report).map_err(|error| error.to_string()))
+        } else {
+            mister_magik_catalog::fast_catalog_refresh::build_fresh_catalog(
+                storage_root,
+                catalog_root,
+            )
+            .and_then(|report| serde_json::to_string(&report).map_err(|error| error.to_string()))
+        };
+    match result {
+        Ok(report) => crate::ui_logln!("{report}"),
+        Err(error) => {
+            crate::ui_errln!("library_refresh\tfailed\t{error}");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -839,170 +847,6 @@ fn should_defer_parent_boot_library_refresh(
     force_foreground: bool,
 ) -> bool {
     parent_boot && !database_exists && !force_foreground
-}
-
-#[cfg(test)]
-fn run_library_sql() {
-    let args: Vec<String> = std::env::args().skip(2).collect();
-    match library_db::run_sqlite_inspect_cli(&args) {
-        Ok(output) => {
-            crate::ui_log!("{output}");
-            if !output.ends_with('\n') {
-                crate::ui_logln!();
-            }
-        }
-        Err(e) => {
-            crate::ui_errln!("library_sql\tfailed\t{e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-#[cfg(test)]
-fn run_catalog_inspect() {
-    use mister_magik_catalog::arcade_catalog::{DEFAULT_ARCADE_ROOT, LaunchTarget};
-
-    let args: Vec<String> = std::env::args().skip(2).collect();
-    let result = (|| -> Result<String, String> {
-        let action = args.first().map(String::as_str).ok_or_else(|| {
-            "usage: catalog-inspect <counts|filter-options|find-launch-ref|launch-plan|prepared> ...".to_string()
-        })?;
-        if action == "counts" {
-            return library_db::run_sqlite_inspect_cli(&[
-                "SELECT (SELECT count(*) FROM game_rows) AS games,(SELECT count(*) FROM launch_target_rows) AS launch_plans,(SELECT count(*) FROM systems) AS systems,(SELECT count(*) FROM ui_arcade_preferred)+(SELECT count(*) FROM launcher_catalog_rows) AS launcher_rows".to_string(),
-            ]);
-        }
-        if action == "launch-plan" {
-            let launch_id = args
-                .get(1)
-                .ok_or_else(|| "catalog-inspect launch-plan needs ID".to_string())?
-                .parse::<u64>()
-                .map_err(|_| "catalog-inspect launch-plan ID must be an integer".to_string())?;
-            return library_db::run_sqlite_inspect_cli(&[format!(
-                "SELECT lt.launch_id,g.title,sys.value AS system_id,COALESCE(p.core_path,core.value) AS core_path,COALESCE(mount.value,'mount-image') AS mount_kind,COALESCE(lt.mount_index,0) AS mount_index,COALESCE(lt.delay_secs,1) AS delay_secs,CASE refkind.value WHEN 'payload' THEN 'magik-plan:payload:'||magik_path(pp.chunk_id,pp.offset,pp.len,pc.uncompressed_len,pc.bytes) WHEN 'archive' THEN 'magik-plan:archive:'||magik_path(pp.chunk_id,pp.offset,pp.len,pc.uncompressed_len,pc.bytes) WHEN 'same-payload' THEN magik_path(pp.chunk_id,pp.offset,pp.len,pc.uncompressed_len,pc.bytes) ELSE magik_path(lp.chunk_id,lp.offset,lp.len,lc.uncompressed_len,lc.bytes) END AS launch_ref,COALESCE(magik_path(pp.chunk_id,pp.offset,pp.len,pc.uncompressed_len,pc.bytes),'') AS payload_path,magik_path(sp.chunk_id,sp.offset,sp.len,sc.uncompressed_len,sc.bytes) AS source_path FROM launch_target_rows lt JOIN game_rows g ON g.game_key_id=lt.launch_id JOIN string_values sys ON sys.string_id=g.system_string_id JOIN string_values refkind ON refkind.string_id=lt.launch_ref_kind_string_id JOIN string_values core ON core.string_id=lt.core_string_id LEFT JOIN string_values profile ON profile.string_id=lt.profile_string_id LEFT JOIN profiles p ON p.profile_id=profile.value LEFT JOIN string_values mount ON mount.string_id=lt.mount_kind_string_id LEFT JOIN path_values lp ON lp.path_id=lt.launch_path_id LEFT JOIN path_chunks lc ON lc.chunk_id=lp.chunk_id LEFT JOIN path_values pp ON pp.path_id=lt.payload_path_id LEFT JOIN path_chunks pc ON pc.chunk_id=pp.chunk_id LEFT JOIN path_values sp ON sp.path_id=lt.source_path_id LEFT JOIN path_chunks sc ON sc.chunk_id=sp.chunk_id WHERE lt.launch_id={launch_id}"
-            )]);
-        }
-        if action == "prepared" {
-            let collection = args
-                .get(1)
-                .ok_or_else(|| "catalog-inspect prepared needs COLLECTION".to_string())?;
-            let collection = collection.replace('\'', "''");
-            return library_db::run_sqlite_inspect_cli(&[format!(
-                "SELECT p.launch_id,g.title,s.value AS system_id,p.collection_id,p.launch_quality,p.adapter_version FROM prepared_launch_rows p JOIN game_rows g ON g.game_key_id=p.launch_id JOIN string_values s ON s.string_id=g.system_string_id WHERE p.collection_id='{collection}' ORDER BY p.launch_id"
-            )]);
-        }
-
-        let sqlite_path = mister_magik_catalog::catalog_config::default_sqlite_path();
-        let stamp = library_db::read_sqlite_catalog_stamp(&sqlite_path)?
-            .ok_or_else(|| format!("{} has no catalog stamp", sqlite_path.display()))?;
-        let loaded = library_db::load_arcade_catalog_from_navigation_projection(
-            DEFAULT_ARCADE_ROOT,
-            &sqlite_path,
-            &stamp,
-        )?
-        .ok_or_else(|| "catalog navigation projection is missing or stale".to_string())?;
-        let catalog = loaded.catalog;
-        match action {
-            "filter-options" => {
-                let collection_id = args
-                    .get(1)
-                    .map(String::as_str)
-                    .unwrap_or(mister_magik_catalog::arcade_catalog::MENU_ARCADE_SYSTEM_ID);
-                let hydrated =
-                    library_db::load_arcade_catalog_from_materialized_sqlite(DEFAULT_ARCADE_ROOT)?;
-                let mismatches = hydrated.catalog.filter_option_mismatches(&catalog);
-                let mut out = catalog_filter_inspection_tsv("navigation", collection_id, &catalog);
-                out.push_str(&catalog_filter_inspection_tsv(
-                    "sqlite",
-                    collection_id,
-                    &hydrated.catalog,
-                ));
-                out.push_str(&format!(
-                    "catalog_filter_parity_tsv\tcollection={}\tstatus={}\tmismatched_collections={}\n",
-                    sanitize_tsv_field(collection_id),
-                    if mismatches.is_empty() { "ok" } else { "mismatch" },
-                    mismatches.len()
-                ));
-                for mismatch in mismatches {
-                    out.push_str(&format!(
-                        "catalog_filter_mismatch_tsv\tdetail={}\n",
-                        sanitize_tsv_field(&mismatch)
-                    ));
-                }
-                Ok(out)
-            }
-            "find-launch-ref" => {
-                let launch_refs =
-                    args.get(1..)
-                        .filter(|refs| !refs.is_empty())
-                        .ok_or_else(|| {
-                            "catalog-inspect find-launch-ref needs one or more REF values"
-                                .to_string()
-                        })?;
-                let mut lookup = launch_refs
-                    .iter()
-                    .map(|launch_ref| (launch_ref.as_str(), None))
-                    .collect::<std::collections::HashMap<_, _>>();
-                for (index, game) in catalog.games.iter().enumerate() {
-                    let target = catalog.launch_target_for_ref(&game.mra_path);
-                    for (requested_ref, found) in &mut lookup {
-                        if found.is_none()
-                            && (game.mra_path.as_ref() == *requested_ref
-                                || matches!(&target, LaunchTarget::Structured(plan) if plan.payload_path.as_ref() == *requested_ref))
-                        {
-                            *found = Some(index);
-                        }
-                    }
-                }
-                let header = "launch_ref\ttitle\tsystem_id\tkind\tcore_path\tpayload_path\tmount_kind\tmount_index\tdelay_secs\n";
-                let mut out = header.to_string();
-                for requested_ref in launch_refs {
-                    let index = lookup.get(requested_ref.as_str()).copied().flatten();
-                    let Some(index) = index else {
-                        continue;
-                    };
-                    let game = &catalog.games[index];
-                    let target = catalog.launch_target_for_ref(&game.mra_path);
-                    let row = match target {
-                        LaunchTarget::Structured(plan) => format!(
-                            "{}\t{}\t{}\tstructured\t{}\t{}\t{}\t{}\t{}\n",
-                            plan.launch_ref,
-                            plan.title,
-                            plan.system_id,
-                            plan.core_path,
-                            plan.payload_path,
-                            plan.mount_kind,
-                            plan.mount_index,
-                            plan.delay_secs
-                        ),
-                        LaunchTarget::Prepared(selection) => format!(
-                            "{}\t{}\t{}\tprepared\t\t\t\t\t\n",
-                            selection.launch_ref, game.title, game.system_id
-                        ),
-                        LaunchTarget::Path(path) => format!(
-                            "{}\t{}\t{}\tpath\t\t\t\t\t\n",
-                            path, game.title, game.system_id
-                        ),
-                        LaunchTarget::MissingStructured(path) => format!(
-                            "{}\t{}\t{}\tmissing-structured\t\t\t\t\t\n",
-                            path, game.title, game.system_id
-                        ),
-                    };
-                    out.push_str(&row);
-                }
-                Ok(out)
-            }
-            _ => Err(format!("unknown catalog-inspect action: {action}")),
-        }
-    })();
-
-    match result {
-        Ok(output) => crate::ui_log!("{output}"),
-        Err(error) => {
-            crate::ui_errln!("catalog_inspect\tfailed\t{error}");
-            std::process::exit(1);
-        }
-    }
 }
 
 #[cfg(test)]

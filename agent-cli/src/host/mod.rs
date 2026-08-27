@@ -46,11 +46,10 @@ pub(crate) use startup_particles::SceneLabRequest;
 
 use agent_client::{
     AGENT_PORT, AgentEndpoint, agent_framebuffer_capture_stream,
-    agent_framebuffer_stream_for_duration, agent_library_snapshot_stream, agent_request,
-    agent_request_at, agent_request_with_liveness, agent_runtime_upload_at,
-    agent_telemetry_for_duration, agent_telemetry_for_duration_at_cadence,
-    agent_telemetry_for_duration_with_mode, agent_telemetry_until_screensaver_profile_complete,
-    bootstrap_agent_with,
+    agent_framebuffer_stream_for_duration, agent_request, agent_request_at,
+    agent_request_with_liveness, agent_runtime_upload_at, agent_telemetry_for_duration,
+    agent_telemetry_for_duration_at_cadence, agent_telemetry_for_duration_with_mode,
+    agent_telemetry_until_screensaver_profile_complete, bootstrap_agent_with,
 };
 use platform_deploy::*;
 use remote::{
@@ -92,7 +91,7 @@ static DEVELOPMENT_AGENT_REMOTE: LazyLock<String> = LazyLock::new(|| {
 static DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND: LazyLock<String> =
     LazyLock::new(|| development_gui_command("benchmark-capabilities"));
 static DEVELOPMENT_CATALOG_REGISTRY_REPORT_COMMAND: LazyLock<String> =
-    LazyLock::new(|| development_gui_command("catalog-v3-registry-report"));
+    LazyLock::new(|| development_gui_command("catalog-registry-report"));
 const RETURN_CATALOG_CAPSULE_REMOTE: &str = "/tmp/mister-magik/launcher-return-catalog.json";
 const MAIN_STATUS_REMOTE: &str = "/tmp/mister-magik/main-status.json";
 const SLINT_STATUS_REMOTE: &str = "/tmp/mister-magik/status.json";
@@ -389,6 +388,9 @@ impl NativeDevice {
                         | LauncherCommand::CaptureSnesHub(_)
                         | LauncherCommand::ReturnToLauncher(_),
                 }
+                | DeviceCommand::Catalog {
+                    command: CatalogCommand::FastFiveOldCold(_),
+                }
                 | DeviceCommand::Fpga {
                     command: DeviceFpgaCommand::InstallExperimental(_)
                         | DeviceFpgaCommand::InstallExperimentalAgent(_),
@@ -595,6 +597,48 @@ impl NativeDevice {
                         &args.sql,
                     ])),
                     CatalogCommand::Cores => core_list(),
+                    CatalogCommand::FastFivePrototype(args) => run_fast_five_catalog_prototype(
+                        &prepared.config,
+                        &args.binary,
+                        &args.out,
+                        &args.input_encoding,
+                        &args.artifact_profile,
+                        args.generic_examples,
+                    ),
+                    CatalogCommand::FastFiveC64Experiments(args) => {
+                        run_fast_five_c64_experiments(&prepared.config, &args.binary, &args.out)
+                    }
+                    CatalogCommand::FastFiveExperiments(args) => {
+                        run_fast_five_experiments(&prepared.config, &args.binary, &args.out)
+                    }
+                    CatalogCommand::FastFivePprof(args) => run_fast_five_pprof(
+                        &prepared.config,
+                        &args.binary,
+                        &args.out,
+                        &args.input_encoding,
+                        &args.artifact_profile,
+                    ),
+                    CatalogCommand::FastRefreshPprof(args) => run_fast_refresh_pprof(
+                        &prepared.config,
+                        &args.binary,
+                        &args.out,
+                        &args.scenario,
+                    ),
+                    CatalogCommand::FastRefreshBenchmark(args) => run_fast_refresh_benchmark(
+                        &prepared.config,
+                        &args.binary,
+                        &args.out,
+                        &args.scenario,
+                    ),
+                    CatalogCommand::FastSourceAb(args) => {
+                        run_fast_source_ab(&prepared.config, &args.binary, &args.out)
+                    }
+                    CatalogCommand::FastMediaAb(args) => {
+                        run_fast_media_ab(&prepared.config, &args.binary, &args.out)
+                    }
+                    CatalogCommand::FastFiveOldCold(args) => {
+                        run_fast_five_old_cold_matrix(&prepared.config, &args.out, &args.target_set)
+                    }
                     CatalogCommand::Purge(_) => purge_development_library_data_and_reboot(),
                 },
                 DeviceCommand::Media { command } => match command {
@@ -965,6 +1009,16 @@ impl NativeDevice {
     ) -> std::result::Result<String, DeviceFailure> {
         self.benchmark_profile(|config| {
             profile_installed_catalog_corpus_inventory(config, output_dir)
+        })
+    }
+
+    pub(crate) fn profile_arcade_catalog_prototype(
+        &mut self,
+        binary: &Path,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_arcade_catalog_prototype(config, binary, output_dir)
         })
     }
 
@@ -1533,7 +1587,7 @@ impl NativeDevice {
         let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
         let inspect = exec(
             &session,
-            &format!("{PUBLIC_GUI_REMOTE} catalog-v3-inspect"),
+            &format!("{PUBLIC_GUI_REMOTE} catalog-inspect"),
             true,
         )
         .map_err(device_failure)?;
@@ -5548,7 +5602,7 @@ fn release_begin_command() -> String {
 
 fn release_catalog_command() -> String {
     format!(
-        "set -eu; test -s {RELEASE_TOKEN}; {active}; report=$(\"$root/mister-magik-fb\" catalog-v3-inspect); printf '%s\\n' \"$report\" | grep -Eq 'catalog_v3_summary_tsv[[:space:]]+valid=1'",
+        "set -eu; test -s {RELEASE_TOKEN}; {active}; report=$(\"$root/mister-magik-fb\" catalog-inspect); printf '%s\\n' \"$report\" | grep -Eq 'catalog_summary_tsv[[:space:]]+valid=1'",
         active = active_installed_root_assignment(),
     )
 }
@@ -6031,6 +6085,8 @@ const CATALOG_LIFECYCLE_REMOTE_DIR: &str = "/tmp/mister-magik/catalog-lifecycle-
 const CATALOG_BUILD_REBUILD_REMOTE_DIR: &str =
     "/media/fat/mister-magik-dev/catalog-benchmarks/catalog-build-rebuild";
 const CATALOG_BUILD_REBUILD_SOURCE_DIR: &str = "/tmp/mister-magik/catalog-build-rebuild-source";
+const PREPARED_BUNDLE_HELPER_REMOTE_DIR: &str =
+    "/media/fat/mister-magik-dev/prepared-bundle-helpers";
 const CATALOG_BUILD_REBUILD_ARCADE_ROOT: &str = "/media/fat/_Arcade";
 const CATALOG_BUILD_REBUILD_SNES_ROOT: &str = "/media/fat/games/SNES";
 const CATALOG_BUILD_REBUILD_C64_ROOT: &str = "/media/fat/games/C64";
@@ -15562,19 +15618,6 @@ fn compact_agent_io_result(
     }))
 }
 
-fn retired_library_snapshot_attempt(error: &str, repetition: u8) -> Option<Value> {
-    let retired = installed_layout::app_path(Layout::Development, "library.sqlite3")
-        .expect("static installed path");
-    (error.contains(&retired) && error.contains("No such file or directory")).then(|| {
-        json!({
-            "label": "library-snapshot",
-            "repetition": repetition,
-            "status": "not-applicable",
-            "reason": "library.sqlite3 is retired in the exact installed Catalog V3 layout",
-        })
-    })
-}
-
 fn run_agent_io_capture_set(
     endpoint: &AgentEndpoint,
     screen: &str,
@@ -15696,32 +15739,6 @@ fn run_agent_io_operation_sequence(
         )?;
         modal_input_action(config, &nonce, AutomationAction::ReleaseAll)?;
         run_agent_io_capture_set(&endpoint, "high-entropy-arcade", &mut operations)?;
-        for repetition in 1..=2 {
-            match agent_library_snapshot_stream(&endpoint) {
-                Ok(snapshot) => {
-                    if snapshot.payload.len()
-                        != snapshot.response["result"]["payload_bytes"]
-                            .as_u64()
-                            .unwrap_or(u64::MAX) as usize
-                    {
-                        return Err("library snapshot payload length changed in transport".into());
-                    }
-                    operations.push(compact_agent_io_result(
-                        agent_io_result(snapshot.response, "library snapshot")?,
-                        "library-snapshot",
-                        repetition,
-                        snapshot.elapsed_ms,
-                    )?);
-                }
-                Err(error) => {
-                    let error = error.to_string();
-                    operations.push(
-                        retired_library_snapshot_attempt(&error, repetition)
-                            .ok_or_else(|| format!("library snapshot failed: {error}"))?,
-                    );
-                }
-            }
-        }
         for v2 in [false, true] {
             for repetition in 1..=2 {
                 let (listing, elapsed_ms) = agent_io_list(&endpoint, directory, v2)?;
@@ -18141,7 +18158,7 @@ fn profile_installed_catalog_lifecycle(
 
             let inspect = exec(
                 &session,
-                &catalog_lifecycle_runtime_command("catalog-v3-inspect"),
+                &catalog_lifecycle_runtime_command("catalog-inspect"),
                 true,
             )?;
             if exec_failure_message("catalog lifecycle inspect", &inspect).is_none() {
@@ -20418,6 +20435,601 @@ fn validate_attended_launch_return_summary(summary: &Value, output_dir: &Path) -
 }
 const LAUNCH_RETURN_ONCE_STEP_DEADLINE_MS: u64 = 2_000;
 
+const ARCADE_CATALOG_PROTOTYPE_REMOTE_ROOT: &str =
+    "/media/fat/mister-magik-dev/catalog-benchmarks/arcade-catalog-prototype";
+const ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY: &str = "/media/fat/mister-magik-dev/catalog-benchmarks/arcade-catalog-prototype/arcade-catalog-prototype";
+const ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY_UPLOAD: &str = "/media/fat/mister-magik-dev/catalog-benchmarks/arcade-catalog-prototype/arcade-catalog-prototype.upload";
+const ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE: &str =
+    "/media/fat/mister-magik-dev/catalog-benchmarks/arcade-catalog-prototype/source-base.bin";
+const ARCADE_CATALOG_PROTOTYPE_REMOTE_FILTERED_INDEX: &str =
+    "/media/fat/mister-magik-dev/catalog-benchmarks/arcade-catalog-prototype/filtered-index.lz4b";
+const ARCADE_CATALOG_PROTOTYPE_REMOTE_FILTERED_BASE: &str =
+    "/media/fat/mister-magik-dev/catalog-benchmarks/arcade-catalog-prototype/filtered-base.bin";
+const ARCADE_CATALOG_PROTOTYPE_UPDATER_INDEX: &str =
+    "/media/fat/mister-magik-dev/arcade-updater-index-v1.lz4b";
+const ARCADE_CATALOG_PROTOTYPE_UNKNOWN_TARGET: &str = "_Arcade/1942 (Revision B).mra";
+
+fn compile_arcade_prototype_base(
+    session: &Session,
+    index_path: &str,
+    base_path: &str,
+    label: &str,
+) -> Result<(Value, Value)> {
+    let compile_arguments = [
+        "--updater-index".to_string(),
+        index_path.to_string(),
+        "--output".to_string(),
+        base_path.to_string(),
+    ];
+    let compile_command = remote_subcommand(
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY,
+        "compile-base",
+        &compile_arguments,
+    );
+    let compile_output = exec_checked_output(
+        session,
+        &format!("compile {label} Arcade prototype base"),
+        &compile_command,
+    )?;
+    let compile_report: Value =
+        serde_json::from_str(compile_output.stdout.trim()).map_err(|error| {
+            format!("Arcade catalog prototype {label} base output is not JSON: {error}")
+        })?;
+    if compile_report.get("command").and_then(Value::as_str) != Some("compile-base") {
+        return Err(
+            format!("Arcade catalog prototype {label} base output has the wrong command").into(),
+        );
+    }
+    let inspect_command = remote_subcommand(
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY,
+        "inspect",
+        &["--input".to_string(), base_path.to_string()],
+    );
+    let inspect_output = exec_checked_output(
+        session,
+        &format!("inspect {label} Arcade prototype base"),
+        &inspect_command,
+    )?;
+    let inspect: Value = serde_json::from_str(inspect_output.stdout.trim()).map_err(|error| {
+        format!("Arcade catalog prototype {label} base inspection is not JSON: {error}")
+    })?;
+    if inspect.get("kind").and_then(Value::as_str) != Some("base")
+        || inspect.get("records").and_then(Value::as_u64)
+            != compile_report
+                .pointer("/compile/source_rows")
+                .and_then(Value::as_u64)
+        || inspect.get("source_sha256").and_then(Value::as_str)
+            != compile_report.get("source_sha256").and_then(Value::as_str)
+    {
+        return Err(format!(
+            "Arcade catalog prototype {label} base inspection disagrees with compile report"
+        )
+        .into());
+    }
+    Ok((compile_report, inspect))
+}
+
+fn profile_arcade_catalog_prototype(
+    config: &NativeDeviceConfig,
+    binary: &Path,
+    output_dir: &Path,
+) -> Result<String> {
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    let run = profile_arcade_catalog_prototype_run(config, binary, output_dir);
+    let cleanup = cleanup_arcade_catalog_prototype(config);
+    match (run, cleanup) {
+        (Ok(summary), Ok(())) => Ok(summary),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(cleanup)) => Err(format!(
+            "Arcade catalog prototype cleanup failed after a successful run: {cleanup}"
+        )
+        .into()),
+        (Err(run), Err(cleanup)) => Err(format!(
+            "Arcade catalog prototype failed: {run}; cleanup also failed: {cleanup}"
+        )
+        .into()),
+    }
+}
+
+fn profile_arcade_catalog_prototype_run(
+    config: &NativeDeviceConfig,
+    binary: &Path,
+    output_dir: &Path,
+) -> Result<String> {
+    if !binary.is_file() {
+        return Err(format!(
+            "Arcade catalog prototype binary is missing: {}",
+            binary.display()
+        )
+        .into());
+    }
+    fs::create_dir_all(output_dir)?;
+    let binary_sha256 = file_sha256(binary.to_path_buf())?;
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "Arcade catalog prototype safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    exec_checked(
+        &session,
+        "prepare isolated Arcade catalog prototype root",
+        &format!(
+            "set -eu; rm -rf {root}; mkdir -p {root}",
+            root = sh(ARCADE_CATALOG_PROTOTYPE_REMOTE_ROOT),
+        ),
+    )?;
+    put(
+        &session,
+        binary,
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY_UPLOAD,
+    )?;
+    exec_checked(
+        &session,
+        "verify and publish exact Arcade catalog prototype binary",
+        &format!(
+            "set -eu; test \"$(sha256sum {upload} | cut -d' ' -f1)\" = {expected}; chmod 755 {upload}; mv -f {upload} {binary}; sync; test -x {binary}; test \"$(sha256sum {binary} | cut -d' ' -f1)\" = {expected}; test -s {index}; test -d /media/fat/_Arcade",
+            upload = sh(ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY_UPLOAD),
+            binary = sh(ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY),
+            expected = sh(&binary_sha256),
+            index = sh(ARCADE_CATALOG_PROTOTYPE_UPDATER_INDEX),
+        ),
+    )?;
+    let updater_local = output_dir.join("source-index.lz4b");
+    get(
+        &session,
+        ARCADE_CATALOG_PROTOTYPE_UPDATER_INDEX,
+        &updater_local,
+    )?;
+    let updater_bytes = fs::read(&updater_local)?;
+    let mut filtered_index =
+        mister_magik_catalog::arcade_updater_index::ArcadeUpdaterIndex::decode(&updater_bytes)
+            .map_err(|error| format!("decode copied Arcade updater index: {error}"))?;
+    let target_position = filtered_index
+        .rows
+        .iter()
+        .position(|row| row.path == ARCADE_CATALOG_PROTOTYPE_UNKNOWN_TARGET)
+        .ok_or("Arcade unknown-content target is absent from Update_All")?;
+    let target = filtered_index.rows.remove(target_position);
+    let target_rbf = target
+        .header
+        .rbf
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or("Arcade unknown-content target has no RBF")?;
+    let (rom_directories, target_rom) = match &target.primary_rom {
+        mister_magik_catalog::mra_header::PrimaryRomRequirement::Archive { namespace, setname } => {
+            let directories = match namespace {
+                mister_magik_catalog::mra_header::RomNamespace::Mame => {
+                    ["/media/fat/games/mame", "/media/fat/_Arcade/mame"]
+                }
+                mister_magik_catalog::mra_header::RomNamespace::Hbmame => {
+                    ["/media/fat/games/hbmame", "/media/fat/_Arcade/hbmame"]
+                }
+            };
+            (directories, setname.clone())
+        }
+        _ => return Err("Arcade unknown-content target has no unambiguous ROM archive".into()),
+    };
+    let target_mra = format!("/media/fat/{}", target.path);
+    let target_rom_name = format!("{target_rom}.zip");
+    let target_rom_paths = rom_directories
+        .iter()
+        .map(|directory| format!("{directory}/{target_rom_name}"))
+        .collect::<Vec<_>>();
+    let target_core_pattern = format!("{target_rbf}*.rbf");
+    exec_checked(
+        &session,
+        "verify installed unknown-content benchmark target",
+        &format!(
+            "set -eu; test -f {mra}; (test -f {rom0} || test -f {rom1}); test -n \"$(find /media/fat/_Arcade/cores -maxdepth 1 -type f -iname {core} -print -quit)\"",
+            mra = sh(&target_mra),
+            rom0 = sh(&target_rom_paths[0]),
+            rom1 = sh(&target_rom_paths[1]),
+            core = sh(&target_core_pattern),
+        ),
+    )?;
+    let filtered_index_local = output_dir.join("filtered-index.lz4b");
+    fs::write(
+        &filtered_index_local,
+        filtered_index
+            .encode()
+            .map_err(|error| format!("encode filtered Arcade updater index: {error}"))?,
+    )?;
+    put(
+        &session,
+        &filtered_index_local,
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_FILTERED_INDEX,
+    )?;
+    let filtered_index_sha256 = file_sha256(filtered_index_local)?;
+    let remote_filtered_index_sha256 = streamline_remote_sha256(
+        &session,
+        "filtered Arcade updater index",
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_FILTERED_INDEX,
+    )?;
+    if filtered_index_sha256 != remote_filtered_index_sha256 {
+        return Err("filtered Arcade updater index upload hash changed".into());
+    }
+    let (compile_report, base_inspect) = compile_arcade_prototype_base(
+        &session,
+        ARCADE_CATALOG_PROTOTYPE_UPDATER_INDEX,
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE,
+        "immutable source",
+    )?;
+    let (filtered_compile_report, filtered_base_inspect) = compile_arcade_prototype_base(
+        &session,
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_FILTERED_INDEX,
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_FILTERED_BASE,
+        "filtered source",
+    )?;
+    exec_checked(
+        &session,
+        "persist Arcade prototype source bases",
+        &format!(
+            "set -eu; test -s {base}; test -s {filtered}; sync",
+            base = sh(ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE),
+            filtered = sh(ARCADE_CATALOG_PROTOTYPE_REMOTE_FILTERED_BASE),
+        ),
+    )?;
+    let base_local = output_dir.join("source-base.bin");
+    get(&session, ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE, &base_local)?;
+    let base_sha256 = file_sha256(base_local)?;
+    let remote_base_sha256 = streamline_remote_sha256(
+        &session,
+        "Arcade catalog prototype source base",
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE,
+    )?;
+    if remote_base_sha256 != base_sha256 {
+        return Err("downloaded Arcade catalog prototype source base hash changed".into());
+    }
+    let filtered_base_local = output_dir.join("filtered-base.bin");
+    get(
+        &session,
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_FILTERED_BASE,
+        &filtered_base_local,
+    )?;
+    let filtered_base_sha256 = file_sha256(filtered_base_local)?;
+    let remote_filtered_base_sha256 = streamline_remote_sha256(
+        &session,
+        "filtered Arcade catalog prototype source base",
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_FILTERED_BASE,
+    )?;
+    if remote_filtered_base_sha256 != filtered_base_sha256 {
+        return Err("downloaded filtered Arcade prototype base hash changed".into());
+    }
+    drop(session);
+
+    let samples = vec![
+        run_arcade_catalog_prototype_cold_sample(
+            config,
+            output_dir,
+            "indexed-fast",
+            ARCADE_CATALOG_PROTOTYPE_REMOTE_BASE,
+            false,
+            &binary_sha256,
+            &base_sha256,
+        )?,
+        run_arcade_catalog_prototype_cold_sample(
+            config,
+            output_dir,
+            "filtered-fast",
+            ARCADE_CATALOG_PROTOTYPE_REMOTE_FILTERED_BASE,
+            false,
+            &binary_sha256,
+            &filtered_base_sha256,
+        )?,
+        run_arcade_catalog_prototype_cold_sample(
+            config,
+            output_dir,
+            "filtered-full-walk",
+            ARCADE_CATALOG_PROTOTYPE_REMOTE_FILTERED_BASE,
+            true,
+            &binary_sha256,
+            &filtered_base_sha256,
+        )?,
+    ];
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_after = catalog_production_registry_identity(&session)?;
+    let production_registry_unchanged = production_registry_after == production_registry_before;
+    drop(session);
+    let records = |index: usize| {
+        samples[index]
+            .pointer("/report/build/active_records")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    };
+    let total_us = |index: usize| {
+        samples[index]
+            .pointer("/report/total_us")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    };
+    let target_recovered = samples[2]
+        .pointer("/report/build/fallback_paths")
+        .and_then(Value::as_array)
+        .is_some_and(|paths| {
+            paths.iter().any(|path| {
+                path.as_str()
+                    .is_some_and(|path| path == ARCADE_CATALOG_PROTOTYPE_UNKNOWN_TARGET)
+            })
+        });
+    let filtered_fast_omits_target = records(0) == records(1).saturating_add(1);
+    let full_walk_restores_target = records(2) >= records(0) && target_recovered;
+    let recovery_extra_us = total_us(2).saturating_sub(total_us(0));
+    let status = if production_registry_unchanged
+        && total_us(0) > 0
+        && total_us(1) > 0
+        && total_us(2) > 0
+        && filtered_fast_omits_target
+        && full_walk_restores_target
+    {
+        "passed"
+    } else {
+        "failed"
+    };
+    let summary = json!({
+        "schema": "mister-magik-arcade-catalog-prototype-cold-v5",
+        "scenario": "arcade-catalog-prototype-cold",
+        "status": status,
+        "binary_sha256": binary_sha256,
+        "source_base_sha256": base_sha256,
+        "source_base_compile": compile_report,
+        "source_base_inspect": base_inspect,
+        "filtered_index_sha256": filtered_index_sha256,
+        "filtered_base_sha256": filtered_base_sha256,
+        "filtered_base_compile": filtered_compile_report,
+        "filtered_base_inspect": filtered_base_inspect,
+        "unknown_target": {
+            "path": target.path,
+            "rbf": target_rbf,
+            "rom": target_rom,
+        },
+        "production_registry": {
+            "before": production_registry_before,
+            "after": production_registry_after,
+            "unchanged": production_registry_unchanged,
+        },
+        "samples": samples,
+        "validation": {
+            "single_worker_policy": true,
+            "filtered_fast_omits_target": filtered_fast_omits_target,
+            "full_walk_restores_target": full_walk_restores_target,
+            "recovery_extra_us": recovery_extra_us,
+        },
+    });
+    let summary_text = format!("{}\n", serde_json::to_string_pretty(&summary)?);
+    fs::write(output_dir.join("summary.json"), &summary_text)?;
+    if status != "passed" {
+        return Err("Arcade catalog prototype unknown-content recovery did not pass".into());
+    }
+    Ok(summary_text)
+}
+
+fn run_arcade_catalog_prototype_cold_sample(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    arm: &str,
+    base_remote: &str,
+    full_walk: bool,
+    binary_sha256: &str,
+    base_sha256: &str,
+) -> Result<Value> {
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "Arcade catalog prototype reboot safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    require_catalog_benchmark_active("Arcade prototype reboot")?;
+    let boot_id_before = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("Arcade catalog prototype cannot read the initial boot id")?;
+    let host_reboot_started = Instant::now();
+    let reboot_mode = issue_reboot(&session, RebootMode::Supervised)?;
+    drop(session);
+    if !wait_down_with(&config.connection, 40.0) || wait_up_with(&config.connection, 120.0)? != 0 {
+        return Err(format!("Arcade catalog prototype {arm} reboot did not complete").into());
+    }
+    require_catalog_benchmark_active("Arcade prototype post-reboot verification")?;
+    let host_reboot_elapsed_ms = host_reboot_started.elapsed().as_millis() as u64;
+    let session = connect_with(&config.connection, 10)?;
+    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
+    require_catalog_benchmark_active("Arcade prototype launcher suspension")?;
+    let boot_id_after = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("Arcade catalog prototype cannot read the final boot id")?;
+    if boot_id_after.trim() == boot_id_before.trim() {
+        return Err(format!("Arcade catalog prototype {arm} did not observe a new boot").into());
+    }
+    let remote_binary_sha256 = streamline_remote_sha256(
+        &session,
+        "Arcade catalog prototype executable",
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY,
+    )?;
+    let remote_base_sha256 = streamline_remote_sha256(
+        &session,
+        "Arcade catalog prototype source base",
+        base_remote,
+    )?;
+    if remote_binary_sha256 != binary_sha256 || remote_base_sha256 != base_sha256 {
+        return Err(
+            format!("Arcade catalog prototype {arm} remote artifact identity changed").into(),
+        );
+    }
+    exec_checked(
+        &session,
+        "suspend launcher for isolated Arcade catalog prototype",
+        &acknowledged_main_command("mister_magik_suspend"),
+    )?;
+    require_catalog_benchmark_active("Arcade prototype cache clearing")?;
+
+    let active_remote = format!("{ARCADE_CATALOG_PROTOTYPE_REMOTE_ROOT}/active-{arm}.bin");
+    let clear_command = format!(
+        "set -eu; rm -f {active}; test -s {base}; sync; test -w /proc/sys/vm/drop_caches; echo 3 > /proc/sys/vm/drop_caches",
+        active = sh(&active_remote),
+        base = sh(base_remote),
+    );
+    exec_checked(
+        &session,
+        "clear caches for Arcade catalog prototype cold sample",
+        &clear_command,
+    )?;
+    require_catalog_benchmark_active("Arcade prototype active build")?;
+    let mut arguments = vec![
+        "build-active".to_string(),
+        "--base".to_string(),
+        base_remote.to_string(),
+        "--output".to_string(),
+        active_remote.clone(),
+    ];
+    if full_walk {
+        arguments.push("--full-walk".to_string());
+    }
+    let prototype_command = remote_subcommand(
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY,
+        &arguments[0],
+        &arguments[1..],
+    );
+    let output = exec_checked_output(
+        &session,
+        &format!("run Arcade catalog prototype {arm} cold sample"),
+        &format!("MALLOC_ARENA_MAX=2 {prototype_command}"),
+    )?;
+    let report: Value = serde_json::from_str(output.stdout.trim())
+        .map_err(|error| format!("Arcade catalog prototype {arm} output is not JSON: {error}"))?;
+    if report.get("command").and_then(Value::as_str) != Some("build-active") {
+        return Err(format!("Arcade catalog prototype {arm} output has the wrong command").into());
+    }
+    require_catalog_benchmark_active("Arcade prototype output inspection")?;
+    let inspect_command = remote_subcommand(
+        ARCADE_CATALOG_PROTOTYPE_REMOTE_BINARY,
+        "inspect",
+        &["--input".to_string(), active_remote.clone()],
+    );
+    let inspect_output = exec_checked_output(
+        &session,
+        &format!("inspect Arcade catalog prototype {arm} output"),
+        &inspect_command,
+    )?;
+    let inspect: Value = serde_json::from_str(inspect_output.stdout.trim()).map_err(|error| {
+        format!("Arcade catalog prototype {arm} inspection is not JSON: {error}")
+    })?;
+    let inspection_matches = inspect.get("kind").and_then(Value::as_str) == Some("active")
+        && inspect.get("bytes").and_then(Value::as_u64)
+            == report.get("output_bytes").and_then(Value::as_u64)
+        && inspect.get("source_sha256").and_then(Value::as_str)
+            == report.get("source_sha256").and_then(Value::as_str)
+        && inspect.get("records").and_then(Value::as_u64)
+            == report
+                .pointer("/build/active_records")
+                .and_then(Value::as_u64)
+        && inspect.get("preferred").and_then(Value::as_u64)
+            == report
+                .pointer("/build/preferred_families")
+                .and_then(Value::as_u64)
+        && inspect
+            .pointer("/counts/installed_mras")
+            .and_then(Value::as_u64)
+            == report
+                .pointer("/build/installed_mras")
+                .and_then(Value::as_u64)
+        && inspect
+            .pointer("/counts/index_hits")
+            .and_then(Value::as_u64)
+            == report
+                .pointer("/build/fast_path_hits")
+                .and_then(Value::as_u64)
+        && inspect.pointer("/counts/fallbacks").and_then(Value::as_u64)
+            == report
+                .pointer("/build/fallback_count")
+                .and_then(Value::as_u64)
+        && inspect
+            .pointer("/counts/skipped_missing_rom")
+            .and_then(Value::as_u64)
+            == report
+                .pointer("/build/skipped_missing_rom")
+                .and_then(Value::as_u64)
+        && inspect
+            .pointer("/counts/skipped_ambiguous")
+            .and_then(Value::as_u64)
+            == report
+                .pointer("/build/skipped_ambiguous")
+                .and_then(Value::as_u64)
+        && inspect
+            .pointer("/counts/skipped_invalid")
+            .and_then(Value::as_u64)
+            == report
+                .pointer("/build/skipped_invalid")
+                .and_then(Value::as_u64);
+    if !inspection_matches
+        || inspect.get("records").and_then(Value::as_u64).unwrap_or(0) == 0
+        || inspect
+            .get("preferred")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            == 0
+    {
+        return Err(format!(
+            "Arcade catalog prototype {arm} inspection disagrees with build report"
+        )
+        .into());
+    }
+    let remote_active_sha256 = streamline_remote_sha256(
+        &session,
+        &format!("Arcade catalog prototype {arm} output"),
+        &active_remote,
+    )?;
+    require_catalog_benchmark_active("Arcade prototype output retrieval")?;
+
+    let arm_output_dir = output_dir.join(arm);
+    fs::create_dir_all(&arm_output_dir)?;
+    let active_local = arm_output_dir.join("active.bin");
+    get(&session, &active_remote, &active_local)?;
+    fs::write(
+        arm_output_dir.join("report.json"),
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    let active_sha256 = file_sha256(active_local)?;
+    if active_sha256 != remote_active_sha256 {
+        return Err(format!("Arcade catalog prototype {arm} download hash changed").into());
+    }
+    exec_checked(
+        &session,
+        "resume launcher after Arcade catalog prototype",
+        &acknowledged_main_command("mister_magik_resume"),
+    )?;
+    wait_delivery_health(&session, "dev", Duration::from_secs(15))?;
+    Ok(json!({
+        "arm": arm,
+        "reboot_verified": true,
+        "reboot_mode": reboot_mode,
+        "host_reboot_elapsed_ms": host_reboot_elapsed_ms,
+        "cache_drop_verified": true,
+        "remote_binary_sha256_verified": remote_binary_sha256 == binary_sha256,
+        "remote_base_sha256_verified": remote_base_sha256 == base_sha256,
+        "remote_active_sha256_verified": remote_active_sha256 == active_sha256,
+        "base_sha256": base_sha256,
+        "full_walk": full_walk,
+        "active_sha256": active_sha256,
+        "report": report,
+        "inspect": inspect,
+    }))
+}
+
+fn cleanup_arcade_catalog_prototype(config: &NativeDeviceConfig) -> Result<()> {
+    let session = connect_with(&config.connection, 10)?;
+    let _ = exec(
+        &session,
+        &acknowledged_main_command("mister_magik_resume"),
+        true,
+    );
+    exec_checked(
+        &session,
+        "remove isolated Arcade catalog prototype root",
+        &format!("rm -rf {}", sh(ARCADE_CATALOG_PROTOTYPE_REMOTE_ROOT)),
+    )?;
+    wait_delivery_health(&session, "dev", Duration::from_secs(15))
+}
+
 const COLD_BOOT_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/cold-boot-profile";
 const COLD_BOOT_FRESH_ARCADE_INDEX: &str =
     "/tmp/mister-magik/cold-boot-fresh-arcade-bootstrap.nav.lz4b";
@@ -20445,7 +21057,14 @@ fn cold_boot_launcher_env(pprof: bool, fresh_catalog: bool) -> Vec<(String, Stri
     if pprof {
         env.extend([
             ("MISTER_PPROF".into(), "1".into()),
-            ("MISTER_PPROF_TRIGGER".into(), "cold-boot".into()),
+            (
+                "MISTER_PPROF_TRIGGER".into(),
+                if fresh_catalog {
+                    "cold-boot-catalog".into()
+                } else {
+                    "cold-boot".into()
+                },
+            ),
             ("MISTER_PPROF_HZ".into(), "999".into()),
             (
                 "MISTER_PPROF_OUT".into(),
@@ -20674,6 +21293,16 @@ fn profile_installed_cold_boot_run(
         .map_err(|error| format!("{error:?}"))?;
     let session = connect_with(&config.connection, 10)?;
     wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
+    if fresh_catalog {
+        wait_magik_startup_event(
+            &session,
+            "launcher_first_frame_presented",
+            Duration::from_secs(300),
+        )?;
+        if pprof {
+            wait_magik_startup_event(&session, "catalog_fresh_build", Duration::from_secs(300))?;
+        }
+    }
     wait_delivery_health(&session, "dev", Duration::from_secs(10))?;
     let host_recovery_elapsed_ms = host_started.elapsed().as_millis() as u64;
 
@@ -22865,13 +23494,27 @@ fn catalog_lifecycle_launcher_env() -> Vec<(String, String)> {
 
 fn catalog_build_rebuild_prepare_command() -> String {
     let safety = platform_safety_script();
+    let helper_setup = match std::env::var("MISTER_PREPARED_BUNDLE_BENCH_MODE").as_deref() {
+        Ok("capture") => format!(
+            "rm -rf {helpers}; mkdir -p {helpers};",
+            helpers = sh(PREPARED_BUNDLE_HELPER_REMOTE_DIR)
+        ),
+        _ => String::new(),
+    };
+    let cold = if std::env::var_os("MISTER_PREPARED_BUNDLE_BENCH_COLD").is_some() {
+        "sync; test -w /proc/sys/vm/drop_caches; echo 3 > /proc/sys/vm/drop_caches;"
+    } else {
+        ""
+    };
     format!(
-        "set -eu; root={root}; source={source}; test -d {arcade}; test -d {snes}; test -r {snes}; test -d {c64}; test -r {c64}; rm -rf \"$root\" \"$source\"; mkdir -p \"$root\" \"$source/fixture/games/SNES\" \"$source/sqlite-build\" \"$source/diagnostics\"; printf '%s\\n' 'MISTER-MAGIK-CATALOG-BENCH-SNES-00000001' > \"$source/fixture/games/SNES/Synthetic SNES 00000001.sfc\"; {safety}",
+        "set -eu; root={root}; source={source}; test -d {arcade}; test -d {snes}; test -r {snes}; test -d {c64}; test -r {c64}; rm -rf \"$root\" \"$source\"; mkdir -p \"$root\" \"$source/fixture/games/SNES\" \"$source/sqlite-build\" \"$source/diagnostics\"; printf '%s\\n' 'MISTER-MAGIK-CATALOG-BENCH-SNES-00000001' > \"$source/fixture/games/SNES/Synthetic SNES 00000001.sfc\"; {helper_setup} {cold} {safety}",
         root = sh(CATALOG_BUILD_REBUILD_REMOTE_DIR),
         source = sh(CATALOG_BUILD_REBUILD_SOURCE_DIR),
         arcade = sh(CATALOG_BUILD_REBUILD_ARCADE_ROOT),
         snes = sh(CATALOG_BUILD_REBUILD_SNES_ROOT),
         c64 = sh(CATALOG_BUILD_REBUILD_C64_ROOT),
+        helper_setup = helper_setup,
+        cold = cold,
         safety = safety,
     )
 }
@@ -22996,12 +23639,24 @@ fn catalog_production_registry_identity(session: &Session) -> Result<String> {
 }
 
 fn catalog_full_build_rebuild_launcher_env() -> Vec<(String, String)> {
-    catalog_build_rebuild_launcher_env()
+    let mut env = catalog_build_rebuild_launcher_env()
         .into_iter()
         .filter(|(key, _)| {
             key != "MISTER_LIBRARY_ROOTS" && key != "MISTER_LIBRARY_TARGET_ALLOWLIST"
         })
-        .collect()
+        .collect::<Vec<_>>();
+    match std::env::var("MISTER_PREPARED_BUNDLE_BENCH_MODE").as_deref() {
+        Ok("capture") => env.push((
+            "MISTER_PREPARED_BUNDLE_CAPTURE_DIR".into(),
+            PREPARED_BUNDLE_HELPER_REMOTE_DIR.into(),
+        )),
+        Ok("helper") => env.push((
+            "MISTER_PREPARED_BUNDLE_HELPER_DIR".into(),
+            PREPARED_BUNDLE_HELPER_REMOTE_DIR.into(),
+        )),
+        _ => {}
+    }
+    env
 }
 
 struct CatalogBuildRebuildLegOptions {
@@ -23178,7 +23833,7 @@ fn run_catalog_build_rebuild_leg(
                 return Err(format!("{label} catalog did not become visible: {status}").into());
             }
             if status.get("catalog_refresh_done").and_then(Value::as_bool) == Some(true) {
-                let inspect = exec(session, &runtime_command("catalog-v3-inspect"), true)?;
+                let inspect = exec(session, &runtime_command("catalog-inspect"), true)?;
                 if let Some(error) = exec_failure_message("catalog build/rebuild inspect", &inspect)
                 {
                     return Err(format!(
@@ -23244,7 +23899,7 @@ fn run_catalog_build_rebuild_leg(
             })?;
             validate_catalog_updater_index_evidence(evidence)?;
         }
-        if !catalog_benchmark_presented_home_arcade(&launcher_log) {
+        if exercise_arcade_ui && !catalog_benchmark_presented_home_arcade(&launcher_log) {
             return Err(format!(
                 "{label} catalog benchmark did not present Home with the Arcade system selected"
             )
@@ -23262,11 +23917,14 @@ fn run_catalog_build_rebuild_leg(
                 telemetry.get(start..interaction_telemetry_end.unwrap_or(telemetry.len()))
             })
             .unwrap_or(&telemetry);
-        let ui = catalog_build_rebuild_ui_summary(
-            &statuses,
-            interaction_telemetry,
-            interaction_started,
-        )?;
+        let ui = if exercise_arcade_ui {
+            catalog_build_rebuild_ui_summary(&statuses, interaction_telemetry, interaction_started)?
+        } else {
+            json!({
+                "status": "not-measured",
+                "reason": "catalog-only-leg",
+            })
+        };
         Ok(json!({
         "launcher_pid": final_status.get("pid"),
         "timing": {
@@ -30897,6 +31555,35 @@ fn wait_launcher_ready(
     .into())
 }
 
+fn wait_magik_startup_event(sess: &Session, event_name: &str, timeout: Duration) -> Result<()> {
+    let started = Instant::now();
+    let mut last_catalog_detail = String::new();
+    while started.elapsed() < timeout {
+        if remote_read(sess, "/tmp/mister-magik-slint.log").is_some_and(|log| {
+            parse_magik_startup_events(&log)
+                .iter()
+                .any(|event| event.get("event").and_then(Value::as_str) == Some(event_name))
+        }) {
+            return Ok(());
+        }
+        if let Some(status) = remote_read(sess, SLINT_STATUS_REMOTE)
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        {
+            last_catalog_detail = status
+                .get("catalog_scan_detail")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    Err(format!(
+        "launcher event {event_name} did not arrive after {}ms; last catalog detail={last_catalog_detail}",
+        timeout.as_millis()
+    )
+    .into())
+}
+
 fn wait_launcher_ready_after(
     sess: &Session,
     previous_pid: i64,
@@ -31416,6 +32103,1806 @@ fn display_route_status(sess: &Session) -> Result<()> {
     Ok(())
 }
 
+const FAST_FIVE_PROTOTYPE_REMOTE_BINARY: &str =
+    "/media/fat/mister-magik-dev/fast-five-tool/five-system-catalog-prototype";
+const FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD: &str =
+    "/media/fat/mister-magik-dev/fast-five-tool/.five-system-catalog-prototype.upload";
+const FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT: &str =
+    "/media/fat/mister-magik-dev/fast-five-tool/reference.json";
+const FAST_FIVE_POSTCARD_REMOTE_SNAPSHOT: &str =
+    "/media/fat/mister-magik-dev/fast-five-tool/reference.postcard";
+const FAST_FIVE_LZ4_REMOTE_SNAPSHOT: &str =
+    "/media/fat/mister-magik-dev/fast-five-tool/reference.postcard.lz4";
+const FAST_FIVE_MMAP_REMOTE_SNAPSHOT: &str =
+    "/media/fat/mister-magik-dev/fast-five-tool/reference.mmap";
+const FAST_FIVE_PROTOTYPE_REMOTE_ROOT: &str = "/media/fat/mister-magik-dev/fast-five-catalog";
+const FAST_FIVE_PROTOTYPE_REFERENCE_ROOT: &str = "/media/fat/mister-magik-dev/catalog-v3";
+const FAST_FIVE_C64_EXPERIMENT_ROOT: &str = "/media/fat/mister-magik-dev/fast-five-c64-experiments";
+const FAST_FIVE_C64_EXPERIMENT_SCRATCH: &str = "/tmp/mister-magik/fast-five-c64-experiments";
+const FAST_FIVE_PPROF_REMOTE_ROOT: &str = "/media/fat/mister-magik-dev/fast-five-pprof-catalog";
+const FAST_FIVE_PPROF_REMOTE_DIR: &str = "/tmp/mister-magik/fast-five-pprof";
+const FAST_FIVE_PPROF_REMOTE_SVG: &str = "/tmp/mister-magik/fast-five-pprof/profile.svg";
+const FAST_FIVE_PPROF_REMOTE_FOLDED: &str = "/tmp/mister-magik/fast-five-pprof/profile.folded";
+
+fn run_fast_five_catalog_prototype(
+    config: &NativeDeviceConfig,
+    binary: &Path,
+    output: &Path,
+    input_encoding: &str,
+    artifact_profile: &str,
+    generic_examples: bool,
+) -> Result<()> {
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    if !binary.is_file() {
+        return Err(format!(
+            "five-system catalog prototype binary is missing: {}",
+            binary.display()
+        )
+        .into());
+    }
+    let binary_sha256 = file_sha256(binary.to_path_buf())?;
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "fast-five prototype safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    exec_checked(
+        &session,
+        "prepare fast-five prototype staging",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "rm -rf {} {}",
+                sh("/media/fat/mister-magik-dev/fast-five-tool"),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT)
+            ),
+            format!(
+                "mkdir -p {}",
+                sh("/media/fat/mister-magik-dev/fast-five-tool")
+            ),
+        ]),
+    )?;
+    put(&session, binary, FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)?;
+    exec_checked(
+        &session,
+        "publish exact fast-five prototype binary",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "test \"$(sha256sum {} | cut -d' ' -f1)\" = {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(&binary_sha256)
+            ),
+            format!("chmod 755 {}", sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)),
+            format!(
+                "mv -f {} {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY)
+            ),
+            "sync".to_string(),
+        ]),
+    )?;
+    let base_snapshot = if generic_examples {
+        None
+    } else {
+        Some(exec_checked_output(
+            &session,
+            "capture five-system reference snapshot",
+            &format!(
+                "{} snapshot-reference --catalog-root {} --output {} --encoding {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+                sh(input_encoding),
+            ),
+        )?)
+    };
+    exec_checked(&session, "sync fast-five cold inputs", "sync")?;
+    drop(session);
+    agent_reboot_wait(&[])?;
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "fast-five post-reboot safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    let independent_build = if generic_examples {
+        Some(exec_checked_output(
+            &session,
+            "reboot-cold independent fast catalog source build",
+            &format!(
+                "{} build-independent --storage-root {} --output {} --encoding {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh("/media/fat"),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+                sh(input_encoding),
+            ),
+        )?)
+    } else {
+        None
+    };
+    let published = exec_checked_output(
+        &session,
+        "publish fast-five catalog",
+        &format!(
+            "{} publish --input {} --input-encoding {} --artifact-profile {} --output-root {}",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+            sh(input_encoding),
+            sh(artifact_profile),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT)
+        ),
+    )?;
+    let refresh_state = if generic_examples {
+        Some(exec_checked_output(
+            &session,
+            "publish fast catalog source snapshots",
+            &format!(
+                "{} write-refresh-state --input {} --input-encoding {} --catalog-root {} --storage-root {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+                sh(input_encoding),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+                sh("/media/fat"),
+            ),
+        )?)
+    } else {
+        None
+    };
+    let compared = exec_checked_output(
+        &session,
+        "verify fast-five catalog",
+        &format!(
+            "{} verify --input {} --input-encoding {} --candidate-root {}",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+            sh(input_encoding),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT)
+        ),
+    )?;
+    let snapshot = if let Some(build) = &independent_build {
+        parse_last_json_line("independent fast catalog source build", &build.stdout)?
+    } else {
+        parse_last_json_line(
+            "fast-five snapshot",
+            &base_snapshot
+                .as_ref()
+                .ok_or("missing five-system source snapshot")?
+                .stdout,
+        )?
+    };
+    let published = parse_last_json_line("fast-five publish", &published.stdout)?;
+    let compared = parse_last_json_line("fast-five comparison", &compared.stdout)?;
+    let expected_systems = if generic_examples { 9 } else { 5 };
+    if compared.get("status").and_then(Value::as_str) != Some("exact")
+        || published.get("systems").and_then(Value::as_u64) != Some(expected_systems)
+    {
+        return Err("fast catalog publication is incomplete or inexact".into());
+    }
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                (
+                    "MISTER_SHARDED_CATALOG_DIR".into(),
+                    FAST_FIVE_PROTOTYPE_REMOTE_ROOT.into(),
+                ),
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+            ],
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            timeout_secs: 30,
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    let status = read_launcher_status(&session)?;
+    let expected_fingerprint = published
+        .get("registry_fingerprint")
+        .and_then(Value::as_str)
+        .ok_or("fast-five publish report has no registry fingerprint")?;
+    if status.get("catalog_systems").and_then(Value::as_u64) != Some(expected_systems)
+        || status.get("catalog_ready").and_then(Value::as_bool) != Some(true)
+        || status.get("catalog_refresh_policy").and_then(Value::as_str) != Some("off")
+        || status.get("catalog_generation").and_then(Value::as_str) != Some(expected_fingerprint)
+    {
+        return Err(format!("real UI did not load the fast-five catalog: {status}").into());
+    }
+    let report = json!({
+        "schema": "mister-magik-fast-five-ui-prototype-v1",
+        "status": "passed",
+        "cold_boot_verified": true,
+        "binary_sha256": binary_sha256,
+        "input_encoding": input_encoding,
+        "artifact_profile": artifact_profile,
+        "generic_examples": generic_examples,
+        "independent_sources": generic_examples,
+        "snapshot": snapshot,
+        "published": published,
+        "refresh_state": refresh_state.as_ref().map(|output| parse_last_json_line("fast catalog source snapshots", &output.stdout)).transpose()?,
+        "comparison": compared,
+        "launcher": {
+            "catalog_systems": status.get("catalog_systems"),
+            "catalog_games": status.get("catalog_games"),
+            "catalog_ready": status.get("catalog_ready"),
+            "catalog_generation": status.get("catalog_generation"),
+            "selected_system_id": status.get("selected_system_id"),
+        },
+    });
+    if let Some(parent) = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(
+        output,
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    println!("fast_five_catalog_report={}", output.display());
+    Ok(())
+}
+
+fn run_fast_five_experiment_case(
+    config: &NativeDeviceConfig,
+    name: &str,
+    input: &str,
+    input_encoding: &str,
+    artifact_profile: &str,
+) -> Result<Value> {
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "prepare isolated fast-five experiment",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!("rm -rf {}", sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT)),
+            "sync".to_string(),
+        ]),
+    )?;
+    drop(session);
+    agent_reboot_wait(&[])?;
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "fast-five experiment post-reboot safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    let published_output = exec_checked_output(
+        &session,
+        "build reboot-cold fast-five experiment",
+        &format!(
+            "{} publish --input {} --input-encoding {} --artifact-profile {} --output-root {}",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(input),
+            sh(input_encoding),
+            sh(artifact_profile),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+        ),
+    )?;
+    let verified_output = exec_checked_output(
+        &session,
+        "verify fast-five experiment rows",
+        &format!(
+            "{} verify --input {} --candidate-root {}",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+        ),
+    )?;
+    let search_output = exec_checked_output(
+        &session,
+        "probe fast-five experiment search",
+        &format!(
+            "{} search-probe --input {} --candidate-root {}",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+        ),
+    )?;
+    let published =
+        parse_last_json_line("fast-five experiment publication", &published_output.stdout)?;
+    let verified =
+        parse_last_json_line("fast-five experiment verification", &verified_output.stdout)?;
+    let search = parse_last_json_line("fast-five experiment search probe", &search_output.stdout)?;
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                (
+                    "MISTER_SHARDED_CATALOG_DIR".into(),
+                    FAST_FIVE_PROTOTYPE_REMOTE_ROOT.into(),
+                ),
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+            ],
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            timeout_secs: 30,
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    let launcher = read_launcher_status(&session)?;
+    let exact = verified.get("status").and_then(Value::as_str) == Some("exact")
+        && verified.get("changed").and_then(Value::as_u64) == Some(0);
+    let ui_passed = launcher.get("catalog_ready").and_then(Value::as_bool) == Some(true)
+        && launcher.get("catalog_systems").and_then(Value::as_u64) == Some(5);
+    Ok(json!({
+        "name": name,
+        "cold_boot_verified": true,
+        "input_encoding": input_encoding,
+        "artifact_profile": artifact_profile,
+        "published": published,
+        "verification": verified,
+        "search": search,
+        "ui_passed": ui_passed,
+        "launcher": {
+            "catalog_ready": launcher.get("catalog_ready"),
+            "catalog_systems": launcher.get("catalog_systems"),
+            "catalog_games": launcher.get("catalog_games"),
+        },
+        "accepted": exact && ui_passed,
+    }))
+}
+
+fn run_fast_five_experiments(
+    config: &NativeDeviceConfig,
+    binary: &Path,
+    output: &Path,
+) -> Result<()> {
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    if !binary.is_file() {
+        return Err(format!(
+            "five-system catalog prototype binary is missing: {}",
+            binary.display()
+        )
+        .into());
+    }
+    if output.exists() {
+        return Err(format!(
+            "fast-five experiment output already exists: {}",
+            output.display()
+        )
+        .into());
+    }
+    fs::create_dir_all(output)?;
+    let binary_sha256 = file_sha256(binary.to_path_buf())?;
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    exec_checked(
+        &session,
+        "fast-five experiment safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    exec_checked(
+        &session,
+        "prepare fast-five experiment tool",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "rm -rf {} {}",
+                sh("/media/fat/mister-magik-dev/fast-five-tool"),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT)
+            ),
+            format!(
+                "mkdir -p {}",
+                sh("/media/fat/mister-magik-dev/fast-five-tool")
+            ),
+        ]),
+    )?;
+    put(&session, binary, FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)?;
+    exec_checked(
+        &session,
+        "publish exact fast-five experiment binary",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "test \"$(sha256sum {} | cut -d' ' -f1)\" = {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(&binary_sha256)
+            ),
+            format!("chmod 755 {}", sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)),
+            format!(
+                "mv -f {} {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY)
+            ),
+        ]),
+    )?;
+    for (path, encoding) in [
+        (FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT, "json"),
+        (FAST_FIVE_POSTCARD_REMOTE_SNAPSHOT, "postcard"),
+        (FAST_FIVE_LZ4_REMOTE_SNAPSHOT, "postcard-lz4"),
+        (FAST_FIVE_MMAP_REMOTE_SNAPSHOT, "postcard-mmap"),
+    ] {
+        exec_checked_output(
+            &session,
+            "capture fast-five experiment input",
+            &format!(
+                "{} snapshot-reference --catalog-root {} --output {} --encoding {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
+                sh(path),
+                sh(encoding),
+            ),
+        )?;
+    }
+    exec_checked(&session, "sync fast-five experiment inputs", "sync")?;
+    drop(session);
+
+    let cases = [
+        (
+            "baseline",
+            FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT,
+            "json",
+            "legacy",
+        ),
+        (
+            "snapshot-postcard",
+            FAST_FIVE_POSTCARD_REMOTE_SNAPSHOT,
+            "postcard",
+            "legacy",
+        ),
+        (
+            "snapshot-postcard-lz4",
+            FAST_FIVE_LZ4_REMOTE_SNAPSHOT,
+            "postcard-lz4",
+            "legacy",
+        ),
+        (
+            "snapshot-postcard-mmap",
+            FAST_FIVE_MMAP_REMOTE_SNAPSHOT,
+            "postcard-mmap",
+            "legacy",
+        ),
+        (
+            "navigation-no-embedded",
+            FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT,
+            "json",
+            "no-embedded-navigation",
+        ),
+        (
+            "navigation-no-adjacent",
+            FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT,
+            "json",
+            "no-adjacent-navigation",
+        ),
+        (
+            "navigation-navpack-only",
+            FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT,
+            "json",
+            "navpack-only",
+        ),
+        (
+            "publication-single-pass",
+            FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT,
+            "json",
+            "single-pass",
+        ),
+        (
+            "sqlite-search-only",
+            FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT,
+            "json",
+            "search-only",
+        ),
+        (
+            "sqlite-search-detail-none",
+            FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT,
+            "json",
+            "search-detail-none",
+        ),
+    ];
+    let mut results = Vec::with_capacity(cases.len() + 1);
+    for (name, input, encoding, artifact) in cases {
+        results.push(run_fast_five_experiment_case(
+            config, name, input, encoding, artifact,
+        )?);
+    }
+    let baseline_search = results[0]
+        .pointer("/search/fingerprint")
+        .and_then(Value::as_str)
+        .ok_or("fast-five baseline search fingerprint is missing")?
+        .to_string();
+    for result in &mut results {
+        let search_exact = result
+            .pointer("/search/fingerprint")
+            .and_then(Value::as_str)
+            == Some(baseline_search.as_str());
+        result["search_exact"] = json!(search_exact);
+        let accepted =
+            result.get("accepted").and_then(Value::as_bool) == Some(true) && search_exact;
+        result["accepted"] = json!(accepted);
+    }
+    let publication_elapsed = |value: &Value| {
+        value
+            .pointer("/published/elapsed_us")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX)
+    };
+    let input_elapsed = |value: &Value| {
+        value
+            .pointer("/published/input_read_decode_us")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX)
+    };
+    let snapshot_winner = results[..4]
+        .iter()
+        .filter(|value| value.get("accepted").and_then(Value::as_bool) == Some(true))
+        .min_by_key(|value| input_elapsed(value))
+        .ok_or("no accepted snapshot experiment")?;
+    let artifact_winner = results
+        .iter()
+        .enumerate()
+        .filter(|(index, value)| {
+            *index == 0
+                || *index >= 4 && value.get("accepted").and_then(Value::as_bool) == Some(true)
+        })
+        .map(|(_, value)| value)
+        .min_by_key(|value| publication_elapsed(value))
+        .ok_or("no accepted artifact experiment")?;
+    let winner_encoding = snapshot_winner
+        .get("input_encoding")
+        .and_then(Value::as_str)
+        .ok_or("snapshot winner encoding missing")?
+        .to_string();
+    let winner_input = match winner_encoding.as_str() {
+        "json" => FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT,
+        "postcard" => FAST_FIVE_POSTCARD_REMOTE_SNAPSHOT,
+        "postcard-lz4" => FAST_FIVE_LZ4_REMOTE_SNAPSHOT,
+        "postcard-mmap" => FAST_FIVE_MMAP_REMOTE_SNAPSHOT,
+        _ => return Err("invalid snapshot winner encoding".into()),
+    };
+    let winner_artifact = artifact_winner
+        .get("artifact_profile")
+        .and_then(Value::as_str)
+        .ok_or("artifact winner profile missing")?
+        .to_string();
+    let final_result = run_fast_five_experiment_case(
+        config,
+        "combined-winner",
+        winner_input,
+        &winner_encoding,
+        &winner_artifact,
+    )?;
+    results.push(final_result);
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_after = catalog_production_registry_identity(&session)?;
+    if production_registry_before != production_registry_after {
+        return Err("production registry changed during fast-five experiments".into());
+    }
+    let report = json!({
+        "schema": "mister-magik-fast-five-experiment-matrix-v1",
+        "status": "passed",
+        "binary_sha256": binary_sha256,
+        "production_registry_changed": false,
+        "baseline_search_fingerprint": baseline_search,
+        "winner": {
+            "input_encoding": winner_encoding,
+            "artifact_profile": winner_artifact,
+        },
+        "runs": results,
+    });
+    fs::write(
+        output.join("report.json"),
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    println!(
+        "fast_five_experiment_report={}",
+        output.join("report.json").display()
+    );
+    Ok(())
+}
+
+fn run_fast_five_pprof(
+    config: &NativeDeviceConfig,
+    binary: &Path,
+    output: &Path,
+    input_encoding: &str,
+    artifact_profile: &str,
+) -> Result<()> {
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    if !binary.is_file() {
+        return Err(format!(
+            "five-system catalog profile binary is missing: {}",
+            binary.display()
+        )
+        .into());
+    }
+    if output.exists() {
+        return Err(format!(
+            "fast-five pprof output already exists: {}",
+            output.display()
+        )
+        .into());
+    }
+    fs::create_dir_all(output)?;
+    let binary_sha256 = file_sha256(binary.to_path_buf())?;
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    exec_checked(
+        &session,
+        "fast-five pprof safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    exec_checked(
+        &session,
+        "prepare fast-five pprof inputs",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "rm -rf {} {} {}",
+                sh("/media/fat/mister-magik-dev/fast-five-tool"),
+                sh(FAST_FIVE_PPROF_REMOTE_ROOT),
+                sh(FAST_FIVE_PPROF_REMOTE_DIR)
+            ),
+            format!(
+                "mkdir -p {}",
+                sh("/media/fat/mister-magik-dev/fast-five-tool")
+            ),
+        ]),
+    )?;
+    put(&session, binary, FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)?;
+    exec_checked(
+        &session,
+        "publish exact fast-five pprof binary",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "test \"$(sha256sum {} | cut -d' ' -f1)\" = {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(&binary_sha256)
+            ),
+            format!("chmod 755 {}", sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)),
+            format!(
+                "mv -f {} {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY)
+            ),
+        ]),
+    )?;
+    let snapshot = exec_checked_output(
+        &session,
+        "capture fast-five pprof reference snapshot",
+        &format!(
+            "{} snapshot-reference --catalog-root {} --output {} --encoding {}",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+            sh(input_encoding)
+        ),
+    )?;
+    let snapshot = parse_last_json_line("fast-five pprof snapshot", &snapshot.stdout)?;
+    exec_checked(&session, "sync fast-five pprof inputs", "sync")?;
+    drop(session);
+
+    let run = (|| -> Result<(Value, Value, String)> {
+        agent_reboot_wait(&[])?;
+        let session = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &session,
+            "fast-five pprof post-reboot safety preflight",
+            &cold_boot_profile_preflight_command(),
+        )?;
+        let published_output = exec_checked_output(
+            &session,
+            "profile reboot-cold fast-five publication",
+            &format!(
+                "{} publish-profile --input {} --input-encoding {} --artifact-profile {} --output-root {} --pprof-svg {} --pprof-folded {} --pprof-hz 997",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+                sh(input_encoding),
+                sh(artifact_profile),
+                sh(FAST_FIVE_PPROF_REMOTE_ROOT),
+                sh(FAST_FIVE_PPROF_REMOTE_SVG),
+                sh(FAST_FIVE_PPROF_REMOTE_FOLDED)
+            ),
+        )?;
+        let compared_output = exec_checked_output(
+            &session,
+            "verify profiled fast-five catalog",
+            &format!(
+                "{} verify --input {} --input-encoding {} --candidate-root {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+                sh(input_encoding),
+                sh(FAST_FIVE_PPROF_REMOTE_ROOT)
+            ),
+        )?;
+        let published =
+            parse_last_json_line("profiled fast-five publication", &published_output.stdout)?;
+        let compared =
+            parse_last_json_line("profiled fast-five comparison", &compared_output.stdout)?;
+        if published.get("systems").and_then(Value::as_u64) != Some(5)
+            || published
+                .pointer("/pprof/sample_hits")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                <= 0
+            || compared.get("status").and_then(Value::as_str) != Some("exact")
+        {
+            return Err("profiled fast-five publication is incomplete or inexact".into());
+        }
+        get(
+            &session,
+            FAST_FIVE_PPROF_REMOTE_SVG,
+            &output.join("profile.svg"),
+        )?;
+        get(
+            &session,
+            FAST_FIVE_PPROF_REMOTE_FOLDED,
+            &output.join("profile.folded"),
+        )?;
+        Ok((published, compared, published_output.stdout))
+    })();
+    let cleanup = (|| -> Result<()> {
+        let session = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &session,
+            "remove isolated fast-five pprof artifacts",
+            &format!(
+                "rm -rf {} {}",
+                sh(FAST_FIVE_PPROF_REMOTE_ROOT),
+                sh(FAST_FIVE_PPROF_REMOTE_DIR)
+            ),
+        )?;
+        if catalog_production_registry_identity(&session)? != production_registry_before {
+            return Err("production registry changed during fast-five pprof".into());
+        }
+        Ok(())
+    })();
+    let (published, compared, build_log) = match (run, cleanup) {
+        (Ok(result), Ok(())) => result,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => return Err(error),
+        (Err(run), Err(cleanup)) => {
+            return Err(format!("{run}; cleanup also failed: {cleanup}").into());
+        }
+    };
+    let report = json!({
+        "schema": "mister-magik-fast-five-pprof-run-v1",
+        "status": "passed",
+        "cold_boot_verified": true,
+        "timing_authoritative": false,
+        "binary_sha256": binary_sha256,
+        "input_encoding": input_encoding,
+        "artifact_profile": artifact_profile,
+        "snapshot": snapshot,
+        "published": published,
+        "comparison": compared,
+        "production_registry_unchanged": true,
+    });
+    fs::write(
+        output.join("report.json"),
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    fs::write(output.join("build.log"), build_log)?;
+    println!("fast_five_pprof_report={}", output.display());
+    Ok(())
+}
+
+fn run_fast_source_ab(config: &NativeDeviceConfig, binary: &Path, output: &Path) -> Result<()> {
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    if !binary.is_file() {
+        return Err(format!("fast source A/B binary is missing: {}", binary.display()).into());
+    }
+    if output.exists() {
+        return Err(format!(
+            "fast source A/B output already exists: {}",
+            output.display()
+        )
+        .into());
+    }
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let binary_sha256 = file_sha256(binary.to_path_buf())?;
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    exec_checked(
+        &session,
+        "fast source A/B safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    exec_checked(
+        &session,
+        "prepare fast source A/B tool",
+        &format!(
+            "mkdir -p {}",
+            sh("/media/fat/mister-magik-dev/fast-five-tool")
+        ),
+    )?;
+    put(&session, binary, FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)?;
+    exec_checked(
+        &session,
+        "publish exact fast source A/B binary",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "test \"$(sha256sum {} | cut -d' ' -f1)\" = {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(&binary_sha256)
+            ),
+            format!("chmod 755 {}", sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)),
+            format!(
+                "mv -f {} {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY)
+            ),
+            "sync".to_string(),
+        ]),
+    )?;
+    drop(session);
+
+    let mut samples = Vec::new();
+    let mut logs = String::new();
+    for order in ["specialized-first", "generic-first"] {
+        agent_reboot_wait(&[])?;
+        let session = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &session,
+            "fast source A/B post-reboot safety preflight",
+            &cold_boot_profile_preflight_command(),
+        )?;
+        let result = exec_checked_output(
+            &session,
+            &format!("run reboot-cold fast source A/B {order}"),
+            &format!(
+                "{} source-ab --storage-root {} --order {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh("/media/fat"),
+                sh(order)
+            ),
+        )?;
+        let sample = parse_last_json_line("fast source A/B", &result.stdout)?;
+        if sample.get("order").and_then(Value::as_str) != Some(order)
+            || sample
+                .pointer("/parity")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                != Some(5)
+        {
+            return Err(format!("fast source A/B {order} is incomplete").into());
+        }
+        logs.push_str(&result.stdout);
+        samples.push(sample);
+    }
+    let session = connect_with(&config.connection, 10)?;
+    if catalog_production_registry_identity(&session)? != production_registry_before {
+        return Err("production registry changed during fast source A/B".into());
+    }
+    let report = json!({
+        "schema": "mister-magik-fast-source-ab-matrix-v1",
+        "status": "passed",
+        "cold_boot_verified": true,
+        "binary_sha256": binary_sha256,
+        "samples": samples,
+        "production_registry_unchanged": true,
+    });
+    fs::write(
+        output,
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    fs::write(output.with_extension("log"), logs)?;
+    println!("fast_source_ab_report={}", output.display());
+    Ok(())
+}
+
+fn run_fast_media_ab(config: &NativeDeviceConfig, binary: &Path, output: &Path) -> Result<()> {
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    if !binary.is_file() {
+        return Err(format!("fast media A/B binary is missing: {}", binary.display()).into());
+    }
+    if output.exists() {
+        return Err(format!("fast media A/B output already exists: {}", output.display()).into());
+    }
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let binary_sha256 = file_sha256(binary.to_path_buf())?;
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    exec_checked(
+        &session,
+        "fast media A/B safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    exec_checked(
+        &session,
+        "prepare fast media A/B tool",
+        &format!(
+            "mkdir -p {}",
+            sh("/media/fat/mister-magik-dev/fast-five-tool")
+        ),
+    )?;
+    put(&session, binary, FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)?;
+    exec_checked(
+        &session,
+        "publish exact fast media A/B binary",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "test \"$(sha256sum {} | cut -d' ' -f1)\" = {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(&binary_sha256)
+            ),
+            format!("chmod 755 {}", sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)),
+            format!(
+                "mv -f {} {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY)
+            ),
+            "sync".to_string(),
+        ]),
+    )?;
+    drop(session);
+
+    let mut samples = Vec::new();
+    let mut logs = String::new();
+    for order in ["baseline-first", "optimized-first"] {
+        agent_reboot_wait(&[])?;
+        let session = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &session,
+            "fast media A/B post-reboot safety preflight",
+            &cold_boot_profile_preflight_command(),
+        )?;
+        let result = exec_checked_output(
+            &session,
+            &format!("run reboot-cold fast media A/B {order}"),
+            &format!(
+                "{} media-ab --storage-root {} --order {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh("/media/fat"),
+                sh(order)
+            ),
+        )?;
+        let sample = parse_last_json_line("fast media A/B", &result.stdout)?;
+        let parity = sample.pointer("/parity").and_then(Value::as_array);
+        if sample.get("order").and_then(Value::as_str) != Some(order)
+            || parity.map(Vec::len) != Some(3)
+            || !parity.is_some_and(|rows| {
+                rows.iter().all(|row| {
+                    row.get("exact_launch_refs").and_then(Value::as_bool) == Some(true)
+                        && row.get("exact_rows").and_then(Value::as_bool) == Some(true)
+                })
+            })
+        {
+            return Err(format!("fast media A/B {order} is incomplete or differs").into());
+        }
+        logs.push_str(&result.stdout);
+        samples.push(sample);
+    }
+    let session = connect_with(&config.connection, 10)?;
+    if catalog_production_registry_identity(&session)? != production_registry_before {
+        return Err("production registry changed during fast media A/B".into());
+    }
+    let report = json!({
+        "schema": "mister-magik-fast-media-ab-matrix-v1",
+        "status": "passed",
+        "cold_boot_verified": true,
+        "binary_sha256": binary_sha256,
+        "samples": samples,
+        "production_registry_unchanged": true,
+    });
+    fs::write(
+        output,
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    fs::write(output.with_extension("log"), logs)?;
+    println!("fast_media_ab_report={}", output.display());
+    Ok(())
+}
+
+fn run_fast_refresh_benchmark(
+    config: &NativeDeviceConfig,
+    binary: &Path,
+    output: &Path,
+    scenario: &str,
+) -> Result<()> {
+    const BENCHMARK_DIR: &str = "/media/fat/games/SNES/mister-magik-refresh-benchmark";
+    const BENCHMARK_ROM: &str =
+        "/media/fat/games/SNES/mister-magik-refresh-benchmark/MagiK Refresh Benchmark.sfc";
+
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    if !matches!(scenario, "no-change" | "add-snes") {
+        return Err(format!("unsupported fast refresh benchmark scenario: {scenario}").into());
+    }
+    if !binary.is_file() {
+        return Err(format!(
+            "fast refresh benchmark binary is missing: {}",
+            binary.display()
+        )
+        .into());
+    }
+    if output.exists() {
+        return Err(format!(
+            "fast refresh benchmark output already exists: {}",
+            output.display()
+        )
+        .into());
+    }
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let binary_sha256 = file_sha256(binary.to_path_buf())?;
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    exec_checked(
+        &session,
+        "fast refresh benchmark safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    exec_checked(
+        &session,
+        "prepare fast refresh benchmark tool",
+        &format!(
+            "mkdir -p {}",
+            sh("/media/fat/mister-magik-dev/fast-five-tool")
+        ),
+    )?;
+    put(&session, binary, FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)?;
+    exec_checked(
+        &session,
+        "publish exact fast refresh benchmark binary",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "test \"$(sha256sum {} | cut -d' ' -f1)\" = {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(&binary_sha256)
+            ),
+            format!("chmod 755 {}", sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)),
+            format!(
+                "mv -f {} {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY)
+            ),
+        ]),
+    )?;
+    let preflight = exec_checked_output(
+        &session,
+        "validate fast refresh benchmark state",
+        &format!(
+            "{} plan-refresh --catalog-root {} --storage-root {} --request update",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+            sh("/media/fat")
+        ),
+    )?;
+    let preflight = parse_last_json_line("fast refresh benchmark plan", &preflight.stdout)?;
+    if preflight.get("systems").and_then(Value::as_u64) != Some(9) {
+        return Err("fast refresh benchmark state is not a complete nine-system snapshot".into());
+    }
+    if scenario == "add-snes" {
+        exec_checked(
+            &session,
+            "add isolated SNES refresh benchmark fixture",
+            &shell_sequence([
+                "set -eu".to_string(),
+                format!("mkdir -p {}", sh(BENCHMARK_DIR)),
+                format!("printf x > {}", sh(BENCHMARK_ROM)),
+                "sync".to_string(),
+            ]),
+        )?;
+    } else {
+        exec_checked(&session, "sync fast refresh benchmark inputs", "sync")?;
+    }
+    drop(session);
+
+    let run = (|| -> Result<(Value, String)> {
+        agent_reboot_wait(&[])?;
+        let session = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &session,
+            "fast refresh benchmark post-reboot safety preflight",
+            &cold_boot_profile_preflight_command(),
+        )?;
+        let refreshed = exec_checked_output(
+            &session,
+            "run reboot-cold fast catalog refresh benchmark",
+            &format!(
+                "{} refresh --catalog-root {} --storage-root {} --request update",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+                sh("/media/fat")
+            ),
+        )?;
+        let report = parse_last_json_line("fast refresh benchmark", &refreshed.stdout)?;
+        if report.get("systems").and_then(Value::as_u64) != Some(9) {
+            return Err("fast refresh benchmark is incomplete".into());
+        }
+        Ok((report, refreshed.stdout))
+    })();
+    let cleanup = (|| -> Result<()> {
+        let session = connect_with(&config.connection, 10)?;
+        if scenario == "add-snes" {
+            exec_checked(
+                &session,
+                "remove isolated SNES refresh benchmark fixture",
+                &format!("rm -rf {}", sh(BENCHMARK_DIR)),
+            )?;
+            exec_checked_output(
+                &session,
+                "reconcile removed SNES refresh benchmark fixture",
+                &format!(
+                    "{} refresh --catalog-root {} --storage-root {} --request update",
+                    sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                    sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+                    sh("/media/fat")
+                ),
+            )?;
+        }
+        if catalog_production_registry_identity(&session)? != production_registry_before {
+            return Err("production registry changed during fast refresh benchmark".into());
+        }
+        Ok(())
+    })();
+    let (refresh, build_log) = match (run, cleanup) {
+        (Ok(result), Ok(())) => result,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => return Err(error),
+        (Err(run), Err(cleanup)) => {
+            return Err(format!("{run}; cleanup also failed: {cleanup}").into());
+        }
+    };
+    let report = json!({
+        "schema": "mister-magik-fast-refresh-benchmark-v1",
+        "status": "passed",
+        "cold_boot_verified": true,
+        "timing_authoritative": true,
+        "scenario": scenario,
+        "binary_sha256": binary_sha256,
+        "refresh": refresh,
+        "production_registry_unchanged": true,
+    });
+    fs::write(
+        output,
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    fs::write(output.with_extension("log"), build_log)?;
+    println!("fast_refresh_benchmark_report={}", output.display());
+    Ok(())
+}
+
+fn run_fast_refresh_pprof(
+    config: &NativeDeviceConfig,
+    binary: &Path,
+    output: &Path,
+    scenario: &str,
+) -> Result<()> {
+    const BENCHMARK_DIR: &str = "/media/fat/games/SNES/mister-magik-refresh-benchmark";
+    const BENCHMARK_ROM: &str =
+        "/media/fat/games/SNES/mister-magik-refresh-benchmark/MagiK Refresh Benchmark.sfc";
+
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    if !matches!(scenario, "no-change" | "add-snes") {
+        return Err(format!("unsupported fast refresh profile scenario: {scenario}").into());
+    }
+    if !binary.is_file() {
+        return Err(format!(
+            "fast refresh profile binary is missing: {}",
+            binary.display()
+        )
+        .into());
+    }
+    if output.exists() {
+        return Err(format!(
+            "fast refresh pprof output already exists: {}",
+            output.display()
+        )
+        .into());
+    }
+    fs::create_dir_all(output)?;
+    let binary_sha256 = file_sha256(binary.to_path_buf())?;
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    exec_checked(
+        &session,
+        "fast refresh pprof safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    exec_checked(
+        &session,
+        "prepare fast refresh profiler",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "mkdir -p {} {}",
+                sh("/media/fat/mister-magik-dev/fast-five-tool"),
+                sh(FAST_FIVE_PPROF_REMOTE_DIR)
+            ),
+            format!(
+                "rm -f {} {} {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(FAST_FIVE_PPROF_REMOTE_SVG),
+                sh(FAST_FIVE_PPROF_REMOTE_FOLDED)
+            ),
+        ]),
+    )?;
+    put(&session, binary, FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)?;
+    exec_checked(
+        &session,
+        "publish exact fast refresh profile binary",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "test \"$(sha256sum {} | cut -d' ' -f1)\" = {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(&binary_sha256)
+            ),
+            format!("chmod 755 {}", sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)),
+            format!(
+                "mv -f {} {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY)
+            ),
+        ]),
+    )?;
+    let preflight = exec_checked_output(
+        &session,
+        "validate fast refresh state",
+        &format!(
+            "{} plan-refresh --catalog-root {} --storage-root {} --request update",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+            sh("/media/fat")
+        ),
+    )?;
+    let preflight = parse_last_json_line("fast refresh plan", &preflight.stdout)?;
+    if preflight.get("systems").and_then(Value::as_u64) != Some(9) {
+        return Err("fast refresh state is not a complete nine-system snapshot".into());
+    }
+    if scenario == "add-snes" {
+        exec_checked(
+            &session,
+            "add isolated SNES refresh fixture",
+            &shell_sequence([
+                "set -eu".to_string(),
+                format!("mkdir -p {}", sh(BENCHMARK_DIR)),
+                format!("printf x > {}", sh(BENCHMARK_ROM)),
+                "sync".to_string(),
+            ]),
+        )?;
+    } else {
+        exec_checked(&session, "sync fast refresh inputs", "sync")?;
+    }
+    drop(session);
+
+    let run = (|| -> Result<(Value, String)> {
+        agent_reboot_wait(&[])?;
+        let session = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &session,
+            "fast refresh post-reboot safety preflight",
+            &cold_boot_profile_preflight_command(),
+        )?;
+        let profiled = exec_checked_output(
+            &session,
+            "profile reboot-cold fast catalog refresh",
+            &format!(
+                "{} refresh-profile --catalog-root {} --storage-root {} --request update --pprof-svg {} --pprof-folded {} --pprof-hz 997",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+                sh("/media/fat"),
+                sh(FAST_FIVE_PPROF_REMOTE_SVG),
+                sh(FAST_FIVE_PPROF_REMOTE_FOLDED)
+            ),
+        )?;
+        let report = parse_last_json_line("profiled fast refresh", &profiled.stdout)?;
+        if report.get("systems").and_then(Value::as_u64) != Some(9)
+            || report
+                .pointer("/pprof/sample_hits")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                <= 0
+        {
+            return Err("profiled fast refresh is incomplete".into());
+        }
+        get(
+            &session,
+            FAST_FIVE_PPROF_REMOTE_SVG,
+            &output.join("profile.svg"),
+        )?;
+        get(
+            &session,
+            FAST_FIVE_PPROF_REMOTE_FOLDED,
+            &output.join("profile.folded"),
+        )?;
+        Ok((report, profiled.stdout))
+    })();
+    let cleanup = (|| -> Result<()> {
+        let session = connect_with(&config.connection, 10)?;
+        if scenario == "add-snes" {
+            exec_checked(
+                &session,
+                "remove isolated SNES refresh fixture",
+                &format!("rm -rf {}", sh(BENCHMARK_DIR)),
+            )?;
+            exec_checked_output(
+                &session,
+                "reconcile removed SNES refresh fixture",
+                &format!(
+                    "{} refresh --catalog-root {} --storage-root {} --request update",
+                    sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                    sh(FAST_FIVE_PROTOTYPE_REMOTE_ROOT),
+                    sh("/media/fat")
+                ),
+            )?;
+        }
+        exec_checked(
+            &session,
+            "remove fast refresh profile scratch",
+            &format!("rm -rf {}", sh(FAST_FIVE_PPROF_REMOTE_DIR)),
+        )?;
+        if catalog_production_registry_identity(&session)? != production_registry_before {
+            return Err("production registry changed during fast refresh pprof".into());
+        }
+        Ok(())
+    })();
+    let (profiled, build_log) = match (run, cleanup) {
+        (Ok(result), Ok(())) => result,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => return Err(error),
+        (Err(run), Err(cleanup)) => {
+            return Err(format!("{run}; cleanup also failed: {cleanup}").into());
+        }
+    };
+    let report = json!({
+        "schema": "mister-magik-fast-refresh-pprof-v1",
+        "status": "passed",
+        "cold_boot_verified": true,
+        "timing_authoritative": false,
+        "scenario": scenario,
+        "binary_sha256": binary_sha256,
+        "refresh": profiled,
+        "production_registry_unchanged": true,
+    });
+    fs::write(
+        output.join("report.json"),
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    fs::write(output.join("build.log"), build_log)?;
+    println!("fast_refresh_pprof_report={}", output.display());
+    Ok(())
+}
+
+fn run_fast_five_c64_experiments(
+    config: &NativeDeviceConfig,
+    binary: &Path,
+    output: &Path,
+) -> Result<()> {
+    const PROFILES: [&str; 2] = ["tmpfs-immediate", "tmpfs-immediate-no-optimize"];
+
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    if !binary.is_file() {
+        return Err(format!(
+            "five-system catalog prototype binary is missing: {}",
+            binary.display()
+        )
+        .into());
+    }
+    let binary_sha256 = file_sha256(binary.to_path_buf())?;
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    exec_checked(
+        &session,
+        "C64 experiment safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    exec_checked(
+        &session,
+        "prepare C64 experiment inputs",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "rm -rf {} {} {}",
+                sh("/media/fat/mister-magik-dev/fast-five-tool"),
+                sh(FAST_FIVE_C64_EXPERIMENT_ROOT),
+                sh(FAST_FIVE_C64_EXPERIMENT_SCRATCH)
+            ),
+            format!(
+                "mkdir -p {}",
+                sh("/media/fat/mister-magik-dev/fast-five-tool")
+            ),
+        ]),
+    )?;
+    put(&session, binary, FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)?;
+    exec_checked(
+        &session,
+        "publish exact C64 experiment binary",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "test \"$(sha256sum {} | cut -d' ' -f1)\" = {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(&binary_sha256)
+            ),
+            format!("chmod 755 {}", sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)),
+            format!(
+                "mv -f {} {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY)
+            ),
+        ]),
+    )?;
+    let snapshot = exec_checked_output(
+        &session,
+        "capture C64 experiment reference snapshot",
+        &format!(
+            "{} snapshot-reference --catalog-root {} --output {}",
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+            sh(FAST_FIVE_PROTOTYPE_REFERENCE_ROOT),
+            sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT)
+        ),
+    )?;
+    let snapshot = parse_last_json_line("C64 experiment snapshot", &snapshot.stdout)?;
+    exec_checked(&session, "sync C64 experiment inputs", "sync")?;
+    drop(session);
+
+    let run = (|| -> Result<Vec<Value>> {
+        let mut samples = Vec::with_capacity(PROFILES.len());
+        for profile in PROFILES {
+            let session = connect_with(&config.connection, 10)?;
+            exec_checked(
+                &session,
+                "prepare isolated C64 experiment root",
+                &shell_sequence([
+                    "set -eu".to_string(),
+                    format!(
+                        "rm -rf {} {}",
+                        sh(FAST_FIVE_C64_EXPERIMENT_ROOT),
+                        sh(FAST_FIVE_C64_EXPERIMENT_SCRATCH)
+                    ),
+                    "sync".to_string(),
+                ]),
+            )?;
+            drop(session);
+            agent_reboot_wait(&[])?;
+            let session = connect_with(&config.connection, 10)?;
+            exec_checked(
+                &session,
+                "C64 experiment post-reboot safety preflight",
+                &cold_boot_profile_preflight_command(),
+            )?;
+            let result = exec_checked_output(
+                &session,
+                &format!("run cold C64 artifact profile {profile}"),
+                &format!(
+                    "{} c64-artifact-experiment --input {} --output-root {} --scratch-root {} --profile {}",
+                    sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                    sh(FAST_FIVE_PROTOTYPE_REMOTE_SNAPSHOT),
+                    sh(FAST_FIVE_C64_EXPERIMENT_ROOT),
+                    sh(FAST_FIVE_C64_EXPERIMENT_SCRATCH),
+                    sh(profile)
+                ),
+            )?;
+            let mut sample = parse_last_json_line("C64 artifact experiment", &result.stdout)?;
+            if sample.get("status").and_then(Value::as_str) != Some("exact")
+                || sample.get("profile").and_then(Value::as_str) != Some(profile)
+                || sample.get("games").and_then(Value::as_u64).unwrap_or(0) == 0
+            {
+                return Err(
+                    format!("C64 artifact profile {profile} failed exact validation").into(),
+                );
+            }
+            let phase_records = result
+                .stdout
+                .lines()
+                .filter(|line| line.starts_with("catalog_"))
+                .collect::<Vec<_>>();
+            let object = sample
+                .as_object_mut()
+                .ok_or("C64 artifact experiment report is not an object")?;
+            object.insert("cold_boot_verified".into(), Value::Bool(true));
+            object.insert("phase_records".into(), serde_json::to_value(phase_records)?);
+            samples.push(sample);
+        }
+        let baseline_search = samples
+            .first()
+            .and_then(|sample| sample.get("search_fingerprint"))
+            .and_then(Value::as_str)
+            .ok_or("baseline C64 experiment has no search fingerprint")?
+            .to_string();
+        for sample in &mut samples {
+            let equivalent = sample.get("search_fingerprint").and_then(Value::as_str)
+                == Some(baseline_search.as_str());
+            sample
+                .as_object_mut()
+                .ok_or("C64 experiment sample is not an object")?
+                .insert("search_equivalent".into(), Value::Bool(equivalent));
+        }
+        Ok(samples)
+    })();
+    let cleanup = (|| -> Result<()> {
+        let session = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &session,
+            "remove isolated C64 experiment artifacts",
+            &format!(
+                "rm -rf {} {}",
+                sh(FAST_FIVE_C64_EXPERIMENT_ROOT),
+                sh(FAST_FIVE_C64_EXPERIMENT_SCRATCH)
+            ),
+        )?;
+        if catalog_production_registry_identity(&session)? != production_registry_before {
+            return Err("production registry changed during C64 artifact experiments".into());
+        }
+        Ok(())
+    })();
+    let samples = match (run, cleanup) {
+        (Ok(samples), Ok(())) => samples,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => return Err(error),
+        (Err(run), Err(cleanup)) => {
+            return Err(format!("{run}; cleanup also failed: {cleanup}").into());
+        }
+    };
+    let report = json!({
+        "schema": "mister-magik-fast-five-c64-artifact-experiments-v1",
+        "status": "passed",
+        "binary_sha256": binary_sha256,
+        "snapshot": snapshot,
+        "samples": samples,
+        "production_registry_unchanged": true,
+    });
+    if let Some(parent) = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(
+        output,
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    println!("fast_five_c64_experiment_report={}", output.display());
+    Ok(())
+}
+
+fn parse_last_json_line(label: &str, output: &str) -> Result<Value> {
+    output
+        .lines()
+        .rev()
+        .find_map(|line| serde_json::from_str(line.trim()).ok())
+        .ok_or_else(|| format!("{label} produced no JSON record").into())
+}
+
+#[derive(Clone, Copy)]
+struct FastFiveOldTarget {
+    system_id: &'static str,
+    roots: &'static str,
+    allowlist: &'static str,
+}
+
+const FAST_FIVE_OLD_TARGETS: [FastFiveOldTarget; 5] = [
+    FastFiveOldTarget {
+        system_id: "arcade",
+        roots: "/media/fat/_Arcade|/media/fat/games",
+        allowlist: "/media/fat/_Arcade:/media/fat/games/mame:/media/fat/games/hbmame",
+    },
+    FastFiveOldTarget {
+        system_id: "amiga",
+        roots: "/media/fat/games",
+        allowlist: "/media/fat/games/Amiga:/media/fat/games/Amiga500",
+    },
+    FastFiveOldTarget {
+        system_id: "c64",
+        roots: "/media/fat/games",
+        allowlist: "/media/fat/games/C64",
+    },
+    FastFiveOldTarget {
+        system_id: "dos",
+        roots: "/media/fat",
+        allowlist: "/media/fat/_DOS Games",
+    },
+    FastFiveOldTarget {
+        system_id: "x68000",
+        roots: "/media/fat",
+        allowlist: "/media/fat/_Computer/_X68000 Games:/media/fat/games/X68000",
+    },
+];
+
+const GENERIC_FOUR_OLD_TARGETS: [FastFiveOldTarget; 4] = [
+    FastFiveOldTarget {
+        system_id: "neogeo",
+        roots: "/media/fat/games",
+        allowlist: "/media/fat/games/NEOGEO:/media/fat/games/NeoGeo",
+    },
+    FastFiveOldTarget {
+        system_id: "saturn",
+        roots: "/media/fat/games",
+        allowlist: "/media/fat/games/Saturn",
+    },
+    FastFiveOldTarget {
+        system_id: "snes",
+        roots: "/media/fat/games",
+        allowlist: "/media/fat/games/SNES:/media/fat/games/Satellaview:/media/fat/games/SGB2:/media/fat/games/SNES-Sinden",
+    },
+    FastFiveOldTarget {
+        system_id: "zx-spectrum",
+        roots: "/media/fat/games",
+        allowlist: "/media/fat/games/Spectrum",
+    },
+];
+
+fn run_fast_five_old_cold_matrix(
+    config: &NativeDeviceConfig,
+    output: &Path,
+    target_set: &str,
+) -> Result<()> {
+    let targets: &[FastFiveOldTarget] = match target_set {
+        "fast-five" => &FAST_FIVE_OLD_TARGETS,
+        "generic-four" => &GENERIC_FOUR_OLD_TARGETS,
+        _ => return Err(format!("unknown old-catalog target set {target_set}").into()),
+    };
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    drop(session);
+    let run = (|| -> Result<Vec<Value>> {
+        let mut samples = Vec::with_capacity(targets.len());
+        for target in targets.iter().copied() {
+            let session = connect_with(&config.connection, 10)?;
+            prepare_fast_five_old_cold_root(&session)?;
+            drop(session);
+            agent_reboot_wait(&[])?;
+            let session = connect_with(&config.connection, 10)?;
+            let endpoint = config.agent()?.clone();
+            let sample_dir = output
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(format!("old-{}", target.system_id));
+            fs::create_dir_all(&sample_dir)?;
+            let leg = run_catalog_build_rebuild_leg(
+                config,
+                &session,
+                &endpoint,
+                &sample_dir,
+                "cold",
+                None,
+                CatalogBuildRebuildLegOptions {
+                    exercise_arcade_ui: false,
+                    require_updater_index: false,
+                    launcher_env: fast_five_old_launcher_env(target),
+                    runtime_command: catalog_full_build_rebuild_runtime_command,
+                },
+            )?;
+            let builder_elapsed_us =
+                catalog_phase_elapsed_us(&leg, "builder_authoritative_catalog_prepared")
+                    .ok_or_else(|| {
+                        format!(
+                            "{} cold build has no authoritative preparation timing",
+                            target.system_id
+                        )
+                    })?;
+            let games = catalog_system_games(&leg["catalog"], target.system_id)?;
+            samples.push(json!({
+                "system_id": target.system_id,
+                "cold_boot_verified": true,
+                "builder_elapsed_us": builder_elapsed_us,
+                "complete_ms": leg.pointer("/timing/complete_ms"),
+                "games": games,
+                "catalog": leg.get("catalog"),
+                "phase_evidence": leg.get("phase_evidence"),
+            }));
+            launcher_restart(
+                &session,
+                &LauncherRestartOptions {
+                    clear_env: true,
+                    remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+                    timeout_secs: 45,
+                    ..LauncherRestartOptions::default()
+                },
+            )?;
+        }
+        Ok(samples)
+    })();
+    let cleanup = (|| -> Result<()> {
+        let session = connect_with(&config.connection, 10)?;
+        launcher_restart(
+            &session,
+            &LauncherRestartOptions {
+                clear_env: true,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+                timeout_secs: 45,
+                ..LauncherRestartOptions::default()
+            },
+        )?;
+        exec_checked(
+            &session,
+            "remove isolated old fast-five benchmark root",
+            &format!(
+                "rm -rf {} {}",
+                sh(CATALOG_BUILD_REBUILD_REMOTE_DIR),
+                sh(CATALOG_BUILD_REBUILD_SOURCE_DIR)
+            ),
+        )?;
+        let production_registry_after = catalog_production_registry_identity(&session)?;
+        if production_registry_after != production_registry_before {
+            return Err("production registry changed during old fast-five cold matrix".into());
+        }
+        Ok(())
+    })();
+    let samples = match (run, cleanup) {
+        (Ok(samples), Ok(())) => samples,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => return Err(error),
+        (Err(run), Err(cleanup)) => {
+            return Err(format!("{run}; cleanup also failed: {cleanup}").into());
+        }
+    };
+    let report = json!({
+        "schema": "mister-magik-fast-five-old-cold-v1",
+        "status": "passed",
+        "target_set": target_set,
+        "samples": samples,
+        "production_registry_unchanged": true,
+    });
+    if let Some(parent) = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(
+        output,
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    println!("fast_five_old_cold_report={}", output.display());
+    Ok(())
+}
+
+fn prepare_fast_five_old_cold_root(session: &Session) -> Result<()> {
+    exec_checked(
+        session,
+        "prepare isolated old fast-five cold root",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "rm -rf {} {}",
+                sh(CATALOG_BUILD_REBUILD_REMOTE_DIR),
+                sh(CATALOG_BUILD_REBUILD_SOURCE_DIR)
+            ),
+            format!(
+                "mkdir -p {} {} {}",
+                sh(CATALOG_BUILD_REBUILD_REMOTE_DIR),
+                sh(&format!("{CATALOG_BUILD_REBUILD_SOURCE_DIR}/sqlite-build")),
+                sh(&format!("{CATALOG_BUILD_REBUILD_SOURCE_DIR}/diagnostics"))
+            ),
+            platform_safety_script(),
+            "sync".to_string(),
+        ]),
+    )
+}
+
+fn fast_five_old_launcher_env(target: FastFiveOldTarget) -> Vec<(String, String)> {
+    catalog_build_rebuild_launcher_env()
+        .into_iter()
+        .map(|(key, value)| match key.as_str() {
+            "MISTER_LIBRARY_ROOTS" => (key, target.roots.to_string()),
+            "MISTER_LIBRARY_TARGET_ALLOWLIST" => (key, target.allowlist.to_string()),
+            _ => (key, value),
+        })
+        .collect()
+}
+
+fn catalog_phase_elapsed_us(leg: &Value, name: &str) -> Option<u64> {
+    leg.pointer("/phase_evidence/records")?
+        .as_array()?
+        .iter()
+        .find(|record| {
+            record.get("record").and_then(Value::as_str) == Some("startup_timing")
+                && record.get("name").and_then(Value::as_str) == Some(name)
+        })?
+        .pointer("/metrics/elapsed_us")?
+        .as_u64()
+}
+
 fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
     if !args.is_empty() {
         return Err("usage: scripts/agent device catalog inspect".into());
@@ -31424,7 +33911,7 @@ fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
         .ok_or("active Main status is unavailable for catalog inspection")?;
     let status: Value = serde_json::from_str(&status_text)?;
     let binary = active_installed_gui_binary(&status)?;
-    let command = remote_subcommand(binary, "catalog-v3-inspect", args);
+    let command = remote_subcommand(binary, "catalog-inspect", args);
     let out = exec(sess, &command, true)?;
     print!("{}", out.stdout);
     if !out.stderr.trim().is_empty() {
@@ -33774,18 +36261,6 @@ mod tests {
     }
 
     #[test]
-    fn agent_io_records_retired_catalog_v3_library_snapshot_as_not_applicable() {
-        let attempt = retired_library_snapshot_attempt(
-            "stat /media/fat/mister-magik-dev/library.sqlite3: No such file or directory",
-            2,
-        )
-        .unwrap();
-        assert_eq!(attempt["status"], "not-applicable");
-        assert_eq!(attempt["repetition"], 2);
-        assert!(retired_library_snapshot_attempt("authentication failed", 1).is_none());
-    }
-
-    #[test]
     fn transition_attribution_rejects_missing_leg_evidence_without_failing_slow_legs() {
         let route = |frames| {
             json!({
@@ -34890,7 +37365,11 @@ video_mode=14
             "MISTER_ARCADE_BOOTSTRAP_INDEX".into(),
             COLD_BOOT_FRESH_ARCADE_INDEX.into(),
         )));
-        assert!(profiled.contains(&("MISTER_PPROF_TRIGGER".into(), "cold-boot".into())));
+        assert!(profiled.contains(&("MISTER_PPROF_TRIGGER".into(), "cold-boot-catalog".into(),)));
+        assert!(
+            cold_boot_launcher_env(true, false)
+                .contains(&("MISTER_PPROF_TRIGGER".into(), "cold-boot".into()))
+        );
     }
 
     #[test]
@@ -38186,7 +40665,7 @@ H: Handlers=event3 js0"#
             key == "MISTER_SHARDED_CATALOG_DIR"
                 && value.starts_with(CATALOG_BUILD_REBUILD_REMOTE_DIR)
         }));
-        let inspect = catalog_full_build_rebuild_runtime_command("catalog-v3-inspect");
+        let inspect = catalog_full_build_rebuild_runtime_command("catalog-inspect");
         assert!(inspect.contains(CATALOG_BUILD_REBUILD_REMOTE_DIR));
         assert!(!inspect.contains("MISTER_LIBRARY_ROOTS="));
     }

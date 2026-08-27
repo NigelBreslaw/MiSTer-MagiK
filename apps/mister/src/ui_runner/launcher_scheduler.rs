@@ -333,7 +333,7 @@ impl SystemEntryPrepareWorker {
                             let started = Instant::now();
                             let result = mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
                                 catalog_paths.sharded_catalog_dir(),
-                                mister_magik_catalog::production_sharded_projection::production_registry_limits(),
+                                mister_magik_catalog::shard_registry::production_registry_limits(),
                             )
                             .map_err(|error| error.to_string())
                             .map(|reader| {
@@ -1435,7 +1435,7 @@ fn cached_search_catalog(
     versioned_cache_value(cache, catalog_version, || {
         mister_magik_catalog::persisted_search::PersistedSearchCatalog::open(
             storage,
-            mister_magik_catalog::production_sharded_projection::production_registry_limits(),
+            mister_magik_catalog::shard_registry::production_registry_limits(),
         )
     })
 }

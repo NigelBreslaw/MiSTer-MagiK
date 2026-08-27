@@ -44,6 +44,11 @@ trait BenchmarkDevice {
         spec: ArcadeVelocityScrollRunSpec,
         output_dir: PathBuf,
     ) -> AgentResult<String>;
+    fn profile_arcade_catalog_prototype(
+        &mut self,
+        binary: &Path,
+        output_dir: PathBuf,
+    ) -> AgentResult<String>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -276,6 +281,14 @@ impl BenchmarkDevice for DeviceClient {
     ) -> AgentResult<String> {
         self.mutate(|device| device.profile_arcade_velocity_scroll_run(&output_dir, spec))
     }
+
+    fn profile_arcade_catalog_prototype(
+        &mut self,
+        binary: &Path,
+        output_dir: PathBuf,
+    ) -> AgentResult<String> {
+        self.mutate(|device| device.profile_arcade_catalog_prototype(binary, &output_dir))
+    }
 }
 
 fn require_clean_installed_commit(
@@ -319,6 +332,20 @@ fn require_clean_installed_commit(
     if !crate::git::value(repository, &["status", "--porcelain"])?.is_empty() {
         return Err("benchmark requires a clean exact-commit worktree".into());
     }
+    let prototype_binary = if scenario == BenchmarkScenario::ArcadeCatalogPrototypeCold {
+        let spec = crate::build::BuildSpec::for_command(
+            crate::build::BuildCommand::ArcadeCatalogPrototypeDevice,
+        )
+        .expect("the Arcade catalog prototype has one focused build specification");
+        spec.verify(repository).map_err(|error| {
+            format!(
+                "Arcade catalog prototype benchmark requires an exact build receipt; run scripts/agent build arcade-catalog-prototype-device first: {error}"
+            )
+        })?;
+        Some(repository.join(spec.artifact()))
+    } else {
+        None
+    };
     if let Some(command) = particle_scene_lab_command(scenario) {
         reporter.emit(EventKind::Warning, "scene-lab-required", command, Some(100))?;
         return Ok(Outcome::ExternalRequired);
@@ -389,6 +416,16 @@ fn require_clean_installed_commit(
         BenchmarkScenario::CatalogCorpusInventory => {
             execute_catalog_corpus_inventory(&mut device, manifest, output_dir, reporter)
         }
+        BenchmarkScenario::ArcadeCatalogPrototypeCold => execute_arcade_catalog_prototype_cold(
+            &mut device,
+            manifest,
+            output_dir,
+            prototype_binary
+                .as_deref()
+                .expect("prototype scenarios resolve their exact binary before device access"),
+            &head,
+            reporter,
+        ),
         BenchmarkScenario::CatalogAttributionControl => execute_catalog_attribution(
             &mut device,
             manifest,
@@ -1065,6 +1102,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::CatalogResumeValidation
         | BenchmarkScenario::CatalogFullBuildRebuild
         | BenchmarkScenario::CatalogCorpusInventory
+        | BenchmarkScenario::ArcadeCatalogPrototypeCold
         | BenchmarkScenario::CatalogAttributionControl
         | BenchmarkScenario::CatalogAttributionPprof
         | BenchmarkScenario::CatalogAttributionPmu
@@ -2576,6 +2614,295 @@ fn execute_catalog_corpus_inventory(
     Ok(Outcome::Passed)
 }
 
+fn execute_arcade_catalog_prototype_cold(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: PathBuf,
+    binary: &Path,
+    source_commit: &str,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "benchmarking a cold single-worker Arcade build from an immutable Update_All base after a controlled reboot",
+        Some(20),
+    )?;
+    let detail = device.profile_arcade_catalog_prototype(binary, output_dir.clone())?;
+    let mut summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    summary
+        .as_object_mut()
+        .ok_or("Arcade catalog prototype benchmark summary is not an object")?
+        .insert("source_commit".into(), json!(source_commit));
+    let retained_summary = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&summary).map_err(|error| error.to_string())?
+    );
+    std::fs::write(output_dir.join("summary.json"), retained_summary)
+        .map_err(|error| error.to_string())?;
+    evaluate_arcade_catalog_prototype_summary(&summary)?;
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn evaluate_arcade_catalog_prototype_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-arcade-catalog-prototype-cold-v5")
+        || summary.get("scenario").and_then(Value::as_str) != Some("arcade-catalog-prototype-cold")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+    {
+        return Err("Arcade catalog prototype benchmark is not a passing v5 report".into());
+    }
+    let is_digest = |value: Option<&str>| {
+        value.is_some_and(|value| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        })
+    };
+    if !is_digest(summary.get("binary_sha256").and_then(Value::as_str))
+        || !is_digest(summary.get("source_base_sha256").and_then(Value::as_str))
+        || !is_digest(summary.get("filtered_index_sha256").and_then(Value::as_str))
+        || !is_digest(summary.get("filtered_base_sha256").and_then(Value::as_str))
+        || summary
+            .get("source_commit")
+            .and_then(Value::as_str)
+            .is_none_or(|revision| {
+                revision.len() != 40
+                    || !revision
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            })
+        || summary
+            .pointer("/production_registry/unchanged")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || summary
+            .pointer("/source_base_inspect/kind")
+            .and_then(Value::as_str)
+            != Some("base")
+        || summary
+            .pointer("/source_base_inspect/records")
+            .and_then(Value::as_u64)
+            != summary
+                .pointer("/source_base_compile/compile/source_rows")
+                .and_then(Value::as_u64)
+        || summary
+            .pointer("/source_base_inspect/source_sha256")
+            .and_then(Value::as_str)
+            != summary
+                .pointer("/source_base_compile/source_sha256")
+                .and_then(Value::as_str)
+        || summary
+            .pointer("/filtered_base_inspect/kind")
+            .and_then(Value::as_str)
+            != Some("base")
+        || summary
+            .pointer("/filtered_base_inspect/records")
+            .and_then(Value::as_u64)
+            != summary
+                .pointer("/filtered_base_compile/compile/source_rows")
+                .and_then(Value::as_u64)
+        || summary
+            .pointer("/filtered_base_inspect/source_sha256")
+            .and_then(Value::as_str)
+            != summary
+                .pointer("/filtered_base_compile/source_sha256")
+                .and_then(Value::as_str)
+    {
+        return Err("Arcade catalog prototype benchmark identity evidence is invalid".into());
+    }
+    let source_sha256 = summary
+        .pointer("/source_base_compile/source_sha256")
+        .and_then(Value::as_str)
+        .filter(|digest| is_digest(Some(digest)))
+        .ok_or("Arcade catalog prototype benchmark source digest is invalid")?;
+    let base_sha256 = summary
+        .get("source_base_sha256")
+        .and_then(Value::as_str)
+        .expect("validated source base digest");
+    let filtered_source_sha256 = summary
+        .pointer("/filtered_base_compile/source_sha256")
+        .and_then(Value::as_str)
+        .filter(|digest| is_digest(Some(digest)))
+        .ok_or("Arcade catalog prototype filtered source digest is invalid")?;
+    let filtered_base_sha256 = summary
+        .get("filtered_base_sha256")
+        .and_then(Value::as_str)
+        .expect("validated filtered base digest");
+    let samples = summary
+        .get("samples")
+        .and_then(Value::as_array)
+        .ok_or("Arcade catalog prototype benchmark has no samples")?;
+    if samples.len() != 3
+        || samples[0].get("arm").and_then(Value::as_str) != Some("indexed-fast")
+        || samples[1].get("arm").and_then(Value::as_str) != Some("filtered-fast")
+        || samples[2].get("arm").and_then(Value::as_str) != Some("filtered-full-walk")
+    {
+        return Err(
+            "Arcade catalog prototype benchmark does not contain its three cold arms".into(),
+        );
+    }
+    let target_path = summary
+        .pointer("/unknown_target/path")
+        .and_then(Value::as_str)
+        .filter(|path| path.starts_with("_Arcade/") && path.ends_with(".mra"))
+        .ok_or("Arcade catalog prototype unknown target is invalid")?;
+    let records = |index: usize| {
+        samples[index]
+            .pointer("/report/build/active_records")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    };
+    let target_recovered = samples[2]
+        .pointer("/report/build/fallback_paths")
+        .and_then(Value::as_array)
+        .is_some_and(|paths| paths.iter().any(|path| path.as_str() == Some(target_path)));
+    if records(0) != records(1).saturating_add(1) || records(2) < records(0) || !target_recovered {
+        return Err(
+            "Arcade catalog prototype samples do not prove unknown-content recovery".into(),
+        );
+    }
+    for (index, sample) in samples.iter().enumerate() {
+        let expected_base = if index == 0 {
+            base_sha256
+        } else {
+            filtered_base_sha256
+        };
+        let expected_source = if index == 0 {
+            source_sha256
+        } else {
+            filtered_source_sha256
+        };
+        let expected_full_walk = index == 2;
+        if sample.get("reboot_verified").and_then(Value::as_bool) != Some(true)
+            || sample.get("cache_drop_verified").and_then(Value::as_bool) != Some(true)
+            || sample
+                .get("remote_binary_sha256_verified")
+                .and_then(Value::as_bool)
+                != Some(true)
+            || sample
+                .get("remote_base_sha256_verified")
+                .and_then(Value::as_bool)
+                != Some(true)
+            || sample
+                .get("remote_active_sha256_verified")
+                .and_then(Value::as_bool)
+                != Some(true)
+            || !is_digest(sample.get("active_sha256").and_then(Value::as_str))
+            || sample.get("base_sha256").and_then(Value::as_str) != Some(expected_base)
+            || sample.get("full_walk").and_then(Value::as_bool) != Some(expected_full_walk)
+            || sample.pointer("/report/command").and_then(Value::as_str) != Some("build-active")
+            || sample.pointer("/report/full_walk").and_then(Value::as_bool)
+                != Some(expected_full_walk)
+            || sample
+                .pointer("/report/source_sha256")
+                .and_then(Value::as_str)
+                != Some(expected_source)
+            || sample
+                .pointer("/report/build/active_records")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                == 0
+            || sample
+                .pointer("/report/total_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                == 0
+            || sample.pointer("/inspect/kind").and_then(Value::as_str) != Some("active")
+            || sample
+                .pointer("/inspect/source_sha256")
+                .and_then(Value::as_str)
+                != Some(expected_source)
+            || sample.pointer("/inspect/bytes").and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/output_bytes")
+                    .and_then(Value::as_u64)
+            || sample.pointer("/inspect/records").and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/build/active_records")
+                    .and_then(Value::as_u64)
+            || sample.pointer("/inspect/preferred").and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/build/preferred_families")
+                    .and_then(Value::as_u64)
+            || sample
+                .pointer("/inspect/preferred")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                == 0
+            || sample
+                .pointer("/inspect/counts/installed_mras")
+                .and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/build/installed_mras")
+                    .and_then(Value::as_u64)
+            || sample
+                .pointer("/inspect/counts/index_hits")
+                .and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/build/fast_path_hits")
+                    .and_then(Value::as_u64)
+            || sample
+                .pointer("/inspect/counts/fallbacks")
+                .and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/build/fallback_count")
+                    .and_then(Value::as_u64)
+            || sample
+                .pointer("/inspect/counts/skipped_missing_rom")
+                .and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/build/skipped_missing_rom")
+                    .and_then(Value::as_u64)
+            || sample
+                .pointer("/inspect/counts/skipped_ambiguous")
+                .and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/build/skipped_ambiguous")
+                    .and_then(Value::as_u64)
+            || sample
+                .pointer("/inspect/counts/skipped_invalid")
+                .and_then(Value::as_u64)
+                != sample
+                    .pointer("/report/build/skipped_invalid")
+                    .and_then(Value::as_u64)
+        {
+            return Err(
+                "Arcade catalog prototype benchmark contains an invalid cold sample".into(),
+            );
+        }
+    }
+    if summary
+        .pointer("/validation/single_worker_policy")
+        .and_then(Value::as_bool)
+        != Some(true)
+        || summary
+            .pointer("/validation/filtered_fast_omits_target")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || summary
+            .pointer("/validation/full_walk_restores_target")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return Err("Arcade catalog prototype unknown-content validation failed".into());
+    }
+    Ok(())
+}
+
 fn evaluate_catalog_full_build_rebuild_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str)
         != Some("mister-magik-catalog-full-build-rebuild-v3")
@@ -2867,6 +3194,131 @@ fn u64_field(value: &Value, field: &str, default: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arcade_prototype_requires_exact_artifacts_and_decoded_output() {
+        let binary_sha = "1".repeat(64);
+        let base_sha = "2".repeat(64);
+        let active_sha = "3".repeat(64);
+        let source_sha = "4".repeat(64);
+        let filtered_source_sha = "5".repeat(64);
+        let filtered_base_sha = "6".repeat(64);
+        let filtered_index_sha = "7".repeat(64);
+        let sample = |arm: &str, filtered: bool, full_walk: bool, records: u64, fallbacks: u64| {
+            let sample_base = if filtered {
+                &filtered_base_sha
+            } else {
+                &base_sha
+            };
+            let sample_source = if filtered {
+                &filtered_source_sha
+            } else {
+                &source_sha
+            };
+            json!({
+                "arm": arm,
+                "full_walk": full_walk,
+                "reboot_verified": true,
+                "cache_drop_verified": true,
+                "remote_binary_sha256_verified": true,
+                "remote_base_sha256_verified": true,
+                "remote_active_sha256_verified": true,
+                "base_sha256": sample_base,
+                "active_sha256": active_sha,
+                "report": {
+                    "command": "build-active",
+                    "full_walk": full_walk,
+                    "source_sha256": sample_source,
+                    "output_bytes": 100,
+                    "total_us": 1,
+                    "build": {
+                        "active_records": records,
+                        "preferred_families": 8,
+                        "installed_mras": 10,
+                        "fast_path_hits": 10,
+                        "fallback_count": fallbacks,
+                        "fallback_paths": if full_walk { json!(["_Arcade/1942 (Revision B).mra"]) } else { json!([]) },
+                        "skipped_missing_rom": 5,
+                        "skipped_ambiguous": 1,
+                        "skipped_invalid": 0
+                    }
+                },
+                "inspect": {
+                    "kind": "active",
+                    "bytes": 100,
+                    "source_sha256": sample_source,
+                    "records": records,
+                    "preferred": 8,
+                    "counts": {
+                        "installed_mras": 10,
+                        "index_hits": 10,
+                        "fallbacks": fallbacks,
+                        "skipped_missing_rom": 5,
+                        "skipped_ambiguous": 1,
+                        "skipped_invalid": 0
+                    }
+                }
+            })
+        };
+        let passing = json!({
+            "schema": "mister-magik-arcade-catalog-prototype-cold-v5",
+            "scenario": "arcade-catalog-prototype-cold",
+            "status": "passed",
+            "source_commit": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+            "binary_sha256": binary_sha,
+            "source_base_sha256": base_sha,
+            "filtered_index_sha256": filtered_index_sha,
+            "filtered_base_sha256": filtered_base_sha,
+            "source_base_compile": {
+                "source_sha256": source_sha,
+                "compile": {"source_rows": 3069}
+            },
+            "source_base_inspect": {
+                "kind": "base",
+                "records": 3069,
+                "source_sha256": source_sha
+            },
+            "filtered_base_compile": {
+                "source_sha256": filtered_source_sha,
+                "compile": {"source_rows": 3068}
+            },
+            "filtered_base_inspect": {
+                "kind": "base",
+                "records": 3068,
+                "source_sha256": filtered_source_sha
+            },
+            "unknown_target": {
+                "path": "_Arcade/1942 (Revision B).mra",
+                "rbf": "jt1942",
+                "rom": "1942"
+            },
+            "production_registry": {"unchanged": true},
+            "samples": [
+                sample("indexed-fast", false, false, 10, 0),
+                sample("filtered-fast", true, false, 9, 0),
+                sample("filtered-full-walk", true, true, 10, 1)
+            ],
+            "validation": {
+                "single_worker_policy": true,
+                "filtered_fast_omits_target": true,
+                "full_walk_restores_target": true,
+                "recovery_extra_us": 1
+            }
+        });
+        assert!(evaluate_arcade_catalog_prototype_summary(&passing).is_ok());
+
+        let mut invalid = passing.clone();
+        invalid["samples"][0]["inspect"]["bytes"] = json!(99);
+        assert!(evaluate_arcade_catalog_prototype_summary(&invalid).is_err());
+
+        let mut invalid = passing.clone();
+        invalid["production_registry"]["unchanged"] = json!(false);
+        assert!(evaluate_arcade_catalog_prototype_summary(&invalid).is_err());
+
+        let mut invalid = passing;
+        invalid["samples"][0]["remote_binary_sha256_verified"] = json!(false);
+        assert!(evaluate_arcade_catalog_prototype_summary(&invalid).is_err());
+    }
 
     #[test]
     fn modal_input_requires_held_release_isolation_and_a_fresh_activation() {

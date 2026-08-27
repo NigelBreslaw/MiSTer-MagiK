@@ -5,12 +5,15 @@
 
 use crate::library_db::LibraryScan;
 use crate::software_identity::{SoftwareHashCache, SoftwareHashCacheKey};
-use rusqlite::{Connection, OpenFlags, params};
+#[cfg(test)]
+use rusqlite::params;
+use rusqlite::{Connection, OpenFlags};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::catalog_format::SCANNER_CACHE_SCHEMA_VERSION as SCHEMA_VERSION;
 const FILE_NAME: &str = "scanner-cache.sqlite3";
+#[cfg(test)]
 const WRITE_BATCH_ROWS: usize = 8_192;
 
 #[derive(Clone, Debug, Default)]
@@ -119,6 +122,7 @@ fn read_rows(conn: &Connection) -> Result<ScannerCacheState, String> {
     })
 }
 
+#[cfg(test)]
 fn validate_staged(path: &Path, expected: &ScannerCacheState) -> Result<(), String> {
     crate::cooperative_work::checkpoint();
     let conn = Connection::open_with_flags(
@@ -171,13 +175,13 @@ fn validate_staged(path: &Path, expected: &ScannerCacheState) -> Result<(), Stri
     Ok(())
 }
 
-#[cfg_attr(not(feature = "builder"), allow(dead_code))]
+#[cfg(test)]
 pub(crate) struct StagedScannerCache {
     temp: Option<PathBuf>,
     final_path: PathBuf,
 }
 
-#[cfg_attr(not(feature = "builder"), allow(dead_code))]
+#[cfg(test)]
 impl StagedScannerCache {
     pub(crate) fn publish(mut self) -> Result<(), String> {
         let temp = self.temp.as_ref().expect("staged scanner cache path");
@@ -192,6 +196,7 @@ impl StagedScannerCache {
     }
 }
 
+#[cfg(test)]
 impl Drop for StagedScannerCache {
     fn drop(&mut self) {
         if let Some(temp) = self.temp.take() {
@@ -200,7 +205,7 @@ impl Drop for StagedScannerCache {
     }
 }
 
-#[cfg_attr(not(feature = "builder"), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn stage(path: &Path, state: &ScannerCacheState) -> Result<StagedScannerCache, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)

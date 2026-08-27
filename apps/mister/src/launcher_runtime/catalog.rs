@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Portable Catalog V3 startup and system-row projection.
+//! Fast-catalog registry startup and system-row projection.
 
 use crate::arcade_catalog::{self, ArcadeCatalog};
 use mister_magik_catalog::sharded_catalog::{CatalogGame, CatalogReader};
@@ -43,7 +43,7 @@ pub fn load_sharded_registry_seed_at(
 ) -> Result<ShardedCatalogSeed, ShardedCatalogSeedLoadError> {
     let reader = mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
         storage,
-        mister_magik_catalog::production_sharded_projection::production_registry_limits(),
+        mister_magik_catalog::shard_registry::production_registry_limits(),
     )
     .map_err(|error| ShardedCatalogSeedLoadError {
         status: "unavailable",
@@ -61,21 +61,40 @@ pub fn load_sharded_registry_seed_at(
             error: "catalog registry has no systems".to_owned(),
         });
     }
-    let catalog_fingerprint =
-        mister_magik_catalog::production_sharded_projection::validate_production_binding(
-            storage,
-            registry.generation(),
-        )
-        .map_err(|error| ShardedCatalogSeedLoadError {
-            status: "stale",
-            error: error.to_string(),
-        })?;
+    validate_fast_five_registry(registry.systems())?;
+    let catalog_fingerprint = mister_magik_catalog::fast_five_catalog::registry_fingerprint(
+        storage,
+        mister_magik_catalog::shard_registry::production_registry_limits(),
+    )
+    .map_err(|error| ShardedCatalogSeedLoadError {
+        status: "stale",
+        error,
+    })?;
     let generation = registry.generation();
     Ok(ShardedCatalogSeed {
         catalog: registry_only_catalog(root, registry.systems()),
         catalog_fingerprint,
         generation,
     })
+}
+
+fn validate_fast_five_registry(
+    systems: &[mister_magik_catalog::sharded_catalog::SystemSummary],
+) -> Result<(), ShardedCatalogSeedLoadError> {
+    let actual = systems
+        .iter()
+        .map(|system| system.system_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if mister_magik_catalog::fast_five_catalog::is_supported_fast_system_set(actual.iter().copied())
+        && systems.len() == actual.len()
+    {
+        Ok(())
+    } else {
+        Err(ShardedCatalogSeedLoadError {
+            status: "stale",
+            error: format!("unsupported fast catalog registry system set: actual={actual:?}"),
+        })
+    }
 }
 
 fn registry_only_catalog(
@@ -91,7 +110,7 @@ fn registry_only_catalog(
         })
         .collect::<Vec<_>>();
     // Startup publishes only registry counts. Arcade uses the same on-demand NavPack path as
-    // every other system; the retained bootstrap remains a recovery path when Catalog V3 cannot
+    // every other system; the retained bootstrap remains a recovery path when the registry cannot
     // seed the launcher at all.
     let games = Vec::new();
     let launch_plans = Vec::new();
@@ -279,5 +298,38 @@ mod tests {
             catalog.system_game_count(arcade_catalog::MENU_ARCADE_SYSTEM_ID),
             0
         );
+    }
+
+    #[test]
+    fn fast_catalog_registry_accepts_any_nonempty_valid_system_set() {
+        use mister_magik_catalog::catalog_classify::SystemId;
+        use mister_magik_catalog::sharded_catalog::SystemSummary;
+
+        let summaries = |ids: &[&str]| {
+            ids.iter()
+                .map(|id| SystemSummary {
+                    system_id: SystemId::parse(id).unwrap(),
+                    display_title: (*id).to_string(),
+                    section: "computers".into(),
+                    family: "computers".into(),
+                    order: 0,
+                    generation: 1,
+                    games: 1,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            validate_fast_five_registry(&summaries(
+                &mister_magik_catalog::fast_five_catalog::FAST_FIVE_SYSTEM_IDS
+            ))
+            .is_ok()
+        );
+        assert!(
+            validate_fast_five_registry(&summaries(
+                &mister_magik_catalog::fast_five_catalog::EXPANDED_FAST_SYSTEM_IDS
+            ))
+            .is_ok()
+        );
+        assert!(validate_fast_five_registry(&summaries(&["arcade"])).is_ok());
     }
 }

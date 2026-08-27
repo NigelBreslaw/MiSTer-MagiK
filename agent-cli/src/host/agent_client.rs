@@ -710,18 +710,6 @@ pub(crate) fn agent_framebuffer_capture_stream(
     )
 }
 
-pub(crate) fn agent_library_snapshot_stream(
-    endpoint: &AgentEndpoint,
-) -> Result<AgentBinaryResponse> {
-    agent_binary_request_at(
-        endpoint,
-        "library_database_snapshot_lz4_stream",
-        json!({}),
-        "payload_bytes",
-        Duration::from_secs(30),
-    )
-}
-
 pub(crate) fn agent_request_with_liveness(
     cmd: &str,
     args: Value,

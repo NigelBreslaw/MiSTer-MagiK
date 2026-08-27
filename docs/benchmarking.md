@@ -17,8 +17,10 @@ correctness stress, not rendering-cadence qualification.
 `scripts/agent benchmark [SCENARIO]` is the only agent-facing performance
 workflow. Scenarios are a closed typed registry rather than a flag matrix. It
 never builds, deploys, or replaces platform files. The fixed `cold-boot`
-scenario is the sole benchmark allowed to issue one supervised Linux reboot;
-all other scenarios must leave the device boot unchanged. The
+scenario may issue one supervised Linux reboot. The isolated
+`arcade-catalog-prototype-cold` scenario may issue three supervised reboots for
+fresh indexed-fast, filtered-fast, and filtered-full-walk active builds. All
+other scenarios must leave the device boot unchanged. The
 installed platform manifest and its hashes are the benchmark identity, and its
 delivery reconciliation against the clean local Git HEAD must be a no-op.
 Host-only benchmark tooling changes therefore do not force an identical runtime
@@ -53,6 +55,7 @@ Supported scenarios:
 - `particle-profile`
 - `catalog-lifecycle`
 - `catalog-resume-validation`
+- `arcade-catalog-prototype-cold`
 - `launch-return`
 - `launch-return-once`
 - `launch-return-fallback`
@@ -525,7 +528,7 @@ The device agent exposes no binary-only runtime replacement endpoint.
 
 ## System entry
 
-`scripts/agent benchmark system-entry` measures every populated Catalog V3
+`scripts/agent benchmark system-entry` measures every populated fast-catalog
 system. Each system gets a fresh launcher process containing registry summaries
 and a generation-bound entry reader; merely focusing the destination tile
 performs no shard load or prelude fault. The benchmark sends one production-path activation press, then
@@ -713,7 +716,7 @@ are archived with their code and visual contracts under
 ## First-run intro qualification
 
 The first-run launcher intro is not qualified by a host render average. Device
-evidence must begin with both Catalog V3 and the retained Arcade bootstrap
+evidence must begin with the fast catalog absent
 absent, use the production direct hidden-slot route, and retain the complete
 launcher frame trace. The qualification run injects no launcher input; UI
 responsiveness under navigation load is measured separately so it cannot alter

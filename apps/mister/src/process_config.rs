@@ -81,9 +81,7 @@ const TEST_CATALOG_PUBLICATION_SESSION: &str = "MISTER_MAGIK_TEST_CATALOG_PUBLIC
 const MODAL_TEST_PATH_INPUTS: &[&str] = &[
     "MISTER_SHARDED_CATALOG_DIR",
     "MISTER_LIBRARY_SQLITE",
-    "MISTER_ARCADE_BOOTSTRAP_INDEX",
     "MISTER_LIBRARY_REFRESH_LOCK",
-    "MISTER_CATALOG_BUILDER_LOCK",
     "MISTER_CATALOG_READY_SNAPSHOT",
     "MISTER_CATALOG_DIAGNOSTICS_DIR",
 ];
@@ -788,12 +786,9 @@ pub struct ProcessConfig {
 
 impl ProcessConfig {
     pub fn capture(args: &[String], command: &str) -> Self {
-        Self::from_snapshot_with_device_paths(
-            args,
-            command,
-            &EnvironmentSnapshot::capture_process(),
-            DevicePaths::current(),
-        )
+        let device_paths = DevicePaths::current();
+        let environment = EnvironmentSnapshot::capture_process();
+        Self::from_snapshot_with_device_paths(args, command, &environment, device_paths)
     }
 
     #[cfg(test)]
@@ -1015,14 +1010,14 @@ mod tests {
             (MAIN_PID, "7"),
         ]);
         let config = ProcessConfig::from_snapshot(
-            &["mister-magik-fb".into(), "catalog-v3-inspect".into()],
-            "catalog-v3-inspect",
+            &["mister-magik-fb".into(), "catalog-inspect".into()],
+            "catalog-inspect",
             &environment,
         );
 
         assert_eq!(
             config.command(),
-            &CommandMode::Other("catalog-v3-inspect".into())
+            &CommandMode::Other("catalog-inspect".into())
         );
         assert!(config.launcher().is_none());
         assert_eq!(

@@ -47,7 +47,6 @@ import {
     AppState,
     DeviceState,
     DirtyRectOverlay,
-    LibraryState,
     ProfileFrameBar,
     ProfileFrameSegment,
     ProfileHeatmapCell,
@@ -62,7 +61,6 @@ import {
 import { AppHeader, Sidebar } from "components/chrome.slint";
 import { DebugPage } from "views/debug.slint";
 import { SdCardPage } from "views/sd_card.slint";
-import { LibraryPage } from "views/library.slint";
 import { AnalyticsPage } from "views/analytics.slint";
 
 export {
@@ -71,7 +69,6 @@ export {
     AppState,
     DeviceState,
     DirtyRectOverlay,
-    LibraryState,
     ProfileFrameBar,
     ProfileFrameSegment,
     ProfileHeatmapCell,
@@ -133,11 +130,6 @@ export component AppWindow inherits Window {
                         }
     
                         if AppState.selected-page == "sd-card": SdCardPage {
-                            width: parent.width;
-                            height: parent.height;
-                        }
-    
-                        if AppState.selected-page == "library": LibraryPage {
                             width: parent.width;
                             height: parent.height;
                         }
