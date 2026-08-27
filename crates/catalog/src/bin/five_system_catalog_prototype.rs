@@ -601,6 +601,7 @@ struct MediaAbReport {
 #[derive(Serialize)]
 struct MediaAbRunReport {
     implementation: &'static str,
+    parallel_lanes: usize,
     elapsed_us: u64,
     systems: Vec<GenericSystemStats>,
 }
@@ -697,15 +698,51 @@ fn run_media_implementation(
     let started = Instant::now();
     let mut reports = Vec::with_capacity(MEDIA_EXPERIMENT_SYSTEM_IDS.len());
     let mut systems = BTreeMap::new();
-    for system_id in MEDIA_EXPERIMENT_SYSTEM_IDS {
-        let (system, report) =
-            scan_media_experiment_system(storage_root, system_id, implementation)?;
+    let parallel_lanes =
+        usize::from(implementation == GenericScanImplementation::NamespaceBorrowed)
+            .saturating_add(1);
+    let results = if parallel_lanes == 2 {
+        std::thread::scope(|scope| {
+            let bbc = scope
+                .spawn(|| scan_media_experiment_system(storage_root, "bbcmicro", implementation));
+            let other = scope.spawn(|| {
+                ["psx", "msx"]
+                    .into_iter()
+                    .map(|system_id| {
+                        scan_media_experiment_system(storage_root, system_id, implementation)
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+            });
+            let bbc = bbc
+                .join()
+                .map_err(|_| "BBC media scan worker panicked".to_string())??;
+            let mut results = other
+                .join()
+                .map_err(|_| "PSX/MSX media scan worker panicked".to_string())??;
+            results.push(bbc);
+            Ok::<_, String>(results)
+        })?
+    } else {
+        MEDIA_EXPERIMENT_SYSTEM_IDS
+            .into_iter()
+            .map(|system_id| scan_media_experiment_system(storage_root, system_id, implementation))
+            .collect::<Result<Vec<_>, String>>()?
+    };
+    for (system, report) in results {
+        let system_id = system.system_id.clone();
         reports.push(report);
-        systems.insert(system_id.to_string(), system);
+        systems.insert(system_id, system);
     }
+    reports.sort_by_key(|report| {
+        MEDIA_EXPERIMENT_SYSTEM_IDS
+            .iter()
+            .position(|system_id| *system_id == report.system_id)
+            .unwrap_or(usize::MAX)
+    });
     Ok(MediaAbRun {
         report: MediaAbRunReport {
             implementation: implementation.as_str(),
+            parallel_lanes,
             elapsed_us: elapsed_us(started),
             systems: reports,
         },
