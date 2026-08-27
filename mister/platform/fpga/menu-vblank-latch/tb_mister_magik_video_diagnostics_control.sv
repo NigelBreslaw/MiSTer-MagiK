@@ -6,14 +6,21 @@
 module tb_mister_magik_video_diagnostics_control;
 	`include "mister_magik_video_diagnostics_protocol.svh"
 
-	localparam [15:0] FETCH_STATE_SCHEMA = 16'd11;
-	localparam [15:0] FETCH_FLAG_CAPTURE_VALID = 16'h0001;
-	localparam [15:0] FETCH_FLAG_FIFO_OVERFLOW = 16'h0002;
-	localparam [15:0] FETCH_FLAG_UNEXPECTED_RETURN = 16'h0004;
-	localparam [15:0] FETCH_FLAG_BAD_BURSTCOUNT = 16'h0008;
-	localparam [15:0] FETCH_FLAG_BAD_RETURN_PHASE = 16'h0010;
-	localparam [15:0] FETCH_FLAG_EPOCH_OVERLAP = 16'h0020;
-	localparam [15:0] FETCH_FLAG_COUNTER_OVERFLOW = 16'h0040;
+	localparam [15:0] FETCH_STATE_SCHEMA = MAGIK_RAW_SCALER_STATE_SCHEMA;
+	localparam [15:0] FETCH_FLAG_CAPTURE_VALID =
+		MAGIK_RAW_SCALER_STATE_FLAG_CAPTURE_VALID;
+	localparam [15:0] FETCH_FLAG_FIFO_OVERFLOW =
+		MAGIK_RAW_SCALER_STATE_FLAG_FIFO_OVERFLOW;
+	localparam [15:0] FETCH_FLAG_UNEXPECTED_RETURN =
+		MAGIK_RAW_SCALER_STATE_FLAG_UNEXPECTED_RETURN;
+	localparam [15:0] FETCH_FLAG_BAD_BURSTCOUNT =
+		MAGIK_RAW_SCALER_STATE_FLAG_BAD_BURSTCOUNT;
+	localparam [15:0] FETCH_FLAG_BAD_RETURN_PHASE =
+		MAGIK_RAW_SCALER_STATE_FLAG_BAD_RETURN_PHASE;
+	localparam [15:0] FETCH_FLAG_EPOCH_OVERLAP =
+		MAGIK_RAW_SCALER_STATE_FLAG_EPOCH_OVERLAP;
+	localparam [15:0] FETCH_FLAG_COUNTER_OVERFLOW =
+		MAGIK_RAW_SCALER_STATE_FLAG_COUNTER_OVERFLOW;
 
 	reg clk_100m = 1'b0;
 	reg clk_sys = 1'b0;
@@ -170,7 +177,8 @@ module tb_mister_magik_video_diagnostics_control;
 			for(beat = 0; beat < 128; beat = beat + 1) begin
 				token = golden_fold_data(beat_data(seed, beat[7:0])) ^ 16'h5a02;
 				if(beat == 0)
-					token = token ^ golden_fold_address(address);
+					next_value = golden_update(
+						next_value, golden_fold_address(address));
 				next_value = golden_update(next_value, token);
 			end
 			golden_burst = next_value;
@@ -190,7 +198,8 @@ module tb_mister_magik_video_diagnostics_control;
 				token = golden_fold_data(
 					beat_data_lane_swapped(seed, beat[7:0])) ^ 16'h5a02;
 				if(beat == 0)
-					token = token ^ golden_fold_address(address);
+					next_value = golden_update(
+						next_value, golden_fold_address(address));
 				next_value = golden_update(next_value, token);
 			end
 			golden_burst_lane_swapped = next_value;
@@ -431,6 +440,20 @@ module tb_mister_magik_video_diagnostics_control;
 		   words[3] == stable_signature)
 			fail("16-bit return-lane permutation was not detected");
 
+		// Accepted-address changes are part of the ordered signature even when
+		// the returned data and burst order remain otherwise identical.
+		golden = golden_burst(16'h56da, 28'h0000800, 8'h11);
+		golden = golden_burst(golden, 28'h0000900, 8'h22);
+		pulse_request(28'h0000900, 8'd128, 1'b0);
+		drive_return_burst(8'h22);
+		pulse_request(28'h0000800, 8'd128, 1'b0);
+		drive_return_burst(8'h11);
+		wait_capture();
+		read_record();
+		if(words[2] != 16'd5 || words[3] != golden ||
+		   words[3] == stable_signature)
+			fail("accepted-address change was not detected");
+
 		// Partial reads reset cleanly.
 		command_start(MAGIK_UIO_GET_RAW_SCALER_STATE);
 		read_word(words[0]);
@@ -488,6 +511,13 @@ module tb_mister_magik_video_diagnostics_control;
 		// Each protocol defect publishes a sticky invalid record with zero
 		// sequence/signature. Exercise all externally reachable fault classes.
 		apply_reset();
+		pulse_request(28'h0001000, 8'd128, 1'b0);
+		apply_reset();
+		read_record();
+		if(words[1] != 0 || words[2] != 0 || words[3] != 0)
+			fail("reset with outstanding work manufactured evidence");
+		// If an ambiguous pre-reset return survives the reset boundary, the
+		// empty post-reset scoreboard must invalidate it rather than hash it.
 		@(negedge clk_100m);
 		vbuf_readdatavalid = 1'b1;
 		@(posedge clk_100m);

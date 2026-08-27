@@ -27,22 +27,29 @@ module mister_magik_scaler_fetch_ordered_frame (
 
 `include "mister_magik_video_diagnostics_protocol.svh"
 
-	// The canonical protocol/host lane owns generated schema constants. This
-	// candidate deliberately preserves schema 10's five-word transport shape.
-	localparam [15:0] FETCH_STATE_SCHEMA = 16'd11;
+	// Keep the active schema and flag assignments generated from the canonical
+	// JSON contract while preserving schema 10's five-word transport shape.
+	localparam [15:0] FETCH_STATE_SCHEMA = MAGIK_RAW_SCALER_STATE_SCHEMA;
 	localparam [15:0] SIGNATURE_INITIAL = 16'h56da;
 	localparam [15:0] SIGNATURE_POLYNOMIAL = 16'ha001;
 	localparam [7:0] REQUIRED_BURSTCOUNT = 8'd128;
 	localparam [15:0] TOKEN_DATA = 16'h5a02;
 	localparam [15:0] TOKEN_ADDRESS = 16'ha501;
 
-	localparam [6:0] FETCH_FLAG_CAPTURE_VALID = 7'h01;
-	localparam [6:0] FETCH_FLAG_FIFO_OVERFLOW = 7'h02;
-	localparam [6:0] FETCH_FLAG_UNEXPECTED_RETURN = 7'h04;
-	localparam [6:0] FETCH_FLAG_BAD_BURSTCOUNT = 7'h08;
-	localparam [6:0] FETCH_FLAG_BAD_RETURN_PHASE = 7'h10;
-	localparam [6:0] FETCH_FLAG_EPOCH_OVERLAP = 7'h20;
-	localparam [6:0] FETCH_FLAG_COUNTER_OVERFLOW = 7'h40;
+	localparam [6:0] FETCH_FLAG_CAPTURE_VALID =
+		MAGIK_RAW_SCALER_STATE_FLAG_CAPTURE_VALID;
+	localparam [6:0] FETCH_FLAG_FIFO_OVERFLOW =
+		MAGIK_RAW_SCALER_STATE_FLAG_FIFO_OVERFLOW;
+	localparam [6:0] FETCH_FLAG_UNEXPECTED_RETURN =
+		MAGIK_RAW_SCALER_STATE_FLAG_UNEXPECTED_RETURN;
+	localparam [6:0] FETCH_FLAG_BAD_BURSTCOUNT =
+		MAGIK_RAW_SCALER_STATE_FLAG_BAD_BURSTCOUNT;
+	localparam [6:0] FETCH_FLAG_BAD_RETURN_PHASE =
+		MAGIK_RAW_SCALER_STATE_FLAG_BAD_RETURN_PHASE;
+	localparam [6:0] FETCH_FLAG_EPOCH_OVERLAP =
+		MAGIK_RAW_SCALER_STATE_FLAG_EPOCH_OVERLAP;
+	localparam [6:0] FETCH_FLAG_COUNTER_OVERFLOW =
+		MAGIK_RAW_SCALER_STATE_FLAG_COUNTER_OVERFLOW;
 
 	// Independent accepted-request FIFO. Only a folded address and its epoch
 	// marker are retained; production ascal itself caps outstanding reads at two.
@@ -243,8 +250,6 @@ module mister_magik_scaler_fetch_ordered_frame (
 
 			if(return_has_entry) begin
 				return_token = fold_return_data(vbuf_readdata) ^ TOKEN_DATA;
-				if(return_phase == 7'd0)
-					return_token = return_token ^ fifo_address_token0;
 
 				if(return_phase == 7'd0 && fifo_wrap0) begin
 					if(epoch_armed && !source_faulted) begin
@@ -254,12 +259,21 @@ module mister_magik_scaler_fetch_ordered_frame (
 					end
 					epoch_armed <= 1'b1;
 					epoch_signature <= ordered_signature_update(
-						SIGNATURE_INITIAL, return_token);
+						ordered_signature_update(
+							SIGNATURE_INITIAL, fifo_address_token0),
+						return_token);
 					fifo_wrap0 <= 1'b0;
 				end
-				else if(epoch_armed && !source_faulted)
-					epoch_signature <= ordered_signature_update(
-						epoch_signature, return_token);
+				else if(epoch_armed && !source_faulted) begin
+					if(return_phase == 7'd0)
+						epoch_signature <= ordered_signature_update(
+							ordered_signature_update(
+								epoch_signature, fifo_address_token0),
+							return_token);
+					else
+						epoch_signature <= ordered_signature_update(
+							epoch_signature, return_token);
+				end
 
 				if(return_phase == 7'd127)
 					return_phase <= 7'd0;
@@ -282,7 +296,7 @@ module mister_magik_scaler_fetch_ordered_frame (
 			response_word = FETCH_STATE_SCHEMA;
 		else if(word_count == MAGIK_RAW_SCALER_STATE_FLAGS_WORD)
 			response_word = {9'd0, snapshot_flags};
-		else if(word_count == MAGIK_RAW_SCALER_STATE_FRAME_SEQUENCE_WORD)
+		else if(word_count == MAGIK_RAW_SCALER_STATE_CAPTURE_SEQUENCE_WORD)
 			response_word = snapshot_sequence;
 		else if(word_count == MAGIK_RAW_SCALER_STATE_CRC_WORD)
 			response_word = tx_crc;

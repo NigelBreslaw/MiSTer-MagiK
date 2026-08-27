@@ -284,7 +284,15 @@ def main() -> None:
         "input  wire [127:0] vbuf_readdata",
         "input  wire         vbuf_readdatavalid",
         "input  wire         vbuf_read",
-        "localparam [15:0] FETCH_STATE_SCHEMA = 16'd11;",
+        "localparam [15:0] FETCH_STATE_SCHEMA = MAGIK_RAW_SCALER_STATE_SCHEMA;",
+        "MAGIK_RAW_SCALER_STATE_FLAG_CAPTURE_VALID;",
+        "MAGIK_RAW_SCALER_STATE_FLAG_FIFO_OVERFLOW;",
+        "MAGIK_RAW_SCALER_STATE_FLAG_UNEXPECTED_RETURN;",
+        "MAGIK_RAW_SCALER_STATE_FLAG_BAD_BURSTCOUNT;",
+        "MAGIK_RAW_SCALER_STATE_FLAG_BAD_RETURN_PHASE;",
+        "MAGIK_RAW_SCALER_STATE_FLAG_EPOCH_OVERLAP;",
+        "MAGIK_RAW_SCALER_STATE_FLAG_COUNTER_OVERFLOW;",
+        "MAGIK_RAW_SCALER_STATE_CAPTURE_SEQUENCE_WORD",
         "wire accepted = vbuf_read && !vbuf_waitrequest;",
         "wire return_has_entry = returned && fifo_count != 2'd0;",
         "wire return_last = return_has_entry && return_phase == 7'd127;",
@@ -304,7 +312,8 @@ def main() -> None:
         "(mixed[0] ? SIGNATURE_POLYNOMIAL : 16'd0);",
         "case({enqueue, dequeue})",
         "return_token = fold_return_data(vbuf_readdata) ^ TOKEN_DATA;",
-        "return_token = return_token ^ fifo_address_token0;",
+        "SIGNATURE_INITIAL, fifo_address_token0",
+        "epoch_signature, fifo_address_token0",
         "if(return_phase == 7'd0 && fifo_wrap0) begin",
         "published_signature <= epoch_signature;",
         "published_flags <= FETCH_FLAG_CAPTURE_VALID;",
@@ -577,12 +586,13 @@ def main() -> None:
             fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
         required_observer_bindings = {
             ".reset_active(reset_req)": 1,
-            ".vbuf_address(vbuf_address)": 1,
-            ".vbuf_burstcount(vbuf_burstcount)": 1,
-            ".vbuf_waitrequest(vbuf_waitrequest)": 1,
-            ".vbuf_readdata(vbuf_readdata)": 1,
-            ".vbuf_readdatavalid(vbuf_readdatavalid)": 1,
-            ".vbuf_read(vbuf_read)": 1,
+            # One production ascal binding plus one passive observer binding.
+            ".vbuf_address(vbuf_address)": 2,
+            ".vbuf_burstcount(vbuf_burstcount)": 2,
+            ".vbuf_waitrequest(vbuf_waitrequest)": 2,
+            ".vbuf_readdata(vbuf_readdata)": 2,
+            ".vbuf_readdatavalid(vbuf_readdatavalid)": 2,
+            ".vbuf_read(vbuf_read)": 2,
         }
         for binding, expected_count in required_observer_bindings.items():
             if patched.count(binding) != expected_count:
