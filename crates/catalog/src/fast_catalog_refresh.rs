@@ -196,9 +196,20 @@ pub fn build_fresh_catalog(
     storage_root: &Path,
     catalog_root: &Path,
 ) -> Result<FastCatalogFreshBuildReport, String> {
+    build_fresh_catalog_with_progress(storage_root, catalog_root, |_| {})
+}
+
+pub fn build_fresh_catalog_with_progress(
+    storage_root: &Path,
+    catalog_root: &Path,
+    system_complete: impl FnMut(&str),
+) -> Result<FastCatalogFreshBuildReport, String> {
     let started = std::time::Instant::now();
     let (snapshot, source) =
-        crate::fast_catalog_sources::build_independent_fast_snapshot(storage_root)?;
+        crate::fast_catalog_sources::build_independent_fast_snapshot_with_progress(
+            storage_root,
+            system_complete,
+        )?;
     let publication = crate::fast_five_catalog::publish_snapshot_with_profile(
         catalog_root,
         &snapshot,
@@ -1136,15 +1147,30 @@ fn capture_tree(
     directories: &mut Vec<FastWatchedDirectory>,
     containers: &mut Vec<FastWatchedContainer>,
 ) -> Result<(), String> {
+    let metadata = fs::metadata(root)
+        .map_err(|error| format!("stat watch directory {}: {error}", root.display()))?;
     let mut entries = fs::read_dir(root)
         .map_err(|error| format!("read watch directory {}: {error}", root.display()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("enumerate watch directory {}: {error}", root.display()))?;
     entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
+    let mut digest = Sha256::new();
     for entry in entries {
         let file_type = entry
             .file_type()
             .map_err(|error| format!("inspect {}: {error}", entry.path().display()))?;
+        let kind = if file_type.is_dir() {
+            b'd'
+        } else if file_type.is_file() {
+            b'f'
+        } else if file_type.is_symlink() {
+            b'l'
+        } else {
+            b'o'
+        };
+        digest.update([kind]);
+        digest.update(entry.file_name().to_string_lossy().as_bytes());
+        digest.update([0]);
         if file_type.is_symlink() {
             continue;
         }
@@ -1166,9 +1192,11 @@ fn capture_tree(
             }
         }
     }
-    if root.is_dir() {
-        directories.push(capture_directory(root)?);
-    }
+    directories.push(FastWatchedDirectory {
+        path: root.to_string_lossy().into_owned(),
+        modified_ns: modified_ns(&metadata),
+        entry_fingerprint: sha256_digest_hex(digest.finalize()),
+    });
     Ok(())
 }
 
@@ -1661,5 +1689,23 @@ mod tests {
         };
         check_watch_index(&root, &watch, &mut check);
         assert_eq!(check.status, FastSourceCheckStatus::Changed);
+    }
+
+    #[test]
+    fn one_pass_tree_capture_matches_directory_fingerprint_contract() {
+        let root = crate::test_support::unique_temp_dir("fast-refresh-one-pass");
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::write(root.join("Game.sfc"), b"rom").unwrap();
+        fs::write(root.join("nested/Other.sfc"), b"rom").unwrap();
+        let expected = capture_directory(&root).unwrap();
+        let mut directories = Vec::new();
+        let mut containers = Vec::new();
+        capture_tree(&root, "snes", &mut directories, &mut containers).unwrap();
+        let actual = directories
+            .iter()
+            .find(|directory| directory.path == root.to_string_lossy())
+            .unwrap();
+        assert_eq!(actual, &expected);
+        assert!(containers.is_empty());
     }
 }

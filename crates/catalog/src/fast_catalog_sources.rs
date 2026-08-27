@@ -12,7 +12,7 @@ use crate::fast_five_catalog::{
     FastFiveVariantRelation, collapse_c64_cross_source_variants,
 };
 use crate::generic_system_catalog::{
-    discover_generic_system_ids, discover_generic_systems_excluding,
+    discover_generic_system_ids, discover_generic_systems_excluding_with_progress,
     rebuild_installed_generic_system,
 };
 use crate::launch_profiles::CollectionListing;
@@ -51,9 +51,19 @@ pub struct FastSourceSystemReport {
 pub fn build_independent_fast_snapshot(
     storage_root: &Path,
 ) -> Result<(FastFiveSnapshot, FastSourceBuildReport), String> {
+    build_independent_fast_snapshot_with_progress(storage_root, |_| {})
+}
+
+pub fn build_independent_fast_snapshot_with_progress(
+    storage_root: &Path,
+    mut system_complete: impl FnMut(&str),
+) -> Result<(FastFiveSnapshot, FastSourceBuildReport), String> {
     let started = Instant::now();
-    let (generic_systems, generic) =
-        discover_generic_systems_excluding(storage_root, &PREPARED_SYSTEM_IDS)?;
+    let (generic_systems, generic) = discover_generic_systems_excluding_with_progress(
+        storage_root,
+        &PREPARED_SYSTEM_IDS,
+        &mut system_complete,
+    )?;
     let mut systems = generic_systems
         .into_iter()
         .map(|system| (system.system_id.clone(), system))
@@ -97,6 +107,7 @@ pub fn build_independent_fast_snapshot(
             report.helper_hits,
             report.fallback_validations,
         );
+        system_complete(system_id);
         if !system.games.is_empty() || !system.variants.is_empty() {
             systems.insert(system_id.to_string(), system);
             reports

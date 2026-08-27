@@ -289,9 +289,24 @@ fn run_fast_catalog_fresh_build(
             system_id: system_id.clone(),
         });
     }
-    let report = match mister_magik_catalog::fast_catalog_refresh::build_fresh_catalog(
+    let planned_system_set = planned_system_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut completed_system_ids = std::collections::BTreeSet::new();
+    let report = match mister_magik_catalog::fast_catalog_refresh::build_fresh_catalog_with_progress(
         &storage_root,
         catalog_root,
+        |system_id| {
+            if planned_system_set.contains(system_id)
+                && completed_system_ids.insert(system_id.to_string())
+            {
+                let _ = tx.send(CatalogWorkerMessage::SystemPrepared {
+                    system_id: system_id.to_string(),
+                    generation: 0,
+                });
+            }
+        },
     ) {
         Ok(report) => report,
         Err(error) => {
@@ -301,11 +316,13 @@ fn run_fast_catalog_fresh_build(
             return;
         }
     };
-    for system_id in &report.system_ids {
-        let _ = tx.send(CatalogWorkerMessage::SystemPrepared {
-            system_id: system_id.clone(),
-            generation: report.publication.generation,
-        });
+    for system_id in &planned_system_ids {
+        if completed_system_ids.insert(system_id.clone()) {
+            let _ = tx.send(CatalogWorkerMessage::SystemPrepared {
+                system_id: system_id.clone(),
+                generation: report.publication.generation,
+            });
+        }
     }
     let _ = tx.send(CatalogWorkerMessage::ManifestPublished {
         generation: report.publication.generation,
