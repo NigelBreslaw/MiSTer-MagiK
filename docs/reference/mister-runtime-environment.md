@@ -2,7 +2,7 @@
 
 <!-- Generated from apps/mister/config/runtime-environment.toml. Do not edit. -->
 
-Registry format: `mister-magik-runtime-environment-v2`. Baseline: 424 literal occurrences, 278 owned names, 7 external/build-time names.
+Registry format: `mister-magik-runtime-environment-v2`. Baseline: 423 literal occurrences, 277 owned names, 7 external/build-time names.
 
 | Name | Classification | Shape | Default behavior | Parser | Typed default | Scope | Conflicts | Sensitivity | Aliases | Documentation | Visibility | Owner |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -31,7 +31,6 @@ Registry format: `mister-magik-runtime-environment-v2`. Baseline: 424 literal oc
 | `MISTER_CAMERA_EFFECTS_TRACE` | diagnostic | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | instrumentation | — | public | — | Controls camera effects trace behavior; value policy: document | developer diagnostic | `apps/mister/src/ui_runner/experiments/effects/camera_effects_loop.rs` |
 | `MISTER_CATALOG_ARTIFACT_COPY` | benchmark | enum token | uses buffered copy-and-hash publication when unset | enum | "buffered" | instrumentation | — | public | — | Selects the catalog artifact copy implementation for benchmark comparison; values: buffered, preallocated, copy-file-range; value policy: document | benchmark only | `crates/catalog/src/shard_registry.rs` |
 | `MISTER_CATALOG_BACKGROUND_DELAY_MS` | production | bounded integer | uses the owner-defined bounded numeric default when unset or invalid | u64 | — | command | — | public | — | Controls catalog background delay ms behavior; value policy: document | internal runtime | `apps/mister/src/ui_runner/launcher_loop.rs` |
-| `MISTER_CATALOG_BUILDER_LOCK` | production | path | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls catalog builder lock behavior; value policy: document | internal runtime | `apps/mister/src/pmu_profile.rs` |
 | `MISTER_CATALOG_CONTENTION_QUIET_PREVIEWS` | production | boolean token | uses the owner-defined enabled or disabled default when unset or unrecognized | bool | — | command | — | public | — | Controls catalog contention quiet previews behavior; value policy: document | internal runtime | `apps/mister/src/ui_runner/launcher_loop.rs` |
 | `MISTER_CATALOG_DIAGNOSTICS_DIR` | diagnostic | path or path list | uses the owner-defined output, fixture, or disabled path when unset | path | — | instrumentation | — | path | — | Controls catalog diagnostics dir behavior; value policy: redact | developer diagnostic | `apps/mister/src/catalog_progress_report.rs` |
 | `MISTER_CATALOG_DURABLE_RESUME` | production | boolean token | uses the owner-defined enabled or disabled default when unset or unrecognized | bool | — | command | — | public | — | Controls catalog durable resume behavior; value policy: document | internal runtime | `crates/catalog/src/library_indexer.rs` |

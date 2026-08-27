@@ -11,8 +11,8 @@ source_roots = [
 ]
 
 [baseline]
-literal_occurrences = 424
-unique_names = 278
+literal_occurrences = 423
+unique_names = 277
 external_build_names = 7
 
 [[control]]
@@ -366,20 +366,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls catalog background delay ms behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_CATALOG_BUILDER_LOCK"
-owner = "apps/mister/src/pmu_profile.rs"
-classification = "production"
-value_shape = "path"
-default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
-visibility = "internal runtime"
-parser = "path"
-scope = "command"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Controls catalog builder lock behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_CATALOG_CONTENTION_QUIET_PREVIEWS"

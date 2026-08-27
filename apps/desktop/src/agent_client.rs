@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 const AGENT_PORT: u16 = agent_protocol::PORT;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const BINARY_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(test)]
 const MAX_AGENT_BINARY_PAYLOAD_BYTES: u64 = agent_protocol::MAX_BINARY_PAYLOAD_BYTES;
 const SD_DIRECTORY_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 static SD_LIST_PROTOCOL: SdListProtocolCache = SdListProtocolCache::new();

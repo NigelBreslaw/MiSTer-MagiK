@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::preview_state::SystemEntryPreviewPrelude;
-use mister_magik_catalog::arcade_catalog::{self, ArcadeCatalog};
+use mister_magik_catalog::arcade_catalog::ArcadeCatalog;
 use mister_magik_catalog::builder_protocol::CatalogChangeReason;
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use std::path::Path;

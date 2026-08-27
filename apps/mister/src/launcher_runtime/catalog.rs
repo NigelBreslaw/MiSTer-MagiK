@@ -301,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn fast_five_registry_rejects_extra_or_missing_systems() {
+    fn fast_catalog_registry_accepts_any_nonempty_valid_system_set() {
         use mister_magik_catalog::catalog_classify::SystemId;
         use mister_magik_catalog::sharded_catalog::SystemSummary;
 
@@ -330,6 +330,6 @@ mod tests {
             ))
             .is_ok()
         );
-        assert!(validate_fast_five_registry(&summaries(&["arcade"])).is_err());
+        assert!(validate_fast_five_registry(&summaries(&["arcade"])).is_ok());
     }
 }

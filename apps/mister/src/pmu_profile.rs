@@ -589,13 +589,6 @@ mod tests {
     }
 
     #[test]
-    fn catalog_profile_roots_append_the_fixture_without_replacing_defaults() {
-        let roots = catalog_profile_library_roots(Path::new("/tmp/fixture"));
-        assert!(roots.starts_with("/media/fat/_Arcade|/media/fat/games|"));
-        assert!(roots.ends_with("|/tmp/fixture"));
-    }
-
-    #[test]
     fn process_profile_status_and_aggregate_require_complete_evidence() {
         let batch = mister_magik_perf_events::ProcessProfileBatch {
             profiles: vec![mister_magik_perf_events::SubmittedThreadProfile {
@@ -618,10 +611,7 @@ mod tests {
             status: "ok",
             elapsed_us: 1,
             peak_rss_kib: Some(2),
-            summary: None,
             timings: Vec::new(),
-            planned_systems: vec!["snes".into()],
-            all_published_systems: true,
             rebuilt_systems: vec!["snes".into()],
             removed_systems: Vec::new(),
             manifest_generation: 3,

@@ -2070,7 +2070,7 @@ mod tests {
         session.defer_catalog_worker(
             "/media/fat/_Arcade".to_string(),
             CatalogWorkerRequest::CheckStamp,
-            CatalogWorkerInitialCache::ProbeSqlite,
+            CatalogWorkerInitialCache::AlreadyProbedMissing,
             CatalogExecutionMode::BackgroundInteractive,
         );
 
@@ -2105,7 +2105,10 @@ mod tests {
 
         assert_eq!(worker.root, "/media/fat/_Arcade");
         assert_eq!(worker.request, CatalogWorkerRequest::CheckStamp);
-        assert_eq!(worker.initial_cache, CatalogWorkerInitialCache::ProbeSqlite);
+        assert_eq!(
+            worker.initial_cache,
+            CatalogWorkerInitialCache::AlreadyProbedMissing
+        );
         assert_eq!(
             worker.execution_mode,
             CatalogExecutionMode::BackgroundInteractive
@@ -2133,7 +2136,7 @@ mod tests {
         session.defer_catalog_worker(
             "/media/fat/_Arcade".to_string(),
             CatalogWorkerRequest::CheckStamp,
-            CatalogWorkerInitialCache::ProbeSqlite,
+            CatalogWorkerInitialCache::AlreadyProbedMissing,
             CatalogExecutionMode::BackgroundInteractive,
         );
 
@@ -2175,7 +2178,10 @@ mod tests {
 
         assert_eq!(worker.root, "/media/fat/_Arcade");
         assert_eq!(worker.request, CatalogWorkerRequest::CheckStamp);
-        assert_eq!(worker.initial_cache, CatalogWorkerInitialCache::ProbeSqlite);
+        assert_eq!(
+            worker.initial_cache,
+            CatalogWorkerInitialCache::AlreadyProbedMissing
+        );
         assert!(
             session
                 .maybe_start_deferred_worker(
