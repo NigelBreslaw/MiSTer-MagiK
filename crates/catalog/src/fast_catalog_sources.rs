@@ -519,6 +519,16 @@ struct ArcadeScan {
     variants: Vec<FastFiveGameVariant>,
 }
 
+#[derive(Debug, Default)]
+struct ArcadeUpdaterEvidence {
+    status: &'static str,
+    path: String,
+    error: String,
+    rows: usize,
+    file_sha256: String,
+    load_us: u64,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct FastArcadeAuditCandidate {
     pub title: String,
@@ -555,7 +565,7 @@ fn scan_arcade_candidates(
 ) -> Result<Vec<ArcadeCandidate>, String> {
     let roms = arcade_rom_inventory(storage_root, report)?;
     let cores = arcade_core_inventory(storage_root, report)?;
-    let updater = arcade_updater_rows(storage_root);
+    let (updater, updater_evidence) = arcade_updater_rows(storage_root);
     let mut files = Vec::new();
     collect_arcade_mras(
         &storage_root.join("_Arcade"),
@@ -563,6 +573,8 @@ fn scan_arcade_candidates(
         &mut files,
     )?;
     let mut games = Vec::new();
+    let mut updater_hits = 0usize;
+    let mut updater_misses = 0usize;
     for path in files {
         let relative = path
             .strip_prefix(storage_root)
@@ -571,6 +583,7 @@ fn scan_arcade_candidates(
             .replace('\\', "/")
             .to_ascii_lowercase();
         if let Some(row) = updater.get(&relative) {
+            updater_hits = updater_hits.saturating_add(1);
             let valid_rom = match &row.primary_rom {
                 PrimaryRomRequirement::None => true,
                 PrimaryRomRequirement::Archive { namespace, setname } => {
@@ -635,6 +648,7 @@ fn scan_arcade_candidates(
             });
             continue;
         }
+        updater_misses = updater_misses.saturating_add(1);
         let bytes = match fs::read(&path) {
             Ok(bytes) if bytes.len() <= 1024 * 1024 => bytes,
             _ => {
@@ -702,6 +716,20 @@ fn scan_arcade_candidates(
             family_id,
         });
     }
+    crate::catalog_logln!(
+        "library_scan_timing\tarcade_mra_prefetch\t{}\tindex_status={} index_path={} index_error={} index_rows={} index_file_sha256={} index_hits={} index_misses={} fallback_reads={} files={} index_load_us={}",
+        updater_evidence.load_us,
+        updater_evidence.status,
+        updater_evidence.path,
+        updater_evidence.error,
+        updater_evidence.rows,
+        updater_evidence.file_sha256,
+        updater_hits,
+        updater_misses,
+        updater_misses,
+        updater_hits.saturating_add(updater_misses),
+        updater_evidence.load_us,
+    );
     Ok(games)
 }
 
@@ -749,21 +777,48 @@ fn collapse_arcade_candidates(mut candidates: Vec<ArcadeCandidate>) -> ArcadeSca
 
 fn arcade_updater_rows(
     storage_root: &Path,
-) -> BTreeMap<String, crate::arcade_updater_index::ArcadeUpdaterRow> {
-    [
+) -> (
+    BTreeMap<String, crate::arcade_updater_index::ArcadeUpdaterRow>,
+    ArcadeUpdaterEvidence,
+) {
+    let started = Instant::now();
+    let candidates = [
         storage_root.join("mister-magik-dev/arcade-updater-index-v1.lz4b"),
         storage_root.join("mister-magik/arcade-updater-index-v1.lz4b"),
-    ]
-    .into_iter()
-    .find_map(|path| crate::arcade_updater_index::ArcadeUpdaterIndex::read(&path).ok())
-    .map(|index| {
-        index
-            .rows
-            .into_iter()
-            .map(|row| (row.path.to_ascii_lowercase(), row))
-            .collect()
-    })
-    .unwrap_or_default()
+    ];
+    let mut last_error = String::new();
+    for path in candidates {
+        match crate::arcade_updater_index::ArcadeUpdaterIndex::read_with_file_sha256(&path) {
+            Ok((index, file_sha256)) => {
+                let rows = index.rows.len();
+                return (
+                    index
+                        .rows
+                        .into_iter()
+                        .map(|row| (row.path.to_ascii_lowercase(), row))
+                        .collect(),
+                    ArcadeUpdaterEvidence {
+                        status: "loaded",
+                        path: path.to_string_lossy().into_owned(),
+                        rows,
+                        file_sha256,
+                        load_us: elapsed_us(started),
+                        ..ArcadeUpdaterEvidence::default()
+                    },
+                );
+            }
+            Err(error) => last_error = error,
+        }
+    }
+    (
+        BTreeMap::new(),
+        ArcadeUpdaterEvidence {
+            status: "missing",
+            error: last_error.split_whitespace().collect::<Vec<_>>().join("_"),
+            load_us: elapsed_us(started),
+            ..ArcadeUpdaterEvidence::default()
+        },
+    )
 }
 
 fn collect_arcade_mras(
