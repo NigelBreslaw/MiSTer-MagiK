@@ -20,10 +20,6 @@ use super::launcher_worker_intents::reset_media_progress_bridge;
 use super::launcher_worker_intents::{
     LauncherWorkerUiIntent, apply_launcher_worker_ui_intent, catalog_scan_message,
 };
-#[cfg(test)]
-use super::launcher_worker_intents::{
-    catalog_background_scan_progress_visible, catalog_scan_progress_visible,
-};
 use super::*;
 use crate::input_event::{InputPhase, InputSourceKind, LogicalAction};
 use crate::input_state::PadState;
@@ -4297,12 +4293,6 @@ impl CatalogGenerationState {
         self.current = fingerprint;
         self.durable = durable.then(|| self.current.clone()).flatten();
     }
-
-    fn mark_durable(&mut self, fingerprint: Option<String>) {
-        if fingerprint.is_some() && fingerprint == self.current {
-            self.durable = fingerprint;
-        }
-    }
 }
 
 fn initialize_catalog_generation(
@@ -6622,10 +6612,6 @@ pub(super) fn run_launcher_loop(
                         preview_route,
                         &mut prepare_trace,
                         &mut launcher_response_trace,
-                        frame_accounting.first_visible_copy_done(),
-                        launching,
-                        benchmark_media_interaction_active,
-                        media_benchmark_contention,
                         loop_start,
                         &app,
                         &mut nav,
@@ -6685,10 +6671,6 @@ pub(super) fn run_launcher_loop(
                     preview_route,
                     &mut prepare_trace,
                     &mut launcher_response_trace,
-                    frame_accounting.first_visible_copy_done(),
-                    launching,
-                    benchmark_media_interaction_active,
-                    media_benchmark_contention,
                     loop_start,
                     &app,
                     &mut nav,
@@ -6727,10 +6709,6 @@ pub(super) fn run_launcher_loop(
                     preview_route,
                     &mut prepare_trace,
                     &mut launcher_response_trace,
-                    frame_accounting.first_visible_copy_done(),
-                    launching,
-                    benchmark_media_interaction_active,
-                    media_benchmark_contention,
                     loop_start,
                     &app,
                     &mut nav,
@@ -12513,10 +12491,7 @@ fn dispatch_catalog_media_effect(
 ) -> Option<ScreenshotMediaUpdateEffects> {
     let is_media_effect = matches!(
         effect,
-        CatalogSessionEffect::FinishMediaWorker
-            | CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending
-            | CatalogSessionEffect::RequestMediaCatalogSeed
-            | CatalogSessionEffect::MediaSystemDiscovered { .. }
+        CatalogSessionEffect::FinishMediaWorker | CatalogSessionEffect::RequestMediaCatalogSeed
     );
     if !is_media_effect {
         return None;
@@ -12526,17 +12501,10 @@ fn dispatch_catalog_media_effect(
     }
     Some(match effect {
         CatalogSessionEffect::FinishMediaWorker => media_session.finish_worker(),
-        CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending => {
-            media_session.finish_worker_if_no_catalog_seed_pending()
-        }
         CatalogSessionEffect::RequestMediaCatalogSeed => {
             media_session.request_catalog_seed();
             ScreenshotMediaUpdateEffects::default()
         }
-        CatalogSessionEffect::MediaSystemDiscovered {
-            system_id,
-            media_gate,
-        } => media_session.handle_catalog_system_discovered(system_id.clone(), *media_gate),
         _ => unreachable!("non-media catalog effect returned above"),
     })
 }
@@ -12624,10 +12592,6 @@ fn process_catalog_worker_message(
     preview_route: PreviewRoutePolicy,
     prepare_trace: &mut LauncherPrepareTrace,
     launcher_response_trace: &mut LauncherResponseTrace,
-    first_visible_copy_done: bool,
-    launching: bool,
-    benchmark_media_interaction_active: bool,
-    media_benchmark_contention: bool,
     loop_start: Instant,
     app: &slint_ui::launcher::Launcher,
     nav: &mut LauncherNav,
@@ -12650,41 +12614,10 @@ fn process_catalog_worker_message(
     start: Instant,
 ) {
     prepare_trace.catalog_message_count = prepare_trace.catalog_message_count.saturating_add(1);
-    let media_gate = if matches!(&message, CatalogWorkerMessage::SystemDiscovered { .. }) {
-        let media_gate = media_session.current_gate(
-            first_visible_copy_done,
-            scheduler.has_pending_launch() || launching,
-            benchmark_media_interaction_active,
-            media_benchmark_contention,
-            loop_start,
-        );
-        let media_gate = if !preview_route.allows_preview_work() {
-            MediaInteractionGate {
-                active: true,
-                reason: "crt-no-screenshots",
-            }
-        } else {
-            catalog_build_media_gate(catalog_session.refresh_done(), media_gate)
-        };
-        apply_screenshot_media_update_effects(
-            media_session.sync_gate(media_gate),
-            app,
-            catalog,
-            scheduler,
-            Some(&mut *preview),
-            full_bridge_dirty,
-            start,
-        );
-        Some(media_gate)
-    } else {
-        None
-    };
     let effects = catalog_session.handle_worker_message(
         CatalogWorkerMessageContext {
             catalog_ready: *catalog_ready,
             catalog_partial: *return_capsule_active,
-            screen: nav.screen,
-            media_gate,
         },
         message,
         loop_start,
@@ -13384,15 +13317,6 @@ fn apply_catalog_session_effects(
                 );
                 apply_lifecycle_effects(lifecycle_effects, scheduler, start);
             }
-            CatalogSessionEffect::MarkCatalogDurable {
-                generation_fingerprint,
-            } => {
-                catalog_generation.mark_durable(generation_fingerprint);
-            }
-            CatalogSessionEffect::ConfirmCatalogSeed => {
-                *return_capsule_active = false;
-                nav.set_arcade_exit_locked(false);
-            }
             CatalogSessionEffect::DiscardPartialCatalog => {
                 let root = catalog.root.to_string_lossy().into_owned();
                 *catalog = empty_arcade_catalog(&root);
@@ -13467,17 +13391,6 @@ fn apply_catalog_session_effects(
             CatalogSessionEffect::SyncCatalogBridge => {
                 *full_bridge_dirty = true;
             }
-            CatalogSessionEffect::CatalogBuildStarted => {
-                nav.catalog_build_started();
-                if defer_bridge_ui {
-                    *startup_intro_catalog_shells_pending = true;
-                    continue;
-                }
-                *catalog_version = (*catalog_version).wrapping_add(1);
-                nav.sync_launcher_taxonomy(catalog);
-                let _ = reapply_pending_launch_return_state(nav, catalog, launch_return_session);
-                *full_bridge_dirty = true;
-            }
             CatalogSessionEffect::CatalogPlanReady {
                 system_ids,
                 all_published_systems,
@@ -13499,7 +13412,6 @@ fn apply_catalog_session_effects(
                 let _ = reapply_pending_launch_return_state(nav, catalog, launch_return_session);
                 *full_bridge_dirty = true;
             }
-            CatalogSessionEffect::CatalogSystemDiscovered { .. } => {}
             CatalogSessionEffect::CatalogSystemScanning { system_id } => {
                 if !apply_catalog_system_scanning_presentation(
                     nav,
@@ -13634,9 +13546,7 @@ fn apply_catalog_session_effects(
                 }
             }
             CatalogSessionEffect::FinishMediaWorker
-            | CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending
-            | CatalogSessionEffect::RequestMediaCatalogSeed
-            | CatalogSessionEffect::MediaSystemDiscovered { .. } => {
+            | CatalogSessionEffect::RequestMediaCatalogSeed => {
                 unreachable!("media effects dispatched before general catalog effects")
             }
             CatalogSessionEffect::CatalogValidationFinished => {
@@ -15703,72 +15613,6 @@ mod tests {
     use mister_magik_fb::experiments::effects::framebuffer_effects::EffectSize;
 
     #[test]
-    fn catalog_discovery_never_starts_screenshot_media_downloads() {
-        fn dispatched_media_actions(policy: PreviewRoutePolicy) -> Vec<&'static str> {
-            let now = Instant::now();
-            let mut catalog_session = LauncherCatalogSession::new(false);
-            let catalog_effects = catalog_session.handle_worker_message(
-                CatalogWorkerMessageContext {
-                    catalog_ready: false,
-                    catalog_partial: true,
-                    screen: Screen::Home,
-                    media_gate: None,
-                },
-                CatalogWorkerMessage::SystemDiscovered {
-                    system_id: "arcade".to_string(),
-                },
-                now,
-            );
-            let mut media_session = ScreenshotMediaUpdateSession::default();
-            let mut actions = Vec::new();
-            for effect in catalog_effects.into_effects() {
-                let Some(media_effects) =
-                    dispatch_catalog_media_effect(policy, &effect, &mut media_session)
-                else {
-                    continue;
-                };
-                actions.extend(
-                    media_effects
-                        .into_effects()
-                        .into_iter()
-                        .filter_map(|effect| match effect {
-                            ScreenshotMediaUpdateEffect::EnsureWorker { .. } => {
-                                Some("ensure-worker")
-                            }
-                            ScreenshotMediaUpdateEffect::EnsureSystem { .. } => {
-                                Some("ensure-system")
-                            }
-                            ScreenshotMediaUpdateEffect::SetInteractionActive { .. } => {
-                                Some("set-interaction")
-                            }
-                            _ => None,
-                        }),
-                );
-            }
-            actions
-        }
-
-        assert!(
-            dispatched_media_actions(PreviewRoutePolicy::for_output_route(
-                ResolvedOutputRoute::Crt480p60,
-            ))
-            .is_empty()
-        );
-        assert!(
-            dispatched_media_actions(PreviewRoutePolicy::for_output_route(
-                ResolvedOutputRoute::Crt240p60,
-            ))
-            .is_empty()
-        );
-        assert!(
-            dispatched_media_actions(PreviewRoutePolicy::for_output_route(
-                ResolvedOutputRoute::Hdmi,
-            ))
-            .is_empty()
-        );
-    }
-
-    #[test]
     fn crt_profile_terminal_tracks_the_composed_backdrop_not_hdmi_layer_state() {
         let crt = PreviewRoutePolicy::for_output_route(ResolvedOutputRoute::Crt240p60);
         assert!(preview_terminal_for_route(
@@ -15928,7 +15772,7 @@ mod tests {
     }
 
     #[test]
-    fn media_stays_gated_through_ready_and_opens_after_persistence() {
+    fn media_stays_gated_through_ready_and_opens_after_completion() {
         let now = Instant::now();
         let mut session = LauncherCatalogSession::new(false);
         let idle = MediaInteractionGate {
@@ -15937,7 +15781,6 @@ mod tests {
         };
         let ready = CatalogWorkerMessage::Ready {
             catalog: catalog_for_media_systems(&["arcade"]),
-            summary: None,
             load_us: 0,
             source: CatalogSource::FreshBuild,
             durable_save_pending: true,
@@ -15948,8 +15791,6 @@ mod tests {
             CatalogWorkerMessageContext {
                 catalog_ready: false,
                 catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
             },
             ready,
             now,
@@ -15962,26 +15803,8 @@ mod tests {
             CatalogWorkerMessageContext {
                 catalog_ready: true,
                 catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
             },
-            CatalogWorkerMessage::Persisted {
-                summary: library_db::LibraryRefreshSummary {
-                    skipped: false,
-                    scan_us: 1,
-                    discover_us: 1,
-                    classify_us: 1,
-                    import_us: 1,
-                    bytes: 1,
-                    normal_files: 1,
-                    containers: 0,
-                    entries: 0,
-                    audit_rows: 0,
-                    discoveries: 1,
-                },
-                completed_build_seconds: Some(120),
-                generation_fingerprint: None,
-            },
+            CatalogWorkerMessage::Done,
             now,
         );
         assert_eq!(catalog_build_media_gate(session.refresh_done(), idle), idle);
@@ -16035,12 +15858,9 @@ mod tests {
             CatalogWorkerMessageContext {
                 catalog_ready: false,
                 catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
             },
             CatalogWorkerMessage::Ready {
                 catalog: catalog_for_media_systems(&["arcade", "amiga"]),
-                summary: None,
                 load_us: 0,
                 source: CatalogSource::FreshBuild,
                 durable_save_pending: false,
@@ -16919,7 +16739,6 @@ mod tests {
     fn ready_catalog_message() -> CatalogWorkerMessage {
         CatalogWorkerMessage::Ready {
             catalog: catalog_for_media_systems(&["arcade"]),
-            summary: None,
             load_us: 42,
             source: CatalogSource::FullSqlite,
             durable_save_pending: false,
@@ -16976,7 +16795,6 @@ mod tests {
         assert!(!catalog.text_indexes_ready());
         let message = CatalogWorkerMessage::Ready {
             catalog,
-            summary: None,
             load_us: 42,
             source: CatalogSource::NavigationProjection,
             durable_save_pending: false,
@@ -17030,21 +16848,7 @@ mod tests {
         nav.screen = Screen::Arcade;
         nav.arcade.handle_direction_input(1, 0, now, 2);
 
-        let message = CatalogWorkerMessage::Unchanged {
-            summary: library_db::LibraryRefreshSummary {
-                skipped: true,
-                scan_us: 1,
-                discover_us: 1,
-                classify_us: 1,
-                import_us: 1,
-                bytes: 0,
-                normal_files: 0,
-                containers: 0,
-                entries: 0,
-                audit_rows: 0,
-                discoveries: 0,
-            },
-        };
+        let message = CatalogWorkerMessage::Done;
 
         assert!(!should_defer_catalog_message(
             &message, true, &nav, None, now
@@ -17636,93 +17440,6 @@ mod tests {
         assert!(initial_catalog_scan_visible(false, true, true, false));
         assert!(!initial_catalog_scan_visible(true, true, true, false));
         assert!(!initial_catalog_scan_visible(false, true, false, false));
-    }
-
-    #[test]
-    pub(super) fn ready_catalog_foreground_rebuild_uses_full_screen_progress() {
-        for title in ["Indexing library", "Loading library"] {
-            let full_visible = catalog_scan_progress_visible(true, Screen::Home, title, true);
-            assert!(full_visible, "{title} should cover a foreground rebuild");
-            assert!(!catalog_background_scan_progress_visible(
-                true,
-                full_visible,
-                title
-            ));
-        }
-    }
-
-    #[test]
-    pub(super) fn cached_home_validation_progress_stays_hidden() {
-        assert!(!catalog_scan_progress_visible(
-            true,
-            Screen::Home,
-            "Validating library",
-            false
-        ));
-        assert!(!catalog_scan_progress_visible(
-            true,
-            Screen::Home,
-            "Preview images changed",
-            false
-        ));
-        assert!(catalog_background_scan_progress_visible(
-            true,
-            false,
-            "Validating library"
-        ));
-        assert!(catalog_background_scan_progress_visible(
-            true,
-            false,
-            "Checking library"
-        ));
-    }
-
-    #[test]
-    pub(super) fn missing_catalog_and_rebuild_progress_are_visible() {
-        assert!(catalog_scan_progress_visible(
-            false,
-            Screen::Home,
-            "Indexing library",
-            false
-        ));
-        assert!(catalog_scan_progress_visible(
-            true,
-            Screen::Home,
-            "Indexing library",
-            true
-        ));
-        assert!(!catalog_scan_progress_visible(
-            true,
-            Screen::Home,
-            "Library changed",
-            false
-        ));
-        assert!(!catalog_background_scan_progress_visible(
-            true,
-            true,
-            "Indexing library"
-        ));
-    }
-
-    #[test]
-    pub(super) fn catalog_scan_failures_are_visible_even_with_cache() {
-        assert!(catalog_scan_progress_visible(
-            true,
-            Screen::Home,
-            "Library scan failed",
-            false
-        ));
-        assert!(catalog_scan_progress_visible(
-            true,
-            Screen::Arcade,
-            "Library load failed",
-            false
-        ));
-        assert!(!catalog_background_scan_progress_visible(
-            true,
-            true,
-            "Library scan failed"
-        ));
     }
 
     #[test]
@@ -18367,15 +18084,12 @@ mod tests {
     }
 
     #[test]
-    fn catalog_generation_becomes_capsule_eligible_only_after_matching_persistence() {
+    fn catalog_generation_is_capsule_eligible_only_when_published_durable() {
         let mut generation = CatalogGenerationState::default();
         generation.publish(Some("new".to_string()), false);
         assert!(generation.durable.is_none());
 
-        generation.mark_durable(Some("old".to_string()));
-        assert!(generation.durable.is_none());
-
-        generation.mark_durable(Some("new".to_string()));
+        generation.publish(Some("new".to_string()), true);
         assert_eq!(generation.durable.as_deref(), Some("new"));
 
         generation.publish(Some("next".to_string()), false);

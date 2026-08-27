@@ -49,8 +49,6 @@ pub struct CatalogProgressEvidence {
     pub inactive_elapsed_ms: u64,
     pub intentionally_paused: bool,
     pub worker_running: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scan_target: Option<mister_magik_catalog::builder_protocol::CatalogScanTargetProgress>,
 }
 
 pub struct CatalogProgressMonitor {
@@ -71,7 +69,6 @@ pub struct CatalogProgressMonitor {
     inactive_elapsed: Duration,
     last_tick_active: bool,
     stall_reported: bool,
-    scan_target: Option<mister_magik_catalog::builder_protocol::CatalogScanTargetProgress>,
 }
 
 impl CatalogProgressMonitor {
@@ -94,7 +91,6 @@ impl CatalogProgressMonitor {
             inactive_elapsed: Duration::ZERO,
             last_tick_active: false,
             stall_reported: false,
-            scan_target: None,
         }
     }
 
@@ -127,7 +123,6 @@ impl CatalogProgressMonitor {
         self.inactive_elapsed = Duration::ZERO;
         self.last_tick_active = execution_mode == "foreground_exclusive";
         self.stall_reported = false;
-        self.scan_target = None;
         self.evidence("running", true)
     }
 
@@ -193,16 +188,6 @@ impl CatalogProgressMonitor {
         ))
     }
 
-    pub fn note_scan_target(
-        &mut self,
-        target: mister_magik_catalog::builder_protocol::CatalogScanTargetProgress,
-    ) {
-        self.execution_mode.clone_from(&target.execution_mode);
-        self.cooperative_policy
-            .clone_from(&target.cooperative_policy);
-        self.scan_target = Some(target);
-    }
-
     pub fn finish(
         &mut self,
         state: &str,
@@ -251,7 +236,6 @@ impl CatalogProgressMonitor {
             inactive_elapsed_ms: duration_ms(self.inactive_elapsed),
             intentionally_paused: worker_running && !self.last_tick_active,
             worker_running,
-            scan_target: self.scan_target.clone(),
         }
     }
 }
@@ -345,6 +329,7 @@ fn write_report(
 }
 
 fn report_value(episode_id: &str, now_ms: u128, evidence: CatalogProgressEvidence) -> Value {
+    let catalog_root = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
     json!({
         "schema": REPORT_SCHEMA,
         "episode_id": episode_id,
@@ -353,16 +338,15 @@ fn report_value(episode_id: &str, now_ms: u128, evidence: CatalogProgressEvidenc
         "build": crate::build_identity::BuildIdentity::current(),
         "progress": evidence,
         "files": {
-            "build_progress": file_snapshot(
-                &mister_magik_catalog::catalog_config::default_build_progress_path()
+            "refresh_state": file_snapshot(
+                &mister_magik_catalog::fast_catalog_refresh::refresh_state_root(&catalog_root)
             ),
-            "catalog_state": file_snapshot(
-                &mister_magik_catalog::catalog_state::default_path()
+            "build_info": file_snapshot(
+                &mister_magik_catalog::fast_catalog_refresh::build_info_path(&catalog_root)
             ),
         },
-        "journal": build_progress_summary(
-            &mister_magik_catalog::catalog_config::default_build_progress_path()
-        ),
+        "refresh_manifest": fast_refresh_manifest_snapshot(&catalog_root),
+        "build_info": fast_build_info_snapshot(&catalog_root),
         "snapshots": {
             "runtime": read_json_snapshot("/tmp/mister-magik/status.json"),
             "main": read_json_snapshot("/tmp/mister-magik/main-status.json"),
@@ -375,11 +359,24 @@ fn report_value(episode_id: &str, now_ms: u128, evidence: CatalogProgressEvidenc
     })
 }
 
-fn build_progress_summary(path: &Path) -> Value {
-    match mister_magik_catalog::build_progress::read_summary(path) {
-        Ok(Some(summary)) => json!({
+fn fast_refresh_manifest_snapshot(catalog_root: &Path) -> Value {
+    match mister_magik_catalog::fast_catalog_refresh::read_latest_refresh_manifest(catalog_root) {
+        Ok(manifest) => json!({
             "available": true,
-            "summary": summary,
+            "manifest": manifest,
+        }),
+        Err(error) => json!({
+            "available": false,
+            "error": error,
+        }),
+    }
+}
+
+fn fast_build_info_snapshot(catalog_root: &Path) -> Value {
+    match mister_magik_catalog::fast_catalog_refresh::read_current_build_info(catalog_root) {
+        Ok(Some(build_info)) => json!({
+            "available": true,
+            "build_info": build_info,
         }),
         Ok(None) => json!({
             "available": false,
@@ -826,7 +823,6 @@ mod tests {
                     inactive_elapsed_ms: 0,
                     intentionally_paused: false,
                     worker_running: true,
-                    scan_target: None,
                 },
                 0,
             )

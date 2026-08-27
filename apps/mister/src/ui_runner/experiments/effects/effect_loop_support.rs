@@ -376,7 +376,7 @@ pub(super) fn load_effect_images(
     synthetic: fn(usize) -> Vec<CameraImage>,
 ) -> Vec<CameraImage> {
     let mut assets = Vec::new();
-    if let Ok(loaded) = library_db::load_arcade_catalog_from_sqlite(root) {
+    if let Ok(loaded) = crate::library_db::load_arcade_catalog_from_sqlite(root) {
         assets.extend(
             loaded
                 .catalog

@@ -44,10 +44,6 @@ pub enum LauncherLifecycleState {
     CatalogRetrying {
         has_stale_catalog: bool,
     },
-    FreshRebuilding {
-        phase: FreshRebuildPhase,
-        has_stale_catalog: bool,
-    },
     CatalogReady {
         source: CatalogSource,
         validating: bool,
@@ -71,7 +67,6 @@ impl LauncherLifecycleState {
             Self::CatalogBuilding { .. } => "catalog-building",
             Self::CatalogLoadFailed { .. } => "catalog-load-failed",
             Self::CatalogRetrying { .. } => "catalog-retrying",
-            Self::FreshRebuilding { .. } => "catalog-fresh-rebuilding",
             Self::CatalogReady { .. } => "catalog-ready",
             Self::Idle => "idle",
             Self::Launching { .. } => "launching",
@@ -216,12 +211,6 @@ fn catalog_recovery_message(
         _ => " Support report: diagnostics/catalog/latest.json.",
     };
     format!("{detail}{safety}{rebuild}{report}")
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FreshRebuildPhase {
-    AwaitingLock,
-    DeletingArtifacts,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -447,8 +436,6 @@ pub enum LauncherLifecycleInput {
     CatalogRecoveryRight,
     CatalogRecoveryConfirm,
     CatalogRecoveryCancel,
-    CatalogFreshCleanupStarted,
-    CatalogFreshCleanupCompleted,
     CatalogValidationStarted,
     CatalogValidationFinished,
     LaunchRequested {
@@ -947,7 +934,6 @@ impl LauncherLifecycle {
                     self.state,
                     LauncherLifecycleState::CatalogBuilding { .. }
                         | LauncherLifecycleState::CatalogRetrying { .. }
-                        | LauncherLifecycleState::FreshRebuilding { .. }
                         | LauncherLifecycleState::CatalogReady { .. }
                         | LauncherLifecycleState::Idle
                 ) {
@@ -973,7 +959,6 @@ impl LauncherLifecycle {
                     self.state,
                     LauncherLifecycleState::CatalogBuilding { .. }
                         | LauncherLifecycleState::CatalogRetrying { .. }
-                        | LauncherLifecycleState::FreshRebuilding { .. }
                         | LauncherLifecycleState::CatalogReady { .. }
                         | LauncherLifecycleState::Idle
                 ) {
@@ -1069,8 +1054,9 @@ impl LauncherLifecycle {
                         }
                         CatalogRecoveryAction::FreshRebuild => {
                             self.transition(
-                                LauncherLifecycleState::FreshRebuilding {
-                                    phase: FreshRebuildPhase::AwaitingLock,
+                                LauncherLifecycleState::CatalogBuilding {
+                                    mode: CatalogBuildMode::FreshRecovery,
+                                    foreground: true,
                                     has_stale_catalog,
                                 },
                                 out,
@@ -1099,39 +1085,6 @@ impl LauncherLifecycle {
                         self.transition(LauncherLifecycleState::Idle, out, "catalog_exit");
                         out.push(LauncherEffect::ExitToMister);
                     }
-                }
-            }
-            LauncherLifecycleInput::CatalogFreshCleanupStarted => {
-                if let LauncherLifecycleState::FreshRebuilding {
-                    phase: FreshRebuildPhase::AwaitingLock,
-                    has_stale_catalog,
-                } = self.state
-                {
-                    self.transition(
-                        LauncherLifecycleState::FreshRebuilding {
-                            phase: FreshRebuildPhase::DeletingArtifacts,
-                            has_stale_catalog,
-                        },
-                        out,
-                        "catalog_fresh_cleanup_started",
-                    );
-                }
-            }
-            LauncherLifecycleInput::CatalogFreshCleanupCompleted => {
-                if let LauncherLifecycleState::FreshRebuilding {
-                    phase: FreshRebuildPhase::DeletingArtifacts,
-                    has_stale_catalog,
-                } = self.state
-                {
-                    self.transition(
-                        LauncherLifecycleState::CatalogBuilding {
-                            mode: CatalogBuildMode::FreshRecovery,
-                            foreground: true,
-                            has_stale_catalog,
-                        },
-                        out,
-                        "catalog_fresh_cleanup_completed",
-                    );
                 }
             }
             LauncherLifecycleInput::CatalogValidationStarted => {
@@ -2512,7 +2465,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_fresh_rebuild_cleanup_phases_follow_state_chart() {
+    fn catalog_fresh_rebuild_enters_building_state_immediately() {
         let (mut lifecycle, mut effects) = idle_lifecycle();
         lifecycle.handle(
             LauncherLifecycleInput::CatalogLoadFailed {
@@ -2527,8 +2480,9 @@ mod tests {
         lifecycle.handle(LauncherLifecycleInput::CatalogRecoveryConfirm, &mut effects);
         assert_eq!(
             lifecycle.state(),
-            &LauncherLifecycleState::FreshRebuilding {
-                phase: FreshRebuildPhase::AwaitingLock,
+            &LauncherLifecycleState::CatalogBuilding {
+                mode: CatalogBuildMode::FreshRecovery,
+                foreground: true,
                 has_stale_catalog: true,
             }
         );
@@ -2538,92 +2492,7 @@ mod tests {
                 .iter()
                 .any(|effect| matches!(effect, LauncherEffect::StartFreshCatalogBuild { .. }))
         );
-
-        effects.clear();
-        lifecycle.handle(
-            LauncherLifecycleInput::CatalogFreshCleanupStarted,
-            &mut effects,
-        );
-        assert_eq!(
-            lifecycle.state(),
-            &LauncherLifecycleState::FreshRebuilding {
-                phase: FreshRebuildPhase::DeletingArtifacts,
-                has_stale_catalog: true,
-            }
-        );
-        lifecycle.handle(
-            LauncherLifecycleInput::CatalogFreshCleanupCompleted,
-            &mut effects,
-        );
-        assert_eq!(
-            lifecycle.state(),
-            &LauncherLifecycleState::CatalogBuilding {
-                mode: CatalogBuildMode::FreshRecovery,
-                foreground: true,
-                has_stale_catalog: true,
-            }
-        );
     }
-
-    #[test]
-    fn cleanup_events_are_ignored_outside_fresh_rebuild() {
-        let (mut lifecycle, mut effects) = idle_lifecycle();
-        assert_input_ignored(
-            &mut lifecycle,
-            &mut effects,
-            LauncherLifecycleInput::CatalogFreshCleanupCompleted,
-        );
-    }
-
-    #[test]
-    fn cleanup_completed_is_rejected_until_deletion_started() {
-        let (mut lifecycle, mut effects) = idle_lifecycle();
-        lifecycle.handle(
-            LauncherLifecycleInput::CatalogLoadFailed {
-                error: "unreadable".to_string(),
-                has_stale_catalog: true,
-                transient: false,
-            },
-            &mut effects,
-        );
-        lifecycle.handle(LauncherLifecycleInput::CatalogRecoveryRight, &mut effects);
-        lifecycle.handle(LauncherLifecycleInput::CatalogRecoveryConfirm, &mut effects);
-        effects.clear();
-
-        assert_input_ignored(
-            &mut lifecycle,
-            &mut effects,
-            LauncherLifecycleInput::CatalogFreshCleanupCompleted,
-        );
-    }
-
-    #[test]
-    fn cleanup_started_is_rejected_after_deletion_started() {
-        let (mut lifecycle, mut effects) = idle_lifecycle();
-        lifecycle.handle(
-            LauncherLifecycleInput::CatalogLoadFailed {
-                error: "unreadable".to_string(),
-                has_stale_catalog: false,
-                transient: false,
-            },
-            &mut effects,
-        );
-        lifecycle.handle(LauncherLifecycleInput::CatalogRecoveryRight, &mut effects);
-        lifecycle.handle(LauncherLifecycleInput::CatalogRecoveryConfirm, &mut effects);
-        lifecycle.handle(
-            LauncherLifecycleInput::CatalogFreshCleanupStarted,
-            &mut effects,
-        );
-        effects.clear();
-
-        assert_input_ignored(
-            &mut lifecycle,
-            &mut effects,
-            LauncherLifecycleInput::CatalogFreshCleanupStarted,
-        );
-    }
-
-    #[test]
     fn stale_catalog_events_cannot_interrupt_launching() {
         let (mut lifecycle, mut effects) = idle_lifecycle();
         lifecycle.handle(

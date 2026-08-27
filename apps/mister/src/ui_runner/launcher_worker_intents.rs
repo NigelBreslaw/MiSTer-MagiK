@@ -168,89 +168,6 @@ fn sync_media_progress_bridge(
     })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct CatalogWorkerUiContext {
-    pub catalog_ready: bool,
-    pub screen: Screen,
-    pub foreground_update: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct CatalogProgressUiIntent {
-    pub title: String,
-    pub detail: String,
-    pub failed: bool,
-    pub counter_target: Option<CatalogCounterTarget>,
-    visible: bool,
-    background_visible: bool,
-    message: &'static str,
-    percent: i32,
-}
-
-impl CatalogProgressUiIntent {
-    pub(super) fn from_worker_progress(
-        context: CatalogWorkerUiContext,
-        title: String,
-        detail: String,
-        percent: i32,
-    ) -> Self {
-        let visible = catalog_scan_progress_visible(
-            context.catalog_ready,
-            context.screen,
-            &title,
-            context.foreground_update,
-        );
-        let background_visible =
-            catalog_background_scan_progress_visible(context.catalog_ready, visible, &title);
-        let counter_target = CatalogCounterPhase::for_title(&title).and_then(|phase| {
-            parse_games_found_detail(&detail).map(|target| CatalogCounterTarget { phase, target })
-        });
-        Self {
-            failed: catalog_progress_title_is_failure(&title),
-            title,
-            detail,
-            counter_target,
-            visible,
-            background_visible,
-            message: catalog_scan_message(context.foreground_update),
-            percent,
-        }
-    }
-
-    pub(super) fn ui_with_detail(self, detail: Option<String>) -> LauncherWorkerUiIntent {
-        LauncherWorkerUiIntent::CatalogScan(CatalogScanBridgeStatus::new(
-            self.visible,
-            self.background_visible,
-            self.message,
-            self.title,
-            detail.unwrap_or(self.detail),
-            self.percent,
-        ))
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct CatalogCounterTarget {
-    pub phase: CatalogCounterPhase,
-    pub target: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CatalogCounterPhase {
-    Bootstrap,
-    FullScan,
-}
-
-impl CatalogCounterPhase {
-    pub(super) fn for_title(title: &str) -> Option<Self> {
-        match title {
-            "Finding games" => Some(Self::Bootstrap),
-            "Classifying library" => Some(Self::FullScan),
-            _ => None,
-        }
-    }
-}
-
 pub(super) fn cached_catalog_validation_intent(
     foreground_update: bool,
     games: usize,
@@ -333,40 +250,6 @@ pub(super) fn catalog_scan_message(foreground_update: bool) -> &'static str {
     } else {
         FIRST_LIBRARY_SCAN_MESSAGE
     }
-}
-
-pub(super) fn catalog_scan_progress_visible(
-    catalog_ready: bool,
-    screen: Screen,
-    title: &str,
-    foreground_update: bool,
-) -> bool {
-    if catalog_progress_title_is_failure(title) {
-        return true;
-    }
-    if foreground_update {
-        return true;
-    }
-    if !catalog_ready {
-        return screen == Screen::Home || screen == Screen::Arcade || title == "Indexing library";
-    }
-    false
-}
-
-pub(super) fn catalog_background_scan_progress_visible(
-    catalog_ready: bool,
-    full_scan_visible: bool,
-    title: &str,
-) -> bool {
-    catalog_ready && !full_scan_visible && !catalog_progress_title_is_failure(title)
-}
-
-fn catalog_progress_title_is_failure(title: &str) -> bool {
-    matches!(title, "Library scan failed" | "Library load failed")
-}
-
-pub(super) fn parse_games_found_detail(detail: &str) -> Option<usize> {
-    detail.strip_prefix("Games found: ")?.trim().parse().ok()
 }
 
 #[derive(Default)]
@@ -704,42 +587,6 @@ mod tests {
     }
 
     #[test]
-    fn catalog_progress_intent_routes_ready_validation_to_background() {
-        let intent = CatalogProgressUiIntent::from_worker_progress(
-            CatalogWorkerUiContext {
-                catalog_ready: true,
-                screen: Screen::Home,
-                foreground_update: false,
-            },
-            "Validating library".to_string(),
-            "Checking stamp".to_string(),
-            -1,
-        );
-
-        assert!(!intent.visible);
-        assert!(intent.background_visible);
-        assert!(!intent.failed);
-    }
-
-    #[test]
-    fn catalog_progress_intent_marks_failures_foreground() {
-        let intent = CatalogProgressUiIntent::from_worker_progress(
-            CatalogWorkerUiContext {
-                catalog_ready: true,
-                screen: Screen::Arcade,
-                foreground_update: false,
-            },
-            "Library scan failed".to_string(),
-            "disk read failed".to_string(),
-            -1,
-        );
-
-        assert!(intent.visible);
-        assert!(!intent.background_visible);
-        assert!(intent.failed);
-    }
-
-    #[test]
     fn survivability_persistence_failure_intent_is_visible_and_specific() {
         let LauncherWorkerUiIntent::CatalogScan(status) =
             catalog_persistence_failed_intent("insert profile: UNIQUE constraint failed")
@@ -751,59 +598,6 @@ mod tests {
         assert!(!status.background_visible());
         assert_eq!(status.title(), "Library load failed");
         assert_eq!(status.detail(), "insert profile: UNIQUE constraint failed");
-    }
-
-    #[test]
-    fn survivability_catalog_failures_never_hide_in_background_progress() {
-        let scan_failed = CatalogProgressUiIntent::from_worker_progress(
-            CatalogWorkerUiContext {
-                catalog_ready: true,
-                screen: Screen::Home,
-                foreground_update: false,
-            },
-            "Library scan failed".to_string(),
-            "unsupported filesystem entry".to_string(),
-            -1,
-        );
-        let load_failed = CatalogProgressUiIntent::from_worker_progress(
-            CatalogWorkerUiContext {
-                catalog_ready: true,
-                screen: Screen::Arcade,
-                foreground_update: false,
-            },
-            "Library load failed".to_string(),
-            "sqlite projection corrupt".to_string(),
-            -1,
-        );
-
-        assert!(scan_failed.visible);
-        assert!(!scan_failed.background_visible);
-        assert!(scan_failed.failed);
-        assert!(load_failed.visible);
-        assert!(!load_failed.background_visible);
-        assert!(load_failed.failed);
-    }
-
-    #[test]
-    fn catalog_progress_intent_extracts_counter_targets() {
-        let intent = CatalogProgressUiIntent::from_worker_progress(
-            CatalogWorkerUiContext {
-                catalog_ready: false,
-                screen: Screen::Home,
-                foreground_update: false,
-            },
-            "Classifying library".to_string(),
-            "Games found: 250".to_string(),
-            45,
-        );
-
-        assert_eq!(
-            intent.counter_target,
-            Some(CatalogCounterTarget {
-                phase: CatalogCounterPhase::FullScan,
-                target: 250
-            })
-        );
     }
 
     #[test]

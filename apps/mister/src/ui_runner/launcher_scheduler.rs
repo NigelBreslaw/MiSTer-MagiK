@@ -1067,43 +1067,8 @@ impl LauncherScheduler {
 
     fn record_catalog_progress_message(&mut self, message: &CatalogWorkerMessage, now: Instant) {
         match message {
-            CatalogWorkerMessage::Progress {
-                title,
-                detail,
-                percent,
-                metadata,
-            } => {
-                if let Some(target) = metadata
-                    .as_ref()
-                    .and_then(|metadata| metadata.scan_target.as_ref())
-                {
-                    self.catalog_progress.note_scan_target(target.clone());
-                }
-                self.note_catalog_progress("progress", title, detail, *percent, now);
-            }
             CatalogWorkerMessage::Timing { name, detail } => {
                 self.note_catalog_progress("timing", name, detail, -1, now);
-            }
-            CatalogWorkerMessage::FreshCleanupStarted => {
-                self.note_catalog_progress("cleanup", "fresh-cleanup", "started", -1, now);
-            }
-            CatalogWorkerMessage::FreshCleanupCompleted { removed } => {
-                self.note_catalog_progress(
-                    "cleanup",
-                    "fresh-cleanup",
-                    &format!("completed removed={removed}"),
-                    -1,
-                    now,
-                );
-            }
-            CatalogWorkerMessage::SystemDiscovered { system_id } => {
-                self.note_catalog_progress(
-                    "system-discovered",
-                    "publishing-systems",
-                    system_id,
-                    -1,
-                    now,
-                );
             }
             CatalogWorkerMessage::ReconciliationPlanReady {
                 system_ids,
@@ -1229,22 +1194,6 @@ impl LauncherScheduler {
             CatalogWorkerMessage::HydrationDoneNeedsValidation { root } => {
                 self.note_catalog_progress("hydration-ready", "validation-deferred", root, -1, now);
             }
-            CatalogWorkerMessage::Persisted { summary, .. } => self.finish_catalog_progress_at(
-                "completed",
-                &format!(
-                    "persisted games={} files={} entries={}",
-                    summary.discoveries, summary.normal_files, summary.entries
-                ),
-                now,
-            ),
-            CatalogWorkerMessage::Unchanged { summary } => self.finish_catalog_progress_at(
-                "unchanged",
-                &format!(
-                    "games={} files={} entries={}",
-                    summary.discoveries, summary.normal_files, summary.entries
-                ),
-                now,
-            ),
             CatalogWorkerMessage::Done => {
                 self.finish_catalog_progress_at("completed", "worker completed", now);
             }
@@ -1253,9 +1202,6 @@ impl LauncherScheduler {
             }
             CatalogWorkerMessage::PersistenceFailed { error } => {
                 self.finish_catalog_progress_at("failed", error, now);
-            }
-            CatalogWorkerMessage::Changed { detail, .. } => {
-                self.finish_catalog_progress_at("changed", detail, now);
             }
             CatalogWorkerMessage::SearchQueryReady { .. }
             | CatalogWorkerMessage::SearchQueryFailed { .. } => {}
@@ -1862,7 +1808,6 @@ mod tests {
         catalog_tx
             .send(CatalogWorkerMessage::Ready {
                 catalog: empty_arcade_catalog("/tmp"),
-                summary: None,
                 load_us: 1,
                 source: CatalogSource::FreshBuild,
                 durable_save_pending: true,

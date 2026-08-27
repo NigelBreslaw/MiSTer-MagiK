@@ -4,14 +4,12 @@
 use super::*;
 use crate::preview_state::SystemEntryPreviewPrelude;
 use mister_magik_catalog::arcade_catalog::ArcadeCatalog;
-use mister_magik_catalog::builder_protocol::CatalogChangeReason;
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use std::path::Path;
 
 fn send_ready_catalog(
     tx: &mpsc::Sender<CatalogWorkerMessage>,
     catalog: ArcadeCatalog,
-    summary: Option<library_db::LibraryRefreshSummary>,
     load_us: u64,
     source: CatalogSource,
     durable_save_pending: bool,
@@ -22,16 +20,14 @@ fn send_ready_catalog(
     let (publication_tx, publication_rx) = mpsc::channel();
     let _ = tx.send(CatalogWorkerMessage::Ready {
         catalog,
-        summary,
         load_us,
         source,
         durable_save_pending,
         generation_fingerprint,
         publication_ack: Some(publication_tx),
     });
-    // The launcher session owns the next transition. For a fresh catalog it
-    // schedules indexing only after the durable Persisted event; the worker
-    // must therefore return immediately to its SQLite/sidecar save path.
+    // The launcher must consume the catalog before the worker publishes the
+    // completion message and exits.
     let _ = publication_rx.recv();
     crate::ui_logln!(
         "catalog_publication_ack_tsv\tsource={}\telapsed_us={}\tdurable_save_pending={}",
@@ -63,7 +59,6 @@ fn publish_strict_registry_seed_at(
             send_ready_catalog(
                 tx,
                 seed.catalog,
-                None,
                 load_us,
                 CatalogSource::ShardedRegistry,
                 false,
@@ -334,7 +329,6 @@ fn run_fast_catalog_fresh_build(
                 send_ready_catalog(
                     tx,
                     catalog,
-                    None,
                     load_us,
                     CatalogSource::NavigationProjection,
                     true,
@@ -539,25 +533,12 @@ pub(super) enum CatalogWorkerMessage {
         name: String,
         detail: String,
     },
-    Progress {
-        title: String,
-        detail: String,
-        percent: i32,
-        metadata: Option<mister_magik_catalog::builder_protocol::CatalogProgressMetadata>,
-    },
     LoadFailed {
         error: String,
-    },
-    FreshCleanupStarted,
-    FreshCleanupCompleted {
-        removed: usize,
     },
     ReconciliationPlanReady {
         system_ids: Vec<String>,
         all_published_systems: bool,
-    },
-    SystemDiscovered {
-        system_id: String,
     },
     SystemScanning {
         system_id: String,
@@ -607,27 +588,14 @@ pub(super) enum CatalogWorkerMessage {
     },
     Ready {
         catalog: ArcadeCatalog,
-        summary: Option<library_db::LibraryRefreshSummary>,
         load_us: u64,
         source: CatalogSource,
         durable_save_pending: bool,
         generation_fingerprint: Option<String>,
         publication_ack: Option<mpsc::Sender<()>>,
     },
-    Persisted {
-        summary: library_db::LibraryRefreshSummary,
-        completed_build_seconds: Option<u64>,
-        generation_fingerprint: Option<String>,
-    },
     PersistenceFailed {
         error: String,
-    },
-    Unchanged {
-        summary: library_db::LibraryRefreshSummary,
-    },
-    Changed {
-        detail: String,
-        reason: CatalogChangeReason,
     },
     Done,
 }

@@ -104,7 +104,6 @@ impl CatalogPublicationTestDriver {
         );
         Some(CatalogWorkerMessage::Ready {
             catalog,
-            summary: None,
             load_us: 0,
             source: CatalogSource::FreshBuild,
             durable_save_pending: false,

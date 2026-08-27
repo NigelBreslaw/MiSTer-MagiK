@@ -2,10 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::launcher_worker_intents::{
-    CatalogCounterPhase, CatalogProgressUiIntent, CatalogWorkerUiContext, LauncherWorkerUiIntent,
-    cached_catalog_validation_intent, catalog_rebuild_started_intent,
+    LauncherWorkerUiIntent, cached_catalog_validation_intent, catalog_rebuild_started_intent,
     catalog_system_update_preparing_intent, catalog_system_update_progress_intent,
-    parse_games_found_detail,
 };
 use super::*;
 use crate::preview_state::SystemEntryPreviewPrelude;
@@ -41,10 +39,6 @@ pub(super) enum CatalogSessionEffect {
         generation_fingerprint: Option<String>,
         publication_ack: Option<mpsc::Sender<()>>,
     },
-    MarkCatalogDurable {
-        generation_fingerprint: Option<String>,
-    },
-    ConfirmCatalogSeed,
     DiscardPartialCatalog,
     ApplySearchResult {
         request: launcher::ArcadeSearchRequest,
@@ -55,13 +49,9 @@ pub(super) enum CatalogSessionEffect {
         error: String,
     },
     SyncCatalogBridge,
-    CatalogBuildStarted,
     CatalogPlanReady {
         system_ids: Vec<String>,
         all_published_systems: bool,
-    },
-    CatalogSystemDiscovered {
-        system_id: String,
     },
     CatalogSystemScanning {
         system_id: String,
@@ -90,13 +80,8 @@ pub(super) enum CatalogSessionEffect {
     CatalogBuildFinished,
     Ui(LauncherWorkerUiIntent),
     FinishMediaWorker,
-    FinishMediaWorkerIfNoCatalogSeedPending,
     CatalogValidationFinished,
     RequestMediaCatalogSeed,
-    MediaSystemDiscovered {
-        system_id: String,
-        media_gate: Option<MediaInteractionGate>,
-    },
     ApplySystemShard {
         system_id: String,
         catalog: ArcadeCatalog,
@@ -141,8 +126,6 @@ impl CatalogSessionEffects {
 pub(super) struct CatalogWorkerMessageContext {
     pub(super) catalog_ready: bool,
     pub(super) catalog_partial: bool,
-    pub(super) screen: Screen,
-    pub(super) media_gate: Option<MediaInteractionGate>,
 }
 
 pub(super) struct LauncherCatalogSession {
@@ -150,12 +133,7 @@ pub(super) struct LauncherCatalogSession {
     refresh_done: bool,
     refresh_failed: bool,
     summary_only: bool,
-    persisted_summary_seen: bool,
     deferred_worker: Option<DeferredCatalogWorker>,
-    games_found_counter: GamesFoundCounter,
-    bootstrap_counter_climb_logged: bool,
-    bootstrap_counter_sustained_climb_logged: bool,
-    full_scan_counter_climb_logged: bool,
     system_update_total: Option<usize>,
     completed_system_updates: BTreeSet<String>,
     catalog_seed_partial: bool,
@@ -168,12 +146,7 @@ impl LauncherCatalogSession {
             refresh_done: false,
             refresh_failed: false,
             summary_only: false,
-            persisted_summary_seen: false,
             deferred_worker: None,
-            games_found_counter: GamesFoundCounter::default(),
-            bootstrap_counter_climb_logged: false,
-            bootstrap_counter_sustained_climb_logged: false,
-            full_scan_counter_climb_logged: false,
             system_update_total: None,
             completed_system_updates: BTreeSet::new(),
             catalog_seed_partial: false,
@@ -260,20 +233,12 @@ impl LauncherCatalogSession {
         &mut self,
         context: CatalogWorkerMessageContext,
         message: CatalogWorkerMessage,
-        now: Instant,
+        _now: Instant,
     ) -> CatalogSessionEffects {
         let mut effects = CatalogSessionEffects::default();
         match message {
             CatalogWorkerMessage::Timing { name, detail } => {
                 effects.event(name, detail);
-            }
-            CatalogWorkerMessage::Progress {
-                title,
-                detail,
-                percent,
-                ..
-            } => {
-                self.handle_progress(context, title, detail, percent, now, &mut effects);
             }
             CatalogWorkerMessage::LoadFailed { error } => {
                 let has_stale_catalog = context.catalog_ready && !context.catalog_partial;
@@ -287,7 +252,6 @@ impl LauncherCatalogSession {
                 self.foreground_update = false;
                 self.refresh_failed = true;
                 self.deferred_worker = None;
-                self.games_found_counter.reset();
                 effects.push(CatalogSessionEffect::FinishMediaWorker);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 effects.push(CatalogSessionEffect::CatalogBuildFinished);
@@ -310,23 +274,6 @@ impl LauncherCatalogSession {
                     },
                 ));
             }
-            CatalogWorkerMessage::FreshCleanupStarted => {
-                effects.push(CatalogSessionEffect::CatalogBuildStarted);
-                effects.event("library_fresh_cleanup_started", "lock=acquired");
-                effects.push(CatalogSessionEffect::Lifecycle(
-                    LauncherLifecycleInput::CatalogFreshCleanupStarted,
-                ));
-            }
-            CatalogWorkerMessage::FreshCleanupCompleted { removed } => {
-                effects.event(
-                    "library_fresh_cleanup_completed",
-                    format!("removed={removed}"),
-                );
-                effects.push(CatalogSessionEffect::Lifecycle(
-                    LauncherLifecycleInput::CatalogFreshCleanupCompleted,
-                ));
-                effects.ui(catalog_rebuild_started_intent(true));
-            }
             CatalogWorkerMessage::ReconciliationPlanReady {
                 system_ids,
                 all_published_systems,
@@ -337,15 +284,6 @@ impl LauncherCatalogSession {
                 effects.push(CatalogSessionEffect::CatalogPlanReady {
                     system_ids,
                     all_published_systems,
-                });
-            }
-            CatalogWorkerMessage::SystemDiscovered { system_id } => {
-                effects.push(CatalogSessionEffect::CatalogSystemDiscovered {
-                    system_id: system_id.clone(),
-                });
-                effects.push(CatalogSessionEffect::MediaSystemDiscovered {
-                    system_id,
-                    media_gate: context.media_gate,
                 });
             }
             CatalogWorkerMessage::SystemScanning { system_id } => {
@@ -443,7 +381,6 @@ impl LauncherCatalogSession {
             }
             CatalogWorkerMessage::Ready {
                 catalog,
-                summary,
                 load_us,
                 source,
                 durable_save_pending,
@@ -454,7 +391,6 @@ impl LauncherCatalogSession {
                     context.catalog_ready,
                     context.catalog_partial || self.catalog_seed_partial,
                     catalog,
-                    summary,
                     load_us,
                     source,
                     durable_save_pending,
@@ -462,33 +398,6 @@ impl LauncherCatalogSession {
                     publication_ack,
                     &mut effects,
                 );
-            }
-            CatalogWorkerMessage::Persisted {
-                summary,
-                completed_build_seconds,
-                generation_fingerprint,
-            } => {
-                self.persisted_summary_seen = true;
-                self.refresh_done = true;
-                self.foreground_update = false;
-                self.refresh_failed = false;
-                effects.push(CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending);
-                effects.push(CatalogSessionEffect::CatalogValidationFinished);
-                effects.push(CatalogSessionEffect::CatalogBuildFinished);
-                effects.event("library_db_saved", format_library_refresh_summary(&summary));
-                effects.push(CatalogSessionEffect::MarkCatalogDurable {
-                    generation_fingerprint,
-                });
-                let seconds = completed_build_seconds.unwrap_or_else(|| {
-                    mister_magik_catalog::catalog_build_record::rounded_seconds(
-                        Duration::from_micros(summary.scan_us.saturating_add(summary.import_us)),
-                    )
-                });
-                effects.ui(LauncherWorkerUiIntent::InfoDatabaseBuild(
-                    mister_magik_catalog::catalog_build_record::format_duration(seconds),
-                ));
-                push_catalog_coverage_diagnostic(&summary, &mut effects);
-                effects.ui(LauncherWorkerUiIntent::HideCatalogBackgroundScan);
             }
             CatalogWorkerMessage::PersistenceFailed { error } => {
                 let transient = catalog_failure_is_transient(&error);
@@ -513,58 +422,6 @@ impl LauncherCatalogSession {
                         mode: CatalogRecoveryMode::PersistenceFailure { transient },
                     },
                 ));
-                self.games_found_counter.reset();
-            }
-            CatalogWorkerMessage::Unchanged { summary } => {
-                self.refresh_done = true;
-                self.foreground_update = false;
-                self.refresh_failed = false;
-                effects.push(CatalogSessionEffect::ConfirmCatalogSeed);
-                effects.push(CatalogSessionEffect::FinishMediaWorker);
-                effects.push(CatalogSessionEffect::CatalogValidationFinished);
-                effects.push(CatalogSessionEffect::CatalogBuildFinished);
-                effects.event(
-                    "library_db_unchanged",
-                    format_library_refresh_summary(&summary),
-                );
-                effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
-                self.games_found_counter.reset();
-            }
-            CatalogWorkerMessage::Changed { detail, reason } => {
-                self.refresh_done = true;
-                self.foreground_update = false;
-                self.refresh_failed = false;
-                effects.push(CatalogSessionEffect::FinishMediaWorker);
-                effects.push(CatalogSessionEffect::CatalogValidationFinished);
-                effects.event("library_changed_detected", detail.clone());
-                let mode = match reason {
-                    mister_magik_catalog::builder_protocol::CatalogChangeReason::InputsChanged => {
-                        CatalogRecoveryMode::InputsChanged
-                    }
-                    mister_magik_catalog::builder_protocol::CatalogChangeReason::ProjectionUpgrade {
-                        ..
-                    } => CatalogRecoveryMode::UpgradeRequired,
-                    mister_magik_catalog::builder_protocol::CatalogChangeReason::RepairRequired => {
-                        CatalogRecoveryMode::RepairRequired
-                    }
-                };
-                if mode == CatalogRecoveryMode::RepairRequired {
-                    effects.push(CatalogSessionEffect::PersistCatalogFailure {
-                        detail: detail.clone(),
-                        mode,
-                        has_stale_catalog: context.catalog_ready && !context.catalog_partial,
-                        system_id: None,
-                    });
-                }
-                effects.push(CatalogSessionEffect::Lifecycle(
-                    LauncherLifecycleInput::CatalogRecoveryRequired {
-                        error: detail,
-                        has_stale_catalog: context.catalog_ready && !context.catalog_partial,
-                        mode,
-                    },
-                ));
-                effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
-                self.games_found_counter.reset();
             }
             CatalogWorkerMessage::Done => {
                 self.refresh_done = true;
@@ -575,7 +432,6 @@ impl LauncherCatalogSession {
                 effects.push(CatalogSessionEffect::CatalogBuildFinished);
                 if context.catalog_ready {
                     effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
-                    self.games_found_counter.reset();
                 }
             }
         }
@@ -589,7 +445,6 @@ impl LauncherCatalogSession {
         self.foreground_update = false;
         self.deferred_worker = None;
         self.refresh_failed = false;
-        self.games_found_counter.reset();
         self.system_update_total = None;
         self.completed_system_updates.clear();
         effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
@@ -603,8 +458,6 @@ impl LauncherCatalogSession {
         self.foreground_update = false;
         self.deferred_worker = None;
         self.refresh_failed = false;
-        self.reset_counter_metrics();
-        self.games_found_counter.reset();
         self.system_update_total = None;
         self.completed_system_updates.clear();
         effects.push(CatalogSessionEffect::StartCatalogWorker(
@@ -629,8 +482,6 @@ impl LauncherCatalogSession {
         self.foreground_update = false;
         self.deferred_worker = None;
         self.refresh_failed = false;
-        self.reset_counter_metrics();
-        self.games_found_counter.reset();
         self.system_update_total = None;
         self.completed_system_updates.clear();
         effects.push(CatalogSessionEffect::CatalogPlanReady {
@@ -659,8 +510,6 @@ impl LauncherCatalogSession {
         self.foreground_update = true;
         self.deferred_worker = None;
         self.refresh_failed = false;
-        self.reset_counter_metrics();
-        self.games_found_counter.reset();
         effects.push(CatalogSessionEffect::StartCatalogWorker(
             CatalogWorkerStart {
                 root,
@@ -671,73 +520,6 @@ impl LauncherCatalogSession {
         ));
         effects.ui(catalog_rebuild_started_intent(self.foreground_update));
         effects
-    }
-
-    fn handle_progress(
-        &mut self,
-        context: CatalogWorkerMessageContext,
-        title: String,
-        detail: String,
-        percent: i32,
-        _now: Instant,
-        effects: &mut CatalogSessionEffects,
-    ) {
-        let intent = CatalogProgressUiIntent::from_worker_progress(
-            CatalogWorkerUiContext {
-                catalog_ready: context.catalog_ready,
-                screen: context.screen,
-                foreground_update: self.foreground_update,
-            },
-            title,
-            detail,
-            percent,
-        );
-        if intent.failed {
-            self.refresh_failed = true;
-        }
-        if !intent.failed
-            && let Some(total) = self.system_update_total
-        {
-            effects.ui(catalog_system_update_progress_intent(
-                self.completed_system_updates.len(),
-                total,
-            ));
-            return;
-        }
-        if let Some(counter_target) = intent
-            .counter_target
-            .filter(|target| counter_climb_target_is_meaningful(target.target))
-        {
-            let target = counter_target.target;
-            let visible_counter_before = self.games_found_counter.displayed;
-            if counter_target.phase == CatalogCounterPhase::Bootstrap
-                && !self.bootstrap_counter_climb_logged
-            {
-                self.bootstrap_counter_climb_logged = true;
-                effects.event("bootstrap_counter_climb", format!("target={target}"));
-            }
-            if counter_target.phase == CatalogCounterPhase::Bootstrap
-                && !self.bootstrap_counter_sustained_climb_logged
-                && counter_climb_target_is_sustained(target)
-            {
-                self.bootstrap_counter_sustained_climb_logged = true;
-                effects.event(
-                    "bootstrap_counter_sustained_climb",
-                    format!("target={target}"),
-                );
-            }
-            if counter_target.phase == CatalogCounterPhase::FullScan
-                && !self.full_scan_counter_climb_logged
-                && counter_climb_target_overtakes_visible(target, visible_counter_before)
-            {
-                self.full_scan_counter_climb_logged = true;
-                effects.event("full_scan_counter_climb", format!("target={target}"));
-            }
-        }
-        let detail = self
-            .games_found_counter
-            .progress_detail(&intent.title, &intent.detail);
-        effects.ui(intent.ui_with_detail(detail));
     }
 
     fn note_system_update_terminal(
@@ -761,7 +543,6 @@ impl LauncherCatalogSession {
         catalog_ready: bool,
         catalog_partial: bool,
         ready_catalog: ArcadeCatalog,
-        summary: Option<library_db::LibraryRefreshSummary>,
         load_us: u64,
         source: CatalogSource,
         durable_save_pending: bool,
@@ -769,7 +550,7 @@ impl LauncherCatalogSession {
         publication_ack: Option<mpsc::Sender<()>>,
         effects: &mut CatalogSessionEffects,
     ) {
-        let cached_before_refresh = summary.is_none() && !durable_save_pending;
+        let cached_before_refresh = !durable_save_pending;
         let duplicate_cached_catalog = !self.summary_only
             && duplicate_cached_catalog_ready(
                 catalog_ready,
@@ -802,22 +583,6 @@ impl LauncherCatalogSession {
                 format!("games={catalog_len} load_us={load_us}"),
             );
         }
-        if let Some(summary) = summary {
-            effects.push(CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending);
-            self.foreground_update = false;
-            self.refresh_failed = false;
-            let event = if summary.skipped {
-                "library_db_unchanged"
-            } else {
-                "library_db_saved"
-            };
-            if !self.persisted_summary_seen {
-                effects.event(event, format_library_refresh_summary(&summary));
-            }
-            if !summary.skipped {
-                push_catalog_coverage_diagnostic(&summary, effects);
-            }
-        }
         if duplicate_cached_catalog {
             if let Some(publication_ack) = publication_ack {
                 let _ = publication_ack.send(());
@@ -826,7 +591,6 @@ impl LauncherCatalogSession {
                 self.refresh_done = true;
                 self.foreground_update = false;
                 effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
-                self.games_found_counter.reset();
                 effects.push(CatalogSessionEffect::Lifecycle(
                     LauncherLifecycleInput::CatalogRecoveryRequired {
                         error: "The catalog update did not complete.".to_string(),
@@ -841,7 +605,6 @@ impl LauncherCatalogSession {
             }
             return;
         }
-        self.games_found_counter.reset();
         if cached_before_refresh && !validation_already_finished {
             effects.ui(cached_catalog_validation_intent(
                 self.foreground_update,
@@ -854,12 +617,6 @@ impl LauncherCatalogSession {
             effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
         }
         effects.push(CatalogSessionEffect::SyncCatalogBridge);
-    }
-
-    fn reset_counter_metrics(&mut self) {
-        self.bootstrap_counter_climb_logged = false;
-        self.bootstrap_counter_sustained_climb_logged = false;
-        self.full_scan_counter_climb_logged = false;
     }
 }
 
@@ -908,83 +665,12 @@ pub(super) fn consume_library_rebuild_marker(worker_enabled: bool, start: Instan
     }
 }
 
-fn format_library_refresh_summary(summary: &library_db::LibraryRefreshSummary) -> String {
-    format!(
-        "bytes={} scan_us={} discover_us={} classify_us={} import_us={} discoveries={} normal_files={} containers={} entries={} audit_rows={}",
-        summary.bytes,
-        summary.scan_us,
-        summary.discover_us,
-        summary.classify_us,
-        summary.import_us,
-        summary.discoveries,
-        summary.normal_files,
-        summary.containers,
-        summary.entries,
-        summary.audit_rows
-    )
-}
-
-fn push_catalog_coverage_diagnostic(
-    summary: &library_db::LibraryRefreshSummary,
-    effects: &mut CatalogSessionEffects,
-) {
-    if summary.audit_rows == 0 {
-        return;
-    }
-    crate::ui_errln!(
-        "catalog coverage audit: rows={} (query catalog_audit for details)",
-        summary.audit_rows
-    );
-    effects.event(
-        "catalog_coverage_audit",
-        format!("rows={}", summary.audit_rows),
-    );
-}
-
 fn duplicate_cached_catalog_ready(
     catalog_ready: bool,
     catalog_partial: bool,
     cached_before_refresh: bool,
 ) -> bool {
     catalog_ready && !catalog_partial && cached_before_refresh
-}
-
-#[derive(Debug, Default)]
-pub(super) struct GamesFoundCounter {
-    displayed: usize,
-}
-
-impl GamesFoundCounter {
-    fn progress_detail(&mut self, title: &str, detail: &str) -> Option<String> {
-        let phase = CatalogCounterPhase::for_title(title);
-        let target = phase.and_then(|_| parse_games_found_detail(detail));
-        let Some(target) = target else {
-            self.reset();
-            return None;
-        };
-        self.displayed = self.displayed.max(target);
-        Some(format_games_found(self.displayed))
-    }
-
-    fn reset(&mut self) {
-        self.displayed = 0;
-    }
-}
-
-fn format_games_found(count: usize) -> String {
-    format!("Games found: {count}")
-}
-
-pub(super) fn counter_climb_target_is_meaningful(target: usize) -> bool {
-    target >= 50
-}
-
-pub(super) fn counter_climb_target_is_sustained(target: usize) -> bool {
-    target >= 500
-}
-
-pub(super) fn counter_climb_target_overtakes_visible(target: usize, displayed: usize) -> bool {
-    target > displayed
 }
 
 #[cfg(test)]
@@ -1010,9 +696,7 @@ mod tests {
             .filter(|effect| {
                 !matches!(
                     effect,
-                    CatalogSessionEffect::CatalogBuildStarted
-                        | CatalogSessionEffect::CatalogPlanReady { .. }
-                        | CatalogSessionEffect::CatalogSystemDiscovered { .. }
+                    CatalogSessionEffect::CatalogPlanReady { .. }
                         | CatalogSessionEffect::CatalogSystemScanning { .. }
                         | CatalogSessionEffect::CatalogSystemPrepared { .. }
                         | CatalogSessionEffect::CatalogManifestPublished { .. }
@@ -1026,15 +710,11 @@ mod tests {
             .map(|effect| match effect {
                 CatalogSessionEffect::StartupEvent(_) => "event",
                 CatalogSessionEffect::UseCatalog { .. } => "catalog",
-                CatalogSessionEffect::MarkCatalogDurable { .. } => "mark-durable",
-                CatalogSessionEffect::ConfirmCatalogSeed => "confirm-seed",
                 CatalogSessionEffect::DiscardPartialCatalog => "discard-partial",
                 CatalogSessionEffect::ApplySearchResult { .. } => "search-result",
                 CatalogSessionEffect::FailSearchRequest { .. } => "search-failed",
                 CatalogSessionEffect::SyncCatalogBridge => "sync",
-                CatalogSessionEffect::CatalogBuildStarted
-                | CatalogSessionEffect::CatalogPlanReady { .. }
-                | CatalogSessionEffect::CatalogSystemDiscovered { .. }
+                CatalogSessionEffect::CatalogPlanReady { .. }
                 | CatalogSessionEffect::CatalogSystemScanning { .. }
                 | CatalogSessionEffect::CatalogSystemPrepared { .. }
                 | CatalogSessionEffect::CatalogManifestPublished { .. }
@@ -1047,12 +727,8 @@ mod tests {
                 }
                 CatalogSessionEffect::Ui(_) => "ui",
                 CatalogSessionEffect::FinishMediaWorker => "finish-media",
-                CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending => {
-                    "finish-media-if-no-seed"
-                }
                 CatalogSessionEffect::CatalogValidationFinished => "catalog-validation-finished",
                 CatalogSessionEffect::RequestMediaCatalogSeed => "request-media-seed",
-                CatalogSessionEffect::MediaSystemDiscovered { .. } => "media-system-discovered",
                 CatalogSessionEffect::RequestLibraryRebuildOnNextBoot => "request-rebuild-marker",
                 CatalogSessionEffect::Confirm(_) => "confirm",
                 CatalogSessionEffect::Lifecycle(_) => "lifecycle",
@@ -1069,9 +745,7 @@ mod tests {
         for effect in effects.into_effects() {
             if matches!(
                 effect,
-                CatalogSessionEffect::CatalogBuildStarted
-                    | CatalogSessionEffect::CatalogPlanReady { .. }
-                    | CatalogSessionEffect::CatalogSystemDiscovered { .. }
+                CatalogSessionEffect::CatalogPlanReady { .. }
                     | CatalogSessionEffect::CatalogSystemScanning { .. }
                     | CatalogSessionEffect::CatalogSystemPrepared { .. }
                     | CatalogSessionEffect::CatalogManifestPublished { .. }
@@ -1086,10 +760,6 @@ mod tests {
             match effect {
                 CatalogSessionEffect::StartupEvent(_) => effect_names.push("event"),
                 CatalogSessionEffect::UseCatalog { .. } => effect_names.push("catalog"),
-                CatalogSessionEffect::MarkCatalogDurable { .. } => {
-                    effect_names.push("mark-durable")
-                }
-                CatalogSessionEffect::ConfirmCatalogSeed => effect_names.push("confirm-seed"),
                 CatalogSessionEffect::DiscardPartialCatalog => effect_names.push("discard-partial"),
                 CatalogSessionEffect::ApplySearchResult { .. } => {
                     effect_names.push("search-result")
@@ -1098,9 +768,7 @@ mod tests {
                     effect_names.push("search-failed")
                 }
                 CatalogSessionEffect::SyncCatalogBridge => effect_names.push("sync"),
-                CatalogSessionEffect::CatalogBuildStarted
-                | CatalogSessionEffect::CatalogPlanReady { .. }
-                | CatalogSessionEffect::CatalogSystemDiscovered { .. }
+                CatalogSessionEffect::CatalogPlanReady { .. }
                 | CatalogSessionEffect::CatalogSystemScanning { .. }
                 | CatalogSessionEffect::CatalogSystemPrepared { .. }
                 | CatalogSessionEffect::CatalogManifestPublished { .. }
@@ -1124,17 +792,11 @@ mod tests {
                     });
                 }
                 CatalogSessionEffect::FinishMediaWorker => effect_names.push("finish-media"),
-                CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending => {
-                    effect_names.push("finish-media-if-no-seed")
-                }
                 CatalogSessionEffect::CatalogValidationFinished => {
                     effect_names.push("catalog-validation-finished")
                 }
                 CatalogSessionEffect::RequestMediaCatalogSeed => {
                     effect_names.push("request-media-seed")
-                }
-                CatalogSessionEffect::MediaSystemDiscovered { .. } => {
-                    effect_names.push("media-system-discovered")
                 }
                 CatalogSessionEffect::RequestLibraryRebuildOnNextBoot => {
                     effect_names.push("request-rebuild-marker")
@@ -1173,37 +835,17 @@ mod tests {
             .collect()
     }
 
-    fn refresh_summary() -> library_db::LibraryRefreshSummary {
-        library_db::LibraryRefreshSummary {
-            skipped: false,
-            scan_us: 10,
-            discover_us: 11,
-            classify_us: 12,
-            import_us: 13,
-            bytes: 14,
-            normal_files: 15,
-            containers: 16,
-            entries: 17,
-            audit_rows: 0,
-            discoveries: 18,
-        }
-    }
-
     #[test]
-    fn persisted_catalog_displays_builder_duration_in_whole_seconds() {
+    fn completed_catalog_build_displays_elapsed_time() {
         let now = Instant::now();
         let mut session = LauncherCatalogSession::new(true);
         let values = database_build_values(session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
                 catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
             },
-            CatalogWorkerMessage::Persisted {
-                summary: refresh_summary(),
-                completed_build_seconds: Some(119),
-                generation_fingerprint: None,
+            CatalogWorkerMessage::BuildCompleted {
+                elapsed_us: 119_000_000,
             },
             now,
         ));
@@ -1212,89 +854,11 @@ mod tests {
     }
 
     #[test]
-    fn progressive_presentation_effects_follow_worker_event_sequence() {
-        let now = Instant::now();
-        let context = || CatalogWorkerMessageContext {
-            catalog_ready: false,
-            catalog_partial: false,
-            screen: Screen::Home,
-            media_gate: None,
-        };
-        let mut session = LauncherCatalogSession::new(false);
-
-        let started = session.handle_worker_message(
-            context(),
-            CatalogWorkerMessage::FreshCleanupStarted,
-            now,
-        );
-        assert!(
-            started
-                .into_effects()
-                .into_iter()
-                .any(|effect| matches!(effect, CatalogSessionEffect::CatalogBuildStarted))
-        );
-
-        let discovered = session.handle_worker_message(
-            context(),
-            CatalogWorkerMessage::SystemDiscovered {
-                system_id: "snes".to_string(),
-            },
-            now,
-        );
-        assert!(discovered.into_effects().into_iter().any(|effect| matches!(
-            effect,
-            CatalogSessionEffect::CatalogSystemDiscovered { system_id } if system_id == "snes"
-        )));
-
-        let ready = session.handle_worker_message(
-            context(),
-            CatalogWorkerMessage::SystemShardReady {
-                system_id: "snes".to_string(),
-                catalog: empty_arcade_catalog("/tmp"),
-                base_catalog_version: 7,
-                game_count: 0,
-                prepare_us: 42,
-                profile: SystemEntryCatalogProfile::default(),
-                preview_prelude: None,
-            },
-            now,
-        );
-        let ready_effects = ready.into_effects().into_iter().collect::<Vec<_>>();
-        assert!(ready_effects.iter().any(|effect| matches!(
-            effect,
-            CatalogSessionEffect::ApplySystemShard { system_id, .. } if system_id == "snes"
-        )));
-        assert!(!ready_effects.iter().any(|effect| matches!(
-            effect,
-            CatalogSessionEffect::CatalogSystemUpdateFailed { .. }
-                | CatalogSessionEffect::CatalogSystemHydrationFailed { .. }
-        )));
-
-        let finished = session.handle_worker_message(
-            context(),
-            CatalogWorkerMessage::Persisted {
-                summary: refresh_summary(),
-                completed_build_seconds: Some(1),
-                generation_fingerprint: None,
-            },
-            now,
-        );
-        assert!(
-            finished
-                .into_effects()
-                .into_iter()
-                .any(|effect| matches!(effect, CatalogSessionEffect::CatalogBuildFinished))
-        );
-    }
-
-    #[test]
     fn rebuild_progress_counts_unique_terminal_system_events() {
         let now = Instant::now();
         let context = || CatalogWorkerMessageContext {
             catalog_ready: true,
             catalog_partial: false,
-            screen: Screen::Home,
-            media_gate: None,
         };
         let mut session = LauncherCatalogSession::new(false);
 
@@ -1345,8 +909,6 @@ mod tests {
         let context = || CatalogWorkerMessageContext {
             catalog_ready: true,
             catalog_partial: false,
-            screen: Screen::Home,
-            media_gate: None,
         };
         let mut session = LauncherCatalogSession::new(false);
 
@@ -1403,12 +965,9 @@ mod tests {
             CatalogWorkerMessageContext {
                 catalog_ready: false,
                 catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
             },
             CatalogWorkerMessage::Ready {
                 catalog: catalog_with_games(3),
-                summary: None,
                 load_us: 42,
                 source: CatalogSource::FullSqlite,
                 durable_save_pending: false,
@@ -1433,8 +992,6 @@ mod tests {
             CatalogWorkerMessageContext {
                 catalog_ready: true,
                 catalog_partial: false,
-                screen: Screen::Arcade,
-                media_gate: None,
             },
             CatalogWorkerMessage::HydrationDoneNeedsValidation {
                 root: "/media/fat".into(),
@@ -1465,384 +1022,12 @@ mod tests {
     }
 
     #[test]
-    fn early_ready_keeps_refresh_open_until_persisted() {
-        let now = Instant::now();
-        let mut session = LauncherCatalogSession::new(false);
-        let (ready_effects, ready_ui) = effect_and_ui_names(session.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: false,
-                catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Ready {
-                catalog: catalog_with_games(3),
-                summary: None,
-                load_us: 42,
-                source: CatalogSource::FreshBuild,
-                durable_save_pending: true,
-                generation_fingerprint: None,
-                publication_ack: None,
-            },
-            now,
-        ));
-
-        assert_eq!(
-            ready_effects,
-            vec!["request-media-seed", "catalog", "event", "ui", "sync"]
-        );
-        assert_eq!(ready_ui, vec!["show-background-scan"]);
-        assert!(!session.refresh_done());
-
-        let (persisted_effects, persisted_ui) = effect_and_ui_names(session.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: true,
-                catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Persisted {
-                summary: refresh_summary(),
-                completed_build_seconds: Some(119),
-                generation_fingerprint: None,
-            },
-            now,
-        ));
-
-        assert_eq!(
-            persisted_effects,
-            vec![
-                "finish-media-if-no-seed",
-                "catalog-validation-finished",
-                "event",
-                "mark-durable",
-                "ui",
-                "ui"
-            ]
-        );
-        assert_eq!(
-            persisted_ui,
-            vec!["info-database-build", "hide-background-scan"]
-        );
-        assert!(session.refresh_done());
-        assert!(!session.foreground_update());
-        assert!(!session.refresh_failed);
-    }
-
-    #[test]
-    fn foreground_rebuild_ready_moves_persistence_to_background_scan() {
-        let now = Instant::now();
-        let mut session = LauncherCatalogSession::new(true);
-        let (ready_effects, ready_ui) = effect_and_ui_names(session.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: true,
-                catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Ready {
-                catalog: catalog_with_games(4),
-                summary: None,
-                load_us: 42,
-                source: CatalogSource::FreshBuild,
-                durable_save_pending: true,
-                generation_fingerprint: None,
-                publication_ack: None,
-            },
-            now,
-        ));
-
-        assert_eq!(
-            ready_effects,
-            vec!["request-media-seed", "catalog", "event", "ui", "sync"]
-        );
-        assert_eq!(ready_ui, vec!["show-background-scan"]);
-        assert!(!session.refresh_done());
-        assert!(!session.foreground_update());
-
-        let (_, progress_ui) = effect_and_ui_names(session.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: true,
-                catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Progress {
-                title: "Saving library".to_string(),
-                detail: "Writing catalog database before opening launcher...".to_string(),
-                percent: -1,
-                metadata: None,
-            },
-            now,
-        ));
-
-        assert_eq!(progress_ui, vec!["catalog-scan"]);
-        assert!(!session.foreground_update());
-
-        let (persisted_effects, persisted_ui) = effect_and_ui_names(session.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: true,
-                catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Persisted {
-                summary: refresh_summary(),
-                completed_build_seconds: Some(119),
-                generation_fingerprint: None,
-            },
-            now,
-        ));
-
-        assert_eq!(
-            persisted_effects,
-            vec![
-                "finish-media-if-no-seed",
-                "catalog-validation-finished",
-                "event",
-                "mark-durable",
-                "ui",
-                "ui"
-            ]
-        );
-        assert_eq!(
-            persisted_ui,
-            vec!["info-database-build", "hide-background-scan"]
-        );
-        assert!(session.refresh_done());
-        assert!(!session.foreground_update());
-        assert!(!session.refresh_failed);
-    }
-
-    #[test]
-    fn persisted_catalog_with_audit_rows_logs_coverage_diagnostic_without_prompt() {
-        let now = Instant::now();
-        let mut session = LauncherCatalogSession::new(true);
-        let mut summary = refresh_summary();
-        summary.audit_rows = 2;
-
-        let effects = effect_names(session.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: true,
-                catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Persisted {
-                summary,
-                completed_build_seconds: Some(119),
-                generation_fingerprint: None,
-            },
-            now,
-        ));
-
-        assert_eq!(
-            effects,
-            vec![
-                "finish-media-if-no-seed",
-                "catalog-validation-finished",
-                "event",
-                "mark-durable",
-                "ui",
-                "event",
-                "ui"
-            ]
-        );
-    }
-
-    #[test]
-    fn ready_catalog_with_saved_audit_rows_logs_coverage_diagnostic_without_prompt() {
-        let now = Instant::now();
-        let mut session = LauncherCatalogSession::new(true);
-        let mut summary = refresh_summary();
-        summary.audit_rows = 2;
-
-        let effects = effect_names(session.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: false,
-                catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Ready {
-                catalog: catalog_with_games(3),
-                summary: Some(summary),
-                load_us: 42,
-                source: CatalogSource::FreshBuild,
-                durable_save_pending: false,
-                generation_fingerprint: None,
-                publication_ack: None,
-            },
-            now,
-        ));
-
-        assert_eq!(
-            effects,
-            vec![
-                "request-media-seed",
-                "catalog",
-                "event",
-                "finish-media-if-no-seed",
-                "event",
-                "event",
-                "ui",
-                "sync"
-            ]
-        );
-    }
-
-    #[test]
-    fn late_cached_ready_after_terminal_validation_does_not_reopen_refresh() {
-        let now = Instant::now();
-        let mut session = LauncherCatalogSession::new(false);
-        session.note_summary_seed_ready();
-
-        let effects = session.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: true,
-                catalog_partial: true,
-                screen: Screen::Arcade,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Unchanged {
-                summary: refresh_summary(),
-            },
-            now,
-        );
-        assert!(
-            effects
-                .into_effects()
-                .into_iter()
-                .any(|effect| matches!(effect, CatalogSessionEffect::ConfirmCatalogSeed))
-        );
-        assert!(session.refresh_done());
-
-        let (effects, ui_effects) = effect_and_ui_names(session.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: true,
-                catalog_partial: false,
-                screen: Screen::Arcade,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Ready {
-                catalog: catalog_with_games(3),
-                summary: None,
-                load_us: 42,
-                source: CatalogSource::FullSqlite,
-                durable_save_pending: false,
-                generation_fingerprint: None,
-                publication_ack: None,
-            },
-            now,
-        ));
-
-        assert_eq!(
-            effects,
-            vec!["request-media-seed", "catalog", "event", "ui", "sync"]
-        );
-        assert_eq!(ui_effects, vec!["clear-catalog-scan"]);
-        assert!(session.refresh_done());
-    }
-
-    #[test]
-    fn duplicate_cached_ready_after_failed_foreground_rebuild_prompts_fallback() {
-        let now = Instant::now();
-        let mut session = LauncherCatalogSession::new(true);
-        session.note_cached_catalog_ready();
-        let _ = session.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: true,
-                catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Progress {
-                title: "Library scan failed".to_string(),
-                detail: "disk unavailable".to_string(),
-                percent: -1,
-                metadata: None,
-            },
-            now,
-        );
-
-        let effects = session.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: true,
-                catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Ready {
-                catalog: catalog_with_games(3),
-                summary: None,
-                load_us: 42,
-                source: CatalogSource::FullSqlite,
-                durable_save_pending: false,
-                generation_fingerprint: None,
-                publication_ack: None,
-            },
-            now,
-        );
-
-        assert_eq!(effect_names(effects), vec!["ui", "lifecycle", "event"]);
-        assert!(session.refresh_done());
-        assert!(!session.foreground_update());
-    }
-
-    #[test]
-    fn survivability_failed_foreground_rebuild_with_cached_catalog_prompts_fallback() {
-        let now = Instant::now();
-        let mut session = LauncherCatalogSession::new(true);
-        session.note_cached_catalog_ready();
-        let _ = session.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: true,
-                catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Progress {
-                title: "Library load failed".to_string(),
-                detail: "sqlite projection corrupt".to_string(),
-                percent: -1,
-                metadata: None,
-            },
-            now,
-        );
-
-        let effects = session.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: true,
-                catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Ready {
-                catalog: catalog_with_games(3),
-                summary: None,
-                load_us: 42,
-                source: CatalogSource::FullSqlite,
-                durable_save_pending: false,
-                generation_fingerprint: None,
-                publication_ack: None,
-            },
-            now,
-        );
-
-        assert_eq!(effect_names(effects), vec!["ui", "lifecycle", "event"]);
-        assert!(session.refresh_done());
-        assert!(!session.foreground_update());
-    }
-
-    #[test]
     fn persistence_failure_replaces_finalizing_progress_with_error_state() {
         let mut session = LauncherCatalogSession::new(true);
         let (effects, ui_effects) = effect_and_ui_names(session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: false,
                 catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
             },
             CatalogWorkerMessage::PersistenceFailed {
                 error: "read launcher catalog row".to_string(),
@@ -1874,12 +1059,9 @@ mod tests {
             CatalogWorkerMessageContext {
                 catalog_ready: false,
                 catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
             },
             CatalogWorkerMessage::Ready {
                 catalog: catalog_with_games(4),
-                summary: None,
                 load_us: 42,
                 source: CatalogSource::FreshBuild,
                 durable_save_pending: true,
@@ -1899,8 +1081,6 @@ mod tests {
             CatalogWorkerMessageContext {
                 catalog_ready: true,
                 catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
             },
             CatalogWorkerMessage::PersistenceFailed {
                 error: "insert profile: UNIQUE constraint failed".to_string(),
@@ -1922,12 +1102,9 @@ mod tests {
             CatalogWorkerMessageContext {
                 catalog_ready: true,
                 catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
             },
             CatalogWorkerMessage::Ready {
                 catalog: catalog_with_games(4),
-                summary: None,
                 load_us: 42,
                 source: CatalogSource::FreshBuild,
                 durable_save_pending: true,
@@ -1942,8 +1119,6 @@ mod tests {
             CatalogWorkerMessageContext {
                 catalog_ready: true,
                 catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
             },
             CatalogWorkerMessage::PersistenceFailed {
                 error: "publish sqlite catalog".to_string(),
@@ -1965,37 +1140,6 @@ mod tests {
         assert!(session.refresh_done());
         assert!(!session.foreground_update());
         assert!(session.refresh_failed);
-    }
-
-    #[test]
-    fn changed_catalog_opens_stale_library_dialog() {
-        let mut session = LauncherCatalogSession::new(false);
-        let effects = session.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: true,
-                catalog_partial: false,
-                screen: Screen::Home,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Changed {
-                detail: "Catalog stamp changed; rebuild required.".to_string(),
-                reason: mister_magik_catalog::builder_protocol::CatalogChangeReason::InputsChanged,
-            },
-            Instant::now(),
-        );
-
-        assert_eq!(
-            effect_names(effects),
-            vec![
-                "finish-media",
-                "catalog-validation-finished",
-                "event",
-                "lifecycle",
-                "ui"
-            ]
-        );
-        assert!(session.refresh_done());
-        assert!(!session.foreground_update());
     }
 
     #[test]
@@ -2281,77 +1425,6 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn games_found_counter_reports_real_worker_counts() {
-        let mut counter = GamesFoundCounter::default();
-
-        assert_eq!(
-            counter.progress_detail("Classifying library", "Games found: 250"),
-            Some("Games found: 250".to_string())
-        );
-        assert_eq!(
-            counter.progress_detail("Classifying library", "Games found: 500"),
-            Some("Games found: 500".to_string())
-        );
-    }
-
-    #[test]
-    pub(super) fn counter_climb_metric_waits_for_meaningful_target() {
-        assert!(!counter_climb_target_is_meaningful(1));
-        assert!(!counter_climb_target_is_meaningful(49));
-        assert!(counter_climb_target_is_meaningful(50));
-        assert!(counter_climb_target_is_meaningful(250));
-        assert!(!counter_climb_target_is_sustained(499));
-        assert!(counter_climb_target_is_sustained(500));
-    }
-
-    #[test]
-    pub(super) fn games_found_counter_accepts_bootstrap_title() {
-        let mut counter = GamesFoundCounter::default();
-
-        assert_eq!(
-            counter.progress_detail("Finding games", "Games found: 50"),
-            Some("Games found: 50".to_string())
-        );
-    }
-
-    #[test]
-    pub(super) fn games_found_counter_does_not_drop_when_full_scan_starts_lower() {
-        let mut counter = GamesFoundCounter::default();
-
-        counter.progress_detail("Finding games", "Games found: 911");
-        assert_eq!(
-            counter.progress_detail("Classifying library", "Games found: 50"),
-            Some("Games found: 911".to_string())
-        );
-        assert_eq!(counter.displayed, 911);
-
-        assert_eq!(
-            counter.progress_detail("Classifying library", "Games found: 1200"),
-            Some("Games found: 1200".to_string())
-        );
-        assert_eq!(counter.displayed, 1200);
-    }
-
-    #[test]
-    pub(super) fn full_scan_counter_takeover_requires_visible_overtake() {
-        assert!(!counter_climb_target_overtakes_visible(50, 650));
-        assert!(!counter_climb_target_overtakes_visible(650, 650));
-        assert!(counter_climb_target_overtakes_visible(700, 650));
-    }
-
-    #[test]
-    pub(super) fn games_found_counter_ignores_other_scan_phases() {
-        let mut counter = GamesFoundCounter::default();
-
-        counter.progress_detail("Classifying library", "Games found: 100");
-        assert_eq!(
-            counter.progress_detail("Saving library", "Writing 0 of 100 games into SQLite..."),
-            None
-        );
-        assert_eq!(counter.displayed, 0);
-    }
-
-    #[test]
     pub(super) fn duplicate_cached_catalog_ready_is_skipped_after_sync_load() {
         assert!(duplicate_cached_catalog_ready(true, false, true));
         assert!(!duplicate_cached_catalog_ready(false, false, true));
@@ -2366,15 +1439,12 @@ mod tests {
         let context = |catalog_ready| CatalogWorkerMessageContext {
             catalog_ready,
             catalog_partial: false,
-            screen: Screen::Home,
-            media_gate: None,
         };
 
         let bootstrap = session.handle_worker_message(
             context(false),
             CatalogWorkerMessage::Ready {
                 catalog: catalog_with_games(1),
-                summary: None,
                 load_us: 1,
                 source: CatalogSource::NavigationProjection,
                 durable_save_pending: true,
@@ -2395,7 +1465,6 @@ mod tests {
             context(true),
             CatalogWorkerMessage::Ready {
                 catalog: catalog_with_games(3),
-                summary: None,
                 load_us: 2,
                 source: CatalogSource::ShardedRegistry,
                 durable_save_pending: false,
@@ -2416,7 +1485,6 @@ mod tests {
             context(true),
             CatalogWorkerMessage::Ready {
                 catalog: catalog_with_games(3),
-                summary: None,
                 load_us: 3,
                 source: CatalogSource::ShardedRegistry,
                 durable_save_pending: false,
@@ -2440,8 +1508,6 @@ mod tests {
             CatalogWorkerMessageContext {
                 catalog_ready: true,
                 catalog_partial: true,
-                screen: Screen::Arcade,
-                media_gate: None,
             },
             CatalogWorkerMessage::LoadFailed {
                 error: "disconnected".to_string(),

@@ -44,7 +44,6 @@ use crate::frame_profile::FrameRect;
 use crate::frame_profile::{FrameProfiler, FrameSample, VideoFrameProfile};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
-use crate::library_db;
 use crate::preview_state::{
     ARCADE_PREVIEW_BOX_H, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_X, ARCADE_PREVIEW_BOX_Y,
     PreviewFrameIntent, PreviewPresentationState, PreviewPresentationTarget, PreviewRawFrame,
