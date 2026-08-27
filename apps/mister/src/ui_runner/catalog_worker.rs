@@ -290,8 +290,17 @@ fn run_fast_catalog_fresh_build(
                 all_published_systems: true,
             });
             for system_id in system_ids {
+                if system_id == "arcade" {
+                    continue;
+                }
                 let _ = tx.send(CatalogWorkerMessage::SystemScanning {
                     system_id: system_id.clone(),
+                });
+            }
+            if system_ids.iter().any(|system_id| system_id == "arcade") {
+                let _ = tx.send(CatalogWorkerMessage::SystemPrepared {
+                    system_id: "arcade".to_string(),
+                    generation: 0,
                 });
             }
         },

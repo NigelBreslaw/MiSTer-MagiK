@@ -82,36 +82,31 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
     mut system_complete: impl FnMut(&FastFiveSystem),
 ) -> Result<FastSourceRefreshBuild, String> {
     let started = Instant::now();
+    let mut systems = BTreeMap::new();
+    let mut reports = BTreeMap::new();
+    build_and_record_prepared_system(
+        storage_root,
+        "arcade",
+        &mut systems,
+        &mut reports,
+        &mut system_complete,
+    )?;
     let roots = [storage_root.display().to_string()];
     let profiles = ProfileSet::for_roots(&roots).into_profiles();
     let planned_system_ids = discover_independent_system_ids_from_profiles(storage_root, &profiles);
     plan_ready(&planned_system_ids);
-    let mut systems = BTreeMap::new();
-    let mut reports = BTreeMap::new();
-    for system_id in PREPARED_SYSTEM_IDS {
-        let system_started = Instant::now();
-        let (mut system, mut report) = build_prepared_system(storage_root, system_id)?;
-        if system_id == "c64" {
-            collapse_c64_cross_source_variants(&mut system);
-        }
-        enrich_fast_preview_identities(storage_root, std::slice::from_mut(&mut system));
-        report.elapsed_us = elapsed_us(system_started);
-        report.games = system.games.len();
-        crate::catalog_logln!(
-            "fast_catalog_source_tsv\tadapter=prepared\tsystem={}\telapsed_us={}\tfiles={}\tgames={}\tinvalid={}\thelper_hits={}\tfallback_validations={}",
-            report.system_id,
-            report.elapsed_us,
-            report.files_visited,
-            report.games,
-            report.invalid,
-            report.helper_hits,
-            report.fallback_validations,
-        );
-        if !system.games.is_empty() || !system.variants.is_empty() {
-            system_complete(&system);
-            systems.insert(system_id.to_string(), system);
-            reports.insert(system_id.to_string(), report);
-        }
+    for system_id in PREPARED_SYSTEM_IDS
+        .iter()
+        .copied()
+        .filter(|system_id| *system_id != "arcade")
+    {
+        build_and_record_prepared_system(
+            storage_root,
+            system_id,
+            &mut systems,
+            &mut reports,
+            &mut system_complete,
+        )?;
     }
     let (mut generic_systems, generic) =
         discover_generic_systems_from_profiles_excluding_with_progress(
@@ -155,6 +150,39 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         },
         profiles,
     })
+}
+
+fn build_and_record_prepared_system(
+    storage_root: &Path,
+    system_id: &str,
+    systems: &mut BTreeMap<String, FastFiveSystem>,
+    reports: &mut BTreeMap<String, FastSourceSystemReport>,
+    system_complete: &mut impl FnMut(&FastFiveSystem),
+) -> Result<(), String> {
+    let system_started = Instant::now();
+    let (mut system, mut report) = build_prepared_system(storage_root, system_id)?;
+    if system_id == "c64" {
+        collapse_c64_cross_source_variants(&mut system);
+    }
+    enrich_fast_preview_identities(storage_root, std::slice::from_mut(&mut system));
+    report.elapsed_us = elapsed_us(system_started);
+    report.games = system.games.len();
+    crate::catalog_logln!(
+        "fast_catalog_source_tsv\tadapter=prepared\tsystem={}\telapsed_us={}\tfiles={}\tgames={}\tinvalid={}\thelper_hits={}\tfallback_validations={}",
+        report.system_id,
+        report.elapsed_us,
+        report.files_visited,
+        report.games,
+        report.invalid,
+        report.helper_hits,
+        report.fallback_validations,
+    );
+    if !system.games.is_empty() || !system.variants.is_empty() {
+        system_complete(&system);
+        systems.insert(system_id.to_string(), system);
+        reports.insert(system_id.to_string(), report);
+    }
+    Ok(())
 }
 
 pub fn rebuild_independent_system(
