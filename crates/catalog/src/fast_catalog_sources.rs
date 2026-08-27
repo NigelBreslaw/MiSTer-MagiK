@@ -80,6 +80,8 @@ pub fn build_independent_fast_snapshot(
                 games: system.games,
                 invalid: system.read_errors.saturating_add(system.archive_errors),
                 elapsed_us: system.elapsed_us,
+                helper_hits: 0,
+                fallback_validations: 0,
             }),
     );
     reports.sort_by(|left, right| left.system_id.cmp(&right.system_id));
@@ -112,6 +114,8 @@ pub fn rebuild_independent_system(
                 games: report.games,
                 invalid: report.read_errors.saturating_add(report.archive_errors),
                 elapsed_us: report.elapsed_us,
+                helper_hits: 0,
+                fallback_validations: 0,
             },
         ));
     }
@@ -571,6 +575,24 @@ fn scan_prepared_mgl(
             extension_is(path, "mgl")
         });
     }
+    if system_id == "x68000" && files.len() > 1 {
+        report.fallback_validations = report.fallback_validations.saturating_add(files.len());
+        let midpoint = files.len().div_ceil(2);
+        let (mut games, invalid, second_games) = std::thread::scope(|scope| {
+            let first = scope
+                .spawn(|| validate_prepared_mgl_paths(&files[..midpoint], system_id, category));
+            let second = scope
+                .spawn(|| validate_prepared_mgl_paths(&files[midpoint..], system_id, category));
+            let (games, invalid) = first.join().unwrap_or_else(|_| (Vec::new(), midpoint));
+            let (second_games, second_invalid) = second
+                .join()
+                .unwrap_or_else(|_| (Vec::new(), files.len().saturating_sub(midpoint)));
+            (games, invalid.saturating_add(second_invalid), second_games)
+        });
+        games.extend(second_games);
+        report.invalid = report.invalid.saturating_add(invalid);
+        return games;
+    }
     let prepared_index = (system_id == "dos").then(|| {
         PreparedPayloadIndex::from_library_roots(
             &roots
@@ -601,6 +623,22 @@ fn scan_prepared_mgl(
             }
         })
         .collect()
+}
+
+fn validate_prepared_mgl_paths(
+    paths: &[PathBuf],
+    system_id: &str,
+    category: &str,
+) -> (Vec<SystemGame>, usize) {
+    let mut games = Vec::with_capacity(paths.len());
+    let mut invalid = 0usize;
+    for path in paths {
+        match validate_prepared_launch_path(path) {
+            Ok(true) => games.push(direct_row(system_id, category, path, display_name(path))),
+            _ => invalid = invalid.saturating_add(1),
+        }
+    }
+    (games, invalid)
 }
 
 fn scan_oneload64(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<SystemGame> {
