@@ -14032,9 +14032,7 @@ fn apply_screenshot_media_update_effects(
                 }
             }
             ScreenshotMediaUpdateEffect::ApplyPreviewAvailability { system_id, games } => {
-                let (replacement, launch_plans) =
-                    arcade_rows_from_persisted_shard(&system_id, &games);
-                *catalog = catalog.replacing_system_games(&system_id, replacement, launch_plans);
+                *catalog = catalog_with_preview_availability(catalog, &system_id, &games);
                 if let Some(preview) = preview.as_deref_mut() {
                     preview.clear_failed_preview_cache();
                 }
@@ -14050,6 +14048,26 @@ fn apply_screenshot_media_update_effects(
             }
         }
     }
+}
+
+fn catalog_with_preview_availability(
+    catalog: &ArcadeCatalog,
+    system_id: &str,
+    games: &[mister_magik_catalog::system_shard::SystemGame],
+) -> ArcadeCatalog {
+    let (replacement, launch_plans) = arcade_rows_from_persisted_shard(system_id, games);
+    let collection = Arc::new(arcade_catalog::SystemCollection::new(
+        system_id,
+        replacement,
+        launch_plans,
+        catalog.platform_kind(system_id),
+    ));
+    let mut updated = catalog.with_system_collection_for_id(system_id, Arc::clone(&collection));
+    if system_id == "arcade" {
+        updated = updated
+            .with_system_collection_for_id(arcade_catalog::MENU_ARCADE_SYSTEM_ID, collection);
+    }
+    updated
 }
 
 fn catalog_background_validation_delay() -> Duration {
@@ -19170,5 +19188,43 @@ mod tests {
         saver.handle_input(start + delay + delay, false, true);
         saver.update(start + delay + delay + delay, true, delay, false, true);
         assert!(saver.active);
+    }
+
+    #[test]
+    fn arcade_preview_availability_updates_artifact_and_menu_aliases() {
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from("/fixture"),
+            Vec::new(),
+            vec![
+                GameSystemEntry {
+                    id: "arcade".into(),
+                    title: "Arcade".into(),
+                    count: 1,
+                },
+                GameSystemEntry {
+                    id: arcade_catalog::MENU_ARCADE_SYSTEM_ID.into(),
+                    title: "Arcade".into(),
+                    count: 1,
+                },
+            ],
+        );
+        let game = mister_magik_catalog::system_shard::SystemGame {
+            stable_key: "arcade\u{1f}1943 kai".into(),
+            title: "1943- Kai Midway Kaisen (JP)".into(),
+            launch_ref: "/media/fat/_Arcade/1943 Kai.mra".into(),
+            preview_archive_path: "/media/fat/mister-magik-dev/assets/arcade-screenshots.mmlz4b"
+                .into(),
+            preview_asset_key: "1943kai".into(),
+            has_preview: true,
+            ..Default::default()
+        };
+
+        let updated = catalog_with_preview_availability(&catalog, "arcade", &[game]);
+
+        for system_id in ["arcade", arcade_catalog::MENU_ARCADE_SYSTEM_ID] {
+            let row = updated.system_game_at(system_id, 0).unwrap();
+            assert!(row.has_preview);
+            assert_eq!(row.preview_asset_key.as_ref(), "1943kai");
+        }
     }
 }
