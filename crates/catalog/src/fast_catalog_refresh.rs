@@ -568,10 +568,28 @@ pub fn capture_refresh_state(
 ) -> Result<(Vec<FastRefreshSystemState>, FastRefreshCaptureReport), String> {
     let started = std::time::Instant::now();
     snapshot.validate()?;
+    let roots = [storage_root.display().to_string()];
+    let profiles = crate::launch_profiles::ProfileSet::for_roots(&roots).into_profiles();
+    let mut anchor_cache = BTreeMap::new();
     let mut states = Vec::with_capacity(snapshot.systems.len());
     let mut report = FastRefreshCaptureReport::default();
     for system in &snapshot.systems {
-        let watch = capture_system_watch(storage_root, &system.system_id)?;
+        let system_started = std::time::Instant::now();
+        let specification =
+            watch_specification_from_profiles(storage_root, &system.system_id, &profiles)?;
+        let watch = capture_system_watch_from_specification(
+            storage_root,
+            &system.system_id,
+            specification,
+            &mut anchor_cache,
+        )?;
+        crate::catalog_logln!(
+            "fast_catalog_capture_tsv\tsystem={}\telapsed_us={}\tdirectories={}\tcontainers={}",
+            system.system_id,
+            system_started.elapsed().as_micros(),
+            watch.directories.len(),
+            watch.containers.len(),
+        );
         report.directories = report.directories.saturating_add(watch.directories.len());
         report.containers = report.containers.saturating_add(watch.containers.len());
         states.push(FastRefreshSystemState {
@@ -592,12 +610,36 @@ pub fn capture_system_watch(
     storage_root: &Path,
     system_id: &str,
 ) -> Result<FastSystemWatchIndex, String> {
-    let specification = watch_specification(storage_root, system_id)?;
+    let roots = [storage_root.display().to_string()];
+    let profiles = crate::launch_profiles::ProfileSet::for_roots(&roots).into_profiles();
+    let specification = watch_specification_from_profiles(storage_root, system_id, &profiles)?;
+    capture_system_watch_from_specification(
+        storage_root,
+        system_id,
+        specification,
+        &mut BTreeMap::new(),
+    )
+}
+
+fn capture_system_watch_from_specification(
+    storage_root: &Path,
+    system_id: &str,
+    specification: WatchSpecification,
+    anchor_cache: &mut BTreeMap<PathBuf, FastWatchedDirectory>,
+) -> Result<FastSystemWatchIndex, String> {
     let mut directories = Vec::new();
     let mut containers = Vec::new();
     for anchor in &specification.anchors {
         if anchor.is_dir() {
-            directories.push(capture_directory(anchor)?);
+            let directory = match anchor_cache.get(anchor) {
+                Some(directory) => directory.clone(),
+                None => {
+                    let directory = capture_directory(anchor)?;
+                    anchor_cache.insert(anchor.clone(), directory.clone());
+                    directory
+                }
+            };
+            directories.push(directory);
         }
     }
     for root in &specification.scan_roots {
@@ -637,7 +679,7 @@ pub fn capture_system_watch(
     FastSystemWatchIndex::new(
         system_id.to_string(),
         crate::fast_catalog_sources::FAST_SOURCE_ADAPTER_VERSION,
-        core_profile_fingerprint(&specification.anchors)?,
+        core_profile_fingerprint(&specification.anchors, anchor_cache),
         specification
             .scan_roots
             .iter()
@@ -1017,7 +1059,11 @@ struct WatchSpecification {
     anchors: Vec<PathBuf>,
 }
 
-fn watch_specification(storage_root: &Path, system_id: &str) -> Result<WatchSpecification, String> {
+fn watch_specification_from_profiles(
+    storage_root: &Path,
+    system_id: &str,
+    profiles: &[crate::launch_profiles::LaunchProfile],
+) -> Result<WatchSpecification, String> {
     let games = storage_root.join("games");
     let (mut scan_roots, mut core_parents) = match system_id {
         "amiga" => (
@@ -1050,16 +1096,14 @@ fn watch_specification(storage_root: &Path, system_id: &str) -> Result<WatchSpec
         ),
         _ => (Vec::new(), Vec::new()),
     };
-    let roots = [storage_root.display().to_string()];
-    for profile in crate::launch_profiles::ProfileSet::for_roots(&roots)
-        .into_profiles()
-        .into_iter()
+    for profile in profiles
+        .iter()
         .filter(|profile| profile.system_id == system_id)
     {
         scan_roots.extend(
             profile
                 .game_dirs
-                .into_iter()
+                .iter()
                 .map(|game_dir| games.join(game_dir)),
         );
         if let Some(parent) = profile
@@ -1185,18 +1229,20 @@ fn capture_container(path: &Path) -> Result<FastWatchedContainer, String> {
     })
 }
 
-fn core_profile_fingerprint(anchors: &[PathBuf]) -> Result<String, String> {
+fn core_profile_fingerprint(
+    anchors: &[PathBuf],
+    anchor_cache: &BTreeMap<PathBuf, FastWatchedDirectory>,
+) -> String {
     let mut digest = Sha256::new();
     digest.update(b"mister-magik-fast-source-adapter-v1\0");
     for anchor in anchors {
         digest.update(anchor.to_string_lossy().as_bytes());
         digest.update([u8::from(anchor.is_dir())]);
-        if anchor.is_dir() {
-            let directory = capture_directory(anchor)?;
+        if let Some(directory) = anchor_cache.get(anchor) {
             digest.update(directory.entry_fingerprint.as_bytes());
         }
     }
-    Ok(sha256_digest_hex(digest.finalize()))
+    sha256_digest_hex(digest.finalize())
 }
 
 fn is_watched_container(system_id: &str, path: &Path) -> bool {

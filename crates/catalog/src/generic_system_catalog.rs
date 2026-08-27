@@ -241,11 +241,29 @@ pub fn discover_generic_systems_excluding(
     let mut systems = Vec::new();
     let mut reports = Vec::new();
     for (system_id, profiles) in grouped {
+        let system_started = Instant::now();
         if let Some((system, report)) =
             rebuild_generic_system_from_profiles(storage_root, &system_id, &profiles)?
         {
+            crate::catalog_logln!(
+                "fast_catalog_source_tsv\tadapter=generic\tsystem={}\telapsed_us={}\tfiles={}\tdirectories={}\tarchive_members={}\tgames={}\tread_errors={}\tarchive_errors={}",
+                report.system_id,
+                report.elapsed_us,
+                report.files,
+                report.directories,
+                report.archive_members,
+                report.games,
+                report.read_errors,
+                report.archive_errors,
+            );
             systems.push(system);
             reports.push(report);
+        } else {
+            crate::catalog_logln!(
+                "fast_catalog_source_tsv\tadapter=generic\tsystem={}\telapsed_us={}\tstatus=absent",
+                system_id,
+                system_started.elapsed().as_micros(),
+            );
         }
     }
     systems.sort_by(|left, right| left.system_id.cmp(&right.system_id));

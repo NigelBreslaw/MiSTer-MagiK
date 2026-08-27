@@ -87,6 +87,16 @@ pub fn build_independent_fast_snapshot(
         }
         report.elapsed_us = elapsed_us(system_started);
         report.games = system.games.len();
+        crate::catalog_logln!(
+            "fast_catalog_source_tsv\tadapter=prepared\tsystem={}\telapsed_us={}\tfiles={}\tgames={}\tinvalid={}\thelper_hits={}\tfallback_validations={}",
+            report.system_id,
+            report.elapsed_us,
+            report.files_visited,
+            report.games,
+            report.invalid,
+            report.helper_hits,
+            report.fallback_validations,
+        );
         if !system.games.is_empty() || !system.variants.is_empty() {
             systems.insert(system_id.to_string(), system);
             reports

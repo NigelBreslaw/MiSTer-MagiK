@@ -21204,7 +21204,11 @@ fn profile_installed_cold_boot_run(
     wait_authenticated_agent_ready(config, Duration::from_secs(60))
         .map_err(|error| format!("{error:?}"))?;
     let session = connect_with(&config.connection, 10)?;
-    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
+    wait_launcher_ready(
+        &session,
+        Instant::now(),
+        Duration::from_secs(if fresh_catalog { 300 } else { 45 }),
+    )?;
     wait_delivery_health(&session, "dev", Duration::from_secs(10))?;
     let host_recovery_elapsed_ms = host_started.elapsed().as_millis() as u64;
 
