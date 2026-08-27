@@ -78,10 +78,6 @@ pub fn load_sharded_registry_seed_at(
     })
 }
 
-pub(crate) fn fast_five_catalog_enabled() -> bool {
-    true
-}
-
 fn validate_fast_five_registry(
     systems: &[mister_magik_catalog::sharded_catalog::SystemSummary],
 ) -> Result<(), ShardedCatalogSeedLoadError> {
