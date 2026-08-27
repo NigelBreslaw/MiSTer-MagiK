@@ -20899,6 +20899,28 @@ fn launch_return_once_action(
     Ok(sequence)
 }
 
+fn launch_return_once_hold_action(
+    config: &NativeDeviceConfig,
+    nonce: &str,
+    button: AutomationButton,
+) -> Result<u64> {
+    let detail = launcher_automation::send_action(
+        config,
+        nonce,
+        &AutomationAction::Hold {
+            button,
+            duration_ms: 120,
+        },
+    )?;
+    let value: Value = serde_json::from_str(&detail)?;
+    let sequence = value
+        .get("action_sequence")
+        .and_then(Value::as_u64)
+        .ok_or("launch-return-once hold action has no sequence")?;
+    launcher_automation::await_presented(config, nonce, sequence, 3_000)?;
+    Ok(sequence)
+}
+
 fn launch_return_once_next_game(
     config: &NativeDeviceConfig,
     nonce: &str,
@@ -21230,10 +21252,12 @@ fn launch_return_once_select_game_index(
 
 fn launch_return_once_open_neogeo(config: &NativeDeviceConfig, nonce: &str) -> Result<Value> {
     launch_return_once_action(config, nonce, AutomationButton::Home)?;
-    for item in ["menu:consoles", "menu:snk-neogeo", "neogeo"] {
+    for item in ["menu:consoles", "menu:snk-neogeo"] {
         launch_return_once_select_menu_item(config, nonce, item)?;
         launch_return_once_action(config, nonce, AutomationButton::A)?;
     }
+    launch_return_once_select_menu_item(config, nonce, "neogeo")?;
+    launch_return_once_hold_action(config, nonce, AutomationButton::A)?;
     launch_return_once_wait(
         config,
         nonce,
