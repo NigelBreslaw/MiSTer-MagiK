@@ -17,7 +17,9 @@ use mister_magik_catalog::fast_five_catalog::{
     run_c64_artifact_experiment, snapshot_reference, verify_snapshot_artifacts,
 };
 use mister_magik_catalog::generic_system_catalog::{
-    add_generic_example_systems, scan_prepared_system_with_generic_walker,
+    GenericScanImplementation, GenericSystemStats, MEDIA_EXPERIMENT_SYSTEM_IDS,
+    add_generic_example_systems, scan_media_experiment_system,
+    scan_prepared_system_with_generic_walker,
 };
 use mister_magik_catalog::shard_registry::production_registry_limits;
 use serde::Serialize;
@@ -43,6 +45,12 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
             let order = required_value(arguments, "--order")?;
             reject_unknown(arguments, &["--storage-root", "--order"])?;
             print_json(&run_source_ab(&storage_root, &order)?)
+        }
+        "media-ab" => {
+            let storage_root = required_path(arguments, "--storage-root")?;
+            let order = required_value(arguments, "--order")?;
+            reject_unknown(arguments, &["--storage-root", "--order"])?;
+            print_json(&run_media_ab(&storage_root, &order)?)
         }
         "refresh-profile" => {
             let catalog_root = required_path(arguments, "--catalog-root")?;
@@ -581,6 +589,130 @@ fn run_generic_prepared_sources(storage_root: &Path) -> Result<SourceAbRun, Stri
     })
 }
 
+#[derive(Serialize)]
+struct MediaAbReport {
+    schema: &'static str,
+    order: String,
+    first: MediaAbRunReport,
+    second: MediaAbRunReport,
+    parity: Vec<MediaAbParity>,
+}
+
+#[derive(Serialize)]
+struct MediaAbRunReport {
+    implementation: &'static str,
+    elapsed_us: u64,
+    systems: Vec<GenericSystemStats>,
+}
+
+#[derive(Serialize)]
+struct MediaAbParity {
+    system_id: String,
+    baseline_games: usize,
+    optimized_games: usize,
+    common_launch_refs: usize,
+    exact_launch_refs: bool,
+    exact_rows: bool,
+}
+
+struct MediaAbRun {
+    report: MediaAbRunReport,
+    systems: BTreeMap<String, FastFiveSystem>,
+}
+
+fn run_media_ab(storage_root: &Path, order: &str) -> Result<MediaAbReport, String> {
+    let (first, second) = match order {
+        "baseline-first" => (
+            run_media_implementation(storage_root, GenericScanImplementation::Baseline)?,
+            run_media_implementation(storage_root, GenericScanImplementation::BorrowedUnsorted)?,
+        ),
+        "optimized-first" => (
+            run_media_implementation(storage_root, GenericScanImplementation::BorrowedUnsorted)?,
+            run_media_implementation(storage_root, GenericScanImplementation::Baseline)?,
+        ),
+        _ => return Err(format!("unknown media A/B order {order}")),
+    };
+    let baseline = if first.report.implementation == "baseline" {
+        &first.systems
+    } else {
+        &second.systems
+    };
+    let optimized = if first.report.implementation == "borrowed-unsorted" {
+        &first.systems
+    } else {
+        &second.systems
+    };
+    let parity = MEDIA_EXPERIMENT_SYSTEM_IDS
+        .iter()
+        .map(|system_id| {
+            let baseline = baseline
+                .get(*system_id)
+                .ok_or_else(|| format!("baseline media result missing {system_id}"))?;
+            let optimized = optimized
+                .get(*system_id)
+                .ok_or_else(|| format!("optimized media result missing {system_id}"))?;
+            let baseline_refs = baseline
+                .games
+                .iter()
+                .map(|game| game.launch_ref.as_str())
+                .collect::<BTreeSet<_>>();
+            let optimized_refs = optimized
+                .games
+                .iter()
+                .map(|game| game.launch_ref.as_str())
+                .collect::<BTreeSet<_>>();
+            let baseline_rows = baseline
+                .games
+                .iter()
+                .map(|game| serde_json::to_string(game).map_err(|error| error.to_string()))
+                .collect::<Result<BTreeSet<_>, _>>()?;
+            let optimized_rows = optimized
+                .games
+                .iter()
+                .map(|game| serde_json::to_string(game).map_err(|error| error.to_string()))
+                .collect::<Result<BTreeSet<_>, _>>()?;
+            Ok(MediaAbParity {
+                system_id: (*system_id).to_string(),
+                baseline_games: baseline.games.len(),
+                optimized_games: optimized.games.len(),
+                common_launch_refs: baseline_refs.intersection(&optimized_refs).count(),
+                exact_launch_refs: baseline_refs == optimized_refs,
+                exact_rows: baseline_rows == optimized_rows,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(MediaAbReport {
+        schema: "mister-magik-fast-media-ab-v1",
+        order: order.to_string(),
+        first: first.report,
+        second: second.report,
+        parity,
+    })
+}
+
+fn run_media_implementation(
+    storage_root: &Path,
+    implementation: GenericScanImplementation,
+) -> Result<MediaAbRun, String> {
+    let started = Instant::now();
+    let mut reports = Vec::with_capacity(MEDIA_EXPERIMENT_SYSTEM_IDS.len());
+    let mut systems = BTreeMap::new();
+    for system_id in MEDIA_EXPERIMENT_SYSTEM_IDS {
+        let (system, report) =
+            scan_media_experiment_system(storage_root, system_id, implementation)?;
+        reports.push(report);
+        systems.insert(system_id.to_string(), system);
+    }
+    Ok(MediaAbRun {
+        report: MediaAbRunReport {
+            implementation: implementation.as_str(),
+            elapsed_us: elapsed_us(started),
+            systems: reports,
+        },
+        systems,
+    })
+}
+
 fn run_publish(arguments: &[String], profile: bool) -> Result<(), String> {
     let command_started = Instant::now();
     let input = required_path(arguments, "--input")?;
@@ -892,6 +1024,6 @@ fn elapsed_us(started: Instant) -> u64 {
 }
 
 fn usage() -> String {
-    "Usage:\n  five-system-catalog-prototype snapshot-reference --catalog-root PATH --output PATH [--encoding json|postcard|postcard-lz4|postcard-mmap]\n  five-system-catalog-prototype replace-arcade --input PATH --arcade-active PATH --output PATH\n  five-system-catalog-prototype publish --input PATH --output-root PATH [--input-encoding ENCODING] [--artifact-profile PROFILE]\n  five-system-catalog-prototype publish-profile --input PATH --output-root PATH --pprof-svg PATH --pprof-folded PATH --pprof-hz HZ [--input-encoding ENCODING] [--artifact-profile PROFILE]\n  five-system-catalog-prototype c64-artifact-experiment --input PATH --output-root PATH --scratch-root PATH --profile PROFILE\n  five-system-catalog-prototype inspect --input PATH\n  five-system-catalog-prototype verify --input PATH --candidate-root PATH [--input-encoding ENCODING]\n  five-system-catalog-prototype compare --reference-root PATH --candidate-root PATH"
+    "Usage:\n  five-system-catalog-prototype source-ab --storage-root PATH --order specialized-first|generic-first\n  five-system-catalog-prototype media-ab --storage-root PATH --order baseline-first|optimized-first\n  five-system-catalog-prototype snapshot-reference --catalog-root PATH --output PATH [--encoding json|postcard|postcard-lz4|postcard-mmap]\n  five-system-catalog-prototype replace-arcade --input PATH --arcade-active PATH --output PATH\n  five-system-catalog-prototype publish --input PATH --output-root PATH [--input-encoding ENCODING] [--artifact-profile PROFILE]\n  five-system-catalog-prototype publish-profile --input PATH --output-root PATH --pprof-svg PATH --pprof-folded PATH --pprof-hz HZ [--input-encoding ENCODING] [--artifact-profile PROFILE]\n  five-system-catalog-prototype c64-artifact-experiment --input PATH --output-root PATH --scratch-root PATH --profile PROFILE\n  five-system-catalog-prototype inspect --input PATH\n  five-system-catalog-prototype verify --input PATH --candidate-root PATH [--input-encoding ENCODING]\n  five-system-catalog-prototype compare --reference-root PATH --candidate-root PATH"
         .to_string()
 }

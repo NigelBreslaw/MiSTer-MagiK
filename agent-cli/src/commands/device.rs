@@ -362,6 +362,8 @@ pub enum CatalogCommand {
     FastRefreshBenchmark(CatalogFastRefreshBenchmarkArgs),
     /// Compare specialised and generic source scanners in alternating cold order.
     FastSourceAb(CatalogFastSourceAbArgs),
+    /// Compare baseline and optimized media scanners in alternating cold order.
+    FastMediaAb(CatalogFastMediaAbArgs),
     /// Cold-build the five systems independently with the existing builder.
     FastFiveOldCold(CatalogFastFiveOldColdArgs),
     /// Delete the Dev catalog and screenshot packs, then perform one supervised reboot.
@@ -457,6 +459,18 @@ pub struct CatalogFastRefreshBenchmarkArgs {
 
 #[derive(Debug, Args)]
 pub struct CatalogFastSourceAbArgs {
+    #[arg(long, required = true)]
+    attended: bool,
+    #[arg(long, required = true)]
+    reboot: bool,
+    #[arg(long, value_name = "PATH")]
+    pub(crate) binary: PathBuf,
+    #[arg(long, value_name = "PATH")]
+    pub(crate) out: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct CatalogFastMediaAbArgs {
     #[arg(long, required = true)]
     attended: bool,
     #[arg(long, required = true)]
@@ -639,6 +653,7 @@ impl DeviceCommand {
                     | CatalogCommand::FastRefreshPprof(_)
                     | CatalogCommand::FastRefreshBenchmark(_)
                     | CatalogCommand::FastSourceAb(_)
+                    | CatalogCommand::FastMediaAb(_)
                     | CatalogCommand::FastFiveOldCold(_)
                     | CatalogCommand::Purge(_)
             ),
