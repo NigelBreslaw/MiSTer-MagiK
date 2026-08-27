@@ -540,7 +540,8 @@ fn run_specialized_sources(storage_root: &Path) -> Result<SourceAbRun, String> {
     let mut systems = BTreeMap::new();
     let mut reports = Vec::new();
     for system_id in PREPARED_AB_SYSTEMS {
-        let (system, report) = rebuild_independent_system(storage_root, &seed, system_id)?;
+        let (system, report) = rebuild_independent_system(storage_root, &seed, system_id)?
+            .ok_or_else(|| format!("no installed launchable source for {system_id}"))?;
         reports.push(SourceAbSystemReport {
             system_id: system_id.to_string(),
             elapsed_us: report.elapsed_us,

@@ -361,6 +361,9 @@ impl LauncherCatalogSession {
                     generation,
                 });
             }
+            CatalogWorkerMessage::SystemRemoved { system_id } => {
+                self.note_system_update_terminal(&system_id, &mut effects);
+            }
             CatalogWorkerMessage::SystemUpdateFailed { system_id, error } => {
                 self.note_system_update_terminal(&system_id, &mut effects);
                 effects.push(CatalogSessionEffect::CatalogSystemUpdateFailed {

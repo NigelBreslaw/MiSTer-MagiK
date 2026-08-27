@@ -519,6 +519,7 @@ pub fn publish_refresh_update(
     catalog_generation: u64,
     catalog_fingerprint: String,
     updated: &[FastRefreshSystemState],
+    removed_system_ids: &BTreeSet<String>,
 ) -> Result<FastRefreshManifest, String> {
     let generation = previous
         .generation
@@ -533,6 +534,9 @@ pub fn publish_refresh_update(
         .cloned()
         .map(|reference| (reference.system_id.clone(), reference))
         .collect::<BTreeMap<_, _>>();
+    for system_id in removed_system_ids {
+        references.remove(system_id);
+    }
     for state in updated {
         state.watch.validate(&state.rows.system_id)?;
         state.rows.validate(&state.watch.system_id)?;
@@ -855,6 +859,8 @@ pub fn execute_planned_fast_refresh(
     let source_started = std::time::Instant::now();
     let mut updated_states = Vec::new();
     let mut artifact_changes = BTreeSet::new();
+    let mut artifact_writes = BTreeSet::new();
+    let mut removed_system_ids = BTreeSet::new();
     let mut reports = Vec::with_capacity(plan.systems);
     for check in &plan.checks {
         let system_started = std::time::Instant::now();
@@ -875,12 +881,16 @@ pub fn execute_planned_fast_refresh(
             });
             continue;
         }
+        let was_active = snapshot
+            .systems
+            .iter()
+            .any(|candidate| candidate.system_id == check.system_id);
         match crate::fast_catalog_sources::rebuild_independent_system(
             storage_root,
             &snapshot,
             &check.system_id,
         ) {
-            Ok((system, source_report)) => {
+            Ok(Some((system, source_report))) => {
                 let watch = capture_system_watch(storage_root, &check.system_id)?;
                 let rows = FastSystemRowsSnapshot::new(
                     system.system_id.clone(),
@@ -888,10 +898,12 @@ pub fn execute_planned_fast_refresh(
                     system.variants.clone(),
                 )?;
                 let new_row_fingerprint = row_fingerprint(&rows)?;
-                let rows_changed = previous_ref
-                    .is_none_or(|reference| reference.row_fingerprint != new_row_fingerprint);
+                let rows_changed = !was_active
+                    || previous_ref
+                        .is_none_or(|reference| reference.row_fingerprint != new_row_fingerprint);
                 if rows_changed {
                     artifact_changes.insert(check.system_id.clone());
+                    artifact_writes.insert(check.system_id.clone());
                 }
                 if let Some(target) = snapshot
                     .systems
@@ -899,6 +911,11 @@ pub fn execute_planned_fast_refresh(
                     .find(|candidate| candidate.system_id == check.system_id)
                 {
                     *target = system;
+                } else {
+                    snapshot.systems.push(system);
+                    snapshot
+                        .systems
+                        .sort_by(|left, right| left.system_id.cmp(&right.system_id));
                 }
                 reports.push(FastCatalogSystemRefreshReport {
                     system_id: check.system_id.clone(),
@@ -922,6 +939,32 @@ pub fn execute_planned_fast_refresh(
                     ),
                 });
                 updated_states.push(FastRefreshSystemState { watch, rows });
+            }
+            Ok(None) => {
+                snapshot
+                    .systems
+                    .retain(|candidate| candidate.system_id != check.system_id);
+                if was_active {
+                    artifact_changes.insert(check.system_id.clone());
+                    removed_system_ids.insert(check.system_id.clone());
+                }
+                reports.push(FastCatalogSystemRefreshReport {
+                    system_id: check.system_id.clone(),
+                    outcome: if was_active {
+                        FastCatalogSystemOutcome::Removed
+                    } else {
+                        FastCatalogSystemOutcome::Unchanged
+                    },
+                    source_status: check.status,
+                    games: 0,
+                    variants: 0,
+                    elapsed_us: system_started
+                        .elapsed()
+                        .as_micros()
+                        .try_into()
+                        .unwrap_or(u64::MAX),
+                    detail: "no installed launchable source remains".to_string(),
+                });
             }
             Err(error) => reports.push(FastCatalogSystemRefreshReport {
                 system_id: check.system_id.clone(),
@@ -964,7 +1007,7 @@ pub fn execute_planned_fast_refresh(
         crate::shard_registry::production_registry_limits(),
     )
     .map_err(|error| format!("read refreshed fast catalog: {error}"))?;
-    let refresh_generation = if updated_states.is_empty() {
+    let refresh_generation = if updated_states.is_empty() && removed_system_ids.is_empty() {
         previous.generation
     } else {
         publish_refresh_update(
@@ -976,6 +1019,7 @@ pub fn execute_planned_fast_refresh(
                 crate::shard_registry::production_registry_limits(),
             )?,
             &updated_states,
+            &removed_system_ids,
         )?
         .generation
     };
@@ -1011,7 +1055,7 @@ pub fn execute_planned_fast_refresh(
         removed,
         failed_retained,
         row_snapshots_opened: 0,
-        artifact_systems_written: artifact_changes.len(),
+        artifact_systems_written: artifact_writes.len(),
         catalog_generation: active.generation,
         refresh_generation,
         games: active
@@ -1720,5 +1764,79 @@ mod tests {
             .unwrap();
         assert_eq!(actual, &expected);
         assert!(containers.is_empty());
+    }
+
+    #[test]
+    fn incremental_refresh_adds_then_removes_a_system() {
+        let storage = crate::test_support::unique_temp_dir("fast-refresh-membership-storage");
+        let catalog = crate::test_support::unique_temp_dir("fast-refresh-membership-catalog");
+        fs::create_dir_all(storage.join("_Console")).unwrap();
+        fs::create_dir_all(storage.join("games/SNES")).unwrap();
+        fs::write(storage.join("_Console/SNES.rbf"), b"core").unwrap();
+        fs::write(storage.join("games/SNES/Game.sfc"), b"rom").unwrap();
+
+        build_fresh_catalog(&storage, &catalog).expect("build initial catalog");
+        let initial = crate::shard_registry::read_latest_manifest_lazy(
+            &catalog,
+            crate::shard_registry::production_registry_limits(),
+        )
+        .unwrap();
+        assert!(
+            initial
+                .systems
+                .iter()
+                .any(|system| system.system_id.as_str() == "snes")
+        );
+
+        fs::create_dir_all(storage.join("games/NES")).unwrap();
+        fs::write(storage.join("_Console/NES.rbf"), b"core").unwrap();
+        fs::write(storage.join("games/NES/Game.nes"), b"rom").unwrap();
+        let added = execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update)
+            .expect("add NES incrementally");
+        assert!(added.system_reports.iter().any(|system| {
+            system.system_id == "nes" && system.outcome == FastCatalogSystemOutcome::Updated
+        }));
+        let after_add = crate::shard_registry::read_latest_manifest_lazy(
+            &catalog,
+            crate::shard_registry::production_registry_limits(),
+        )
+        .unwrap();
+        assert!(
+            after_add
+                .systems
+                .iter()
+                .any(|system| system.system_id.as_str() == "nes")
+        );
+
+        let unchanged = execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update)
+            .expect("check unchanged catalog");
+        assert!(unchanged.system_reports.iter().any(|system| {
+            system.system_id == "nes" && system.outcome == FastCatalogSystemOutcome::Unchanged
+        }));
+
+        fs::remove_dir_all(storage.join("games/NES")).unwrap();
+        let removed = execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update)
+            .expect("remove NES incrementally");
+        assert!(removed.system_reports.iter().any(|system| {
+            system.system_id == "nes" && system.outcome == FastCatalogSystemOutcome::Removed
+        }));
+        let after_remove = crate::shard_registry::read_latest_manifest_lazy(
+            &catalog,
+            crate::shard_registry::production_registry_limits(),
+        )
+        .unwrap();
+        assert!(
+            after_remove
+                .systems
+                .iter()
+                .all(|system| system.system_id.as_str() != "nes")
+        );
+        assert!(
+            read_latest_refresh_manifest(&catalog)
+                .unwrap()
+                .systems
+                .iter()
+                .all(|system| system.system_id != "nes")
+        );
     }
 }

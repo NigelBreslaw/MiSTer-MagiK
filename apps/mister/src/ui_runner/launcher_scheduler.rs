@@ -1142,6 +1142,15 @@ impl LauncherScheduler {
                     now,
                 );
             }
+            CatalogWorkerMessage::SystemRemoved { system_id } => {
+                self.note_catalog_progress(
+                    "system-removed",
+                    "publishing-systems",
+                    system_id,
+                    -1,
+                    now,
+                );
+            }
             CatalogWorkerMessage::SystemUpdateFailed { system_id, error } => {
                 self.note_catalog_progress(
                     "system-update-failed",

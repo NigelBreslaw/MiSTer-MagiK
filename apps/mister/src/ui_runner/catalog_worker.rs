@@ -215,6 +215,7 @@ fn run_fast_catalog_refresh_in_process(
         }
     };
     let mut rebuilt = Vec::new();
+    let mut removed = Vec::new();
     for system in &report.system_reports {
         match system.outcome {
             FastCatalogSystemOutcome::Unchanged => {
@@ -230,7 +231,12 @@ fn run_fast_catalog_refresh_in_process(
                     generation: report.catalog_generation,
                 });
             }
-            FastCatalogSystemOutcome::Removed => {}
+            FastCatalogSystemOutcome::Removed => {
+                removed.push(system.system_id.clone());
+                let _ = tx.send(CatalogWorkerMessage::SystemRemoved {
+                    system_id: system.system_id.clone(),
+                });
+            }
             FastCatalogSystemOutcome::FailedRetained => {
                 let _ = tx.send(CatalogWorkerMessage::SystemUpdateFailed {
                     system_id: system.system_id.clone(),
@@ -256,11 +262,11 @@ fn run_fast_catalog_refresh_in_process(
             report.row_snapshots_opened,
         ),
     });
-    if !rebuilt.is_empty() {
+    if !rebuilt.is_empty() || !removed.is_empty() {
         let _ = tx.send(CatalogWorkerMessage::ManifestPublished {
             generation: report.catalog_generation,
             rebuilt,
-            removed: Vec::new(),
+            removed,
         });
         if let Err(error) = publish_strict_registry_seed_at(tx, root, catalog_root) {
             let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
@@ -556,6 +562,9 @@ pub(super) enum CatalogWorkerMessage {
     SystemPrepared {
         system_id: String,
         generation: u64,
+    },
+    SystemRemoved {
+        system_id: String,
     },
     SystemUpdateFailed {
         system_id: String,

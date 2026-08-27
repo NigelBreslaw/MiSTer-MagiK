@@ -256,7 +256,7 @@ pub fn rebuild_independent_system(
     storage_root: &Path,
     _snapshot: &FastFiveSnapshot,
     system_id: &str,
-) -> Result<(FastFiveSystem, FastSourceSystemReport), String> {
+) -> Result<Option<(FastFiveSystem, FastSourceSystemReport)>, String> {
     let started = Instant::now();
     let prepared = PREPARED_SYSTEM_IDS
         .contains(&system_id)
@@ -301,7 +301,7 @@ pub fn rebuild_independent_system(
                 fallback_validations: 0,
             },
         ),
-        (None, None) => return Err(format!("no installed launchable source for {system_id}")),
+        (None, None) => return Ok(None),
     };
     if system_id == "c64" {
         collapse_c64_cross_source_variants(&mut system);
@@ -309,7 +309,11 @@ pub fn rebuild_independent_system(
     enrich_fast_preview_identities(storage_root, std::slice::from_mut(&mut system));
     report.elapsed_us = elapsed_us(started);
     report.games = system.games.len();
-    Ok((system, report))
+    if system.games.is_empty() && system.variants.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some((system, report)))
+    }
 }
 
 pub fn discover_independent_system_ids(storage_root: &Path) -> Result<Vec<String>, String> {
