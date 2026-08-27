@@ -7,17 +7,21 @@ use mister_magik_catalog::fast_catalog_refresh::{
     FastCatalogRefreshRequest, capture_refresh_state, execute_fast_refresh, plan_fast_refresh,
     publish_refresh_state, read_latest_refresh_manifest,
 };
-use mister_magik_catalog::fast_catalog_sources::build_independent_fast_snapshot;
+use mister_magik_catalog::fast_catalog_sources::{
+    build_independent_fast_snapshot, rebuild_independent_system,
+};
 use mister_magik_catalog::fast_five_catalog::{
     C64ArtifactExperimentProfile, FastFiveArtifactProfile, FastFiveSnapshot,
-    FastFiveSnapshotEncoding, decode_snapshot, encode_snapshot, fast_five_search_probe,
-    publish_snapshot_with_profile, replace_arcade_from_active, run_c64_artifact_experiment,
-    snapshot_reference, verify_snapshot_artifacts,
+    FastFiveSnapshotEncoding, FastFiveSystem, decode_snapshot, encode_snapshot,
+    fast_five_search_probe, publish_snapshot_with_profile, replace_arcade_from_active,
+    run_c64_artifact_experiment, snapshot_reference, verify_snapshot_artifacts,
 };
-use mister_magik_catalog::generic_system_catalog::add_generic_example_systems;
+use mister_magik_catalog::generic_system_catalog::{
+    add_generic_example_systems, scan_prepared_system_with_generic_walker,
+};
 use mister_magik_catalog::shard_registry::production_registry_limits;
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -34,6 +38,12 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
         return Err(usage());
     };
     match command.as_str() {
+        "source-ab" => {
+            let storage_root = required_path(arguments, "--storage-root")?;
+            let order = required_value(arguments, "--order")?;
+            reject_unknown(arguments, &["--storage-root", "--order"])?;
+            print_json(&run_source_ab(&storage_root, &order)?)
+        }
         "refresh-profile" => {
             let catalog_root = required_path(arguments, "--catalog-root")?;
             let storage_root = required_path(arguments, "--storage-root")?;
@@ -403,6 +413,166 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
         }
         _ => Err(usage()),
     }
+}
+
+const PREPARED_AB_SYSTEMS: [&str; 5] = ["arcade", "amiga", "dos", "x68000", "c64"];
+
+#[derive(Serialize)]
+struct SourceAbReport {
+    schema: &'static str,
+    order: String,
+    first: SourceAbRunReport,
+    second: SourceAbRunReport,
+    parity: Vec<SourceAbParity>,
+}
+
+#[derive(Serialize)]
+struct SourceAbRunReport {
+    adapter: &'static str,
+    elapsed_us: u64,
+    systems: Vec<SourceAbSystemReport>,
+}
+
+#[derive(Serialize)]
+struct SourceAbSystemReport {
+    system_id: String,
+    elapsed_us: u64,
+    files_visited: usize,
+    games: usize,
+    rejected: usize,
+}
+
+#[derive(Serialize)]
+struct SourceAbParity {
+    system_id: String,
+    specialized_games: usize,
+    generic_games: usize,
+    common: usize,
+    missing_from_generic: usize,
+    extra_from_generic: usize,
+    exact: bool,
+}
+
+struct SourceAbRun {
+    report: SourceAbRunReport,
+    systems: BTreeMap<String, FastFiveSystem>,
+}
+
+fn run_source_ab(storage_root: &Path, order: &str) -> Result<SourceAbReport, String> {
+    let (first, second) = match order {
+        "specialized-first" => (
+            run_specialized_sources(storage_root)?,
+            run_generic_prepared_sources(storage_root)?,
+        ),
+        "generic-first" => (
+            run_generic_prepared_sources(storage_root)?,
+            run_specialized_sources(storage_root)?,
+        ),
+        _ => return Err(format!("unknown source A/B order {order}")),
+    };
+    let specialized = if first.report.adapter == "specialized" {
+        &first.systems
+    } else {
+        &second.systems
+    };
+    let generic = if first.report.adapter == "generic" {
+        &first.systems
+    } else {
+        &second.systems
+    };
+    let parity = PREPARED_AB_SYSTEMS
+        .iter()
+        .map(|system_id| {
+            let specialized = specialized
+                .get(*system_id)
+                .ok_or_else(|| format!("specialized result missing {system_id}"))?;
+            let generic = generic
+                .get(*system_id)
+                .ok_or_else(|| format!("generic result missing {system_id}"))?;
+            let specialized_refs = specialized
+                .games
+                .iter()
+                .map(|game| game.launch_ref.as_str())
+                .collect::<BTreeSet<_>>();
+            let generic_refs = generic
+                .games
+                .iter()
+                .map(|game| game.launch_ref.as_str())
+                .collect::<BTreeSet<_>>();
+            let common = specialized_refs.intersection(&generic_refs).count();
+            Ok(SourceAbParity {
+                system_id: (*system_id).to_string(),
+                specialized_games: specialized_refs.len(),
+                generic_games: generic_refs.len(),
+                common,
+                missing_from_generic: specialized_refs.len().saturating_sub(common),
+                extra_from_generic: generic_refs.len().saturating_sub(common),
+                exact: specialized_refs == generic_refs,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(SourceAbReport {
+        schema: "mister-magik-fast-source-ab-v1",
+        order: order.to_string(),
+        first: first.report,
+        second: second.report,
+        parity,
+    })
+}
+
+fn run_specialized_sources(storage_root: &Path) -> Result<SourceAbRun, String> {
+    let started = Instant::now();
+    let seed = FastFiveSnapshot {
+        schema: mister_magik_catalog::fast_five_catalog::FAST_FIVE_SNAPSHOT_SCHEMA.to_string(),
+        source_fingerprint: "0".repeat(64),
+        systems: Vec::new(),
+    };
+    let mut systems = BTreeMap::new();
+    let mut reports = Vec::new();
+    for system_id in PREPARED_AB_SYSTEMS {
+        let (system, report) = rebuild_independent_system(storage_root, &seed, system_id)?;
+        reports.push(SourceAbSystemReport {
+            system_id: system_id.to_string(),
+            elapsed_us: report.elapsed_us,
+            files_visited: report.files_visited,
+            games: report.games,
+            rejected: report.invalid,
+        });
+        systems.insert(system_id.to_string(), system);
+    }
+    Ok(SourceAbRun {
+        report: SourceAbRunReport {
+            adapter: "specialized",
+            elapsed_us: started.elapsed().as_micros() as u64,
+            systems: reports,
+        },
+        systems,
+    })
+}
+
+fn run_generic_prepared_sources(storage_root: &Path) -> Result<SourceAbRun, String> {
+    let started = Instant::now();
+    let mut systems = BTreeMap::new();
+    let mut reports = Vec::new();
+    for system_id in PREPARED_AB_SYSTEMS {
+        let (system, report) = scan_prepared_system_with_generic_walker(storage_root, system_id)?;
+        reports.push(SourceAbSystemReport {
+            system_id: system_id.to_string(),
+            elapsed_us: report.elapsed_us,
+            files_visited: report.files,
+            games: report.games,
+            rejected: report.read_errors.saturating_add(report.archive_errors),
+        });
+        systems.insert(system_id.to_string(), system);
+    }
+    Ok(SourceAbRun {
+        report: SourceAbRunReport {
+            adapter: "generic",
+            elapsed_us: started.elapsed().as_micros() as u64,
+            systems: reports,
+        },
+        systems,
+    })
 }
 
 fn run_publish(arguments: &[String], profile: bool) -> Result<(), String> {

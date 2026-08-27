@@ -617,6 +617,9 @@ impl NativeDevice {
                         &args.out,
                         &args.scenario,
                     ),
+                    CatalogCommand::FastSourceAb(args) => {
+                        run_fast_source_ab(&prepared.config, &args.binary, &args.out)
+                    }
                     CatalogCommand::FastFiveOldCold(args) => {
                         run_fast_five_old_cold_matrix(&prepared.config, &args.out, &args.target_set)
                     }
@@ -32402,6 +32405,113 @@ fn run_fast_five_pprof(
     )?;
     fs::write(output.join("build.log"), build_log)?;
     println!("fast_five_pprof_report={}", output.display());
+    Ok(())
+}
+
+fn run_fast_source_ab(config: &NativeDeviceConfig, binary: &Path, output: &Path) -> Result<()> {
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    if !binary.is_file() {
+        return Err(format!("fast source A/B binary is missing: {}", binary.display()).into());
+    }
+    if output.exists() {
+        return Err(format!(
+            "fast source A/B output already exists: {}",
+            output.display()
+        )
+        .into());
+    }
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let binary_sha256 = file_sha256(binary.to_path_buf())?;
+    let session = connect_with(&config.connection, 10)?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    exec_checked(
+        &session,
+        "fast source A/B safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+    exec_checked(
+        &session,
+        "prepare fast source A/B tool",
+        &format!(
+            "mkdir -p {}",
+            sh("/media/fat/mister-magik-dev/fast-five-tool")
+        ),
+    )?;
+    put(&session, binary, FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)?;
+    exec_checked(
+        &session,
+        "publish exact fast source A/B binary",
+        &shell_sequence([
+            "set -eu".to_string(),
+            format!(
+                "test \"$(sha256sum {} | cut -d' ' -f1)\" = {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(&binary_sha256)
+            ),
+            format!("chmod 755 {}", sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD)),
+            format!(
+                "mv -f {} {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_UPLOAD),
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY)
+            ),
+            "sync".to_string(),
+        ]),
+    )?;
+    drop(session);
+
+    let mut samples = Vec::new();
+    let mut logs = String::new();
+    for order in ["specialized-first", "generic-first"] {
+        agent_reboot_wait(&[])?;
+        let session = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &session,
+            "fast source A/B post-reboot safety preflight",
+            &cold_boot_profile_preflight_command(),
+        )?;
+        let result = exec_checked_output(
+            &session,
+            &format!("run reboot-cold fast source A/B {order}"),
+            &format!(
+                "{} source-ab --storage-root {} --order {}",
+                sh(FAST_FIVE_PROTOTYPE_REMOTE_BINARY),
+                sh("/media/fat"),
+                sh(order)
+            ),
+        )?;
+        let sample = parse_last_json_line("fast source A/B", &result.stdout)?;
+        if sample.get("order").and_then(Value::as_str) != Some(order)
+            || sample
+                .pointer("/parity")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                != Some(5)
+        {
+            return Err(format!("fast source A/B {order} is incomplete").into());
+        }
+        logs.push_str(&result.stdout);
+        samples.push(sample);
+    }
+    let session = connect_with(&config.connection, 10)?;
+    if catalog_production_registry_identity(&session)? != production_registry_before {
+        return Err("production registry changed during fast source A/B".into());
+    }
+    let report = json!({
+        "schema": "mister-magik-fast-source-ab-matrix-v1",
+        "status": "passed",
+        "cold_boot_verified": true,
+        "binary_sha256": binary_sha256,
+        "samples": samples,
+        "production_registry_unchanged": true,
+    });
+    fs::write(
+        output,
+        format!("{}\n", serde_json::to_string_pretty(&report)?),
+    )?;
+    fs::write(output.with_extension("log"), logs)?;
+    println!("fast_source_ab_report={}", output.display());
     Ok(())
 }
 

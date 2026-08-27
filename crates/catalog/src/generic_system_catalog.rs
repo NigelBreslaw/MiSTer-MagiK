@@ -43,6 +43,101 @@ pub struct GenericSystemStats {
     pub elapsed_us: u64,
 }
 
+/// Run the ordinary recursive scanner against the five prepared-source trees.
+///
+/// This is an A/B benchmark baseline, not an alternate publication path. It
+/// deliberately has no release manifest or precomputed file inventory.
+pub fn scan_prepared_system_with_generic_walker(
+    storage_root: &Path,
+    system_id: &str,
+) -> Result<(FastFiveSystem, GenericSystemStats), String> {
+    let profiles = ProfileSet::all();
+    let profile = match system_id {
+        "arcade" => profiles
+            .profiles()
+            .iter()
+            .find(|profile| profile.id == "mra"),
+        "amiga" => profiles
+            .profiles()
+            .iter()
+            .find(|profile| profile.id == "amiga"),
+        "dos" => profiles
+            .profiles()
+            .iter()
+            .find(|profile| profile.id == "dos"),
+        "x68000" => profiles
+            .profiles()
+            .iter()
+            .find(|profile| profile.id == "neon68k"),
+        "c64" => profiles.profiles().iter().find(|profile| {
+            profile.system_id == "c64"
+                && profile.payload_rules.iter().any(|rule| {
+                    rule.extensions
+                        .iter()
+                        .any(|extension| extension.eq_ignore_ascii_case("crt"))
+                })
+        }),
+        _ => return Err(format!("unsupported prepared generic baseline {system_id}")),
+    }
+    .cloned()
+    .ok_or_else(|| format!("generic baseline profile is missing for {system_id}"))?;
+    let roots = match system_id {
+        "arcade" => vec![storage_root.join("_Arcade")],
+        "amiga" => vec![storage_root.join("games/Amiga")],
+        "dos" => vec![storage_root.join("_DOS Games")],
+        "x68000" => vec![
+            storage_root.join("_Computer/_X68000 Games"),
+            storage_root.join("_Computer/X68000 Games"),
+        ],
+        "c64" => vec![storage_root.join("games/C64")],
+        _ => unreachable!(),
+    };
+    let started = Instant::now();
+    let mut stats = GenericSystemStats {
+        system_id: system_id.to_string(),
+        ..GenericSystemStats::default()
+    };
+    let mut scanned = Vec::new();
+    let mut visited_roots = BTreeSet::new();
+    for candidate in roots {
+        if !candidate.is_dir() {
+            continue;
+        }
+        let root = candidate.canonicalize().unwrap_or(candidate);
+        if visited_roots.insert(root.to_string_lossy().to_ascii_lowercase()) {
+            stats.roots += 1;
+            scan_directory(&root, &profile, &mut stats, &mut scanned);
+        }
+    }
+    if system_id == "c64" {
+        scanned.retain(|row| {
+            row.game
+                .launch_ref
+                .to_ascii_lowercase()
+                .contains("oneload64")
+        });
+    }
+    scanned.sort_by(|left, right| {
+        left.game
+            .title
+            .to_ascii_lowercase()
+            .cmp(&right.game.title.to_ascii_lowercase())
+            .then_with(|| left.game.stable_key.cmp(&right.game.stable_key))
+    });
+    scanned.dedup_by(|left, right| left.game.launch_ref == right.game.launch_ref);
+    stats.games = scanned.len();
+    stats.elapsed_us = started.elapsed().as_micros() as u64;
+    Ok((
+        FastFiveSystem {
+            system_id: system_id.to_string(),
+            display_title: display_title(system_id).to_string(),
+            games: scanned.into_iter().map(|row| row.game).collect(),
+            variants: Vec::new(),
+        },
+        stats,
+    ))
+}
+
 pub fn rebuild_generic_system(
     storage_root: &Path,
     system_id: &str,
