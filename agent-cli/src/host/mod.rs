@@ -21585,11 +21585,32 @@ fn launch_return_once_hold_until_selection_changes(
     }
 }
 
-fn launch_return_once_initial_env() -> Vec<(String, String)> {
-    vec![
+fn launch_return_once_initial_env(fast_catalog: bool) -> Vec<(String, String)> {
+    let mut environment = vec![
         ("MISTER_CATALOG_REFRESH".into(), "off".into()),
         ("MISTER_ARCADE_SELECTED_INDEX".into(), "0".into()),
-    ]
+    ];
+    if fast_catalog {
+        environment.extend([
+            ("MISTER_FAST_FIVE_CATALOG".into(), "1".into()),
+            (
+                "MISTER_SHARDED_CATALOG_DIR".into(),
+                FAST_FIVE_PROTOTYPE_REMOTE_ROOT.into(),
+            ),
+        ]);
+    }
+    environment
+}
+
+fn launcher_status_uses_fast_catalog(status: &Value) -> bool {
+    let fingerprint = status
+        .get("catalog_generation")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    status.get("catalog_ready").and_then(Value::as_bool) == Some(true)
+        && status.get("catalog_systems").and_then(Value::as_u64) == Some(9)
+        && fingerprint.len() == 64
+        && fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn launch_return_once_wait(
@@ -21749,10 +21770,13 @@ fn profile_installed_launch_return_once(
 ) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     fs::create_dir_all(output_dir)?;
+    let fast_catalog = read_launcher_status(&session)
+        .as_ref()
+        .is_ok_and(launcher_status_uses_fast_catalog);
     restart_launcher_with_one_shot_env(
         &session,
         LauncherRestartOptions {
-            env_vars: launch_return_once_initial_env(),
+            env_vars: launch_return_once_initial_env(fast_catalog),
             timeout_secs: 45,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
@@ -35483,7 +35507,7 @@ mod tests {
 
     #[test]
     fn launch_return_once_starts_at_home_without_automatic_relaunch() {
-        let environment = launch_return_once_initial_env();
+        let environment = launch_return_once_initial_env(false);
         assert!(environment.contains(&("MISTER_ARCADE_SELECTED_INDEX".into(), "0".into())));
         assert!(!environment.iter().any(|(key, _)| matches!(
             key.as_str(),
@@ -35499,6 +35523,24 @@ mod tests {
         );
         assert_eq!(LAUNCH_RETURN_ONCE_STEP_DEADLINE_MS, 2_000);
         assert_eq!(LAUNCH_RETURN_CYCLES, 2);
+    }
+
+    #[test]
+    fn launch_return_once_preserves_an_active_fast_catalog() {
+        let environment = launch_return_once_initial_env(true);
+        assert!(
+            environment
+                .iter()
+                .any(|(name, value)| { name == "MISTER_FAST_FIVE_CATALOG" && value == "1" })
+        );
+        assert!(environment.iter().any(|(name, value)| {
+            name == "MISTER_SHARDED_CATALOG_DIR" && value == FAST_FIVE_PROTOTYPE_REMOTE_ROOT
+        }));
+        assert!(launcher_status_uses_fast_catalog(&json!({
+            "catalog_ready": true,
+            "catalog_systems": 9,
+            "catalog_generation": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        })));
     }
 
     #[test]
