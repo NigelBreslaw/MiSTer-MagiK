@@ -87,11 +87,11 @@ Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
 """
 SCALER_FETCH_SYNC_ASSIGNMENTS = quartus_assignment_section(
     "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame",
-    ("generation_meta", "generation_sync"),
+    ("generation_meta", "generation_sync", "fault_meta", "fault_sync"),
 )
 SCALER_FETCH_CUSTOM_SYNC = SYNC_ASSIGNMENTS + SCALER_FETCH_SYNC_ASSIGNMENTS + """\
-Info (332114): Report Metastability: Found 8 synchronizer chains.
-Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.500000
+Info (332114): Report Metastability: Found 9 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.444444
 Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
 """
 
@@ -172,6 +172,11 @@ SCALER_FETCH_DIAGNOSTIC_REPORTS = {
             "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|source_generation",
             "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_meta",
         )
+        + "; set_net_delay ; 1.025 ; 10.000 ; 8.975 ; sources ; destinations ; max ;\n"
+        + net_delay_detail(
+            "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|source_fault",
+            "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_meta",
+        )
     ),
     "menu.magik-diagnostic-metastability.rpt": (
         VALID_DIAGNOSTIC_REPORTS["menu.magik-diagnostic-metastability.rpt"]
@@ -182,6 +187,15 @@ SCALER_FETCH_DIAGNOSTIC_REPORTS = {
             (
                 "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_meta",
                 "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_sync",
+            ),
+        )
+        + metastability_chain(
+            4,
+            "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|source_fault",
+            "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_meta",
+            (
+                "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_meta",
+                "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_sync",
             ),
         )
     ),
@@ -355,10 +369,10 @@ class QuartusDeltaTest(unittest.TestCase):
             baseline.replace("setup slack is 0.660", "setup slack is 0.389")
             .replace("0.660               0.000", "0.389               0.000")
             + SCALER_FETCH_CUSTOM_SYNC.replace(
-                "Found 8 synchronizer chains", "Found 6 synchronizer chains"
+                "Found 9 synchronizer chains", "Found 7 synchronizer chains"
             ).replace(
-                "Could Not be Calculated: 0.500000",
-                "Could Not be Calculated: 0.333333",
+                "Could Not be Calculated: 0.444444",
+                "Could Not be Calculated: 0.285714",
             )
         )
         result, payload = self.run_check(
@@ -493,8 +507,13 @@ class QuartusDeltaTest(unittest.TestCase):
         patched = BASE.replace(
             "; Unconstrained Output Port Paths ; 158 ; 158 ;",
             "; Unconstrained Output Port Paths ; 160 ; 160 ;",
-        ) + CUSTOM_SYNC
-        result, payload = self.run_check(BASE, patched)
+        ) + EXPERIMENTAL_CUSTOM_SYNC
+        result, payload = self.run_check(
+            BASE,
+            patched,
+            diagnostic_reports=EXPERIMENTAL_DIAGNOSTIC_REPORTS,
+            experimental_diagnostic=True,
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(payload["diagnostic_unconstrained_output_paths_exception"])
 
@@ -806,7 +825,7 @@ class QuartusDeltaTest(unittest.TestCase):
             / "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics.sdc"
         ).read_text(encoding="utf-8")
         self.assertIn("get_registers -nowarn -no_duplicates", sdc)
-        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 3)
+        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 4)
         self.assertNotIn("set_max_skew", sdc)
         self.assertNotIn("set_false_path", sdc)
 

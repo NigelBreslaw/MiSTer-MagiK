@@ -355,6 +355,7 @@ module tb_mister_magik_video_diagnostics_control;
 
 	initial begin
 		reg [15:0] golden;
+		reg prior_generation;
 		apply_reset();
 
 		for(index = 8'h60; index <= 8'h66; index = index + 1) begin
@@ -489,6 +490,26 @@ module tb_mister_magik_video_diagnostics_control;
 		read_record();
 		if(words[1] != FETCH_FLAG_CAPTURE_VALID || words[2] != 16'd0)
 			fail("capture sequence wrap lost valid evidence");
+
+		// A new valid publication followed at the next source edge by a sticky
+		// fault must not cancel in the toggle CDC and leave this older valid
+		// snapshot readable. Fault publication uses its independent sticky
+		// level and does not toggle the valid-generation channel.
+		@(negedge clk_100m);
+		dut.published_signature = 16'hcafe;
+		dut.published_flags = FETCH_FLAG_CAPTURE_VALID[6:0];
+		dut.source_generation = ~dut.source_generation;
+		prior_generation = dut.source_generation;
+		@(posedge clk_100m);
+		pulse_request(28'h0000880, 8'd127, 1'b0);
+		if(dut.source_generation != prior_generation)
+			fail("fault publication reused the cancellable valid-generation toggle");
+		wait_capture();
+		read_record();
+		if(words[1] != FETCH_FLAG_BAD_BURSTCOUNT || words[2] != 16'd0 ||
+		   words[3] != 16'd0)
+			fail("valid publication followed by an immediate fault stayed readable");
+		apply_reset();
 
 		// Reset during a partially returned accepted burst discards both the
 		// transaction and prior publication; no mixed epoch may remain visible.

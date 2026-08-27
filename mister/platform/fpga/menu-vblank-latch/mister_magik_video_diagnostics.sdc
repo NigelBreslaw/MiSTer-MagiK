@@ -46,4 +46,12 @@ set_net_delay -max 10.0 \
 	-from $magik_fetch_frame_generation \
 	-to $magik_fetch_frame_generation_meta
 
-post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_ordered_signature"
+set magik_fetch_fault [magik_require_registers fetch_fault \
+	{*mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|source_fault} 1]
+set magik_fetch_fault_meta [magik_require_registers fetch_fault_meta \
+	{*mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_meta} 1]
+set_net_delay -max 10.0 \
+	-from $magik_fetch_fault \
+	-to $magik_fetch_fault_meta
+
+post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_ordered_signature scaler_fetch_fault"

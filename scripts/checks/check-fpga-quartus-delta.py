@@ -122,7 +122,16 @@ EXPERIMENTAL_SCALER_FETCH_METASTABILITY_CHAIN = {
             "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_meta",
             "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_sync",
         ),
-    }
+    },
+    "scaler_fetch_fault": {
+        "source": "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|source_fault",
+        "synchronization_node": "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_meta",
+        "allow_source_duplicate": False,
+        "registers": (
+            "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_meta",
+            "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_sync",
+        ),
+    },
 }
 EXPECTED_CDC_ANALYSIS_LABELS: frozenset[str] = frozenset(
     {"scaler_completion_request_ack"}
@@ -154,7 +163,10 @@ EXPERIMENTAL_RAW_SCALER_NET_DELAY_PATH = {
 EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH = {
     "scaler_fetch_generation": re.compile(
         r"source_generation\s*;[^\n]*generation_meta\s*;", re.IGNORECASE
-    )
+    ),
+    "scaler_fetch_fault": re.compile(
+        r"source_fault\s*;[^\n]*fault_meta\s*;", re.IGNORECASE
+    ),
 }
 
 
@@ -472,10 +484,15 @@ def validate_diagnostic_reports(
     detailed_path_counts: dict[str, int | None] = {}
     minimum_slacks: dict[str, float | None] = {}
     expected_report_analyses = dict(EXPECTED_CDC_REPORT_ANALYSES)
-    if experimental_diagnostic or experimental_scaler_fetch:
+    if experimental_diagnostic:
         expected_report_analyses["menu.magik-diagnostic-cdc-net-delay.rpt"] = (
             "set_net_delay",
             3,
+        )
+    if experimental_scaler_fetch:
+        expected_report_analyses["menu.magik-diagnostic-cdc-net-delay.rpt"] = (
+            "set_net_delay",
+            4,
         )
     for name, (command, expected_count) in expected_report_analyses.items():
         text = reports.get(name, "")
@@ -801,6 +818,8 @@ def compare(
             (
                 "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_meta",
                 "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_sync",
+                "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_meta",
+                "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_sync",
             )
         )
     missing_sync_assignments = [
@@ -825,7 +844,7 @@ def compare(
         and patched_calculable_chains
         == baseline_calculable_chains
         + EXPECTED_ADDED_CALCULABLE_COMPLETION_SYNCHRONIZER_CHAINS
-        + (1 if experimental else 0)
+        + (2 if experimental_scaler_fetch else 1 if experimental_diagnostic else 0)
     )
     if not custom_assignment_seen:
         reasons.append("custom_synchronizer_missing")

@@ -66,11 +66,16 @@ module mister_magik_scaler_fetch_ordered_frame (
 	reg [15:0] published_signature = 16'd0;
 	reg [6:0]  published_flags = 7'd0;
 	(* preserve, dont_replicate *) reg source_generation = 1'b0;
+	(* preserve, dont_replicate *) reg source_fault = 1'b0;
 
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg generation_meta = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg generation_sync = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg fault_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg fault_sync = 1'b0;
 	reg generation_seen = 1'b0;
 	reg capture_pending = 1'b0;
 
@@ -98,7 +103,9 @@ module mister_magik_scaler_fetch_ordered_frame (
 	wire marker_consumed = return_has_entry && return_phase == 7'd0 && fifo_wrap0;
 	wire marker_still_pending =
 		(fifo_wrap0 && !marker_consumed) || (fifo_count == 2'd2 && fifo_wrap1);
-	wire source_faulted = published_flags[6:1] != 6'd0;
+	wire source_faulted = source_fault;
+	wire snapshot_faulted = snapshot_flags[6:1] != 6'd0;
+	wire response_safe = !fault_sync || snapshot_faulted;
 
 	wire [6:0] fault_event = {
 		fifo_count == 2'd3,
@@ -117,10 +124,10 @@ module mister_magik_scaler_fetch_ordered_frame (
 		snapshot_crc_valid && !crc_busy;
 	wire selected_command = command_selected;
 
-	assign response_valid =
+	assign response_valid = response_safe && (
 		(command_start && selected_start) ||
 		(command_data && selected_command &&
-		 (word_count < MAGIK_RAW_SCALER_STATE_WORDS));
+		 (word_count < MAGIK_RAW_SCALER_STATE_WORDS)));
 
 	function automatic [15:0] ordered_signature_update;
 		input [15:0] signature_in;
@@ -226,6 +233,7 @@ module mister_magik_scaler_fetch_ordered_frame (
 			published_signature <= 16'd0;
 			published_flags <= 7'd0;
 			source_generation <= 1'b0;
+			source_fault <= 1'b0;
 		end
 		else begin
 			if(accepted) begin
@@ -305,7 +313,7 @@ module mister_magik_scaler_fetch_ordered_frame (
 				epoch_armed <= 1'b0;
 				published_signature <= 16'd0;
 				published_flags <= fault_event;
-				source_generation <= ~source_generation;
+				source_fault <= 1'b1;
 			end
 		end
 	end
@@ -337,6 +345,8 @@ module mister_magik_scaler_fetch_ordered_frame (
 		if(reset_active) begin
 			generation_meta <= 1'b0;
 			generation_sync <= 1'b0;
+			fault_meta <= 1'b0;
+			fault_sync <= 1'b0;
 			generation_seen <= 1'b0;
 			capture_pending <= 1'b0;
 			snapshot_signature <= 16'd0;
@@ -353,19 +363,34 @@ module mister_magik_scaler_fetch_ordered_frame (
 		else begin
 			generation_meta <= source_generation;
 			generation_sync <= generation_meta;
+			fault_meta <= source_faulted;
+			fault_sync <= fault_meta;
 
-			if(!snapshot_crc_valid && !crc_busy && !capture_pending) begin
+			if(!snapshot_crc_valid && !crc_busy && !capture_pending &&
+			   !fault_sync) begin
 				snapshot_crc <= FETCH_FLAGS_CRC;
 				crc_bit_count <= 6'd0;
 				crc_busy <= 1'b1;
 			end
 
-			if(!has_command && !command_start && !crc_busy &&
+			if(!has_command && !command_start && !crc_busy && fault_sync &&
+			   !snapshot_faulted) begin
+				generation_seen <= generation_sync;
+				capture_pending <= 1'b0;
+				snapshot_signature <= 16'd0;
+				snapshot_sequence <= 16'd0;
+				snapshot_flags <= published_flags;
+				snapshot_crc <= FETCH_FLAGS_CRC;
+				crc_bit_count <= 6'd0;
+				crc_busy <= 1'b1;
+				snapshot_crc_valid <= 1'b0;
+			end
+			else if(!has_command && !command_start && !crc_busy && !fault_sync &&
 			   generation_sync != generation_seen) begin
 				generation_seen <= generation_sync;
 				capture_pending <= 1'b1;
 			end
-			else if(!has_command && !command_start && !crc_busy &&
+			else if(!has_command && !command_start && !crc_busy && !fault_sync &&
 				capture_pending) begin
 				snapshot_signature <= published_signature;
 				snapshot_flags <= published_flags;

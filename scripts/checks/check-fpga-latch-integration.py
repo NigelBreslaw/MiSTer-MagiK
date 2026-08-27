@@ -321,9 +321,14 @@ def main() -> None:
         "fault_event[6:1] != 6'd0",
         "published_flags <= fault_event;",
         "(* preserve, dont_replicate *) reg source_generation = 1'b0;",
+        "(* preserve, dont_replicate *) reg source_fault = 1'b0;",
         "source_generation <= ~source_generation;",
         "generation_meta <= source_generation;",
         "generation_sync <= generation_meta;",
+        "fault_meta <= source_faulted;",
+        "fault_sync <= fault_meta;",
+        "wire response_safe = !fault_sync || snapshot_faulted;",
+        "assign response_valid = response_safe && (",
         "snapshot_signature <= published_signature;",
         "snapshot_flags <= published_flags;",
         "snapshot_sequence <= snapshot_sequence + 1'd1;",
@@ -483,8 +488,8 @@ def main() -> None:
     timing_commands = re.findall(
         r"(?m)^\s*(set_[A-Za-z0-9_]+\b[^\n]*)$", diagnostics_sdc_text
     )
-    if timing_commands != ["set_net_delay -max 10.0 \\"] * 3:
-        fail("diagnostic SDC must contain the two completion bounds and one observer bound")
+    if timing_commands != ["set_net_delay -max 10.0 \\"] * 4:
+        fail("diagnostic SDC must contain two completion and two observer bounds")
     for fragment in (
         "{*ascal:ascal|avl_readdataack} 1",
         "{*ascal:ascal|o_readdataack_sync} 1",
@@ -498,7 +503,11 @@ def main() -> None:
         "{*mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_meta} 1",
         "-from $magik_fetch_frame_generation",
         "-to $magik_fetch_frame_generation_meta",
-        "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_ordered_signature",
+        "{*mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|source_fault} 1",
+        "{*mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_meta} 1",
+        "-from $magik_fetch_fault",
+        "-to $magik_fetch_fault_meta",
+        "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_ordered_signature scaler_fetch_fault",
         "*ascal:ascal|o_readdataack_sync2*",
         "scaler_copy_tail",
     ):
