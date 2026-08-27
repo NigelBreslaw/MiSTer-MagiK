@@ -670,9 +670,18 @@ pub fn execute_fast_refresh(
     catalog_root: &Path,
     request: FastCatalogRefreshRequest,
 ) -> Result<FastCatalogRefreshReport, String> {
-    let started = std::time::Instant::now();
     let plan = plan_fast_refresh(storage_root, catalog_root, request)?;
-    let planning_us = started.elapsed().as_micros().try_into().unwrap_or(u64::MAX);
+    execute_planned_fast_refresh(storage_root, catalog_root, request, plan)
+}
+
+pub fn execute_planned_fast_refresh(
+    storage_root: &Path,
+    catalog_root: &Path,
+    request: FastCatalogRefreshRequest,
+    plan: FastRefreshPlanReport,
+) -> Result<FastCatalogRefreshReport, String> {
+    let started = std::time::Instant::now();
+    let planning_us = plan.elapsed_us;
     let previous = read_latest_refresh_manifest(catalog_root)?;
     let active = crate::shard_registry::read_latest_manifest_lazy(
         catalog_root,
@@ -849,7 +858,8 @@ pub fn execute_fast_refresh(
     let failed_retained = reports.len().saturating_sub(unchanged + updated + removed);
     Ok(FastCatalogRefreshReport {
         request,
-        elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+        elapsed_us: planning_us
+            .saturating_add(started.elapsed().as_micros().try_into().unwrap_or(u64::MAX)),
         planning_us,
         source_rebuild_us,
         artifact_publish_us,

@@ -661,10 +661,11 @@ fn run_fast_catalog_refresh_in_process(
             });
         }
     }
-    let report = match mister_magik_catalog::fast_catalog_refresh::execute_fast_refresh(
+    let report = match mister_magik_catalog::fast_catalog_refresh::execute_planned_fast_refresh(
         &storage_root,
         catalog_root,
         request,
+        planned,
     ) {
         Ok(report) => report,
         Err(error) => {
