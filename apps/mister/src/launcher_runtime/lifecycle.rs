@@ -1741,7 +1741,7 @@ mod tests {
     }
 
     #[test]
-    fn return_black_screen_timeout_does_not_apply_to_warm_start() {
+    fn return_black_screen_timeout_leaves_warm_start_revealed() {
         let now = Instant::now();
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
@@ -1756,7 +1756,7 @@ mod tests {
 
         assert_eq!(
             lifecycle.startup_status().state,
-            StartupRevealState::HoldBlack
+            StartupRevealState::RevealLauncher
         );
         assert!(effects.as_slice().is_empty());
     }
