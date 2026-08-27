@@ -254,12 +254,12 @@ fn kernel_version() -> String {
 }
 
 fn last_database_build() -> String {
-    mister_magik_catalog::catalog_build_record::read_completed_build_duration(
-        &mister_magik_catalog::catalog_state::default_path(),
+    mister_magik_catalog::fast_catalog_refresh::read_current_build_info(
+        &mister_magik_catalog::catalog_config::default_sharded_catalog_path(),
     )
     .ok()
     .flatten()
-    .map(mister_magik_catalog::catalog_build_record::format_duration)
+    .map(|info| mister_magik_catalog::fast_catalog_refresh::format_build_elapsed(info.elapsed_us))
     .unwrap_or_else(|| "No completed database build recorded yet".to_string())
 }
 

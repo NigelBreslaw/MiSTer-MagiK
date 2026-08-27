@@ -377,6 +377,9 @@ fn run_fast_catalog_fresh_build(
             report.publication.copied_bytes,
         ),
     });
+    let _ = tx.send(CatalogWorkerMessage::BuildCompleted {
+        elapsed_us: report.elapsed_us,
+    });
     if let Err(error) = publish_strict_registry_seed_at(tx, root, catalog_root) {
         let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
             error: format!("catalog registry load failed: {error}"),
@@ -574,6 +577,9 @@ pub(super) enum CatalogWorkerMessage {
         generation: u64,
         rebuilt: Vec<String>,
         removed: Vec<String>,
+    },
+    BuildCompleted {
+        elapsed_us: u64,
     },
     SystemShardReady {
         system_id: String,

@@ -1177,6 +1177,15 @@ impl LauncherScheduler {
                     now,
                 );
             }
+            CatalogWorkerMessage::BuildCompleted { elapsed_us } => {
+                self.note_catalog_progress(
+                    "build-completed",
+                    "catalog-ready",
+                    &format!("elapsed_us={elapsed_us}"),
+                    100,
+                    now,
+                );
+            }
             CatalogWorkerMessage::SystemShardReady {
                 system_id,
                 game_count,

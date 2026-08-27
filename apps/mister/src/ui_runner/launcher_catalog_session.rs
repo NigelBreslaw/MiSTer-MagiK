@@ -385,6 +385,11 @@ impl LauncherCatalogSession {
                     removed,
                 });
             }
+            CatalogWorkerMessage::BuildCompleted { elapsed_us } => {
+                effects.ui(LauncherWorkerUiIntent::InfoDatabaseBuild(
+                    mister_magik_catalog::fast_catalog_refresh::format_build_elapsed(elapsed_us),
+                ));
+            }
             CatalogWorkerMessage::SystemShardReady {
                 system_id,
                 catalog,

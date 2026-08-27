@@ -23,12 +23,15 @@ const ENVELOPE_BYTES: usize = 64;
 const MANIFEST_MAGIC: &[u8; 8] = b"MGKRFSMF";
 const WATCH_MAGIC: &[u8; 8] = b"MGKRFSWI";
 const ROWS_MAGIC: &[u8; 8] = b"MGKRFSRW";
+const BUILD_INFO_MAGIC: &[u8; 8] = b"MGKRFBIN";
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_WATCH_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ROWS_BYTES: usize = 128 * 1024 * 1024;
+const MAX_BUILD_INFO_BYTES: usize = 4096;
 const STATE_DIRECTORY: &str = "fast-refresh-v1";
 const MANIFEST_A: &str = "manifest-a.bin";
 const MANIFEST_B: &str = "manifest-b.bin";
+const BUILD_INFO_FILE: &str = "build-info.bin";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FastRefreshManifest {
@@ -101,6 +104,15 @@ pub struct FastRefreshCaptureReport {
     pub directories: usize,
     pub containers: usize,
     pub systems: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FastCatalogBuildInfo {
+    pub schema: u32,
+    pub catalog_generation: u64,
+    pub catalog_fingerprint: String,
+    pub completed_unix_ms: u64,
+    pub elapsed_us: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -190,6 +202,7 @@ pub struct FastCatalogFreshBuildReport {
     pub capture: FastRefreshCaptureReport,
     pub refresh_generation: u64,
     pub system_ids: Vec<String>,
+    pub build_info_persisted: bool,
 }
 
 pub fn build_fresh_catalog(
@@ -235,8 +248,24 @@ pub fn build_fresh_catalog_with_progress(
         ),
         &states,
     )?;
+    let build_elapsed_us = started.elapsed().as_micros().try_into().unwrap_or(u64::MAX);
+    let build_info = FastCatalogBuildInfo::new(
+        publication.generation,
+        publication.registry_fingerprint.clone(),
+        build_elapsed_us,
+    )?;
+    let build_info_persisted = match publish_build_info(catalog_root, &build_info) {
+        Ok(()) => true,
+        Err(error) => {
+            crate::catalog_logln!(
+                "fast_catalog_build_info_tsv\tstatus=failed\terror={}",
+                error.replace('\t', " ")
+            );
+            false
+        }
+    };
     Ok(FastCatalogFreshBuildReport {
-        elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+        elapsed_us: build_elapsed_us,
         source,
         publication,
         capture,
@@ -246,6 +275,7 @@ pub fn build_fresh_catalog_with_progress(
             .into_iter()
             .map(|system| system.system_id)
             .collect(),
+        build_info_persisted,
     })
 }
 
@@ -314,6 +344,40 @@ impl FastRefreshManifest {
             validate_sha256(&system.row_fingerprint, "row fingerprint")?;
         }
         Ok(())
+    }
+}
+
+impl FastCatalogBuildInfo {
+    fn new(
+        catalog_generation: u64,
+        catalog_fingerprint: String,
+        elapsed_us: u64,
+    ) -> Result<Self, String> {
+        let completed_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| "clock predates Unix epoch")?
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        let info = Self {
+            schema: REFRESH_SCHEMA,
+            catalog_generation,
+            catalog_fingerprint,
+            completed_unix_ms,
+            elapsed_us,
+        };
+        info.validate()?;
+        Ok(info)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != REFRESH_SCHEMA
+            || self.catalog_generation == 0
+            || self.completed_unix_ms == 0
+        {
+            return Err("invalid fast catalog build information".to_string());
+        }
+        validate_sha256(&self.catalog_fingerprint, "build catalog fingerprint")
     }
 }
 
@@ -412,6 +476,54 @@ impl FastSystemRowsSnapshot {
 
 pub fn refresh_state_root(catalog_root: &Path) -> PathBuf {
     catalog_root.join("state").join(STATE_DIRECTORY)
+}
+
+pub fn build_info_path(catalog_root: &Path) -> PathBuf {
+    refresh_state_root(catalog_root).join(BUILD_INFO_FILE)
+}
+
+fn publish_build_info(catalog_root: &Path, info: &FastCatalogBuildInfo) -> Result<(), String> {
+    info.validate()?;
+    let path = build_info_path(catalog_root);
+    let bytes = encode_envelope(info, BUILD_INFO_MAGIC)?;
+    write_replace_file(&path, &bytes)?;
+    sync_directory(
+        path.parent()
+            .ok_or_else(|| "fast catalog build information has no parent".to_string())?,
+    )
+}
+
+pub fn read_current_build_info(
+    catalog_root: &Path,
+) -> Result<Option<FastCatalogBuildInfo>, String> {
+    let path = build_info_path(catalog_root);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let info: FastCatalogBuildInfo = read_envelope(&path, BUILD_INFO_MAGIC, MAX_BUILD_INFO_BYTES)?;
+    info.validate()?;
+    let active = crate::shard_registry::read_latest_manifest_lazy(
+        catalog_root,
+        crate::shard_registry::production_registry_limits(),
+    )
+    .map_err(|error| format!("read active fast catalog for build information: {error}"))?;
+    let fingerprint = crate::fast_five_catalog::registry_fingerprint(
+        catalog_root,
+        crate::shard_registry::production_registry_limits(),
+    )?;
+    if info.catalog_generation != active.generation || info.catalog_fingerprint != fingerprint {
+        return Ok(None);
+    }
+    Ok(Some(info))
+}
+
+pub fn format_build_elapsed(elapsed_us: u64) -> String {
+    let seconds = elapsed_us.saturating_add(500_000) / 1_000_000;
+    if seconds == 1 {
+        "1 second".to_string()
+    } else {
+        format!("{seconds} seconds")
+    }
 }
 
 pub fn read_latest_refresh_manifest(catalog_root: &Path) -> Result<FastRefreshManifest, String> {
@@ -1977,5 +2089,37 @@ mod tests {
                 .games,
             1
         );
+    }
+
+    #[test]
+    fn current_build_information_rejects_stale_and_corrupt_records() {
+        let storage = crate::test_support::unique_temp_dir("fast-build-info-storage");
+        let catalog = crate::test_support::unique_temp_dir("fast-build-info-catalog");
+        assert_eq!(read_current_build_info(&catalog).unwrap(), None);
+        fs::create_dir_all(storage.join("_Console")).unwrap();
+        fs::create_dir_all(storage.join("games/SNES")).unwrap();
+        fs::write(storage.join("_Console/SNES.rbf"), b"core").unwrap();
+        fs::write(storage.join("games/SNES/Game.sfc"), b"rom").unwrap();
+
+        let report = build_fresh_catalog(&storage, &catalog).expect("build catalog");
+        assert!(report.build_info_persisted);
+        let current = read_current_build_info(&catalog)
+            .expect("read build information")
+            .expect("current build information");
+        assert_eq!(current.catalog_generation, report.publication.generation);
+        assert_eq!(
+            current.catalog_fingerprint,
+            report.publication.registry_fingerprint
+        );
+
+        let mut stale = current;
+        stale.catalog_generation = stale.catalog_generation.saturating_add(1);
+        publish_build_info(&catalog, &stale).unwrap();
+        assert_eq!(read_current_build_info(&catalog).unwrap(), None);
+
+        fs::write(build_info_path(&catalog), b"corrupt").unwrap();
+        assert!(read_current_build_info(&catalog).is_err());
+        assert_eq!(format_build_elapsed(1_499_999), "1 second");
+        assert_eq!(format_build_elapsed(1_500_000), "2 seconds");
     }
 }
