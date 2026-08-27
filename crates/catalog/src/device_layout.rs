@@ -226,7 +226,7 @@ impl CatalogPaths {
                 .unwrap_or_else(|| PathBuf::from("/tmp/mister-magik/sqlite-build")),
             sharded_catalog_dir: overrides
                 .sharded_catalog_dir
-                .unwrap_or_else(|| device.app_path("catalog-v3")),
+                .unwrap_or_else(|| device.app_path("catalog-fast-v1")),
         }
     }
 

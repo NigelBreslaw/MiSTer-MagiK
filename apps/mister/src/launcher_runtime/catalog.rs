@@ -61,26 +61,15 @@ pub fn load_sharded_registry_seed_at(
             error: "catalog registry has no systems".to_owned(),
         });
     }
-    let catalog_fingerprint = if fast_five_catalog_enabled() {
-        validate_fast_five_registry(registry.systems())?;
-        mister_magik_catalog::fast_five_catalog::registry_fingerprint(
-            storage,
-            mister_magik_catalog::production_sharded_projection::production_registry_limits(),
-        )
-        .map_err(|error| ShardedCatalogSeedLoadError {
-            status: "stale",
-            error,
-        })?
-    } else {
-        mister_magik_catalog::production_sharded_projection::validate_production_binding(
-            storage,
-            registry.generation(),
-        )
-        .map_err(|error| ShardedCatalogSeedLoadError {
-            status: "stale",
-            error: error.to_string(),
-        })?
-    };
+    validate_fast_five_registry(registry.systems())?;
+    let catalog_fingerprint = mister_magik_catalog::fast_five_catalog::registry_fingerprint(
+        storage,
+        mister_magik_catalog::production_sharded_projection::production_registry_limits(),
+    )
+    .map_err(|error| ShardedCatalogSeedLoadError {
+        status: "stale",
+        error,
+    })?;
     let generation = registry.generation();
     Ok(ShardedCatalogSeed {
         catalog: registry_only_catalog(root, registry.systems()),
@@ -90,9 +79,7 @@ pub fn load_sharded_registry_seed_at(
 }
 
 pub(crate) fn fast_five_catalog_enabled() -> bool {
-    std::env::var("MISTER_FAST_FIVE_CATALOG")
-        .ok()
-        .is_some_and(|value| matches!(value.as_str(), "1" | "on" | "true" | "yes"))
+    true
 }
 
 fn validate_fast_five_registry(
