@@ -25,7 +25,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 6;
+pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 7;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FastSourceBuildReport {
@@ -1020,7 +1020,7 @@ mod tests {
 
     #[test]
     fn independent_source_set_contains_no_legacy_input_kind() {
-        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 6);
+        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 7);
         assert_eq!(EXPANDED_FAST_SYSTEM_IDS.len(), 9);
     }
 

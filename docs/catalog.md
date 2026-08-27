@@ -181,6 +181,9 @@ shared profile contract to classify primary payloads separately from BIOS,
 sidecars, and referenced disc tracks. On Linux its retained scratch-build path
 uses one serial bounded fd-relative namespace reader. Parallelism is reserved
 for CPU-only preparation because multiple readers contend on the exFAT SD card.
+Both generic walkers prune hidden path components, AppleDouble `._` files,
+`__MACOSX`, and other catalog-irrelevant metadata before ROM classification;
+ZIP central-directory scanning applies the same policy.
 Cutover requires an explicit audit of every ignored or unmatched installed file
 before these three systems are allowed to publish UI artifacts.
 

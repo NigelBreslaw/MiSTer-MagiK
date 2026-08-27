@@ -8,7 +8,7 @@
 //! core launch profiles, walks arbitrary nesting, and reads ZIP directories
 //! without extracting payload data.
 
-use crate::catalog_scan::{FoundFile, scan_zip_central_directory};
+use crate::catalog_scan::{FoundFile, scan_zip_central_directory, should_ignore_path};
 use crate::fast_five_catalog::{FastFiveSnapshot, FastFiveSystem, GENERIC_EXAMPLE_SYSTEM_IDS};
 use crate::launch_profiles::{
     BorrowedProfilePathClass, IgnoreReason, IgnoreRule, LaunchProfile, MountKind, MountSpec,
@@ -604,6 +604,9 @@ fn scan_directory(
         if file_type.is_symlink() {
             continue;
         }
+        if should_ignore_path(&path) {
+            continue;
+        }
         if file_type.is_dir() {
             scan_directory(&path, profile, stats, games);
             continue;
@@ -648,49 +651,44 @@ fn scan_namespace_borrowed(
     games: &mut Vec<ScannedGame>,
 ) {
     stats.directories += 1;
-    let namespace = namespace_walk::visit(
-        root,
-        None,
-        |_| false,
-        |entry| {
-            if entry.kind == NamespaceEntryKind::Directory {
-                stats.directories += 1;
-                return true;
+    let namespace = namespace_walk::visit(root, None, should_ignore_path, |entry| {
+        if entry.kind == NamespaceEntryKind::Directory {
+            stats.directories += 1;
+            return true;
+        }
+        if entry.kind != NamespaceEntryKind::File {
+            return true;
+        }
+        let path = entry.path.as_path();
+        stats.files += 1;
+        match profile.classify_path_borrowed(path) {
+            BorrowedProfilePathClass::Payload { rule }
+                if rule.disposition == PayloadDisposition::Playable =>
+            {
+                stats.candidate_files += 1;
+                games.push(direct_game(profile, path, rule));
             }
-            if entry.kind != NamespaceEntryKind::File {
-                return true;
+            BorrowedProfilePathClass::NotMatched
+                if path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+                    && !profile.archive_entry_rules.is_empty() =>
+            {
+                stats.candidate_files += 1;
+                scan_archive(profile, path, stats, games);
             }
-            let path = entry.path.as_path();
-            stats.files += 1;
-            match profile.classify_path_borrowed(path) {
-                BorrowedProfilePathClass::Payload { rule }
-                    if rule.disposition == PayloadDisposition::Playable =>
-                {
-                    stats.candidate_files += 1;
-                    games.push(direct_game(profile, path, rule));
+            BorrowedProfilePathClass::Ignored { reason } => {
+                stats.ignored_files += 1;
+                if reason == IgnoreReason::CueTrack {
+                    stats.dependency_files += 1;
                 }
-                BorrowedProfilePathClass::NotMatched
-                    if path
-                        .extension()
-                        .and_then(|extension| extension.to_str())
-                        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
-                        && !profile.archive_entry_rules.is_empty() =>
-                {
-                    stats.candidate_files += 1;
-                    scan_archive(profile, path, stats, games);
-                }
-                BorrowedProfilePathClass::Ignored { reason } => {
-                    stats.ignored_files += 1;
-                    if reason == IgnoreReason::CueTrack {
-                        stats.dependency_files += 1;
-                    }
-                }
-                BorrowedProfilePathClass::Payload { .. } => stats.dependency_files += 1,
-                _ => stats.unmatched_files += 1,
             }
-            true
-        },
-    );
+            BorrowedProfilePathClass::Payload { .. } => stats.dependency_files += 1,
+            _ => stats.unmatched_files += 1,
+        }
+        true
+    });
     stats.namespace_backend = namespace.backend.to_string();
     stats.namespace_read_calls = stats
         .namespace_read_calls
@@ -859,6 +857,11 @@ mod tests {
         }
         let files = [
             ("games/SNES/Publisher/Super Game.sfc", b"rom".as_slice()),
+            (
+                "games/SNES/Publisher/._Super Game.sfc",
+                b"sidecar".as_slice(),
+            ),
+            ("games/SNES/.metadata/Hidden Game.sfc", b"hidden".as_slice()),
             ("games/Saturn/Disc Game.chd", b"disc".as_slice()),
             ("games/Saturn/Disc Game.bin", b"track".as_slice()),
             ("games/NEOGEO/Arcade Game.neo", b"rom".as_slice()),
@@ -923,6 +926,8 @@ mod tests {
         }
         for (relative, bytes) in [
             ("games/PSX/Disc Game.chd", b"disc".as_slice()),
+            ("games/PSX/._Disc Game.chd", b"sidecar".as_slice()),
+            ("games/PSX/.metadata/Hidden Disc.chd", b"hidden".as_slice()),
             ("games/PSX/Disc Game.bin", b"track".as_slice()),
             ("games/PSX/boot.rom", b"bios".as_slice()),
             ("games/PSX/Disc Game.sbi", b"sidecar".as_slice()),
