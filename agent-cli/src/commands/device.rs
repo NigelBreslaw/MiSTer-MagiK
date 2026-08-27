@@ -281,6 +281,7 @@ pub enum LauncherCommand {
     Restart(LauncherRestartArgs),
     CaptureFirstArcade(FirstArcadeCaptureArgs),
     LaunchReturnOnce(FirstArcadeCaptureArgs),
+    VerifyNeogeoSdram(FirstArcadeCaptureArgs),
     CaptureCrtFontAb(CrtFontAbCaptureArgs),
     CaptureSnesHub(FirstArcadeCaptureArgs),
     ReturnToLauncher(AttendedArgs),

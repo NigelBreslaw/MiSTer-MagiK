@@ -384,6 +384,7 @@ impl NativeDevice {
                     command: LauncherCommand::Status
                         | LauncherCommand::CaptureFirstArcade(_)
                         | LauncherCommand::LaunchReturnOnce(_)
+                        | LauncherCommand::VerifyNeogeoSdram(_)
                         | LauncherCommand::CaptureCrtFontAb(_)
                         | LauncherCommand::CaptureSnesHub(_)
                         | LauncherCommand::ReturnToLauncher(_),
@@ -553,6 +554,19 @@ impl NativeDevice {
                         );
                         validate_attended_launch_return_summary(&summary, &args.output)?;
                         thread::sleep(ATTENDED_LAUNCH_RETURN_COOLDOWN);
+                        Ok(())
+                    }
+                    LauncherCommand::VerifyNeogeoSdram(args) => {
+                        let summary =
+                            profile_installed_neogeo_sdram(&prepared.config, &args.output)?;
+                        println!(
+                            "NeoGeo SDRAM smoke passed runs={} evidence={}",
+                            summary
+                                .get("runs")
+                                .and_then(Value::as_array)
+                                .map_or(0, Vec::len),
+                            args.output.display()
+                        );
                         Ok(())
                     }
                     LauncherCommand::CaptureCrtFontAb(args) => {
@@ -21091,6 +21105,363 @@ fn launch_return_once_validate_restored_selection(
     Ok(())
 }
 
+const NEOGEO_SDRAM_GAME_DWELL: Duration = Duration::from_secs(20);
+const NEOGEO_HIGH_MEMORY_SETNAMES: &[&str] = &[
+    "mslug3",
+    "mslug5",
+    "kof2003",
+    "svc",
+    "garou",
+    "samsho5",
+    "samsho5sp",
+];
+const NEOGEO_CONTROL_SETNAMES: &[&str] = &["mslug", "kof98", "samsho2"];
+
+#[derive(Clone, Debug)]
+struct NeoGeoSmokeTarget {
+    role: &'static str,
+    game_id: String,
+    setname: String,
+    selected_index: u64,
+}
+
+fn neogeo_setname(game_id: &str) -> Option<String> {
+    let lower = game_id.to_ascii_lowercase();
+    if let Some(end) = lower.rfind(").neo") {
+        let start = lower[..end].rfind('(')? + 1;
+        let setname = lower[start..end].trim();
+        if !setname.is_empty() {
+            return Some(setname.to_owned());
+        }
+    }
+    let filename = lower.rsplit('/').next()?;
+    filename
+        .strip_suffix(".neo")
+        .or_else(|| filename.strip_suffix(".mgl"))
+        .filter(|stem| !stem.is_empty())
+        .map(str::to_owned)
+}
+
+fn neogeo_smoke_matrix(entries: &[(String, u64)]) -> Result<Vec<NeoGeoSmokeTarget>> {
+    let structured: BTreeMap<String, (String, u64)> = entries
+        .iter()
+        .filter(|(game_id, _)| game_id.starts_with("magik-plan:"))
+        .filter_map(|(game_id, index)| {
+            neogeo_setname(game_id).map(|setname| (setname, (game_id.clone(), *index)))
+        })
+        .collect();
+    let target = |role, setname: &str| {
+        structured
+            .get(setname)
+            .map(|(game_id, selected_index)| NeoGeoSmokeTarget {
+                role,
+                game_id: game_id.clone(),
+                setname: setname.to_owned(),
+                selected_index: *selected_index,
+            })
+    };
+    let mandatory = target("mandatory-high-memory", "mslug3")
+        .ok_or("NeoGeo smoke requires the structured Metal Slug 3 (mslug3) launch")?;
+    let additional = NEOGEO_HIGH_MEMORY_SETNAMES
+        .iter()
+        .copied()
+        .filter(|setname| *setname != "mslug3")
+        .find_map(|setname| target("additional-high-memory", setname))
+        .ok_or("NeoGeo smoke requires a second installed high-memory structured launch")?;
+    let control = NEOGEO_CONTROL_SETNAMES
+        .iter()
+        .copied()
+        .find_map(|setname| target("control", setname))
+        .ok_or("NeoGeo smoke requires an installed low-memory structured control")?;
+    let (mgl, mgl_index) = entries
+        .iter()
+        .find(|(game_id, _)| game_id.to_ascii_lowercase().ends_with(".mgl"))
+        .ok_or("NeoGeo smoke requires a real .mgl entry in the NeoGeo collection")?;
+    let direct_mgl = NeoGeoSmokeTarget {
+        role: "direct-mgl",
+        game_id: mgl.clone(),
+        setname: neogeo_setname(mgl).unwrap_or_else(|| "mgl".to_string()),
+        selected_index: *mgl_index,
+    };
+    Ok(vec![mandatory, additional, control, direct_mgl])
+}
+
+fn launch_return_once_select_game_index(
+    config: &NativeDeviceConfig,
+    nonce: &str,
+    target: u64,
+) -> Result<Value> {
+    let mut state = launch_return_once_wait(
+        config,
+        nonce,
+        |snapshot| {
+            modal_semantic(snapshot, "effective_view").and_then(Value::as_str) == Some("arcade")
+                && modal_semantic(snapshot, "selected_count")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|count| target < count)
+        },
+        "populated NeoGeo view",
+    )?;
+    loop {
+        let current = modal_semantic(&state, "selected_index")
+            .and_then(Value::as_u64)
+            .ok_or("NeoGeo view has no selected index")?;
+        if current == target {
+            return Ok(state);
+        }
+        let previous = modal_semantic(&state, "selected_game_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        state = launch_return_once_hold_until_selection_changes(
+            config,
+            nonce,
+            if current < target {
+                AutomationButton::Down
+            } else {
+                AutomationButton::Up
+            },
+            "selected_game_id",
+            &previous,
+            "NeoGeo selection change",
+        )?;
+    }
+}
+
+fn launch_return_once_open_neogeo(config: &NativeDeviceConfig, nonce: &str) -> Result<Value> {
+    launch_return_once_action(config, nonce, AutomationButton::Home)?;
+    for item in ["menu:consoles", "menu:snk-neogeo", "neogeo"] {
+        launch_return_once_select_menu_item(config, nonce, item)?;
+        launch_return_once_action(config, nonce, AutomationButton::A)?;
+    }
+    launch_return_once_wait(
+        config,
+        nonce,
+        |snapshot| {
+            modal_semantic(snapshot, "effective_view").and_then(Value::as_str) == Some("arcade")
+                && modal_semantic(snapshot, "active_collection_id").and_then(Value::as_str)
+                    == Some("neogeo")
+                && modal_semantic(snapshot, "selected_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    > 0
+        },
+        "populated NeoGeo collection",
+    )
+}
+
+fn collect_neogeo_entries(
+    config: &NativeDeviceConfig,
+    nonce: &str,
+    initial: Value,
+) -> Result<Vec<(String, u64)>> {
+    let count = modal_semantic(&initial, "selected_count")
+        .and_then(Value::as_u64)
+        .ok_or("NeoGeo collection has no selected count")?;
+    let mut state = launch_return_once_select_game_index(config, nonce, 0)?;
+    let mut entries = Vec::with_capacity(count.try_into().unwrap_or(0));
+    for index in 0..count {
+        let game_id = modal_semantic(&state, "selected_game_id")
+            .and_then(Value::as_str)
+            .ok_or("NeoGeo entry has no selected game id")?;
+        entries.push((game_id.to_owned(), index));
+        if index + 1 < count {
+            state = launch_return_once_next_game(config, nonce, game_id)?;
+        }
+    }
+    Ok(entries)
+}
+
+fn confirm_neogeo_game(target: &NeoGeoSmokeTarget) -> Result<Value> {
+    if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+        return Err("NeoGeo SDRAM smoke requires an interactive terminal".into());
+    }
+    let token = target.setname.to_ascii_uppercase();
+    eprintln!(
+        "Observe {} now. Confirm the title/attract graphics are correct and no memory warning is visible by typing {token}:",
+        target.game_id
+    );
+    io::stderr().flush()?;
+    let mut acknowledgement = String::new();
+    io::stdin().read_line(&mut acknowledgement)?;
+    if acknowledgement.trim().to_ascii_uppercase() != token {
+        return Err(format!("NeoGeo observation was not confirmed with {token}").into());
+    }
+    Ok(json!({
+        "confirmation": token,
+        "no_memory_warning": true,
+        "title_and_attract_graphics_correct": true,
+    }))
+}
+
+fn validate_neogeo_sdram_events(events: &str, first_new_line: usize) -> Result<Value> {
+    let parsed: Vec<Value> = events
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let (handoff_index, handoff) = parsed
+        .iter()
+        .enumerate()
+        .skip(first_new_line)
+        .find(|(_, event)| {
+            matches!(
+                event.get("event").and_then(Value::as_str),
+                Some("handoff_launch" | "handoff_launch_plan")
+            )
+        })
+        .ok_or("NeoGeo run produced no new Main handoff event")?;
+    let (ready_index, ready) = parsed[..handoff_index]
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, event)| event.get("event").and_then(Value::as_str) == Some("sdram_config_ready"))
+        .ok_or("NeoGeo handoff has no preceding SDRAM-ready event")?;
+    let detail = ready.get("detail").and_then(Value::as_str).unwrap_or("");
+    if !detail.contains("size_code=3") {
+        return Err(format!("NeoGeo handoff SDRAM size is not 128 MiB: {detail}").into());
+    }
+    if parsed[ready_index..handoff_index]
+        .iter()
+        .any(|event| event.get("event").and_then(Value::as_str) == Some("sdram_config_unavailable"))
+    {
+        return Err("NeoGeo handoff followed an SDRAM-unavailable event".into());
+    }
+    Ok(json!({"ready": ready, "handoff": handoff}))
+}
+
+fn profile_installed_neogeo_sdram(config: &NativeDeviceConfig, output_dir: &Path) -> Result<Value> {
+    let session = connect_with(&config.connection, 10)?;
+    fs::create_dir_all(output_dir)?;
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: launch_return_once_initial_env(),
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    let status = read_launcher_status(&session)?;
+    let main_status: Value = serde_json::from_str(
+        &remote_read(&session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
+    )?;
+    let begun: Value = serde_json::from_str(&launcher_automation::begin(
+        config,
+        status
+            .pointer("/build/version")
+            .and_then(Value::as_str)
+            .ok_or("NeoGeo smoke status has no build version")?,
+        status
+            .pointer("/build/source_revision")
+            .and_then(Value::as_str)
+            .ok_or("NeoGeo smoke status has no source revision")?,
+        main_status
+            .get("main_generation")
+            .and_then(Value::as_u64)
+            .ok_or("NeoGeo smoke Main status has no generation")?,
+        120,
+    )?)?;
+    let mut nonce = begun
+        .get("nonce")
+        .and_then(Value::as_str)
+        .ok_or("NeoGeo smoke automation has no nonce")?
+        .to_owned();
+
+    let run_result = (|| -> Result<Value> {
+        let initial = launch_return_once_open_neogeo(config, &nonce)?;
+        let entries = collect_neogeo_entries(config, &nonce, initial)?;
+        let targets = neogeo_smoke_matrix(&entries)?;
+        fs::write(
+            output_dir.join("discovered-neogeo-launches.json"),
+            format!("{}\n", serde_json::to_string_pretty(&entries)?),
+        )?;
+        let mut runs = Vec::new();
+        for (run_index, target) in targets.iter().enumerate() {
+            let selected =
+                launch_return_once_select_game_index(config, &nonce, target.selected_index)?;
+            if modal_semantic(&selected, "selected_game_id").and_then(Value::as_str)
+                != Some(target.game_id.as_str())
+            {
+                return Err(
+                    format!("NeoGeo target changed before launch: {}", target.game_id).into(),
+                );
+            }
+            let before_events = remote_read(&session, "/tmp/mister-magik/events.jsonl")
+                .unwrap_or_default()
+                .lines()
+                .count();
+            let capture_path = output_dir.join(format!(
+                "{:02}-{}-active-usb-video.jpg",
+                run_index + 1,
+                target.role
+            ));
+            let returned = launcher_automation::exercise_launch_return_observed(
+                config,
+                &nonce,
+                &target.game_id,
+                120,
+                NEOGEO_SDRAM_GAME_DWELL,
+                || {
+                    let capture = crate::capture::execute_analyzed(Some(&capture_path))?;
+                    if capture.visibility != crate::capture::CaptureVisibility::Visible {
+                        return Err(format!(
+                            "active NeoGeo USB capture is not visible: {:?}",
+                            capture.visibility
+                        )
+                        .into());
+                    }
+                    Ok(json!({
+                        "usb_video": capture,
+                        "operator": confirm_neogeo_game(target)?,
+                    }))
+                },
+            )
+            .map_err(|error| format!("NeoGeo {} run failed: {error}", target.role))?;
+            let returned: Value = serde_json::from_str(&returned)?;
+            nonce = returned
+                .get("nonce")
+                .and_then(Value::as_str)
+                .ok_or("NeoGeo replacement session has no nonce")?
+                .to_owned();
+            let events = remote_read(&session, "/tmp/mister-magik/events.jsonl")
+                .ok_or("Main events are missing after NeoGeo run")?;
+            let sdram = validate_neogeo_sdram_events(&events, before_events)?;
+            runs.push(json!({
+                "role": target.role,
+                "setname": target.setname,
+                "game_id": target.game_id,
+                "selected_index": target.selected_index,
+                "sdram": sdram,
+                "automation": returned,
+            }));
+        }
+        let events = remote_read(&session, "/tmp/mister-magik/events.jsonl")
+            .ok_or("Main events are missing after NeoGeo matrix")?;
+        fs::write(output_dir.join("events.jsonl"), &events)?;
+        Ok(json!({
+            "schema": "mister-magik-neogeo-sdram-smoke-v1",
+            "artifact_status": "passed",
+            "required_sdram_size_code": 3,
+            "runs": runs,
+        }))
+    })();
+    let ended = launcher_automation::end(config, &nonce);
+    match (run_result, ended) {
+        (Ok(summary), Ok(_)) => {
+            fs::write(
+                output_dir.join("neogeo-sdram-smoke.json"),
+                format!("{}\n", serde_json::to_string_pretty(&summary)?),
+            )?;
+            Ok(summary)
+        }
+        (Err(error), Ok(_)) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), Err(end_error)) => {
+            Err(format!("{error}; ending automation failed: {end_error}").into())
+        }
+    }
+}
+
 fn profile_installed_launch_return_once(
     config: &NativeDeviceConfig,
     output_dir: &Path,
@@ -32100,6 +32471,47 @@ fn unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn neogeo_setname_reads_structured_and_direct_launches() {
+        assert_eq!(
+            neogeo_setname("magik-plan:archive:/media/fat/games/NEOGEO/Metal Slug 3 (mslug3).neo")
+                .as_deref(),
+            Some("mslug3")
+        );
+        assert_eq!(
+            neogeo_setname("/media/fat/_Console/NeoGeo/Metal Slug.mgl").as_deref(),
+            Some("metal slug")
+        );
+    }
+
+    #[test]
+    fn neogeo_smoke_matrix_requires_both_memory_classes_and_mgl() {
+        let entries = vec![
+            (
+                "magik-plan:archive:/media/fat/games/NEOGEO/Metal Slug 3 (mslug3).neo".to_string(),
+                1,
+            ),
+            (
+                "magik-plan:archive:/media/fat/games/NEOGEO/Garou (garou).neo".to_string(),
+                2,
+            ),
+            (
+                "magik-plan:archive:/media/fat/games/NEOGEO/Metal Slug (mslug).neo".to_string(),
+                3,
+            ),
+            ("/media/fat/_Console/NeoGeo/Metal Slug.mgl".to_string(), 4),
+        ];
+        let matrix = neogeo_smoke_matrix(&entries).unwrap();
+        assert_eq!(matrix.len(), 4);
+        assert_eq!(matrix[0].setname, "mslug3");
+        assert_eq!(matrix[1].setname, "garou");
+        assert_eq!(matrix[2].setname, "mslug");
+        assert_eq!(matrix[3].role, "direct-mgl");
+
+        assert!(neogeo_smoke_matrix(&entries[..3]).is_err());
+        assert!(neogeo_smoke_matrix(&entries[1..]).is_err());
+    }
 
     fn ready_arcade_capture_status() -> Value {
         json!({

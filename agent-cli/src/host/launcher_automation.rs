@@ -5,7 +5,7 @@
 
 use super::agent_client::agent_request_at;
 use super::{
-    NativeDeviceConfig, PngCapture, Result, capture_source_label, encode_hex,
+    ConnectionConfig, NativeDeviceConfig, PngCapture, Result, capture_source_label, encode_hex,
     request_framebuffer_png_at_when_latched, validate_visible_launcher_capture,
 };
 use crate::transport::{AutomationAction, AutomationButton};
@@ -405,6 +405,27 @@ pub(super) fn exercise_launch_return(
     lifetime_seconds: u64,
     game_dwell: Duration,
 ) -> std::result::Result<String, LaunchReturnError> {
+    exercise_launch_return_observed(
+        config,
+        nonce,
+        expected_game_id,
+        lifetime_seconds,
+        game_dwell,
+        || Ok(Value::Null),
+    )
+}
+
+pub(super) fn exercise_launch_return_observed<F>(
+    config: &NativeDeviceConfig,
+    nonce: &str,
+    expected_game_id: &str,
+    lifetime_seconds: u64,
+    game_dwell: Duration,
+    observe: F,
+) -> std::result::Result<String, LaunchReturnError>
+where
+    F: FnOnce() -> Result<Value>,
+{
     if !(1..=120).contains(&lifetime_seconds) {
         return fail_before_launch(config, nonce, "invalid replacement automation lifetime");
     }
@@ -415,7 +436,7 @@ pub(super) fn exercise_launch_return(
     };
     validate_pre_launch_snapshot(&pre_launch, expected_game_id)
         .or_else(|error| fail_before_launch(config, nonce, &error.to_string()))?;
-    validate_selected_mra(config, expected_game_id)
+    validate_selected_launch(config, expected_game_id)
         .or_else(|error| fail_before_launch(config, nonce, &error.to_string()))?;
 
     let before = match magik_status(config) {
@@ -505,7 +526,15 @@ pub(super) fn exercise_launch_return(
             return recover_after_launch_failure(config, nonce, &identity, error);
         }
     };
-    thread::sleep(game_dwell);
+    let before_observation = game_dwell / 2;
+    thread::sleep(before_observation);
+    let observation = match observe() {
+        Ok(observation) => observation,
+        Err(error) => {
+            return recover_after_launch_failure(config, nonce, &identity, error);
+        }
+    };
+    thread::sleep(game_dwell.saturating_sub(before_observation));
     if let Err(error) = request_return_to_launcher(config, handoff_main.generation) {
         return Err(LaunchReturnError::RecoveryRequired(format!(
             "game handoff passed but typed return failed: {error}"
@@ -545,10 +574,31 @@ pub(super) fn exercise_launch_return(
         "pre_launch_snapshot": pre_launch,
         "handoff": handoff,
         "game_dwell_ms": game_dwell.as_millis(),
+        "game_observation": observation,
         "restored_status": restored,
         "restored_snapshot": restored_snapshot,
     }))
     .map_err(|error| LaunchReturnError::Failed(error.to_string()))
+}
+
+fn validate_selected_launch(config: &NativeDeviceConfig, game_id: &str) -> Result<()> {
+    if game_id.starts_with("magik-plan:") {
+        let payload = game_id
+            .split_once(":/media/fat/")
+            .map(|(_, payload)| payload)
+            .filter(|payload| !payload.is_empty())
+            .ok_or("selected structured launch has no safe /media/fat payload")?;
+        if payload.contains(['\n', '\r', '\0']) {
+            return Err("selected structured launch contains a control character".into());
+        }
+        return Ok(());
+    }
+    if game_id.strip_prefix("/media/fat/").is_some_and(|path| {
+        !path.is_empty() && path.ends_with(".mgl") && !path.contains(['\n', '\r', '\0'])
+    }) {
+        return Ok(());
+    }
+    validate_selected_mra(config, game_id)
 }
 
 fn prepare_replacement_session(
@@ -1144,6 +1194,26 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn structured_and_mgl_launch_refs_are_validated_without_mra_parsing() {
+        let config = NativeDeviceConfig::new(
+            ConnectionConfig::from_environment(),
+            "test-device".to_string(),
+        );
+        assert!(
+            validate_selected_launch(
+                &config,
+                "magik-plan:archive:/media/fat/games/NEOGEO/Metal Slug 3 (mslug3).neo"
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_selected_launch(&config, "/media/fat/_Console/NeoGeo/Metal Slug.mgl").is_ok()
+        );
+        assert!(validate_selected_launch(&config, "relative/game.mgl").is_err());
+        assert!(validate_selected_launch(&config, "magik-plan:archive:relative.neo").is_err());
+    }
 
     #[test]
     fn closed_actions_map_to_agent_contract() {
