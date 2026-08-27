@@ -11,8 +11,8 @@
 use crate::catalog_scan::{FoundFile, scan_zip_central_directory};
 use crate::fast_five_catalog::{FastFiveSnapshot, FastFiveSystem, GENERIC_EXAMPLE_SYSTEM_IDS};
 use crate::launch_profiles::{
-    IgnoreReason, IgnoreRule, LaunchProfile, MountKind, MountSpec, PayloadDisposition, PayloadRule,
-    ProfilePathClass, ProfileSet, RuleProvenance,
+    BorrowedProfilePathClass, IgnoreReason, IgnoreRule, LaunchProfile, MountKind, MountSpec,
+    PayloadDisposition, PayloadRule, ProfilePathClass, ProfileSet, RuleProvenance,
 };
 use crate::system_shard::{SystemGame, SystemLaunchPlan};
 use serde::Serialize;
@@ -38,9 +38,29 @@ pub struct GenericSystemStats {
     pub candidate_files: usize,
     pub archive_members: usize,
     pub games: usize,
+    pub ignored_files: usize,
+    pub dependency_files: usize,
+    pub unmatched_files: usize,
     pub read_errors: usize,
     pub archive_errors: usize,
     pub elapsed_us: u64,
+}
+
+pub const MEDIA_EXPERIMENT_SYSTEM_IDS: [&str; 3] = ["psx", "bbcmicro", "msx"];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GenericScanImplementation {
+    Baseline,
+    BorrowedUnsorted,
+}
+
+impl GenericScanImplementation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Baseline => "baseline",
+            Self::BorrowedUnsorted => "borrowed-unsorted",
+        }
+    }
 }
 
 /// Run the ordinary recursive scanner against the five prepared-source trees.
@@ -200,6 +220,75 @@ pub fn rebuild_generic_system(
             "generic system {system_id} has an installed profile but no game directory"
         ));
     }
+    scanned.sort_by(|left, right| {
+        left.game
+            .title
+            .to_ascii_lowercase()
+            .cmp(&right.game.title.to_ascii_lowercase())
+            .then_with(|| left.game.stable_key.cmp(&right.game.stable_key))
+    });
+    scanned.dedup_by(|left, right| left.game.launch_ref == right.game.launch_ref);
+    stats.games = scanned.len();
+    stats.elapsed_us = started.elapsed().as_micros() as u64;
+    Ok((
+        FastFiveSystem {
+            system_id: system_id.to_string(),
+            display_title: display_title(system_id).to_string(),
+            games: scanned.into_iter().map(|row| row.game).collect(),
+            variants: Vec::new(),
+        },
+        stats,
+    ))
+}
+
+pub fn scan_media_experiment_system(
+    storage_root: &Path,
+    system_id: &str,
+    implementation: GenericScanImplementation,
+) -> Result<(FastFiveSystem, GenericSystemStats), String> {
+    if !MEDIA_EXPERIMENT_SYSTEM_IDS.contains(&system_id) {
+        return Err(format!("unsupported media experiment system {system_id}"));
+    }
+    let profiles = focused_media_profiles()?;
+    let profile = profiles
+        .iter()
+        .find(|profile| profile.system_id == system_id)
+        .ok_or_else(|| format!("no media experiment profile found for {system_id}"))?;
+    if !core_is_installed(storage_root, profile) {
+        return Err(format!(
+            "no installed core found for media system {system_id}"
+        ));
+    }
+
+    let started = Instant::now();
+    let mut stats = GenericSystemStats {
+        system_id: system_id.to_string(),
+        ..GenericSystemStats::default()
+    };
+    let mut scanned = Vec::new();
+    let mut visited_roots = BTreeSet::new();
+    for game_dir in &profile.game_dirs {
+        let candidate = storage_root.join("games").join(game_dir);
+        if !candidate.is_dir() {
+            continue;
+        }
+        let root = candidate.canonicalize().unwrap_or(candidate);
+        if visited_roots.insert(root.to_string_lossy().to_ascii_lowercase()) {
+            stats.roots += 1;
+            match implementation {
+                GenericScanImplementation::Baseline => {
+                    scan_directory(&root, profile, &mut stats, &mut scanned)
+                }
+                GenericScanImplementation::BorrowedUnsorted => {
+                    scan_directory_borrowed_unsorted(&root, profile, &mut stats, &mut scanned)
+                }
+            }
+        }
+    }
+    if stats.roots == 0 {
+        return Err(format!("media system {system_id} has no game directory"));
+    }
+
     scanned.sort_by(|left, right| {
         left.game
             .title
@@ -381,6 +470,73 @@ fn focused_profiles() -> Result<Vec<LaunchProfile>, String> {
     Ok(profiles)
 }
 
+fn focused_media_profiles() -> Result<Vec<LaunchProfile>, String> {
+    let all = ProfileSet::all();
+    let psx = all
+        .profiles()
+        .iter()
+        .find(|profile| profile.id == "psx")
+        .cloned()
+        .ok_or_else(|| "built-in PSX launch profile is missing".to_string())?;
+    let bbc_rule = PayloadRule {
+        extensions: ["adl", "dsd", "sdd", "ssd", "uef"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        mount: MountSpec::load_file(1),
+        disposition: PayloadDisposition::Playable,
+        provenance: RuleProvenance::conf_str(
+            "BBC Micro runtime profile accepts maintained disk and tape payload formats",
+        ),
+    };
+    let msx_rule = PayloadRule {
+        extensions: ["rom", "mx1", "mx2"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        mount: MountSpec::load_file(1),
+        disposition: PayloadDisposition::Playable,
+        provenance: RuleProvenance::conf_str(
+            "Focused MSX experiment covers cartridge payloads without filesystem snapshots",
+        ),
+    };
+    Ok(vec![
+        psx,
+        LaunchProfile {
+            id: "focused-bbcmicro".to_string(),
+            system_id: "bbcmicro".to_string(),
+            category: "Computer".to_string(),
+            title: "BBC Micro".to_string(),
+            core_name: "BBCMicro".to_string(),
+            core_path: Some("_Computer/BBCMicro".to_string()),
+            game_dirs: vec!["BBCMicro".to_string()],
+            payload_rules: vec![bbc_rule.clone()],
+            archive_entry_rules: vec![bbc_rule],
+            collection_rules: Vec::new(),
+            ignore_rules: Vec::new(),
+            provenance: RuleProvenance::conf_str(
+                "Focused generic BBC Micro media experiment profile",
+            ),
+        },
+        LaunchProfile {
+            id: "focused-msx".to_string(),
+            system_id: "msx".to_string(),
+            category: "Computer".to_string(),
+            title: "MSX".to_string(),
+            core_name: "MSX".to_string(),
+            core_path: Some("_Computer/MSX".to_string()),
+            game_dirs: vec!["MSX".to_string()],
+            payload_rules: vec![msx_rule.clone()],
+            archive_entry_rules: vec![msx_rule],
+            collection_rules: Vec::new(),
+            ignore_rules: Vec::new(),
+            provenance: RuleProvenance::conf_str(
+                "Focused generic MSX cartridge experiment profile",
+            ),
+        },
+    ])
+}
+
 fn core_is_installed(storage_root: &Path, profile: &LaunchProfile) -> bool {
     let Some(core_path) = profile.core_path.as_deref() else {
         return false;
@@ -465,7 +621,84 @@ fn scan_directory(
                 stats.candidate_files += 1;
                 scan_archive(profile, &path, stats, games);
             }
-            _ => {}
+            ProfilePathClass::Ignored { reason, .. } => {
+                stats.ignored_files += 1;
+                if reason == IgnoreReason::CueTrack {
+                    stats.dependency_files += 1;
+                }
+            }
+            ProfilePathClass::Payload { .. } => stats.dependency_files += 1,
+            _ => stats.unmatched_files += 1,
+        }
+    }
+}
+
+fn scan_directory_borrowed_unsorted(
+    root: &Path,
+    profile: &LaunchProfile,
+    stats: &mut GenericSystemStats,
+    games: &mut Vec<ScannedGame>,
+) {
+    stats.directories += 1;
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(_) => {
+            stats.read_errors += 1;
+            return;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                stats.read_errors += 1;
+                continue;
+            }
+        };
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => {
+                stats.read_errors += 1;
+                continue;
+            }
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            scan_directory_borrowed_unsorted(&path, profile, stats, games);
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        stats.files += 1;
+        match profile.classify_path_borrowed(&path) {
+            BorrowedProfilePathClass::Payload { rule }
+                if rule.disposition == PayloadDisposition::Playable =>
+            {
+                stats.candidate_files += 1;
+                games.push(direct_game(profile, &path, rule));
+            }
+            BorrowedProfilePathClass::NotMatched
+                if path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+                    && !profile.archive_entry_rules.is_empty() =>
+            {
+                stats.candidate_files += 1;
+                scan_archive(profile, &path, stats, games);
+            }
+            BorrowedProfilePathClass::Ignored { reason } => {
+                stats.ignored_files += 1;
+                if reason == IgnoreReason::CueTrack {
+                    stats.dependency_files += 1;
+                }
+            }
+            BorrowedProfilePathClass::Payload { .. } => stats.dependency_files += 1,
+            _ => stats.unmatched_files += 1,
         }
     }
 }
@@ -568,7 +801,10 @@ fn display_name(path: &Path) -> String {
 
 fn display_title(system_id: &str) -> &'static str {
     match system_id {
+        "bbcmicro" => "BBC Micro",
+        "msx" => "MSX",
         "neogeo" => "Neo Geo",
+        "psx" => "PlayStation",
         "saturn" => "Sega Saturn",
         "snes" => "Super Nintendo",
         "zx-spectrum" => "ZX Spectrum",
@@ -671,5 +907,69 @@ mod tests {
                 .iter()
                 .all(|game| !game.launch_ref.ends_with(".bin"))
         );
+    }
+
+    #[test]
+    fn media_experiment_implementations_have_exact_launch_parity() {
+        let root = crate::test_support::unique_temp_dir("generic-media-experiment");
+        for core in [
+            "_Console/PSX_20260826.rbf",
+            "_Computer/BBCMicro_20260826.rbf",
+            "_Computer/MSX_20260826.rbf",
+        ] {
+            let path = root.join(core);
+            fs::create_dir_all(path.parent().expect("core parent")).expect("create core parent");
+            fs::write(path, b"core").expect("write core");
+        }
+        for (relative, bytes) in [
+            ("games/PSX/Disc Game.chd", b"disc".as_slice()),
+            ("games/PSX/Disc Game.bin", b"track".as_slice()),
+            ("games/PSX/boot.rom", b"bios".as_slice()),
+            ("games/PSX/Disc Game.sbi", b"sidecar".as_slice()),
+            ("games/BBCMicro/Elite.ssd", b"disk".as_slice()),
+            ("games/BBCMicro/Exile.uef", b"tape".as_slice()),
+            ("games/MSX/Metal Gear.rom", b"rom".as_slice()),
+        ] {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().expect("game parent")).expect("create game parent");
+            fs::write(path, bytes).expect("write game");
+        }
+
+        for system_id in MEDIA_EXPERIMENT_SYSTEM_IDS {
+            let (baseline, baseline_stats) =
+                scan_media_experiment_system(&root, system_id, GenericScanImplementation::Baseline)
+                    .expect("baseline scan");
+            let (optimized, optimized_stats) = scan_media_experiment_system(
+                &root,
+                system_id,
+                GenericScanImplementation::BorrowedUnsorted,
+            )
+            .expect("optimized scan");
+            assert_eq!(
+                baseline
+                    .games
+                    .iter()
+                    .map(|game| &game.launch_ref)
+                    .collect::<Vec<_>>(),
+                optimized
+                    .games
+                    .iter()
+                    .map(|game| &game.launch_ref)
+                    .collect::<Vec<_>>(),
+                "{system_id}"
+            );
+            assert_eq!(baseline_stats.games, optimized_stats.games, "{system_id}");
+            assert_eq!(
+                baseline_stats.ignored_files, optimized_stats.ignored_files,
+                "{system_id}"
+            );
+        }
+        let (_, psx_stats) =
+            scan_media_experiment_system(&root, "psx", GenericScanImplementation::BorrowedUnsorted)
+                .expect("PSX scan");
+        assert_eq!(psx_stats.games, 1);
+        assert_eq!(psx_stats.ignored_files, 3);
+        assert_eq!(psx_stats.dependency_files, 1);
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -236,7 +236,47 @@ pub enum ProfilePathClass {
     NotMatched,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BorrowedProfilePathClass<'a> {
+    Payload { rule: &'a PayloadRule },
+    Collection { rule: &'a CollectionRule },
+    Ignored { reason: IgnoreReason },
+    NotMatched,
+}
+
 impl LaunchProfile {
+    pub(crate) fn classify_path_borrowed(&self, path: &Path) -> BorrowedProfilePathClass<'_> {
+        for rule in &self.ignore_rules {
+            if rule.matches(path) {
+                return BorrowedProfilePathClass::Ignored {
+                    reason: rule.reason,
+                };
+            }
+        }
+
+        if let Some(reason) = generic_support_reason(path) {
+            return BorrowedProfilePathClass::Ignored { reason };
+        }
+
+        for rule in &self.collection_rules {
+            if rule.matches(path) {
+                return BorrowedProfilePathClass::Collection { rule };
+            }
+        }
+
+        let ext = path_ext(path);
+        for rule in &self.payload_rules {
+            if ext
+                .as_deref()
+                .is_some_and(|ext| contains_ignore_ascii_case(&rule.extensions, ext))
+            {
+                return BorrowedProfilePathClass::Payload { rule };
+            }
+        }
+
+        BorrowedProfilePathClass::NotMatched
+    }
+
     pub fn classify_path(&self, path: &Path) -> ProfilePathClass {
         for rule in &self.ignore_rules {
             if rule.matches(path) {
@@ -1845,6 +1885,14 @@ fn psx_profile() -> LaunchProfile {
                 reason: IgnoreReason::Bios,
                 provenance: RuleProvenance::main(
                     "PSX boot ROMs live under games/PSX as support files",
+                ),
+            },
+            IgnoreRule {
+                file_names: Vec::new(),
+                extensions: str_vec(&["bin", "img"]),
+                reason: IgnoreReason::CueTrack,
+                provenance: RuleProvenance::main(
+                    "PSX CUE descriptors reference BIN/IMG tracks as dependent media",
                 ),
             },
             IgnoreRule {
