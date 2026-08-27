@@ -66,7 +66,7 @@ module mister_magik_scaler_fetch_ordered_frame (
 	reg [15:0] published_signature = 16'd0;
 	reg [6:0]  published_flags = 7'd0;
 	(* preserve, dont_replicate *) reg source_generation = 1'b0;
-	(* preserve, dont_replicate *) reg source_fault = 1'b0;
+	reg source_fault = 1'b0;
 
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg generation_meta = 1'b0;
@@ -103,7 +103,7 @@ module mister_magik_scaler_fetch_ordered_frame (
 	wire marker_consumed = return_has_entry && return_phase == 7'd0 && fifo_wrap0;
 	wire marker_still_pending =
 		(fifo_wrap0 && !marker_consumed) || (fifo_count == 2'd2 && fifo_wrap1);
-	wire source_faulted = source_fault;
+	wire source_faulted = published_flags[6:1] != 6'd0;
 	wire snapshot_faulted = snapshot_flags[6:1] != 6'd0;
 	wire response_safe = !fault_sync || snapshot_faulted;
 
@@ -363,7 +363,7 @@ module mister_magik_scaler_fetch_ordered_frame (
 		else begin
 			generation_meta <= source_generation;
 			generation_sync <= generation_meta;
-			fault_meta <= source_faulted;
+			fault_meta <= source_fault;
 			fault_sync <= fault_meta;
 
 			if(!snapshot_crc_valid && !crc_busy && !capture_pending &&
