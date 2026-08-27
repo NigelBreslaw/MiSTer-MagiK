@@ -158,7 +158,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         )
     }));
     let merge_us = elapsed_us(phase_started);
-    let prepared_systems_us = reports
+    let prepared_systems_us: u64 = reports
         .values()
         .filter(|report| PREPARED_SYSTEM_IDS.contains(&report.system_id.as_str()))
         .map(|report| report.elapsed_us)
