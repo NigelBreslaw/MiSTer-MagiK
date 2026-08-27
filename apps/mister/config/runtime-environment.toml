@@ -1603,7 +1603,7 @@ documentation = { summary = "Controls library refresh lock behavior", accepted_v
 
 [[control]]
 name = "MISTER_LIBRARY_ROOTS"
-owner = "apps/mister/src/pmu_profile.rs"
+owner = "crates/catalog/src/catalog_config.rs"
 classification = "production"
 value_shape = "path or path list"
 default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
@@ -1645,7 +1645,7 @@ documentation = { summary = "Controls library software hash behavior", accepted_
 
 [[control]]
 name = "MISTER_LIBRARY_SQLITE"
-owner = "apps/mister/src/pmu_profile.rs"
+owner = "crates/catalog/src/device_layout.rs"
 classification = "production"
 value_shape = "path or path list"
 default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
@@ -3339,7 +3339,7 @@ documentation = { summary = "Controls settings navigation evidence dir behavior"
 
 [[control]]
 name = "MISTER_SHARDED_CATALOG_DIR"
-owner = "apps/mister/src/pmu_profile.rs"
+owner = "crates/catalog/src/device_layout.rs"
 classification = "production"
 value_shape = "path or path list"
 default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
