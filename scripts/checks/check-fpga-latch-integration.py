@@ -329,7 +329,7 @@ def main() -> None:
         "snapshot_sequence <= snapshot_sequence + 1'd1;",
         "function automatic [15:0] crc16_update_bit;",
         "snapshot_crc <= FETCH_SCHEMA_CRC;",
-        "snapshot_crc_valid <= 1'b1;",
+        "crc_bit_count <= 6'd48;",
         "snapshot_crc <= next_crc;",
     ):
         if required_observer_fragment not in control_source:

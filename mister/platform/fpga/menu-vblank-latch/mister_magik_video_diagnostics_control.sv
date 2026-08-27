@@ -78,9 +78,10 @@ module mister_magik_scaler_fetch_ordered_frame (
 	reg [15:0] snapshot_sequence = 16'd0;
 	reg [6:0] snapshot_flags = 7'd0;
 	reg [15:0] snapshot_crc = 16'd0;
-	reg [5:0] crc_bit_count = 6'd0;
-	reg crc_busy = 1'b0;
-	reg snapshot_crc_valid = 1'b0;
+	// One six-bit phase owns the CRC lifecycle: 0..47 computes the payload,
+	// 48 is a valid immutable snapshot, and 49 requests initial generation.
+	// This avoids two high-fanout state bits in the disposable observer.
+	reg [5:0] crc_bit_count = 6'd49;
 	reg has_command = 1'b0;
 	reg command_selected = 1'b0;
 	reg [2:0] word_count = 3'd0;
@@ -112,9 +113,11 @@ module mister_magik_scaler_fetch_ordered_frame (
 
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
+	wire crc_busy = crc_bit_count < 6'd48;
+	wire snapshot_crc_valid = crc_bit_count == 6'd48;
 	wire selected_start =
 		io_din[7:0] == MAGIK_UIO_GET_RAW_SCALER_STATE &&
-		snapshot_crc_valid && !crc_busy;
+		snapshot_crc_valid;
 	wire selected_command = command_selected;
 
 	assign response_valid =
@@ -334,9 +337,7 @@ module mister_magik_scaler_fetch_ordered_frame (
 			snapshot_sequence <= 16'd0;
 			snapshot_flags <= 7'd0;
 			snapshot_crc <= 16'd0;
-			crc_bit_count <= 6'd0;
-			crc_busy <= 1'b0;
-			snapshot_crc_valid <= 1'b0;
+			crc_bit_count <= 6'd49;
 			has_command <= 1'b0;
 			command_selected <= 1'b0;
 			word_count <= 3'd0;
@@ -345,10 +346,9 @@ module mister_magik_scaler_fetch_ordered_frame (
 			generation_meta <= source_generation;
 			generation_sync <= generation_meta;
 
-			if(!snapshot_crc_valid && !crc_busy && !capture_pending) begin
+			if(crc_bit_count == 6'd49 && !capture_pending) begin
 				snapshot_crc <= FETCH_SCHEMA_CRC;
 				crc_bit_count <= 6'd0;
-				crc_busy <= 1'b1;
 			end
 
 			if(!has_command && !command_start && !crc_busy &&
@@ -368,8 +368,6 @@ module mister_magik_scaler_fetch_ordered_frame (
 				end
 				snapshot_crc <= FETCH_SCHEMA_CRC;
 				crc_bit_count <= 6'd0;
-				crc_busy <= 1'b1;
-				snapshot_crc_valid <= 1'b0;
 				capture_pending <= 1'b0;
 			end
 
@@ -395,8 +393,7 @@ module mister_magik_scaler_fetch_ordered_frame (
 					snapshot_signature <= {snapshot_signature[14:0],
 						snapshot_signature[15]};
 				if(crc_bit_count == 6'd47) begin
-					crc_busy <= 1'b0;
-					snapshot_crc_valid <= 1'b1;
+					crc_bit_count <= 6'd48;
 				end
 				else
 					crc_bit_count <= crc_bit_count + 1'd1;
