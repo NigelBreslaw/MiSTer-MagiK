@@ -12,7 +12,8 @@ use crate::fast_five_catalog::{
     FastFiveVariantRelation, collapse_c64_cross_source_variants,
 };
 use crate::generic_system_catalog::{
-    discover_generic_system_ids, discover_generic_systems, rebuild_installed_generic_system,
+    discover_generic_system_ids, discover_generic_systems_excluding,
+    rebuild_installed_generic_system,
 };
 use crate::launch_profiles::CollectionListing;
 use crate::media_identity::ScreenshotAssetId;
@@ -26,7 +27,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 10;
+pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 11;
+const PREPARED_SYSTEM_IDS: [&str; 5] = ["amiga", "arcade", "c64", "dos", "x68000"];
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FastSourceBuildReport {
@@ -50,7 +52,8 @@ pub fn build_independent_fast_snapshot(
     storage_root: &Path,
 ) -> Result<(FastFiveSnapshot, FastSourceBuildReport), String> {
     let started = Instant::now();
-    let (generic_systems, generic) = discover_generic_systems(storage_root)?;
+    let (generic_systems, generic) =
+        discover_generic_systems_excluding(storage_root, &PREPARED_SYSTEM_IDS)?;
     let mut systems = generic_systems
         .into_iter()
         .map(|system| (system.system_id.clone(), system))
@@ -73,7 +76,7 @@ pub fn build_independent_fast_snapshot(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    for system_id in ["amiga", "arcade", "c64", "dos", "x68000"] {
+    for system_id in PREPARED_SYSTEM_IDS {
         let system_started = Instant::now();
         let (mut system, mut report) = build_prepared_system(storage_root, system_id)?;
         if let Some(generic) = systems.remove(system_id) {
@@ -117,10 +120,15 @@ pub fn rebuild_independent_system(
     system_id: &str,
 ) -> Result<(FastFiveSystem, FastSourceSystemReport), String> {
     let started = Instant::now();
-    let generic = rebuild_installed_generic_system(storage_root, system_id)?;
-    let prepared = matches!(system_id, "amiga" | "arcade" | "c64" | "dos" | "x68000")
+    let prepared = PREPARED_SYSTEM_IDS
+        .contains(&system_id)
         .then(|| build_prepared_system(storage_root, system_id))
         .transpose()?;
+    let generic = if prepared.is_some() {
+        None
+    } else {
+        rebuild_installed_generic_system(storage_root, system_id)?
+    };
     let (mut system, mut report) = match (prepared, generic) {
         (Some((mut prepared, mut report)), Some((generic, generic_report))) => {
             merge_system_rows(&mut prepared, generic);

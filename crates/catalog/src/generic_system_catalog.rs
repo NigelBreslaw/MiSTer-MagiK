@@ -219,10 +219,20 @@ pub fn rebuild_installed_generic_system(
 pub fn discover_generic_systems(
     storage_root: &Path,
 ) -> Result<(Vec<FastFiveSystem>, GenericSystemScanReport), String> {
+    discover_generic_systems_excluding(storage_root, &[])
+}
+
+pub fn discover_generic_systems_excluding(
+    storage_root: &Path,
+    excluded_system_ids: &[&str],
+) -> Result<(Vec<FastFiveSystem>, GenericSystemScanReport), String> {
     let started = Instant::now();
     let roots = [storage_root.display().to_string()];
     let mut grouped = BTreeMap::<String, Vec<LaunchProfile>>::new();
     for profile in ProfileSet::for_roots(&roots).into_profiles() {
+        if excluded_system_ids.contains(&profile.system_id.as_str()) {
+            continue;
+        }
         grouped
             .entry(profile.system_id.clone())
             .or_default()
