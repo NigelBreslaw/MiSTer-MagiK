@@ -48,10 +48,20 @@ struct CapsuleBinding {
 
 impl CapsuleBinding {
     fn current(catalog_root: &Path) -> Result<Self, String> {
-        let state = mister_magik_catalog::catalog_state::read(
-            &mister_magik_catalog::catalog_state::default_path(),
-        )?;
-        Self::for_current_generation(catalog_root, &state.stamp.fingerprint_hex())
+        let durable_catalog_fingerprint = if fast_catalog_environment_enabled() {
+            let paths = mister_magik_catalog::device_layout::CatalogPaths::capture_process();
+            mister_magik_catalog::fast_five_catalog::registry_fingerprint(
+                paths.sharded_catalog_dir(),
+                mister_magik_catalog::production_sharded_projection::production_registry_limits(),
+            )?
+        } else {
+            mister_magik_catalog::catalog_state::read(
+                &mister_magik_catalog::catalog_state::default_path(),
+            )?
+            .stamp
+            .fingerprint_hex()
+        };
+        Self::for_current_generation(catalog_root, &durable_catalog_fingerprint)
     }
 
     fn for_current_generation(
@@ -95,6 +105,12 @@ impl CapsuleBinding {
             binary_build: env!("MISTER_MAGIK_BUILD_TIME").to_string(),
         }
     }
+}
+
+fn fast_catalog_environment_enabled() -> bool {
+    std::env::var("MISTER_FAST_FIVE_CATALOG")
+        .ok()
+        .is_some_and(|value| matches!(value.as_str(), "1" | "on" | "true" | "yes"))
 }
 
 #[derive(Clone, Debug)]
@@ -386,6 +402,23 @@ pub fn take_return_catalog_capsule(
     )
 }
 
+pub fn peek_return_catalog_fingerprint() -> Result<String, String> {
+    peek_return_catalog_fingerprint_at(Path::new(RETURN_CATALOG_CAPSULE_PATH))
+}
+
+fn peek_return_catalog_fingerprint_at(path: &Path) -> Result<String, String> {
+    let bytes = read_return_catalog_capsule_bytes(path)?;
+    let mut reader = CapsuleBinaryReader::new(&bytes);
+    reader.expect_magic(RETURN_CATALOG_CAPSULE_MAGIC)?;
+    let schema = reader.read_u32()?;
+    if schema != RETURN_CATALOG_CAPSULE_SCHEMA {
+        return Err(format!("return capsule schema {schema} is unsupported"));
+    }
+    let binding = decode_binding(&mut reader)?;
+    validate_binding(&binding)?;
+    Ok(binding.catalog_stamp_fingerprint)
+}
+
 fn take_return_catalog_capsule_at(
     path: &Path,
     expected: &CapsuleBinding,
@@ -408,6 +441,11 @@ fn read_return_catalog_capsule_at(
     collection_id: &str,
     return_game_path: &str,
 ) -> Result<ArcadeCatalog, String> {
+    let bytes = read_return_catalog_capsule_bytes(path)?;
+    decode_return_catalog_capsule(&bytes, expected, collection_id, return_game_path)
+}
+
+fn read_return_catalog_capsule_bytes(path: &Path) -> Result<Vec<u8>, String> {
     let file = File::open(path).map_err(|e| format!("open return capsule: {e}"))?;
     let file_len = file
         .metadata()
@@ -426,7 +464,7 @@ fn read_return_catalog_capsule_at(
     if bytes.len() as u64 > RETURN_CATALOG_CAPSULE_MAX_BYTES {
         return Err("return capsule exceeds byte limit".to_string());
     }
-    decode_return_catalog_capsule(&bytes, expected, collection_id, return_game_path)
+    Ok(bytes)
 }
 
 fn decode_return_catalog_capsule(
@@ -1123,6 +1161,10 @@ mod tests {
         )
         .expect("prepare");
         save_return_catalog_capsule_at(&path, &prepared).expect("save");
+        assert_eq!(
+            peek_return_catalog_fingerprint_at(&path).expect("peek fingerprint"),
+            binding(&root).catalog_stamp_fingerprint
+        );
         let restored =
             take_return_catalog_capsule_at(&path, &binding(&root), "arcade", "/games/two.mra")
                 .expect("take");

@@ -44,6 +44,10 @@ const READY_WIRE_VERSION: &str = "MISTER_MAGIK_READY_WIRE_VERSION";
 const MAIN_PID: &str = "MISTER_MAGIK_MAIN_PID";
 const MAIN_GENERATION: &str = "MISTER_MAGIK_MAIN_GENERATION";
 const OWNER_EPOCH: &str = "MISTER_MAGIK_OWNER_EPOCH";
+const RETURN_TO_LAUNCHER: &str = "MISTER_MAGIK_RETURN_TO_LAUNCHER";
+const FAST_FIVE_CATALOG: &str = "MISTER_FAST_FIVE_CATALOG";
+const SHARDED_CATALOG_DIR: &str = "MISTER_SHARDED_CATALOG_DIR";
+const CATALOG_REFRESH: &str = "MISTER_CATALOG_REFRESH";
 const LAUNCHER_RESPONSE_TRACE: &str = "MISTER_LAUNCHER_RESPONSE_TRACE";
 const LAUNCHER_RESPONSE_EXECUTION_TRACE: &str = "MISTER_LAUNCHER_RESPONSE_EXECUTION_TRACE";
 const LAUNCHER_RESPONSE_PMU: &str = "MISTER_LAUNCHER_RESPONSE_PMU";
@@ -108,6 +112,10 @@ impl EnvironmentSnapshot {
 
     pub fn get_path(&self, name: &str) -> Option<&Path> {
         self.values.get(OsStr::new(name)).map(Path::new)
+    }
+
+    fn insert(&mut self, name: &str, value: impl Into<OsString>) {
+        self.values.insert(name.into(), value.into());
     }
 
     #[cfg(test)]
@@ -788,12 +796,10 @@ pub struct ProcessConfig {
 
 impl ProcessConfig {
     pub fn capture(args: &[String], command: &str) -> Self {
-        Self::from_snapshot_with_device_paths(
-            args,
-            command,
-            &EnvironmentSnapshot::capture_process(),
-            DevicePaths::current(),
-        )
+        let device_paths = DevicePaths::current();
+        let mut environment = EnvironmentSnapshot::capture_process();
+        restore_fast_catalog_return_environment(&mut environment, &device_paths, command);
+        Self::from_snapshot_with_device_paths(args, command, &environment, device_paths)
     }
 
     #[cfg(test)]
@@ -894,6 +900,62 @@ impl ProcessConfig {
     pub fn fault(&self) -> Option<&FaultConfig> {
         self.fault.armed()
     }
+}
+
+fn restore_fast_catalog_return_environment(
+    environment: &mut EnvironmentSnapshot,
+    device_paths: &DevicePaths,
+    command: &str,
+) {
+    let Some(root) = matching_fast_catalog_return_root(environment, device_paths, command) else {
+        return;
+    };
+    // SAFETY: ProcessConfig::capture is the single-threaded process boundary, before launcher,
+    // catalog, media, input, or presentation workers are created. Restoring the consumed
+    // one-shot route here makes existing process-wide readers observe the same immutable values.
+    unsafe {
+        std::env::set_var(FAST_FIVE_CATALOG, "1");
+        std::env::set_var(SHARDED_CATALOG_DIR, &root);
+        std::env::set_var(CATALOG_REFRESH, "off");
+    }
+    environment.insert(FAST_FIVE_CATALOG, "1");
+    environment.insert(SHARDED_CATALOG_DIR, root.into_os_string());
+    environment.insert(CATALOG_REFRESH, "off");
+}
+
+fn matching_fast_catalog_return_root(
+    environment: &EnvironmentSnapshot,
+    device_paths: &DevicePaths,
+    command: &str,
+) -> Option<PathBuf> {
+    if command != "ui"
+        || !matches!(
+            environment.get(RETURN_TO_LAUNCHER),
+            Some("1" | "true" | "yes")
+        )
+        || environment.get_path(SHARDED_CATALOG_DIR).is_some()
+    {
+        return None;
+    }
+    let expected = crate::return_catalog_capsule::peek_return_catalog_fingerprint().ok()?;
+    let root = device_paths.app_path("fast-five-catalog");
+    let limits = mister_magik_catalog::production_sharded_projection::production_registry_limits();
+    let manifest =
+        mister_magik_catalog::shard_registry::read_latest_manifest_lazy(&root, limits).ok()?;
+    let systems = manifest
+        .systems
+        .iter()
+        .map(|system| system.system_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if manifest.systems.len() != systems.len()
+        || !mister_magik_catalog::fast_five_catalog::is_supported_fast_system_set(
+            systems.iter().copied(),
+        )
+    {
+        return None;
+    }
+    (mister_magik_catalog::fast_five_catalog::registry_fingerprint(&root, limits).ok()? == expected)
+        .then_some(root)
 }
 
 fn environment_flag(environment: &EnvironmentSnapshot, name: &str) -> bool {
