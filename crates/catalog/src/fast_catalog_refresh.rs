@@ -600,7 +600,7 @@ fn capture_refresh_state_with_profiles(
     for system in &snapshot.systems {
         let system_started = std::time::Instant::now();
         let specification =
-            watch_specification_from_profiles(storage_root, &system.system_id, &profiles)?;
+            watch_specification_from_profiles(storage_root, &system.system_id, profiles)?;
         let watch = capture_system_watch_from_specification(
             storage_root,
             &system.system_id,
