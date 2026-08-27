@@ -43,3 +43,35 @@ overall on this installation, and the Arcade and C64 prepared knowledge gives a
 large cold win. It is not true that every specialised adapter is faster. DOS
 and X68000 deliberately spend more time validating launchability, while the
 current Amiga installation is too incomplete for a meaningful speed claim.
+
+## Retained source optimisations
+
+Evidence:
+`build/agent-benchmarks/fast-refresh/source-specialized-vs-generic-optimized-ab.json`
+
+Two measured changes were retained:
+
+- Known 0MHz v0.04 launchers use the checked-in release manifest and a batched
+  payload-presence index. Of 305 installed launchers, 304 matched the release
+  helper and one used full MGL fallback validation. Cold DOS time fell from
+  2.441 s to 1.404 s, a 42.5% reduction. The helper accepted four additional
+  release-known launchers whose payloads were present, leaving one invalid
+  custom or unmatched launcher rejected.
+- Neon68K MGL validation uses two bounded Cortex-A9 lanes after file discovery.
+  Cold X68000 time fell from 1.463 s to 1.279 s, a 12.6% reduction, with the
+  same 545 specialised launch references and the same generic parity result.
+
+Arcade and C64 were unchanged. Their run-to-run cold variation dominates the
+five-system total, so the per-adapter timings above are the useful evidence for
+these targeted changes.
+
+## Rejected 0MHz experiment
+
+Evidence:
+`build/agent-benchmarks/fast-refresh/source-specialized-vs-generic-direct-0mhz-ab.json`
+
+Replacing the batched payload index with one direct filesystem check per
+manifest payload produced 1.442 s cold versus 1.404 s for the batched version.
+It was faster only with warm metadata. The direct-check variant was therefore
+removed; the retained implementation groups expected payloads by directory and
+enumerates each directory once.

@@ -15,7 +15,7 @@ use crate::fast_five_catalog::{
 use crate::generic_system_catalog::{add_generic_example_systems, rebuild_generic_system};
 use crate::launch_profiles::CollectionListing;
 use crate::mra_header::{PrimaryRomRequirement, RomNamespace};
-use crate::prepared_collections::validate_prepared_launch_path;
+use crate::prepared_collections::{PreparedPayloadIndex, validate_prepared_launch_path};
 use crate::system_shard::{SystemGame, SystemLaunchPlan};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -593,16 +593,22 @@ fn scan_prepared_mgl(
         report.invalid = report.invalid.saturating_add(invalid);
         return games;
     }
+    let prepared_index = (system_id == "dos").then(|| {
+        PreparedPayloadIndex::from_library_roots(
+            &roots
+                .iter()
+                .map(|root| root.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+        )
+    });
     files
         .into_iter()
         .filter_map(|path| {
-            if system_id == "dos"
+            if let Some(index) = &prepared_index
                 && let Some(known) = crate::prepared_release_manifest::known_0mhz_launch(&path)
-                && known
-                    .package
-                    .payloads
-                    .iter()
-                    .all(|payload| known.storage_root.join(&payload.relative_path).is_file())
+                && known.package.payloads.iter().all(|payload| {
+                    index.path_is_file(&known.storage_root.join(&payload.relative_path))
+                })
             {
                 report.helper_hits = report.helper_hits.saturating_add(1);
                 return Some(direct_row(system_id, category, &path, display_name(&path)));
