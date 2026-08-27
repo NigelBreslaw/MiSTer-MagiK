@@ -37,8 +37,22 @@ const PREPARED_SYSTEM_IDS: [&str; 5] = ["arcade", "amiga", "c64", "dos", "x68000
 #[derive(Clone, Debug, Serialize)]
 pub struct FastSourceBuildReport {
     pub elapsed_us: u64,
+    pub phases: FastSourcePhaseReport,
     pub systems: Vec<FastSourceSystemReport>,
     pub legacy_inputs: usize,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct FastSourcePhaseReport {
+    pub prepared_systems_us: u64,
+    pub profile_discovery_us: u64,
+    pub system_planning_us: u64,
+    pub generic_systems_us: u64,
+    pub preview_identity_us: u64,
+    pub merge_us: u64,
+    pub fingerprint_us: u64,
+    pub validation_us: u64,
+    pub residual_us: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -92,9 +106,13 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         &mut system_complete,
     )?;
     let roots = [storage_root.display().to_string()];
+    let phase_started = Instant::now();
     let profiles = ProfileSet::try_for_roots(&roots)?.into_profiles();
+    let profile_discovery_us = elapsed_us(phase_started);
+    let phase_started = Instant::now();
     let planned_system_ids = discover_independent_system_ids_from_profiles(storage_root, &profiles);
     plan_ready(&planned_system_ids);
+    let system_planning_us = elapsed_us(phase_started);
     for system_id in PREPARED_SYSTEM_IDS
         .iter()
         .copied()
@@ -115,7 +133,11 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
             &PREPARED_SYSTEM_IDS,
             &mut system_complete,
         )?;
+    let generic_systems_us = generic.elapsed_us;
+    let phase_started = Instant::now();
     enrich_fast_preview_identities(storage_root, &mut generic_systems);
+    let preview_identity_us = elapsed_us(phase_started);
+    let phase_started = Instant::now();
     systems.extend(
         generic_systems
             .into_iter()
@@ -135,16 +157,61 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
             },
         )
     }));
+    let merge_us = elapsed_us(phase_started);
+    let prepared_systems_us = reports
+        .values()
+        .filter(|report| PREPARED_SYSTEM_IDS.contains(&report.system_id.as_str()))
+        .map(|report| report.elapsed_us)
+        .sum();
+    let phase_started = Instant::now();
+    let source_fingerprint = fingerprint_systems(&systems.values().cloned().collect::<Vec<_>>())?;
+    let fingerprint_us = elapsed_us(phase_started);
     let snapshot = FastFiveSnapshot {
         schema: FAST_FIVE_SNAPSHOT_SCHEMA.to_string(),
-        source_fingerprint: fingerprint_systems(&systems.values().cloned().collect::<Vec<_>>())?,
+        source_fingerprint,
         systems: systems.into_values().collect(),
     };
+    let phase_started = Instant::now();
     snapshot.validate()?;
+    let validation_us = elapsed_us(phase_started);
+    let total_us = elapsed_us(started);
+    let accounted_us = prepared_systems_us
+        .saturating_add(profile_discovery_us)
+        .saturating_add(system_planning_us)
+        .saturating_add(generic_systems_us)
+        .saturating_add(preview_identity_us)
+        .saturating_add(merge_us)
+        .saturating_add(fingerprint_us)
+        .saturating_add(validation_us);
+    let phases = FastSourcePhaseReport {
+        prepared_systems_us,
+        profile_discovery_us,
+        system_planning_us,
+        generic_systems_us,
+        preview_identity_us,
+        merge_us,
+        fingerprint_us,
+        validation_us,
+        residual_us: total_us.saturating_sub(accounted_us),
+    };
+    crate::catalog_logln!(
+        "fast_catalog_source_phase_tsv\ttotal_us={}\tprepared_us={}\tprofiles_us={}\tplanning_us={}\tgeneric_us={}\tpreview_identity_us={}\tmerge_us={}\tfingerprint_us={}\tvalidation_us={}\tresidual_us={}",
+        total_us,
+        phases.prepared_systems_us,
+        phases.profile_discovery_us,
+        phases.system_planning_us,
+        phases.generic_systems_us,
+        phases.preview_identity_us,
+        phases.merge_us,
+        phases.fingerprint_us,
+        phases.validation_us,
+        phases.residual_us,
+    );
     Ok(FastSourceRefreshBuild {
         snapshot,
         report: FastSourceBuildReport {
-            elapsed_us: elapsed_us(started),
+            elapsed_us: total_us,
+            phases,
             systems: reports.into_values().collect(),
             legacy_inputs: 0,
         },

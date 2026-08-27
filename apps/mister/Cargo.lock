@@ -3917,7 +3917,7 @@ dependencies = [
 [[package]]
 name = "pprof"
 version = "0.15.0"
-source = "git+https://github.com/NigelBreslaw/pprof-rs?branch=armv7-itimer-abi#54c0c32488e98390092b0059f27f6948afe8f6f0"
+source = "git+https://github.com/NigelBreslaw/pprof-rs?branch=armv7-itimer-abi#431b88c4fc67bef98126eaa8932287583d1a660e"
 dependencies = [
  "aligned-vec",
  "backtrace",

@@ -280,6 +280,7 @@ fn screensaver_profile_frame_bounds(first_frame: u64, next_frame: u64) -> (u64, 
 pub struct CpuProfileSummary {
     pub sample_stacks: usize,
     pub sample_hits: isize,
+    pub stackless_sample_hits: isize,
     pub duration_secs: f64,
     pub hz: i32,
     pub out_path: String,
@@ -381,11 +382,18 @@ mod imp {
         };
         let sample_stacks = report.data.len();
         let sample_hits: isize = report.data.values().sum();
+        let stackless_sample_hits: isize = report
+            .data
+            .iter()
+            .filter(|(frames, _)| frames.frames.is_empty())
+            .map(|(_, hits)| hits)
+            .sum();
         let duration_secs = report.timing.duration.as_secs_f64();
         crate::ui_logln!(
-            "cpu_profile: {} unique stacks, {} sample hits, {:.1}s at {} Hz",
+            "cpu_profile: {} unique stacks, {} sample hits, {} stackless, {:.1}s at {} Hz",
             sample_stacks,
             sample_hits,
+            stackless_sample_hits,
             duration_secs,
             p.hz
         );
@@ -410,6 +418,7 @@ mod imp {
                 Ok(Some(CpuProfileSummary {
                     sample_stacks,
                     sample_hits,
+                    stackless_sample_hits,
                     duration_secs,
                     hz: p.hz,
                     out_path: p.out_path,
@@ -433,6 +442,7 @@ mod imp {
                 "hz": summary.hz,
                 "sample_stacks": summary.sample_stacks,
                 "sample_hits": summary.sample_hits,
+                "stackless_sample_hits": summary.stackless_sample_hits,
                 "out_path": summary.out_path,
                 "bytes": summary.bytes,
             }),
@@ -494,6 +504,7 @@ mod imp {
                         "hz": summary.hz,
                         "sample_stacks": summary.sample_stacks,
                         "sample_hits": summary.sample_hits,
+                        "stackless_sample_hits": summary.stackless_sample_hits,
                         "out_path": summary.out_path,
                         "bytes": summary.bytes,
                     }),
@@ -542,6 +553,7 @@ mod imp {
                         "hz": summary.hz,
                         "sample_stacks": summary.sample_stacks,
                         "sample_hits": summary.sample_hits,
+                        "stackless_sample_hits": summary.stackless_sample_hits,
                         "out_path": summary.out_path,
                         "bytes": summary.bytes,
                     }),
@@ -788,6 +800,7 @@ mod imp {
                 "hz": summary.hz,
                 "sample_stacks": summary.sample_stacks,
                 "sample_hits": summary.sample_hits,
+                "stackless_sample_hits": summary.stackless_sample_hits,
                 "out_path": summary.out_path,
                 "bytes": summary.bytes,
             }),
@@ -1029,6 +1042,7 @@ mod imp {
                             "hz": summary.hz,
                             "sample_stacks": summary.sample_stacks,
                             "sample_hits": summary.sample_hits,
+                            "stackless_sample_hits": summary.stackless_sample_hits,
                             "out_path": summary.out_path,
                             "bytes": summary.bytes,
                             "first_frame": first_frame,
