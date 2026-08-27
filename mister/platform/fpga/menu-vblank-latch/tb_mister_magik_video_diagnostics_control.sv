@@ -157,11 +157,12 @@ module tb_mister_magik_video_diagnostics_control;
 		end
 	endfunction
 
-	function automatic [7:0] golden_fold_address;
+	function automatic [3:0] golden_fold_address;
 		input [27:0] address;
 		begin
-			golden_fold_address = address[7:0] ^ address[15:8] ^
-				address[23:16] ^ {4'd0, address[27:24]};
+			golden_fold_address = address[3:0] ^ address[7:4] ^
+				address[11:8] ^ address[15:12] ^ address[19:16] ^
+				address[23:20] ^ address[27:24];
 		end
 	endfunction
 
@@ -178,7 +179,7 @@ module tb_mister_magik_video_diagnostics_control;
 				token = golden_fold_data(beat_data(seed, beat[7:0])) ^ 16'h5a02;
 				if(beat == 0)
 					next_value = golden_update(
-						next_value, {8'ha5, golden_fold_address(address)});
+						next_value, {12'ha5a, golden_fold_address(address)});
 				next_value = golden_update(next_value, token);
 			end
 			golden_burst = next_value;
@@ -199,7 +200,7 @@ module tb_mister_magik_video_diagnostics_control;
 					beat_data_lane_swapped(seed, beat[7:0])) ^ 16'h5a02;
 				if(beat == 0)
 					next_value = golden_update(
-						next_value, {8'ha5, golden_fold_address(address)});
+						next_value, {12'ha5a, golden_fold_address(address)});
 				next_value = golden_update(next_value, token);
 			end
 			golden_burst_lane_swapped = next_value;

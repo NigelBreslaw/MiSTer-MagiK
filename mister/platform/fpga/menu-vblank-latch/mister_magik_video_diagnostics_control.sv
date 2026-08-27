@@ -33,7 +33,7 @@ module mister_magik_scaler_fetch_ordered_frame (
 	localparam [15:0] SIGNATURE_INITIAL = 16'h56da;
 	localparam [7:0] REQUIRED_BURSTCOUNT = 8'd128;
 	localparam [15:0] TOKEN_DATA = 16'h5a02;
-	localparam [7:0] TOKEN_ADDRESS = 8'ha5;
+	localparam [11:0] TOKEN_ADDRESS = 12'ha5a;
 
 	localparam [6:0] FETCH_FLAG_CAPTURE_VALID =
 		MAGIK_RAW_SCALER_STATE_FLAG_CAPTURE_VALID[6:0];
@@ -52,8 +52,8 @@ module mister_magik_scaler_fetch_ordered_frame (
 
 	// Independent accepted-request FIFO. Only a folded address and its epoch
 	// marker are retained; production ascal itself caps outstanding reads at two.
-	reg [7:0]  fifo_address_token0 = 8'd0;
-	reg [7:0]  fifo_address_token1 = 8'd0;
+	reg [3:0]  fifo_address_token0 = 4'd0;
+	reg [3:0]  fifo_address_token1 = 4'd0;
 	reg        fifo_wrap0 = 1'b0;
 	reg        fifo_wrap1 = 1'b0;
 	reg [1:0]  fifo_count = 2'd0;
@@ -78,10 +78,9 @@ module mister_magik_scaler_fetch_ordered_frame (
 	reg [15:0] snapshot_sequence = 16'd0;
 	reg [6:0] snapshot_flags = 7'd0;
 	reg [15:0] snapshot_crc = 16'd0;
-	// One six-bit phase owns the CRC lifecycle: 0..47 computes the payload,
-	// 48 is a valid immutable snapshot, and 49 requests initial generation.
-	// This avoids two high-fanout state bits in the disposable observer.
-	reg [5:0] crc_bit_count = 6'd49;
+	reg [5:0] crc_bit_count = 6'd0;
+	reg crc_busy = 1'b0;
+	reg snapshot_crc_valid = 1'b0;
 	reg has_command = 1'b0;
 	reg command_selected = 1'b0;
 	reg [2:0] word_count = 3'd0;
@@ -113,11 +112,9 @@ module mister_magik_scaler_fetch_ordered_frame (
 
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
-	wire crc_busy = crc_bit_count < 6'd48;
-	wire snapshot_crc_valid = crc_bit_count == 6'd48;
 	wire selected_start =
 		io_din[7:0] == MAGIK_UIO_GET_RAW_SCALER_STATE &&
-		snapshot_crc_valid;
+		snapshot_crc_valid && !crc_busy;
 	wire selected_command = command_selected;
 
 	assign response_valid =
@@ -153,11 +150,12 @@ module mister_magik_scaler_fetch_ordered_frame (
 		end
 	endfunction
 
-	function automatic [7:0] fold_address;
+	function automatic [3:0] fold_address;
 		input [27:0] address;
 		begin
-			fold_address = address[7:0] ^ address[15:8] ^
-				address[23:16] ^ {4'd0, address[27:24]};
+			fold_address = address[3:0] ^ address[7:4] ^
+				address[11:8] ^ address[15:12] ^ address[19:16] ^
+				address[23:20] ^ address[27:24];
 		end
 	endfunction
 
@@ -208,8 +206,8 @@ module mister_magik_scaler_fetch_ordered_frame (
 	always @(posedge clk_100m or posedge reset_active) begin : fetch_order
 		reg [15:0] return_token;
 		if(reset_active) begin
-			fifo_address_token0 <= 8'd0;
-			fifo_address_token1 <= 8'd0;
+			fifo_address_token0 <= 4'd0;
+			fifo_address_token1 <= 4'd0;
 			fifo_wrap0 <= 1'b0;
 			fifo_wrap1 <= 1'b0;
 			fifo_count <= 2'd0;
@@ -337,7 +335,9 @@ module mister_magik_scaler_fetch_ordered_frame (
 			snapshot_sequence <= 16'd0;
 			snapshot_flags <= 7'd0;
 			snapshot_crc <= 16'd0;
-			crc_bit_count <= 6'd49;
+			crc_bit_count <= 6'd0;
+			crc_busy <= 1'b0;
+			snapshot_crc_valid <= 1'b0;
 			has_command <= 1'b0;
 			command_selected <= 1'b0;
 			word_count <= 3'd0;
@@ -346,9 +346,10 @@ module mister_magik_scaler_fetch_ordered_frame (
 			generation_meta <= source_generation;
 			generation_sync <= generation_meta;
 
-			if(crc_bit_count == 6'd49 && !capture_pending) begin
+			if(!snapshot_crc_valid && !crc_busy && !capture_pending) begin
 				snapshot_crc <= FETCH_SCHEMA_CRC;
 				crc_bit_count <= 6'd0;
+				crc_busy <= 1'b1;
 			end
 
 			if(!has_command && !command_start && !crc_busy &&
@@ -368,6 +369,8 @@ module mister_magik_scaler_fetch_ordered_frame (
 				end
 				snapshot_crc <= FETCH_SCHEMA_CRC;
 				crc_bit_count <= 6'd0;
+				crc_busy <= 1'b1;
+				snapshot_crc_valid <= 1'b0;
 				capture_pending <= 1'b0;
 			end
 
@@ -393,7 +396,8 @@ module mister_magik_scaler_fetch_ordered_frame (
 					snapshot_signature <= {snapshot_signature[14:0],
 						snapshot_signature[15]};
 				if(crc_bit_count == 6'd47) begin
-					crc_bit_count <= 6'd48;
+					crc_busy <= 1'b0;
+					snapshot_crc_valid <= 1'b1;
 				end
 				else
 					crc_bit_count <= crc_bit_count + 1'd1;
