@@ -43,7 +43,7 @@ pub fn load_sharded_registry_seed_at(
 ) -> Result<ShardedCatalogSeed, ShardedCatalogSeedLoadError> {
     let reader = mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
         storage,
-        mister_magik_catalog::production_sharded_projection::production_registry_limits(),
+        mister_magik_catalog::shard_registry::production_registry_limits(),
     )
     .map_err(|error| ShardedCatalogSeedLoadError {
         status: "unavailable",
@@ -64,7 +64,7 @@ pub fn load_sharded_registry_seed_at(
     validate_fast_five_registry(registry.systems())?;
     let catalog_fingerprint = mister_magik_catalog::fast_five_catalog::registry_fingerprint(
         storage,
-        mister_magik_catalog::production_sharded_projection::production_registry_limits(),
+        mister_magik_catalog::shard_registry::production_registry_limits(),
     )
     .map_err(|error| ShardedCatalogSeedLoadError {
         status: "stale",

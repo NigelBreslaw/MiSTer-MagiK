@@ -11,12 +11,12 @@ use crate::media_update::{
     parse_manifest_json, size_qualified_pack_path, state_path, valid_image_size,
 };
 use mister_magik_catalog::media_identity::preferred_screenshot_image_size;
-use mister_magik_catalog::preview_worker::invalidate_preview_archive_metadata_cache;
-use mister_magik_catalog::production_sharded_projection::{
-    PreviewAvailabilityReconciliationOutcome, production_registry_limits,
-    reconcile_fast_preview_availability,
+use mister_magik_catalog::preview_availability::{
+    PreviewAvailabilityReconciliationOutcome, reconcile_preview_availability,
 };
+use mister_magik_catalog::preview_worker::invalidate_preview_archive_metadata_cache;
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
+use mister_magik_catalog::shard_registry::production_registry_limits;
 use mister_magik_media_contract::{MEDIA_CONNECT_TIMEOUT_SECS, MEDIA_TRANSFER_TIMEOUT_SECS};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -1918,7 +1918,7 @@ fn reconcile_pack_preview_availability(
             return;
         }
     };
-    let result = reconcile_fast_preview_availability(
+    let result = reconcile_preview_availability(
         &config.catalog_root,
         &system_id,
         local_path,

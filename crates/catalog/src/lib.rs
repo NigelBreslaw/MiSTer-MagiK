@@ -92,6 +92,7 @@ pub mod prepared_bundle_helper;
 pub mod prepared_collections;
 mod prepared_release_manifest;
 mod preview_archive;
+pub mod preview_availability;
 pub mod preview_worker;
 #[cfg(feature = "builder")]
 pub mod production_sharded_projection;

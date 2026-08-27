@@ -637,7 +637,7 @@ mod tests {
         let mut session = ScreenshotMediaUpdateSession::default();
         let updated = session.handle_worker_message(
             MediaWorkerMessage::PreviewAvailabilityUpdated {
-                outcome: mister_magik_catalog::production_sharded_projection::PreviewAvailabilityReconciliationOutcome {
+                outcome: mister_magik_catalog::preview_availability::PreviewAvailabilityReconciliationOutcome {
                     system_id: mister_magik_catalog::catalog_classify::SystemId::parse("arcade")
                         .unwrap(),
                     previous_generation: 1,
