@@ -5568,7 +5568,7 @@ pub fn purge_library_data() -> Result<PurgeLibraryDataOutcome, String> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| mister_magik_catalog::device_layout::current_app_path("assets"));
     purge_library_data_with(&asset_dir, || {
-        mister_magik_catalog::builder_service::remove_default_production_catalog_artifacts()
+        mister_magik_catalog::fast_catalog_refresh::remove_default_catalog_artifacts()
     })
 }
 

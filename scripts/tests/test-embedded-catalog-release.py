@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Regression checks for the embedded production catalog-builder boundary."""
+"""Regression checks for the embedded production catalog boundary."""
 
 from pathlib import Path
 import subprocess
@@ -31,17 +31,20 @@ def main() -> None:
     require(cargo, 'features = ["builder"]', "frontend catalog dependency")
 
     worker = read("apps/mister/src/ui_runner/catalog_worker.rs")
-    require(worker, "builder_service::run", "catalog worker")
+    require(worker, "execute_planned_fast_refresh", "catalog worker")
     for needle in (
         "run_catalog_builder_subprocess",
         "MISTER_CATALOG_BUILDER_BIN",
         "Command::new",
+        "builder_service",
     ):
         forbid(worker, needle, "catalog worker")
 
-    main_rs = read("apps/mister/src/main.rs")
-    require(main_rs, "builder_service::run", "library-refresh")
-    forbid(main_rs, "MISTER_CATALOG_BUILDER_BIN", "library-refresh")
+    app_entry = read("apps/mister/src/app_entry.rs")
+    require(app_entry, "execute_fast_refresh", "library-refresh")
+    require(app_entry, "build_fresh_catalog", "library-refresh")
+    forbid(app_entry, "builder_service", "library-refresh")
+    forbid(app_entry, "MISTER_CATALOG_BUILDER_BIN", "library-refresh")
 
     workflow = read(".github/workflows/distribution.yml")
     forbid(workflow, "scripts/build-catalog-builder.sh", "release workflow")

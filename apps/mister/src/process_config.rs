@@ -1012,14 +1012,14 @@ mod tests {
             (MAIN_PID, "7"),
         ]);
         let config = ProcessConfig::from_snapshot(
-            &["mister-magik-fb".into(), "catalog-v3-inspect".into()],
-            "catalog-v3-inspect",
+            &["mister-magik-fb".into(), "catalog-inspect".into()],
+            "catalog-inspect",
             &environment,
         );
 
         assert_eq!(
             config.command(),
-            &CommandMode::Other("catalog-v3-inspect".into())
+            &CommandMode::Other("catalog-inspect".into())
         );
         assert!(config.launcher().is_none());
         assert_eq!(

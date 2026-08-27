@@ -109,10 +109,7 @@ struct CatalogOperationReport {
     status: &'static str,
     elapsed_us: u128,
     peak_rss_kib: Option<u64>,
-    summary: Option<mister_magik_catalog::builder_protocol::BuilderSummary>,
-    timings: Vec<(String, String)>,
-    planned_systems: Vec<String>,
-    all_published_systems: bool,
+    timings: Vec<(String, u64)>,
     rebuilt_systems: Vec<String>,
     removed_systems: Vec<String>,
     manifest_generation: u64,
@@ -142,48 +139,6 @@ struct CatalogPmuAggregate {
     neon_instructions_per_active_cycle: f64,
     neon_clock_duty: f64,
     data_dependent_stall_ratio: f64,
-}
-
-#[derive(Default)]
-struct CatalogEventCapture {
-    summary: Option<mister_magik_catalog::builder_protocol::BuilderSummary>,
-    timings: Vec<(String, String)>,
-    planned_systems: Vec<String>,
-    all_published_systems: bool,
-    rebuilt_systems: Vec<String>,
-    removed_systems: Vec<String>,
-}
-
-impl CatalogEventCapture {
-    fn observe(&mut self, event: mister_magik_catalog::builder_protocol::CatalogBuilderEvent) {
-        use mister_magik_catalog::builder_protocol::CatalogBuilderEvent;
-        match event {
-            CatalogBuilderEvent::PlanReady {
-                mut system_ids,
-                all_published_systems,
-                ..
-            } => {
-                system_ids.sort();
-                self.planned_systems = system_ids;
-                self.all_published_systems = all_published_systems;
-            }
-            CatalogBuilderEvent::Timing { name, detail, .. } => {
-                self.timings.push((name, detail));
-            }
-            CatalogBuilderEvent::ManifestPublished {
-                mut rebuilt,
-                mut removed,
-                ..
-            } => {
-                rebuilt.sort();
-                removed.sort();
-                self.rebuilt_systems = rebuilt;
-                self.removed_systems = removed;
-            }
-            CatalogBuilderEvent::Persisted { summary, .. } => self.summary = Some(summary),
-            _ => {}
-        }
-    }
 }
 
 struct CatalogProfileRoot {
@@ -225,10 +180,18 @@ impl Drop for CatalogProfileRoot {
     }
 }
 
+#[derive(Clone, Copy)]
+enum CatalogProfileOperation {
+    Fresh,
+    Update,
+    RebuildAll,
+}
+
 fn profile_catalog() -> Result<Value, String> {
     let root = PathBuf::from(CATALOG_PROFILE_ROOT);
     let _root_guard = CatalogProfileRoot::prepare(&root)?;
     let fixture_root = root.join("fixture");
+    let catalog_root = root.join("catalog-fast-v1");
     let fixture = mister_magik_catalog::synthetic_fixture::generate_synthetic_fixture(
         &fixture_root,
         &mister_magik_catalog::synthetic_fixture::SyntheticFixtureSpec {
@@ -239,25 +202,27 @@ fn profile_catalog() -> Result<Value, String> {
         },
     )
     .map_err(|error| format!("create catalog PMU fixture: {error}"))?;
-    configure_catalog_profile_environment(&root, &fixture_root);
 
     let fresh = profile_catalog_operation(
         "fresh-build",
-        mister_magik_catalog::builder_service::BuilderOperation::FreshBuild,
-        &root,
+        CatalogProfileOperation::Fresh,
+        &fixture_root,
+        &catalog_root,
     )?;
     mister_magik_catalog::synthetic_fixture::add_synthetic_snes_game(&fixture_root, 1)
         .map_err(|error| format!("append catalog PMU fixture game: {error}"))?;
     let rebuild = profile_catalog_operation(
-        "rebuild",
-        mister_magik_catalog::builder_service::BuilderOperation::Rebuild,
-        &root,
+        "update",
+        CatalogProfileOperation::Update,
+        &fixture_root,
+        &catalog_root,
     )?;
     validate_incremental_catalog_profile(&fresh, &rebuild)?;
     let rebuild_all = profile_catalog_operation(
         "rebuild-all",
-        mister_magik_catalog::builder_service::BuilderOperation::RebuildAll,
-        &root,
+        CatalogProfileOperation::RebuildAll,
+        &fixture_root,
+        &catalog_root,
     )?;
     validate_rebuild_all_catalog_profile(&rebuild, &rebuild_all)?;
 
@@ -275,9 +240,9 @@ fn profile_catalog() -> Result<Value, String> {
         "status": status,
         "configuration": {
             "root": CATALOG_PROFILE_ROOT,
-            "library_roots": catalog_profile_library_roots(&fixture_root),
+            "storage_root": fixture_root,
             "fixture": fixture,
-            "operations": ["fresh-build", "rebuild", "rebuild-all"],
+            "operations": ["fresh-build", "update", "rebuild-all"],
         },
         "operations": [fresh, rebuild, rebuild_all],
         "validation": {
@@ -291,26 +256,78 @@ fn profile_catalog() -> Result<Value, String> {
 
 fn profile_catalog_operation(
     operation_label: &'static str,
-    operation: mister_magik_catalog::builder_service::BuilderOperation,
-    root: &Path,
+    operation: CatalogProfileOperation,
+    storage_root: &Path,
+    catalog_root: &Path,
 ) -> Result<CatalogOperationReport, String> {
+    use mister_magik_catalog::fast_catalog_refresh::{
+        FastCatalogRefreshRequest, FastCatalogSystemOutcome,
+    };
+
     mister_magik_perf_events::clear_process_profiles();
     let started = Instant::now();
-    let mut events = CatalogEventCapture::default();
-    let result = mister_magik_catalog::builder_service::run_with_execution_policy_and_fault_control(
-        operation,
-        mister_magik_catalog::builder_service::BuilderExecutionPolicy::BackgroundContinuous,
-        Box::new(mister_magik_mister_runtime::direct_reset_fault::process_fault_control()),
-        |event| events.observe(event),
-    );
-    mister_magik_perf_events::submit_thread_profile("catalog-builder");
+    let (timings, mut rebuilt_systems, mut removed_systems) = match operation {
+        CatalogProfileOperation::Fresh => {
+            let report = mister_magik_catalog::fast_catalog_refresh::build_fresh_catalog(
+                storage_root,
+                catalog_root,
+            )?;
+            (
+                vec![
+                    ("source".to_string(), report.source.elapsed_us),
+                    (
+                        "artifact-publish".to_string(),
+                        report.publication.elapsed_us,
+                    ),
+                    ("snapshot-capture".to_string(), report.capture.elapsed_us),
+                ],
+                report.system_ids,
+                Vec::new(),
+            )
+        }
+        CatalogProfileOperation::Update | CatalogProfileOperation::RebuildAll => {
+            let request = if matches!(operation, CatalogProfileOperation::Update) {
+                FastCatalogRefreshRequest::Update
+            } else {
+                FastCatalogRefreshRequest::RebuildAll
+            };
+            let report = mister_magik_catalog::fast_catalog_refresh::execute_fast_refresh(
+                storage_root,
+                catalog_root,
+                request,
+            )?;
+            let rebuilt = report
+                .system_reports
+                .iter()
+                .filter(|system| system.outcome == FastCatalogSystemOutcome::Updated)
+                .map(|system| system.system_id.clone())
+                .collect();
+            let removed = report
+                .system_reports
+                .iter()
+                .filter(|system| system.outcome == FastCatalogSystemOutcome::Removed)
+                .map(|system| system.system_id.clone())
+                .collect();
+            (
+                vec![
+                    ("planning".to_string(), report.planning_us),
+                    ("source".to_string(), report.source_rebuild_us),
+                    ("artifact-publish".to_string(), report.artifact_publish_us),
+                    ("snapshot-publish".to_string(), report.snapshot_publish_us),
+                ],
+                rebuilt,
+                removed,
+            )
+        }
+    };
+    mister_magik_perf_events::submit_thread_profile("catalog-refresh");
     let elapsed_us = started.elapsed().as_micros();
     let profile = mister_magik_perf_events::take_process_profiles();
-    result?;
 
-    let catalog_root = root.join("catalog-v3");
+    rebuilt_systems.sort();
+    removed_systems.sort();
     let manifest = mister_magik_catalog::shard_registry::read_latest_manifest(
-        &catalog_root,
+        catalog_root,
         mister_magik_catalog::shard_registry::production_registry_limits(),
     )
     .map_err(|error| format!("validate {operation_label} catalog manifest: {error}"))?;
@@ -334,12 +351,9 @@ fn profile_catalog_operation(
         status,
         elapsed_us,
         peak_rss_kib: peak_rss_kib(),
-        summary: events.summary,
-        timings: events.timings,
-        planned_systems: events.planned_systems,
-        all_published_systems: events.all_published_systems,
-        rebuilt_systems: events.rebuilt_systems,
-        removed_systems: events.removed_systems,
+        timings,
+        rebuilt_systems,
+        removed_systems,
         manifest_generation: manifest.generation,
         manifest_systems,
         manifest_games,
@@ -398,52 +412,6 @@ fn validate_catalog_profile_root(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn configure_catalog_profile_environment(root: &Path, fixture_root: &Path) {
-    let values = [
-        ("MISTER_SHARDED_CATALOG_DIR", root.join("catalog-v3")),
-        ("MISTER_LIBRARY_SQLITE", root.join("library.sqlite3")),
-        ("MISTER_LIBRARY_SQLITE_BUILD_DIR", root.join("sqlite-build")),
-        (
-            "MISTER_ARCADE_BOOTSTRAP_INDEX",
-            root.join("arcade-bootstrap.nav.lz4b"),
-        ),
-        (
-            "MISTER_LIBRARY_REFRESH_LOCK",
-            root.join("library-refresh.lock"),
-        ),
-        (
-            "MISTER_CATALOG_BUILDER_LOCK",
-            root.join("catalog-builder.lock"),
-        ),
-        (
-            "MISTER_CATALOG_READY_SNAPSHOT",
-            root.join("catalog-ready.snapshot"),
-        ),
-        ("MISTER_CATALOG_DIAGNOSTICS_DIR", root.join("diagnostics")),
-    ];
-    // SAFETY: PMU workloads configure their isolated environment before the
-    // catalog builder creates any worker threads, and the process exits after
-    // printing the workload result.
-    unsafe {
-        for (name, value) in values {
-            std::env::set_var(name, value);
-        }
-        std::env::set_var(
-            "MISTER_LIBRARY_ROOTS",
-            catalog_profile_library_roots(fixture_root),
-        );
-    }
-}
-
-fn catalog_profile_library_roots(fixture_root: &Path) -> String {
-    let mut roots = mister_magik_catalog::catalog_config::DEFAULT_ROOTS
-        .iter()
-        .map(|root| (*root).to_owned())
-        .collect::<Vec<_>>();
-    roots.push(fixture_root.to_string_lossy().into_owned());
-    roots.join("|")
-}
-
 fn process_profile_status(batch: &mister_magik_perf_events::ProcessProfileBatch) -> &'static str {
     if batch.dropped_profiles == 0
         && !batch.profiles.is_empty()
@@ -459,7 +427,6 @@ fn process_profile_status(batch: &mister_magik_perf_events::ProcessProfileBatch)
         "failed"
     }
 }
-
 fn aggregate_process_profile(
     batch: &mister_magik_perf_events::ProcessProfileBatch,
 ) -> CatalogPmuAggregate {

@@ -33,7 +33,6 @@ use crate::launcher_ui_actions::{
 };
 use crate::preview_state::PreviewApplyTrace;
 use crate::preview_worker;
-use mister_magik_catalog::builder_service::CatalogWorkMode;
 #[cfg(test)]
 use mister_magik_catalog::catalog_summary;
 #[cfg(test)]
@@ -3947,6 +3946,13 @@ fn expand_home_pan_dirty_rect(
     Some(dirty.map_or(band, |rect| rect.union(band)))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CatalogWorkMode {
+    Cpu0,
+    Paused,
+    DualCoreBurst,
+}
+
 fn launcher_idle_sleep_duration(pacer: &VsyncPacer, work_mode: CatalogWorkMode) -> Duration {
     let frame_period = if work_mode == CatalogWorkMode::DualCoreBurst {
         CATALOG_IDLE_BURST_SLEEP_LIMIT
@@ -6695,19 +6701,12 @@ pub(super) fn run_launcher_loop(
             loop_start,
             &mut catalog_idle_candidate_since,
         );
-        let catalog_work_epoch =
-            mister_magik_catalog::builder_service::set_catalog_work_mode(catalog_work_mode);
         if catalog_work_telemetry.observe(catalog_work_mode, loop_start) {
-            let gate = mister_magik_catalog::builder_service::catalog_work_gate_snapshot();
             crate::ui_logln!(
-                "catalog_work_mode_tsv\tmode={:?}\tepoch={}\tinteraction={}\tvisible_animation={}\tparked_threads={}\tpark_count={}\tcheckpoints={}",
+                "catalog_work_mode_tsv\tmode={:?}\tinteraction={}\tvisible_animation={}",
                 catalog_work_mode,
-                catalog_work_epoch,
                 u8::from(catalog_interaction_active),
                 u8::from(startup_intro.is_some() || slint_animation_active),
-                gate.parked_threads,
-                gate.park_count,
-                gate.checkpoints,
             );
         }
         let catalog_worker_work_allowed = catalog_work_mode != CatalogWorkMode::Paused;
@@ -12490,19 +12489,13 @@ pub(super) fn run_launcher_loop(
     // Preserve the continuous background permission for a later launcher run
     // in the same process (notably host tests and diagnostic runners).
     catalog_work_telemetry.account(Instant::now());
-    let gate = mister_magik_catalog::builder_service::catalog_work_gate_snapshot();
     crate::ui_logln!(
-        "catalog_work_mode_summary_tsv\ttransitions={}\tcpu0_us={}\tpaused_us={}\tburst_us={}\tepoch={}\tpark_count={}\tparked_threads={}\tcheckpoints={}",
+        "catalog_work_mode_summary_tsv\ttransitions={}\tcpu0_us={}\tpaused_us={}\tburst_us={}",
         catalog_work_telemetry.transitions,
         catalog_work_telemetry.cpu0_us,
         catalog_work_telemetry.paused_us,
         catalog_work_telemetry.burst_us,
-        gate.epoch,
-        gate.park_count,
-        gate.parked_threads,
-        gate.checkpoints,
     );
-    mister_magik_catalog::builder_service::set_catalog_work_mode(CatalogWorkMode::Cpu0);
     frame_accounting.finish_preview_scroll_trace();
     let elapsed = run_start.elapsed().as_secs_f64();
     crate::ui_logln!(

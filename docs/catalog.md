@@ -674,7 +674,7 @@ remains in launch-failure recovery and captures dialog input; the original
 system, filter, scroll position, and selected row remain unchanged. Detailed
 paths and error codes are logged but are not shown in the primary UI.
 
-On a device, `mister-magik-fb catalog-v3-inspect` (or `scripts/agent device catalog inspect`)
+On a device, `mister-magik-fb catalog-inspect` (or `scripts/agent device catalog inspect`)
 eagerly verifies both manifest slots, artifact sizes and hashes, state binding,
 scanner cache, every system shard, summed counts, duplicate visible family
 keys, structured-plan payload readability, canonical system/core agreement,

@@ -242,7 +242,7 @@ pub(super) fn profile_installed_storage_attribution(
         let inspect = exec_checked_output(
             &session,
             "inspect isolated storage attribution catalog",
-            &storage_catalog_command("catalog-v3-inspect"),
+            &storage_catalog_command("catalog-inspect"),
         )?;
         if !inspect.stdout.contains("catalog_v3_summary_tsv") || !inspect.stdout.contains("valid=1")
         {

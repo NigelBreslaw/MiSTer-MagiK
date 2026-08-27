@@ -1009,7 +1009,7 @@ query completes without delaying reveal or input.
 Current rules:
 
 - Production `mister-magik-fb` exposes the minimal command surface, including
-  `ui`, `early-black`, `library-refresh`, read-only `catalog-v3-inspect`, and
+  `ui`, `early-black`, `library-refresh`, read-only `catalog-inspect`, and
   attended `purge-library-data --confirm`.
   Low-level probes are diagnostic/experiment builds, not release commands.
 - Build/update the catalog outside the UI hot path through the typed benchmark

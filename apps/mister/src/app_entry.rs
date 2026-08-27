@@ -7,7 +7,7 @@
 //!   Production:
 //!     ui [scene] [secs]  Slint UI (default `launcher`, infinite when secs=0)
 //!     early-black        route a black launcher framebuffer before full UI
-//!     library-refresh    build/update the SQLite library cache
+//!     library-refresh    update the installed catalog or build it when missing
 //!     request-library-rebuild
 //!                        write rebuild-on-next-boot marker for fault tests
 //!     toggle-simple-joystick-setting
@@ -28,9 +28,9 @@
 //!                        fill one scanout slot and post it through FPGA latch
 //!     fpga-latch-pattern
 //!                        fill scanout slots and vblank-latch them in FPGA
-//!     catalog-v3-inspect validate the registry, shards, state, and scanner cache
+//!     catalog-inspect    validate the registry, system artifacts, and source snapshot
 //!     catalog-corpus-inventory inventory production-planned scan targets only
-//!     catalog-v3-registry-report list system counts without opening system shards
+//!     catalog-registry-report list system counts without opening system artifacts
 //!     search-bench       benchmark persisted Arcade FTS5 search
 //!     rom-identity-bench benchmark production ROM identity hashing
 //!     hbmame-metadata-from-library
@@ -364,10 +364,7 @@ fn dispatch_pre_fpga(
         "fb-map-bandwidth" => run_fb_map_bandwidth(),
         #[cfg(feature = "diagnostics")]
         "scanout-slots-map-report" => run_scanout_slots_map_report(),
-        "library-refresh" => run_library_refresh(
-            process_config.catalog_paths(),
-            process_config.archive_cache(),
-        ),
+        "library-refresh" => run_library_refresh(process_config.catalog_paths()),
         "request-library-rebuild" => run_request_library_rebuild(),
         "toggle-simple-joystick-setting" => run_toggle_simple_joystick_setting(),
         "display-persist" => run_display_persist(args),
@@ -388,14 +385,14 @@ fn dispatch_pre_fpga(
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         "preview-index-refresh-bench" => run_preview_index_refresh_bench(),
         command_args::CATALOG_INSPECT_COMMAND => {
-            run_catalog_v3_inspect(process_config.catalog_paths())
+            run_catalog_inspect(process_config.catalog_paths())
         }
         command_args::CATALOG_ROM_AUDIT_COMMAND => run_catalog_arcade_rom_audit(
             process_config.catalog_paths(),
             process_config.archive_cache(),
         ),
         command_args::CATALOG_REGISTRY_REPORT_COMMAND => {
-            run_catalog_v3_registry_report(process_config.catalog_paths())
+            run_catalog_registry_report(process_config.catalog_paths())
         }
         #[cfg(feature = "diagnostics")]
         "hbmame-metadata-from-library" => run_hbmame_metadata_from_library(),
@@ -488,11 +485,11 @@ fn benchmark_capabilities() -> serde_json::Value {
     capabilities
 }
 
-fn run_catalog_v3_inspect(paths: &mister_magik_catalog::device_layout::CatalogPaths) {
+fn run_catalog_inspect(paths: &mister_magik_catalog::device_layout::CatalogPaths) {
     match mister_magik_catalog::catalog_acceptance::inspect_catalog(paths.sharded_catalog_dir()) {
         Ok(report) => crate::ui_log!("{report}"),
         Err(error) => {
-            crate::ui_errln!("catalog_v3_summary_tsv\tvalid=0\terror={error}");
+            crate::ui_errln!("catalog_summary_tsv\tvalid=0\terror={error}");
             std::process::exit(1);
         }
     }
@@ -511,11 +508,11 @@ fn run_catalog_arcade_rom_audit(
     }
 }
 
-fn run_catalog_v3_registry_report(paths: &mister_magik_catalog::device_layout::CatalogPaths) {
+fn run_catalog_registry_report(paths: &mister_magik_catalog::device_layout::CatalogPaths) {
     match mister_magik_catalog::catalog_acceptance::inspect_registry(paths.sharded_catalog_dir()) {
         Ok(report) => crate::ui_log!("{report}"),
         Err(error) => {
-            crate::ui_errln!("catalog_v3_registry_summary_tsv\tvalid=0\terror={error}");
+            crate::ui_errln!("catalog_registry_summary_tsv\tvalid=0\terror={error}");
             std::process::exit(1);
         }
     }
@@ -603,21 +600,32 @@ fn print_experiment_capabilities() {
     }
 }
 
-fn run_library_refresh(
-    paths: &mister_magik_catalog::device_layout::CatalogPaths,
-    archive_cache: &mister_magik_catalog::catalog_config::ArchiveCacheConfig,
-) {
-    let result = mister_magik_catalog::builder_service::run_with_execution_policy_and_fault_control_and_paths(
-        mister_magik_catalog::builder_service::BuilderOperation::Rebuild,
-        mister_magik_catalog::builder_service::BuilderExecutionPolicy::ForegroundUntilFirstVisible,
-        Box::new(mister_magik_mister_runtime::direct_reset_fault::process_fault_control()),
-        paths,
-        archive_cache,
-        |event| crate::ui_logln!("{}", serde_json::to_string(&event).unwrap_or_default()),
-    );
-    if let Err(error) = result {
-        crate::ui_errln!("library_refresh\tfailed\t{error}");
-        std::process::exit(1);
+fn run_library_refresh(paths: &mister_magik_catalog::device_layout::CatalogPaths) {
+    let storage_root = Path::new("/media/fat");
+    let catalog_root = paths.sharded_catalog_dir();
+    let result =
+        if mister_magik_catalog::fast_catalog_refresh::read_latest_refresh_manifest(catalog_root)
+            .is_ok()
+        {
+            mister_magik_catalog::fast_catalog_refresh::execute_fast_refresh(
+                storage_root,
+                catalog_root,
+                mister_magik_catalog::fast_catalog_refresh::FastCatalogRefreshRequest::Update,
+            )
+            .and_then(|report| serde_json::to_string(&report).map_err(|error| error.to_string()))
+        } else {
+            mister_magik_catalog::fast_catalog_refresh::build_fresh_catalog(
+                storage_root,
+                catalog_root,
+            )
+            .and_then(|report| serde_json::to_string(&report).map_err(|error| error.to_string()))
+        };
+    match result {
+        Ok(report) => crate::ui_logln!("{report}"),
+        Err(error) => {
+            crate::ui_errln!("library_refresh\tfailed\t{error}");
+            std::process::exit(1);
+        }
     }
 }
 

@@ -182,6 +182,81 @@ pub struct FastCatalogRefreshReport {
     pub plan: FastRefreshPlanReport,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct FastCatalogFreshBuildReport {
+    pub elapsed_us: u64,
+    pub source: crate::fast_catalog_sources::FastSourceBuildReport,
+    pub publication: crate::fast_five_catalog::FastFivePublishReport,
+    pub capture: FastRefreshCaptureReport,
+    pub refresh_generation: u64,
+    pub system_ids: Vec<String>,
+}
+
+pub fn build_fresh_catalog(
+    storage_root: &Path,
+    catalog_root: &Path,
+) -> Result<FastCatalogFreshBuildReport, String> {
+    let started = std::time::Instant::now();
+    let (snapshot, source) =
+        crate::fast_catalog_sources::build_independent_fast_snapshot(storage_root)?;
+    let publication = crate::fast_five_catalog::publish_snapshot_with_profile(
+        catalog_root,
+        &snapshot,
+        crate::shard_registry::production_registry_limits(),
+        crate::fast_five_catalog::FastFiveArtifactProfile::SearchOnly,
+    )?;
+    let (states, capture) = capture_refresh_state(storage_root, &snapshot)?;
+    let refresh_generation = read_latest_refresh_manifest(catalog_root)
+        .map_or(1, |manifest| manifest.generation.saturating_add(1));
+    publish_refresh_state(
+        catalog_root,
+        refresh_generation,
+        publication.generation,
+        publication.registry_fingerprint.clone(),
+        format!(
+            "independent-fast-sources-v{}",
+            crate::fast_catalog_sources::FAST_SOURCE_ADAPTER_VERSION
+        ),
+        &states,
+    )?;
+    Ok(FastCatalogFreshBuildReport {
+        elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+        source,
+        publication,
+        capture,
+        refresh_generation,
+        system_ids: snapshot
+            .systems
+            .into_iter()
+            .map(|system| system.system_id)
+            .collect(),
+    })
+}
+
+pub fn remove_default_catalog_artifacts() -> Result<usize, String> {
+    let paths = crate::device_layout::CatalogPaths::capture_process();
+    remove_catalog_artifacts(paths.sharded_catalog_dir())
+}
+
+pub fn remove_catalog_artifacts(catalog_root: &Path) -> Result<usize, String> {
+    if catalog_root.file_name().and_then(|name| name.to_str()) != Some("catalog-fast-v1") {
+        return Err(format!(
+            "refusing to remove unexpected catalog path {}",
+            catalog_root.display()
+        ));
+    }
+    if !catalog_root.exists() {
+        return Ok(0);
+    }
+    let entries = walkdir::WalkDir::new(catalog_root)
+        .into_iter()
+        .filter_map(Result::ok)
+        .count();
+    fs::remove_dir_all(catalog_root)
+        .map_err(|error| format!("remove catalog {}: {error}", catalog_root.display()))?;
+    Ok(entries)
+}
+
 impl FastRefreshManifest {
     pub fn new(
         generation: u64,

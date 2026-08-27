@@ -277,126 +277,62 @@ fn run_fast_catalog_fresh_build(
     catalog_root: &Path,
     tx: &mpsc::Sender<CatalogWorkerMessage>,
 ) {
-    use mister_magik_catalog::fast_catalog_refresh::{
-        capture_refresh_state, publish_refresh_state, read_latest_refresh_manifest,
-    };
-    use mister_magik_catalog::fast_catalog_sources::{
-        FAST_SOURCE_ADAPTER_VERSION, build_independent_fast_snapshot,
-        discover_independent_system_ids,
-    };
-    use mister_magik_catalog::fast_five_catalog::{
-        FastFiveArtifactProfile, publish_snapshot_with_profile, registry_fingerprint,
-    };
-
-    let started = Instant::now();
     let storage_root = PathBuf::from("/media/fat");
-    let system_ids = discover_independent_system_ids(&storage_root);
+    let planned_system_ids =
+        mister_magik_catalog::fast_catalog_sources::discover_independent_system_ids(&storage_root);
     let _ = tx.send(CatalogWorkerMessage::ReconciliationPlanReady {
-        system_ids: system_ids.clone(),
+        system_ids: planned_system_ids.clone(),
         all_published_systems: true,
     });
-    for system_id in &system_ids {
+    for system_id in &planned_system_ids {
         let _ = tx.send(CatalogWorkerMessage::SystemScanning {
             system_id: system_id.clone(),
         });
     }
-    let (snapshot, source_report) = match build_independent_fast_snapshot(&storage_root) {
-        Ok(result) => result,
-        Err(error) => {
-            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-                error: format!("fast catalog source build failed: {error}"),
-            });
-            return;
-        }
-    };
-    let publication = match publish_snapshot_with_profile(
+    let report = match mister_magik_catalog::fast_catalog_refresh::build_fresh_catalog(
+        &storage_root,
         catalog_root,
-        &snapshot,
-        mister_magik_catalog::shard_registry::production_registry_limits(),
-        FastFiveArtifactProfile::SearchOnly,
     ) {
         Ok(report) => report,
         Err(error) => {
             let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-                error: format!("fast catalog publication failed: {error}"),
+                error: format!("catalog build failed: {error}"),
             });
             return;
         }
     };
-    let (states, capture_report) = match capture_refresh_state(&storage_root, &snapshot) {
-        Ok(result) => result,
-        Err(error) => {
-            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-                error: format!("fast catalog watch capture failed: {error}"),
-            });
-            return;
-        }
-    };
-    let refresh_generation = read_latest_refresh_manifest(catalog_root)
-        .map_or(1, |manifest| manifest.generation.saturating_add(1));
-    let fingerprint = match registry_fingerprint(
-        catalog_root,
-        mister_magik_catalog::shard_registry::production_registry_limits(),
-    ) {
-        Ok(fingerprint) => fingerprint,
-        Err(error) => {
-            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-                error: format!("fast catalog fingerprint failed: {error}"),
-            });
-            return;
-        }
-    };
-    if let Err(error) = publish_refresh_state(
-        catalog_root,
-        refresh_generation,
-        publication.generation,
-        fingerprint,
-        format!("independent-fast-sources-v{FAST_SOURCE_ADAPTER_VERSION}"),
-        &states,
-    ) {
-        let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-            error: format!("fast catalog watch publication failed: {error}"),
-        });
-        return;
-    }
-    for system in &snapshot.systems {
+    for system_id in &report.system_ids {
         let _ = tx.send(CatalogWorkerMessage::SystemPrepared {
-            system_id: system.system_id.clone(),
-            generation: publication.generation,
+            system_id: system_id.clone(),
+            generation: report.publication.generation,
         });
     }
-    let rebuilt = snapshot
-        .systems
-        .iter()
-        .map(|system| system.system_id.clone())
-        .collect::<Vec<_>>();
     let _ = tx.send(CatalogWorkerMessage::ManifestPublished {
-        generation: publication.generation,
-        rebuilt,
+        generation: report.publication.generation,
+        rebuilt: report.system_ids.clone(),
         removed: Vec::new(),
     });
     let _ = tx.send(CatalogWorkerMessage::Timing {
-        name: "fast_catalog_fresh_build".to_string(),
+        name: "catalog_fresh_build".to_string(),
         detail: format!(
             "elapsed_us={} source_us={} publish_us={} capture_us={} systems={} games={} copied_bytes={}",
-            started.elapsed().as_micros(),
-            source_report.elapsed_us,
-            publication.elapsed_us,
-            capture_report.elapsed_us,
-            publication.systems,
-            publication.games,
-            publication.copied_bytes,
+            report.elapsed_us,
+            report.source.elapsed_us,
+            report.publication.elapsed_us,
+            report.capture.elapsed_us,
+            report.publication.systems,
+            report.publication.games,
+            report.publication.copied_bytes,
         ),
     });
     if let Err(error) = publish_strict_registry_seed_at(tx, root, catalog_root) {
         let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-            error: format!("fast catalog registry load failed: {error}"),
+            error: format!("catalog registry load failed: {error}"),
         });
         return;
     }
     let _ = tx.send(CatalogWorkerMessage::Done);
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CatalogReconcileScope {
     ChangedInputs,

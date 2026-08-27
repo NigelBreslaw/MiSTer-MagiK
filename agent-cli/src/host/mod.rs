@@ -91,7 +91,7 @@ static DEVELOPMENT_AGENT_REMOTE: LazyLock<String> = LazyLock::new(|| {
 static DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND: LazyLock<String> =
     LazyLock::new(|| development_gui_command("benchmark-capabilities"));
 static DEVELOPMENT_CATALOG_REGISTRY_REPORT_COMMAND: LazyLock<String> =
-    LazyLock::new(|| development_gui_command("catalog-v3-registry-report"));
+    LazyLock::new(|| development_gui_command("catalog-registry-report"));
 const RETURN_CATALOG_CAPSULE_REMOTE: &str = "/tmp/mister-magik/launcher-return-catalog.json";
 const MAIN_STATUS_REMOTE: &str = "/tmp/mister-magik/main-status.json";
 const SLINT_STATUS_REMOTE: &str = "/tmp/mister-magik/status.json";
@@ -1573,7 +1573,7 @@ impl NativeDevice {
         let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
         let inspect = exec(
             &session,
-            &format!("{PUBLIC_GUI_REMOTE} catalog-v3-inspect"),
+            &format!("{PUBLIC_GUI_REMOTE} catalog-inspect"),
             true,
         )
         .map_err(device_failure)?;
@@ -5521,7 +5521,7 @@ fn release_begin_command() -> String {
 
 fn release_catalog_command() -> String {
     format!(
-        "set -eu; test -s {RELEASE_TOKEN}; {active}; report=$(\"$root/mister-magik-fb\" catalog-v3-inspect); printf '%s\\n' \"$report\" | grep -Eq 'catalog_v3_summary_tsv[[:space:]]+valid=1'",
+        "set -eu; test -s {RELEASE_TOKEN}; {active}; report=$(\"$root/mister-magik-fb\" catalog-inspect); printf '%s\\n' \"$report\" | grep -Eq 'catalog_summary_tsv[[:space:]]+valid=1'",
         active = active_installed_root_assignment(),
     )
 }
@@ -18077,7 +18077,7 @@ fn profile_installed_catalog_lifecycle(
 
             let inspect = exec(
                 &session,
-                &catalog_lifecycle_runtime_command("catalog-v3-inspect"),
+                &catalog_lifecycle_runtime_command("catalog-inspect"),
                 true,
             )?;
             if exec_failure_message("catalog lifecycle inspect", &inspect).is_none() {
@@ -23354,7 +23354,7 @@ fn run_catalog_build_rebuild_leg(
                 return Err(format!("{label} catalog did not become visible: {status}").into());
             }
             if status.get("catalog_refresh_done").and_then(Value::as_bool) == Some(true) {
-                let inspect = exec(session, &runtime_command("catalog-v3-inspect"), true)?;
+                let inspect = exec(session, &runtime_command("catalog-inspect"), true)?;
                 if let Some(error) = exec_failure_message("catalog build/rebuild inspect", &inspect)
                 {
                     return Err(format!(
@@ -33403,7 +33403,7 @@ fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
         .ok_or("active Main status is unavailable for catalog inspection")?;
     let status: Value = serde_json::from_str(&status_text)?;
     let binary = active_installed_gui_binary(&status)?;
-    let command = remote_subcommand(binary, "catalog-v3-inspect", args);
+    let command = remote_subcommand(binary, "catalog-inspect", args);
     let out = exec(sess, &command, true)?;
     print!("{}", out.stdout);
     if !out.stderr.trim().is_empty() {
@@ -40052,7 +40052,7 @@ H: Handlers=event3 js0"#
             key == "MISTER_SHARDED_CATALOG_DIR"
                 && value.starts_with(CATALOG_BUILD_REBUILD_REMOTE_DIR)
         }));
-        let inspect = catalog_full_build_rebuild_runtime_command("catalog-v3-inspect");
+        let inspect = catalog_full_build_rebuild_runtime_command("catalog-inspect");
         assert!(inspect.contains(CATALOG_BUILD_REBUILD_REMOTE_DIR));
         assert!(!inspect.contains("MISTER_LIBRARY_ROOTS="));
     }
