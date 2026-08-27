@@ -163,13 +163,13 @@ impl FastFiveSnapshot {
                         system.system_id, game.stable_key
                     ));
                 }
-                if let Some(plan) = &game.launch_plan {
-                    if plan.launch_ref != game.launch_ref || plan.system_id != system.system_id {
-                        return Err(format!(
-                            "{} launch plan is not bound to {}",
-                            system.system_id, game.stable_key
-                        ));
-                    }
+                if let Some(plan) = &game.launch_plan
+                    && (plan.launch_ref != game.launch_ref || plan.system_id != system.system_id)
+                {
+                    return Err(format!(
+                        "{} launch plan is not bound to {}",
+                        system.system_id, game.stable_key
+                    ));
                 }
             }
             for variant in &system.variants {

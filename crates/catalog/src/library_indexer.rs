@@ -21,7 +21,7 @@ use crate::library_db::{
     LibraryScanEvent, ProgressCallback, ScanEventCallback,
 };
 use crate::media_metadata;
-use crate::prepared_bundle_helper::PreparedTargetCatalogHelper;
+use crate::prepared_bundle_helper::{PreparedTargetCatalogCapture, PreparedTargetCatalogHelper};
 use crate::prepared_collections::PreparedPayloadIndex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -581,16 +581,19 @@ fn capture_prepared_target_helper(
             descriptor.path.display()
         ));
     }
-    let helper = PreparedTargetCatalogHelper::capture(
-        &storage_root,
-        &descriptor.path,
+    let exact_relative_paths = exact_paths.into_iter().collect::<Vec<_>>();
+    let payload_relative_paths = payload_paths.into_iter().collect::<Vec<_>>();
+    let inventory_extensions = inventory_extensions.into_iter().collect::<Vec<_>>();
+    let helper = PreparedTargetCatalogHelper::capture(PreparedTargetCatalogCapture {
+        storage_root: &storage_root,
+        target_path: &descriptor.path,
         scan_exclusion_path,
-        collection_ids.into_iter().collect::<Vec<_>>().join("+"),
+        collection_id: collection_ids.into_iter().collect::<Vec<_>>().join("+"),
         output_json,
-        &exact_paths.into_iter().collect::<Vec<_>>(),
-        &payload_paths.into_iter().collect::<Vec<_>>(),
-        &inventory_extensions.into_iter().collect::<Vec<_>>(),
-    )?;
+        exact_relative_paths: &exact_relative_paths,
+        payload_relative_paths: &payload_relative_paths,
+        inventory_extensions: &inventory_extensions,
+    })?;
     std::fs::create_dir_all(&directory).map_err(|error| {
         format!(
             "create prepared target helper directory {}: {error}",

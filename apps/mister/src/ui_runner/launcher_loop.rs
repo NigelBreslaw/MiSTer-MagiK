@@ -19197,12 +19197,12 @@ mod tests {
             PathBuf::from("/fixture"),
             Vec::new(),
             vec![
-                GameSystemEntry {
+                arcade_catalog::GameSystemEntry {
                     id: "arcade".into(),
                     title: "Arcade".into(),
                     count: 1,
                 },
-                GameSystemEntry {
+                arcade_catalog::GameSystemEntry {
                     id: arcade_catalog::MENU_ARCADE_SYSTEM_ID.into(),
                     title: "Arcade".into(),
                     count: 1,

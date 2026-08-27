@@ -11,8 +11,8 @@ source_roots = [
 ]
 
 [baseline]
-literal_occurrences = 417
-unique_names = 278
+literal_occurrences = 429
+unique_names = 282
 external_build_names = 7
 
 [[control]]
@@ -620,6 +620,36 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls effect bench label behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_FAST_CATALOG_STORAGE_ROOT"
+owner = "apps/mister/src/ui_runner/catalog_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "defaults to /media/fat when unset"
+visibility = "internal runtime"
+parser = "path"
+typed_default = "/media/fat"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Storage root inspected by the independent fast catalog refresher", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_FAST_FIVE_CATALOG"
+owner = "apps/mister/src/process_config.rs"
+classification = "production"
+value_shape = "boolean token"
+default_behavior = "uses the production catalog when unset or disabled"
+visibility = "internal runtime"
+parser = "bool"
+typed_default = false
+scope = "command"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Selects the independent fast catalog and its return-path restoration", accepted_values = ["0", "1", "off", "on", "false", "true", "no", "yes"], value_policy = "document" }
 
 [[control]]
 name = "MISTER_FB_DIAGNOSTIC_RECT"
@@ -2665,6 +2695,34 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls pprof warmup secs behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_PREPARED_BUNDLE_CAPTURE_DIR"
+owner = "crates/catalog/src/library_indexer.rs"
+classification = "diagnostic"
+value_shape = "path or path list"
+default_behavior = "prepared helper capture is disabled when unset"
+visibility = "developer diagnostic"
+parser = "path"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Output directory for capturing prepared collection helper fixtures", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_PREPARED_BUNDLE_HELPER_DIR"
+owner = "crates/catalog/src/library_indexer.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "prepared collection acceleration is disabled when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Directory containing receipt-guarded prepared collection helpers", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PRESENT_BACKEND"

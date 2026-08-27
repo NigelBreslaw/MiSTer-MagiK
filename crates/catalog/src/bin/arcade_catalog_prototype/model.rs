@@ -251,7 +251,9 @@ pub fn decode_base(bytes: &[u8]) -> Result<BaseCatalog, String> {
     }
     let strings = &payload[records_end..];
     let mut candidates = Vec::with_capacity(count);
-    for record in payload[40..records_end].chunks_exact(BASE_RECORD_BYTES) {
+    let (records, remainder) = payload[40..records_end].as_chunks::<BASE_RECORD_BYTES>();
+    debug_assert!(remainder.is_empty());
+    for record in records {
         let rom_setname = read_string(strings, read_u32(record, 36)?)?;
         let rom = match record[51] {
             0 => RomRequirement::None,
@@ -365,7 +367,10 @@ pub fn decode_active(bytes: &[u8]) -> Result<ActiveCatalog, String> {
     }
     let strings = &payload[records_end..];
     let mut records = Vec::with_capacity(count);
-    for record in payload[records_start..records_end].chunks_exact(ACTIVE_RECORD_BYTES) {
+    let (active_records, remainder) =
+        payload[records_start..records_end].as_chunks::<ACTIVE_RECORD_BYTES>();
+    debug_assert!(remainder.is_empty());
+    for record in active_records {
         records.push(ActiveRecord {
             path: read_string(strings, read_u32(record, 0)?)?,
             family_id: read_string(strings, read_u32(record, 4)?)?,

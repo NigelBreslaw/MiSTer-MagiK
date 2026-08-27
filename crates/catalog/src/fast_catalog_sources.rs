@@ -604,7 +604,7 @@ fn scan_amiga(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<S
             } else {
                 "games"
             };
-            let contents = match fs::read_to_string(&path) {
+            let contents = match fs::read_to_string(path) {
                 Ok(contents) => contents,
                 Err(_) => continue,
             };

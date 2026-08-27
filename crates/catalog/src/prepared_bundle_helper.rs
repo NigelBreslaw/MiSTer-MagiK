@@ -36,17 +36,29 @@ pub(crate) struct PreparedTargetCatalogHelper {
     pub(crate) output_sha256: String,
 }
 
+pub(crate) struct PreparedTargetCatalogCapture<'a> {
+    pub(crate) storage_root: &'a Path,
+    pub(crate) target_path: &'a Path,
+    pub(crate) scan_exclusion_path: Option<&'a Path>,
+    pub(crate) collection_id: String,
+    pub(crate) output_json: String,
+    pub(crate) exact_relative_paths: &'a [String],
+    pub(crate) payload_relative_paths: &'a [String],
+    pub(crate) inventory_extensions: &'a [String],
+}
+
 impl PreparedTargetCatalogHelper {
-    pub(crate) fn capture(
-        storage_root: &Path,
-        target_path: &Path,
-        scan_exclusion_path: Option<&Path>,
-        collection_id: impl Into<String>,
-        output_json: String,
-        exact_relative_paths: &[String],
-        payload_relative_paths: &[String],
-        inventory_extensions: &[String],
-    ) -> Result<Self, String> {
+    pub(crate) fn capture(request: PreparedTargetCatalogCapture<'_>) -> Result<Self, String> {
+        let PreparedTargetCatalogCapture {
+            storage_root,
+            target_path,
+            scan_exclusion_path,
+            collection_id,
+            output_json,
+            exact_relative_paths,
+            payload_relative_paths,
+            inventory_extensions,
+        } = request;
         target_path.strip_prefix(storage_root).map_err(|error| {
             format!(
                 "prepared target {} is outside storage root {}: {error}",
@@ -756,7 +768,9 @@ mod tests {
         write_fixture(&root);
         let helper = helper(&root);
         fs::remove_file(root.join("games/AO486/Doom.vhd")).unwrap();
-        let activation = helper.activate_with_fallback(&root, Vec::new).unwrap();
+        let activation = helper
+            .activate_with_fallback(&root, || Ok(Vec::new()))
+            .unwrap();
         fs::remove_dir_all(root).unwrap();
 
         assert_eq!(activation.path, PreparedBundlePath::Fallback);
@@ -783,16 +797,16 @@ mod tests {
     fn prepared_target_helper_activates_for_unchanged_tree() {
         let root = fixture_root("target-exact");
         write_fixture(&root);
-        let helper = PreparedTargetCatalogHelper::capture(
-            &root,
-            &root.join("_DOS Games"),
-            None,
-            "0mhz",
-            "{\"discoveries\":[]}".to_string(),
-            &["_DOS Games/Doom.mgl".to_string()],
-            &["games/AO486/Doom.vhd".to_string()],
-            &["mgl".to_string()],
-        )
+        let helper = PreparedTargetCatalogHelper::capture(PreparedTargetCatalogCapture {
+            storage_root: &root,
+            target_path: &root.join("_DOS Games"),
+            scan_exclusion_path: None,
+            collection_id: "0mhz".to_string(),
+            output_json: "{\"discoveries\":[]}".to_string(),
+            exact_relative_paths: &["_DOS Games/Doom.mgl".to_string()],
+            payload_relative_paths: &["games/AO486/Doom.vhd".to_string()],
+            inventory_extensions: &["mgl".to_string()],
+        })
         .unwrap();
 
         assert!(helper.activate().is_ok());
@@ -803,16 +817,16 @@ mod tests {
     fn prepared_target_helper_rejects_added_game() {
         let root = fixture_root("target-addition");
         write_fixture(&root);
-        let helper = PreparedTargetCatalogHelper::capture(
-            &root,
-            &root.join("_DOS Games"),
-            None,
-            "0mhz",
-            "{\"discoveries\":[]}".to_string(),
-            &["_DOS Games/Doom.mgl".to_string()],
-            &["games/AO486/Doom.vhd".to_string()],
-            &["mgl".to_string()],
-        )
+        let helper = PreparedTargetCatalogHelper::capture(PreparedTargetCatalogCapture {
+            storage_root: &root,
+            target_path: &root.join("_DOS Games"),
+            scan_exclusion_path: None,
+            collection_id: "0mhz".to_string(),
+            output_json: "{\"discoveries\":[]}".to_string(),
+            exact_relative_paths: &["_DOS Games/Doom.mgl".to_string()],
+            payload_relative_paths: &["games/AO486/Doom.vhd".to_string()],
+            inventory_extensions: &["mgl".to_string()],
+        })
         .unwrap();
         fs::write(root.join("_DOS Games/Homebrew.mgl"), b"custom").unwrap();
 
