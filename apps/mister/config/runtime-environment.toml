@@ -411,7 +411,7 @@ documentation = { summary = "Controls catalog durable resume behavior", accepted
 
 [[control]]
 name = "MISTER_CATALOG_PROTOCOL_STDOUT"
-owner = "crates/catalog/src/bin/catalog_builder.rs"
+owner = "crates/catalog/src/fallible_log.rs"
 classification = "production"
 value_shape = "boolean token"
 default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
@@ -421,7 +421,7 @@ scope = "command"
 conflicts = []
 sensitivity = "public"
 aliases = []
-documentation = { summary = "Controls catalog protocol stdout behavior", accepted_values = [], value_policy = "document" }
+documentation = { summary = "Routes catalog protocol output away from standard output", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_CATALOG_READY_SNAPSHOT"
