@@ -1350,11 +1350,6 @@ mod tests {
             .iter()
             .find(|system| system.system_id.as_str() == "arcade")
             .unwrap();
-        fs::write(
-            root.join(&published.active.navigation_path),
-            b"fast catalogs do not use this legacy navigation artifact",
-        )
-        .unwrap();
         let pack = root.join("arcade-pack.mmlz4b");
         write_preview_sidecar_index(&pack, &["present.rgb565"]);
 

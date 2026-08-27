@@ -495,6 +495,14 @@ mod tests {
         );
         session.observe_system_entry(None);
         session.observe_system_entry(Some("snes"));
+        assert!(effect_names(session.apply_gate(session.last_gate)).is_empty());
+        let _ = session.handle_worker_message(
+            MediaWorkerMessage::Done {
+                detail: "checked=1".to_string(),
+            },
+            false,
+            Instant::now(),
+        );
         assert_eq!(
             effect_names(session.apply_gate(session.last_gate)),
             vec!["ensure-worker", "set-interaction", "ensure-system"]

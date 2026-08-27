@@ -1144,7 +1144,8 @@ mod tests {
         .unwrap();
         let mut report = FastSourceSystemReport::default();
         let games = scan_amiga(&root, &mut report);
-        assert_eq!(games.len(), 2);
+        assert_eq!(games.len(), 3);
+        assert!(games.iter().any(|game| game.title == "AmigaVision"));
         assert_eq!(
             games[1].launch_ref,
             "magik-amigavision:games:Agony%20%26%20Pain"
@@ -1178,7 +1179,12 @@ mod tests {
         .unwrap();
         fs::write(&payload, b"payload").unwrap();
         let mut report = FastSourceSystemReport::default();
-        let games = scan_prepared_mgl(&[launcher_root.clone()], "dos", "DOS", &mut report);
+        let games = scan_prepared_mgl(
+            std::slice::from_ref(&launcher_root),
+            "dos",
+            "DOS",
+            &mut report,
+        );
         assert_eq!(games.len(), 1);
         assert_eq!(report.helper_hits, 1);
         assert_eq!(report.fallback_validations, 0);

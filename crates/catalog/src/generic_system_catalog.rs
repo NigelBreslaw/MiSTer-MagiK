@@ -164,7 +164,7 @@ pub fn scan_prepared_system_with_generic_walker(
     ))
 }
 
-fn generic_c64_baseline_profile() -> LaunchProfile {
+pub(crate) fn generic_c64_baseline_profile() -> LaunchProfile {
     LaunchProfile {
         id: "generic-c64-baseline".to_string(),
         system_id: "c64".to_string(),

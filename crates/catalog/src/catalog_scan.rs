@@ -2632,7 +2632,7 @@ mod tests {
         std::fs::create_dir_all(&personal).unwrap();
         std::fs::write(oneload.join("Bundled.crt"), b"bundle").unwrap();
         std::fs::write(personal.join("Homebrew.crt"), b"personal").unwrap();
-        let profiles = crate::launch_profiles::builtin_profiles();
+        let profiles = vec![crate::generic_system_catalog::generic_c64_baseline_profile()];
         let candidate_exts = source_index_extensions(&profiles);
         let mut paths = Vec::new();
 
