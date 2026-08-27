@@ -2,7 +2,7 @@
 
 <!-- Generated from apps/mister/config/runtime-environment.toml. Do not edit. -->
 
-Registry format: `mister-magik-runtime-environment-v2`. Baseline: 426 literal occurrences, 280 owned names, 7 external/build-time names.
+Registry format: `mister-magik-runtime-environment-v2`. Baseline: 425 literal occurrences, 279 owned names, 7 external/build-time names.
 
 | Name | Classification | Shape | Default behavior | Parser | Typed default | Scope | Conflicts | Sensitivity | Aliases | Documentation | Visibility | Owner |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -39,7 +39,6 @@ Registry format: `mister-magik-runtime-environment-v2`. Baseline: 426 literal oc
 | `MISTER_CATALOG_PROTOCOL_STDOUT` | production | boolean token | uses the owner-defined enabled or disabled default when unset or unrecognized | bool | — | command | — | public | — | Controls catalog protocol stdout behavior; value policy: document | internal runtime | `crates/catalog/src/bin/catalog_builder.rs` |
 | `MISTER_CATALOG_READY_SNAPSHOT` | production | path | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls catalog ready snapshot behavior; value policy: document | internal runtime | `apps/mister/src/pmu_profile.rs` |
 | `MISTER_CATALOG_REFRESH` | production | boolean token | loads an existing catalog without reconciliation and builds only when no usable catalog exists | bool | — | command | — | public | — | Selects catalog startup policy; force is an explicit diagnostic/stress override and off disables the worker; values: default, force, off, load-only; value policy: document | internal runtime | `apps/mister/src/ui_runner/ui_frame_target.rs` |
-| `MISTER_CATALOG_SHARD_STAGING` | benchmark | enum token | automatically selects tmpfs when supported and sufficiently sized, otherwise generation-private on-media staging | enum | "auto" | instrumentation | — | public | — | Selects the catalog shard staging route for benchmark comparison; values: auto, tmpfs, on-media; value policy: document | benchmark only | `crates/catalog/src/reconciliation_executor.rs` |
 | `MISTER_CATALOG_TRACE` | diagnostic | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | instrumentation | — | public | — | Controls catalog trace behavior; value policy: document | developer diagnostic | `crates/catalog/src/catalog_checkpoint.rs` |
 | `MISTER_CRASH_BACKTRACE` | diagnostic | boolean token | uses the owner-defined enabled or disabled default when unset or unrecognized | bool | — | instrumentation | — | public | — | Controls crash backtrace behavior; value policy: document | developer diagnostic | `apps/mister/src/crash_report.rs` |
 | `MISTER_CRT240_COMPOSITION` | diagnostic | enum token | uses native 640x240 composition when unset or unrecognized | enum | "native" | instrumentation | — | public | — | Selects the volatile CRT240 composition policy; values: native, legacy-480; value policy: document | developer diagnostic | `apps/mister/src/ui_display.rs` |

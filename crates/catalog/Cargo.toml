@@ -11,16 +11,6 @@ description = "Catalog, library scan, and preview-loading logic for MiSTer MagiK
 license = "GPL-3.0-or-later"
 
 [[bin]]
-name = "mister-magik-catalog-builder"
-path = "src/bin/catalog_builder.rs"
-required-features = ["builder"]
-
-[[bin]]
-name = "catalog-lab"
-path = "src/bin/catalog_lab.rs"
-required-features = ["builder"]
-
-[[bin]]
 name = "arcade-catalog-prototype"
 path = "src/bin/arcade_catalog_prototype/main.rs"
 required-features = ["builder"]

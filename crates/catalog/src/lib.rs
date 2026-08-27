@@ -16,8 +16,6 @@ mod bounded_lz4;
 pub mod build_progress;
 pub mod builder_protocol;
 #[cfg(feature = "builder")]
-pub mod builder_service;
-#[cfg(feature = "builder")]
 pub mod catalog_acceptance;
 pub mod catalog_build;
 pub mod catalog_build_record;
@@ -37,8 +35,6 @@ pub mod catalog_stamp;
 pub mod catalog_state;
 pub mod catalog_store;
 pub mod catalog_summary;
-#[cfg(feature = "builder")]
-pub mod catalog_vertical_slice;
 mod cooperative_work;
 mod core_audit;
 pub mod device_layout;
@@ -86,24 +82,12 @@ pub mod multi_system_projection;
 mod namespace_walk;
 pub mod navpack;
 pub mod persisted_search;
-#[cfg(feature = "builder")]
-pub mod portable_catalog_builder;
 pub mod prepared_bundle_helper;
 pub mod prepared_collections;
 mod prepared_release_manifest;
 mod preview_archive;
 pub mod preview_availability;
 pub mod preview_worker;
-#[cfg(feature = "builder")]
-pub mod production_sharded_projection;
-#[cfg(feature = "builder")]
-pub mod progressive_scheduler;
-#[cfg(feature = "builder")]
-pub mod rebuild_benchmark;
-#[cfg(feature = "builder")]
-pub mod reconciliation_executor;
-#[cfg(feature = "builder")]
-pub mod reconciliation_planner;
 pub mod runtime_thread;
 pub mod scanner_cache;
 pub mod shard_registry;

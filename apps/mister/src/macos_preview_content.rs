@@ -82,7 +82,7 @@ impl HostContentLayout {
         let cache_root = cache_base.as_ref().join("cards").join(&volume_key);
         Ok(Self {
             card_root,
-            catalog_root: cache_root.join("catalog-v3"),
+            catalog_root: cache_root.join("catalog-fast-v1"),
             media_root: cache_root.join("assets"),
             work_root: cache_root.join("work"),
             cache_root,

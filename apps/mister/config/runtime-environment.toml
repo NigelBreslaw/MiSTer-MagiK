@@ -11,8 +11,8 @@ source_roots = [
 ]
 
 [baseline]
-literal_occurrences = 426
-unique_names = 280
+literal_occurrences = 425
+unique_names = 279
 external_build_names = 7
 
 [[control]]
@@ -478,21 +478,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Selects catalog startup policy; force is an explicit diagnostic/stress override and off disables the worker", accepted_values = ["default", "force", "off", "load-only"], value_policy = "document" }
-
-[[control]]
-name = "MISTER_CATALOG_SHARD_STAGING"
-owner = "crates/catalog/src/reconciliation_executor.rs"
-classification = "benchmark"
-value_shape = "enum token"
-default_behavior = "automatically selects tmpfs when supported and sufficiently sized, otherwise generation-private on-media staging"
-visibility = "benchmark only"
-parser = "enum"
-typed_default = "auto"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Selects the catalog shard staging route for benchmark comparison", accepted_values = ["auto", "tmpfs", "on-media"], value_policy = "document" }
 
 [[control]]
 name = "MISTER_CATALOG_TRACE"
