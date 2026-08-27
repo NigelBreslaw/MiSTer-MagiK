@@ -842,9 +842,9 @@ export component DebugPage {
         { id: "scanout-slots", cells: [{ kind: DataTableCellKind.iconText, text: "Scanout slots", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.eye, icon-tint: DeviceState.scanout-slots-summary == "Scanout slots ready" ? DataTableIconTint.success : DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.scanout-slots-summary, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.scanout-slots-detail, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
     ];
 
-    property <[DataTableRow]> library-rows: [
-        { id: "catalog", cells: [{ kind: DataTableCellKind.iconText, text: "Library", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.table, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Catalog", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.catalog-summary, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
-        { id: "screen", cells: [{ kind: DataTableCellKind.iconText, text: "Library", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.eye, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Screen", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.screen-summary, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+    property <[DataTableRow]> launcher-rows: [
+        { id: "catalog", cells: [{ kind: DataTableCellKind.iconText, text: "Launcher", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.table, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Catalog", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.catalog-summary, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+        { id: "screen", cells: [{ kind: DataTableCellKind.iconText, text: "Launcher", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.eye, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Screen", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.screen-summary, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
         { id: "input", cells: [{ kind: DataTableCellKind.iconText, text: "Input", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.checkbox, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Controller", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.input-summary, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
     ];
     property <[SegmentedControlSegment]> debug-tabs: [
@@ -852,7 +852,7 @@ export component DebugPage {
         { label: "Real Time", has-leading-icon: true, leading-icon: Icons.history, disabled: false, has-count: false, count-text: "", icon-only: false },
         { label: "Device", has-leading-icon: true, leading-icon: Icons.repo, disabled: false, has-count: false, count-text: "", icon-only: false },
         { label: "Runtime", has-leading-icon: true, leading-icon: Icons.layout_grid, disabled: false, has-count: false, count-text: "", icon-only: false },
-        { label: "Library", has-leading-icon: true, leading-icon: Icons.table, disabled: false, has-count: false, count-text: "", icon-only: false },
+        { label: "Launcher", has-leading-icon: true, leading-icon: Icons.table, disabled: false, has-count: false, count-text: "", icon-only: false },
     ];
 
     VerticalLayout {
@@ -934,14 +934,14 @@ export component DebugPage {
             if AppState.debug-tab-index == 4: RealtimeStopper { }
 
             if AppState.debug-tab-index == 4: TableContainer {
-                title: "Library and input";
+                title: "Launcher and input";
                 subtitle: "Catalog, visible scene, and controller summary.";
 
                 DataTable {
                     width: 100%;
                     cell-padding: DataTableCellPadding.normal;
                     columns: detail-columns;
-                    rows: library-rows;
+                    rows: launcher-rows;
                 }
             }
         }

@@ -147,12 +147,6 @@ export component Sidebar inherits Rectangle {
         }
 
         SidebarIconButton {
-            icon: Icons.table;
-            active: AppState.selected-page == "library";
-            clicked => { Actions.select-page("library"); }
-        }
-
-        SidebarIconButton {
             icon: Icons.eye;
             active: AppState.selected-page == "analytics";
             clicked => { Actions.select-page("analytics"); }
@@ -192,4 +186,3 @@ export component ViewTitle {
         }
     }
 }
-

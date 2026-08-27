@@ -20,7 +20,6 @@ lz4_flex = "0.14.0"
 mister-magik-framebuffer-stream = { path = "../../crates/framebuffer-stream" }
 mister-magik-agent-protocol = { path = "../../crates/agent-protocol" }
 png = "0.18.1"
-rusqlite = { version = "0.40.0", default-features = false, features = ["bundled", "modern_sqlite"] }
 serde_json = "1"
 slint = { version = "=1.17.1", default-features = false, features = ["std", "backend-winit", "renderer-software", "compat-1-2", "accessibility", "unstable-winit-030"] }
 slint-interpreter = { version = "=1.17.1", optional = true, default-features = false, features = ["compat-1-2", "display-diagnostics"] }

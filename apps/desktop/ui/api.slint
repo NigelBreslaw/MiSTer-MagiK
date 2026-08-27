@@ -14,7 +14,6 @@ import {
     DataTableColumn,
     DataTableIconTint,
     DataTableRow,
-    DataTableSortDirection,
     Icons,
     LabelSize,
     LabelVariant,
@@ -25,7 +24,6 @@ import {
     SegmentedControlSegment,
     SegmentedControlSize,
     Select,
-    SelectOption,
     Size,
     Spinner,
     TableContainer,
@@ -236,53 +234,6 @@ export global SdCardState {
     ];
 }
 
-export global LibraryState {
-    in-out property <string> status: "Sync the MiSTer library database to browse games.";
-    in-out property <string> warning: "";
-    in-out property <string> last-error: "";
-    in-out property <bool> loading: false;
-    in-out property <bool> updating_controls: false;
-    in-out property <string> query: "";
-    in-out property <string> system-filter: "";
-    in-out property <string> category-filter: "";
-    in-out property <string> region-filter: "";
-    in-out property <string> manufacturer-filter: "";
-    in-out property <string> preview-filter: "";
-    in-out property <string> confidence-filter: "";
-    in-out property <string> sort-column: "title";
-    in-out property <DataTableSortDirection> sort-direction: DataTableSortDirection.ascending;
-    in-out property <int> page: 1;
-    in-out property <int> page-count: 1;
-    in-out property <string> result-summary: "No library loaded.";
-    in-out property <[DataTableRow]> rows: [];
-    in-out property <[DataTableRow]> compact-rows: [];
-    in-out property <[SelectOption]> system-options: [{ value: "", label: "All systems", enabled: true }];
-    in-out property <[SelectOption]> category-options: [{ value: "", label: "All categories", enabled: true }];
-    in-out property <[SelectOption]> region-options: [{ value: "", label: "All regions", enabled: true }];
-    in-out property <[SelectOption]> manufacturer-options: [{ value: "", label: "All manufacturers", enabled: true }];
-    in-out property <[SelectOption]> preview-options: [
-        { value: "", label: "All previews", enabled: true },
-        { value: "with-preview", label: "With preview", enabled: true },
-        { value: "missing-preview", label: "Missing preview", enabled: true },
-    ];
-    in-out property <[SelectOption]> confidence-options: [{ value: "", label: "All confidence", enabled: true }];
-    in-out property <int> system-index: 0;
-    in-out property <int> category-index: 0;
-    in-out property <int> region-index: 0;
-    in-out property <int> manufacturer-index: 0;
-    in-out property <int> preview-index: 0;
-    in-out property <int> confidence-index: 0;
-    in-out property <string> selected-game-id: "";
-    in-out property <string> detail-title: "No game selected";
-    in-out property <string> detail-subtitle: "Select a row to inspect catalog facts.";
-    in-out property <[DataTableRow]> detail-overview-rows: [];
-    in-out property <[DataTableRow]> detail-system-rows: [];
-    in-out property <[DataTableRow]> detail-media-rows: [];
-    in-out property <[DataTableRow]> detail-launch-rows: [];
-    in-out property <[DataTableRow]> detail-identity-rows: [];
-    in-out property <[DataTableRow]> detail-path-rows: [];
-}
-
 export global Actions {
     callback refresh-status();
     callback select-page(string);
@@ -298,12 +249,6 @@ export global Actions {
     callback sd-refresh-folder();
     callback sd-refresh-details();
     callback sd-show-hidden-changed(bool);
-    callback sync-library();
-    callback library-query-changed(string);
-    callback library-filter-changed(string, string);
-    callback library-sort-toggled(string, DataTableSortDirection);
-    callback library-page-changed(int);
-    callback library-row-selected(string);
 }
 
 export global WindowActions {

@@ -46,11 +46,10 @@ pub(crate) use startup_particles::SceneLabRequest;
 
 use agent_client::{
     AGENT_PORT, AgentEndpoint, agent_framebuffer_capture_stream,
-    agent_framebuffer_stream_for_duration, agent_library_snapshot_stream, agent_request,
-    agent_request_at, agent_request_with_liveness, agent_runtime_upload_at,
-    agent_telemetry_for_duration, agent_telemetry_for_duration_at_cadence,
-    agent_telemetry_for_duration_with_mode, agent_telemetry_until_screensaver_profile_complete,
-    bootstrap_agent_with,
+    agent_framebuffer_stream_for_duration, agent_request, agent_request_at,
+    agent_request_with_liveness, agent_runtime_upload_at, agent_telemetry_for_duration,
+    agent_telemetry_for_duration_at_cadence, agent_telemetry_for_duration_with_mode,
+    agent_telemetry_until_screensaver_profile_complete, bootstrap_agent_with,
 };
 use platform_deploy::*;
 use remote::{
@@ -15538,19 +15537,6 @@ fn compact_agent_io_result(
     }))
 }
 
-fn retired_library_snapshot_attempt(error: &str, repetition: u8) -> Option<Value> {
-    let retired = installed_layout::app_path(Layout::Development, "library.sqlite3")
-        .expect("static installed path");
-    (error.contains(&retired) && error.contains("No such file or directory")).then(|| {
-        json!({
-            "label": "library-snapshot",
-            "repetition": repetition,
-            "status": "not-applicable",
-            "reason": "library.sqlite3 is retired in the exact installed Catalog V3 layout",
-        })
-    })
-}
-
 fn run_agent_io_capture_set(
     endpoint: &AgentEndpoint,
     screen: &str,
@@ -15672,32 +15658,6 @@ fn run_agent_io_operation_sequence(
         )?;
         modal_input_action(config, &nonce, AutomationAction::ReleaseAll)?;
         run_agent_io_capture_set(&endpoint, "high-entropy-arcade", &mut operations)?;
-        for repetition in 1..=2 {
-            match agent_library_snapshot_stream(&endpoint) {
-                Ok(snapshot) => {
-                    if snapshot.payload.len()
-                        != snapshot.response["result"]["payload_bytes"]
-                            .as_u64()
-                            .unwrap_or(u64::MAX) as usize
-                    {
-                        return Err("library snapshot payload length changed in transport".into());
-                    }
-                    operations.push(compact_agent_io_result(
-                        agent_io_result(snapshot.response, "library snapshot")?,
-                        "library-snapshot",
-                        repetition,
-                        snapshot.elapsed_ms,
-                    )?);
-                }
-                Err(error) => {
-                    let error = error.to_string();
-                    operations.push(
-                        retired_library_snapshot_attempt(&error, repetition)
-                            .ok_or_else(|| format!("library snapshot failed: {error}"))?,
-                    );
-                }
-            }
-        }
         for v2 in [false, true] {
             for repetition in 1..=2 {
                 let (listing, elapsed_ms) = agent_io_list(&endpoint, directory, v2)?;
@@ -35793,18 +35753,6 @@ mod tests {
         .unwrap();
         assert_eq!(compact["normalized_us_per_mib"], 1_000.0);
         assert!(compact["result"].get("png_hex").is_none());
-    }
-
-    #[test]
-    fn agent_io_records_retired_catalog_v3_library_snapshot_as_not_applicable() {
-        let attempt = retired_library_snapshot_attempt(
-            "stat /media/fat/mister-magik-dev/library.sqlite3: No such file or directory",
-            2,
-        )
-        .unwrap();
-        assert_eq!(attempt["status"], "not-applicable");
-        assert_eq!(attempt["repetition"], 2);
-        assert!(retired_library_snapshot_attempt("authentication failed", 1).is_none());
     }
 
     #[test]
