@@ -175,16 +175,9 @@ pub fn reconcile_fast_preview_availability(
         .iter()
         .find(|system| &system.system_id == system_id)
         .ok_or_else(|| ReconciliationError::new("preview-availability", "system is absent"))?;
-    let loaded = open_system_shard(
-        &storage_root.join(&published.active.sqlite_path),
-        &storage_root.join(&published.active.navigation_path),
-        system_id,
-        published.active.generation,
-        limits.shard,
-    )
-    .map_err(|error| ReconciliationError::new("preview-availability", error.to_string()))?;
+    let games = open_fast_navpack_games(storage_root, published)?;
     let (games, candidate_rows, available_rows, changed_rows) =
-        reconcile_preview_rows(system_id, pack_path, loaded.games)?;
+        reconcile_preview_rows(system_id, pack_path, games)?;
     Ok(PreviewAvailabilityReconciliationOutcome {
         system_id: system_id.clone(),
         previous_generation: manifest.generation,
@@ -194,6 +187,76 @@ pub fn reconcile_fast_preview_availability(
         changed_rows,
         games,
     })
+}
+
+fn open_fast_navpack_games(
+    storage_root: &Path,
+    published: &ManifestSystem,
+) -> Result<Vec<SystemGame>, ReconciliationError> {
+    let generation = &published.active;
+    let descriptor = generation.navpack.as_ref().ok_or_else(|| {
+        ReconciliationError::new("preview-availability", "active system has no NavPack")
+    })?;
+    let game_count = usize::try_from(generation.games).map_err(|_| {
+        ReconciliationError::new(
+            "preview-availability",
+            "system game count exceeds platform size",
+        )
+    })?;
+    let (navpack, _) = crate::navpack::MappedNavPack::open(
+        &storage_root.join(&descriptor.path),
+        descriptor.bytes,
+        published.system_id.as_str(),
+        generation.generation,
+        game_count,
+    )
+    .map_err(|error| ReconciliationError::new("preview-availability", error))?;
+    let mut games = Vec::with_capacity(game_count);
+    for ordinal in 0..game_count {
+        let row = navpack
+            .row(ordinal)
+            .map_err(|error| ReconciliationError::new("preview-availability", error))?;
+        let metadata = navpack
+            .metadata(ordinal)
+            .map_err(|error| ReconciliationError::new("preview-availability", error))?;
+        let launch_plan = row
+            .launch_index
+            .map(|index| {
+                navpack.launch(index).map(|launch| SystemLaunchPlan {
+                    launch_ref: launch.launch_ref.to_string(),
+                    title: launch.title.to_string(),
+                    system_id: launch.system_id.to_string(),
+                    core_path: launch.core_path.to_string(),
+                    payload_path: launch.payload_path.to_string(),
+                    mount_kind: launch.mount_kind.to_string(),
+                    mount_index: launch.mount_index,
+                    delay_secs: launch.delay_secs,
+                })
+            })
+            .transpose()
+            .map_err(|error| ReconciliationError::new("preview-availability", error))?;
+        games.push(SystemGame {
+            stable_key: format!(
+                "{}\u{1f}{}\u{1f}{}",
+                published.system_id,
+                row.title.to_ascii_lowercase(),
+                row.launch_ref
+            ),
+            title: row.title.to_string(),
+            launch_ref: row.launch_ref.to_string(),
+            preview_archive_path: row.preview_archive_path.to_string(),
+            preview_asset_key: row.preview_asset_key.to_string(),
+            has_preview: row.has_preview,
+            year: metadata.year,
+            manufacturer: metadata.manufacturer.to_string(),
+            category: metadata.category.to_string(),
+            players: metadata.players,
+            control: metadata.control.to_string(),
+            is_new: row.is_new,
+            launch_plan,
+        });
+    }
+    Ok(games)
 }
 
 fn reconcile_preview_rows(
@@ -1281,6 +1344,17 @@ mod tests {
         );
         publish_bound_production_projection(&root, &catalog, &fingerprint, limits()).unwrap();
         fs::remove_file(root.join(BINDING_FILE)).unwrap();
+        let manifest = read_latest_manifest(&root, limits()).unwrap();
+        let published = manifest
+            .systems
+            .iter()
+            .find(|system| system.system_id.as_str() == "arcade")
+            .unwrap();
+        fs::write(
+            root.join(&published.active.navigation_path),
+            b"fast catalogs do not use this legacy navigation artifact",
+        )
+        .unwrap();
         let pack = root.join("arcade-pack.mmlz4b");
         write_preview_sidecar_index(&pack, &["present.rgb565"]);
 
@@ -1300,14 +1374,7 @@ mod tests {
         assert!(reconciled.games[0].has_preview);
         assert_eq!(read_latest_manifest(&root, limits()).unwrap().generation, 1);
         assert!(!root.join(BINDING_FILE).exists());
-        let reader = LazyShardedCatalogReader::open(&root, limits()).unwrap();
-        assert!(
-            !reader
-                .open_system(&SystemId::parse("arcade").unwrap())
-                .unwrap()
-                .games()[0]
-                .has_preview
-        );
+        assert!(!open_fast_navpack_games(&root, published).unwrap()[0].has_preview);
         let _ = fs::remove_dir_all(root);
     }
 
