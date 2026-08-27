@@ -8,13 +8,16 @@
 //! core launch profiles, walks arbitrary nesting, and reads ZIP directories
 //! without extracting payload data.
 
+use crate::catalog_discovery::{GameDirFact, GameDirHeader, GameDirSignature};
 use crate::catalog_scan::{FoundFile, scan_zip_central_directory, should_ignore_path};
 use crate::fast_five_catalog::{FastFiveSnapshot, FastFiveSystem, GENERIC_EXAMPLE_SYSTEM_IDS};
 use crate::launch_profiles::{
-    BorrowedProfilePathClass, IgnoreReason, IgnoreRule, LaunchProfile, MountKind, MountSpec,
-    PayloadDisposition, PayloadRule, ProfilePathClass, ProfileSet, RuleProvenance,
+    BorrowedProfilePathClass, CatalogScanPlan, IgnoreReason, IgnoreRule, LaunchProfile, MountKind,
+    MountSpec, PayloadDisposition, PayloadRule, ProfilePathClass, ProfileSet, RuleProvenance,
 };
-use crate::namespace_walk::{self, NamespaceEntryKind};
+use crate::namespace_walk::{
+    self, NamespaceEntryKind, NamespaceSignatureCapture, NamespaceWalkStats,
+};
 use crate::system_shard::{SystemGame, SystemLaunchPlan};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -46,9 +49,34 @@ pub struct GenericSystemStats {
     pub namespace_read_calls: usize,
     pub namespace_read_bytes: u64,
     pub namespace_type_stats: usize,
+    pub inventory_roots: usize,
+    pub inventory_entries: usize,
+    pub archive_opens: usize,
     pub read_errors: usize,
     pub archive_errors: usize,
     pub elapsed_us: u64,
+}
+
+#[derive(Debug)]
+struct GenericNamespaceInventory {
+    fact: GameDirFact,
+    entries: Vec<GenericInventoryEntry>,
+    namespace: NamespaceWalkStats,
+    elapsed_us: u64,
+}
+
+#[derive(Debug)]
+struct GenericInventoryEntry {
+    path: PathBuf,
+    kind: NamespaceEntryKind,
+    zip_signature: Option<(u64, i64)>,
+}
+
+#[derive(Debug, Default)]
+struct GenericSystemAccumulator {
+    profiles: Vec<LaunchProfile>,
+    stats: GenericSystemStats,
+    games: Vec<ScannedGame>,
 }
 
 pub const MEDIA_EXPERIMENT_SYSTEM_IDS: [&str; 3] = ["psx", "bbcmicro", "msx"];
@@ -295,6 +323,362 @@ pub(crate) fn discover_generic_systems_from_profiles_excluding_with_progress(
             systems: reports,
         },
     ))
+}
+
+/// Discover generic systems while sharing each runtime directory traversal
+/// between profile resolution and row construction.
+///
+/// Known profile roots are streamed directly. Runtime-derived roots are
+/// retained only for the duration of that root, resolved from the same entries,
+/// and then classified without reopening the directory tree.
+pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
+    storage_root: &Path,
+    plan: &CatalogScanPlan,
+    excluded_system_ids: &[&str],
+    mut system_complete: impl FnMut(&FastFiveSystem),
+) -> Result<
+    (
+        Vec<FastFiveSystem>,
+        GenericSystemScanReport,
+        Vec<LaunchProfile>,
+    ),
+    String,
+> {
+    let started = Instant::now();
+    let mut profiles = plan.base_profiles().to_vec();
+    let mut accumulators = BTreeMap::<String, GenericSystemAccumulator>::new();
+    let mut visited_roots = BTreeSet::new();
+
+    for profile in plan.base_profiles() {
+        if excluded_system_ids.contains(&profile.system_id.as_str()) {
+            continue;
+        }
+        for game_dir in &profile.game_dirs {
+            let candidate = storage_root.join("games").join(game_dir);
+            if !candidate.is_dir() {
+                continue;
+            }
+            let root_key = candidate.to_string_lossy().to_ascii_lowercase();
+            if !visited_roots.insert(root_key) {
+                continue;
+            }
+            let root_started = Instant::now();
+            let accumulator = accumulator_for_profile(&mut accumulators, profile);
+            accumulator.stats.roots = accumulator.stats.roots.saturating_add(1);
+            scan_namespace_borrowed(
+                &candidate,
+                profile,
+                &mut accumulator.stats,
+                &mut accumulator.games,
+            );
+            accumulator.stats.elapsed_us = accumulator
+                .stats
+                .elapsed_us
+                .saturating_add(root_started.elapsed().as_micros() as u64);
+        }
+    }
+
+    for header in plan.game_dir_headers() {
+        let inventory = collect_generic_namespace_inventory(header)?;
+        let Some(profile) = plan.profile_for_game_dir_facts(&inventory.fact) else {
+            continue;
+        };
+        merge_resolved_profile(&mut profiles, profile.clone());
+        if excluded_system_ids.contains(&profile.system_id.as_str()) {
+            continue;
+        }
+        let root_key = inventory.fact.path.to_string_lossy().to_ascii_lowercase();
+        if !visited_roots.insert(root_key) {
+            continue;
+        }
+        let accumulator = accumulator_for_profile(&mut accumulators, &profile);
+        accumulator.stats.roots = accumulator.stats.roots.saturating_add(1);
+        apply_generic_namespace_inventory(
+            inventory,
+            &profile,
+            &mut accumulator.stats,
+            &mut accumulator.games,
+        );
+    }
+
+    let mut systems = Vec::new();
+    let mut reports = Vec::new();
+    for (system_id, mut accumulator) in accumulators {
+        if accumulator.stats.roots == 0 {
+            continue;
+        }
+        accumulator.games.sort_by(|left, right| {
+            left.game
+                .title
+                .to_ascii_lowercase()
+                .cmp(&right.game.title.to_ascii_lowercase())
+                .then_with(|| left.game.stable_key.cmp(&right.game.stable_key))
+        });
+        accumulator
+            .games
+            .dedup_by(|left, right| left.game.launch_ref == right.game.launch_ref);
+        accumulator.stats.games = accumulator.games.len();
+        if accumulator.stats.read_errors > 0 {
+            return Err(format!(
+                "incomplete {system_id} scan: {} directory errors",
+                accumulator.stats.read_errors
+            ));
+        }
+        crate::catalog_logln!(
+            "fast_catalog_source_tsv\tadapter=generic-one-pass\tsystem={}\telapsed_us={}\tfiles={}\tdirectories={}\tarchive_members={}\tgames={}\tread_errors={}\tarchive_errors={}",
+            system_id,
+            accumulator.stats.elapsed_us,
+            accumulator.stats.files,
+            accumulator.stats.directories,
+            accumulator.stats.archive_members,
+            accumulator.stats.games,
+            accumulator.stats.read_errors,
+            accumulator.stats.archive_errors,
+        );
+        let display_title = accumulator
+            .profiles
+            .iter()
+            .map(|profile| profile.title.trim())
+            .find(|title| !title.is_empty())
+            .unwrap_or_else(|| display_title(&system_id))
+            .to_string();
+        let system = FastFiveSystem {
+            system_id: system_id.clone(),
+            display_title,
+            games: accumulator.games.into_iter().map(|row| row.game).collect(),
+            variants: Vec::new(),
+        };
+        system_complete(&system);
+        systems.push(system);
+        reports.push(accumulator.stats);
+    }
+    systems.sort_by(|left, right| left.system_id.cmp(&right.system_id));
+    reports.sort_by(|left, right| left.system_id.cmp(&right.system_id));
+    Ok((
+        systems,
+        GenericSystemScanReport {
+            elapsed_us: started.elapsed().as_micros() as u64,
+            games: reports.iter().map(|system| system.games).sum(),
+            systems: reports,
+        },
+        profiles,
+    ))
+}
+
+fn accumulator_for_profile<'a>(
+    accumulators: &'a mut BTreeMap<String, GenericSystemAccumulator>,
+    profile: &LaunchProfile,
+) -> &'a mut GenericSystemAccumulator {
+    let accumulator = accumulators
+        .entry(profile.system_id.clone())
+        .or_insert_with(|| GenericSystemAccumulator {
+            stats: GenericSystemStats {
+                system_id: profile.system_id.clone(),
+                ..GenericSystemStats::default()
+            },
+            ..GenericSystemAccumulator::default()
+        });
+    if !accumulator
+        .profiles
+        .iter()
+        .any(|existing| existing.id == profile.id)
+    {
+        accumulator.profiles.push(profile.clone());
+    }
+    accumulator
+}
+
+fn merge_resolved_profile(profiles: &mut Vec<LaunchProfile>, profile: LaunchProfile) {
+    if let Some(existing) = profiles
+        .iter_mut()
+        .find(|existing| existing.id == profile.id)
+    {
+        for game_dir in profile.game_dirs {
+            if !existing
+                .game_dirs
+                .iter()
+                .any(|existing_dir| existing_dir.eq_ignore_ascii_case(&game_dir))
+            {
+                existing.game_dirs.push(game_dir);
+            }
+        }
+    } else {
+        profiles.push(profile);
+    }
+}
+
+fn collect_generic_namespace_inventory(
+    header: &GameDirHeader,
+) -> Result<GenericNamespaceInventory, String> {
+    let started = Instant::now();
+    let mut entries = Vec::new();
+    let mut has_payload_files = false;
+    let mut has_zip_files = false;
+    let mut direct_zip_paths = Vec::new();
+    let mut nested_probe_signatures = Vec::new();
+    let mut payload_extensions = BTreeSet::new();
+    let namespace = namespace_walk::visit_with_signature_capture(
+        &header.path,
+        None,
+        NamespaceSignatureCapture::TargetAndDepthOneDirectories,
+        should_ignore_path,
+        |entry| {
+            let depth = entry
+                .path
+                .strip_prefix(&header.path)
+                .map(|relative| relative.components().count())
+                .unwrap_or(usize::MAX);
+            if depth <= 2 {
+                match entry.kind {
+                    NamespaceEntryKind::Directory if depth == 1 => {
+                        nested_probe_signatures.push((
+                            entry.path.clone(),
+                            GameDirSignature::from_namespace_signature(entry.directory_signature),
+                        ));
+                    }
+                    NamespaceEntryKind::File => {
+                        if entry
+                            .path
+                            .extension()
+                            .and_then(|extension| extension.to_str())
+                            .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+                        {
+                            has_zip_files = true;
+                            if depth == 1 {
+                                direct_zip_paths.push(entry.path.clone());
+                            }
+                        } else {
+                            has_payload_files = true;
+                            if let Some(extension) = entry
+                                .path
+                                .extension()
+                                .and_then(|extension| extension.to_str())
+                            {
+                                payload_extensions.insert(extension.to_ascii_lowercase());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            entries.push(GenericInventoryEntry {
+                path: entry.path.clone(),
+                kind: entry.kind,
+                zip_signature: entry.zip_signature,
+            });
+            true
+        },
+    );
+    if namespace.errors > 0 {
+        return Err(format!(
+            "incomplete {} inventory: {} directory errors",
+            header.path.display(),
+            namespace.errors
+        ));
+    }
+    direct_zip_paths.sort_by_cached_key(|path| path.to_string_lossy().to_ascii_lowercase());
+    nested_probe_signatures.sort_by_cached_key(|(path, _)| {
+        (path.to_string_lossy().to_ascii_lowercase(), path.clone())
+    });
+    Ok(GenericNamespaceInventory {
+        fact: GameDirFact {
+            name: header.name.clone(),
+            path: header.path.clone(),
+            signature: header.signature,
+            has_payload_files,
+            has_zip_files,
+            direct_zip_paths,
+            nested_probe_signatures,
+            payload_extensions,
+        },
+        entries,
+        namespace,
+        elapsed_us: started.elapsed().as_micros() as u64,
+    })
+}
+
+fn apply_generic_namespace_inventory(
+    inventory: GenericNamespaceInventory,
+    profile: &LaunchProfile,
+    stats: &mut GenericSystemStats,
+    games: &mut Vec<ScannedGame>,
+) {
+    let classify_started = Instant::now();
+    stats.elapsed_us = stats.elapsed_us.saturating_add(inventory.elapsed_us);
+    stats.inventory_roots = stats.inventory_roots.saturating_add(1);
+    stats.inventory_entries = stats
+        .inventory_entries
+        .saturating_add(inventory.entries.len());
+    stats.directories = stats.directories.saturating_add(1);
+    merge_namespace_stats(stats, &inventory.namespace);
+    for entry in inventory.entries {
+        if entry.kind == NamespaceEntryKind::Directory {
+            stats.directories = stats.directories.saturating_add(1);
+            continue;
+        }
+        if entry.kind != NamespaceEntryKind::File {
+            continue;
+        }
+        stats.files = stats.files.saturating_add(1);
+        match profile.classify_path_borrowed(&entry.path) {
+            BorrowedProfilePathClass::Payload { rule }
+                if rule.disposition == PayloadDisposition::Playable =>
+            {
+                stats.candidate_files = stats.candidate_files.saturating_add(1);
+                games.push(direct_game(profile, &entry.path, rule));
+            }
+            BorrowedProfilePathClass::NotMatched
+                if entry
+                    .path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+                    && !profile.archive_entry_rules.is_empty() =>
+            {
+                stats.candidate_files = stats.candidate_files.saturating_add(1);
+                scan_archive_with_signature(
+                    profile,
+                    &entry.path,
+                    entry.zip_signature,
+                    stats,
+                    games,
+                );
+            }
+            BorrowedProfilePathClass::Ignored { reason } => {
+                stats.ignored_files = stats.ignored_files.saturating_add(1);
+                if reason == IgnoreReason::CueTrack {
+                    stats.dependency_files = stats.dependency_files.saturating_add(1);
+                }
+            }
+            BorrowedProfilePathClass::Payload { .. } => {
+                stats.dependency_files = stats.dependency_files.saturating_add(1);
+            }
+            _ => stats.unmatched_files = stats.unmatched_files.saturating_add(1),
+        }
+    }
+    stats.elapsed_us = stats
+        .elapsed_us
+        .saturating_add(classify_started.elapsed().as_micros() as u64);
+}
+
+fn merge_namespace_stats(stats: &mut GenericSystemStats, namespace: &NamespaceWalkStats) {
+    stats.namespace_backend = if stats.namespace_backend.is_empty() {
+        namespace.backend.to_string()
+    } else if stats.namespace_backend == namespace.backend {
+        stats.namespace_backend.clone()
+    } else {
+        "mixed".to_string()
+    };
+    stats.namespace_read_calls = stats
+        .namespace_read_calls
+        .saturating_add(namespace.read_calls);
+    stats.namespace_read_bytes = stats
+        .namespace_read_bytes
+        .saturating_add(namespace.read_bytes);
+    stats.namespace_type_stats = stats
+        .namespace_type_stats
+        .saturating_add(namespace.type_stats);
+    stats.read_errors = stats.read_errors.saturating_add(namespace.errors);
 }
 
 pub fn discover_generic_system_ids(storage_root: &Path) -> BTreeSet<String> {
@@ -846,18 +1230,29 @@ fn scan_archive(
     stats: &mut GenericSystemStats,
     games: &mut Vec<ScannedGame>,
 ) {
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(_) => {
-            stats.read_errors += 1;
-            return;
-        }
+    let signature = fs::metadata(path)
+        .ok()
+        .map(|metadata| (metadata.len(), mtime_secs(&metadata)));
+    scan_archive_with_signature(profile, path, signature, stats, games);
+}
+
+fn scan_archive_with_signature(
+    profile: &LaunchProfile,
+    path: &Path,
+    signature: Option<(u64, i64)>,
+    stats: &mut GenericSystemStats,
+    games: &mut Vec<ScannedGame>,
+) {
+    stats.archive_opens = stats.archive_opens.saturating_add(1);
+    let Some((size, mtime_secs)) = signature else {
+        stats.read_errors += 1;
+        return;
     };
     let found = FoundFile {
         path: path.to_path_buf(),
         ext: "zip".to_string(),
-        size: metadata.len(),
-        mtime_secs: mtime_secs(&metadata),
+        size,
+        mtime_secs,
     };
     match scan_zip_central_directory(&found, profile) {
         Ok(entries) => {
@@ -971,6 +1366,54 @@ fn hex_lower(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::fast_five_catalog::{FAST_FIVE_SNAPSHOT_SCHEMA, FAST_FIVE_SYSTEM_IDS};
+
+    #[test]
+    fn one_pass_runtime_inventory_matches_two_pass_rows() {
+        let root = crate::test_support::unique_temp_dir("generic-one-pass-parity");
+        let core = root.join("_Console/MyBeta_20260828.rbf");
+        fs::create_dir_all(core.parent().expect("core parent")).expect("create core parent");
+        fs::write(core, b"core").expect("write core");
+        for relative in [
+            "games/MyBeta/Publisher/First Game.rom",
+            "games/MyBeta/Publisher/Nested/Second Game.rom",
+            "games/MyBeta/.metadata/Hidden Game.rom",
+        ] {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().expect("game parent")).expect("create game parent");
+            fs::write(path, b"rom").expect("write game");
+        }
+        let roots = [root.display().to_string()];
+        let profiles = ProfileSet::try_for_roots(&roots)
+            .expect("two-pass profiles")
+            .into_profiles();
+        let (two_pass, _) = discover_generic_systems_from_profiles_excluding_with_progress(
+            &root,
+            &profiles,
+            &[],
+            |_| {},
+        )
+        .expect("two-pass scan");
+        let plan = CatalogScanPlan::try_for_roots(&roots).expect("one-pass plan");
+        let (one_pass, report, resolved) =
+            discover_generic_systems_from_plan_excluding_with_progress(&root, &plan, &[], |_| {})
+                .expect("one-pass scan");
+
+        assert_eq!(one_pass, two_pass);
+        assert_eq!(
+            resolved
+                .iter()
+                .filter(|profile| profile.system_id == "mybeta")
+                .count(),
+            1
+        );
+        let beta = report
+            .systems
+            .iter()
+            .find(|system| system.system_id == "mybeta")
+            .expect("runtime report");
+        assert_eq!(beta.inventory_roots, 1);
+        assert!(beta.inventory_entries >= 4);
+    }
 
     #[test]
     fn scans_nested_user_collections_without_a_release_manifest() {

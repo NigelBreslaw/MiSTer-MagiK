@@ -15,10 +15,9 @@ use crate::fast_five_catalog::{
     FastFiveVariantRelation, collapse_c64_cross_source_variants,
 };
 use crate::generic_system_catalog::{
-    discover_generic_systems_from_profiles_excluding_with_progress,
-    rebuild_installed_generic_system,
+    discover_generic_systems_from_plan_excluding_with_progress, rebuild_installed_generic_system,
 };
-use crate::launch_profiles::{CollectionListing, LaunchProfile, ProfileSet};
+use crate::launch_profiles::{CatalogScanPlan, CollectionListing, LaunchProfile, ProfileSet};
 use crate::media_identity::ScreenshotAssetId;
 use crate::mra_header::{PrimaryRomRequirement, RomNamespace};
 use crate::prepared_collections::{PreparedPayloadIndex, validate_prepared_launch_path};
@@ -31,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 11;
+pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 12;
 const PREPARED_SYSTEM_IDS: [&str; 5] = ["arcade", "amiga", "c64", "dos", "x68000"];
 
 #[derive(Clone, Debug, Serialize)]
@@ -107,8 +106,16 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
     )?;
     let roots = [storage_root.display().to_string()];
     let phase_started = Instant::now();
-    let profiles = ProfileSet::try_for_roots(&roots)?.into_profiles();
+    let plan = CatalogScanPlan::try_for_roots(&roots)?;
     let profile_discovery_us = elapsed_us(phase_started);
+    let (mut generic_systems, generic, profiles) =
+        discover_generic_systems_from_plan_excluding_with_progress(
+            storage_root,
+            &plan,
+            &PREPARED_SYSTEM_IDS,
+            |_| {},
+        )?;
+    let generic_systems_us = generic.elapsed_us;
     let phase_started = Instant::now();
     let planned_system_ids = discover_independent_system_ids_from_profiles(storage_root, &profiles);
     plan_ready(&planned_system_ids);
@@ -126,14 +133,9 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
             &mut system_complete,
         )?;
     }
-    let (mut generic_systems, generic) =
-        discover_generic_systems_from_profiles_excluding_with_progress(
-            storage_root,
-            &profiles,
-            &PREPARED_SYSTEM_IDS,
-            &mut system_complete,
-        )?;
-    let generic_systems_us = generic.elapsed_us;
+    for system in &generic_systems {
+        system_complete(system);
+    }
     let phase_started = Instant::now();
     enrich_fast_preview_identities(storage_root, &mut generic_systems);
     let preview_identity_us = elapsed_us(phase_started);
