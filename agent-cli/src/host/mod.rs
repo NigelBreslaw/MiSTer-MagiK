@@ -21204,11 +21204,14 @@ fn profile_installed_cold_boot_run(
     wait_authenticated_agent_ready(config, Duration::from_secs(60))
         .map_err(|error| format!("{error:?}"))?;
     let session = connect_with(&config.connection, 10)?;
-    wait_launcher_ready(
-        &session,
-        Instant::now(),
-        Duration::from_secs(if fresh_catalog { 300 } else { 45 }),
-    )?;
+    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
+    if fresh_catalog {
+        wait_magik_startup_event(
+            &session,
+            "launcher_first_frame_presented",
+            Duration::from_secs(300),
+        )?;
+    }
     wait_delivery_health(&session, "dev", Duration::from_secs(10))?;
     let host_recovery_elapsed_ms = host_started.elapsed().as_millis() as u64;
 
@@ -31075,6 +31078,35 @@ fn wait_launcher_ready(
     }
     Err(format!(
         "launcher restart timed out after {}ms; last launcher_state={last_state}",
+        timeout.as_millis()
+    )
+    .into())
+}
+
+fn wait_magik_startup_event(sess: &Session, event_name: &str, timeout: Duration) -> Result<()> {
+    let started = Instant::now();
+    let mut last_catalog_detail = String::new();
+    while started.elapsed() < timeout {
+        if remote_read(sess, "/tmp/mister-magik-slint.log").is_some_and(|log| {
+            parse_magik_startup_events(&log)
+                .iter()
+                .any(|event| event.get("event").and_then(Value::as_str) == Some(event_name))
+        }) {
+            return Ok(());
+        }
+        if let Some(status) = remote_read(sess, SLINT_STATUS_REMOTE)
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        {
+            last_catalog_detail = status
+                .get("catalog_scan_detail")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    Err(format!(
+        "launcher event {event_name} did not arrive after {}ms; last catalog detail={last_catalog_detail}",
         timeout.as_millis()
     )
     .into())
