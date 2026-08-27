@@ -31,7 +31,6 @@ module mister_magik_scaler_fetch_ordered_frame (
 	// JSON contract while preserving schema 10's five-word transport shape.
 	localparam [15:0] FETCH_STATE_SCHEMA = MAGIK_RAW_SCALER_STATE_SCHEMA;
 	localparam [15:0] SIGNATURE_INITIAL = 16'h56da;
-	localparam [15:0] SIGNATURE_POLYNOMIAL = 16'ha001;
 	localparam [7:0] REQUIRED_BURSTCOUNT = 8'd128;
 	localparam [15:0] TOKEN_DATA = 16'h5a02;
 	localparam [7:0] TOKEN_ADDRESS = 8'ha5;
@@ -61,9 +60,7 @@ module mister_magik_scaler_fetch_ordered_frame (
 	reg [6:0]  return_phase = 7'd0;
 
 	reg [20:0] previous_address = 21'd0;
-	reg        previous_address_valid = 1'b0;
 	reg        epoch_armed = 1'b0;
-	reg        source_faulted = 1'b0;
 	reg [15:0] epoch_signature = SIGNATURE_INITIAL;
 
 	reg [15:0] published_signature = 16'd0;
@@ -97,11 +94,11 @@ module mister_magik_scaler_fetch_ordered_frame (
 	wire enqueue = accepted && request_shape_valid &&
 		(fifo_count != 2'd2 || return_last);
 	wire dequeue = return_last;
-	wire accepted_wrap = previous_address_valid &&
-		vbuf_address[27:7] < previous_address;
+	wire accepted_wrap = vbuf_address[27:7] < previous_address;
 	wire marker_consumed = return_has_entry && return_phase == 7'd0 && fifo_wrap0;
 	wire marker_still_pending =
 		(fifo_wrap0 && !marker_consumed) || (fifo_count == 2'd2 && fifo_wrap1);
+	wire source_faulted = published_flags[6:1] != 6'd0;
 
 	wire [6:0] fault_event = {
 		fifo_count == 2'd3,
@@ -117,8 +114,7 @@ module mister_magik_scaler_fetch_ordered_frame (
 	wire command_data = io_uio && io_strobe && has_command;
 	wire selected_start =
 		io_din[7:0] == MAGIK_UIO_GET_RAW_SCALER_STATE &&
-		snapshot_crc_valid && !crc_busy && !capture_pending &&
-		generation_sync == generation_seen;
+		snapshot_crc_valid && !crc_busy;
 	wire selected_command = command_selected;
 
 	assign response_valid =
@@ -132,8 +128,8 @@ module mister_magik_scaler_fetch_ordered_frame (
 		reg [15:0] mixed;
 		begin
 			mixed = signature_in ^ token_in;
-			ordered_signature_update = (mixed >> 1) ^
-				(mixed[0] ? SIGNATURE_POLYNOMIAL : 16'd0);
+			ordered_signature_update =
+				{mixed[14:0], mixed[15] ^ mixed[0]};
 		end
 	endfunction
 
@@ -216,9 +212,7 @@ module mister_magik_scaler_fetch_ordered_frame (
 			fifo_count <= 2'd0;
 			return_phase <= 7'd0;
 			previous_address <= 21'd0;
-			previous_address_valid <= 1'b0;
 			epoch_armed <= 1'b0;
-			source_faulted <= 1'b0;
 			epoch_signature <= SIGNATURE_INITIAL;
 			published_signature <= 16'd0;
 			published_flags <= 7'd0;
@@ -227,7 +221,6 @@ module mister_magik_scaler_fetch_ordered_frame (
 		else begin
 			if(accepted) begin
 				previous_address <= vbuf_address[27:7];
-				previous_address_valid <= 1'b1;
 			end
 
 			case({enqueue, dequeue})
@@ -300,7 +293,6 @@ module mister_magik_scaler_fetch_ordered_frame (
 			end
 
 			if(!source_faulted && fault_event[6:1] != 6'd0) begin
-				source_faulted <= 1'b1;
 				epoch_armed <= 1'b0;
 				published_signature <= 16'd0;
 				published_flags <= fault_event;
@@ -359,12 +351,13 @@ module mister_magik_scaler_fetch_ordered_frame (
 				crc_busy <= 1'b1;
 			end
 
-			if(!has_command && !crc_busy &&
+			if(!has_command && !command_start && !crc_busy &&
 			   generation_sync != generation_seen) begin
 				generation_seen <= generation_sync;
 				capture_pending <= 1'b1;
 			end
-			else if(!has_command && !crc_busy && capture_pending) begin
+			else if(!has_command && !command_start && !crc_busy &&
+				capture_pending) begin
 				snapshot_signature <= published_signature;
 				snapshot_flags <= published_flags;
 				if(published_flags == FETCH_FLAG_CAPTURE_VALID)

@@ -113,7 +113,7 @@ module tb_mister_magik_video_diagnostics_control;
 		reg [15:0] mixed;
 		begin
 			mixed = current ^ token;
-			golden_update = (mixed >> 1) ^ (mixed[0] ? 16'ha001 : 16'd0);
+			golden_update = {mixed[14:0], mixed[15] ^ mixed[0]};
 		end
 	endfunction
 

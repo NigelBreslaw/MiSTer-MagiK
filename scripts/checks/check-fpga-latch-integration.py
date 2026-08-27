@@ -309,7 +309,7 @@ def main() -> None:
         "fold_return_data(vbuf_readdata)",
         "function automatic [15:0] ordered_signature_update;",
         "mixed = signature_in ^ token_in;",
-        "(mixed[0] ? SIGNATURE_POLYNOMIAL : 16'd0);",
+        "{mixed[14:0], mixed[15] ^ mixed[0]};",
         "case({enqueue, dequeue})",
         "return_token = fold_return_data(vbuf_readdata) ^ TOKEN_DATA;",
         "SIGNATURE_INITIAL,",
