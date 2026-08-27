@@ -179,8 +179,8 @@ The next generic-media experiment covers PlayStation, BBC Micro, and MSX
 without adding them to the authoritative nine-system registry yet. It uses the
 shared profile contract to classify primary payloads separately from BIOS,
 sidecars, and referenced disc tracks. On Linux its retained scratch-build path
-uses the bounded fd-relative namespace backend and two lanes: BBC Micro on one,
-PSX followed by MSX on the other. Warm/no-change refresh remains sequential.
+uses one serial bounded fd-relative namespace reader. Parallelism is reserved
+for CPU-only preparation because multiple readers contend on the exFAT SD card.
 Cutover requires an explicit audit of every ignored or unmatched installed file
 before these three systems are allowed to publish UI artifacts.
 
@@ -191,7 +191,7 @@ manifest bound to the immutable catalog generation, registry fingerprint, and
 source-adapter version. Catalog SQLite and NavPack artifacts remain the only UI
 and search data; refresh snapshots are disposable builder state.
 
-An explicit update checks all nine watch indexes in two bounded lanes. A true
+An explicit update checks all nine watch indexes with one serial SD-card reader. A true
 no-change result opens no row snapshots and writes no SQLite, NavPack, refresh,
 or catalog manifest. Changed systems are rebuilt independently and only those
 systems receive new SQLite/NavPack artifacts. Unchanged immutable artifact

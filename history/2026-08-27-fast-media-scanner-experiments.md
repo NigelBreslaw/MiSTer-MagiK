@@ -54,19 +54,19 @@ per-entry type-stat fallback. Warm total time fell from 0.691 s to 0.436 s.
 Evidence:
 `build/agent-benchmarks/fast-refresh/media-psx-bbc-msx-parallel-ab.json`
 
-The final candidate assigns BBC Micro to one lane and scans PSX then MSX on the
-other. It deliberately uses only the two available Cortex-A9 cores.
+The candidate assigned BBC Micro to one lane and scanned PSX then MSX on the
+other.
 
 | Implementation | Cold total | Result |
 |---|---:|---|
 | Existing sequential baseline | 3.135 s | Baseline |
-| Two-lane fd-relative scanner | 2.638 s | 15.8% faster |
+| Two-lane fd-relative scanner | 2.638 s | Rejected despite lower aggregate |
 
-The two-lane result was 8.2% faster than the separately measured sequential
-fd-relative result. Parallel SD access made each small scan slower in isolation,
-but useful overlap remained. Warm two-lane time was slower than the sequential
-fd-relative path, so this scheduling policy is appropriate for cold scratch
-construction rather than the ordinary no-change refresh path.
+The apparent aggregate overlap came with severe SD contention: cold PSX time
+rose from 0.207 s to 2.149 s, BBC Micro rose from 2.384 s to 2.528 s, and the
+warm two-lane result was slower than the serial fd-relative path. The candidate
+was rejected. The retained design uses one serial SD-card reader and reserves
+the second Cortex-A9 for CPU-only work that does not issue concurrent exFAT I/O.
 
 Both alternating-order reboot samples had exact launch-reference and complete
 row parity for all three systems, zero read/archive errors, and left the

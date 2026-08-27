@@ -57,9 +57,10 @@ Two measured changes were retained:
   2.441 s to 1.404 s, a 42.5% reduction. The helper accepted four additional
   release-known launchers whose payloads were present, leaving one invalid
   custom or unmatched launcher rejected.
-- Neon68K MGL validation uses two bounded Cortex-A9 lanes after file discovery.
-  Cold X68000 time fell from 1.463 s to 1.279 s, a 12.6% reduction, with the
-  same 545 specialised launch references and the same generic parity result.
+- A two-lane Neon68K MGL validation experiment reduced its isolated cold time
+  from 1.463 s to 1.279 s, but was later removed because both lanes issued
+  concurrent exFAT reads. The retained source path validates MGLs serially and
+  reserves the second Cortex-A9 for CPU-only work.
 
 Arcade and C64 were unchanged. Their run-to-run cold variation dominates the
 five-system total, so the per-adapter timings above are the useful evidence for

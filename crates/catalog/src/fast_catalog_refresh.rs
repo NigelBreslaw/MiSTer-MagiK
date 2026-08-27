@@ -621,30 +621,10 @@ pub fn plan_fast_refresh(
         check
     };
     let systems = crate::fast_five_catalog::EXPANDED_FAST_SYSTEM_IDS;
-    let midpoint = systems.len().div_ceil(2);
-    let checks = std::thread::scope(|scope| {
-        let first = scope.spawn(|| {
-            systems[..midpoint]
-                .iter()
-                .map(|system_id| build_check(system_id))
-                .collect::<Vec<_>>()
-        });
-        let second = scope.spawn(|| {
-            systems[midpoint..]
-                .iter()
-                .map(|system_id| build_check(system_id))
-                .collect::<Vec<_>>()
-        });
-        let mut checks = first
-            .join()
-            .map_err(|_| "first refresh planner lane failed")?;
-        checks.extend(
-            second
-                .join()
-                .map_err(|_| "second refresh planner lane failed")?,
-        );
-        Ok::<_, String>(checks)
-    })?;
+    let checks = systems
+        .iter()
+        .map(|system_id| build_check(system_id))
+        .collect::<Vec<_>>();
     let unchanged = checks
         .iter()
         .filter(|check| check.status == FastSourceCheckStatus::Unchanged)
