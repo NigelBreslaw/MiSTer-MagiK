@@ -6064,7 +6064,7 @@ pub(super) fn run_launcher_loop(
             catalog_publication_test.catalog_worker_allowed(),
             Instant::now(),
             Duration::ZERO,
-            catalog_builder_lock_available,
+            catalog_refresh_available,
         )
     {
         print_startup_event(start, "catalog_worker_start", &worker.root);
@@ -6730,7 +6730,7 @@ pub(super) fn run_launcher_loop(
                 deferred_worker_policy.allowed && catalog_publication_test.catalog_worker_allowed(),
                 loop_start,
                 deferred_worker_policy.delay,
-                catalog_builder_lock_available,
+                catalog_refresh_available,
             )
         {
             print_startup_event(start, "catalog_worker_start", &worker.root);
