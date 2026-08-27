@@ -5,7 +5,7 @@
 
 use super::agent_client::agent_request_at;
 use super::{
-    ConnectionConfig, NativeDeviceConfig, PngCapture, Result, capture_source_label, encode_hex,
+    NativeDeviceConfig, PngCapture, Result, capture_source_label, encode_hex,
     request_framebuffer_png_at_when_latched, validate_visible_launcher_capture,
 };
 use crate::transport::{AutomationAction, AutomationButton};
@@ -1198,7 +1198,7 @@ mod tests {
     #[test]
     fn structured_and_mgl_launch_refs_are_validated_without_mra_parsing() {
         let config = NativeDeviceConfig::new(
-            ConnectionConfig::from_environment(),
+            crate::host::remote::ConnectionConfig::from_environment(),
             "test-device".to_string(),
         );
         assert!(
