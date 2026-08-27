@@ -440,6 +440,8 @@ struct SourceAbSystemReport {
     files_visited: usize,
     games: usize,
     rejected: usize,
+    helper_hits: usize,
+    fallback_validations: usize,
 }
 
 #[derive(Serialize)]
@@ -537,6 +539,8 @@ fn run_specialized_sources(storage_root: &Path) -> Result<SourceAbRun, String> {
             files_visited: report.files_visited,
             games: report.games,
             rejected: report.invalid,
+            helper_hits: report.helper_hits,
+            fallback_validations: report.fallback_validations,
         });
         systems.insert(system_id.to_string(), system);
     }
@@ -562,6 +566,8 @@ fn run_generic_prepared_sources(storage_root: &Path) -> Result<SourceAbRun, Stri
             files_visited: report.files,
             games: report.games,
             rejected: report.read_errors.saturating_add(report.archive_errors),
+            helper_hits: 0,
+            fallback_validations: 0,
         });
         systems.insert(system_id.to_string(), system);
     }
