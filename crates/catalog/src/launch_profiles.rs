@@ -237,6 +237,7 @@ pub enum ProfilePathClass {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(feature = "builder")]
 pub(crate) enum BorrowedProfilePathClass<'a> {
     Payload { rule: &'a PayloadRule },
     Collection { rule: &'a CollectionRule },
@@ -245,6 +246,7 @@ pub(crate) enum BorrowedProfilePathClass<'a> {
 }
 
 impl LaunchProfile {
+    #[cfg(feature = "builder")]
     pub(crate) fn classify_path_borrowed(&self, path: &Path) -> BorrowedProfilePathClass<'_> {
         for rule in &self.ignore_rules {
             if rule.matches(path) {
