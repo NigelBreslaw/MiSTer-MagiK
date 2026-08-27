@@ -825,6 +825,58 @@ pub fn execute_planned_fast_refresh(
     request: FastCatalogRefreshRequest,
     plan: FastRefreshPlanReport,
 ) -> Result<FastCatalogRefreshReport, String> {
+    execute_planned_fast_refresh_with(
+        storage_root,
+        catalog_root,
+        request,
+        plan,
+        prepare_system_refresh,
+    )
+}
+
+struct PreparedSystemRefresh {
+    system: FastFiveSystem,
+    source_report: crate::fast_catalog_sources::FastSourceSystemReport,
+    state: FastRefreshSystemState,
+    row_fingerprint: String,
+}
+
+fn prepare_system_refresh(
+    storage_root: &Path,
+    snapshot: &FastFiveSnapshot,
+    system_id: &str,
+) -> Result<Option<PreparedSystemRefresh>, String> {
+    let Some((system, source_report)) =
+        crate::fast_catalog_sources::rebuild_independent_system(storage_root, snapshot, system_id)?
+    else {
+        return Ok(None);
+    };
+    let watch = capture_system_watch(storage_root, system_id)?;
+    let rows = FastSystemRowsSnapshot::new(
+        system.system_id.clone(),
+        system.games.clone(),
+        system.variants.clone(),
+    )?;
+    let row_fingerprint = row_fingerprint(&rows)?;
+    Ok(Some(PreparedSystemRefresh {
+        system,
+        source_report,
+        state: FastRefreshSystemState { watch, rows },
+        row_fingerprint,
+    }))
+}
+
+fn execute_planned_fast_refresh_with(
+    storage_root: &Path,
+    catalog_root: &Path,
+    request: FastCatalogRefreshRequest,
+    plan: FastRefreshPlanReport,
+    mut prepare_system: impl FnMut(
+        &Path,
+        &FastFiveSnapshot,
+        &str,
+    ) -> Result<Option<PreparedSystemRefresh>, String>,
+) -> Result<FastCatalogRefreshReport, String> {
     let started = std::time::Instant::now();
     let planning_us = plan.elapsed_us;
     let previous = read_latest_refresh_manifest(catalog_root)?;
@@ -885,19 +937,14 @@ pub fn execute_planned_fast_refresh(
             .systems
             .iter()
             .any(|candidate| candidate.system_id == check.system_id);
-        match crate::fast_catalog_sources::rebuild_independent_system(
-            storage_root,
-            &snapshot,
-            &check.system_id,
-        ) {
-            Ok(Some((system, source_report))) => {
-                let watch = capture_system_watch(storage_root, &check.system_id)?;
-                let rows = FastSystemRowsSnapshot::new(
-                    system.system_id.clone(),
-                    system.games.clone(),
-                    system.variants.clone(),
-                )?;
-                let new_row_fingerprint = row_fingerprint(&rows)?;
+        match prepare_system(storage_root, &snapshot, &check.system_id) {
+            Ok(Some(prepared)) => {
+                let PreparedSystemRefresh {
+                    system,
+                    source_report,
+                    state,
+                    row_fingerprint: new_row_fingerprint,
+                } = prepared;
                 let rows_changed = !was_active
                     || previous_ref
                         .is_none_or(|reference| reference.row_fingerprint != new_row_fingerprint);
@@ -925,8 +972,8 @@ pub fn execute_planned_fast_refresh(
                         FastCatalogSystemOutcome::Unchanged
                     },
                     source_status: check.status,
-                    games: rows.games.len().try_into().unwrap_or(u64::MAX),
-                    variants: rows.variants.len().try_into().unwrap_or(u64::MAX),
+                    games: state.rows.games.len().try_into().unwrap_or(u64::MAX),
+                    variants: state.rows.variants.len().try_into().unwrap_or(u64::MAX),
                     elapsed_us: system_started
                         .elapsed()
                         .as_micros()
@@ -938,7 +985,7 @@ pub fn execute_planned_fast_refresh(
                         if rows_changed { "changed" } else { "unchanged" }
                     ),
                 });
-                updated_states.push(FastRefreshSystemState { watch, rows });
+                updated_states.push(state);
             }
             Ok(None) => {
                 snapshot
@@ -1837,6 +1884,98 @@ mod tests {
                 .systems
                 .iter()
                 .all(|system| system.system_id != "nes")
+        );
+    }
+
+    #[test]
+    fn per_system_preparation_failure_retains_only_that_system() {
+        let storage = crate::test_support::unique_temp_dir("fast-refresh-failure-storage");
+        let catalog = crate::test_support::unique_temp_dir("fast-refresh-failure-catalog");
+        fs::create_dir_all(storage.join("_Console")).unwrap();
+        for (system, extension) in [("SNES", "sfc"), ("NES", "nes")] {
+            fs::create_dir_all(storage.join("games").join(system)).unwrap();
+            fs::write(
+                storage.join("_Console").join(format!("{system}.rbf")),
+                b"core",
+            )
+            .unwrap();
+            fs::write(
+                storage
+                    .join("games")
+                    .join(system)
+                    .join(format!("First.{extension}")),
+                b"rom",
+            )
+            .unwrap();
+        }
+        build_fresh_catalog(&storage, &catalog).expect("build initial catalog");
+        fs::write(storage.join("games/SNES/Second.sfc"), b"rom").unwrap();
+        fs::write(storage.join("games/NES/Second.nes"), b"rom").unwrap();
+
+        let plan = plan_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::RebuildAll)
+            .expect("plan rebuild");
+        let report = execute_planned_fast_refresh_with(
+            &storage,
+            &catalog,
+            FastCatalogRefreshRequest::RebuildAll,
+            plan,
+            |storage_root, snapshot, system_id| {
+                if system_id == "nes" {
+                    let rebuilt = crate::fast_catalog_sources::rebuild_independent_system(
+                        storage_root,
+                        snapshot,
+                        system_id,
+                    )?;
+                    assert!(rebuilt.is_some());
+                    return Err("injected watch capture failure".to_string());
+                }
+                prepare_system_refresh(storage_root, snapshot, system_id)
+            },
+        )
+        .expect("publish successful systems");
+        assert!(report.system_reports.iter().any(|system| {
+            system.system_id == "snes" && system.outcome == FastCatalogSystemOutcome::Updated
+        }));
+        assert!(report.system_reports.iter().any(|system| {
+            system.system_id == "nes"
+                && system.outcome == FastCatalogSystemOutcome::FailedRetained
+                && system.detail == "injected watch capture failure"
+        }));
+
+        let active = crate::shard_registry::read_latest_manifest_lazy(
+            &catalog,
+            crate::shard_registry::production_registry_limits(),
+        )
+        .unwrap();
+        assert_eq!(
+            active
+                .systems
+                .iter()
+                .find(|system| system.system_id.as_str() == "snes")
+                .unwrap()
+                .active
+                .games,
+            2
+        );
+        assert_eq!(
+            active
+                .systems
+                .iter()
+                .find(|system| system.system_id.as_str() == "nes")
+                .unwrap()
+                .active
+                .games,
+            1
+        );
+        assert_eq!(
+            read_latest_refresh_manifest(&catalog)
+                .unwrap()
+                .systems
+                .iter()
+                .find(|system| system.system_id == "nes")
+                .unwrap()
+                .games,
+            1
         );
     }
 }
