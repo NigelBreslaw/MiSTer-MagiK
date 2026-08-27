@@ -183,7 +183,12 @@ uses one serial bounded fd-relative namespace reader. Parallelism is reserved
 for CPU-only preparation because multiple readers contend on the exFAT SD card.
 Both generic walkers prune hidden path components, AppleDouble `._` files,
 `__MACOSX`, and other catalog-irrelevant metadata before ROM classification;
-ZIP central-directory scanning applies the same policy.
+ZIP central-directory scanning applies the same policy. On Linux FAT/exFAT
+roots, otherwise launchable files and traversable directories are also checked
+with `FAT_IOCTL_GET_ATTRIBUTES`; DOS hidden and system entries are excluded
+before a row is created. The scanner reports attribute checks, exclusions, and
+errors separately. This check is deliberately deferred until after cheap name
+and extension filtering, so non-candidate files do not acquire an extra open.
 Cutover requires an explicit audit of every ignored or unmatched installed file
 before these three systems are allowed to publish UI artifacts.
 

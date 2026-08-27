@@ -22,6 +22,8 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, UNIX_EPOCH};
+#[cfg(target_os = "linux")]
+use std::{ffi::CString, fs::File, os::fd::AsRawFd, os::unix::ffi::OsStrExt};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct GenericSystemScanReport {
@@ -46,6 +48,9 @@ pub struct GenericSystemStats {
     pub namespace_read_calls: usize,
     pub namespace_read_bytes: u64,
     pub namespace_type_stats: usize,
+    pub dos_attribute_checks: usize,
+    pub dos_hidden_entries: usize,
+    pub dos_attribute_errors: usize,
     pub read_errors: usize,
     pub archive_errors: usize,
     pub elapsed_us: u64,
@@ -580,6 +585,18 @@ fn scan_directory(
     stats: &mut GenericSystemStats,
     games: &mut Vec<ScannedGame>,
 ) {
+    let mut dos_attributes = DosAttributeProbe::for_root(root);
+    scan_directory_with_attributes(root, profile, stats, games, &mut dos_attributes);
+    dos_attributes.add_to_stats(stats);
+}
+
+fn scan_directory_with_attributes(
+    root: &Path,
+    profile: &LaunchProfile,
+    stats: &mut GenericSystemStats,
+    games: &mut Vec<ScannedGame>,
+    dos_attributes: &mut DosAttributeProbe,
+) {
     if stats.namespace_backend.is_empty() {
         stats.namespace_backend = "std-read-dir".to_string();
     }
@@ -608,7 +625,10 @@ fn scan_directory(
             continue;
         }
         if file_type.is_dir() {
-            scan_directory(&path, profile, stats, games);
+            if dos_attributes.is_catalog_hidden(&path) {
+                continue;
+            }
+            scan_directory_with_attributes(&path, profile, stats, games, dos_attributes);
             continue;
         }
         if !file_type.is_file() {
@@ -619,6 +639,9 @@ fn scan_directory(
             ProfilePathClass::Payload { rule }
                 if rule.disposition == PayloadDisposition::Playable =>
             {
+                if dos_attributes.is_catalog_hidden(&path) {
+                    continue;
+                }
                 stats.candidate_files += 1;
                 games.push(direct_game(profile, &path, &rule));
             }
@@ -629,6 +652,9 @@ fn scan_directory(
                     .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
                     && !profile.archive_entry_rules.is_empty() =>
             {
+                if dos_attributes.is_catalog_hidden(&path) {
+                    continue;
+                }
                 stats.candidate_files += 1;
                 scan_archive(profile, &path, stats, games);
             }
@@ -651,8 +677,20 @@ fn scan_namespace_borrowed(
     games: &mut Vec<ScannedGame>,
 ) {
     stats.directories += 1;
+    let mut dos_attributes = DosAttributeProbe::for_root(root);
+    let mut hidden_directories = Vec::<PathBuf>::new();
     let namespace = namespace_walk::visit(root, None, should_ignore_path, |entry| {
+        if hidden_directories
+            .iter()
+            .any(|hidden| entry.path.starts_with(hidden))
+        {
+            return true;
+        }
         if entry.kind == NamespaceEntryKind::Directory {
+            if dos_attributes.is_catalog_hidden(&entry.path) {
+                hidden_directories.push(entry.path.clone());
+                return true;
+            }
             stats.directories += 1;
             return true;
         }
@@ -665,6 +703,9 @@ fn scan_namespace_borrowed(
             BorrowedProfilePathClass::Payload { rule }
                 if rule.disposition == PayloadDisposition::Playable =>
             {
+                if dos_attributes.is_catalog_hidden(path) {
+                    return true;
+                }
                 stats.candidate_files += 1;
                 games.push(direct_game(profile, path, rule));
             }
@@ -675,6 +716,9 @@ fn scan_namespace_borrowed(
                     .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
                     && !profile.archive_entry_rules.is_empty() =>
             {
+                if dos_attributes.is_catalog_hidden(path) {
+                    return true;
+                }
                 stats.candidate_files += 1;
                 scan_archive(profile, path, stats, games);
             }
@@ -699,6 +743,100 @@ fn scan_namespace_borrowed(
     stats.namespace_type_stats = stats
         .namespace_type_stats
         .saturating_add(namespace.type_stats);
+    dos_attributes.add_to_stats(stats);
+}
+
+#[derive(Default)]
+struct DosAttributeProbe {
+    enabled: bool,
+    checks: usize,
+    hidden_entries: usize,
+    errors: usize,
+}
+
+impl DosAttributeProbe {
+    fn for_root(root: &Path) -> Self {
+        Self {
+            enabled: dos_attributes_supported(root),
+            ..Self::default()
+        }
+    }
+
+    fn is_catalog_hidden(&mut self, path: &Path) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        self.checks = self.checks.saturating_add(1);
+        match dos_file_attributes(path) {
+            Ok(attributes) => {
+                let hidden = dos_attributes_are_catalog_hidden(attributes);
+                self.hidden_entries = self.hidden_entries.saturating_add(usize::from(hidden));
+                hidden
+            }
+            Err(_) => {
+                self.errors = self.errors.saturating_add(1);
+                false
+            }
+        }
+    }
+
+    fn add_to_stats(&self, stats: &mut GenericSystemStats) {
+        stats.dos_attribute_checks = stats.dos_attribute_checks.saturating_add(self.checks);
+        stats.dos_hidden_entries = stats.dos_hidden_entries.saturating_add(self.hidden_entries);
+        stats.dos_attribute_errors = stats.dos_attribute_errors.saturating_add(self.errors);
+    }
+}
+
+fn dos_attributes_are_catalog_hidden(attributes: u32) -> bool {
+    const HIDDEN: u32 = 0x02;
+    const SYSTEM: u32 = 0x04;
+    attributes & (HIDDEN | SYSTEM) != 0
+}
+
+#[cfg(target_os = "linux")]
+fn dos_attributes_supported(root: &Path) -> bool {
+    const MSDOS_SUPER_MAGIC: libc::c_long = 0x4d44;
+    const EXFAT_SUPER_MAGIC: libc::c_long = 0x2011_bab0;
+    let Ok(path) = CString::new(root.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `path` is a live NUL-terminated string and `filesystem` points
+    // to writable storage for the duration of this call.
+    let mut filesystem = unsafe { std::mem::zeroed::<libc::statfs>() };
+    // SAFETY: both pointers remain valid for the complete syscall.
+    if unsafe { libc::statfs(path.as_ptr(), &mut filesystem) } != 0 {
+        return false;
+    }
+    matches!(filesystem.f_type, MSDOS_SUPER_MAGIC | EXFAT_SUPER_MAGIC)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn dos_attributes_supported(_root: &Path) -> bool {
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn dos_file_attributes(path: &Path) -> Result<u32, std::io::Error> {
+    const FAT_IOCTL_GET_ATTRIBUTES: libc::c_ulong = 0x8004_7210;
+    let file = File::open(path)?;
+    let mut attributes = 0u32;
+    // SAFETY: the file descriptor is live and the ioctl writes one u32 to the
+    // supplied pointer, matching Linux's FAT_IOCTL_GET_ATTRIBUTES contract.
+    let result =
+        unsafe { libc::ioctl(file.as_raw_fd(), FAT_IOCTL_GET_ATTRIBUTES, &mut attributes) };
+    if result == 0 {
+        Ok(attributes)
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn dos_file_attributes(_path: &Path) -> Result<u32, std::io::Error> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "DOS file attributes require Linux FAT/exFAT ioctls",
+    ))
 }
 
 fn direct_game(profile: &LaunchProfile, path: &Path, rule: &PayloadRule) -> ScannedGame {
@@ -979,5 +1117,33 @@ mod tests {
         assert_eq!(psx_stats.ignored_files, 3);
         assert_eq!(psx_stats.dependency_files, 1);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dos_hidden_and_system_attributes_are_catalog_hidden() {
+        assert!(!dos_attributes_are_catalog_hidden(0));
+        assert!(!dos_attributes_are_catalog_hidden(0x01));
+        assert!(dos_attributes_are_catalog_hidden(0x02));
+        assert!(dos_attributes_are_catalog_hidden(0x04));
+        assert!(dos_attributes_are_catalog_hidden(0x06));
+        assert!(!dos_attributes_are_catalog_hidden(0x20));
+    }
+
+    #[test]
+    fn generic_scanners_share_the_complete_production_hidden_name_policy() {
+        for path in [
+            "/media/fat/games/SNES/._Game.sfc",
+            "/media/fat/games/SNES/.DS_Store.sfc",
+            "/media/fat/games/SNES/.metadata/Game.sfc",
+            "/media/fat/games/SNES/__MACOSX/Game.sfc",
+            "/media/fat/games/SNES/.____padding_file/Game.sfc",
+            "/media/fat/games/SNES/screenshots/Game.sfc",
+            "/media/fat/games/SNES/boxart/Game.sfc",
+        ] {
+            assert!(should_ignore_path(Path::new(path)), "{path}");
+        }
+        assert!(!should_ignore_path(Path::new(
+            "/media/fat/games/SNES/Real Game.sfc"
+        )));
     }
 }
