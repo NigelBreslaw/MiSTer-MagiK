@@ -63,6 +63,7 @@ struct GenericNamespaceInventory {
     entries: Vec<GenericInventoryEntry>,
     namespace: NamespaceWalkStats,
     watch: GenericSourceWatchObservations,
+    continuation_roots: Vec<PathBuf>,
     elapsed_us: u64,
 }
 
@@ -391,7 +392,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
                 signature: GameDirSignature::from_path(&candidate),
                 path: candidate,
             };
-            let inventory = collect_generic_namespace_inventory(&header)?;
+            let inventory = collect_generic_namespace_inventory(&header, None)?;
             let accumulator = accumulator_for_profile(&mut accumulators, profile);
             accumulator.stats.roots = accumulator.stats.roots.saturating_add(1);
             apply_generic_namespace_inventory(
@@ -405,7 +406,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
     }
 
     for header in plan.game_dir_headers() {
-        let inventory = collect_generic_namespace_inventory(header)?;
+        let mut inventory = collect_generic_namespace_inventory(header, Some(2))?;
         let Some(profile) = plan.profile_for_game_dir_facts(&inventory.fact) else {
             continue;
         };
@@ -417,6 +418,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
         if !visited_roots.insert(root_key) {
             continue;
         }
+        let continuation_roots = std::mem::take(&mut inventory.continuation_roots);
         let accumulator = accumulator_for_profile(&mut accumulators, &profile);
         accumulator.stats.roots = accumulator.stats.roots.saturating_add(1);
         apply_generic_namespace_inventory(
@@ -426,6 +428,22 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
             &mut accumulator.games,
             &mut accumulator.watch,
         );
+        for continuation_root in continuation_roots {
+            let continuation_header = GameDirHeader {
+                name: header.name.clone(),
+                signature: GameDirSignature::from_path(&continuation_root),
+                path: continuation_root,
+            };
+            let mut continuation = collect_generic_namespace_inventory(&continuation_header, None)?;
+            continuation.watch.roots.clear();
+            apply_generic_namespace_inventory(
+                continuation,
+                &profile,
+                &mut accumulator.stats,
+                &mut accumulator.games,
+                &mut accumulator.watch,
+            );
+        }
     }
 
     let mut systems = Vec::new();
@@ -543,6 +561,7 @@ fn merge_resolved_profile(profiles: &mut Vec<LaunchProfile>, profile: LaunchProf
 
 fn collect_generic_namespace_inventory(
     header: &GameDirHeader,
+    max_depth: Option<usize>,
 ) -> Result<GenericNamespaceInventory, String> {
     let started = Instant::now();
     let mut entries = Vec::new();
@@ -557,10 +576,11 @@ fn collect_generic_namespace_inventory(
         GenericDirectoryObservationBuilder::default(),
     );
     let mut watch_containers = Vec::new();
+    let mut continuation_roots = Vec::new();
     let mut watch_complete = true;
     let namespace = namespace_walk::visit_with_signature_capture(
         &header.path,
-        None,
+        max_depth,
         NamespaceSignatureCapture::AllDirectories,
         should_ignore_path,
         |entry| {
@@ -601,6 +621,9 @@ fn collect_generic_namespace_inventory(
                     }
                     _ => {}
                 }
+            }
+            if max_depth == Some(2) && depth == 2 && entry.kind == NamespaceEntryKind::Directory {
+                continuation_roots.push(entry.path.clone());
             }
             if let (Some(parent), Some(name)) = (entry.path.parent(), entry.path.file_name()) {
                 let kind = match entry.kind {
@@ -676,6 +699,8 @@ fn collect_generic_namespace_inventory(
     watch_directories.sort_by(|left, right| left.path.cmp(&right.path));
     watch_containers.sort();
     watch_containers.dedup();
+    continuation_roots.sort();
+    continuation_roots.dedup();
     direct_zip_paths.sort_by_cached_key(|path| path.to_string_lossy().to_ascii_lowercase());
     nested_probe_signatures.sort_by_cached_key(|(path, _)| {
         (path.to_string_lossy().to_ascii_lowercase(), path.clone())
@@ -699,6 +724,7 @@ fn collect_generic_namespace_inventory(
             containers: watch_containers,
             complete: watch_complete,
         },
+        continuation_roots,
         elapsed_us: started.elapsed().as_micros() as u64,
     })
 }
@@ -775,16 +801,20 @@ fn merge_watch_observations(
 ) {
     target.complete &= source.complete;
     target.roots.extend(source.roots.iter().cloned());
-    target
+    let mut directories = target
         .directories
-        .extend(source.directories.iter().cloned());
+        .drain(..)
+        .map(|directory| (directory.path.clone(), directory))
+        .collect::<BTreeMap<_, _>>();
+    directories.extend(
+        source
+            .directories
+            .iter()
+            .cloned()
+            .map(|directory| (directory.path.clone(), directory)),
+    );
+    target.directories = directories.into_values().collect();
     target.containers.extend(source.containers.iter().cloned());
-    target
-        .directories
-        .sort_by(|left, right| left.path.cmp(&right.path));
-    target
-        .directories
-        .dedup_by(|left, right| left.path == right.path);
     target.containers.sort();
     target.containers.dedup();
 }
