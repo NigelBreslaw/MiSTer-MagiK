@@ -559,16 +559,20 @@ enum RomEligibility {
 fn rom_eligibility(requirement: &RomRequirement, inventory: &RomInventory) -> RomEligibility {
     match requirement {
         RomRequirement::None => RomEligibility::Eligible,
-        RomRequirement::Mame(setname) => inventory
-            .mame
-            .contains(setname)
-            .then_some(RomEligibility::Eligible)
-            .unwrap_or(RomEligibility::Missing),
-        RomRequirement::Hbmame(setname) => inventory
-            .hbmame
-            .contains(setname)
-            .then_some(RomEligibility::Eligible)
-            .unwrap_or(RomEligibility::Missing),
+        RomRequirement::Mame(setname) => {
+            if inventory.mame.contains(setname) {
+                RomEligibility::Eligible
+            } else {
+                RomEligibility::Missing
+            }
+        }
+        RomRequirement::Hbmame(setname) => {
+            if inventory.hbmame.contains(setname) {
+                RomEligibility::Eligible
+            } else {
+                RomEligibility::Missing
+            }
+        }
         RomRequirement::Ambiguous => RomEligibility::Ambiguous,
     }
 }

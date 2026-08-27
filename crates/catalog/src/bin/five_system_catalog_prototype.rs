@@ -916,7 +916,7 @@ fn process_metrics() -> serde_json::Value {
         contents
             .lines()
             .find_map(|line| line.strip_prefix(name))
-            .and_then(|value| value.trim().split_whitespace().next())
+            .and_then(|value| value.split_whitespace().next())
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(0)
     };
