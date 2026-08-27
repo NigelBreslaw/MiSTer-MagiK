@@ -95,6 +95,7 @@ pub struct FastFiveSystem {
 pub enum FastFiveVariantRelation {
     LanguageEdition,
     TitleFormatting,
+    ArcadeVariant,
 }
 
 #[cfg(feature = "builder")]
@@ -103,6 +104,7 @@ impl FastFiveVariantRelation {
         match self {
             Self::LanguageEdition => "language-edition",
             Self::TitleFormatting => "title-formatting",
+            Self::ArcadeVariant => "arcade-variant",
         }
     }
 }
@@ -1426,6 +1428,7 @@ pub fn verify_snapshot_artifacts(
                     let relation = match relation.as_str() {
                         "language-edition" => FastFiveVariantRelation::LanguageEdition,
                         "title-formatting" => FastFiveVariantRelation::TitleFormatting,
+                        "arcade-variant" => FastFiveVariantRelation::ArcadeVariant,
                         _ => {
                             return Err(format!(
                                 "candidate {} has unknown variant relation {relation}",

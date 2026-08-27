@@ -9,8 +9,8 @@
 
 use crate::catalog_scan::FoundFile;
 use crate::fast_five_catalog::{
-    EXPANDED_FAST_SYSTEM_IDS, FAST_FIVE_SNAPSHOT_SCHEMA, FastFiveSnapshot, FastFiveSystem,
-    collapse_c64_cross_source_variants,
+    EXPANDED_FAST_SYSTEM_IDS, FAST_FIVE_SNAPSHOT_SCHEMA, FastFiveGameVariant, FastFiveSnapshot,
+    FastFiveSystem, FastFiveVariantRelation, collapse_c64_cross_source_variants,
 };
 use crate::generic_system_catalog::{add_generic_example_systems, rebuild_generic_system};
 use crate::launch_profiles::CollectionListing;
@@ -25,7 +25,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 8;
+pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 9;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FastSourceBuildReport {
@@ -141,25 +141,34 @@ fn build_prepared_system(
         system_id: system_id.to_string(),
         ..FastSourceSystemReport::default()
     };
-    let mut games = match system_id {
-        "arcade" => scan_arcade(storage_root, &mut report),
-        "amiga" => scan_amiga(storage_root, &mut report),
-        "dos" => scan_prepared_mgl(
-            &[storage_root.join("_DOS Games")],
-            "dos",
-            "DOS",
-            &mut report,
+    let (mut games, mut variants) = match system_id {
+        "arcade" => {
+            let scan = scan_arcade(storage_root, &mut report);
+            (scan.games, scan.variants)
+        }
+        "amiga" => (scan_amiga(storage_root, &mut report), Vec::new()),
+        "dos" => (
+            scan_prepared_mgl(
+                &[storage_root.join("_DOS Games")],
+                "dos",
+                "DOS",
+                &mut report,
+            ),
+            Vec::new(),
         ),
-        "x68000" => scan_prepared_mgl(
-            &[
-                storage_root.join("_Computer/_X68000 Games"),
-                storage_root.join("_Computer/X68000 Games"),
-            ],
-            "x68000",
-            "X68000",
-            &mut report,
+        "x68000" => (
+            scan_prepared_mgl(
+                &[
+                    storage_root.join("_Computer/_X68000 Games"),
+                    storage_root.join("_Computer/X68000 Games"),
+                ],
+                "x68000",
+                "X68000",
+                &mut report,
+            ),
+            Vec::new(),
         ),
-        "c64" => scan_oneload64(storage_root, &mut report),
+        "c64" => (scan_oneload64(storage_root, &mut report), Vec::new()),
         _ => return Err(format!("unsupported prepared fast system {system_id}")),
     };
     games.sort_by(|left, right| {
@@ -169,18 +178,68 @@ fn build_prepared_system(
             .then_with(|| left.stable_key.cmp(&right.stable_key))
     });
     games.dedup_by(|left, right| left.launch_ref == right.launch_ref);
+    variants.sort_by(|left, right| {
+        left.family_stable_key
+            .cmp(&right.family_stable_key)
+            .then_with(|| {
+                left.game
+                    .title
+                    .to_ascii_lowercase()
+                    .cmp(&right.game.title.to_ascii_lowercase())
+            })
+            .then_with(|| left.game.launch_ref.cmp(&right.game.launch_ref))
+    });
     Ok((
         FastFiveSystem {
             system_id: system_id.to_string(),
             display_title: display_title(system_id).to_string(),
             games,
-            variants: Vec::new(),
+            variants,
         },
         report,
     ))
 }
 
-fn scan_arcade(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<SystemGame> {
+#[derive(Clone, Debug)]
+struct ArcadeCandidate {
+    game: SystemGame,
+    identity_id: String,
+    family_id: String,
+}
+
+#[derive(Clone, Debug)]
+struct ArcadeScan {
+    games: Vec<SystemGame>,
+    variants: Vec<FastFiveGameVariant>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FastArcadeAuditCandidate {
+    pub title: String,
+    pub launch_ref: String,
+    pub family_id: String,
+}
+
+fn scan_arcade(storage_root: &Path, report: &mut FastSourceSystemReport) -> ArcadeScan {
+    collapse_arcade_candidates(scan_arcade_candidates(storage_root, report))
+}
+
+pub(crate) fn audit_arcade_candidates(storage_root: &Path) -> Vec<FastArcadeAuditCandidate> {
+    let mut report = FastSourceSystemReport::default();
+    scan_arcade_candidates(storage_root, &mut report)
+        .into_iter()
+        .map(|candidate| FastArcadeAuditCandidate {
+            title: candidate.game.title,
+            launch_ref: candidate.game.launch_ref,
+            family_id: candidate.family_id,
+        })
+        .collect()
+}
+
+fn scan_arcade_candidates(
+    storage_root: &Path,
+    report: &mut FastSourceSystemReport,
+) -> Vec<ArcadeCandidate> {
     let roms = arcade_rom_inventory(storage_root, report);
     let cores = arcade_core_inventory(storage_root, report);
     let updater = arcade_updater_rows(storage_root);
@@ -251,7 +310,16 @@ fn scan_arcade(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<
             if game.preview_asset_key.is_empty() {
                 game.preview_asset_key = arcade_requirement_preview_asset_key(&row.primary_rom);
             }
-            games.push(game);
+            let (identity_id, family_id) = row
+                .catalog_metadata
+                .as_ref()
+                .map(|metadata| (metadata.identity_id.clone(), metadata.family_id.clone()))
+                .unwrap_or_default();
+            games.push(ArcadeCandidate {
+                game,
+                identity_id,
+                family_id,
+            });
             continue;
         }
         let bytes = match fs::read(&path) {
@@ -310,9 +378,60 @@ fn scan_arcade(storage_root: &Path, report: &mut FastSourceSystemReport) -> Vec<
             .as_deref()
             .and_then(|year| year.parse::<u16>().ok());
         game.manufacturer = inspection.header.manufacturer.unwrap_or_default();
-        games.push(game);
+        let (identity_id, family_id) = inspection
+            .catalog_metadata
+            .as_ref()
+            .map(|metadata| (metadata.identity_id.clone(), metadata.family_id.clone()))
+            .unwrap_or_default();
+        games.push(ArcadeCandidate {
+            game,
+            identity_id,
+            family_id,
+        });
     }
     games
+}
+
+fn collapse_arcade_candidates(mut candidates: Vec<ArcadeCandidate>) -> ArcadeScan {
+    candidates.sort_by(|left, right| left.game.launch_ref.cmp(&right.game.launch_ref));
+    candidates.dedup_by(|left, right| left.game.launch_ref == right.game.launch_ref);
+    let mut families = BTreeMap::<String, Vec<ArcadeCandidate>>::new();
+    for candidate in candidates {
+        let family = if candidate.family_id.trim().is_empty() {
+            format!("launch:{}", candidate.game.launch_ref.to_ascii_lowercase())
+        } else {
+            format!("family:{}", candidate.family_id.to_ascii_lowercase())
+        };
+        families.entry(family).or_default().push(candidate);
+    }
+    let mut games = Vec::with_capacity(families.len());
+    let mut variants = Vec::new();
+    for mut family in families.into_values() {
+        family.sort_by(|left, right| {
+            let left_parent = !left.family_id.is_empty()
+                && left.identity_id.eq_ignore_ascii_case(&left.family_id);
+            let right_parent = !right.family_id.is_empty()
+                && right.identity_id.eq_ignore_ascii_case(&right.family_id);
+            right_parent
+                .cmp(&left_parent)
+                .then_with(|| {
+                    left.game
+                        .title
+                        .to_ascii_lowercase()
+                        .cmp(&right.game.title.to_ascii_lowercase())
+                })
+                .then_with(|| left.game.launch_ref.cmp(&right.game.launch_ref))
+        });
+        let preferred = family.remove(0).game;
+        let family_stable_key = preferred.stable_key.clone();
+        games.push(preferred);
+        variants.extend(family.into_iter().map(|candidate| FastFiveGameVariant {
+            family_stable_key: family_stable_key.clone(),
+            relation: FastFiveVariantRelation::ArcadeVariant,
+            game: candidate.game,
+        }));
+    }
+    ArcadeScan { games, variants }
 }
 
 fn arcade_updater_rows(
@@ -953,11 +1072,64 @@ mod tests {
         )
         .unwrap();
         let mut report = FastSourceSystemReport::default();
-        assert!(scan_arcade(&root, &mut report).is_empty());
+        assert!(scan_arcade(&root, &mut report).games.is_empty());
         fs::write(root.join("games/mame/test.zip"), b"rom").unwrap();
-        let games = scan_arcade(&root, &mut report);
+        let games = scan_arcade(&root, &mut report).games;
         assert_eq!(games.len(), 1);
         assert_eq!(games[0].preview_asset_key, "test");
+    }
+
+    #[test]
+    fn arcade_family_metadata_keeps_one_preferred_game_and_retains_variants() {
+        let parent = direct_row(
+            "arcade",
+            "Arcade",
+            Path::new("/media/fat/_Arcade/Example.mra"),
+            "Example".to_string(),
+        );
+        let clone = direct_row(
+            "arcade",
+            "Arcade",
+            Path::new("/media/fat/_Arcade/_alternatives/Example (Japan).mra"),
+            "Example (Japan)".to_string(),
+        );
+        let standalone = direct_row(
+            "arcade",
+            "Arcade",
+            Path::new("/media/fat/_Arcade/Standalone.mra"),
+            "Standalone".to_string(),
+        );
+        let scan = collapse_arcade_candidates(vec![
+            ArcadeCandidate {
+                game: clone,
+                identity_id: "examplej".to_string(),
+                family_id: "example".to_string(),
+            },
+            ArcadeCandidate {
+                game: parent,
+                identity_id: "example".to_string(),
+                family_id: "example".to_string(),
+            },
+            ArcadeCandidate {
+                game: standalone,
+                identity_id: String::new(),
+                family_id: String::new(),
+            },
+        ]);
+        assert_eq!(scan.games.len(), 2);
+        assert_eq!(scan.variants.len(), 1);
+        assert!(scan.games.iter().any(|game| game.title == "Example"));
+        assert_eq!(scan.variants[0].game.title, "Example (Japan)");
+        assert_eq!(
+            scan.variants[0].relation,
+            FastFiveVariantRelation::ArcadeVariant
+        );
+        let parent = scan
+            .games
+            .iter()
+            .find(|game| game.title == "Example")
+            .unwrap();
+        assert_eq!(scan.variants[0].family_stable_key, parent.stable_key);
     }
 
     #[test]
@@ -1020,7 +1192,7 @@ mod tests {
 
     #[test]
     fn independent_source_set_contains_no_legacy_input_kind() {
-        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 8);
+        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 9);
         assert_eq!(EXPANDED_FAST_SYSTEM_IDS.len(), 9);
     }
 

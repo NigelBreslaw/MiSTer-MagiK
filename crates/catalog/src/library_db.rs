@@ -1224,10 +1224,17 @@ pub fn audit_arcade_rom_visibility_with_paths(
         roots: vec![root.to_string()],
         sqlite_path: paths.library_sqlite().to_path_buf(),
     };
-    let filtered = CatalogRefreshPipeline::with_archive_cache(&cfg, archive_cache)
+    let filtered_artifact = CatalogRefreshPipeline::with_archive_cache(&cfg, archive_cache)
         .with_arcade_updater_index(paths.arcade_updater_index())
-        .scan_ram_artifact_foreground_with_events(None, None)
-        .catalog(root);
+        .scan_ram_artifact_foreground_with_events(None, None);
+    let legacy_candidates = filtered_artifact
+        .scan
+        .discoveries
+        .iter()
+        .filter(|discovery| matches!(&discovery.source_kind, DiscoverySourceKind::Mra))
+        .map(|discovery| discovery.source_path.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let filtered = filtered_artifact.catalog(root);
     let unfiltered = CatalogRefreshPipeline::with_archive_cache(&cfg, archive_cache)
         .with_arcade_updater_index(paths.arcade_updater_index())
         .with_arcade_rom_presence(false)
@@ -1287,6 +1294,29 @@ pub fn audit_arcade_rom_visibility_with_paths(
             })
             .unwrap_or_default();
     let inventory = crate::arcade_rom_inventory::ArcadeRomInventory::from_library_roots(&cfg.roots);
+    let storage_root = Path::new(root)
+        .parent()
+        .ok_or_else(|| format!("Arcade root {root} has no storage parent"))?;
+    let fast_candidates = crate::fast_catalog_sources::audit_arcade_candidates(storage_root);
+    let fast_candidate_refs = fast_candidates
+        .iter()
+        .map(|candidate| candidate.launch_ref.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let mut supplemental = fast_candidates
+        .iter()
+        .filter(|candidate| !legacy_candidates.contains(&candidate.launch_ref.to_ascii_lowercase()))
+        .collect::<Vec<_>>();
+    supplemental.sort_by(|left, right| {
+        left.title
+            .to_ascii_lowercase()
+            .cmp(&right.title.to_ascii_lowercase())
+            .then_with(|| left.launch_ref.cmp(&right.launch_ref))
+    });
+    let legacy_only_candidates = legacy_candidates
+        .iter()
+        .filter(|launch_ref| !fast_candidate_refs.contains(*launch_ref))
+        .count();
+
     let mut false_negatives = 0usize;
     let mut rows = String::new();
     for (direction, games) in [("old-only", &old_only), ("filtered-only", &filtered_only)] {
@@ -1353,7 +1383,25 @@ pub fn audit_arcade_rom_visibility_with_paths(
         inventory.counts().1,
         inventory.fingerprint(),
     );
-    Ok(summary + &rows)
+    let supplemental_summary = format!(
+        "arcade_fast_supplemental_summary_tsv\tfast_candidates={}\tlegacy_candidates={}\tfast_only={}\tlegacy_only={}\n",
+        fast_candidates.len(),
+        legacy_candidates.len(),
+        supplemental.len(),
+        legacy_only_candidates,
+    );
+    let supplemental_rows = supplemental
+        .into_iter()
+        .map(|candidate| {
+            format!(
+                "arcade_fast_supplemental_row_tsv\ttitle={}\tlaunch_ref={}\tfamily_id={}\n",
+                sanitize_catalog_audit_field(&candidate.title),
+                sanitize_catalog_audit_field(&candidate.launch_ref),
+                sanitize_catalog_audit_field(&candidate.family_id),
+            )
+        })
+        .collect::<String>();
+    Ok(summary + &supplemental_summary + &supplemental_rows + &rows)
 }
 
 #[cfg(feature = "builder")]
