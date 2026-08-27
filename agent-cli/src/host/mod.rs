@@ -21065,10 +21065,11 @@ fn cold_boot_launcher_env(pprof: bool, fresh_catalog: bool) -> Vec<(String, Stri
                     "cold-boot".into()
                 },
             ),
-            // A full catalog build spends long intervals in slow exFAT directory
-            // syscalls. 99 Hz still yields thousands of samples without delivering
-            // SIGPROF every millisecond throughout those reads.
-            ("MISTER_PPROF_HZ".into(), "99".into()),
+            // The 99 Hz full-catalog run still delivered enough asynchronous
+            // SIGPROF traffic to crash the ARM launcher during the generic scan.
+            // At 19 Hz a two-minute build still yields thousands of useful hits
+            // while leaving much wider uninterrupted windows around exFAT reads.
+            ("MISTER_PPROF_HZ".into(), "19".into()),
             (
                 "MISTER_PPROF_OUT".into(),
                 format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/flamegraph.svg"),
@@ -37369,7 +37370,7 @@ video_mode=14
             COLD_BOOT_FRESH_ARCADE_INDEX.into(),
         )));
         assert!(profiled.contains(&("MISTER_PPROF_TRIGGER".into(), "cold-boot-catalog".into(),)));
-        assert!(profiled.contains(&("MISTER_PPROF_HZ".into(), "99".into())));
+        assert!(profiled.contains(&("MISTER_PPROF_HZ".into(), "19".into())));
         assert!(
             cold_boot_launcher_env(true, false)
                 .contains(&("MISTER_PPROF_TRIGGER".into(), "cold-boot".into()))
