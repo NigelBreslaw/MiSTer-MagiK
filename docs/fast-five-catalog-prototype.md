@@ -74,6 +74,14 @@ not create them. It still validates the current shard format and manifest,
 maps generation-bound NavPacks, and derives a SHA-256 fingerprint from the
 published artifacts.
 
+Screenshot packs use the same stable media identities as production, while
+availability remains runtime media state. The independent builder records
+Arcade family/set keys, AmigaVision title keys, Neo Geo set names, and focused
+title-only MAME software-list keys for SNES and Saturn. The media worker then
+matches a current pack index in memory; it does not require a production
+catalog binding and does not republish fast-catalog artifacts when packs
+change.
+
 Timing comparisons are accepted only from isolated builds after a verified
 supervised reboot. Each old/new sample must build one named system only. Warm,
 forced-rebuild, and whole-card figures are not comparison evidence.

@@ -95,34 +95,8 @@ pub fn reconcile_production_preview_availability(
         limits.shard,
     )
     .map_err(|error| ReconciliationError::new("preview-availability", error.to_string()))?;
-    let stems = crate::preview_worker::preview_archive_sidecar_entry_stems(pack_path)
-        .map_err(|error| ReconciliationError::new("preview-availability", error))?
-        .ok_or_else(|| ReconciliationError::new("preview-availability", "pack index is missing"))?;
-    let entries = stems.entries.into_iter().collect::<HashSet<_>>();
-    let stable_archive_path =
-        crate::preview_worker::preview_archive_path_for_system(system_id.as_str());
-    let mut games = loaded.games;
-    let mut candidate_rows = 0;
-    let mut available_rows = 0;
-    let mut changed_rows = 0;
-    for game in &mut games {
-        if game.preview_asset_key.is_empty() {
-            continue;
-        }
-        candidate_rows += 1;
-        let available = entries.contains(&game.preview_asset_key.to_ascii_lowercase());
-        available_rows += usize::from(available);
-        let archive_path = if available {
-            stable_archive_path.as_str()
-        } else {
-            ""
-        };
-        if game.has_preview != available || game.preview_archive_path != archive_path {
-            game.has_preview = available;
-            game.preview_archive_path = archive_path.to_string();
-            changed_rows += 1;
-        }
-    }
+    let (games, candidate_rows, available_rows, changed_rows) =
+        reconcile_preview_rows(system_id, pack_path, loaded.games)?;
     if changed_rows == 0 {
         return Ok(PreviewAvailabilityReconciliationOutcome {
             system_id: system_id.clone(),
@@ -181,6 +155,80 @@ pub fn reconcile_production_preview_availability(
         changed_rows,
         games,
     })
+}
+
+/// Reconcile a downloaded pack against an independent fast-catalog shard.
+///
+/// Fast catalogs deliberately have no production binding. Availability is
+/// applied to the launcher's in-memory rows and never republishes catalog
+/// artifacts merely because a media pack changed.
+pub fn reconcile_fast_preview_availability(
+    storage_root: &Path,
+    system_id: &SystemId,
+    pack_path: &Path,
+    limits: RegistryLimits,
+) -> Result<PreviewAvailabilityReconciliationOutcome, ReconciliationError> {
+    let manifest = read_latest_manifest(storage_root, limits)
+        .map_err(|error| ReconciliationError::new("preview-availability", error.to_string()))?;
+    let published = manifest
+        .systems
+        .iter()
+        .find(|system| &system.system_id == system_id)
+        .ok_or_else(|| ReconciliationError::new("preview-availability", "system is absent"))?;
+    let loaded = open_system_shard(
+        &storage_root.join(&published.active.sqlite_path),
+        &storage_root.join(&published.active.navigation_path),
+        system_id,
+        published.active.generation,
+        limits.shard,
+    )
+    .map_err(|error| ReconciliationError::new("preview-availability", error.to_string()))?;
+    let (games, candidate_rows, available_rows, changed_rows) =
+        reconcile_preview_rows(system_id, pack_path, loaded.games)?;
+    Ok(PreviewAvailabilityReconciliationOutcome {
+        system_id: system_id.clone(),
+        previous_generation: manifest.generation,
+        generation: manifest.generation,
+        candidate_rows,
+        available_rows,
+        changed_rows,
+        games,
+    })
+}
+
+fn reconcile_preview_rows(
+    system_id: &SystemId,
+    pack_path: &Path,
+    mut games: Vec<SystemGame>,
+) -> Result<(Vec<SystemGame>, usize, usize, usize), ReconciliationError> {
+    let stems = crate::preview_worker::preview_archive_sidecar_entry_stems(pack_path)
+        .map_err(|error| ReconciliationError::new("preview-availability", error))?
+        .ok_or_else(|| ReconciliationError::new("preview-availability", "pack index is missing"))?;
+    let entries = stems.entries.into_iter().collect::<HashSet<_>>();
+    let stable_archive_path =
+        crate::preview_worker::preview_archive_path_for_system(system_id.as_str());
+    let mut candidate_rows = 0;
+    let mut available_rows = 0;
+    let mut changed_rows = 0;
+    for game in &mut games {
+        if game.preview_asset_key.is_empty() {
+            continue;
+        }
+        candidate_rows += 1;
+        let available = entries.contains(&game.preview_asset_key.to_ascii_lowercase());
+        available_rows += usize::from(available);
+        let archive_path = if available {
+            stable_archive_path.as_str()
+        } else {
+            ""
+        };
+        if game.has_preview != available || game.preview_archive_path != archive_path {
+            game.has_preview = available;
+            game.preview_archive_path = archive_path.to_string();
+            changed_rows += 1;
+        }
+    }
+    Ok((games, candidate_rows, available_rows, changed_rows))
 }
 
 struct PreviewAvailabilityMaterializer(Option<MaterializedSystem>);
@@ -1208,6 +1256,58 @@ mod tests {
         assert_eq!(unchanged.generation, 2);
         assert_eq!(unchanged.changed_rows, 0);
         assert_eq!(read_latest_manifest(&root, limits()).unwrap().generation, 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fast_preview_reconciliation_needs_no_binding_and_does_not_publish() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-fast-preview-availability-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let fingerprint = fixture_state().stamp.fingerprint_hex();
+        let mut present = game("Present", "/arcade/present.mra", "arcade");
+        present.preview_asset_key = "present".into();
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from("/fixture"),
+            vec![present],
+            vec![GameSystemEntry {
+                id: "arcade".to_string(),
+                title: "Arcade".to_string(),
+                count: 1,
+            }],
+        );
+        publish_bound_production_projection(&root, &catalog, &fingerprint, limits()).unwrap();
+        fs::remove_file(root.join(BINDING_FILE)).unwrap();
+        let pack = root.join("arcade-pack.mmlz4b");
+        write_preview_sidecar_index(&pack, &["present.rgb565"]);
+
+        let reconciled = reconcile_fast_preview_availability(
+            &root,
+            &SystemId::parse("arcade").unwrap(),
+            &pack,
+            limits(),
+        )
+        .unwrap();
+
+        assert_eq!(reconciled.previous_generation, 1);
+        assert_eq!(reconciled.generation, 1);
+        assert_eq!(reconciled.candidate_rows, 1);
+        assert_eq!(reconciled.available_rows, 1);
+        assert_eq!(reconciled.changed_rows, 1);
+        assert!(reconciled.games[0].has_preview);
+        assert_eq!(read_latest_manifest(&root, limits()).unwrap().generation, 1);
+        assert!(!root.join(BINDING_FILE).exists());
+        let reader = LazyShardedCatalogReader::open(&root, limits()).unwrap();
+        assert!(
+            !reader
+                .open_system(&SystemId::parse("arcade").unwrap())
+                .unwrap()
+                .games()[0]
+                .has_preview
+        );
         let _ = fs::remove_dir_all(root);
     }
 

@@ -206,6 +206,17 @@ Direct ROM contents are not hashed: their catalog identity is the path. A
 same-path content replacement with preserved metadata requires the explicit
 full-rebuild request.
 
+Fast-catalog rows store stable screenshot identities but never store pack
+availability as source truth. Arcade uses the Update_All family/set identity,
+supplemental MRAs fall back to their required ROM set, AmigaVision uses its
+title identity, Neo Geo uses its ROM-set name, and SNES/Saturn use a focused
+title-only MAME software-list lookup. The latter reads no ROM bytes or software
+hash tables, and ambiguous title matches stay without a preview. Changes to the
+MAME metadata database invalidate only the affected SNES/Saturn source watches.
+When a pack is current or newly downloaded, fast mode matches its bounded index
+against the active shard and applies availability to launcher memory without a
+production binding or catalog artifact write.
+
 An update whose public format descriptor is unchanged reuses that published
 catalog directly. An explicitly recognized predecessor format is classified as
 upgrade-required and rebuilt under the current descriptor; incomplete or

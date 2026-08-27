@@ -544,6 +544,17 @@ pub fn capture_system_watch(
             }
         }
     }
+    if matches!(system_id, "snes" | "saturn") {
+        for path in [
+            storage_root.join("mister-magik-dev/mame.sqlite3"),
+            storage_root.join("mister-magik/mame.sqlite3"),
+        ] {
+            if path.is_file() {
+                containers.push(capture_container(&path)?);
+                break;
+            }
+        }
+    }
     directories.sort_by(|left, right| left.path.cmp(&right.path));
     directories.dedup_by(|left, right| left.path == right.path);
     containers.sort_by(|left, right| left.path.cmp(&right.path));

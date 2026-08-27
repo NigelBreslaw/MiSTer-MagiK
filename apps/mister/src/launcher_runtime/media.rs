@@ -14,7 +14,7 @@ use mister_magik_catalog::media_identity::preferred_screenshot_image_size;
 use mister_magik_catalog::preview_worker::invalidate_preview_archive_metadata_cache;
 use mister_magik_catalog::production_sharded_projection::{
     PreviewAvailabilityReconciliationOutcome, production_registry_limits,
-    reconcile_production_preview_availability,
+    reconcile_fast_preview_availability, reconcile_production_preview_availability,
 };
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use mister_magik_media_contract::{MEDIA_CONNECT_TIMEOUT_SECS, MEDIA_TRANSFER_TIMEOUT_SECS};
@@ -210,7 +210,7 @@ fn run_screenshot_media_worker(
         for (_system, (pack, local_path)) in
             take_pending_reconciliations(!interaction_active, &mut pending_reconciliation)
         {
-            reconcile_pack_preview_availability(&config.catalog_root, &pack, &local_path, &tx);
+            reconcile_pack_preview_availability(&config, &pack, &local_path, &tx);
         }
         if request_received && active.is_empty() && queue.pending.is_empty() {
             let quiescent_since = benchmark_quiescent_since.get_or_insert_with(Instant::now);
@@ -237,7 +237,7 @@ fn run_screenshot_media_worker(
             for (_system, (pack, local_path)) in
                 take_pending_reconciliations(true, &mut pending_reconciliation)
             {
-                reconcile_pack_preview_availability(&config.catalog_root, &pack, &local_path, &tx);
+                reconcile_pack_preview_availability(&config, &pack, &local_path, &tx);
             }
             break;
         }
@@ -1783,6 +1783,7 @@ pub struct MediaWorkerConfig {
     image_size: String,
     asset_dir: PathBuf,
     catalog_root: PathBuf,
+    fast_catalog: bool,
     max_concurrent_downloads: usize,
     benchmark_auto_finish: bool,
 }
@@ -1809,6 +1810,10 @@ impl MediaWorkerConfig {
             image_size,
             asset_dir: paths.media_asset_dir().to_path_buf(),
             catalog_root: paths.sharded_catalog_dir().to_path_buf(),
+            fast_catalog: matches!(
+                get("MISTER_FAST_FIVE_CATALOG"),
+                Some("1" | "true" | "yes" | "on")
+            ),
             max_concurrent_downloads: media_download_concurrency_from_value(get(
                 "MISTER_MEDIA_CONCURRENCY",
             )),
@@ -1834,6 +1839,7 @@ impl MediaWorkerConfig {
             image_size: DEFAULT_IMAGE_SIZE.to_string(),
             asset_dir,
             catalog_root,
+            fast_catalog: false,
             max_concurrent_downloads: DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS,
             benchmark_auto_finish: false,
         })
@@ -1903,7 +1909,7 @@ pub enum MediaWorkerMessage {
 }
 
 fn reconcile_pack_preview_availability(
-    catalog_root: &Path,
+    config: &MediaWorkerConfig,
     pack: &MediaPack,
     local_path: &Path,
     tx: &mpsc::Sender<MediaWorkerMessage>,
@@ -1918,12 +1924,22 @@ fn reconcile_pack_preview_availability(
             return;
         }
     };
-    match reconcile_production_preview_availability(
-        catalog_root,
-        &system_id,
-        local_path,
-        production_registry_limits(),
-    ) {
+    let result = if config.fast_catalog {
+        reconcile_fast_preview_availability(
+            &config.catalog_root,
+            &system_id,
+            local_path,
+            production_registry_limits(),
+        )
+    } else {
+        reconcile_production_preview_availability(
+            &config.catalog_root,
+            &system_id,
+            local_path,
+            production_registry_limits(),
+        )
+    };
+    match result {
         Ok(outcome) => {
             let _ = tx.send(MediaWorkerMessage::PreviewAvailabilityUpdated { outcome });
         }
@@ -2127,6 +2143,7 @@ mod tests {
             ("MISTER_MEDIA_UPDATE", "off"),
             ("MISTER_MEDIA_SIZE", "320x320"),
             ("MISTER_MEDIA_MANIFEST_URL", DEFAULT_MANIFEST_URL),
+            ("MISTER_FAST_FIVE_CATALOG", "1"),
         ]);
         let config = MediaWorkerConfig::capture_with(&paths, |name| values.get(name).copied())
             .expect("valid media configuration");
@@ -2134,6 +2151,7 @@ mod tests {
         assert_eq!(config.policy, MediaUpdatePolicy::Off);
         assert_eq!(config.image_size, "320x320");
         assert_eq!(config.asset_dir, paths.media_asset_dir());
+        assert!(config.fast_catalog);
     }
 
     const SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
