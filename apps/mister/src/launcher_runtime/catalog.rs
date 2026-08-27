@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Portable Catalog V3 startup and system-row projection.
+//! Fast-catalog registry startup and system-row projection.
 
 use crate::arcade_catalog::{self, ArcadeCatalog};
 use mister_magik_catalog::sharded_catalog::{CatalogGame, CatalogReader};
@@ -110,7 +110,7 @@ fn registry_only_catalog(
         })
         .collect::<Vec<_>>();
     // Startup publishes only registry counts. Arcade uses the same on-demand NavPack path as
-    // every other system; the retained bootstrap remains a recovery path when Catalog V3 cannot
+    // every other system; the retained bootstrap remains a recovery path when the registry cannot
     // seed the launcher at all.
     let games = Vec::new();
     let launch_plans = Vec::new();

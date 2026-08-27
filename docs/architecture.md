@@ -848,70 +848,43 @@ display without valid scan-out.
 
 ## Catalog And Preview Model
 
-Catalog V3 is the sole authoritative production catalog. Its schema-one
-manifest registry names immutable schema-four SQLite, schema-two mini-nav, and
-schema-two NavPack artifacts for each playable system. A small checksummed
-Arcade bootstrap mini-nav may be
-retained beside Catalog V3 as a disposable startup accelerator; it is never a
-complete catalog or publication authority.
-Warm startup reads the registry and opens the generation-bound NavPack reader.
-Every system remains a registry summary with an unfaulted entry prelude until
-its collection is activated. Collection
-activation is an atomic state transition: an already resident destination
-commits in the input frame; a cold destination leaves the originating Home view
-presented while CPU0 prepares the mapped `SystemCollection`, then commits before
-bridge synchronization and drawing. A registered, populated collection may
-never be presented with zero resident rows. The registry's summed counts are
-the full catalog total, while resident rows describe only hydrated memory.
+The snapshot-driven fast catalog is the sole authoritative production catalog.
+Its manifest registry names immutable search-only SQLite and NavPack artifacts
+for every playable system. Warm startup reads only registry summaries. Entering
+a collection opens its NavPack on demand; search opens that system's SQLite
+database on demand. A registered, populated collection may never be presented
+with zero resident rows. The registry's summed counts are the full catalog
+total, while resident rows describe only hydrated memory.
 
-The development fast-catalog path exercises a replacement builder without
-borrowing Catalog V3 discovery state. Its source snapshots sit beside its own
-isolated registry and are never opened by the UI. An explicit update first
-checks versioned per-system watch indexes, then rebuilds and republishes only
-systems whose canonical rows changed. The existing registry stays launchable
-until a manifest-last publication succeeds; the launcher reloads it atomically
-afterward. This prototype preserves the production SQLite-search and
-NavPack-navigation boundary while replacing source discovery and refresh
-planning.
+Source adapters discover systems dynamically from installed roots and production
+launch profiles. Arcade, AmigaVision, 0MHz DOS, Neon68K, and OneLoad64 receive
+prepared handling; every other recognized system uses the generic profile-backed
+scanner. The builder does not read retired catalog artifacts or a snapshot of a
+specific user's card.
 
-A build without a valid registry enters the first-build lifecycle. Its CPU0
-builder may use the retained Arcade mini-nav to accelerate the first-visible
-projection, but the launcher never treats that index as a catalog seed. A
-missing, corrupt, oversized, or stale index causes a normal CPU0-confined
-first-visible Arcade scan. The interactive Slint launcher is
-not rendered continuously behind the intro: timer dispatch and bridge sync are
-suppressed while catalog changes accumulate in Rust. The existing lifecycle
-`launcher_reveal_ready` transition is the only capture gate; no parallel
-catalog-readiness flag is permitted. Its normal reveal cycle commits Arcade
-navigation and performs the established full bridge synchronization that
-populates the launcher and its tile models and clears the scan overlay. Only
-then does one off-screen Slint render into the persistent composition cache
-produce the live RGB565 target. The host immediately retains that frame and a
-low-priority CPU0 worker derives its particle formation, leaving CPU1 to render
-the intro. Transient build-progress shell and taxonomy mutations are not
-projected through the dormant launcher; the final publication installs their
-authoritative state. If the prepared target is not ready by 16 seconds, the
-cabinet continues spinning and storyboard time pauses. The 20-second logical
-endpoint and first interactive frame are therefore pixel-identical. After the projection is
-acknowledged, the complete authoritative scan continues in the background. It
-audits the retained projection and
-atomically refreshes the bootstrap index. Background walkers, classification
-batches, archive inspection, prepared-payload indexing, and projection work all
-remain in the continuous CPU0 background scope through UI-independent
-cooperative checkpoints.
+Versioned per-system watch indexes and row snapshots support incremental refresh.
+An explicit update checks every published or currently recognized system,
+rebuilds only changed source units, and republishes only systems whose canonical
+rows changed. The existing registry remains launchable until manifest-last
+publication succeeds, then the launcher reloads it atomically.
+
+A build without a valid registry enters the first-build lifecycle after the
+first visible frame. The catalog worker performs independent source discovery,
+publishes per-system artifacts, commits the registry, and then makes the complete
+catalog visible. The interactive launcher does not project partial source rows.
+Progress is based on terminal per-system outcomes and is shown as
+`Updating systems X/N`.
+
 Changed systems receive new immutable artifacts and unchanged systems retain
-their existing generations. The manifest is the atomic publication boundary.
-Published availability is independent of update activity: an existing system
-remains selectable with its old count and games while queued, scanning, or
-prepared; a genuinely new system is a disabled placeholder until publication.
-Per-system failure leaves an existing system selectable with an update warning.
-Removed systems remain visible until the replacement manifest is published.
+their existing generations. Publication is manifest-last. Per-system failure
+retains an existing system with a warning; a failed first build for a newly
+recognized system omits that system. Removed systems remain visible until the
+replacement manifest is authoritative.
 
-The catalog-state fingerprint, registry generation, and binding must agree.
-The separate scanner cache owns discovery timestamps and software hashes. The
-UI must never scan media on launcher hot paths, and production never reads or
-creates `library.sqlite3`, `library.summary.json`, or `library.nav.lz4b`.
-
+The source-snapshot binding and registry generation must agree. Watch indexes
+are builder state, never a UI database. Production does not read or create the
+retired monolithic `library.sqlite3`, summary JSON, navigation database, scanner
+cache, or builder journal.
 See `docs/catalog.md` for the current catalog lifecycle, worker request modes,
 root stamp semantics, SQLite publish model, and benchmark gates.
 
@@ -1090,8 +1063,7 @@ tracking, and CI details. Do not duplicate those details here.
   Bluetooth devices after each platform input change.
 - Keep the fork patch surface small and documented in `../Main_MiSTer`
   `MAGIK_PATCHSET.md`.
-Catalog scanning, validation, and database publication run inside
-`mister-magik-fb` through `mister_magik_catalog::builder_service`. The launcher
-translates typed builder events directly into lifecycle events. The standalone
-`mister-magik-catalog-builder` is a developer-only adapter over the same service
-for isolated optimization profiling; it is not a production artifact.
+Catalog discovery, validation, refresh planning, and artifact publication run
+inside `mister-magik-fb` through `fast_catalog_refresh`. The launcher translates
+typed per-system outcomes directly into lifecycle progress and atomically reloads
+the registry after publication. There is no standalone production builder.

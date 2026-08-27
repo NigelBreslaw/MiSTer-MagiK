@@ -4,8 +4,7 @@
 //! Independent source adapters for the fast nine-system catalog.
 //!
 //! These adapters consume installed files and the dedicated Arcade metadata
-//! contract directly. They never read Catalog V3, its scanner cache, or its
-//! generated sidecars.
+//! contract directly. They never read retired catalog artifacts or scanner state.
 
 use crate::catalog_scan::FoundFile;
 use crate::fast_five_catalog::{

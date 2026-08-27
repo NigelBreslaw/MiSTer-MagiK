@@ -19,7 +19,7 @@ pub(crate) const PREPARED_TARGET_CATALOG_HELPER_SCHEMA: &str =
     "mister-magik-prepared-target-catalog-helper-v3";
 
 /// A production catalog target snapshot guarded by a cheap, exact-enough
-/// release receipt. The opaque output is the normal Catalog V3 target output,
+/// release receipt. The opaque output is the normal fast-catalog target output,
 /// so activation still goes through the ordinary projection and publication
 /// path.
 #[derive(Clone, Debug, Serialize, Deserialize)]

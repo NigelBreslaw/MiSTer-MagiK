@@ -45,8 +45,8 @@ content it can positively identify and cannot hide custom content.
 AmigaVision and Neon68K use exact target helpers. OneLoad64 uses a subtree
 helper so a personal C64 collection never becomes part of its cached output.
 0MHz uses the checked-in per-game manifest rather than a target snapshot because
-users can install any subset of the release. All feed the normal Catalog V3
-projection and retain their existing adapters as the mismatch fallback.
+users can install any subset of the release. All feed the fast catalog and
+retain their generic adapters as the mismatch fallback.
 
 ## Acceptance
 

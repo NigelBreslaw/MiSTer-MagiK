@@ -3,8 +3,6 @@
 
 //! Catalog, library scan, and preview-loading logic for MiSTer MagiK.
 
-#[cfg(feature = "builder")]
-mod arcade_bootstrap_index;
 pub mod arcade_catalog;
 #[cfg(feature = "builder")]
 #[path = "bin/arcade_catalog_prototype/model.rs"]

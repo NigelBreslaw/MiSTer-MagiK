@@ -34,12 +34,10 @@ use crate::launcher_ui_actions::{
 use crate::preview_state::PreviewApplyTrace;
 use crate::preview_worker;
 #[cfg(test)]
-use mister_magik_catalog::catalog_summary;
-#[cfg(test)]
 use mister_magik_fb::framebuffer::target::PhysicalLayerBacking;
 use mister_magik_fb::process_config::{ScreensaverStartMode, ScriptedInputConfig};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Sender, channel};
 
@@ -53,7 +51,6 @@ const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
 const SYSTEM_ENTRY_BENCHMARK_SETTLE_MS: u64 = 2_000;
 const SETTINGS_NAVIGATION_STATUS_DRAIN_MIN: Duration = Duration::from_millis(500);
 const SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT: Duration = Duration::from_secs(2);
-const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
 
 fn custom_damage_invalidation_comparison(
@@ -4231,58 +4228,6 @@ fn home_repeat_benchmark_active(scenario: Option<LauncherBenchScenario>) -> bool
     scenario == Some(LauncherBenchScenario::HomeRepeatHold)
 }
 
-#[cfg(test)]
-fn catalog_from_summary(
-    root: &str,
-    summary: &catalog_summary::CatalogSummaryProjection,
-) -> ArcadeCatalog {
-    let systems = summary
-        .systems
-        .iter()
-        .map(|system| arcade_catalog::GameSystemEntry {
-            id: system.id.clone(),
-            title: system.title.clone(),
-            count: system.count,
-        })
-        .collect();
-    let hot_games = summary
-        .hot_games
-        .iter()
-        .map(arcade_catalog::ArcadeGameEntry::from)
-        .collect();
-    ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
-        PathBuf::from(root),
-        hot_games,
-        systems,
-        Vec::new(),
-        summary.platform_kinds(),
-    )
-}
-
-#[cfg(test)]
-fn catalog_from_sharded_registry_and_summary(
-    root: &str,
-    sharded: ArcadeCatalog,
-    summary: &catalog_summary::CatalogSummaryProjection,
-) -> ArcadeCatalog {
-    let hot_games = if sharded.games.is_empty() {
-        summary
-            .hot_games
-            .iter()
-            .map(arcade_catalog::ArcadeGameEntry::from)
-            .collect()
-    } else {
-        sharded.games.iter().cloned().collect()
-    };
-    ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
-        PathBuf::from(root),
-        hot_games,
-        sharded.systems,
-        Vec::new(),
-        summary.platform_kinds(),
-    )
-}
-
 fn read_sharded_registry_seed(
     root: &str,
     storage: &Path,
@@ -4293,7 +4238,7 @@ fn read_sharded_registry_seed(
         Ok(seed) => {
             print_startup_event(
                 start,
-                "catalog_v3_registry_load",
+                "catalog_registry_load",
                 format!(
                     "status=ready elapsed_us={} path={} generation={} systems={}",
                     load_started.elapsed().as_micros(),
@@ -4308,126 +4253,12 @@ fn read_sharded_registry_seed(
         Err(error) => {
             print_startup_event(
                 start,
-                "catalog_v3_registry_load",
+                "catalog_registry_load",
                 format!(
                     "status={} elapsed_us={} path={} error={error}",
                     error.status,
                     load_started.elapsed().as_micros(),
                     storage.display()
-                ),
-            );
-            None
-        }
-    }
-}
-
-#[cfg(test)]
-fn legacy_summary_seed_needed(capsule_ready: bool, sharded_ready: bool) -> bool {
-    !capsule_ready && !sharded_ready
-}
-
-#[cfg(test)]
-fn read_catalog_summary_seed(
-    sqlite_path: &Path,
-    summary_path: &Path,
-    start: Instant,
-) -> Option<catalog_summary::CatalogSummaryProjection> {
-    let summary_t = Instant::now();
-    if !sqlite_path.exists() {
-        print_startup_event(
-            start,
-            "catalog_summary_load",
-            format!(
-                "status=sqlite_missing elapsed_us={} sqlite_path={} path={} {}",
-                summary_t.elapsed().as_micros(),
-                sqlite_path.display(),
-                summary_path.display(),
-                library_db::catalog_load_counter_detail()
-            ),
-        );
-        return None;
-    }
-    if !sqlite_file_has_valid_header(sqlite_path) {
-        print_startup_event(
-            start,
-            "catalog_summary_load",
-            format!(
-                "status=sqlite_unusable elapsed_us={} sqlite_path={} path={} {}",
-                summary_t.elapsed().as_micros(),
-                sqlite_path.display(),
-                summary_path.display(),
-                library_db::catalog_load_counter_detail()
-            ),
-        );
-        return None;
-    }
-
-    match catalog_summary::read_catalog_summary(summary_path) {
-        Ok(Some(summary)) if !summary.systems.is_empty() => {
-            if catalog_summary_seed_matches_sqlite(sqlite_path, &summary) {
-                print_startup_event(
-                    start,
-                    "catalog_summary_load",
-                    format!(
-                        "status=ready systems={} games={} elapsed_us={} path={} {}",
-                        summary.systems.len(),
-                        summary.total_game_count,
-                        summary_t.elapsed().as_micros(),
-                        summary_path.display(),
-                        library_db::catalog_load_counter_detail()
-                    ),
-                );
-                Some(summary)
-            } else {
-                print_startup_event(
-                    start,
-                    "catalog_summary_load",
-                    format!(
-                        "status=missing_or_stale elapsed_us={} path={} {}",
-                        summary_t.elapsed().as_micros(),
-                        summary_path.display(),
-                        library_db::catalog_load_counter_detail()
-                    ),
-                );
-                None
-            }
-        }
-        Ok(Some(_)) => {
-            print_startup_event(
-                start,
-                "catalog_summary_load",
-                format!(
-                    "status=empty elapsed_us={} path={} {}",
-                    summary_t.elapsed().as_micros(),
-                    summary_path.display(),
-                    library_db::catalog_load_counter_detail()
-                ),
-            );
-            None
-        }
-        Ok(None) => {
-            print_startup_event(
-                start,
-                "catalog_summary_load",
-                format!(
-                    "status=missing_or_stale elapsed_us={} path={} {}",
-                    summary_t.elapsed().as_micros(),
-                    summary_path.display(),
-                    library_db::catalog_load_counter_detail()
-                ),
-            );
-            None
-        }
-        Err(e) => {
-            print_startup_event(
-                start,
-                "catalog_summary_load_failed",
-                format!(
-                    "elapsed_us={} path={} error={} {}",
-                    summary_t.elapsed().as_micros(),
-                    summary_path.display(),
-                    e,
-                    library_db::catalog_load_counter_detail()
                 ),
             );
             None
@@ -4666,32 +4497,6 @@ fn catalog_for_ready_source(
     } else {
         nav.catalog_with_build_shells(catalog)
     }
-}
-
-#[cfg(test)]
-fn catalog_summary_seed_matches_sqlite(
-    sqlite_path: &Path,
-    summary: &catalog_summary::CatalogSummaryProjection,
-) -> bool {
-    let summary_stamp = mister_magik_catalog::catalog_stamp::CatalogStamp::from_lines(
-        summary.catalog_stamp_lines.clone(),
-    );
-    match library_db::read_sqlite_catalog_stamp(sqlite_path) {
-        Ok(Some(stored_stamp)) => {
-            stored_stamp == summary_stamp
-                && summary.catalog_stamp_fingerprint == stored_stamp.fingerprint_hex()
-        }
-        Ok(None) | Err(_) => false,
-    }
-}
-
-fn sqlite_file_has_valid_header(path: &Path) -> bool {
-    let mut file = match std::fs::File::open(path) {
-        Ok(file) => file,
-        Err(_) => return false,
-    };
-    let mut header = [0u8; SQLITE_HEADER.len()];
-    file.read_exact(&mut header).is_ok() && &header == SQLITE_HEADER
 }
 
 fn modal_input_test_paths_are_isolated<'a>(paths: impl IntoIterator<Item = &'a Path>) -> bool {
@@ -5637,9 +5442,6 @@ pub(super) fn run_launcher_loop(
     let mut launcher_input_script =
         LauncherInputScriptDriver::from_config(launcher_config.input().scripted(), start);
     let mut launcher_automation = LauncherAutomation::new();
-    let sqlite_path = mister_magik_catalog::catalog_state::path_for_root(
-        launcher_config.catalog_paths().sharded_catalog_dir(),
-    );
     let capsule_seed_ready = catalog_ready;
     let warm_registry_hydration_pending = defer_warm_registry_hydration(
         capsule_seed_ready,
@@ -5734,9 +5536,8 @@ pub(super) fn run_launcher_loop(
             return_catalog_hydration_needed,
         );
         if let Some(request) = request {
-            // Rich V3 rows are now the hydration authority. Validation may
-            // inspect source facts, but it must not reopen the monolithic V2
-            // navigation before a selected system asks for its mini-nav.
+            // NavPack and per-system SQLite rows are the hydration authority.
+            // Source validation remains separate from the selected-system hot path.
             let initial_cache = CatalogWorkerInitialCache::AlreadyLoadedReady;
             if summary_seed_catalog_worker_starts_immediately(
                 request,
@@ -5776,7 +5577,7 @@ pub(super) fn run_launcher_loop(
     } else if warm_registry_hydration_pending {
         print_startup_event(
             start,
-            "catalog_v3_registry_deferred",
+            "catalog_registry_deferred",
             format!(
                 "path={} reveal=first_visible_copy",
                 launcher_config
@@ -5792,13 +5593,7 @@ pub(super) fn run_launcher_loop(
             CatalogExecutionMode::BackgroundInteractive,
         );
     } else {
-        let sqlite_state = catalog_startup_sqlite_state(&sqlite_path);
-        match catalog_startup_without_summary_plan(
-            sqlite_state,
-            catalog_worker_enabled,
-            catalog_refresh_policy,
-            deferred_library_rebuild,
-        ) {
+        match catalog_startup_without_registry_plan(catalog_worker_enabled) {
             CatalogStartupWithoutSummaryPlan::DeferredWorker {
                 request,
                 initial_cache,
@@ -5808,10 +5603,9 @@ pub(super) fn run_launcher_loop(
                     start,
                     "catalog_worker_deferred",
                     format!(
-                        "root={} request={} cache={} reason=first_visible_copy",
+                        "root={} request={} reason=first_visible_copy",
                         arcade_root,
                         request.label(),
-                        sqlite_state.label()
                     ),
                 );
                 catalog_session.defer_catalog_worker(
@@ -14073,33 +13867,6 @@ fn catalog_background_validation_delay() -> Duration {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CatalogStartupSqliteState {
-    Missing,
-    HeaderValid,
-    ExistingUnusable,
-}
-
-impl CatalogStartupSqliteState {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Missing => "missing",
-            Self::HeaderValid => "sqlite-or-navigation",
-            Self::ExistingUnusable => "existing-unusable",
-        }
-    }
-}
-
-fn catalog_startup_sqlite_state(path: &Path) -> CatalogStartupSqliteState {
-    if !path.exists() {
-        CatalogStartupSqliteState::Missing
-    } else if sqlite_file_has_valid_header(path) {
-        CatalogStartupSqliteState::HeaderValid
-    } else {
-        CatalogStartupSqliteState::ExistingUnusable
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CatalogStartupWithoutSummaryPlan {
     DeferredWorker {
         request: CatalogWorkerRequest,
@@ -14109,29 +13876,9 @@ enum CatalogStartupWithoutSummaryPlan {
     NoCatalog,
 }
 
-fn catalog_startup_without_summary_plan(
-    sqlite_state: CatalogStartupSqliteState,
+fn catalog_startup_without_registry_plan(
     catalog_worker_enabled: bool,
-    _refresh_policy: CatalogRefreshPolicy,
-    _deferred_library_rebuild: bool,
 ) -> CatalogStartupWithoutSummaryPlan {
-    match sqlite_state {
-        CatalogStartupSqliteState::HeaderValid => {
-            return CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
-                initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
-                execution_mode: CatalogExecutionMode::ForegroundExclusive,
-            };
-        }
-        CatalogStartupSqliteState::ExistingUnusable => {
-            return CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
-                initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
-                execution_mode: CatalogExecutionMode::ForegroundExclusive,
-            };
-        }
-        CatalogStartupSqliteState::Missing => {}
-    }
     if catalog_worker_enabled {
         return CatalogStartupWithoutSummaryPlan::DeferredWorker {
             request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
@@ -17275,74 +17022,6 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn summary_hot_arcade_rows_are_ready_for_arcade_navigation() {
-        let full_catalog = catalog_for_media_systems(&["arcade", "cps1", "amiga"]);
-        let stamp = mister_magik_catalog::catalog_stamp::CatalogStamp::from_lines(vec![
-            "root\t/media/fat".to_string(),
-        ]);
-        let summary =
-            catalog_summary::CatalogSummaryProjection::from_catalog(&full_catalog, &stamp);
-        let catalog = catalog_from_summary("/media/fat/_Arcade", &summary);
-        let mut nav = LauncherNav::new();
-        assert!(nav.open_default_arcade(&catalog));
-
-        assert!(!active_system_games_loading(&catalog, &nav));
-        assert!(arcade_catalog_rows_ready(&catalog));
-        assert!(arcade_navigation_ready(true, &catalog));
-        assert_eq!(catalog.system_game_count("arcade"), 1);
-        assert_eq!(
-            catalog.system_game_count(arcade_catalog::MENU_ARCADE_SYSTEM_ID),
-            2
-        );
-        assert_eq!(
-            catalog
-                .system_game_view(arcade_catalog::MENU_ARCADE_SYSTEM_ID)
-                .iter()
-                .map(|game| game.title.as_ref())
-                .collect::<Vec<_>>(),
-            vec!["arcade game", "cps1 game"]
-        );
-    }
-
-    #[test]
-    pub(super) fn sharded_registry_keeps_system_authority_and_summary_hot_rows() {
-        let full_catalog = catalog_for_media_systems(&["arcade", "cps1", "amiga"]);
-        let stamp = mister_magik_catalog::catalog_stamp::CatalogStamp::from_lines(vec![
-            "root\t/media/fat".to_string(),
-        ]);
-        let summary =
-            catalog_summary::CatalogSummaryProjection::from_catalog(&full_catalog, &stamp);
-        let sharded = ArcadeCatalog::new(
-            PathBuf::from("/media/fat/_Arcade"),
-            Vec::new(),
-            vec![arcade_catalog::GameSystemEntry {
-                id: "arcade".into(),
-                title: "Arcade from V3".into(),
-                count: 1234,
-            }],
-        );
-
-        let catalog =
-            catalog_from_sharded_registry_and_summary("/media/fat/_Arcade", sharded, &summary);
-
-        assert_eq!(catalog.systems.len(), 1);
-        assert_eq!(catalog.systems[0].title, "Arcade from V3");
-        assert_eq!(catalog.systems[0].count, 1234);
-        assert_eq!(
-            catalog.system_game_count(arcade_catalog::MENU_ARCADE_SYSTEM_ID),
-            2
-        );
-    }
-
-    #[test]
-    pub(super) fn valid_sharded_seed_never_reads_the_legacy_summary() {
-        assert!(!legacy_summary_seed_needed(false, true));
-        assert!(!legacy_summary_seed_needed(true, false));
-        assert!(!legacy_summary_seed_needed(true, true));
-        assert!(legacy_summary_seed_needed(false, false));
-    }
-
-    #[test]
     pub(super) fn full_catalog_is_ready_for_arcade_navigation() {
         let catalog = catalog_for_media_systems(&["arcade", "amiga"]);
 
@@ -17684,50 +17363,6 @@ mod tests {
         assert!(!active_system_games_loading(&catalog, &LauncherNav::new()));
         assert!(arcade_catalog_rows_ready(&catalog));
         assert!(!arcade_navigation_ready(false, &catalog));
-    }
-
-    #[test]
-    pub(super) fn catalog_summary_seed_requires_usable_sqlite_database() {
-        let root = unique_temp_dir("catalog-summary-seed");
-        let db = root.join("library.sqlite3");
-        let summary_path = catalog_summary::summary_path_for_sqlite(&db);
-        let summary = catalog_summary::CatalogSummaryProjection {
-            schema: catalog_summary::CATALOG_SUMMARY_SCHEMA_VERSION,
-            catalog_schema_version: mister_magik_catalog::catalog_config::SCHEMA_VERSION,
-            catalog_build_version: mister_magik_catalog::catalog_config::CATALOG_BUILD_VERSION,
-            catalog_generation: "test-generation".to_string(),
-            catalog_stamp_fingerprint: "test-generation".to_string(),
-            catalog_stamp_lines: Vec::new(),
-            total_game_count: 7,
-            systems: vec![catalog_summary::CatalogSummarySystem {
-                id: "arcade".to_string(),
-                title: "Arcade".to_string(),
-                count: 7,
-                platform_kind: arcade_catalog::PlatformKind::Arcade,
-                supported_media: vec!["screenshots".to_string()],
-            }],
-            hot_games: Vec::new(),
-        };
-        std::fs::write(
-            &summary_path,
-            serde_json::to_vec(&summary).expect("summary json"),
-        )
-        .expect("write summary");
-
-        assert!(read_catalog_summary_seed(&db, &summary_path, Instant::now()).is_none());
-
-        std::fs::write(&db, b"").expect("write zero-byte sqlite placeholder");
-        assert!(read_catalog_summary_seed(&db, &summary_path, Instant::now()).is_none());
-
-        std::fs::write(&db, b"not-a-sqlite-db").expect("write corrupt sqlite placeholder");
-        assert!(read_catalog_summary_seed(&db, &summary_path, Instant::now()).is_none());
-
-        std::fs::write(&db, SQLITE_HEADER).expect("write sqlite header");
-        assert!(
-            read_catalog_summary_seed(&db, &summary_path, Instant::now()).is_none(),
-            "warm summary seed must require a current SQLite catalog stamp, not just a SQLite header"
-        );
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -18599,116 +18234,6 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn startup_without_navigation_projection_forces_a_fresh_build() {
-        assert_eq!(
-            catalog_startup_without_summary_plan(
-                CatalogStartupSqliteState::HeaderValid,
-                true,
-                CatalogRefreshPolicy::Default,
-                false,
-            ),
-            CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
-                initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
-                execution_mode: CatalogExecutionMode::ForegroundExclusive,
-            }
-        );
-        assert_eq!(
-            catalog_startup_without_summary_plan(
-                CatalogStartupSqliteState::HeaderValid,
-                false,
-                CatalogRefreshPolicy::Off,
-                false,
-            ),
-            CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
-                initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
-                execution_mode: CatalogExecutionMode::ForegroundExclusive,
-            },
-            "without a navigation projection the retired SQLite cache is not a startup source"
-        );
-        assert_eq!(
-            catalog_startup_without_summary_plan(
-                CatalogStartupSqliteState::Missing,
-                true,
-                CatalogRefreshPolicy::Default,
-                false,
-            ),
-            CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
-                initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
-                execution_mode: CatalogExecutionMode::ForegroundExclusive,
-            }
-        );
-        assert_eq!(
-            catalog_startup_without_summary_plan(
-                CatalogStartupSqliteState::Missing,
-                false,
-                CatalogRefreshPolicy::Off,
-                false,
-            ),
-            CatalogStartupWithoutSummaryPlan::NoCatalog
-        );
-    }
-
-    #[test]
-    pub(super) fn existing_invalid_sqlite_forces_v3_rebuild_after_first_frame() {
-        let root = unique_temp_dir("catalog-invalid-header-startup");
-        let sqlite_path = root.join("library.sqlite3");
-        assert_eq!(
-            catalog_startup_sqlite_state(&sqlite_path),
-            CatalogStartupSqliteState::Missing
-        );
-
-        std::fs::write(&sqlite_path, b"not-a-sqlite-database").expect("write invalid database");
-        let sqlite_state = catalog_startup_sqlite_state(&sqlite_path);
-        assert_eq!(sqlite_state, CatalogStartupSqliteState::ExistingUnusable);
-        assert_eq!(
-            catalog_startup_without_summary_plan(
-                sqlite_state,
-                true,
-                CatalogRefreshPolicy::Default,
-                false,
-            ),
-            CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
-                initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
-                execution_mode: CatalogExecutionMode::ForegroundExclusive,
-            }
-        );
-        assert_eq!(
-            catalog_startup_without_summary_plan(
-                sqlite_state,
-                false,
-                CatalogRefreshPolicy::Off,
-                false,
-            ),
-            CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
-                initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
-                execution_mode: CatalogExecutionMode::ForegroundExclusive,
-            },
-            "the retired SQLite cache is never used as a V3 startup source"
-        );
-        assert_eq!(
-            catalog_startup_without_summary_plan(
-                sqlite_state,
-                true,
-                CatalogRefreshPolicy::Force,
-                false,
-            ),
-            CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
-                initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
-                execution_mode: CatalogExecutionMode::ForegroundExclusive,
-            },
-            "an explicit force request may rebuild the unusable catalog"
-        );
-
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
     pub(super) fn cold_catalog_worker_starts_after_first_copy_without_delay() {
         let before_copy =
             deferred_catalog_worker_start_policy(false, false, false, Duration::from_secs(2));
@@ -19220,5 +18745,21 @@ mod tests {
             assert!(row.has_preview);
             assert_eq!(row.preview_asset_key.as_ref(), "1943kai");
         }
+    }
+
+    #[test]
+    pub(super) fn startup_without_registry_starts_the_fast_builder() {
+        assert_eq!(
+            catalog_startup_without_registry_plan(true),
+            CatalogStartupWithoutSummaryPlan::DeferredWorker {
+                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
+                initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
+                execution_mode: CatalogExecutionMode::ForegroundExclusive,
+            }
+        );
+        assert_eq!(
+            catalog_startup_without_registry_plan(false),
+            CatalogStartupWithoutSummaryPlan::NoCatalog
+        );
     }
 }

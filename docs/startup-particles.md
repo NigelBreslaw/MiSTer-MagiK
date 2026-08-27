@@ -26,11 +26,9 @@ engine.
 ## First-run launcher intro
 
 The production launcher uses the embedded `intro-v1` scene only for
-`ColdNoCatalog`: no return capsule, no Catalog V3 registry, and no valid
-retained Arcade bootstrap projection. A valid registry or retained projection
-is a warm start and goes directly to the interactive launcher. The retained
-projection is source-stamped, bounded, and checksummed, so an interrupted first
-run repeats the intro unless it reached the first-visible publication barrier.
+`ColdNoCatalog`: no return capsule and no valid fast-catalog registry. A valid
+registry is a warm start and goes directly to the interactive launcher. An
+interrupted first run repeats the intro unless it reached manifest publication.
 
 The intro owns the production direct hidden-slot latch for 20 seconds of
 storyboard time. Storyboard time advances by the resolved physical refresh
