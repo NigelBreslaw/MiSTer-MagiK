@@ -20976,7 +20976,14 @@ fn cold_boot_launcher_env(pprof: bool, fresh_catalog: bool) -> Vec<(String, Stri
     if pprof {
         env.extend([
             ("MISTER_PPROF".into(), "1".into()),
-            ("MISTER_PPROF_TRIGGER".into(), "cold-boot".into()),
+            (
+                "MISTER_PPROF_TRIGGER".into(),
+                if fresh_catalog {
+                    "cold-boot-catalog".into()
+                } else {
+                    "cold-boot".into()
+                },
+            ),
             ("MISTER_PPROF_HZ".into(), "999".into()),
             (
                 "MISTER_PPROF_OUT".into(),
@@ -21211,6 +21218,9 @@ fn profile_installed_cold_boot_run(
             "launcher_first_frame_presented",
             Duration::from_secs(300),
         )?;
+        if pprof {
+            wait_magik_startup_event(&session, "catalog_fresh_build", Duration::from_secs(300))?;
+        }
     }
     wait_delivery_health(&session, "dev", Duration::from_secs(10))?;
     let host_recovery_elapsed_ms = host_started.elapsed().as_millis() as u64;
@@ -36852,7 +36862,11 @@ video_mode=14
             "MISTER_ARCADE_BOOTSTRAP_INDEX".into(),
             COLD_BOOT_FRESH_ARCADE_INDEX.into(),
         )));
-        assert!(profiled.contains(&("MISTER_PPROF_TRIGGER".into(), "cold-boot".into())));
+        assert!(profiled.contains(&("MISTER_PPROF_TRIGGER".into(), "cold-boot-catalog".into(),)));
+        assert!(
+            cold_boot_launcher_env(true, false)
+                .contains(&("MISTER_PPROF_TRIGGER".into(), "cold-boot".into()))
+        );
     }
 
     #[test]

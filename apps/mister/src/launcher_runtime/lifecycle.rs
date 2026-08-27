@@ -561,6 +561,7 @@ pub struct LauncherLifecycle {
 
 impl LauncherLifecycle {
     pub const COLD_SPLASH_DURATION: Duration = Duration::from_secs(2);
+    pub const COLD_STARTUP_MAX_DURATION: Duration = Duration::from_secs(20);
     pub const RETURN_PREVIEW_HOLD_TIMEOUT: Duration = Duration::from_millis(250);
     pub const RETURN_BLACK_SCREEN_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -652,6 +653,15 @@ impl LauncherLifecycle {
             StartupRevealState::CatalogProgressVisible if catalog_ready => {
                 self.mark_reveal_ready("preview_state=not_required", out);
             }
+            StartupRevealState::CatalogProgressVisible
+                if self.startup_hard_deadline_reached(now) =>
+            {
+                out.startup_event(
+                    "startup_hard_timeout",
+                    format!("elapsed_ms={}", startup_elapsed.as_millis()),
+                );
+                self.mark_reveal_ready("preview_state=startup_hard_timeout", out);
+            }
             StartupRevealState::HoldBlack if catalog_ready => {
                 self.mark_reveal_ready("preview_state=not_required", out);
             }
@@ -691,6 +701,12 @@ impl LauncherLifecycle {
 
     pub fn startup_input_enabled(&self) -> bool {
         self.startup_input_enabled_at.is_some()
+    }
+
+    pub fn startup_hard_deadline_reached(&self, now: Instant) -> bool {
+        self.startup_mode == StartupMode::ColdNoCatalog
+            && now.saturating_duration_since(self.startup_started_at)
+                >= Self::COLD_STARTUP_MAX_DURATION
     }
 
     pub fn startup_waiting_for_return_catalog(&self) -> bool {
@@ -1434,6 +1450,47 @@ mod tests {
         assert!(!lifecycle.startup_should_show_splash());
         assert!(effect_names(&effects).contains(&"startup_splash_done"));
         assert!(effect_names(&effects).contains(&"catalog_progress_revealed"));
+    }
+
+    #[test]
+    fn cold_start_becomes_interactive_at_twenty_seconds_without_a_catalog() {
+        let now = Instant::now();
+        let mut lifecycle = lifecycle();
+        let mut effects = LifecycleEffects::new();
+        lifecycle.begin_startup_reveal(StartupMode::ColdNoCatalog, now, &mut effects);
+        lifecycle.tick_startup_reveal(
+            now + LauncherLifecycle::COLD_SPLASH_DURATION,
+            false,
+            &mut effects,
+        );
+        effects.clear();
+
+        lifecycle.tick_startup_reveal(
+            now + LauncherLifecycle::COLD_STARTUP_MAX_DURATION - Duration::from_millis(1),
+            false,
+            &mut effects,
+        );
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::CatalogProgressVisible
+        );
+
+        lifecycle.tick_startup_reveal(
+            now + LauncherLifecycle::COLD_STARTUP_MAX_DURATION,
+            false,
+            &mut effects,
+        );
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::RevealLauncher
+        );
+        assert!(effect_names(&effects).contains(&"startup_hard_timeout"));
+        lifecycle.note_startup_frame_presented(
+            1,
+            now + LauncherLifecycle::COLD_STARTUP_MAX_DURATION,
+            &mut effects,
+        );
+        assert!(lifecycle.startup_input_enabled());
     }
 
     #[test]

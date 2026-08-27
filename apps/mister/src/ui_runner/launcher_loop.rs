@@ -9656,6 +9656,22 @@ pub(super) fn run_launcher_loop(
                 Err(failure) => launcher_presenter.fail_latch_completion(failure),
             }
         }
+        if lifecycle.startup_hard_deadline_reached(Instant::now())
+            && let Some(intro) = startup_intro.take()
+        {
+            print_startup_event(
+                start,
+                "startup_intro_hard_timeout",
+                format!(
+                    "elapsed_ms={} cabinet_wait_frames={}",
+                    LauncherLifecycle::COLD_STARTUP_MAX_DURATION.as_millis(),
+                    intro.waiting_frames(),
+                ),
+            );
+            launcher_presenter.invalidate_external_hidden_mode();
+            full_frame_present = true;
+            window.request_redraw();
+        }
         if let Some(intro) = startup_intro.as_mut() {
             if intro.snapshot_capture_needed() && startup_intro_launcher_frame_ready {
                 let launcher_pixels = layer_target.presentation_frame_view().pixels();
@@ -11292,6 +11308,7 @@ pub(super) fn run_launcher_loop(
             if first_launcher_frame_logged
                 && lifecycle.startup_status().input_enabled
                 && profile_config.cpu().cold_boot_requested()
+                && (!profile_config.cpu().cold_boot_catalog_requested() || catalog_ready)
                 && cpu.is_some()
                 && let Err(error) =
                     cpu_profile::finish_cold_boot_async(cpu.take(), profile_config.cpu())

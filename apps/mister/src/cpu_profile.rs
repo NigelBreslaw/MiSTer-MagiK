@@ -17,6 +17,7 @@ const ORIENTATION_TRANSITION_FADE_TRIGGER: &str = "orientation-transition-fade";
 const ORIENTATION_TRANSITION_ZOOM_TRIGGER: &str = "orientation-transition-zoom";
 const LAUNCH_RETURN_TRIGGER: &str = "launch-return";
 const COLD_BOOT_TRIGGER: &str = "cold-boot";
+const COLD_BOOT_CATALOG_TRIGGER: &str = "cold-boot-catalog";
 const SYSTEM_ENTRY_TRIGGER: &str = "system-entry";
 const LAUNCHER_RESPONSE_TRIGGER: &str = "launcher-response";
 const ARCADE_VELOCITY_SCROLL_TRIGGER: &str = "arcade-velocity-scroll";
@@ -140,6 +141,7 @@ pub struct CpuProfileConfig {
     folded_out_path: Option<String>,
     complete_path: Option<String>,
     catalog_build_full: bool,
+    cold_boot_catalog: bool,
 }
 
 impl CpuProfileConfig {
@@ -165,6 +167,8 @@ impl CpuProfileConfig {
             complete_path: get(PPROF_COMPLETE).map(str::to_owned),
             catalog_build_full: enabled_value == Some("1")
                 && trigger_value == Some(CATALOG_BUILD_FULL_TRIGGER),
+            cold_boot_catalog: enabled_value == Some("1")
+                && trigger_value == Some(COLD_BOOT_CATALOG_TRIGGER),
         }
     }
 
@@ -184,6 +188,10 @@ impl CpuProfileConfig {
 
     pub fn cold_boot_requested(&self) -> bool {
         self.trigger == Some(BoundedProfileTrigger::ColdBoot)
+    }
+
+    pub fn cold_boot_catalog_requested(&self) -> bool {
+        self.cold_boot_catalog
     }
 
     #[cfg(feature = "profile")]
@@ -229,7 +237,9 @@ fn bounded_profile_trigger_from_values(
             Some(BoundedProfileTrigger::CatalogBuild)
         }
         Some(LAUNCH_RETURN_TRIGGER) => Some(BoundedProfileTrigger::LaunchReturn),
-        Some(COLD_BOOT_TRIGGER) => Some(BoundedProfileTrigger::ColdBoot),
+        Some(COLD_BOOT_TRIGGER | COLD_BOOT_CATALOG_TRIGGER) => {
+            Some(BoundedProfileTrigger::ColdBoot)
+        }
         _ => None,
     }
 }
@@ -1390,11 +1400,23 @@ mod tests {
 
         assert!(config.launch_return_requested());
         assert!(!config.cold_boot_requested());
+        assert!(!config.cold_boot_catalog_requested());
         assert_eq!(config.hz, 999);
         assert_eq!(config.out_path, "/tmp/profile.svg");
         assert_eq!(
             config.complete_path.as_deref(),
             Some("/tmp/profile-complete.json")
         );
+    }
+
+    #[test]
+    fn cold_boot_catalog_profile_runs_until_catalog_ready() {
+        let values = std::collections::BTreeMap::from([
+            (PPROF, "1"),
+            (PPROF_TRIGGER, COLD_BOOT_CATALOG_TRIGGER),
+        ]);
+        let config = CpuProfileConfig::capture_with(|name| values.get(name).copied());
+        assert!(config.cold_boot_requested());
+        assert!(config.cold_boot_catalog_requested());
     }
 }
