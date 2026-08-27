@@ -14056,13 +14056,14 @@ fn catalog_with_preview_availability(
     games: &[mister_magik_catalog::system_shard::SystemGame],
 ) -> ArcadeCatalog {
     let (replacement, launch_plans) = arcade_rows_from_persisted_shard(system_id, games);
-    let collection = Arc::new(arcade_catalog::SystemCollection::new(
+    let collection = std::sync::Arc::new(arcade_catalog::SystemCollection::new(
         system_id,
         replacement,
         launch_plans,
         catalog.platform_kind(system_id),
     ));
-    let mut updated = catalog.with_system_collection_for_id(system_id, Arc::clone(&collection));
+    let mut updated =
+        catalog.with_system_collection_for_id(system_id, std::sync::Arc::clone(&collection));
     if system_id == "arcade" {
         updated = updated
             .with_system_collection_for_id(arcade_catalog::MENU_ARCADE_SYSTEM_ID, collection);
