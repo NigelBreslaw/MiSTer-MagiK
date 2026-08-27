@@ -68,6 +68,26 @@ warm two-lane result was slower than the serial fd-relative path. The candidate
 was rejected. The retained design uses one serial SD-card reader and reserves
 the second Cortex-A9 for CPU-only work that does not issue concurrent exFAT I/O.
 
+## Final serial qualification
+
+Evidence:
+`build/agent-benchmarks/fast-refresh/media-psx-bbc-msx-serial-final-ab.json`
+
+The exact final serial implementation was rebuilt and measured in the same
+alternating two-reboot matrix after removing every concurrent exFAT reader from
+the fast source, refresh-planning, generic-scan, and benchmark paths.
+
+| System | Baseline cold | Serial fd-relative cold | Result |
+|---|---:|---:|---|
+| PlayStation | 0.190 s | 0.227 s | 19.1% slower in this sample |
+| BBC Micro | 2.453 s | 2.426 s | 1.1% faster |
+| MSX | 0.182 s | 0.147 s | 19.5% faster |
+| **Total** | **2.969 s** | **2.925 s** | **1.5% faster** |
+
+Warm total time fell from 0.538 s to 0.474 s, an 11.9% reduction. All 5,259
+rows remained structurally identical. The final artifact SHA-256 was
+`9f78fd8c9b429097c3396c475961643d6ead6d108d14905e0628f0fc8f9ec749`.
+
 Both alternating-order reboot samples had exact launch-reference and complete
 row parity for all three systems, zero read/archive errors, and left the
 production registry unchanged. The benchmarked binary SHA-256 was

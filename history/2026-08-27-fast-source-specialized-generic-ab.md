@@ -44,7 +44,7 @@ large cold win. It is not true that every specialised adapter is faster. DOS
 and X68000 deliberately spend more time validating launchability, while the
 current Amiga installation is too incomplete for a meaningful speed claim.
 
-## Retained source optimisations
+## Source optimisation experiments
 
 Evidence:
 `build/agent-benchmarks/fast-refresh/source-specialized-vs-generic-optimized-ab.json`
