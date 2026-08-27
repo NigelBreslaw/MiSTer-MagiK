@@ -662,23 +662,13 @@ fn run_media_ab(storage_root: &Path, order: &str) -> Result<MediaAbReport, Strin
                 .iter()
                 .map(|game| game.launch_ref.as_str())
                 .collect::<BTreeSet<_>>();
-            let baseline_rows = baseline
-                .games
-                .iter()
-                .map(|game| serde_json::to_string(game).map_err(|error| error.to_string()))
-                .collect::<Result<BTreeSet<_>, _>>()?;
-            let optimized_rows = optimized
-                .games
-                .iter()
-                .map(|game| serde_json::to_string(game).map_err(|error| error.to_string()))
-                .collect::<Result<BTreeSet<_>, _>>()?;
             Ok(MediaAbParity {
                 system_id: (*system_id).to_string(),
                 baseline_games: baseline.games.len(),
                 optimized_games: optimized.games.len(),
                 common_launch_refs: baseline_refs.intersection(&optimized_refs).count(),
                 exact_launch_refs: baseline_refs == optimized_refs,
-                exact_rows: baseline_rows == optimized_rows,
+                exact_rows: baseline.games == optimized.games,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
