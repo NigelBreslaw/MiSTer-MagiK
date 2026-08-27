@@ -127,12 +127,11 @@ impl FastFiveSnapshot {
             .iter()
             .map(|system| system.system_id.as_str())
             .collect::<BTreeSet<_>>();
-        if !is_supported_fast_system_set(actual.iter().copied())
-            || self.systems.len() != actual.len()
-        {
-            return Err(format!(
-                "unsupported fast catalog system set: actual={actual:?}"
-            ));
+        if self.systems.is_empty() {
+            return Err("fast catalog contains no systems".to_string());
+        }
+        if self.systems.len() != actual.len() {
+            return Err("fast catalog contains duplicate system ids".to_string());
         }
         for system in &self.systems {
             SystemId::parse(&system.system_id)
@@ -217,12 +216,14 @@ impl FastFiveSnapshot {
 }
 
 pub fn is_supported_fast_system_set<'a>(system_ids: impl IntoIterator<Item = &'a str>) -> bool {
-    let actual = system_ids.into_iter().collect::<BTreeSet<_>>();
-    actual == FAST_FIVE_SYSTEM_IDS.into_iter().collect::<BTreeSet<_>>()
-        || actual
-            == EXPANDED_FAST_SYSTEM_IDS
-                .into_iter()
-                .collect::<BTreeSet<_>>()
+    let mut any = false;
+    for system_id in system_ids {
+        any = true;
+        if SystemId::parse(system_id).is_err() {
+            return false;
+        }
+    }
+    any
 }
 
 #[cfg(feature = "builder")]

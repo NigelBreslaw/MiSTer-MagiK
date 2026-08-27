@@ -18,7 +18,7 @@ use crate::namespace_walk::{self, NamespaceEntryKind};
 use crate::system_shard::{SystemGame, SystemLaunchPlan};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, UNIX_EPOCH};
@@ -194,18 +194,84 @@ pub fn rebuild_generic_system(
     storage_root: &Path,
     system_id: &str,
 ) -> Result<(FastFiveSystem, GenericSystemStats), String> {
-    if !GENERIC_EXAMPLE_SYSTEM_IDS.contains(&system_id) {
-        return Err(format!("unsupported generic fast system {system_id}"));
+    rebuild_installed_generic_system(storage_root, system_id)?
+        .ok_or_else(|| format!("generic system {system_id} has no installed launchable content"))
+}
+
+pub fn rebuild_installed_generic_system(
+    storage_root: &Path,
+    system_id: &str,
+) -> Result<Option<(FastFiveSystem, GenericSystemStats)>, String> {
+    let roots = [storage_root.display().to_string()];
+    let profiles = ProfileSet::for_roots(&roots)
+        .into_profiles()
+        .into_iter()
+        .filter(|profile| profile.system_id == system_id)
+        .collect::<Vec<_>>();
+    rebuild_generic_system_from_profiles(storage_root, system_id, &profiles)
+}
+
+/// Discover every installed profile-backed system without assuming a fixed
+/// console or computer list.
+///
+/// Prepared collections are merged by the independent source layer after this
+/// pass, so ordinary user-managed files remain the fallback for every system.
+pub fn discover_generic_systems(
+    storage_root: &Path,
+) -> Result<(Vec<FastFiveSystem>, GenericSystemScanReport), String> {
+    let started = Instant::now();
+    let roots = [storage_root.display().to_string()];
+    let mut grouped = BTreeMap::<String, Vec<LaunchProfile>>::new();
+    for profile in ProfileSet::for_roots(&roots).into_profiles() {
+        grouped
+            .entry(profile.system_id.clone())
+            .or_default()
+            .push(profile);
     }
-    let profiles = focused_profiles()?;
-    let profile = profiles
-        .iter()
-        .find(|profile| profile.system_id == system_id)
-        .ok_or_else(|| format!("no focused launch profile found for {system_id}"))?;
-    if !core_is_installed(storage_root, profile) {
-        return Err(format!(
-            "no installed launch profile found for generic system {system_id}"
-        ));
+    let mut systems = Vec::new();
+    let mut reports = Vec::new();
+    for (system_id, profiles) in grouped {
+        if let Some((system, report)) =
+            rebuild_generic_system_from_profiles(storage_root, &system_id, &profiles)?
+        {
+            systems.push(system);
+            reports.push(report);
+        }
+    }
+    systems.sort_by(|left, right| left.system_id.cmp(&right.system_id));
+    reports.sort_by(|left, right| left.system_id.cmp(&right.system_id));
+    Ok((
+        systems,
+        GenericSystemScanReport {
+            elapsed_us: started.elapsed().as_micros() as u64,
+            games: reports.iter().map(|system| system.games).sum(),
+            systems: reports,
+        },
+    ))
+}
+
+pub fn discover_generic_system_ids(storage_root: &Path) -> BTreeSet<String> {
+    let roots = [storage_root.display().to_string()];
+    ProfileSet::for_roots(&roots)
+        .into_profiles()
+        .into_iter()
+        .filter(|profile| {
+            profile
+                .game_dirs
+                .iter()
+                .any(|game_dir| storage_root.join("games").join(game_dir).is_dir())
+        })
+        .map(|profile| profile.system_id)
+        .collect()
+}
+
+fn rebuild_generic_system_from_profiles(
+    storage_root: &Path,
+    system_id: &str,
+    profiles: &[LaunchProfile],
+) -> Result<Option<(FastFiveSystem, GenericSystemStats)>, String> {
+    if profiles.is_empty() {
+        return Ok(None);
     }
     let started = Instant::now();
     let mut stats = GenericSystemStats {
@@ -214,21 +280,21 @@ pub fn rebuild_generic_system(
     };
     let mut scanned = Vec::new();
     let mut visited_roots = BTreeSet::new();
-    for game_dir in &profile.game_dirs {
-        let candidate = storage_root.join("games").join(game_dir);
-        if !candidate.is_dir() {
-            continue;
-        }
-        let root = candidate.canonicalize().unwrap_or(candidate);
-        if visited_roots.insert(root.to_string_lossy().to_ascii_lowercase()) {
-            stats.roots += 1;
-            scan_directory(&root, profile, &mut stats, &mut scanned);
+    for profile in profiles {
+        for game_dir in &profile.game_dirs {
+            let candidate = storage_root.join("games").join(game_dir);
+            if !candidate.is_dir() {
+                continue;
+            }
+            let root = candidate.canonicalize().unwrap_or(candidate);
+            if visited_roots.insert(root.to_string_lossy().to_ascii_lowercase()) {
+                stats.roots += 1;
+                scan_namespace_borrowed(&root, profile, &mut stats, &mut scanned);
+            }
         }
     }
     if stats.roots == 0 {
-        return Err(format!(
-            "generic system {system_id} has an installed profile but no game directory"
-        ));
+        return Ok(None);
     }
     scanned.sort_by(|left, right| {
         left.game
@@ -240,15 +306,20 @@ pub fn rebuild_generic_system(
     scanned.dedup_by(|left, right| left.game.launch_ref == right.game.launch_ref);
     stats.games = scanned.len();
     stats.elapsed_us = started.elapsed().as_micros() as u64;
-    Ok((
+    Ok(Some((
         FastFiveSystem {
             system_id: system_id.to_string(),
-            display_title: display_title(system_id).to_string(),
+            display_title: profiles
+                .iter()
+                .map(|profile| profile.title.trim())
+                .find(|title| !title.is_empty())
+                .unwrap_or_else(|| display_title(system_id))
+                .to_string(),
             games: scanned.into_iter().map(|row| row.game).collect(),
             variants: Vec::new(),
         },
         stats,
-    ))
+    )))
 }
 
 pub fn scan_media_experiment_system(

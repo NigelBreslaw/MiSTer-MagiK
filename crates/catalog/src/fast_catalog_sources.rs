@@ -9,10 +9,12 @@
 
 use crate::catalog_scan::FoundFile;
 use crate::fast_five_catalog::{
-    EXPANDED_FAST_SYSTEM_IDS, FAST_FIVE_SNAPSHOT_SCHEMA, FastFiveGameVariant, FastFiveSnapshot,
-    FastFiveSystem, FastFiveVariantRelation, collapse_c64_cross_source_variants,
+    FAST_FIVE_SNAPSHOT_SCHEMA, FastFiveGameVariant, FastFiveSnapshot, FastFiveSystem,
+    FastFiveVariantRelation, collapse_c64_cross_source_variants,
 };
-use crate::generic_system_catalog::{add_generic_example_systems, rebuild_generic_system};
+use crate::generic_system_catalog::{
+    discover_generic_system_ids, discover_generic_systems, rebuild_installed_generic_system,
+};
 use crate::launch_profiles::CollectionListing;
 use crate::media_identity::ScreenshotAssetId;
 use crate::mra_header::{PrimaryRomRequirement, RomNamespace};
@@ -25,7 +27,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 9;
+pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 10;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FastSourceBuildReport {
@@ -49,43 +51,54 @@ pub fn build_independent_fast_snapshot(
     storage_root: &Path,
 ) -> Result<(FastFiveSnapshot, FastSourceBuildReport), String> {
     let started = Instant::now();
-    let mut reports = Vec::new();
-    let mut systems = Vec::new();
+    let (generic_systems, generic) = discover_generic_systems(storage_root)?;
+    let mut systems = generic_systems
+        .into_iter()
+        .map(|system| (system.system_id.clone(), system))
+        .collect::<BTreeMap<_, _>>();
+    let mut reports = generic
+        .systems
+        .into_iter()
+        .map(|system| {
+            (
+                system.system_id.clone(),
+                FastSourceSystemReport {
+                    system_id: system.system_id,
+                    files_visited: system.files,
+                    games: system.games,
+                    invalid: system.read_errors.saturating_add(system.archive_errors),
+                    elapsed_us: system.elapsed_us,
+                    helper_hits: 0,
+                    fallback_validations: 0,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     for system_id in ["amiga", "arcade", "c64", "dos", "x68000"] {
         let system_started = Instant::now();
         let (mut system, mut report) = build_prepared_system(storage_root, system_id)?;
+        if let Some(generic) = systems.remove(system_id) {
+            merge_system_rows(&mut system, generic);
+        }
         if system_id == "c64" {
             collapse_c64_cross_source_variants(&mut system);
         }
         report.elapsed_us = elapsed_us(system_started);
         report.games = system.games.len();
-        systems.push(system);
-        reports.push(report);
+        if !system.games.is_empty() || !system.variants.is_empty() {
+            systems.insert(system_id.to_string(), system);
+            reports
+                .entry(system_id.to_string())
+                .and_modify(|generic| merge_source_report(generic, &report))
+                .or_insert(report);
+        }
     }
-    systems.sort_by(|left, right| left.system_id.cmp(&right.system_id));
     let mut snapshot = FastFiveSnapshot {
         schema: FAST_FIVE_SNAPSHOT_SCHEMA.to_string(),
-        source_fingerprint: fingerprint_systems(&systems)?,
-        systems,
+        source_fingerprint: fingerprint_systems(&systems.values().cloned().collect::<Vec<_>>())?,
+        systems: systems.into_values().collect(),
     };
     snapshot.validate()?;
-    let (expanded, generic) = add_generic_example_systems(storage_root, snapshot)?;
-    snapshot = expanded;
-    reports.extend(
-        generic
-            .systems
-            .into_iter()
-            .map(|system| FastSourceSystemReport {
-                system_id: system.system_id,
-                files_visited: system.files,
-                games: system.games,
-                invalid: system.read_errors.saturating_add(system.archive_errors),
-                elapsed_us: system.elapsed_us,
-                helper_hits: 0,
-                fallback_validations: 0,
-            }),
-    );
-    reports.sort_by(|left, right| left.system_id.cmp(&right.system_id));
     enrich_fast_preview_identities(storage_root, &mut snapshot.systems);
     snapshot.source_fingerprint = fingerprint_systems(&snapshot.systems)?;
     snapshot.validate()?;
@@ -93,7 +106,7 @@ pub fn build_independent_fast_snapshot(
         snapshot,
         FastSourceBuildReport {
             elapsed_us: elapsed_us(started),
-            systems: reports,
+            systems: reports.into_values().collect(),
             legacy_inputs: 0,
         },
     ))
@@ -104,33 +117,101 @@ pub fn rebuild_independent_system(
     _snapshot: &FastFiveSnapshot,
     system_id: &str,
 ) -> Result<(FastFiveSystem, FastSourceSystemReport), String> {
-    if !EXPANDED_FAST_SYSTEM_IDS.contains(&system_id) {
-        return Err(format!("unsupported fast source system {system_id}"));
-    }
-    if matches!(system_id, "neogeo" | "saturn" | "snes" | "zx-spectrum") {
-        let (mut system, report) = rebuild_generic_system(storage_root, system_id)?;
-        enrich_fast_preview_identities(storage_root, std::slice::from_mut(&mut system));
-        return Ok((
+    let started = Instant::now();
+    let generic = rebuild_installed_generic_system(storage_root, system_id)?;
+    let prepared = matches!(system_id, "amiga" | "arcade" | "c64" | "dos" | "x68000")
+        .then(|| build_prepared_system(storage_root, system_id))
+        .transpose()?;
+    let (mut system, mut report) = match (prepared, generic) {
+        (Some((mut prepared, mut report)), Some((generic, generic_report))) => {
+            merge_system_rows(&mut prepared, generic);
+            merge_source_report(
+                &mut report,
+                &FastSourceSystemReport {
+                    system_id: generic_report.system_id,
+                    files_visited: generic_report.files,
+                    games: generic_report.games,
+                    invalid: generic_report
+                        .read_errors
+                        .saturating_add(generic_report.archive_errors),
+                    elapsed_us: generic_report.elapsed_us,
+                    helper_hits: 0,
+                    fallback_validations: 0,
+                },
+            );
+            (prepared, report)
+        }
+        (Some(value), None) => value,
+        (None, Some((system, generic_report))) => (
             system,
             FastSourceSystemReport {
-                system_id: report.system_id,
-                files_visited: report.files,
-                games: report.games,
-                invalid: report.read_errors.saturating_add(report.archive_errors),
-                elapsed_us: report.elapsed_us,
+                system_id: generic_report.system_id,
+                files_visited: generic_report.files,
+                games: generic_report.games,
+                invalid: generic_report
+                    .read_errors
+                    .saturating_add(generic_report.archive_errors),
+                elapsed_us: generic_report.elapsed_us,
                 helper_hits: 0,
                 fallback_validations: 0,
             },
-        ));
-    }
-    let started = Instant::now();
-    let (mut system, mut report) = build_prepared_system(storage_root, system_id)?;
+        ),
+        (None, None) => return Err(format!("no installed launchable source for {system_id}")),
+    };
     if system_id == "c64" {
         collapse_c64_cross_source_variants(&mut system);
     }
+    enrich_fast_preview_identities(storage_root, std::slice::from_mut(&mut system));
     report.elapsed_us = elapsed_us(started);
     report.games = system.games.len();
     Ok((system, report))
+}
+
+pub fn discover_independent_system_ids(storage_root: &Path) -> Vec<String> {
+    let mut systems = discover_generic_system_ids(storage_root);
+    for (system_id, present) in [
+        ("amiga", storage_root.join("games/Amiga").is_dir()),
+        ("arcade", storage_root.join("_Arcade").is_dir()),
+        ("c64", storage_root.join("games/C64").is_dir()),
+        ("dos", storage_root.join("_DOS Games").is_dir()),
+        (
+            "x68000",
+            storage_root.join("_Computer/_X68000 Games").is_dir()
+                || storage_root.join("_Computer/X68000 Games").is_dir(),
+        ),
+    ] {
+        if present {
+            systems.insert(system_id.to_string());
+        }
+    }
+    systems.into_iter().collect()
+}
+
+fn merge_system_rows(target: &mut FastFiveSystem, mut additional: FastFiveSystem) {
+    target.games.append(&mut additional.games);
+    target.variants.append(&mut additional.variants);
+    target.games.sort_by(|left, right| {
+        left.title
+            .to_ascii_lowercase()
+            .cmp(&right.title.to_ascii_lowercase())
+            .then_with(|| left.stable_key.cmp(&right.stable_key))
+    });
+    target
+        .games
+        .dedup_by(|left, right| left.launch_ref == right.launch_ref);
+}
+
+fn merge_source_report(target: &mut FastSourceSystemReport, additional: &FastSourceSystemReport) {
+    target.files_visited = target
+        .files_visited
+        .saturating_add(additional.files_visited);
+    target.games = target.games.saturating_add(additional.games);
+    target.invalid = target.invalid.saturating_add(additional.invalid);
+    target.elapsed_us = target.elapsed_us.saturating_add(additional.elapsed_us);
+    target.helper_hits = target.helper_hits.saturating_add(additional.helper_hits);
+    target.fallback_validations = target
+        .fallback_validations
+        .saturating_add(additional.fallback_validations);
 }
 
 fn build_prepared_system(
@@ -1198,8 +1279,7 @@ mod tests {
 
     #[test]
     fn independent_source_set_contains_no_legacy_input_kind() {
-        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 9);
-        assert_eq!(EXPANDED_FAST_SYSTEM_IDS.len(), 9);
+        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 10);
     }
 
     #[test]

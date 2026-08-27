@@ -602,7 +602,7 @@ pub fn plan_fast_refresh(
         .iter()
         .map(|reference| (reference.system_id.as_str(), reference))
         .collect::<std::collections::BTreeMap<_, _>>();
-    let build_check = |system_id: &'static str| {
+    let build_check = |system_id: &str| {
         let system_started = std::time::Instant::now();
         let mut check = FastSystemSourceCheck {
             system_id: system_id.to_string(),
@@ -631,7 +631,15 @@ pub fn plan_fast_refresh(
             .unwrap_or(u64::MAX);
         check
     };
-    let systems = crate::fast_five_catalog::EXPANDED_FAST_SYSTEM_IDS;
+    let mut systems = crate::fast_catalog_sources::discover_independent_system_ids(storage_root);
+    systems.extend(
+        active
+            .systems
+            .iter()
+            .map(|system| system.system_id.as_str().to_string()),
+    );
+    systems.sort();
+    systems.dedup();
     let checks = systems
         .iter()
         .map(|system_id| build_check(system_id))
@@ -926,32 +934,26 @@ struct WatchSpecification {
 
 fn watch_specification(storage_root: &Path, system_id: &str) -> Result<WatchSpecification, String> {
     let games = storage_root.join("games");
-    let (scan_roots, core_parent) = match system_id {
-        "amiga" => (vec![games.join("Amiga")], storage_root.join("_Computer")),
+    let (mut scan_roots, mut core_parents) = match system_id {
+        "amiga" => (
+            vec![games.join("Amiga")],
+            vec![storage_root.join("_Computer")],
+        ),
         "arcade" => (
             vec![
                 storage_root.join("_Arcade"),
                 games.join("mame"),
                 games.join("hbmame"),
             ],
-            storage_root.join("_Arcade/cores"),
+            vec![storage_root.join("_Arcade/cores")],
         ),
         "c64" => (
-            crate::fast_catalog_sources::oneload64_roots(storage_root),
-            storage_root.join("_Computer"),
+            vec![games.join("C64")],
+            vec![storage_root.join("_Computer")],
         ),
         "dos" => (
             vec![storage_root.join("_DOS Games"), games.join("AO486")],
-            storage_root.join("_Computer"),
-        ),
-        "neogeo" => (vec![games.join("NEOGEO")], storage_root.join("_Console")),
-        "saturn" => (vec![games.join("Saturn")], storage_root.join("_Console")),
-        "snes" => (
-            ["SNES", "Satellaview", "SGB2", "SNES-Sinden"]
-                .into_iter()
-                .map(|name| games.join(name))
-                .collect(),
-            storage_root.join("_Console"),
+            vec![storage_root.join("_Computer")],
         ),
         "x68000" => (
             vec![
@@ -959,12 +961,38 @@ fn watch_specification(storage_root: &Path, system_id: &str) -> Result<WatchSpec
                 storage_root.join("_Computer/X68000 Games"),
                 games.join("X68000"),
             ],
-            storage_root.join("_Computer"),
+            vec![storage_root.join("_Computer")],
         ),
-        "zx-spectrum" => (vec![games.join("Spectrum")], storage_root.join("_Computer")),
-        _ => return Err(format!("unsupported fast refresh system {system_id}")),
+        _ => (Vec::new(), Vec::new()),
     };
-    let mut anchors = vec![games, core_parent];
+    let roots = [storage_root.display().to_string()];
+    for profile in crate::launch_profiles::ProfileSet::for_roots(&roots)
+        .into_profiles()
+        .into_iter()
+        .filter(|profile| profile.system_id == system_id)
+    {
+        scan_roots.extend(
+            profile
+                .game_dirs
+                .into_iter()
+                .map(|game_dir| games.join(game_dir)),
+        );
+        if let Some(parent) = profile
+            .core_path
+            .as_deref()
+            .map(Path::new)
+            .and_then(Path::parent)
+        {
+            core_parents.push(storage_root.join(parent));
+        }
+    }
+    scan_roots.sort();
+    scan_roots.dedup();
+    if scan_roots.is_empty() {
+        return Err(format!("no watch roots for catalog system {system_id}"));
+    }
+    let mut anchors = vec![games];
+    anchors.append(&mut core_parents);
     anchors.sort();
     anchors.dedup();
     Ok(WatchSpecification {
