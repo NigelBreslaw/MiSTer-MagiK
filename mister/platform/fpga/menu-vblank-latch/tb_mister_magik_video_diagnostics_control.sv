@@ -160,9 +160,7 @@ module tb_mister_magik_video_diagnostics_control;
 	function automatic [3:0] golden_fold_address;
 		input [27:0] address;
 		begin
-			golden_fold_address = address[3:0] ^ address[7:4] ^
-				address[11:8] ^ address[15:12] ^ address[19:16] ^
-				address[23:20] ^ address[27:24];
+			golden_fold_address = address[10:7] ^ address[18:15];
 		end
 	endfunction
 

@@ -153,9 +153,10 @@ module mister_magik_scaler_fetch_ordered_frame (
 	function automatic [3:0] fold_address;
 		input [27:0] address;
 		begin
-			fold_address = address[3:0] ^ address[7:4] ^
-				address[11:8] ^ address[15:12] ^ address[19:16] ^
-				address[23:20] ^ address[27:24];
+			// Accepted bursts are 128-byte aligned. Fold one burst-index
+			// nibble with one page nibble; later split diagnostics retain
+			// responsibility for exact first-divergence attribution.
+			fold_address = address[10:7] ^ address[18:15];
 		end
 	endfunction
 
@@ -200,6 +201,13 @@ module mister_magik_scaler_fetch_ordered_frame (
 		MAGIK_RAW_SCALER_STATE_WORDS - 1'd1);
 	localparam [15:0] FETCH_SCHEMA_CRC =
 		crc16_update_word(FETCH_HEADER_CRC, FETCH_STATE_SCHEMA);
+	// The flags word has nine constant-zero high bits. Advance those at
+	// elaboration so the serial engine needs only the 39 variable payload bits.
+	localparam [15:0] FETCH_FLAGS_CRC = crc16_update_bit(
+		crc16_update_bit(crc16_update_bit(crc16_update_bit(
+		crc16_update_bit(crc16_update_bit(crc16_update_bit(
+		crc16_update_bit(crc16_update_bit(FETCH_SCHEMA_CRC, 1'b0), 1'b0),
+		1'b0), 1'b0), 1'b0), 1'b0), 1'b0), 1'b0), 1'b0);
 	// The actual accept/return events, not DUT credits, own this scoreboard.
 	// A wrap marker reaches the signature only with its accepted transaction's
 	// first return, so no asynchronous video-frame marker is required.
@@ -347,7 +355,7 @@ module mister_magik_scaler_fetch_ordered_frame (
 			generation_sync <= generation_meta;
 
 			if(!snapshot_crc_valid && !crc_busy && !capture_pending) begin
-				snapshot_crc <= FETCH_SCHEMA_CRC;
+				snapshot_crc <= FETCH_FLAGS_CRC;
 				crc_bit_count <= 6'd0;
 				crc_busy <= 1'b1;
 			end
@@ -367,7 +375,7 @@ module mister_magik_scaler_fetch_ordered_frame (
 					snapshot_sequence <= 16'd0;
 					snapshot_signature <= 16'd0;
 				end
-				snapshot_crc <= FETCH_SCHEMA_CRC;
+				snapshot_crc <= FETCH_FLAGS_CRC;
 				crc_bit_count <= 6'd0;
 				crc_busy <= 1'b1;
 				snapshot_crc_valid <= 1'b0;
@@ -377,25 +385,23 @@ module mister_magik_scaler_fetch_ordered_frame (
 			if(crc_busy) begin : snapshot_crc_step
 				reg [15:0] next_crc;
 				reg payload_bit;
-				if(crc_bit_count < 6'd9)
-					payload_bit = 1'b0;
-				else if(crc_bit_count < 6'd16)
+				if(crc_bit_count < 6'd7)
 					payload_bit = snapshot_flags[6];
-				else if(crc_bit_count < 6'd32)
+				else if(crc_bit_count < 6'd23)
 					payload_bit = snapshot_sequence[15];
 				else
 					payload_bit = snapshot_signature[15];
 				next_crc = crc16_update_bit(snapshot_crc, payload_bit);
 				snapshot_crc <= next_crc;
-				if(crc_bit_count >= 6'd9 && crc_bit_count < 6'd16)
+				if(crc_bit_count < 6'd7)
 					snapshot_flags <= {snapshot_flags[5:0], snapshot_flags[6]};
-				else if(crc_bit_count < 6'd32 && crc_bit_count >= 6'd16)
+				else if(crc_bit_count < 6'd23)
 					snapshot_sequence <= {snapshot_sequence[14:0],
 						snapshot_sequence[15]};
-				else if(crc_bit_count >= 6'd32)
+				else
 					snapshot_signature <= {snapshot_signature[14:0],
 						snapshot_signature[15]};
-				if(crc_bit_count == 6'd47) begin
+				if(crc_bit_count == 6'd38) begin
 					crc_busy <= 1'b0;
 					snapshot_crc_valid <= 1'b1;
 				end

@@ -328,7 +328,7 @@ def main() -> None:
         "snapshot_flags <= published_flags;",
         "snapshot_sequence <= snapshot_sequence + 1'd1;",
         "function automatic [15:0] crc16_update_bit;",
-        "snapshot_crc <= FETCH_SCHEMA_CRC;",
+        "snapshot_crc <= FETCH_FLAGS_CRC;",
         "snapshot_crc_valid <= 1'b1;",
         "snapshot_crc <= next_crc;",
     ):
