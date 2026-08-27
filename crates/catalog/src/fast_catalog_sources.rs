@@ -15,7 +15,7 @@ use crate::fast_five_catalog::{
 use crate::generic_system_catalog::{add_generic_example_systems, rebuild_generic_system};
 use crate::launch_profiles::CollectionListing;
 use crate::mra_header::{PrimaryRomRequirement, RomNamespace};
-use crate::prepared_collections::validate_prepared_launch_path;
+use crate::prepared_collections::{PreparedPayloadIndex, validate_prepared_launch_path};
 use crate::system_shard::{SystemGame, SystemLaunchPlan};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -40,6 +40,8 @@ pub struct FastSourceSystemReport {
     pub games: usize,
     pub invalid: usize,
     pub elapsed_us: u64,
+    pub helper_hits: usize,
+    pub fallback_validations: usize,
 }
 
 pub fn build_independent_fast_snapshot(
@@ -569,13 +571,33 @@ fn scan_prepared_mgl(
             extension_is(path, "mgl")
         });
     }
+    let prepared_index = (system_id == "dos").then(|| {
+        PreparedPayloadIndex::from_library_roots(
+            &roots
+                .iter()
+                .map(|root| root.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+        )
+    });
     files
         .into_iter()
-        .filter_map(|path| match validate_prepared_launch_path(&path) {
-            Ok(true) => Some(direct_row(system_id, category, &path, display_name(&path))),
-            _ => {
-                report.invalid += 1;
-                None
+        .filter_map(|path| {
+            if let Some(index) = &prepared_index
+                && let Some(known) = crate::prepared_release_manifest::known_0mhz_launch(&path)
+                && known.package.payloads.iter().all(|payload| {
+                    index.path_is_file(&known.storage_root.join(&payload.relative_path))
+                })
+            {
+                report.helper_hits = report.helper_hits.saturating_add(1);
+                return Some(direct_row(system_id, category, &path, display_name(&path)));
+            }
+            report.fallback_validations = report.fallback_validations.saturating_add(1);
+            match validate_prepared_launch_path(&path) {
+                Ok(true) => Some(direct_row(system_id, category, &path, display_name(&path))),
+                _ => {
+                    report.invalid += 1;
+                    None
+                }
             }
         })
         .collect()
@@ -824,6 +846,32 @@ mod tests {
         fs::write(root.join("games/C64/Personal/Game.crt"), b"rom").unwrap();
         let mut report = FastSourceSystemReport::default();
         assert!(scan_oneload64(&root, &mut report).is_empty());
+    }
+
+    #[test]
+    fn known_0mhz_rows_use_manifest_payload_receipts_before_mgl_fallback() {
+        let root = crate::test_support::unique_temp_dir("fast-source-0mhz-helper");
+        let launcher_root = root.join("_DOS Games");
+        let payload = root.join("games/ao486/media/stunts/stunts.vhd");
+        fs::create_dir_all(&launcher_root).unwrap();
+        fs::create_dir_all(payload.parent().unwrap()).unwrap();
+        fs::write(
+            launcher_root.join("4D Sports Driving.mgl"),
+            b"known launcher need not be parsed",
+        )
+        .unwrap();
+        fs::write(&payload, b"payload").unwrap();
+        let mut report = FastSourceSystemReport::default();
+        let games = scan_prepared_mgl(&[launcher_root.clone()], "dos", "DOS", &mut report);
+        assert_eq!(games.len(), 1);
+        assert_eq!(report.helper_hits, 1);
+        assert_eq!(report.fallback_validations, 0);
+
+        fs::remove_file(payload).unwrap();
+        let mut report = FastSourceSystemReport::default();
+        assert!(scan_prepared_mgl(&[launcher_root], "dos", "DOS", &mut report).is_empty());
+        assert_eq!(report.helper_hits, 0);
+        assert_eq!(report.fallback_validations, 1);
     }
 
     #[test]
