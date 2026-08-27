@@ -34,7 +34,7 @@ module mister_magik_scaler_fetch_ordered_frame (
 	localparam [15:0] SIGNATURE_POLYNOMIAL = 16'ha001;
 	localparam [7:0] REQUIRED_BURSTCOUNT = 8'd128;
 	localparam [15:0] TOKEN_DATA = 16'h5a02;
-	localparam [15:0] TOKEN_ADDRESS = 16'ha501;
+	localparam [7:0] TOKEN_ADDRESS = 8'ha5;
 
 	localparam [6:0] FETCH_FLAG_CAPTURE_VALID =
 		MAGIK_RAW_SCALER_STATE_FLAG_CAPTURE_VALID[6:0];
@@ -53,8 +53,8 @@ module mister_magik_scaler_fetch_ordered_frame (
 
 	// Independent accepted-request FIFO. Only a folded address and its epoch
 	// marker are retained; production ascal itself caps outstanding reads at two.
-	reg [15:0] fifo_address_token0 = 16'd0;
-	reg [15:0] fifo_address_token1 = 16'd0;
+	reg [7:0]  fifo_address_token0 = 8'd0;
+	reg [7:0]  fifo_address_token1 = 8'd0;
 	reg        fifo_wrap0 = 1'b0;
 	reg        fifo_wrap1 = 1'b0;
 	reg [1:0]  fifo_count = 2'd0;
@@ -81,11 +81,9 @@ module mister_magik_scaler_fetch_ordered_frame (
 	reg [15:0] snapshot_sequence = 16'd0;
 	reg [6:0] snapshot_flags = 7'd0;
 	reg [15:0] snapshot_crc = 16'd0;
-	reg [15:0] crc_work = 16'd0;
-	reg [15:0] crc_payload_shift = 16'd0;
-	reg [3:0] crc_bit_count = 4'd0;
-	reg [1:0] crc_word_count = 2'd0;
+	reg [5:0] crc_bit_count = 6'd0;
 	reg crc_busy = 1'b0;
+	reg snapshot_crc_valid = 1'b0;
 	reg has_command = 1'b0;
 	reg command_selected = 1'b0;
 	reg [2:0] word_count = 3'd0;
@@ -118,7 +116,9 @@ module mister_magik_scaler_fetch_ordered_frame (
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
 	wire selected_start =
-		io_din[7:0] == MAGIK_UIO_GET_RAW_SCALER_STATE && !crc_busy;
+		io_din[7:0] == MAGIK_UIO_GET_RAW_SCALER_STATE &&
+		snapshot_crc_valid && !crc_busy && !capture_pending &&
+		generation_sync == generation_seen;
 	wire selected_command = command_selected;
 
 	assign response_valid =
@@ -154,11 +154,11 @@ module mister_magik_scaler_fetch_ordered_frame (
 		end
 	endfunction
 
-	function automatic [15:0] fold_address;
+	function automatic [7:0] fold_address;
 		input [27:0] address;
 		begin
-			fold_address = address[15:0] ^ {4'd0, address[27:16]} ^
-				TOKEN_ADDRESS;
+			fold_address = address[7:0] ^ address[15:8] ^
+				address[23:16] ^ {4'd0, address[27:24]};
 		end
 	endfunction
 
@@ -203,19 +203,14 @@ module mister_magik_scaler_fetch_ordered_frame (
 		MAGIK_RAW_SCALER_STATE_WORDS - 1'd1);
 	localparam [15:0] FETCH_SCHEMA_CRC =
 		crc16_update_word(FETCH_HEADER_CRC, FETCH_STATE_SCHEMA);
-	localparam [15:0] FETCH_EMPTY_CRC = crc16_update_word(
-		crc16_update_word(
-			crc16_update_word(FETCH_SCHEMA_CRC, 16'd0), 16'd0),
-		16'd0);
-
 	// The actual accept/return events, not DUT credits, own this scoreboard.
 	// A wrap marker reaches the signature only with its accepted transaction's
 	// first return, so no asynchronous video-frame marker is required.
 	always @(posedge clk_100m or posedge reset_active) begin : fetch_order
 		reg [15:0] return_token;
 		if(reset_active) begin
-			fifo_address_token0 <= 16'd0;
-			fifo_address_token1 <= 16'd0;
+			fifo_address_token0 <= 8'd0;
+			fifo_address_token1 <= 8'd0;
 			fifo_wrap0 <= 1'b0;
 			fifo_wrap1 <= 1'b0;
 			fifo_count <= 2'd0;
@@ -281,7 +276,8 @@ module mister_magik_scaler_fetch_ordered_frame (
 					epoch_armed <= 1'b1;
 					epoch_signature <= ordered_signature_update(
 						ordered_signature_update(
-							SIGNATURE_INITIAL, fifo_address_token0),
+							SIGNATURE_INITIAL,
+							{TOKEN_ADDRESS, fifo_address_token0}),
 						return_token);
 					fifo_wrap0 <= 1'b0;
 				end
@@ -289,7 +285,8 @@ module mister_magik_scaler_fetch_ordered_frame (
 					if(return_phase == 7'd0)
 						epoch_signature <= ordered_signature_update(
 							ordered_signature_update(
-								epoch_signature, fifo_address_token0),
+								epoch_signature,
+								{TOKEN_ADDRESS, fifo_address_token0}),
 							return_token);
 					else
 						epoch_signature <= ordered_signature_update(
@@ -344,12 +341,10 @@ module mister_magik_scaler_fetch_ordered_frame (
 			snapshot_signature <= 16'd0;
 			snapshot_sequence <= 16'd0;
 			snapshot_flags <= 7'd0;
-			snapshot_crc <= FETCH_EMPTY_CRC;
-			crc_work <= 16'd0;
-			crc_payload_shift <= 16'd0;
-			crc_bit_count <= 4'd0;
-			crc_word_count <= 2'd0;
+			snapshot_crc <= 16'd0;
+			crc_bit_count <= 6'd0;
 			crc_busy <= 1'b0;
+			snapshot_crc_valid <= 1'b0;
 			has_command <= 1'b0;
 			command_selected <= 1'b0;
 			word_count <= 3'd0;
@@ -357,6 +352,12 @@ module mister_magik_scaler_fetch_ordered_frame (
 		else begin
 			generation_meta <= source_generation;
 			generation_sync <= generation_meta;
+
+			if(!snapshot_crc_valid && !crc_busy && !capture_pending) begin
+				snapshot_crc <= FETCH_SCHEMA_CRC;
+				crc_bit_count <= 6'd0;
+				crc_busy <= 1'b1;
+			end
 
 			if(!has_command && !crc_busy &&
 			   generation_sync != generation_seen) begin
@@ -372,34 +373,37 @@ module mister_magik_scaler_fetch_ordered_frame (
 					snapshot_sequence <= 16'd0;
 					snapshot_signature <= 16'd0;
 				end
-				crc_work <= FETCH_SCHEMA_CRC;
-				crc_payload_shift <= {9'd0, published_flags};
-				crc_bit_count <= 4'd0;
-				crc_word_count <= 2'd0;
+				snapshot_crc <= FETCH_SCHEMA_CRC;
+				crc_bit_count <= 6'd0;
 				crc_busy <= 1'b1;
+				snapshot_crc_valid <= 1'b0;
 				capture_pending <= 1'b0;
 			end
 
 			if(crc_busy) begin : snapshot_crc_step
 				reg [15:0] next_crc;
-				next_crc = crc16_update_bit(crc_work,
-					crc_payload_shift[15]);
-				crc_work <= next_crc;
-				crc_payload_shift <= {crc_payload_shift[14:0], 1'b0};
-				if(crc_bit_count == 4'd15) begin
-					crc_bit_count <= 4'd0;
-					if(crc_word_count == 2'd0) begin
-						crc_word_count <= 2'd1;
-						crc_payload_shift <= snapshot_sequence;
-					end
-					else if(crc_word_count == 2'd1) begin
-						crc_word_count <= 2'd2;
-						crc_payload_shift <= snapshot_signature;
-					end
-					else begin
-						snapshot_crc <= next_crc;
-						crc_busy <= 1'b0;
-					end
+				reg payload_bit;
+				if(crc_bit_count < 6'd9)
+					payload_bit = 1'b0;
+				else if(crc_bit_count < 6'd16)
+					payload_bit = snapshot_flags[6];
+				else if(crc_bit_count < 6'd32)
+					payload_bit = snapshot_sequence[15];
+				else
+					payload_bit = snapshot_signature[15];
+				next_crc = crc16_update_bit(snapshot_crc, payload_bit);
+				snapshot_crc <= next_crc;
+				if(crc_bit_count >= 6'd9 && crc_bit_count < 6'd16)
+					snapshot_flags <= {snapshot_flags[5:0], snapshot_flags[6]};
+				else if(crc_bit_count < 6'd32 && crc_bit_count >= 6'd16)
+					snapshot_sequence <= {snapshot_sequence[14:0],
+						snapshot_sequence[15]};
+				else if(crc_bit_count >= 6'd32)
+					snapshot_signature <= {snapshot_signature[14:0],
+						snapshot_signature[15]};
+				if(crc_bit_count == 6'd47) begin
+					crc_busy <= 1'b0;
+					snapshot_crc_valid <= 1'b1;
 				end
 				else
 					crc_bit_count <= crc_bit_count + 1'd1;
