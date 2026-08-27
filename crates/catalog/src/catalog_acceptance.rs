@@ -3,6 +3,7 @@
 
 //! Read-only integrity reports for the installed catalog.
 
+use crate::sharded_catalog::CatalogReader;
 use std::fmt::Write as _;
 use std::path::Path;
 
