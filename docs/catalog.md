@@ -175,6 +175,15 @@ or retired sidecars as source data. Fresh builds obtain rows from Update_All
 plus installed Arcade validation, prepared-collection metadata and launch
 validation, or the generic filesystem adapters.
 
+The next generic-media experiment covers PlayStation, BBC Micro, and MSX
+without adding them to the authoritative nine-system registry yet. It uses the
+shared profile contract to classify primary payloads separately from BIOS,
+sidecars, and referenced disc tracks. On Linux its retained scratch-build path
+uses the bounded fd-relative namespace backend and two lanes: BBC Micro on one,
+PSX followed by MSX on the other. Warm/no-change refresh remains sequential.
+Cutover requires an explicit audit of every ignored or unmatched installed file
+before these three systems are allowed to publish UI artifacts.
+
 Each successful system build publishes two separate builder-state files: a
 small watch index and a potentially larger canonical-row snapshot. Their
 checksummed fixed-header postcard envelopes are referenced by a two-slot
