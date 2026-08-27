@@ -3875,6 +3875,18 @@ fn startup_catalog_ready_for_reveal(
     catalog_ready && (!intro_active || refresh_done)
 }
 
+fn cold_boot_profile_completion_ready(
+    includes_catalog_build: bool,
+    catalog_ready: bool,
+    refresh_done: bool,
+) -> bool {
+    if includes_catalog_build {
+        refresh_done
+    } else {
+        catalog_ready
+    }
+}
+
 fn launcher_bridge_sync_plan(
     launching: bool,
     _startup_input_enabled: bool,
@@ -11308,7 +11320,11 @@ pub(super) fn run_launcher_loop(
             if first_launcher_frame_logged
                 && lifecycle.startup_status().input_enabled
                 && profile_config.cpu().cold_boot_requested()
-                && (!profile_config.cpu().cold_boot_catalog_requested() || catalog_ready)
+                && cold_boot_profile_completion_ready(
+                    profile_config.cpu().cold_boot_catalog_requested(),
+                    catalog_ready,
+                    catalog_session.refresh_done(),
+                )
                 && cpu.is_some()
                 && let Err(error) =
                     cpu_profile::finish_cold_boot_async(cpu.take(), profile_config.cpu())
@@ -16003,6 +16019,13 @@ mod tests {
         assert!(startup_catalog_ready_for_reveal(true, true, true));
         assert!(startup_catalog_ready_for_reveal(false, true, false));
         assert!(!startup_catalog_ready_for_reveal(true, false, true));
+    }
+
+    #[test]
+    fn cold_boot_catalog_profile_waits_for_the_complete_refresh() {
+        assert!(!cold_boot_profile_completion_ready(true, true, false));
+        assert!(cold_boot_profile_completion_ready(true, true, true));
+        assert!(cold_boot_profile_completion_ready(false, true, false));
     }
 
     #[test]
