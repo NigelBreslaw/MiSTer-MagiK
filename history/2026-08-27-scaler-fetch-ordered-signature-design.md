@@ -4,7 +4,7 @@
 
 Diagnostic 1 of the persistent moving-band campaign is implemented and has
 passed the canonical fixed-seed local FPGA signoff. The accepted builder commit
-is `7ceef9e97e86f6317985622f4c4f809ba0c2d2e7`. It replaces the schema-10 raw
+is `19b2c040cf3cf9f290f0d61a62c09f5487812fee`. It replaces the schema-10 raw
 scaler observer with schema 11, architecture
 `scaler-fetch-ordered-signature-v1`; schema-10 decoding remains available to
 interpret the preserved rollback evidence.
@@ -30,6 +30,10 @@ later internal split rather than a root-cause claim.
 
 Malformed burst count, queue overflow, unexpected return, return phase error,
 overlapping epoch marker, counter overflow, and reset ambiguity fail closed.
+Fault publication has an independent sticky source level and two-stage
+synchronizer. It aborts an older valid command response until the coherent
+invalid record is captured, so a valid-generation toggle followed immediately
+by a fault cannot cancel and leave stale valid evidence readable.
 Command `0x67`, magic `0x4d57`, and the five response words are preserved. The
 words contain schema, valid/fault flags, advancing capture sequence, ordered
 signature, and CRC-16/CCITT-FALSE. The generated SystemVerilog and Rust
@@ -42,13 +46,14 @@ The exact pinned Menu source is
 reference signature and CRC checks, stable/change cases, lane permutation,
 address-token change, empty/pre-alignment handling, sequence wrap, reset with
 an outstanding request and stale return, every fault class, simultaneous FIFO
-pop/push, and immutable command reads. Structural checks passed observer-only
-fanout, exact top-level binding, retired-tap absence, and unchanged production
-integration.
+pop/push, immutable command reads, and valid publication followed at the next
+source edge by a fault. All 47 delta-checker fixtures passed. Structural checks
+passed observer-only fanout, exact top-level binding, retired-tap absence, and
+unchanged production integration.
 
 The unchanged completion and copy-tail suite passed BMC, covers, and induction
 without new assumptions at exact root
-`7ceef9e97e86f6317985622f4c4f809ba0c2d2e7`. Its production patch SHA-256 is
+`19b2c040cf3cf9f290f0d61a62c09f5487812fee`. Its production patch SHA-256 is
 `612b0378442aa08a04e6a620646598d4e9e13305ce8be71851d0e4ef227da8c2` and the
 patched `ascal` SHA-256 is
 `70846aacfc77c069dd26f694bf45d6c4359af70e8fb80ba21f87aa54d17c4d5b`.
@@ -61,33 +66,41 @@ four-bit-address candidate reached 217 ALMs and was rejected. Only
 observer-local folding and CRC elaboration logic changed between these
 candidates; production RTL and all fixed gates remained unchanged.
 
+Final review then found that a valid toggle and immediately following fault
+toggle could cancel before `clk_sys` observed either edge. The pre-review RBF
+was withdrawn without installation. The first sticky-fault fix passed resource,
+warning, CDC, and MTBF gates but was rejected at `0.232 ns` setup slack. Removing
+only an unnecessary placement restriction from the single-destination fault
+source recovered timing; neither seed nor fitter policy changed.
+
 ## Accepted fixed-seed signoff
 
 Canonical `scripts/agent fpga signoff` used Quartus 17.0.0 Build 595, seed 2,
 and profile `experimental_scaler_fetch-v1`. The retained delta report is
 `valid=1`, `invalid_reason=ok`:
 
-- setup slack `0.494 ns`, hold slack `0.241 ns`, and zero TNS;
-- 202 ALMs and 163 registers over the matched baseline, within the hard limits
+- setup slack `0.456 ns`, hold slack `0.249 ns`, and zero TNS;
+- 204 ALMs and 156 registers over the matched baseline, within the hard limits
   of 208 and 224;
 - unchanged block RAM, DSP, PLL identities, and accepted warning identities;
-- exact completion-request, completion-ack, and scaler-fetch generation CDC
-  paths, with combined custom-chain MTBF `333333333.3333333` years, above
+- exact completion-request, completion-ack, scaler-fetch generation, and
+  sticky scaler-fetch fault CDC paths, with combined custom-chain MTBF
+  `249999999.99999997` years, above
   `10^12` device-hours;
 - 158 baseline and 158 patched unconstrained output paths, with no diagnostic
   unconstrained-path exception.
 
 Artifact SHA-256 values:
 
-- RBF: `595baf6151b377f0cd00e6a51a470667e4b86eb987fddd2b03f638fac8b98612`;
-- metadata: `eb31d452f3b2e3acfc37fe92a6de0755b4bc25ff9a140daceda8a318d99a71f6`;
+- RBF: `f0c80706681cdc3126a0bd26dc089b0f4576a0ffba42f3a5088420feb1dce60e`;
+- metadata: `c915b0566443f165554e47f9f79b8fe1c6bad0de34b26ec2866c6da6207d4d6d`;
 - delta signoff report:
-  `57d94f5d7fdbe69c7d8a202406e4476f56f12f9cf39b6c804f06b07ba6e95b2b`;
+  `a5c9cf0c47b4ae4527995c45eb0e78e620eac02f96e7a3ba092e328d961a8c51`;
 - local signoff input:
-  `ae98d2ffcf507d856b86c26d2f156dc575075a4ea6075bf08a63d229f47bdb69`;
-- build log: `9d6846d1868dc66f339fc45f668d9cc80d9e89add7401715f985bf66311eca88`;
+  `650329259ebe5e7c087004624d619212cd11733cc2fbaae75464a52dfc22c1e8`;
+- build log: `1537874ed772f05d17dc1d77b040eeeb727d685459fb2a64ee86e13cff6f6974`;
 - top timing log:
-  `9c66e72f4d8abad330dd2701325213dc9e277c734fb0eef73f41b3d2b2116f7e`.
+  `73963c41f960305962b418a5355e064a1b7813657d4c3c4dc3cfc19042b3c668`.
 
 Large artifacts remain ignored under `build/fpga-local-apple/signoff/`.
 
