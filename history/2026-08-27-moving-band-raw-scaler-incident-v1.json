@@ -1,0 +1,71 @@
+{
+  "schema": "mister-magik-screen-corruption-incident-v1",
+  "incident_id": "2026-08-27-persistent-moving-band-raw-scaler",
+  "preservation_state": "captured-unrecovered",
+  "device_state_at_preservation": {
+    "boot_id": 797,
+    "fpga_owner": "magik",
+    "fpga_owner_epoch": 3,
+    "launcher_pid": 1286,
+    "launcher_state": "LauncherActive",
+    "main_generation": 8480,
+    "main_pid": 581
+  },
+  "platform_identity": {
+    "platform_release": "platform-v0.31",
+    "platform_manifest_path": "build/agent-diagnostics/1787846552/platform-v3.manifest",
+    "platform_manifest_sha256": "b48b826c6049dae36a3cf7d4e3a243ed12c8bdb536e3f8f151450b45620909db",
+    "magik_revision": "6806f948ed51f5c06acf8a48f4905fb6f757f429",
+    "menu_revision": "3c3634c0105d78f27aeba66b38966c50dbc42c9b",
+    "latch_protocol_version": 5,
+    "latch_capability_mask": "0x03ff",
+    "rbf_sha256": "6c9324ffe52cd6ae10ecac31ef8a37a281dd2882156ecdc4571e5ab5d35a7691",
+    "diagnostic_architecture": "raw-scaler-ordered-signature-v3",
+    "diagnostic_schema": 10
+  },
+  "runtime_identity": {
+    "launcher_build": 5325,
+    "launcher_source_dirty": false,
+    "launcher_source_revision": "6806f948ed51f5c06acf8a48f4905fb6f757f429",
+    "launcher_version": "0.2.5325"
+  },
+  "physical_evidence": {
+    "classification": "persistent-moving-band-full-raster-corruption",
+    "movie_seconds": 15.156667,
+    "captured_frame_count": 105,
+    "captured_width": 1920,
+    "captured_height": 1080,
+    "movie_sha256": "5b6fa5e37cd6fc314a09bbed7fea6f4635aa0f5bf2a20068ef8eb5a91ded3578",
+    "sink_visibility": "observed-by-native-usb-video"
+  },
+  "internal_evidence": {
+    "authoritative_framebuffer": "correct-byte-stable",
+    "framebuffer_source": "fpga-latched-scanout-slots",
+    "framebuffer_sha256": "7f5765886b3e8e0658f2c01c9f8e150bcf58f3bf6319aa13c645cac8b5930948",
+    "framebuffer_capture_count": 3,
+    "latch_drop_count": 0,
+    "latch_reject_count": 0,
+    "observer_classification": "raw_scaler_order_changed_requires_static_source_proof",
+    "observer_coherent": true,
+    "initial_frame_sequences": [18027, 18028, 18030],
+    "initial_ordered_signatures": ["2e7a", "da6d", "4e8e"],
+    "static_window_frame_sequences": [25494, 25495, 25497],
+    "static_window_ordered_signatures": ["750b", "e31e", "ff4a"]
+  },
+  "artifacts": [
+    {"path": "build/agent-diagnostics/1787846552/platform-v3.manifest", "bytes": 1641, "sha256": "b48b826c6049dae36a3cf7d4e3a243ed12c8bdb536e3f8f151450b45620909db"},
+    {"path": "build/agent-diagnostics/2026-08-27-live-corruption-raw-scaler-v3/SUMMARY.md", "bytes": 1915, "sha256": "32eb5276deba348049532e3f5f2eed595ffed166e5700a2eff7fe3f71a1b76ee"},
+    {"path": "build/agent-diagnostics/2026-08-27-live-corruption-raw-scaler-v3/usb-video.mov", "bytes": 27165791, "sha256": "5b6fa5e37cd6fc314a09bbed7fea6f4635aa0f5bf2a20068ef8eb5a91ded3578"},
+    {"path": "build/agent-diagnostics/2026-08-27-live-corruption-raw-scaler-v3/video-frames/timeline-1fps.jpg", "bytes": 107334, "sha256": "bd6ef604ce05345e3c3d321096abfd6e1dc4b8995fd1d44d5995a13efcee2f2f"},
+    {"path": "build/agent-diagnostics/2026-08-27-live-corruption-raw-scaler-v3/initial-diagnostics-and-source-frames/source-1-raw.png", "bytes": 112152, "sha256": "7f5765886b3e8e0658f2c01c9f8e150bcf58f3bf6319aa13c645cac8b5930948"},
+    {"path": "build/agent-diagnostics/2026-08-27-live-corruption-raw-scaler-v3/initial-diagnostics-and-source-frames/source-2-raw.png", "bytes": 112152, "sha256": "7f5765886b3e8e0658f2c01c9f8e150bcf58f3bf6319aa13c645cac8b5930948"},
+    {"path": "build/agent-diagnostics/2026-08-27-live-corruption-raw-scaler-v3/initial-diagnostics-and-source-frames/source-3-raw.png", "bytes": 112152, "sha256": "7f5765886b3e8e0658f2c01c9f8e150bcf58f3bf6319aa13c645cac8b5930948"},
+    {"path": "build/agent-diagnostics/2026-08-27-live-corruption-raw-scaler-v3/initial-diagnostics-and-source-frames/fpga-video-diagnostics.json", "bytes": 1957, "sha256": "1cf160bce75a228727dde538ed6b3798d285ac82b2b286709d9c67cbeebb922b"},
+    {"path": "build/agent-diagnostics/2026-08-27-live-corruption-raw-scaler-v3/initial-diagnostics-and-source-frames/bundle.json", "bytes": 743862, "sha256": "93346e6d4540575046d2740c226a0fcbc3edd83760f58b60542ce8d2af647349"},
+    {"path": "build/agent-diagnostics/2026-08-27-live-corruption-raw-scaler-v3/static-window-diagnostics/fpga-video-diagnostics.json", "bytes": 1957, "sha256": "bb9c0bbd56d3f9d3a2682afd7932e5ce83fe42dacc318675269e1d4a9a40e6c3"},
+    {"path": "build/agent-diagnostics/2026-08-27-live-corruption-raw-scaler-v3/static-window-diagnostics/bundle.json", "bytes": 743529, "sha256": "02f2af0592268ae611233de684c436adc48198339b9a999bd27b0ac09c37fcce"}
+  ],
+  "artifact_count": 11,
+  "ordered_artifact_manifest_format": "path-tab-bytes-tab-sha256-newline",
+  "ordered_artifact_manifest_sha256": "bd2200ddc1da429d66a7b1c4a1dc008869ffe97861968944544e3425fd5651b2"
+}
