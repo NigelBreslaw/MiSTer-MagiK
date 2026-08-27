@@ -19890,7 +19890,7 @@ fn run_catalog_attribution_pair(
         Some(generation),
         CatalogBuildRebuildLegOptions {
             exercise_arcade_ui: false,
-            require_updater_index: true,
+            require_updater_index: false,
             launcher_env: catalog_attribution_launcher_env(arm),
             runtime_command: catalog_attribution_runtime_command,
         },
