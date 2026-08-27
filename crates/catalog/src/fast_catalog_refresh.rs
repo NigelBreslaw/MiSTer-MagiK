@@ -1490,7 +1490,9 @@ mod tests {
     fn watch_check_is_metadata_only_when_sources_are_unchanged() {
         let root = crate::test_support::unique_temp_dir("fast-refresh-check");
         let games = root.join("games/SNES");
+        fs::create_dir_all(root.join("_Console")).unwrap();
         fs::create_dir_all(&games).unwrap();
+        fs::write(root.join("_Console/SNES.rbf"), b"core").unwrap();
         fs::write(games.join("Game.sfc"), b"rom").unwrap();
         let watch = capture_system_watch(&root, "snes").unwrap();
         let mut check = FastSystemSourceCheck {
@@ -1511,7 +1513,9 @@ mod tests {
     fn watch_check_detects_container_replacement_without_row_reads() {
         let root = crate::test_support::unique_temp_dir("fast-refresh-container-check");
         let games = root.join("games/SNES");
+        fs::create_dir_all(root.join("_Console")).unwrap();
         fs::create_dir_all(&games).unwrap();
+        fs::write(root.join("_Console/SNES.rbf"), b"core").unwrap();
         let archive = games.join("Games.zip");
         fs::write(&archive, b"first").unwrap();
         let watch = capture_system_watch(&root, "snes").unwrap();

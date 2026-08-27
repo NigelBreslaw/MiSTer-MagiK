@@ -622,21 +622,6 @@ aliases = []
 documentation = { summary = "Controls effect bench label behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_FAST_CATALOG_STORAGE_ROOT"
-owner = "apps/mister/src/ui_runner/catalog_worker.rs"
-classification = "production"
-value_shape = "path or path list"
-default_behavior = "defaults to /media/fat when unset"
-visibility = "internal runtime"
-parser = "path"
-typed_default = "/media/fat"
-scope = "command"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Storage root inspected by the independent fast catalog refresher", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_FAST_FIVE_CATALOG"
 owner = "apps/mister/src/process_config.rs"
 classification = "production"
