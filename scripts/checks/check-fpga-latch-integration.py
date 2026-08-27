@@ -269,77 +269,61 @@ def main() -> None:
     control_source = diagnostics_control.read_text()
     avalon_source = diagnostics_avalon.read_text()
     output_source = diagnostics_output.read_text()
-    if local_signoff_profile.read_text().strip() != "experimental_raw_scaler-v1":
-        fail("ordered-signature candidate lacks its exact local signoff profile identity")
-    if control_source.count("module mister_magik_raw_scaler_ordered_frame (") != 1:
-        fail("raw ordered-frame observer design unit is missing or ambiguous")
+    if local_signoff_profile.read_text().strip() != "experimental_scaler_fetch-v1":
+        fail("scaler-fetch candidate lacks its exact local signoff profile identity")
+    if control_source.count("module mister_magik_scaler_fetch_ordered_frame (") != 1:
+        fail("scaler-fetch ordered-frame observer design unit is missing or ambiguous")
     if re.search(r"(?m)^\s*module\b", avalon_source + output_source):
         fail("retired Avalon/output compatibility sources must define no design unit")
     for required_observer_fragment in (
-        "isolated_ce <= raw_ce;",
-        "raw_rgb[23:19], raw_rgb[15:10], raw_rgb[7:3]",
-        "isolated_de <= raw_de;",
-        "isolated_hs <= raw_hs;",
-        "isolated_vs <= raw_vs;",
+        "localparam [15:0] FETCH_STATE_SCHEMA = 16'd11;",
+        "wire accepted = vbuf_read && !vbuf_waitrequest;",
+        "wire return_has_entry = returned && fifo_count != 2'd0;",
+        "wire return_last = return_has_entry && return_phase == 7'd127;",
+        "vbuf_burstcount == REQUIRED_BURSTCOUNT",
+        "vbuf_address[27:7] < previous_address",
+        "reg [15:0] fifo_address_token0",
+        "reg [15:0] fifo_address_token1",
+        "reg        fifo_wrap0",
+        "reg        fifo_wrap1",
+        "reg [1:0]  fifo_count",
+        "reg [6:0]  return_phase",
+        "function automatic [15:0] fold_return_data;",
+        "function automatic [15:0] fold_address;",
         "function automatic [15:0] ordered_signature_update;",
-        "mixed = signature_in ^ token_in[15:0] ^ token_in[31:16];",
+        "mixed = signature_in ^ token_in;",
         "(mixed[0] ? SIGNATURE_POLYNOMIAL : 16'd0);",
-        "signature_rgb <= isolated_rgb;",
-        "signature_de <= isolated_de;",
-        "signature_hs <= isolated_hs;",
-        "signature_vs <= isolated_vs;",
-        "pixel_token(signature_rgb, !previous_de, signature_hs)",
-        "line_end_token(signature_hs)",
-        "published_signature <= completed_signature;",
-        "wire [15:0] source_state",
-        "reg [31:0] snapshot_state",
-        "reg snapshot_valid",
-        "response_word = snapshot_valid ?",
+        "case({enqueue, dequeue})",
+        "return_token = fold_return_data(vbuf_readdata) ^ TOKEN_DATA;",
+        "return_token = return_token ^ fifo_address_token0;",
+        "if(return_phase == 7'd0 && fifo_wrap0) begin",
+        "published_signature <= epoch_signature;",
+        "published_flags <= FETCH_FLAG_CAPTURE_VALID;",
+        "fault_event[6:1] != 6'd0",
+        "published_flags <= fault_event;",
         "(* preserve, dont_replicate *) reg source_generation = 1'b0;",
         "source_generation <= ~source_generation;",
         "generation_meta <= source_generation;",
         "generation_sync <= generation_meta;",
-        "source_state, snapshot_state[15:0] + 1'd1",
+        "snapshot_signature <= published_signature;",
+        "snapshot_flags <= published_flags;",
+        "snapshot_sequence <= snapshot_sequence + 1'd1;",
     ):
         if required_observer_fragment not in control_source:
             fail(
-                "raw ordered-frame observer structure is missing: "
+                "scaler-fetch ordered-frame observer structure is missing: "
                 f"{required_observer_fragment}"
             )
-    for direct_tap, expected_count in (
-        ("raw_ce", 2),
-        ("raw_rgb", 4),
-        ("raw_de", 2),
-        ("raw_hs", 2),
-        ("raw_vs", 2),
-    ):
-        if len(re.findall(rf"\b{direct_tap}\b", control_source)) != expected_count:
-            fail(
-                "production direct-ascal tap must appear only at its port and isolation assignment: "
-                f"{direct_tap}"
-            )
-    for isolated_signal in (
-        "isolated_ce",
-        "isolated_rgb",
-        "isolated_de",
-        "isolated_hs",
-        "isolated_vs",
-    ):
-        expected_isolated_count = 5 if isolated_signal == "isolated_ce" else 4
-        if len(re.findall(rf"\b{isolated_signal}\b", control_source)) != expected_isolated_count or len(
-            re.findall(rf"<=\s*{isolated_signal}\b", control_source)
-        ) != 1:
-            fail(
-                "direct-tap isolation must feed only the observer signature pipeline: "
-                f"{isolated_signal}"
-            )
-    if control_source.count("if(isolated_ce) begin") != 1:
-        fail("qualified observer pipeline must use isolated_ce only as its local capture enable")
     if "generation_launch" in control_source:
         fail("rejected placement-heavy generation launch stage remains present")
     for forbidden_observer_input in (
         "LFB_",
-        "vbuf_",
+        "clk_hdmi",
+        "raw_ce",
+        "raw_rgb",
+        "raw_de",
+        "raw_hs",
+        "raw_vs",
         "hdmi_data_mask",
         "hdmi_data_osd",
         "hdmi_out_",
@@ -349,11 +333,17 @@ def main() -> None:
         "completion_pending",
         "o_copylev",
         "o_readlev",
+        "reg [127:0]",
     ):
         if forbidden_observer_input in control_source:
-            fail(f"ordered-frame observer exceeds its passive tap boundary: {forbidden_observer_input}")
+            fail(f"scaler-fetch observer exceeds its passive tap boundary: {forbidden_observer_input}")
     for retired_control_observer in (
+        "mister_magik_raw_scaler_ordered_frame",
         "mister_magik_raw_scaler_diagnostic",
+        "isolated_rgb",
+        "signature_rgb",
+        "pixel_token",
+        "line_end_token",
         "control_crc",
         "candidate_streak",
         "candidate_valid",
@@ -367,7 +357,6 @@ def main() -> None:
         "published_oldest_crc",
         "published_previous_crc",
         "published_newest_crc",
-        "published_flags",
         "variation_history",
         "comparison_count",
         "frame_pixels",
@@ -475,11 +464,11 @@ def main() -> None:
         "-to $magik_scaler_completion_request_meta",
         "-from $magik_scaler_completion_ack_route",
         "-to $magik_scaler_completion_ack_meta",
-        "{*mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|source_generation} 1",
-        "{*mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta} 1",
-        "-from $magik_raw_frame_generation",
-        "-to $magik_raw_frame_generation_meta",
-        "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail raw_scaler_ordered_signature",
+        "{*mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|source_generation} 1",
+        "{*mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_meta} 1",
+        "-from $magik_fetch_frame_generation",
+        "-to $magik_fetch_frame_generation_meta",
+        "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_ordered_signature",
         "*ascal:ascal|o_readdataack_sync2*",
         "scaler_copy_tail",
     ):
@@ -559,7 +548,7 @@ def main() -> None:
             "mister_magik_video_diagnostics_control magik_video_diagnostics": 0,
             "mister_magik_video_diagnostics_avalon magik_video_diagnostics_avalon": 0,
             "mister_magik_video_diagnostics_output magik_video_diagnostics_output": 0,
-            "mister_magik_raw_scaler_ordered_frame magik_raw_scaler_ordered_frame": 1,
+            "mister_magik_scaler_fetch_ordered_frame magik_scaler_fetch_ordered_frame": 1,
             "magik_diag_response_valid": 4,
             "magik_diag_response_data": 4,
         }
@@ -572,35 +561,40 @@ def main() -> None:
             fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
         required_observer_bindings = {
             ".reset_active(reset_req)": 1,
-            ".raw_ce(scaler_out)": 1,
-            ".raw_rgb(hdmi_data)": 1,
-            ".raw_de(hdmi_de)": 1,
-            ".raw_hs(hdmi_hs)": 1,
-            ".raw_vs(hdmi_vs)": 1,
+            ".vbuf_address(vbuf_address)": 1,
+            ".vbuf_burstcount(vbuf_burstcount)": 1,
+            ".vbuf_waitrequest(vbuf_waitrequest)": 1,
+            ".vbuf_readdata(vbuf_readdata)": 1,
+            ".vbuf_readdatavalid(vbuf_readdatavalid)": 1,
+            ".vbuf_read(vbuf_read)": 1,
         }
         for binding, expected_count in required_observer_bindings.items():
             if patched.count(binding) != expected_count:
                 fail(
-                    "raw ordered-frame production tap mismatch: "
+                    "scaler-fetch production tap mismatch: "
                     f"{binding} expected {expected_count}, found {patched.count(binding)}"
                 )
         observer_mapping = re.compile(
-            r"mister_magik_raw_scaler_ordered_frame\s+"
-            r"magik_raw_scaler_ordered_frame\s*\(.*?"
-            r"\.clk_hdmi\(clk_hdmi\).*?\.clk_sys\(clk_sys\).*?"
-            r"\.reset_active\(reset_req\).*?\.raw_ce\(scaler_out\).*?"
-            r"\.raw_rgb\(hdmi_data\).*?\.raw_de\(hdmi_de\).*?"
-            r"\.raw_hs\(hdmi_hs\).*?\.raw_vs\(hdmi_vs\).*?"
+            r"mister_magik_scaler_fetch_ordered_frame\s+"
+            r"magik_scaler_fetch_ordered_frame\s*\(.*?"
+            r"\.clk_100m\(clk_100m\).*?\.clk_sys\(clk_sys\).*?"
+            r"\.reset_active\(reset_req\).*?\.vbuf_address\(vbuf_address\).*?"
+            r"\.vbuf_burstcount\(vbuf_burstcount\).*?"
+            r"\.vbuf_waitrequest\(vbuf_waitrequest\).*?"
+            r"\.vbuf_readdata\(vbuf_readdata\).*?"
+            r"\.vbuf_readdatavalid\(vbuf_readdatavalid\).*?"
+            r"\.vbuf_read\(vbuf_read\).*?"
             r"\.response_valid\(magik_diag_response_valid\).*?"
             r"\.response_data\(magik_diag_response_data\).*?\);",
             re.S,
         )
         if len(observer_mapping.findall(patched)) != 1:
-            fail("raw ordered-frame observer mapping is missing or ambiguous")
+            fail("scaler-fetch ordered-frame observer mapping is missing or ambiguous")
         for retired_binding in (
             "magik_scaler_copy_state",
             ".magik_diag_state",
             ".magik_diag_generation",
+            "mister_magik_raw_scaler_ordered_frame",
             "mister_magik_raw_scaler_diagnostic",
         ):
             if retired_binding in patched:

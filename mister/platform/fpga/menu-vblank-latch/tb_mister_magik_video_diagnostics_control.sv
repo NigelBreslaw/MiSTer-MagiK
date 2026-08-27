@@ -6,34 +6,45 @@
 module tb_mister_magik_video_diagnostics_control;
 	`include "mister_magik_video_diagnostics_protocol.svh"
 
-	reg clk_hdmi = 1'b0;
+	localparam [15:0] FETCH_STATE_SCHEMA = 16'd11;
+	localparam [15:0] FETCH_FLAG_CAPTURE_VALID = 16'h0001;
+	localparam [15:0] FETCH_FLAG_FIFO_OVERFLOW = 16'h0002;
+	localparam [15:0] FETCH_FLAG_UNEXPECTED_RETURN = 16'h0004;
+	localparam [15:0] FETCH_FLAG_BAD_BURSTCOUNT = 16'h0008;
+	localparam [15:0] FETCH_FLAG_BAD_RETURN_PHASE = 16'h0010;
+	localparam [15:0] FETCH_FLAG_EPOCH_OVERLAP = 16'h0020;
+	localparam [15:0] FETCH_FLAG_COUNTER_OVERFLOW = 16'h0040;
+
+	reg clk_100m = 1'b0;
 	reg clk_sys = 1'b0;
 	reg reset_active = 1'b1;
-	reg raw_ce = 1'b0;
-	reg [23:0] raw_rgb = 24'd0;
-	reg raw_de = 1'b0;
-	reg raw_hs = 1'b0;
-	reg raw_vs = 1'b0;
+	reg [27:0] vbuf_address = 28'd0;
+	reg [7:0] vbuf_burstcount = 8'd128;
+	reg vbuf_waitrequest = 1'b0;
+	reg [127:0] vbuf_readdata = 128'd0;
+	reg vbuf_readdatavalid = 1'b0;
+	reg vbuf_read = 1'b0;
 	reg io_uio = 1'b0;
 	reg io_strobe = 1'b0;
 	reg [15:0] io_din = 16'd0;
 	wire response_valid;
 	wire [15:0] response_data;
-	reg [15:0] words [0:5];
-	reg [15:0] immutable_words [0:5];
-	reg [15:0] first_signature;
-	reg [15:0] second_signature;
+	reg [15:0] words [0:4];
+	reg [15:0] immutable_words [0:4];
+	reg [15:0] stable_signature;
+	reg [15:0] changed_signature;
 	integer index;
 
-	mister_magik_raw_scaler_ordered_frame dut (
-		.clk_hdmi(clk_hdmi),
+	mister_magik_scaler_fetch_ordered_frame dut (
+		.clk_100m(clk_100m),
 		.clk_sys(clk_sys),
 		.reset_active(reset_active),
-		.raw_ce(raw_ce),
-		.raw_rgb(raw_rgb),
-		.raw_de(raw_de),
-		.raw_hs(raw_hs),
-		.raw_vs(raw_vs),
+		.vbuf_address(vbuf_address),
+		.vbuf_burstcount(vbuf_burstcount),
+		.vbuf_waitrequest(vbuf_waitrequest),
+		.vbuf_readdata(vbuf_readdata),
+		.vbuf_readdatavalid(vbuf_readdatavalid),
+		.vbuf_read(vbuf_read),
 		.io_uio(io_uio),
 		.io_strobe(io_strobe),
 		.io_din(io_din),
@@ -41,8 +52,8 @@ module tb_mister_magik_video_diagnostics_control;
 		.response_data(response_data)
 	);
 
-	always #4 clk_hdmi = ~clk_hdmi;
-	always #5 clk_sys = ~clk_sys;
+	always #5 clk_100m = ~clk_100m;
+	always #7 clk_sys = ~clk_sys;
 
 	task automatic fail(input [8*112-1:0] message);
 		begin
@@ -55,12 +66,13 @@ module tb_mister_magik_video_diagnostics_control;
 		input [15:0] current;
 		input [7:0] value;
 		integer bit_index;
-		reg [15:0] next;
+		reg [15:0] next_value;
 		begin
-			next = current ^ {value, 8'h00};
+			next_value = current ^ {value, 8'h00};
 			for(bit_index = 0; bit_index < 8; bit_index = bit_index + 1)
-				next = next[15] ? ((next << 1) ^ 16'h1021) : (next << 1);
-			crc16_byte = next;
+				next_value = next_value[15] ?
+					((next_value << 1) ^ 16'h1021) : (next_value << 1);
+			crc16_byte = next_value;
 		end
 	endfunction
 
@@ -79,101 +91,191 @@ module tb_mister_magik_video_diagnostics_control;
 		begin
 			value = 16'hffff;
 			value = crc16_word(value, {8'd0, MAGIK_UIO_GET_RAW_SCALER_STATE});
-			value = crc16_word(value, MAGIK_RAW_SCALER_STATE_SCHEMA);
+			value = crc16_word(value, FETCH_STATE_SCHEMA);
 			value = crc16_word(value, MAGIK_RAW_SCALER_STATE_WORDS - 1'd1);
-			for(word_index = 0; word_index <= last_payload_word; word_index = word_index + 1)
+			for(word_index = 0; word_index <= last_payload_word;
+				word_index = word_index + 1)
 				value = crc16_word(value, words[word_index]);
 			response_crc = value;
 		end
 	endfunction
 
-	// Independent executable model of the one-step ordered signature.
 	function automatic [15:0] golden_update;
 		input [15:0] current;
-		input [31:0] token;
+		input [15:0] token;
 		reg [15:0] mixed;
 		begin
-			mixed = current ^ token[15:0] ^ token[31:16];
-			golden_update = (mixed >> 1) ^
-				(mixed[0] ? 16'ha001 : 16'd0);
+			mixed = current ^ token;
+			golden_update = (mixed >> 1) ^ (mixed[0] ? 16'ha001 : 16'd0);
 		end
 	endfunction
 
-	function automatic [15:0] golden_rgb565(input [23:0] rgb);
-		golden_rgb565 = {rgb[23:19], rgb[15:10], rgb[7:3]};
-	endfunction
-
-	function automatic [31:0] golden_pixel_token(
-		input [7:0] header,
-		input [23:0] rgb
-	);
-		golden_pixel_token = {header, golden_rgb565(rgb), 8'd0};
-	endfunction
-
-	function automatic [15:0] golden_frame_signature(input [7:0] seed, input swapped);
-		reg [15:0] next;
-		reg [7:0] first_line;
-		reg [7:0] second_line;
+	function automatic [127:0] beat_data;
+		input [7:0] seed;
+		input [7:0] beat;
+		integer lane;
+		reg [127:0] value;
 		begin
-			first_line = swapped ? seed + 8'd32 : seed;
-			second_line = swapped ? seed : seed + 8'd32;
-			next = 16'h56da;
-			next = golden_update(next,
-				golden_pixel_token(8'hc1, {first_line, 8'h10, 8'h20}));
-			next = golden_update(next,
-				golden_pixel_token(8'h41, {first_line + 1'd1, 8'h11, 8'h21}));
-			next = golden_update(next, {8'ha0, 24'd0});
-			next = golden_update(next,
-				golden_pixel_token(8'h81, {second_line, 8'h12, 8'h22}));
-			next = golden_update(next,
-				golden_pixel_token(8'h01, {second_line + 1'd1, 8'h13, 8'h23}));
-			golden_frame_signature = golden_update(next, {8'he0, 24'd0});
+			value = 128'd0;
+			for(lane = 0; lane < 8; lane = lane + 1)
+				value[lane * 16 +: 16] = {seed + lane[7:0], beat};
+			beat_data = value;
 		end
 	endfunction
 
-	task automatic raw_sample(
-		input sample_ce,
-		input sample_vs,
-		input sample_hs,
-		input sample_de,
-		input [23:0] sample_rgb
-	);
+	function automatic [127:0] beat_data_lane_swapped;
+		input [7:0] seed;
+		input [7:0] beat;
+		reg [127:0] value;
 		begin
-			@(negedge clk_hdmi);
-			raw_ce = sample_ce;
-			raw_vs = sample_vs;
-			raw_hs = sample_hs;
-			raw_de = sample_de;
-			raw_rgb = sample_rgb;
-			@(posedge clk_hdmi);
+			value = beat_data(seed, beat);
+			value[15:0] = {seed + 1'd1, beat};
+			value[31:16] = {seed, beat};
+			beat_data_lane_swapped = value;
 		end
-	endtask
+	endfunction
 
-	// Start and complete one two-line, four-pixel frame. The next call's first
-	// VS edge completes the preceding frame, matching production framing.
-	task automatic drive_frame(input [7:0] seed, input empty, input swapped);
-		reg [7:0] first_line;
-		reg [7:0] second_line;
+	function automatic [15:0] golden_fold_data;
+		input [127:0] data;
 		begin
-			first_line = swapped ? seed + 8'd32 : seed;
-			second_line = swapped ? seed : seed + 8'd32;
-			raw_sample(1'b1, 1'b1, 1'b0, 1'b0, 24'd0);
-			raw_sample(1'b1, 1'b0, 1'b0, 1'b0, 24'd0);
-			if(!empty) begin
-				raw_sample(1'b1, 1'b0, 1'b1, 1'b1, {first_line, 8'h10, 8'h20});
-				raw_sample(1'b1, 1'b0, 1'b1, 1'b1, {first_line + 1'd1, 8'h11, 8'h21});
-				raw_sample(1'b1, 1'b0, 1'b0, 1'b0, 24'd0);
-				raw_sample(1'b1, 1'b0, 1'b0, 1'b1, {second_line, 8'h12, 8'h22});
-				raw_sample(1'b1, 1'b0, 1'b0, 1'b1, {second_line + 1'd1, 8'h13, 8'h23});
-				raw_sample(1'b1, 1'b0, 1'b1, 1'b0, 24'd0);
+			golden_fold_data =
+				data[15:0] ^
+				{data[30:16], data[31]} ^
+				{data[44:32], data[47:45]} ^
+				{data[58:48], data[63:59]} ^
+				{data[72:64], data[79:73]} ^
+				{data[86:80], data[95:87]} ^
+				{data[100:96], data[111:101]} ^
+				{data[114:112], data[127:115]};
+		end
+	endfunction
+
+	function automatic [15:0] golden_fold_address;
+		input [27:0] address;
+		begin
+			golden_fold_address = address[15:0] ^
+				{4'd0, address[27:16]} ^ 16'ha501;
+		end
+	endfunction
+
+	function automatic [15:0] golden_burst;
+		input [15:0] current;
+		input [27:0] address;
+		input [7:0] seed;
+		integer beat;
+		reg [15:0] next_value;
+		reg [15:0] token;
+		begin
+			next_value = current;
+			for(beat = 0; beat < 128; beat = beat + 1) begin
+				token = golden_fold_data(beat_data(seed, beat[7:0])) ^ 16'h5a02;
+				if(beat == 0)
+					token = token ^ golden_fold_address(address);
+				next_value = golden_update(next_value, token);
 			end
+			golden_burst = next_value;
+		end
+	endfunction
+
+	function automatic [15:0] golden_burst_lane_swapped;
+		input [15:0] current;
+		input [27:0] address;
+		input [7:0] seed;
+		integer beat;
+		reg [15:0] next_value;
+		reg [15:0] token;
+		begin
+			next_value = current;
+			for(beat = 0; beat < 128; beat = beat + 1) begin
+				token = golden_fold_data(
+					beat_data_lane_swapped(seed, beat[7:0])) ^ 16'h5a02;
+				if(beat == 0)
+					token = token ^ golden_fold_address(address);
+				next_value = golden_update(next_value, token);
+			end
+			golden_burst_lane_swapped = next_value;
+		end
+	endfunction
+
+	task automatic pulse_request;
+		input [27:0] address;
+		input [7:0] burstcount;
+		input stalled_first;
+		begin
+			@(negedge clk_100m);
+			vbuf_address = address;
+			vbuf_burstcount = burstcount;
+			vbuf_read = 1'b1;
+			vbuf_waitrequest = stalled_first;
+			@(posedge clk_100m);
+			if(stalled_first) begin
+				@(negedge clk_100m);
+				vbuf_waitrequest = 1'b0;
+				@(posedge clk_100m);
+			end
+			@(negedge clk_100m);
+			vbuf_read = 1'b0;
 		end
 	endtask
 
-	task automatic complete_frame;
+	task automatic drive_return_burst;
+		input [7:0] seed;
+		integer beat;
 		begin
-			raw_sample(1'b1, 1'b1, 1'b0, 1'b0, 24'd0);
-			raw_sample(1'b1, 1'b0, 1'b0, 1'b0, 24'd0);
+			for(beat = 0; beat < 128; beat = beat + 1) begin
+				@(negedge clk_100m);
+				vbuf_readdatavalid = 1'b1;
+				vbuf_readdata = beat_data(seed, beat[7:0]);
+				@(posedge clk_100m);
+			end
+			@(negedge clk_100m);
+			vbuf_readdatavalid = 1'b0;
+			vbuf_readdata = 128'd0;
+		end
+	endtask
+
+	task automatic drive_return_burst_lane_swapped;
+		input [7:0] seed;
+		integer beat;
+		begin
+			for(beat = 0; beat < 128; beat = beat + 1) begin
+				@(negedge clk_100m);
+				vbuf_readdatavalid = 1'b1;
+				vbuf_readdata = beat_data_lane_swapped(seed, beat[7:0]);
+				@(posedge clk_100m);
+			end
+			@(negedge clk_100m);
+			vbuf_readdatavalid = 1'b0;
+			vbuf_readdata = 128'd0;
+		end
+	endtask
+
+	task automatic drive_return_burst_with_final_accept;
+		input [7:0] seed;
+		input [27:0] accepted_address;
+		integer beat;
+		begin
+			for(beat = 0; beat < 128; beat = beat + 1) begin
+				@(negedge clk_100m);
+				vbuf_readdatavalid = 1'b1;
+				vbuf_readdata = beat_data(seed, beat[7:0]);
+				if(beat == 127) begin
+					vbuf_address = accepted_address;
+					vbuf_burstcount = 8'd128;
+					vbuf_waitrequest = 1'b0;
+					vbuf_read = 1'b1;
+				end
+				@(posedge clk_100m);
+			end
+			@(negedge clk_100m);
+			vbuf_readdatavalid = 1'b0;
+			vbuf_readdata = 128'd0;
+			vbuf_read = 1'b0;
+		end
+	endtask
+
+	task automatic wait_capture;
+		begin
 			repeat(8) @(posedge clk_sys);
 		end
 	endtask
@@ -225,99 +327,227 @@ module tb_mister_magik_video_diagnostics_control;
 			for(index = 0; index < 5; index = index + 1)
 				read_word(words[index]);
 			command_end();
-			if(words[0] != MAGIK_RAW_SCALER_STATE_SCHEMA)
+			if(words[0] != FETCH_STATE_SCHEMA)
 				fail("schema mismatch");
 			if(words[4] != response_crc(3))
 				fail("response CRC mismatch");
 		end
 	endtask
 
+	task automatic apply_reset;
+		begin
+			reset_active = 1'b1;
+			repeat(3) @(posedge clk_100m);
+			repeat(2) @(posedge clk_sys);
+			reset_active = 1'b0;
+			repeat(3) @(posedge clk_100m);
+		end
+	endtask
+
 	initial begin
-		repeat(4) @(posedge clk_sys);
-		reset_active = 1'b0;
-		repeat(3) @(posedge clk_hdmi);
+		reg [15:0] golden;
+		apply_reset();
 
 		for(index = 8'h60; index <= 8'h66; index = index + 1) begin
 			command_start(index[7:0]);
 			command_end();
 		end
 
-		drive_frame(8'h11, 1'b0, 1'b0);
-		complete_frame();
 		read_record();
-		if(words[1] != MAGIK_RAW_SCALER_STATE_FLAG_FRAME_VALID || words[2] != 16'd1)
-			fail("first completed-frame flags or sequence mismatch");
-		first_signature = words[3];
-		if(first_signature != golden_frame_signature(8'h11, 1'b0))
-			fail("ordered signature model mismatch");
+		if(words[1] != 16'd0 || words[2] != 16'd0 || words[3] != 16'd0)
+			fail("pre-alignment record was not empty");
 
-		// An empty frame cannot replace or advance completed nonempty evidence.
-		drive_frame(8'h00, 1'b1, 1'b0);
-		complete_frame();
+		// A full two-entry FIFO may dequeue its final beat and enqueue the next
+		// accepted request on the same edge without an overflow or reordering.
+		pulse_request(28'h0001000, 8'd128, 1'b0);
+		pulse_request(28'h0001080, 8'd128, 1'b0);
+		drive_return_burst_with_final_accept(8'h01, 28'h0001100);
+		drive_return_burst(8'h02);
+		drive_return_burst(8'h03);
+		wait_capture();
 		read_record();
-		if(words[2] != 16'd1 || words[3] != first_signature)
-			fail("empty frame changed retained evidence");
+		if(words[1] != 16'd0 || words[2] != 16'd0 || words[3] != 16'd0)
+			fail("simultaneous full-FIFO dequeue/enqueue corrupted pre-alignment state");
+		apply_reset();
 
-		// Repeating the exact frame advances sequence but preserves signature.
-		drive_frame(8'h11, 1'b0, 1'b0);
-		complete_frame();
+		// One ignored pre-alignment transaction establishes a high address.
+		pulse_request(28'h0001800, 8'd128, 1'b1);
+		drive_return_burst(8'h70);
+
+		// First wrap arms. Two accepted requests are deliberately outstanding;
+		// the following wrap is queued behind the second request.
+		pulse_request(28'h0000800, 8'd128, 1'b0);
+		pulse_request(28'h0000880, 8'd128, 1'b0);
+		drive_return_burst(8'h11);
+		pulse_request(28'h0000800, 8'd128, 1'b0);
+		drive_return_burst(8'h22);
+		drive_return_burst(8'h11);
+		wait_capture();
+
+		golden = golden_burst(16'h56da, 28'h0000800, 8'h11);
+		golden = golden_burst(golden, 28'h0000880, 8'h22);
 		read_record();
-		if(words[2] != 16'd2 || words[3] != first_signature)
-			fail("static ordered frame did not retain its signature");
+		if(words[1] != FETCH_FLAG_CAPTURE_VALID || words[2] != 16'd1 ||
+		   words[3] != golden)
+			fail("first wrap-aligned fetch epoch mismatch");
+		stable_signature = words[3];
 
-		// Swapping complete lines must change the order-sensitive signature.
-		drive_frame(8'h11, 1'b0, 1'b1);
-		complete_frame();
+		// The exact same address/data epoch advances sequence and stays stable.
+		pulse_request(28'h0000880, 8'd128, 1'b0);
+		drive_return_burst(8'h22);
+		pulse_request(28'h0000800, 8'd128, 1'b0);
+		drive_return_burst(8'h11);
+		wait_capture();
 		read_record();
-		second_signature = words[3];
-		if(second_signature != golden_frame_signature(8'h11, 1'b1) ||
-		   second_signature == first_signature)
-			fail("line-order change was not detected");
+		if(words[2] != 16'd2 || words[3] != stable_signature)
+			fail("identical ordered fetch epoch did not remain stable");
 
-		// A partial read cannot leak its word index into the next transaction.
+		// Returned-data change in an otherwise identical address epoch changes
+		// the combined address/data signature.
+		golden = golden_burst(16'h56da, 28'h0000800, 8'h11);
+		golden = golden_burst(golden, 28'h0000880, 8'h33);
+		pulse_request(28'h0000880, 8'd128, 1'b0);
+		drive_return_burst(8'h33);
+		pulse_request(28'h0000800, 8'd128, 1'b0);
+		drive_return_burst(8'h11);
+		wait_capture();
+		read_record();
+		changed_signature = words[3];
+		if(words[2] != 16'd3 || changed_signature != golden ||
+		   changed_signature == stable_signature)
+			fail("ordered returned-data change was not detected");
+
+		// Swapping complete 16-bit lanes changes the folded-return signature;
+		// the reducer is not permutation-invariant like a plain lane XOR.
+		golden = golden_burst(16'h56da, 28'h0000800, 8'h11);
+		golden = golden_burst_lane_swapped(golden, 28'h0000880, 8'h22);
+		pulse_request(28'h0000880, 8'd128, 1'b0);
+		drive_return_burst_lane_swapped(8'h22);
+		pulse_request(28'h0000800, 8'd128, 1'b0);
+		drive_return_burst(8'h11);
+		wait_capture();
+		read_record();
+		if(words[2] != 16'd4 || words[3] != golden ||
+		   words[3] == stable_signature)
+			fail("16-bit return-lane permutation was not detected");
+
+		// Partial reads reset cleanly.
 		command_start(MAGIK_UIO_GET_RAW_SCALER_STATE);
 		read_word(words[0]);
 		read_word(words[1]);
 		command_end();
 		read_record();
 
-		// Snapshot remains immutable even if another frame completes mid-read.
+		// A source publication during streaming cannot mutate the response.
 		command_start(MAGIK_UIO_GET_RAW_SCALER_STATE);
 		for(index = 0; index < 3; index = index + 1)
 			read_word(immutable_words[index]);
-		drive_frame(8'h44, 1'b0, 1'b0);
-		complete_frame();
+		pulse_request(28'h0000880, 8'd128, 1'b0);
+		drive_return_burst(8'h44);
+		pulse_request(28'h0000800, 8'd128, 1'b0);
+		drive_return_burst(8'h11);
+		wait_capture();
 		for(index = 3; index < 5; index = index + 1)
 			read_word(immutable_words[index]);
 		command_end();
 		for(index = 0; index < 5; index = index + 1)
 			words[index] = immutable_words[index];
 		if(words[4] != response_crc(3))
-			fail("immutable mid-read snapshot CRC mismatch");
+			fail("immutable mid-read response CRC mismatch");
 
-		// Sequence wrap remains observable.
-		drive_frame(8'h55, 1'b0, 1'b0);
-		dut.snapshot_state[15:0] = 16'hffff;
-		complete_frame();
+		// Sequence wrap remains a valid coherent capture.
+		wait_capture();
+		dut.snapshot_sequence = 16'hffff;
+		pulse_request(28'h0000880, 8'd128, 1'b0);
+		drive_return_burst(8'h55);
+		pulse_request(28'h0000800, 8'd128, 1'b0);
+		drive_return_burst(8'h11);
+		wait_capture();
 		read_record();
-		if(words[1] != MAGIK_RAW_SCALER_STATE_FLAG_FRAME_VALID ||
-		   words[2] != 16'h0000)
-			fail("completed-frame valid state or sequence did not survive wrap");
+		if(words[1] != FETCH_FLAG_CAPTURE_VALID || words[2] != 16'd0)
+			fail("capture sequence wrap lost valid evidence");
 
-		// Reset during an active frame clears the coherent source and snapshot.
-		drive_frame(8'h99, 1'b0, 1'b0);
-		raw_sample(1'b1, 1'b0, 1'b0, 1'b1, 24'habcdef);
-		reset_active = 1'b1;
-		repeat(2) @(posedge clk_hdmi);
-		repeat(2) @(posedge clk_sys);
-		reset_active = 1'b0;
-		repeat(6) @(posedge clk_sys);
+		// Reset during a partially returned accepted burst discards both the
+		// transaction and prior publication; no mixed epoch may remain visible.
+		pulse_request(28'h0000880, 8'd128, 1'b0);
+		for(index = 0; index < 8; index = index + 1) begin
+			@(negedge clk_100m);
+			vbuf_readdatavalid = 1'b1;
+			vbuf_readdata = beat_data(8'h66, index[7:0]);
+			@(posedge clk_100m);
+		end
+		@(negedge clk_100m);
+		vbuf_readdatavalid = 1'b0;
+		vbuf_readdata = 128'd0;
+		apply_reset();
+		wait_capture();
 		read_record();
-		if(words[1] != 16'd0 || words[2] != 16'd0 ||
-		   words[3] != 16'd0)
-			fail("reset did not clear observer snapshot coherently");
+		if(words[1] != 16'd0 || words[2] != 16'd0 || words[3] != 16'd0)
+			fail("mid-burst reset retained ambiguous fetch evidence");
 
-		$display("PASS: raw scaler ordered-signature observer framing and state");
+		// Each protocol defect publishes a sticky invalid record with zero
+		// sequence/signature. Exercise all externally reachable fault classes.
+		apply_reset();
+		@(negedge clk_100m);
+		vbuf_readdatavalid = 1'b1;
+		@(posedge clk_100m);
+		@(negedge clk_100m);
+		vbuf_readdatavalid = 1'b0;
+		wait_capture();
+		read_record();
+		if(words[1] != FETCH_FLAG_UNEXPECTED_RETURN || words[2] != 0 || words[3] != 0)
+			fail("unexpected return did not fail closed");
+
+		apply_reset();
+		pulse_request(28'h0001000, 8'd127, 1'b0);
+		wait_capture();
+		read_record();
+		if(words[1] != FETCH_FLAG_BAD_BURSTCOUNT || words[2] != 0 || words[3] != 0)
+			fail("bad burstcount did not fail closed");
+
+		apply_reset();
+		pulse_request(28'h0001000, 8'd128, 1'b0);
+		pulse_request(28'h0001080, 8'd128, 1'b0);
+		pulse_request(28'h0001100, 8'd128, 1'b0);
+		wait_capture();
+		read_record();
+		if(words[1] != FETCH_FLAG_FIFO_OVERFLOW || words[2] != 0 || words[3] != 0)
+			fail("FIFO overflow did not fail closed");
+
+		apply_reset();
+		pulse_request(28'h0003000, 8'd128, 1'b0);
+		drive_return_burst(8'h10);
+		pulse_request(28'h0002000, 8'd128, 1'b0);
+		pulse_request(28'h0001000, 8'd128, 1'b0);
+		wait_capture();
+		read_record();
+		if(words[1] != FETCH_FLAG_EPOCH_OVERLAP || words[2] != 0 || words[3] != 0)
+			fail("epoch overlap did not fail closed");
+
+		apply_reset();
+		pulse_request(28'h0003000, 8'd128, 1'b0);
+		drive_return_burst(8'h10);
+		pulse_request(28'h0002000, 8'd128, 1'b0);
+		dut.return_phase = 7'd1;
+		@(negedge clk_100m);
+		vbuf_readdatavalid = 1'b1;
+		@(posedge clk_100m);
+		@(negedge clk_100m);
+		vbuf_readdatavalid = 1'b0;
+		wait_capture();
+		read_record();
+		if(words[1] != FETCH_FLAG_BAD_RETURN_PHASE || words[2] != 0 || words[3] != 0)
+			fail("bad return phase did not fail closed");
+
+		apply_reset();
+		dut.fifo_count = 2'd3;
+		@(posedge clk_100m);
+		wait_capture();
+		read_record();
+		if(words[1] != FETCH_FLAG_COUNTER_OVERFLOW || words[2] != 0 || words[3] != 0)
+			fail("counter overflow did not fail closed");
+
+		$display("PASS: scaler fetch ordered-signature observer and fail-closed protocol");
 		$finish;
 	end
 endmodule

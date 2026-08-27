@@ -636,16 +636,17 @@ index a416879..4d81fc6 100644
  		.avl_byteenable   (vbuf_byteenable)
  	);
 +
-+mister_magik_raw_scaler_ordered_frame magik_raw_scaler_ordered_frame
++mister_magik_scaler_fetch_ordered_frame magik_scaler_fetch_ordered_frame
 +(
-+	.clk_hdmi(clk_hdmi),
++	.clk_100m(clk_100m),
 +	.clk_sys(clk_sys),
 +	.reset_active(reset_req),
-+	.raw_ce(scaler_out),
-+	.raw_rgb(hdmi_data),
-+	.raw_de(hdmi_de),
-+	.raw_hs(hdmi_hs),
-+	.raw_vs(hdmi_vs),
++	.vbuf_address(vbuf_address),
++	.vbuf_burstcount(vbuf_burstcount),
++	.vbuf_waitrequest(vbuf_waitrequest),
++	.vbuf_readdata(vbuf_readdata),
++	.vbuf_readdatavalid(vbuf_readdatavalid),
++	.vbuf_read(vbuf_read),
 +	.io_uio(io_uio),
 +	.io_strobe(io_strobe),
 +	.io_din(io_din),

@@ -93,15 +93,16 @@ module mister_magik_sys_top_latch_path (
 		.active_route_epoch(magik_lfb_active_route_epoch)
 	);
 
-	mister_magik_raw_scaler_ordered_frame diagnostic (
-		.clk_hdmi(clk_sys),
+	mister_magik_scaler_fetch_ordered_frame diagnostic (
+		.clk_100m(clk_sys),
 		.clk_sys(clk_sys),
 		.reset_active(1'b0),
-		.raw_ce(1'b0),
-		.raw_rgb(24'd0),
-		.raw_de(1'b0),
-		.raw_hs(1'b0),
-		.raw_vs(1'b0),
+		.vbuf_address(28'd0),
+		.vbuf_burstcount(8'd128),
+		.vbuf_waitrequest(1'b0),
+		.vbuf_readdata(128'd0),
+		.vbuf_readdatavalid(1'b0),
+		.vbuf_read(1'b0),
 		.io_uio(io_uio),
 		.io_strobe(io_strobe),
 		.io_din(io_din),
@@ -343,7 +344,7 @@ module tb_mister_magik_sys_top_integration;
 			telemetry_crc = crc_word(telemetry_crc, telemetry[index]);
 		expect16(telemetry[10], telemetry_crc, "sys_top telemetry CRC");
 
-		// Only the ordered raw-scaler record is supported. Legacy diagnostics
+		// Only the ordered scaler-fetch record is supported. Legacy diagnostics
 		// remain explicitly unsupported and cannot disturb latch-v5 state.
 		for(index = 8'h60; index <= 8'h66; index = index + 1) begin
 			begin_command(index[7:0], 16'd0);
