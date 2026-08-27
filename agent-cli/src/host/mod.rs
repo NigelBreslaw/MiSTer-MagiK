@@ -26401,8 +26401,8 @@ fn parse_catalog_lifecycle_inspect(output: &str) -> Result<Value> {
                 let sha256 = values
                     .get("sha256")
                     .copied()
-                    .filter(|digest| digest.len() == 64)
-                    .ok_or("catalog artifact row has no valid sha256")?;
+                    .filter(|digest| matches!(digest.len(), 16 | 64))
+                    .ok_or("catalog artifact row has no valid checksum")?;
                 artifacts.push(json!({
                     "system": values.get("system").copied().unwrap_or(""),
                     "kind": values.get("kind").copied().unwrap_or("unknown"),
