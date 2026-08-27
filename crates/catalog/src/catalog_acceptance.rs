@@ -3,7 +3,6 @@
 
 //! Read-only integrity reports for the installed catalog.
 
-use crate::sharded_catalog::CatalogReader;
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -59,21 +58,49 @@ pub fn inspect_catalog(storage: &Path) -> Result<String, String> {
     {
         return Err("catalog source snapshot is not bound to the active manifest".to_string());
     }
-    let reader = crate::lazy_sharded_reader::LazyShardedCatalogReader::open(storage, limits)
-        .map_err(|error| error.to_string())?;
-    let registry = reader.open_registry().map_err(|error| error.to_string())?;
     let mut total_games = 0_u64;
     let mut output = String::new();
-    for summary in registry.systems() {
-        let system = reader
-            .open_system(&summary.system_id)
-            .map_err(|error| format!("open system {}: {error}", summary.system_id))?;
-        let games = u64::try_from(system.games().len())
+    for system in &manifest.systems {
+        let navpack = system.active.navpack.as_ref().ok_or_else(|| {
+            format!(
+                "open system {}: active generation has no NavPack",
+                system.system_id
+            )
+        })?;
+        let (mapped, _) = crate::navpack::MappedNavPack::open(
+            &storage.join(&navpack.path),
+            navpack.bytes,
+            system.system_id.as_str(),
+            system.active.generation,
+            usize::try_from(system.active.games)
+                .map_err(|_| "system game count exceeds platform size".to_string())?,
+        )
+        .map_err(|error| format!("open system {}: {error}", system.system_id))?;
+        for ordinal in 0..mapped.identity().games {
+            let row = mapped.row(ordinal).map_err(|error| {
+                format!("read system {} row {ordinal}: {error}", system.system_id)
+            })?;
+            mapped.metadata(ordinal).map_err(|error| {
+                format!(
+                    "read system {} metadata {ordinal}: {error}",
+                    system.system_id
+                )
+            })?;
+            if let Some(launch_index) = row.launch_index {
+                mapped.launch(launch_index).map_err(|error| {
+                    format!(
+                        "read system {} launch {launch_index}: {error}",
+                        system.system_id
+                    )
+                })?;
+            }
+        }
+        let games = u64::try_from(mapped.identity().games)
             .map_err(|_| "system game count exceeds u64".to_string())?;
-        if games != summary.games {
+        if games != system.active.games {
             return Err(format!(
                 "system {} registry/artifact count mismatch: {} != {}",
-                summary.system_id, summary.games, games
+                system.system_id, system.active.games, games
             ));
         }
         total_games = total_games
@@ -82,7 +109,7 @@ pub fn inspect_catalog(storage: &Path) -> Result<String, String> {
         writeln!(
             output,
             "catalog_system_tsv\tsystem={}\tgeneration={}\tgames={}",
-            summary.system_id, summary.generation, games
+            system.system_id, system.active.generation, games
         )
         .expect("write to String");
     }
@@ -91,7 +118,7 @@ pub fn inspect_catalog(storage: &Path) -> Result<String, String> {
         "catalog_summary_tsv\tvalid=1\tgeneration={}\trefresh_generation={}\tsystems={}\ttotal_games={}\tfingerprint={}",
         manifest.generation,
         refresh.generation,
-        registry.systems().len(),
+        manifest.systems.len(),
         total_games,
         fingerprint
     )
