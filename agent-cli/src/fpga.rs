@@ -751,8 +751,14 @@ fn run_delta_checker(source_root: &Path, signoff_root: &Path) -> AgentResult<()>
     let mut command = Command::new(source_root.join("scripts/checks/check-fpga-quartus-delta.py"));
     let profile = fs::read_to_string(source_root.join(LOCAL_SIGNOFF_PROFILE_PATH))
         .map_err(|error| format!("cannot read checked-in FPGA local signoff profile: {error}"))?;
-    if validate_local_signoff_profile(&profile)? {
-        command.arg("--experimental-diagnostic");
+    match validate_local_signoff_profile(&profile)? {
+        LocalSignoffProfile::Production => {}
+        LocalSignoffProfile::RawScaler => {
+            command.arg("--experimental-diagnostic");
+        }
+        LocalSignoffProfile::ScalerFetch => {
+            command.arg("--experimental-scaler-fetch");
+        }
     }
     for (flag, flavour) in [
         ("--stock", "stock"),
@@ -785,10 +791,18 @@ fn run_delta_checker(source_root: &Path, signoff_root: &Path) -> AgentResult<()>
     Ok(())
 }
 
-fn validate_local_signoff_profile(profile: &str) -> AgentResult<bool> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalSignoffProfile {
+    Production,
+    RawScaler,
+    ScalerFetch,
+}
+
+fn validate_local_signoff_profile(profile: &str) -> AgentResult<LocalSignoffProfile> {
     match profile.trim() {
-        "production-v1" => Ok(false),
-        "experimental_raw_scaler-v1" => Ok(true),
+        "production-v1" => Ok(LocalSignoffProfile::Production),
+        "experimental_raw_scaler-v1" => Ok(LocalSignoffProfile::RawScaler),
+        "experimental_scaler_fetch-v1" => Ok(LocalSignoffProfile::ScalerFetch),
         value => Err(format!("unsupported checked-in FPGA local signoff profile {value:?}").into()),
     }
 }
@@ -958,8 +972,18 @@ mod tests {
 
     #[test]
     fn checked_in_local_signoff_profile_is_fail_closed() {
-        assert!(!validate_local_signoff_profile("production-v1\n").unwrap());
-        assert!(validate_local_signoff_profile("experimental_raw_scaler-v1\n").unwrap());
+        assert_eq!(
+            validate_local_signoff_profile("production-v1\n").unwrap(),
+            LocalSignoffProfile::Production
+        );
+        assert_eq!(
+            validate_local_signoff_profile("experimental_raw_scaler-v1\n").unwrap(),
+            LocalSignoffProfile::RawScaler
+        );
+        assert_eq!(
+            validate_local_signoff_profile("experimental_scaler_fetch-v1\n").unwrap(),
+            LocalSignoffProfile::ScalerFetch
+        );
         assert!(validate_local_signoff_profile("experimental\n").is_err());
         assert!(validate_local_signoff_profile("").is_err());
     }

@@ -133,25 +133,67 @@ pub struct HdmiOutputActivity {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RawScalerState {
+pub struct ScalerFetchOrderedSignatureState {
     pub words: [u16; RAW_SCALER_STATE_WORDS],
 }
 
-impl RawScalerState {
+impl ScalerFetchOrderedSignatureState {
     pub fn flags(&self) -> u16 {
         self.words[RAW_SCALER_STATE_FLAGS_WORD]
     }
 
-    pub fn frame_valid(&self) -> bool {
-        self.flags() & RAW_SCALER_STATE_FLAG_FRAME_VALID != 0
+    pub fn capture_valid(&self) -> bool {
+        self.flags() & RAW_SCALER_STATE_FLAG_CAPTURE_VALID != 0
     }
 
-    pub fn frame_sequence(&self) -> u16 {
-        self.words[RAW_SCALER_STATE_FRAME_SEQUENCE_WORD]
+    pub fn fault_flags(&self) -> u16 {
+        self.flags() & !RAW_SCALER_STATE_FLAG_CAPTURE_VALID
+    }
+
+    pub fn capture_sequence(&self) -> u16 {
+        self.words[RAW_SCALER_STATE_CAPTURE_SEQUENCE_WORD]
     }
 
     pub fn ordered_signature(&self) -> u16 {
         self.words[RAW_SCALER_STATE_ORDERED_SIGNATURE_WORD]
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RawScalerOrderedSignatureState {
+    pub words: [u16; RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_WORDS],
+}
+
+impl RawScalerOrderedSignatureState {
+    pub fn flags(&self) -> u16 {
+        self.words[RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_FLAGS_WORD]
+    }
+
+    pub fn frame_valid(&self) -> bool {
+        self.flags() & RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_FLAG_FRAME_VALID != 0
+    }
+
+    pub fn frame_sequence(&self) -> u16 {
+        self.words[RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_FRAME_SEQUENCE_WORD]
+    }
+
+    pub fn ordered_signature(&self) -> u16 {
+        self.words[RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_ORDERED_SIGNATURE_WORD]
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RawScalerState {
+    ScalerFetchOrderedSignatureV1(ScalerFetchOrderedSignatureState),
+    RawScalerOrderedSignatureV3(RawScalerOrderedSignatureState),
+}
+
+impl RawScalerState {
+    pub fn words(&self) -> &[u16; RAW_SCALER_STATE_WORDS] {
+        match self {
+            Self::ScalerFetchOrderedSignatureV1(state) => &state.words,
+            Self::RawScalerOrderedSignatureV3(state) => &state.words,
+        }
     }
 }
 
@@ -650,16 +692,17 @@ pub fn decode_raw_scaler_state(words: &[u16]) -> Result<RawScalerState, String> 
             words.len()
         ));
     }
-    if words[RAW_SCALER_STATE_SCHEMA_WORD] != RAW_SCALER_STATE_SCHEMA {
-        return Err(format!(
-            "unsupported raw scaler state schema {}",
-            words[RAW_SCALER_STATE_SCHEMA_WORD]
-        ));
+    let schema = words[RAW_SCALER_STATE_SCHEMA_WORD];
+    if !matches!(
+        schema,
+        RAW_SCALER_STATE_SCHEMA | RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_SCHEMA
+    ) {
+        return Err(format!("unsupported raw scaler state schema {schema}"));
     }
     let expected = words[RAW_SCALER_STATE_CRC_WORD];
     let actual = message_crc_with_schema(
         GET_RAW_SCALER_STATE,
-        RAW_SCALER_STATE_SCHEMA,
+        schema,
         &words[..RAW_SCALER_STATE_CRC_WORD],
     );
     if expected != actual {
@@ -667,28 +710,50 @@ pub fn decode_raw_scaler_state(words: &[u16]) -> Result<RawScalerState, String> 
             "raw scaler state CRC mismatch expected=0x{expected:04x} actual=0x{actual:04x}"
         ));
     }
-    let flags = words[RAW_SCALER_STATE_FLAGS_WORD];
-    if flags & !RAW_SCALER_STATE_FLAGS_MASK != 0 {
+    if schema == RAW_SCALER_STATE_SCHEMA {
+        let flags = words[RAW_SCALER_STATE_FLAGS_WORD];
+        if flags & !RAW_SCALER_STATE_FLAGS_MASK != 0 {
+            return Err(format!(
+                "scaler-fetch ordered-signature flags contain reserved bits: 0x{flags:04x}"
+            ));
+        }
+        let capture_valid = flags & RAW_SCALER_STATE_FLAG_CAPTURE_VALID != 0;
+        let fault_flags = flags & !RAW_SCALER_STATE_FLAG_CAPTURE_VALID;
+        let payload_zero = words[RAW_SCALER_STATE_CAPTURE_SEQUENCE_WORD] == 0
+            && words[RAW_SCALER_STATE_ORDERED_SIGNATURE_WORD] == 0;
+        if fault_flags != 0 && (capture_valid || !payload_zero) {
+            return Err(
+                "scaler-fetch fault evidence must clear capture-valid and payload".to_string(),
+            );
+        }
+        if fault_flags == 0 && !capture_valid && (flags != 0 || !payload_zero) {
+            return Err("scaler-fetch payload exists before coherent aligned capture".to_string());
+        }
+        let mut owned = [0; RAW_SCALER_STATE_WORDS];
+        owned.copy_from_slice(words);
+        return Ok(RawScalerState::ScalerFetchOrderedSignatureV1(
+            ScalerFetchOrderedSignatureState { words: owned },
+        ));
+    }
+
+    let flags = words[RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_FLAGS_WORD];
+    if flags & !RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_FLAGS_MASK != 0 {
         return Err(format!(
             "raw scaler ordered-frame flags contain reserved bits: 0x{flags:04x}"
         ));
     }
-    let mut owned = [0; RAW_SCALER_STATE_WORDS];
+    let mut owned = [0; RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_WORDS];
     owned.copy_from_slice(words);
-    let decoded = RawScalerState { words: owned };
-    if !decoded.frame_valid() {
-        if flags != 0
-            || words[1..RAW_SCALER_STATE_CRC_WORD]
+    let decoded = RawScalerOrderedSignatureState { words: owned };
+    if !decoded.frame_valid()
+        && (flags != 0
+            || words[1..RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_CRC_WORD]
                 .iter()
-                .any(|word| *word != 0)
-        {
-            return Err(
-                "raw scaler ordered-frame payload exists before coherent evidence".to_string(),
-            );
-        }
-        return Ok(decoded);
+                .any(|word| *word != 0))
+    {
+        return Err("raw scaler ordered-frame payload exists before coherent evidence".to_string());
     }
-    Ok(decoded)
+    Ok(RawScalerState::RawScalerOrderedSignatureV3(decoded))
 }
 
 fn decode<const N: usize>(
@@ -841,13 +906,13 @@ mod tests {
     }
 
     #[test]
-    fn raw_scaler_state_decodes_ordered_frame_state() {
+    fn scaler_fetch_state_decodes_aligned_capture() {
         let mut words = zero_hdmi_words::<RAW_SCALER_STATE_WORDS>(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
         );
-        words[RAW_SCALER_STATE_FLAGS_WORD] = RAW_SCALER_STATE_FLAG_FRAME_VALID;
-        words[RAW_SCALER_STATE_FRAME_SEQUENCE_WORD] = 0x1234;
+        words[RAW_SCALER_STATE_FLAGS_WORD] = RAW_SCALER_STATE_FLAG_CAPTURE_VALID;
+        words[RAW_SCALER_STATE_CAPTURE_SEQUENCE_WORD] = 0x1234;
         words[RAW_SCALER_STATE_ORDERED_SIGNATURE_WORD] = 0x5678;
         words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
             GET_RAW_SCALER_STATE,
@@ -855,13 +920,16 @@ mod tests {
             &words[..RAW_SCALER_STATE_CRC_WORD],
         );
         let decoded = decode_raw_scaler_state(&words).unwrap();
-        assert!(decoded.frame_valid());
-        assert_eq!(decoded.frame_sequence(), 0x1234);
+        let RawScalerState::ScalerFetchOrderedSignatureV1(decoded) = decoded else {
+            panic!("schema 11 decoded as rollback state");
+        };
+        assert!(decoded.capture_valid());
+        assert_eq!(decoded.capture_sequence(), 0x1234);
         assert_eq!(decoded.ordered_signature(), 0x5678);
     }
 
     #[test]
-    fn raw_scaler_state_rejects_crc_reserved_bits_and_prepublication_payload() {
+    fn scaler_fetch_state_rejects_crc_reserved_bits_and_unaligned_payload() {
         let mut words = zero_hdmi_words::<RAW_SCALER_STATE_WORDS>(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
@@ -884,6 +952,66 @@ mod tests {
             &words[..RAW_SCALER_STATE_CRC_WORD],
         );
         assert!(decode_raw_scaler_state(&words).is_err());
+    }
+
+    #[test]
+    fn scaler_fetch_state_accepts_fault_only_fail_closed_payload() {
+        let mut words = zero_hdmi_words::<RAW_SCALER_STATE_WORDS>(
+            GET_RAW_SCALER_STATE,
+            RAW_SCALER_STATE_SCHEMA,
+        );
+        words[RAW_SCALER_STATE_FLAGS_WORD] = RAW_SCALER_STATE_FLAG_FIFO_OVERFLOW;
+        words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
+            GET_RAW_SCALER_STATE,
+            RAW_SCALER_STATE_SCHEMA,
+            &words[..RAW_SCALER_STATE_CRC_WORD],
+        );
+        let decoded = decode_raw_scaler_state(&words).unwrap();
+        let RawScalerState::ScalerFetchOrderedSignatureV1(decoded) = decoded else {
+            panic!("schema 11 decoded as rollback state");
+        };
+        assert!(!decoded.capture_valid());
+        assert_eq!(decoded.fault_flags(), RAW_SCALER_STATE_FLAG_FIFO_OVERFLOW);
+
+        words[RAW_SCALER_STATE_FLAGS_WORD] |= RAW_SCALER_STATE_FLAG_CAPTURE_VALID;
+        words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
+            GET_RAW_SCALER_STATE,
+            RAW_SCALER_STATE_SCHEMA,
+            &words[..RAW_SCALER_STATE_CRC_WORD],
+        );
+        assert!(decode_raw_scaler_state(&words).is_err());
+        words[RAW_SCALER_STATE_FLAGS_WORD] = RAW_SCALER_STATE_FLAG_FIFO_OVERFLOW;
+        words[RAW_SCALER_STATE_CAPTURE_SEQUENCE_WORD] = 1;
+        words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
+            GET_RAW_SCALER_STATE,
+            RAW_SCALER_STATE_SCHEMA,
+            &words[..RAW_SCALER_STATE_CRC_WORD],
+        );
+        assert!(decode_raw_scaler_state(&words).is_err());
+    }
+
+    #[test]
+    fn raw_scaler_schema_10_remains_decodable_for_rollback() {
+        let mut words = zero_hdmi_words::<RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_WORDS>(
+            GET_RAW_SCALER_STATE,
+            RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_SCHEMA,
+        );
+        words[RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_FLAGS_WORD] =
+            RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_FLAG_FRAME_VALID;
+        words[RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_FRAME_SEQUENCE_WORD] = 0x1234;
+        words[RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_ORDERED_SIGNATURE_WORD] = 0x5678;
+        words[RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_CRC_WORD] = message_crc_with_schema(
+            GET_RAW_SCALER_STATE,
+            RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_SCHEMA,
+            &words[..RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_CRC_WORD],
+        );
+        let decoded = decode_raw_scaler_state(&words).unwrap();
+        let RawScalerState::RawScalerOrderedSignatureV3(decoded) = decoded else {
+            panic!("schema 10 decoded as active state");
+        };
+        assert!(decoded.frame_valid());
+        assert_eq!(decoded.frame_sequence(), 0x1234);
+        assert_eq!(decoded.ordered_signature(), 0x5678);
     }
 
     #[test]

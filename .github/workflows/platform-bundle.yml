@@ -699,6 +699,9 @@ jobs:
             experimental_raw_scaler-v1)
               args+=(--experimental-diagnostic)
               ;;
+            experimental_scaler_fetch-v1)
+              args+=(--experimental-scaler-fetch)
+              ;;
             *)
               echo "unsupported FPGA signoff profile: $signoff_profile" >&2
               exit 1

@@ -85,6 +85,15 @@ Info (332114): Report Metastability: Found 8 synchronizer chains.
 Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.500000
 Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
 """
+SCALER_FETCH_SYNC_ASSIGNMENTS = quartus_assignment_section(
+    "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame",
+    ("generation_meta", "generation_sync"),
+)
+SCALER_FETCH_CUSTOM_SYNC = SYNC_ASSIGNMENTS + SCALER_FETCH_SYNC_ASSIGNMENTS + """\
+Info (332114): Report Metastability: Found 8 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.500000
+Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
+"""
 
 
 def metastability_chain(
@@ -154,6 +163,29 @@ EXPERIMENTAL_DIAGNOSTIC_REPORTS = {
         )
     ),
 }
+SCALER_FETCH_DIAGNOSTIC_REPORTS = {
+    **VALID_DIAGNOSTIC_REPORTS,
+    "menu.magik-diagnostic-cdc-net-delay.rpt": (
+        VALID_DIAGNOSTIC_REPORTS["menu.magik-diagnostic-cdc-net-delay.rpt"]
+        + "; set_net_delay ; 1.050 ; 10.000 ; 8.950 ; sources ; destinations ; max ;\n"
+        + net_delay_detail(
+            "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|source_generation",
+            "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_meta",
+        )
+    ),
+    "menu.magik-diagnostic-metastability.rpt": (
+        VALID_DIAGNOSTIC_REPORTS["menu.magik-diagnostic-metastability.rpt"]
+        + metastability_chain(
+            3,
+            "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|source_generation",
+            "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_meta",
+            (
+                "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_meta",
+                "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_sync",
+            ),
+        )
+    ),
+}
 
 
 def bootstrap_black_warnings(copies: int) -> str:
@@ -180,6 +212,7 @@ class QuartusDeltaTest(unittest.TestCase):
         fitter_resources: tuple[str, str, str] | None = None,
         diagnostic_reports: dict[str, str] | None = None,
         experimental_diagnostic: bool = False,
+        experimental_scaler_fetch: bool = False,
     ) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -202,6 +235,8 @@ class QuartusDeltaTest(unittest.TestCase):
             ]
             if experimental_diagnostic:
                 command.append("--experimental-diagnostic")
+            if experimental_scaler_fetch:
+                command.append("--experimental-scaler-fetch")
             reports = (
                 VALID_DIAGNOSTIC_REPORTS
                 if diagnostic_reports is None
@@ -311,6 +346,31 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertIn("setup_slack_below_minimum", payload["invalid_reason"])
         self.assertIn("setup_slack_degradation", payload["invalid_reason"])
         self.assertIn("synchronizer_chain_count_mismatch", payload["invalid_reason"])
+
+    def test_scaler_fetch_profile_accepts_exact_hierarchy_and_canonical_paths(self) -> None:
+        baseline = BASE.replace("setup slack is 0.500", "setup slack is 0.660").replace(
+            "0.500               0.000", "0.660               0.000"
+        )
+        patched = (
+            baseline.replace("setup slack is 0.660", "setup slack is 0.389")
+            .replace("0.660               0.000", "0.389               0.000")
+            + SCALER_FETCH_CUSTOM_SYNC.replace(
+                "Found 8 synchronizer chains", "Found 6 synchronizer chains"
+            ).replace(
+                "Could Not be Calculated: 0.500000",
+                "Could Not be Calculated: 0.333333",
+            )
+        )
+        result, payload = self.run_check(
+            BASE,
+            patched,
+            baseline,
+            diagnostic_reports=SCALER_FETCH_DIAGNOSTIC_REPORTS,
+            experimental_scaler_fetch=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["signoff_profile"], "experimental_scaler_fetch")
+        self.assertEqual(payload["patched_unconstrained_output_paths"], 158)
 
     def test_experimental_profile_has_explicit_resource_ceiling(self) -> None:
         resources = (
@@ -605,6 +665,28 @@ class QuartusDeltaTest(unittest.TestCase):
             BASE + EXPERIMENTAL_CUSTOM_SYNC,
             diagnostic_reports=reports,
             experimental_diagnostic=True,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "diagnostic_cdc_path_identity_mismatch", payload["invalid_reason"]
+        )
+        self.assertIn(
+            "diagnostic_metastability_chain_missing", payload["invalid_reason"]
+        )
+
+    def test_duplicated_scaler_fetch_generation_path_fails(self) -> None:
+        reports = dict(SCALER_FETCH_DIAGNOSTIC_REPORTS)
+        reports["menu.magik-diagnostic-cdc-net-delay.rpt"] = reports[
+            "menu.magik-diagnostic-cdc-net-delay.rpt"
+        ].replace("|source_generation ;", "|source_generation~DUPLICATE ;", 1)
+        reports["menu.magik-diagnostic-metastability.rpt"] = reports[
+            "menu.magik-diagnostic-metastability.rpt"
+        ].replace("|source_generation ;", "|source_generation~DUPLICATE ;", 1)
+        result, payload = self.run_check(
+            BASE,
+            BASE + SCALER_FETCH_CUSTOM_SYNC,
+            diagnostic_reports=reports,
+            experimental_scaler_fetch=True,
         )
         self.assertEqual(result.returncode, 1)
         self.assertIn(

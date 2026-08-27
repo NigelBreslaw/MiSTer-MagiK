@@ -276,6 +276,14 @@ def main() -> None:
     if re.search(r"(?m)^\s*module\b", avalon_source + output_source):
         fail("retired Avalon/output compatibility sources must define no design unit")
     for required_observer_fragment in (
+        "input  wire         clk_100m",
+        "input  wire         clk_sys",
+        "input  wire [27:0]  vbuf_address",
+        "input  wire [7:0]   vbuf_burstcount",
+        "input  wire         vbuf_waitrequest",
+        "input  wire [127:0] vbuf_readdata",
+        "input  wire         vbuf_readdatavalid",
+        "input  wire         vbuf_read",
         "localparam [15:0] FETCH_STATE_SCHEMA = 16'd11;",
         "wire accepted = vbuf_read && !vbuf_waitrequest;",
         "wire return_has_entry = returned && fifo_count != 2'd0;",
@@ -290,6 +298,7 @@ def main() -> None:
         "reg [6:0]  return_phase",
         "function automatic [15:0] fold_return_data;",
         "function automatic [15:0] fold_address;",
+        "fold_return_data(vbuf_readdata)",
         "function automatic [15:0] ordered_signature_update;",
         "mixed = signature_in ^ token_in;",
         "(mixed[0] ? SIGNATURE_POLYNOMIAL : 16'd0);",
@@ -314,16 +323,18 @@ def main() -> None:
                 "scaler-fetch ordered-frame observer structure is missing: "
                 f"{required_observer_fragment}"
             )
+    if re.search(r"\breg\s*\[127:0\]", control_source):
+        fail("scaler-fetch observer must not retain a 128-bit return-data isolation register")
     if "generation_launch" in control_source:
         fail("rejected placement-heavy generation launch stage remains present")
     for forbidden_observer_input in (
-        "LFB_",
         "clk_hdmi",
         "raw_ce",
         "raw_rgb",
         "raw_de",
         "raw_hs",
         "raw_vs",
+        "LFB_",
         "hdmi_data_mask",
         "hdmi_data_osd",
         "hdmi_out_",
@@ -334,6 +345,9 @@ def main() -> None:
         "o_copylev",
         "o_readlev",
         "reg [127:0]",
+        "o_copy",
+        "o_readdata",
+        "avl_magik",
     ):
         if forbidden_observer_input in control_source:
             fail(f"scaler-fetch observer exceeds its passive tap boundary: {forbidden_observer_input}")
@@ -370,7 +384,9 @@ def main() -> None:
         "published_sequence",
         "pipeline_state",
         "pipeline_generation",
-        "avl_magik",
+        "isolated_rgb",
+        "signature_rgb",
+        "mister_magik_raw_scaler_ordered_frame",
     ):
         if retired_control_observer in control_source + avalon_source + output_source:
             fail(f"retired disposable observer remains: {retired_control_observer}")

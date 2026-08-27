@@ -4087,17 +4087,18 @@ mod linux {
         pub(super) starved_frame: u8,
     }
 
+    fn sequences_advance(sequences: [u16; 3]) -> bool {
+        sequences.windows(2).all(|pair| {
+            let delta = pair[1].wrapping_sub(pair[0]);
+            delta != 0 && delta <= 0x7fff
+        })
+    }
+
     pub(super) fn raw_scaler_classification(
-        samples: &[mister_magik_video_diagnostics_contract::RawScalerState; 3],
+        samples: [&mister_magik_video_diagnostics_contract::RawScalerOrderedSignatureState; 3],
     ) -> &'static str {
         let valid = samples.iter().all(|sample| sample.frame_valid());
-        let sequence_advancing = samples.windows(2).all(|pair| {
-            let delta = pair[1]
-                .frame_sequence()
-                .wrapping_sub(pair[0].frame_sequence());
-            delta != 0 && delta <= 0x7fff
-        });
-        if !valid || !sequence_advancing {
+        if !valid || !sequences_advance(samples.map(|sample| sample.frame_sequence())) {
             return "raw_scaler_ordered_evidence_inconclusive";
         }
         if samples[1..]
@@ -4110,6 +4111,29 @@ mod linux {
             // Root-cause attribution therefore requires independent proof that
             // the source framebuffer and scene remained byte-stable.
             "raw_scaler_order_changed_requires_static_source_proof"
+        }
+    }
+
+    pub(super) fn scaler_fetch_ordered_classification(
+        samples: [&mister_magik_video_diagnostics_contract::ScalerFetchOrderedSignatureState; 3],
+    ) -> &'static str {
+        let valid = samples.iter().all(|sample| sample.capture_valid());
+        let fault_free = samples.iter().all(|sample| sample.fault_flags() == 0);
+        if !valid
+            || !fault_free
+            || !sequences_advance(samples.map(|sample| sample.capture_sequence()))
+        {
+            return "scaler_fetch_ordered_evidence_inconclusive";
+        }
+        if samples[1..]
+            .iter()
+            .all(|sample| sample.ordered_signature() == samples[0].ordered_signature())
+        {
+            "scaler_fetch_ordered_stable"
+        } else {
+            // A source or scene transition can also change this passive fetch
+            // fingerprint, so attribution requires independent byte-stability.
+            "scaler_fetch_order_changed_requires_static_source_proof"
         }
     }
 
@@ -4569,56 +4593,127 @@ mod linux {
         fn to_json(&self, context: VideoDiagnosticsJsonContext) -> Value {
             match self {
                 Self::RawScaler(readout) => {
-                    let valid_samples = readout.samples.iter().all(|sample| sample.frame_valid());
-                    let classification = raw_scaler_classification(&readout.samples);
-                    let classification_stable =
-                        classification != "raw_scaler_ordered_evidence_inconclusive";
-                    let coherent = context.owner_stable
-                        && context.latch_ownership_stable == Some(true)
-                        && context.launcher_state_stable
-                        && valid_samples
-                        && classification_stable;
-                    json!({
-                        "schema": "mister-magik-fpga-video-diagnostics-v2",
-                        "diagnostic_architecture": "raw-scaler-ordered-signature-v3",
-                        "available": true,
-                        "coherent": coherent,
-                        "classification": if coherent {
-                            classification
-                        } else {
-                            "raw_scaler_ordered_evidence_inconclusive"
-                        },
-                        "sink_visibility": "unobserved",
-                        "capture_start_monotonic_us": context.capture_start_monotonic_us,
-                        "capture_end_monotonic_us": context.capture_end_monotonic_us,
-                        "owner_epoch_before": context.owner_epoch_before,
-                        "owner_epoch_after": context.owner_epoch_after,
-                        "latch_status": context.latch_status_json,
-                        "coherence": {
-                            "three_samples_valid": valid_samples,
-                            "classification_stable": classification_stable,
-                            "sample_interval_us": readout.sample_interval_us,
-                            "latch_ownership_stable": context.latch_ownership_stable,
-                            "launcher_state_stable": context.launcher_state_stable,
-                            "ownership_check_error": context.ownership_check_error,
-                        },
-                        "capabilities": {
-                            "passive_video_observer": true,
-                            "scaler_scheduler_state": false,
-                            "scaler_pipeline_state": false,
-                            "scaler_copy_retirement": false,
-                            "raw_scaler_ordered_signature": true,
-                            "pixel_observer": true,
-                            "pll_observer": false,
-                        },
-                        "raw_scaler_state": {
-                            "frame_valid": readout.samples.iter().map(|sample| sample.frame_valid()).collect::<Vec<_>>(),
-                            "flags": readout.samples.iter().map(|sample| sample.flags()).collect::<Vec<_>>(),
-                            "frame_sequence": readout.samples.iter().map(|sample| sample.frame_sequence()).collect::<Vec<_>>(),
-                            "ordered_signature": readout.samples.iter().map(|sample| format!("{:04x}", sample.ordered_signature())).collect::<Vec<_>>(),
-                            "raw_samples": readout.samples.iter().map(|sample| sample.words).collect::<Vec<_>>(),
-                        },
-                    })
+                    use mister_magik_video_diagnostics_contract::RawScalerState;
+                    match &readout.samples {
+                        [
+                            RawScalerState::RawScalerOrderedSignatureV3(first),
+                            RawScalerState::RawScalerOrderedSignatureV3(second),
+                            RawScalerState::RawScalerOrderedSignatureV3(third),
+                        ] => {
+                            let samples = [first, second, third];
+                            let valid_samples = samples.iter().all(|sample| sample.frame_valid());
+                            let classification = raw_scaler_classification(samples);
+                            let classification_stable =
+                                classification != "raw_scaler_ordered_evidence_inconclusive";
+                            let coherent = context.owner_stable
+                                && context.latch_ownership_stable == Some(true)
+                                && context.launcher_state_stable
+                                && valid_samples
+                                && classification_stable;
+                            json!({
+                                "schema": "mister-magik-fpga-video-diagnostics-v2",
+                                "diagnostic_architecture": "raw-scaler-ordered-signature-v3",
+                                "available": true,
+                                "coherent": coherent,
+                                "classification": if coherent { classification } else { "raw_scaler_ordered_evidence_inconclusive" },
+                                "sink_visibility": "unobserved",
+                                "capture_start_monotonic_us": context.capture_start_monotonic_us,
+                                "capture_end_monotonic_us": context.capture_end_monotonic_us,
+                                "owner_epoch_before": context.owner_epoch_before,
+                                "owner_epoch_after": context.owner_epoch_after,
+                                "latch_status": context.latch_status_json,
+                                "coherence": {
+                                    "three_samples_valid": valid_samples,
+                                    "classification_stable": classification_stable,
+                                    "sample_interval_us": readout.sample_interval_us,
+                                    "latch_ownership_stable": context.latch_ownership_stable,
+                                    "launcher_state_stable": context.launcher_state_stable,
+                                    "ownership_check_error": context.ownership_check_error,
+                                },
+                                "capabilities": {
+                                    "passive_video_observer": true,
+                                    "scaler_scheduler_state": false,
+                                    "scaler_pipeline_state": false,
+                                    "scaler_copy_retirement": false,
+                                    "scaler_fetch_ordered_signature": false,
+                                    "raw_scaler_ordered_signature": true,
+                                    "pixel_observer": true,
+                                    "pll_observer": false,
+                                },
+                                "raw_scaler_state": {
+                                    "frame_valid": samples.iter().map(|sample| sample.frame_valid()).collect::<Vec<_>>(),
+                                    "flags": samples.iter().map(|sample| sample.flags()).collect::<Vec<_>>(),
+                                    "frame_sequence": samples.iter().map(|sample| sample.frame_sequence()).collect::<Vec<_>>(),
+                                    "ordered_signature": samples.iter().map(|sample| format!("{:04x}", sample.ordered_signature())).collect::<Vec<_>>(),
+                                    "raw_samples": readout.samples.iter().map(|sample| *sample.words()).collect::<Vec<_>>(),
+                                },
+                            })
+                        }
+                        [
+                            RawScalerState::ScalerFetchOrderedSignatureV1(first),
+                            RawScalerState::ScalerFetchOrderedSignatureV1(second),
+                            RawScalerState::ScalerFetchOrderedSignatureV1(third),
+                        ] => {
+                            let samples = [first, second, third];
+                            let valid_samples = samples.iter().all(|sample| sample.capture_valid());
+                            let classification = scaler_fetch_ordered_classification(samples);
+                            let classification_stable =
+                                classification != "scaler_fetch_ordered_evidence_inconclusive";
+                            let coherent = context.owner_stable
+                                && context.latch_ownership_stable == Some(true)
+                                && context.launcher_state_stable
+                                && valid_samples
+                                && classification_stable;
+                            json!({
+                                "schema": "mister-magik-fpga-video-diagnostics-v2",
+                                "diagnostic_architecture": "scaler-fetch-ordered-signature-v1",
+                                "available": true,
+                                "coherent": coherent,
+                                "classification": if coherent { classification } else { "scaler_fetch_ordered_evidence_inconclusive" },
+                                "sink_visibility": "unobserved",
+                                "capture_start_monotonic_us": context.capture_start_monotonic_us,
+                                "capture_end_monotonic_us": context.capture_end_monotonic_us,
+                                "owner_epoch_before": context.owner_epoch_before,
+                                "owner_epoch_after": context.owner_epoch_after,
+                                "latch_status": context.latch_status_json,
+                                "coherence": {
+                                    "three_samples_valid": valid_samples,
+                                    "classification_stable": classification_stable,
+                                    "sample_interval_us": readout.sample_interval_us,
+                                    "latch_ownership_stable": context.latch_ownership_stable,
+                                    "launcher_state_stable": context.launcher_state_stable,
+                                    "ownership_check_error": context.ownership_check_error,
+                                },
+                                "capabilities": {
+                                    "passive_video_observer": true,
+                                    "scaler_scheduler_state": false,
+                                    "scaler_pipeline_state": false,
+                                    "scaler_copy_retirement": false,
+                                    "scaler_fetch_ordered_signature": true,
+                                    "raw_scaler_ordered_signature": false,
+                                    "pixel_observer": false,
+                                    "pll_observer": false,
+                                },
+                                "scaler_fetch_state": {
+                                    "capture_valid": samples.iter().map(|sample| sample.capture_valid()).collect::<Vec<_>>(),
+                                    "flags": samples.iter().map(|sample| sample.flags()).collect::<Vec<_>>(),
+                                    "fault_flags": samples.iter().map(|sample| sample.fault_flags()).collect::<Vec<_>>(),
+                                    "capture_sequence": samples.iter().map(|sample| sample.capture_sequence()).collect::<Vec<_>>(),
+                                    "ordered_signature": samples.iter().map(|sample| format!("{:04x}", sample.ordered_signature())).collect::<Vec<_>>(),
+                                    "raw_samples": readout.samples.iter().map(|sample| *sample.words()).collect::<Vec<_>>(),
+                                },
+                            })
+                        }
+                        _ => json!({
+                            "schema": "mister-magik-fpga-video-diagnostics-v2",
+                            "diagnostic_architecture": "raw-scaler-schema-transition",
+                            "available": false,
+                            "coherent": false,
+                            "classification": "scaler_fetch_ordered_evidence_inconclusive",
+                            "sink_visibility": "unobserved",
+                            "reason": "raw scaler schema changed during bounded sampling",
+                        }),
+                    }
                 }
                 Self::HdmiLock(readout) => {
                     use mister_magik_video_diagnostics_contract as contract;
@@ -8217,13 +8312,16 @@ mod tests {
         use mister_magik_video_diagnostics_contract as contract;
 
         let sample = |sequence: u16, signature: u16| {
-            let mut words = [0; contract::RAW_SCALER_STATE_WORDS];
-            words[contract::RAW_SCALER_STATE_SCHEMA_WORD] = contract::RAW_SCALER_STATE_SCHEMA;
-            words[contract::RAW_SCALER_STATE_FLAGS_WORD] =
-                contract::RAW_SCALER_STATE_FLAG_FRAME_VALID;
-            words[contract::RAW_SCALER_STATE_FRAME_SEQUENCE_WORD] = sequence;
-            words[contract::RAW_SCALER_STATE_ORDERED_SIGNATURE_WORD] = signature;
-            contract::RawScalerState { words }
+            let mut words = [0; contract::RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_WORDS];
+            words[contract::RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_SCHEMA_WORD] =
+                contract::RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_SCHEMA;
+            words[contract::RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_FLAGS_WORD] =
+                contract::RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_FLAG_FRAME_VALID;
+            words[contract::RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_FRAME_SEQUENCE_WORD] =
+                sequence;
+            words[contract::RAW_SCALER_ROLLBACK_ORDERED_SIGNATURE_V3_ORDERED_SIGNATURE_WORD] =
+                signature;
+            contract::RawScalerOrderedSignatureState { words }
         };
         let stable = [
             sample(100, 0x5678),
@@ -8231,7 +8329,7 @@ mod tests {
             sample(103, 0x5678),
         ];
         assert_eq!(
-            linux::raw_scaler_classification(&stable),
+            linux::raw_scaler_classification([&stable[0], &stable[1], &stable[2]]),
             "raw_scaler_ordered_stable"
         );
 
@@ -8241,13 +8339,17 @@ mod tests {
             sample(103, 0x5678),
         ];
         assert_eq!(
-            linux::raw_scaler_classification(&varying),
+            linux::raw_scaler_classification([&varying[0], &varying[1], &varying[2]]),
             "raw_scaler_order_changed_requires_static_source_proof"
         );
 
         let nonadvancing = [stable[0].clone(), stable[0].clone(), stable[2].clone()];
         assert_eq!(
-            linux::raw_scaler_classification(&nonadvancing),
+            linux::raw_scaler_classification([
+                &nonadvancing[0],
+                &nonadvancing[1],
+                &nonadvancing[2],
+            ]),
             "raw_scaler_ordered_evidence_inconclusive"
         );
 
@@ -8257,8 +8359,51 @@ mod tests {
             sample(0x0001, 0x5678),
         ];
         assert_eq!(
-            linux::raw_scaler_classification(&wrapping),
+            linux::raw_scaler_classification([&wrapping[0], &wrapping[1], &wrapping[2]]),
             "raw_scaler_ordered_stable"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn scaler_fetch_ordered_classification_is_fail_closed() {
+        use mister_magik_video_diagnostics_contract as contract;
+
+        let sample = |sequence: u16, signature: u16, flags: u16| {
+            let mut words = [0; contract::RAW_SCALER_STATE_WORDS];
+            words[contract::RAW_SCALER_STATE_SCHEMA_WORD] = contract::RAW_SCALER_STATE_SCHEMA;
+            words[contract::RAW_SCALER_STATE_FLAGS_WORD] = flags;
+            words[contract::RAW_SCALER_STATE_CAPTURE_SEQUENCE_WORD] = sequence;
+            words[contract::RAW_SCALER_STATE_ORDERED_SIGNATURE_WORD] = signature;
+            contract::ScalerFetchOrderedSignatureState { words }
+        };
+        let valid = contract::RAW_SCALER_STATE_FLAG_CAPTURE_VALID;
+        let stable = [
+            sample(100, 0x5678, valid),
+            sample(101, 0x5678, valid),
+            sample(103, 0x5678, valid),
+        ];
+        assert_eq!(
+            linux::scaler_fetch_ordered_classification([&stable[0], &stable[1], &stable[2]]),
+            "scaler_fetch_ordered_stable"
+        );
+        let changed = [
+            stable[0].clone(),
+            sample(101, 0x5679, valid),
+            stable[2].clone(),
+        ];
+        assert_eq!(
+            linux::scaler_fetch_ordered_classification([&changed[0], &changed[1], &changed[2],]),
+            "scaler_fetch_order_changed_requires_static_source_proof"
+        );
+        let fault = [
+            stable[0].clone(),
+            sample(0, 0, contract::RAW_SCALER_STATE_FLAG_UNEXPECTED_RETURN),
+            stable[2].clone(),
+        ];
+        assert_eq!(
+            linux::scaler_fetch_ordered_classification([&fault[0], &fault[1], &fault[2]]),
+            "scaler_fetch_ordered_evidence_inconclusive"
         );
     }
 

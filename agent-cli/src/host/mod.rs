@@ -3736,6 +3736,66 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                     .and_then(Value::as_array)
                     .is_some_and(|samples| samples.len() == 3)
         }
+        Some("scaler-fetch-ordered-signature-v1") => {
+            matches!(
+                diagnostics.get("classification").and_then(Value::as_str),
+                Some(
+                    "scaler_fetch_ordered_stable"
+                        | "scaler_fetch_order_changed_requires_static_source_proof"
+                )
+            ) && diagnostics
+                .pointer("/capabilities/passive_video_observer")
+                .and_then(Value::as_bool)
+                == Some(true)
+                && diagnostics
+                    .pointer("/capabilities/scaler_fetch_ordered_signature")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/capabilities/raw_scaler_ordered_signature")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/capabilities/pixel_observer")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/capabilities/pll_observer")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/coherence/three_samples_valid")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/coherence/classification_stable")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/scaler_fetch_state/raw_samples")
+                    .and_then(Value::as_array)
+                    .is_some_and(|samples| samples.len() == 3)
+                && diagnostics
+                    .pointer("/scaler_fetch_state/fault_flags")
+                    .and_then(Value::as_array)
+                    .is_some_and(|flags| {
+                        flags.len() == 3 && flags.iter().all(|flag| flag.as_u64() == Some(0))
+                    })
+                && diagnostics
+                    .pointer("/scaler_fetch_state/capture_sequence")
+                    .and_then(Value::as_array)
+                    .is_some_and(|sequences| {
+                        sequences.len() == 3
+                            && sequences.windows(2).all(|pair| {
+                                pair[0].as_u64().zip(pair[1].as_u64()).is_some_and(
+                                    |(left, right)| {
+                                        let delta = (right as u16).wrapping_sub(left as u16);
+                                        delta != 0 && delta <= 0x7fff
+                                    },
+                                )
+                            })
+                    })
+        }
         Some("raw-scaler-ordered-signature-v3") => {
             matches!(
                 diagnostics.get("classification").and_then(Value::as_str),
@@ -4353,10 +4413,17 @@ fn experimental_raw_scaler_evidence_available(evidence: &Value) -> bool {
             .pointer("/capabilities/passive_video_observer")
             .and_then(Value::as_bool)
             == Some(true)
-        && evidence
-            .pointer("/raw_scaler_state/raw_samples")
-            .and_then(Value::as_array)
-            .is_some_and(|samples| samples.len() == 3)
+        && [
+            "/raw_scaler_state/raw_samples",
+            "/scaler_fetch_state/raw_samples",
+        ]
+        .iter()
+        .any(|path| {
+            evidence
+                .pointer(path)
+                .and_then(Value::as_array)
+                .is_some_and(|samples| samples.len() == 3)
+        })
 }
 
 fn experimental_agent_preload_evidence_accepted(evidence: &Value) -> bool {
@@ -35551,6 +35618,66 @@ H: Handlers=event3 js0"#
         assert!(!experimental_fpga_evidence_is_current(
             &ordered_inconclusive
         ));
+        let scaler_fetch_signature = json!({
+            "schema": "mister-magik-fpga-video-diagnostics-v2",
+            "diagnostic_architecture": "scaler-fetch-ordered-signature-v1",
+            "available": true,
+            "coherent": true,
+            "classification": "scaler_fetch_ordered_stable",
+            "sink_visibility": "unobserved",
+            "owner_epoch_before": 13,
+            "owner_epoch_after": 13,
+            "coherence": {
+                "three_samples_valid": true,
+                "classification_stable": true,
+                "latch_ownership_stable": true,
+                "launcher_state_stable": true,
+                "ownership_check_error": null,
+            },
+            "capabilities": {
+                "passive_video_observer": true,
+                "scaler_fetch_ordered_signature": true,
+                "raw_scaler_ordered_signature": false,
+                "pixel_observer": false,
+                "pll_observer": false,
+            },
+            "latch_status": {
+                "active_sequence": 7,
+                "flags": 1 << mister_magik_latch_contract::STATUS_MAGIK_OWNERSHIP,
+                "active_width": 960,
+                "active_height": 540,
+                "active_stride": 1920,
+                "crc": 0,
+            },
+            "scaler_fetch_state": {
+                "capture_sequence": [100, 101, 103],
+                "ordered_signature": ["5678", "5678", "5678"],
+                "fault_flags": [0, 0, 0],
+                "raw_samples": vec![vec![11; 5]; 3],
+            },
+        });
+        assert!(experimental_raw_scaler_evidence_available(
+            &scaler_fetch_signature
+        ));
+        assert!(experimental_agent_preload_evidence_accepted(
+            &scaler_fetch_signature
+        ));
+        assert!(experimental_fpga_evidence_is_current(
+            &scaler_fetch_signature
+        ));
+        let mut fetch_changed = scaler_fetch_signature.clone();
+        fetch_changed["classification"] =
+            json!("scaler_fetch_order_changed_requires_static_source_proof");
+        assert!(experimental_fpga_evidence_is_current(&fetch_changed));
+        let mut fetch_fault = scaler_fetch_signature.clone();
+        fetch_fault["scaler_fetch_state"]["fault_flags"] = json!([0, 2, 0]);
+        assert!(!experimental_fpga_evidence_is_current(&fetch_fault));
+        let mut fetch_nonadvancing = scaler_fetch_signature.clone();
+        fetch_nonadvancing["scaler_fetch_state"]["capture_sequence"] = json!([100, 100, 103]);
+        assert!(!experimental_fpga_evidence_is_current(&fetch_nonadvancing));
+        let mut fetch_inconclusive = scaler_fetch_signature.clone();
+        fetch_inconclusive["classification"] = json!("scaler_fetch_ordered_evidence_inconclusive");
+        assert!(!experimental_fpga_evidence_is_current(&fetch_inconclusive));
         let scaler_copy_retirement = json!({
             "schema": "mister-magik-fpga-video-diagnostics-v2",
             "diagnostic_architecture": "scaler-copy-retirement-v1",

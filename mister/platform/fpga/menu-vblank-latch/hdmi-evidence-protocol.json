@@ -43,18 +43,41 @@
     ]
   },
   "raw_scaler_state": {
-    "schema": 10,
+    "schema": 11,
     "command": 103,
     "magic": 19799,
     "word_count": 5,
     "words": [
-      "schema", "flags", "frame_sequence", "ordered_signature", "crc"
+      "schema", "flags", "capture_sequence", "ordered_signature", "crc"
     ],
     "flags": {
-      "frame_valid": 0
+      "capture_valid": 0,
+      "fifo_overflow": 1,
+      "unexpected_return": 2,
+      "bad_burstcount": 3,
+      "bad_return_phase": 4,
+      "epoch_overlap": 5,
+      "counter_overflow": 6
     },
     "reserved_zero_masks": {
-      "flags": 65534
+      "flags": 65408
+    }
+  },
+  "raw_scaler_rollback_states": {
+    "ordered_signature_v3": {
+      "schema": 10,
+      "command": 103,
+      "magic": 19799,
+      "word_count": 5,
+      "words": [
+        "schema", "flags", "frame_sequence", "ordered_signature", "crc"
+      ],
+      "flags": {
+        "frame_valid": 0
+      },
+      "reserved_zero_masks": {
+        "flags": 65534
+      }
     }
   },
   "path_activity": {

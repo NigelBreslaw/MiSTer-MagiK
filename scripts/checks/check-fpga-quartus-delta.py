@@ -113,6 +113,17 @@ EXPERIMENTAL_RAW_SCALER_METASTABILITY_CHAIN = {
         ),
     }
 }
+EXPERIMENTAL_SCALER_FETCH_METASTABILITY_CHAIN = {
+    "scaler_fetch_generation": {
+        "source": "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|source_generation",
+        "synchronization_node": "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_meta",
+        "allow_source_duplicate": False,
+        "registers": (
+            "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_meta",
+            "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_sync",
+        ),
+    }
+}
 EXPECTED_CDC_ANALYSIS_LABELS: frozenset[str] = frozenset(
     {"scaler_completion_request_ack"}
 )
@@ -137,6 +148,11 @@ EXPECTED_NET_DELAY_PATHS = {
 }
 EXPERIMENTAL_RAW_SCALER_NET_DELAY_PATH = {
     "raw_scaler_generation": re.compile(
+        r"source_generation\s*;[^\n]*generation_meta\s*;", re.IGNORECASE
+    )
+}
+EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH = {
+    "scaler_fetch_generation": re.compile(
         r"source_generation\s*;[^\n]*generation_meta\s*;", re.IGNORECASE
     )
 }
@@ -438,6 +454,7 @@ def validate_diagnostic_reports(
     reports: dict[str, str],
     analysis_labels: Counter[str],
     experimental_diagnostic: bool,
+    experimental_scaler_fetch: bool,
 ) -> tuple[list[str], dict[str, object]]:
     reasons: list[str] = []
     missing_reports = sorted(DIAGNOSTIC_REPORT_NAMES - reports.keys())
@@ -455,7 +472,7 @@ def validate_diagnostic_reports(
     detailed_path_counts: dict[str, int | None] = {}
     minimum_slacks: dict[str, float | None] = {}
     expected_report_analyses = dict(EXPECTED_CDC_REPORT_ANALYSES)
-    if experimental_diagnostic:
+    if experimental_diagnostic or experimental_scaler_fetch:
         expected_report_analyses["menu.magik-diagnostic-cdc-net-delay.rpt"] = (
             "set_net_delay",
             3,
@@ -492,6 +509,8 @@ def validate_diagnostic_reports(
             expected_net_delay_paths = dict(EXPECTED_NET_DELAY_PATHS)
             if experimental_diagnostic:
                 expected_net_delay_paths.update(EXPERIMENTAL_RAW_SCALER_NET_DELAY_PATH)
+            if experimental_scaler_fetch:
+                expected_net_delay_paths.update(EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH)
             if len(detailed_rows) != len(expected_net_delay_paths):
                 reasons.append("diagnostic_cdc_analysis_count")
             detailed_path_identities = {
@@ -519,6 +538,8 @@ def validate_diagnostic_reports(
     expected_metastability_chains = dict(EXPECTED_METASTABILITY_CHAINS)
     if experimental_diagnostic:
         expected_metastability_chains.update(EXPERIMENTAL_RAW_SCALER_METASTABILITY_CHAIN)
+    if experimental_scaler_fetch:
+        expected_metastability_chains.update(EXPERIMENTAL_SCALER_FETCH_METASTABILITY_CHAIN)
     custom_mtbf_years, missing_metastability_chains = parse_expected_metastability_chains(
         metastability, expected_metastability_chains
     )
@@ -575,8 +596,10 @@ def compare(
     baseline: dict[str, object],
     patched: dict[str, object],
     experimental_diagnostic: bool = False,
+    experimental_scaler_fetch: bool = False,
 ) -> tuple[list[str], dict[str, object]]:
     reasons: list[str] = []
+    experimental = experimental_diagnostic or experimental_scaler_fetch
     policy_details: dict[str, dict[str, dict[str, int]]] = {}
     for flavour, report in (("stock", stock), ("baseline", baseline), ("patched", patched)):
         policy = report["quartus_policy"]
@@ -624,6 +647,8 @@ def compare(
         reasons.append("unconstrained_output_summary_missing")
     else:
         diagnostic_output_paths_exception = (
+            experimental_diagnostic
+            and
             max(baseline_output_paths) == EXPECTED_UNCONSTRAINED_OUTPUT_PATHS
             and max(patched_output_paths)
             == EXPECTED_DIAGNOSTIC_UNCONSTRAINED_OUTPUT_PATHS
@@ -648,12 +673,12 @@ def compare(
     assert isinstance(baseline_slacks, dict)
     minimum_slack = (
         EXPERIMENTAL_DIAGNOSTIC_MINIMUM_SLACK_NS
-        if experimental_diagnostic
+        if experimental
         else MINIMUM_SLACK_NS
     )
     maximum_slack_degradation = (
         EXPERIMENTAL_DIAGNOSTIC_MAXIMUM_SLACK_DEGRADATION_NS
-        if experimental_diagnostic
+        if experimental
         else MAXIMUM_SLACK_DEGRADATION_NS
     )
     for kind in ("setup", "hold"):
@@ -685,12 +710,12 @@ def compare(
     resource_limits = {
         logic_resource: (
             EXPERIMENTAL_DIAGNOSTIC_MAXIMUM_LOGIC_ELEMENT_DELTA
-            if experimental_diagnostic
+            if experimental
             else MAXIMUM_LOGIC_ELEMENT_DELTA
         ),
         "total registers": (
             EXPERIMENTAL_DIAGNOSTIC_MAXIMUM_REGISTER_DELTA
-            if experimental_diagnostic
+            if experimental
             else MAXIMUM_REGISTER_DELTA
         ),
         "total block memory bits": 0,
@@ -759,7 +784,7 @@ def compare(
     # attended diagnostic profile may ignore only that aggregate mismatch;
     # exact assignments, calculable-chain delta, bounded endpoint reports and
     # per-chain MTBF remain mandatory below.
-    if not exact_added_chain_seen and not experimental_diagnostic:
+    if not exact_added_chain_seen and not experimental:
         reasons.append("synchronizer_chain_count_mismatch")
     sync_assignments = patched["sync_assignments"]
     assert isinstance(sync_assignments, set)
@@ -769,6 +794,13 @@ def compare(
             (
                 "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta",
                 "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_sync",
+            )
+        )
+    if experimental_scaler_fetch:
+        expected_sync_assignment_suffixes.extend(
+            (
+                "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_meta",
+                "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_sync",
             )
         )
     missing_sync_assignments = [
@@ -793,7 +825,7 @@ def compare(
         and patched_calculable_chains
         == baseline_calculable_chains
         + EXPECTED_ADDED_CALCULABLE_COMPLETION_SYNCHRONIZER_CHAINS
-        + (1 if experimental_diagnostic else 0)
+        + (1 if experimental else 0)
     )
     if not custom_assignment_seen:
         reasons.append("custom_synchronizer_missing")
@@ -804,7 +836,10 @@ def compare(
     diagnostic_reports = patched["diagnostic_reports"]
     assert isinstance(analysis_labels, Counter) and isinstance(diagnostic_reports, dict)
     diagnostic_reasons, diagnostic_details = validate_diagnostic_reports(
-        diagnostic_reports, analysis_labels, experimental_diagnostic
+        diagnostic_reports,
+        analysis_labels,
+        experimental_diagnostic,
+        experimental_scaler_fetch,
     )
     reasons.extend(diagnostic_reasons)
 
@@ -812,7 +847,11 @@ def compare(
     assert isinstance(stock_output_paths, list)
     details = {
         "signoff_profile": (
-            "experimental_raw_scaler" if experimental_diagnostic else "production"
+            "experimental_scaler_fetch"
+            if experimental_scaler_fetch
+            else "experimental_raw_scaler"
+            if experimental_diagnostic
+            else "production"
         ),
         "stock_warning_count": sum(stock_warnings.values()),
         "patched_warning_count": sum(patched_warnings.values()),
@@ -881,7 +920,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="use the bounded attended raw-scaler diagnostic timing profile",
     )
+    parser.add_argument(
+        "--experimental-scaler-fetch",
+        action="store_true",
+        help="use the bounded attended scaler-fetch diagnostic timing profile",
+    )
     args = parser.parse_args(argv)
+    if args.experimental_diagnostic and args.experimental_scaler_fetch:
+        parser.error("experimental diagnostic profiles are mutually exclusive")
 
     try:
         sync_re = re.compile(args.synchronizer_regex, re.IGNORECASE)
@@ -898,7 +944,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(error))
 
     reasons, details = compare(
-        stock, baseline, patched, experimental_diagnostic=args.experimental_diagnostic
+        stock,
+        baseline,
+        patched,
+        experimental_diagnostic=args.experimental_diagnostic,
+        experimental_scaler_fetch=args.experimental_scaler_fetch,
     )
     valid = not reasons
     result = {"valid": int(valid), "invalid_reason": ",".join(reasons) if reasons else "ok", **details}

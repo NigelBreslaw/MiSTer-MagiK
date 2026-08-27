@@ -258,21 +258,47 @@ for name, record in path_activity["records"].items():
     platform_magics.add(record["magic"])
 raw_scaler = hdmi_evidence["raw_scaler_state"]
 if raw_scaler != {
-    "schema": 10,
+    "schema": 11,
     "command": 0x67,
     "magic": 0x4D57,
     "word_count": 5,
     "words": [
         "schema",
         "flags",
-        "frame_sequence",
+        "capture_sequence",
         "ordered_signature",
         "crc",
     ],
-    "flags": {"frame_valid": 0},
-    "reserved_zero_masks": {"flags": 0xFFFE},
+    "flags": {
+        "capture_valid": 0,
+        "fifo_overflow": 1,
+        "unexpected_return": 2,
+        "bad_burstcount": 3,
+        "bad_return_phase": 4,
+        "epoch_overlap": 5,
+        "counter_overflow": 6,
+    },
+    "reserved_zero_masks": {"flags": 0xFF80},
 }:
-    raise SystemExit("raw scaler ordered-signature schema 10 changed without an ABI update")
+    raise SystemExit("scaler-fetch ordered-signature schema 11 changed without an ABI update")
+if hdmi_evidence.get("raw_scaler_rollback_states") != {
+    "ordered_signature_v3": {
+        "schema": 10,
+        "command": 0x67,
+        "magic": 0x4D57,
+        "word_count": 5,
+        "words": [
+            "schema",
+            "flags",
+            "frame_sequence",
+            "ordered_signature",
+            "crc",
+        ],
+        "flags": {"frame_valid": 0},
+        "reserved_zero_masks": {"flags": 0xFFFE},
+    }
+}:
+    raise SystemExit("raw scaler ordered-signature schema-10 rollback ABI changed")
 if raw_scaler["command"] in platform_commands:
     raise SystemExit("raw scaler ordered-frame command overlaps an existing platform command")
 if raw_scaler["magic"] in platform_magics:
