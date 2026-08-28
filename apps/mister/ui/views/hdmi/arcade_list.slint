@@ -157,6 +157,18 @@ export component ArcadeListScreen inherits Rectangle {
     property <bool> games-loading: ArcadeView.load-state == ArcadeLoadState.loading;
     background: #1a1424;
 
+    if ArcadeView.drawer-open : Rectangle {
+        accessible-role: AccessibleRole.list;
+        accessible-label: ArcadeView.drawer-title;
+        accessible-description: ArcadeView.active-filter-label;
+        for item[index] in ArcadeView.drawer-items : Rectangle {
+            accessible-role: AccessibleRole.list-item;
+            accessible-label: item;
+            accessible-item-selected: index == ArcadeView.drawer-selected-index;
+            accessible-enabled: true;
+        }
+    }
+
     if !MisterUi.portrait-layout : HorizontalLayout {
 
         // Left half - scrollable game list or search keyboard

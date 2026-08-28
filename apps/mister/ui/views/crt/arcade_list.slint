@@ -98,6 +98,18 @@ export component ArcadeListScreen inherits Rectangle {
     property <int> count: ArcadeView.active-count;
     background: CrtTheme.background;
 
+    if ArcadeView.drawer-open : Rectangle {
+        accessible-role: AccessibleRole.list;
+        accessible-label: ArcadeView.drawer-title;
+        accessible-description: ArcadeView.active-filter-label;
+        for item[index] in ArcadeView.drawer-items : Rectangle {
+            accessible-role: AccessibleRole.list-item;
+            accessible-label: item;
+            accessible-item-selected: index == ArcadeView.drawer-selected-index;
+            accessible-enabled: true;
+        }
+    }
+
     CrtHeader {
         x: LauncherLayout.crt-header.x * 1px;
         y: LauncherLayout.crt-header.y * 1px;
