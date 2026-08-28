@@ -16,6 +16,10 @@ dev = ["ruff==0.16.4", "ty==0.0.73", "pytest>=8"]
 [tool.uv]
 package = false
 
+[tool.ruff.lint.per-file-ignores]
+"scripts/codex-context-report.py" = ["N999"]
+"scripts/prepare-fpga-menu-signoff.py" = ["N999"]
+
 [tool.pytest.ini_options]
 testpaths = ["scripts/tests"]
 python_files = ["test_*.py", "test-*.py"]
