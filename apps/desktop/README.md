@@ -27,7 +27,7 @@ scripts/dev-live-mcp.sh
 
 That adds Cargo features `slint/mcp,live-ui,skia-renderer` and sets
 `SLINT_MCP_PORT=9315`.
-Slint 1.17's MCP feature currently pulls in the testing backend and software
+Slint 1.18's MCP feature currently pulls in the testing backend and software
 renderer, so the default live loop keeps MCP off for faster Skia-only builds.
 
 The default MiSTer host is `192.168.1.117`. Override it for development with:
