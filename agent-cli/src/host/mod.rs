@@ -7,10 +7,14 @@ use crate::model::{
 };
 use crate::transport::{AutomationAction, AutomationButton, DeviceFailure, Layout};
 use mister_magik_platform_manifest_contract as platform_manifest_contract;
+#[cfg(test)]
 use quick_xml::Reader;
+#[cfg(test)]
 use quick_xml::events::{BytesStart, Event};
 use rusqlite::backup::Backup;
-use rusqlite::{Connection, OpenFlags, params};
+#[cfg(test)]
+use rusqlite::params;
+use rusqlite::{Connection, OpenFlags};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use ssh2::Session;
@@ -30072,6 +30076,7 @@ fn issue_delivery_reboot(sess: &Session) -> Result<String> {
     )
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq)]
 struct MameMachine {
     setname: String,
@@ -30096,6 +30101,7 @@ struct MameMachine {
     source_version: String,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct MameSoftwareItem {
     list_name: String,
@@ -30108,6 +30114,7 @@ struct MameSoftwareItem {
     source_version: String,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct MameSoftwareHash {
     list_name: String,
@@ -30121,85 +30128,7 @@ struct MameSoftwareHash {
     disk_sha1: Option<String>,
 }
 
-fn mame_metadata_build(args: &[String]) -> Result<()> {
-    let out = option_value(args, "--out")
-        .or_else(|| option_value(args, "-o"))
-        .ok_or("mame-metadata-build needs --out <sqlite>")?;
-    let machines = if let Some(machine_sqlite) = option_value(args, "--machine-sqlite") {
-        load_mame_machines_from_db(Path::new(&machine_sqlite))?
-    } else {
-        let xml = if let Some(listxml) = option_value(args, "--listxml") {
-            fs::read_to_string(listxml)?
-        } else {
-            let mame = option_value(args, "--mame")
-            .or_else(|| env::var("MAME_BIN").ok())
-            .or_else(|| find_program_on_path("mame"))
-            .ok_or("mame-metadata-build needs --listxml <mame-listxml>, --mame <binary>, MAME_BIN, or mame on PATH")?;
-            let output = Command::new(&mame).arg("-listxml").output()?;
-            if !output.status.success() {
-                return Err(format!(
-                    "{mame} -listxml failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                )
-                .into());
-            }
-            String::from_utf8(output.stdout)?
-        };
-        parse_mame_listxml(&xml)?
-    };
-    let (software_items, software_hashes) = load_mame_software_list_xmls(args)?;
-    write_mame_metadata_db(
-        Path::new(&out),
-        &machines,
-        &software_items,
-        &software_hashes,
-    )?;
-    println!(
-        "mame_metadata_build out={} machines={} software_items={} software_hashes={} source_version={}",
-        out,
-        machines.len(),
-        software_items.len(),
-        software_hashes.len(),
-        machines
-            .first()
-            .map(|machine| machine.source_version.as_str())
-            .unwrap_or("unknown")
-    );
-    Ok(())
-}
-
-fn load_mame_software_list_xmls(
-    args: &[String],
-) -> Result<(Vec<MameSoftwareItem>, Vec<MameSoftwareHash>)> {
-    const TARGET_LISTS: &[&str] = &["nes", "snes", "n64", "sms", "megadriv", "saturn", "lynx"];
-
-    let mut paths = option_values(args, "--software-list")
-        .into_iter()
-        .map(PathBuf::from)
-        .collect::<Vec<_>>();
-    if let Some(dir) = option_value(args, "--software-dir") {
-        let dir = PathBuf::from(dir);
-        for list in TARGET_LISTS {
-            let path = dir.join(format!("{list}.xml"));
-            if path.is_file() {
-                paths.push(path);
-            }
-        }
-    }
-    paths.sort();
-    paths.dedup();
-
-    let mut items = Vec::new();
-    let mut hashes = Vec::new();
-    for path in paths {
-        let xml = fs::read_to_string(&path)?;
-        let (mut list_items, mut list_hashes) = parse_mame_software_list_xml(&xml)?;
-        items.append(&mut list_items);
-        hashes.append(&mut list_hashes);
-    }
-    Ok((items, hashes))
-}
-
+#[cfg(test)]
 fn parse_mame_listxml(xml: &str) -> Result<Vec<MameMachine>> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
@@ -30281,6 +30210,7 @@ fn parse_mame_listxml(xml: &str) -> Result<Vec<MameMachine>> {
     Ok(machines)
 }
 
+#[cfg(test)]
 fn parse_mame_software_list_xml(
     xml: &str,
 ) -> Result<(Vec<MameSoftwareItem>, Vec<MameSoftwareHash>)> {
@@ -30401,6 +30331,7 @@ fn parse_mame_software_list_xml(
     Ok((items, hashes))
 }
 
+#[cfg(test)]
 fn load_mame_machines_from_db(path: &Path) -> Result<Vec<MameMachine>> {
     let conn = Connection::open(path)?;
     let sql =
@@ -30437,6 +30368,7 @@ fn load_mame_machines_from_db(path: &Path) -> Result<Vec<MameMachine>> {
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
+#[cfg(test)]
 fn region_from_text(text: &str) -> Option<&'static str> {
     let lower = text.to_ascii_lowercase();
     if contains_any(
@@ -30467,41 +30399,12 @@ fn region_from_text(text: &str) -> Option<&'static str> {
     }
 }
 
+#[cfg(test)]
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
 }
 
-fn find_program_on_path(name: &str) -> Option<String> {
-    let paths = env::var_os("PATH")?;
-    let extensions: Vec<String> = if cfg!(windows) {
-        env::var_os("PATHEXT")
-            .map(|value| {
-                value
-                    .to_string_lossy()
-                    .split(';')
-                    .filter(|ext| !ext.is_empty())
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_else(|| vec![".exe".into(), ".bat".into(), ".cmd".into()])
-    } else {
-        vec![String::new()]
-    };
-    for dir in env::split_paths(&paths) {
-        for extension in &extensions {
-            let candidate = if extension.is_empty() || name.ends_with(extension) {
-                dir.join(name)
-            } else {
-                dir.join(format!("{name}{extension}"))
-            };
-            if candidate.is_file() {
-                return Some(candidate.display().to_string());
-            }
-        }
-    }
-    None
-}
-
+#[cfg(test)]
 fn apply_mame_display(machine: &mut MameMachine, e: &BytesStart<'_>) {
     machine.display_type = attr_value(e, b"type");
     machine.rotate = attr_value(e, b"rotate").and_then(|value| value.parse().ok());
@@ -30510,11 +30413,13 @@ fn apply_mame_display(machine: &mut MameMachine, e: &BytesStart<'_>) {
     machine.refresh_hz = attr_value(e, b"refresh").and_then(|value| value.parse().ok());
 }
 
+#[cfg(test)]
 fn apply_mame_input(machine: &mut MameMachine, e: &BytesStart<'_>) {
     machine.players = attr_value(e, b"players").and_then(|value| value.parse().ok());
     machine.coins = attr_value(e, b"coins").and_then(|value| value.parse().ok());
 }
 
+#[cfg(test)]
 fn apply_mame_control(machine: &mut MameMachine, e: &BytesStart<'_>) {
     if machine.control_type.is_none() {
         machine.control_type = attr_value(e, b"type");
@@ -30527,12 +30432,14 @@ fn apply_mame_control(machine: &mut MameMachine, e: &BytesStart<'_>) {
     }
 }
 
+#[cfg(test)]
 fn apply_mame_driver(machine: &mut MameMachine, e: &BytesStart<'_>) {
     machine.driver_status = attr_value(e, b"status");
     machine.emulation_status = attr_value(e, b"emulation");
     machine.savestate = attr_value(e, b"savestate");
 }
 
+#[cfg(test)]
 fn attr_value(e: &BytesStart<'_>, key: &[u8]) -> Option<String> {
     e.attributes()
         .with_checks(false)
@@ -30541,6 +30448,7 @@ fn attr_value(e: &BytesStart<'_>, key: &[u8]) -> Option<String> {
         .map(|attr| attr.value.as_ref().to_owned())
 }
 
+#[cfg(test)]
 fn write_mame_metadata_db(
     path: &Path,
     machines: &[MameMachine],
@@ -36004,6 +35912,7 @@ fn option_value(args: &[String], name: &str) -> Option<String> {
         .map(|pair| pair[1].clone())
 }
 
+#[cfg(test)]
 fn option_values(args: &[String], name: &str) -> Vec<String> {
     args.windows(2)
         .filter(|pair| pair[0] == name)
