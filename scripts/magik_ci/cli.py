@@ -61,6 +61,7 @@ def parser() -> argparse.ArgumentParser:
     db_verify = db_sub.add_parser("verify")
     db_verify.add_argument("archive", type=Path)
     db_verify.add_argument("--manifest", type=Path)
+    db_verify.add_argument("--checksums", type=Path)
     db_verify.add_argument("--release-version", type=int)
     extract = db_sub.add_parser("extract-release")
     extract.add_argument("release", type=Path)

@@ -33,6 +33,7 @@ def atomic_write(path: Path, data: bytes) -> None:
     with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
         stream.write(data)
         temporary = Path(stream.name)
+    temporary.chmod(0o644)
     temporary.replace(path)
 
 

@@ -9,6 +9,12 @@ from .common import github_output
 def platform_candidates(artifacts: Path, name: str) -> list[dict[str, object]]:
     payload = json.loads(artifacts.read_text(encoding="utf-8"))
     values = payload.get("artifacts", payload) if isinstance(payload, dict) else payload
+    if (
+        isinstance(values, list)
+        and values
+        and all(isinstance(page, list) for page in values)
+    ):
+        values = [item for page in values for item in page]
     if not isinstance(values, list):
         return []
     return [

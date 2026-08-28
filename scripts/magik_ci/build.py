@@ -20,11 +20,16 @@ def execute(repository: Path, intent: str) -> None:
     if intent not in COMMANDS:
         raise ValueError(f"unsupported CI build intent: {intent}")
     manifest, profile, features = COMMANDS[intent]
+    runner = (
+        "cross" if os.environ.get("MISTER_ARM_BUILD_BACKEND") == "cross" else "cargo"
+    )
     command = [
-        "cargo",
+        runner,
         "build",
         "--manifest-path",
         str(repository / manifest),
+        "--target",
+        "armv7-unknown-linux-gnueabihf",
         "--profile",
         profile,
         "--locked",

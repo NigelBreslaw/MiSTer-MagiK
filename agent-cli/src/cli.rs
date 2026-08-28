@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::architecture::ArchitectureCommand;
 use crate::build::BuildCommand;
 use crate::commands::device::DeviceCommand;
 use crate::compile_time::CompileTimeCommand;
@@ -44,10 +43,6 @@ pub enum Command {
     /// Print the bounded guidance and authority record for one path.
     Guidance {
         path: PathBuf,
-    },
-    Architecture {
-        #[command(subcommand)]
-        command: ArchitectureCommand,
     },
     #[command(hide = true)]
     Run {
@@ -138,41 +133,6 @@ pub enum Command {
         #[arg(value_enum)]
         intent: BuildCommand,
     },
-    #[command(hide = true)]
-    Ci {
-        #[command(subcommand)]
-        command: CiCommand,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-pub enum CiCommand {
-    HostAssurance(ScopeArgs),
-    PlatformCandidates {
-        artifacts: PathBuf,
-        name: String,
-    },
-    PlatformEligibleRun {
-        run: PathBuf,
-        head_sha: String,
-    },
-    RequireAlphaPromotion {
-        channel: String,
-        alpha_sha: String,
-        candidate_sha: String,
-    },
-    PlatformManifest {
-        #[command(subcommand)]
-        command: PlatformManifestCommand,
-    },
-    GameDatabases {
-        #[command(subcommand)]
-        command: GameDatabaseCommand,
-    },
-    PlatformBundle {
-        #[command(subcommand)]
-        command: PlatformBundleCommand,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -180,9 +140,8 @@ pub enum DeliverTarget {
     LocalMain,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize, Subcommand)]
-#[allow(clippy::large_enum_variant)] // Clap owns this short-lived value; boxing fields obscures its flat CI API.
-pub enum PlatformBundleCommand {
+/* CI artifact commands are implemented by scripts/magik_ci. */
+/*
     Create {
         #[arg(long)]
         main_dir: PathBuf,
@@ -422,6 +381,7 @@ pub enum PlatformManifestCommand {
         layout: String,
     },
 }
+*/
 
 #[derive(Debug, Subcommand)]
 pub enum ReleaseCommand {
@@ -836,22 +796,6 @@ mod tests {
     fn clean_is_a_flag_free_repository_command() {
         assert!(Cli::try_parse_from(["agent-cli", "clean"]).is_ok());
         assert!(Cli::try_parse_from(["agent-cli", "clean", "--package", "catalog"]).is_err());
-    }
-
-    #[test]
-    fn hidden_ci_assurance_preserves_explicit_paths() {
-        let cli = Cli::try_parse_from(["agent-cli", "ci", "host-assurance", "--paths", "a", "b"])
-            .unwrap();
-        let Some(Command::Ci { command }) = cli.command else {
-            panic!("expected ci command");
-        };
-        let CiCommand::HostAssurance(scope) = command else {
-            panic!("expected host assurance");
-        };
-        assert_eq!(
-            scope.scope(),
-            Scope::Paths(vec![PathBuf::from("a"), PathBuf::from("b")])
-        );
     }
 
     #[test]

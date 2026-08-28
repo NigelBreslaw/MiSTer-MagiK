@@ -4,13 +4,11 @@
 #![recursion_limit = "256"]
 
 pub mod alpha;
-pub mod architecture;
 mod archive;
 pub mod benchmark;
 pub mod build;
 pub mod capture;
 pub mod checks;
-pub mod ci;
 pub mod clean;
 pub mod cli;
 pub mod commands;

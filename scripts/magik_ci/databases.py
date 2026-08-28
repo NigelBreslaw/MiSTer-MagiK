@@ -226,9 +226,9 @@ def build_mame(
 
 def build_updater(input_manifest: Path, output: Path) -> dict[str, object]:
     """Build the Rust-compatible size-prepended LZ4 updater index."""
+    import ctypes
+    import ctypes.util
     import hashlib
-
-    import lz4.block
 
     manifest = json.loads(input_manifest.read_text(encoding="utf-8"))
     sources: list[dict[str, Any]] = []
@@ -270,7 +270,18 @@ def build_updater(input_manifest: Path, output: Path) -> dict[str, object]:
         **payload,
     }
     raw = json.dumps(stored, separators=(",", ":"), sort_keys=True).encode()
-    encoded = len(raw).to_bytes(4, "little") + lz4.block.compress(raw, store_size=False)
+    library_name = ctypes.util.find_library("lz4")
+    if not library_name:
+        raise RuntimeError("liblz4 is required to build the updater index")
+    library = ctypes.CDLL(library_name)
+    compressor = library.LZ4_compress_default
+    compressor.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
+    compressor.restype = ctypes.c_int
+    buffer = ctypes.create_string_buffer(len(raw) + len(raw) // 255 + 16)
+    compressed_size = compressor(raw, buffer, len(raw), len(buffer))
+    if compressed_size <= 0:
+        raise RuntimeError("liblz4 failed to compress updater index")
+    encoded = len(raw).to_bytes(4, "little") + buffer.raw[:compressed_size]
     atomic_write(output, encoded)
     return {
         "format": "mister-magik-arcade-updater-index-v1",

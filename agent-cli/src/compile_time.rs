@@ -853,7 +853,7 @@ fn measure_assurance_revision(
         source_sha256_before,
         source_sha256_after,
         effective_profile: effective_profile.into(),
-        command: "scripts/agent ci host-assurance --paths crates/catalog/src/lib.rs".into(),
+        command: "scripts/magik-ci ci host-assurance --paths crates/catalog/src/lib.rs".into(),
         target_dir: target_dir.display().to_string(),
         cold_ms,
         edit_warmup_ms,
@@ -871,7 +871,7 @@ fn timed_assurance(repository: &Path, target_dir: &Path, state_dir: &Path) -> Ag
         .into());
     }
     let started = Instant::now();
-    let mut child = Command::new(repository.join("scripts/agent"))
+    let mut child = Command::new(repository.join("scripts/magik-ci"))
         .current_dir(repository)
         .env("CARGO_TARGET_DIR", target_dir)
         .env("MISTER_AGENT_CLI_STATE_DIR", state_dir)

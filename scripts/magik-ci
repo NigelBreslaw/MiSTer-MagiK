@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Thin entrypoint for Python CI tooling."""
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from scripts.magik_ci.cli import main
 
 raise SystemExit(main())
