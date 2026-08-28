@@ -113,7 +113,7 @@ pub(crate) fn probe_known_path_metadata(
 ) -> Vec<Option<KnownPathMetadata>> {
     #[cfg(target_os = "linux")]
     {
-        return linux::probe_known_path_metadata(parent, child_paths);
+        linux::probe_known_path_metadata(parent, child_paths)
     }
 
     #[cfg(not(target_os = "linux"))]
