@@ -37,6 +37,8 @@ def execute(repository: Path, intent: str) -> None:
     if features:
         command.extend(["--features", features.replace(",", ",")])
     environment = os.environ.copy()
-    if intent.endswith("ci"):
+    if intent == "runtime-ci":
         environment.setdefault("MISTER_UI_BUILD_SCOPE", "all")
+    elif intent == "runtime-device":
+        environment.setdefault("MISTER_UI_BUILD_SCOPE", "production")
     subprocess.run(command, cwd=repository, env=environment, check=True)

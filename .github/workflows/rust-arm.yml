@@ -277,8 +277,8 @@ jobs:
           path: apps/mister/target/armv7-unknown-linux-gnueabihf/ci-fast/mister-magik-fb
           if-no-files-found: error
 
-  agent-arm-build:
-    name: agent-arm-build
+  device-agent-arm-build:
+    name: device-agent-arm-build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
