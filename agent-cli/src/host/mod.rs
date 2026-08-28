@@ -19503,6 +19503,8 @@ fn profile_installed_catalog_attribution(
         .to_string();
     fs::create_dir_all(output_dir)?;
     let sample_count = usize::from(arm == CatalogAttributionArm::Control) * 2 + 1;
+    let experiment_value =
+        |key: &str, default: &str| env::var(key).unwrap_or_else(|_| default.to_string());
 
     let run_result = (|| -> Result<Value> {
         let mut samples = Vec::with_capacity(sample_count);
@@ -19552,6 +19554,9 @@ fn profile_installed_catalog_attribution(
                 "real_content_only": true,
                 "publication_filesystem": "exfat",
                 "timing_authority": arm == CatalogAttributionArm::Control,
+                "fts_optimize": experiment_value("MISTER_BENCH_CATALOG_FTS_OPTIMIZE", "default"),
+                "fts_integrity": experiment_value("MISTER_BENCH_CATALOG_FTS_INTEGRITY", "default"),
+                "media_update": experiment_value("MISTER_BENCH_CATALOG_MEDIA_UPDATE", "default"),
             },
             "samples": samples,
             "validation": {
