@@ -386,7 +386,8 @@ impl NativeDevice {
                         | LauncherCommand::VerifyNeogeoSdram(_)
                         | LauncherCommand::CaptureCrtFontAb(_)
                         | LauncherCommand::CaptureSnesHub(_)
-                        | LauncherCommand::ReturnToLauncher(_),
+                        | LauncherCommand::ReturnToLauncher(_)
+                        | LauncherCommand::UiTest(_),
                 }
                 | DeviceCommand::Catalog {
                     command: CatalogCommand::FastFiveOldCold(_),
@@ -580,6 +581,7 @@ impl NativeDevice {
                     LauncherCommand::ReturnToLauncher(_) => {
                         agent_magik(&device_strings(["return-to-launcher"]))
                     }
+                    LauncherCommand::UiTest(args) => run_ui_test_case(args),
                 },
                 DeviceCommand::Catalog { command } => match command {
                     CatalogCommand::Inspect => {
@@ -31948,6 +31950,31 @@ fn agent_magik(args: &[String]) -> Result<()> {
             format_agent_magik_summary(action, reply.elapsed_ms, result)
         );
     }
+    Ok(())
+}
+
+fn run_ui_test_case(args: &crate::commands::device::UiTestArgs) -> Result<()> {
+    let request = mister_magik_agent_protocol::UiTestCaseRequest {
+        case: args.case.clone(),
+        fixture: args.fixture.clone(),
+        timeout_ms: args.timeout_secs.saturating_mul(1_000),
+    };
+    let reply = agent_request_with_liveness(
+        "ui_test",
+        request.to_value(),
+        Duration::from_secs(args.timeout_secs.saturating_add(5)),
+    )?;
+    let result = reply
+        .response
+        .get("result")
+        .ok_or("ui test agent response missing result")?;
+    if result.get("accepted").and_then(Value::as_bool) != Some(true) {
+        return Err("ui test agent did not accept the requested case".into());
+    }
+    println!(
+        "ui-test case={} fixture={} timeout_ms={} effects=isolated",
+        args.case, args.fixture, request.timeout_ms
+    );
     Ok(())
 }
 
