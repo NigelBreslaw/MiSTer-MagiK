@@ -75,6 +75,7 @@ pprof = { git = "https://github.com/NigelBreslaw/pprof-rs", branch = "armv7-itim
 mister-magik-catalog = { path = "../../crates/catalog", default-features = false, features = ["builder"] }
 mister-magik-ui = { path = "ui-generated", optional = true }
 i-slint-core = { git = "https://github.com/slint-ui/slint", rev = "72cf74306784e7d15374639ef110c1bb85c21cb0", optional = true, default-features = false }
+i-slint-common = { git = "https://github.com/slint-ui/slint", rev = "72cf74306784e7d15374639ef110c1bb85c21cb0", optional = true, default-features = false }
 [target.'cfg(target_os = "macos")'.dependencies]
 slint = { git = "https://github.com/slint-ui/slint", rev = "72cf74306784e7d15374639ef110c1bb85c21cb0", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std"] }
 softbuffer = { version = "0.4.8", optional = true }
@@ -97,7 +98,12 @@ default = []
 asset-tools = ["dep:swash"]
 profile = ["dep:pprof"]
 ui = ["dep:slint", "dep:i-slint-core", "dep:mister-magik-ui", "dep:ffmpeg-next", "mister-magik-mister-runtime/ui"]
-ui-device-tests = ["ui", "slint/system-testing"]
+ui-device-tests = [
+    "ui",
+    "slint/system-testing",
+    "dep:i-slint-common",
+    "i-slint-common/fontconfig-dlopen",
+]
 ui-preview = ["dep:slint", "dep:i-slint-core", "dep:mister-magik-ui", "dep:softbuffer", "dep:winit", "mister-magik-mister-runtime/ui", "experiments"]
 bench-tools = ["mister-magik-mister-runtime/bench-tools"]
 bench-scenes = ["mister-magik-ui?/bench-scenes", "mister-magik-mister-runtime/bench-scenes"]

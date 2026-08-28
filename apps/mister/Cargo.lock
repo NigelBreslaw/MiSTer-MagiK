@@ -2813,6 +2813,7 @@ dependencies = [
  "crc32fast",
  "ffmpeg-next",
  "flate2",
+ "i-slint-common",
  "i-slint-core",
  "libc",
  "lz4_flex",
