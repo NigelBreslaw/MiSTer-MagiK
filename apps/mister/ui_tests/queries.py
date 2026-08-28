@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .driver import MagiKDriver
 from .slint_adapter import SlintElement
+from .uinput_joystick import Button
 
 
 def element_with_label(driver: MagiKDriver, label: str) -> SlintElement:
@@ -27,4 +28,19 @@ def selected_labels(driver: MagiKDriver) -> tuple[str, ...]:
     )
 
 
-__all__ = ["element_with_label", "selected_labels"]
+def open_arcade(driver: MagiKDriver) -> None:
+    for step in range(16):
+        if "Arcade" in selected_labels(driver):
+            break
+        driver.hat(f"find-arcade-{step}", 1, 0)
+    else:
+        raise AssertionError("Arcade home item never became selected")
+    driver.button("open-arcade-hub", Button.A)
+    for step in range(4):
+        if "Games" in selected_labels(driver):
+            break
+        driver.hat(f"find-games-{step}", 0, 1)
+    driver.button("open-arcade-games", Button.A)
+
+
+__all__ = ["element_with_label", "open_arcade", "selected_labels"]
