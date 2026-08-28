@@ -198,6 +198,10 @@ def verify(
     }
     if actual != declared:
         raise ValueError("platform_file_manifest")
+    for line in files.get("SHA256SUMS", b"").decode().splitlines():
+        digest, name = line.split("  ", 1)
+        if name not in files or sha256_bytes(files[name]) != digest:
+            raise ValueError(f"platform_checksum:{name}")
     if manifest is not None and manifest.read_bytes() != files[MANIFEST]:
         raise ValueError("platform_release_manifest_mismatch")
     return payload

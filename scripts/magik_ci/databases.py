@@ -48,6 +48,10 @@ def verify(
         raise ValueError("database_release_version")
     if manifest is not None and manifest.read_bytes() != files[MANIFEST]:
         raise ValueError("database_manifest_mismatch")
+    for line in files.get(CHECKSUMS, b"").decode().splitlines():
+        digest, name = line.split("  ", 1)
+        if name not in files or sha256_bytes(files[name]) != digest:
+            raise ValueError(f"database_checksum:{name}")
     return payload
 
 
