@@ -3021,15 +3021,17 @@ impl CoherentDeliveryActions for PlatformDeliveryActions<'_> {
             Ok(architecture) => architecture,
             Err(first_identity_failure) => {
                 let session = connect_with(&self.config.connection, 10).map_err(device_failure)?;
-                activate_installed_menu_fpga(self.config, &session).map_err(|activation_error| {
-                    DeviceFailure::Unhealthy(format!(
-                        "FPGA identity verification failed ({first_identity_failure:?}); bounded Main-owned reload failed ({activation_error})"
-                    ))
-                })?;
+                if let Err(activation_error) = activate_installed_menu_fpga(self.config, &session) {
+                    return Err(DeviceFailure::Unhealthy(format!(
+                        "FPGA identity verification failed ({first_identity_failure:?}); bounded Main-owned reload failed ({activation_error}); main_console={}",
+                        main_console_snapshot(&session)
+                    )));
+                }
+                let main_console = main_console_snapshot(&session);
                 verify_installed_fpga_activation(self.config, Layout::Development).map_err(
                     |second_identity_failure| {
                         DeviceFailure::Unhealthy(format!(
-                            "FPGA identity verification failed after bounded Main-owned reload: {second_identity_failure:?}"
+                            "FPGA identity verification failed after bounded Main-owned reload: {second_identity_failure:?}; main_console={main_console}"
                         ))
                     },
                 )?
@@ -3574,6 +3576,16 @@ const EXPERIMENTAL_FPGA_METADATA_REMOTE: &str =
 const PATCHED_DIAGNOSTIC_ARCHITECTURE: &str = "scaler-fetch-liveness-first-stall-v1";
 const PLATFORM_V0_34_SCHEMA14_RBF_SHA256: &str =
     "ef1920500c925d35b23808792f0930954446a6030b33d3e92c0f4feccd23106e";
+
+fn main_console_snapshot(session: &Session) -> String {
+    let Some(raw) = remote_read(session, "/dev/vcs1") else {
+        return "unavailable".into();
+    };
+    let compact = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut tail = compact.chars().rev().take(1200).collect::<Vec<_>>();
+    tail.reverse();
+    tail.into_iter().collect()
+}
 
 fn experimental_fpga_transaction_remote() -> String {
     installed_layout::app_path(Layout::Development, "experimental-fpga.delivery-state")
