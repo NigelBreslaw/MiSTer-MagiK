@@ -22,7 +22,7 @@ export component CatalogScanPopup inherits Rectangle {
         ? scan-content-width
         : 560px;
 
-    accessible-role: AccessibleRole.status;
+    accessible-role: AccessibleRole.progress-indicator;
     accessible-label: "Catalog scan";
     accessible-description: CatalogView.message;
 
@@ -108,7 +108,7 @@ export component MediaProgressPopup inherits Rectangle {
     border-width: 1px;
     border-color: #5c4a72;
     clip: true;
-    accessible-role: AccessibleRole.status;
+    accessible-role: AccessibleRole.progress-indicator;
     accessible-label: "Media download progress";
     accessible-description: MediaView.summary;
 
@@ -134,7 +134,7 @@ export component MediaProgressPopup inherits Rectangle {
 
 export component StartupSplash inherits Rectangle {
 
-    accessible-role: AccessibleRole.status;
+    accessible-role: AccessibleRole.progress-indicator;
     accessible-label: "MiSTer MagiK starting";
 
     background: #1a1424;
@@ -161,7 +161,7 @@ export component BackgroundScanBadge inherits Rectangle {
     background: #101420;
     border-width: 1px;
     border-color: #52647d;
-    accessible-role: AccessibleRole.status;
+    accessible-role: AccessibleRole.progress-indicator;
     accessible-label: "Background scan";
     accessible-description: CatalogView.title;
 
@@ -304,7 +304,7 @@ export component ConfirmDialog inherits Rectangle {
 }
 
 export component LoadingOverlay inherits Rectangle {
-    accessible-role: AccessibleRole.status;
+    accessible-role: AccessibleRole.progress-indicator;
     accessible-label: OverlayView.loading-message;
     accessible-description: OverlayView.loading-detail;
     background: #1a1424;
