@@ -5519,7 +5519,11 @@ pub(super) fn run_launcher_loop(
         catalog = seed.catalog;
         catalog_ready = true;
     }
-    let initial_catalog_fingerprint = return_capsule_fingerprint.or(sharded_catalog_fingerprint);
+    let initial_catalog_fingerprint = if ui_test_fixture {
+        None
+    } else {
+        return_capsule_fingerprint.or(sharded_catalog_fingerprint)
+    };
     let mut catalog_generation =
         initialize_catalog_generation(&mut scheduler, initial_catalog_fingerprint);
     if initial_system_entry_reader_required(capsule_seed_ready, sharded_seed_ready) {
