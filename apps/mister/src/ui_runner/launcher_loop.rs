@@ -5459,6 +5459,7 @@ pub(super) fn run_launcher_loop(
         mister_magik_catalog::shard_registry::manifest_slots_present(
             launcher_config.catalog_paths().sharded_catalog_dir(),
         ),
+        catalog_refresh,
     );
     let sharded_seed = (!capsule_seed_ready && !warm_registry_hydration_pending)
         .then(|| {
@@ -13969,8 +13970,12 @@ fn defer_warm_registry_hydration(
     capsule_seed_ready: bool,
     startup_return_requested: bool,
     manifest_slots_present: bool,
+    forced_refresh_requested: bool,
 ) -> bool {
-    !capsule_seed_ready && !startup_return_requested && manifest_slots_present
+    !capsule_seed_ready
+        && !startup_return_requested
+        && manifest_slots_present
+        && !forced_refresh_requested
 }
 
 fn summary_seed_catalog_worker_request(
@@ -17933,10 +17938,11 @@ mod tests {
 
     #[test]
     pub(super) fn warm_registry_hydration_is_deferred_only_for_normal_boot() {
-        assert!(defer_warm_registry_hydration(false, false, true));
-        assert!(!defer_warm_registry_hydration(true, false, true));
-        assert!(!defer_warm_registry_hydration(false, true, true));
-        assert!(!defer_warm_registry_hydration(false, false, false));
+        assert!(defer_warm_registry_hydration(false, false, true, false));
+        assert!(!defer_warm_registry_hydration(true, false, true, false));
+        assert!(!defer_warm_registry_hydration(false, true, true, false));
+        assert!(!defer_warm_registry_hydration(false, false, false, false));
+        assert!(!defer_warm_registry_hydration(false, false, true, true));
     }
 
     #[test]
