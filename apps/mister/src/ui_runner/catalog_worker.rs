@@ -253,9 +253,13 @@ fn run_fast_catalog_refresh_in_process(
     let _ = tx.send(CatalogWorkerMessage::Timing {
         name: "fast_catalog_refresh".to_string(),
         detail: format!(
-            "elapsed_us={} planning_us={} source_rebuild_us={} artifact_publish_us={} snapshot_publish_us={} systems={} unchanged={} updated={} failed_retained={} artifact_systems_written={}",
+            "elapsed_us={} planning_us={} watch_read_us={} metadata_probe_us={} metadata_parents={} metadata_paths={} source_rebuild_us={} artifact_publish_us={} snapshot_publish_us={} systems={} unchanged={} updated={} failed_retained={} artifact_systems_written={}",
             report.elapsed_us,
             report.planning_us,
+            report.plan.watch_read_us,
+            report.plan.metadata_probe_us,
+            report.plan.metadata_parents,
+            report.plan.metadata_paths,
             report.source_rebuild_us,
             report.artifact_publish_us,
             report.snapshot_publish_us,

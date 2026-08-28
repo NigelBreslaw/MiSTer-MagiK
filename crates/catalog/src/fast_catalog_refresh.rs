@@ -158,6 +158,10 @@ pub struct FastSystemSourceCheck {
 #[derive(Clone, Debug, Serialize)]
 pub struct FastRefreshPlanReport {
     pub elapsed_us: u64,
+    pub watch_read_us: u64,
+    pub metadata_probe_us: u64,
+    pub metadata_parents: usize,
+    pub metadata_paths: usize,
     pub systems: usize,
     pub unchanged: usize,
     pub changed: usize,
@@ -958,6 +962,7 @@ pub fn plan_fast_refresh(
         .iter()
         .map(|reference| (reference.system_id.as_str(), reference))
         .collect::<std::collections::BTreeMap<_, _>>();
+    let watch_started = std::time::Instant::now();
     let mut watch_indices = BTreeMap::new();
     let mut watch_errors = BTreeMap::new();
     if request != FastCatalogRefreshRequest::RebuildAll && binding_matches {
@@ -972,7 +977,19 @@ pub fn plan_fast_refresh(
             }
         }
     }
-    let metadata_cache = build_watch_metadata_cache(watch_indices.values());
+    let watch_read_us = watch_started
+        .elapsed()
+        .as_micros()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let metadata_started = std::time::Instant::now();
+    let (metadata_cache, metadata_parents, metadata_paths) =
+        build_watch_metadata_cache(watch_indices.values());
+    let metadata_probe_us = metadata_started
+        .elapsed()
+        .as_micros()
+        .try_into()
+        .unwrap_or(u64::MAX);
     let build_check = |system_id: &str| {
         let system_started = std::time::Instant::now();
         let mut check = FastSystemSourceCheck {
@@ -1027,6 +1044,10 @@ pub fn plan_fast_refresh(
     let rescans = checks.len().saturating_sub(unchanged + changed);
     Ok(FastRefreshPlanReport {
         elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+        watch_read_us,
+        metadata_probe_us,
+        metadata_parents,
+        metadata_paths,
         systems: checks.len(),
         unchanged,
         changed,
@@ -1401,7 +1422,11 @@ fn check_watch_index(
 
 fn build_watch_metadata_cache<'a>(
     watches: impl Iterator<Item = &'a FastSystemWatchIndex>,
-) -> BTreeMap<PathBuf, Option<crate::namespace_walk::KnownPathMetadata>> {
+) -> (
+    BTreeMap<PathBuf, Option<crate::namespace_walk::KnownPathMetadata>>,
+    usize,
+    usize,
+) {
     let mut grouped = BTreeMap::<PathBuf, BTreeSet<PathBuf>>::new();
     for watch in watches {
         for path in watch
@@ -1422,13 +1447,15 @@ fn build_watch_metadata_cache<'a>(
             }
         }
     }
+    let metadata_parents = grouped.len();
     let mut cache = BTreeMap::new();
     for (parent, paths) in grouped {
         let paths = paths.into_iter().collect::<Vec<_>>();
         let observations = crate::namespace_walk::probe_known_path_metadata(&parent, &paths);
         cache.extend(paths.into_iter().zip(observations));
     }
-    cache
+    let metadata_paths = cache.len();
+    (cache, metadata_parents, metadata_paths)
 }
 
 #[derive(Debug)]
@@ -2176,7 +2203,7 @@ mod tests {
             elapsed_us: 0,
             reason: String::new(),
         };
-        let metadata_cache = build_watch_metadata_cache(std::iter::once(&watch));
+        let (metadata_cache, _, _) = build_watch_metadata_cache(std::iter::once(&watch));
         check_watch_index(&watch, &metadata_cache, &mut check);
         assert_eq!(check.status, FastSourceCheckStatus::Unchanged);
         assert_eq!(check.directories_checked, watch.directories.len());
@@ -2202,7 +2229,7 @@ mod tests {
             elapsed_us: 0,
             reason: String::new(),
         };
-        let metadata_cache = build_watch_metadata_cache(std::iter::once(&watch));
+        let (metadata_cache, _, _) = build_watch_metadata_cache(std::iter::once(&watch));
         check_watch_index(&watch, &metadata_cache, &mut check);
         assert_eq!(check.status, FastSourceCheckStatus::Changed);
     }
