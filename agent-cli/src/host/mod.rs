@@ -19473,6 +19473,10 @@ fn catalog_attribution_search_ui_env(arm: CatalogAttributionArm) -> Vec<(String,
         ("MISTER_CATALOG_REFRESH".into(), "off".into()),
         ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
         ("MISTER_HOME_SELECTED_INDEX".into(), "0".into()),
+        (
+            "MISTER_BENCH_CATALOG_SEARCH_FORCE_PERSISTED".into(),
+            "1".into(),
+        ),
     ]);
     env
 }
