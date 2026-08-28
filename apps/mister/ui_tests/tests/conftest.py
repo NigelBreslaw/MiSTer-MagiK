@@ -30,3 +30,19 @@ def magik() -> Iterator[MagiKDriver]:
     )
     with MagiKDriver.start(config) as driver:
         yield driver
+
+
+@pytest.fixture
+def controller() -> Iterator[MagiKDriver]:
+    """Launch the dedicated controller-test scene when configured."""
+
+    command_text = os.environ.get("MISTER_UI_TEST_CONTROLLER_COMMAND")
+    if not command_text:
+        pytest.skip("set MISTER_UI_TEST_CONTROLLER_COMMAND for controller UI tests")
+    config = DriverConfig(
+        command=tuple(shlex.split(command_text)),
+        environment=dict(os.environ),
+        launch_timeout=float(os.environ.get("MISTER_UI_TEST_LAUNCH_TIMEOUT", "20")),
+    )
+    with MagiKDriver.start(config) as driver:
+        yield driver

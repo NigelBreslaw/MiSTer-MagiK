@@ -4,7 +4,7 @@
 import { Spleen6x12, Spleen6x12Size } from "../components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "../components/nocive_15.slint";
 import { MisterUi } from "../mister_window.slint";
-import { FeedbackView, SetupEntry, SetupField, SetupPhase, SetupView } from "../api.slint";
+import { AccessibleRole, FeedbackView, SetupEntry, SetupField, SetupPhase, SetupView } from "../api.slint";
 
 // Controller setup overlay — new pad detection and USB port change rebinding.
 component ConfigRow inherits HorizontalLayout {
@@ -40,6 +40,10 @@ export component SetupOverlay inherits Rectangle {
     property <[SetupField]> fields: SetupView.fields;
     property <string> setup-name: SetupView.name;
     property <string> setup-kind-label: SetupView.kind-label;
+
+    accessible-role: AccessibleRole.region;
+    accessible-label: "Controller setup";
+    accessible-description: root.subtitle;
 
     background: #1a1424e0;
 

@@ -4,13 +4,18 @@
 import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 
-import { AboutSection, FeedbackView, SettingsView } from "../../api.slint";
+import { AccessibleRole, AboutSection, FeedbackView, SettingsView } from "../../api.slint";
 
 component AboutRow inherits Rectangle {
     in property <string> label;
     in property <string> detail;
     in property <bool> focused;
     in property <bool> acknowledged;
+    accessible-role: AccessibleRole.list-item;
+    accessible-label: root.label;
+    accessible-description: root.detail;
+    accessible-item-selected: root.focused;
+    accessible-enabled: true;
 
     height: 52px;
     background: focused ? #2a2236 : #1e1828;
@@ -26,6 +31,8 @@ component AboutRow inherits Rectangle {
 }
 
 export component AboutScreen inherits Rectangle {
+    accessible-role: AccessibleRole.main;
+    accessible-label: "About";
     VerticalLayout {
         padding: 48px;
         spacing: 24px;

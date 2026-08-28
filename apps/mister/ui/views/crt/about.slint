@@ -4,10 +4,12 @@
 import { Spleen6x12 } from "../../components/spleen_6x12.slint";
 
 import { MisterUi } from "../../mister_window.slint";
-import { AboutSection, FeedbackView, SettingsView } from "../../api.slint";
+import { AccessibleRole, AboutSection, FeedbackView, SettingsView } from "../../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
 
 export component AboutScreen inherits Rectangle {
+    accessible-role: AccessibleRole.main;
+    accessible-label: "About";
     background: CrtTheme.background;
 
     VerticalLayout {

@@ -4,7 +4,7 @@
 import { Spleen6x12 } from "../components/spleen_6x12.slint";
 
 import { MisterUi } from "../mister_window.slint";
-import { FeedbackView, SetupEntry, SetupField, SetupPhase, SetupView } from "../api.slint";
+import { AccessibleRole, FeedbackView, SetupEntry, SetupField, SetupPhase, SetupView } from "../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../components/crt_ui.slint";
 
 export component SetupOverlay inherits Rectangle {
@@ -21,6 +21,10 @@ export component SetupOverlay inherits Rectangle {
         0,
         (root.list-items.length - root.setup-visible-rows).max(0),
     );
+
+    accessible-role: AccessibleRole.region;
+    accessible-label: "Controller setup";
+    accessible-description: root.subtitle;
 
     background: CrtTheme.background;
 
