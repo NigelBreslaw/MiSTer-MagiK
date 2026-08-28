@@ -14,7 +14,7 @@ use agent_cli::progress::{EventKind, Reporter};
 use agent_cli::request::RawRequest;
 use agent_cli::scope;
 use clap::Parser;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -492,30 +492,6 @@ fn run_assurance(
     })
 }
 
-fn append_github_output(path: &Path, result: &serde_json::Value, keys: &[&str]) -> AgentResult<()> {
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|error| error.to_string())?;
-    write_github_output(&mut file, result, keys)
-}
-
-fn write_github_output(
-    output: &mut impl Write,
-    result: &serde_json::Value,
-    keys: &[&str],
-) -> AgentResult<()> {
-    for key in keys {
-        let value = result[*key]
-            .as_str()
-            .map(str::to_owned)
-            .unwrap_or_else(|| result[*key].to_string());
-        writeln!(output, "{key}={value}").map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
 fn deliver(
     evidence: &Evidence,
     repository: &std::path::Path,
@@ -649,55 +625,6 @@ mod tests {
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    struct FailingWriter;
-
-    impl Write for FailingWriter {
-        fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
-            Err(std::io::Error::other("write failed"))
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn github_output_appends_ordered_scalar_fields() {
-        let root = std::env::temp_dir().join(format!(
-            "agent-cli-github-output-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        let path = root.join("output");
-        fs::write(&path, "existing=value\n").unwrap();
-        let result = serde_json::json!({"text":"release-v1","enabled":true,"version":2});
-        append_github_output(&path, &result, &["version", "text", "enabled"]).unwrap();
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            "existing=value\nversion=2\ntext=release-v1\nenabled=true\n"
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn github_output_propagates_open_and_write_failures() {
-        let result = serde_json::json!({"value":1});
-        let missing_parent = std::env::temp_dir()
-            .join("agent-cli-missing-output-parent")
-            .join("output");
-        assert!(append_github_output(&missing_parent, &result, &["value"]).is_err());
-        assert_eq!(
-            write_github_output(&mut FailingWriter, &result, &["value"])
-                .unwrap_err()
-                .to_string(),
-            "write failed"
-        );
-    }
 
     #[test]
     fn fatal_error_first_line_remains_compatible() {
