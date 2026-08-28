@@ -20199,6 +20199,8 @@ fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Ve
                 "leg": leg,
                 "first_visible_ms": value.pointer("/timing/first_visible_ms"),
                 "complete_ms": value.pointer("/timing/complete_ms"),
+                "runtime_start_to_catalog_complete_ms":
+                    catalog_runtime_completion_ms(value.get("phase_evidence")),
                 "total_games": value.pointer("/catalog/total_games"),
                 "systems": value.pointer("/catalog/systems"),
                 "phase_evidence_complete": value.pointer("/phase_evidence/complete"),
@@ -20209,6 +20211,21 @@ fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Ve
         }
     }
     rows
+}
+
+fn catalog_runtime_completion_ms(phase_evidence: Option<&Value>) -> Option<u64> {
+    phase_evidence?
+        .get("records")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter(|record| {
+            record.get("record").and_then(Value::as_str) == Some("startup_timing")
+                && record.get("name").and_then(Value::as_str)
+                    == Some("catalog_100_percent_complete")
+        })
+        .filter_map(|record| record.get("observed_at_us").and_then(Value::as_u64))
+        .min()
+        .map(|elapsed_us| elapsed_us.saturating_add(999) / 1_000)
 }
 
 fn catalog_attribution_artifact_manifest(root: &Path, run_dir: &Path) -> Result<Vec<Value>> {
@@ -20253,9 +20270,9 @@ fn catalog_attribution_evidence_report(summary: &Value) -> Result<String> {
     )?;
     writeln!(
         report,
-        "| Arm | Sample | Leg | First visible | Complete | Games |"
+        "| Arm | Sample | Leg | First visible | Host complete | Runtime complete | Games |"
     )?;
-    writeln!(report, "|---|---:|---|---:|---:|---:|")?;
+    writeln!(report, "|---|---:|---|---:|---:|---:|---:|")?;
     if let Some(rows) = summary
         .get("normalized_measurements")
         .and_then(Value::as_array)
@@ -20263,12 +20280,15 @@ fn catalog_attribution_evidence_report(summary: &Value) -> Result<String> {
         for row in rows {
             writeln!(
                 report,
-                "| {} | {} | {} | {} ms | {} ms | {} |",
+                "| {} | {} | {} | {} ms | {} ms | {} ms | {} |",
                 row["arm"].as_str().unwrap_or("unknown"),
                 row["sample"].as_u64().unwrap_or(0),
                 row["leg"].as_str().unwrap_or("unknown"),
                 row["first_visible_ms"].as_u64().unwrap_or(0),
                 row["complete_ms"].as_u64().unwrap_or(0),
+                row["runtime_start_to_catalog_complete_ms"]
+                    .as_u64()
+                    .unwrap_or(0),
                 row["total_games"].as_u64().unwrap_or(0),
             )?;
         }

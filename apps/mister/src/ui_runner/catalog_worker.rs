@@ -286,6 +286,17 @@ fn run_fast_catalog_refresh_in_process(
     } else {
         catalog_profile.persisted();
     }
+    let _ = tx.send(CatalogWorkerMessage::Timing {
+        name: "catalog_100_percent_complete".to_string(),
+        detail: format!(
+            "generation={} systems={} unchanged={} updated={} artifacts_written={}",
+            report.catalog_generation,
+            report.systems,
+            report.unchanged,
+            report.updated,
+            report.artifact_systems_written,
+        ),
+    });
     let _ = tx.send(CatalogWorkerMessage::Done);
 }
 
@@ -388,6 +399,16 @@ fn run_fast_catalog_fresh_build(
             report.publication.systems,
             report.publication.games,
             report.publication.copied_bytes,
+        ),
+    });
+    let _ = tx.send(CatalogWorkerMessage::Timing {
+        name: "catalog_100_percent_complete".to_string(),
+        detail: format!(
+            "generation={} systems={} games={} artifacts_written={}",
+            report.publication.generation,
+            report.publication.systems,
+            report.publication.games,
+            report.publication.systems,
         ),
     });
     let _ = tx.send(CatalogWorkerMessage::BuildCompleted {
