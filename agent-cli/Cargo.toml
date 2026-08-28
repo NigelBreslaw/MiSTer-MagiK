@@ -24,14 +24,14 @@ clap = { version = "4.5", features = ["derive"] }
 flate2 = "1"
 libc = "0.2"
 lz4_flex = "0.14.0"
-md-5 = "0.10"
+md-5 = "0.11"
 mister-magik-agent-protocol = { path = "../crates/agent-protocol" }
 mister-magik-platform-manifest-contract = { path = "../mister/platform/contracts/manifest" }
 mister-magik-catalog = { path = "../crates/catalog" }
 mister-magik-ini = { path = "../crates/mister-ini" }
 mister-magik-latch-contract = { path = "../mister/platform/contracts/latch" }
 mister-magik-media-contract = { path = "../crates/media-contract", default-features = false }
-quick-xml = "0.41"
+quick-xml = "0.42"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
