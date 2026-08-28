@@ -23953,6 +23953,8 @@ fn run_catalog_build_rebuild_leg(
             &launcher_log,
         )?;
         let phase_evidence = catalog_phase_evidence(&launcher_log);
+        let runtime_start_to_catalog_complete_ms =
+            catalog_runtime_completion_ms(Some(&phase_evidence));
         let logical_fingerprint = catalog_logical_fingerprint(&catalog)?;
         catalog["logical_fingerprint"] = json!(logical_fingerprint);
         let interaction_telemetry = interaction_telemetry_start
@@ -23973,6 +23975,7 @@ fn run_catalog_build_rebuild_leg(
         "timing": {
             "first_visible_ms": first_visible_ms,
             "complete_ms": complete_ms,
+            "runtime_start_to_catalog_complete_ms": runtime_start_to_catalog_complete_ms,
         },
         "catalog": catalog,
         "phase_evidence": phase_evidence,
