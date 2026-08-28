@@ -121,7 +121,7 @@ mod macos {
     const PARTICLE_SCENE_SEED: u64 = 0x4d61_6769_4b;
     const SCREENSHOT_TILE_SEED: u64 = 0x4d61_6769_4b54_696c;
     const CAPTURE_PROVENANCE_SCHEMA: &str = "mister-magik-launcher-capture-v1";
-    const PINNED_SLINT_VERSION: &str = "1.17.1";
+    const PINNED_SLINT_VERSION: &str = "1.18.0 (master 72cf7430)";
     const RGB565_CONVERSION_VERSION: &str = "rgb565-le-expand-v1";
     const PREVIEW_RENDERER_ID: &str = "slint-software-rgb565-reused-buffer";
     const PNG_ENCODER_ID: &str = "png-rgb8-filter-none-zlib-best-v1";
@@ -5479,7 +5479,9 @@ mod macos {
 
         #[test]
         fn provenance_writer_refuses_overwrite_and_slint_version_is_pinned() {
-            assert!(include_str!("../../Cargo.toml").contains("slint = { version = \"=1.17.1\""));
+            let manifest = include_str!("../../Cargo.toml");
+            assert!(manifest.contains("git = \"https://github.com/slint-ui/slint\""));
+            assert!(manifest.contains("rev = \"72cf74306784e7d15374639ef110c1bb85c21cb0\""));
             let options =
                 PreviewOptions::parse(["--output", "/tmp/capture.png"].map(String::from)).unwrap();
             let provenance =
