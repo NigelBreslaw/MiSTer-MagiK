@@ -20207,7 +20207,9 @@ fn run_catalog_attribution_streamline_leg(
             minimum_generation,
             CatalogBuildRebuildLegOptions {
                 exercise_arcade_ui: false,
-                require_updater_index: true,
+                // Only the fresh leg is expected to prefetch the updater
+                // index; unchanged rebuilds intentionally skip that work.
+                require_updater_index: minimum_generation.is_none(),
                 launcher_env: catalog_attribution_launcher_env(CatalogAttributionArm::Streamline),
                 runtime_command: catalog_attribution_runtime_command,
             },
