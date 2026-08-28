@@ -72,5 +72,7 @@ def execute(repository: Path, intent: str) -> None:
     ]
     if features:
         command.extend(["--features", features.replace(",", ",")])
+    if os.environ.get("MISTER_CARGO_TIMINGS") == "1":
+        command.append("--timings")
     environment = _environment(repository, intent, profile, features, runner)
     subprocess.run(command, cwd=repository, env=environment, check=True)
