@@ -4477,9 +4477,9 @@ fn activate_installed_menu_fpga(config: &NativeDeviceConfig, session: &Session) 
         || activated_main_pid == expected_main_pid
         || activated_launcher_pid == previous_launcher_pid
     {
-        return Err(
-            "experimental FPGA activation did not produce a new owned Dev Menu session".into(),
-        );
+        return Err(format!(
+            "experimental FPGA activation did not produce a new owned Dev Menu session: generation before={expected_generation} after={activated_generation}; Main pid before={expected_main_pid} after={activated_main_pid}; launcher pid before={previous_launcher_pid} after={activated_launcher_pid}"
+        ).into());
     }
     exec_checked(
         session,
@@ -42260,6 +42260,9 @@ catalog_v3_persist_phases_tsv\tprojection_us=4\tscanner_cache_us=5\n";
             assert!(verify.contains("manager_sha256"));
             assert!(verify.contains("scanout_module_sha256"));
             assert!(verify.contains("latch_rbf_sha256"));
+            assert!(verify.contains("platform verification"));
+            assert!(verify.contains("hash mismatch"));
+            assert!(verify.contains("manifest key is missing"));
         }
         assert!(release_arming_cleanup_command().contains("rebuild-on-next-boot"));
     }

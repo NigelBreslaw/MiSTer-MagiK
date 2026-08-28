@@ -17,7 +17,55 @@ pub(super) fn installed_platform_verify_command(layout: Layout) -> String {
     let root = installed.root;
     let main = installed.main;
     format!(
-        "set -eu; root={root}; manifest=$root/platform-v3.manifest; test -s \"$manifest\"; test -x {main}; test -x \"$root/mister-magik-fb\"; test -x \"$root/mister-magik-manager\"; test -r \"$root/mister_magik_scanout_slots.ko\"; test -r \"$root/mister_magik_scanout_slots.metadata.txt\"; test -r \"$root/fpga/menu-magik-vblank-latch.rbf\"; test -r \"$root/fpga/menu-magik-vblank-latch.metadata.txt\"; test -r \"$root/assets/snes/snes-small-v1.rgb565a\"; test -r \"$root/assets/ui/settings-v1.rgb565a\"; grep -qx 'format={manifest_format}' \"$manifest\"; get() {{ sed -n \"s/^$1=//p\" \"$manifest\"; }}; test \"$(sha256sum {main} | awk '{{print $1}}')\" = \"$(get main_sha256)\"; test \"$(sha256sum \"$root/mister-magik-fb\" | awk '{{print $1}}')\" = \"$(get gui_sha256)\"; test \"$(sha256sum \"$root/mister-magik-manager\" | awk '{{print $1}}')\" = \"$(get manager_sha256)\"; test \"$(sha256sum \"$root/mister_magik_scanout_slots.ko\" | awk '{{print $1}}')\" = \"$(get scanout_module_sha256)\"; test \"$(sha256sum \"$root/mister_magik_scanout_slots.metadata.txt\" | awk '{{print $1}}')\" = \"$(get scanout_metadata_sha256)\"; test \"$(sha256sum \"$root/fpga/menu-magik-vblank-latch.rbf\" | awk '{{print $1}}')\" = \"$(get latch_rbf_sha256)\"; test \"$(sha256sum \"$root/fpga/menu-magik-vblank-latch.metadata.txt\" | awk '{{print $1}}')\" = \"$(get latch_metadata_sha256)\"; test \"$(sha256sum \"$root/assets/snes/snes-small-v1.rgb565a\" | awk '{{print $1}}')\" = {SNES_ARTWORK_SHA256}; test \"$(sha256sum \"$root/assets/ui/settings-v1.rgb565a\" | awk '{{print $1}}')\" = {SETTINGS_ARTWORK_SHA256}",
+        r#"set -eu
+root={root}
+manifest="$root/platform-v3.manifest"
+fail() {{ printf 'platform verification: %s\n' "$1" >&2; exit 1; }}
+require() {{
+    label="$1"
+    path="$2"
+    mode="$3"
+    if [ "$mode" = x ] && [ ! -x "$path" ]; then fail "$label is missing or not executable: $path"; fi
+    if [ "$mode" = r ] && [ ! -r "$path" ]; then fail "$label is missing or unreadable: $path"; fi
+}}
+check_hash() {{
+    label="$1"
+    path="$2"
+    expected="$3"
+    actual=$(sha256sum "$path" | awk '{{print $1}}')
+    if [ "$actual" != "$expected" ]; then
+        fail "$label hash mismatch path=$path expected=$expected actual=$actual"
+    fi
+}}
+test -s "$manifest" || fail "manifest is missing or empty: $manifest"
+require "Main" {main} x
+require "GUI" "$root/mister-magik-fb" x
+require "manager" "$root/mister-magik-manager" x
+require "scanout module" "$root/mister_magik_scanout_slots.ko" r
+require "scanout metadata" "$root/mister_magik_scanout_slots.metadata.txt" r
+require "FPGA RBF" "$root/fpga/menu-magik-vblank-latch.rbf" r
+require "FPGA metadata" "$root/fpga/menu-magik-vblank-latch.metadata.txt" r
+require "SNES artwork" "$root/assets/snes/snes-small-v1.rgb565a" r
+require "settings artwork" "$root/assets/ui/settings-v1.rgb565a" r
+grep -qx 'format={manifest_format}' "$manifest" || fail "manifest format is not {manifest_format}"
+get() {{
+    values=$(sed -n "s/^$1=//p" "$manifest")
+    [ -n "$values" ] || fail "manifest key is missing or empty: $1"
+    count=$(printf '%s\n' "$values" | wc -l | tr -d ' ')
+    [ "$count" -eq 1 ] || fail "manifest key is duplicated: $1"
+    printf '%s' "$values"
+}}
+check_hash "Main" {main} "$(get main_sha256)"
+check_hash "GUI" "$root/mister-magik-fb" "$(get gui_sha256)"
+check_hash "manager" "$root/mister-magik-manager" "$(get manager_sha256)"
+check_hash "scanout module" "$root/mister_magik_scanout_slots.ko" "$(get scanout_module_sha256)"
+check_hash "scanout metadata" "$root/mister_magik_scanout_slots.metadata.txt" "$(get scanout_metadata_sha256)"
+check_hash "FPGA RBF" "$root/fpga/menu-magik-vblank-latch.rbf" "$(get latch_rbf_sha256)"
+check_hash "FPGA metadata" "$root/fpga/menu-magik-vblank-latch.metadata.txt" "$(get latch_metadata_sha256)"
+check_hash "SNES artwork" "$root/assets/snes/snes-small-v1.rgb565a" "{SNES_ARTWORK_SHA256}"
+check_hash "settings artwork" "$root/assets/ui/settings-v1.rgb565a" "{SETTINGS_ARTWORK_SHA256}""#,
+        root = sh(root),
+        main = sh(main),
         manifest_format = crate::platform_manifest::FORMAT,
     )
 }
