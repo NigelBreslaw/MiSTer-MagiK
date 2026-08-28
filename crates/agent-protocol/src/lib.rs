@@ -18,6 +18,18 @@ pub const UI_TEST_REQUEST_SCHEMA: &str = "mister-magik-ui-test-request-v1";
 pub const UI_TEST_MAX_CASE_LENGTH: usize = 128;
 pub const UI_TEST_MAX_FIXTURE_LENGTH: usize = 128;
 pub const UI_TEST_MAX_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
+pub const UI_TEST_CASES: &[&str] = &[
+    "smoke",
+    "startup-home",
+    "system-hub",
+    "arcade-navigation",
+    "arcade-filters",
+    "settings-display",
+    "screensaver-motion",
+    "about-licenses",
+    "effect-sandbox",
+];
+pub const UI_TEST_FIXTURES: &[&str] = &["deterministic-arcade-v1"];
 pub const LAUNCHER_AUTOMATION_MAX_HOLD_MS: u64 = 40_000;
 pub const ALPHA_CANDIDATE_INSTALL_CAPABILITY: &str = "alpha-candidate-install-v1";
 pub const SCREENSAVER_FRAME_EVIDENCE_CAPABILITY: &str = "screensaver-frame-evidence-v6";
@@ -75,6 +87,12 @@ impl UiTestCaseRequest {
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
         {
             return Err("ui test fixture contains invalid characters or length".to_string());
+        }
+        if !UI_TEST_CASES.contains(&case) {
+            return Err(format!("unsupported ui test case: {case}"));
+        }
+        if !UI_TEST_FIXTURES.contains(&fixture) {
+            return Err(format!("unsupported ui test fixture: {fixture}"));
         }
         let timeout_ms = object["timeout_ms"]
             .as_u64()

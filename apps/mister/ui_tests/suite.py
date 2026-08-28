@@ -12,6 +12,7 @@ from typing import Protocol
 DEFAULT_FIXTURE = "deterministic-arcade-v1"
 DEFAULT_TIMEOUT_SECONDS = 120
 CASE_TARGETS = {
+    "smoke": "apps/mister/ui_tests/tests/test_startup_home.py",
     "startup-home": "apps/mister/ui_tests/tests/test_startup_home.py",
     "system-hub": "apps/mister/ui_tests/tests/test_system_hub.py",
     "arcade-navigation": "apps/mister/ui_tests/tests/test_arcade_navigation.py",
