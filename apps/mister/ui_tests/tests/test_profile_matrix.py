@@ -14,6 +14,13 @@ DISPLAY_PROFILES = ("hdmi-720p", "hdmi-1080p", "crt-240p", "crt-480p")
 ORIENTATIONS = ("normal", "monitor-clockwise")
 FEATURES = ("home", "arcade", "settings")
 
+DISPLAY_CONTRACTS = {
+    "hdmi-720p": ("hdmi", "hdmi-1280x720p60"),
+    "hdmi-1080p": ("hdmi", "hdmi-1920x1080p60"),
+    "crt-240p": ("crt-240p60", "crt-240p60"),
+    "crt-480p": ("crt-480p60", "crt-480p60"),
+}
+
 
 @pytest.mark.parametrize("display", DISPLAY_PROFILES)
 @pytest.mark.parametrize("orientation", ORIENTATIONS)
@@ -26,12 +33,15 @@ def test_profile_feature_matrix(
     command_text = os.environ.get("MISTER_UI_TEST_COMMAND")
     if not command_text:
         pytest.skip("set MISTER_UI_TEST_COMMAND for attended device UI tests")
+    output_route, display_mode = DISPLAY_CONTRACTS[display]
     environment = dict(os.environ)
     environment.update(
         {
             "MISTER_UI_TEST_DISPLAY": display,
             "MISTER_UI_TEST_ORIENTATION": orientation,
             "MISTER_UI_TEST_FEATURE": feature,
+            "MISTER_MAGIK_RUNTIME_SETTINGS_V1": f"schema=1&output={output_route}",
+            "MISTER_MAGIK_RUNTIME_DISPLAY_V1": f"schema=1&mode={display_mode}",
         }
     )
     config = DriverConfig(
