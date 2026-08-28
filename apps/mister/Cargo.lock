@@ -2627,7 +2627,7 @@ dependencies = [
  "mister-magik-perf-events",
  "mister-magik-platform-manifest-contract",
  "postcard",
- "quick-xml 0.41.0",
+ "quick-xml 0.42.0",
  "rusqlite",
  "serde",
  "serde_json",
