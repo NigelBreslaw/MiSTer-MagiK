@@ -82,12 +82,14 @@ class InputCorrelation:
         vertical: int,
         timeout: float = 2.0,
     ) -> CorrelatedInput:
-        return self._record(
+        result = self._record(
             action,
             "joystick",
             lambda: self._joystick.hat(horizontal, vertical),
             timeout,
         )
+        self._joystick.hat(0, 0)
+        return result
 
     def history(self) -> tuple[CorrelatedInput, ...]:
         return tuple(self._history)
