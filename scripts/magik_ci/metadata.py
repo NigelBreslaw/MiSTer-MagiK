@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from .common import github_output
@@ -49,10 +50,26 @@ def require_alpha_promotion(channel: str, alpha_sha: str, candidate_sha: str) ->
 
 
 def host_assurance(paths: list[str]) -> None:
-    """Validate that requested host paths exist; detailed checks live in scripts/checks."""
+    """Run the bounded host checks selected by a CI path group."""
     missing = [path for path in paths if not Path(path).exists()]
     if missing:
         raise FileNotFoundError(", ".join(missing))
+    root = Path.cwd()
+    checks: list[tuple[Path, list[str]]] = [
+        (root / "scripts/checks/check-repository-layout.py", []),
+        (root / "scripts/checks/check-unified-agent-surface.py", []),
+    ]
+    if any(path.startswith("scripts") or path.startswith("docs") for path in paths):
+        checks.append(
+            (
+                root / "scripts/checks/check-font-text-contract.py",
+                ["--repository", str(root), "--all"],
+            )
+        )
+    if any("visual-baselines/launcher" in path for path in paths):
+        checks.append((root / "scripts/tests/test-launcher-contract.py", []))
+    for check, arguments in checks:
+        subprocess.run([str(check), *arguments], cwd=root, check=True)
 
 
 def write_plan(path: Path | None, value: dict[str, object]) -> None:
