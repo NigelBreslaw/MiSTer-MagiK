@@ -1339,6 +1339,12 @@ fn check_watch_index(
     watch: &FastSystemWatchIndex,
     check: &mut FastSystemSourceCheck,
 ) {
+    #[derive(Clone, Copy)]
+    enum ExpectedKind {
+        Directory,
+        Container,
+    }
+
     let known_directories = watch
         .directories
         .iter()
@@ -1351,36 +1357,109 @@ fn check_watch_index(
             return;
         }
     }
+    let mut grouped = BTreeMap::<PathBuf, Vec<(ExpectedKind, PathBuf, u64, i128)>>::new();
+    let mut fallback = Vec::new();
     for directory in &watch.directories {
         check.directories_checked = check.directories_checked.saturating_add(1);
-        let metadata = match fs::metadata(&directory.path) {
-            Ok(metadata) if metadata.is_dir() => metadata,
-            _ => {
-                check.status = FastSourceCheckStatus::Changed;
-                check.reason = format!("directory removed: {}", directory.path);
-                return;
-            }
+        let path = PathBuf::from(&directory.path);
+        let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        else {
+            fallback.push((ExpectedKind::Directory, path, 0, directory.modified_ns));
+            continue;
         };
-        if modified_ns(&metadata) != directory.modified_ns {
-            check.status = FastSourceCheckStatus::Changed;
-            check.reason = format!("directory entries changed: {}", directory.path);
-            return;
-        }
+        grouped.entry(parent.to_path_buf()).or_default().push((
+            ExpectedKind::Directory,
+            path,
+            0,
+            directory.modified_ns,
+        ));
     }
     for container in &watch.containers {
         check.containers_checked = check.containers_checked.saturating_add(1);
-        let metadata = match fs::metadata(&container.path) {
-            Ok(metadata) if metadata.is_file() => metadata,
-            _ => {
+        let path = PathBuf::from(&container.path);
+        let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        else {
+            fallback.push((
+                ExpectedKind::Container,
+                path,
+                container.size,
+                container.modified_ns,
+            ));
+            continue;
+        };
+        grouped.entry(parent.to_path_buf()).or_default().push((
+            ExpectedKind::Container,
+            path,
+            container.size,
+            container.modified_ns,
+        ));
+    }
+    for (parent, entries) in grouped {
+        let paths = entries
+            .iter()
+            .map(|(_, path, _, _)| path.clone())
+            .collect::<Vec<_>>();
+        let observations = crate::namespace_walk::probe_known_path_metadata(&parent, &paths);
+        for ((kind, path, expected_size, expected_modified_ns), observed) in
+            entries.into_iter().zip(observations)
+        {
+            let Some(observed) = observed else {
                 check.status = FastSourceCheckStatus::Changed;
-                check.reason = format!("container removed: {}", container.path);
+                check.reason = format!("watched path unavailable: {}", path.display());
+                return;
+            };
+            match kind {
+                ExpectedKind::Directory => {
+                    if !observed.is_dir || expected_modified_ns != observed.modified_ns {
+                        check.status = FastSourceCheckStatus::Changed;
+                        check.reason = format!("directory entries changed: {}", path.display());
+                        return;
+                    }
+                }
+                ExpectedKind::Container => {
+                    if !observed.is_file
+                        || expected_size != observed.size
+                        || expected_modified_ns != observed.modified_ns
+                    {
+                        check.status = FastSourceCheckStatus::Changed;
+                        check.reason = format!("container changed: {}", path.display());
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    for (kind, path, expected_size, expected_modified_ns) in fallback {
+        let metadata = match fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                check.status = FastSourceCheckStatus::Changed;
+                check.reason = format!("watched path unavailable: {}", path.display());
                 return;
             }
         };
-        if metadata.len() != container.size || modified_ns(&metadata) != container.modified_ns {
-            check.status = FastSourceCheckStatus::Changed;
-            check.reason = format!("container changed: {}", container.path);
-            return;
+        match kind {
+            ExpectedKind::Directory => {
+                if !metadata.is_dir() || modified_ns(&metadata) != expected_modified_ns {
+                    check.status = FastSourceCheckStatus::Changed;
+                    check.reason = format!("directory entries changed: {}", path.display());
+                    return;
+                }
+            }
+            ExpectedKind::Container => {
+                if !metadata.is_file()
+                    || metadata.len() != expected_size
+                    || modified_ns(&metadata) != expected_modified_ns
+                {
+                    check.status = FastSourceCheckStatus::Changed;
+                    check.reason = format!("container changed: {}", path.display());
+                    return;
+                }
+            }
         }
     }
     check.status = FastSourceCheckStatus::Unchanged;

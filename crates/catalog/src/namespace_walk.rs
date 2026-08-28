@@ -93,6 +93,52 @@ pub(crate) struct DirectorySignatureProbe {
     pub(crate) child_signatures: Vec<Option<(u64, i64)>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct KnownPathMetadata {
+    pub(crate) is_dir: bool,
+    pub(crate) is_file: bool,
+    pub(crate) size: u64,
+    pub(crate) modified_ns: i128,
+}
+
+/// Probe immediate children of one parent directory without repeating the
+/// parent pathname lookup. The returned entries follow `std::fs::metadata`
+/// semantics: symlinks are followed, and missing or invalid entries are
+/// represented by `None`.
+pub(crate) fn probe_known_path_metadata(
+    parent: &Path,
+    child_paths: &[PathBuf],
+) -> Vec<Option<KnownPathMetadata>> {
+    #[cfg(target_os = "linux")]
+    {
+        return linux::probe_known_path_metadata(parent, child_paths);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    child_paths
+        .iter()
+        .map(|path| std::fs::metadata(path).ok().map(known_path_metadata))
+        .collect()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn known_path_metadata(metadata: std::fs::Metadata) -> KnownPathMetadata {
+    use std::time::UNIX_EPOCH;
+
+    KnownPathMetadata {
+        is_dir: metadata.is_dir(),
+        is_file: metadata.is_file(),
+        size: metadata.len(),
+        modified_ns: metadata
+            .modified()
+            .ok()
+            .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+            .map_or(0, |value| {
+                i128::from(value.as_secs()) * 1_000_000_000 + i128::from(value.subsec_nanos())
+            }),
+    }
+}
+
 impl NamespaceWalkStats {
     pub(crate) fn add(&mut self, other: &Self) {
         if self.backend != other.backend {
@@ -457,14 +503,15 @@ fn unix_timestamp_nanos(seconds: i64, nanos: i64) -> i64 {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::{
-        DirectorySignatureProbe, NamespaceEntry, NamespaceEntryKind, NamespaceRootPolicy,
-        NamespaceSignatureCapture, NamespaceWalkStats, is_zip_path, unix_timestamp_nanos,
+        DirectorySignatureProbe, KnownPathMetadata, NamespaceEntry, NamespaceEntryKind,
+        NamespaceRootPolicy, NamespaceSignatureCapture, NamespaceWalkStats, is_zip_path,
+        unix_timestamp_nanos,
     };
     use std::ffi::{CString, OsString};
     use std::io;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     const GETDENTS_INITIAL_BUFFER_BYTES: usize = 8 * 1024;
     const GETDENTS_MAX_BUFFER_BYTES: usize = 128 * 1024;
@@ -551,6 +598,36 @@ mod linux {
                 .map(|(before, after)| super::stable_directory_signature(before, after))
                 .collect(),
         }
+    }
+
+    pub(super) fn probe_known_path_metadata(
+        parent: &Path,
+        child_paths: &[PathBuf],
+    ) -> Vec<Option<KnownPathMetadata>> {
+        use std::os::unix::ffi::OsStrExt;
+
+        let Ok(parent_name) = c_string(parent.as_os_str().as_bytes(), "parent path") else {
+            return vec![None; child_paths.len()];
+        };
+        let raw_fd = unsafe {
+            libc::open(
+                parent_name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            )
+        };
+        if raw_fd < 0 {
+            return vec![None; child_paths.len()];
+        }
+        let parent_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(raw_fd) };
+        child_paths
+            .iter()
+            .map(|path| {
+                let name = path.file_name()?.as_bytes();
+                let name = c_string(name, "child path").ok()?;
+                let value = stat_entry_following_symlinks(parent_fd.as_raw_fd(), &name).ok()?;
+                Some(known_path_metadata_from_stat(value))
+            })
+            .collect()
     }
 
     fn child_directory_signature(parent_fd: RawFd, path: &Path) -> Option<(u64, i64)> {
@@ -930,6 +1007,28 @@ mod linux {
         Ok(unsafe { value.assume_init() })
     }
 
+    fn stat_entry_following_symlinks(
+        directory: RawFd,
+        name: &CString,
+    ) -> Result<libc::stat, io::Error> {
+        let mut value = std::mem::MaybeUninit::<libc::stat>::uninit();
+        let result = unsafe { libc::fstatat(directory, name.as_ptr(), value.as_mut_ptr(), 0) };
+        if result != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(unsafe { value.assume_init() })
+    }
+
+    fn known_path_metadata_from_stat(value: libc::stat) -> KnownPathMetadata {
+        KnownPathMetadata {
+            is_dir: kind_from_mode(value.st_mode) == NamespaceEntryKind::Directory,
+            is_file: kind_from_mode(value.st_mode) == NamespaceEntryKind::File,
+            size: u64::try_from(value.st_size).unwrap_or(0),
+            modified_ns: i128::from(value.st_mtime) * 1_000_000_000
+                + i128::from(value.st_mtime_nsec),
+        }
+    }
+
     fn stat_fd(fd: RawFd) -> Result<libc::stat, io::Error> {
         let mut value = std::mem::MaybeUninit::<libc::stat>::uninit();
         let result = unsafe { libc::fstat(fd, value.as_mut_ptr()) };
@@ -1205,6 +1304,26 @@ mod tests {
         assert!(probe.child_signatures[0].is_some());
         assert_eq!(probe.child_signatures[1], None);
         assert_eq!(probe.child_signatures[2], None);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn known_path_metadata_batches_directory_and_file_children() {
+        let dir = unique_temp_dir("namespace-known-path-probe");
+        let child = dir.join("child");
+        let file = dir.join("file.rom");
+        let missing = dir.join("missing");
+        fs::create_dir_all(&child).unwrap();
+        fs::write(&file, b"file").unwrap();
+
+        let observations =
+            probe_known_path_metadata(&dir, &[child.clone(), file.clone(), missing.clone()]);
+
+        assert_eq!(observations.len(), 3);
+        assert!(observations[0].is_some_and(|value| value.is_dir));
+        assert!(observations[1].is_some_and(|value| value.is_file && value.size == 4));
+        assert_eq!(observations[2], None);
 
         fs::remove_dir_all(dir).unwrap();
     }
