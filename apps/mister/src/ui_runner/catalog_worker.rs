@@ -6,7 +6,37 @@ use crate::cpu_profile::CatalogBuildProfiler;
 use crate::preview_state::SystemEntryPreviewPrelude;
 use mister_magik_catalog::arcade_catalog::ArcadeCatalog;
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
+use std::ffi::CString;
 use std::path::Path;
+
+fn filesystem_available_bytes(path: &str) -> Option<u64> {
+    let path = CString::new(path).ok()?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::zeroed();
+    let result = unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) };
+    if result != 0 {
+        return None;
+    }
+    let stats = unsafe { stats.assume_init() };
+    (stats.f_bavail as u64).checked_mul(stats.f_frsize as u64)
+}
+
+fn report_catalog_filesystem_headroom(tx: &mpsc::Sender<CatalogWorkerMessage>, phase: &str) {
+    let tmp_available_bytes = filesystem_available_bytes("/tmp/mister-magik");
+    let media_available_bytes = filesystem_available_bytes("/media/fat");
+    let format_bytes = |value: Option<u64>| {
+        value
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    };
+    let _ = tx.send(CatalogWorkerMessage::Timing {
+        name: "catalog_filesystem_headroom".to_string(),
+        detail: format!(
+            "phase={phase} tmp_available_bytes={} media_available_bytes={}",
+            format_bytes(tmp_available_bytes),
+            format_bytes(media_available_bytes),
+        ),
+    });
+}
 
 fn send_ready_catalog(
     tx: &mpsc::Sender<CatalogWorkerMessage>,
@@ -174,6 +204,7 @@ fn run_fast_catalog_refresh_in_process(
         FastCatalogRefreshRequest::Update
     };
     let storage_root = PathBuf::from("/media/fat");
+    report_catalog_filesystem_headroom(tx, "begin");
     let planned = match mister_magik_catalog::fast_catalog_refresh::plan_fast_refresh(
         &storage_root,
         catalog_root,
@@ -181,6 +212,7 @@ fn run_fast_catalog_refresh_in_process(
     ) {
         Ok(planned) => planned,
         Err(error) => {
+            report_catalog_filesystem_headroom(tx, "planning-error");
             catalog_profile.fail("planning-failed");
             let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
                 error: format!("fast catalog refresh planning failed: {error}"),
@@ -212,6 +244,7 @@ fn run_fast_catalog_refresh_in_process(
     ) {
         Ok(report) => report,
         Err(error) => {
+            report_catalog_filesystem_headroom(tx, "refresh-error");
             catalog_profile.fail("refresh-failed");
             let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
                 error: format!("fast catalog refresh failed: {error}"),
@@ -284,6 +317,7 @@ fn run_fast_catalog_refresh_in_process(
             return;
         }
     }
+    report_catalog_filesystem_headroom(tx, "complete");
     if report.artifact_systems_written == 0 {
         catalog_profile.unchanged();
     } else {
@@ -310,6 +344,7 @@ fn run_fast_catalog_fresh_build(
     mut catalog_profile: CatalogBuildProfiler,
 ) {
     let storage_root = PathBuf::from("/media/fat");
+    report_catalog_filesystem_headroom(tx, "fresh-begin");
     let mut planned_system_ids = Vec::new();
     let mut completed_system_ids = std::collections::BTreeSet::new();
     let report = match mister_magik_catalog::fast_catalog_refresh::build_fresh_catalog_with_progress(
@@ -370,6 +405,7 @@ fn run_fast_catalog_fresh_build(
     ) {
         Ok(report) => report,
         Err(error) => {
+            report_catalog_filesystem_headroom(tx, "fresh-error");
             catalog_profile.fail("fresh-build-failed");
             let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
                 error: format!("catalog build failed: {error}"),
@@ -390,6 +426,7 @@ fn run_fast_catalog_fresh_build(
         rebuilt: report.system_ids.clone(),
         removed: Vec::new(),
     });
+    report_catalog_filesystem_headroom(tx, "fresh-complete");
     let _ = tx.send(CatalogWorkerMessage::Timing {
         name: "catalog_fresh_build".to_string(),
         detail: format!(

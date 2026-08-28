@@ -20282,6 +20282,18 @@ fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Ve
                     "catalog_search_build_tsv",
                     "integrity_us",
                 ),
+                "tmp_available_bytes_min": catalog_phase_metric_min(
+                    value.get("phase_evidence"),
+                    "startup_timing",
+                    Some("catalog_filesystem_headroom"),
+                    "tmp_available_bytes",
+                ),
+                "media_available_bytes_min": catalog_phase_metric_min(
+                    value.get("phase_evidence"),
+                    "startup_timing",
+                    Some("catalog_filesystem_headroom"),
+                    "media_available_bytes",
+                ),
                 "magik_rss_kb_max": value
                     .pointer("/resource_profile/magik_rss_kb_max"),
                 "available_memory_kb_min": value
@@ -20371,6 +20383,27 @@ fn catalog_phase_metric_sum(
     (!values.is_empty()).then(|| values.into_iter().fold(0, u64::saturating_add))
 }
 
+fn catalog_phase_metric_min(
+    phase_evidence: Option<&Value>,
+    record: &str,
+    name: Option<&str>,
+    metric: &str,
+) -> Option<u64> {
+    phase_evidence?
+        .get("records")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter(|value| {
+            value.get("record").and_then(Value::as_str) == Some(record)
+                && name.is_none_or(|expected| {
+                    value.get("name").and_then(Value::as_str) == Some(expected)
+                })
+        })
+        .filter_map(|value| value.pointer(&format!("/metrics/{metric}")))
+        .filter_map(Value::as_u64)
+        .min()
+}
+
 fn catalog_runtime_completion_ms(phase_evidence: Option<&Value>) -> Option<u64> {
     phase_evidence?
         .get("records")
@@ -20428,11 +20461,11 @@ fn catalog_attribution_evidence_report(summary: &Value) -> Result<String> {
     )?;
     writeln!(
         report,
-        "| Arm | Sample | Leg | First visible | Host complete | Runtime complete | Internal | Source | FTS optimize | FTS integrity | RSS max | Mem min | Games |"
+        "| Arm | Sample | Leg | First visible | Host complete | Runtime complete | Internal | Source | FTS optimize | FTS integrity | Tmp free min | Media free min | RSS max | Mem min | Games |"
     )?;
     writeln!(
         report,
-        "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+        "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
     )?;
     if let Some(rows) = summary
         .get("normalized_measurements")
@@ -20441,7 +20474,7 @@ fn catalog_attribution_evidence_report(summary: &Value) -> Result<String> {
         for row in rows {
             writeln!(
                 report,
-                "| {} | {} | {} | {} ms | {} ms | {} ms | {} ms | {} ms | {} us | {} us | {} kb | {} kb | {} |",
+                "| {} | {} | {} | {} ms | {} ms | {} ms | {} ms | {} ms | {} us | {} us | {} B | {} B | {} kb | {} kb | {} |",
                 row["arm"].as_str().unwrap_or("unknown"),
                 row["sample"].as_u64().unwrap_or(0),
                 row["leg"].as_str().unwrap_or("unknown"),
@@ -20454,6 +20487,8 @@ fn catalog_attribution_evidence_report(summary: &Value) -> Result<String> {
                 row["source_phase_ms"].as_u64().unwrap_or(0),
                 row["search_optimize_us"].as_u64().unwrap_or(0),
                 row["search_integrity_us"].as_u64().unwrap_or(0),
+                row["tmp_available_bytes_min"].as_u64().unwrap_or(0),
+                row["media_available_bytes_min"].as_u64().unwrap_or(0),
                 row["magik_rss_kb_max"].as_u64().unwrap_or(0),
                 row["available_memory_kb_min"].as_u64().unwrap_or(0),
                 row["total_games"].as_u64().unwrap_or(0),
@@ -40881,6 +40916,16 @@ H: Handlers=event3 js0"#
                 {
                     "record": "catalog_search_build_tsv",
                     "metrics": {"optimize_us": 800, "integrity_us": 500}
+                },
+                {
+                    "record": "startup_timing",
+                    "name": "catalog_filesystem_headroom",
+                    "metrics": {"tmp_available_bytes": 900, "media_available_bytes": 8000}
+                },
+                {
+                    "record": "startup_timing",
+                    "name": "catalog_filesystem_headroom",
+                    "metrics": {"tmp_available_bytes": 700, "media_available_bytes": 7000}
                 }
             ]
         });
@@ -40900,6 +40945,15 @@ H: Handlers=event3 js0"#
         assert_eq!(
             catalog_phase_metric_sum(Some(&evidence), "catalog_search_build_tsv", "integrity_us"),
             Some(800)
+        );
+        assert_eq!(
+            catalog_phase_metric_min(
+                Some(&evidence),
+                "startup_timing",
+                Some("catalog_filesystem_headroom"),
+                "tmp_available_bytes",
+            ),
+            Some(700)
         );
     }
 
