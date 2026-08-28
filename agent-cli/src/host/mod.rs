@@ -19433,28 +19433,6 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
     env
 }
 
-fn catalog_attribution_search_ui_env(arm: CatalogAttributionArm) -> Vec<(String, String)> {
-    let mut env = catalog_attribution_launcher_env(arm)
-        .into_iter()
-        .filter(|(key, _)| {
-            !matches!(
-                key.as_str(),
-                "MISTER_CATALOG_REFRESH"
-                    | "MISTER_LAUNCHER_START_SCREEN"
-                    | "MISTER_LAUNCHER_START_SYSTEM"
-                    | "MISTER_HOME_SELECTED_INDEX"
-                    | "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM"
-            )
-        })
-        .collect::<Vec<_>>();
-    env.extend([
-        ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-        ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
-        ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
-    ]);
-    env
-}
-
 fn catalog_attribution_runtime_command(subcommand: &str) -> String {
     let root = CATALOG_ATTRIBUTION_REMOTE_DIR;
     let work = CATALOG_ATTRIBUTION_WORK_DIR;
@@ -20029,14 +20007,7 @@ fn run_catalog_attribution_pair(
     )?;
     let fresh_profile = collect_catalog_attribution_profile(session, sample_dir, "fresh", arm)?;
     let (first_use_search_ui, first_use_search) = if arm == CatalogAttributionArm::Control {
-        let ui_detail = verify_installed_search_ui_with_env(
-            config,
-            &sample_dir.join("first-use-search-ui"),
-            catalog_attribution_search_ui_env(arm),
-            Duration::from_secs(45),
-            120,
-        )?;
-        let ui_summary: Value = serde_json::from_str(&ui_detail)?;
+        let ui_summary = measure_catalog_attribution_search_ui(config, session, sample_dir)?;
         let search_summary = run_catalog_attribution_search_bench(session, sample_dir)?;
         (Some(ui_summary), Some(search_summary))
     } else {
@@ -20071,6 +20042,174 @@ fn run_catalog_attribution_pair(
         pair["first_use_search"] = first_use_search;
     }
     Ok(pair)
+}
+
+fn measure_catalog_attribution_search_ui(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    sample_dir: &Path,
+) -> Result<Value> {
+    let status = read_launcher_status(session)?;
+    let main_status: Value = serde_json::from_str(
+        &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
+    )?;
+    let begin: Value = serde_json::from_str(&launcher_automation::begin(
+        config,
+        status
+            .pointer("/build/version")
+            .and_then(Value::as_str)
+            .ok_or("catalog search UI status has no build version")?,
+        status
+            .pointer("/build/source_revision")
+            .and_then(Value::as_str)
+            .ok_or("catalog search UI status has no source revision")?,
+        main_status
+            .get("main_generation")
+            .and_then(Value::as_u64)
+            .ok_or("catalog search UI Main status has no generation")?,
+        120,
+    )?)?;
+    let nonce = begin["nonce"]
+        .as_str()
+        .ok_or("catalog search UI automation has no nonce")?
+        .to_string();
+    let run_result = (|| -> Result<Value> {
+        if status.get("input_enabled").and_then(Value::as_bool) != Some(true) {
+            return Err("catalog search UI started before launcher input was enabled".into());
+        }
+        wait_gui_profile_snapshot_with_timeout(
+            config,
+            &nonce,
+            |snapshot| {
+                gui_profile_effective_view(snapshot) == Some("home")
+                    && snapshot
+                        .pointer("/semantic/navigation_transition_active")
+                        .and_then(Value::as_bool)
+                        == Some(false)
+            },
+            "cold catalog Home",
+            Duration::from_secs(45),
+        )?;
+        modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::A))?;
+        wait_gui_profile_snapshot_with_timeout(
+            config,
+            &nonce,
+            |snapshot| {
+                gui_profile_effective_view(snapshot) == Some("arcade")
+                    && snapshot
+                        .pointer("/semantic/navigation_transition_active")
+                        .and_then(Value::as_bool)
+                        == Some(false)
+            },
+            "cold catalog Arcade",
+            Duration::from_secs(10),
+        )?;
+        modal_input_action(
+            config,
+            &nonce,
+            AutomationAction::Tap(AutomationButton::Left),
+        )?;
+        wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| {
+                snapshot
+                    .pointer("/semantic/drawer_open")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+            },
+            "catalog search UI drawer open",
+        )?;
+        modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::B))?;
+        wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| {
+                snapshot
+                    .pointer("/semantic/drawer_level")
+                    .and_then(Value::as_str)
+                    == Some("Filters")
+            },
+            "catalog search UI drawer top level",
+        )?;
+        modal_input_action(
+            config,
+            &nonce,
+            AutomationAction::Tap(AutomationButton::Down),
+        )?;
+        modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::A))?;
+        wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| {
+                snapshot
+                    .pointer("/semantic/search_active")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+            },
+            "catalog search UI keyboard",
+        )?;
+        modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::A))?;
+        let started = Instant::now();
+        let timeout = Duration::from_secs(30);
+        loop {
+            let status = read_launcher_status(session)?;
+            if search_ui_status_ready(&status) {
+                let launcher_log = remote_read(session, "/tmp/mister-magik-slint.log")
+                    .ok_or("catalog search UI launcher log is missing")?;
+                fs::write(
+                    sample_dir.join("first-use-search-ui-launcher.log"),
+                    &launcher_log,
+                )?;
+                let worker_threads = launcher_log
+                    .lines()
+                    .filter(|line| line.contains("search_query_tsv\tspawn\t"))
+                    .count();
+                return Ok(json!({
+                    "schema": "mister-magik-search-ui-verification-v1",
+                    "status": "ready",
+                    "query": "A",
+                    "results": status["arcade_search_results"],
+                    "elapsed_ms": started.elapsed().as_millis() as u64,
+                    "worker_threads_observed": worker_threads,
+                    "result_source": if worker_threads == 0 { "resident-catalog" } else { "persisted-search-worker" },
+                }));
+            }
+            if status.get("arcade_search_status").and_then(Value::as_str) == Some("failed") {
+                return Err(format!(
+                    "launcher search failed for query {:?}",
+                    status.get("arcade_search_query")
+                )
+                .into());
+            }
+            if started.elapsed() >= timeout {
+                return Err(format!(
+                    "launcher search did not reach ready results within {} ms; final status={status}",
+                    started.elapsed().as_millis()
+                )
+                .into());
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    })();
+    let end_result = launcher_automation::end(config, &nonce).map(|_| ());
+    let summary = match (run_result, end_result) {
+        (Ok(summary), Ok(())) => summary,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(end)) => {
+            return Err(format!("catalog search UI automation cleanup failed: {end}").into());
+        }
+        (Err(run), Err(end)) => {
+            return Err(
+                format!("{run}; catalog search UI automation cleanup failed: {end}").into(),
+            );
+        }
+    };
+    fs::write(
+        sample_dir.join("first-use-search-ui.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    Ok(summary)
 }
 
 fn run_catalog_attribution_search_bench(session: &Session, sample_dir: &Path) -> Result<Value> {
