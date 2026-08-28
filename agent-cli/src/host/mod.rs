@@ -1420,7 +1420,7 @@ impl NativeDevice {
     pub(crate) fn development_fpga_activation_current(
         &mut self,
     ) -> std::result::Result<bool, DeviceFailure> {
-        let prepared = self.prepare(DeviceAccess::SSH_READ)?;
+        let prepared = self.prepare(DeviceAccess::AGENT_READ)?;
         match verify_installed_fpga_activation(&prepared.config, Layout::Development) {
             Ok(_) => Ok(true),
             Err(DeviceFailure::Unhealthy(_)) => Ok(false),
