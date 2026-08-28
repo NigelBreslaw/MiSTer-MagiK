@@ -1649,7 +1649,7 @@ mod tests {
 
     #[test]
     fn independent_source_set_contains_no_legacy_input_kind() {
-        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 11);
+        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 12);
     }
 
     #[test]

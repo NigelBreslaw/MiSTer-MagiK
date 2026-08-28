@@ -82,6 +82,13 @@ struct GenericSystemAccumulator {
     watch: GenericSourceWatchObservations,
 }
 
+type GenericSystemPlanDiscovery = (
+    Vec<FastFiveSystem>,
+    GenericSystemScanReport,
+    Vec<LaunchProfile>,
+    BTreeMap<String, GenericSourceWatchObservations>,
+);
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct GenericSourceWatchObservations {
     pub(crate) roots: BTreeSet<String>,
@@ -146,7 +153,7 @@ pub(crate) fn inventory_prepared_extension_under_named_roots(
         root,
         None,
         NamespaceSignatureCapture::AllDirectories,
-        &ignore,
+        ignore,
         |entry| {
             files_visited = files_visited.saturating_add(1);
             if let (Some(parent), Some(name)) = (entry.path.parent(), entry.path.file_name()) {
@@ -486,15 +493,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
     plan: &CatalogScanPlan,
     excluded_system_ids: &[&str],
     mut system_complete: impl FnMut(&FastFiveSystem),
-) -> Result<
-    (
-        Vec<FastFiveSystem>,
-        GenericSystemScanReport,
-        Vec<LaunchProfile>,
-        BTreeMap<String, GenericSourceWatchObservations>,
-    ),
-    String,
-> {
+) -> Result<GenericSystemPlanDiscovery, String> {
     let started = Instant::now();
     let mut profiles = plan.base_profiles().to_vec();
     let mut accumulators = BTreeMap::<String, GenericSystemAccumulator>::new();
@@ -527,6 +526,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
                 &mut accumulator.stats,
                 &mut accumulator.games,
                 &mut accumulator.watch,
+                true,
             );
         }
     }
@@ -553,6 +553,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
             &mut accumulator.stats,
             &mut accumulator.games,
             &mut accumulator.watch,
+            true,
         );
         for continuation_root in continuation_roots {
             let continuation_header = GameDirHeader {
@@ -568,6 +569,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
                 &mut accumulator.stats,
                 &mut accumulator.games,
                 &mut accumulator.watch,
+                false,
             );
         }
     }
@@ -690,6 +692,15 @@ fn collect_generic_namespace_inventory(
     max_depth: Option<usize>,
 ) -> Result<GenericNamespaceInventory, String> {
     let started = Instant::now();
+    let canonical_path = header
+        .path
+        .canonicalize()
+        .unwrap_or_else(|_| header.path.clone());
+    let header = GameDirHeader {
+        name: header.name.clone(),
+        signature: header.signature,
+        path: canonical_path,
+    };
     let mut entries = Vec::new();
     let mut has_payload_files = false;
     let mut has_zip_files = false;
@@ -861,11 +872,14 @@ fn apply_generic_namespace_inventory(
     stats: &mut GenericSystemStats,
     games: &mut Vec<ScannedGame>,
     watch: &mut GenericSourceWatchObservations,
+    counts_as_root: bool,
 ) {
     let classify_started = Instant::now();
     merge_watch_observations(watch, &inventory.watch);
     stats.elapsed_us = stats.elapsed_us.saturating_add(inventory.elapsed_us);
-    stats.inventory_roots = stats.inventory_roots.saturating_add(1);
+    if counts_as_root {
+        stats.inventory_roots = stats.inventory_roots.saturating_add(1);
+    }
     stats.inventory_entries = stats
         .inventory_entries
         .saturating_add(inventory.entries.len());

@@ -2493,6 +2493,8 @@ mod tests {
                 .any(|effect| matches!(effect, LauncherEffect::StartFreshCatalogBuild { .. }))
         );
     }
+
+    #[test]
     fn stale_catalog_events_cannot_interrupt_launching() {
         let (mut lifecycle, mut effects) = idle_lifecycle();
         lifecycle.handle(
