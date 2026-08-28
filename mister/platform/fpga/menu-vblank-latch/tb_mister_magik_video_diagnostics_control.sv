@@ -198,6 +198,7 @@ module tb_mister_magik_video_diagnostics_control;
 	initial begin
 		reg [3:0] first_sequence;
 		reg [3:0] second_sequence;
+		integer qualified_attempt;
 
 		// The observer publishes while reset is held and does not claim a
 		// qualified record before synchronized reset-low qualification.
@@ -227,9 +228,16 @@ module tb_mister_magik_video_diagnostics_control;
 		drive_return_beats(128);
 
 		// Leave the qualified, empty boundary idle long enough to freeze the
-		// exact no-request observation. Normal liveness must remain recorded.
+		// exact no-request observation. Consume a bounded pending publication:
+		// its acknowledgement lets the source publish the already-frozen tuple.
 		repeat(24) @(posedge clk_100m);
-		read_record();
+		for(qualified_attempt = 0;
+			qualified_attempt < 4 &&
+			!(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID &&
+				words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN &&
+				words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID);
+			qualified_attempt = qualified_attempt + 1)
+			read_record();
 		if(!(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID))
 			fail("qualified record not valid");
 		if(!(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN))

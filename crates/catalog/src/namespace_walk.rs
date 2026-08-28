@@ -518,7 +518,9 @@ mod linux {
     use std::io;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
+    #[cfg(feature = "builder")]
+    use std::path::PathBuf;
 
     const GETDENTS_INITIAL_BUFFER_BYTES: usize = 8 * 1024;
     const GETDENTS_MAX_BUFFER_BYTES: usize = 128 * 1024;
@@ -1015,6 +1017,7 @@ mod linux {
         Ok(unsafe { value.assume_init() })
     }
 
+    #[cfg(feature = "builder")]
     fn stat_entry_following_symlinks(
         directory: RawFd,
         name: &CString,
