@@ -3879,8 +3879,7 @@ fn platform_fpga_smoke(config: &NativeDeviceConfig) -> std::result::Result<Strin
         FpgaActivationAssessment::ArtifactInvalid { detail } => {
             return Err(DeviceFailure::ArtifactMismatch(detail));
         }
-        assessment @ (FpgaActivationAssessment::Stale { .. }
-        | FpgaActivationAssessment::NotReady { .. }) => {
+        assessment @ FpgaActivationAssessment::Stale { .. } => {
             let initial_reason = assessment.reason();
             let session = connect_with(&config.connection, 10).map_err(device_failure)?;
             if let Err(reload_error) = activate_installed_menu_fpga(config, &session) {
@@ -3904,6 +3903,13 @@ fn platform_fpga_smoke(config: &NativeDeviceConfig) -> std::result::Result<Strin
                     )));
                 }
             }
+        }
+        assessment @ FpgaActivationAssessment::NotReady { .. } => {
+            return Err(DeviceFailure::Unhealthy(format!(
+                "FPGA readiness timed out without a definite stale identity: {}; main_console={}",
+                assessment.reason(),
+                console_snapshot_for_config(config)
+            )));
         }
     };
     Ok(architecture)
@@ -38819,6 +38825,15 @@ H: Handlers=event3 js0"#
         assert_eq!(
             fpga_readiness_action(&fallback, 3, Duration::from_millis(500)),
             FpgaReadinessAction::Reload
+        );
+        let coherence_timeout = FpgaActivationAssessment::NotReady {
+            expected: "patched".into(),
+            observed: "patched".into(),
+            failures: Vec::new(),
+        };
+        assert_eq!(
+            fpga_readiness_action(&coherence_timeout, 10, FPGA_READINESS_TIMEOUT),
+            FpgaReadinessAction::Fail
         );
         let artifact = FpgaActivationAssessment::ArtifactInvalid {
             detail: "metadata missing".into(),
