@@ -7,7 +7,11 @@ import shlex
 
 import pytest
 
-from apps.mister.ui_tests.driver import DriverConfig, MagiKDriver
+from apps.mister.ui_tests.driver import (
+    DriverConfig,
+    MagiKDriver,
+    environment_for_application,
+)
 from apps.mister.ui_tests.queries import element_with_label
 
 DISPLAY_PROFILES = ("hdmi-720p", "hdmi-1080p", "crt-240p", "crt-480p")
@@ -34,7 +38,7 @@ def test_profile_feature_matrix(
     if not command_text:
         pytest.skip("set MISTER_UI_TEST_COMMAND for attended device UI tests")
     output_route, display_mode = DISPLAY_CONTRACTS[display]
-    environment = dict(os.environ)
+    environment = environment_for_application()
     environment.update(
         {
             "MISTER_UI_TEST_DISPLAY": display,

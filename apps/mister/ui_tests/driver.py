@@ -23,6 +23,25 @@ class DriverConfig:
     launch_timeout: float = 20.0
 
 
+def environment_for_application() -> dict[str, str]:
+    """Return process variables, excluding credentials for remote launches."""
+
+    import os
+
+    environment = dict(os.environ)
+    if not environment.get("MISTER_UI_TEST_SSH_DESTINATION"):
+        return environment
+    return {
+        key: value
+        for key, value in environment.items()
+        if (key.startswith("MISTER_") or key.startswith("SLINT_"))
+        and not any(
+            marker in key.upper()
+            for marker in ("TOKEN", "PASSWORD", "SECRET", "CREDENTIAL")
+        )
+    }
+
+
 class MagiKDriver:
     """Window oracle and physical-input driver for one application session."""
 
@@ -74,4 +93,4 @@ class MagiKDriver:
         path.write_bytes(self.window.grab_window_as_png())
 
 
-__all__ = ["DriverConfig", "MagiKDriver"]
+__all__ = ["DriverConfig", "MagiKDriver", "environment_for_application"]

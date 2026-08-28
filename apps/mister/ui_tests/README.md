@@ -7,3 +7,29 @@ lint it without launching a MiSTer or requiring the private Slint test wheel.
 Install the optional `device-ui-tests` dependency group only on the operator
 host that will run the suite. The Slint testing token must remain in the
 operator environment and must never be committed or copied to the device.
+
+The suite is attended and intentionally absent from CI discovery. Build and
+install the `ui-device-tests` ARM binary, then run selected journeys from the
+repository root with the device agent configured:
+
+```sh
+export SLINT_TESTING_TOKEN="..."
+export MISTER_UI_TEST_SSH_DESTINATION="root@192.0.2.10"
+export MISTER_UI_TEST_COMMAND="/media/fat/mister-magik/mister-magik-fb ui launcher 0"
+UV_INDEX="slint-private=https://testing.slint.dev/simple/" \
+UV_INDEX_SLINT_PRIVATE_USERNAME=__token__ \
+UV_INDEX_SLINT_PRIVATE_PASSWORD="$SLINT_TESTING_TOKEN" \
+uv run --extra device-ui-tests python -m apps.mister.ui_tests.suite \
+  startup-home system-hub arcade-navigation arcade-filters \
+  settings-display screensaver-motion about-licenses effect-sandbox \
+  --fixture deterministic-arcade-v1 --attended
+```
+
+`slint-testing` launches the ARM process through its SSH reverse tunnel. The
+test command receives only the bounded `MISTER_*`/`SLINT_*` controls; credentials
+are filtered before a remote command is constructed. Virtual keyboard and
+joystick devices require uinput access on the machine running the Python suite.
+Use one operator session at a time so the device display and input ownership
+remain unambiguous. The `scripts/agent device launcher ui-test` command is the
+typed per-case handshake used by the suite; it denies core launches, catalog
+writes, and reboots.
