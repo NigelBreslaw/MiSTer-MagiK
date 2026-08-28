@@ -267,13 +267,15 @@ def build_updater(input_manifest: Path, output: Path) -> dict[str, object]:
     sources.sort(key=lambda value: value["id"])
     ordered_rows = [rows[key] for key in sorted(rows)]
     payload = {"sources": sources, "rows": ordered_rows}
-    payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    payload_bytes = json.dumps(
+        [sources, ordered_rows], separators=(",", ":"), ensure_ascii=False
+    ).encode()
     stored = {
         "format": "mister-magik-arcade-updater-index-v1",
         "payload_sha256": hashlib.sha256(payload_bytes).hexdigest(),
         **payload,
     }
-    raw = json.dumps(stored, separators=(",", ":"), sort_keys=True).encode()
+    raw = json.dumps(stored, separators=(",", ":"), ensure_ascii=False).encode()
     library_name = ctypes.util.find_library("lz4")
     if not library_name:
         raise RuntimeError("liblz4 is required to build the updater index")
