@@ -3826,31 +3826,6 @@ fn probe_installed_fpga_activation(
     Ok(assess_fpga_evidence(&expected, evidence))
 }
 
-fn verify_installed_fpga_activation(
-    config: &NativeDeviceConfig,
-    layout: Layout,
-) -> std::result::Result<String, DeviceFailure> {
-    match probe_installed_fpga_activation(config, layout)? {
-        FpgaActivationAssessment::Current { architecture } => Ok(architecture),
-        FpgaActivationAssessment::Stale {
-            expected,
-            observed,
-            failures,
-        }
-        | FpgaActivationAssessment::NotReady {
-            expected,
-            observed,
-            failures,
-        } => Err(DeviceFailure::Unhealthy(format!(
-            "active FPGA identity is not current: expected={expected} observed={observed} checks={}",
-            render_fpga_check_failures(&failures)
-        ))),
-        FpgaActivationAssessment::ArtifactInvalid { detail } => {
-            Err(DeviceFailure::ArtifactMismatch(detail))
-        }
-    }
-}
-
 fn wait_for_fpga_activation(
     config: &NativeDeviceConfig,
 ) -> std::result::Result<FpgaActivationAssessment, DeviceFailure> {
