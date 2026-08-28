@@ -9,12 +9,16 @@ from .common import github_output
 def platform_candidates(artifacts: Path, name: str) -> list[dict[str, object]]:
     payload = json.loads(artifacts.read_text(encoding="utf-8"))
     values = payload.get("artifacts", payload) if isinstance(payload, dict) else payload
-    if (
-        isinstance(values, list)
-        and values
-        and all(isinstance(page, list) for page in values)
-    ):
-        values = [item for page in values for item in page]
+    if isinstance(values, list):
+        flattened: list[object] = []
+        for page in values:
+            if isinstance(page, dict) and isinstance(page.get("artifacts"), list):
+                flattened.extend(page["artifacts"])
+            elif isinstance(page, list):
+                flattened.extend(page)
+            else:
+                flattened.append(page)
+        values = flattened
     if not isinstance(values, list):
         return []
     return [
