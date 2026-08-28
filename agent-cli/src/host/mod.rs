@@ -19264,14 +19264,16 @@ const CATALOG_ATTRIBUTION_REMOTE_DIR: &str =
     "/media/fat/mister-magik-dev/catalog-attribution-benchmark";
 const CATALOG_ATTRIBUTION_WORK_DIR: &str = "/tmp/mister-magik/catalog-attribution";
 const CATALOG_ATTRIBUTION_C64_ROOT: &str = CATALOG_BUILD_REBUILD_C64_ROOT;
+const CATALOG_FAST_FIVE_STAGING_REMOTE: &str = "/tmp/mister-magik/fast-five-catalog";
 const CATALOG_COMPLETION_MANIFEST_RETRY_LIMIT: usize = 20;
 const CATALOG_COMPLETION_MANIFEST_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 fn catalog_attribution_prepare_command() -> String {
     format!(
-        "set -eu; rm -rf {root} {work}; test -d {arcade}; test -d {snes}; test -d {c64}; mkdir -p {root} {work}/diagnostics {work}/sqlite-build; test -d {root}; test -d {work}",
+        "set -eu; rm -rf {root} {work} {staging}; test -d {arcade}; test -d {snes}; test -d {c64}; mkdir -p {root} {work}/diagnostics {work}/sqlite-build; test -d {root}; test -d {work}; test ! -e {staging}",
         root = sh(CATALOG_ATTRIBUTION_REMOTE_DIR),
         work = sh(CATALOG_ATTRIBUTION_WORK_DIR),
+        staging = sh(CATALOG_FAST_FIVE_STAGING_REMOTE),
         arcade = sh(CATALOG_BUILD_REBUILD_ARCADE_ROOT),
         snes = sh(CATALOG_BUILD_REBUILD_SNES_ROOT),
         c64 = sh(CATALOG_ATTRIBUTION_C64_ROOT),
@@ -19280,9 +19282,10 @@ fn catalog_attribution_prepare_command() -> String {
 
 fn catalog_attribution_cleanup_command() -> String {
     format!(
-        "set -eu; rm -rf {root} {work}; test ! -e {root}; test ! -e {work}",
+        "set -eu; rm -rf {root} {work} {staging}; test ! -e {root}; test ! -e {work}; test ! -e {staging}",
         root = sh(CATALOG_ATTRIBUTION_REMOTE_DIR),
         work = sh(CATALOG_ATTRIBUTION_WORK_DIR),
+        staging = sh(CATALOG_FAST_FIVE_STAGING_REMOTE),
     )
 }
 
@@ -24494,9 +24497,10 @@ fn catalog_system_games(catalog: &Value, system_id: &str) -> Result<u64> {
 
 fn catalog_build_rebuild_cleanup_command() -> String {
     format!(
-        "set -eu; rm -rf {root} {source}; test ! -e {root}; test ! -e {source}",
+        "set -eu; rm -rf {root} {source} {staging}; test ! -e {root}; test ! -e {source}; test ! -e {staging}",
         root = sh(CATALOG_BUILD_REBUILD_REMOTE_DIR),
         source = sh(CATALOG_BUILD_REBUILD_SOURCE_DIR),
+        staging = sh(CATALOG_FAST_FIVE_STAGING_REMOTE),
     )
 }
 
@@ -40915,6 +40919,8 @@ H: Handlers=event3 js0"#
             env.iter()
                 .all(|(key, _)| key != "MISTER_CATALOG_SHARD_STAGING")
         );
+        let cleanup = catalog_attribution_cleanup_command();
+        assert!(cleanup.contains(CATALOG_FAST_FIVE_STAGING_REMOTE));
     }
 
     #[test]
