@@ -1740,7 +1740,7 @@ fn encode_envelope_with_payload_fingerprint<T: Serialize>(
     let payload = postcard::to_allocvec(value).map_err(|error| format!("encode state: {error}"))?;
     let payload_len = u64::try_from(payload.len()).map_err(|_| "state is too large")?;
     let payload_digest = Sha256::digest(&payload);
-    let payload_fingerprint = sha256_hex(&payload);
+    let payload_fingerprint = sha256_digest_hex(&payload_digest);
     let mut output = Vec::with_capacity(ENVELOPE_BYTES + payload.len());
     output.extend_from_slice(magic);
     output.extend_from_slice(&ENVELOPE_VERSION.to_le_bytes());
