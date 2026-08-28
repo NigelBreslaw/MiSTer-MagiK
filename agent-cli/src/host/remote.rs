@@ -244,15 +244,11 @@ pub(crate) fn get(sess: &Session, remote: &str, local: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn tcp_probe_label(timeout: Duration) -> String {
-    tcp_probe_label_port(22, timeout)
-}
-
-pub(crate) fn tcp_probe_label_port(port: u16, timeout: Duration) -> String {
-    tcp_probe_label_port_with(&ConnectionConfig::from_environment(), port, timeout)
-}
-
-fn tcp_probe_label_port_with(config: &ConnectionConfig, port: u16, timeout: Duration) -> String {
+pub(crate) fn tcp_probe_label_port_with(
+    config: &ConnectionConfig,
+    port: u16,
+    timeout: Duration,
+) -> String {
     let addr = match format!("{}:{port}", config.host).to_socket_addrs() {
         Ok(mut addrs) => match addrs.next() {
             Some(addr) => addr,

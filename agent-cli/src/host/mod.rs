@@ -56,7 +56,7 @@ use remote::{
     ConnectionConfig, ExecOutput, acknowledged_main_command, connect, connect_with,
     create_dir_command, exec, exec_failure_message, get, host, host_wait_diagnostics_with,
     launcher_restart_command, port_open_with, put, put_bytes, remote_subcommand,
-    remove_files_command, shell_quote as sh, tcp_probe_label, tcp_probe_label_port,
+    remove_files_command, shell_quote as sh, tcp_probe_label_port_with,
 };
 
 #[cfg(test)]
@@ -19469,7 +19469,7 @@ fn reboot_for_catalog_attribution(config: &NativeDeviceConfig) -> Result<Value> 
     drop(before_session);
 
     let started = Instant::now();
-    agent_reboot_wait(&[])?;
+    agent_reboot_wait_with_config(&[], &config.connection, config.agent()?)?;
     let elapsed_ms = started.elapsed().as_millis();
 
     let after_session = connect_with(&config.connection, 10)?;
@@ -31280,6 +31280,16 @@ fn opt_ms(value: Option<u128>) -> String {
 }
 
 fn agent_reboot_wait(args: &[String]) -> Result<()> {
+    let connection = ConnectionConfig::from_environment();
+    let endpoint = AgentEndpoint::from_environment()?;
+    agent_reboot_wait_with_config(args, &connection, &endpoint)
+}
+
+fn agent_reboot_wait_with_config(
+    args: &[String],
+    connection: &ConnectionConfig,
+    endpoint: &AgentEndpoint,
+) -> Result<()> {
     if !args.is_empty() {
         return Err("device reboot accepts only --attended".into());
     }
@@ -31287,17 +31297,21 @@ fn agent_reboot_wait(args: &[String]) -> Result<()> {
     let timeout_secs = 120.0;
     let mode = reboot_mode.label();
     let issue_t = Instant::now();
-    let session = connect(10)?;
+    let session = connect_with(connection, 10)?;
     let reply = issue_reboot(&session, reboot_mode)?;
     let issue_ms = issue_t.elapsed().as_millis();
-    println!("reboot issued to {} after {issue_ms}ms: {reply}", host());
+    println!(
+        "reboot issued to {} after {issue_ms}ms: {reply}",
+        connection.host()
+    );
     drop(session);
 
     let start = Instant::now();
     let mut down_ms = None;
     while start.elapsed().as_secs_f64() < 40.0 {
-        let ssh_label = tcp_probe_label(Duration::from_millis(100));
-        let agent_label = tcp_probe_label_port(AGENT_PORT, Duration::from_millis(100));
+        let ssh_label = tcp_probe_label_port_with(connection, 22, Duration::from_millis(100));
+        let agent_label =
+            tcp_probe_label_port_with(connection, AGENT_PORT, Duration::from_millis(100));
         if ssh_label != "ok" && agent_label != "ok" {
             down_ms = Some(start.elapsed().as_millis());
             println!("  device went down after {}ms", opt_ms(down_ms));
@@ -31311,7 +31325,8 @@ fn agent_reboot_wait(args: &[String]) -> Result<()> {
     let mut last_note = String::new();
     while start.elapsed().as_secs_f64() < timeout_secs {
         if agent_ready_ms.is_none() {
-            let agent_probe = agent_request("ping", json!({}), Duration::from_millis(300));
+            let agent_probe =
+                agent_request_at(endpoint, "ping", json!({}), Duration::from_millis(300));
             match agent_probe {
                 Ok(_) => {
                     agent_ready_ms = Some(start.elapsed().as_millis());
@@ -31321,7 +31336,7 @@ fn agent_reboot_wait(args: &[String]) -> Result<()> {
             }
         }
         if ssh_ready_ms.is_none() {
-            let ssh_probe = connect(2);
+            let ssh_probe = connect_with(connection, 2);
             match ssh_probe {
                 Ok(session) => {
                     let out = exec(&session, "cat /proc/uptime", true)?;
