@@ -19376,6 +19376,12 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
             value.to_string_lossy().into_owned(),
         ));
     }
+    if let Some(value) = env::var_os("MISTER_BENCH_CATALOG_FTS_INTEGRITY") {
+        env.push((
+            "MISTER_CATALOG_FTS_INTEGRITY".into(),
+            value.to_string_lossy().into_owned(),
+        ));
+    }
     env
 }
 

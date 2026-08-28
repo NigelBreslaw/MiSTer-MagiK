@@ -512,7 +512,7 @@ fn write_system_shard_with_options_and_profile(
         crate::persisted_search::populate_with_options(&transaction, &data.games, optimize_search)
             .map_err(|error| SystemShardError::new("write", error.to_string()))?;
     crate::catalog_logln!(
-        "catalog_search_build_tsv\tsystem={}\tdocuments={}\twords={}\tbatches={}\tdocument_build_us={}\tfts_insert_us={}\tpipeline_wait_us={}\trow_loop_us={}\tautocomplete_sort_us={}\tautocomplete_insert_us={}\toptimize_us={}\tautomerge_restore_us={}\tintegrity_us={}\ttotal_us={}",
+        "catalog_search_build_tsv\tsystem={}\tdocuments={}\twords={}\tbatches={}\tdocument_build_us={}\tfts_insert_us={}\tpipeline_wait_us={}\trow_loop_us={}\tautocomplete_sort_us={}\tautocomplete_insert_us={}\toptimize_us={}\tautomerge_restore_us={}\tintegrity_mode={}\tintegrity_us={}\ttotal_us={}",
         data.system_id.as_str(),
         data.games.len(),
         search.words,
@@ -525,6 +525,7 @@ fn write_system_shard_with_options_and_profile(
         search.autocomplete_insert_us,
         search.optimize_us,
         search.automerge_restore_us,
+        search.integrity_mode,
         search.integrity_us,
         search.total_us,
     );
@@ -535,6 +536,7 @@ fn write_system_shard_with_options_and_profile(
         ),
         ("search_document_count", data.games.len().to_string()),
         ("autocomplete_word_count", search.words.to_string()),
+        ("search_source_sha256", search.source_checksum.clone()),
     ] {
         transaction
             .execute(

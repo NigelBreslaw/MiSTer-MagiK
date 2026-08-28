@@ -4,6 +4,7 @@
 //! Persisted FTS5 game search and autocomplete stored inside system shards.
 
 use rusqlite::{Connection, OpenFlags};
+use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fmt;
@@ -13,7 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::time::Instant;
 
-pub const SEARCH_SCHEMA_VERSION: u32 = 1;
+pub const SEARCH_SCHEMA_VERSION: u32 = 2;
 
 const SEARCH_WEIGHTS: &str = "10.0,9.0,8.0,7.0,7.0,6.0,6.8,6.5,6.0,4.0,3.5";
 #[cfg(feature = "builder")]
@@ -390,7 +391,7 @@ pub(crate) fn create_schema_with_detail(
 }
 
 #[cfg(feature = "builder")]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PersistedSearchBuildOutcome {
     pub(crate) words: usize,
     pub(crate) batches: usize,
@@ -403,6 +404,8 @@ pub(crate) struct PersistedSearchBuildOutcome {
     pub(crate) optimize_us: u64,
     pub(crate) automerge_restore_us: u64,
     pub(crate) integrity_us: u64,
+    pub(crate) integrity_mode: &'static str,
+    pub(crate) source_checksum: String,
     pub(crate) total_us: u64,
 }
 
@@ -518,6 +521,7 @@ pub(crate) fn populate_with_options(
     use std::collections::HashMap;
 
     let total_started = Instant::now();
+    let source_checksum = search_source_checksum(games);
     connection
         .execute(
             "INSERT INTO game_search_fts(game_search_fts,rank) VALUES ('automerge',0)",
@@ -664,12 +668,20 @@ pub(crate) fn populate_with_options(
     let automerge_restore_us = elapsed_us(automerge_restore_started);
     let integrity_started = Instant::now();
     let integrity_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SEARCH_INTEGRITY);
-    connection
-        .execute(
-            "INSERT INTO game_search_fts(game_search_fts) VALUES ('integrity-check')",
-            [],
-        )
-        .map_err(|error| PersistedSearchError::with("check FTS integrity", error))?;
+    let integrity_mode = if std::env::var("MISTER_CATALOG_FTS_INTEGRITY")
+        .is_ok_and(|value| value.eq_ignore_ascii_case("full"))
+    {
+        connection
+            .execute(
+                "INSERT INTO game_search_fts(game_search_fts) VALUES ('integrity-check')",
+                [],
+            )
+            .map_err(|error| PersistedSearchError::with("check FTS integrity", error))?;
+        "full"
+    } else {
+        bounded_integrity_check(connection, games)?;
+        "bounded"
+    };
     drop(integrity_pmu);
     Ok(PersistedSearchBuildOutcome {
         words: word_count,
@@ -683,8 +695,83 @@ pub(crate) fn populate_with_options(
         optimize_us,
         automerge_restore_us,
         integrity_us: elapsed_us(integrity_started),
+        integrity_mode,
+        source_checksum,
         total_us: elapsed_us(total_started),
     })
+}
+
+#[cfg(feature = "builder")]
+fn bounded_integrity_check(
+    connection: &Connection,
+    games: &[crate::system_shard::SystemGame],
+) -> Result<(), PersistedSearchError> {
+    if games.is_empty() {
+        return Ok(());
+    }
+    let first_rowid: i64 = connection
+        .query_row(
+            "SELECT rowid FROM game_search_fts WHERE rowid=1 LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| PersistedSearchError::with("probe first FTS row", error))?;
+    if first_rowid != 1 {
+        return Err(PersistedSearchError::new("first FTS rowid is invalid"));
+    }
+    let last_rowid = i64::try_from(games.len())
+        .map_err(|_| PersistedSearchError::new("FTS document count exceeds SQLite integer"))?;
+    let stored_last: i64 = connection
+        .query_row(
+            "SELECT rowid FROM game_search_fts WHERE rowid=?1 LIMIT 1",
+            [last_rowid],
+            |row| row.get(0),
+        )
+        .map_err(|error| PersistedSearchError::with("probe last FTS row", error))?;
+    if stored_last != last_rowid {
+        return Err(PersistedSearchError::new("last FTS rowid is invalid"));
+    }
+    let probe = games.iter().find_map(|game| {
+        normalize_search_text(&game.title)
+            .split_whitespace()
+            .find(|token| !token.is_empty())
+            .map(str::to_owned)
+    });
+    if let Some(token) = probe {
+        let matched: bool = connection
+            .query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM game_search_fts
+                     WHERE game_search_fts MATCH ?1
+                     LIMIT 1
+                 )",
+                [token],
+                |row| row.get(0),
+            )
+            .map_err(|error| PersistedSearchError::with("probe FTS search", error))?;
+        if !matched {
+            return Err(PersistedSearchError::new(
+                "bounded FTS search probe returned no row",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "builder")]
+fn search_source_checksum(games: &[crate::system_shard::SystemGame]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"mister-magik-search-source-v1\0");
+    for game in games {
+        digest.update(game.stable_key.as_bytes());
+        digest.update([0]);
+        digest.update(game.title.as_bytes());
+        digest.update([0]);
+        digest.update(game.launch_ref.as_bytes());
+        digest.update([0]);
+    }
+    let digest = digest.finalize();
+    crate::library_db::hex_lower(&digest)
 }
 
 pub(crate) fn validate(
@@ -698,6 +785,13 @@ pub(crate) fn validate(
     }
     let stored_documents = search_meta_usize(connection, "search_document_count")?;
     let _stored_words = search_meta_usize(connection, "autocomplete_word_count")?;
+    let source_checksum = search_meta_text(connection, "search_source_sha256")?;
+    if source_checksum.len() != 64 || !source_checksum.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(PersistedSearchError::new(
+            "persisted search source checksum is invalid",
+        ));
+    }
     if stored_documents != expected_documents {
         return Err(PersistedSearchError::new(
             "persisted search document count does not match shard",
@@ -735,6 +829,14 @@ fn search_meta_u64(connection: &Connection, key: &str) -> Result<u64, PersistedS
 fn search_meta_usize(connection: &Connection, key: &str) -> Result<usize, PersistedSearchError> {
     usize::try_from(search_meta_u64(connection, key)?)
         .map_err(|_| PersistedSearchError::new("search metadata exceeds platform size"))
+}
+
+fn search_meta_text(connection: &Connection, key: &str) -> Result<String, PersistedSearchError> {
+    connection
+        .query_row("SELECT value FROM shard_meta WHERE key=?1", [key], |row| {
+            row.get(0)
+        })
+        .map_err(|error| PersistedSearchError::with("read search metadata", error))
 }
 
 fn open_read_only(path: &Path) -> Result<Connection, PersistedSearchError> {
