@@ -258,6 +258,21 @@ module tb_mister_magik_video_diagnostics_control;
 			fail("sticky first-stall evidence changed");
 		if(words[2][7:0] == prior_words[2][7:0])
 			fail("publication sequence stopped after frozen event");
+		for(index = 0; index < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS;
+			index = index + 1)
+			prior_words[index] = words[index];
+
+		// Reset remains observable but cannot erase either part of the frozen
+		// identity/state snapshot now sharing the stopped watchdog bank.
+		reset_req = 1'b1;
+		repeat(6) @(posedge clk_100m);
+		read_record();
+		if(words[2][15:8] != prior_words[2][15:8] ||
+			words[MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD] !=
+				prior_words[MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD])
+			fail("reset erased sticky first-stall evidence");
+		reset_req = 1'b0;
+		repeat(6) @(posedge clk_100m);
 
 		// Legacy command is deliberately unsupported by the replacement RBF.
 		@(negedge clk_sys);

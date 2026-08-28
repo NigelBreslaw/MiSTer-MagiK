@@ -27,6 +27,13 @@ as data, and returned beats continue draining accepted obligations while reset
 is asserted. A stable publication bank remains immutable until a complete host
 read is acknowledged across the two-stage CDC handshake.
 
+Address wraps are detected from the accepted address's 64 KiB prefix, well
+below one active GUI framebuffer, and the low prefix nibble supplies the frozen
+address fold. After a first stall or observer fault, the stopped 24-bit
+watchdog bank is reused for the immutable sequence/cause/phase/FIFO/address
+snapshot. This makes that evidence reset-retentive without a parallel register
+bank.
+
 The single progress watchdog prioritizes the oldest accepted return obligation,
 then a wait-blocked request, then absence of a request. Its default bound is
 `2^24-1` `clk_100m` cycles (about 167.8 ms). Progress on the terminal cycle wins

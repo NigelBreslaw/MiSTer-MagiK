@@ -29,7 +29,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 	,output wire [6:0] formal_return_phase
 	,output wire formal_first_stall_valid
 	,output wire formal_observer_fault
-	,output wire [15:0] formal_frozen_state
+	,output wire [23:0] formal_frozen_state
 	,output wire formal_publication_generation
 	,output wire formal_acknowledge_sync
 	,output wire [79:0] formal_published_bundle
@@ -67,9 +67,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 	reg fifo_wrap1 = 1'b0;
 	reg [1:0] fifo_count = 2'd0;
 	reg [6:0] return_phase = 7'd0;
-	reg [15:0] previous_address = 16'd0;
+	reg [11:0] previous_address = 12'd0;
 	reg previous_address_valid = 1'b0;
-	reg [3:0] last_address_fold = 4'd0;
 
 	reg normal_liveness_seen = 1'b0;
 	reg address_wrap_seen = 1'b0;
@@ -87,13 +86,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 	reg fifo_phase_error = 1'b0;
 	reg request_cancelled = 1'b0;
 	reg counter_ambiguous = 1'b0;
-	reg [2:0] frozen_cause =
-		MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NONE;
-	reg [6:0] frozen_return_phase = 7'd0;
-	reg [1:0] frozen_fifo_depth = 2'd0;
-	reg [3:0] frozen_address_fold = 4'd0;
-	reg [7:0] frozen_sequence = 8'd0;
-
 	// The destination acknowledges only after a complete command. The source
 	// publication bank remains immutable until that acknowledgement returns.
 	reg [7:0] publication_sequence = 8'd0;
@@ -131,9 +123,9 @@ module mister_magik_scaler_fetch_liveness_state #(
 		(fifo_count != 2'd2 || return_last);
 	wire dequeue = return_last;
 	wire accepted_wrap = previous_address_valid &&
-		vbuf_address[27:12] < previous_address;
-	wire [3:0] accepted_address_fold =
-		vbuf_address[10:7] ^ vbuf_address[18:15];
+		vbuf_address[27:16] < previous_address;
+	wire [3:0] last_address_fold = previous_address[3:0];
+	wire frozen_valid = first_stall_valid || observer_fault;
 
 	wire [1:0] monitor_state = !reset_qualified ?
 		MAGIK_SCALER_FETCH_LIVENESS_STATE_MONITOR_UNQUALIFIED :
@@ -146,7 +138,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 		(monitor_state == MAGIK_SCALER_FETCH_LIVENESS_STATE_MONITOR_RETURN_PROGRESS && returned) ||
 		(monitor_state == MAGIK_SCALER_FETCH_LIVENESS_STATE_MONITOR_ACCEPT_BLOCKED && accepted) ||
 		(monitor_state == MAGIK_SCALER_FETCH_LIVENESS_STATE_MONITOR_NO_REQUEST && vbuf_read);
-	wire watchdog_terminal = progress_watchdog == WATCHDOG_LIMIT;
+	wire watchdog_terminal = !frozen_valid && progress_watchdog == WATCHDOG_LIMIT;
 	wire request_cancel_event = reset_qualified && blocked_request_seen &&
 		!vbuf_read && !accepted;
 	wire bad_burst_event = accepted && !request_shape_valid;
@@ -161,7 +153,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 	assign formal_return_phase = return_phase;
 	assign formal_first_stall_valid = first_stall_valid;
 	assign formal_observer_fault = observer_fault;
-	assign formal_frozen_state = frozen_state;
+	assign formal_frozen_state = {frozen_sequence, frozen_state};
 	assign formal_publication_generation = publication_generation;
 	assign formal_acknowledge_sync = acknowledge_sync;
 	assign formal_published_bundle = {
@@ -205,12 +197,11 @@ module mister_magik_scaler_fetch_liveness_state #(
 		fifo_count,
 		return_phase
 	};
-	wire [15:0] frozen_state = {
-		frozen_address_fold,
-		frozen_fifo_depth,
-		frozen_return_phase,
-		frozen_cause
-	};
+	// Once a first stall or observer fault freezes, the watchdog has no further
+	// liveness role. Reuse that reset-retentive bank for the exact first-fault
+	// snapshot instead of maintaining a second parallel register bank.
+	wire [7:0] frozen_sequence = frozen_valid ? progress_watchdog[23:16] : 8'd0;
+	wire [15:0] frozen_state = frozen_valid ? progress_watchdog[15:0] : 16'd0;
 
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
@@ -261,7 +252,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 		if(reset_sync) begin
 			reset_low_count <= 3'd0;
 			reset_qualified <= 1'b0;
-			progress_watchdog <= 24'd0;
+			if(!frozen_valid)
+				progress_watchdog <= 24'd0;
 			blocked_request_seen <= 1'b0;
 		end
 		else if(!reset_qualified) begin
@@ -272,13 +264,16 @@ module mister_magik_scaler_fetch_liveness_state #(
 			end
 			else
 				reset_low_count <= reset_low_count + 1'd1;
-			progress_watchdog <= 24'd0;
+			if(!frozen_valid)
+				progress_watchdog <= 24'd0;
 		end
 		else begin
-			if(expected_progress)
-				progress_watchdog <= 24'd0;
-			else if(!watchdog_terminal)
-				progress_watchdog <= progress_watchdog + 1'd1;
+			if(!frozen_valid) begin
+				if(expected_progress)
+					progress_watchdog <= 24'd0;
+				else if(!watchdog_terminal)
+					progress_watchdog <= progress_watchdog + 1'd1;
+			end
 
 			if(fifo_count == 2'd0 && vbuf_read && vbuf_waitrequest)
 				blocked_request_seen <= 1'b1;
@@ -287,9 +282,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 		end
 
 		if(accepted) begin
-			last_address_fold <= accepted_address_fold;
 			if(request_shape_valid) begin
-				previous_address <= vbuf_address[27:12];
+				previous_address <= vbuf_address[27:16];
 				previous_address_valid <= 1'b1;
 				if(accepted_wrap)
 					address_wrap_seen <= 1'b1;
@@ -338,11 +332,13 @@ module mister_magik_scaler_fetch_liveness_state #(
 		// the terminal watchdog cycle wins over timeout.
 		if(!first_stall_valid && !observer_fault && observer_fault_event) begin
 			observer_fault <= 1'b1;
-			frozen_cause <= MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT;
-			frozen_return_phase <= return_phase;
-			frozen_fifo_depth <= fifo_count;
-			frozen_address_fold <= last_address_fold;
-			frozen_sequence <= publication_sequence;
+			progress_watchdog <= {
+				publication_sequence,
+				last_address_fold,
+				fifo_count,
+				return_phase,
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT
+			};
 			if(bad_burst_event)
 				bad_burstcount <= 1'b1;
 			if(fifo_overflow_event)
@@ -357,11 +353,13 @@ module mister_magik_scaler_fetch_liveness_state #(
 		else if(!first_stall_valid && !observer_fault && request_cancel_event) begin
 			first_stall_valid <= 1'b1;
 			request_cancelled <= 1'b1;
-			frozen_cause <= MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED;
-			frozen_return_phase <= return_phase;
-			frozen_fifo_depth <= fifo_count;
-			frozen_address_fold <= last_address_fold;
-			frozen_sequence <= publication_sequence;
+			progress_watchdog <= {
+				publication_sequence,
+				last_address_fold,
+				fifo_count,
+				return_phase,
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED
+			};
 		end
 		else if(!first_stall_valid && !observer_fault && reset_qualified &&
 			watchdog_terminal && !expected_progress) begin
@@ -374,11 +372,13 @@ module mister_magik_scaler_fetch_liveness_state #(
 			else
 				timeout_cause = MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN;
 			first_stall_valid <= 1'b1;
-			frozen_cause <= timeout_cause;
-			frozen_return_phase <= return_phase;
-			frozen_fifo_depth <= fifo_count;
-			frozen_address_fold <= last_address_fold;
-			frozen_sequence <= publication_sequence;
+			progress_watchdog <= {
+				publication_sequence,
+				last_address_fold,
+				fifo_count,
+				return_phase,
+				timeout_cause
+			};
 		end
 
 		// Capture one immutable bank and serialize its CRC before advertising it.

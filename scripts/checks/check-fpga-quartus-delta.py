@@ -855,7 +855,7 @@ def compare(
         and patched_calculable_chains
         == baseline_calculable_chains
         + EXPECTED_ADDED_CALCULABLE_COMPLETION_SYNCHRONIZER_CHAINS
-        + (2 if experimental_scaler_fetch else 1 if experimental_diagnostic else 0)
+        + (3 if experimental_scaler_fetch else 1 if experimental_diagnostic else 0)
     )
     if not custom_assignment_seen:
         reasons.append("custom_synchronizer_missing")
