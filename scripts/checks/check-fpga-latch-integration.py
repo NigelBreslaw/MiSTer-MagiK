@@ -318,7 +318,8 @@ def main() -> None:
         "publication_generation <= ~publication_generation;",
         "if(command_selected)",
         "acknowledged_generation <= generation_sync;",
-        "function automatic [15:0] crc16_update_word;",
+        "function automatic [15:0] crc16_update_byte;",
+        "publish_crc_byte == 4'd9",
     ):
         if required_observer_fragment not in control_source:
             fail(
@@ -333,6 +334,8 @@ def main() -> None:
         "reg [15:0] published_sequence_identity",
         "reg [15:0] published_crc",
         "reg [7:0] frozen_sequence",
+        "reg [3:0] last_address_fold",
+        "function automatic [15:0] crc16_update_word",
     ):
         if redundant_publication_register in control_source:
             fail(

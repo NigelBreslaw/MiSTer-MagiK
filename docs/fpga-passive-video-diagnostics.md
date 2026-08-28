@@ -32,7 +32,9 @@ four-bit fold of the last accepted address is retained with the immutable
 cause/phase/FIFO snapshot. The noncausal frozen publication identity is
 deliberately absent. The publication sequence and completed CRC work register
 remain stable under the generation/acknowledgement hold interval and are read
-directly instead of being copied into redundant publication registers.
+directly instead of being copied into redundant publication registers. CRC is
+advanced one byte per `clk_100m` cycle, keeping the same polynomial and record
+value while halving the former word-wide combinational update cone.
 
 The single progress watchdog prioritizes the oldest accepted return obligation,
 then a wait-blocked request, then absence of a request. Its default bound is

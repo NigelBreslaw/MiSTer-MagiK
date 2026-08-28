@@ -195,7 +195,7 @@ def main() -> None:
         "if(sequence_identity != $past(sequence_identity))",
         "assert($past(publication_generation == acknowledge_sync));",
         "if(publication_generation != $past(publication_generation))",
-        "assert($past(publish_crc_word) == 3'd4);",
+        "assert($past(publish_crc_byte) == 4'd9);",
         "watchdog_terminal && expected_progress",
         "cover(drained_during_reset);",
         "cover(enqueue && dequeue);",

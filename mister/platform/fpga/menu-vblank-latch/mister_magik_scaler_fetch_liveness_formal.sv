@@ -24,7 +24,7 @@ module mister_magik_scaler_fetch_liveness_formal;
 	wire [79:0] published_bundle;
 	wire [15:0] sequence_identity;
 	wire publish_crc_busy;
-	wire [2:0] publish_crc_word;
+	wire [3:0] publish_crc_byte;
 	wire enqueue;
 	wire dequeue;
 	wire return_has_entry;
@@ -60,7 +60,7 @@ module mister_magik_scaler_fetch_liveness_formal;
 		.formal_published_bundle(published_bundle),
 		.formal_sequence_identity(sequence_identity),
 		.formal_publish_crc_busy(publish_crc_busy),
-		.formal_publish_crc_word(publish_crc_word),
+		.formal_publish_crc_byte(publish_crc_byte),
 		.formal_enqueue(enqueue),
 		.formal_dequeue(dequeue),
 		.formal_return_has_entry(return_has_entry),
@@ -112,7 +112,7 @@ module mister_magik_scaler_fetch_liveness_formal;
 			end
 			if(publication_generation != $past(publication_generation)) begin
 				assert($past(publish_crc_busy));
-				assert($past(publish_crc_word) == 3'd4);
+				assert($past(publish_crc_byte) == 4'd9);
 			end
 
 			// A real transition on the terminal watchdog cycle wins unless an
