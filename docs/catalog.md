@@ -69,11 +69,29 @@ not the published catalog.
 A fresh build:
 
 1. discovers installed systems from current roots and profiles;
-2. invokes prepared adapters where available and generic adapters elsewhere;
-3. validates launchability and canonicalizes rows;
-4. writes one NavPack and one search SQLite database per system;
-5. publishes the active catalog manifest;
-6. captures watch indexes and row snapshots for later refreshes.
+2. inventories each generic root once, resolving its profile and creating rows,
+   archive identities, directory fingerprints, and refresh watches from that
+   retained traversal;
+3. invokes prepared adapters for known collections, with OneLoad64 likewise
+   deriving rows and refresh watches from one namespace inventory;
+4. validates launchability and canonicalizes rows;
+5. writes one NavPack and one search SQLite database per system;
+6. publishes the active catalog manifest;
+7. captures any remaining fallback watch indexes and all row snapshots for
+   later refreshes.
+
+Profile resolution never opens a generic root a second time. Unknown runtime
+roots are inspected only to depth two; traversal resumes from the retained
+frontier only after the root resolves to a launchable profile. Relevant ZIP
+central directories are opened once after profile resolution. Arbitrary ROM
+collections remain dynamically discovered—there are no card-specific generic
+rows or filesystem snapshots.
+
+All exFAT enumeration and archive access is serial. Artifact construction may
+use CPU helpers internally, but publication never adds a second SD-card I/O
+lane. Production counters report directory opens, ZIP opens, shallow and
+resumed traversal, classification, row creation, refresh-watch reuse, SQLite,
+NavPack, copy/hash, and publication timings.
 
 The fresh path never reads old catalog artifacts. Removing
 `catalog-fast-v1` and rebooting therefore exercises authoritative cold source
