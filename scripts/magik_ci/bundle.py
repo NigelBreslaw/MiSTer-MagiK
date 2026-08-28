@@ -278,6 +278,10 @@ def verify_component(
         or origin.get("component_id") != component_id
     ):
         raise ValueError("component_origin")
+    for line in (artifact / CHECKSUMS).read_text(encoding="utf-8").splitlines():
+        digest, name = line.split("  ", 1)
+        if sha256_file(artifact / name) != digest:
+            raise ValueError(f"component_checksum:{name}")
     return {"component": component, "component_id": component_id, "origin": origin}
 
 
