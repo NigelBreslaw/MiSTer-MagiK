@@ -571,6 +571,7 @@ pub(crate) fn oneload64_install_root(path: &Path) -> Option<&Path> {
 /// Validate a CRT path that was just observed as a regular file by the
 /// bounded namespace inventory. Avoids repeating one exFAT metadata lookup per
 /// payload while preserving the OneLoad64 signature and tree exclusions.
+#[cfg(feature = "builder")]
 pub(crate) fn observed_oneload64_path_is_valid(path: &Path) -> bool {
     oneload64_install_root(path).is_some_and(|install_root| {
         oneload64_root_has_signature(install_root)
