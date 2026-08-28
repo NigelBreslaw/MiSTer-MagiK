@@ -423,6 +423,7 @@ jobs:
           ARCADE_DATABASE_SHA: ${{ needs.inspect.outputs.arcade-database-sha }}
         run: |
           set -euo pipefail
+          # The former Rust arcade-database-import operation is now Python.
           curl -fsSL "https://raw.githubusercontent.com/MiSTer-devel/ArcadeDatabase_MiSTer/$ARCADE_DATABASE_SHA/ArcadeDatabase.csv" -o build/ArcadeDatabase.csv
           curl -fsSL "https://raw.githubusercontent.com/MiSTer-devel/ArcadeDatabase_MiSTer/$ARCADE_DATABASE_SHA/LICENSE" -o build/ArcadeDatabase-LICENSE.txt
           scripts/magik-ci ci game-databases import-arcade --sqlite build/mame.sqlite3 \
