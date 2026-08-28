@@ -29,7 +29,7 @@ mister-magik-latch-contract = { path = "../../platform/contracts/latch" }
 mister-magik-platform-manifest-contract = { path = "../../platform/contracts/manifest" }
 mister-magik-video-diagnostics-contract = { path = "../../platform/contracts/video-diagnostics" }
 mister-magik-agent-protocol = { path = "../../../crates/agent-protocol" }
-quick-xml = "0.41.0"
+quick-xml = "0.42.0"
 serde_json = "1"
 sha2 = "0.11"
 

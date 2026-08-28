@@ -508,7 +508,7 @@ dependencies = [
  "mister-magik-platform-manifest-contract",
  "postcard",
  "pprof",
- "quick-xml 0.41.0",
+ "quick-xml 0.42.0",
  "rusqlite",
  "serde",
  "serde_json",
@@ -597,7 +597,7 @@ dependencies = [
 [[package]]
 name = "pprof"
 version = "0.15.0"
-source = "git+https://github.com/NigelBreslaw/pprof-rs?branch=armv7-itimer-abi#54c0c32488e98390092b0059f27f6948afe8f6f0"
+source = "git+https://github.com/NigelBreslaw/pprof-rs?branch=armv7-itimer-abi#431b88c4fc67bef98126eaa8932287583d1a660e"
 dependencies = [
  "aligned-vec",
  "backtrace",
@@ -635,9 +635,9 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.41.0"
+version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
+checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
 dependencies = [
  "memchr",
 ]
