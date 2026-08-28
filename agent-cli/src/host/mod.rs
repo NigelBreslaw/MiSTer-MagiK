@@ -38741,8 +38741,8 @@ H: Handlers=event3 js0"#
             "scaler_fetch_liveness_state": {
                 "record_valid": [true, true, true],
                 "observer_fault": [false, false, false],
-                "publication_sequence": [100, 101, 103],
-                "frozen_sequence": [99, 99, 99],
+                "publication_sequence": [100, 101, 102],
+                "frozen_address_fold": [3, 3, 3],
                 "frozen_cause": [1, 1, 1],
                 "raw_samples": vec![vec![14; 6]; 3],
             },

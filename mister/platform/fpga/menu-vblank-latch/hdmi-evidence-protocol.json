@@ -110,11 +110,11 @@
     },
     "reserved_zero_masks": {
       "flags": 61440,
+      "sequence_identity": 65280,
       "live_state": 32768
     },
     "fields": {
       "publication_sequence": {"word": "sequence_identity", "bit": 0, "width": 8},
-      "frozen_sequence": {"word": "sequence_identity", "bit": 8, "width": 8},
       "return_phase": {"word": "live_state", "bit": 0, "width": 7},
       "fifo_depth": {"word": "live_state", "bit": 7, "width": 2},
       "monitor_state": {"word": "live_state", "bit": 9, "width": 2},

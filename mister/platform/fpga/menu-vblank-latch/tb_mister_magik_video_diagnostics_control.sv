@@ -199,7 +199,6 @@ module tb_mister_magik_video_diagnostics_control;
 	initial begin
 		reg [7:0] first_sequence;
 		reg [7:0] second_sequence;
-		reg [7:0] frozen_identity;
 
 		// The observer publishes while reset is held and does not claim a
 		// qualified record before synchronized reset-low qualification.
@@ -234,6 +233,9 @@ module tb_mister_magik_video_diagnostics_control;
 			fail("wrap-marked complete burst did not establish normal liveness");
 		if(!(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID))
 			fail("first stall was not frozen");
+		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_SEQUENCE_IDENTITY_WORD] &
+			MAGIK_SCALER_FETCH_LIVENESS_STATE_SEQUENCE_IDENTITY_RESERVED_ZERO_MASK)
+			fail("sequence identity reserved bits were nonzero");
 		if(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_OBSERVER_FAULT)
 			fail("reset-retained obligation produced observer fault");
 		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD][2:0] !=
@@ -242,7 +244,6 @@ module tb_mister_magik_video_diagnostics_control;
 		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_WORD][8:7] != 2'd0 ||
 			words[MAGIK_SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_WORD][6:0] != 7'd0)
 			fail("completed scoreboard did not drain");
-		frozen_identity = words[2][15:8];
 		for(index = 0; index < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS;
 			index = index + 1)
 			prior_words[index] = words[index];
@@ -252,8 +253,7 @@ module tb_mister_magik_video_diagnostics_control;
 		drive_accept(28'h0000080);
 		drive_return_beats(128);
 		read_record();
-		if(words[2][15:8] != frozen_identity ||
-			words[MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD] !=
+		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD] !=
 				prior_words[MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD])
 			fail("sticky first-stall evidence changed");
 		if(words[2][7:0] == prior_words[2][7:0])
@@ -267,8 +267,7 @@ module tb_mister_magik_video_diagnostics_control;
 		reset_req = 1'b1;
 		repeat(6) @(posedge clk_100m);
 		read_record();
-		if(words[2][15:8] != prior_words[2][15:8] ||
-			words[MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD] !=
+		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD] !=
 				prior_words[MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD])
 			fail("reset erased sticky first-stall evidence");
 		reset_req = 1'b0;

@@ -328,10 +328,13 @@ if scaler_fetch_liveness != {
         "request_cancelled": 10,
         "counter_ambiguous": 11,
     },
-    "reserved_zero_masks": {"flags": 0xF000, "live_state": 0x8000},
+    "reserved_zero_masks": {
+        "flags": 0xF000,
+        "sequence_identity": 0xFF00,
+        "live_state": 0x8000,
+    },
     "fields": {
         "publication_sequence": {"word": "sequence_identity", "bit": 0, "width": 8},
-        "frozen_sequence": {"word": "sequence_identity", "bit": 8, "width": 8},
         "return_phase": {"word": "live_state", "bit": 0, "width": 7},
         "fifo_depth": {"word": "live_state", "bit": 7, "width": 2},
         "monitor_state": {"word": "live_state", "bit": 9, "width": 2},

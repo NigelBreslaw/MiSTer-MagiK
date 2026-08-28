@@ -312,7 +312,8 @@ def main() -> None:
         "acknowledge_meta <= acknowledged_generation;",
         "acknowledge_sync <= acknowledge_meta;",
         "publication_generation == acknowledge_sync",
-        "published_sequence_identity",
+        "wire [15:0] sequence_identity = {8'd0, publication_sequence};",
+        "publish_crc_work",
         "published_frozen_state",
         "publication_generation <= ~publication_generation;",
         "if(command_selected)",
@@ -328,6 +329,16 @@ def main() -> None:
         fail("scaler-fetch observer must not retain a 128-bit return-data isolation register")
     if "generation_launch" in control_source:
         fail("rejected placement-heavy generation launch stage remains present")
+    for redundant_publication_register in (
+        "reg [15:0] published_sequence_identity",
+        "reg [15:0] published_crc",
+        "reg [7:0] frozen_sequence",
+    ):
+        if redundant_publication_register in control_source:
+            fail(
+                "redundant scaler-fetch publication storage remains: "
+                f"{redundant_publication_register}"
+            )
     for forbidden_observer_input in (
         "clk_hdmi",
         "raw_ce",

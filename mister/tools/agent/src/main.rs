@@ -3928,10 +3928,9 @@ mod linux {
     }
 
     fn byte_sequences_advance(sequences: [u8; 3]) -> bool {
-        sequences.windows(2).all(|pair| {
-            let delta = pair[1].wrapping_sub(pair[0]);
-            delta != 0 && delta <= 0x7f
-        })
+        sequences
+            .windows(2)
+            .all(|pair| pair[1] == pair[0].wrapping_add(1))
     }
 
     pub(super) fn scaler_fetch_liveness_classification(
@@ -3957,7 +3956,9 @@ mod linux {
             if !samples.iter().all(|sample| {
                 sample.first_stall_valid()
                     && sample.frozen_cause() == first.frozen_cause()
-                    && sample.frozen_sequence() == first.frozen_sequence()
+                    && sample.frozen_return_phase() == first.frozen_return_phase()
+                    && sample.frozen_fifo_depth() == first.frozen_fifo_depth()
+                    && sample.frozen_address_fold() == first.frozen_address_fold()
             }) {
                 return "scaler_fetch_liveness_evidence_inconclusive";
             }
@@ -4544,14 +4545,13 @@ mod linux {
                             "observer_fault": samples.iter().map(|sample| sample.observer_fault()).collect::<Vec<_>>(),
                             "flags": samples.iter().map(|sample| sample.flags()).collect::<Vec<_>>(),
                             "publication_sequence": samples.iter().map(|sample| sample.publication_sequence()).collect::<Vec<_>>(),
-                            "frozen_sequence": samples.iter().map(|sample| sample.frozen_sequence()).collect::<Vec<_>>(),
+                            "frozen_address_fold": samples.iter().map(|sample| sample.frozen_address_fold()).collect::<Vec<_>>(),
                             "return_phase": samples.iter().map(|sample| sample.return_phase()).collect::<Vec<_>>(),
                             "fifo_depth": samples.iter().map(|sample| sample.fifo_depth()).collect::<Vec<_>>(),
                             "monitor_state": samples.iter().map(|sample| sample.monitor_state()).collect::<Vec<_>>(),
                             "frozen_cause": samples.iter().map(|sample| sample.frozen_cause()).collect::<Vec<_>>(),
                             "frozen_return_phase": samples.iter().map(|sample| sample.frozen_return_phase()).collect::<Vec<_>>(),
                             "frozen_fifo_depth": samples.iter().map(|sample| sample.frozen_fifo_depth()).collect::<Vec<_>>(),
-                            "frozen_address_fold": samples.iter().map(|sample| sample.frozen_address_fold()).collect::<Vec<_>>(),
                             "raw_samples": readout.samples.iter().map(|sample| sample.words).collect::<Vec<_>>(),
                         },
                     })
@@ -8340,14 +8340,16 @@ mod tests {
     fn scaler_fetch_liveness_classification_is_temporal_and_observational() {
         use mister_magik_video_diagnostics_contract as contract;
 
-        let sample = |sequence: u8, frozen_sequence: u8, flags: u16, cause: u16| {
+        let sample = |sequence: u8, frozen_address_fold: u8, flags: u16, cause: u16| {
             let mut words = [0; contract::SCALER_FETCH_LIVENESS_STATE_WORDS];
             words[contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD] =
                 contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA;
             words[contract::SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] = flags;
             words[contract::SCALER_FETCH_LIVENESS_STATE_SEQUENCE_IDENTITY_WORD] =
-                u16::from(sequence) | (u16::from(frozen_sequence) << 8);
-            words[contract::SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD] = cause;
+                u16::from(sequence);
+            words[contract::SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD] = cause
+                | (u16::from(frozen_address_fold)
+                    << contract::SCALER_FETCH_LIVENESS_STATE_FROZEN_ADDRESS_FOLD_BIT);
             contract::ScalerFetchLivenessState { words }
         };
         let valid = contract::SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID;
@@ -8355,7 +8357,7 @@ mod tests {
         let normal_samples = [
             sample(254, 0, normal, 0),
             sample(255, 0, normal, 0),
-            sample(1, 0, normal, 0),
+            sample(0, 0, normal, 0),
         ];
         assert_eq!(
             linux::scaler_fetch_liveness_classification([
@@ -8364,6 +8366,20 @@ mod tests {
                 &normal_samples[2],
             ]),
             "scaler_fetch_normal_liveness"
+        );
+
+        let skipped_samples = [
+            sample(14, 0, normal, 0),
+            sample(15, 0, normal, 0),
+            sample(1, 0, normal, 0),
+        ];
+        assert_eq!(
+            linux::scaler_fetch_liveness_classification([
+                &skipped_samples[0],
+                &skipped_samples[1],
+                &skipped_samples[2],
+            ]),
+            "scaler_fetch_liveness_evidence_inconclusive"
         );
 
         for (cause, expected) in [
@@ -8403,6 +8419,35 @@ mod tests {
                 expected
             );
         }
+
+        let changed_frozen_tuple = [
+            sample(
+                20,
+                7,
+                valid | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID,
+                contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_RETURN_INCOMPLETE,
+            ),
+            sample(
+                21,
+                8,
+                valid | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID,
+                contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_RETURN_INCOMPLETE,
+            ),
+            sample(
+                22,
+                7,
+                valid | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID,
+                contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_RETURN_INCOMPLETE,
+            ),
+        ];
+        assert_eq!(
+            linux::scaler_fetch_liveness_classification([
+                &changed_frozen_tuple[0],
+                &changed_frozen_tuple[1],
+                &changed_frozen_tuple[2],
+            ]),
+            "scaler_fetch_liveness_evidence_inconclusive"
+        );
 
         let transitioning = [
             sample(10, 0, valid, 0),
