@@ -19382,6 +19382,17 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
             value.to_string_lossy().into_owned(),
         ));
     }
+    if let Some(value) = env::var_os("MISTER_BENCH_CATALOG_MEDIA_UPDATE") {
+        // Keep catalog attribution runs reproducible when screenshot downloads
+        // would otherwise overlap the final catalog publication seconds. The
+        // value is parsed by the production media worker, so benchmark callers
+        // can select `off`, `check-only`, or `download` without adding a
+        // benchmark-only media policy.
+        env.push((
+            "MISTER_MEDIA_UPDATE".into(),
+            value.to_string_lossy().into_owned(),
+        ));
+    }
     env
 }
 
