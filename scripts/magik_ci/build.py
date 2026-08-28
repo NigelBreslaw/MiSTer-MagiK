@@ -30,9 +30,7 @@ def _environment(
     rustflags = "-D warnings -C target-cpu=cortex-a9"
     if "profile" in feature_set:
         rustflags += " -C force-frame-pointers=yes"
-        environment["CFLAGS_armv7_unknown_linux_gnueabihf"] = (
-            "-fno-omit-frame-pointer"
-        )
+        environment["CFLAGS_armv7_unknown_linux_gnueabihf"] = "-fno-omit-frame-pointer"
     environment["RUSTFLAGS"] = rustflags
 
     if intent.startswith("runtime-"):
