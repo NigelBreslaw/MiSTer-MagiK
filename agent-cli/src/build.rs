@@ -42,6 +42,7 @@ const FFMPEG_APPLE_CONTAINER_ENV: [(&str, &str); 5] = [
 #[serde(rename_all = "kebab-case")]
 pub enum BuildCommand {
     RuntimeDevice,
+    RuntimeUiTests,
     RuntimeCi,
     RuntimeAnalysis,
     ValidateLauncher,
@@ -109,6 +110,14 @@ impl BuildSpec {
                 vec!["ui", "profile"],
                 UiScope::Production,
                 runtime_artifact("release-device"),
+            ),
+            BuildCommand::RuntimeUiTests => (
+                BuildTarget::Runtime,
+                BuildMode::Build,
+                "release-device-ui-tests",
+                vec!["ui", "ui-device-tests"],
+                UiScope::Launcher,
+                runtime_artifact("release-device-ui-tests"),
             ),
             BuildCommand::RuntimeCi => (
                 BuildTarget::Runtime,
@@ -1941,6 +1950,10 @@ mod tests {
         assert_eq!(runtime.profile, "release-device");
         assert_eq!(runtime.features, ["ui", "profile"]);
         assert_eq!(runtime.ui_scope, UiScope::Production);
+        let ui_tests = BuildSpec::for_command(BuildCommand::RuntimeUiTests).unwrap();
+        assert_eq!(ui_tests.profile, "release-device-ui-tests");
+        assert_eq!(ui_tests.features, ["ui", "ui-device-tests"]);
+        assert_eq!(ui_tests.ui_scope, UiScope::Launcher);
         let analysis = BuildSpec::for_command(BuildCommand::RuntimeAnalysis).unwrap();
         assert_eq!(analysis.ui_scope, UiScope::Production);
         let ci = BuildSpec::for_command(BuildCommand::RuntimeCi).unwrap();

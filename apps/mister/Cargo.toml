@@ -136,6 +136,12 @@ codegen-units = 32
 # line-level debug sections.
 strip = "debuginfo"
 
+# Attended Slint system-testing binary. This is deliberately separate from the
+# delivery profile so an operator cannot replace the production runtime by
+# accidentally building the test transport.
+[profile.release-device-ui-tests]
+inherits = "release-device"
+
 # Historical alias retained for reproducible comparison with the former
 # thin-LTO/16-CGU candidate. Ordinary delivery selects release-device above.
 [profile.release-device-thin]
