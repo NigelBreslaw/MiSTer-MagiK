@@ -9,7 +9,7 @@ use mister_magik_catalog::arcade_updater_index::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::{Digest as Sha2Digest, Sha256};
+use sha2::Sha256;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;

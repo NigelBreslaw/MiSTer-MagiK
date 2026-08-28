@@ -802,7 +802,7 @@ mod sd_browse {
                     push_start_row(&mut xml_rows, &mut stack, &e, &mut order, true);
                 }
                 Ok(Event::Text(e)) => {
-                    let text_value = e.xml10_content().unwrap_or_default().trim().to_string();
+                    let text_value = e.xml10_content().trim().to_string();
                     if !text_value.is_empty() {
                         let path = format!("/{}", stack.join("/"));
                         xml_rows.push(json!({
@@ -884,8 +884,8 @@ mod sd_browse {
         }
     }
 
-    fn xml_name(bytes: &[u8]) -> String {
-        String::from_utf8_lossy(bytes).to_string()
+    fn xml_name(name: &str) -> String {
+        name.to_string()
     }
 
     fn mra_summary_rows(rows: &[Value], source_size: u64) -> Vec<Value> {

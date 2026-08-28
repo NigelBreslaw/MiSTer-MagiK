@@ -167,7 +167,10 @@ fn parse_mra_buttons(text: &str) -> Option<MraButtons> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) | Ok(Event::Empty(e))
-                if e.name().as_ref().eq_ignore_ascii_case(b"buttons") =>
+                if e.name()
+                    .as_ref()
+                    .as_bytes()
+                    .eq_ignore_ascii_case(b"buttons") =>
             {
                 let names = xml_attr_value(&e, b"names")?;
                 let defaults = xml_attr_value(&e, b"default").unwrap_or_default();
@@ -353,7 +356,7 @@ fn xml_attr_value(e: &BytesStart<'_>, key: &[u8]) -> Option<String> {
     e.attributes()
         .with_checks(false)
         .flatten()
-        .find(|attr| attr.key.as_ref().eq_ignore_ascii_case(key))
+        .find(|attr| attr.key.as_ref().as_bytes().eq_ignore_ascii_case(key))
         .and_then(|attr| {
             attr.normalized_value(XmlVersion::Implicit1_0)
                 .ok()
