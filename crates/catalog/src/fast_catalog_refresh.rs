@@ -3,9 +3,10 @@
 
 //! Disposable source state for the independent fast catalog.
 //!
-//! The watch index is intentionally separate from cached rows. An unchanged
-//! refresh reads and validates only the manifest and watch indexes; large row
-//! snapshots are opened only after a source change is proven.
+//! The watch index is intentionally separate from canonical catalog rows. An
+//! unchanged refresh reads and validates only the manifest and watch indexes;
+//! changed systems are rebuilt from source rather than hydrating persisted row
+//! snapshots.
 
 use crate::catalog_scan::should_ignore_path;
 use crate::fast_five_catalog::{FastFiveGameVariant, FastFiveSnapshot, FastFiveSystem};
@@ -19,18 +20,16 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const REFRESH_SCHEMA: u32 = 1;
+const REFRESH_SCHEMA: u32 = 2;
 const ENVELOPE_VERSION: u32 = 1;
 const ENVELOPE_BYTES: usize = 64;
 const MANIFEST_MAGIC: &[u8; 8] = b"MGKRFSMF";
 const WATCH_MAGIC: &[u8; 8] = b"MGKRFSWI";
-const ROWS_MAGIC: &[u8; 8] = b"MGKRFSRW";
 const BUILD_INFO_MAGIC: &[u8; 8] = b"MGKRFBIN";
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_WATCH_BYTES: usize = 16 * 1024 * 1024;
-const MAX_ROWS_BYTES: usize = 128 * 1024 * 1024;
 const MAX_BUILD_INFO_BYTES: usize = 4096;
-const STATE_DIRECTORY: &str = "fast-refresh-v1";
+const STATE_DIRECTORY: &str = "fast-refresh-v2";
 const MANIFEST_A: &str = "manifest-a.bin";
 const MANIFEST_B: &str = "manifest-b.bin";
 const BUILD_INFO_FILE: &str = "build-info.bin";
@@ -50,8 +49,6 @@ pub struct FastRefreshSystemRef {
     pub system_id: String,
     pub watch_path: String,
     pub watch_sha256: String,
-    pub rows_path: String,
-    pub rows_sha256: String,
     pub source_fingerprint: String,
     pub row_fingerprint: String,
     pub games: u64,
@@ -367,9 +364,7 @@ impl FastRefreshManifest {
                 return Err(format!("duplicate refresh system {}", system.system_id));
             }
             validate_relative_path(&system.watch_path)?;
-            validate_relative_path(&system.rows_path)?;
             validate_sha256(&system.watch_sha256, "watch checksum")?;
-            validate_sha256(&system.rows_sha256, "row checksum")?;
             validate_sha256(&system.source_fingerprint, "source fingerprint")?;
             validate_sha256(&system.row_fingerprint, "row fingerprint")?;
         }
@@ -585,18 +580,6 @@ pub fn read_system_watch(
     Ok(watch)
 }
 
-pub fn read_system_rows(
-    catalog_root: &Path,
-    reference: &FastRefreshSystemRef,
-) -> Result<FastSystemRowsSnapshot, String> {
-    let path = refresh_state_root(catalog_root).join(&reference.rows_path);
-    let bytes = fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
-    verify_file_checksum(&bytes, &reference.rows_sha256, &path)?;
-    let rows: FastSystemRowsSnapshot = decode_envelope(&bytes, ROWS_MAGIC, MAX_ROWS_BYTES)?;
-    rows.validate(&reference.system_id)?;
-    Ok(rows)
-}
-
 pub fn publish_refresh_state(
     catalog_root: &Path,
     generation: u64,
@@ -647,29 +630,22 @@ pub fn publish_refresh_state_with_report(
         fs::create_dir_all(&system_dir)
             .map_err(|error| format!("create {} refresh state: {error}", state.watch.system_id))?;
         let watch_relative = format!("systems/{}/{generation}.watch", state.watch.system_id);
-        let rows_relative = format!("systems/{}/{generation}.rows", state.watch.system_id);
         let encoding_started = std::time::Instant::now();
         let (watch_bytes, source_fingerprint) =
             encode_envelope_with_payload_fingerprint(&state.watch, WATCH_MAGIC)?;
-        let (rows_bytes, row_fingerprint) =
-            encode_envelope_with_payload_fingerprint(&state.rows, ROWS_MAGIC)?;
+        let row_fingerprint = row_fingerprint(&state.rows)?;
         report.encoding_us = report
             .encoding_us
             .saturating_add(encoding_started.elapsed().as_micros() as u64);
-        report.bytes = report
-            .bytes
-            .saturating_add(watch_bytes.len() as u64)
-            .saturating_add(rows_bytes.len() as u64);
-        report.files = report.files.saturating_add(2);
+        report.bytes = report.bytes.saturating_add(watch_bytes.len() as u64);
+        report.files = report.files.saturating_add(1);
         let fingerprint_started = std::time::Instant::now();
         let watch_sha256 = sha256_hex(&watch_bytes);
-        let rows_sha256 = sha256_hex(&rows_bytes);
         report.fingerprint_us = report
             .fingerprint_us
             .saturating_add(fingerprint_started.elapsed().as_micros() as u64);
         let write_started = std::time::Instant::now();
         write_new_file(&root.join(&watch_relative), &watch_bytes)?;
-        write_new_file(&root.join(&rows_relative), &rows_bytes)?;
         report.write_us = report
             .write_us
             .saturating_add(write_started.elapsed().as_micros() as u64);
@@ -677,8 +653,6 @@ pub fn publish_refresh_state_with_report(
             system_id: state.watch.system_id.clone(),
             watch_path: watch_relative,
             watch_sha256,
-            rows_path: rows_relative,
-            rows_sha256,
             source_fingerprint,
             row_fingerprint,
             games: state.rows.games.len().try_into().unwrap_or(u64::MAX),
@@ -760,21 +734,16 @@ pub fn publish_refresh_update(
         fs::create_dir_all(&system_dir)
             .map_err(|error| format!("create {} refresh state: {error}", state.watch.system_id))?;
         let watch_relative = format!("systems/{}/{generation}.watch", state.watch.system_id);
-        let rows_relative = format!("systems/{}/{generation}.rows", state.watch.system_id);
         let (watch_bytes, source_fingerprint) =
             encode_envelope_with_payload_fingerprint(&state.watch, WATCH_MAGIC)?;
-        let (rows_bytes, row_fingerprint) =
-            encode_envelope_with_payload_fingerprint(&state.rows, ROWS_MAGIC)?;
+        let row_fingerprint = row_fingerprint(&state.rows)?;
         write_new_file(&root.join(&watch_relative), &watch_bytes)?;
-        write_new_file(&root.join(&rows_relative), &rows_bytes)?;
         references.insert(
             state.watch.system_id.clone(),
             FastRefreshSystemRef {
                 system_id: state.watch.system_id.clone(),
                 watch_path: watch_relative,
                 watch_sha256: sha256_hex(&watch_bytes),
-                rows_path: rows_relative,
-                rows_sha256: sha256_hex(&rows_bytes),
                 source_fingerprint,
                 row_fingerprint,
                 games: state.rows.games.len().try_into().unwrap_or(u64::MAX),
@@ -2003,7 +1972,16 @@ mod tests {
             read_system_watch(&root, reference).unwrap().system_id,
             "snes"
         );
-        assert_eq!(read_system_rows(&root, reference).unwrap().games.len(), 1);
+        assert!(!reference.watch_path.is_empty());
+        assert!(
+            !refresh_state_root(&root)
+                .join("systems/snes/1.rows")
+                .exists()
+        );
+        assert_eq!(
+            reference.row_fingerprint,
+            row_fingerprint(&state("snes").rows).unwrap()
+        );
 
         let second = publish_refresh_state(
             &root,
@@ -2038,8 +2016,6 @@ mod tests {
                 system_id: "snes".to_string(),
                 watch_path: "../watch".to_string(),
                 watch_sha256: "b".repeat(64),
-                rows_path: "rows".to_string(),
-                rows_sha256: "c".repeat(64),
                 source_fingerprint: "d".repeat(64),
                 row_fingerprint: "e".repeat(64),
                 games: 0,
