@@ -16339,14 +16339,14 @@ fn streamline_prepare_command() -> String {
 }
 
 fn streamline_capture_command(workload: StreamlineWorkload) -> String {
-    let app = match workload {
-        StreamlineWorkload::Screensaver => format!(
-            "MISTER_PMU_PROFILE=1 MISTER_PMU_COUNTER_SET=cortex-a9-neon MISTER_PMU_SAMPLE_EVERY=1 {}",
-            development_gui_command("pmu-profile screensaver")
+    let (app, app_environment) = match workload {
+        StreamlineWorkload::Screensaver => (
+            development_gui_command("pmu-profile screensaver"),
+            "MISTER_PMU_PROFILE=1 MISTER_PMU_COUNTER_SET=cortex-a9-neon MISTER_PMU_SAMPLE_EVERY=1",
         ),
     };
     let invocation = format!(
-        "{gatord} --output {apc} --max-duration 10 --sample-rate low --system-wide no --exclude-kernel no --call-stack-unwinding no --stop-on-exit yes --capture-log --counters {counters} --app {app}",
+        "{app_environment} {gatord} --output {apc} --max-duration 10 --sample-rate low --system-wide no --exclude-kernel no --call-stack-unwinding no --stop-on-exit yes --capture-log --counters {counters} --app {app}",
         gatord = sh(STREAMLINE_REMOTE_GATORD),
         apc = sh(STREAMLINE_REMOTE_APC),
         counters = sh(CORTEX_A9_NEON_GATOR_COUNTERS),
