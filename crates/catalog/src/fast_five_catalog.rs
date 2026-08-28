@@ -977,107 +977,6 @@ pub fn publish_snapshot_with_profile(
 }
 
 #[cfg(feature = "builder")]
-struct StagedFastFiveSystem {
-    system_id: String,
-    staging: std::path::PathBuf,
-    sqlite: std::path::PathBuf,
-    navigation: std::path::PathBuf,
-    elapsed_us: u64,
-}
-
-#[cfg(feature = "builder")]
-#[allow(clippy::too_many_arguments)]
-fn stage_fast_five_system(
-    storage_root: &Path,
-    source: &FastFiveSystem,
-    generation: u64,
-    nonce: u128,
-    limits: RegistryLimits,
-    artifact_profile: FastFiveArtifactProfile,
-) -> Result<StagedFastFiveSystem, String> {
-    use crate::system_shard::{
-        ShardArtifactProfile, ShardDurability, SystemShardData, write_system_shard,
-        write_system_shard_with_artifact_profile, write_system_shard_with_durability,
-    };
-
-    let started = std::time::Instant::now();
-    let stage_all_in_tmpfs = matches!(
-        artifact_profile,
-        FastFiveArtifactProfile::SinglePass
-            | FastFiveArtifactProfile::SearchOnly
-            | FastFiveArtifactProfile::SearchDetailNone
-    );
-    let stage_in_tmpfs =
-        cfg!(target_os = "linux") && (stage_all_in_tmpfs || source.system_id == "c64");
-    let staging_parent = if stage_in_tmpfs {
-        std::path::PathBuf::from("/tmp/mister-magik/fast-five-catalog")
-    } else {
-        storage_root.join("staging")
-    };
-    let staging = staging_parent.join(format!(
-        "fast-five-{}-{generation}-{nonce}-{}",
-        std::process::id(),
-        source.system_id
-    ));
-    std::fs::create_dir_all(&staging)
-        .map_err(|error| format!("create {} staging: {error}", source.system_id))?;
-    let sqlite = staging.join("system.sqlite3");
-    let navigation = staging.join("system.nav.lz4b");
-    let data = SystemShardData {
-        system_id: SystemId::parse(&source.system_id)
-            .map_err(|error| format!("invalid system {}: {error}", source.system_id))?,
-        generation,
-        projection_stats: (!source.variants.is_empty()).then_some(
-            crate::system_shard::SystemShardProjectionStats {
-                source_games: source.games.len() + source.variants.len(),
-                visible_families: source.games.len(),
-                collapsed_variants: source.variants.len(),
-            },
-        ),
-        games: source.games.clone(),
-    };
-    let shard_profile = match artifact_profile {
-        FastFiveArtifactProfile::Legacy | FastFiveArtifactProfile::SinglePass => {
-            ShardArtifactProfile::Legacy
-        }
-        FastFiveArtifactProfile::NoEmbeddedNavigation => ShardArtifactProfile::NoEmbeddedNavigation,
-        FastFiveArtifactProfile::NoAdjacentNavigation => ShardArtifactProfile::NoAdjacentNavigation,
-        FastFiveArtifactProfile::NavpackOnly => ShardArtifactProfile::NavpackOnly,
-        FastFiveArtifactProfile::SearchOnly => ShardArtifactProfile::SearchOnly,
-        FastFiveArtifactProfile::SearchDetailNone => ShardArtifactProfile::SearchDetailNone,
-    };
-    if artifact_profile == FastFiveArtifactProfile::Legacy && stage_in_tmpfs {
-        write_system_shard_with_durability(
-            &sqlite,
-            &navigation,
-            data,
-            limits.shard,
-            ShardDurability::Immediate,
-        )
-    } else if artifact_profile == FastFiveArtifactProfile::Legacy {
-        write_system_shard(&sqlite, &navigation, &data, limits.shard)
-    } else {
-        write_system_shard_with_artifact_profile(
-            &sqlite,
-            &navigation,
-            data,
-            limits.shard,
-            ShardDurability::Immediate,
-            shard_profile,
-        )
-    }
-    .map_err(|error| format!("write {} shard: {error}", source.system_id))?;
-    write_fast_five_variants(&sqlite, source)?;
-    Ok(StagedFastFiveSystem {
-        system_id: source.system_id.clone(),
-        staging,
-        sqlite,
-        navigation,
-        elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
-    })
-}
-
-#[cfg(feature = "builder")]
 pub fn publish_changed_snapshot_with_profile(
     storage_root: &Path,
     snapshot: &FastFiveSnapshot,
@@ -1108,6 +1007,10 @@ fn publish_snapshot_selection(
         ManifestSystem, garbage_collect_unreferenced, manifest_slots_present, publish_manifest,
         publish_prevalidated_system_artifacts_deferred, publish_system_artifacts,
         sync_artifact_batch,
+    };
+    use crate::system_shard::{
+        ShardArtifactProfile, ShardDurability, SystemShardData, write_system_shard,
+        write_system_shard_with_artifact_profile, write_system_shard_with_durability,
     };
     use std::fs;
     use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -1186,187 +1089,185 @@ fn publish_snapshot_selection(
     let mut system_builds = Vec::with_capacity(snapshot.systems.len());
     let mut copied_bytes = 0u64;
     let mut copy_hash_us = 0u64;
-    let pipeline_staging = cfg!(target_os = "linux")
-        && matches!(
+    for source in &snapshot.systems {
+        let system_started = Instant::now();
+        let system_id = SystemId::parse(&source.system_id)
+            .map_err(|error| format!("invalid system {}: {error}", source.system_id))?;
+        if changed_system_ids.is_some_and(|changed| !changed.contains(&source.system_id)) {
+            let published = current
+                .as_ref()
+                .and_then(|manifest| {
+                    manifest
+                        .systems
+                        .iter()
+                        .find(|system| system.system_id == system_id)
+                })
+                .cloned()
+                .ok_or_else(|| format!("active catalog is missing {}", source.system_id))?;
+            system_builds.push(FastFiveSystemBuildReport {
+                system_id: source.system_id.clone(),
+                games: source.games.len(),
+                variants: source.variants.len(),
+                sqlite_bytes: published.active.sqlite_bytes,
+                navigation_bytes: published.active.navigation_bytes,
+                navpack_bytes: published
+                    .active
+                    .navpack
+                    .as_ref()
+                    .map_or(0, |navpack| navpack.bytes),
+                elapsed_us: 0,
+            });
+            manifest_systems.push(published);
+            continue;
+        }
+        let stage_all_in_tmpfs = matches!(
             artifact_profile,
             FastFiveArtifactProfile::SinglePass
                 | FastFiveArtifactProfile::SearchOnly
                 | FastFiveArtifactProfile::SearchDetailNone
         );
-    std::thread::scope(|scope| -> Result<(), String> {
-        let (staged_sender, staged_receiver) = std::sync::mpsc::sync_channel(1);
-        let staged_worker = if pipeline_staging {
-            let staged_sender = staged_sender.clone();
-            let changed_sources = snapshot
-                .systems
-                .iter()
-                .filter(|source| {
-                    changed_system_ids.is_none_or(|changed| changed.contains(&source.system_id))
-                })
-                .collect::<Vec<_>>();
-            Some(scope.spawn(move || {
-                for source in changed_sources {
-                    let staged = stage_fast_five_system(
-                        storage_root,
-                        source,
-                        generation,
-                        nonce,
-                        limits,
-                        artifact_profile,
-                    );
-                    let failed = staged.is_err();
-                    if staged_sender.send(staged).is_err() || failed {
-                        break;
-                    }
-                }
-            }))
+        let stage_in_tmpfs =
+            cfg!(target_os = "linux") && (stage_all_in_tmpfs || source.system_id == "c64");
+        let staging_parent = if stage_in_tmpfs {
+            std::path::PathBuf::from("/tmp/mister-magik/fast-five-catalog")
         } else {
-            None
+            storage_root.join("staging")
         };
-        drop(staged_sender);
-        for source in &snapshot.systems {
-            let system_started = Instant::now();
-            let system_id = SystemId::parse(&source.system_id)
-                .map_err(|error| format!("invalid system {}: {error}", source.system_id))?;
-            if changed_system_ids.is_some_and(|changed| !changed.contains(&source.system_id)) {
-                let published = current
-                    .as_ref()
-                    .and_then(|manifest| {
-                        manifest
-                            .systems
-                            .iter()
-                            .find(|system| system.system_id == system_id)
-                    })
-                    .cloned()
-                    .ok_or_else(|| format!("active catalog is missing {}", source.system_id))?;
-                system_builds.push(FastFiveSystemBuildReport {
-                    system_id: source.system_id.clone(),
-                    games: source.games.len(),
-                    variants: source.variants.len(),
-                    sqlite_bytes: published.active.sqlite_bytes,
-                    navigation_bytes: published.active.navigation_bytes,
-                    navpack_bytes: published
-                        .active
-                        .navpack
-                        .as_ref()
-                        .map_or(0, |navpack| navpack.bytes),
-                    elapsed_us: 0,
-                });
-                manifest_systems.push(published);
-                continue;
+        let staging = staging_parent.join(format!(
+            "fast-five-{}-{generation}-{nonce}-{}",
+            std::process::id(),
+            source.system_id
+        ));
+        fs::create_dir_all(&staging)
+            .map_err(|error| format!("create {} staging: {error}", source.system_id))?;
+        let sqlite = staging.join("system.sqlite3");
+        let navigation = staging.join("system.nav.lz4b");
+        let data = SystemShardData {
+            system_id: system_id.clone(),
+            generation,
+            projection_stats: (!source.variants.is_empty()).then_some(
+                crate::system_shard::SystemShardProjectionStats {
+                    source_games: source.games.len() + source.variants.len(),
+                    visible_families: source.games.len(),
+                    collapsed_variants: source.variants.len(),
+                },
+            ),
+            games: source.games.clone(),
+        };
+        let shard_profile = match artifact_profile {
+            FastFiveArtifactProfile::Legacy | FastFiveArtifactProfile::SinglePass => {
+                ShardArtifactProfile::Legacy
             }
-            let staged = if pipeline_staging {
-                staged_receiver
-                    .recv()
-                    .map_err(|_| format!("{} shard staging stopped", source.system_id))??
-            } else {
-                stage_fast_five_system(
-                    storage_root,
-                    source,
-                    generation,
-                    nonce,
-                    limits,
-                    artifact_profile,
-                )?
-            };
-            if staged.system_id != source.system_id {
-                return Err(format!(
-                    "staged {} while publishing {}",
-                    staged.system_id, source.system_id
-                ));
+            FastFiveArtifactProfile::NoEmbeddedNavigation => {
+                ShardArtifactProfile::NoEmbeddedNavigation
             }
-            crate::catalog_logln!(
-                "catalog_artifact_stage_tsv\tsystem={}\telapsed_us={}",
-                staged.system_id,
-                staged.elapsed_us,
-            );
-            let stage_in_tmpfs = staged.sqlite.starts_with("/tmp");
-            let active = if stage_in_tmpfs || artifact_profile != FastFiveArtifactProfile::Legacy {
-                let publication = publish_prevalidated_system_artifacts_deferred(
-                    storage_root,
-                    &staged.sqlite,
-                    &staged.navigation,
-                    &system_id,
-                    generation,
-                    source.games.len() as u64,
-                    limits,
-                )
-                .map_err(|error| format!("publish {} shard: {error}", source.system_id))?;
-                copied_bytes = copied_bytes.saturating_add(publication.copied_bytes);
-                copy_hash_us = copy_hash_us.saturating_add(
-                    publication
-                        .copy_hash_time
-                        .as_micros()
-                        .try_into()
-                        .unwrap_or(u64::MAX),
-                );
-                publication.generation
-            } else {
-                publish_system_artifacts(
-                    storage_root,
-                    &staged.sqlite,
-                    &staged.navigation,
-                    &system_id,
-                    generation,
-                    source.games.len() as u64,
-                    limits,
-                )
-                .map_err(|error| format!("publish {} shard: {error}", source.system_id))?
-            };
-            let _ = fs::remove_dir(staged.staging);
-            let previous = current.as_ref().and_then(|manifest| {
-                manifest
-                    .systems
-                    .iter()
-                    .find(|system| system.system_id == system_id)
-                    .map(|system| system.active.clone())
-            });
-            let definition = system_definition(&source.system_id);
-            let active_sqlite_bytes = active.sqlite_bytes;
-            let active_navigation_bytes = active.navigation_bytes;
-            let active_navpack_bytes = active.navpack.as_ref().map_or(0, |navpack| navpack.bytes);
-            manifest_systems.push(ManifestSystem {
-                system_id,
-                display_title: source.display_title.clone(),
-                section: definition
-                    .map(|value| section_label(value.section))
-                    .unwrap_or("Other")
-                    .to_string(),
-                family: definition
-                    .map(|value| value.family.as_str())
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or("Other")
-                    .to_string(),
-                order: definition.map_or(1000, |value| u32::from(value.order)),
-                producers: vec![
-                    ScanUnitId::parse(&format!("fast-five-{}", source.system_id))
-                        .map_err(|error| format!("create producer id: {error}"))?,
-                ],
-                active,
-                previous,
-            });
-            system_builds.push(FastFiveSystemBuildReport {
-                system_id: source.system_id.clone(),
-                games: source.games.len(),
-                variants: source.variants.len(),
-                sqlite_bytes: active_sqlite_bytes,
-                navigation_bytes: active_navigation_bytes,
-                navpack_bytes: active_navpack_bytes,
-                elapsed_us: system_started
-                    .elapsed()
+            FastFiveArtifactProfile::NoAdjacentNavigation => {
+                ShardArtifactProfile::NoAdjacentNavigation
+            }
+            FastFiveArtifactProfile::NavpackOnly => ShardArtifactProfile::NavpackOnly,
+            FastFiveArtifactProfile::SearchOnly => ShardArtifactProfile::SearchOnly,
+            FastFiveArtifactProfile::SearchDetailNone => ShardArtifactProfile::SearchDetailNone,
+        };
+        if artifact_profile == FastFiveArtifactProfile::Legacy && stage_in_tmpfs {
+            write_system_shard_with_durability(
+                &sqlite,
+                &navigation,
+                data,
+                limits.shard,
+                ShardDurability::Immediate,
+            )
+        } else if artifact_profile == FastFiveArtifactProfile::Legacy {
+            write_system_shard(&sqlite, &navigation, &data, limits.shard)
+        } else {
+            write_system_shard_with_artifact_profile(
+                &sqlite,
+                &navigation,
+                data,
+                limits.shard,
+                ShardDurability::Immediate,
+                shard_profile,
+            )
+        }
+        .map_err(|error| format!("write {} shard: {error}", source.system_id))?;
+        write_fast_five_variants(&sqlite, source)?;
+        let active = if stage_in_tmpfs || artifact_profile != FastFiveArtifactProfile::Legacy {
+            let publication = publish_prevalidated_system_artifacts_deferred(
+                storage_root,
+                &sqlite,
+                &navigation,
+                &system_id,
+                generation,
+                source.games.len() as u64,
+                limits,
+            )
+            .map_err(|error| format!("publish {} shard: {error}", source.system_id))?;
+            copied_bytes = copied_bytes.saturating_add(publication.copied_bytes);
+            copy_hash_us = copy_hash_us.saturating_add(
+                publication
+                    .copy_hash_time
                     .as_micros()
                     .try_into()
                     .unwrap_or(u64::MAX),
-            });
-        }
-        drop(staged_receiver);
-        if let Some(worker) = staged_worker {
-            worker
-                .join()
-                .map_err(|_| "artifact staging worker panicked".to_string())?;
-        }
-        Ok(())
-    })?;
+            );
+            publication.generation
+        } else {
+            publish_system_artifacts(
+                storage_root,
+                &sqlite,
+                &navigation,
+                &system_id,
+                generation,
+                source.games.len() as u64,
+                limits,
+            )
+            .map_err(|error| format!("publish {} shard: {error}", source.system_id))?
+        };
+        let _ = fs::remove_dir(staging);
+        let previous = current.as_ref().and_then(|manifest| {
+            manifest
+                .systems
+                .iter()
+                .find(|system| system.system_id == system_id)
+                .map(|system| system.active.clone())
+        });
+        let definition = system_definition(&source.system_id);
+        let active_sqlite_bytes = active.sqlite_bytes;
+        let active_navigation_bytes = active.navigation_bytes;
+        let active_navpack_bytes = active.navpack.as_ref().map_or(0, |navpack| navpack.bytes);
+        manifest_systems.push(ManifestSystem {
+            system_id,
+            display_title: source.display_title.clone(),
+            section: definition
+                .map(|value| section_label(value.section))
+                .unwrap_or("Other")
+                .to_string(),
+            family: definition
+                .map(|value| value.family.as_str())
+                .filter(|value| !value.is_empty())
+                .unwrap_or("Other")
+                .to_string(),
+            order: definition.map_or(1000, |value| u32::from(value.order)),
+            producers: vec![
+                ScanUnitId::parse(&format!("fast-five-{}", source.system_id))
+                    .map_err(|error| format!("create producer id: {error}"))?,
+            ],
+            active,
+            previous,
+        });
+        system_builds.push(FastFiveSystemBuildReport {
+            system_id: source.system_id.clone(),
+            games: source.games.len(),
+            variants: source.variants.len(),
+            sqlite_bytes: active_sqlite_bytes,
+            navigation_bytes: active_navigation_bytes,
+            navpack_bytes: active_navpack_bytes,
+            elapsed_us: system_started
+                .elapsed()
+                .as_micros()
+                .try_into()
+                .unwrap_or(u64::MAX),
+        });
+    }
     sync_artifact_batch(storage_root)
         .map_err(|error| format!("sync fast-five artifacts: {error}"))?;
     manifest_systems.sort_by(|left, right| left.system_id.cmp(&right.system_id));
