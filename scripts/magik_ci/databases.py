@@ -261,8 +261,8 @@ def build_updater(input_manifest: Path, output: Path) -> dict[str, object]:
                     "source_id": source["id"],
                     "size": entry["size"],
                     "md5": entry["hash"],
-                    "header": {},
-                    "primary_rom": {},
+                    "header": _mra_header(Path(source["roots"][0]) / normalized),
+                    "primary_rom": _primary_rom(Path(source["roots"][0]) / normalized),
                 }
     sources.sort(key=lambda value: value["id"])
     ordered_rows = [rows[key] for key in sorted(rows)]
@@ -293,3 +293,33 @@ def build_updater(input_manifest: Path, output: Path) -> dict[str, object]:
         "compressed_bytes": len(encoded),
         "output": str(output),
     }
+
+
+def _mra_header(path: Path) -> dict[str, str | None]:
+    import xml.etree.ElementTree as ET
+
+    root = ET.parse(path).getroot()
+    text = lambda name: root.findtext(name)
+    return {
+        "name": text("name"),
+        "rbf": text("rbf"),
+        "platform": text("platform"),
+        "manufacturer": text("manufacturer"),
+        "year": text("year"),
+        "setname": text("setname"),
+        "parent": text("parent"),
+    }
+
+
+def _primary_rom(path: Path) -> str | dict[str, object]:
+    import xml.etree.ElementTree as ET
+
+    root = ET.parse(path).getroot()
+    rom = root.find("rom")
+    if rom is None:
+        return "None"
+    setname = rom.get("zip") or rom.get("setname")
+    if not setname:
+        return "Ambiguous"
+    namespace = "Hbmame" if "hbmame" in setname.lower() else "Mame"
+    return {"Archive": {"namespace": namespace, "setname": setname}}
