@@ -16,9 +16,10 @@ signature and excluded-tree checks.
 
 ## Real-hardware evidence
 
-All values below are seconds. The retained candidate is commit `98e801318`;
-the final documentation-only descendant has identical runtime code. The cold
-candidate was measured immediately after an attended reboot. The original
+All values below are seconds. The retained catalog-build candidate is commit
+`98e801318`; later descendants wire profiling and forced-refresh diagnostics
+without changing catalog row or publication algorithms. The cold candidate was
+measured immediately after an attended reboot. The original
 126.12-second profile is attribution evidence rather than an unprofiled
 like-for-like baseline.
 
@@ -68,3 +69,33 @@ of unavoidable cold generic source enumeration, led by collections containing
 thousands of one-game directories. Skipping those directory opens would require
 assuming a particular user's layout or trusting precomputed rows, both of which
 would violate arbitrary-collection discovery and scratch-build parity.
+
+The corrected forced-refresh benchmark also proved that the no-change target
+had not previously been measured: the old benchmark's second leg performed a
+strict registry load. Genuine unprofiled no-change refreshes took 2.67 and 3.04
+seconds internally; a third sample rose to 18.77 seconds while the device
+reported low-memory contention. All three opened zero row snapshots and wrote
+zero SQLite, NavPack, or catalog artifacts. Reaching 0.5 seconds would require
+not statting thousands of watched leaf directories, which would miss arbitrary
+nested changes on exFAT unless a less conservative source-change contract is
+accepted.
+
+## Profiling evidence
+
+The fast catalog worker now owns the `catalog-build-full` profiler lifecycle.
+A forced refresh also bypasses deferred strict-load hydration, so fresh and
+no-change profile legs both finalize. The successful cold fresh profile
+captured 1,456 samples over 107.84 seconds: 866 resolved to folded stacks and
+590 (40.5%) did not resolve to a symbol stack, down from the earlier 69.8%.
+
+The ARM profiler records the interrupted PC before symbolication. Final
+profiling additionally persists every unresolved PC and `/proc/self/maps`.
+Verification produced a 34 KB raw-PC table and an 8.4 KB mapping file alongside
+the folded stacks and flamegraph. In that warm verification, only 177 of 984
+fresh samples (18.0%) lacked a resolved stack, and those samples remain
+available for offline symbolication rather than being discarded.
+
+The cold folded-stack attribution contained 1,456 hits. Inclusive categories
+included 192 launcher-intro/UI hits, 94 SQLite/search hits, 84 namespace/syscall
+hits, 67 SHA/checksum hits, and 47 artifact-copy hits. This profile is CPU
+attribution only; the unprofiled control remains timing authority.
