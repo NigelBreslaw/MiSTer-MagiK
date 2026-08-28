@@ -59,7 +59,7 @@ def host_assurance(paths: list[str]) -> None:
         (root / "scripts/checks/check-repository-layout.py", []),
         (root / "scripts/checks/check-unified-agent-surface.py", []),
     ]
-    if any(path.startswith("scripts") or path.startswith("docs") for path in paths):
+    if any(path.startswith(("scripts", "docs")) for path in paths):
         checks.append(
             (
                 root / "scripts/checks/check-font-text-contract.py",
