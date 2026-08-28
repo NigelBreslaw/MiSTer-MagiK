@@ -1004,9 +1004,9 @@ fn publish_snapshot_selection(
     use crate::catalog_domain::ScanUnitId;
     use crate::catalog_format::CatalogFormatDescriptor;
     use crate::shard_registry::{
-        ManifestSystem, garbage_collect_unreferenced, manifest_slots_present, publish_manifest,
-        publish_prevalidated_system_artifacts_deferred, publish_system_artifacts,
-        sync_artifact_batch,
+        ManifestSystem, garbage_collect_unreferenced, manifest_slots_present,
+        publish_manifest_with_trusted_artifacts, publish_prevalidated_system_artifacts_deferred,
+        publish_system_artifacts, sync_artifact_batch,
     };
     use crate::system_shard::{
         ShardArtifactProfile, ShardDurability, SystemShardData, write_system_shard,
@@ -1276,7 +1276,7 @@ fn publish_snapshot_selection(
         generation,
         systems: manifest_systems,
     };
-    publish_manifest(storage_root, &manifest, limits)
+    publish_manifest_with_trusted_artifacts(storage_root, &manifest, limits)
         .map_err(|error| format!("publish fast-five manifest: {error}"))?;
     garbage_collect_unreferenced(storage_root, &manifest)
         .map_err(|error| format!("collect fast-five artifacts: {error}"))?;

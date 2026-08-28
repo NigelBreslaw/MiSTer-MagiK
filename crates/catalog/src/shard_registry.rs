@@ -546,8 +546,31 @@ pub fn publish_manifest(
     manifest: &CatalogManifest,
     limits: RegistryLimits,
 ) -> Result<PathBuf, RegistryError> {
-    validate_manifest(storage_root, manifest, limits, true, true)?;
-    let current = read_manifest_slots(storage_root, limits, true)?;
+    publish_manifest_with_hash_policy(storage_root, manifest, limits, true)
+}
+
+/// Publish a manifest after the artifact writer has supplied hashes while
+/// copying immutable files. Sizes, paths, and schema are still checked; the
+/// already-computed hashes are trusted so publication does not reread every
+/// artifact from exFAT.
+#[cfg(feature = "builder")]
+pub(crate) fn publish_manifest_with_trusted_artifacts(
+    storage_root: &Path,
+    manifest: &CatalogManifest,
+    limits: RegistryLimits,
+) -> Result<PathBuf, RegistryError> {
+    publish_manifest_with_hash_policy(storage_root, manifest, limits, false)
+}
+
+#[cfg(feature = "builder")]
+fn publish_manifest_with_hash_policy(
+    storage_root: &Path,
+    manifest: &CatalogManifest,
+    limits: RegistryLimits,
+    verify_hashes: bool,
+) -> Result<PathBuf, RegistryError> {
+    validate_manifest(storage_root, manifest, limits, true, verify_hashes)?;
+    let current = read_manifest_slots(storage_root, limits, verify_hashes)?;
     if current
         .iter()
         .any(|(_, existing)| existing.generation >= manifest.generation)
