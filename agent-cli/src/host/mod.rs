@@ -20040,7 +20040,10 @@ fn run_catalog_attribution_trace_leg(
         minimum_generation,
         CatalogBuildRebuildLegOptions {
             exercise_arcade_ui: false,
-            require_updater_index: true,
+            // A fresh leg must prove the updater-index prefetch, but an
+            // unchanged rebuild intentionally does not prefetch it. Keep the
+            // trace harness aligned with the ordinary attribution pair.
+            require_updater_index: minimum_generation.is_none(),
             launcher_env: catalog_attribution_launcher_env(arm),
             runtime_command: catalog_attribution_runtime_command,
         },
