@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from apps.mister.ui_tests.driver import MagiKDriver
-from apps.mister.ui_tests.queries import element_with_label, open_arcade, selected_labels
+from apps.mister.ui_tests.queries import (
+    element_with_label,
+    open_arcade,
+    selected_labels,
+)
 from apps.mister.ui_tests.uinput_joystick import Button
 
 

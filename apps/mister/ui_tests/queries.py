@@ -20,7 +20,9 @@ def element_with_label(driver: MagiKDriver, label: str) -> SlintElement:
     return matches[0]
 
 
-def element_with_any_label(driver: MagiKDriver, labels: tuple[str, ...]) -> SlintElement:
+def element_with_any_label(
+    driver: MagiKDriver, labels: tuple[str, ...]
+) -> SlintElement:
     for label in labels:
         matches = [
             element

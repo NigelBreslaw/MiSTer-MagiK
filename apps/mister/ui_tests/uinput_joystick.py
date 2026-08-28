@@ -71,7 +71,9 @@ def _user_dev(name: str) -> bytearray:
         )
     for axis in (_ABS_HAT0X, _ABS_HAT0Y):
         struct.pack_into("i", data, header + axis * struct.calcsize("i"), 1)
-        struct.pack_into("i", data, header + array_bytes + axis * struct.calcsize("i"), -1)
+        struct.pack_into(
+            "i", data, header + array_bytes + axis * struct.calcsize("i"), -1
+        )
     return data
 
 

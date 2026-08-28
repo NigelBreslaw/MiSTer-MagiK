@@ -68,12 +68,16 @@ class InputCorrelation:
         self._history: list[CorrelatedInput] = []
 
     def key(self, action: str, key: Key, timeout: float = 2.0) -> CorrelatedInput:
-        return self._record(action, "keyboard", lambda: self._keyboard.tap(key), timeout)
+        return self._record(
+            action, "keyboard", lambda: self._keyboard.tap(key), timeout
+        )
 
     def button(
         self, action: str, button: Button, timeout: float = 2.0
     ) -> CorrelatedInput:
-        return self._record(action, "joystick", lambda: self._joystick.tap(button), timeout)
+        return self._record(
+            action, "joystick", lambda: self._joystick.tap(button), timeout
+        )
 
     def hat(
         self,

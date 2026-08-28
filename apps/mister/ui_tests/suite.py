@@ -76,7 +76,8 @@ class ScriptAgentBridge:
         ).strip()
         if completed.returncode != 0:
             raise RuntimeError(
-                f"device UI case {case.name!r} failed ({completed.returncode}): {output}"
+                f"device UI case {case.name!r} failed ({completed.returncode}): "
+                f"{output}"
             )
         return UiCaseResult(case, output)
 
@@ -102,13 +103,17 @@ def run_pytest(cases: list[UiCase], repository: Path) -> str:
         part for part in (completed.stdout, completed.stderr) if part
     ).strip()
     if completed.returncode != 0:
-        raise RuntimeError(f"device UI pytest run failed ({completed.returncode}): {output}")
+        raise RuntimeError(
+            f"device UI pytest run failed ({completed.returncode}): {output}"
+        )
     return output
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("case", nargs="+", choices=sorted(CASE_TARGETS), help="case names to run")
+    parser.add_argument(
+        "case", nargs="+", choices=sorted(CASE_TARGETS), help="case names to run"
+    )
     parser.add_argument("--fixture", default=DEFAULT_FIXTURE)
     parser.add_argument("--timeout-secs", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--repository", type=Path, default=Path(__file__).parents[3])
