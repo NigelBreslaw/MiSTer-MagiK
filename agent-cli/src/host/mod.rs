@@ -19422,14 +19422,21 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
 fn catalog_attribution_search_ui_env(arm: CatalogAttributionArm) -> Vec<(String, String)> {
     let mut env = catalog_attribution_launcher_env(arm)
         .into_iter()
-        .filter(|(key, _)| key != "MISTER_CATALOG_REFRESH")
+        .filter(|(key, _)| {
+            !matches!(
+                key.as_str(),
+                "MISTER_CATALOG_REFRESH"
+                    | "MISTER_LAUNCHER_START_SCREEN"
+                    | "MISTER_LAUNCHER_START_SYSTEM"
+                    | "MISTER_HOME_SELECTED_INDEX"
+                    | "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM"
+            )
+        })
         .collect::<Vec<_>>();
     env.extend([
         ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-        (
-            "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM".into(),
-            "arcade".into(),
-        ),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
+        ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
     ]);
     env
 }
