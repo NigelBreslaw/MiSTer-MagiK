@@ -4536,6 +4536,7 @@ fn experimental_raw_scaler_evidence_available(evidence: &Value) -> bool {
         && [
             "/raw_scaler_state/raw_samples",
             "/scaler_fetch_state/raw_samples",
+            "/scaler_fetch_liveness_state/raw_samples",
         ]
         .iter()
         .any(|path| {
