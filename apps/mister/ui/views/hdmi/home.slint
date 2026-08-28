@@ -5,7 +5,7 @@ import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
 import { Xerxes10, Xerxes10Size } from "../../components/xerxes_10.slint";
 import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 
-import { FeedbackView, HomeFocus, MenuHierarchy, NavigationView } from "../../api.slint";
+import { AccessibleRole, FeedbackView, HomeFocus, MenuHierarchy, NavigationView } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
 import { LauncherTile, SettingsButton } from "../../components/launcher_chrome.slint";
 
@@ -129,6 +129,8 @@ export component HomeGrid inherits Rectangle {
                 vertical-stretch: 1;
                 background: transparent;
                 clip: true;
+                accessible-role: AccessibleRole.list;
+                accessible-label: NavigationView.menu-title;
 
                 Rectangle {
                     x: -root.scroll-x;
@@ -214,6 +216,8 @@ export component HomeGrid inherits Rectangle {
             vertical-stretch: 1;
             clip: true;
             background: transparent;
+            accessible-role: AccessibleRole.list;
+            accessible-label: NavigationView.menu-title;
             property <length> gap: 12px;
             property <length> card-height: (self.height - gap * 3.5) / 4.5;
             property <length> pitch: card-height + gap;
