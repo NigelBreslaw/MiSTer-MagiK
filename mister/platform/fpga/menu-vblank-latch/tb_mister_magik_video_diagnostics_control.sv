@@ -19,8 +19,8 @@ module tb_mister_magik_video_diagnostics_control;
 	reg [15:0] io_din = 16'd0;
 	wire response_valid;
 	wire [15:0] response_data;
-	reg [15:0] words [0:6];
-	reg [15:0] prior_words [0:6];
+	reg [15:0] words [0:5];
+	reg [15:0] prior_words [0:5];
 	integer index;
 
 	mister_magik_scaler_fetch_liveness_state #(
@@ -140,11 +140,12 @@ module tb_mister_magik_video_diagnostics_control;
 			command_end();
 			if(words[0] != MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA)
 				fail("schema mismatch");
-			if(words[6] != response_crc())
+			if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_CRC_WORD] != response_crc())
 				fail("response CRC mismatch");
 			if(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAGS_RESERVED_ZERO_MASK)
 				fail("reserved flag bits set");
-			if(words[4] & MAGIK_SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_RESERVED_ZERO_MASK)
+			if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_WORD] &
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_RESERVED_ZERO_MASK)
 				fail("reserved live-state bit set");
 		end
 	endtask
@@ -235,12 +236,15 @@ module tb_mister_magik_video_diagnostics_control;
 			fail("first stall was not frozen");
 		if(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_OBSERVER_FAULT)
 			fail("reset-retained obligation produced observer fault");
-		if(words[5][2:0] != MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN)
+		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD][2:0] !=
+			MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN)
 			fail("wrong first-stall cause");
-		if(words[4][8:7] != 2'd0 || words[4][6:0] != 7'd0)
+		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_WORD][8:7] != 2'd0 ||
+			words[MAGIK_SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_WORD][6:0] != 7'd0)
 			fail("completed scoreboard did not drain");
 		frozen_identity = words[2][15:8];
-		for(index = 0; index < 7; index = index + 1)
+		for(index = 0; index < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS;
+			index = index + 1)
 			prior_words[index] = words[index];
 
 		// A later good burst changes rolling progress but cannot overwrite the
@@ -248,7 +252,9 @@ module tb_mister_magik_video_diagnostics_control;
 		drive_accept(28'h0000080);
 		drive_return_beats(128);
 		read_record();
-		if(words[2][15:8] != frozen_identity || words[5] != prior_words[5])
+		if(words[2][15:8] != frozen_identity ||
+			words[MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD] !=
+				prior_words[MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD])
 			fail("sticky first-stall evidence changed");
 		if(words[2][7:0] == prior_words[2][7:0])
 			fail("publication sequence stopped after frozen event");

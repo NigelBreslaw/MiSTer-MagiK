@@ -32,7 +32,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 	,output wire [15:0] formal_frozen_state
 	,output wire formal_publication_generation
 	,output wire formal_acknowledge_sync
-	,output wire [95:0] formal_published_bundle
+	,output wire [79:0] formal_published_bundle
 	,output wire formal_enqueue
 	,output wire formal_dequeue
 	,output wire formal_return_has_entry
@@ -63,18 +63,14 @@ module mister_magik_scaler_fetch_liveness_state #(
 
 	// Independent two-entry accepted-obligation scoreboard. Production caps the
 	// external scaler reads at two; obligations remain live across reset_req.
-	reg [3:0] fifo_address_fold0 = 4'd0;
-	reg [3:0] fifo_address_fold1 = 4'd0;
 	reg fifo_wrap0 = 1'b0;
 	reg fifo_wrap1 = 1'b0;
 	reg [1:0] fifo_count = 2'd0;
 	reg [6:0] return_phase = 7'd0;
-	reg [20:0] previous_address = 21'd0;
+	reg [15:0] previous_address = 16'd0;
 	reg previous_address_valid = 1'b0;
 	reg [3:0] last_address_fold = 4'd0;
 
-	reg [7:0] accepted_count = 8'd0;
-	reg [7:0] completed_count = 8'd0;
 	reg normal_liveness_seen = 1'b0;
 	reg address_wrap_seen = 1'b0;
 	reg blocked_request_seen = 1'b0;
@@ -103,7 +99,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 	reg [7:0] publication_sequence = 8'd0;
 	reg [15:0] published_flags = 16'd0;
 	reg [15:0] published_sequence_identity = 16'd0;
-	reg [15:0] published_progress = 16'd0;
 	reg [15:0] published_live_state = 16'd0;
 	reg [15:0] published_frozen_state = 16'd0;
 	reg [15:0] published_crc = 16'd0;
@@ -136,7 +131,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 		(fifo_count != 2'd2 || return_last);
 	wire dequeue = return_last;
 	wire accepted_wrap = previous_address_valid &&
-		vbuf_address[27:7] < previous_address;
+		vbuf_address[27:12] < previous_address;
 	wire [3:0] accepted_address_fold =
 		vbuf_address[10:7] ^ vbuf_address[18:15];
 
@@ -173,7 +168,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 		published_crc,
 		published_frozen_state,
 		published_live_state,
-		published_progress,
 		published_sequence_identity,
 		published_flags
 	};
@@ -293,10 +287,9 @@ module mister_magik_scaler_fetch_liveness_state #(
 		end
 
 		if(accepted) begin
-			accepted_count <= accepted_count + 1'd1;
 			last_address_fold <= accepted_address_fold;
 			if(request_shape_valid) begin
-				previous_address <= vbuf_address[27:7];
+				previous_address <= vbuf_address[27:12];
 				previous_address_valid <= 1'b1;
 				if(accepted_wrap)
 					address_wrap_seen <= 1'b1;
@@ -306,31 +299,25 @@ module mister_magik_scaler_fetch_liveness_state #(
 		case({enqueue, dequeue})
 			2'b10: begin
 				if(fifo_count == 2'd0) begin
-					fifo_address_fold0 <= accepted_address_fold;
 					fifo_wrap0 <= accepted_wrap;
 				end
 				else begin
-					fifo_address_fold1 <= accepted_address_fold;
 					fifo_wrap1 <= accepted_wrap;
 				end
 				fifo_count <= fifo_count + 1'd1;
 			end
 			2'b01: begin
 				if(fifo_count == 2'd2) begin
-					fifo_address_fold0 <= fifo_address_fold1;
 					fifo_wrap0 <= fifo_wrap1;
 				end
 				fifo_count <= fifo_count - 1'd1;
 			end
 			2'b11: begin
 				if(fifo_count == 2'd1) begin
-					fifo_address_fold0 <= accepted_address_fold;
 					fifo_wrap0 <= accepted_wrap;
 				end
 				else begin
-					fifo_address_fold0 <= fifo_address_fold1;
 					fifo_wrap0 <= fifo_wrap1;
-					fifo_address_fold1 <= accepted_address_fold;
 					fifo_wrap1 <= accepted_wrap;
 				end
 			end
@@ -340,7 +327,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 		if(return_has_entry) begin
 			if(return_phase == 7'd127) begin
 				return_phase <= 7'd0;
-				completed_count <= completed_count + 1'd1;
 				if(fifo_wrap0)
 					normal_liveness_seen <= 1'b1;
 			end
@@ -401,7 +387,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 			published_flags <= live_flags;
 			published_sequence_identity <=
 				{frozen_sequence, publication_sequence + 1'd1};
-			published_progress <= {completed_count, accepted_count};
 			published_live_state <= live_state;
 			published_frozen_state <= frozen_state;
 			publish_crc_work <= MAGIK_SCALER_FETCH_LIVENESS_STATE_HEADER_CRC;
@@ -415,13 +400,12 @@ module mister_magik_scaler_fetch_liveness_state #(
 				3'd0: crc_word_value = MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA;
 				3'd1: crc_word_value = published_flags;
 				3'd2: crc_word_value = published_sequence_identity;
-				3'd3: crc_word_value = published_progress;
-				3'd4: crc_word_value = published_live_state;
+				3'd3: crc_word_value = published_live_state;
 				default: crc_word_value = published_frozen_state;
 			endcase
 			crc_next = crc16_update_word(publish_crc_work, crc_word_value);
 			publish_crc_work <= crc_next;
-			if(publish_crc_word == 3'd5) begin
+			if(publish_crc_word == 3'd4) begin
 				published_crc <= crc_next;
 				publication_generation <= ~publication_generation;
 				publish_crc_busy <= 1'b0;
@@ -439,8 +423,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 				response_word = published_flags;
 			MAGIK_SCALER_FETCH_LIVENESS_STATE_SEQUENCE_IDENTITY_WORD:
 				response_word = published_sequence_identity;
-			MAGIK_SCALER_FETCH_LIVENESS_STATE_PROGRESS_WORD:
-				response_word = published_progress;
 			MAGIK_SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_WORD:
 				response_word = published_live_state;
 			MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD:

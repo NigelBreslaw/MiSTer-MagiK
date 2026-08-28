@@ -54,12 +54,4 @@ set_net_delay -max 10.0 \
 	-from $magik_fetch_publication_ack \
 	-to $magik_fetch_publication_ack_meta
 
-set magik_fetch_reset_req [magik_require_registers fetch_reset_source \
-	{*reset_req} 1]
-set magik_fetch_reset_meta [magik_require_registers fetch_reset_meta \
-	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|reset_meta} 1]
-set_net_delay -max 10.0 \
-	-from $magik_fetch_reset_req \
-	-to $magik_fetch_reset_meta
-
-post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_liveness_publication_request_ack_reset"
+post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_liveness_publication_request_ack_reset_observed"

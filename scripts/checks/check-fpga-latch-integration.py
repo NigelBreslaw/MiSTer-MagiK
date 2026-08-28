@@ -291,9 +291,7 @@ def main() -> None:
         "wire return_has_entry = returned && fifo_count != 2'd0;",
         "wire return_last = return_has_entry && return_phase == 7'd127;",
         "vbuf_burstcount == REQUIRED_BURSTCOUNT",
-        "vbuf_address[27:7] < previous_address",
-        "reg [3:0] fifo_address_fold0",
-        "reg [3:0] fifo_address_fold1",
+        "vbuf_address[27:12] < previous_address",
         "reg fifo_wrap0",
         "reg fifo_wrap1",
         "reg [1:0] fifo_count",
@@ -474,8 +472,8 @@ def main() -> None:
     timing_commands = re.findall(
         r"(?m)^\s*(set_[A-Za-z0-9_]+\b[^\n]*)$", diagnostics_sdc_text
     )
-    if timing_commands != ["set_net_delay -max 10.0 \\"] * 5:
-        fail("diagnostic SDC must contain two completion and three observer bounds")
+    if timing_commands != ["set_net_delay -max 10.0 \\"] * 4:
+        fail("diagnostic SDC must contain two completion and two handshake bounds")
     for fragment in (
         "{*ascal:ascal|avl_readdataack} 1",
         "{*ascal:ascal|o_readdataack_sync} 1",
@@ -493,11 +491,7 @@ def main() -> None:
         "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledge_meta} 1",
         "-from $magik_fetch_publication_ack",
         "-to $magik_fetch_publication_ack_meta",
-        "{*reset_req} 1",
-        "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|reset_meta} 1",
-        "-from $magik_fetch_reset_req",
-        "-to $magik_fetch_reset_meta",
-        "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_liveness_publication_request_ack_reset",
+        "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_liveness_publication_request_ack_reset_observed",
         "*ascal:ascal|o_readdataack_sync2*",
         "scaler_copy_tail",
     ):

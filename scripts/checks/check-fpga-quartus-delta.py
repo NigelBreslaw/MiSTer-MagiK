@@ -176,9 +176,6 @@ EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH = {
     "scaler_fetch_publication_ack": re.compile(
         r"acknowledged_generation\s*;[^\n]*acknowledge_meta\s*;", re.IGNORECASE
     ),
-    "scaler_fetch_reset": re.compile(
-        r"reset_req\s*;[^\n]*reset_meta\s*;", re.IGNORECASE
-    ),
 }
 
 

@@ -12,7 +12,7 @@ the observer could erase its own queue, phase, heartbeat, and publication
 evidence.
 
 The replacement diagnostic is schema 14,
-`scaler-fetch-liveness-first-stall-v1`, on read-only command `0x68` with magic
+`scaler-fetch-liveness-first-stall-v1`, as a six-word record on read-only command `0x68` with magic
 `0x4d58`. The fixed five-word schema-10/11 `0x67` ABI remains unchanged for
 rollback decoding; the device agent probes `0x68` first and falls back to
 `0x67` only when the new command is explicitly unsupported. A malformed

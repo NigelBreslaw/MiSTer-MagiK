@@ -305,12 +305,11 @@ if scaler_fetch_liveness != {
     "architecture": "scaler-fetch-liveness-first-stall-v1",
     "command": 0x68,
     "magic": 0x4D58,
-    "word_count": 7,
+    "word_count": 6,
     "words": [
         "schema",
         "flags",
         "sequence_identity",
-        "progress",
         "live_state",
         "frozen_state",
         "crc",
@@ -333,8 +332,6 @@ if scaler_fetch_liveness != {
     "fields": {
         "publication_sequence": {"word": "sequence_identity", "bit": 0, "width": 8},
         "frozen_sequence": {"word": "sequence_identity", "bit": 8, "width": 8},
-        "accepted_count": {"word": "progress", "bit": 0, "width": 8},
-        "completed_count": {"word": "progress", "bit": 8, "width": 8},
         "return_phase": {"word": "live_state", "bit": 0, "width": 7},
         "fifo_depth": {"word": "live_state", "bit": 7, "width": 2},
         "monitor_state": {"word": "live_state", "bit": 9, "width": 2},

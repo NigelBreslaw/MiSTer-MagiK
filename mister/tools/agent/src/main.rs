@@ -4545,8 +4545,6 @@ mod linux {
                             "flags": samples.iter().map(|sample| sample.flags()).collect::<Vec<_>>(),
                             "publication_sequence": samples.iter().map(|sample| sample.publication_sequence()).collect::<Vec<_>>(),
                             "frozen_sequence": samples.iter().map(|sample| sample.frozen_sequence()).collect::<Vec<_>>(),
-                            "accepted_count": samples.iter().map(|sample| sample.accepted_count()).collect::<Vec<_>>(),
-                            "completed_count": samples.iter().map(|sample| sample.completed_count()).collect::<Vec<_>>(),
                             "return_phase": samples.iter().map(|sample| sample.return_phase()).collect::<Vec<_>>(),
                             "fifo_depth": samples.iter().map(|sample| sample.fifo_depth()).collect::<Vec<_>>(),
                             "monitor_state": samples.iter().map(|sample| sample.monitor_state()).collect::<Vec<_>>(),

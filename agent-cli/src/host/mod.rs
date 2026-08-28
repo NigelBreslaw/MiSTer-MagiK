@@ -38744,7 +38744,7 @@ H: Handlers=event3 js0"#
                 "publication_sequence": [100, 101, 103],
                 "frozen_sequence": [99, 99, 99],
                 "frozen_cause": [1, 1, 1],
-                "raw_samples": vec![vec![14; 7]; 3],
+                "raw_samples": vec![vec![14; 6]; 3],
             },
         });
         assert!(experimental_raw_scaler_evidence_available(

@@ -21,7 +21,7 @@ module mister_magik_scaler_fetch_liveness_formal;
 	wire [15:0] frozen_state;
 	wire publication_generation;
 	wire acknowledge_sync;
-	wire [95:0] published_bundle;
+	wire [79:0] published_bundle;
 	wire enqueue;
 	wire dequeue;
 	wire return_has_entry;

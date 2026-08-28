@@ -184,11 +184,6 @@ SCALER_FETCH_DIAGNOSTIC_REPORTS = {
             "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledged_generation",
             "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledge_meta",
         )
-        + "; set_net_delay ; 1.000 ; 10.000 ; 9.000 ; sources ; destinations ; max ;\n"
-        + net_delay_detail(
-            "reset_req",
-            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|reset_meta",
-        )
     ),
     "menu.magik-diagnostic-metastability.rpt": (
         VALID_DIAGNOSTIC_REPORTS["menu.magik-diagnostic-metastability.rpt"]

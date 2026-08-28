@@ -183,22 +183,6 @@ impl ScalerFetchLivenessState {
         ) as u8
     }
 
-    pub fn accepted_count(&self) -> u8 {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_ACCEPTED_COUNT_WORD,
-            SCALER_FETCH_LIVENESS_STATE_ACCEPTED_COUNT_BIT,
-            SCALER_FETCH_LIVENESS_STATE_ACCEPTED_COUNT_MASK,
-        ) as u8
-    }
-
-    pub fn completed_count(&self) -> u8 {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_COMPLETED_COUNT_WORD,
-            SCALER_FETCH_LIVENESS_STATE_COMPLETED_COUNT_BIT,
-            SCALER_FETCH_LIVENESS_STATE_COMPLETED_COUNT_MASK,
-        ) as u8
-    }
-
     pub fn return_phase(&self) -> u8 {
         self.field(
             SCALER_FETCH_LIVENESS_STATE_RETURN_PHASE_WORD,
@@ -1142,7 +1126,6 @@ mod tests {
                 | SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN
                 | SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID;
         words[SCALER_FETCH_LIVENESS_STATE_SEQUENCE_IDENTITY_WORD] = 0x070a;
-        words[SCALER_FETCH_LIVENESS_STATE_PROGRESS_WORD] = 0x0304;
         words[SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_WORD] =
             (SCALER_FETCH_LIVENESS_STATE_MONITOR_NO_REQUEST
                 << SCALER_FETCH_LIVENESS_STATE_MONITOR_STATE_BIT)
@@ -1160,8 +1143,6 @@ mod tests {
         assert!(decoded.first_stall_valid());
         assert_eq!(decoded.publication_sequence(), 10);
         assert_eq!(decoded.frozen_sequence(), 7);
-        assert_eq!(decoded.accepted_count(), 4);
-        assert_eq!(decoded.completed_count(), 3);
         assert_eq!(
             decoded.frozen_cause(),
             SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN
