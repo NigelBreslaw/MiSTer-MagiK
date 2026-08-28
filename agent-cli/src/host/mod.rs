@@ -19460,12 +19460,45 @@ fn inspect_catalog_after_completion(
     .into())
 }
 
+fn reboot_for_catalog_attribution(config: &NativeDeviceConfig) -> Result<Value> {
+    let before_session = connect_with(&config.connection, 10)?;
+    let before_boot_id = remote_read(&before_session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable before catalog attribution reboot")?
+        .trim()
+        .to_string();
+    drop(before_session);
+
+    let started = Instant::now();
+    agent_reboot_wait(&[])?;
+    let elapsed_ms = started.elapsed().as_millis();
+
+    let after_session = connect_with(&config.connection, 10)?;
+    let after_boot_id = remote_read(&after_session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after catalog attribution reboot")?
+        .trim()
+        .to_string();
+    if before_boot_id == after_boot_id {
+        return Err("catalog attribution reboot did not change the device boot id".into());
+    }
+    println!(
+        "catalog attribution reboot verified after {elapsed_ms}ms: {before_boot_id} -> {after_boot_id}"
+    );
+    Ok(json!({
+        "mode": "supervised",
+        "verified": true,
+        "elapsed_ms": elapsed_ms,
+        "boot_id_before": before_boot_id,
+        "boot_id_after": after_boot_id,
+    }))
+}
+
 fn profile_installed_catalog_attribution(
     config: &NativeDeviceConfig,
     output_dir: &Path,
     arm: CatalogAttributionArm,
 ) -> Result<String> {
     let _signal_guard = AttendedOperationSignalGuard::install();
+    let reboot = reboot_for_catalog_attribution(config)?;
     match arm {
         CatalogAttributionArm::Storage => {
             return profile_catalog_attribution_trace(
@@ -19473,6 +19506,7 @@ fn profile_installed_catalog_attribution(
                 output_dir,
                 arm,
                 &[("storage", tracefs::STORAGE_TRACE_SPEC)],
+                reboot,
             );
         }
         CatalogAttributionArm::FunctionGraph => {
@@ -19484,10 +19518,11 @@ fn profile_installed_catalog_attribution(
                     ("namespace", CATALOG_NAMESPACE_FUNCTION_GRAPH_SPEC),
                     ("durability", CATALOG_DURABILITY_FUNCTION_GRAPH_SPEC),
                 ],
+                reboot,
             );
         }
         CatalogAttributionArm::Streamline => {
-            return profile_catalog_attribution_streamline(config, output_dir);
+            return profile_catalog_attribution_streamline(config, output_dir, reboot);
         }
         CatalogAttributionArm::Control
         | CatalogAttributionArm::Pprof
@@ -19502,7 +19537,7 @@ fn profile_installed_catalog_attribution(
         .trim()
         .to_string();
     fs::create_dir_all(output_dir)?;
-    let sample_count = usize::from(arm == CatalogAttributionArm::Control) * 2 + 1;
+    let sample_count = 1;
     let experiment_value =
         |key: &str, default: &str| env::var(key).unwrap_or_else(|_| default.to_string());
 
@@ -19550,6 +19585,7 @@ fn profile_installed_catalog_attribution(
             "status": status,
             "configuration": {
                 "samples": sample_count,
+                "reboot_before_pair": reboot,
                 "roots": [CATALOG_BUILD_REBUILD_ARCADE_ROOT, CATALOG_BUILD_REBUILD_SNES_ROOT, CATALOG_ATTRIBUTION_C64_ROOT],
                 "real_content_only": true,
                 "publication_filesystem": "exfat",
@@ -19576,6 +19612,7 @@ fn profile_catalog_attribution_trace(
     output_dir: &Path,
     arm: CatalogAttributionArm,
     captures: &[(&str, tracefs::TracefsCaptureSpec)],
+    reboot: Value,
 ) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     let endpoint = config.agent()?.clone();
@@ -19625,6 +19662,7 @@ fn profile_catalog_attribution_trace(
             "status": if all_identical && profiles_complete { "passed" } else { "failed" },
             "configuration": {
                 "samples": captures.len(),
+                "reboot_before_pair": reboot,
                 "roots": [CATALOG_BUILD_REBUILD_ARCADE_ROOT, CATALOG_BUILD_REBUILD_SNES_ROOT, CATALOG_ATTRIBUTION_C64_ROOT],
                 "real_content_only": true,
                 "publication_filesystem": "exfat",
@@ -19756,6 +19794,7 @@ fn run_catalog_attribution_trace_leg(
 fn profile_catalog_attribution_streamline(
     config: &NativeDeviceConfig,
     output_dir: &Path,
+    reboot: Value,
 ) -> Result<String> {
     let gatord = streamline_gatord_path(env::var_os("MISTER_GATORD_PATH"))?;
     let metadata = fs::metadata(&gatord)?;
@@ -19817,6 +19856,7 @@ fn profile_catalog_attribution_streamline(
             "status": if identical && profiles_complete { "passed" } else { "failed" },
             "configuration": {
                 "samples": 1,
+                "reboot_before_pair": reboot,
                 "roots": [CATALOG_BUILD_REBUILD_ARCADE_ROOT, CATALOG_BUILD_REBUILD_SNES_ROOT, CATALOG_ATTRIBUTION_C64_ROOT],
                 "real_content_only": true,
                 "publication_filesystem": "exfat",
