@@ -641,8 +641,10 @@ pub fn publish_refresh_state_with_report(
         let watch_relative = format!("systems/{}/{generation}.watch", state.watch.system_id);
         let rows_relative = format!("systems/{}/{generation}.rows", state.watch.system_id);
         let encoding_started = std::time::Instant::now();
-        let watch_bytes = encode_envelope(&state.watch, WATCH_MAGIC)?;
-        let rows_bytes = encode_envelope(&state.rows, ROWS_MAGIC)?;
+        let (watch_bytes, source_fingerprint) =
+            encode_envelope_with_payload_fingerprint(&state.watch, WATCH_MAGIC)?;
+        let (rows_bytes, row_fingerprint) =
+            encode_envelope_with_payload_fingerprint(&state.rows, ROWS_MAGIC)?;
         report.encoding_us = report
             .encoding_us
             .saturating_add(encoding_started.elapsed().as_micros() as u64);
@@ -654,8 +656,6 @@ pub fn publish_refresh_state_with_report(
         let fingerprint_started = std::time::Instant::now();
         let watch_sha256 = sha256_hex(&watch_bytes);
         let rows_sha256 = sha256_hex(&rows_bytes);
-        let source_fingerprint = source_fingerprint(&state.watch);
-        let row_fingerprint = row_fingerprint(&state.rows)?;
         report.fingerprint_us = report
             .fingerprint_us
             .saturating_add(fingerprint_started.elapsed().as_micros() as u64);
@@ -753,8 +753,10 @@ pub fn publish_refresh_update(
             .map_err(|error| format!("create {} refresh state: {error}", state.watch.system_id))?;
         let watch_relative = format!("systems/{}/{generation}.watch", state.watch.system_id);
         let rows_relative = format!("systems/{}/{generation}.rows", state.watch.system_id);
-        let watch_bytes = encode_envelope(&state.watch, WATCH_MAGIC)?;
-        let rows_bytes = encode_envelope(&state.rows, ROWS_MAGIC)?;
+        let (watch_bytes, source_fingerprint) =
+            encode_envelope_with_payload_fingerprint(&state.watch, WATCH_MAGIC)?;
+        let (rows_bytes, row_fingerprint) =
+            encode_envelope_with_payload_fingerprint(&state.rows, ROWS_MAGIC)?;
         write_new_file(&root.join(&watch_relative), &watch_bytes)?;
         write_new_file(&root.join(&rows_relative), &rows_bytes)?;
         references.insert(
@@ -765,8 +767,8 @@ pub fn publish_refresh_update(
                 watch_sha256: sha256_hex(&watch_bytes),
                 rows_path: rows_relative,
                 rows_sha256: sha256_hex(&rows_bytes),
-                source_fingerprint: source_fingerprint(&state.watch),
-                row_fingerprint: row_fingerprint(&state.rows)?,
+                source_fingerprint,
+                row_fingerprint,
                 games: state.rows.games.len().try_into().unwrap_or(u64::MAX),
                 variants: state.rows.variants.len().try_into().unwrap_or(u64::MAX),
             },
@@ -1728,18 +1730,27 @@ pub fn row_fingerprint(rows: &FastSystemRowsSnapshot) -> Result<String, String> 
 }
 
 fn encode_envelope<T: Serialize>(value: &T, magic: &[u8; 8]) -> Result<Vec<u8>, String> {
+    encode_envelope_with_payload_fingerprint(value, magic).map(|(bytes, _)| bytes)
+}
+
+fn encode_envelope_with_payload_fingerprint<T: Serialize>(
+    value: &T,
+    magic: &[u8; 8],
+) -> Result<(Vec<u8>, String), String> {
     let payload = postcard::to_allocvec(value).map_err(|error| format!("encode state: {error}"))?;
     let payload_len = u64::try_from(payload.len()).map_err(|_| "state is too large")?;
+    let payload_digest = Sha256::digest(&payload);
+    let payload_fingerprint = sha256_hex(&payload);
     let mut output = Vec::with_capacity(ENVELOPE_BYTES + payload.len());
     output.extend_from_slice(magic);
     output.extend_from_slice(&ENVELOPE_VERSION.to_le_bytes());
     output.extend_from_slice(&REFRESH_SCHEMA.to_le_bytes());
     output.extend_from_slice(&payload_len.to_le_bytes());
-    output.extend_from_slice(&Sha256::digest(&payload));
+    output.extend_from_slice(&payload_digest);
     output.extend_from_slice(&[0; 8]);
     debug_assert_eq!(output.len(), ENVELOPE_BYTES);
     output.extend_from_slice(&payload);
-    Ok(output)
+    Ok((output, payload_fingerprint))
 }
 
 fn read_envelope<T: DeserializeOwned>(
