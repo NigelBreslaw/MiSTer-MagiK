@@ -10,11 +10,95 @@
 use crate::arcade_catalog::ArcadeCatalog;
 use crate::launcher::{ArcadeSearchStatus, LauncherNav, Screen};
 use crate::test_support::{arcade_catalog, arcade_game, arcade_system};
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Environment switch understood by the device-test runner.
 pub const FIXTURE_ENV: &str = "MISTER_UI_TEST_FIXTURE";
 /// Stable fixture name used by the first-party UI suite.
 pub const DETERMINISTIC_FIXTURE: &str = "deterministic-arcade-v1";
+
+/// Effects that are intentionally disabled while a device UI journey runs.
+///
+/// A UI test may exercise the launch, rebuild, or restart menu entries, but it
+/// must never start a real core, rewrite the device catalog, or reboot the
+/// board.  Keeping this policy as data lets the typed bridge report it and
+/// makes accidental production-effect calls visible in assertions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SandboxEffects {
+    pub allow_core_launch: bool,
+    pub allow_catalog_write: bool,
+    pub allow_reboot: bool,
+}
+
+impl SandboxEffects {
+    pub const fn device_ui_defaults() -> Self {
+        Self {
+            allow_core_launch: false,
+            allow_catalog_write: false,
+            allow_reboot: false,
+        }
+    }
+}
+
+/// Volatile, per-run storage for device fixtures and captures.
+///
+/// The root is created below the host/device temporary directory and removed
+/// on drop.  `path_for` rejects absolute paths and parent traversal so cleanup
+/// can never escape the run's sandbox.
+#[derive(Debug)]
+pub struct UiTestSandbox {
+    root: PathBuf,
+    effects: SandboxEffects,
+}
+
+impl UiTestSandbox {
+    pub fn new() -> io::Result<Self> {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-ui-test-{}-{stamp}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&root)?;
+        Ok(Self {
+            root,
+            effects: SandboxEffects::device_ui_defaults(),
+        })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn effects(&self) -> SandboxEffects {
+        self.effects
+    }
+
+    pub fn path_for(&self, relative: impl AsRef<Path>) -> io::Result<PathBuf> {
+        let relative = relative.as_ref();
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| component == std::path::Component::ParentDir)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "UI test sandbox paths must stay below the run root",
+            ));
+        }
+        Ok(self.root.join(relative))
+    }
+}
+
+impl Drop for UiTestSandbox {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
 
 /// Build a small catalog with stable metadata for navigation and filter tests.
 pub fn deterministic_catalog() -> ArcadeCatalog {
