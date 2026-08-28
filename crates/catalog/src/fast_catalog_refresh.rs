@@ -94,7 +94,9 @@ pub struct FastSystemRowsSnapshot {
 #[derive(Clone, Debug)]
 pub struct FastRefreshSystemState {
     pub watch: FastSystemWatchIndex,
-    pub rows: FastSystemRowsSnapshot,
+    pub row_fingerprint: String,
+    pub games: u64,
+    pub variants: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -475,26 +477,16 @@ impl FastSystemRowsSnapshot {
         if self.schema != REFRESH_SCHEMA || self.system_id != expected_system_id {
             return Err(format!("invalid row snapshot for {expected_system_id}"));
         }
-        let prefix = format!("{expected_system_id}\u{1f}");
-        let mut keys = BTreeSet::new();
-        for game in &self.games {
-            if !game.stable_key.starts_with(&prefix)
-                || game.title.trim().is_empty()
-                || game.launch_ref.trim().is_empty()
-                || !keys.insert(game.stable_key.as_str())
-            {
-                return Err(format!("invalid cached row in {expected_system_id}"));
-            }
-        }
-        for variant in &self.variants {
-            if !variant.game.stable_key.starts_with(&prefix)
-                || !keys.insert(variant.game.stable_key.as_str())
-            {
-                return Err(format!("invalid cached variant in {expected_system_id}"));
-            }
-        }
-        Ok(())
+        validate_row_parts(expected_system_id, &self.games, &self.variants)
     }
+}
+
+#[derive(Serialize)]
+struct FastSystemRowsSnapshotRef<'a> {
+    schema: u32,
+    system_id: &'a str,
+    games: &'a [SystemGame],
+    variants: &'a [FastFiveGameVariant],
 }
 
 pub fn refresh_state_root(catalog_root: &Path) -> PathBuf {
@@ -619,8 +611,8 @@ pub fn publish_refresh_state_with_report(
     };
     for state in systems {
         let phase_started = std::time::Instant::now();
-        state.watch.validate(&state.rows.system_id)?;
-        state.rows.validate(&state.watch.system_id)?;
+        state.watch.validate(&state.watch.system_id)?;
+        validate_sha256(&state.row_fingerprint, "row fingerprint")?;
         report.validation_us = report
             .validation_us
             .saturating_add(phase_started.elapsed().as_micros() as u64);
@@ -631,7 +623,6 @@ pub fn publish_refresh_state_with_report(
         let encoding_started = std::time::Instant::now();
         let (watch_bytes, source_fingerprint) =
             encode_envelope_with_payload_fingerprint(&state.watch, WATCH_MAGIC)?;
-        let row_fingerprint = row_fingerprint(&state.rows)?;
         report.encoding_us = report
             .encoding_us
             .saturating_add(encoding_started.elapsed().as_micros() as u64);
@@ -652,9 +643,9 @@ pub fn publish_refresh_state_with_report(
             watch_path: watch_relative,
             watch_sha256,
             source_fingerprint,
-            row_fingerprint,
-            games: state.rows.games.len().try_into().unwrap_or(u64::MAX),
-            variants: state.rows.variants.len().try_into().unwrap_or(u64::MAX),
+            row_fingerprint: state.row_fingerprint.clone(),
+            games: state.games,
+            variants: state.variants,
         });
     }
     let batch_sync_started = std::time::Instant::now();
@@ -726,15 +717,14 @@ pub fn publish_refresh_update(
         references.remove(system_id);
     }
     for state in updated {
-        state.watch.validate(&state.rows.system_id)?;
-        state.rows.validate(&state.watch.system_id)?;
+        state.watch.validate(&state.watch.system_id)?;
+        validate_sha256(&state.row_fingerprint, "row fingerprint")?;
         let system_dir = root.join("systems").join(&state.watch.system_id);
         fs::create_dir_all(&system_dir)
             .map_err(|error| format!("create {} refresh state: {error}", state.watch.system_id))?;
         let watch_relative = format!("systems/{}/{generation}.watch", state.watch.system_id);
         let (watch_bytes, source_fingerprint) =
             encode_envelope_with_payload_fingerprint(&state.watch, WATCH_MAGIC)?;
-        let row_fingerprint = row_fingerprint(&state.rows)?;
         write_new_file(&root.join(&watch_relative), &watch_bytes)?;
         references.insert(
             state.watch.system_id.clone(),
@@ -743,9 +733,9 @@ pub fn publish_refresh_update(
                 watch_path: watch_relative,
                 watch_sha256: sha256_hex(&watch_bytes),
                 source_fingerprint,
-                row_fingerprint,
-                games: state.rows.games.len().try_into().unwrap_or(u64::MAX),
-                variants: state.rows.variants.len().try_into().unwrap_or(u64::MAX),
+                row_fingerprint: state.row_fingerprint.clone(),
+                games: state.games,
+                variants: state.variants,
             },
         );
     }
@@ -808,13 +798,13 @@ fn capture_refresh_state_with_profiles(
         );
         report.directories = report.directories.saturating_add(watch.directories.len());
         report.containers = report.containers.saturating_add(watch.containers.len());
+        let row_fingerprint =
+            row_fingerprint_parts(&system.system_id, &system.games, &system.variants)?;
         states.push(FastRefreshSystemState {
             watch,
-            rows: FastSystemRowsSnapshot::new(
-                system.system_id.clone(),
-                system.games.clone(),
-                system.variants.clone(),
-            )?,
+            row_fingerprint,
+            games: system.games.len().try_into().unwrap_or(u64::MAX),
+            variants: system.variants.len().try_into().unwrap_or(u64::MAX),
         });
     }
     report.systems = states.len();
@@ -1088,16 +1078,19 @@ fn prepare_system_refresh(
         return Ok(None);
     };
     let watch = capture_system_watch(storage_root, system_id)?;
-    let rows = FastSystemRowsSnapshot::new(
-        system.system_id.clone(),
-        system.games.clone(),
-        system.variants.clone(),
-    )?;
-    let row_fingerprint = row_fingerprint(&rows)?;
+    let row_fingerprint =
+        row_fingerprint_parts(&system.system_id, &system.games, &system.variants)?;
+    let games = system.games.len().try_into().unwrap_or(u64::MAX);
+    let variants = system.variants.len().try_into().unwrap_or(u64::MAX);
     Ok(Some(PreparedSystemRefresh {
         system,
         source_report,
-        state: FastRefreshSystemState { watch, rows },
+        state: FastRefreshSystemState {
+            watch,
+            row_fingerprint: row_fingerprint.clone(),
+            games,
+            variants,
+        },
         row_fingerprint,
     }))
 }
@@ -1208,8 +1201,8 @@ fn execute_planned_fast_refresh_with(
                         FastCatalogSystemOutcome::Unchanged
                     },
                     source_status: check.status,
-                    games: state.rows.games.len().try_into().unwrap_or(u64::MAX),
-                    variants: state.rows.variants.len().try_into().unwrap_or(u64::MAX),
+                    games: state.games,
+                    variants: state.variants,
                     elapsed_us: system_started
                         .elapsed()
                         .as_micros()
@@ -1747,10 +1740,50 @@ pub fn source_fingerprint(watch: &FastSystemWatchIndex) -> String {
 }
 
 pub fn row_fingerprint(rows: &FastSystemRowsSnapshot) -> Result<String, String> {
-    rows.validate(&rows.system_id)?;
-    postcard::to_allocvec(rows)
+    row_fingerprint_parts(&rows.system_id, &rows.games, &rows.variants)
+}
+
+fn row_fingerprint_parts(
+    system_id: &str,
+    games: &[SystemGame],
+    variants: &[FastFiveGameVariant],
+) -> Result<String, String> {
+    validate_row_parts(system_id, games, variants)?;
+    let rows = FastSystemRowsSnapshotRef {
+        schema: REFRESH_SCHEMA,
+        system_id,
+        games,
+        variants,
+    };
+    postcard::to_allocvec(&rows)
         .map(|bytes| sha256_hex(&bytes))
         .map_err(|error| format!("encode row fingerprint: {error}"))
+}
+
+fn validate_row_parts(
+    system_id: &str,
+    games: &[SystemGame],
+    variants: &[FastFiveGameVariant],
+) -> Result<(), String> {
+    let prefix = format!("{system_id}\u{1f}");
+    let mut keys = BTreeSet::new();
+    for game in games {
+        if !game.stable_key.starts_with(&prefix)
+            || game.title.trim().is_empty()
+            || game.launch_ref.trim().is_empty()
+            || !keys.insert(game.stable_key.as_str())
+        {
+            return Err(format!("invalid cached row in {system_id}"));
+        }
+    }
+    for variant in variants {
+        if !variant.game.stable_key.starts_with(&prefix)
+            || !keys.insert(variant.game.stable_key.as_str())
+        {
+            return Err(format!("invalid cached variant in {system_id}"));
+        }
+    }
+    Ok(())
 }
 
 fn encode_envelope<T: Serialize>(value: &T, magic: &[u8; 8]) -> Result<Vec<u8>, String> {
@@ -1970,6 +2003,20 @@ mod tests {
             is_new: false,
             launch_plan: None,
         };
+        let rows = FastSystemRowsSnapshot {
+            schema: REFRESH_SCHEMA,
+            system_id: system_id.to_string(),
+            games: vec![game.clone()],
+            variants: vec![FastFiveGameVariant {
+                family_stable_key: game.stable_key.clone(),
+                relation: FastFiveVariantRelation::LanguageEdition,
+                game: SystemGame {
+                    stable_key: format!("{system_id}\u{1f}variant"),
+                    ..game
+                },
+            }],
+        };
+        let row_fingerprint = row_fingerprint(&rows).unwrap();
         FastRefreshSystemState {
             watch: FastSystemWatchIndex {
                 schema: REFRESH_SCHEMA,
@@ -1984,19 +2031,9 @@ mod tests {
                 }],
                 containers: Vec::new(),
             },
-            rows: FastSystemRowsSnapshot {
-                schema: REFRESH_SCHEMA,
-                system_id: system_id.to_string(),
-                games: vec![game.clone()],
-                variants: vec![FastFiveGameVariant {
-                    family_stable_key: game.stable_key.clone(),
-                    relation: FastFiveVariantRelation::LanguageEdition,
-                    game: SystemGame {
-                        stable_key: format!("{system_id}\u{1f}variant"),
-                        ..game
-                    },
-                }],
-            },
+            row_fingerprint,
+            games: rows.games.len() as u64,
+            variants: rows.variants.len() as u64,
         }
     }
 
@@ -2025,10 +2062,7 @@ mod tests {
                 .join("systems/snes/1.rows")
                 .exists()
         );
-        assert_eq!(
-            reference.row_fingerprint,
-            row_fingerprint(&state("snes").rows).unwrap()
-        );
+        assert_eq!(reference.row_fingerprint, state("snes").row_fingerprint);
 
         let second = publish_refresh_state(
             &root,
@@ -2041,6 +2075,50 @@ mod tests {
         .expect("publish second state");
         assert!(refresh_state_root(&root).join(MANIFEST_A).is_file());
         assert_eq!(read_latest_refresh_manifest(&root).unwrap(), second);
+    }
+
+    #[test]
+    fn borrowed_row_fingerprint_encoding_matches_owned_snapshot() {
+        let state = state("snes");
+        let game = SystemGame {
+            stable_key: "snes\u{1f}game".to_string(),
+            title: "Game".to_string(),
+            launch_ref: "/media/fat/games/Game.rom".to_string(),
+            preview_archive_path: String::new(),
+            preview_asset_key: String::new(),
+            has_preview: false,
+            year: None,
+            manufacturer: String::new(),
+            category: "Games".to_string(),
+            players: None,
+            control: String::new(),
+            is_new: false,
+            launch_plan: None,
+        };
+        let rows = FastSystemRowsSnapshot {
+            schema: REFRESH_SCHEMA,
+            system_id: "snes".to_string(),
+            games: vec![game.clone()],
+            variants: vec![FastFiveGameVariant {
+                family_stable_key: game.stable_key.clone(),
+                relation: FastFiveVariantRelation::LanguageEdition,
+                game: SystemGame {
+                    stable_key: "snes\u{1f}variant".to_string(),
+                    ..game
+                },
+            }],
+        };
+        let borrowed = FastSystemRowsSnapshotRef {
+            schema: rows.schema,
+            system_id: &rows.system_id,
+            games: &rows.games,
+            variants: &rows.variants,
+        };
+        assert_eq!(
+            postcard::to_allocvec(&rows).unwrap(),
+            postcard::to_allocvec(&borrowed).unwrap()
+        );
+        assert_eq!(state.row_fingerprint, row_fingerprint(&rows).unwrap());
     }
 
     #[test]
