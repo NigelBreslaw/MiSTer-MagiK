@@ -4,12 +4,23 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 DEFAULT_FIXTURE = "deterministic-arcade-v1"
 DEFAULT_TIMEOUT_SECONDS = 120
+CASE_TARGETS = {
+    "startup-home": "apps/mister/ui_tests/tests/test_startup_home.py",
+    "system-hub": "apps/mister/ui_tests/tests/test_system_hub.py",
+    "arcade-navigation": "apps/mister/ui_tests/tests/test_arcade_navigation.py",
+    "arcade-filters": "apps/mister/ui_tests/tests/test_arcade_filters.py",
+    "settings-display": "apps/mister/ui_tests/tests/test_settings_display.py",
+    "screensaver-motion": "apps/mister/ui_tests/tests/test_screensaver_motion.py",
+    "about-licenses": "apps/mister/ui_tests/tests/test_about_licenses.py",
+    "effect-sandbox": "apps/mister/ui_tests/tests/test_effect_sandbox.py",
+}
 
 
 @dataclass(frozen=True)
@@ -76,9 +87,28 @@ def run_cases(cases: list[UiCase], bridge: AgentBridge) -> list[UiCaseResult]:
     return [bridge.run(case) for case in cases]
 
 
+def run_pytest(cases: list[UiCase], repository: Path) -> str:
+    """Run mapped pytest modules after the agent has accepted each case."""
+
+    targets = [CASE_TARGETS[case.name] for case in cases]
+    completed = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", *targets],
+        check=False,
+        cwd=repository,
+        capture_output=True,
+        text=True,
+    )
+    output = "\n".join(
+        part for part in (completed.stdout, completed.stderr) if part
+    ).strip()
+    if completed.returncode != 0:
+        raise RuntimeError(f"device UI pytest run failed ({completed.returncode}): {output}")
+    return output
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("case", nargs="+", help="case names to run")
+    parser.add_argument("case", nargs="+", choices=sorted(CASE_TARGETS), help="case names to run")
     parser.add_argument("--fixture", default=DEFAULT_FIXTURE)
     parser.add_argument("--timeout-secs", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--repository", type=Path, default=Path(__file__).parents[3])
@@ -98,6 +128,9 @@ def main() -> int:
     for result in results:
         if result.output:
             print(result.output)
+    pytest_output = run_pytest(cases, arguments.repository)
+    if pytest_output:
+        print(pytest_output)
     return 0
 
 
@@ -105,4 +138,12 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["AgentBridge", "ScriptAgentBridge", "UiCase", "UiCaseResult", "run_cases"]
+__all__ = [
+    "AgentBridge",
+    "CASE_TARGETS",
+    "ScriptAgentBridge",
+    "UiCase",
+    "UiCaseResult",
+    "run_cases",
+    "run_pytest",
+]
