@@ -208,6 +208,7 @@ trait DeliveryDevice {
     fn connect(&mut self) -> AgentResult<()>;
     fn read_development_manifest(&mut self) -> AgentResult<String>;
     fn read_active_runtime(&mut self) -> AgentResult<crate::host::ActiveRuntime>;
+    fn read_development_fpga_activation_current(&mut self) -> AgentResult<bool>;
     fn deliver_runtime(
         &mut self,
         delivery: RuntimeDelivery,
@@ -244,6 +245,10 @@ impl DeliveryDevice for DeviceClient {
 
     fn read_active_runtime(&mut self) -> AgentResult<crate::host::ActiveRuntime> {
         self.read(crate::NativeDevice::read_active_runtime)
+    }
+
+    fn read_development_fpga_activation_current(&mut self) -> AgentResult<bool> {
+        self.read(crate::NativeDevice::development_fpga_activation_current)
     }
 
     fn deliver_runtime(
@@ -756,6 +761,11 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
                 self.deployment.platform_candidate = platform_candidate;
                 let active = self.device.read_active_runtime()?;
                 self.decision = reconcile_active_runtime(reconciliation.decision, &active);
+                if self.decision != DeliveryDecision::Platform
+                    && !self.device.read_development_fpga_activation_current()?
+                {
+                    self.decision = DeliveryDecision::Platform;
+                }
                 if self.decision == DeliveryDecision::Platform {
                     self.deployment.kind = DeploymentKind::Platform;
                     self.deployment.ui_scope = UiScope::Production;
@@ -1071,6 +1081,10 @@ mod tests {
                 Some("/media/fat/MiSTer_MagiKDev"),
                 Some("LauncherActive"),
             ))
+        }
+
+        fn read_development_fpga_activation_current(&mut self) -> AgentResult<bool> {
+            Ok(true)
         }
 
         fn deliver_runtime(

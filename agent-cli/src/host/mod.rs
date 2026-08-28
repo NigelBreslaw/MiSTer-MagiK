@@ -1417,6 +1417,17 @@ impl NativeDevice {
         collect_diagnostic_facts(&prepared.config)
     }
 
+    pub(crate) fn development_fpga_activation_current(
+        &mut self,
+    ) -> std::result::Result<bool, DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::SSH_READ)?;
+        match verify_installed_fpga_activation(&prepared.config, Layout::Development) {
+            Ok(_) => Ok(true),
+            Err(DeviceFailure::Unhealthy(_)) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
     pub(crate) fn repair_safe_device_state(&mut self) -> std::result::Result<(), DeviceFailure> {
         let prepared = self.prepare(DeviceAccess::SSH_MUTATION)?;
         let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
