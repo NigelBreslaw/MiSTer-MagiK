@@ -253,7 +253,7 @@ fn run_fast_catalog_refresh_in_process(
     let _ = tx.send(CatalogWorkerMessage::Timing {
         name: "fast_catalog_refresh".to_string(),
         detail: format!(
-            "elapsed_us={} planning_us={} source_rebuild_us={} artifact_publish_us={} snapshot_publish_us={} systems={} unchanged={} updated={} failed_retained={} artifact_systems_written={} row_snapshots_opened={}",
+            "elapsed_us={} planning_us={} source_rebuild_us={} artifact_publish_us={} snapshot_publish_us={} systems={} unchanged={} updated={} failed_retained={} artifact_systems_written={}",
             report.elapsed_us,
             report.planning_us,
             report.source_rebuild_us,
@@ -264,7 +264,6 @@ fn run_fast_catalog_refresh_in_process(
             report.updated,
             report.failed_retained,
             report.artifact_systems_written,
-            report.row_snapshots_opened,
         ),
     });
     if !rebuilt.is_empty() || !removed.is_empty() {

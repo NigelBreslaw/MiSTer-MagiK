@@ -160,7 +160,6 @@ pub struct FastRefreshPlanReport {
     pub unchanged: usize,
     pub changed: usize,
     pub rescans: usize,
-    pub row_snapshots_opened: usize,
     pub artifact_writes: usize,
     pub checks: Vec<FastSystemSourceCheck>,
 }
@@ -198,7 +197,6 @@ pub struct FastCatalogRefreshReport {
     pub updated: usize,
     pub removed: usize,
     pub failed_retained: usize,
-    pub row_snapshots_opened: usize,
     pub artifact_systems_written: usize,
     pub catalog_generation: u64,
     pub refresh_generation: u64,
@@ -1027,7 +1025,6 @@ pub fn plan_fast_refresh(
         unchanged,
         changed,
         rescans,
-        row_snapshots_opened: 0,
         artifact_writes: 0,
         checks,
     })
@@ -1324,7 +1321,6 @@ fn execute_planned_fast_refresh_with(
         updated,
         removed,
         failed_retained,
-        row_snapshots_opened: 0,
         artifact_systems_written: artifact_writes.len(),
         catalog_generation: active.generation,
         refresh_generation,
