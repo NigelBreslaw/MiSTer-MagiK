@@ -54,6 +54,6 @@ assert "always()" in publish
 assert "needs.inspect.result == 'success'" in publish
 assert "needs.assemble.result == 'success'" in publish
 assert "permissions:\n      actions: read\n      contents: write" in publish
-assert "push:" not in trigger and "schedule:" not in trigger
+assert "push:" not in trigger and "schedule:" in trigger
 
 print("game-database workflow contract ok")

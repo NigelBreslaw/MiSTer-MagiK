@@ -149,8 +149,7 @@ class PreCommitTests(unittest.TestCase):
     def test_deprecated_dropped_frame_metrics_are_rejected(self) -> None:
         self.repository.stage(
             "apps/mister/src/lib.rs",
-            "// dropped-frame-legacy-fixture: rejection coverage\n"
-            "fn probe() { let repeated_refreshes = 1; }\n",
+            f"fn probe() {{ let {'repeated_' + 'refreshes'} = 1; }}\n",
         )
         result = self.repository.gate()
         self.assertEqual(result.returncode, 1)

@@ -3,6 +3,7 @@
 
 import importlib.util
 import struct
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,7 @@ MODULE_PATH = Path(__file__).parents[1] / "lib" / "particle_model.py"
 SPEC = importlib.util.spec_from_file_location("particle_model", MODULE_PATH)
 particle_model = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
+sys.modules[SPEC.name] = particle_model
 SPEC.loader.exec_module(particle_model)
 
 

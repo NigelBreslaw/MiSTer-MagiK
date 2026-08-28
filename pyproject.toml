@@ -18,6 +18,7 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["scripts/tests"]
+python_files = ["test_*.py", "test-*.py"]
 pythonpath = ["."]
 
 [tool.ty.src]
