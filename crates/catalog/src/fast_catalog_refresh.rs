@@ -677,6 +677,11 @@ pub fn publish_refresh_state_with_report(
             variants: state.rows.variants.len().try_into().unwrap_or(u64::MAX),
         });
     }
+    let batch_sync_started = std::time::Instant::now();
+    sync_filesystem(&root)?;
+    report.sync_us = report
+        .sync_us
+        .saturating_add(batch_sync_started.elapsed().as_micros() as u64);
     references.sort_by(|left, right| left.system_id.cmp(&right.system_id));
     let manifest = FastRefreshManifest::new(
         generation,
@@ -696,7 +701,9 @@ pub fn publish_refresh_state_with_report(
     report.manifest_us = manifest_started.elapsed().as_micros() as u64;
     let sync_started = std::time::Instant::now();
     sync_directory(&root)?;
-    report.sync_us = sync_started.elapsed().as_micros() as u64;
+    report.sync_us = report
+        .sync_us
+        .saturating_add(sync_started.elapsed().as_micros() as u64);
     report.elapsed_us = started.elapsed().as_micros() as u64;
     crate::catalog_logln!(
         "fast_catalog_refresh_publish_tsv\telapsed_us={}\tvalidation_us={}\tencoding_us={}\tfingerprint_us={}\twrite_us={}\tmanifest_us={}\tsync_us={}\tsystems={}\tfiles={}\tbytes={}",
@@ -765,6 +772,7 @@ pub fn publish_refresh_update(
             },
         );
     }
+    sync_filesystem(&root)?;
     let manifest = FastRefreshManifest::new(
         generation,
         catalog_generation,
@@ -1786,7 +1794,7 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
             path.display()
         ));
     }
-    write_synced(path, bytes, false)
+    write_unsynced(path, bytes)
 }
 
 fn write_replace_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -1809,6 +1817,38 @@ fn write_synced(path: &Path, bytes: &[u8], replace: bool) -> Result<(), String> 
     file.write_all(bytes)
         .and_then(|()| file.sync_all())
         .map_err(|error| format!("write {}: {error}", path.display()))
+}
+
+fn write_unsynced(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| format!("create {}: {error}", path.display()))?;
+    file.write_all(bytes)
+        .map_err(|error| format!("write {}: {error}", path.display()))
+}
+
+fn sync_filesystem(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        let directory = File::open(path)
+            .map_err(|error| format!("open filesystem {}: {error}", path.display()))?;
+        let result = unsafe { libc::syncfs(directory.as_raw_fd()) };
+        if result != 0 {
+            return Err(format!(
+                "sync filesystem {}: {}",
+                path.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        sync_directory(path)
+    }
 }
 
 fn sync_directory(path: &Path) -> Result<(), String> {
