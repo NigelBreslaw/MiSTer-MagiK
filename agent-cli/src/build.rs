@@ -956,6 +956,13 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
                 "-fno-omit-frame-pointer",
             );
         }
+        if self.spec.profile == "release-device-ui-tests" {
+            // Slint's system-testing backend enables shared font discovery. The
+            // MiSTer image does not provide a cross-compilable fontconfig
+            // development package, so use Slint's optional runtime loader for
+            // this attended-only profile.
+            command.env("RUST_FONTCONFIG_DLOPEN", "1");
+        }
         configure_cross_environment(&mut command, self.session.repository)?;
         if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
             command.envs(ffmpeg_cross_env(self.session.repository));
@@ -1102,6 +1109,11 @@ fn apple_container_cargo_command(
         command
             .arg("--env")
             .arg("CFLAGS_armv7_unknown_linux_gnueabihf=-fno-omit-frame-pointer");
+    }
+    if spec.profile == "release-device-ui-tests" {
+        // See the cross build path above: system-testing must not add a
+        // compile-time fontconfig dependency to the device image.
+        command.arg("--env").arg("RUST_FONTCONFIG_DLOPEN=1");
     }
     for value in metadata.environment() {
         command.arg("--env").arg(value);
@@ -1964,6 +1976,28 @@ mod tests {
         let library = BuildSpec::for_command(BuildCommand::ValidateLibrary).unwrap();
         assert_eq!(library.mode, BuildMode::CheckLibrary);
         assert!(BuildSpec::for_command(BuildCommand::ReleaseBinaries).is_none());
+    }
+
+    #[test]
+    fn ui_test_container_build_uses_runtime_fontconfig_loader() {
+        let spec = BuildSpec::for_command(BuildCommand::RuntimeUiTests).unwrap();
+        let command = apple_container_cargo_command(
+            Path::new("/checkout"),
+            &spec,
+            Path::new("/target-cache"),
+            &fixed_metadata(false),
+            false,
+        )
+        .unwrap();
+        let arguments: Vec<_> = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["--env", "RUST_FONTCONFIG_DLOPEN=1"])
+        );
     }
 
     #[test]
