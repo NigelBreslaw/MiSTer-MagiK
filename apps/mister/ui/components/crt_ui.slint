@@ -173,6 +173,13 @@ export component CrtCard inherits Rectangle {
     in property <bool> show-marker: true;
     in property <MenuItemStatus> status: MenuItemStatus.ready;
 
+    accessible-role: AccessibleRole.list-item;
+    accessible-label: root.label;
+    accessible-description: root.detail;
+    accessible-enabled: true;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.focused;
+
     background: root.focused ? CrtTheme.accent
         : root.status == MenuItemStatus.failed ? #250918
         : root.status == MenuItemStatus.update-failed ? #211807

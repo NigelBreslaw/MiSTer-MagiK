@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { FeedbackView, NavigationView, SystemHubSection } from "../../api.slint";
+import { AccessibleRole, FeedbackView, NavigationView, SystemHubSection } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
 import { Spleen6x12 } from "../../components/spleen_6x12.slint";
 import { CrtTheme, CrtFooter } from "../../components/crt_ui.slint";
@@ -14,6 +14,12 @@ component HubCard inherits Rectangle {
     in property <bool> focused;
     in property <bool> acknowledged;
     in property <bool> enabled: true;
+    accessible-role: AccessibleRole.list-item;
+    accessible-label: root.label;
+    accessible-description: root.detail;
+    accessible-enabled: root.enabled;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.focused;
     background: focused ? CrtTheme.panel-alt : CrtTheme.panel;
     border-width: focused ? MisterUi.border * 2 : MisterUi.border;
     border-color: focused ? CrtTheme.accent : acknowledged ? #4e8f80 : CrtTheme.border;
