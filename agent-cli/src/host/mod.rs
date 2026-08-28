@@ -1417,15 +1417,11 @@ impl NativeDevice {
         collect_diagnostic_facts(&prepared.config)
     }
 
-    pub(crate) fn development_fpga_activation_current(
+    pub(crate) fn development_fpga_activation_assessment(
         &mut self,
-    ) -> std::result::Result<bool, DeviceFailure> {
+    ) -> std::result::Result<FpgaActivationAssessment, DeviceFailure> {
         let prepared = self.prepare(DeviceAccess::AGENT_READ)?;
-        match verify_installed_fpga_activation(&prepared.config, Layout::Development) {
-            Ok(_) => Ok(true),
-            Err(DeviceFailure::Unhealthy(_)) => Ok(false),
-            Err(error) => Err(error),
-        }
+        probe_installed_fpga_activation(&prepared.config, Layout::Development)
     }
 
     pub(crate) fn repair_safe_device_state(&mut self) -> std::result::Result<(), DeviceFailure> {

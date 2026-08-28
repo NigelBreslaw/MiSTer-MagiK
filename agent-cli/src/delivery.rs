@@ -208,7 +208,9 @@ trait DeliveryDevice {
     fn connect(&mut self) -> AgentResult<()>;
     fn read_development_manifest(&mut self) -> AgentResult<String>;
     fn read_active_runtime(&mut self) -> AgentResult<crate::host::ActiveRuntime>;
-    fn read_development_fpga_activation_current(&mut self) -> AgentResult<bool>;
+    fn read_development_fpga_activation(
+        &mut self,
+    ) -> AgentResult<crate::host::FpgaActivationAssessment>;
     fn deliver_runtime(
         &mut self,
         delivery: RuntimeDelivery,
@@ -247,8 +249,10 @@ impl DeliveryDevice for DeviceClient {
         self.read(crate::NativeDevice::read_active_runtime)
     }
 
-    fn read_development_fpga_activation_current(&mut self) -> AgentResult<bool> {
-        self.read(crate::NativeDevice::development_fpga_activation_current)
+    fn read_development_fpga_activation(
+        &mut self,
+    ) -> AgentResult<crate::host::FpgaActivationAssessment> {
+        self.read(crate::NativeDevice::development_fpga_activation_assessment)
     }
 
     fn deliver_runtime(
@@ -332,6 +336,7 @@ fn execute_with_device<D: DeliveryDevice>(
         expected_commit,
         artifact_sha256: None,
         decision: DeliveryDecision::Platform,
+        reconciliation_reason: None,
         manager_artifact: None,
         main_revision: None,
         installed_manifest: None,
@@ -377,6 +382,14 @@ fn execute_with_device<D: DeliveryDevice>(
             let _ = emit_delivery_timings(reporter, &actions.timing_samples);
             return Err(error);
         }
+    }
+    if let Some(reason) = actions.reconciliation_reason.as_deref() {
+        reporter.emit(
+            EventKind::Progress,
+            "fpga-reconciliation",
+            &format!("promoted delivery to platform: {reason}"),
+            Some(100),
+        )?;
     }
     if let Some(candidate) = actions.deployment.platform_candidate.as_ref() {
         let release = candidate.release_tag.as_deref().unwrap_or("candidate");
@@ -580,6 +593,7 @@ struct ProcessActions<'a, D = DeviceClient> {
     expected_commit: &'a str,
     artifact_sha256: Option<String>,
     decision: DeliveryDecision,
+    reconciliation_reason: Option<String>,
     manager_artifact: Option<PathBuf>,
     main_revision: Option<String>,
     installed_manifest: Option<String>,
@@ -731,6 +745,21 @@ fn reconcile_active_runtime(
     }
 }
 
+fn reconcile_fpga_activation(
+    decision: DeliveryDecision,
+    assessment: &crate::host::FpgaActivationAssessment,
+) -> (DeliveryDecision, Option<String>) {
+    if decision == DeliveryDecision::Platform
+        || matches!(
+            assessment,
+            crate::host::FpgaActivationAssessment::Current { .. }
+        )
+    {
+        return (decision, None);
+    }
+    (DeliveryDecision::Platform, Some(assessment.reason()))
+}
+
 impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
     fn run(&mut self, phase: Phase) -> AgentResult<()> {
         match phase {
@@ -761,14 +790,11 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
                 self.deployment.platform_candidate = platform_candidate;
                 let active = self.device.read_active_runtime()?;
                 self.decision = reconcile_active_runtime(reconciliation.decision, &active);
-                // A runtime delivery may contain the decoder needed to
-                // establish the current FPGA identity. Install that runtime
-                // before using its result to decide whether platform
-                // reconciliation is necessary on the following delivery.
-                if self.decision == DeliveryDecision::NoOp
-                    && !self.device.read_development_fpga_activation_current()?
-                {
-                    self.decision = DeliveryDecision::Platform;
+                if self.decision != DeliveryDecision::Platform {
+                    let assessment = self.device.read_development_fpga_activation()?;
+                    let (decision, reason) = reconcile_fpga_activation(self.decision, &assessment);
+                    self.decision = decision;
+                    self.reconciliation_reason = reason;
                 }
                 if self.decision == DeliveryDecision::Platform {
                     self.deployment.kind = DeploymentKind::Platform;
@@ -1087,8 +1113,12 @@ mod tests {
             ))
         }
 
-        fn read_development_fpga_activation_current(&mut self) -> AgentResult<bool> {
-            Ok(true)
+        fn read_development_fpga_activation(
+            &mut self,
+        ) -> AgentResult<crate::host::FpgaActivationAssessment> {
+            Ok(crate::host::FpgaActivationAssessment::Current {
+                architecture: "scaler-fetch-liveness-first-stall-v1".into(),
+            })
         }
 
         fn deliver_runtime(
@@ -1267,6 +1297,33 @@ mod tests {
         assert_eq!(
             reconcile_active_runtime(DeliveryDecision::Runtime, &development),
             DeliveryDecision::Runtime
+        );
+    }
+
+    #[test]
+    fn uncertain_fpga_activation_promotes_any_non_platform_delivery() {
+        let stale = crate::host::FpgaActivationAssessment::Stale {
+            expected: "patched".into(),
+            observed: "stock".into(),
+            failures: Vec::new(),
+        };
+        let (decision, reason) = reconcile_fpga_activation(DeliveryDecision::Runtime, &stale);
+        assert_eq!(decision, DeliveryDecision::Platform);
+        assert!(reason.unwrap().contains("expected=patched"));
+
+        let invalid = crate::host::FpgaActivationAssessment::ArtifactInvalid {
+            detail: "metadata missing".into(),
+        };
+        assert_eq!(
+            reconcile_fpga_activation(DeliveryDecision::NoOp, &invalid).0,
+            DeliveryDecision::Platform
+        );
+        let current = crate::host::FpgaActivationAssessment::Current {
+            architecture: "patched".into(),
+        };
+        assert_eq!(
+            reconcile_fpga_activation(DeliveryDecision::Runtime, &current),
+            (DeliveryDecision::Runtime, None)
         );
     }
 
@@ -1501,6 +1558,7 @@ mod tests {
             expected_commit: "revision",
             artifact_sha256: Some("a".repeat(64)),
             decision,
+            reconciliation_reason: None,
             manager_artifact: None,
             main_revision: None,
             installed_manifest: None,
