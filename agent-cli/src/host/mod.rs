@@ -19264,6 +19264,8 @@ const CATALOG_ATTRIBUTION_REMOTE_DIR: &str =
     "/media/fat/mister-magik-dev/catalog-attribution-benchmark";
 const CATALOG_ATTRIBUTION_WORK_DIR: &str = "/tmp/mister-magik/catalog-attribution";
 const CATALOG_ATTRIBUTION_C64_ROOT: &str = CATALOG_BUILD_REBUILD_C64_ROOT;
+const CATALOG_COMPLETION_MANIFEST_RETRY_LIMIT: usize = 20;
+const CATALOG_COMPLETION_MANIFEST_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 fn catalog_attribution_prepare_command() -> String {
     format!(
@@ -19417,6 +19419,36 @@ fn catalog_attribution_runtime_command(subcommand: &str) -> String {
         diagnostics = sh(&format!("{work}/diagnostics")),
         gui = sh(DEVELOPMENT_GUI_REMOTE),
     )
+}
+
+fn inspect_catalog_after_completion(
+    session: &Session,
+    runtime_command: fn(&str) -> String,
+    label: &str,
+) -> Result<ExecOutput> {
+    let mut last_error = None;
+    for attempt in 0..=CATALOG_COMPLETION_MANIFEST_RETRY_LIMIT {
+        let inspect = exec(session, &runtime_command("catalog-inspect"), true)?;
+        if let Some(error) = exec_failure_message("catalog build/rebuild inspect", &inspect) {
+            if !error.contains("no valid manifest slot")
+                || attempt == CATALOG_COMPLETION_MANIFEST_RETRY_LIMIT
+            {
+                return Err(format!(
+                    "{label} catalog refresh completed but inspection failed: {error}"
+                )
+                .into());
+            }
+            last_error = Some(error);
+            thread::sleep(CATALOG_COMPLETION_MANIFEST_RETRY_DELAY);
+            continue;
+        }
+        return Ok(inspect);
+    }
+    Err(format!(
+        "{label} catalog refresh completed but inspection did not stabilize: {}",
+        last_error.unwrap_or_else(|| "unknown manifest error".to_string())
+    )
+    .into())
 }
 
 fn profile_installed_catalog_attribution(
@@ -23876,14 +23908,7 @@ fn run_catalog_build_rebuild_leg(
                 return Err(format!("{label} catalog did not become visible: {status}").into());
             }
             if status.get("catalog_refresh_done").and_then(Value::as_bool) == Some(true) {
-                let inspect = exec(session, &runtime_command("catalog-inspect"), true)?;
-                if let Some(error) = exec_failure_message("catalog build/rebuild inspect", &inspect)
-                {
-                    return Err(format!(
-                        "{label} catalog refresh completed but inspection failed: {error}"
-                    )
-                    .into());
-                }
+                let inspect = inspect_catalog_after_completion(session, runtime_command, label)?;
                 let catalog = parse_catalog_lifecycle_inspect(&inspect.stdout).map_err(|error| {
                 format!(
                     "{label} catalog refresh completed with invalid inspection: {error}; output={}",
