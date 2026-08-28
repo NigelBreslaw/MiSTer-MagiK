@@ -349,7 +349,7 @@ module tb_mister_magik_sys_top_integration;
 			begin_command(index[7:0], 16'd0);
 			end_command();
 		end
-		repeat(20) @(posedge clk_sys);
+		repeat(20) @(posedge test_clk);
 		begin_command(MAGIK_UIO_GET_SCALER_FETCH_LIVENESS_STATE,
 			MAGIK_SCALER_FETCH_LIVENESS_STATE_MAGIC);
 		for(index = 0; index < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS;
