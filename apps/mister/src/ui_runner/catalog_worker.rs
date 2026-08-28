@@ -379,11 +379,12 @@ fn run_fast_catalog_fresh_build(
     let _ = tx.send(CatalogWorkerMessage::Timing {
         name: "catalog_fresh_build".to_string(),
         detail: format!(
-            "elapsed_us={} source_us={} publish_us={} capture_us={} systems={} games={} copied_bytes={}",
+            "elapsed_us={} source_us={} publish_us={} capture_us={} refresh_state_publish_us={} systems={} games={} copied_bytes={}",
             report.elapsed_us,
             report.source.elapsed_us,
             report.publication.elapsed_us,
             report.capture.elapsed_us,
+            report.refresh_state_publish.elapsed_us,
             report.publication.systems,
             report.publication.games,
             report.publication.copied_bytes,

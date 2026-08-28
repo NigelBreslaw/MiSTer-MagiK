@@ -108,6 +108,20 @@ pub struct FastRefreshCaptureReport {
     pub systems: usize,
 }
 
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct FastRefreshStatePublishReport {
+    pub elapsed_us: u64,
+    pub validation_us: u64,
+    pub encoding_us: u64,
+    pub fingerprint_us: u64,
+    pub write_us: u64,
+    pub manifest_us: u64,
+    pub sync_us: u64,
+    pub systems: usize,
+    pub files: usize,
+    pub bytes: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FastCatalogBuildInfo {
     pub schema: u32,
@@ -202,6 +216,7 @@ pub struct FastCatalogFreshBuildReport {
     pub source: crate::fast_catalog_sources::FastSourceBuildReport,
     pub publication: crate::fast_five_catalog::FastFivePublishReport,
     pub capture: FastRefreshCaptureReport,
+    pub refresh_state_publish: FastRefreshStatePublishReport,
     pub refresh_generation: u64,
     pub system_ids: Vec<String>,
     pub build_info_persisted: bool,
@@ -243,7 +258,7 @@ pub fn build_fresh_catalog_with_progress(
     )?;
     let refresh_generation = read_latest_refresh_manifest(catalog_root)
         .map_or(1, |manifest| manifest.generation.saturating_add(1));
-    publish_refresh_state(
+    let (_, refresh_state_publish) = publish_refresh_state_with_report(
         catalog_root,
         refresh_generation,
         publication.generation,
@@ -275,6 +290,7 @@ pub fn build_fresh_catalog_with_progress(
         source,
         publication,
         capture,
+        refresh_state_publish,
         refresh_generation,
         system_ids: snapshot
             .systems
@@ -581,6 +597,26 @@ pub fn publish_refresh_state(
     builder_identity: String,
     systems: &[FastRefreshSystemState],
 ) -> Result<FastRefreshManifest, String> {
+    publish_refresh_state_with_report(
+        catalog_root,
+        generation,
+        catalog_generation,
+        catalog_fingerprint,
+        builder_identity,
+        systems,
+    )
+    .map(|(manifest, _)| manifest)
+}
+
+pub fn publish_refresh_state_with_report(
+    catalog_root: &Path,
+    generation: u64,
+    catalog_generation: u64,
+    catalog_fingerprint: String,
+    builder_identity: String,
+    systems: &[FastRefreshSystemState],
+) -> Result<(FastRefreshManifest, FastRefreshStatePublishReport), String> {
+    let started = std::time::Instant::now();
     if generation == 0 {
         return Err("fast refresh generation must be non-zero".to_string());
     }
@@ -588,26 +624,55 @@ pub fn publish_refresh_state(
     fs::create_dir_all(root.join("systems"))
         .map_err(|error| format!("create refresh state root: {error}"))?;
     let mut references = Vec::with_capacity(systems.len());
+    let mut report = FastRefreshStatePublishReport {
+        systems: systems.len(),
+        ..FastRefreshStatePublishReport::default()
+    };
     for state in systems {
+        let phase_started = std::time::Instant::now();
         state.watch.validate(&state.rows.system_id)?;
         state.rows.validate(&state.watch.system_id)?;
+        report.validation_us = report
+            .validation_us
+            .saturating_add(phase_started.elapsed().as_micros() as u64);
         let system_dir = root.join("systems").join(&state.watch.system_id);
         fs::create_dir_all(&system_dir)
             .map_err(|error| format!("create {} refresh state: {error}", state.watch.system_id))?;
         let watch_relative = format!("systems/{}/{generation}.watch", state.watch.system_id);
         let rows_relative = format!("systems/{}/{generation}.rows", state.watch.system_id);
+        let encoding_started = std::time::Instant::now();
         let watch_bytes = encode_envelope(&state.watch, WATCH_MAGIC)?;
         let rows_bytes = encode_envelope(&state.rows, ROWS_MAGIC)?;
+        report.encoding_us = report
+            .encoding_us
+            .saturating_add(encoding_started.elapsed().as_micros() as u64);
+        report.bytes = report
+            .bytes
+            .saturating_add(watch_bytes.len() as u64)
+            .saturating_add(rows_bytes.len() as u64);
+        report.files = report.files.saturating_add(2);
+        let fingerprint_started = std::time::Instant::now();
+        let watch_sha256 = sha256_hex(&watch_bytes);
+        let rows_sha256 = sha256_hex(&rows_bytes);
+        let source_fingerprint = source_fingerprint(&state.watch);
+        let row_fingerprint = row_fingerprint(&state.rows)?;
+        report.fingerprint_us = report
+            .fingerprint_us
+            .saturating_add(fingerprint_started.elapsed().as_micros() as u64);
+        let write_started = std::time::Instant::now();
         write_new_file(&root.join(&watch_relative), &watch_bytes)?;
         write_new_file(&root.join(&rows_relative), &rows_bytes)?;
+        report.write_us = report
+            .write_us
+            .saturating_add(write_started.elapsed().as_micros() as u64);
         references.push(FastRefreshSystemRef {
             system_id: state.watch.system_id.clone(),
             watch_path: watch_relative,
-            watch_sha256: sha256_hex(&watch_bytes),
+            watch_sha256,
             rows_path: rows_relative,
-            rows_sha256: sha256_hex(&rows_bytes),
-            source_fingerprint: source_fingerprint(&state.watch),
-            row_fingerprint: row_fingerprint(&state.rows)?,
+            rows_sha256,
+            source_fingerprint,
+            row_fingerprint,
             games: state.rows.games.len().try_into().unwrap_or(u64::MAX),
             variants: state.rows.variants.len().try_into().unwrap_or(u64::MAX),
         });
@@ -620,6 +685,7 @@ pub fn publish_refresh_state(
         builder_identity,
         references,
     )?;
+    let manifest_started = std::time::Instant::now();
     let bytes = encode_envelope(&manifest, MANIFEST_MAGIC)?;
     let slot = if generation.is_multiple_of(2) {
         MANIFEST_A
@@ -627,8 +693,25 @@ pub fn publish_refresh_state(
         MANIFEST_B
     };
     write_replace_file(&root.join(slot), &bytes)?;
+    report.manifest_us = manifest_started.elapsed().as_micros() as u64;
+    let sync_started = std::time::Instant::now();
     sync_directory(&root)?;
-    Ok(manifest)
+    report.sync_us = sync_started.elapsed().as_micros() as u64;
+    report.elapsed_us = started.elapsed().as_micros() as u64;
+    crate::catalog_logln!(
+        "fast_catalog_refresh_publish_tsv\telapsed_us={}\tvalidation_us={}\tencoding_us={}\tfingerprint_us={}\twrite_us={}\tmanifest_us={}\tsync_us={}\tsystems={}\tfiles={}\tbytes={}",
+        report.elapsed_us,
+        report.validation_us,
+        report.encoding_us,
+        report.fingerprint_us,
+        report.write_us,
+        report.manifest_us,
+        report.sync_us,
+        report.systems,
+        report.files,
+        report.bytes,
+    );
+    Ok((manifest, report))
 }
 
 pub fn publish_refresh_update(

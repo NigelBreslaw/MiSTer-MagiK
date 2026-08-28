@@ -24053,6 +24053,12 @@ fn catalog_phase_evidence(log: &str) -> Value {
         "catalog_v3_shard_phase_tsv",
         "catalog_memory_tsv",
         "catalog_search_build_tsv",
+        "fast_catalog_source_phase_tsv",
+        "fast_catalog_capture_tsv",
+        "fast_catalog_capture_source_tsv",
+        "fast_catalog_refresh_publish_tsv",
+        "catalog_artifact_copy_tsv",
+        "catalog_shard_allocator_trim_tsv",
     ];
     let mut records = Vec::new();
     for line in log.lines() {
