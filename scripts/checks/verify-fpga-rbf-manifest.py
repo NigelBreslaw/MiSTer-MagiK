@@ -88,7 +88,10 @@ def verify(
                 "component_revision",
             )
         )
-        if fields.get("rbf_sha256") != LEGACY_SCHEMA14_RBF_SHA256:
+        if (
+            fields.get("rbf_sha256") != LEGACY_SCHEMA14_RBF_SHA256
+            and fields.get("apply_patch") != "0"
+        ):
             required.add("diagnostic_architecture")
     missing = sorted(required - fields.keys())
     if missing:

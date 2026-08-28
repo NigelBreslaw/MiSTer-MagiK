@@ -132,6 +132,22 @@ class ManifestTest(unittest.TestCase):
             module.LEGACY_SCHEMA14_RBF_SHA256 = hashlib.sha256(b"release-rbf").hexdigest()
             self.assertIn("rbf_sha256", module.verify(metadata))
 
+    def test_legacy_stock_metadata_without_architecture_remains_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = self.fixture(Path(directory))
+            metadata_text = "\n".join(
+                line
+                for line in metadata.read_text().splitlines()
+                if not line.startswith("diagnostic_architecture=")
+            ) + "\napply_patch=0\n"
+            metadata.write_text(metadata_text)
+            spec = importlib.util.spec_from_file_location("fpga_manifest", SCRIPT)
+            self.assertIsNotNone(spec)
+            module = importlib.util.module_from_spec(spec)
+            self.assertIsNotNone(spec.loader)
+            spec.loader.exec_module(module)
+            self.assertIn("apply_patch", module.verify(metadata))
+
     def test_controlled_analysis_constraint_override_passes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             metadata = self.fixture(Path(directory))

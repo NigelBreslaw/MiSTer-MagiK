@@ -561,6 +561,9 @@ fn diagnostic_architecture(
     {
         return Ok(PATCHED_DIAGNOSTIC_ARCHITECTURE.into());
     }
+    if flavour == "stock" && metadata.get("apply_patch").map(String::as_str) == Some("0") {
+        return Ok(STOCK_DIAGNOSTIC_ARCHITECTURE.into());
+    }
     classified(
         "fpga_diagnostic_architecture",
         format!("{flavour}: missing architecture metadata"),
