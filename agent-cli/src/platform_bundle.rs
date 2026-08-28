@@ -20,9 +20,6 @@ pub const FORMAT: &str = "mister-magik-platform-bundle-v0.2";
 pub const MANIFEST: &str = "platform-bundle-v0.2.json";
 const ORIGIN: &str = "platform-component-origin-v1.json";
 const COMPONENT_CHECKSUMS: &str = "platform-component-SHA256SUMS";
-const PATCHED_DIAGNOSTIC_ARCHITECTURE: &str = "scaler-fetch-liveness-first-stall-v1";
-const PLATFORM_V0_34_SCHEMA14_RBF_SHA256: &str =
-    "ef1920500c925d35b23808792f0930954446a6030b33d3e92c0f4feccd23106e";
 
 pub struct Create<'a> {
     pub main: &'a Path,
@@ -299,7 +296,6 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
         "platform_contract_sha256":fpga_contract,
         "latch_protocol_sha256":fpga_metadata.get("latch_protocol_sha256").cloned().unwrap_or_default(),
         "latch_protocol_version":fpga_metadata.get("latch_protocol_version").and_then(|value|value.parse::<u64>().ok()).unwrap_or(0),
-        "diagnostic_architecture":fpga_metadata.get("diagnostic_architecture").cloned().unwrap_or_default(),
         "latch_rbf_sha256":fpga_metadata.get("rbf_sha256").cloned().unwrap_or_default(),
         "components":{
             "main":origin("main",request.main_run_id,request.main_head_sha,"mister-magik",request.main_source),
@@ -479,16 +475,6 @@ fn validate_manifest(payload: &Value, version: Option<u64>) -> AgentResult<()> {
     if version.is_some_and(|v| payload["release_version"] != v) {
         return classified("platform_release_version", "tag and manifest differ");
     }
-    let legacy_v0_34_schema14 = payload["release_version"] == 34
-        && payload["latch_rbf_sha256"] == PLATFORM_V0_34_SCHEMA14_RBF_SHA256;
-    if payload["diagnostic_architecture"] != PATCHED_DIAGNOSTIC_ARCHITECTURE
-        && !legacy_v0_34_schema14
-    {
-        return classified(
-            "platform_diagnostic_architecture",
-            "published platform does not identify the patched FPGA observer",
-        );
-    }
     for name in ["main", "fpga", "kernel"] {
         require_hex(
             name,
@@ -549,16 +535,6 @@ fn verify_fpga(root: &Path, id: &str) -> AgentResult<String> {
                 "fpga_capabilities",
                 format!("{LATCH_CAPABILITY_MASK} required"),
             );
-        }
-        let expected_architecture = if flavour == "patched" {
-            PATCHED_DIAGNOSTIC_ARCHITECTURE
-        } else {
-            "stock-uninstrumented-v1"
-        };
-        if metadata.get("diagnostic_architecture").map(String::as_str)
-            != Some(expected_architecture)
-        {
-            return classified("fpga_diagnostic_architecture", flavour);
         }
         for field in ["latch_protocol_sha256", "latch_bridge_sha256"] {
             require_hex(
@@ -827,14 +803,9 @@ mod tests {
             fs::write(
                 directory.join("menu-magik-vblank-latch.metadata.txt"),
                 format!(
-                    "format=mister-magik-fpga-release-v2\nsource_status= M menu.qsf\nsource_status= M sys/sys_top.sdc\ncomponent_input_sha256={component_id}\nplatform_contract_sha256={contract}\nlatch_protocol_sha256={}\nlatch_bridge_sha256={}\nlatch_protocol_version={LATCH_PROTOCOL_VERSION}\nlatch_capability_mask={LATCH_CAPABILITY_MASK}\ndiagnostic_architecture={}\nrbf_sha256={}\nreport_sha256.reports/menu.fit.rpt={}\n",
+                    "format=mister-magik-fpga-release-v2\nsource_status= M menu.qsf\nsource_status= M sys/sys_top.sdc\ncomponent_input_sha256={component_id}\nplatform_contract_sha256={contract}\nlatch_protocol_sha256={}\nlatch_bridge_sha256={}\nlatch_protocol_version={LATCH_PROTOCOL_VERSION}\nlatch_capability_mask={LATCH_CAPABILITY_MASK}\nrbf_sha256={}\nreport_sha256.reports/menu.fit.rpt={}\n",
                     "1".repeat(64),
                     "2".repeat(64),
-                    if flavour == "patched" {
-                        PATCHED_DIAGNOSTIC_ARCHITECTURE
-                    } else {
-                        "stock-uninstrumented-v1"
-                    },
                     digest_bytes(rbf.as_bytes()),
                     digest_bytes(report.as_bytes())
                 ),

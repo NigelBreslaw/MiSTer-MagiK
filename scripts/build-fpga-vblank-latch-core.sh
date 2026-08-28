@@ -14,7 +14,6 @@ VIDEO_DIAGNOSTICS_CONTROL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_m
 VIDEO_DIAGNOSTICS_AVALON="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_avalon.sv"
 VIDEO_DIAGNOSTICS_OUTPUT="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_output.sv"
 VIDEO_DIAGNOSTICS_PROTOCOL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_protocol.svh"
-VIDEO_DIAGNOSTICS_PROTOCOL_JSON="$ROOT/mister/platform/fpga/menu-vblank-latch/hdmi-evidence-protocol.json"
 VIDEO_DIAGNOSTICS_SDC="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics.sdc"
 TIMING_REPORT_TCL="$ROOT/mister/platform/fpga/menu-vblank-latch/report_top_timing.tcl"
 OUT_DIR="${MISTER_FPGA_OUT_DIR:-$ROOT/build/fpga-vblank-latch}"
@@ -252,11 +251,6 @@ PY
   shasum -a 256 "$LATCH_PROTOCOL" | awk '{print "latch_protocol_sha256="$1}'
   python3 -c 'import re,sys; source=open(sys.argv[1]).read(); match=re.search(r"MAGIK_FBUF_PROTOCOL_VERSION\s*=\s*16.d(\d+)", source); assert match; print("latch_protocol_version=" + match.group(1))' "$LATCH_PROTOCOL"
   python3 -c 'import re,sys; source=open(sys.argv[1]).read(); match=re.search(r"MAGIK_FBUF_CAPS_FLAGS\s*=\s*16.h([0-9A-Fa-f]+)", source); assert match; print("latch_capability_mask=0x" + match.group(1).lower())' "$LATCH_PROTOCOL"
-  if [[ "$APPLY_PATCH" = "1" ]]; then
-    python3 -c 'import json,sys; protocol=json.load(open(sys.argv[1])); print("diagnostic_architecture=" + protocol["scaler_fetch_liveness_state"]["architecture"])' "$VIDEO_DIAGNOSTICS_PROTOCOL_JSON"
-  else
-    echo "diagnostic_architecture=stock-uninstrumented-v1"
-  fi
   echo "apply_patch=$APPLY_PATCH"
   echo "build_date=$BUILD_DATE"
   echo "work_dir=$WORK_DIR"
