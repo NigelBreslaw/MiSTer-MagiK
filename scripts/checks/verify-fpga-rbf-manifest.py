@@ -21,6 +21,11 @@ CURRENT_ANALYSIS_CONSTRAINT_SOURCE_STATUSES = (
     " M menu.qsf",
     " M sys/sys_top.sdc",
 )
+LEGACY_SCHEMA14_RBF_SHA256 = "ef1920500c925d35b23808792f0930954446a6030b33d3e92c0f4feccd23106e"
+DIAGNOSTIC_ARCHITECTURES = {
+    "scaler-fetch-liveness-first-stall-v1",
+    "stock-uninstrumented-v1",
+}
 CANONICAL_QUARTUS_SEED_SOURCE = (
     Path(__file__).resolve().parents[2]
     / "mister/platform/fpga/menu-vblank-latch/Quartus.seed"
@@ -83,6 +88,8 @@ def verify(
                 "component_revision",
             )
         )
+        if fields.get("rbf_sha256") != LEGACY_SCHEMA14_RBF_SHA256:
+            required.add("diagnostic_architecture")
     missing = sorted(required - fields.keys())
     if missing:
         raise ValueError("missing metadata fields: " + ", ".join(missing))
@@ -102,6 +109,9 @@ def verify(
     ):
         if not SHA256_RE.fullmatch(fields[name]):
             raise ValueError(f"invalid SHA-256 in {name}")
+    architecture = fields.get("diagnostic_architecture")
+    if architecture is not None and architecture not in DIAGNOSTIC_ARCHITECTURES:
+        raise ValueError(f"unsupported diagnostic architecture: {architecture}")
     if "latch_protocol_sha256" in fields and not SHA256_RE.fullmatch(fields["latch_protocol_sha256"]):
         raise ValueError("invalid SHA-256 in latch_protocol_sha256")
     if "latch_bridge_sha256" in fields and not SHA256_RE.fullmatch(fields["latch_bridge_sha256"]):

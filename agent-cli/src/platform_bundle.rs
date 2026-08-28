@@ -20,6 +20,10 @@ pub const FORMAT: &str = "mister-magik-platform-bundle-v0.2";
 pub const MANIFEST: &str = "platform-bundle-v0.2.json";
 const ORIGIN: &str = "platform-component-origin-v1.json";
 const COMPONENT_CHECKSUMS: &str = "platform-component-SHA256SUMS";
+const LEGACY_SCHEMA14_RBF_SHA256: &str =
+    "ef1920500c925d35b23808792f0930954446a6030b33d3e92c0f4feccd23106e";
+const PATCHED_DIAGNOSTIC_ARCHITECTURE: &str = "scaler-fetch-liveness-first-stall-v1";
+const STOCK_DIAGNOSTIC_ARCHITECTURE: &str = "stock-uninstrumented-v1";
 
 pub struct Create<'a> {
     pub main: &'a Path,
@@ -273,6 +277,7 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
             .fpga
             .join("patched/menu-magik-vblank-latch.metadata.txt"),
     )?;
+    let fpga_architecture = diagnostic_architecture(&fpga_metadata, "patched")?;
     let mut files = Vec::new();
     for (prefix, root) in [
         ("main", request.main),
@@ -297,6 +302,7 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
         "latch_protocol_sha256":fpga_metadata.get("latch_protocol_sha256").cloned().unwrap_or_default(),
         "latch_protocol_version":fpga_metadata.get("latch_protocol_version").and_then(|value|value.parse::<u64>().ok()).unwrap_or(0),
         "latch_rbf_sha256":fpga_metadata.get("rbf_sha256").cloned().unwrap_or_default(),
+        "diagnostic_architecture":fpga_architecture,
         "components":{
             "main":origin("main",request.main_run_id,request.main_head_sha,"mister-magik",request.main_source),
             "fpga":origin("fpga",request.fpga_run_id,request.fpga_head_sha,"main",request.fpga_source),
@@ -457,6 +463,15 @@ fn verify_embedded_components(
     {
         return classified("embedded_component_identity", "metadata mismatch");
     }
+    let embedded_architecture = diagnostic_architecture(&patched, "patched")?;
+    if payload["latch_rbf_sha256"] != LEGACY_SCHEMA14_RBF_SHA256
+        && payload
+            .get("diagnostic_architecture")
+            .and_then(Value::as_str)
+            != Some(embedded_architecture.as_str())
+    {
+        return classified("fpga_diagnostic_architecture", "bundle metadata mismatch");
+    }
     if patched.get("platform_contract_sha256") != provenance.get("platform_contract_sha256")
         || payload["platform_contract_sha256"]
             != patched
@@ -491,6 +506,21 @@ fn validate_manifest(payload: &Value, version: Option<u64>) -> AgentResult<()> {
         )?;
         require_run_id(origin["run_id"].as_str().unwrap_or_default())?;
     }
+    match payload
+        .get("diagnostic_architecture")
+        .and_then(Value::as_str)
+    {
+        Some(architecture)
+            if architecture == PATCHED_DIAGNOSTIC_ARCHITECTURE
+                || architecture == STOCK_DIAGNOSTIC_ARCHITECTURE => {}
+        Some(architecture) => {
+            return classified("fpga_diagnostic_architecture", architecture);
+        }
+        None if payload["latch_rbf_sha256"] == LEGACY_SCHEMA14_RBF_SHA256 => {}
+        None => {
+            return classified("fpga_diagnostic_architecture", "missing from new bundle");
+        }
+    }
     Ok(())
 }
 fn verify_main(root: &Path, id: &str, revision: Option<&str>) -> AgentResult<()> {
@@ -507,6 +537,36 @@ fn verify_main(root: &Path, id: &str, revision: Option<&str>) -> AgentResult<()>
     }
     Ok(())
 }
+
+fn diagnostic_architecture(
+    metadata: &BTreeMap<String, String>,
+    flavour: &str,
+) -> AgentResult<String> {
+    let expected = match flavour {
+        "patched" => PATCHED_DIAGNOSTIC_ARCHITECTURE,
+        "stock" => STOCK_DIAGNOSTIC_ARCHITECTURE,
+        _ => return classified("fpga_diagnostic_architecture", flavour),
+    };
+    if let Some(architecture) = metadata.get("diagnostic_architecture") {
+        if architecture == expected {
+            return Ok(architecture.clone());
+        }
+        return classified(
+            "fpga_diagnostic_architecture",
+            format!("{flavour}: unsupported architecture {architecture}"),
+        );
+    }
+    if flavour == "patched"
+        && metadata.get("rbf_sha256").map(String::as_str) == Some(LEGACY_SCHEMA14_RBF_SHA256)
+    {
+        return Ok(PATCHED_DIAGNOSTIC_ARCHITECTURE.into());
+    }
+    classified(
+        "fpga_diagnostic_architecture",
+        format!("{flavour}: missing architecture metadata"),
+    )
+}
+
 fn verify_fpga(root: &Path, id: &str) -> AgentResult<String> {
     let mut contract = None;
     for flavour in ["stock", "patched"] {
@@ -536,6 +596,7 @@ fn verify_fpga(root: &Path, id: &str) -> AgentResult<String> {
                 format!("{LATCH_CAPABILITY_MASK} required"),
             );
         }
+        let _ = diagnostic_architecture(&metadata, flavour)?;
         for field in ["latch_protocol_sha256", "latch_bridge_sha256"] {
             require_hex(
                 field,
@@ -803,9 +864,14 @@ mod tests {
             fs::write(
                 directory.join("menu-magik-vblank-latch.metadata.txt"),
                 format!(
-                    "format=mister-magik-fpga-release-v2\nsource_status= M menu.qsf\nsource_status= M sys/sys_top.sdc\ncomponent_input_sha256={component_id}\nplatform_contract_sha256={contract}\nlatch_protocol_sha256={}\nlatch_bridge_sha256={}\nlatch_protocol_version={LATCH_PROTOCOL_VERSION}\nlatch_capability_mask={LATCH_CAPABILITY_MASK}\nrbf_sha256={}\nreport_sha256.reports/menu.fit.rpt={}\n",
+                    "format=mister-magik-fpga-release-v2\nsource_status= M menu.qsf\nsource_status= M sys/sys_top.sdc\ncomponent_input_sha256={component_id}\nplatform_contract_sha256={contract}\nlatch_protocol_sha256={}\nlatch_bridge_sha256={}\nlatch_protocol_version={LATCH_PROTOCOL_VERSION}\nlatch_capability_mask={LATCH_CAPABILITY_MASK}\ndiagnostic_architecture={}\nrbf_sha256={}\nreport_sha256.reports/menu.fit.rpt={}\n",
                     "1".repeat(64),
                     "2".repeat(64),
+                    if flavour == "patched" {
+                        PATCHED_DIAGNOSTIC_ARCHITECTURE
+                    } else {
+                        STOCK_DIAGNOSTIC_ARCHITECTURE
+                    },
                     digest_bytes(rbf.as_bytes()),
                     digest_bytes(report.as_bytes())
                 ),

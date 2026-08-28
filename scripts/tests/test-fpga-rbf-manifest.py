@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 from pathlib import Path
 import subprocess
 import tempfile
@@ -52,6 +53,7 @@ class ManifestTest(unittest.TestCase):
                 "latch_protocol_sha256=" + "7" * 64,
                 "latch_protocol_version=" + ("2" if historical_v2 else "5"),
                 *(() if historical_v2 else ("latch_capability_mask=0x03ff",)),
+                *(() if historical_v2 else ("diagnostic_architecture=scaler-fetch-liveness-first-stall-v1",)),
                 "quartus_seed=" + ("1" if historical_v2 else "2"),
                 "quartus_version=17.0.0 Build 595",
                 "workflow_url=https://github.example/actions/runs/1",
@@ -93,6 +95,42 @@ class ManifestTest(unittest.TestCase):
             metadata.write_text(metadata.read_text().replace("quartus_seed=2", "quartus_seed=1"))
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
             self.assertNotEqual(self.run_verify(Path(directory) / "missing.txt").returncode, 0)
+
+    def test_new_release_requires_supported_diagnostic_architecture(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = self.fixture(Path(directory))
+            metadata.write_text(
+                "\n".join(
+                    line
+                    for line in metadata.read_text().splitlines()
+                    if not line.startswith("diagnostic_architecture=")
+                )
+                + "\n"
+            )
+            self.assertNotEqual(self.run_verify(metadata).returncode, 0)
+            metadata.write_text(
+                metadata.read_text()
+                + "diagnostic_architecture=unknown-v1\n"
+            )
+            self.assertNotEqual(self.run_verify(metadata).returncode, 0)
+
+    def test_known_schema14_artifact_without_architecture_remains_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = self.fixture(Path(directory))
+            metadata_text = metadata.read_text()
+            metadata_text = "\n".join(
+                line
+                for line in metadata_text.splitlines()
+                if not line.startswith("diagnostic_architecture=")
+            ) + "\n"
+            metadata.write_text(metadata_text)
+            spec = importlib.util.spec_from_file_location("fpga_manifest", SCRIPT)
+            self.assertIsNotNone(spec)
+            module = importlib.util.module_from_spec(spec)
+            self.assertIsNotNone(spec.loader)
+            spec.loader.exec_module(module)
+            module.LEGACY_SCHEMA14_RBF_SHA256 = hashlib.sha256(b"release-rbf").hexdigest()
+            self.assertIn("rbf_sha256", module.verify(metadata))
 
     def test_controlled_analysis_constraint_override_passes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
