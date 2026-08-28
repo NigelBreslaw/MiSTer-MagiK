@@ -508,62 +508,53 @@ fn inspect_mgl_xml(text: &str) -> Result<MglInspection, String> {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let name = e.name();
-                if name.as_ref().eq_ignore_ascii_case(b"mistergamedescription")
-                    || name.as_ref().eq_ignore_ascii_case(b"mistergamelist")
+                if xml_name_eq(name.as_ref(), b"mistergamedescription")
+                    || xml_name_eq(name.as_ref(), b"mistergamelist")
                 {
                     saw_root = true;
-                } else if name.as_ref().eq_ignore_ascii_case(b"rbf") {
+                } else if xml_name_eq(name.as_ref(), b"rbf") {
                     text_tag = Some("rbf");
                     text_value.clear();
-                } else if name.as_ref().eq_ignore_ascii_case(b"setname") {
+                } else if xml_name_eq(name.as_ref(), b"setname") {
                     text_tag = Some("setname");
                     text_value.clear();
-                } else if name.as_ref().eq_ignore_ascii_case(b"file") {
+                } else if xml_name_eq(name.as_ref(), b"file") {
                     pending_file = Some(mgl_file_action_from_element(&e));
                     text_tag = Some("file");
                     text_value.clear();
-                } else if name.as_ref().eq_ignore_ascii_case(b"reset") {
+                } else if xml_name_eq(name.as_ref(), b"reset") {
                     inspection.reset_count = inspection.reset_count.saturating_add(1);
                 }
             }
             Ok(Event::Empty(e)) => {
-                if e.name().as_ref().eq_ignore_ascii_case(b"file") {
+                if xml_name_eq(e.name().as_ref(), b"file") {
                     let action = mgl_file_action_from_element(&e);
                     if !action.path.is_empty() {
                         inspection.files.push(action);
                     }
-                } else if e.name().as_ref().eq_ignore_ascii_case(b"reset") {
+                } else if xml_name_eq(e.name().as_ref(), b"reset") {
                     inspection.reset_count = inspection.reset_count.saturating_add(1);
                 }
             }
             Ok(Event::Text(e)) => {
                 if text_tag.is_some() {
-                    text_value.push_str(
-                        &e.xml10_content()
-                            .map_err(|error| format!("decode text: {error}"))?,
-                    );
+                    text_value.push_str(&e.xml10_content());
                 }
             }
             Ok(Event::CData(e)) => {
                 if text_tag.is_some() {
-                    text_value.push_str(
-                        &e.xml10_content()
-                            .map_err(|error| format!("decode CDATA: {error}"))?,
-                    );
+                    text_value.push_str(&e.xml10_content());
                 }
             }
             Ok(Event::End(e)) => {
-                if e.name().as_ref().eq_ignore_ascii_case(b"rbf") && text_tag == Some("rbf") {
+                if xml_name_eq(e.name().as_ref(), b"rbf") && text_tag == Some("rbf") {
                     set_optional_trimmed(&mut inspection.rbf, &text_value);
                     text_tag = None;
-                } else if e.name().as_ref().eq_ignore_ascii_case(b"setname")
-                    && text_tag == Some("setname")
+                } else if xml_name_eq(e.name().as_ref(), b"setname") && text_tag == Some("setname")
                 {
                     set_optional_trimmed(&mut inspection.setname, &text_value);
                     text_tag = None;
-                } else if e.name().as_ref().eq_ignore_ascii_case(b"file")
-                    && text_tag == Some("file")
-                {
+                } else if xml_name_eq(e.name().as_ref(), b"file") && text_tag == Some("file") {
                     if let Some(mut action) = pending_file.take() {
                         if action.path.is_empty() {
                             action.path = text_value.trim().to_string();
@@ -643,24 +634,22 @@ fn apply_mra_metadata_event(
             // the first ROM payload. ROM elements can contain a large number
             // of parts and patches, none of which affect catalog projection,
             // so do not pull that payload from exFAT during discovery.
-            if e.name().as_ref().eq_ignore_ascii_case(b"rom") {
+            if xml_name_eq(e.name().as_ref(), b"rom") {
                 return false;
             }
             *field = mra_metadata_field(e.name().as_ref());
             field_text.clear();
         }
-        Event::Empty(e) if e.name().as_ref().eq_ignore_ascii_case(b"rom") => return false,
+        Event::Empty(e) if xml_name_eq(e.name().as_ref(), b"rom") => return false,
         Event::Text(e) => {
-            if field.is_some()
-                && let Ok(value) = e.xml10_content()
-            {
+            if field.is_some() {
+                let value = e.xml10_content();
                 field_text.push_str(&value);
             }
         }
         Event::CData(e) => {
-            if field.is_some()
-                && let Ok(value) = e.xml10_content()
-            {
+            if field.is_some() {
+                let value = e.xml10_content();
                 field_text.push_str(&value);
             }
         }
@@ -678,11 +667,7 @@ fn apply_mra_metadata_event(
                 }
                 *field = None;
                 field_text.clear();
-            } else if e
-                .name()
-                .as_ref()
-                .eq_ignore_ascii_case(b"misterromdescription")
-            {
+            } else if xml_name_eq(e.name().as_ref(), b"misterromdescription") {
                 return false;
             }
         }
@@ -704,44 +689,41 @@ fn parse_mgl_metadata_xml(text: &str) -> Option<MglMetadata> {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let tag = e.name();
-                if tag.as_ref().eq_ignore_ascii_case(b"rbf") {
+                if xml_name_eq(tag.as_ref(), b"rbf") {
                     in_rbf = true;
                     rbf_text.clear();
-                } else if tag.as_ref().eq_ignore_ascii_case(b"setname") {
+                } else if xml_name_eq(tag.as_ref(), b"setname") {
                     in_setname = true;
                     setname_text.clear();
-                } else if tag.as_ref().eq_ignore_ascii_case(b"file") && metadata.file_path.is_none()
-                {
+                } else if xml_name_eq(tag.as_ref(), b"file") && metadata.file_path.is_none() {
                     in_file = true;
                     file_text.clear();
                     metadata.file_path = xml_attr_value(&e, b"path");
                 }
             }
             Ok(Event::Empty(e)) => {
-                if e.name().as_ref().eq_ignore_ascii_case(b"file") && metadata.file_path.is_none() {
+                if xml_name_eq(e.name().as_ref(), b"file") && metadata.file_path.is_none() {
                     metadata.file_path = xml_attr_value(&e, b"path");
                 }
             }
             Ok(Event::Text(e)) => {
-                if let Ok(value) = e.xml10_content() {
-                    if in_rbf {
-                        rbf_text.push_str(&value);
-                    } else if in_setname {
-                        setname_text.push_str(&value);
-                    } else if in_file && metadata.file_path.is_none() {
-                        file_text.push_str(&value);
-                    }
+                let value = e.xml10_content();
+                if in_rbf {
+                    rbf_text.push_str(&value);
+                } else if in_setname {
+                    setname_text.push_str(&value);
+                } else if in_file && metadata.file_path.is_none() {
+                    file_text.push_str(&value);
                 }
             }
             Ok(Event::CData(e)) => {
-                if let Ok(value) = e.xml10_content() {
-                    if in_rbf {
-                        rbf_text.push_str(&value);
-                    } else if in_setname {
-                        setname_text.push_str(&value);
-                    } else if in_file && metadata.file_path.is_none() {
-                        file_text.push_str(&value);
-                    }
+                let value = e.xml10_content();
+                if in_rbf {
+                    rbf_text.push_str(&value);
+                } else if in_setname {
+                    setname_text.push_str(&value);
+                } else if in_file && metadata.file_path.is_none() {
+                    file_text.push_str(&value);
                 }
             }
             Ok(Event::GeneralRef(e)) => {
@@ -756,15 +738,15 @@ fn parse_mgl_metadata_xml(text: &str) -> Option<MglMetadata> {
                 }
             }
             Ok(Event::End(e)) => {
-                if e.name().as_ref().eq_ignore_ascii_case(b"rbf") {
+                if xml_name_eq(e.name().as_ref(), b"rbf") {
                     set_optional_trimmed(&mut metadata.rbf, &rbf_text);
                     in_rbf = false;
                     rbf_text.clear();
-                } else if e.name().as_ref().eq_ignore_ascii_case(b"setname") {
+                } else if xml_name_eq(e.name().as_ref(), b"setname") {
                     set_optional_trimmed(&mut metadata.setname, &setname_text);
                     in_setname = false;
                     setname_text.clear();
-                } else if e.name().as_ref().eq_ignore_ascii_case(b"file") {
+                } else if xml_name_eq(e.name().as_ref(), b"file") {
                     if metadata.file_path.is_none() {
                         set_optional_trimmed(&mut metadata.file_path, &file_text);
                     }
@@ -779,15 +761,15 @@ fn parse_mgl_metadata_xml(text: &str) -> Option<MglMetadata> {
     Some(metadata)
 }
 
-fn mra_metadata_field(name: &[u8]) -> Option<&'static str> {
-    match name.to_ascii_lowercase().as_slice() {
-        b"name" => Some("name"),
-        b"rbf" => Some("rbf"),
-        b"platform" => Some("platform"),
-        b"manufacturer" => Some("manufacturer"),
-        b"year" => Some("year"),
-        b"setname" => Some("setname"),
-        b"parent" => Some("parent"),
+fn mra_metadata_field(name: &str) -> Option<&'static str> {
+    match name.to_ascii_lowercase().as_str() {
+        "name" => Some("name"),
+        "rbf" => Some("rbf"),
+        "platform" => Some("platform"),
+        "manufacturer" => Some("manufacturer"),
+        "year" => Some("year"),
+        "setname" => Some("setname"),
+        "parent" => Some("parent"),
         _ => None,
     }
 }
@@ -812,11 +794,15 @@ fn set_optional_trimmed(slot: &mut Option<String>, value: &str) {
     }
 }
 
+fn xml_name_eq(name: &str, expected: &[u8]) -> bool {
+    name.as_bytes().eq_ignore_ascii_case(expected)
+}
+
 fn xml_attr_value(e: &BytesStart<'_>, key: &[u8]) -> Option<String> {
     e.attributes()
         .with_checks(false)
         .flatten()
-        .find(|attr| attr.key.as_ref().eq_ignore_ascii_case(key))
+        .find(|attr| attr.key.as_ref().as_bytes().eq_ignore_ascii_case(key))
         .and_then(|attr| {
             attr.normalized_value(XmlVersion::Implicit1_0)
                 .ok()
@@ -826,13 +812,13 @@ fn xml_attr_value(e: &BytesStart<'_>, key: &[u8]) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn xml_general_ref_text(name: &[u8]) -> Option<&'static str> {
+fn xml_general_ref_text(name: &str) -> Option<&'static str> {
     match name {
-        b"amp" => Some("&"),
-        b"quot" => Some("\""),
-        b"apos" => Some("'"),
-        b"lt" => Some("<"),
-        b"gt" => Some(">"),
+        "amp" => Some("&"),
+        "quot" => Some("\""),
+        "apos" => Some("'"),
+        "lt" => Some("<"),
+        "gt" => Some(">"),
         _ => None,
     }
 }

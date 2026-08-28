@@ -29833,7 +29833,7 @@ fn parse_mame_listxml(xml: &str) -> Result<Vec<MameMachine>> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                let tag = e.name().as_ref().to_owned();
                 match tag.as_str() {
                     "mame" => {
                         if let Some(build) = attr_value(&e, b"build") {
@@ -29860,7 +29860,7 @@ fn parse_mame_listxml(xml: &str) -> Result<Vec<MameMachine>> {
                 }
             }
             Ok(Event::Empty(e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                let tag = e.name().as_ref().to_owned();
                 if let Some(machine) = current.as_mut() {
                     match tag.as_str() {
                         "display" if machine.display_type.is_none() => {
@@ -29875,7 +29875,7 @@ fn parse_mame_listxml(xml: &str) -> Result<Vec<MameMachine>> {
             }
             Ok(Event::Text(e)) => {
                 if let Some(machine) = current.as_mut() {
-                    let text = e.xml10_content().unwrap_or_default().into_owned();
+                    let text = e.xml10_content().into_owned();
                     match field.as_str() {
                         "description" => machine.title = text,
                         "year" => machine.year = Some(text),
@@ -29885,7 +29885,7 @@ fn parse_mame_listxml(xml: &str) -> Result<Vec<MameMachine>> {
                 }
             }
             Ok(Event::End(e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                let tag = e.name().as_ref().to_owned();
                 if tag == "machine"
                     && let Some(mut machine) = current.take()
                 {
@@ -29921,7 +29921,7 @@ fn parse_mame_software_list_xml(
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                let tag = e.name().as_ref().to_owned();
                 match tag.as_str() {
                     "softwarelist" => {
                         list_name = attr_value(&e, b"name").unwrap_or_default();
@@ -29948,7 +29948,7 @@ fn parse_mame_software_list_xml(
                 }
             }
             Ok(Event::Empty(e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                let tag = e.name().as_ref().to_owned();
                 if let Some(item) = current.as_ref() {
                     match tag.as_str() {
                         "rom" => hashes.push(MameSoftwareHash {
@@ -29980,7 +29980,7 @@ fn parse_mame_software_list_xml(
             }
             Ok(Event::Text(e)) => {
                 if let Some(item) = current.as_mut() {
-                    let text = e.xml10_content().unwrap_or_default().into_owned();
+                    let text = e.xml10_content().into_owned();
                     match field.as_str() {
                         "description" => {
                             item.description = text;
@@ -29993,7 +29993,7 @@ fn parse_mame_software_list_xml(
                 }
             }
             Ok(Event::End(e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                let tag = e.name().as_ref().to_owned();
                 match tag.as_str() {
                     "software" => {
                         if let Some(mut item) = current.take() {
@@ -30160,8 +30160,8 @@ fn attr_value(e: &BytesStart<'_>, key: &[u8]) -> Option<String> {
     e.attributes()
         .with_checks(false)
         .flatten()
-        .find(|attr| attr.key.as_ref() == key)
-        .map(|attr| String::from_utf8_lossy(attr.value.as_ref()).into_owned())
+        .find(|attr| attr.key.as_ref().as_bytes() == key)
+        .map(|attr| attr.value.as_ref().to_owned())
 }
 
 fn write_mame_metadata_db(
