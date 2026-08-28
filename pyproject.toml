@@ -22,4 +22,4 @@ python_files = ["test_*.py", "test-*.py"]
 pythonpath = ["."]
 
 [tool.ty.src]
-include = ["scripts"]
+include = ["scripts/magik_ci", "scripts/tests/test_magik_ci.py"]
