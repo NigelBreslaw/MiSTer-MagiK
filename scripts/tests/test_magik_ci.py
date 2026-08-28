@@ -61,6 +61,46 @@ class MagikCiTests(unittest.TestCase):
             )
             self.assertEqual(verify(archive)["release_version"], 1)
 
+    def test_database_round_trip(self) -> None:
+        from scripts.magik_ci.databases import create, verify
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            mame = root / "mame.sqlite3"
+            hbmame = root / "hbmame.sqlite3"
+            csv = root / "ArcadeDatabase.csv"
+            license_file = root / "ArcadeDatabase-LICENSE.txt"
+            index = root / "arcade-updater-index-v1.lz4b"
+            for path, data in (
+                (mame, b"mame"),
+                (hbmame, b"hbmame"),
+                (csv, b"name\n"),
+                (license_file, b"license"),
+                (index, b"index"),
+            ):
+                path.write_bytes(data)
+            archive = create(
+                mame=mame,
+                hbmame=hbmame,
+                release_version=1,
+                mame_tag="mame0288",
+                mame_sha="a" * 40,
+                listxml_asset="listxml.zip",
+                listxml_sha256="b" * 64,
+                hbmame_tag="hbmame",
+                hbmame_sha="c" * 40,
+                mame_builder_sha="d" * 40,
+                hbmame_builder_sha="e" * 40,
+                arcade_database_csv=csv,
+                arcade_database_license=license_file,
+                arcade_database_sha="f" * 40,
+                arcade_database_builder_sha="1" * 40,
+                arcade_updater_builder_sha="2" * 40,
+                arcade_updater_index=index,
+                output=root / "release",
+            )
+            self.assertEqual(verify(archive)["release_version"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
