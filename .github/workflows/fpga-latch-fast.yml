@@ -29,7 +29,6 @@ on:
       - "scripts/tests/test-fpga-quartus-delta.py"
       - "scripts/tests/test-fpga-vblank-latch.sh"
       - "scripts/tests/test-platform-component-id.py"
-      - "agent-cli/src/platform_bundle.rs"
       - ".github/workflows/fpga-latch-fast.yml"
       - ".github/workflows/platform-bundle.yml"
   push:
@@ -57,7 +56,6 @@ on:
       - "scripts/tests/test-fpga-quartus-delta.py"
       - "scripts/tests/test-fpga-vblank-latch.sh"
       - "scripts/tests/test-platform-component-id.py"
-      - "agent-cli/src/platform_bundle.rs"
       - ".github/workflows/fpga-latch-fast.yml"
       - ".github/workflows/platform-bundle.yml"
 
