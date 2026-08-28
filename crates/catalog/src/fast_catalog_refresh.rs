@@ -968,6 +968,21 @@ pub fn plan_fast_refresh(
         .iter()
         .map(|reference| (reference.system_id.as_str(), reference))
         .collect::<std::collections::BTreeMap<_, _>>();
+    let mut watch_indices = BTreeMap::new();
+    let mut watch_errors = BTreeMap::new();
+    if request != FastCatalogRefreshRequest::RebuildAll && binding_matches {
+        for reference in &manifest.systems {
+            match read_system_watch(catalog_root, reference) {
+                Ok(watch) => {
+                    watch_indices.insert(reference.system_id.clone(), watch);
+                }
+                Err(error) => {
+                    watch_errors.insert(reference.system_id.clone(), error);
+                }
+            }
+        }
+    }
+    let metadata_cache = build_watch_metadata_cache(watch_indices.values());
     let build_check = |system_id: &str| {
         let system_started = std::time::Instant::now();
         let mut check = FastSystemSourceCheck {
@@ -982,11 +997,12 @@ pub fn plan_fast_refresh(
             check.reason = "explicit rebuild-all".to_string();
         } else if !binding_matches {
             check.reason = "refresh state is not bound to the active catalog".to_string();
-        } else if let Some(reference) = references.get(system_id) {
-            match read_system_watch(catalog_root, reference) {
-                Ok(watch) => check_watch_index(storage_root, &watch, &mut check),
-                Err(error) => check.reason = format!("watch index unavailable: {error}"),
-            }
+        } else if let Some(watch) = watch_indices.get(system_id) {
+            check_watch_index(watch, &metadata_cache, &mut check);
+        } else if let Some(error) = watch_errors.get(system_id) {
+            check.reason = format!("watch index unavailable: {error}");
+        } else if references.contains_key(system_id) {
+            check.reason = "watch index unavailable".to_string();
         } else {
             check.reason = "system source snapshot is missing".to_string();
         }
@@ -1335,135 +1351,91 @@ fn execute_planned_fast_refresh_with(
 }
 
 fn check_watch_index(
-    _storage_root: &Path,
     watch: &FastSystemWatchIndex,
+    metadata_cache: &BTreeMap<PathBuf, Option<crate::namespace_walk::KnownPathMetadata>>,
     check: &mut FastSystemSourceCheck,
 ) {
-    #[derive(Clone, Copy)]
-    enum ExpectedKind {
-        Directory,
-        Container,
-    }
-
     let known_directories = watch
         .directories
         .iter()
         .map(|directory| directory.path.as_str())
         .collect::<BTreeSet<_>>();
     for root in &watch.roots {
-        if Path::new(root).is_dir() != known_directories.contains(root.as_str()) {
+        let observed_is_dir = metadata_cache
+            .get(Path::new(root))
+            .and_then(|metadata| *metadata)
+            .is_some_and(|metadata| metadata.is_dir);
+        if observed_is_dir != known_directories.contains(root.as_str()) {
             check.status = FastSourceCheckStatus::Changed;
             check.reason = format!("root availability changed: {root}");
             return;
         }
     }
-    let mut grouped = BTreeMap::<PathBuf, Vec<(ExpectedKind, PathBuf, u64, i128)>>::new();
-    let mut fallback = Vec::new();
     for directory in &watch.directories {
         check.directories_checked = check.directories_checked.saturating_add(1);
-        let path = PathBuf::from(&directory.path);
-        let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        else {
-            fallback.push((ExpectedKind::Directory, path, 0, directory.modified_ns));
-            continue;
+        let path = Path::new(&directory.path);
+        let Some(observed) = metadata_cache.get(path).and_then(|metadata| *metadata) else {
+            check.status = FastSourceCheckStatus::Changed;
+            check.reason = format!("directory unavailable: {}", directory.path);
+            return;
         };
-        grouped.entry(parent.to_path_buf()).or_default().push((
-            ExpectedKind::Directory,
-            path,
-            0,
-            directory.modified_ns,
-        ));
+        if !observed.is_dir || observed.modified_ns != directory.modified_ns {
+            check.status = FastSourceCheckStatus::Changed;
+            check.reason = format!("directory entries changed: {}", directory.path);
+            return;
+        }
     }
     for container in &watch.containers {
         check.containers_checked = check.containers_checked.saturating_add(1);
-        let path = PathBuf::from(&container.path);
-        let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        else {
-            fallback.push((
-                ExpectedKind::Container,
-                path,
-                container.size,
-                container.modified_ns,
-            ));
-            continue;
+        let path = Path::new(&container.path);
+        let Some(observed) = metadata_cache.get(path).and_then(|metadata| *metadata) else {
+            check.status = FastSourceCheckStatus::Changed;
+            check.reason = format!("container unavailable: {}", container.path);
+            return;
         };
-        grouped.entry(parent.to_path_buf()).or_default().push((
-            ExpectedKind::Container,
-            path,
-            container.size,
-            container.modified_ns,
-        ));
-    }
-    for (parent, entries) in grouped {
-        let paths = entries
-            .iter()
-            .map(|(_, path, _, _)| path.clone())
-            .collect::<Vec<_>>();
-        let observations = crate::namespace_walk::probe_known_path_metadata(&parent, &paths);
-        for ((kind, path, expected_size, expected_modified_ns), observed) in
-            entries.into_iter().zip(observations)
+        if !observed.is_file
+            || observed.size != container.size
+            || observed.modified_ns != container.modified_ns
         {
-            let Some(observed) = observed else {
-                check.status = FastSourceCheckStatus::Changed;
-                check.reason = format!("watched path unavailable: {}", path.display());
-                return;
-            };
-            match kind {
-                ExpectedKind::Directory => {
-                    if !observed.is_dir || expected_modified_ns != observed.modified_ns {
-                        check.status = FastSourceCheckStatus::Changed;
-                        check.reason = format!("directory entries changed: {}", path.display());
-                        return;
-                    }
-                }
-                ExpectedKind::Container => {
-                    if !observed.is_file
-                        || expected_size != observed.size
-                        || expected_modified_ns != observed.modified_ns
-                    {
-                        check.status = FastSourceCheckStatus::Changed;
-                        check.reason = format!("container changed: {}", path.display());
-                        return;
-                    }
-                }
-            }
-        }
-    }
-    for (kind, path, expected_size, expected_modified_ns) in fallback {
-        let metadata = match fs::metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(_) => {
-                check.status = FastSourceCheckStatus::Changed;
-                check.reason = format!("watched path unavailable: {}", path.display());
-                return;
-            }
-        };
-        match kind {
-            ExpectedKind::Directory => {
-                if !metadata.is_dir() || modified_ns(&metadata) != expected_modified_ns {
-                    check.status = FastSourceCheckStatus::Changed;
-                    check.reason = format!("directory entries changed: {}", path.display());
-                    return;
-                }
-            }
-            ExpectedKind::Container => {
-                if !metadata.is_file()
-                    || metadata.len() != expected_size
-                    || modified_ns(&metadata) != expected_modified_ns
-                {
-                    check.status = FastSourceCheckStatus::Changed;
-                    check.reason = format!("container changed: {}", path.display());
-                    return;
-                }
-            }
+            check.status = FastSourceCheckStatus::Changed;
+            check.reason = format!("container changed: {}", container.path);
+            return;
         }
     }
     check.status = FastSourceCheckStatus::Unchanged;
     check.reason = "source identities match".to_string();
+}
+
+fn build_watch_metadata_cache<'a>(
+    watches: impl Iterator<Item = &'a FastSystemWatchIndex>,
+) -> BTreeMap<PathBuf, Option<crate::namespace_walk::KnownPathMetadata>> {
+    let mut grouped = BTreeMap::<PathBuf, BTreeSet<PathBuf>>::new();
+    for watch in watches {
+        for path in watch
+            .roots
+            .iter()
+            .chain(watch.directories.iter().map(|entry| &entry.path))
+            .chain(watch.containers.iter().map(|entry| &entry.path))
+            .map(PathBuf::from)
+        {
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                grouped
+                    .entry(parent.to_path_buf())
+                    .or_default()
+                    .insert(path);
+            }
+        }
+    }
+    let mut cache = BTreeMap::new();
+    for (parent, paths) in grouped {
+        let paths = paths.into_iter().collect::<Vec<_>>();
+        let observations = crate::namespace_walk::probe_known_path_metadata(&parent, &paths);
+        cache.extend(paths.into_iter().zip(observations));
+    }
+    cache
 }
 
 #[derive(Debug)]
@@ -2126,7 +2098,8 @@ mod tests {
             elapsed_us: 0,
             reason: String::new(),
         };
-        check_watch_index(&root, &watch, &mut check);
+        let metadata_cache = build_watch_metadata_cache(std::iter::once(&watch));
+        check_watch_index(&watch, &metadata_cache, &mut check);
         assert_eq!(check.status, FastSourceCheckStatus::Unchanged);
         assert_eq!(check.directories_checked, watch.directories.len());
         assert_eq!(check.containers_checked, 0);
@@ -2151,7 +2124,8 @@ mod tests {
             elapsed_us: 0,
             reason: String::new(),
         };
-        check_watch_index(&root, &watch, &mut check);
+        let metadata_cache = build_watch_metadata_cache(std::iter::once(&watch));
+        check_watch_index(&watch, &metadata_cache, &mut check);
         assert_eq!(check.status, FastSourceCheckStatus::Changed);
     }
 
