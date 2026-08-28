@@ -3140,9 +3140,11 @@ mod linux {
             "accepted_transaction": latch_status.accepted_transaction,
             "crc": latch_status.crc,
         }));
-        let readout = match fpga.read_video_diagnostics() {
-            Ok(readout) => Some(readout),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        let (readout, passive_observer_probe_error) = match fpga.read_video_diagnostics() {
+            Ok(readout) => (Some(readout), None),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                (None, Some(error.to_string()))
+            }
             Err(error) => {
                 return fpga_video_diagnostics_unavailable(format!(
                     "read passive FPGA video diagnostics: {error}"
@@ -3198,19 +3200,20 @@ mod linux {
                     && telemetry.lifetime_invariant_valid();
                 json!({
                     "schema": "mister-magik-fpga-video-diagnostics-v2",
-                    "diagnostic_architecture": "scaler-completion-repair-v1",
+                    "diagnostic_architecture": "unverified-observer-fallback-v1",
                     "available": true,
                     "coherent": coherent,
                     "classification": if coherent {
-                        "repair_transport_ready"
+                        "observer_fallback_transport_ready"
                     } else {
-                        "repair_transport_incoherent"
+                        "observer_fallback_transport_incoherent"
                     },
                     "sink_visibility": "unobserved",
                     "capture_start_monotonic_us": capture_start_monotonic_us,
                     "capture_end_monotonic_us": capture_end_monotonic_us,
                     "owner_epoch_before": owner_epoch_before,
                     "owner_epoch_after": owner_epoch_after,
+                    "passive_observer_probe_error": passive_observer_probe_error,
                     "coherence": {
                         "latch_ownership_stable": latch_ownership_stable,
                         "launcher_state_stable": launcher_state_stable,
@@ -5098,13 +5101,14 @@ mod linux {
         }
 
         fn read_video_diagnostics(&mut self) -> io::Result<VideoDiagnosticsReadout> {
-            match self.read_scaler_fetch_liveness_diagnostics() {
-                Ok(readout) => {
-                    return Ok(VideoDiagnosticsReadout::ScalerFetchLiveness(readout));
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error),
-            }
+            let scaler_fetch_liveness_probe_error =
+                match self.read_scaler_fetch_liveness_diagnostics() {
+                    Ok(readout) => {
+                        return Ok(VideoDiagnosticsReadout::ScalerFetchLiveness(readout));
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => error.to_string(),
+                    Err(error) => return Err(error),
+                };
             match self.read_raw_scaler_diagnostics() {
                 Ok(readout) => return Ok(VideoDiagnosticsReadout::RawScaler(readout)),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -5135,7 +5139,7 @@ mod linux {
                         == HdmiEvidenceProbeAction::ReadLegacy => {}
                 Err(error) => return Err(error),
             }
-            match self.read_legacy_video_diagnostics_once() {
+            let legacy_result = match self.read_legacy_video_diagnostics_once() {
                 Err(first) if first.kind() == io::ErrorKind::InvalidData => {
                     self.reset_spi_transport();
                     self.read_legacy_video_diagnostics_once()
@@ -5149,7 +5153,19 @@ mod linux {
                         .map(VideoDiagnosticsReadout::Legacy)
                 }
                 result => result.map(Box::new).map(VideoDiagnosticsReadout::Legacy),
-            }
+            };
+            legacy_result.map_err(|error| {
+                if error.kind() == io::ErrorKind::NotFound {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!(
+                            "no passive observer responded; scaler_fetch_liveness_probe={scaler_fetch_liveness_probe_error}; final_probe={error}"
+                        ),
+                    )
+                } else {
+                    error
+                }
+            })
         }
 
         fn read_scaler_fetch_liveness_diagnostics(
@@ -5444,7 +5460,9 @@ mod linux {
                     HdmiEvidenceAck::Unsupported => {
                         return Err(io::Error::new(
                             io::ErrorKind::NotFound,
-                            format!("{label} command 0x{command:02x} is unsupported"),
+                            format!(
+                                "{label} command 0x{command:02x} is unsupported: ack_high=0x{magic_hi:04x} ack_low=0x{magic_lo:04x}"
+                            ),
                         ));
                     }
                     HdmiEvidenceAck::Invalid => {

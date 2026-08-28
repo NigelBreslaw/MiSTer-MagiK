@@ -3648,8 +3648,12 @@ fn verify_installed_fpga_activation(
         .and_then(Value::as_str)
         .unwrap_or("unavailable");
     if active != expected {
+        let probe_error = evidence
+            .get("passive_observer_probe_error")
+            .and_then(Value::as_str)
+            .unwrap_or("unavailable");
         return Err(DeviceFailure::Unhealthy(format!(
-            "active FPGA identity mismatch: expected={expected} active={active}"
+            "active FPGA identity mismatch: expected={expected} active={active} passive_observer_probe={probe_error}"
         )));
     }
     if !experimental_fpga_evidence_is_current(evidence) {
