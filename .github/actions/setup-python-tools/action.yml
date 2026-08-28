@@ -1,0 +1,13 @@
+name: Setup Python tools
+description: Install the pinned host-side Python CI toolchain
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v6
+      with:
+        python-version-file: .python-version
+    - uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
+    - shell: bash
+      run: uv sync --frozen

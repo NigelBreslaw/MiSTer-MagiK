@@ -70,7 +70,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: ./.github/actions/setup-agent-cli
 
       - name: Verify checked-out main
         run: |
@@ -115,7 +114,7 @@ jobs:
       - name: Plan platform update
         id: plan
         run: |
-          scripts/agent ci platform-bundle plan-update \
+          scripts/magik-ci ci platform-bundle plan-update \
             --manifest '${{ steps.current.outputs.manifest }}' \
             --current-version '${{ steps.current.outputs.version }}' \
             --main-id '${{ steps.identity.outputs.main_id }}' \
@@ -151,21 +150,21 @@ jobs:
               details="build/platform-reuse/run-$run_id.json"
               gh run view "$run_id" --repo "$GITHUB_REPOSITORY" \
                 --json status,conclusion,workflowName,headBranch,event,headSha > "$details" || continue
-              scripts/agent ci platform-eligible-run "$details" "$head_sha" || continue
+              scripts/magik-ci ci platform-eligible-run "$details" "$head_sha" || continue
               attempt="build/platform-reuse/attempt-$kind-$artifact_id"
               mkdir -p "$attempt"
               gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$name" --dir "$attempt" || continue
               if [ "$kind" = candidate ]; then
                 archive="$attempt/mister-magik-platform-v0.$NEXT_VERSION.zip"
                 manifest="$attempt/platform-bundle-v0.2.json"
-                scripts/agent ci platform-bundle verify "$archive" \
+                scripts/magik-ci ci platform-bundle verify "$archive" \
                   --manifest "$manifest" --release-version "$NEXT_VERSION" >/dev/null || continue
                 [ "$(jq -r .bundle_id "$manifest")" = "$BUNDLE_ID" ] || continue
               else
                 args=(--component "$kind" --artifact "$attempt" --component-id "$identity")
                 [ "$kind" != main ] || args+=(--revision "$MAIN_REVISION")
                 verification="build/platform-reuse/verification-$kind-$artifact_id.json"
-                scripts/agent ci platform-bundle verify-component "${args[@]}" > "$verification" || continue
+                scripts/magik-ci ci platform-bundle verify-component "${args[@]}" > "$verification" || continue
                 if ! run_id="$(jq -er '.origin.run_id | tostring | select(test("^[0-9]+$"))' "$verification")"; then
                   continue
                 fi
@@ -177,7 +176,7 @@ jobs:
               [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || continue
               canonical="build/platform-reuse/$kind"
               if [ "$kind" = fpga ]; then
-                scripts/agent ci platform-bundle compact-component \
+                scripts/magik-ci ci platform-bundle compact-component \
                   --component fpga --artifact "$attempt" --component-id "$identity" --output "$canonical" >/dev/null
               else
                 mkdir -p "$canonical"
@@ -187,7 +186,7 @@ jobs:
               printf '%s_head_sha=%s\n' "$kind" "$head_sha" >> "$GITHUB_OUTPUT"
               [ "$kind" = candidate ] || printf '%s_id=%s\n' "$kind" "$identity" >> "$GITHUB_OUTPUT"
               return 0
-            done < <(scripts/agent ci platform-candidates build/platform-reuse/artifacts.json "$name")
+            done < <(scripts/magik-ci ci platform-candidates build/platform-reuse/artifacts.json "$name")
             echo "${kind}_hit=false" >> "$GITHUB_OUTPUT"
             return 1
           }
@@ -204,12 +203,12 @@ jobs:
               details="build/platform-reuse/run-$run_id.json"
               gh run view "$run_id" --repo "$GITHUB_REPOSITORY" \
                 --json status,conclusion,workflowName,headBranch,event,headSha > "$details" || continue
-              scripts/agent ci platform-eligible-run "$details" "$head_sha" || continue
+              scripts/magik-ci ci platform-eligible-run "$details" "$head_sha" || continue
               attempt="build/platform-reuse/attempt-$kind-$artifact_id"
               mkdir -p "$attempt"
               gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$name" --dir "$attempt" || continue
               verification="build/platform-reuse/verification-$kind-$artifact_id.json"
-              scripts/agent ci platform-bundle verify-component \
+              scripts/magik-ci ci platform-bundle verify-component \
                 --component "$kind" --artifact "$attempt" --component-id "$identity" > "$verification" || continue
               if ! run_id="$(jq -er '.origin.run_id | tostring | select(test("^[0-9]+$"))' "$verification")"; then
                 continue
@@ -223,7 +222,7 @@ jobs:
               git diff --quiet "$head_sha" "$GITHUB_SHA" -- "${component_inputs[@]}" || continue
               canonical="build/platform-reuse/$kind"
               if [ "$kind" = fpga ]; then
-                scripts/agent ci platform-bundle compact-component \
+                scripts/magik-ci ci platform-bundle compact-component \
                   --component fpga --artifact "$attempt" --component-id "$identity" --output "$canonical" >/dev/null
               else
                 mkdir -p "$canonical"
@@ -346,7 +345,7 @@ jobs:
             --pattern 'mister-magik-platform-v0.*.zip'
           archive="$(find build/platform-current/release -name 'mister-magik-platform-v0.*.zip' -print -quit)"
           test -n "$archive"
-          scripts/agent ci platform-bundle verify "$archive" \
+          scripts/magik-ci ci platform-bundle verify "$archive" \
             --manifest build/platform-current/release/platform-bundle-v0.2.json --release-version "$VERSION" >/dev/null
           printf 'baseline download and verification: %ss, %s bytes\n' \
             "$((SECONDS-started))" "$(stat -c %s "$archive")" >> "$GITHUB_STEP_SUMMARY"
@@ -369,7 +368,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: ./.github/actions/setup-agent-cli
 
       - uses: actions/checkout@v7
         with:
@@ -410,7 +408,7 @@ jobs:
             --revision "$MAIN_REVISION" --toolchain "$MAIN_TOOLCHAIN_VERSION" >/dev/null
           python3 scripts/release/platform/main-component.py verify \
             --artifact build/main-component --revision "$MAIN_REVISION" >/dev/null
-          scripts/agent ci platform-bundle write-component-cache \
+          scripts/magik-ci ci platform-bundle write-component-cache \
             --component main --artifact build/main-component \
             --component-id '${{ needs.plan.outputs.main-id }}' \
             --run-id "$GITHUB_RUN_ID" --head-sha "$MAIN_REVISION"
@@ -440,8 +438,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: ./.github/actions/setup-agent-cli
-        with:
+              with:
           cache-scope: ubuntu-20.04
 
       - name: Trust checkout and fetch pinned kernel
@@ -465,7 +462,7 @@ jobs:
             echo "builder_revision=$GITHUB_SHA"
           } >> build/scanout-slots/provenance.txt
           (cd build/scanout-slots && sha256sum mister_magik_scanout_slots.ko modinfo.txt provenance.txt imports.txt > SHA256SUMS)
-          scripts/agent ci platform-bundle write-component-cache \
+          scripts/magik-ci ci platform-bundle write-component-cache \
             --component kernel --artifact build/scanout-slots \
             --component-id '${{ needs.plan.outputs.kernel-id }}' \
             --run-id "$GITHUB_RUN_ID" --head-sha "$GITHUB_SHA"
@@ -521,7 +518,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: ./.github/actions/setup-agent-cli
 
       - name: Resolve Menu and component metadata
         id: metadata
@@ -731,7 +727,7 @@ jobs:
             "$delta_sha" >> build/fpga-signoff/patched/menu-magik-vblank-latch.metadata.txt
           scripts/checks/verify-fpga-rbf-manifest.py \
             build/fpga-signoff/patched/menu-magik-vblank-latch.metadata.txt
-          scripts/agent ci platform-bundle write-component-cache \
+          scripts/magik-ci ci platform-bundle write-component-cache \
             --component fpga --artifact build/fpga-signoff \
             --component-id '${{ needs.plan.outputs.fpga-id }}' \
             --run-id "$GITHUB_RUN_ID" --head-sha "$GITHUB_SHA"
@@ -740,7 +736,7 @@ jobs:
         run: |
           set -euo pipefail
           started=$SECONDS
-          scripts/agent ci platform-bundle compact-component \
+          scripts/magik-ci ci platform-bundle compact-component \
             --component fpga --artifact build/fpga-signoff \
             --component-id '${{ needs.plan.outputs.fpga-id }}' \
             --output build/fpga-component >/dev/null
@@ -810,7 +806,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: ./.github/actions/setup-agent-cli
 
       - uses: actions/download-artifact@v8
         with:
@@ -848,9 +843,9 @@ jobs:
           archive="$(find build/platform-current -name 'mister-magik-platform-v0.*.zip' -print -quit)"
           manifest="build/platform-current/platform-bundle-v0.2.json"
           test -n "$archive" && test -f "$manifest"
-          [ "$MAIN_CHANGED" = true ] || scripts/agent ci platform-bundle extract-component "$archive" --manifest "$manifest" --component main --component-id "$MAIN_ID" --output build/platform-input/main
-          [ "$FPGA_CHANGED" = true ] || scripts/agent ci platform-bundle extract-component "$archive" --manifest "$manifest" --component fpga --component-id "$FPGA_ID" --output build/platform-input/fpga
-          [ "$KERNEL_CHANGED" = true ] || scripts/agent ci platform-bundle extract-component "$archive" --manifest "$manifest" --component kernel --component-id "$KERNEL_ID" --output build/platform-input/scanout
+          [ "$MAIN_CHANGED" = true ] || scripts/magik-ci ci platform-bundle extract-component "$archive" --manifest "$manifest" --component main --component-id "$MAIN_ID" --output build/platform-input/main
+          [ "$FPGA_CHANGED" = true ] || scripts/magik-ci ci platform-bundle extract-component "$archive" --manifest "$manifest" --component fpga --component-id "$FPGA_ID" --output build/platform-input/fpga
+          [ "$KERNEL_CHANGED" = true ] || scripts/magik-ci ci platform-bundle extract-component "$archive" --manifest "$manifest" --component kernel --component-id "$KERNEL_ID" --output build/platform-input/scanout
 
       - name: Assemble and verify candidate
         env:
@@ -884,7 +879,7 @@ jobs:
           fpga_sha="$(cached "$FPGA_CHANGED" "$FPGA_CACHE_HIT" "$FPGA_CACHE_HEAD_SHA" "$GITHUB_SHA" fpga head_sha)"
           kernel_sha="$(cached "$KERNEL_CHANGED" "$KERNEL_CACHE_HIT" "$KERNEL_CACHE_HEAD_SHA" "$GITHUB_SHA" kernel head_sha)"
           source() { if [ "$1" != true ]; then echo reused-from-latest-release; elif [ "$2" = true ]; then echo reused-from-actions-cache; else echo built-in-current-run; fi; }
-          scripts/agent ci platform-bundle create \
+          scripts/magik-ci ci platform-bundle create \
             --main-dir build/platform-input/main --fpga-dir build/platform-input/fpga --scanout-dir build/platform-input/scanout \
             --main-id "$MAIN_ID" --fpga-id "$FPGA_ID" --kernel-id "$KERNEL_ID" \
             --main-run-id "$main_run" --fpga-run-id "$fpga_run" --kernel-run-id "$kernel_run" \
@@ -892,7 +887,7 @@ jobs:
             --main-source "$(source "$MAIN_CHANGED" "$MAIN_CACHE_HIT")" --fpga-source "$(source "$FPGA_CHANGED" "$FPGA_CACHE_HIT")" --kernel-source "$(source "$KERNEL_CHANGED" "$KERNEL_CACHE_HIT")" \
             --release-version "$NEXT_VERSION" --output build/platform-bundle
           created=$SECONDS
-          scripts/agent ci platform-bundle verify \
+          scripts/magik-ci ci platform-bundle verify \
             "build/platform-bundle/mister-magik-platform-v0.$NEXT_VERSION.zip" \
             --manifest build/platform-bundle/platform-bundle-v0.2.json --release-version "$NEXT_VERSION" >/dev/null
           archive="build/platform-bundle/mister-magik-platform-v0.$NEXT_VERSION.zip"
@@ -922,7 +917,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: ./.github/actions/setup-agent-cli
 
       - uses: actions/download-artifact@v8
         with:
@@ -938,7 +932,7 @@ jobs:
           set -euo pipefail
           archive="candidate/mister-magik-platform-v0.$VERSION.zip"
           manifest="candidate/platform-bundle-v0.2.json"
-          scripts/agent ci platform-bundle verify "$archive" --manifest "$manifest" --release-version "$VERSION" >/dev/null
+          scripts/magik-ci ci platform-bundle verify "$archive" --manifest "$manifest" --release-version "$VERSION" >/dev/null
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Tag $TAG already exists; numbered platform releases are immutable." >&2
             exit 1

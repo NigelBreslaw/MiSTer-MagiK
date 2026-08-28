@@ -57,7 +57,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: ./.github/actions/setup-agent-cli
 
       - name: Verify checked-out main
         run: |
@@ -120,7 +119,7 @@ jobs:
               --pattern "mister-magik-game-databases-v${version}.zip" \
               --pattern game-databases-manifest.json --pattern SHA256SUMS
             archive="build/game-databases/current/mister-magik-game-databases-v${version}.zip"
-            scripts/agent ci game-databases verify "$archive" \
+            scripts/magik-ci ci game-databases verify "$archive" \
               --manifest build/game-databases/current/game-databases-manifest.json >/dev/null
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
             echo "manifest=build/game-databases/current/game-databases-manifest.json" >> "$GITHUB_OUTPUT"
@@ -150,7 +149,7 @@ jobs:
           if [ -n "$CURRENT_MANIFEST" ]; then
             args+=(--manifest "$CURRENT_MANIFEST")
           fi
-          scripts/agent ci game-databases plan-update "${args[@]}" \
+          scripts/magik-ci ci game-databases plan-update "${args[@]}" \
             --mame-tag "$MAME_TAG" --mame-sha "$MAME_SHA" \
             --hbmame-tag "$HBMAME_TAG" --hbmame-sha "$HBMAME_SHA" \
             --arcade-database-sha "$ARCADE_DATABASE_SHA" \
@@ -197,7 +196,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: ./.github/actions/setup-agent-cli
 
       - name: Download pinned updater databases and source trees
         env:
@@ -253,7 +251,7 @@ jobs:
 
       - name: Build and verify updater Arcade index
         run: |
-          scripts/agent ci game-databases build-updater-arcade \
+          scripts/magik-ci ci game-databases build-updater-arcade \
             --input-manifest build/updater/inputs.json \
             --out build/arcade-updater-index-v1.lz4b | tee build/updater-summary.json
 
@@ -300,7 +298,7 @@ jobs:
           sparse-checkout: hash
 
       - name: Build MAME database
-        run: scripts/agent ci game-databases build-mame --listxml build/mame-listxml.xml --software-dir "$GITHUB_WORKSPACE/mame-source/hash" --out build/mame.sqlite3
+        run: scripts/magik-ci ci game-databases build-mame --listxml build/mame-listxml.xml --software-dir "$GITHUB_WORKSPACE/mame-source/hash" --out build/mame.sqlite3
 
       - name: Verify Atari Lynx software list
         run: |
@@ -370,7 +368,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: ./.github/actions/setup-agent-cli
 
       - name: Install package tools
         run: sudo apt-get update && sudo apt-get install -y curl sqlite3 unzip
@@ -388,7 +385,7 @@ jobs:
             --pattern "mister-magik-game-databases-v${CURRENT_VERSION}.zip" \
             --pattern game-databases-manifest.json
           archive="build/current/mister-magik-game-databases-v${CURRENT_VERSION}.zip"
-          scripts/agent ci game-databases verify "$archive" \
+          scripts/magik-ci ci game-databases verify "$archive" \
             --manifest build/current/game-databases-manifest.json >/dev/null
           unzip -q "$archive" mame.sqlite3 hbmame.sqlite3 -d build/current
           if unzip -Z1 "$archive" | grep -qx ArcadeDatabase.csv; then
@@ -428,7 +425,7 @@ jobs:
           set -euo pipefail
           curl -fsSL "https://raw.githubusercontent.com/MiSTer-devel/ArcadeDatabase_MiSTer/$ARCADE_DATABASE_SHA/ArcadeDatabase.csv" -o build/ArcadeDatabase.csv
           curl -fsSL "https://raw.githubusercontent.com/MiSTer-devel/ArcadeDatabase_MiSTer/$ARCADE_DATABASE_SHA/LICENSE" -o build/ArcadeDatabase-LICENSE.txt
-          scripts/agent ci game-databases import-arcade --sqlite build/mame.sqlite3 \
+          scripts/magik-ci ci game-databases import-arcade --sqlite build/mame.sqlite3 \
             --csv build/ArcadeDatabase.csv --source-sha "$ARCADE_DATABASE_SHA"
 
       - name: Reuse unchanged ArcadeDatabase source
@@ -446,7 +443,7 @@ jobs:
 
       - name: Build HBMAME database
         if: needs.inspect.outputs.hbmame-changed == 'true'
-        run: scripts/agent ci game-databases build-mame --listxml build/hbmame-listxml.xml --out build/hbmame.sqlite3
+        run: scripts/magik-ci ci game-databases build-mame --listxml build/hbmame-listxml.xml --out build/hbmame.sqlite3
 
       - name: Reuse unchanged HBMAME database
         if: needs.inspect.outputs.hbmame-changed != 'true'
@@ -474,7 +471,7 @@ jobs:
           if [ '${{ needs.inspect.outputs.arcade-updater-changed }}' != true ]; then
             arcade_updater_builder_sha="$(jq -r '.sources.arcade_updater.builder_sha' build/current/game-databases-manifest.json)"
           fi
-          scripts/agent ci game-databases create \
+          scripts/magik-ci ci game-databases create \
             --mame-sqlite build/mame.sqlite3 --hbmame-sqlite build/hbmame.sqlite3 \
             --release-version '${{ needs.inspect.outputs.next-version }}' \
             --mame-tag '${{ needs.inspect.outputs.mame-tag }}' \
@@ -517,7 +514,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: ./.github/actions/setup-agent-cli
 
       - uses: actions/download-artifact@v8
         with:
@@ -533,7 +529,7 @@ jobs:
           test "$GITHUB_REF" = refs/heads/main
           tag="game-databases-v$VERSION"
           archive="candidate/mister-magik-game-databases-v$VERSION.zip"
-          scripts/agent ci game-databases verify "$archive" \
+          scripts/magik-ci ci game-databases verify "$archive" \
             --manifest candidate/game-databases-manifest.json >/dev/null
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
             echo "Tag $tag already exists; numbered database releases are immutable." >&2

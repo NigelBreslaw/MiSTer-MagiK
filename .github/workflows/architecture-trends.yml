@@ -21,7 +21,6 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
-      - uses: ./.github/actions/setup-agent-cli
 
       - name: Generate advisory architecture reports
         id: report
@@ -36,12 +35,12 @@ jobs:
           git cat-file -e "${BASE_SHA}^{commit}"
           git cat-file -e "${HEAD_SHA}^{commit}"
           mkdir -p build/architecture-trends
-          scripts/agent architecture report \
+          scripts/magik-ci architecture report \
             --base "$BASE_SHA" \
             --head "$HEAD_SHA" \
             --format json \
             --output build/architecture-trends/architecture-report.json
-          scripts/agent architecture report \
+          scripts/magik-ci architecture report \
             --base "$BASE_SHA" \
             --head "$HEAD_SHA" \
             --format markdown \

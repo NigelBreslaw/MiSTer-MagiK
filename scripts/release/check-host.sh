@@ -28,7 +28,7 @@ if [[ $# -gt 0 ]]; then
   exit 2
 fi
 
-scripts/agent ci host-assurance --paths \
+scripts/magik-ci ci host-assurance --paths \
   agent-cli/src/main.rs \
   crates/catalog/src/lib.rs \
   crates/magik-core/src/lib.rs \
@@ -38,7 +38,7 @@ scripts/agent ci host-assurance --paths \
   mister/tools/agent/src/main.rs \
   apps/mister/src/lib.rs
 
-scripts/agent build release-binaries
+scripts/magik-ci build release-binaries
 apps/mister/scripts/check-arm-shared-libs.sh \
   "$BIN"
 apps/mister/scripts/check-arm-shared-libs.sh \
@@ -146,11 +146,11 @@ for position, source_id in enumerate(("distribution", "alternatives", "jtcores",
     "format": "mister-magik-arcade-updater-inputs-v1", "sources": sources
 }))
 PY
-scripts/agent ci game-databases build-updater-arcade \
+scripts/magik-ci ci game-databases build-updater-arcade \
   --input-manifest "$WORK/updater-inputs.json" \
   --out "$WORK/arcade-updater-index-v1.lz4b" >/dev/null
 
-scripts/agent ci game-databases create \
+scripts/magik-ci ci game-databases create \
   --mame-sqlite "$WORK/mame.sqlite3" --hbmame-sqlite "$WORK/hbmame.sqlite3" \
   --release-version 1 --mame-tag mame0288 \
   --mame-sha 1111111111111111111111111111111111111111 \
@@ -187,7 +187,7 @@ printf 'format=mister-magik-fpga-release-v2\nplatform_contract_sha256=%s\nmagik_
   >"$WORK/latch.metadata.txt"
 printf '{"format":"mister-magik-platform-bundle-v0.2","release_version":16,"bundle_id":"%064d"}\n' 0 \
   >"$WORK/platform-bundle-v0.2.json"
-scripts/agent ci platform-manifest generate \
+scripts/magik-ci ci platform-manifest generate \
   --layout public --output "$WORK/platform-v3.manifest" \
   --main "$MAIN_BIN" --gui "$BIN" \
   --manager "$MANAGER" \

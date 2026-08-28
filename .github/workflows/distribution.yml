@@ -52,7 +52,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: ./.github/actions/setup-agent-cli
 
       - name: Derive build-based version
         id: release
@@ -68,7 +67,7 @@ jobs:
               ;;
             beta)
               alpha_sha="$(git rev-parse -q --verify 'refs/tags/alpha^{commit}' || true)"
-              scripts/agent ci require-alpha-promotion "$channel" "$alpha_sha" "$GITHUB_SHA"
+              scripts/magik-ci ci require-alpha-promotion "$channel" "$alpha_sha" "$GITHUB_SHA"
               tag=beta
               ;;
             release)
@@ -105,7 +104,6 @@ jobs:
           path: private/magik-assets
           ssh-key: ${{ secrets.MAGIK_ASSETS_SSH_KEY }}
 
-      - uses: ./.github/actions/setup-agent-cli
 
       - name: Compute cache identities
         id: cache-id
@@ -143,7 +141,7 @@ jobs:
           archive="$(find build/qualified -name 'mister-magik-platform-v0.*.zip' -print -quit)"
           manifest="$(find build/qualified -name 'platform-bundle-v0.*.json' -print -quit)"
           test -n "$archive" && test -n "$manifest"
-          scripts/agent ci platform-bundle verify "$archive" \
+          scripts/magik-ci ci platform-bundle verify "$archive" \
             --manifest "$manifest" \
             --release-version "$platform_version" >/dev/null
           unzip -q -o "$archive" -d build/qualified
@@ -171,7 +169,7 @@ jobs:
             --pattern "mister-magik-game-databases-v${databases_version}.zip" \
             --pattern game-databases-manifest.json --pattern SHA256SUMS
           databases_archive="build/game-databases/mister-magik-game-databases-v${databases_version}.zip"
-          scripts/agent ci game-databases verify "$databases_archive" \
+          scripts/magik-ci ci game-databases verify "$databases_archive" \
             --manifest build/game-databases/game-databases-manifest.json \
             --checksums build/game-databases/SHA256SUMS >/dev/null
 
@@ -246,7 +244,7 @@ jobs:
           MISTER_MAGIK_VERSION: ${{ needs.release-metadata.outputs.version }}
         run: |
           docker image inspect "${{ steps.cache-id.outputs.cross_image }}" >/dev/null
-          MISTER_ARM_BUILD_BACKEND=cross scripts/agent build runtime-device
+          MISTER_ARM_BUILD_BACKEND=cross scripts/magik-ci build runtime-device
 
       - name: Check ARM shared libraries
         run: apps/mister/scripts/check-arm-shared-libs.sh apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
@@ -308,8 +306,8 @@ jobs:
           test -f "$rbf" && test -f "$rbf_meta" && test -f "$module" && test -f "$module_meta"
           test -f "$main_bin" && [[ "$main_revision" =~ ^[0-9a-f]{40}$ ]]
           python3 scripts/checks/generate-platform-v3-consumers.py --check
-          scripts/agent build manager-device
-          scripts/agent ci platform-manifest generate \
+          scripts/magik-ci build manager-device
+          scripts/magik-ci ci platform-manifest generate \
             --output build/platform-v3.manifest \
             --main "$main_bin" \
             --gui apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb \

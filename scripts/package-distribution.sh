@@ -217,7 +217,7 @@ if [[ -z "$GAME_DATABASES_RELEASE_DIR" || ! -d "$GAME_DATABASES_RELEASE_DIR" ]];
 fi
 DATABASE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/mister-magik-game-databases.XXXXXX")"
 trap 'rm -rf "$DATABASE_TMP"' EXIT
-"$ROOT/scripts/agent" ci game-databases extract-release \
+"/scripts/magik-ci" ci game-databases extract-release \
   "$GAME_DATABASES_RELEASE_DIR" --output "$DATABASE_TMP" >/dev/null
 MAME_SQLITE="$DATABASE_TMP/mame.sqlite3"
 HBMAME_SQLITE="$DATABASE_TMP/hbmame.sqlite3"
@@ -403,7 +403,7 @@ platform_bundle_id=$PLATFORM_BUNDLE_ID
 game_database_version=$GAME_DATABASE_VERSION
 EOF
 chmod 755 "$STAGE/$PUBLIC_MAIN_RELATIVE"
-"$ROOT/scripts/agent" ci platform-manifest verify \
+"/scripts/magik-ci" ci platform-manifest verify \
   "$STAGE/$PUBLIC_ROOT_RELATIVE/$PLATFORM_V3_FILE_NAME" --root "$STAGE" --layout public >/dev/null
 if find "$STAGE" -type f \( -path '*/experiments/*' -o -name menu.rbf \) -print -quit | grep -q .; then
   echo "ERROR: production package contains experiments/ or root menu.rbf" >&2

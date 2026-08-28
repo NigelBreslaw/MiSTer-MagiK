@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""Thin entrypoint for Python CI tooling."""
+
+from scripts.magik_ci.cli import main
+
+raise SystemExit(main())

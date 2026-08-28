@@ -6,7 +6,7 @@ name = "mister-magik-host-tools"
 version = "0.1.0"
 description = "MiSTer MagiK host-side CI and release tooling"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["lz4>=4.3"]
 
 [dependency-groups]
 # Keep the quality tool versions aligned with gb-slint so local and CI
@@ -22,7 +22,3 @@ pythonpath = ["."]
 
 [tool.ty.src]
 include = ["scripts"]
-exclude = [
-    "scripts/magik_ci", # Added in the CI migration commits.
-    "scripts/tests/test_magik_ci", # Added in the CI migration commits.
-]

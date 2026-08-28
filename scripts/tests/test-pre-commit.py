@@ -155,7 +155,8 @@ class PreCommitTests(unittest.TestCase):
         result = self.repository.gate()
         self.assertEqual(result.returncode, 1)
         self.assertIn("deprecated_dropped_frame_term", result.stderr)
-        self.assertIn("repeated_" "refreshes", result.stderr)
+        deprecated_term = "repeated_" + "refreshes"
+        self.assertIn(deprecated_term, result.stderr)
 
         self.repository.run("git", "reset", "-q")
         self.repository.stage(

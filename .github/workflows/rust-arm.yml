@@ -42,7 +42,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - uses: ./.github/actions/setup-agent-cli
 
       - name: Install host validation tools
         run: sudo apt-get update && sudo apt-get install -y ripgrep
@@ -70,18 +69,37 @@ jobs:
             cargo-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
 
       - name: Full host validation (${{ matrix.group }})
-        run: scripts/agent ci host-assurance --paths ${{ matrix.paths }}
+        run: scripts/magik-ci ci host-assurance --paths ${{ matrix.paths }}
 
   host-dev:
     name: host-dev
     runs-on: ubuntu-24.04
-    needs: host-dev-group
+    needs: [host-dev-group, python-quality]
     if: always()
     steps:
       - name: Require every host validation group
         env:
           GROUP_RESULT: ${{ needs.host-dev-group.result }}
-        run: test "$GROUP_RESULT" = success
+          PYTHON_RESULT: ${{ needs.python-quality.result }}
+        run: test "$GROUP_RESULT" = success && test "$PYTHON_RESULT" = success
+
+  python-quality:
+    name: python-quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Install Python toolchain
+        uses: ./.github/actions/setup-python-tools
+      - name: Check formatting
+        run: uv run ruff format --check scripts
+      - name: Lint maintained scripts
+        run: uv run ruff check scripts
+      - name: Type-check migrated tooling
+        run: uv run ty check scripts/magik_ci scripts/tests/test_magik_ci.py
+      - name: Run Python tests
+        run: uv run pytest scripts/tests -q
 
   launcher-visual-matrix:
     name: launcher-visual-matrix
@@ -103,7 +121,6 @@ jobs:
           path: private/magik-assets
           ssh-key: ${{ secrets.MAGIK_ASSETS_SSH_KEY }}
 
-      - uses: ./.github/actions/setup-agent-cli
 
       - name: Select application Rust toolchain
         run: |
@@ -112,7 +129,7 @@ jobs:
           rustup default "$toolchain"
 
       - name: Compare launcher visual matrix
-        run: scripts/agent ci host-assurance --paths apps/mister/tests/visual-baselines/launcher
+        run: scripts/magik-ci ci host-assurance --paths apps/mister/tests/visual-baselines/launcher
 
       - name: Upload launcher visual mismatches
         if: failure()
@@ -151,7 +168,6 @@ jobs:
           path: private/magik-assets
           ssh-key: ${{ secrets.MAGIK_ASSETS_SSH_KEY }}
 
-      - uses: ./.github/actions/setup-agent-cli
 
       - name: Compute cache identities
         id: cache-id
@@ -217,7 +233,7 @@ jobs:
           MISTER_CARGO_TIMINGS: "1"
         run: |
           docker image inspect "${{ steps.cache-id.outputs.cross_image }}" >/dev/null
-          MISTER_ARM_BUILD_BACKEND=cross scripts/agent build runtime-ci
+          MISTER_ARM_BUILD_BACKEND=cross scripts/magik-ci build runtime-ci
 
       - name: Report ARM cache footprint
         if: always()
@@ -269,7 +285,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - uses: ./.github/actions/setup-agent-cli
 
       - name: Compute cache identities
         id: cache-id
@@ -325,7 +340,7 @@ jobs:
       - name: Build ARM agent
         run: |
           docker image inspect "${{ steps.cache-id.outputs.cross_image }}" >/dev/null
-          MISTER_ARM_BUILD_BACKEND=cross scripts/agent build device-agent-ci
+          MISTER_ARM_BUILD_BACKEND=cross scripts/magik-ci build device-agent-ci
 
       - name: Upload ARM agent
         uses: actions/upload-artifact@v7
