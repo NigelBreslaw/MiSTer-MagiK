@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
+use crate::cpu_profile::CatalogBuildProfiler;
 use crate::preview_state::SystemEntryPreviewPrelude;
 use mister_magik_catalog::arcade_catalog::ArcadeCatalog;
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
@@ -153,11 +154,18 @@ fn run_fast_catalog_refresh_in_process(
         FastCatalogRefreshRequest, FastCatalogSystemOutcome, FastSourceCheckStatus,
     };
 
+    let mut catalog_profile = CatalogBuildProfiler::capture_process();
+    let profile_operation = match plan {
+        CatalogWorkerPlan::InitialBuild | CatalogWorkerPlan::FreshBuild => "fresh",
+        CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS => "rebuild-all",
+        _ => "refresh",
+    };
+    catalog_profile.arm(profile_operation);
     if matches!(
         plan,
         CatalogWorkerPlan::InitialBuild | CatalogWorkerPlan::FreshBuild
     ) {
-        run_fast_catalog_fresh_build(root, catalog_root, tx);
+        run_fast_catalog_fresh_build(root, catalog_root, tx, catalog_profile);
         return;
     }
     let request = if plan == CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS {
@@ -173,6 +181,7 @@ fn run_fast_catalog_refresh_in_process(
     ) {
         Ok(planned) => planned,
         Err(error) => {
+            catalog_profile.fail("planning-failed");
             let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
                 error: format!("fast catalog refresh planning failed: {error}"),
             });
@@ -203,6 +212,7 @@ fn run_fast_catalog_refresh_in_process(
     ) {
         Ok(report) => report,
         Err(error) => {
+            catalog_profile.fail("refresh-failed");
             let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
                 error: format!("fast catalog refresh failed: {error}"),
             });
@@ -264,11 +274,17 @@ fn run_fast_catalog_refresh_in_process(
             removed,
         });
         if let Err(error) = publish_strict_registry_seed_at(tx, root, catalog_root) {
+            catalog_profile.fail("registry-reload-failed");
             let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
                 error: format!("fast catalog registry reload failed: {error}"),
             });
             return;
         }
+    }
+    if report.artifact_systems_written == 0 {
+        catalog_profile.unchanged();
+    } else {
+        catalog_profile.persisted();
     }
     let _ = tx.send(CatalogWorkerMessage::Done);
 }
@@ -277,6 +293,7 @@ fn run_fast_catalog_fresh_build(
     root: &str,
     catalog_root: &Path,
     tx: &mpsc::Sender<CatalogWorkerMessage>,
+    mut catalog_profile: CatalogBuildProfiler,
 ) {
     let storage_root = PathBuf::from("/media/fat");
     let mut planned_system_ids = Vec::new();
@@ -339,6 +356,7 @@ fn run_fast_catalog_fresh_build(
     ) {
         Ok(report) => report,
         Err(error) => {
+            catalog_profile.fail("fresh-build-failed");
             let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
                 error: format!("catalog build failed: {error}"),
             });
@@ -375,11 +393,13 @@ fn run_fast_catalog_fresh_build(
         elapsed_us: report.elapsed_us,
     });
     if let Err(error) = publish_strict_registry_seed_at(tx, root, catalog_root) {
+        catalog_profile.fail("registry-reload-failed");
         let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
             error: format!("catalog registry load failed: {error}"),
         });
         return;
     }
+    catalog_profile.persisted();
     let _ = tx.send(CatalogWorkerMessage::Done);
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
