@@ -93,14 +93,13 @@ module mister_magik_sys_top_latch_path (
 		.active_route_epoch(magik_lfb_active_route_epoch)
 	);
 
-	mister_magik_scaler_fetch_ordered_frame diagnostic (
+	mister_magik_scaler_fetch_liveness_state diagnostic (
 		.clk_100m(clk_sys),
 		.clk_sys(clk_sys),
-		.reset_active(1'b0),
+		.reset_req(1'b0),
 		.vbuf_address(28'd0),
 		.vbuf_burstcount(8'd128),
 		.vbuf_waitrequest(1'b0),
-		.vbuf_readdata(128'd0),
 		.vbuf_readdatavalid(1'b0),
 		.vbuf_read(1'b0),
 		.io_uio(io_uio),
@@ -344,14 +343,17 @@ module tb_mister_magik_sys_top_integration;
 			telemetry_crc = crc_word(telemetry_crc, telemetry[index]);
 		expect16(telemetry[10], telemetry_crc, "sys_top telemetry CRC");
 
-		// Only the ordered scaler-fetch record is supported. Legacy diagnostics
+		// Only the liveness scaler-fetch record is supported. Legacy diagnostics
 		// remain explicitly unsupported and cannot disturb latch-v5 state.
-		for(index = 8'h60; index <= 8'h66; index = index + 1) begin
+		for(index = 8'h60; index <= 8'h67; index = index + 1) begin
 			begin_command(index[7:0], 16'd0);
 			end_command();
 		end
-		begin_command(MAGIK_UIO_GET_RAW_SCALER_STATE, MAGIK_RAW_SCALER_STATE_MAGIC);
-		for(index = 0; index < MAGIK_RAW_SCALER_STATE_WORDS; index = index + 1)
+		repeat(20) @(posedge clk_sys);
+		begin_command(MAGIK_UIO_GET_SCALER_FETCH_LIVENESS_STATE,
+			MAGIK_SCALER_FETCH_LIVENESS_STATE_MAGIC);
+		for(index = 0; index < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS;
+			index = index + 1)
 			transfer_word(16'd0, response);
 		end_command();
 		expect16(dut.magik_lfb_active_seq, 16'h002b,

@@ -3846,9 +3846,15 @@ mod linux {
     }
 
     enum VideoDiagnosticsReadout {
+        ScalerFetchLiveness(ScalerFetchLivenessDiagnosticsReadout),
         RawScaler(RawScalerDiagnosticsReadout),
         HdmiLock(HdmiLockDiagnosticsReadout),
         Legacy(Box<LegacyVideoDiagnosticsReadout>),
+    }
+
+    struct ScalerFetchLivenessDiagnosticsReadout {
+        samples: [mister_magik_video_diagnostics_contract::ScalerFetchLivenessState; 3],
+        sample_interval_us: [u64; 2],
     }
 
     struct RawScalerDiagnosticsReadout {
@@ -3919,6 +3925,67 @@ mod linux {
             let delta = pair[1].wrapping_sub(pair[0]);
             delta != 0 && delta <= 0x7fff
         })
+    }
+
+    fn byte_sequences_advance(sequences: [u8; 3]) -> bool {
+        sequences.windows(2).all(|pair| {
+            let delta = pair[1].wrapping_sub(pair[0]);
+            delta != 0 && delta <= 0x7f
+        })
+    }
+
+    pub(super) fn scaler_fetch_liveness_classification(
+        samples: [&mister_magik_video_diagnostics_contract::ScalerFetchLivenessState; 3],
+    ) -> &'static str {
+        use mister_magik_video_diagnostics_contract as contract;
+
+        let flags = samples
+            .iter()
+            .fold(0, |flags, sample| flags | sample.flags());
+        let invalid_flags = contract::SCALER_FETCH_LIVENESS_STATE_FLAG_OBSERVER_FAULT
+            | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_RESET_AMBIGUITY
+            | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_COUNTER_AMBIGUOUS;
+        if !samples.iter().all(|sample| sample.record_valid())
+            || flags & invalid_flags != 0
+            || !byte_sequences_advance(samples.map(|sample| sample.publication_sequence()))
+        {
+            return "scaler_fetch_liveness_evidence_inconclusive";
+        }
+
+        if samples.iter().any(|sample| sample.first_stall_valid()) {
+            let first = samples[0];
+            if !samples.iter().all(|sample| {
+                sample.first_stall_valid()
+                    && sample.frozen_cause() == first.frozen_cause()
+                    && sample.frozen_sequence() == first.frozen_sequence()
+            }) {
+                return "scaler_fetch_liveness_evidence_inconclusive";
+            }
+            return match first.frozen_cause() {
+                contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN => {
+                    "scaler_fetch_no_request_seen"
+                }
+                contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_ACCEPT_BLOCKED => {
+                    "scaler_fetch_accept_blocked"
+                }
+                contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_FIRST_RETURN_MISSING => {
+                    "scaler_fetch_first_return_missing"
+                }
+                contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_RETURN_INCOMPLETE => {
+                    "scaler_fetch_return_incomplete"
+                }
+                contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED => {
+                    "scaler_fetch_request_cancelled"
+                }
+                _ => "scaler_fetch_liveness_evidence_inconclusive",
+            };
+        }
+
+        if samples.iter().all(|sample| sample.normal_liveness_seen()) {
+            "scaler_fetch_normal_liveness"
+        } else {
+            "scaler_fetch_liveness_evidence_inconclusive"
+        }
     }
 
     pub(super) fn raw_scaler_classification(
@@ -4419,6 +4486,78 @@ mod linux {
     impl VideoDiagnosticsReadout {
         fn to_json(&self, context: VideoDiagnosticsJsonContext) -> Value {
             match self {
+                Self::ScalerFetchLiveness(readout) => {
+                    use mister_magik_video_diagnostics_contract as contract;
+                    let samples = [
+                        &readout.samples[0],
+                        &readout.samples[1],
+                        &readout.samples[2],
+                    ];
+                    let classification = scaler_fetch_liveness_classification(samples);
+                    let valid_samples = samples.iter().all(|sample| sample.record_valid());
+                    let advancing =
+                        byte_sequences_advance(samples.map(|sample| sample.publication_sequence()));
+                    let classification_stable =
+                        classification != "scaler_fetch_liveness_evidence_inconclusive";
+                    let coherent = context.owner_stable
+                        && context.latch_ownership_stable == Some(true)
+                        && context.launcher_state_stable
+                        && valid_samples
+                        && advancing
+                        && classification_stable;
+                    json!({
+                        "schema": "mister-magik-fpga-video-diagnostics-v2",
+                        "diagnostic_architecture": contract::SCALER_FETCH_LIVENESS_STATE_ARCHITECTURE,
+                        "available": true,
+                        "coherent": coherent,
+                        "classification": if coherent { classification } else { "scaler_fetch_liveness_evidence_inconclusive" },
+                        "sink_visibility": "unobserved",
+                        "capture_start_monotonic_us": context.capture_start_monotonic_us,
+                        "capture_end_monotonic_us": context.capture_end_monotonic_us,
+                        "owner_epoch_before": context.owner_epoch_before,
+                        "owner_epoch_after": context.owner_epoch_after,
+                        "latch_status": context.latch_status_json,
+                        "coherence": {
+                            "three_samples_valid": valid_samples,
+                            "publication_sequence_advancing": advancing,
+                            "classification_stable": classification_stable,
+                            "sample_interval_us": readout.sample_interval_us,
+                            "latch_ownership_stable": context.latch_ownership_stable,
+                            "launcher_state_stable": context.launcher_state_stable,
+                            "ownership_check_error": context.ownership_check_error,
+                        },
+                        "capabilities": {
+                            "passive_video_observer": true,
+                            "scaler_scheduler_state": false,
+                            "scaler_pipeline_state": false,
+                            "scaler_copy_retirement": false,
+                            "scaler_fetch_liveness": true,
+                            "scaler_fetch_ordered_signature": false,
+                            "raw_scaler_ordered_signature": false,
+                            "pixel_observer": false,
+                            "pll_observer": false,
+                        },
+                        "scaler_fetch_liveness_state": {
+                            "record_valid": samples.iter().map(|sample| sample.record_valid()).collect::<Vec<_>>(),
+                            "normal_liveness_seen": samples.iter().map(|sample| sample.normal_liveness_seen()).collect::<Vec<_>>(),
+                            "first_stall_valid": samples.iter().map(|sample| sample.first_stall_valid()).collect::<Vec<_>>(),
+                            "observer_fault": samples.iter().map(|sample| sample.observer_fault()).collect::<Vec<_>>(),
+                            "flags": samples.iter().map(|sample| sample.flags()).collect::<Vec<_>>(),
+                            "publication_sequence": samples.iter().map(|sample| sample.publication_sequence()).collect::<Vec<_>>(),
+                            "frozen_sequence": samples.iter().map(|sample| sample.frozen_sequence()).collect::<Vec<_>>(),
+                            "accepted_count": samples.iter().map(|sample| sample.accepted_count()).collect::<Vec<_>>(),
+                            "completed_count": samples.iter().map(|sample| sample.completed_count()).collect::<Vec<_>>(),
+                            "return_phase": samples.iter().map(|sample| sample.return_phase()).collect::<Vec<_>>(),
+                            "fifo_depth": samples.iter().map(|sample| sample.fifo_depth()).collect::<Vec<_>>(),
+                            "monitor_state": samples.iter().map(|sample| sample.monitor_state()).collect::<Vec<_>>(),
+                            "frozen_cause": samples.iter().map(|sample| sample.frozen_cause()).collect::<Vec<_>>(),
+                            "frozen_return_phase": samples.iter().map(|sample| sample.frozen_return_phase()).collect::<Vec<_>>(),
+                            "frozen_fifo_depth": samples.iter().map(|sample| sample.frozen_fifo_depth()).collect::<Vec<_>>(),
+                            "frozen_address_fold": samples.iter().map(|sample| sample.frozen_address_fold()).collect::<Vec<_>>(),
+                            "raw_samples": readout.samples.iter().map(|sample| sample.words).collect::<Vec<_>>(),
+                        },
+                    })
+                }
                 Self::RawScaler(readout) => {
                     use mister_magik_video_diagnostics_contract::RawScalerState;
                     match &readout.samples {
@@ -4960,6 +5099,13 @@ mod linux {
         }
 
         fn read_video_diagnostics(&mut self) -> io::Result<VideoDiagnosticsReadout> {
+            match self.read_scaler_fetch_liveness_diagnostics() {
+                Ok(readout) => {
+                    return Ok(VideoDiagnosticsReadout::ScalerFetchLiveness(readout));
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
             match self.read_raw_scaler_diagnostics() {
                 Ok(readout) => return Ok(VideoDiagnosticsReadout::RawScaler(readout)),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -5005,6 +5151,58 @@ mod linux {
                 }
                 result => result.map(Box::new).map(VideoDiagnosticsReadout::Legacy),
             }
+        }
+
+        fn read_scaler_fetch_liveness_diagnostics(
+            &mut self,
+        ) -> io::Result<ScalerFetchLivenessDiagnosticsReadout> {
+            let first = self.read_scaler_fetch_liveness_state()?;
+            let first_started = Instant::now();
+            thread::sleep(Duration::from_millis(25));
+            let second = self.read_scaler_fetch_liveness_state().map_err(|error| {
+                if error.kind() == io::ErrorKind::NotFound {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("scaler fetch liveness disappeared during sampling: {error}"),
+                    )
+                } else {
+                    error
+                }
+            })?;
+            let first_interval_us = first_started.elapsed().as_micros() as u64;
+            let second_started = Instant::now();
+            thread::sleep(Duration::from_millis(25));
+            let third = self.read_scaler_fetch_liveness_state().map_err(|error| {
+                if error.kind() == io::ErrorKind::NotFound {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("scaler fetch liveness disappeared during sampling: {error}"),
+                    )
+                } else {
+                    error
+                }
+            })?;
+            Ok(ScalerFetchLivenessDiagnosticsReadout {
+                samples: [first, second, third],
+                sample_interval_us: [
+                    first_interval_us,
+                    second_started.elapsed().as_micros() as u64,
+                ],
+            })
+        }
+
+        fn read_scaler_fetch_liveness_state(
+            &mut self,
+        ) -> io::Result<mister_magik_video_diagnostics_contract::ScalerFetchLivenessState> {
+            use mister_magik_video_diagnostics_contract as contract;
+            let words = self
+                .read_diagnostic_words::<{ contract::SCALER_FETCH_LIVENESS_STATE_WORDS }>(
+                    contract::GET_SCALER_FETCH_LIVENESS_STATE,
+                    contract::SCALER_FETCH_LIVENESS_STATE_MAGIC,
+                    "scaler fetch liveness state",
+                )?;
+            contract::decode_scaler_fetch_liveness_state(&words)
+                .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))
         }
 
         fn read_raw_scaler_diagnostics(&mut self) -> io::Result<RawScalerDiagnosticsReadout> {
@@ -8136,6 +8334,100 @@ mod tests {
         assert_eq!(
             linux::raw_scaler_classification([&wrapping[0], &wrapping[1], &wrapping[2]]),
             "raw_scaler_ordered_stable"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn scaler_fetch_liveness_classification_is_temporal_and_observational() {
+        use mister_magik_video_diagnostics_contract as contract;
+
+        let sample = |sequence: u8, frozen_sequence: u8, flags: u16, cause: u16| {
+            let mut words = [0; contract::SCALER_FETCH_LIVENESS_STATE_WORDS];
+            words[contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD] =
+                contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA;
+            words[contract::SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] = flags;
+            words[contract::SCALER_FETCH_LIVENESS_STATE_SEQUENCE_IDENTITY_WORD] =
+                u16::from(sequence) | (u16::from(frozen_sequence) << 8);
+            words[contract::SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD] = cause;
+            contract::ScalerFetchLivenessState { words }
+        };
+        let valid = contract::SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID;
+        let normal = valid | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN;
+        let normal_samples = [
+            sample(254, 0, normal, 0),
+            sample(255, 0, normal, 0),
+            sample(1, 0, normal, 0),
+        ];
+        assert_eq!(
+            linux::scaler_fetch_liveness_classification([
+                &normal_samples[0],
+                &normal_samples[1],
+                &normal_samples[2],
+            ]),
+            "scaler_fetch_normal_liveness"
+        );
+
+        for (cause, expected) in [
+            (
+                contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN,
+                "scaler_fetch_no_request_seen",
+            ),
+            (
+                contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_ACCEPT_BLOCKED,
+                "scaler_fetch_accept_blocked",
+            ),
+            (
+                contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_FIRST_RETURN_MISSING,
+                "scaler_fetch_first_return_missing",
+            ),
+            (
+                contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_RETURN_INCOMPLETE,
+                "scaler_fetch_return_incomplete",
+            ),
+            (
+                contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED,
+                "scaler_fetch_request_cancelled",
+            ),
+        ] {
+            let flags = valid | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID;
+            let samples = [
+                sample(10, 7, flags, cause),
+                sample(11, 7, flags, cause),
+                sample(12, 7, flags, cause),
+            ];
+            assert_eq!(
+                linux::scaler_fetch_liveness_classification([
+                    &samples[0],
+                    &samples[1],
+                    &samples[2],
+                ]),
+                expected
+            );
+        }
+
+        let transitioning = [
+            sample(10, 0, valid, 0),
+            sample(
+                11,
+                10,
+                valid | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID,
+                contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN,
+            ),
+            sample(
+                12,
+                10,
+                valid | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID,
+                contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN,
+            ),
+        ];
+        assert_eq!(
+            linux::scaler_fetch_liveness_classification([
+                &transitioning[0],
+                &transitioning[1],
+                &transitioning[2],
+            ]),
+            "scaler_fetch_liveness_evidence_inconclusive"
         );
     }
 

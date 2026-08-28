@@ -130,6 +130,10 @@ def main() -> None:
     formal_wrapper = source_dir / "mister_magik_ascal_completion_formal.sv"
     tail_formal_dut = source_dir / "mister_magik_scaler_copy_tail_formal_dut.vhd"
     tail_formal_wrapper = source_dir / "mister_magik_scaler_copy_tail_formal.sv"
+    liveness_rtl = source_dir / "mister_magik_video_diagnostics_control.sv"
+    liveness_formal_wrapper = (
+        source_dir / "mister_magik_scaler_fetch_liveness_formal.sv"
+    )
     pin = (source_dir / "Menu_MiSTer.commit").read_text().strip()
 
     root_commit = run(["git", "rev-parse", "HEAD"], cwd=root, capture=True).strip()
@@ -147,6 +151,8 @@ def main() -> None:
         formal_wrapper,
         tail_formal_dut,
         tail_formal_wrapper,
+        liveness_rtl,
+        liveness_formal_wrapper,
         menu / "sys/ascal.vhd",
     )
     missing = [str(path) for path in required if not path.is_file()]
@@ -179,6 +185,19 @@ def main() -> None:
     ):
         if fragment not in formal_wrapper_source:
             fail(f"formal pipeline invariant binding is missing: {fragment}")
+    liveness_formal_source = liveness_formal_wrapper.read_text()
+    for fragment in (
+        "assert(fifo_count <= 2);",
+        "assert(return_phase < 128);",
+        "case({$past(enqueue), $past(dequeue)})",
+        "assert(frozen_state == $past(frozen_state));",
+        "if($past(publication_generation != acknowledge_sync))",
+        "watchdog_terminal && expected_progress",
+        "cover(drained_during_reset);",
+        "cover(enqueue && dequeue);",
+    ):
+        if fragment not in liveness_formal_source:
+            fail(f"liveness observer formal obligation is missing: {fragment}")
 
     with tempfile.TemporaryDirectory(prefix="mister-magik-scaler-formal-") as temp:
         temporary = Path(temp)
@@ -308,6 +327,92 @@ def main() -> None:
             shutil.copy2(patched_ascal, artifacts / "patched-ascal.vhd")
             shutil.copy2(netlist, artifacts / "formal-dut.v")
             shutil.copy2(tail_netlist, artifacts / "copy-tail-formal-dut.v")
+            shutil.copy2(liveness_rtl, artifacts / "scaler-fetch-liveness.sv")
+            shutil.copy2(
+                liveness_formal_wrapper,
+                artifacts / "scaler-fetch-liveness-formal.sv",
+            )
+
+        liveness_prefix = "; ".join(
+            (
+                f"read_verilog -formal -sv -DFORMAL -I{source_dir} {liveness_rtl}",
+                f"read_verilog -formal -sv {liveness_formal_wrapper}",
+                "hierarchy -check -top mister_magik_scaler_fetch_liveness_formal",
+                "proc",
+                "flatten",
+                "clk2fflogic",
+                "opt_clean",
+            )
+        )
+        liveness_base_command = (
+            liveness_prefix
+            + "; chformal -cover -remove"
+            + "; sat -seq 32 -set-assumes -set-init-zero"
+            + " -prove-asserts -verify"
+            + f" -timeout {args.solver_timeout}"
+        )
+        liveness_base_log = run_solver(
+            [yosys, "-Q", "-p", liveness_base_command],
+            cwd=root,
+            log_path=artifacts / "scaler-fetch-liveness-base.log" if artifacts else None,
+        )
+        if "SAT proof finished - no model found" not in liveness_base_log:
+            fail("Yosys did not complete the liveness observer bounded proof")
+
+        liveness_covers = {
+            "drained_during_reset": 20,
+            "first_stall_valid": 24,
+            "observer_fault": 8,
+            "simultaneous_event_seen": 140,
+        }
+        liveness_cover_results: dict[str, int] = {}
+        for witness, depth in liveness_covers.items():
+            liveness_cover_command = (
+                liveness_prefix
+                + "; chformal -cover -remove; chformal -assert -remove"
+                + f"; sat -seq {depth} -set-assumes -set-init-zero"
+                + f" -set-at {depth} {witness} 1"
+                + f" -timeout {args.solver_timeout} -show {witness}"
+            )
+            liveness_cover_log = run_solver(
+                [yosys, "-Q", "-p", liveness_cover_command],
+                cwd=root,
+                log_path=(
+                    artifacts / f"scaler-fetch-liveness-{witness}.log"
+                    if artifacts
+                    else None
+                ),
+            )
+            if "SAT solving finished - model found" not in liveness_cover_log:
+                fail(f"required liveness observer cover is unreachable: {witness}")
+            liveness_cover_results[witness] = depth
+
+        if not args.preflight:
+            liveness_induction_command = (
+                liveness_prefix
+                + "; chformal -cover -remove"
+                + "; sat -seq 1 -tempinduct -set-assumes -set-init-zero"
+                + " -prove-asserts -verify"
+                + f" -maxsteps {args.safety_maxsteps}"
+                + f" -timeout {args.solver_timeout}"
+            )
+            liveness_induction_log = run_solver(
+                [yosys, "-Q", "-p", liveness_induction_command],
+                cwd=root,
+                log_path=(
+                    artifacts / "scaler-fetch-liveness-induction.log"
+                    if artifacts
+                    else None
+                ),
+            )
+            if not any(
+                marker in liveness_induction_log
+                for marker in (
+                    "Temporal induction proof finished - no model found",
+                    "Induction step proven: SUCCESS!",
+                )
+            ):
+                fail("Yosys did not complete liveness observer induction")
 
         tail_prefix = yosys_prefix(
             tail_netlist,
@@ -436,6 +541,10 @@ def main() -> None:
             "formal_wrapper_sha256": sha256(formal_wrapper),
             "copy_tail_formal_dut_sha256": sha256(tail_formal_dut),
             "copy_tail_formal_wrapper_sha256": sha256(tail_formal_wrapper),
+            "scaler_fetch_liveness_rtl_sha256": sha256(liveness_rtl),
+            "scaler_fetch_liveness_formal_wrapper_sha256": sha256(
+                liveness_formal_wrapper
+            ),
             "ghdl_netlist_sha256": sha256(netlist),
             "copy_tail_ghdl_netlist_sha256": sha256(tail_netlist),
             "blen": 128,
@@ -443,6 +552,9 @@ def main() -> None:
             "safety_induction_maxsteps": args.safety_maxsteps,
             "copy_tail_bounded_depth": 48,
             "copy_tail_retirement_cover_depth": 48,
+            "scaler_fetch_liveness_bounded_depth": 32,
+            "scaler_fetch_liveness_induction_maxsteps": args.safety_maxsteps,
+            "scaler_fetch_liveness_covers": liveness_cover_results,
             "covers": cover_results,
             "result": "preflight-pass" if args.preflight else "pass",
         }

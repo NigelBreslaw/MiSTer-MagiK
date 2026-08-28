@@ -38,20 +38,28 @@ set_net_delay -max 10.0 \
 	-from $magik_scaler_completion_ack_route \
 	-to $magik_scaler_completion_ack_meta
 
-set magik_fetch_frame_generation [magik_require_registers fetch_frame_generation \
-	{*mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|source_generation} 1]
-set magik_fetch_frame_generation_meta [magik_require_registers fetch_frame_generation_meta \
-	{*mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_meta} 1]
+set magik_fetch_publication_generation [magik_require_registers fetch_publication_generation \
+	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|publication_generation} 1]
+set magik_fetch_publication_generation_meta [magik_require_registers fetch_publication_generation_meta \
+	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|generation_meta} 1]
 set_net_delay -max 10.0 \
-	-from $magik_fetch_frame_generation \
-	-to $magik_fetch_frame_generation_meta
+	-from $magik_fetch_publication_generation \
+	-to $magik_fetch_publication_generation_meta
 
-set magik_fetch_fault [magik_require_registers fetch_fault \
-	{*mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|source_fault} 1]
-set magik_fetch_fault_meta [magik_require_registers fetch_fault_meta \
-	{*mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_meta} 1]
+set magik_fetch_publication_ack [magik_require_registers fetch_publication_ack \
+	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledged_generation} 1]
+set magik_fetch_publication_ack_meta [magik_require_registers fetch_publication_ack_meta \
+	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledge_meta} 1]
 set_net_delay -max 10.0 \
-	-from $magik_fetch_fault \
-	-to $magik_fetch_fault_meta
+	-from $magik_fetch_publication_ack \
+	-to $magik_fetch_publication_ack_meta
 
-post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_ordered_signature scaler_fetch_fault"
+set magik_fetch_reset_req [magik_require_registers fetch_reset_source \
+	{*reset_req} 1]
+set magik_fetch_reset_meta [magik_require_registers fetch_reset_meta \
+	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|reset_meta} 1]
+set_net_delay -max 10.0 \
+	-from $magik_fetch_reset_req \
+	-to $magik_fetch_reset_meta
+
+post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_liveness_publication_request_ack_reset"

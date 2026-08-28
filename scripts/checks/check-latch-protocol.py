@@ -299,8 +299,86 @@ if hdmi_evidence.get("raw_scaler_rollback_states") != {
     }
 }:
     raise SystemExit("raw scaler ordered-signature schema-10 rollback ABI changed")
+scaler_fetch_liveness = hdmi_evidence.get("scaler_fetch_liveness_state")
+if scaler_fetch_liveness != {
+    "schema": 14,
+    "architecture": "scaler-fetch-liveness-first-stall-v1",
+    "command": 0x68,
+    "magic": 0x4D58,
+    "word_count": 7,
+    "words": [
+        "schema",
+        "flags",
+        "sequence_identity",
+        "progress",
+        "live_state",
+        "frozen_state",
+        "crc",
+    ],
+    "flags": {
+        "record_valid": 0,
+        "normal_liveness_seen": 1,
+        "first_stall_valid": 2,
+        "observer_fault": 3,
+        "reset_ambiguity": 4,
+        "reset_level": 5,
+        "reset_seen": 6,
+        "bad_burstcount": 7,
+        "unexpected_return": 8,
+        "fifo_phase_error": 9,
+        "request_cancelled": 10,
+        "counter_ambiguous": 11,
+    },
+    "reserved_zero_masks": {"flags": 0xF000, "live_state": 0x8000},
+    "fields": {
+        "publication_sequence": {"word": "sequence_identity", "bit": 0, "width": 8},
+        "frozen_sequence": {"word": "sequence_identity", "bit": 8, "width": 8},
+        "accepted_count": {"word": "progress", "bit": 0, "width": 8},
+        "completed_count": {"word": "progress", "bit": 8, "width": 8},
+        "return_phase": {"word": "live_state", "bit": 0, "width": 7},
+        "fifo_depth": {"word": "live_state", "bit": 7, "width": 2},
+        "monitor_state": {"word": "live_state", "bit": 9, "width": 2},
+        "scoreboard_armed": {"word": "live_state", "bit": 11, "width": 1},
+        "first_return_seen": {"word": "live_state", "bit": 12, "width": 1},
+        "reset_qualified": {"word": "live_state", "bit": 13, "width": 1},
+        "address_wrap_seen": {"word": "live_state", "bit": 14, "width": 1},
+        "frozen_cause": {"word": "frozen_state", "bit": 0, "width": 3},
+        "frozen_return_phase": {"word": "frozen_state", "bit": 3, "width": 7},
+        "frozen_fifo_depth": {"word": "frozen_state", "bit": 10, "width": 2},
+        "frozen_address_fold": {"word": "frozen_state", "bit": 12, "width": 4},
+    },
+    "causes": {
+        "none": 0,
+        "no_request_seen": 1,
+        "accept_blocked": 2,
+        "first_return_missing": 3,
+        "return_incomplete": 4,
+        "request_cancelled": 5,
+        "observer_fault": 6,
+        "reserved": 7,
+    },
+    "monitor_states": {
+        "unqualified": 0,
+        "no_request": 1,
+        "accept_blocked": 2,
+        "return_progress": 3,
+    },
+    "constants": {
+        "required_burstcount": 128,
+        "return_beats": 128,
+        "reset_qualify_cycles": 4,
+        "watchdog_cycles": 0xFFFFFF,
+    },
+}:
+    raise SystemExit("scaler-fetch liveness schema 14 changed without an ABI update")
 if raw_scaler["command"] in platform_commands:
     raise SystemExit("raw scaler ordered-frame command overlaps an existing platform command")
 if raw_scaler["magic"] in platform_magics:
     raise SystemExit("raw scaler ordered-frame magic overlaps an existing diagnostics record")
+platform_commands.add(raw_scaler["command"])
+platform_magics.add(raw_scaler["magic"])
+if scaler_fetch_liveness["command"] in platform_commands:
+    raise SystemExit("scaler-fetch liveness command overlaps an existing platform command")
+if scaler_fetch_liveness["magic"] in platform_magics:
+    raise SystemExit("scaler-fetch liveness magic overlaps an existing diagnostics record")
 print("latch protocol contract: ok")

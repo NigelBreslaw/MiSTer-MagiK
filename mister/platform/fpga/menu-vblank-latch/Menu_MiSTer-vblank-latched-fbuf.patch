@@ -632,19 +632,18 @@ index a416879..4d81fc6 100644
  			if(cmd == 'h25) {led_overtake, led_state} <= io_din;
  			if(cmd == 'h26) vol_att <= io_din[4:0];
  			if(cmd == 'h27) VSET <= io_din[11:0];
-@@ -825,6 +906,23 @@ wire         freeze;
+@@ -825,6 +906,22 @@ wire         freeze;
  		.avl_byteenable   (vbuf_byteenable)
  	);
 +
-+mister_magik_scaler_fetch_ordered_frame magik_scaler_fetch_ordered_frame
++mister_magik_scaler_fetch_liveness_state magik_scaler_fetch_liveness_state
 +(
 +	.clk_100m(clk_100m),
 +	.clk_sys(clk_sys),
-+	.reset_active(reset_req),
++	.reset_req(reset_req),
 +	.vbuf_address(vbuf_address),
 +	.vbuf_burstcount(vbuf_burstcount),
 +	.vbuf_waitrequest(vbuf_waitrequest),
-+	.vbuf_readdata(vbuf_readdata),
 +	.vbuf_readdatavalid(vbuf_readdatavalid),
 +	.vbuf_read(vbuf_read),
 +	.io_uio(io_uio),
@@ -654,7 +653,7 @@ index a416879..4d81fc6 100644
 +	.response_data(magik_diag_response_data)
 +);
  `endif
-@@ -1380,15 +1478,30 @@ assign HDMI_TX_D  = hdmi_out_d;
+@@ -1380,15 +1477,30 @@ assign HDMI_TX_D  = hdmi_out_d;
  
  wire [23:0] vga_data_sl;
  wire        vga_de_sl, vga_ce_sl, vga_vs_sl, vga_hs_sl;

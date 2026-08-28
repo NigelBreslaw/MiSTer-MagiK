@@ -225,6 +225,47 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
         lines.append(
             f"localparam [15:0] {prefix}_{upper(name)}_MASK = 16'h{((1 << field['width']) - 1):04X};"
         )
+    liveness = hdmi_evidence["scaler_fetch_liveness_state"]
+    prefix = "MAGIK_SCALER_FETCH_LIVENESS_STATE"
+    lines.extend(
+        [
+            "",
+            f"localparam [15:0] {prefix}_SCHEMA = 16'd{liveness['schema']};",
+            f"localparam [7:0] MAGIK_UIO_GET_SCALER_FETCH_LIVENESS_STATE = 8'h{liveness['command']:02X};",
+            f"localparam [15:0] {prefix}_MAGIC = 16'h{liveness['magic']:04X};",
+            f"localparam [3:0] {prefix}_WORDS = 4'd{liveness['word_count']};",
+            f"localparam [15:0] {prefix}_HEADER_CRC = 16'h{hdmi_evidence_header_crc(liveness, hdmi_evidence['crc']):04X};",
+        ]
+    )
+    for index, name in enumerate(liveness["words"]):
+        lines.append(f"localparam [3:0] {prefix}_{upper(name)}_WORD = 4'd{index};")
+    mask = 0
+    for name, bit in liveness.get("flags", {}).items():
+        lines.append(f"localparam [15:0] {prefix}_FLAG_{upper(name)} = 16'h{1 << bit:04X};")
+        mask |= 1 << bit
+    lines.append(f"localparam [15:0] {prefix}_FLAGS_MASK = 16'h{mask:04X};")
+    for word_name, reserved_mask in liveness.get("reserved_zero_masks", {}).items():
+        lines.append(
+            f"localparam [15:0] {prefix}_{upper(word_name)}_RESERVED_ZERO_MASK = 16'h{reserved_mask:04X};"
+        )
+    for name, field in liveness.get("fields", {}).items():
+        lines.append(
+            f"localparam [3:0] {prefix}_{upper(name)}_WORD = "
+            f"{prefix}_{upper(field['word'])}_WORD;"
+        )
+        lines.append(f"localparam [3:0] {prefix}_{upper(name)}_BIT = 4'd{field['bit']};")
+        lines.append(
+            f"localparam [15:0] {prefix}_{upper(name)}_MASK = 16'h{((1 << field['width']) - 1):04X};"
+        )
+    for name, value in liveness.get("causes", {}).items():
+        lines.append(f"localparam [2:0] {prefix}_CAUSE_{upper(name)} = 3'd{value};")
+    for name, value in liveness.get("monitor_states", {}).items():
+        lines.append(f"localparam [1:0] {prefix}_MONITOR_{upper(name)} = 2'd{value};")
+    for name, value in liveness.get("constants", {}).items():
+        width = max(1, value.bit_length())
+        lines.append(
+            f"localparam [{width - 1}:0] {prefix}_{upper(name)} = {width}'d{value};"
+        )
     return "\n".join(lines) + "\n"
 
 

@@ -4,88 +4,124 @@
 `timescale 1ns/1ps
 `default_nettype none
 
-// Disposable passive observer at the external scaler Avalon boundary. It
-// reconstructs the accepted two-deep transaction order independently from the
-// production scaler and fingerprints accepted addresses together with every
-// returned beat. No observer output is permitted to drive production logic.
-module mister_magik_scaler_fetch_ordered_frame (
-	input  wire         clk_100m,
-	input  wire         clk_sys,
-	input  wire         reset_active,
-	input  wire [27:0]  vbuf_address,
-	input  wire [7:0]   vbuf_burstcount,
-	input  wire         vbuf_waitrequest,
-	input  wire [127:0] vbuf_readdata,
-	input  wire         vbuf_readdatavalid,
-	input  wire         vbuf_read,
-	input  wire         io_uio,
-	input  wire         io_strobe,
-	input  wire [15:0]  io_din,
-	output wire         response_valid,
-	output reg  [15:0]  response_data
+// Replacement-only passive observer at the external scaler Avalon boundary.
+// reset_req is observed as data: it never clears accepted return obligations,
+// telemetry, or the publication handshake. No observer output drives production.
+module mister_magik_scaler_fetch_liveness_state #(
+	parameter [23:0] WATCHDOG_LIMIT = 24'hffffff,
+	parameter [2:0] RESET_QUALIFY_LIMIT = 3'd4
+) (
+	input  wire        clk_100m,
+	input  wire        clk_sys,
+	input  wire        reset_req,
+	input  wire [27:0] vbuf_address,
+	input  wire [7:0]  vbuf_burstcount,
+	input  wire        vbuf_waitrequest,
+	input  wire        vbuf_readdatavalid,
+	input  wire        vbuf_read,
+	input  wire        io_uio,
+	input  wire        io_strobe,
+	input  wire [15:0] io_din,
+	output wire        response_valid,
+	output reg  [15:0] response_data
+`ifdef FORMAL
+	,output wire [1:0] formal_fifo_count
+	,output wire [6:0] formal_return_phase
+	,output wire formal_first_stall_valid
+	,output wire formal_observer_fault
+	,output wire [15:0] formal_frozen_state
+	,output wire formal_publication_generation
+	,output wire formal_acknowledge_sync
+	,output wire [95:0] formal_published_bundle
+	,output wire formal_enqueue
+	,output wire formal_dequeue
+	,output wire formal_return_has_entry
+	,output wire formal_expected_progress
+	,output wire formal_watchdog_terminal
+	,output wire formal_observer_fault_event
+	,output wire formal_request_cancel_event
+`endif
 );
 
 `include "mister_magik_video_diagnostics_protocol.svh"
 
-	// Keep the active schema and flag assignments generated from the canonical
-	// JSON contract while preserving schema 10's five-word transport shape.
-	localparam [15:0] FETCH_STATE_SCHEMA = MAGIK_RAW_SCALER_STATE_SCHEMA;
-	localparam [15:0] SIGNATURE_INITIAL = 16'h56da;
-	localparam [7:0] REQUIRED_BURSTCOUNT = 8'd128;
-	localparam [15:0] TOKEN_DATA = 16'h5a02;
-	localparam [11:0] TOKEN_ADDRESS = 12'ha5a;
+	localparam [7:0] REQUIRED_BURSTCOUNT =
+		MAGIK_SCALER_FETCH_LIVENESS_STATE_REQUIRED_BURSTCOUNT;
+	localparam [23:0] CONTRACT_WATCHDOG_LIMIT =
+		MAGIK_SCALER_FETCH_LIVENESS_STATE_WATCHDOG_CYCLES;
+	localparam [2:0] CONTRACT_RESET_QUALIFY_LIMIT =
+		MAGIK_SCALER_FETCH_LIVENESS_STATE_RESET_QUALIFY_CYCLES;
 
-	localparam [6:0] FETCH_FLAG_CAPTURE_VALID =
-		MAGIK_RAW_SCALER_STATE_FLAG_CAPTURE_VALID[6:0];
-	localparam [6:0] FETCH_FLAG_FIFO_OVERFLOW =
-		MAGIK_RAW_SCALER_STATE_FLAG_FIFO_OVERFLOW[6:0];
-	localparam [6:0] FETCH_FLAG_UNEXPECTED_RETURN =
-		MAGIK_RAW_SCALER_STATE_FLAG_UNEXPECTED_RETURN[6:0];
-	localparam [6:0] FETCH_FLAG_BAD_BURSTCOUNT =
-		MAGIK_RAW_SCALER_STATE_FLAG_BAD_BURSTCOUNT[6:0];
-	localparam [6:0] FETCH_FLAG_BAD_RETURN_PHASE =
-		MAGIK_RAW_SCALER_STATE_FLAG_BAD_RETURN_PHASE[6:0];
-	localparam [6:0] FETCH_FLAG_EPOCH_OVERLAP =
-		MAGIK_RAW_SCALER_STATE_FLAG_EPOCH_OVERLAP[6:0];
-	localparam [6:0] FETCH_FLAG_COUNTER_OVERFLOW =
-		MAGIK_RAW_SCALER_STATE_FLAG_COUNTER_OVERFLOW[6:0];
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg reset_meta = 1'b1;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg reset_sync = 1'b1;
+	reg reset_sync_d = 1'b1;
+	reg [2:0] reset_low_count = 3'd0;
+	reg reset_qualified = 1'b0;
+	reg ever_qualified = 1'b0;
 
-	// Independent accepted-request FIFO. Only a folded address and its epoch
-	// marker are retained; production ascal itself caps outstanding reads at two.
-	reg [3:0]  fifo_address_token0 = 4'd0;
-	reg [3:0]  fifo_address_token1 = 4'd0;
-	reg        fifo_wrap0 = 1'b0;
-	reg        fifo_wrap1 = 1'b0;
-	reg [1:0]  fifo_count = 2'd0;
-	reg [6:0]  return_phase = 7'd0;
-
+	// Independent two-entry accepted-obligation scoreboard. Production caps the
+	// external scaler reads at two; obligations remain live across reset_req.
+	reg [3:0] fifo_address_fold0 = 4'd0;
+	reg [3:0] fifo_address_fold1 = 4'd0;
+	reg fifo_wrap0 = 1'b0;
+	reg fifo_wrap1 = 1'b0;
+	reg [1:0] fifo_count = 2'd0;
+	reg [6:0] return_phase = 7'd0;
 	reg [20:0] previous_address = 21'd0;
-	reg        epoch_armed = 1'b0;
-	reg [15:0] epoch_signature = SIGNATURE_INITIAL;
+	reg previous_address_valid = 1'b0;
+	reg [3:0] last_address_fold = 4'd0;
 
-	reg [15:0] published_signature = 16'd0;
-	reg [6:0]  published_flags = 7'd0;
-	(* preserve, dont_replicate *) reg source_generation = 1'b0;
-	reg source_fault = 1'b0;
+	reg [7:0] accepted_count = 8'd0;
+	reg [7:0] completed_count = 8'd0;
+	reg normal_liveness_seen = 1'b0;
+	reg address_wrap_seen = 1'b0;
+	reg blocked_request_seen = 1'b0;
+	reg [23:0] progress_watchdog = 24'd0;
 
+	// Sticky first-stall/fault evidence. Rolling live state and publication keep
+	// advancing after this bank freezes.
+	reg first_stall_valid = 1'b0;
+	reg observer_fault = 1'b0;
+	reg reset_ambiguity = 1'b0;
+	reg reset_seen = 1'b0;
+	reg bad_burstcount = 1'b0;
+	reg unexpected_return = 1'b0;
+	reg fifo_phase_error = 1'b0;
+	reg request_cancelled = 1'b0;
+	reg counter_ambiguous = 1'b0;
+	reg [2:0] frozen_cause =
+		MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NONE;
+	reg [6:0] frozen_return_phase = 7'd0;
+	reg [1:0] frozen_fifo_depth = 2'd0;
+	reg [3:0] frozen_address_fold = 4'd0;
+	reg [7:0] frozen_sequence = 8'd0;
+
+	// The destination acknowledges only after a complete command. The source
+	// publication bank remains immutable until that acknowledgement returns.
+	reg [7:0] publication_sequence = 8'd0;
+	reg [15:0] published_flags = 16'd0;
+	reg [15:0] published_sequence_identity = 16'd0;
+	reg [15:0] published_progress = 16'd0;
+	reg [15:0] published_live_state = 16'd0;
+	reg [15:0] published_frozen_state = 16'd0;
+	reg [15:0] published_crc = 16'd0;
+	(* preserve, dont_replicate *) reg publication_generation = 1'b0;
+	reg publish_crc_busy = 1'b0;
+	reg [2:0] publish_crc_word = 3'd0;
+	reg [15:0] publish_crc_work = 16'd0;
+
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg acknowledge_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg acknowledge_sync = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg generation_meta = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg generation_sync = 1'b0;
-	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
-	reg fault_meta = 1'b0;
-	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
-	reg fault_sync = 1'b0;
-	reg generation_seen = 1'b0;
-	reg capture_pending = 1'b0;
+	reg acknowledged_generation = 1'b0;
 
-	reg [15:0] snapshot_signature = 16'd0;
-	reg [15:0] snapshot_sequence = 16'd0;
-	reg [6:0] snapshot_flags = 7'd0;
-	reg [15:0] snapshot_crc = 16'd0;
-	reg [5:0] crc_bit_count = 6'd0;
-	reg crc_busy = 1'b0;
-	reg snapshot_crc_valid = 1'b0;
 	reg has_command = 1'b0;
 	reg command_selected = 1'b0;
 	reg [2:0] word_count = 3'd0;
@@ -93,79 +129,107 @@ module mister_magik_scaler_fetch_ordered_frame (
 
 	wire accepted = vbuf_read && !vbuf_waitrequest;
 	wire returned = vbuf_readdatavalid;
+	wire request_shape_valid = vbuf_burstcount == REQUIRED_BURSTCOUNT;
 	wire return_has_entry = returned && fifo_count != 2'd0;
 	wire return_last = return_has_entry && return_phase == 7'd127;
-	wire request_shape_valid = vbuf_burstcount == REQUIRED_BURSTCOUNT;
 	wire enqueue = accepted && request_shape_valid &&
 		(fifo_count != 2'd2 || return_last);
 	wire dequeue = return_last;
-	wire accepted_wrap = vbuf_address[27:7] < previous_address;
-	wire marker_consumed = return_has_entry && return_phase == 7'd0 && fifo_wrap0;
-	wire marker_still_pending =
-		(fifo_wrap0 && !marker_consumed) || (fifo_count == 2'd2 && fifo_wrap1);
-	wire source_faulted = published_flags[6:1] != 6'd0;
-	wire snapshot_faulted = snapshot_flags[6:1] != 6'd0;
-	wire response_safe = !fault_sync || snapshot_faulted;
+	wire accepted_wrap = previous_address_valid &&
+		vbuf_address[27:7] < previous_address;
+	wire [3:0] accepted_address_fold =
+		vbuf_address[10:7] ^ vbuf_address[18:15];
 
-	wire [6:0] fault_event = {
-		fifo_count == 2'd3,
-		accepted && accepted_wrap && marker_still_pending,
-		return_has_entry && fifo_wrap0 && return_phase != 7'd0,
-		accepted && vbuf_burstcount != REQUIRED_BURSTCOUNT,
-		returned && fifo_count == 2'd0,
-		accepted && request_shape_valid && fifo_count == 2'd2 && !return_last,
-		1'b0
+	wire [1:0] monitor_state = !reset_qualified ?
+		MAGIK_SCALER_FETCH_LIVENESS_STATE_MONITOR_UNQUALIFIED :
+		(fifo_count != 2'd0 ?
+			MAGIK_SCALER_FETCH_LIVENESS_STATE_MONITOR_RETURN_PROGRESS :
+			(vbuf_read && vbuf_waitrequest ?
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_MONITOR_ACCEPT_BLOCKED :
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_MONITOR_NO_REQUEST));
+	wire expected_progress =
+		(monitor_state == MAGIK_SCALER_FETCH_LIVENESS_STATE_MONITOR_RETURN_PROGRESS && returned) ||
+		(monitor_state == MAGIK_SCALER_FETCH_LIVENESS_STATE_MONITOR_ACCEPT_BLOCKED && accepted) ||
+		(monitor_state == MAGIK_SCALER_FETCH_LIVENESS_STATE_MONITOR_NO_REQUEST && vbuf_read);
+	wire watchdog_terminal = progress_watchdog == WATCHDOG_LIMIT;
+	wire request_cancel_event = reset_qualified && blocked_request_seen &&
+		!vbuf_read && !accepted;
+	wire bad_burst_event = accepted && !request_shape_valid;
+	wire fifo_overflow_event = accepted && request_shape_valid &&
+		fifo_count == 2'd2 && !return_last;
+	wire unexpected_return_event = returned && fifo_count == 2'd0;
+	wire observer_fault_event =
+		bad_burst_event || fifo_overflow_event || unexpected_return_event;
+
+`ifdef FORMAL
+	assign formal_fifo_count = fifo_count;
+	assign formal_return_phase = return_phase;
+	assign formal_first_stall_valid = first_stall_valid;
+	assign formal_observer_fault = observer_fault;
+	assign formal_frozen_state = frozen_state;
+	assign formal_publication_generation = publication_generation;
+	assign formal_acknowledge_sync = acknowledge_sync;
+	assign formal_published_bundle = {
+		published_crc,
+		published_frozen_state,
+		published_live_state,
+		published_progress,
+		published_sequence_identity,
+		published_flags
+	};
+	assign formal_enqueue = enqueue;
+	assign formal_dequeue = dequeue;
+	assign formal_return_has_entry = return_has_entry;
+	assign formal_expected_progress = expected_progress;
+	assign formal_watchdog_terminal = watchdog_terminal;
+	assign formal_observer_fault_event = observer_fault_event;
+	assign formal_request_cancel_event = request_cancel_event;
+`endif
+
+	wire [15:0] live_flags = {
+		4'd0,
+		counter_ambiguous,
+		request_cancelled,
+		fifo_phase_error,
+		unexpected_return,
+		bad_burstcount,
+		reset_seen,
+		reset_sync,
+		reset_ambiguity,
+		observer_fault,
+		first_stall_valid,
+		normal_liveness_seen,
+		ever_qualified
+	};
+	wire [15:0] live_state = {
+		1'b0,
+		address_wrap_seen,
+		reset_qualified,
+		(return_phase != 7'd0),
+		(fifo_count != 2'd0),
+		monitor_state,
+		fifo_count,
+		return_phase
+	};
+	wire [15:0] frozen_state = {
+		frozen_address_fold,
+		frozen_fifo_depth,
+		frozen_return_phase,
+		frozen_cause
 	};
 
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
+	wire publication_available = generation_sync != acknowledged_generation;
 	wire selected_start =
-		io_din[7:0] == MAGIK_UIO_GET_RAW_SCALER_STATE &&
-		snapshot_crc_valid && !crc_busy;
+		io_din[7:0] == MAGIK_UIO_GET_SCALER_FETCH_LIVENESS_STATE &&
+		publication_available;
 	wire selected_command = command_selected;
 
-	assign response_valid = response_safe && (
+	assign response_valid =
 		(command_start && selected_start) ||
 		(command_data && selected_command &&
-		 (word_count < MAGIK_RAW_SCALER_STATE_WORDS)));
-
-	function automatic [15:0] ordered_signature_update;
-		input [15:0] signature_in;
-		input [15:0] token_in;
-		reg [15:0] mixed;
-		begin
-			mixed = signature_in ^ token_in;
-			ordered_signature_update =
-				{mixed[14:0], mixed[15] ^ mixed[0]};
-		end
-	endfunction
-
-	// Distinct fixed rotations make the reduction sensitive to 16-bit lane
-	// permutations without a byte-serial CRC cone or a 128-bit isolation bank.
-	function automatic [15:0] fold_return_data;
-		input [127:0] data;
-		begin
-			fold_return_data =
-				data[15:0] ^
-				{data[30:16], data[31]} ^
-				{data[44:32], data[47:45]} ^
-				{data[58:48], data[63:59]} ^
-				{data[72:64], data[79:73]} ^
-				{data[86:80], data[95:87]} ^
-				{data[100:96], data[111:101]} ^
-				{data[114:112], data[127:115]};
-		end
-	endfunction
-
-	function automatic [3:0] fold_address;
-		input [27:0] address;
-		begin
-			// Accepted bursts are 128-byte aligned. Fold one burst-index
-			// nibble with one page nibble; later split diagnostics retain
-			// responsibility for exact first-divergence attribution.
-			fold_address = address[10:7] ^ address[18:15];
-		end
-	endfunction
+			word_count < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS);
 
 	function automatic [15:0] crc16_update_byte;
 		input [15:0] crc_in;
@@ -189,267 +253,236 @@ module mister_magik_scaler_fetch_ordered_frame (
 		end
 	endfunction
 
-	function automatic [15:0] crc16_update_bit;
-		input [15:0] crc_in;
-		input bit_in;
-		reg feedback;
-		begin
-			feedback = crc_in[15] ^ bit_in;
-			crc16_update_bit = {crc_in[14:0], 1'b0} ^
-				(feedback ? 16'h1021 : 16'd0);
-		end
-	endfunction
+	always @(posedge clk_100m) begin : observe_fetch
+		reg [2:0] timeout_cause;
+		reset_meta <= reset_req;
+		reset_sync <= reset_meta;
+		reset_sync_d <= reset_sync;
+		acknowledge_meta <= acknowledged_generation;
+		acknowledge_sync <= acknowledge_meta;
 
-	localparam [15:0] FETCH_HEADER_CRC = crc16_update_word(
-		crc16_update_word(
-			crc16_update_word(16'hffff,
-				{8'd0, MAGIK_UIO_GET_RAW_SCALER_STATE}),
-			FETCH_STATE_SCHEMA),
-		MAGIK_RAW_SCALER_STATE_WORDS - 1'd1);
-	localparam [15:0] FETCH_SCHEMA_CRC =
-		crc16_update_word(FETCH_HEADER_CRC, FETCH_STATE_SCHEMA);
-	// The flags word has nine constant-zero high bits. Advance those at
-	// elaboration so the serial engine needs only the 39 variable payload bits.
-	localparam [15:0] FETCH_FLAGS_CRC = crc16_update_bit(
-		crc16_update_bit(crc16_update_bit(crc16_update_bit(
-		crc16_update_bit(crc16_update_bit(crc16_update_bit(
-		crc16_update_bit(crc16_update_bit(FETCH_SCHEMA_CRC, 1'b0), 1'b0),
-		1'b0), 1'b0), 1'b0), 1'b0), 1'b0), 1'b0), 1'b0);
-	// The actual accept/return events, not DUT credits, own this scoreboard.
-	// A wrap marker reaches the signature only with its accepted transaction's
-	// first return, so no asynchronous video-frame marker is required.
-	always @(posedge clk_100m or posedge reset_active) begin : fetch_order
-		reg [15:0] return_token;
-		if(reset_active) begin
-			fifo_address_token0 <= 4'd0;
-			fifo_address_token1 <= 4'd0;
-			fifo_wrap0 <= 1'b0;
-			fifo_wrap1 <= 1'b0;
-			fifo_count <= 2'd0;
-			return_phase <= 7'd0;
-			previous_address <= 21'd0;
-			epoch_armed <= 1'b0;
-			epoch_signature <= SIGNATURE_INITIAL;
-			published_signature <= 16'd0;
-			published_flags <= 7'd0;
-			source_generation <= 1'b0;
-			source_fault <= 1'b0;
+		if(reset_sync && !reset_sync_d)
+			reset_seen <= 1'b1;
+
+		if(reset_sync) begin
+			reset_low_count <= 3'd0;
+			reset_qualified <= 1'b0;
+			progress_watchdog <= 24'd0;
+			blocked_request_seen <= 1'b0;
+		end
+		else if(!reset_qualified) begin
+			if(reset_low_count + 1'd1 >= RESET_QUALIFY_LIMIT) begin
+				reset_low_count <= RESET_QUALIFY_LIMIT;
+				reset_qualified <= 1'b1;
+				ever_qualified <= 1'b1;
+			end
+			else
+				reset_low_count <= reset_low_count + 1'd1;
+			progress_watchdog <= 24'd0;
 		end
 		else begin
-			if(accepted) begin
+			if(expected_progress)
+				progress_watchdog <= 24'd0;
+			else if(!watchdog_terminal)
+				progress_watchdog <= progress_watchdog + 1'd1;
+
+			if(fifo_count == 2'd0 && vbuf_read && vbuf_waitrequest)
+				blocked_request_seen <= 1'b1;
+			else if(accepted || fifo_count != 2'd0 || !vbuf_read)
+				blocked_request_seen <= 1'b0;
+		end
+
+		if(accepted) begin
+			accepted_count <= accepted_count + 1'd1;
+			last_address_fold <= accepted_address_fold;
+			if(request_shape_valid) begin
 				previous_address <= vbuf_address[27:7];
+				previous_address_valid <= 1'b1;
+				if(accepted_wrap)
+					address_wrap_seen <= 1'b1;
 			end
+		end
 
-			case({enqueue, dequeue})
-				2'b10: begin
-					if(fifo_count == 2'd0) begin
-						fifo_address_token0 <= fold_address(vbuf_address);
-						fifo_wrap0 <= accepted_wrap;
-					end
-					else begin
-						fifo_address_token1 <= fold_address(vbuf_address);
-						fifo_wrap1 <= accepted_wrap;
-					end
-					fifo_count <= fifo_count + 1'd1;
+		case({enqueue, dequeue})
+			2'b10: begin
+				if(fifo_count == 2'd0) begin
+					fifo_address_fold0 <= accepted_address_fold;
+					fifo_wrap0 <= accepted_wrap;
 				end
-				2'b01: begin
-					if(fifo_count == 2'd2) begin
-						fifo_address_token0 <= fifo_address_token1;
-						fifo_wrap0 <= fifo_wrap1;
-					end
-					fifo_count <= fifo_count - 1'd1;
+				else begin
+					fifo_address_fold1 <= accepted_address_fold;
+					fifo_wrap1 <= accepted_wrap;
 				end
-				2'b11: begin
-					if(fifo_count == 2'd1) begin
-						fifo_address_token0 <= fold_address(vbuf_address);
-						fifo_wrap0 <= accepted_wrap;
-					end
-					else begin
-						fifo_address_token0 <= fifo_address_token1;
-						fifo_wrap0 <= fifo_wrap1;
-						fifo_address_token1 <= fold_address(vbuf_address);
-						fifo_wrap1 <= accepted_wrap;
-					end
+				fifo_count <= fifo_count + 1'd1;
+			end
+			2'b01: begin
+				if(fifo_count == 2'd2) begin
+					fifo_address_fold0 <= fifo_address_fold1;
+					fifo_wrap0 <= fifo_wrap1;
 				end
-				default: begin end
-			endcase
+				fifo_count <= fifo_count - 1'd1;
+			end
+			2'b11: begin
+				if(fifo_count == 2'd1) begin
+					fifo_address_fold0 <= accepted_address_fold;
+					fifo_wrap0 <= accepted_wrap;
+				end
+				else begin
+					fifo_address_fold0 <= fifo_address_fold1;
+					fifo_wrap0 <= fifo_wrap1;
+					fifo_address_fold1 <= accepted_address_fold;
+					fifo_wrap1 <= accepted_wrap;
+				end
+			end
+			default: begin end
+		endcase
 
-			if(return_has_entry) begin
-				return_token = fold_return_data(vbuf_readdata) ^ TOKEN_DATA;
+		if(return_has_entry) begin
+			if(return_phase == 7'd127) begin
+				return_phase <= 7'd0;
+				completed_count <= completed_count + 1'd1;
+				if(fifo_wrap0)
+					normal_liveness_seen <= 1'b1;
+			end
+			else
+				return_phase <= return_phase + 1'd1;
+		end
 
-				if(return_phase == 7'd0 && fifo_wrap0) begin
-					if(epoch_armed && !source_faulted) begin
-						published_signature <= epoch_signature;
-						published_flags <= FETCH_FLAG_CAPTURE_VALID;
-						source_generation <= ~source_generation;
-					end
-					epoch_armed <= 1'b1;
-					epoch_signature <= ordered_signature_update(
-						ordered_signature_update(
-							SIGNATURE_INITIAL,
-							{TOKEN_ADDRESS, fifo_address_token0}),
-						return_token);
-					fifo_wrap0 <= 1'b0;
-				end
-				else if(epoch_armed && !source_faulted) begin
-					if(return_phase == 7'd0)
-						epoch_signature <= ordered_signature_update(
-							ordered_signature_update(
-								epoch_signature,
-								{TOKEN_ADDRESS, fifo_address_token0}),
-							return_token);
-					else
-						epoch_signature <= ordered_signature_update(
-							epoch_signature, return_token);
-				end
-
-				if(return_phase == 7'd127)
-					return_phase <= 7'd0;
+		// Faults outrank cancellation and watchdog attribution. Real progress on
+		// the terminal watchdog cycle wins over timeout.
+		if(!first_stall_valid && !observer_fault && observer_fault_event) begin
+			observer_fault <= 1'b1;
+			frozen_cause <= MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT;
+			frozen_return_phase <= return_phase;
+			frozen_fifo_depth <= fifo_count;
+			frozen_address_fold <= last_address_fold;
+			frozen_sequence <= publication_sequence;
+			if(bad_burst_event)
+				bad_burstcount <= 1'b1;
+			if(fifo_overflow_event)
+				fifo_phase_error <= 1'b1;
+			if(unexpected_return_event) begin
+				if(ever_qualified)
+					unexpected_return <= 1'b1;
 				else
-					return_phase <= return_phase + 1'd1;
+					reset_ambiguity <= 1'b1;
 			end
+		end
+		else if(!first_stall_valid && !observer_fault && request_cancel_event) begin
+			first_stall_valid <= 1'b1;
+			request_cancelled <= 1'b1;
+			frozen_cause <= MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED;
+			frozen_return_phase <= return_phase;
+			frozen_fifo_depth <= fifo_count;
+			frozen_address_fold <= last_address_fold;
+			frozen_sequence <= publication_sequence;
+		end
+		else if(!first_stall_valid && !observer_fault && reset_qualified &&
+			watchdog_terminal && !expected_progress) begin
+			if(monitor_state == MAGIK_SCALER_FETCH_LIVENESS_STATE_MONITOR_RETURN_PROGRESS)
+				timeout_cause = return_phase == 7'd0 ?
+					MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_FIRST_RETURN_MISSING :
+					MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_RETURN_INCOMPLETE;
+			else if(monitor_state == MAGIK_SCALER_FETCH_LIVENESS_STATE_MONITOR_ACCEPT_BLOCKED)
+				timeout_cause = MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_ACCEPT_BLOCKED;
+			else
+				timeout_cause = MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN;
+			first_stall_valid <= 1'b1;
+			frozen_cause <= timeout_cause;
+			frozen_return_phase <= return_phase;
+			frozen_fifo_depth <= fifo_count;
+			frozen_address_fold <= last_address_fold;
+			frozen_sequence <= publication_sequence;
+		end
 
-			if(!source_faulted && fault_event[6:1] != 6'd0) begin
-				epoch_armed <= 1'b0;
-				published_signature <= 16'd0;
-				published_flags <= fault_event;
-				source_fault <= 1'b1;
+		// Capture one immutable bank and serialize its CRC before advertising it.
+		if(!publish_crc_busy && publication_generation == acknowledge_sync) begin
+			publication_sequence <= publication_sequence + 1'd1;
+			published_flags <= live_flags;
+			published_sequence_identity <=
+				{frozen_sequence, publication_sequence + 1'd1};
+			published_progress <= {completed_count, accepted_count};
+			published_live_state <= live_state;
+			published_frozen_state <= frozen_state;
+			publish_crc_work <= MAGIK_SCALER_FETCH_LIVENESS_STATE_HEADER_CRC;
+			publish_crc_word <= 3'd0;
+			publish_crc_busy <= 1'b1;
+		end
+		else if(publish_crc_busy) begin : publish_crc_step
+			reg [15:0] crc_word_value;
+			reg [15:0] crc_next;
+			case(publish_crc_word)
+				3'd0: crc_word_value = MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA;
+				3'd1: crc_word_value = published_flags;
+				3'd2: crc_word_value = published_sequence_identity;
+				3'd3: crc_word_value = published_progress;
+				3'd4: crc_word_value = published_live_state;
+				default: crc_word_value = published_frozen_state;
+			endcase
+			crc_next = crc16_update_word(publish_crc_work, crc_word_value);
+			publish_crc_work <= crc_next;
+			if(publish_crc_word == 3'd5) begin
+				published_crc <= crc_next;
+				publication_generation <= ~publication_generation;
+				publish_crc_busy <= 1'b0;
 			end
+			else
+				publish_crc_word <= publish_crc_word + 1'd1;
 		end
 	end
 
 	always @(*) begin
-		if(word_count == MAGIK_RAW_SCALER_STATE_SCHEMA_WORD)
-			response_word = FETCH_STATE_SCHEMA;
-		else if(word_count == MAGIK_RAW_SCALER_STATE_FLAGS_WORD)
-			response_word = {9'd0, snapshot_flags};
-		else if(word_count == MAGIK_RAW_SCALER_STATE_CAPTURE_SEQUENCE_WORD)
-			response_word = snapshot_sequence;
-		else if(word_count == MAGIK_RAW_SCALER_STATE_CRC_WORD)
-			response_word = snapshot_crc;
-		else
-			response_word = snapshot_signature;
+		case(word_count)
+			MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD:
+				response_word = MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA;
+			MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD:
+				response_word = published_flags;
+			MAGIK_SCALER_FETCH_LIVENESS_STATE_SEQUENCE_IDENTITY_WORD:
+				response_word = published_sequence_identity;
+			MAGIK_SCALER_FETCH_LIVENESS_STATE_PROGRESS_WORD:
+				response_word = published_progress;
+			MAGIK_SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_WORD:
+				response_word = published_live_state;
+			MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD:
+				response_word = published_frozen_state;
+			default: response_word = published_crc;
+		endcase
 
 		response_data = 16'd0;
 		if(command_start && selected_start)
-			response_data = MAGIK_RAW_SCALER_STATE_MAGIC;
+			response_data = MAGIK_SCALER_FETCH_LIVENESS_STATE_MAGIC;
 		else if(command_data && selected_command &&
-			(word_count < MAGIK_RAW_SCALER_STATE_WORDS))
+			word_count < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS)
 			response_data = response_word;
 	end
 
-	// Stable bundled-data crossing. The destination waits one clk_sys edge after
-	// observing the synchronized generation before capturing signature/flags.
-	// A command snapshot remains immutable until io_uio is released.
-	always @(posedge clk_sys or posedge reset_active) begin
-		if(reset_active) begin
-			generation_meta <= 1'b0;
-			generation_sync <= 1'b0;
-			fault_meta <= 1'b0;
-			fault_sync <= 1'b0;
-			generation_seen <= 1'b0;
-			capture_pending <= 1'b0;
-			snapshot_signature <= 16'd0;
-			snapshot_sequence <= 16'd0;
-			snapshot_flags <= 7'd0;
-			snapshot_crc <= 16'd0;
-			crc_bit_count <= 6'd0;
-			crc_busy <= 1'b0;
-			snapshot_crc_valid <= 1'b0;
+	always @(posedge clk_sys) begin
+		generation_meta <= publication_generation;
+		generation_sync <= generation_meta;
+
+		if(command_start) begin
+			has_command <= 1'b1;
+			command_selected <= selected_start;
+			word_count <= 3'd0;
+		end
+		else if(command_data && selected_command &&
+			word_count < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS)
+			word_count <= word_count + 1'd1;
+
+		if(!io_uio && has_command) begin
+			if(command_selected)
+				acknowledged_generation <= generation_sync;
 			has_command <= 1'b0;
 			command_selected <= 1'b0;
 			word_count <= 3'd0;
 		end
-		else begin
-			generation_meta <= source_generation;
-			generation_sync <= generation_meta;
-			fault_meta <= source_fault;
-			fault_sync <= fault_meta;
+	end
 
-			if(!snapshot_crc_valid && !crc_busy && !capture_pending &&
-			   !fault_sync) begin
-				snapshot_crc <= FETCH_FLAGS_CRC;
-				crc_bit_count <= 6'd0;
-				crc_busy <= 1'b1;
-			end
-
-			if(!has_command && !command_start && !crc_busy && fault_sync &&
-			   !snapshot_faulted) begin
-				generation_seen <= generation_sync;
-				capture_pending <= 1'b0;
-				snapshot_signature <= 16'd0;
-				snapshot_sequence <= 16'd0;
-				snapshot_flags <= published_flags;
-				snapshot_crc <= FETCH_FLAGS_CRC;
-				crc_bit_count <= 6'd0;
-				crc_busy <= 1'b1;
-				snapshot_crc_valid <= 1'b0;
-			end
-			else if(!has_command && !command_start && !crc_busy && !fault_sync &&
-			   generation_sync != generation_seen) begin
-				generation_seen <= generation_sync;
-				capture_pending <= 1'b1;
-			end
-			else if(!has_command && !command_start && !crc_busy && !fault_sync &&
-				capture_pending) begin
-				snapshot_signature <= published_signature;
-				snapshot_flags <= published_flags;
-				if(published_flags == FETCH_FLAG_CAPTURE_VALID)
-					snapshot_sequence <= snapshot_sequence + 1'd1;
-				else begin
-					snapshot_sequence <= 16'd0;
-					snapshot_signature <= 16'd0;
-				end
-				snapshot_crc <= FETCH_FLAGS_CRC;
-				crc_bit_count <= 6'd0;
-				crc_busy <= 1'b1;
-				snapshot_crc_valid <= 1'b0;
-				capture_pending <= 1'b0;
-			end
-
-			if(crc_busy) begin : snapshot_crc_step
-				reg [15:0] next_crc;
-				reg payload_bit;
-				if(crc_bit_count < 6'd7)
-					payload_bit = snapshot_flags[6];
-				else if(crc_bit_count < 6'd23)
-					payload_bit = snapshot_sequence[15];
-				else
-					payload_bit = snapshot_signature[15];
-				next_crc = crc16_update_bit(snapshot_crc, payload_bit);
-				snapshot_crc <= next_crc;
-				if(crc_bit_count < 6'd7)
-					snapshot_flags <= {snapshot_flags[5:0], snapshot_flags[6]};
-				else if(crc_bit_count < 6'd23)
-					snapshot_sequence <= {snapshot_sequence[14:0],
-						snapshot_sequence[15]};
-				else
-					snapshot_signature <= {snapshot_signature[14:0],
-						snapshot_signature[15]};
-				if(crc_bit_count == 6'd38) begin
-					crc_busy <= 1'b0;
-					snapshot_crc_valid <= 1'b1;
-				end
-				else
-					crc_bit_count <= crc_bit_count + 1'd1;
-			end
-
-			if(command_start) begin
-				has_command <= 1'b1;
-				command_selected <= selected_start;
-				word_count <= 3'd0;
-			end
-			else if(command_data && selected_command &&
-				(word_count < MAGIK_RAW_SCALER_STATE_WORDS)) begin
-				word_count <= word_count + 1'd1;
-			end
-
-			if(!io_uio && has_command) begin
-				has_command <= 1'b0;
-				command_selected <= 1'b0;
-				word_count <= 3'd0;
-			end
-		end
+	initial begin
+		if(WATCHDOG_LIMIT != CONTRACT_WATCHDOG_LIMIT)
+			$display("MagiK liveness watchdog overridden for simulation");
+		if(RESET_QUALIFY_LIMIT != CONTRACT_RESET_QUALIFY_LIMIT)
+			$display("MagiK liveness reset qualification overridden for simulation");
 	end
 
 endmodule

@@ -1,5 +1,43 @@
 # Passive FPGA HDMI evidence
 
+## Active moving-band campaign: schema 14
+
+The preserved 2026-08-28 recurrence showed a byte-stable framebuffer and
+visible moving-band corruption while schema 11 returned CRC-valid but
+permanently zero records. That is evidence that schema 11 never completed a
+fetch epoch, not proof that the production fetch boundary itself stopped.
+Schema 11 used `reset_req` as an asynchronous observer reset even though
+accepted Avalon return obligations survive that production reset boundary, so
+the observer could erase its own queue, phase, heartbeat, and publication
+evidence.
+
+The replacement diagnostic is schema 14,
+`scaler-fetch-liveness-first-stall-v1`, on read-only command `0x68` with magic
+`0x4d58`. The fixed five-word schema-10/11 `0x67` ABI remains unchanged for
+rollback decoding; the device agent probes `0x68` first and falls back to
+`0x67` only when the new command is explicitly unsupported. A malformed
+schema-14 acknowledgement or record fails closed and never falls back.
+
+Schema 14 observes only the existing top-level `vbuf_address`,
+`vbuf_burstcount`, `vbuf_read`, `vbuf_waitrequest`, and
+`vbuf_readdatavalid` control wires in `clk_100m`. It has no return-data or
+`ascal` output tap. Its two-entry accepted-obligation scoreboard and 0–127
+return phase are never cleared by `reset_req`; synchronized reset is recorded
+as data, and returned beats continue draining accepted obligations while reset
+is asserted. A stable publication bank remains immutable until a complete host
+read is acknowledged across the two-stage CDC handshake.
+
+The single progress watchdog prioritizes the oldest accepted return obligation,
+then a wait-blocked request, then absence of a request. Its default bound is
+`2^24-1` `clk_100m` cycles (about 167.8 ms). Progress on the terminal cycle wins
+over timeout. The sticky classifications are deliberately observational:
+`no_request_seen`, `accept_blocked`, `first_return_missing`,
+`return_incomplete`, and `request_cancelled`. Normal wrap-marked completion is
+rolling evidence and never prevents a much later first stall from freezing.
+Malformed burst shape, unexpected return, FIFO/phase error, reset ambiguity,
+or counter ambiguity invalidates attribution. Exact root cause still requires
+the following narrow recorder to expose the responsible production transition.
+
 The wide and staged FPGA video observers are retired from production. Their
 field evidence was decisive, but every expanded implementation made the dense
 legacy scaler physically sensitive and failed at least one fixed qualification

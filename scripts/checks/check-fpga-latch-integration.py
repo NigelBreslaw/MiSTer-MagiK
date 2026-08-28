@@ -33,6 +33,7 @@ COMMAND_PATTERNS = {
     "0x65": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')65", re.I),
     "0x66": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')66", re.I),
     "0x67": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')67", re.I),
+    "0x68": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')68", re.I),
 }
 
 IMMUTABLE_LATCH_SHA256 = {
@@ -271,75 +272,58 @@ def main() -> None:
     output_source = diagnostics_output.read_text()
     if local_signoff_profile.read_text().strip() != "experimental_scaler_fetch-v1":
         fail("scaler-fetch candidate lacks its exact local signoff profile identity")
-    if control_source.count("module mister_magik_scaler_fetch_ordered_frame (") != 1:
-        fail("scaler-fetch ordered-frame observer design unit is missing or ambiguous")
+    if control_source.count("module mister_magik_scaler_fetch_liveness_state #(") != 1:
+        fail("scaler-fetch liveness observer design unit is missing or ambiguous")
     if re.search(r"(?m)^\s*module\b", avalon_source + output_source):
         fail("retired Avalon/output compatibility sources must define no design unit")
     for required_observer_fragment in (
-        "input  wire         clk_100m",
-        "input  wire         clk_sys",
-        "input  wire [27:0]  vbuf_address",
-        "input  wire [7:0]   vbuf_burstcount",
-        "input  wire         vbuf_waitrequest",
-        "input  wire [127:0] vbuf_readdata",
-        "input  wire         vbuf_readdatavalid",
-        "input  wire         vbuf_read",
-        "localparam [15:0] FETCH_STATE_SCHEMA = MAGIK_RAW_SCALER_STATE_SCHEMA;",
-        "MAGIK_RAW_SCALER_STATE_FLAG_CAPTURE_VALID[6:0];",
-        "MAGIK_RAW_SCALER_STATE_FLAG_FIFO_OVERFLOW[6:0];",
-        "MAGIK_RAW_SCALER_STATE_FLAG_UNEXPECTED_RETURN[6:0];",
-        "MAGIK_RAW_SCALER_STATE_FLAG_BAD_BURSTCOUNT[6:0];",
-        "MAGIK_RAW_SCALER_STATE_FLAG_BAD_RETURN_PHASE[6:0];",
-        "MAGIK_RAW_SCALER_STATE_FLAG_EPOCH_OVERLAP[6:0];",
-        "MAGIK_RAW_SCALER_STATE_FLAG_COUNTER_OVERFLOW[6:0];",
-        "MAGIK_RAW_SCALER_STATE_CAPTURE_SEQUENCE_WORD",
+        "input  wire        clk_100m",
+        "input  wire        clk_sys",
+        "input  wire        reset_req",
+        "input  wire [27:0] vbuf_address",
+        "input  wire [7:0]  vbuf_burstcount",
+        "input  wire        vbuf_waitrequest",
+        "input  wire        vbuf_readdatavalid",
+        "input  wire        vbuf_read",
+        "MAGIK_UIO_GET_SCALER_FETCH_LIVENESS_STATE",
+        "MAGIK_SCALER_FETCH_LIVENESS_STATE_HEADER_CRC",
         "wire accepted = vbuf_read && !vbuf_waitrequest;",
         "wire return_has_entry = returned && fifo_count != 2'd0;",
         "wire return_last = return_has_entry && return_phase == 7'd127;",
         "vbuf_burstcount == REQUIRED_BURSTCOUNT",
         "vbuf_address[27:7] < previous_address",
-        "reg [3:0]  fifo_address_token0",
-        "reg [3:0]  fifo_address_token1",
-        "reg        fifo_wrap0",
-        "reg        fifo_wrap1",
-        "reg [1:0]  fifo_count",
-        "reg [6:0]  return_phase",
-        "function automatic [15:0] fold_return_data;",
-        "function automatic [3:0] fold_address;",
-        "fold_return_data(vbuf_readdata)",
-        "function automatic [15:0] ordered_signature_update;",
-        "mixed = signature_in ^ token_in;",
-        "{mixed[14:0], mixed[15] ^ mixed[0]};",
+        "reg [3:0] fifo_address_fold0",
+        "reg [3:0] fifo_address_fold1",
+        "reg fifo_wrap0",
+        "reg fifo_wrap1",
+        "reg [1:0] fifo_count",
+        "reg [6:0] return_phase",
+        "reg [23:0] progress_watchdog",
+        "reg first_stall_valid",
+        "reg observer_fault",
         "case({enqueue, dequeue})",
-        "return_token = fold_return_data(vbuf_readdata) ^ TOKEN_DATA;",
-        "SIGNATURE_INITIAL,",
-        "{TOKEN_ADDRESS, fifo_address_token0}",
-        "epoch_signature,",
-        "if(return_phase == 7'd0 && fifo_wrap0) begin",
-        "published_signature <= epoch_signature;",
-        "published_flags <= FETCH_FLAG_CAPTURE_VALID;",
-        "fault_event[6:1] != 6'd0",
-        "published_flags <= fault_event;",
-        "(* preserve, dont_replicate *) reg source_generation = 1'b0;",
-        "reg source_fault = 1'b0;",
-        "source_generation <= ~source_generation;",
-        "generation_meta <= source_generation;",
+        "watchdog_terminal && !expected_progress",
+        "return_phase == 7'd0 ?",
+        "MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_FIRST_RETURN_MISSING",
+        "MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_RETURN_INCOMPLETE",
+        "MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_ACCEPT_BLOCKED",
+        "MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN",
+        "(* preserve, dont_replicate *) reg publication_generation = 1'b0;",
+        "generation_meta <= publication_generation;",
         "generation_sync <= generation_meta;",
-        "fault_meta <= source_fault;",
-        "fault_sync <= fault_meta;",
-        "wire response_safe = !fault_sync || snapshot_faulted;",
-        "assign response_valid = response_safe && (",
-        "snapshot_signature <= published_signature;",
-        "snapshot_flags <= published_flags;",
-        "snapshot_sequence <= snapshot_sequence + 1'd1;",
-        "function automatic [15:0] crc16_update_bit;",
-        "snapshot_crc <= FETCH_FLAGS_CRC;",
-        "snapshot_crc_valid <= 1'b1;",
-        "snapshot_crc <= next_crc;",
+        "acknowledge_meta <= acknowledged_generation;",
+        "acknowledge_sync <= acknowledge_meta;",
+        "publication_generation == acknowledge_sync",
+        "published_sequence_identity",
+        "published_frozen_state",
+        "publication_generation <= ~publication_generation;",
+        "if(command_selected)",
+        "acknowledged_generation <= generation_sync;",
+        "function automatic [15:0] crc16_update_word;",
     ):
         if required_observer_fragment not in control_source:
             fail(
-                "scaler-fetch ordered-frame observer structure is missing: "
+                "scaler-fetch liveness observer structure is missing: "
                 f"{required_observer_fragment}"
             )
     if re.search(r"\breg\s*\[127:0\]", control_source):
@@ -370,6 +354,8 @@ def main() -> None:
     ):
         if forbidden_observer_input in control_source:
             fail(f"scaler-fetch observer exceeds its passive tap boundary: {forbidden_observer_input}")
+    if re.search(r"\bvbuf_readdata\b", control_source):
+        fail("scaler-fetch liveness observer must not tap return data")
     for retired_control_observer in (
         "mister_magik_raw_scaler_ordered_frame",
         "mister_magik_raw_scaler_diagnostic",
@@ -488,8 +474,8 @@ def main() -> None:
     timing_commands = re.findall(
         r"(?m)^\s*(set_[A-Za-z0-9_]+\b[^\n]*)$", diagnostics_sdc_text
     )
-    if timing_commands != ["set_net_delay -max 10.0 \\"] * 4:
-        fail("diagnostic SDC must contain two completion and two observer bounds")
+    if timing_commands != ["set_net_delay -max 10.0 \\"] * 5:
+        fail("diagnostic SDC must contain two completion and three observer bounds")
     for fragment in (
         "{*ascal:ascal|avl_readdataack} 1",
         "{*ascal:ascal|o_readdataack_sync} 1",
@@ -499,15 +485,19 @@ def main() -> None:
         "-to $magik_scaler_completion_request_meta",
         "-from $magik_scaler_completion_ack_route",
         "-to $magik_scaler_completion_ack_meta",
-        "{*mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|source_generation} 1",
-        "{*mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_meta} 1",
-        "-from $magik_fetch_frame_generation",
-        "-to $magik_fetch_frame_generation_meta",
-        "{*mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|source_fault} 1",
-        "{*mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_meta} 1",
-        "-from $magik_fetch_fault",
-        "-to $magik_fetch_fault_meta",
-        "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_ordered_signature scaler_fetch_fault",
+        "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|publication_generation} 1",
+        "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|generation_meta} 1",
+        "-from $magik_fetch_publication_generation",
+        "-to $magik_fetch_publication_generation_meta",
+        "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledged_generation} 1",
+        "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledge_meta} 1",
+        "-from $magik_fetch_publication_ack",
+        "-to $magik_fetch_publication_ack_meta",
+        "{*reset_req} 1",
+        "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|reset_meta} 1",
+        "-from $magik_fetch_reset_req",
+        "-to $magik_fetch_reset_meta",
+        "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_liveness_publication_request_ack_reset",
         "*ascal:ascal|o_readdataack_sync2*",
         "scaler_copy_tail",
     ):
@@ -587,7 +577,7 @@ def main() -> None:
             "mister_magik_video_diagnostics_control magik_video_diagnostics": 0,
             "mister_magik_video_diagnostics_avalon magik_video_diagnostics_avalon": 0,
             "mister_magik_video_diagnostics_output magik_video_diagnostics_output": 0,
-            "mister_magik_scaler_fetch_ordered_frame magik_scaler_fetch_ordered_frame": 1,
+            "mister_magik_scaler_fetch_liveness_state magik_scaler_fetch_liveness_state": 1,
             "magik_diag_response_valid": 4,
             "magik_diag_response_data": 4,
         }
@@ -599,12 +589,13 @@ def main() -> None:
         if mismatches:
             fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
         required_observer_bindings = {
-            ".reset_active(reset_req)": 1,
+            ".reset_req(reset_req)": 1,
             # One production ascal binding plus one passive observer binding.
             ".vbuf_address(vbuf_address)": 2,
             ".vbuf_burstcount(vbuf_burstcount)": 2,
             ".vbuf_waitrequest(vbuf_waitrequest)": 2,
-            ".vbuf_readdata(vbuf_readdata)": 2,
+            # One production ascal binding plus one passive observer binding.
+            ".vbuf_readdata(vbuf_readdata)": 1,
             ".vbuf_readdatavalid(vbuf_readdatavalid)": 2,
             ".vbuf_read(vbuf_read)": 2,
         }
@@ -615,13 +606,12 @@ def main() -> None:
                     f"{binding} expected {expected_count}, found {patched.count(binding)}"
                 )
         observer_mapping = re.compile(
-            r"mister_magik_scaler_fetch_ordered_frame\s+"
-            r"magik_scaler_fetch_ordered_frame\s*\(.*?"
+            r"mister_magik_scaler_fetch_liveness_state\s+"
+            r"magik_scaler_fetch_liveness_state\s*\(.*?"
             r"\.clk_100m\(clk_100m\).*?\.clk_sys\(clk_sys\).*?"
-            r"\.reset_active\(reset_req\).*?\.vbuf_address\(vbuf_address\).*?"
+            r"\.reset_req\(reset_req\).*?\.vbuf_address\(vbuf_address\).*?"
             r"\.vbuf_burstcount\(vbuf_burstcount\).*?"
             r"\.vbuf_waitrequest\(vbuf_waitrequest\).*?"
-            r"\.vbuf_readdata\(vbuf_readdata\).*?"
             r"\.vbuf_readdatavalid\(vbuf_readdatavalid\).*?"
             r"\.vbuf_read\(vbuf_read\).*?"
             r"\.response_valid\(magik_diag_response_valid\).*?"
@@ -629,7 +619,7 @@ def main() -> None:
             re.S,
         )
         if len(observer_mapping.findall(patched)) != 1:
-            fail("scaler-fetch ordered-frame observer mapping is missing or ambiguous")
+            fail("scaler-fetch liveness observer mapping is missing or ambiguous")
         for retired_binding in (
             "magik_scaler_copy_state",
             ".magik_diag_state",

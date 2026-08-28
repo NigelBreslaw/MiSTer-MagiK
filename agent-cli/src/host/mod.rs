@@ -3790,6 +3790,72 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                     .and_then(Value::as_array)
                     .is_some_and(|samples| samples.len() == 3)
         }
+        Some("scaler-fetch-liveness-first-stall-v1") => {
+            matches!(
+                diagnostics.get("classification").and_then(Value::as_str),
+                Some(
+                    "scaler_fetch_normal_liveness"
+                        | "scaler_fetch_no_request_seen"
+                        | "scaler_fetch_accept_blocked"
+                        | "scaler_fetch_first_return_missing"
+                        | "scaler_fetch_return_incomplete"
+                        | "scaler_fetch_request_cancelled"
+                )
+            ) && diagnostics
+                .pointer("/capabilities/passive_video_observer")
+                .and_then(Value::as_bool)
+                == Some(true)
+                && diagnostics
+                    .pointer("/capabilities/scaler_fetch_liveness")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/capabilities/scaler_fetch_ordered_signature")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/capabilities/raw_scaler_ordered_signature")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/capabilities/pixel_observer")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/capabilities/pll_observer")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/coherence/three_samples_valid")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/coherence/publication_sequence_advancing")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/coherence/classification_stable")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/scaler_fetch_liveness_state/raw_samples")
+                    .and_then(Value::as_array)
+                    .is_some_and(|samples| samples.len() == 3)
+                && diagnostics
+                    .pointer("/scaler_fetch_liveness_state/record_valid")
+                    .and_then(Value::as_array)
+                    .is_some_and(|values| {
+                        values.len() == 3
+                            && values.iter().all(|value| value.as_bool() == Some(true))
+                    })
+                && diagnostics
+                    .pointer("/scaler_fetch_liveness_state/observer_fault")
+                    .and_then(Value::as_array)
+                    .is_some_and(|values| {
+                        values.len() == 3
+                            && values.iter().all(|value| value.as_bool() == Some(false))
+                    })
+        }
         Some("scaler-fetch-ordered-signature-v1") => {
             matches!(
                 diagnostics.get("classification").and_then(Value::as_str),
@@ -38639,6 +38705,62 @@ H: Handlers=event3 js0"#
         assert!(!experimental_fpga_evidence_is_current(
             &ordered_inconclusive
         ));
+        let scaler_fetch_liveness = json!({
+            "schema": "mister-magik-fpga-video-diagnostics-v2",
+            "diagnostic_architecture": "scaler-fetch-liveness-first-stall-v1",
+            "available": true,
+            "coherent": true,
+            "classification": "scaler_fetch_no_request_seen",
+            "sink_visibility": "unobserved",
+            "owner_epoch_before": 13,
+            "owner_epoch_after": 13,
+            "coherence": {
+                "three_samples_valid": true,
+                "publication_sequence_advancing": true,
+                "classification_stable": true,
+                "latch_ownership_stable": true,
+                "launcher_state_stable": true,
+                "ownership_check_error": null,
+            },
+            "capabilities": {
+                "passive_video_observer": true,
+                "scaler_fetch_liveness": true,
+                "scaler_fetch_ordered_signature": false,
+                "raw_scaler_ordered_signature": false,
+                "pixel_observer": false,
+                "pll_observer": false,
+            },
+            "latch_status": {
+                "active_sequence": 7,
+                "flags": 1 << mister_magik_latch_contract::STATUS_MAGIK_OWNERSHIP,
+                "active_width": 960,
+                "active_height": 540,
+                "active_stride": 1920,
+                "crc": 0,
+            },
+            "scaler_fetch_liveness_state": {
+                "record_valid": [true, true, true],
+                "observer_fault": [false, false, false],
+                "publication_sequence": [100, 101, 103],
+                "frozen_sequence": [99, 99, 99],
+                "frozen_cause": [1, 1, 1],
+                "raw_samples": vec![vec![14; 7]; 3],
+            },
+        });
+        assert!(experimental_raw_scaler_evidence_available(
+            &scaler_fetch_liveness
+        ));
+        assert!(experimental_agent_preload_evidence_accepted(
+            &scaler_fetch_liveness
+        ));
+        assert!(experimental_fpga_evidence_is_current(
+            &scaler_fetch_liveness
+        ));
+        let mut liveness_fault = scaler_fetch_liveness.clone();
+        liveness_fault["scaler_fetch_liveness_state"]["observer_fault"] =
+            json!([false, true, false]);
+        assert!(!experimental_fpga_evidence_is_current(&liveness_fault));
+
         let scaler_fetch_signature = json!({
             "schema": "mister-magik-fpga-video-diagnostics-v2",
             "diagnostic_architecture": "scaler-fetch-ordered-signature-v1",

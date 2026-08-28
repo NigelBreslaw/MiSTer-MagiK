@@ -114,22 +114,31 @@ EXPERIMENTAL_RAW_SCALER_METASTABILITY_CHAIN = {
     }
 }
 EXPERIMENTAL_SCALER_FETCH_METASTABILITY_CHAIN = {
-    "scaler_fetch_generation": {
-        "source": "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|source_generation",
-        "synchronization_node": "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_meta",
+    "scaler_fetch_publication_generation": {
+        "source": "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|publication_generation",
+        "synchronization_node": "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|generation_meta",
         "allow_source_duplicate": False,
         "registers": (
-            "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_meta",
-            "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_sync",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|generation_meta",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|generation_sync",
         ),
     },
-    "scaler_fetch_fault": {
-        "source": "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|source_fault",
-        "synchronization_node": "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_meta",
+    "scaler_fetch_publication_ack": {
+        "source": "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledged_generation",
+        "synchronization_node": "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledge_meta",
         "allow_source_duplicate": False,
         "registers": (
-            "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_meta",
-            "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_sync",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledge_meta",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledge_sync",
+        ),
+    },
+    "scaler_fetch_reset": {
+        "source": "reset_req",
+        "synchronization_node": "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|reset_meta",
+        "allow_source_duplicate": False,
+        "registers": (
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|reset_meta",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|reset_sync",
         ),
     },
 }
@@ -161,11 +170,14 @@ EXPERIMENTAL_RAW_SCALER_NET_DELAY_PATH = {
     )
 }
 EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH = {
-    "scaler_fetch_generation": re.compile(
-        r"source_generation\s*;[^\n]*generation_meta\s*;", re.IGNORECASE
+    "scaler_fetch_publication_generation": re.compile(
+        r"publication_generation\s*;[^\n]*generation_meta\s*;", re.IGNORECASE
     ),
-    "scaler_fetch_fault": re.compile(
-        r"source_fault\s*;[^\n]*fault_meta\s*;", re.IGNORECASE
+    "scaler_fetch_publication_ack": re.compile(
+        r"acknowledged_generation\s*;[^\n]*acknowledge_meta\s*;", re.IGNORECASE
+    ),
+    "scaler_fetch_reset": re.compile(
+        r"reset_req\s*;[^\n]*reset_meta\s*;", re.IGNORECASE
     ),
 }
 
@@ -816,10 +828,12 @@ def compare(
     if experimental_scaler_fetch:
         expected_sync_assignment_suffixes.extend(
             (
-                "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_meta",
-                "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|generation_sync",
-                "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_meta",
-                "mister_magik_scaler_fetch_ordered_frame:magik_scaler_fetch_ordered_frame|fault_sync",
+                "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|generation_meta",
+                "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|generation_sync",
+                "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledge_meta",
+                "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledge_sync",
+                "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|reset_meta",
+                "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|reset_sync",
             )
         )
     missing_sync_assignments = [
