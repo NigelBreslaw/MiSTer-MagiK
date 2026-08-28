@@ -174,7 +174,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         .map(|report| report.elapsed_us)
         .sum();
     let phase_started = Instant::now();
-    let source_fingerprint = fingerprint_systems(&systems.values().cloned().collect::<Vec<_>>())?;
+    let source_fingerprint = fingerprint_systems(systems.values())?;
     let fingerprint_us = elapsed_us(phase_started);
     let snapshot = FastFiveSnapshot {
         schema: FAST_FIVE_SNAPSHOT_SCHEMA.to_string(),
@@ -1391,7 +1391,9 @@ fn load_fast_console_preview_title_index(
     index
 }
 
-fn fingerprint_systems(systems: &[FastFiveSystem]) -> Result<String, String> {
+fn fingerprint_systems<'a>(
+    systems: impl IntoIterator<Item = &'a FastFiveSystem>,
+) -> Result<String, String> {
     let mut digest = Sha256::new();
     digest.update(b"mister-magik-independent-fast-sources-v1\0");
     for system in systems {
