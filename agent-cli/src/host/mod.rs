@@ -16321,6 +16321,24 @@ fn analyze_streamline_capture(capture: &Path, output_dir: &Path) -> Result<()> {
 }
 
 fn verify_installed_search_ui(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
+    verify_installed_search_ui_with_env(
+        config,
+        output_dir,
+        vec![
+            ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+            (
+                "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM".into(),
+                "arcade".into(),
+            ),
+        ],
+    )
+}
+
+fn verify_installed_search_ui_with_env(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    env_vars: Vec<(String, String)>,
+) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     fs::create_dir_all(output_dir)?;
     let mut nonce = None;
@@ -16328,13 +16346,7 @@ fn verify_installed_search_ui(config: &NativeDeviceConfig, output_dir: &Path) ->
         restart_launcher_with_one_shot_env(
             &session,
             LauncherRestartOptions {
-                env_vars: vec![
-                    ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-                    (
-                        "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM".into(),
-                        "arcade".into(),
-                    ),
-                ],
+                env_vars,
                 timeout_secs: 45,
                 remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
                 ..LauncherRestartOptions::default()
@@ -19407,6 +19419,21 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
     env
 }
 
+fn catalog_attribution_search_ui_env(arm: CatalogAttributionArm) -> Vec<(String, String)> {
+    let mut env = catalog_attribution_launcher_env(arm)
+        .into_iter()
+        .filter(|(key, _)| key != "MISTER_CATALOG_REFRESH")
+        .collect::<Vec<_>>();
+    env.extend([
+        ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+        (
+            "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM".into(),
+            "arcade".into(),
+        ),
+    ]);
+    env
+}
+
 fn catalog_attribution_runtime_command(subcommand: &str) -> String {
     let root = CATALOG_ATTRIBUTION_REMOTE_DIR;
     let work = CATALOG_ATTRIBUTION_WORK_DIR;
@@ -19980,6 +20007,18 @@ fn run_catalog_attribution_pair(
         },
     )?;
     let fresh_profile = collect_catalog_attribution_profile(session, sample_dir, "fresh", arm)?;
+    let (first_use_search_ui, first_use_search) = if arm == CatalogAttributionArm::Control {
+        let ui_detail = verify_installed_search_ui_with_env(
+            config,
+            &sample_dir.join("first-use-search-ui"),
+            catalog_attribution_search_ui_env(arm),
+        )?;
+        let ui_summary: Value = serde_json::from_str(&ui_detail)?;
+        let search_summary = run_catalog_attribution_search_bench(session, sample_dir)?;
+        (Some(ui_summary), Some(search_summary))
+    } else {
+        (None, None)
+    };
     let generation = fresh
         .pointer("/catalog/generation")
         .and_then(Value::as_u64)
@@ -20001,7 +20040,30 @@ fn run_catalog_attribution_pair(
     let rebuild_profile = collect_catalog_attribution_profile(session, sample_dir, "rebuild", arm)?;
     fresh["profile"] = fresh_profile;
     rebuild["profile"] = rebuild_profile;
-    Ok(json!({"fresh": fresh, "rebuild": rebuild}))
+    let mut pair = json!({"fresh": fresh, "rebuild": rebuild});
+    if let Some(first_use_search_ui) = first_use_search_ui {
+        pair["first_use_search_ui"] = first_use_search_ui;
+    }
+    if let Some(first_use_search) = first_use_search {
+        pair["first_use_search"] = first_use_search;
+    }
+    Ok(pair)
+}
+
+fn run_catalog_attribution_search_bench(session: &Session, sample_dir: &Path) -> Result<Value> {
+    let output = exec_checked_output(
+        session,
+        "measure first-use catalog search",
+        &catalog_attribution_runtime_command("search-bench"),
+    )?;
+    let mut log = output.stdout;
+    log.push_str(&output.stderr);
+    fs::write(sample_dir.join("first-use-search-bench.log"), &log)?;
+    let summary = last_json_line(&log).ok_or("catalog search benchmark returned no JSON")?;
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-search-benchmark-v2") {
+        return Err("catalog search benchmark returned the wrong schema".into());
+    }
+    Ok(summary)
 }
 
 fn collect_catalog_attribution_profile(
@@ -20122,6 +20184,8 @@ fn profile_catalog_attribution_report(output_dir: &Path) -> Result<String> {
     let mut revisions = BTreeSet::new();
     let mut fingerprints = BTreeSet::new();
     let mut measurements = Vec::new();
+    let mut search_measurements = Vec::new();
+    let mut search_ui_measurements = Vec::new();
     let mut artifact_manifest = Vec::new();
     let mut negative_results = Vec::new();
     let mut control_fingerprint = None::<String>;
@@ -20170,6 +20234,12 @@ fn profile_catalog_attribution_report(output_dir: &Path) -> Result<String> {
             required_arms_complete = false;
         }
         measurements.extend(normalized_catalog_attribution_measurements(arm, &summary));
+        search_measurements.extend(normalized_catalog_attribution_search_measurements(
+            arm, &summary,
+        ));
+        search_ui_measurements.extend(normalized_catalog_attribution_search_ui_measurements(
+            arm, &summary,
+        ));
         let artifacts = catalog_attribution_artifact_manifest(benchmark_root, &run_dir)?;
         artifact_manifest.extend(artifacts.iter().cloned());
         let relative_run = run_dir
@@ -20219,6 +20289,8 @@ fn profile_catalog_attribution_report(output_dir: &Path) -> Result<String> {
         },
         "arms": arms,
         "normalized_measurements": measurements,
+        "first_use_search_measurements": search_measurements,
+        "first_use_search_ui_measurements": search_ui_measurements,
         "artifact_manifest": artifact_manifest,
         "negative_result_ledger": negative_results,
     });
@@ -20353,6 +20425,64 @@ fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Ve
                 "profile_state": value.pointer("/profile/state"),
             }));
         }
+    }
+    rows
+}
+
+fn normalized_catalog_attribution_search_measurements(arm: &str, summary: &Value) -> Vec<Value> {
+    let mut rows = Vec::new();
+    let Some(samples) = summary.get("samples").and_then(Value::as_array) else {
+        return rows;
+    };
+    for (sample_index, sample) in samples.iter().enumerate() {
+        let Some(runs) = sample
+            .get("first_use_search")
+            .and_then(|search| search.get("runs"))
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        for run in runs {
+            let Some(queries) = run.get("queries").and_then(Value::as_array) else {
+                continue;
+            };
+            for query in queries {
+                rows.push(json!({
+                    "arm": arm,
+                    "sample": sample_index + 1,
+                    "run": run.get("run"),
+                    "query": query.get("query"),
+                    "first_total_us": query.pointer("/first/total_us"),
+                    "warm_p50_us": query.pointer("/warm/total_us/p50"),
+                    "warm_p95_us": query.pointer("/warm/total_us/p95"),
+                    "warm_max_us": query.pointer("/warm/total_us/max"),
+                    "first_matches": query.get("first_matches"),
+                }));
+            }
+        }
+    }
+    rows
+}
+
+fn normalized_catalog_attribution_search_ui_measurements(arm: &str, summary: &Value) -> Vec<Value> {
+    let mut rows = Vec::new();
+    let Some(samples) = summary.get("samples").and_then(Value::as_array) else {
+        return rows;
+    };
+    for (sample_index, sample) in samples.iter().enumerate() {
+        let Some(search) = sample.get("first_use_search_ui") else {
+            continue;
+        };
+        rows.push(json!({
+            "arm": arm,
+            "sample": sample_index + 1,
+            "status": search.get("status"),
+            "query": search.get("query"),
+            "elapsed_ms": search.get("elapsed_ms"),
+            "results": search.get("results"),
+            "worker_threads_observed": search.get("worker_threads_observed"),
+            "result_source": search.get("result_source"),
+        }));
     }
     rows
 }
@@ -20537,6 +20667,58 @@ fn catalog_attribution_evidence_report(summary: &Value) -> Result<String> {
                 row["magik_rss_kb_max"].as_u64().unwrap_or(0),
                 row["available_memory_kb_min"].as_u64().unwrap_or(0),
                 row["total_games"].as_u64().unwrap_or(0),
+            )?;
+        }
+    }
+    if let Some(rows) = summary
+        .get("first_use_search_ui_measurements")
+        .and_then(Value::as_array)
+        && !rows.is_empty()
+    {
+        writeln!(report, "\n## First-use launcher search\n")?;
+        writeln!(
+            report,
+            "| Arm | Sample | Query | Ready latency | Results | Worker threads | Source |"
+        )?;
+        writeln!(report, "|---|---:|---|---:|---:|---:|---|")?;
+        for row in rows {
+            writeln!(
+                report,
+                "| {} | {} | {} | {} ms | {} | {} | {} |",
+                row["arm"].as_str().unwrap_or("unknown"),
+                row["sample"].as_u64().unwrap_or(0),
+                row["query"].as_str().unwrap_or("unknown"),
+                row["elapsed_ms"].as_u64().unwrap_or(0),
+                row["results"].as_u64().unwrap_or(0),
+                row["worker_threads_observed"].as_u64().unwrap_or(0),
+                row["result_source"].as_str().unwrap_or("unknown"),
+            )?;
+        }
+    }
+    if let Some(rows) = summary
+        .get("first_use_search_measurements")
+        .and_then(Value::as_array)
+        && !rows.is_empty()
+    {
+        writeln!(report, "\n## First-use persisted search query\n")?;
+        writeln!(
+            report,
+            "| Arm | Sample | Run | Query | First total | Warm p50 | Warm p95 | Warm max | Matches |"
+        )?;
+        writeln!(report, "|---|---:|---:|---|---:|---:|---:|---:|---:|")?;
+        for row in rows {
+            writeln!(
+                report,
+                "| {} | {} | {} | {} | {} us | {} us | {} us | {} us | {} |",
+                row["arm"].as_str().unwrap_or("unknown"),
+                row["sample"].as_u64().unwrap_or(0),
+                row["run"].as_u64().unwrap_or(0),
+                row["query"].as_str().unwrap_or("unknown"),
+                row["first_total_us"].as_u64().unwrap_or(0),
+                row["warm_p50_us"].as_u64().unwrap_or(0),
+                row["warm_p95_us"].as_u64().unwrap_or(0),
+                row["warm_max_us"].as_u64().unwrap_or(0),
+                row["first_matches"].as_u64().unwrap_or(0),
             )?;
         }
     }
