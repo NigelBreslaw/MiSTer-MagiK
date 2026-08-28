@@ -29,9 +29,11 @@ def platform_candidates(artifacts: Path, name: str) -> list[dict[str, object]]:
 def platform_eligible_run(path: Path, head_sha: str) -> bool:
     payload = json.loads(path.read_text(encoding="utf-8"))
     origin = payload.get("workflow_run", payload)
+    actual_sha = origin.get("head_sha", origin.get("headSha"))
+    branch = origin.get("head_branch", origin.get("headBranch"))
     return bool(
-        origin.get("head_sha") == head_sha
-        and origin.get("head_branch") in {"main", "mister-magik"}
+        actual_sha == head_sha
+        and branch in {"main", "mister-magik"}
         and origin.get("status", "completed") == "completed"
         and origin.get("conclusion", "success") == "success"
     )
