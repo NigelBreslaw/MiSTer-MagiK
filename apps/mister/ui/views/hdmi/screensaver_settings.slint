@@ -4,7 +4,7 @@
 import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 
-import { AccessibleRole, FeedbackView, ScreensaverSetting, SettingsView } from "../../api.slint";
+import { FeedbackView, ScreensaverSetting, SettingsView } from "../../api.slint";
 
 component SaverRow inherits Rectangle {
     in property <string> label;
@@ -12,7 +12,7 @@ component SaverRow inherits Rectangle {
     in property <bool> focused;
     in property <bool> acknowledged;
     in property <bool> enabled: true;
-    accessible-role: AccessibleRole.list-item;
+    accessible-role: list-item;
     accessible-label: root.label;
     accessible-description: root.detail;
     accessible-item-selected: root.focused;
@@ -30,7 +30,7 @@ component SaverRow inherits Rectangle {
 }
 
 export component ScreensaverSettingsScreen inherits Rectangle {
-    accessible-role: AccessibleRole.main;
+    accessible-role: main;
     accessible-label: "Screensaver settings";
     VerticalLayout {
         padding: 20px;

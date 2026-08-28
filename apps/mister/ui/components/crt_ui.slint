@@ -7,7 +7,6 @@ import { Jersey15 } from "jersey_15.slint";
 import { Jersey25 } from "jersey_25.slint";
 
 import { MisterUi } from "../mister_window.slint";
-import { AccessibleRole } from "../api.slint";
 import { MenuItemStatus } from "../launcher_menu.slint";
 
 export global CrtTheme {
@@ -127,7 +126,7 @@ export component CrtMenuRow inherits Rectangle {
     in property <bool> acknowledged;
     in property <bool> enabled: true;
 
-    accessible-role: AccessibleRole.list-item;
+    accessible-role: list-item;
     accessible-label: root.label;
     accessible-description: root.detail;
     accessible-item-selected: root.focused;
@@ -173,7 +172,7 @@ export component CrtCard inherits Rectangle {
     in property <bool> show-marker: true;
     in property <MenuItemStatus> status: MenuItemStatus.ready;
 
-    accessible-role: AccessibleRole.list-item;
+    accessible-role: list-item;
     accessible-label: root.label;
     accessible-description: root.detail;
     accessible-enabled: true;

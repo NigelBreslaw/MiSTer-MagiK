@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { AccessibleRole, FeedbackView, NavigationView, SystemHubSection } from "../../api.slint";
+import { FeedbackView, NavigationView, SystemHubSection } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
 import { Jersey25 } from "../../components/jersey_25.slint";
 import { Xerxes10, Xerxes10Size } from "../../components/xerxes_10.slint";
@@ -15,7 +15,7 @@ component HubCard inherits Rectangle {
     in property <bool> enabled: true;
     property <color> ink: !enabled ? #665574 : focused ? #06d6a0 : #9b88ae;
 
-    accessible-role: AccessibleRole.list-item;
+    accessible-role: list-item;
     accessible-label: root.label;
     accessible-description: root.detail;
     accessible-enabled: root.enabled;

@@ -4,7 +4,7 @@
 import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
 
 import { MisterUi } from "../../mister_window.slint";
-import { AccessibleRole, ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane, ArcadeSearchStatus, ArcadeView, FeedbackView, LauncherLayout } from "../../api.slint";
+import { ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane, ArcadeSearchStatus, ArcadeView, FeedbackView, LauncherLayout } from "../../api.slint";
 
 component SearchKey inherits Rectangle {
     in property <string> label;
@@ -12,7 +12,7 @@ component SearchKey inherits Rectangle {
     in property <bool> keyboard-focused;
     in property <bool> acknowledged;
 
-    accessible-role: AccessibleRole.button;
+    accessible-role: button;
     accessible-label: root.label;
     accessible-description: "Search keyboard key";
     accessible-item-selected: root.selected;
@@ -58,7 +58,7 @@ component SearchKeyboardRow inherits Rectangle {
 
 component SearchKeyboard inherits Rectangle {
 
-    accessible-role: AccessibleRole.region;
+    accessible-role: region;
     accessible-label: "Search keyboard";
     accessible-description: "Use the keyboard to enter an arcade search";
 
@@ -79,7 +79,7 @@ component SearchKeyboard inherits Rectangle {
             background: #120d1a;
             border-width: ArcadeView.search-pane == ArcadeSearchPane.keyboard ? 2px : 1px;
             border-color: ArcadeView.search-pane == ArcadeSearchPane.keyboard ? #06d6a0 : #352848;
-            accessible-role: AccessibleRole.text-input;
+            accessible-role: text-input;
             accessible-label: "Search query";
             accessible-value: ArcadeView.search-query;
             accessible-enabled: true;
@@ -114,7 +114,7 @@ component SearchKeyboard inherits Rectangle {
                     background: ArcadeView.search-suggestion == "" ? #20182a : #06d6a0;
                     border-width: 1px;
                     border-color: ArcadeView.search-suggestion == "" ? #352848 : #ffffff;
-                    accessible-role: AccessibleRole.button;
+                    accessible-role: button;
                     accessible-label: "Use search suggestion";
                     accessible-description: ArcadeView.search-suggestion;
                     accessible-enabled: ArcadeView.search-suggestion != "";
@@ -158,11 +158,11 @@ export component ArcadeListScreen inherits Rectangle {
     background: #1a1424;
 
     if ArcadeView.drawer-open : Rectangle {
-        accessible-role: AccessibleRole.list;
+        accessible-role: list;
         accessible-label: ArcadeView.drawer-title;
         accessible-description: ArcadeView.active-filter-label;
         for item[index] in ArcadeView.drawer-items : Rectangle {
-            accessible-role: AccessibleRole.list-item;
+            accessible-role: list-item;
             accessible-label: item;
             accessible-item-selected: index == ArcadeView.drawer-selected-index;
             accessible-enabled: true;
@@ -176,7 +176,7 @@ export component ArcadeListScreen inherits Rectangle {
             horizontal-stretch: 1;
             vertical-stretch: 1;
             visible: ArcadeView.list-visible;
-            accessible-role: AccessibleRole.list;
+            accessible-role: list;
             accessible-label: ArcadeView.active-title + " games";
             accessible-description: root.count + " games";
 
@@ -192,7 +192,7 @@ export component ArcadeListScreen inherits Rectangle {
                 border-width: 1px;
                 border-color: #352848;
                 clip: true;
-                accessible-role: AccessibleRole.list;
+                accessible-role: list;
                 accessible-label: "Arcade games";
                 accessible-description: root.count + " games";
             }
@@ -207,7 +207,7 @@ export component ArcadeListScreen inherits Rectangle {
                 background: #120d1a;
                 border-width: 1px;
                 border-color: #352848;
-                accessible-role: AccessibleRole.progress-indicator;
+                accessible-role: progress-indicator;
                 accessible-label: "Loading games";
                 accessible-description: "Loading arcade list";
                 animate opacity { duration: 180ms; }
@@ -233,7 +233,7 @@ export component ArcadeListScreen inherits Rectangle {
             horizontal-stretch: 1;
             vertical-stretch: 1;
             background: #000000;
-            accessible-role: AccessibleRole.region;
+            accessible-role: region;
             accessible-label: "Game preview";
             accessible-description: ArcadeView.active-title;
 
@@ -264,7 +264,7 @@ export component ArcadeListScreen inherits Rectangle {
                     border-width: 1px;
                     border-color: ArcadeView.search-pane == ArcadeSearchPane.results ? #06d6a0 : #352848;
                     clip: true;
-                    accessible-role: AccessibleRole.list;
+                    accessible-role: list;
                     accessible-label: "Search results";
                     accessible-description: root.count + " matches";
 
@@ -302,7 +302,7 @@ export component ArcadeListScreen inherits Rectangle {
             background: black;
             border-width: 1px;
             border-color: #352848;
-            accessible-role: AccessibleRole.region;
+            accessible-role: region;
             accessible-label: "Game preview";
             accessible-description: ArcadeView.active-title;
         }
@@ -316,7 +316,7 @@ export component ArcadeListScreen inherits Rectangle {
             border-width: ArcadeView.search-mode == ArcadeSearchMode.active && ArcadeView.search-pane == ArcadeSearchPane.results ? 2px : 1px;
             border-color: ArcadeView.search-mode == ArcadeSearchMode.active && ArcadeView.search-pane == ArcadeSearchPane.results ? #06d6a0 : #352848;
             clip: true;
-            accessible-role: AccessibleRole.list;
+            accessible-role: list;
             accessible-label: ArcadeView.search-mode == ArcadeSearchMode.active ? "Search results" : "Arcade games";
             accessible-description: root.count + (ArcadeView.search-mode == ArcadeSearchMode.active ? " matches" : " games");
         }

@@ -3,13 +3,13 @@
 
 import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
-import { AccessibleRole, FeedbackView, SettingsView } from "../../api.slint";
+import { FeedbackView, SettingsView } from "../../api.slint";
 
 component LicenseRow inherits Rectangle {
     in property <string> label;
     in property <bool> focused;
     in property <bool> acknowledged;
-    accessible-role: AccessibleRole.list-item;
+    accessible-role: list-item;
     accessible-label: root.label;
     accessible-item-selected: root.focused;
     accessible-enabled: true;
@@ -26,7 +26,7 @@ component LicenseRow inherits Rectangle {
 }
 
 export component LicensesScreen inherits Rectangle {
-    accessible-role: AccessibleRole.main;
+    accessible-role: main;
     accessible-label: "Licenses";
     if !SettingsView.license-expanded : VerticalLayout {
         padding: 24px;
@@ -59,7 +59,7 @@ export component LicensesScreen inherits Rectangle {
             background: #12101a;
             border-width: 1px;
             border-color: #5c4a72;
-            accessible-role: AccessibleRole.region;
+            accessible-role: region;
             accessible-label: "License text";
             accessible-description: SettingsView.license-titles[SettingsView.selected-license-index];
             Flickable {

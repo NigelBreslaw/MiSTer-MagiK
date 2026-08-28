@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterWindow, MisterUi } from "mister_window.slint";
-import { AccessibleRole } from "api.slint";
 export { MisterUi }
 export { Spleen6x12Size } from "components/spleen_6x12.slint";
 import { InputView } from "api.slint";
@@ -10,7 +9,7 @@ export { InputView }
 import { ControllerPanel } from "controller_panel.slint";
 
 export component ControllerTest inherits MisterWindow {
-    accessible-role: AccessibleRole.main;
+    accessible-role: main;
     accessible-label: "MiSTer Controller Test";
     title: "MiSTer Controller Test";
     background: #1a1424;

@@ -6,7 +6,7 @@ import { Spleen5x8, Spleen5x8Size } from "spleen_5x8.slint";
 import { Xerxes10, Xerxes10Size } from "xerxes_10.slint";
 import { Nocive15, Nocive15Size } from "nocive_15.slint";
 
-import { AccessibleRole, CatalogView, NavigationView } from "../api.slint";
+import { CatalogView, NavigationView } from "../api.slint";
 import { MenuItemStatus } from "../launcher_menu.slint";
 
 component ScanningSubtitle inherits VerticalLayout {
@@ -14,7 +14,7 @@ component ScanningSubtitle inherits VerticalLayout {
 
     alignment: center;
     spacing: 2px;
-    accessible-role: AccessibleRole.region;
+    accessible-role: region;
     accessible-label: "Catalog scanning";
     accessible-description: root.detail;
 
@@ -133,7 +133,7 @@ export component LauncherTile inherits Rectangle {
     in property <bool> flat-focus-style: false;
     in property <MenuItemStatus> status: MenuItemStatus.ready;
 
-    accessible-role: AccessibleRole.list-item;
+    accessible-role: list-item;
     accessible-label: root.label;
     accessible-description: root.subtitle;
     accessible-item-selected: root.focused;
@@ -223,7 +223,7 @@ export component SettingsButton inherits Rectangle {
     in property <bool> focused;
     in property <bool> acknowledged;
 
-    accessible-role: AccessibleRole.button;
+    accessible-role: button;
     accessible-label: "Settings";
     accessible-item-selected: root.focused;
 

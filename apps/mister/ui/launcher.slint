@@ -6,8 +6,7 @@ import { Spleen6x12, Spleen6x12Size } from "components/spleen_6x12.slint";
 export { Spleen6x12Size } from "components/spleen_6x12.slint";
 import {
     AboutSection,
-    AccessibleRole,
-    ArcadeListMode,
+        ArcadeListMode,
     ArcadeLoadState,
     ArcadeSearchMode,
     ArcadeSearchPane,
@@ -107,7 +106,7 @@ export { MenuItem, MenuItemKind, MenuItemPresentation } from "launcher_menu.slin
 export component Launcher inherits MisterWindow {
     title: "MiSTer MagiK Launcher";
     background: black;
-    accessible-role: AccessibleRole.main;
+    accessible-role: main;
     accessible-label: "MiSTer MagiK Launcher";
     accessible-description: NavigationView.menu-title;
 
@@ -122,7 +121,7 @@ export component Launcher inherits MisterWindow {
         background: #b00020;
         border-width: 2px;
         border-color: white;
-        accessible-role: AccessibleRole.banner;
+        accessible-role: banner;
         accessible-label: "Input error";
         accessible-description: InputView.fault-notice;
 
