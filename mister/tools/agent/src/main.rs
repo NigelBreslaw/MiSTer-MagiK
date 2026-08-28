@@ -5194,12 +5194,23 @@ mod linux {
             &mut self,
         ) -> io::Result<mister_magik_video_diagnostics_contract::ScalerFetchLivenessState> {
             use mister_magik_video_diagnostics_contract as contract;
-            let words = self
-                .read_diagnostic_words::<{ contract::SCALER_FETCH_LIVENESS_STATE_WORDS }>(
+            // Command 0x68 deliberately acknowledges only while a freshly
+            // published bank is available. The short acknowledge/re-publish
+            // handoff must not be mistaken for an unsupported architecture.
+            let mut attempt = 0;
+            let words = loop {
+                match self.read_diagnostic_words::<{ contract::SCALER_FETCH_LIVENESS_STATE_WORDS }>(
                     contract::GET_SCALER_FETCH_LIVENESS_STATE,
                     contract::SCALER_FETCH_LIVENESS_STATE_MAGIC,
                     "scaler fetch liveness state",
-                )?;
+                ) {
+                    Err(error) if error.kind() == io::ErrorKind::NotFound && attempt < 9 => {
+                        attempt += 1;
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    result => break result?,
+                }
+            };
             contract::decode_scaler_fetch_liveness_state(&words)
                 .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))
         }

@@ -761,7 +761,11 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
                 self.deployment.platform_candidate = platform_candidate;
                 let active = self.device.read_active_runtime()?;
                 self.decision = reconcile_active_runtime(reconciliation.decision, &active);
-                if self.decision != DeliveryDecision::Platform
+                // A runtime delivery may contain the decoder needed to
+                // establish the current FPGA identity. Install that runtime
+                // before using its result to decide whether platform
+                // reconciliation is necessary on the following delivery.
+                if self.decision == DeliveryDecision::NoOp
                     && !self.device.read_development_fpga_activation_current()?
                 {
                     self.decision = DeliveryDecision::Platform;
