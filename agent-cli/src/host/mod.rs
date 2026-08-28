@@ -9248,8 +9248,17 @@ fn wait_gui_profile_snapshot(
     predicate: impl Fn(&Value) -> bool,
     label: &str,
 ) -> Result<Value> {
+    wait_gui_profile_snapshot_with_timeout(config, nonce, predicate, label, Duration::from_secs(10))
+}
+
+fn wait_gui_profile_snapshot_with_timeout(
+    config: &NativeDeviceConfig,
+    nonce: &str,
+    predicate: impl Fn(&Value) -> bool,
+    label: &str,
+    timeout: Duration,
+) -> Result<Value> {
     let started = Instant::now();
-    let timeout = Duration::from_secs(10);
     loop {
         let snapshot = launcher_automation::snapshot(config, nonce)?;
         if predicate(&snapshot) {
@@ -16331,6 +16340,7 @@ fn verify_installed_search_ui(config: &NativeDeviceConfig, output_dir: &Path) ->
                 "arcade".into(),
             ),
         ],
+        Duration::from_secs(10),
     )
 }
 
@@ -16338,6 +16348,7 @@ fn verify_installed_search_ui_with_env(
     config: &NativeDeviceConfig,
     output_dir: &Path,
     env_vars: Vec<(String, String)>,
+    initial_view_timeout: Duration,
 ) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     fs::create_dir_all(output_dir)?;
@@ -16378,7 +16389,7 @@ fn verify_installed_search_ui_with_env(
             .ok_or("search UI automation has no nonce")?
             .to_string();
         nonce = Some(active_nonce.clone());
-        wait_gui_profile_snapshot(
+        wait_gui_profile_snapshot_with_timeout(
             config,
             &active_nonce,
             |snapshot| {
@@ -16389,6 +16400,7 @@ fn verify_installed_search_ui_with_env(
                         == Some(false)
             },
             "search UI cached Arcade entry",
+            initial_view_timeout,
         )?;
         modal_input_action(
             config,
@@ -20019,6 +20031,7 @@ fn run_catalog_attribution_pair(
             config,
             &sample_dir.join("first-use-search-ui"),
             catalog_attribution_search_ui_env(arm),
+            Duration::from_secs(45),
         )?;
         let ui_summary: Value = serde_json::from_str(&ui_detail)?;
         let search_summary = run_catalog_attribution_search_bench(session, sample_dir)?;
