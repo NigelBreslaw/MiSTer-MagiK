@@ -261,8 +261,10 @@ def build_updater(input_manifest: Path, output: Path) -> dict[str, object]:
                     "source_id": source["id"],
                     "size": entry["size"],
                     "md5": entry["hash"],
-                    "header": _mra_header(Path(source["roots"][0]) / normalized),
-                    "primary_rom": _primary_rom(Path(source["roots"][0]) / normalized),
+                    "header": _mra_header(_source_path(source, normalized, entry)),
+                    "primary_rom": _primary_rom(
+                        _source_path(source, normalized, entry)
+                    ),
                 }
     sources.sort(key=lambda value: value["id"])
     ordered_rows = [rows[key] for key in sorted(rows)]
@@ -311,6 +313,21 @@ def _mra_header(path: Path) -> dict[str, str | None]:
         "setname": text("setname"),
         "parent": text("parent"),
     }
+
+
+def _source_path(
+    source: dict[str, Any], normalized: str, entry: dict[str, Any]
+) -> Path:
+    roots = [Path(value) for value in source.get("roots", [])]
+    candidates: list[Path] = []
+    if entry.get("arc_at"):
+        candidates.extend(root / str(entry["arc_at"]).lstrip("/") for root in roots)
+    candidates.extend(root / normalized for root in roots)
+    candidates.extend(root / normalized.removeprefix("_Arcade/") for root in roots)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(normalized)
 
 
 def _primary_rom(path: Path) -> str | dict[str, object]:
