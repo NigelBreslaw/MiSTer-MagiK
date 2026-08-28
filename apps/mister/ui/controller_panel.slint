@@ -4,7 +4,7 @@
 import { Spleen6x12, Spleen6x12Size } from "components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "components/nocive_15.slint";
 
-import { InputAvailability, InputView } from "api.slint";
+import { AccessibleRole, InputAvailability, InputView } from "api.slint";
 import { MisterUi } from "mister_window.slint";
 
 // Palette — flat fills only (software renderer friendly).
@@ -24,6 +24,10 @@ component CircleBtn inherits Rectangle {
     in property <bool> pressed;
     in property <string> caption;
     in property <length> btn-size: 56px;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.caption;
+    accessible-item-selected: root.pressed;
+    accessible-enabled: true;
     width: btn-size;
     height: btn-size;
     border-radius: btn-size / 2;
@@ -44,6 +48,8 @@ component CircleBtn inherits Rectangle {
 
 component DpadArm inherits Rectangle {
     in property <bool> pressed;
+    accessible-role: AccessibleRole.button;
+    accessible-enabled: true;
     width: 36px;
     height: 36px;
     border-radius: 4px;
@@ -57,6 +63,9 @@ component Dpad inherits Rectangle {
     in property <bool> down;
     in property <bool> left;
     in property <bool> right;
+    accessible-role: AccessibleRole.region;
+    accessible-label: "D-pad";
+    accessible-description: (root.up ? "Up " : "") + (root.down ? "Down " : "") + (root.left ? "Left " : "") + (root.right ? "Right" : "");
     width: 148px;
     height: 148px;
 
@@ -107,6 +116,9 @@ component Dpad inherits Rectangle {
 component StickWell inherits Rectangle {
     in property <float> stick-x;
     in property <float> stick-y;
+    accessible-role: AccessibleRole.region;
+    accessible-label: "Analog stick";
+    accessible-value: round(root.stick-x * 100) + "," + round(root.stick-y * 100);
     width: 130px;
     height: 130px;
     border-radius: 65px;
@@ -145,6 +157,10 @@ component StickWell inherits Rectangle {
 component ShoulderBtn inherits Rectangle {
     in property <bool> pressed;
     in property <string> caption;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.caption;
+    accessible-item-selected: root.pressed;
+    accessible-enabled: true;
     width: 140px;
     height: 28px;
     border-radius: 10px;
@@ -164,6 +180,10 @@ component ShoulderBtn inherits Rectangle {
 component PillBtn inherits Rectangle {
     in property <bool> pressed;
     in property <string> caption;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.caption;
+    accessible-item-selected: root.pressed;
+    accessible-enabled: true;
     width: 88px;
     height: 26px;
     border-radius: 13px;
@@ -185,6 +205,10 @@ component SysBtn inherits Rectangle {
     in property <bool> pressed;
     in property <bool> available: true;
     in property <string> caption;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.caption;
+    accessible-item-selected: root.pressed;
+    accessible-enabled: root.available;
     width: 36px;
     height: 36px;
     border-radius: 18px;
@@ -284,6 +308,10 @@ component ControllerBody inherits Rectangle {
     in property <float> left-y;
     in property <float> right-x;
     in property <float> right-y;
+
+    accessible-role: AccessibleRole.region;
+    accessible-label: "Controller input state";
+    accessible-description: InputView.pressed-now;
 
     width: 1180px;
     height: 540px;
@@ -430,6 +458,8 @@ component ControllerBody inherits Rectangle {
 }
 
 export component ControllerPanel inherits Rectangle {
+    accessible-role: AccessibleRole.main;
+    accessible-label: "Controller test";
     if !MisterUi.portrait-layout : VerticalLayout {
         width: 100%;
         height: 100%;

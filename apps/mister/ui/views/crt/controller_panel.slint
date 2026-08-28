@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterUi } from "../../mister_window.slint";
-import { InputView } from "../../api.slint";
+import { AccessibleRole, InputView } from "../../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
 
 export component CrtControllerPanel inherits Rectangle {
+    accessible-role: AccessibleRole.main;
+    accessible-label: "Controller test";
     background: CrtTheme.background;
 
     VerticalLayout {

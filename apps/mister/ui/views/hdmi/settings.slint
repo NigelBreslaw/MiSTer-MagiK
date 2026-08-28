@@ -4,13 +4,19 @@
 import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 
-import { FeedbackView, ScreenOrientation, SettingsSection, SettingsView } from "../../api.slint";
+import { AccessibleRole, FeedbackView, ScreenOrientation, SettingsSection, SettingsView } from "../../api.slint";
 
 component SettingsRow inherits Rectangle {
     in property <string> label;
     in property <string> detail;
     in property <bool> focused;
     in property <bool> acknowledged;
+
+    accessible-role: AccessibleRole.list-item;
+    accessible-label: root.label;
+    accessible-description: root.detail;
+    accessible-item-selected: root.focused;
+    accessible-enabled: true;
 
     height: 52px;
     background: focused ? #2a2236 : #1e1828;
@@ -36,6 +42,9 @@ component SettingsRow inherits Rectangle {
 }
 
 export component SettingsScreen inherits Rectangle {
+
+    accessible-role: AccessibleRole.main;
+    accessible-label: "Settings";
 
     HorizontalLayout {
 

@@ -7,6 +7,7 @@ import { Jersey15 } from "jersey_15.slint";
 import { Jersey25 } from "jersey_25.slint";
 
 import { MisterUi } from "../mister_window.slint";
+import { AccessibleRole } from "../api.slint";
 import { MenuItemStatus } from "../launcher_menu.slint";
 
 export global CrtTheme {
@@ -125,6 +126,12 @@ export component CrtMenuRow inherits Rectangle {
     in property <bool> focused;
     in property <bool> acknowledged;
     in property <bool> enabled: true;
+
+    accessible-role: AccessibleRole.list-item;
+    accessible-label: root.label;
+    accessible-description: root.detail;
+    accessible-item-selected: root.focused;
+    accessible-enabled: root.enabled;
 
     min-height: MisterUi.footer-height;
     background: root.focused ? CrtTheme.accent : CrtTheme.panel-alt;

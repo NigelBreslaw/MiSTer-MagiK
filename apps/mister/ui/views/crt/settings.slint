@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterUi } from "../../mister_window.slint";
-import { FeedbackView, ScreenOrientation, SettingsSection, SettingsView } from "../../api.slint";
+import { AccessibleRole, FeedbackView, ScreenOrientation, SettingsSection, SettingsView } from "../../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
 
 export component SettingsScreen inherits Rectangle {
+    accessible-role: AccessibleRole.main;
+    accessible-label: "Settings";
     background: CrtTheme.background;
 
     VerticalLayout {
