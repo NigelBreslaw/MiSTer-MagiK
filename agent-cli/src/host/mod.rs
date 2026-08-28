@@ -3012,27 +3012,7 @@ impl CoherentDeliveryActions for PlatformDeliveryActions<'_> {
     }
 
     fn smoke(&mut self) -> std::result::Result<String, DeviceFailure> {
-        let architecture = match verify_installed_fpga_activation(self.config, Layout::Development)
-        {
-            Ok(architecture) => architecture,
-            Err(first_identity_failure) => {
-                let session = connect_with(&self.config.connection, 10).map_err(device_failure)?;
-                if let Err(activation_error) = activate_installed_menu_fpga(self.config, &session) {
-                    return Err(DeviceFailure::Unhealthy(format!(
-                        "FPGA identity verification failed ({first_identity_failure:?}); bounded Main-owned reload failed ({activation_error}); main_console={}",
-                        main_console_snapshot(&session)
-                    )));
-                }
-                let main_console = main_console_snapshot(&session);
-                verify_installed_fpga_activation(self.config, Layout::Development).map_err(
-                    |second_identity_failure| {
-                        DeviceFailure::Unhealthy(format!(
-                            "FPGA identity verification failed after bounded Main-owned reload: {second_identity_failure:?}; main_console={main_console}"
-                        ))
-                    },
-                )?
-            }
-        };
+        let architecture = platform_fpga_smoke(self.config)?;
         let detail = smoke_development_delivery(self.config, self.expected_sha256)?;
         Ok(format!("{detail} fpga_architecture={architecture}"))
     }
@@ -3572,6 +3552,9 @@ const EXPERIMENTAL_FPGA_METADATA_REMOTE: &str =
 const PATCHED_DIAGNOSTIC_ARCHITECTURE: &str = "scaler-fetch-liveness-first-stall-v1";
 const PLATFORM_V0_34_SCHEMA14_RBF_SHA256: &str =
     "ef1920500c925d35b23808792f0930954446a6030b33d3e92c0f4feccd23106e";
+const FPGA_READINESS_TIMEOUT: Duration = Duration::from_secs(10);
+const FPGA_READINESS_POLL: Duration = Duration::from_millis(100);
+const FPGA_FALLBACK_STREAK: usize = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FpgaCheckFailure {
@@ -3618,6 +3601,31 @@ impl FpgaActivationAssessment {
                 render_fpga_check_failures(failures)
             ),
             Self::ArtifactInvalid { detail } => detail.clone(),
+        }
+    }
+
+    fn reloadable_fallback(&self) -> bool {
+        matches!(
+            self,
+            Self::NotReady {
+                observed,
+                ..
+            } if observed == "unavailable" || observed == "unverified-observer-fallback-v1"
+        )
+    }
+
+    fn into_stale(self) -> Self {
+        match self {
+            Self::NotReady {
+                expected,
+                observed,
+                failures,
+            } => Self::Stale {
+                expected,
+                observed,
+                failures,
+            },
+            assessment => assessment,
         }
     }
 }
@@ -3811,6 +3819,86 @@ fn verify_installed_fpga_activation(
             Err(DeviceFailure::ArtifactMismatch(detail))
         }
     }
+}
+
+fn wait_for_fpga_activation(
+    config: &NativeDeviceConfig,
+) -> std::result::Result<FpgaActivationAssessment, DeviceFailure> {
+    let started = Instant::now();
+    let mut previous_reason = None;
+    let mut fallback_streak = 0;
+    loop {
+        let assessment = probe_installed_fpga_activation(config, Layout::Development)?;
+        match &assessment {
+            FpgaActivationAssessment::Current { .. }
+            | FpgaActivationAssessment::Stale { .. }
+            | FpgaActivationAssessment::ArtifactInvalid { .. } => return Ok(assessment),
+            FpgaActivationAssessment::NotReady { .. } => {
+                let reason = assessment.reason();
+                if previous_reason.as_deref() == Some(reason.as_str())
+                    && assessment.reloadable_fallback()
+                {
+                    fallback_streak += 1;
+                } else {
+                    fallback_streak = 1;
+                }
+                previous_reason = Some(reason);
+                if fallback_streak >= FPGA_FALLBACK_STREAK
+                    && started.elapsed() >= Duration::from_millis(500)
+                {
+                    return Ok(assessment.into_stale());
+                }
+                if started.elapsed() >= FPGA_READINESS_TIMEOUT {
+                    return Ok(assessment);
+                }
+                thread::sleep(FPGA_READINESS_POLL);
+            }
+        }
+    }
+}
+
+fn console_snapshot_for_config(config: &NativeDeviceConfig) -> String {
+    connect_with(&config.connection, 10)
+        .ok()
+        .map(|session| main_console_snapshot(&session))
+        .unwrap_or_else(|| "unavailable".into())
+}
+
+fn platform_fpga_smoke(config: &NativeDeviceConfig) -> std::result::Result<String, DeviceFailure> {
+    let initial = wait_for_fpga_activation(config)?;
+    let architecture = match initial {
+        FpgaActivationAssessment::Current { architecture } => architecture,
+        FpgaActivationAssessment::ArtifactInvalid { detail } => {
+            return Err(DeviceFailure::ArtifactMismatch(detail));
+        }
+        assessment @ (FpgaActivationAssessment::Stale { .. }
+        | FpgaActivationAssessment::NotReady { .. }) => {
+            let initial_reason = assessment.reason();
+            let session = connect_with(&config.connection, 10).map_err(device_failure)?;
+            if let Err(reload_error) = activate_installed_menu_fpga(config, &session) {
+                return Err(DeviceFailure::Unhealthy(format!(
+                    "FPGA activation assessment failed: {initial_reason}; bounded Main-owned reload failed: {reload_error}; main_console={}",
+                    main_console_snapshot(&session)
+                )));
+            }
+            match wait_for_fpga_activation(config)? {
+                FpgaActivationAssessment::Current { architecture } => architecture,
+                FpgaActivationAssessment::ArtifactInvalid { detail } => {
+                    return Err(DeviceFailure::ArtifactMismatch(format!(
+                        "FPGA became artifact-invalid after reload: {detail}"
+                    )));
+                }
+                assessment => {
+                    return Err(DeviceFailure::Unhealthy(format!(
+                        "FPGA activation did not become current after bounded Main-owned reload: before={initial_reason} after={}; main_console={}",
+                        assessment.reason(),
+                        console_snapshot_for_config(config)
+                    )));
+                }
+            }
+        }
+    };
+    Ok(architecture)
 }
 
 fn validate_experimental_fpga_inputs(
@@ -38684,6 +38772,20 @@ H: Handlers=event3 js0"#
             FpgaActivationAssessment::NotReady { .. }
         ));
         assert!(not_ready.reason().contains("coherence"));
+    }
+
+    #[test]
+    fn fallback_readiness_can_be_promoted_to_one_reloadable_stale_state() {
+        let fallback = FpgaActivationAssessment::NotReady {
+            expected: PATCHED_DIAGNOSTIC_ARCHITECTURE.into(),
+            observed: "unverified-observer-fallback-v1".into(),
+            failures: Vec::new(),
+        };
+        assert!(fallback.reloadable_fallback());
+        assert!(matches!(
+            fallback.into_stale(),
+            FpgaActivationAssessment::Stale { .. }
+        ));
     }
 
     #[test]
