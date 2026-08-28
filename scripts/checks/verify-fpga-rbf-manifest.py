@@ -79,6 +79,7 @@ def verify(
             (
                 "latch_bridge_sha256",
                 "latch_capability_mask",
+                "diagnostic_architecture",
                 "component_input_sha256",
                 "component_revision",
             )
@@ -137,6 +138,11 @@ def verify(
         raise ValueError(f"release must bind latch protocol version {expected_protocol}")
     if not historical_v2 and fields["latch_capability_mask"] != "0x03ff":
         raise ValueError("release must bind latch capability mask 0x03ff")
+    if not historical_v2 and fields["diagnostic_architecture"] not in (
+        "scaler-fetch-liveness-first-stall-v1",
+        "stock-uninstrumented-v1",
+    ):
+        raise ValueError("release must identify its diagnostic architecture")
     if not fields["quartus_version"].startswith("17.0"):
         raise ValueError("release must use Quartus 17.0")
     if not fields["workflow_url"].startswith("https://"):

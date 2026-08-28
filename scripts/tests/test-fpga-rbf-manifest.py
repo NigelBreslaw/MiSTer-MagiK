@@ -52,6 +52,11 @@ class ManifestTest(unittest.TestCase):
                 "latch_protocol_sha256=" + "7" * 64,
                 "latch_protocol_version=" + ("2" if historical_v2 else "5"),
                 *(() if historical_v2 else ("latch_capability_mask=0x03ff",)),
+                *(
+                    ()
+                    if historical_v2
+                    else ("diagnostic_architecture=scaler-fetch-liveness-first-stall-v1",)
+                ),
                 "quartus_seed=" + ("1" if historical_v2 else "2"),
                 "quartus_version=17.0.0 Build 595",
                 "workflow_url=https://github.example/actions/runs/1",

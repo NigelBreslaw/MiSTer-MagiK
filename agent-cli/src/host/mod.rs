@@ -3005,7 +3005,27 @@ impl CoherentDeliveryActions for PlatformDeliveryActions<'_> {
     }
 
     fn smoke(&mut self) -> std::result::Result<String, DeviceFailure> {
-        smoke_development_delivery(self.config, self.expected_sha256)
+        let architecture = match verify_installed_fpga_activation(self.config, Layout::Development)
+        {
+            Ok(architecture) => architecture,
+            Err(first_identity_failure) => {
+                let session = connect_with(&self.config.connection, 10).map_err(device_failure)?;
+                activate_installed_menu_fpga(self.config, &session).map_err(|activation_error| {
+                    DeviceFailure::Unhealthy(format!(
+                        "FPGA identity verification failed ({first_identity_failure:?}); bounded Main-owned reload failed ({activation_error})"
+                    ))
+                })?;
+                verify_installed_fpga_activation(self.config, Layout::Development).map_err(
+                    |second_identity_failure| {
+                        DeviceFailure::Unhealthy(format!(
+                            "FPGA identity verification failed after bounded Main-owned reload: {second_identity_failure:?}"
+                        ))
+                    },
+                )?
+            }
+        };
+        let detail = smoke_development_delivery(self.config, self.expected_sha256)?;
+        Ok(format!("{detail} fpga_architecture={architecture}"))
     }
 
     fn commit(&mut self) -> std::result::Result<(), DeviceFailure> {
@@ -3540,6 +3560,9 @@ const EXPERIMENTAL_FPGA_RBF_REMOTE: &str =
     mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.latch_rbf;
 const EXPERIMENTAL_FPGA_METADATA_REMOTE: &str =
     mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.latch_metadata;
+const PATCHED_DIAGNOSTIC_ARCHITECTURE: &str = "scaler-fetch-liveness-first-stall-v1";
+const PLATFORM_V0_34_SCHEMA14_RBF_SHA256: &str =
+    "ef1920500c925d35b23808792f0930954446a6030b33d3e92c0f4feccd23106e";
 
 fn experimental_fpga_transaction_remote() -> String {
     installed_layout::app_path(Layout::Development, "experimental-fpga.delivery-state")
@@ -3556,6 +3579,62 @@ fn unique_field(text: &str, name: &str) -> Result<String> {
         return Err(format!("field {name} is empty or duplicated").into());
     }
     Ok(value.to_owned())
+}
+
+fn expected_fpga_architecture(metadata: &str) -> Result<String> {
+    if metadata
+        .lines()
+        .any(|line| line.starts_with("diagnostic_architecture="))
+    {
+        return unique_field(metadata, "diagnostic_architecture");
+    }
+    if unique_field(metadata, "rbf_sha256")? == PLATFORM_V0_34_SCHEMA14_RBF_SHA256 {
+        return Ok(PATCHED_DIAGNOSTIC_ARCHITECTURE.to_owned());
+    }
+    Err("installed FPGA metadata does not identify the expected diagnostic architecture".into())
+}
+
+fn verify_installed_fpga_activation(
+    config: &NativeDeviceConfig,
+    layout: Layout,
+) -> std::result::Result<String, DeviceFailure> {
+    let session = connect_with(&config.connection, 10).map_err(device_failure)?;
+    let metadata = remote_read(&session, installed_layout::paths(layout).latch_metadata)
+        .ok_or_else(|| {
+            DeviceFailure::ArtifactMismatch(
+                "installed FPGA metadata is missing after activation".into(),
+            )
+        })?;
+    let expected = expected_fpga_architecture(&metadata)
+        .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))?;
+    let response = agent_request_at(
+        config.agent().map_err(device_failure)?,
+        "diagnostics",
+        json!({}),
+        Duration::from_secs(5),
+    )
+    .map_err(device_failure)?;
+    let evidence = response
+        .response
+        .pointer("/result/fpga_video_diagnostics")
+        .ok_or_else(|| {
+            DeviceFailure::Unhealthy("active FPGA returned no diagnostic identity".into())
+        })?;
+    let active = evidence
+        .get("diagnostic_architecture")
+        .and_then(Value::as_str)
+        .unwrap_or("unavailable");
+    if active != expected {
+        return Err(DeviceFailure::Unhealthy(format!(
+            "active FPGA identity mismatch: expected={expected} active={active}"
+        )));
+    }
+    if !experimental_fpga_evidence_is_current(evidence) {
+        return Err(DeviceFailure::Unhealthy(format!(
+            "active FPGA identity is not coherent: expected={expected}"
+        )));
+    }
+    Ok(expected)
 }
 
 fn validate_experimental_fpga_inputs(
@@ -38321,6 +38400,31 @@ H: Handlers=event3 js0"#
     fn shell_quote_handles_single_quotes() {
         assert_eq!(sh("/tmp/simple"), "'/tmp/simple'");
         assert_eq!(sh("a'b"), "'a'\"'\"'b'");
+    }
+
+    #[test]
+    fn installed_fpga_metadata_identifies_the_expected_observer() {
+        assert_eq!(
+            expected_fpga_architecture(
+                "rbf_sha256=ignored\ndiagnostic_architecture=scaler-fetch-liveness-first-stall-v1\n"
+            )
+            .unwrap(),
+            PATCHED_DIAGNOSTIC_ARCHITECTURE
+        );
+        assert_eq!(
+            expected_fpga_architecture(&format!(
+                "rbf_sha256={PLATFORM_V0_34_SCHEMA14_RBF_SHA256}\n"
+            ))
+            .unwrap(),
+            PATCHED_DIAGNOSTIC_ARCHITECTURE
+        );
+        assert!(expected_fpga_architecture(&format!("rbf_sha256={}\n", "0".repeat(64))).is_err());
+        assert!(
+            expected_fpga_architecture(
+                "diagnostic_architecture=one\ndiagnostic_architecture=two\nrbf_sha256=ignored\n"
+            )
+            .is_err()
+        );
     }
 
     #[test]
