@@ -45,8 +45,8 @@ repositories.
 
 - Use `$magik-rust-lsp` for Rust/Cargo navigation and diagnostics. Use the Slint
   MCP for Slint behavior. Do not construct Cargo, test, lint, hook, host
-  assurance, ARM, or Apple-container commands; pre-commit, pre-push, native Linux
-  CI, and other CI groups own full assurance.
+  assurance, ARM, or Apple-container commands; pre-commit, pre-push, native Linux CI,
+  and other CI groups own full assurance.
 - `scripts/agent plan` previews affected assurance. Agents use the typed
   `scripts/agent deliver`, `benchmark`, and `diagnose` workflows. Human device
   operations use attended `scripts/agent device` commands. Never use raw
