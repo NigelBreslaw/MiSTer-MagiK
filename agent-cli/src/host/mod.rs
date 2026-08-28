@@ -26,7 +26,6 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod agent_client;
-mod arcade_database;
 mod crt_qualification;
 mod discovery;
 mod framebuffer_views;
@@ -40,7 +39,6 @@ mod platform_deploy;
 mod remote;
 mod startup_particles;
 mod tracefs;
-mod updater_arcade;
 
 pub(crate) use startup_particles::SceneLabRequest;
 
@@ -4990,39 +4988,6 @@ fn device_failure(error: impl std::fmt::Display) -> DeviceFailure {
     } else {
         DeviceFailure::OperationFailed(detail)
     }
-}
-
-pub(crate) fn run_local_data_args(mut args: Vec<String>) -> Result<()> {
-    let Some(action) = args.first().cloned() else {
-        return Err("missing local data operation".into());
-    };
-    args.remove(0);
-    match action.as_str() {
-        "mame-metadata-build" => {
-            mame_metadata_build(&args)?;
-        }
-        "arcade-database-import" => {
-            let sqlite = option_value(&args, "--sqlite")
-                .ok_or("arcade-database-import needs --sqlite <mame.sqlite3>")?;
-            let csv = option_value(&args, "--csv")
-                .ok_or("arcade-database-import needs --csv <ArcadeDatabase.csv>")?;
-            let source_sha = option_value(&args, "--source-sha")
-                .ok_or("arcade-database-import needs --source-sha <commit>")?;
-            let summary =
-                arcade_database::import(Path::new(&sqlite), Path::new(&csv), &source_sha)?;
-            println!("{}", serde_json::to_string(&summary)?);
-        }
-        "arcade-updater-index-build" => {
-            let input_manifest = option_value(&args, "--input-manifest")
-                .ok_or("arcade-updater-index-build needs --input-manifest <inputs.json>")?;
-            let output = option_value(&args, "--out")
-                .ok_or("arcade-updater-index-build needs --out <index.lz4b>")?;
-            let summary = updater_arcade::build(Path::new(&input_manifest), Path::new(&output))?;
-            println!("{}", serde_json::to_string(&summary)?);
-        }
-        other => return Err(format!("unknown local data operation: {other}").into()),
-    }
-    Ok(())
 }
 
 fn install_prepared_device_environment(config: &NativeDeviceConfig) {

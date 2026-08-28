@@ -52,6 +52,9 @@ repositories.
   operations use attended `scripts/agent device` commands. Never use raw
   SSH/SCP or generic remote-shell orchestration. Use `scripts/agent db report`,
   never ad-hoc SQL.
+- CI host orchestration and release artifact processing use `scripts/magik-ci`
+  (Python); the Rust agent is reserved for attended device and delivery
+  operations.
 - Dependency changes use `scripts/agent dependencies sync PATH/Cargo.toml` and
   include only the owning manifest plus adjacent lockfile.
 - Stage exact paths with `git add -- PATH...` and commit with

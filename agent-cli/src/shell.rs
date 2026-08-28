@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 pub(crate) fn agent_retry_command(args: &[String]) -> String {
-    std::iter::once("scripts/agent".to_owned())
+    let entrypoint = if args.get(1).map(String::as_str) == Some("ci") {
+        "scripts/magik-ci"
+    } else {
+        "scripts/agent"
+    };
+    std::iter::once(entrypoint.to_owned())
         .chain(args.iter().skip(1).map(|arg| quote(arg)))
         .collect::<Vec<_>>()
         .join(" ")
@@ -39,7 +44,7 @@ mod tests {
         .map(str::to_owned);
         assert_eq!(
             agent_retry_command(&args),
-            "scripts/agent ci host-assurance --paths 'Quoted path' '' 'it'\\''s' safe/path-1.2"
+            "scripts/magik-ci ci host-assurance --paths 'Quoted path' '' 'it'\\''s' safe/path-1.2"
         );
     }
 }

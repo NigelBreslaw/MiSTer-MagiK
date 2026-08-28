@@ -9,7 +9,7 @@ OUT="${1:-$ROOT/build/alpha-release}"
 BIN="$ROOT/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
 
 if [[ "${2:-}" != "--skip-build" ]]; then
-  "$ROOT/scripts/agent" build runtime-device
+  "$ROOT/scripts/magik-ci" build runtime-device
 fi
 
 python3 "$ROOT/scripts/release/packaging/generate-third-party-licenses.py"

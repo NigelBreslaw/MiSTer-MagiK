@@ -1,8 +1,9 @@
 # AGENTS.md - host scripts
 
 Scripts own thin host validation, packaging, conversion, CI, release-data, and
-analysis entrypoints. Device, build, deployment, profiling, acceptance, and
-recovery orchestration belongs in typed Rust.
+analysis entrypoints. `scripts/magik-ci` is the Python implementation for CI
+and release artifact processing; device, deployment, profiling, acceptance,
+and recovery orchestration remains typed Rust.
 
 - Use Bash with `set -euo pipefail` and preserve macOS Bash compatibility.
 - Preserve stable command shapes used by sandbox approvals.
