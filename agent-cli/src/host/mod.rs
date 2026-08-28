@@ -3577,6 +3577,71 @@ const PATCHED_DIAGNOSTIC_ARCHITECTURE: &str = "scaler-fetch-liveness-first-stall
 const PLATFORM_V0_34_SCHEMA14_RBF_SHA256: &str =
     "ef1920500c925d35b23808792f0930954446a6030b33d3e92c0f4feccd23106e";
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FpgaCheckFailure {
+    pub(crate) check: String,
+    pub(crate) expected: String,
+    pub(crate) actual: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FpgaActivationAssessment {
+    Current {
+        architecture: String,
+    },
+    Stale {
+        expected: String,
+        observed: String,
+        failures: Vec<FpgaCheckFailure>,
+    },
+    NotReady {
+        expected: String,
+        observed: String,
+        failures: Vec<FpgaCheckFailure>,
+    },
+    ArtifactInvalid {
+        detail: String,
+    },
+}
+
+impl FpgaActivationAssessment {
+    pub(crate) fn reason(&self) -> String {
+        match self {
+            Self::Current { architecture } => format!("current architecture={architecture}"),
+            Self::Stale {
+                expected,
+                observed,
+                failures,
+            }
+            | Self::NotReady {
+                expected,
+                observed,
+                failures,
+            } => format!(
+                "expected={expected} observed={observed} checks={}",
+                render_fpga_check_failures(failures)
+            ),
+            Self::ArtifactInvalid { detail } => detail.clone(),
+        }
+    }
+}
+
+fn render_fpga_check_failures(failures: &[FpgaCheckFailure]) -> String {
+    if failures.is_empty() {
+        return "none".into();
+    }
+    failures
+        .iter()
+        .map(|failure| {
+            format!(
+                "{} expected={} actual={}",
+                failure.check, failure.expected, failure.actual
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn main_console_snapshot(session: &Session) -> String {
     let Some(raw) = remote_read(session, "/dev/vcs1") else {
         return "unavailable".into();
@@ -3617,19 +3682,92 @@ fn expected_fpga_architecture(metadata: &str) -> Result<String> {
     Err("installed FPGA metadata does not identify the expected diagnostic architecture".into())
 }
 
-fn verify_installed_fpga_activation(
+fn assess_fpga_evidence(expected: &str, evidence: &Value) -> FpgaActivationAssessment {
+    let observed = evidence
+        .get("diagnostic_architecture")
+        .and_then(Value::as_str)
+        .unwrap_or("unavailable")
+        .to_owned();
+    let mut failures = Vec::new();
+    if observed != expected {
+        failures.push(FpgaCheckFailure {
+            check: "diagnostic_architecture".into(),
+            expected: expected.into(),
+            actual: observed.clone(),
+        });
+    }
+    if evidence.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-fpga-video-diagnostics-v2")
+    {
+        failures.push(FpgaCheckFailure {
+            check: "schema".into(),
+            expected: "mister-magik-fpga-video-diagnostics-v2".into(),
+            actual: evidence
+                .get("schema")
+                .and_then(Value::as_str)
+                .unwrap_or("unavailable")
+                .into(),
+        });
+    }
+    let current = observed == expected && experimental_fpga_evidence_is_current(evidence);
+    if !current {
+        failures.push(FpgaCheckFailure {
+            check: "coherence".into(),
+            expected: "current".into(),
+            actual: evidence
+                .get("classification")
+                .and_then(Value::as_str)
+                .unwrap_or("inconclusive")
+                .into(),
+        });
+    }
+    if current {
+        return FpgaActivationAssessment::Current {
+            architecture: expected.into(),
+        };
+    }
+    let passive_fallback = observed == "unavailable"
+        || observed == "unverified-observer-fallback-v1"
+        || evidence
+            .get("passive_observer_probe_error")
+            .and_then(Value::as_str)
+            .is_some();
+    if observed != expected && !passive_fallback {
+        FpgaActivationAssessment::Stale {
+            expected: expected.into(),
+            observed,
+            failures,
+        }
+    } else {
+        FpgaActivationAssessment::NotReady {
+            expected: expected.into(),
+            observed,
+            failures,
+        }
+    }
+}
+
+fn probe_installed_fpga_activation(
     config: &NativeDeviceConfig,
     layout: Layout,
-) -> std::result::Result<String, DeviceFailure> {
+) -> std::result::Result<FpgaActivationAssessment, DeviceFailure> {
     let session = connect_with(&config.connection, 10).map_err(device_failure)?;
-    let metadata = remote_read(&session, installed_layout::paths(layout).latch_metadata)
-        .ok_or_else(|| {
-            DeviceFailure::ArtifactMismatch(
-                "installed FPGA metadata is missing after activation".into(),
-            )
-        })?;
-    let expected = expected_fpga_architecture(&metadata)
-        .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))?;
+    let metadata = match remote_read(&session, installed_layout::paths(layout).latch_metadata) {
+        Some(metadata) => metadata,
+        None => {
+            return Ok(FpgaActivationAssessment::ArtifactInvalid {
+                detail: "installed FPGA metadata is missing after activation".into(),
+            });
+        }
+    };
+    let expected = match expected_fpga_architecture(&metadata) {
+        Ok(expected) => expected,
+        Err(error) => {
+            return Ok(FpgaActivationAssessment::ArtifactInvalid {
+                detail: error.to_string(),
+            });
+        }
+    };
     let response = agent_request_at(
         config.agent().map_err(device_failure)?,
         "diagnostics",
@@ -3637,31 +3775,46 @@ fn verify_installed_fpga_activation(
         Duration::from_secs(5),
     )
     .map_err(device_failure)?;
-    let evidence = response
-        .response
-        .pointer("/result/fpga_video_diagnostics")
-        .ok_or_else(|| {
-            DeviceFailure::Unhealthy("active FPGA returned no diagnostic identity".into())
-        })?;
-    let active = evidence
-        .get("diagnostic_architecture")
-        .and_then(Value::as_str)
-        .unwrap_or("unavailable");
-    if active != expected {
-        let probe_error = evidence
-            .get("passive_observer_probe_error")
-            .and_then(Value::as_str)
-            .unwrap_or("unavailable");
-        return Err(DeviceFailure::Unhealthy(format!(
-            "active FPGA identity mismatch: expected={expected} active={active} passive_observer_probe={probe_error}"
-        )));
+    let evidence = match response.response.pointer("/result/fpga_video_diagnostics") {
+        Some(evidence) => evidence,
+        None => {
+            return Ok(FpgaActivationAssessment::NotReady {
+                expected,
+                observed: "unavailable".into(),
+                failures: vec![FpgaCheckFailure {
+                    check: "fpga_video_diagnostics".into(),
+                    expected: "present".into(),
+                    actual: "missing".into(),
+                }],
+            });
+        }
+    };
+    Ok(assess_fpga_evidence(&expected, evidence))
+}
+
+fn verify_installed_fpga_activation(
+    config: &NativeDeviceConfig,
+    layout: Layout,
+) -> std::result::Result<String, DeviceFailure> {
+    match probe_installed_fpga_activation(config, layout)? {
+        FpgaActivationAssessment::Current { architecture } => Ok(architecture),
+        FpgaActivationAssessment::Stale {
+            expected,
+            observed,
+            failures,
+        }
+        | FpgaActivationAssessment::NotReady {
+            expected,
+            observed,
+            failures,
+        } => Err(DeviceFailure::Unhealthy(format!(
+            "active FPGA identity is not current: expected={expected} observed={observed} checks={}",
+            render_fpga_check_failures(&failures)
+        ))),
+        FpgaActivationAssessment::ArtifactInvalid { detail } => {
+            Err(DeviceFailure::ArtifactMismatch(detail))
+        }
     }
-    if !experimental_fpga_evidence_is_current(evidence) {
-        return Err(DeviceFailure::Unhealthy(format!(
-            "active FPGA identity is not coherent: expected={expected}"
-        )));
-    }
-    Ok(expected)
 }
 
 fn validate_experimental_fpga_inputs(
@@ -38507,6 +38660,34 @@ H: Handlers=event3 js0"#
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn fpga_activation_assessment_separates_stale_from_not_ready() {
+        let stale = assess_fpga_evidence(
+            PATCHED_DIAGNOSTIC_ARCHITECTURE,
+            &json!({
+                "schema": "mister-magik-fpga-video-diagnostics-v2",
+                "diagnostic_architecture": "raw-scaler-boundary-v1",
+                "classification": "raw_scaler_active"
+            }),
+        );
+        assert!(matches!(&stale, FpgaActivationAssessment::Stale { .. }));
+        assert!(stale.reason().contains("diagnostic_architecture"));
+
+        let not_ready = assess_fpga_evidence(
+            PATCHED_DIAGNOSTIC_ARCHITECTURE,
+            &json!({
+                "schema": "mister-magik-fpga-video-diagnostics-v2",
+                "diagnostic_architecture": "unverified-observer-fallback-v1",
+                "passive_observer_probe_error": "unsupported"
+            }),
+        );
+        assert!(matches!(
+            &not_ready,
+            FpgaActivationAssessment::NotReady { .. }
+        ));
+        assert!(not_ready.reason().contains("coherence"));
     }
 
     #[test]
