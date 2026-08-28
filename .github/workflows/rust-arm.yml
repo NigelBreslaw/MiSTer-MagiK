@@ -93,11 +93,11 @@ jobs:
       - name: Install Python toolchain
         uses: ./.github/actions/setup-python-tools
       - name: Check formatting
-        run: uv run ruff format --check scripts
+        run: uv run ruff format --check scripts apps/mister/ui_tests
       - name: Lint maintained scripts
-        run: uv run ruff check scripts
+        run: uv run ruff check scripts apps/mister/ui_tests
       - name: Type-check migrated tooling
-        run: uv run ty check scripts/magik_ci scripts/tests/test_magik_ci.py
+        run: uv run ty check scripts apps/mister/ui_tests
       - name: Run Python tests
         run: uv run pytest scripts/tests -q
 
