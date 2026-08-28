@@ -4,7 +4,7 @@
 import { Spleen6x12 } from "../../components/spleen_6x12.slint";
 
 import { MisterUi } from "../../mister_window.slint";
-import { ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane, ArcadeSearchStatus, ArcadeView, FeedbackView, LauncherLayout } from "../../api.slint";
+import { AccessibleRole, ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane, ArcadeSearchStatus, ArcadeView, FeedbackView, LauncherLayout } from "../../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter } from "../../components/crt_ui.slint";
 
 component SearchKey inherits Rectangle {
@@ -12,6 +12,12 @@ component SearchKey inherits Rectangle {
     in property <bool> selected;
     in property <bool> keyboard-focused;
     in property <bool> acknowledged;
+
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.label;
+    accessible-description: "Search keyboard key";
+    accessible-item-selected: root.selected;
+    accessible-enabled: true;
 
     height: MisterUi.footer-height;
     background: selected && keyboard-focused ? CrtTheme.accent : CrtTheme.panel-alt;
@@ -48,6 +54,9 @@ component SearchKeyboardRow inherits Rectangle {
 }
 
 component SearchKeyboard inherits Rectangle {
+    accessible-role: AccessibleRole.region;
+    accessible-label: "Search keyboard";
+    accessible-description: "Use the keyboard to enter an arcade search";
     background: CrtTheme.background;
 
     VerticalLayout {
@@ -59,6 +68,10 @@ component SearchKeyboard inherits Rectangle {
             background: CrtTheme.panel-alt;
             border-width: MisterUi.border;
             border-color: ArcadeView.search-pane == ArcadeSearchPane.keyboard ? CrtTheme.accent : CrtTheme.border;
+            accessible-role: AccessibleRole.text-input;
+            accessible-label: "Search query";
+            accessible-value: ArcadeView.search-query;
+            accessible-enabled: true;
 
             Spleen6x12 {
                 x: MisterUi.grid-x;
@@ -118,6 +131,9 @@ export component ArcadeListScreen inherits Rectangle {
         border-width: MisterUi.border;
         border-color: ArcadeView.search-pane == ArcadeSearchPane.results ? CrtTheme.accent : CrtTheme.border;
         clip: true;
+        accessible-role: AccessibleRole.list;
+        accessible-label: ArcadeView.search-mode == ArcadeSearchMode.active ? "Search results" : "Arcade games";
+        accessible-description: root.count + (ArcadeView.search-mode == ArcadeSearchMode.active ? " matches" : " games");
 
         Spleen6x12 {
             width: parent.width;
@@ -140,6 +156,9 @@ export component ArcadeListScreen inherits Rectangle {
         width: LauncherLayout.arcade-list.width * 1px;
         height: LauncherLayout.arcade-list.height * 1px;
         background: CrtTheme.panel-alt;
+        accessible-role: AccessibleRole.status;
+        accessible-label: "Loading games";
+        accessible-description: "Loading arcade list";
 
         Spleen6x12 {
             text: "Loading list...";
