@@ -4964,6 +4964,13 @@ pub(super) fn run_launcher_loop(
 ) {
     let launcher_ui_actions = LauncherUiActionsAdapter::install(&app);
     let start = Instant::now();
+    #[cfg(feature = "ui-device-tests")]
+    let ui_test_fixture = std::env::var(crate::ui_test_support::FIXTURE_ENV)
+        .ok()
+        .as_deref()
+        == Some(crate::ui_test_support::DETERMINISTIC_FIXTURE);
+    #[cfg(not(feature = "ui-device-tests"))]
+    let ui_test_fixture = false;
     let mut ui_action_sequence = 0u64;
     let startup_monotonic_us = monotonic_clock_us().unwrap_or(0);
     let mut frames = 0u64;
@@ -5064,7 +5071,7 @@ pub(super) fn run_launcher_loop(
         .is_some()
         .then(|| benchmark_config.start_menu().map(str::to_owned))
         .flatten();
-    let start_screen = orientation_benchmark
+    let configured_start_screen = orientation_benchmark
         .enabled()
         .then_some(Screen::Settings)
         .or_else(|| {
@@ -5078,6 +5085,18 @@ pub(super) fn run_launcher_loop(
         .or_else(|| env_start_system.as_ref().map(|_| Screen::Arcade))
         .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade))
         .unwrap_or(Screen::Home);
+    #[cfg(feature = "ui-device-tests")]
+    let start_screen = if ui_test_fixture {
+        match std::env::var("MISTER_UI_TEST_FEATURE").ok().as_deref() {
+            Some("arcade") => Screen::Arcade,
+            Some("settings") => Screen::Settings,
+            _ => Screen::Home,
+        }
+    } else {
+        configured_start_screen
+    };
+    #[cfg(not(feature = "ui-device-tests"))]
+    let start_screen = configured_start_screen;
     let lock_screen = benchmark_config
         .lock_screen()
         .or_else(|| {
@@ -5440,13 +5459,6 @@ pub(super) fn run_launcher_loop(
         .unwrap_or_else(|| empty_arcade_catalog(&arcade_root));
     let mut catalog_ready = !catalog.is_empty();
     let mut return_capsule_active = catalog_ready;
-    #[cfg(feature = "ui-device-tests")]
-    let ui_test_fixture = std::env::var(crate::ui_test_support::FIXTURE_ENV)
-        .ok()
-        .as_deref()
-        == Some(crate::ui_test_support::DETERMINISTIC_FIXTURE);
-    #[cfg(not(feature = "ui-device-tests"))]
-    let ui_test_fixture = false;
     if ui_test_fixture {
         catalog = crate::ui_test_support::deterministic_catalog();
         catalog_ready = true;
