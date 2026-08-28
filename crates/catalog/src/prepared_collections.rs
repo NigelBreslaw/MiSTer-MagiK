@@ -568,6 +568,16 @@ pub(crate) fn oneload64_install_root(path: &Path) -> Option<&Path> {
     })
 }
 
+/// Validate a CRT path that was just observed as a regular file by the
+/// bounded namespace inventory. Avoids repeating one exFAT metadata lookup per
+/// payload while preserving the OneLoad64 signature and tree exclusions.
+pub(crate) fn observed_oneload64_path_is_valid(path: &Path) -> bool {
+    oneload64_install_root(path).is_some_and(|install_root| {
+        oneload64_root_has_signature(install_root)
+            && !oneload64_path_is_excluded(path, install_root)
+    })
+}
+
 fn oneload64_root_has_signature(root: &Path) -> bool {
     // A catalog build runs in a fresh standalone process. The install root
     // cannot meaningfully change underneath that one scan, so key this

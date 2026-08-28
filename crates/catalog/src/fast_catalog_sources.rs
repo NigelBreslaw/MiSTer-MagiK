@@ -16,12 +16,14 @@ use crate::fast_five_catalog::{
 };
 use crate::generic_system_catalog::{
     GenericSourceWatchObservations, discover_generic_systems_from_plan_excluding_with_progress,
-    rebuild_installed_generic_system,
+    inventory_prepared_extension_under_named_roots, rebuild_installed_generic_system,
 };
 use crate::launch_profiles::{CatalogScanPlan, CollectionListing, LaunchProfile, ProfileSet};
 use crate::media_identity::ScreenshotAssetId;
 use crate::mra_header::{PrimaryRomRequirement, RomNamespace};
-use crate::prepared_collections::{PreparedPayloadIndex, validate_prepared_launch_path};
+use crate::prepared_collections::{
+    PreparedPayloadIndex, observed_oneload64_path_is_valid, validate_prepared_launch_path,
+};
 use crate::system_shard::{SystemGame, SystemLaunchPlan};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -99,18 +101,20 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
     let started = Instant::now();
     let mut systems = BTreeMap::new();
     let mut reports = BTreeMap::new();
+    let mut prepared_watch_observations = BTreeMap::new();
     build_and_record_prepared_system(
         storage_root,
         "arcade",
         &mut systems,
         &mut reports,
+        &mut prepared_watch_observations,
         &mut system_complete,
     )?;
     let roots = [storage_root.display().to_string()];
     let phase_started = Instant::now();
     let plan = CatalogScanPlan::try_for_roots(&roots)?;
     let profile_discovery_us = elapsed_us(phase_started);
-    let (mut generic_systems, generic, profiles, generic_watch_observations) =
+    let (mut generic_systems, generic, profiles, mut generic_watch_observations) =
         discover_generic_systems_from_plan_excluding_with_progress(
             storage_root,
             &plan,
@@ -132,9 +136,11 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
             system_id,
             &mut systems,
             &mut reports,
+            &mut prepared_watch_observations,
             &mut system_complete,
         )?;
     }
+    generic_watch_observations.extend(prepared_watch_observations);
     for system in &generic_systems {
         system_complete(system);
     }
@@ -229,10 +235,11 @@ fn build_and_record_prepared_system(
     system_id: &str,
     systems: &mut BTreeMap<String, FastFiveSystem>,
     reports: &mut BTreeMap<String, FastSourceSystemReport>,
+    watch_observations: &mut BTreeMap<String, GenericSourceWatchObservations>,
     system_complete: &mut impl FnMut(&FastFiveSystem),
 ) -> Result<(), String> {
     let system_started = Instant::now();
-    let (mut system, mut report) = build_prepared_system(storage_root, system_id)?;
+    let (mut system, mut report, watch) = build_prepared_system(storage_root, system_id, true)?;
     if system_id == "c64" {
         collapse_c64_cross_source_variants(&mut system);
     }
@@ -250,6 +257,9 @@ fn build_and_record_prepared_system(
         report.fallback_validations,
     );
     if !system.games.is_empty() || !system.variants.is_empty() {
+        if let Some(watch) = watch {
+            watch_observations.insert(system_id.to_string(), watch);
+        }
         system_complete(&system);
         systems.insert(system_id.to_string(), system);
         reports.insert(system_id.to_string(), report);
@@ -265,7 +275,7 @@ pub fn rebuild_independent_system(
     let started = Instant::now();
     let prepared = PREPARED_SYSTEM_IDS
         .contains(&system_id)
-        .then(|| build_prepared_system(storage_root, system_id))
+        .then(|| build_prepared_system(storage_root, system_id, false))
         .transpose()?;
     let generic = if prepared.is_some() {
         None
@@ -273,7 +283,7 @@ pub fn rebuild_independent_system(
         rebuild_installed_generic_system(storage_root, system_id)?
     };
     let (mut system, mut report) = match (prepared, generic) {
-        (Some((mut prepared, mut report)), Some((generic, generic_report))) => {
+        (Some((mut prepared, mut report, _)), Some((generic, generic_report))) => {
             merge_system_rows(&mut prepared, generic);
             merge_source_report(
                 &mut report,
@@ -291,7 +301,7 @@ pub fn rebuild_independent_system(
             );
             (prepared, report)
         }
-        (Some(value), None) => value,
+        (Some((system, report, _)), None) => (system, report),
         (None, Some((system, generic_report))) => (
             system,
             FastSourceSystemReport {
@@ -442,11 +452,20 @@ fn merge_source_report(target: &mut FastSourceSystemReport, additional: &FastSou
 fn build_prepared_system(
     storage_root: &Path,
     system_id: &str,
-) -> Result<(FastFiveSystem, FastSourceSystemReport), String> {
+    capture_watch: bool,
+) -> Result<
+    (
+        FastFiveSystem,
+        FastSourceSystemReport,
+        Option<GenericSourceWatchObservations>,
+    ),
+    String,
+> {
     let mut report = FastSourceSystemReport {
         system_id: system_id.to_string(),
         ..FastSourceSystemReport::default()
     };
+    let mut watch = None;
     let (mut games, mut variants) = match system_id {
         "arcade" => {
             let scan = scan_arcade(storage_root, &mut report)?;
@@ -474,7 +493,12 @@ fn build_prepared_system(
             )?,
             Vec::new(),
         ),
-        "c64" => (scan_oneload64(storage_root, &mut report)?, Vec::new()),
+        "c64" => {
+            let (games, observations) =
+                scan_oneload64_with_observations(storage_root, &mut report, capture_watch)?;
+            watch = observations;
+            (games, Vec::new())
+        }
         _ => return Err(format!("unsupported prepared fast system {system_id}")),
     };
     games.sort_by(|left, right| {
@@ -503,6 +527,7 @@ fn build_prepared_system(
             variants,
         },
         report,
+        watch,
     ))
 }
 
@@ -1126,46 +1151,28 @@ fn scan_prepared_mgl(
         .collect())
 }
 
-fn scan_oneload64(
+fn scan_oneload64_with_observations(
     storage_root: &Path,
     report: &mut FastSourceSystemReport,
-) -> Result<Vec<SystemGame>, String> {
-    let mut files = Vec::new();
-    for root in oneload64_roots_checked(storage_root)? {
-        collect_matching_files(&root, &mut report.files_visited, &mut files, |path| {
-            extension_is(path, "crt")
-        })?;
-    }
-    Ok(files
+    capture_watch: bool,
+) -> Result<(Vec<SystemGame>, Option<GenericSourceWatchObservations>), String> {
+    let base = storage_root.join("games/C64");
+    let inventory = inventory_prepared_extension_under_named_roots(&base, "oneload64", "crt")?;
+    report.files_visited = report.files_visited.saturating_add(inventory.files_visited);
+    let watch = capture_watch.then_some(inventory.watch);
+    let games = inventory
+        .files
         .into_iter()
-        .filter_map(|path| match validate_prepared_launch_path(&path) {
-            Ok(true) => Some(direct_row("c64", "Computer", &path, display_name(&path))),
-            Ok(false) => None,
-            Err(_) => {
-                report.invalid += 1;
+        .filter_map(|path| {
+            if observed_oneload64_path_is_valid(&path) {
+                Some(direct_row("c64", "Computer", &path, display_name(&path)))
+            } else {
+                report.invalid = report.invalid.saturating_add(1);
                 None
             }
         })
-        .collect())
-}
-
-fn oneload64_roots_checked(storage_root: &Path) -> Result<Vec<PathBuf>, String> {
-    let base = storage_root.join("games/C64");
-    let Some(entries) = read_dir_entries_checked(&base)? else {
-        return Ok(Vec::new());
-    };
-    let mut roots = Vec::new();
-    for entry in entries {
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("inspect {}: {error}", entry.path().display()))?;
-        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-        if file_type.is_dir() && name.contains("oneload64") {
-            roots.push(entry.path());
-        }
-    }
-    roots.sort();
-    Ok(roots)
+        .collect();
+    Ok((games, watch))
 }
 
 fn collect_matching_files(
@@ -1564,8 +1571,29 @@ mod tests {
         let root = crate::test_support::unique_temp_dir("fast-source-c64");
         fs::create_dir_all(root.join("games/C64/Personal")).unwrap();
         fs::write(root.join("games/C64/Personal/Game.crt"), b"rom").unwrap();
+        fs::create_dir_all(root.join("games/C64/OneLoad64 Games/Publisher")).unwrap();
+        fs::create_dir_all(root.join("games/C64/OneLoad64 Games/MultiLoad64")).unwrap();
+        fs::write(
+            root.join("games/C64/OneLoad64 Games/Publisher/Included.crt"),
+            b"rom",
+        )
+        .unwrap();
+        fs::write(
+            root.join("games/C64/OneLoad64 Games/Publisher/._Hidden.crt"),
+            b"sidecar",
+        )
+        .unwrap();
         let mut report = FastSourceSystemReport::default();
-        assert!(scan_oneload64(&root, &mut report).unwrap().is_empty());
+        let (games, watch) = scan_oneload64_with_observations(&root, &mut report, true).unwrap();
+        assert_eq!(games.len(), 1);
+        assert_eq!(games[0].title, "Included");
+        let watch = watch.expect("fresh C64 inventory must retain watch observations");
+        assert_eq!(
+            watch.roots,
+            BTreeSet::from([root.join("games/C64").to_string_lossy().into_owned()])
+        );
+        #[cfg(target_os = "linux")]
+        assert!(watch.complete);
     }
 
     #[test]

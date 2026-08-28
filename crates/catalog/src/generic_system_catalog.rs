@@ -97,10 +97,136 @@ pub(crate) struct GenericWatchedDirectoryObservation {
     pub(crate) entry_fingerprint: String,
 }
 
+#[derive(Debug)]
+pub(crate) struct PreparedExtensionInventory {
+    pub(crate) files: Vec<PathBuf>,
+    pub(crate) files_visited: usize,
+    pub(crate) watch: GenericSourceWatchObservations,
+}
+
 #[derive(Debug, Default)]
 struct GenericDirectoryObservationBuilder {
     signature: Option<(u64, i64)>,
     entries: Vec<(String, u8)>,
+}
+
+/// Inventory a prepared collection whose owned payload lies below named
+/// first-level directories. This keeps prepared row discovery and refresh
+/// watch generation on the same serial filesystem traversal.
+pub(crate) fn inventory_prepared_extension_under_named_roots(
+    root: &Path,
+    root_name_marker: &str,
+    extension: &str,
+) -> Result<PreparedExtensionInventory, String> {
+    if !root.is_dir() {
+        return Ok(PreparedExtensionInventory {
+            files: Vec::new(),
+            files_visited: 0,
+            watch: GenericSourceWatchObservations::default(),
+        });
+    }
+    let marker = root_name_marker.to_ascii_lowercase();
+    let mut files = Vec::new();
+    let mut files_visited = 0usize;
+    let mut watch_complete = true;
+    let mut watch_builders = BTreeMap::<PathBuf, GenericDirectoryObservationBuilder>::new();
+    watch_builders.insert(
+        root.to_path_buf(),
+        GenericDirectoryObservationBuilder::default(),
+    );
+    let ignore = |path: &Path| {
+        should_ignore_path(path)
+            || (path.parent() == Some(root)
+                && !path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.to_ascii_lowercase().contains(&marker)))
+    };
+    let namespace = namespace_walk::visit_with_signature_capture(
+        root,
+        None,
+        NamespaceSignatureCapture::AllDirectories,
+        &ignore,
+        |entry| {
+            files_visited = files_visited.saturating_add(1);
+            if let (Some(parent), Some(name)) = (entry.path.parent(), entry.path.file_name()) {
+                let kind = match entry.kind {
+                    NamespaceEntryKind::Directory => b'd',
+                    NamespaceEntryKind::File => b'f',
+                    NamespaceEntryKind::Other => {
+                        watch_complete = false;
+                        b'o'
+                    }
+                };
+                watch_builders
+                    .entry(parent.to_path_buf())
+                    .or_default()
+                    .entries
+                    .push((name.to_string_lossy().into_owned(), kind));
+            }
+            if entry.kind == NamespaceEntryKind::Directory {
+                watch_builders
+                    .entry(entry.path.clone())
+                    .or_default()
+                    .signature = entry.directory_signature;
+            } else if entry.kind == NamespaceEntryKind::File
+                && entry
+                    .path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|value| value.eq_ignore_ascii_case(extension))
+            {
+                files.push(entry.path.clone());
+            }
+            true
+        },
+    );
+    if namespace.errors > 0 {
+        return Err(format!(
+            "incomplete {} prepared inventory: {} directory errors",
+            root.display(),
+            namespace.errors
+        ));
+    }
+    if let Some(root_builder) = watch_builders.get_mut(root) {
+        root_builder.signature = namespace.target_signature;
+    }
+    let mut directories = Vec::with_capacity(watch_builders.len());
+    for (path, mut builder) in watch_builders {
+        let Some((_, modified_ns)) = builder.signature else {
+            watch_complete = false;
+            continue;
+        };
+        builder.entries.sort_by(|left, right| {
+            left.0
+                .to_ascii_lowercase()
+                .cmp(&right.0.to_ascii_lowercase())
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        let mut digest = Sha256::new();
+        for (name, kind) in builder.entries {
+            digest.update([kind]);
+            digest.update(name.as_bytes());
+            digest.update([0]);
+        }
+        directories.push(GenericWatchedDirectoryObservation {
+            path,
+            modified_ns: i128::from(modified_ns),
+            entry_fingerprint: hex_lower(&digest.finalize()),
+        });
+    }
+    directories.sort_by(|left, right| left.path.cmp(&right.path));
+    files.sort_by_cached_key(|path| path.to_string_lossy().to_ascii_lowercase());
+    Ok(PreparedExtensionInventory {
+        files,
+        files_visited,
+        watch: GenericSourceWatchObservations {
+            roots: BTreeSet::from([root.to_string_lossy().into_owned()]),
+            directories,
+            containers: Vec::new(),
+            complete: watch_complete,
+        },
+    })
 }
 
 pub const MEDIA_EXPERIMENT_SYSTEM_IDS: [&str; 3] = ["psx", "bbcmicro", "msx"];
