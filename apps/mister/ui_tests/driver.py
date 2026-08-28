@@ -19,6 +19,7 @@ class DriverConfig:
 
     command: tuple[Path | str, ...]
     environment: Mapping[str, str]
+    ssh_destination: str | None = None
     launch_timeout: float = 20.0
 
 
@@ -44,6 +45,7 @@ class MagiKDriver:
         arguments = [str(argument) for argument in config.command]
         application = factory(
             arguments,
+            ssh_destination=config.ssh_destination,
             env=config.environment,
             launch_timeout=config.launch_timeout,
         )

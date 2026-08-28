@@ -64,6 +64,7 @@ class SlintApplicationFactory(Protocol):
         self,
         arguments: list[str],
         *,
+        ssh_destination: str | None = None,
         env: Mapping[str, str],
         launch_timeout: float,
     ) -> SlintApplication:
