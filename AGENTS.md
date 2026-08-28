@@ -1,7 +1,7 @@
 # AGENTS.md - mister-slint
 
-Use universal rules plus nearest scoped `AGENTS.md`. Other links are
-references: open only needed sections; never follow recursively unless blocked.
+Use universal rules plus nearest scoped `AGENTS.md`. Other references: open only
+needed sections; never follow recursively unless blocked.
 
 ## Safety
 
@@ -44,7 +44,7 @@ repositories.
 
 - Use `$magik-rust-lsp` for Rust/Cargo navigation and diagnostics. Use Slint MCP
   for behavior. Do not construct Cargo, test, lint, hook, host
-  assurance, ARM, or Apple-container commands; CI groups own full assurance.
+  assurance, ARM, or Apple-container commands; CI owns assurance (native Linux CI).
 - `scripts/agent plan` previews affected assurance. Agents use the typed
   `scripts/agent deliver`, `benchmark`, and `diagnose` workflows. Human device
   operations use attended `scripts/agent device` commands. Never use raw
