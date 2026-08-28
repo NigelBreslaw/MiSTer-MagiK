@@ -80,6 +80,14 @@ Authentication and access failures require changed external state. The device
 is reported unavailable only after the applicable bounded recovery fails.
 Host-only work never contacts MiSTer.
 
+Delivery reconciles the active FPGA during every non-platform delivery. A current
+diagnostic identity preserves a runtime-only delivery; stale, incomplete, or
+repairable FPGA evidence promotes that same invocation to the rollback-capable
+platform transaction. Delivery never requires a second invocation to finish FPGA
+reconciliation. After platform reboot, smoke waits for bounded readiness, performs at
+most one Main-owned reload for a definite stale identity, and reports the failed
+identity/readiness checks before rollback.
+
 The runtime executable and its platform manifest are inseparable deployment
 state. No operator command, benchmark request, or device-agent endpoint may
 replace `mister-magik-fb` alone. Runtime changes use the coherent Dev bundle

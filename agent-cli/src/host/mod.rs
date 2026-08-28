@@ -3630,6 +3630,36 @@ impl FpgaActivationAssessment {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FpgaReadinessAction {
+    Continue,
+    Reload,
+    Fail,
+}
+
+fn fpga_readiness_action(
+    assessment: &FpgaActivationAssessment,
+    fallback_streak: usize,
+    elapsed: Duration,
+) -> FpgaReadinessAction {
+    match assessment {
+        FpgaActivationAssessment::Current { .. } => FpgaReadinessAction::Continue,
+        FpgaActivationAssessment::Stale { .. } => FpgaReadinessAction::Reload,
+        FpgaActivationAssessment::ArtifactInvalid { .. } => FpgaReadinessAction::Fail,
+        FpgaActivationAssessment::NotReady { .. }
+            if assessment.reloadable_fallback()
+                && fallback_streak >= FPGA_FALLBACK_STREAK
+                && elapsed >= Duration::from_millis(500) =>
+        {
+            FpgaReadinessAction::Reload
+        }
+        FpgaActivationAssessment::NotReady { .. } if elapsed >= FPGA_READINESS_TIMEOUT => {
+            FpgaReadinessAction::Fail
+        }
+        FpgaActivationAssessment::NotReady { .. } => FpgaReadinessAction::Continue,
+    }
+}
+
 fn render_fpga_check_failures(failures: &[FpgaCheckFailure]) -> String {
     if failures.is_empty() {
         return "none".into();
@@ -3843,13 +3873,16 @@ fn wait_for_fpga_activation(
                     fallback_streak = 1;
                 }
                 previous_reason = Some(reason);
-                if fallback_streak >= FPGA_FALLBACK_STREAK
-                    && started.elapsed() >= Duration::from_millis(500)
-                {
-                    return Ok(assessment.into_stale());
-                }
-                if started.elapsed() >= FPGA_READINESS_TIMEOUT {
-                    return Ok(assessment);
+                let action = fpga_readiness_action(&assessment, fallback_streak, started.elapsed());
+                match action {
+                    FpgaReadinessAction::Reload | FpgaReadinessAction::Fail => {
+                        return Ok(if action == FpgaReadinessAction::Reload {
+                            assessment.into_stale()
+                        } else {
+                            assessment
+                        });
+                    }
+                    FpgaReadinessAction::Continue => {}
                 }
                 thread::sleep(FPGA_READINESS_POLL);
             }
@@ -38786,6 +38819,39 @@ H: Handlers=event3 js0"#
             fallback.into_stale(),
             FpgaActivationAssessment::Stale { .. }
         ));
+    }
+
+    #[test]
+    fn fpga_readiness_policy_reloads_only_definite_or_stable_fallback_stale() {
+        let stale = FpgaActivationAssessment::Stale {
+            expected: "patched".into(),
+            observed: "stock".into(),
+            failures: Vec::new(),
+        };
+        assert_eq!(
+            fpga_readiness_action(&stale, 1, Duration::from_millis(1)),
+            FpgaReadinessAction::Reload
+        );
+        let fallback = FpgaActivationAssessment::NotReady {
+            expected: "patched".into(),
+            observed: "unavailable".into(),
+            failures: Vec::new(),
+        };
+        assert_eq!(
+            fpga_readiness_action(&fallback, 2, Duration::from_secs(1)),
+            FpgaReadinessAction::Continue
+        );
+        assert_eq!(
+            fpga_readiness_action(&fallback, 3, Duration::from_millis(500)),
+            FpgaReadinessAction::Reload
+        );
+        let artifact = FpgaActivationAssessment::ArtifactInvalid {
+            detail: "metadata missing".into(),
+        };
+        assert_eq!(
+            fpga_readiness_action(&artifact, 0, Duration::ZERO),
+            FpgaReadinessAction::Fail
+        );
     }
 
     #[test]

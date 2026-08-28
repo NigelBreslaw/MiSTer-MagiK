@@ -1325,6 +1325,20 @@ mod tests {
             reconcile_fpga_activation(DeliveryDecision::Runtime, &current),
             (DeliveryDecision::Runtime, None)
         );
+
+        let not_ready = crate::host::FpgaActivationAssessment::NotReady {
+            expected: "patched".into(),
+            observed: "unavailable".into(),
+            failures: Vec::new(),
+        };
+        assert_eq!(
+            reconcile_fpga_activation(DeliveryDecision::NoOp, &not_ready).0,
+            DeliveryDecision::Platform
+        );
+        assert_eq!(
+            reconcile_fpga_activation(DeliveryDecision::Platform, &not_ready),
+            (DeliveryDecision::Platform, None)
+        );
     }
 
     #[test]
