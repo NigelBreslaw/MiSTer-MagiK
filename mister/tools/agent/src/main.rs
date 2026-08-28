@@ -3927,10 +3927,10 @@ mod linux {
         })
     }
 
-    fn byte_sequences_advance(sequences: [u8; 3]) -> bool {
+    fn nibble_sequences_advance(sequences: [u8; 3]) -> bool {
         sequences
             .windows(2)
-            .all(|pair| pair[1] == pair[0].wrapping_add(1))
+            .all(|pair| pair[1] == (pair[0].wrapping_add(1) & 0x0f))
     }
 
     pub(super) fn scaler_fetch_liveness_classification(
@@ -3946,7 +3946,7 @@ mod linux {
             | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_COUNTER_AMBIGUOUS;
         if !samples.iter().all(|sample| sample.record_valid())
             || flags & invalid_flags != 0
-            || !byte_sequences_advance(samples.map(|sample| sample.publication_sequence()))
+            || !nibble_sequences_advance(samples.map(|sample| sample.publication_sequence()))
         {
             return "scaler_fetch_liveness_evidence_inconclusive";
         }
@@ -4496,8 +4496,9 @@ mod linux {
                     ];
                     let classification = scaler_fetch_liveness_classification(samples);
                     let valid_samples = samples.iter().all(|sample| sample.record_valid());
-                    let advancing =
-                        byte_sequences_advance(samples.map(|sample| sample.publication_sequence()));
+                    let advancing = nibble_sequences_advance(
+                        samples.map(|sample| sample.publication_sequence()),
+                    );
                     let classification_stable =
                         classification != "scaler_fetch_liveness_evidence_inconclusive";
                     let coherent = context.owner_stable
@@ -8344,10 +8345,10 @@ mod tests {
             let mut words = [0; contract::SCALER_FETCH_LIVENESS_STATE_WORDS];
             words[contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD] =
                 contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA;
-            words[contract::SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] = flags;
-            words[contract::SCALER_FETCH_LIVENESS_STATE_SEQUENCE_IDENTITY_WORD] =
-                u16::from(sequence);
-            words[contract::SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD] = cause
+            words[contract::SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] = flags
+                | (u16::from(sequence)
+                    << contract::SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_BIT);
+            words[contract::SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = cause
                 | (u16::from(frozen_address_fold)
                     << contract::SCALER_FETCH_LIVENESS_STATE_FROZEN_ADDRESS_FOLD_BIT);
             contract::ScalerFetchLivenessState { words }
@@ -8355,8 +8356,8 @@ mod tests {
         let valid = contract::SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID;
         let normal = valid | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN;
         let normal_samples = [
-            sample(254, 0, normal, 0),
-            sample(255, 0, normal, 0),
+            sample(14, 0, normal, 0),
+            sample(15, 0, normal, 0),
             sample(0, 0, normal, 0),
         ];
         assert_eq!(
@@ -8422,19 +8423,19 @@ mod tests {
 
         let changed_frozen_tuple = [
             sample(
-                20,
+                4,
                 7,
                 valid | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID,
                 contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_RETURN_INCOMPLETE,
             ),
             sample(
-                21,
+                5,
                 8,
                 valid | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID,
                 contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_RETURN_INCOMPLETE,
             ),
             sample(
-                22,
+                6,
                 7,
                 valid | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID,
                 contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_RETURN_INCOMPLETE,

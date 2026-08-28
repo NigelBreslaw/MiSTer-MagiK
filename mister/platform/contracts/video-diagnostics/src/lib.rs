@@ -148,7 +148,7 @@ impl ScalerFetchLivenessState {
     }
 
     pub fn flags(&self) -> u16 {
-        self.words[SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD]
+        self.words[SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] & SCALER_FETCH_LIVENESS_STATE_FLAGS_MASK
     }
 
     pub fn record_valid(&self) -> bool {
@@ -878,30 +878,10 @@ pub fn decode_scaler_fetch_liveness_state(
             "scaler fetch liveness CRC mismatch expected=0x{expected:04x} actual=0x{actual:04x}"
         ));
     }
-    let flags = words[SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD];
-    if flags & !SCALER_FETCH_LIVENESS_STATE_FLAGS_MASK != 0 {
-        return Err(format!(
-            "scaler fetch liveness flags contain reserved bits: 0x{flags:04x}"
-        ));
-    }
-    let sequence_identity = words[SCALER_FETCH_LIVENESS_STATE_SEQUENCE_IDENTITY_WORD];
-    if sequence_identity & SCALER_FETCH_LIVENESS_STATE_SEQUENCE_IDENTITY_RESERVED_ZERO_MASK != 0 {
-        return Err(format!(
-            "scaler fetch liveness sequence identity contains reserved bits: 0x{sequence_identity:04x}"
-        ));
-    }
-    let live_state = words[SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_WORD];
-    if live_state & SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_RESERVED_ZERO_MASK != 0 {
-        return Err(format!(
-            "scaler fetch liveness live state contains reserved bits: 0x{live_state:04x}"
-        ));
-    }
     let mut owned = [0; SCALER_FETCH_LIVENESS_STATE_WORDS];
     owned.copy_from_slice(words);
     let decoded = ScalerFetchLivenessState { words: owned };
-    if decoded.fifo_depth() > 2 || decoded.frozen_fifo_depth() > 2 {
-        return Err("scaler fetch liveness FIFO depth is impossible".to_string());
-    }
+    let flags = decoded.flags();
     let stall = decoded.first_stall_valid();
     let fault = decoded.observer_fault();
     let cause = decoded.frozen_cause();
@@ -923,18 +903,23 @@ pub fn decode_scaler_fetch_liveness_state(
     if fault && cause != SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT {
         return Err("scaler fetch liveness observer fault has an illegal cause".to_string());
     }
-    if !stall && !fault && cause != SCALER_FETCH_LIVENESS_STATE_CAUSE_NONE {
-        return Err("scaler fetch liveness unfrozen record carries a cause".to_string());
-    }
-    if !stall
-        && !fault
-        && (words[SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD] != 0
-            || decoded.frozen_address_fold() != 0)
-    {
-        return Err("scaler fetch liveness unfrozen record carries frozen context".to_string());
+    if stall || fault {
+        if decoded.frozen_fifo_depth() > 2 {
+            return Err("scaler fetch liveness frozen FIFO depth is impossible".to_string());
+        }
+    } else {
+        let live_state = words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD];
+        if live_state & 0x8000 != 0 {
+            return Err(format!(
+                "scaler fetch liveness live state contains reserved bits: 0x{live_state:04x}"
+            ));
+        }
+        if decoded.fifo_depth() > 2 {
+            return Err("scaler fetch liveness live FIFO depth is impossible".to_string());
+        }
     }
     if flags & SCALER_FETCH_LIVENESS_STATE_FLAG_REQUEST_CANCELLED != 0
-        && cause != SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED
+        && (!stall || cause != SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED)
     {
         return Err("scaler fetch liveness request-cancelled flag mismatches cause".to_string());
     }
@@ -1119,16 +1104,12 @@ mod tests {
             GET_SCALER_FETCH_LIVENESS_STATE,
             SCALER_FETCH_LIVENESS_STATE_SCHEMA,
         );
-        words[SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] =
-            SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID
-                | SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN
-                | SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID;
-        words[SCALER_FETCH_LIVENESS_STATE_SEQUENCE_IDENTITY_WORD] = 0x000a;
-        words[SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_WORD] =
-            (SCALER_FETCH_LIVENESS_STATE_MONITOR_NO_REQUEST
-                << SCALER_FETCH_LIVENESS_STATE_MONITOR_STATE_BIT)
-                | (1 << SCALER_FETCH_LIVENESS_STATE_RESET_QUALIFIED_BIT);
-        words[SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD] = (7
+        words[SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] = (10
+            << SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_BIT)
+            | SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID
+            | SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN
+            | SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID;
+        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = (7
             << SCALER_FETCH_LIVENESS_STATE_FROZEN_ADDRESS_FOLD_BIT)
             | SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN;
         words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
@@ -1154,7 +1135,7 @@ mod tests {
             GET_SCALER_FETCH_LIVENESS_STATE,
             SCALER_FETCH_LIVENESS_STATE_SCHEMA,
         );
-        words[SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] = 1 << 15;
+        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = 1 << 15;
         words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
             GET_SCALER_FETCH_LIVENESS_STATE,
             SCALER_FETCH_LIVENESS_STATE_SCHEMA,
@@ -1162,21 +1143,12 @@ mod tests {
         );
         assert!(decode_scaler_fetch_liveness_state(&words).is_err());
 
-        words[SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] = 0;
-        words[SCALER_FETCH_LIVENESS_STATE_SEQUENCE_IDENTITY_WORD] = 1 << 8;
-        words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
-            GET_SCALER_FETCH_LIVENESS_STATE,
-            SCALER_FETCH_LIVENESS_STATE_SCHEMA,
-            &words[..SCALER_FETCH_LIVENESS_STATE_CRC_WORD],
-        );
-        assert!(decode_scaler_fetch_liveness_state(&words).is_err());
-
-        words[SCALER_FETCH_LIVENESS_STATE_SEQUENCE_IDENTITY_WORD] = 0;
+        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = 0;
         words[SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] =
             SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID
                 | SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
                 | SCALER_FETCH_LIVENESS_STATE_FLAG_OBSERVER_FAULT;
-        words[SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD] =
+        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] =
             SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT;
         words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
             GET_SCALER_FETCH_LIVENESS_STATE,
@@ -1187,8 +1159,8 @@ mod tests {
 
         words[SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] =
             SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID;
-        words[SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD] =
-            SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN;
+        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] =
+            3 << SCALER_FETCH_LIVENESS_STATE_FIFO_DEPTH_BIT;
         words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
             GET_SCALER_FETCH_LIVENESS_STATE,
             SCALER_FETCH_LIVENESS_STATE_SCHEMA,

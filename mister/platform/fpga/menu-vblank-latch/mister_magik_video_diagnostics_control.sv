@@ -32,10 +32,10 @@ module mister_magik_scaler_fetch_liveness_state #(
 	,output wire [15:0] formal_frozen_state
 	,output wire formal_publication_generation
 	,output wire formal_acknowledge_sync
-	,output wire [79:0] formal_published_bundle
-	,output wire [15:0] formal_sequence_identity
+	,output wire [47:0] formal_published_bundle
+	,output wire [3:0] formal_publication_sequence
 	,output wire formal_publish_crc_busy
-	,output wire [3:0] formal_publish_crc_byte
+	,output wire [1:0] formal_publish_crc_word
 	,output wire formal_enqueue
 	,output wire formal_dequeue
 	,output wire formal_return_has_entry
@@ -96,13 +96,12 @@ module mister_magik_scaler_fetch_liveness_state #(
 	reg [3:0] frozen_address_fold = 4'd0;
 	// The destination acknowledges only after a complete command. The source
 	// publication bank remains immutable until that acknowledgement returns.
-	reg [7:0] publication_sequence = 8'd0;
+	reg [3:0] publication_sequence = 4'd0;
 	reg [15:0] published_flags = 16'd0;
-	reg [15:0] published_live_state = 16'd0;
-	reg [15:0] published_frozen_state = 16'd0;
+	reg [15:0] published_state = 16'd0;
 	(* preserve, dont_replicate *) reg publication_generation = 1'b0;
 	reg publish_crc_busy = 1'b0;
-	reg [3:0] publish_crc_byte = 4'd0;
+	reg [1:0] publish_crc_word = 2'd0;
 	reg [15:0] publish_crc_work = 16'd0;
 
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
@@ -133,6 +132,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 	wire [3:0] previous_address_fold = previous_address[3:0];
 	wire [3:0] event_address_fold = accepted ?
 		vbuf_address[15:12] : previous_address_fold;
+	wire frozen_valid = first_stall_valid || observer_fault;
 
 	wire [1:0] monitor_state = !reset_qualified ?
 		MAGIK_SCALER_FETCH_LIVENESS_STATE_MONITOR_UNQUALIFIED :
@@ -163,14 +163,12 @@ module mister_magik_scaler_fetch_liveness_state #(
 	assign formal_frozen_state = frozen_state;
 	assign formal_publication_generation = publication_generation;
 	assign formal_acknowledge_sync = acknowledge_sync;
-	assign formal_sequence_identity = sequence_identity;
+	assign formal_publication_sequence = publication_sequence;
 	assign formal_publish_crc_busy = publish_crc_busy;
-	assign formal_publish_crc_byte = publish_crc_byte;
+	assign formal_publish_crc_word = publish_crc_word;
 	assign formal_published_bundle = {
 		publish_crc_work,
-		published_frozen_state,
-		published_live_state,
-		sequence_identity,
+		published_state,
 		published_flags
 	};
 	assign formal_enqueue = enqueue;
@@ -207,7 +205,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 		fifo_count,
 		return_phase
 	};
-	wire [15:0] sequence_identity = {8'd0, publication_sequence};
 	wire [15:0] frozen_state = {
 		frozen_address_fold,
 		frozen_fifo_depth,
@@ -238,6 +235,15 @@ module mister_magik_scaler_fetch_liveness_state #(
 			for(bit_index = 0; bit_index < 8; bit_index = bit_index + 1)
 				value = value[15] ? ((value << 1) ^ 16'h1021) : (value << 1);
 			crc16_update_byte = value;
+		end
+	endfunction
+
+	function automatic [15:0] crc16_update_word;
+		input [15:0] crc_in;
+		input [15:0] word_in;
+		begin
+			crc16_update_word = crc16_update_byte(
+				crc16_update_byte(crc_in, word_in[15:8]), word_in[7:0]);
 		end
 	endfunction
 
@@ -374,34 +380,28 @@ module mister_magik_scaler_fetch_liveness_state #(
 		// Capture one immutable bank and serialize its CRC before advertising it.
 		if(!publish_crc_busy && publication_generation == acknowledge_sync) begin
 			publication_sequence <= publication_sequence + 1'd1;
-			published_flags <= live_flags;
-			published_live_state <= live_state;
-			published_frozen_state <= frozen_state;
+			published_flags <= {publication_sequence + 1'd1, live_flags[11:0]};
+			published_state <= frozen_valid ? frozen_state : live_state;
 			publish_crc_work <= MAGIK_SCALER_FETCH_LIVENESS_STATE_HEADER_CRC;
-			publish_crc_byte <= 4'd0;
+			publish_crc_word <= 2'd0;
 			publish_crc_busy <= 1'b1;
 		end
 		else if(publish_crc_busy) begin : publish_crc_step
 			reg [15:0] crc_word_value;
 			reg [15:0] crc_next;
-			case(publish_crc_byte[3:1])
-				3'd0: crc_word_value = MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA;
-				3'd1: crc_word_value = published_flags;
-				3'd2: crc_word_value = sequence_identity;
-				3'd3: crc_word_value = published_live_state;
-				default: crc_word_value = published_frozen_state;
+			case(publish_crc_word)
+				2'd0: crc_word_value = MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA;
+				2'd1: crc_word_value = published_flags;
+				default: crc_word_value = published_state;
 			endcase
-			crc_next = crc16_update_byte(
-				publish_crc_work,
-				publish_crc_byte[0] ? crc_word_value[7:0] : crc_word_value[15:8]
-			);
+			crc_next = crc16_update_word(publish_crc_work, crc_word_value);
 			publish_crc_work <= crc_next;
-			if(publish_crc_byte == 4'd9) begin
+			if(publish_crc_word == 2'd2) begin
 				publication_generation <= ~publication_generation;
 				publish_crc_busy <= 1'b0;
 			end
 			else
-				publish_crc_byte <= publish_crc_byte + 1'd1;
+				publish_crc_word <= publish_crc_word + 1'd1;
 		end
 	end
 
@@ -411,12 +411,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 				response_word = MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA;
 			MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD:
 				response_word = published_flags;
-			MAGIK_SCALER_FETCH_LIVENESS_STATE_SEQUENCE_IDENTITY_WORD:
-				response_word = sequence_identity;
-			MAGIK_SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_WORD:
-				response_word = published_live_state;
-			MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD:
-				response_word = published_frozen_state;
+			MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD:
+				response_word = published_state;
 			default: response_word = publish_crc_work;
 		endcase
 

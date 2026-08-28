@@ -21,10 +21,10 @@ module mister_magik_scaler_fetch_liveness_formal;
 	wire [15:0] frozen_state;
 	wire publication_generation;
 	wire acknowledge_sync;
-	wire [79:0] published_bundle;
-	wire [15:0] sequence_identity;
+	wire [47:0] published_bundle;
+	wire [3:0] publication_sequence;
 	wire publish_crc_busy;
-	wire [3:0] publish_crc_byte;
+	wire [1:0] publish_crc_word;
 	wire enqueue;
 	wire dequeue;
 	wire return_has_entry;
@@ -58,9 +58,9 @@ module mister_magik_scaler_fetch_liveness_formal;
 		.formal_publication_generation(publication_generation),
 		.formal_acknowledge_sync(acknowledge_sync),
 		.formal_published_bundle(published_bundle),
-		.formal_sequence_identity(sequence_identity),
+		.formal_publication_sequence(publication_sequence),
 		.formal_publish_crc_busy(publish_crc_busy),
-		.formal_publish_crc_byte(publish_crc_byte),
+		.formal_publish_crc_word(publish_crc_word),
 		.formal_enqueue(enqueue),
 		.formal_dequeue(dequeue),
 		.formal_return_has_entry(return_has_entry),
@@ -104,15 +104,14 @@ module mister_magik_scaler_fetch_liveness_formal;
 			end
 			if($past(publication_generation != acknowledge_sync))
 				assert(published_bundle == $past(published_bundle));
-			if(sequence_identity != $past(sequence_identity)) begin
+			if(publication_sequence != $past(publication_sequence)) begin
 				assert($past(publication_generation == acknowledge_sync));
 				assert(!$past(publish_crc_busy));
-				assert(sequence_identity[7:0] == $past(sequence_identity[7:0]) + 1'b1);
-				assert(sequence_identity[15:8] == 0);
+				assert(publication_sequence == $past(publication_sequence) + 1'b1);
 			end
 			if(publication_generation != $past(publication_generation)) begin
 				assert($past(publish_crc_busy));
-				assert($past(publish_crc_byte) == 4'd9);
+				assert($past(publish_crc_word) == 2'd2);
 			end
 
 			// A real transition on the terminal watchdog cycle wins unless an

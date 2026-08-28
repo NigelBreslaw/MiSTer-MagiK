@@ -12,8 +12,8 @@ the observer could erase its own queue, phase, heartbeat, and publication
 evidence.
 
 The replacement diagnostic is schema 14,
-`scaler-fetch-liveness-first-stall-v1`, as a six-word record on read-only command `0x68` with magic
-`0x4d58`. The fixed five-word schema-10/11 `0x67` ABI remains unchanged for
+`scaler-fetch-liveness-first-stall-v1`, as a four-word record on read-only
+command `0x68` with magic `0x4d58`. The fixed five-word schema-10/11 `0x67` ABI remains unchanged for
 rollback decoding; the device agent probes `0x68` first and falls back to
 `0x67` only when the new command is explicitly unsupported. A malformed
 schema-14 acknowledgement or record fails closed and never falls back.
@@ -29,12 +29,16 @@ read is acknowledged across the two-stage CDC handshake.
 
 Address wraps are detected from the accepted address's 4 KiB prefix, and a
 four-bit fold of the last accepted address is retained with the immutable
-cause/phase/FIFO snapshot. The noncausal frozen publication identity is
-deliberately absent. The publication sequence and completed CRC work register
-remain stable under the generation/acknowledgement hold interval and are read
-directly instead of being copied into redundant publication registers. CRC is
-advanced one byte per `clk_100m` cycle, keeping the same polynomial and record
-value while halving the former word-wide combinational update cone.
+cause/phase/FIFO snapshot. The compact record is `{schema, flags, state, CRC}`.
+The high nibble of `flags` is a modulo-16 publication sequence. Before a stall
+or observer fault, `state` is the live phase/FIFO/monitor tuple; afterward the
+same word is the frozen `{address fold, FIFO depth, return phase, cause}` tuple,
+as selected by the sticky flags. Host decoding fails closed on an impossible
+tuple and requires three exact modulo-16 advancing publications. The noncausal
+frozen publication identity is deliberately absent. The publication bank and
+completed CRC work register remain stable under the generation/acknowledgement
+hold interval. CRC advances once per payload word using the established
+word-wide update and the same polynomial and record value.
 
 The single progress watchdog prioritizes the oldest accepted return obligation,
 then a wait-blocked request, then absence of a request. Its default bound is

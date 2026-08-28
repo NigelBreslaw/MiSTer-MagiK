@@ -312,14 +312,16 @@ def main() -> None:
         "acknowledge_meta <= acknowledged_generation;",
         "acknowledge_sync <= acknowledge_meta;",
         "publication_generation == acknowledge_sync",
-        "wire [15:0] sequence_identity = {8'd0, publication_sequence};",
+        "reg [3:0] publication_sequence = 4'd0;",
         "publish_crc_work",
-        "published_frozen_state",
+        "published_state",
+        "published_flags <= {publication_sequence + 1'd1, live_flags[11:0]};",
+        "published_state <= frozen_valid ? frozen_state : live_state;",
         "publication_generation <= ~publication_generation;",
         "if(command_selected)",
         "acknowledged_generation <= generation_sync;",
-        "function automatic [15:0] crc16_update_byte;",
-        "publish_crc_byte == 4'd9",
+        "function automatic [15:0] crc16_update_word;",
+        "publish_crc_word == 2'd2",
     ):
         if required_observer_fragment not in control_source:
             fail(
@@ -335,7 +337,10 @@ def main() -> None:
         "reg [15:0] published_crc",
         "reg [7:0] frozen_sequence",
         "reg [3:0] last_address_fold",
-        "function automatic [15:0] crc16_update_word",
+        "reg [15:0] published_live_state",
+        "reg [15:0] published_frozen_state",
+        "reg [15:0] published_sequence_identity",
+        "reg [3:0] publish_crc_byte",
     ):
         if redundant_publication_register in control_source:
             fail(

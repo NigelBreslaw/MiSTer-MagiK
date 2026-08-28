@@ -19,8 +19,8 @@ module tb_mister_magik_video_diagnostics_control;
 	reg [15:0] io_din = 16'd0;
 	wire response_valid;
 	wire [15:0] response_data;
-	reg [15:0] words [0:5];
-	reg [15:0] prior_words [0:5];
+	reg [15:0] words [0:3];
+	reg [15:0] prior_words [0:3];
 	integer index;
 
 	mister_magik_scaler_fetch_liveness_state #(
@@ -142,10 +142,9 @@ module tb_mister_magik_video_diagnostics_control;
 				fail("schema mismatch");
 			if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_CRC_WORD] != response_crc())
 				fail("response CRC mismatch");
-			if(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAGS_RESERVED_ZERO_MASK)
-				fail("reserved flag bits set");
-			if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_WORD] &
-				MAGIK_SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_RESERVED_ZERO_MASK)
+			if(!(words[1] & (MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID |
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_OBSERVER_FAULT)) &&
+				words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD][15])
 				fail("reserved live-state bit set");
 		end
 	endtask
@@ -197,8 +196,8 @@ module tb_mister_magik_video_diagnostics_control;
 	endtask
 
 	initial begin
-		reg [7:0] first_sequence;
-		reg [7:0] second_sequence;
+		reg [3:0] first_sequence;
+		reg [3:0] second_sequence;
 
 		// The observer publishes while reset is held and does not claim a
 		// qualified record before synchronized reset-low qualification.
@@ -208,9 +207,13 @@ module tb_mister_magik_video_diagnostics_control;
 			fail("reset level not reported");
 		if(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID)
 			fail("startup record incorrectly valid");
-		first_sequence = words[2][7:0];
+		first_sequence = (words[MAGIK_SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_WORD] >>
+			MAGIK_SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_BIT) &
+			MAGIK_SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_MASK;
 		read_record();
-		second_sequence = words[2][7:0];
+		second_sequence = (words[MAGIK_SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_WORD] >>
+			MAGIK_SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_BIT) &
+			MAGIK_SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_MASK;
 		if(second_sequence == first_sequence)
 			fail("publication heartbeat did not advance during reset");
 
@@ -233,17 +236,11 @@ module tb_mister_magik_video_diagnostics_control;
 			fail("wrap-marked complete burst did not establish normal liveness");
 		if(!(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID))
 			fail("first stall was not frozen");
-		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_SEQUENCE_IDENTITY_WORD] &
-			MAGIK_SCALER_FETCH_LIVENESS_STATE_SEQUENCE_IDENTITY_RESERVED_ZERO_MASK)
-			fail("sequence identity reserved bits were nonzero");
 		if(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_OBSERVER_FAULT)
 			fail("reset-retained obligation produced observer fault");
-		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD][2:0] !=
+		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD][2:0] !=
 			MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN)
 			fail("wrong first-stall cause");
-		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_WORD][8:7] != 2'd0 ||
-			words[MAGIK_SCALER_FETCH_LIVENESS_STATE_LIVE_STATE_WORD][6:0] != 7'd0)
-			fail("completed scoreboard did not drain");
 		for(index = 0; index < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS;
 			index = index + 1)
 			prior_words[index] = words[index];
@@ -253,10 +250,11 @@ module tb_mister_magik_video_diagnostics_control;
 		drive_accept(28'h0000080);
 		drive_return_beats(128);
 		read_record();
-		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD] !=
-				prior_words[MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD])
+		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD] !=
+				prior_words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD])
 			fail("sticky first-stall evidence changed");
-		if(words[2][7:0] == prior_words[2][7:0])
+		if((words[MAGIK_SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_WORD] & 16'hf000) ==
+				(prior_words[MAGIK_SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_WORD] & 16'hf000))
 			fail("publication sequence stopped after frozen event");
 		for(index = 0; index < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS;
 			index = index + 1)
@@ -267,8 +265,8 @@ module tb_mister_magik_video_diagnostics_control;
 		reset_req = 1'b1;
 		repeat(6) @(posedge clk_100m);
 		read_record();
-		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD] !=
-				prior_words[MAGIK_SCALER_FETCH_LIVENESS_STATE_FROZEN_STATE_WORD])
+		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD] !=
+				prior_words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD])
 			fail("reset erased sticky first-stall evidence");
 		reset_req = 1'b0;
 		repeat(6) @(posedge clk_100m);

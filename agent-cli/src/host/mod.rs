@@ -38741,10 +38741,10 @@ H: Handlers=event3 js0"#
             "scaler_fetch_liveness_state": {
                 "record_valid": [true, true, true],
                 "observer_fault": [false, false, false],
-                "publication_sequence": [100, 101, 102],
+                "publication_sequence": [10, 11, 12],
                 "frozen_address_fold": [3, 3, 3],
                 "frozen_cause": [1, 1, 1],
-                "raw_samples": vec![vec![14; 6]; 3],
+                "raw_samples": vec![vec![14; 4]; 3],
             },
         });
         assert!(experimental_raw_scaler_evidence_available(
