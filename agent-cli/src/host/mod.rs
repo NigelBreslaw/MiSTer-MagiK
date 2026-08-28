@@ -16341,6 +16341,7 @@ fn verify_installed_search_ui(config: &NativeDeviceConfig, output_dir: &Path) ->
             ),
         ],
         Duration::from_secs(10),
+        45,
     )
 }
 
@@ -16349,6 +16350,7 @@ fn verify_installed_search_ui_with_env(
     output_dir: &Path,
     env_vars: Vec<(String, String)>,
     initial_view_timeout: Duration,
+    automation_lifetime_seconds: u64,
 ) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     fs::create_dir_all(output_dir)?;
@@ -16381,7 +16383,7 @@ fn verify_installed_search_ui_with_env(
                 .get("main_generation")
                 .and_then(Value::as_u64)
                 .ok_or("search UI Main status has no generation")?,
-            45,
+            automation_lifetime_seconds,
         )?;
         let begin: Value = serde_json::from_str(&begin)?;
         let active_nonce = begin["nonce"]
@@ -20032,6 +20034,7 @@ fn run_catalog_attribution_pair(
             &sample_dir.join("first-use-search-ui"),
             catalog_attribution_search_ui_env(arm),
             Duration::from_secs(45),
+            120,
         )?;
         let ui_summary: Value = serde_json::from_str(&ui_detail)?;
         let search_summary = run_catalog_attribution_search_bench(session, sample_dir)?;
