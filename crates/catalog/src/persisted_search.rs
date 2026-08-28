@@ -4,6 +4,7 @@
 //! Persisted FTS5 game search and autocomplete stored inside system shards.
 
 use rusqlite::{Connection, OpenFlags};
+#[cfg(feature = "builder")]
 use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use std::error::Error;
