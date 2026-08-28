@@ -93,6 +93,7 @@ pub(crate) struct DirectorySignatureProbe {
     pub(crate) child_signatures: Vec<Option<(u64, i64)>>,
 }
 
+#[cfg(feature = "builder")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct KnownPathMetadata {
     pub(crate) is_dir: bool,
@@ -105,6 +106,7 @@ pub(crate) struct KnownPathMetadata {
 /// parent pathname lookup. The returned entries follow `std::fs::metadata`
 /// semantics: symlinks are followed, and missing or invalid entries are
 /// represented by `None`.
+#[cfg(feature = "builder")]
 pub(crate) fn probe_known_path_metadata(
     parent: &Path,
     child_paths: &[PathBuf],
@@ -115,6 +117,9 @@ pub(crate) fn probe_known_path_metadata(
     }
 
     #[cfg(not(target_os = "linux"))]
+    let _ = parent;
+
+    #[cfg(not(target_os = "linux"))]
     child_paths
         .iter()
         .map(|path| std::fs::metadata(path).ok().map(known_path_metadata))
@@ -122,6 +127,7 @@ pub(crate) fn probe_known_path_metadata(
 }
 
 #[cfg(not(target_os = "linux"))]
+#[cfg(feature = "builder")]
 fn known_path_metadata(metadata: std::fs::Metadata) -> KnownPathMetadata {
     use std::time::UNIX_EPOCH;
 
@@ -502,10 +508,11 @@ fn unix_timestamp_nanos(seconds: i64, nanos: i64) -> i64 {
 
 #[cfg(target_os = "linux")]
 mod linux {
+    #[cfg(feature = "builder")]
+    use super::KnownPathMetadata;
     use super::{
-        DirectorySignatureProbe, KnownPathMetadata, NamespaceEntry, NamespaceEntryKind,
-        NamespaceRootPolicy, NamespaceSignatureCapture, NamespaceWalkStats, is_zip_path,
-        unix_timestamp_nanos,
+        DirectorySignatureProbe, NamespaceEntry, NamespaceEntryKind, NamespaceRootPolicy,
+        NamespaceSignatureCapture, NamespaceWalkStats, is_zip_path, unix_timestamp_nanos,
     };
     use std::ffi::{CString, OsString};
     use std::io;
@@ -600,6 +607,7 @@ mod linux {
         }
     }
 
+    #[cfg(feature = "builder")]
     pub(super) fn probe_known_path_metadata(
         parent: &Path,
         child_paths: &[PathBuf],
@@ -1019,6 +1027,7 @@ mod linux {
         Ok(unsafe { value.assume_init() })
     }
 
+    #[cfg(feature = "builder")]
     fn known_path_metadata_from_stat(value: libc::stat) -> KnownPathMetadata {
         KnownPathMetadata {
             is_dir: kind_from_mode(value.st_mode) == NamespaceEntryKind::Directory,
@@ -1308,6 +1317,7 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    #[cfg(feature = "builder")]
     #[test]
     fn known_path_metadata_batches_directory_and_file_children() {
         let dir = unique_temp_dir("namespace-known-path-probe");
