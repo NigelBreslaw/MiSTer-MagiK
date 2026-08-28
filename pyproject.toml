@@ -8,6 +8,12 @@ description = "MiSTer MagiK host-side CI and release tooling"
 requires-python = ">=3.12"
 dependencies = ["lz4>=4.3"]
 
+[project.optional-dependencies]
+device-ui-tests = [
+    "pillow>=11,<13",
+    "slint-testing==0.3",
+]
+
 [dependency-groups]
 # Keep the quality tool versions aligned with gb-slint so local and CI
 # diagnostics are reproducible.
@@ -16,9 +22,12 @@ dev = ["ruff==0.16.4", "ty==0.0.73", "pytest>=8"]
 [tool.uv]
 package = false
 
+[tool.uv.sources]
+slint-testing = { index = "slint-private" }
+
 [tool.pytest.ini_options]
 testpaths = ["scripts/tests"]
 pythonpath = ["."]
 
 [tool.ty.src]
-include = ["scripts"]
+include = ["scripts", "apps/mister/ui_tests"]
