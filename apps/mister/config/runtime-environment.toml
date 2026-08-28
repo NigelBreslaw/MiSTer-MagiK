@@ -11,8 +11,8 @@ source_roots = [
 ]
 
 [baseline]
-literal_occurrences = 396
-unique_names = 277
+literal_occurrences = 399
+unique_names = 280
 external_build_names = 7
 
 [[control]]
@@ -197,6 +197,21 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls background affinity behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_BENCH_CATALOG_SEARCH_FORCE_PERSISTED"
+owner = "apps/mister/src/launcher.rs"
+classification = "benchmark"
+value_shape = "boolean token"
+default_behavior = "uses in-memory catalog search unless explicitly enabled"
+visibility = "benchmark only"
+parser = "bool"
+typed_default = false
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Forces persisted catalog search for benchmark comparison", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_BOOT_ANALYTICS"
@@ -408,6 +423,36 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls catalog durable resume behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_CATALOG_FTS_INTEGRITY"
+owner = "crates/catalog/src/persisted_search.rs"
+classification = "benchmark"
+value_shape = "enum token"
+default_behavior = "uses bounded FTS integrity checking unless set to full"
+visibility = "benchmark only"
+parser = "enum"
+typed_default = "bounded"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Selects bounded or full FTS integrity checking for catalog benchmark comparison", accepted_values = ["bounded", "full"], value_policy = "document" }
+
+[[control]]
+name = "MISTER_CATALOG_FTS_OPTIMIZE"
+owner = "crates/catalog/src/system_shard.rs"
+classification = "benchmark"
+value_shape = "enum token"
+default_behavior = "keeps FTS optimization enabled unless explicitly disabled"
+visibility = "benchmark only"
+parser = "enum"
+typed_default = "on"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Enables or disables FTS optimization for catalog benchmark comparison", accepted_values = ["on", "off"], value_policy = "document" }
 
 [[control]]
 name = "MISTER_CATALOG_PROTOCOL_STDOUT"

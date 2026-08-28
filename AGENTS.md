@@ -56,8 +56,8 @@ repositories.
   include only the owning manifest plus adjacent lockfile.
 - Stage exact paths with `git add -- PATH...` and commit with
   `git commit -m MESSAGE`; both require first-attempt sandbox escalation. The
-  pre-commit hook is the index-only gate and pre-push owns full clean-`HEAD`
-  assurance. Use `gh`, never the Codex GitHub plugin.
+  pre-commit hook is the index-only gate and the pre-push hook owns full
+  clean-`HEAD` assurance. Use `gh`, never the Codex GitHub plugin.
 - “Build and deploy” means commit, then `scripts/agent deliver`. Delivery uses
   the exact clean app commit and the latest qualified platform. Use
   `scripts/agent deliver local-main` only for committed Dev Main work.
