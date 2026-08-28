@@ -21,6 +21,7 @@ CASE_TARGETS = {
     "screensaver-motion": "apps/mister/ui_tests/tests/test_screensaver_motion.py",
     "about-licenses": "apps/mister/ui_tests/tests/test_about_licenses.py",
     "effect-sandbox": "apps/mister/ui_tests/tests/test_effect_sandbox.py",
+    "profile-matrix": "apps/mister/ui_tests/tests/test_profile_matrix.py",
 }
 
 

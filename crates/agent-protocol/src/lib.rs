@@ -28,6 +28,7 @@ pub const UI_TEST_CASES: &[&str] = &[
     "screensaver-motion",
     "about-licenses",
     "effect-sandbox",
+    "profile-matrix",
 ];
 pub const UI_TEST_FIXTURES: &[&str] = &["deterministic-arcade-v1"];
 pub const LAUNCHER_AUTOMATION_MAX_HOLD_MS: u64 = 40_000;
