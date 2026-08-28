@@ -21,6 +21,8 @@ _BUS_USB = 0x03
 _ABS_CNT = 64
 _ABS_X = 0
 _ABS_Y = 1
+_ABS_RX = 3
+_ABS_RY = 4
 _ABS_HAT0X = 16
 _ABS_HAT0Y = 17
 _AXIS_MAX = 32767
@@ -62,7 +64,7 @@ def _user_dev(name: str) -> bytearray:
     )
     # The four arrays follow absmax, absmin, absfuzz, absflat order.
     array_bytes = _ABS_CNT * struct.calcsize("i")
-    for axis in (_ABS_X, _ABS_Y):
+    for axis in (_ABS_X, _ABS_Y, _ABS_RX, _ABS_RY):
         struct.pack_into("i", data, header + axis * struct.calcsize("i"), _AXIS_MAX)
         struct.pack_into(
             "i", data, header + array_bytes + axis * struct.calcsize("i"), -_AXIS_MAX
@@ -91,7 +93,7 @@ class VirtualJoystick:
             fcntl.ioctl(file, _UI_SET_EVBIT, _EV_SYN)
             for button in Button:
                 fcntl.ioctl(file, _UI_SET_KEYBIT, int(button))
-            for axis in (_ABS_X, _ABS_Y, _ABS_HAT0X, _ABS_HAT0Y):
+            for axis in (_ABS_X, _ABS_Y, _ABS_RX, _ABS_RY, _ABS_HAT0X, _ABS_HAT0Y):
                 fcntl.ioctl(file, _UI_SET_ABSBIT, axis)
             file.write(_user_dev("MiSTer MagiK UI test joystick"))
             fcntl.ioctl(file, _UI_DEV_CREATE)
