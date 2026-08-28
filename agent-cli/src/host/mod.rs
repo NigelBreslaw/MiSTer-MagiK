@@ -16391,19 +16391,41 @@ fn verify_installed_search_ui_with_env(
             .ok_or("search UI automation has no nonce")?
             .to_string();
         nonce = Some(active_nonce.clone());
-        wait_gui_profile_snapshot_with_timeout(
+        let initial_snapshot = wait_gui_profile_snapshot_with_timeout(
             config,
             &active_nonce,
             |snapshot| {
-                gui_profile_effective_view(snapshot) == Some("arcade")
-                    && snapshot
-                        .pointer("/semantic/navigation_transition_active")
-                        .and_then(Value::as_bool)
-                        == Some(false)
+                matches!(
+                    gui_profile_effective_view(snapshot),
+                    Some("home" | "arcade")
+                ) && snapshot
+                    .pointer("/semantic/navigation_transition_active")
+                    .and_then(Value::as_bool)
+                    == Some(false)
             },
             "search UI cached Arcade entry",
             initial_view_timeout,
         )?;
+        if gui_profile_effective_view(&initial_snapshot) == Some("home") {
+            modal_input_action(
+                config,
+                &active_nonce,
+                AutomationAction::Tap(AutomationButton::A),
+            )?;
+            wait_gui_profile_snapshot_with_timeout(
+                config,
+                &active_nonce,
+                |snapshot| {
+                    gui_profile_effective_view(snapshot) == Some("arcade")
+                        && snapshot
+                            .pointer("/semantic/navigation_transition_active")
+                            .and_then(Value::as_bool)
+                            == Some(false)
+                },
+                "search UI Arcade after Home",
+                Duration::from_secs(10),
+            )?;
+        }
         modal_input_action(
             config,
             &active_nonce,
@@ -19433,6 +19455,28 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
     env
 }
 
+fn catalog_attribution_search_ui_env(arm: CatalogAttributionArm) -> Vec<(String, String)> {
+    let mut env = catalog_attribution_launcher_env(arm)
+        .into_iter()
+        .filter(|(key, _)| {
+            !matches!(
+                key.as_str(),
+                "MISTER_CATALOG_REFRESH"
+                    | "MISTER_LAUNCHER_START_SCREEN"
+                    | "MISTER_LAUNCHER_START_SYSTEM"
+                    | "MISTER_HOME_SELECTED_INDEX"
+                    | "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM"
+            )
+        })
+        .collect::<Vec<_>>();
+    env.extend([
+        ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
+        ("MISTER_HOME_SELECTED_INDEX".into(), "0".into()),
+    ]);
+    env
+}
+
 fn catalog_attribution_runtime_command(subcommand: &str) -> String {
     let root = CATALOG_ATTRIBUTION_REMOTE_DIR;
     let work = CATALOG_ATTRIBUTION_WORK_DIR;
@@ -20007,7 +20051,14 @@ fn run_catalog_attribution_pair(
     )?;
     let fresh_profile = collect_catalog_attribution_profile(session, sample_dir, "fresh", arm)?;
     let (first_use_search_ui, first_use_search) = if arm == CatalogAttributionArm::Control {
-        let ui_summary = measure_catalog_attribution_search_ui(config, session, sample_dir)?;
+        let ui_detail = verify_installed_search_ui_with_env(
+            config,
+            &sample_dir.join("first-use-search-ui"),
+            catalog_attribution_search_ui_env(arm),
+            Duration::from_secs(45),
+            120,
+        )?;
+        let ui_summary: Value = serde_json::from_str(&ui_detail)?;
         let search_summary = run_catalog_attribution_search_bench(session, sample_dir)?;
         (Some(ui_summary), Some(search_summary))
     } else {
