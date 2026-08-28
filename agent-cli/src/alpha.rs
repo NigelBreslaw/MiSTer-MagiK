@@ -6,7 +6,7 @@ use crate::device::DeviceClient;
 use crate::error::{AgentError, AgentResult};
 use crate::platform_manifest::{self, Layout};
 use crate::progress::{EventKind, Reporter};
-use crate::transport::{AlphaCandidateHashes, AutomationAction, AutomationButton};
+use crate::transport::AlphaCandidateHashes;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -89,29 +89,6 @@ trait AlphaDevice {
     fn ensure_launcher(&mut self, version: String, revision: String) -> AgentResult<()>;
     fn status(&mut self) -> AgentResult<Value>;
     fn inspect_public_catalog(&mut self) -> AgentResult<Value>;
-    fn begin_automation(
-        &mut self,
-        version: String,
-        revision: String,
-        main_generation: u64,
-        lifetime_seconds: u64,
-    ) -> AgentResult<Value>;
-    fn end_automation(&mut self, nonce: String) -> AgentResult<()>;
-    fn action(&mut self, nonce: String, action: AutomationAction) -> AgentResult<u64>;
-    fn snapshot(&mut self, nonce: String) -> AgentResult<Value>;
-    fn checkpoint(
-        &mut self,
-        nonce: String,
-        action_sequence: u64,
-        label: String,
-        output_dir: PathBuf,
-    ) -> AgentResult<Value>;
-    fn exercise_launch_return(
-        &mut self,
-        nonce: String,
-        expected_game_id: String,
-        lifetime_seconds: u64,
-    ) -> AgentResult<Value>;
 }
 
 impl AlphaDevice for DeviceClient {
@@ -138,65 +115,6 @@ impl AlphaDevice for DeviceClient {
 
     fn inspect_public_catalog(&mut self) -> AgentResult<Value> {
         self.read(crate::NativeDevice::inspect_public_catalog)
-    }
-
-    fn begin_automation(
-        &mut self,
-        version: String,
-        revision: String,
-        main_generation: u64,
-        lifetime_seconds: u64,
-    ) -> AgentResult<Value> {
-        self.mutate(|device| {
-            device.begin_launcher_automation(&version, &revision, main_generation, lifetime_seconds)
-        })
-    }
-
-    fn end_automation(&mut self, nonce: String) -> AgentResult<()> {
-        self.mutate(|device| device.end_launcher_automation(&nonce))
-    }
-
-    fn action(&mut self, nonce: String, action: AutomationAction) -> AgentResult<u64> {
-        let sequence =
-            self.mutate(|device| device.send_launcher_automation_action(&nonce, &action))?;
-        self.read(|device| device.await_launcher_automation_presented(&nonce, sequence, 3_000))?;
-        Ok(sequence)
-    }
-
-    fn snapshot(&mut self, nonce: String) -> AgentResult<Value> {
-        self.read(|device| device.launcher_automation_snapshot(&nonce))
-    }
-
-    fn checkpoint(
-        &mut self,
-        nonce: String,
-        action_sequence: u64,
-        label: String,
-        output_dir: PathBuf,
-    ) -> AgentResult<Value> {
-        self.mutate(|device| {
-            device.capture_launcher_automation_checkpoint(
-                &nonce,
-                action_sequence,
-                &label,
-                &output_dir,
-            )
-        })
-    }
-
-    fn exercise_launch_return(
-        &mut self,
-        nonce: String,
-        expected_game_id: String,
-        lifetime_seconds: u64,
-    ) -> AgentResult<Value> {
-        self.mutate(|device| {
-            device.exercise_launcher_automation_launch_return(
-                &nonce,
-                &expected_game_id,
-                lifetime_seconds,
-            )
-        })
     }
 }
 
@@ -586,165 +504,6 @@ fn run_ui_journey(
     Ok((vec![evidence.clone()], evidence, Vec::new()))
 }
 
-fn select_home_item(
-    device: &mut impl AlphaDevice,
-    nonce: &Option<String>,
-    expected_item_id: &str,
-) -> AgentResult<()> {
-    let initial = snapshot(device, nonce)?;
-    let count = semantic(&initial, "selected_count")
-        .and_then(Value::as_u64)
-        .ok_or("home menu has no selected count")?;
-    let mut state = initial;
-    let mut move_left = semantic(&state, "selected_index")
-        .and_then(Value::as_u64)
-        .is_some_and(|index| index > 0);
-    for _ in 0..count.saturating_mul(2) {
-        if semantic(&state, "selected_item_id").and_then(Value::as_str) == Some(expected_item_id) {
-            return Ok(());
-        }
-        let index = semantic(&state, "selected_index")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        if (move_left && index == 0) || (!move_left && index.saturating_add(1) >= count) {
-            move_left = !move_left;
-        }
-        let previous = semantic(&state, "selected_item_id")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned();
-        state = tap_until_semantic_change(
-            device,
-            nonce,
-            if move_left {
-                AutomationButton::Left
-            } else {
-                AutomationButton::Right
-            },
-            "selected_item_id",
-            &previous,
-        )?;
-    }
-    classified(
-        "alpha_ui_assertion_failed",
-        format!("home menu has no {expected_item_id} item"),
-    )
-}
-
-fn tap_until_semantic_change(
-    device: &mut impl AlphaDevice,
-    nonce: &Option<String>,
-    button: AutomationButton,
-    field: &str,
-    previous: &str,
-) -> AgentResult<Value> {
-    for _ in 0..3 {
-        tap(device, nonce, button)?;
-        for _ in 0..100 {
-            let value = snapshot(device, nonce)?;
-            if semantic(&value, field).and_then(Value::as_str) != Some(previous) {
-                return Ok(value);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-    }
-    classified(
-        "alpha_ui_assertion_failed",
-        format!("{field} did not change from {previous} after bounded input retries"),
-    )
-}
-
-fn tap(
-    device: &mut impl AlphaDevice,
-    nonce: &Option<String>,
-    button: AutomationButton,
-) -> AgentResult<u64> {
-    action(device, nonce, AutomationAction::Tap(button))
-}
-
-fn action(
-    device: &mut impl AlphaDevice,
-    nonce: &Option<String>,
-    action: AutomationAction,
-) -> AgentResult<u64> {
-    device.action(active_nonce(nonce)?.to_owned(), action)
-}
-
-fn snapshot(device: &mut impl AlphaDevice, nonce: &Option<String>) -> AgentResult<Value> {
-    device.snapshot(active_nonce(nonce)?.to_owned())
-}
-
-fn checkpoint(
-    device: &mut impl AlphaDevice,
-    nonce: &Option<String>,
-    sequence: u64,
-    label: &str,
-    output: &Path,
-) -> AgentResult<Value> {
-    device.checkpoint(
-        active_nonce(nonce)?.to_owned(),
-        sequence,
-        label.to_owned(),
-        output.to_owned(),
-    )
-}
-
-fn await_semantic(
-    device: &mut impl AlphaDevice,
-    nonce: &Option<String>,
-    field: &str,
-    expected: &str,
-) -> AgentResult<Value> {
-    let mut last_actual = None;
-    for _ in 0..100 {
-        let value = snapshot(device, nonce)?;
-        let actual = semantic(&value, field).and_then(Value::as_str);
-        if actual == Some(expected) {
-            return Ok(value);
-        }
-        last_actual = actual.map(str::to_owned);
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    classified(
-        "alpha_ui_assertion_failed",
-        format!(
-            "{field} did not become {expected}; actual={}",
-            last_actual.as_deref().unwrap_or("missing")
-        ),
-    )
-}
-
-fn await_semantic_not(
-    device: &mut impl AlphaDevice,
-    nonce: &Option<String>,
-    field: &str,
-    unexpected: &str,
-) -> AgentResult<Value> {
-    let mut steady_since = None;
-    for _ in 0..300 {
-        let value = snapshot(device, nonce)?;
-        if semantic(&value, field).and_then(Value::as_str) != Some(unexpected) {
-            let since = steady_since.get_or_insert_with(std::time::Instant::now);
-            if since.elapsed() >= std::time::Duration::from_millis(250) {
-                return Ok(value);
-            }
-        } else {
-            steady_since = None;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    classified(
-        "alpha_ui_assertion_failed",
-        format!("{field} remained {unexpected}"),
-    )
-}
-
-fn active_nonce(nonce: &Option<String>) -> AgentResult<&str> {
-    nonce
-        .as_deref()
-        .ok_or_else(|| "automation session is not active".into())
-}
-
 fn require_installed_candidate(
     status: &Value,
     candidate: &CandidateIdentity,
@@ -774,10 +533,12 @@ fn require_installed_candidate(
     Ok(runtime.clone())
 }
 
+#[cfg(test)]
 fn semantic<'a>(snapshot: &'a Value, field: &str) -> Option<&'a Value> {
     snapshot.get("semantic")?.get(field)
 }
 
+#[cfg(test)]
 fn require_semantic(snapshot: &Value, field: &str, expected: &str) -> AgentResult<()> {
     if semantic(snapshot, field).and_then(Value::as_str) == Some(expected) {
         Ok(())
@@ -789,6 +550,7 @@ fn require_semantic(snapshot: &Value, field: &str, expected: &str) -> AgentResul
     }
 }
 
+#[cfg(test)]
 fn require_bool(snapshot: &Value, field: &str, expected: bool) -> AgentResult<()> {
     if semantic(snapshot, field).and_then(Value::as_bool) == Some(expected) {
         Ok(())
@@ -800,6 +562,7 @@ fn require_bool(snapshot: &Value, field: &str, expected: bool) -> AgentResult<()
     }
 }
 
+#[cfg(test)]
 fn require_nonzero(snapshot: &Value, field: &str) -> AgentResult<()> {
     if semantic(snapshot, field)
         .and_then(Value::as_u64)
@@ -811,6 +574,7 @@ fn require_nonzero(snapshot: &Value, field: &str) -> AgentResult<()> {
     }
 }
 
+#[cfg(test)]
 fn require_nonempty(snapshot: &Value, field: &str) -> AgentResult<()> {
     if semantic(snapshot, field)
         .and_then(Value::as_str)
@@ -820,31 +584,6 @@ fn require_nonempty(snapshot: &Value, field: &str) -> AgentResult<()> {
     } else {
         classified("alpha_ui_assertion_failed", format!("{field} is empty"))
     }
-}
-
-fn capture_usb(label: &str, output: &Path) -> AgentResult<UsbEvidence> {
-    let path = output.join(format!("{label}.jpg"));
-    let artifact = crate::capture::execute(Some(&path))?;
-    Ok(UsbEvidence {
-        label: label.to_owned(),
-        path: format!("usb-video/{label}.jpg"),
-        bytes: artifact.bytes,
-        width: artifact.width,
-        height: artifact.height,
-        sha256: digest_file(&artifact.path)?,
-    })
-}
-
-fn maybe_capture_usb(
-    capture_usb_video: bool,
-    evidence: &mut Vec<UsbEvidence>,
-    label: &str,
-    output: &Path,
-) -> AgentResult<()> {
-    if capture_usb_video {
-        evidence.push(capture_usb(label, output)?);
-    }
-    Ok(())
 }
 
 fn write_receipt_atomically(path: &Path, receipt: &AcceptanceReceipt) -> AgentResult<()> {
@@ -1250,8 +989,6 @@ mod tests {
         assert!(require_bool(&snapshot, "ready", false).is_err());
         assert!(require_nonzero(&json!({"semantic": {"generation": 0}}), "generation").is_err());
         assert!(require_nonempty(&json!({"semantic": {"selection": ""}}), "selection").is_err());
-        assert!(active_nonce(&None).is_err());
-        assert_eq!(active_nonce(&Some("nonce".into())).unwrap(), "nonce");
     }
 
     #[test]
