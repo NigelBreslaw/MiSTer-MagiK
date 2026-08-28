@@ -2,8 +2,8 @@
 
 Use these documents to reduce repository-wide exploration:
 
-- [`task-map.md`](task-map.md) — where to start and which assurance boundary
-  owns common work.
+- [`task-map.md`](task-map.md) — fallback routing when subsystem ownership,
+  canonical documentation, or exceptional assurance is unclear.
 - [`file-authority.md`](file-authority.md) — whether a file is hand-edited,
   generated, private, or device-owned.
 - [`ai-efficiency.md`](ai-efficiency.md) — bounded inspection, tool-output

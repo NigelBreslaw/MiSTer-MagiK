@@ -1,7 +1,8 @@
 # AGENTS.md - mister-slint
 
 Universal safety lives here. Before subsystem work, read the nearest
-`AGENTS.md` and narrowest `docs/agents/task-map.md` row.
+`AGENTS.md`. Consult `docs/agents/task-map.md` only when ownership, canonical
+documentation, or exceptional assurance is unclear.
 
 ## Critical Boot-Loop Safety
 

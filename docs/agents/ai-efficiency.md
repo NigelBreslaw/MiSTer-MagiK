@@ -13,8 +13,9 @@ settings follow OpenAI's current model guidance:
 
 ## Inspection loop
 
-1. Start with the narrowest row in `task-map.md` and read only the nearest
-   governing `AGENTS.md` plus the listed canonical source.
+1. Read the nearest governing `AGENTS.md`. When ownership, canonical
+   documentation, or exceptional assurance is unclear, consult only the
+   narrowest row in `task-map.md` and its listed source.
 2. For Rust or Cargo work, use `$magik-rust-lsp` semantic navigation before
    broad shell exploration. Keep broad semantic results to 20 entries without
    snippets unless the skill requires otherwise.
