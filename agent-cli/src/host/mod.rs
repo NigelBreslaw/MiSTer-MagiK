@@ -20239,6 +20239,46 @@ fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Ve
                 "complete_ms": value.pointer("/timing/complete_ms"),
                 "runtime_start_to_catalog_complete_ms":
                     catalog_runtime_completion_ms(value.get("phase_evidence")),
+                "internal_catalog_elapsed_ms": catalog_phase_metric_ms(
+                    value.get("phase_evidence"),
+                    "startup_timing",
+                    Some("catalog_fresh_build"),
+                    "elapsed_us",
+                ),
+                "source_phase_ms": catalog_phase_metric_ms(
+                    value.get("phase_evidence"),
+                    "fast_catalog_source_phase_tsv",
+                    None,
+                    "total_us",
+                ),
+                "artifact_publish_ms": catalog_phase_metric_ms(
+                    value.get("phase_evidence"),
+                    "startup_timing",
+                    Some("catalog_fresh_build"),
+                    "publish_us",
+                ),
+                "capture_ms": catalog_phase_metric_ms(
+                    value.get("phase_evidence"),
+                    "startup_timing",
+                    Some("catalog_fresh_build"),
+                    "capture_us",
+                ),
+                "refresh_state_publish_ms": catalog_phase_metric_ms(
+                    value.get("phase_evidence"),
+                    "startup_timing",
+                    Some("catalog_fresh_build"),
+                    "refresh_state_publish_us",
+                ),
+                "search_optimize_us": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "catalog_search_build_tsv",
+                    "optimize_us",
+                ),
+                "search_integrity_us": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "catalog_search_build_tsv",
+                    "integrity_us",
+                ),
                 "total_games": value.pointer("/catalog/total_games"),
                 "systems": value.pointer("/catalog/systems"),
                 "phase_evidence_complete": value.pointer("/phase_evidence/complete"),
@@ -20249,6 +20289,43 @@ fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Ve
         }
     }
     rows
+}
+
+fn catalog_phase_metric_ms(
+    phase_evidence: Option<&Value>,
+    record: &str,
+    name: Option<&str>,
+    metric: &str,
+) -> Option<u64> {
+    phase_evidence?
+        .get("records")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|value| {
+            value.get("record").and_then(Value::as_str) == Some(record)
+                && name.is_none_or(|expected| {
+                    value.get("name").and_then(Value::as_str) == Some(expected)
+                })
+        })
+        .and_then(|value| value.pointer(&format!("/metrics/{metric}")))
+        .and_then(Value::as_u64)
+        .map(|value| value.saturating_add(999) / 1_000)
+}
+
+fn catalog_phase_metric_sum(
+    phase_evidence: Option<&Value>,
+    record: &str,
+    metric: &str,
+) -> Option<u64> {
+    let values = phase_evidence?
+        .get("records")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter(|value| value.get("record").and_then(Value::as_str) == Some(record))
+        .filter_map(|value| value.pointer(&format!("/metrics/{metric}")))
+        .filter_map(Value::as_u64)
+        .collect::<Vec<_>>();
+    (!values.is_empty()).then(|| values.into_iter().fold(0, u64::saturating_add))
 }
 
 fn catalog_runtime_completion_ms(phase_evidence: Option<&Value>) -> Option<u64> {
@@ -20308,9 +20385,12 @@ fn catalog_attribution_evidence_report(summary: &Value) -> Result<String> {
     )?;
     writeln!(
         report,
-        "| Arm | Sample | Leg | First visible | Host complete | Runtime complete | Games |"
+        "| Arm | Sample | Leg | First visible | Host complete | Runtime complete | Internal | Source | FTS optimize | FTS integrity | Games |"
     )?;
-    writeln!(report, "|---|---:|---|---:|---:|---:|---:|")?;
+    writeln!(
+        report,
+        "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|"
+    )?;
     if let Some(rows) = summary
         .get("normalized_measurements")
         .and_then(Value::as_array)
@@ -20318,7 +20398,7 @@ fn catalog_attribution_evidence_report(summary: &Value) -> Result<String> {
         for row in rows {
             writeln!(
                 report,
-                "| {} | {} | {} | {} ms | {} ms | {} ms | {} |",
+                "| {} | {} | {} | {} ms | {} ms | {} ms | {} ms | {} ms | {} us | {} us | {} |",
                 row["arm"].as_str().unwrap_or("unknown"),
                 row["sample"].as_u64().unwrap_or(0),
                 row["leg"].as_str().unwrap_or("unknown"),
@@ -20327,6 +20407,10 @@ fn catalog_attribution_evidence_report(summary: &Value) -> Result<String> {
                 row["runtime_start_to_catalog_complete_ms"]
                     .as_u64()
                     .unwrap_or(0),
+                row["internal_catalog_elapsed_ms"].as_u64().unwrap_or(0),
+                row["source_phase_ms"].as_u64().unwrap_or(0),
+                row["search_optimize_us"].as_u64().unwrap_or(0),
+                row["search_integrity_us"].as_u64().unwrap_or(0),
                 row["total_games"].as_u64().unwrap_or(0),
             )?;
         }
@@ -40731,6 +40815,44 @@ H: Handlers=event3 js0"#
         .unwrap_err()
         .to_string();
         assert!(error.contains("matched no installed MRAs"));
+    }
+
+    #[test]
+    fn catalog_attribution_phase_metrics_normalize_microseconds() {
+        let evidence = json!({
+            "records": [
+                {
+                    "record": "startup_timing",
+                    "name": "catalog_fresh_build",
+                    "metrics": {"elapsed_us": 47463662, "source_us": 25083503}
+                },
+                {
+                    "record": "catalog_search_build_tsv",
+                    "metrics": {"optimize_us": 1200, "integrity_us": 300}
+                },
+                {
+                    "record": "catalog_search_build_tsv",
+                    "metrics": {"optimize_us": 800, "integrity_us": 500}
+                }
+            ]
+        });
+        assert_eq!(
+            catalog_phase_metric_ms(
+                Some(&evidence),
+                "startup_timing",
+                Some("catalog_fresh_build"),
+                "elapsed_us"
+            ),
+            Some(47_464)
+        );
+        assert_eq!(
+            catalog_phase_metric_sum(Some(&evidence), "catalog_search_build_tsv", "optimize_us"),
+            Some(2_000)
+        );
+        assert_eq!(
+            catalog_phase_metric_sum(Some(&evidence), "catalog_search_build_tsv", "integrity_us"),
+            Some(800)
+        );
     }
 
     #[test]
