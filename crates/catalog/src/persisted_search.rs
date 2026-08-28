@@ -403,6 +403,7 @@ pub(crate) struct PersistedSearchBuildOutcome {
     pub(crate) autocomplete_sort_us: u64,
     pub(crate) autocomplete_insert_us: u64,
     pub(crate) optimize_us: u64,
+    pub(crate) optimize_mode: &'static str,
     pub(crate) automerge_restore_us: u64,
     pub(crate) integrity_us: u64,
     pub(crate) integrity_mode: &'static str,
@@ -659,6 +660,7 @@ pub(crate) fn populate_with_options(
     }
     drop(optimize_pmu);
     let optimize_us = elapsed_us(optimize_started);
+    let optimize_mode = if optimize { "enabled" } else { "disabled" };
     let automerge_restore_started = Instant::now();
     connection
         .execute(
@@ -694,6 +696,7 @@ pub(crate) fn populate_with_options(
         autocomplete_sort_us,
         autocomplete_insert_us,
         optimize_us,
+        optimize_mode,
         automerge_restore_us,
         integrity_us: elapsed_us(integrity_started),
         integrity_mode,

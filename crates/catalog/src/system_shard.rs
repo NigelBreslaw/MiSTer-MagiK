@@ -507,12 +507,14 @@ fn write_system_shard_with_options_and_profile(
     let optimize_search = matches!(
         search_tuning,
         ShardSearchTuning::FullOptimized | ShardSearchTuning::ColumnOptimized
-    );
+    ) && !std::env::var("MISTER_CATALOG_FTS_OPTIMIZE").is_ok_and(|value| {
+        value.eq_ignore_ascii_case("off") || value.eq_ignore_ascii_case("false") || value == "0"
+    });
     let search =
         crate::persisted_search::populate_with_options(&transaction, &data.games, optimize_search)
             .map_err(|error| SystemShardError::new("write", error.to_string()))?;
     crate::catalog_logln!(
-        "catalog_search_build_tsv\tsystem={}\tdocuments={}\twords={}\tbatches={}\tdocument_build_us={}\tfts_insert_us={}\tpipeline_wait_us={}\trow_loop_us={}\tautocomplete_sort_us={}\tautocomplete_insert_us={}\toptimize_us={}\tautomerge_restore_us={}\tintegrity_mode={}\tintegrity_us={}\ttotal_us={}",
+        "catalog_search_build_tsv\tsystem={}\tdocuments={}\twords={}\tbatches={}\tdocument_build_us={}\tfts_insert_us={}\tpipeline_wait_us={}\trow_loop_us={}\tautocomplete_sort_us={}\tautocomplete_insert_us={}\toptimize_mode={}\toptimize_us={}\tautomerge_restore_us={}\tintegrity_mode={}\tintegrity_us={}\ttotal_us={}",
         data.system_id.as_str(),
         data.games.len(),
         search.words,
@@ -523,6 +525,7 @@ fn write_system_shard_with_options_and_profile(
         search.row_loop_us,
         search.autocomplete_sort_us,
         search.autocomplete_insert_us,
+        search.optimize_mode,
         search.optimize_us,
         search.automerge_restore_us,
         search.integrity_mode,
