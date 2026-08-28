@@ -1,43 +1,20 @@
-# AGENTS.md - scripts
+# AGENTS.md - host scripts
 
-Root `AGENTS.md` applies.
-File authority and regeneration commands are indexed in
-`docs/agents/file-authority.md`.
+Scripts own thin host validation, packaging, conversion, CI, release-data, and
+analysis entrypoints. Device, build, deployment, profiling, acceptance, and
+recovery orchestration belongs in typed Rust.
 
-## Ownership
+- Use Bash with `set -euo pipefail` and preserve macOS Bash compatibility.
+- Preserve stable command shapes used by sandbox approvals.
+- Do not add device or workflow orchestrators. Agents use typed
+  `scripts/agent deliver`, `benchmark`, or `diagnose`; attended human operations
+  use `scripts/agent device`.
+- Retry one explicitly read-only device request after transient transport
+  failure. Never blindly replay mutation.
+- Destructive runners require volatile arming and interruption-safe cleanup.
+- Self-tests use temporary fixtures and never contact the MiSTer.
+- Generated output belongs under ignored `build/`, `dist/`, `outputs/`, or a
+  temporary directory.
 
-Scripts provide host validation, packaging, conversion, CI, release-data, and
-pure-analysis interfaces. Device, build, deployment, profiling, acceptance,
-and recovery orchestration belongs in typed Rust.
-
-Stable public commands remain directly under `scripts/`. Shared implementation,
-checks, tests, analysis, media, and release helpers are organized according to
-`scripts/README.md`.
-
-Use `scripts/agent plan` to preview affected assurance without executing it or
-contacting the MiSTer.
-
-## Rules
-
-- Use Bash with `set -euo pipefail`; keep macOS Bash compatibility.
-- Preserve stable direct command shapes used by sandbox approvals.
-- Do not add device/build/deploy/profile/acceptance shell orchestrators.
-- Human device operations use typed `scripts/agent device` commands; agents use
-  `scripts/agent deliver`, `benchmark`, or `diagnose`.
-- Local Main experiments use only the positional
-  `scripts/agent deliver local-main` workflow. Do not add feature-flag or shell
-  deployment alternatives.
-- Explicitly read-only device requests may retry once after transient transport
-  unavailability. Mutating requests must not be replayed outside their typed
-  reconciliation or compensation path.
-- Destructive runners require interruption-safe cleanup and volatile arming.
-- Self-tests must use temporary/local fixtures and never contact the MiSTer.
-- Generated output belongs under ignored `build/`, `dist/`, or a temporary
-  directory unless explicitly curated evidence.
-
-## Assurance
-
-Stage intentional script changes and commit them normally. Pre-commit performs
-bounded shell syntax, whitespace, and policy checks. Pre-push and CI run the
-affected script contracts, packaging fixtures, and other full assurance. Agents
-do not construct those checks directly.
+`scripts/agent plan` previews assurance. Hooks and CI own automated checks;
+agents do not reconstruct them.

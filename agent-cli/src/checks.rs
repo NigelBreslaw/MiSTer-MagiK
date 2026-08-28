@@ -346,28 +346,42 @@ fn check_distribution_workflow(repository: &Path) -> Result<(), String> {
 }
 
 fn check_agent_guidance(repository: &Path) -> Result<(), String> {
-    const REQUIRED: &[&str] = &[
-        "docs/agents/README.md",
-        "docs/agents/task-map.md",
-        "docs/agents/file-authority.md",
-        "docs/agents/ai-efficiency.md",
+    const SCOPED: &[&str] = &[
+        "apps/AGENTS.md",
+        "apps/desktop/AGENTS.md",
         "apps/mister/AGENTS.md",
         "apps/mister/src/ui_runner/AGENTS.md",
+        "crates/AGENTS.md",
+        "mister/AGENTS.md",
+        "mister/platform/fpga/AGENTS.md",
         "mister/tools/agent/AGENTS.md",
         "scripts/AGENTS.md",
-        "apps/desktop/AGENTS.md",
+    ];
+    const REQUIRED_REFERENCES: &[&str] = &[
+        "docs/fpga-development.md",
         "apps/mister/BUILD.md",
         "documentation/src/content/docs/contributing/workflow.mdx",
     ];
-    let missing: Vec<_> = REQUIRED
+    let missing: Vec<_> = SCOPED
         .iter()
+        .chain(REQUIRED_REFERENCES)
         .filter(|path| !repository.join(path).is_file())
         .copied()
         .collect();
     if !missing.is_empty() {
         return Err(format!("agent_guidance_missing: {}", missing.join(", ")));
     }
-    let authority = read(repository, "docs/agents/file-authority.md")?;
+    for retired in [
+        "docs/agents/README.md",
+        "docs/agents/task-map.md",
+        "docs/agents/file-authority.md",
+        "docs/agents/ai-efficiency.md",
+    ] {
+        if repository.join(retired).exists() {
+            return Err(format!("retired_agent_guidance_present: {retired}"));
+        }
+    }
+    let authority = read(repository, "agent-cli/src/guidance.rs")?;
     for generator in [
         "scripts/media/harvest-core-launch-manifest.py",
         "scripts/release/packaging/generate-third-party-licenses.py",
@@ -389,8 +403,9 @@ fn check_agent_guidance(repository: &Path) -> Result<(), String> {
         }
     }
     let mut guidance = vec!["AGENTS.md"];
-    guidance.extend_from_slice(REQUIRED);
-    for path in guidance {
+    guidance.extend_from_slice(SCOPED);
+    guidance.extend_from_slice(REQUIRED_REFERENCES);
+    for path in &guidance {
         let text = read(repository, path)?;
         for forbidden in [
             "scripts/agent check",
@@ -427,19 +442,59 @@ fn check_agent_guidance(repository: &Path) -> Result<(), String> {
             return Err(format!("root_workflow_missing: {expected}"));
         }
     }
-    let efficiency = read(repository, "docs/agents/ai-efficiency.md")?;
     for expected in [
         "1,200 tokens",
-        "3,000-token",
+        "3,000 tokens",
         "$magik-rust-lsp",
         "150 lines",
         "100 matches",
-        "Never forward unconditional broad `r.output`",
-        "scripts/codex-context-report.py",
+        "unconditional broad `r.output`",
     ] {
-        if !efficiency.contains(expected) {
-            return Err(format!("ai_efficiency_guidance_missing: {expected}"));
+        if !root.contains(expected) {
+            return Err(format!("root_context_guidance_missing: {expected}"));
         }
+    }
+    let root_words = root.split_whitespace().count();
+    if root_words > 700 {
+        return Err(format!("root_guidance_word_budget: {root_words} > 700"));
+    }
+    for path in SCOPED {
+        let text = read(repository, path)?;
+        let words = text.split_whitespace().count();
+        if words > 350 {
+            return Err(format!("scoped_guidance_word_budget: {path} {words} > 350"));
+        }
+        for forbidden in [
+            "`docs/agents/README.md`",
+            "`docs/agents/task-map.md`",
+            "`docs/agents/file-authority.md`",
+            "`docs/agents/ai-efficiency.md`",
+            "`AGENTS.md` applies",
+            "Read `",
+            "Follow `",
+        ] {
+            if text.contains(forbidden) {
+                return Err(format!("recursive_guidance: {path} contains {forbidden}"));
+            }
+        }
+    }
+    let runtime = crate::guidance::report(
+        repository,
+        Path::new("docs/reference/mister-runtime-environment.md"),
+    )
+    .map_err(|error| error.to_string())?;
+    if !runtime.contains("generate-runtime-environment-reference.py") {
+        return Err("path_guidance_missing: runtime environment regeneration".into());
+    }
+    let launcher = crate::guidance::report(
+        repository,
+        Path::new("apps/mister/src/ui_runner/launcher_loop.rs"),
+    )
+    .map_err(|error| error.to_string())?;
+    if launcher.contains("apps/mister/AGENTS.md")
+        || !launcher.contains("apps/mister/src/ui_runner/AGENTS.md")
+    {
+        return Err("path_guidance_not_nearest: launcher runtime".into());
     }
     check_codex_config(repository)?;
     check_retired_validation_call_sites(repository)

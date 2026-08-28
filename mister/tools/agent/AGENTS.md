@@ -1,27 +1,14 @@
-# AGENTS.md - mister/tools/agent
+# AGENTS.md - device agent
 
-Root `AGENTS.md` applies.
-File authority is documented in `docs/agents/file-authority.md`.
+This is the authenticated device-side network and boot agent. Start with
+`src/main.rs`; scanout ABI handling starts in `scanout_slots_contract.rs`.
 
-## Ownership
-
-This is the small device-side network/boot agent. It owns authenticated command
-handling, SD browsing, library snapshots, framebuffer capture/stream proxying,
-telemetry, and Linux-specific device operations. Start with `src/main.rs`;
-the scanout contract is in `scanout_slots_contract.rs`.
-
-## Rules
-
-- Validate all lengths, paths, and decoded sizes before allocation or I/O.
-- Keep non-Linux tests functional.
+- Validate lengths, paths, and decoded sizes before allocation or I/O.
+- Keep non-Linux tests functional and OS access isolated from validation.
 - Never expose credentials or add unauthenticated commands.
-- The steady-state framebuffer stream proxies producer frames; it must not poll
+- Proxy steady-state framebuffer streams from the producer; never poll
   `/dev/fb0`.
-- OS access stays isolated from request validation where practical.
+- Device communication and ARM deployment require first-attempt escalation.
 
-## Assurance
-
-Use `$magik-rust-lsp` for Rust navigation and diagnostics. Pre-commit checks
-staged formatting; pre-push and native Linux CI own tests, full Clippy, and ARM
-assurance. Building/deploying the ARM agent and all device communication
-require first-attempt escalation.
+Use `$magik-rust-lsp` for edit-time diagnostics; hooks and native Linux CI own
+automated assurance.

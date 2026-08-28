@@ -41,6 +41,10 @@ pub enum Command {
         remote: String,
     },
     Plan(ScopeArgs),
+    /// Print the bounded guidance and authority record for one path.
+    Guidance {
+        path: PathBuf,
+    },
     Architecture {
         #[command(subcommand)]
         command: ArchitectureCommand,
@@ -860,6 +864,25 @@ mod tests {
             scope.scope(),
             Scope::Paths(vec![PathBuf::from("a"), PathBuf::from("b")])
         );
+    }
+
+    #[test]
+    fn guidance_accepts_exactly_one_path() {
+        let cli = Cli::try_parse_from([
+            "agent-cli",
+            "guidance",
+            "apps/mister/src/ui_runner/launcher_loop.rs",
+        ])
+        .unwrap();
+        let Some(Command::Guidance { path }) = cli.command else {
+            panic!("expected guidance command");
+        };
+        assert_eq!(
+            path,
+            PathBuf::from("apps/mister/src/ui_runner/launcher_loop.rs")
+        );
+        assert!(Cli::try_parse_from(["agent-cli", "guidance"]).is_err());
+        assert!(Cli::try_parse_from(["agent-cli", "guidance", "a", "b"]).is_err());
     }
 
     #[test]

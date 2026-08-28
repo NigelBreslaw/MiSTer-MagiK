@@ -28,6 +28,7 @@ pub mod executor;
 pub mod fpga;
 pub mod game_databases;
 pub mod git;
+pub mod guidance;
 pub mod hooks;
 mod host;
 pub mod lab_build;

@@ -51,7 +51,7 @@ pub fn affected_plan_at(
     let mut external_requirements = Vec::new();
     for path in &paths {
         add_path_operations(repository, path, &mut operations, &mut operation_conflicts);
-        if path.starts_with("mister/platform/fpga") {
+        if fpga_source_affected(path) {
             external_requirements.push(rbf_external_requirement());
         }
     }
@@ -184,6 +184,14 @@ fn cargo_clippy_subsumes(clippy: &Operation, check: &Operation) -> bool {
 
 fn classified(path: &Path) -> bool {
     crate::components::classify(path).is_some()
+}
+
+fn fpga_source_affected(path: &Path) -> bool {
+    path.starts_with("mister/platform/fpga")
+        && !matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("md" | "mdx")
+        )
 }
 
 const LAUNCHER_VISUAL_MATRIX_ENABLED: bool = true;
@@ -320,6 +328,8 @@ fn add_path_operations(
     if path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
         || path.starts_with("docs/agents")
         || path == Path::new(".codex/config.toml")
+        || path == Path::new("agent-cli/src/guidance.rs")
+        || path == Path::new("docs/fpga-development.md")
     {
         add(builtin(
             "repo.guidance",
@@ -940,7 +950,7 @@ fn add_path_operations(
             ],
         ));
     }
-    if path.starts_with("mister/platform/fpga") {
+    if fpga_source_affected(path) {
         add(builtin(
             "fpga.workflow-contract",
             "Test platform workflow",
@@ -2223,19 +2233,26 @@ mod tests {
     }
 
     #[test]
-    fn codex_config_changes_select_guidance_contract() {
-        let plan = affected_plan(
-            AssuranceRequest::Plan {
-                scope: Scope::Paths(vec![]),
-            },
-            vec![".codex/config.toml".into()],
-        )
-        .unwrap();
-        assert!(
-            plan.operations
-                .iter()
-                .any(|operation| operation.id == "repo.guidance")
-        );
+    fn guidance_sources_select_guidance_contract() {
+        for path in [
+            ".codex/config.toml",
+            "agent-cli/src/guidance.rs",
+            "docs/fpga-development.md",
+        ] {
+            let plan = affected_plan(
+                AssuranceRequest::Plan {
+                    scope: Scope::Paths(vec![]),
+                },
+                vec![path.into()],
+            )
+            .unwrap();
+            assert!(
+                plan.operations
+                    .iter()
+                    .any(|operation| operation.id == "repo.guidance"),
+                "missing guidance contract for {path}"
+            );
+        }
     }
 
     #[test]
@@ -2323,6 +2340,23 @@ mod tests {
             plan.operations
                 .iter()
                 .all(|operation| !operation.program.to_ascii_lowercase().contains("quartus"))
+        );
+    }
+
+    #[test]
+    fn fpga_guidance_does_not_require_rbf_signoff() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["mister/platform/fpga/AGENTS.md".into()],
+        )
+        .unwrap();
+        assert!(plan.external_requirements.is_empty());
+        assert!(
+            plan.operations
+                .iter()
+                .any(|operation| operation.id == "repo.guidance")
         );
     }
 

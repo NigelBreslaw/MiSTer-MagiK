@@ -115,6 +115,7 @@ fn command_label(command: &CliCommand) -> &'static str {
     match command {
         CliCommand::PrePush { .. } => "pre-push",
         CliCommand::Plan(_) => "plan",
+        CliCommand::Guidance { .. } => "guidance",
         CliCommand::Architecture { .. } => "architecture",
         CliCommand::Run { .. } => "run",
         CliCommand::Db { .. } => "db",
@@ -866,6 +867,10 @@ fn dispatch(
                 false,
                 reporter,
             );
+        }
+        CliCommand::Guidance { path } => {
+            print!("{}", agent_cli::guidance::report(repository, path)?);
+            return Ok(Outcome::Passed);
         }
         CliCommand::Architecture { command } => {
             agent_cli::architecture::execute(repository, command)?;

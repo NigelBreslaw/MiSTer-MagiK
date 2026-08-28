@@ -1,203 +1,95 @@
 # AGENTS.md - mister-slint
 
-Universal safety lives here. Before subsystem work, read the nearest
-`AGENTS.md`. Consult `docs/agents/task-map.md` only when ownership, canonical
-documentation, or exceptional assurance is unclear.
+Use these universal rules plus the nearest scoped `AGENTS.md`. Other links are
+references: open only the needed section and never follow recursively unless
+blocked.
 
-## Critical Boot-Loop Safety
-
-Never leave the MiSTer in an unattended or persistent reboot loop. A fast reset
-loop can make SSH unusable and require SD-card recovery.
-
-Never use persistent `launcher.env` to arm destructive reset faults.
-`direct-reset-no-sync` requires a volatile `/tmp` session token. Cleanup and
-exit traps for destructive runners must remove:
-
-- `/media/fat/mister-magik/launcher.env`
-- `/media/fat/mister-magik-dev/launcher.env`
-- `/tmp/mister-magik/fs-fault-launcher.env`
-- `/tmp/mister-magik/fs-fault-session`
-- `/tmp/mister-magik/fs-fault.json`
-- `/media/fat/mister-magik/rebuild-on-next-boot`
-- `/media/fat/mister-magik-dev/rebuild-on-next-boot`
-
-Host wait and recovery loops require bounded local timeouts. Before a
-reset-fault test, confirm non-network recovery and interruption-safe cleanup.
-After `direct-reset-no-sync`, verify no arming file remains:
-
-```bash
-scripts/agent device arming-status
-```
-
-`scripts/agent diagnose` may clear those files and issue one raw Linux reboot
-over SSH only when the installed platform is coherent and launcher health is
-down. Never replay that reboot automatically. If rebooting repeats, stop normal
-delivery, remove stale arming files, and use SD-card recovery plus
-`/media/fat/mister-magik/bootlogs/main-reboot.log` when SSH is unstable.
-
-## Names And Repository Routing
-
-MiSTer MagiK is a Rust/Slint frontend for MiSTer FPGA. Main_MiSTer is normally
-`../Main_MiSTer`; override with `MISTER_MAIN_DIR`.
-
-- Product/UI: **MiSTer MagiK**
-- Main processes: `MiSTer_MagiK`, `MiSTer_MagiKDev`
-- Directory/script slug: `mister-magik`
-- Slint binary/package: `mister-magik-fb`
-- Rust crate/import: `mister_magik_fb`
-
-Never introduce the retired `magic` spelling or mixed-case path variants.
-
-- `apps/mister/` — device frontend; `apps/mister/src/ui_runner/` — launcher;
-  read each local `AGENTS.md`
-- `agent-cli/` — workflow/device tool; `mister/tools/agent/` — device agent
-- `apps/desktop/` — macOS companion; `scripts/` — host tooling; read local
-  guidance
-- `private/magik-assets/`, `private/magik-cloud/` — independent repositories;
-  read their local guidance
-- `docs/` — current policy; `history/` — dated evidence; `reference/` —
-  optional read-only research clones
-
-Routine `rg` honors `.ignore`; use `rg --no-ignore` only when excluded trees are
-in scope.
-
-## Universal Workflow
+## Safety
 
 - Preserve user changes. Never reset, checkout, clean, overwrite, or broadly
-  stage unrelated work; concurrent agents use separate worktrees.
-- Never amend pushed `main`. Rewriting pushed history requires an explicit
-  request and identification of the remote history being replaced.
-- Never use the Codex GitHub plugin for repository, issue, PR, or Actions work;
-  use `gh`.
-- Agents use `scripts/agent deliver`, `benchmark`, or `diagnose` for device
-  workflows. Attended operations use typed `scripts/agent device` commands.
-  Never use raw SSH/SCP or generic remote-shell orchestration.
-- Device workflows, Apple container, virtualization, and attended `mister`
-  commands require first-attempt sandbox escalation with the direct repository
-  command.
-- Retry a read-only typed request once after transient transport failure. Never
-  replay mutation blindly; use reconciliation or compensation. Authentication
-  failures require changed access. Report unavailable only after bounded
-  recovery fails.
-- Edit `MiSTer.ini` only through typed `mister` mutators or approved
-  install/restore scripts.
-- Apple Silicon ARM builds use Apple `container`; never substitute
-  Docker/OrbStack.
-- Commit and push private submodules before updating only the parent gitlink.
-- Never stage private screenshots, caches, archives, `.env`, `.wrangler/`,
-  credentials, or ignored `private/test-fixtures/` content.
-- Existing `reference/` repos are read-only; new clones may be added there.
+  stage unrelated work. Never rewrite pushed history without an explicit
+  request identifying the history to replace.
+- Never leave the MiSTer in an unattended or persistent reboot loop. Destructive
+  reset tests require volatile `/tmp` arming, bounded host timeouts,
+  interruption-safe cleanup, and confirmed non-network recovery.
+- Cleanup for destructive runners must remove
+  `/media/fat/mister-magik{,-dev}/{launcher.env,rebuild-on-next-boot}` and
+  `/tmp/mister-magik/{fs-fault-launcher.env,fs-fault-session,fs-fault.json}`.
+  After `direct-reset-no-sync`, run
+  `scripts/agent device arming-status` and verify nothing remains armed.
+- `scripts/agent diagnose` may clear stale arming state and issue one raw Linux
+  reboot only when the installed platform is coherent and launcher health is
+  down. Never replay that reboot automatically. Stop and use SD-card recovery
+  plus `bootlogs/main-reboot.log` if rebooting repeats or SSH is unstable.
+- Device, Apple-container, virtualization, and attended `scripts/agent device`
+  commands require first-attempt sandbox escalation. Retry a read-only typed
+  request once after transient transport failure; reconcile mutations instead
+  of replaying them. Authentication failures require changed access.
+- Never stage screenshots, caches, archives, secrets, `.env`, `.wrangler/`,
+  credentials, ignored fixtures, or private-repository contents. Commit and
+  push a private submodule before staging its parent gitlink.
 
-## FPGA Safety
+## Names And Ownership
 
-RBF synthesis runs only through `Build MiSTer MagiK Platform` GitHub Actions or
-the typed Apple Silicon `scripts/agent fpga signoff` workflow. Never invoke
-Quartus, its installer, or FPGA build scripts directly.
+Use **MiSTer MagiK**, processes `MiSTer_MagiK` and `MiSTer_MagiKDev`, slug
+`mister-magik`, binary/package `mister-magik-fb`, and Rust crate
+`mister_magik_fb`. Never introduce the retired `magic` spelling.
 
-A canonical local signoff set may be installed only to the Dev layout through
-the attended rollback-capable `scripts/agent device fpga install-experimental`
-transaction. Never copy a local RBF directly to the device. Local artifacts are
-not release-qualified; production delivery requires the GitHub platform
-workflow.
+Portable domain logic belongs in `crates/`; MiSTer hardware integration in
+`mister/`; device UI in `apps/mister/`; macOS UI in `apps/desktop/`; typed host
+workflow in `agent-cli/`; thin host entrypoints in `scripts/`. Existing
+`reference/` repositories are read-only. Private submodules are independent
+repositories.
 
-Experimental activation must use Main's `load_core` with the exact
-manifest-selected Dev latch RBF. Never activate or verify it through root
-`/media/fat/menu.rbf` or `load_core menu.rbf`; that stock-owned route may fall
-back to stock Menu. `mister_magik_reload_main` restarts Dev Main but does not
-prove a replacement RBF was configured. Remaining signoff and evidence rules
-are in `docs/fpga-latch-release.md`.
+## Workflow
 
-## Canonical Commands And Assurance
+- Use `$magik-rust-lsp` for Rust/Cargo navigation and diagnostics. Use the Slint
+  MCP for Slint behavior. Do not construct Cargo, test, lint, hook, host
+  assurance, ARM, or Apple-container commands; pre-commit, pre-push, native
+  Linux CI, and other CI groups own full assurance.
+- `scripts/agent plan` previews affected assurance. Agents use the typed
+  `scripts/agent deliver`, `benchmark`, and `diagnose` workflows. Human device
+  operations use attended `scripts/agent device` commands. Never use raw
+  SSH/SCP or generic remote-shell orchestration. Use `scripts/agent db report`,
+  never ad-hoc SQL.
+- Dependency changes use `scripts/agent dependencies sync PATH/Cargo.toml` and
+  include only the owning manifest plus adjacent lockfile.
+- Stage exact paths with `git add -- PATH...` and commit with
+  `git commit -m MESSAGE`; both require first-attempt sandbox escalation. The
+  pre-commit hook is the index-only gate and pre-push owns full clean-`HEAD`
+  assurance. Use `gh`, never the Codex GitHub plugin.
+- “Build and deploy” means commit, then `scripts/agent deliver`. Delivery uses
+  the exact clean app commit and the latest qualified platform. Use
+  `scripts/agent deliver local-main` only for committed Dev Main work.
+  `scripts/agent release qualify` is an attended operator gate requiring an
+  explicit request.
+- FPGA synthesis runs only through GitHub `Build MiSTer MagiK Platform` or the
+  typed Apple Silicon `scripts/agent fpga signoff` workflow. Never invoke
+  Quartus or FPGA build scripts directly. Local RBFs may be installed only by
+  the attended rollback-capable Dev transaction, never copied to the device.
 
-```bash
-scripts/agent plan
-scripts/agent deliver
-scripts/agent deliver local-main
-scripts/agent benchmark
-scripts/agent capture usb-video
-scripts/agent diagnose
-scripts/agent dependencies sync path/to/Cargo.toml
-QUARTUS_ACCEPT_EULA=1 scripts/agent fpga setup
-scripts/agent fpga signoff
-scripts/agent device fpga install-experimental --rbf PATH --metadata PATH --signoff-report PATH --attended
-scripts/agent release qualify
-git add -- path/to/file
-git commit -m "Describe the completed change"
-```
+## Hard Invariants
 
-For Rust/Cargo work, use `$magik-rust-lsp`; refresh diagnostics after coherent
-edits. Never construct Cargo, test, lint, host-assurance, or Apple-container
-commands. Dependency changes use the canonical sync command and commit only the
-owning manifest plus adjacent lockfile.
-
-`scripts/agent plan` previews assurance without execution. The pre-commit hook
-is the index-only gate, and the pre-push hook owns full local assurance. The
-native Linux CI owns Linux Rust/Clippy behavior. Never construct hook or CI
-assurance commands. Report only running, passed, or failed with actionable
-detail. Use `scripts/agent db report`, never ad-hoc SQL, for workflow evidence.
-
-Enable hooks with `git config core.hooksPath .githooks`. Git's index is the only
-commit-scope authority: use explicit `git add -- PATH...`. Run `git add`,
-`git commit`, and hook configuration with first-attempt sandbox escalation;
-persistent approvals cover only narrow `git add` and `git commit` prefixes.
-
-## Delivery And Operator Boundaries
-
-- “Build and deploy” means commit, then `scripts/agent deliver`. Never call
-  implementation scripts or add deployment flags. Delivery uses the exact
-  clean app commit and never changes Git or pushes.
-- Ordinary delivery uses the latest qualified platform release. `deliver
-  local-main` replaces only Dev Main and its manifest; it never targets
-  production or synthesizes an RBF.
-- Run delivery only for committed runtime or platform impact.
-- `benchmark` is a closed read/profile/health interface on the coherent Dev
-  runtime; never mutate artifacts or bypass it with lower-level transport.
-- `release qualify` is an attended operator gate and requires an explicit user
-  request.
-- `capture usb-video` owns validated fixed-`USB Video` capture and never
-  overwrites an explicit path.
-
-## AI Inspection And Output
-
-Follow `docs/agents/ai-efficiency.md`. Start narrow; for Rust use semantic LSP
-before shell search. Initial reads stop at 150 lines and searches at 100 matches.
-
-Routine tool output targets 1,200 tokens under the 3,000-token history ceiling.
-Reduce broad output at source; never forward it unconditionally. If truncated
-evidence is insufficient, make one focused expansion.
-
-## Universal Hard Rules
-
-- Never set `main=mister-magik-fb`; Slint cannot replace Main video
-  initialization. Use `MiSTer_MagiK` or `MiSTer_MagiKDev`.
+- Never set `main=mister-magik-fb`; use `MiSTer_MagiK` or `MiSTer_MagiKDev`.
 - Never replace `mister-magik-fb` without its regenerated
-  `platform-v3.manifest` in the coherent rollback-capable delivery transaction.
-  Main suspend/resume acknowledgement is not launcher health.
-- Never launch cores with external `rbf_load`; use Main's command/FIFO handoff.
-- Never SIGSTOP MiSTer for the launcher.
-- Use Analytics live streaming for continuous framebuffer inspection and
-  `mister --capture-buffer` for stills. Never add raw `/dev/fb0` capture paths;
-  framebuffer contents alone do not prove HDMI visibility.
-- Never infer frame cadence from latch drops: they are rejected/superseded
-  protocol posts, while dropped frames are physical refresh intervals reusing
-  the prior frame. Authoritative animation requires zero dropped frames;
-  measure both independently.
-- Production rendering is RGB565-only. Never restore wider-color routes.
-- Never rebuild preview caches on the MiSTer hot path.
+  `platform-v3.manifest` in one rollback-capable delivery transaction.
+- Launch cores through Main's command/FIFO handoff, never external `rbf_load`.
+  Never SIGSTOP MiSTer for the launcher.
+- Experimental FPGA activation uses Main's `load_core` with the exact
+  manifest-selected Dev latch RBF, never `/media/fat/menu.rbf`.
+- Use Analytics streaming for continuous framebuffer inspection and typed
+  `mister --capture-buffer` for stills. Never add raw `/dev/fb0` capture paths.
+- Measure latch rejection separately from physical dropped frames. Authoritative
+  animation requires zero dropped frames. Production rendering is RGB565-only,
+  and preview caches must never rebuild on the MiSTer hot path.
+- Edit `MiSTer.ini` only through typed mutators or approved install/restore
+  scripts. Apple Silicon ARM work uses Apple `container`, never Docker.
 
-## Sources Of Truth
+## Context Discipline
 
-- AI routing and efficiency: `docs/agents/task-map.md`,
-  `docs/agents/ai-efficiency.md`
-- File authority/regeneration: `docs/agents/file-authority.md`
-- Architecture: `docs/architecture.md`
-- Catalog: `docs/catalog.md`
-- Device/recovery: `docs/device.md`
-- Benchmarking: `docs/benchmarking.md`
-- Main fork: `docs/main-mister-fork.md`
-- ARM/build: `apps/mister/BUILD.md`
-- FPGA release: `docs/fpga-latch-release.md`
-
-Agent-critical universal rules belong here. Subsystem rules belong in the
-nearest `AGENTS.md`; current design belongs in `docs/`; dated evidence belongs
-in `history/`.
+Start with source and nearest scoped rules. `scripts/agent guidance PATH`
+reports authority, regeneration, one canonical reference, and extra assurance.
+Initial reads stop at 150 lines and searches at 100 matches. Routine tool output
+stays under 1,200 tokens and stored output under 3,000 tokens. Reduce broad
+output at its source; never forward unconditional broad `r.output`. Make one
+focused expansion only when needed. Read `history/` only for provenance.

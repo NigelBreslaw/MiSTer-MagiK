@@ -365,8 +365,7 @@ The following are no-concurrent-edit seams regardless of worktree separation:
 - `agent-cli/src/checks.rs`
 - `agent-cli/src/planner.rs`
 
-Before starting a P1 commit, choose its narrowest row in
-`docs/agents/task-map.md`, confirm the exception or seam still exists, and use
-`scripts/agent plan` to preview the affected assurance. If ownership has moved,
-update this ledger in the owning migration commit rather than following stale
-path assumptions.
+Before starting a P1 commit, run `scripts/agent guidance PATH` for the owning
+path, confirm the exception or seam still exists, and use `scripts/agent plan`
+to preview affected assurance. If ownership has moved, update this ledger in
+the owning migration commit rather than following stale path assumptions.
