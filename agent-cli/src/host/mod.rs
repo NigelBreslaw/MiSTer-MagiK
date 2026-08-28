@@ -20282,6 +20282,12 @@ fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Ve
                     "catalog_search_build_tsv",
                     "integrity_us",
                 ),
+                "magik_rss_kb_max": value
+                    .pointer("/resource_profile/magik_rss_kb_max"),
+                "available_memory_kb_min": value
+                    .pointer("/resource_profile/available_memory_kb_min"),
+                "storage_available_bytes_min": value
+                    .pointer("/resource_profile/storage_available_bytes_min"),
                 "total_games": value.pointer("/catalog/total_games"),
                 "systems": value.pointer("/catalog/systems"),
                 "phase_evidence_complete": value.pointer("/phase_evidence/complete"),
@@ -20292,6 +20298,40 @@ fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Ve
         }
     }
     rows
+}
+
+fn catalog_telemetry_resource_summary(samples: &[Value]) -> Value {
+    let mut magik_rss_kb_max: Option<u64> = None;
+    let mut available_memory_kb_min: Option<u64> = None;
+    let mut storage_available_bytes_min: Option<u64> = None;
+    for sample in samples {
+        if let Some(value) = sample
+            .pointer("/processes/mister-magik-fb/rss_kb")
+            .and_then(Value::as_u64)
+        {
+            magik_rss_kb_max = Some(magik_rss_kb_max.map_or(value, |current| current.max(value)));
+        }
+        if let Some(value) = sample
+            .pointer("/memory/available_kb")
+            .and_then(Value::as_u64)
+        {
+            available_memory_kb_min =
+                Some(available_memory_kb_min.map_or(value, |current| current.min(value)));
+        }
+        if let Some(value) = sample
+            .pointer("/storage/available_bytes")
+            .and_then(Value::as_u64)
+        {
+            storage_available_bytes_min =
+                Some(storage_available_bytes_min.map_or(value, |current| current.min(value)));
+        }
+    }
+    json!({
+        "samples": samples.len(),
+        "magik_rss_kb_max": magik_rss_kb_max,
+        "available_memory_kb_min": available_memory_kb_min,
+        "storage_available_bytes_min": storage_available_bytes_min,
+    })
 }
 
 fn catalog_phase_metric_ms(
@@ -20388,11 +20428,11 @@ fn catalog_attribution_evidence_report(summary: &Value) -> Result<String> {
     )?;
     writeln!(
         report,
-        "| Arm | Sample | Leg | First visible | Host complete | Runtime complete | Internal | Source | FTS optimize | FTS integrity | Games |"
+        "| Arm | Sample | Leg | First visible | Host complete | Runtime complete | Internal | Source | FTS optimize | FTS integrity | RSS max | Mem min | Games |"
     )?;
     writeln!(
         report,
-        "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|"
+        "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
     )?;
     if let Some(rows) = summary
         .get("normalized_measurements")
@@ -20401,7 +20441,7 @@ fn catalog_attribution_evidence_report(summary: &Value) -> Result<String> {
         for row in rows {
             writeln!(
                 report,
-                "| {} | {} | {} | {} ms | {} ms | {} ms | {} ms | {} ms | {} us | {} us | {} |",
+                "| {} | {} | {} | {} ms | {} ms | {} ms | {} ms | {} ms | {} us | {} us | {} kb | {} kb | {} |",
                 row["arm"].as_str().unwrap_or("unknown"),
                 row["sample"].as_u64().unwrap_or(0),
                 row["leg"].as_str().unwrap_or("unknown"),
@@ -20414,6 +20454,8 @@ fn catalog_attribution_evidence_report(summary: &Value) -> Result<String> {
                 row["source_phase_ms"].as_u64().unwrap_or(0),
                 row["search_optimize_us"].as_u64().unwrap_or(0),
                 row["search_integrity_us"].as_u64().unwrap_or(0),
+                row["magik_rss_kb_max"].as_u64().unwrap_or(0),
+                row["available_memory_kb_min"].as_u64().unwrap_or(0),
                 row["total_games"].as_u64().unwrap_or(0),
             )?;
         }
@@ -24088,6 +24130,7 @@ fn run_catalog_build_rebuild_leg(
                 "reason": "catalog-only-leg",
             })
         };
+        let resource_profile = catalog_telemetry_resource_summary(&telemetry);
         Ok(json!({
         "launcher_pid": final_status.get("pid"),
         "timing": {
@@ -24097,6 +24140,7 @@ fn run_catalog_build_rebuild_leg(
         },
         "catalog": catalog,
         "phase_evidence": phase_evidence,
+        "resource_profile": resource_profile,
         "updater_index": updater_index_evidence,
         "ui": ui,
         }))
@@ -40857,6 +40901,27 @@ H: Handlers=event3 js0"#
             catalog_phase_metric_sum(Some(&evidence), "catalog_search_build_tsv", "integrity_us"),
             Some(800)
         );
+    }
+
+    #[test]
+    fn catalog_telemetry_resource_summary_tracks_memory_extrema() {
+        let samples = vec![
+            json!({
+                "memory": {"available_kb": 200, "magik_kb": 80},
+                "storage": {"available_bytes": 500},
+                "processes": {"mister-magik-fb": {"rss_kb": 100}}
+            }),
+            json!({
+                "memory": {"available_kb": 150, "magik_kb": 120},
+                "storage": {"available_bytes": 450},
+                "processes": {"mister-magik-fb": {"rss_kb": 140}}
+            }),
+        ];
+        let summary = catalog_telemetry_resource_summary(&samples);
+        assert_eq!(summary["samples"], 2);
+        assert_eq!(summary["magik_rss_kb_max"], 140);
+        assert_eq!(summary["available_memory_kb_min"], 150);
+        assert_eq!(summary["storage_available_bytes_min"], 450);
     }
 
     #[test]
