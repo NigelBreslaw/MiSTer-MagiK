@@ -4653,9 +4653,59 @@ fn experimental_raw_scaler_evidence_available(evidence: &Value) -> bool {
         })
 }
 
+fn scaler_fetch_liveness_preload_evidence_available(evidence: &Value) -> bool {
+    evidence.get("schema").and_then(Value::as_str) == Some("mister-magik-fpga-video-diagnostics-v2")
+        && evidence
+            .get("diagnostic_architecture")
+            .and_then(Value::as_str)
+            == Some("scaler-fetch-liveness-first-stall-v1")
+        && evidence.get("available").and_then(Value::as_bool) == Some(true)
+        && evidence.get("sink_visibility").and_then(Value::as_str) == Some("unobserved")
+        && evidence
+            .pointer("/capabilities/passive_video_observer")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && evidence
+            .pointer("/capabilities/scaler_fetch_liveness")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && evidence
+            .pointer("/coherence/publication_sequence_advancing")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && evidence
+            .pointer("/coherence/latch_ownership_stable")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && evidence
+            .pointer("/coherence/launcher_state_stable")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && evidence
+            .pointer("/coherence/ownership_check_error")
+            .is_some_and(Value::is_null)
+        && evidence
+            .pointer("/scaler_fetch_liveness_state/raw_samples")
+            .and_then(Value::as_array)
+            .is_some_and(|samples| samples.len() == 3)
+        && evidence
+            .pointer("/scaler_fetch_liveness_state/record_valid")
+            .and_then(Value::as_array)
+            .is_some_and(|valid| {
+                valid.len() == 3 && valid.iter().any(|value| value.as_bool() == Some(true))
+            })
+        && evidence
+            .pointer("/scaler_fetch_liveness_state/observer_fault")
+            .and_then(Value::as_array)
+            .is_some_and(|faults| {
+                faults.len() == 3 && faults.iter().all(|value| value.as_bool() == Some(false))
+            })
+}
+
 fn experimental_agent_preload_evidence_accepted(evidence: &Value) -> bool {
     experimental_fpga_evidence_is_current(evidence)
         || experimental_raw_scaler_evidence_available(evidence)
+        || scaler_fetch_liveness_preload_evidence_available(evidence)
         || (evidence.get("available").and_then(Value::as_bool) == Some(false)
             && evidence.get("coherent").and_then(Value::as_bool) == Some(false)
             && evidence.get("schema").and_then(Value::as_str)
@@ -38892,6 +38942,28 @@ H: Handlers=event3 js0"#
         liveness_fault["scaler_fetch_liveness_state"]["observer_fault"] =
             json!([false, true, false]);
         assert!(!experimental_fpga_evidence_is_current(&liveness_fault));
+        assert!(!experimental_agent_preload_evidence_accepted(
+            &liveness_fault
+        ));
+        let mut liveness_bootstrap = scaler_fetch_liveness.clone();
+        liveness_bootstrap["coherent"] = json!(false);
+        liveness_bootstrap["classification"] = json!("scaler_fetch_liveness_evidence_inconclusive");
+        liveness_bootstrap["coherence"]["three_samples_valid"] = json!(false);
+        liveness_bootstrap["coherence"]["classification_stable"] = json!(false);
+        liveness_bootstrap["scaler_fetch_liveness_state"]["record_valid"] =
+            json!([false, true, true]);
+        assert!(scaler_fetch_liveness_preload_evidence_available(
+            &liveness_bootstrap
+        ));
+        assert!(experimental_agent_preload_evidence_accepted(
+            &liveness_bootstrap
+        ));
+        assert!(!experimental_fpga_evidence_is_current(&liveness_bootstrap));
+        liveness_bootstrap["scaler_fetch_liveness_state"]["record_valid"] =
+            json!([false, false, false]);
+        assert!(!experimental_agent_preload_evidence_accepted(
+            &liveness_bootstrap
+        ));
 
         let scaler_fetch_signature = json!({
             "schema": "mister-magik-fpga-video-diagnostics-v2",
