@@ -74,14 +74,14 @@ swash = { version = "0.2.7", features = ["scale", "render"], optional = true }
 pprof = { git = "https://github.com/NigelBreslaw/pprof-rs", branch = "armv7-itimer-abi", optional = true, default-features = false, features = ["flamegraph"] }
 mister-magik-catalog = { path = "../../crates/catalog", default-features = false, features = ["builder"] }
 mister-magik-ui = { path = "ui-generated", optional = true }
-i-slint-core = { version = "=1.17.1", optional = true, default-features = false }
+i-slint-core = { git = "https://github.com/slint-ui/slint", rev = "72cf74306784e7d15374639ef110c1bb85c21cb0", optional = true, default-features = false }
 [target.'cfg(target_os = "macos")'.dependencies]
-slint = { version = "=1.17.1", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std"] }
+slint = { git = "https://github.com/slint-ui/slint", rev = "72cf74306784e7d15374639ef110c1bb85c21cb0", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std"] }
 softbuffer = { version = "0.4.8", optional = true }
 winit = { version = "0.30.13", optional = true }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-slint = { version = "=1.17.1", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
+slint = { git = "https://github.com/slint-ui/slint", rev = "72cf74306784e7d15374639ef110c1bb85c21cb0", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
 
 [target.'cfg(all(target_os = "linux", target_arch = "arm"))'.dependencies]
 ffmpeg-next = { version = "8.1", optional = true, default-features = false, features = ["codec", "format", "software-resampling", "static"] }

@@ -1,6 +1,6 @@
 {
   "schema": "mister-magik-launcher-visual-baseline-v1",
-  "source_commit": "a3289e26758656e6f9e0c18ac650ac46df6eeb69",
+  "source_commit": "cf0905f5a0f98c264797e59a5ad0c2e4e656a450",
   "scene_manifest_sha256": "d53a60a81a87d0bbe7d895028837dc379075d878e98b10b9bb188e4ebe86e896",
   "review": {
     "owner": "Codex (visual review delegated by Nigel Breslaw)",
@@ -13,7 +13,7 @@
     "refresh_hz": 60,
     "rgb565_conversion": "rgb565-le-expand-v1",
     "renderer": "slint-software-rgb565-reused-buffer",
-    "slint_version": "1.17.1",
+    "slint_version": "1.18.0 (master 72cf7430)",
     "png_encoder": "png-rgb8-filter-none-zlib-best-v1",
     "fixture_sha256": "9998b71830e02db4348dfa4c53684251bc9a25a39b2a094d46e851c70783c37a",
     "asset_bundle_sha256": "a215cf99a3f03f325061bcd570dd9bd4bb51405748d87583a23bfd942a1a1548",
@@ -44,8 +44,8 @@
     },
     {
       "id": "crt-240p-controller-setup",
-      "rgb565_hash": "630dbd029e8200cf",
-      "provenance_sha256": "bffc369dcacc8d3adb40d10137d4434359e9ad680b435d3dc921349e467c0686",
+      "rgb565_hash": "442ad59447997edf",
+      "provenance_sha256": "de01d4900427802a6b0b732d675983f7f9d061ebe0d340eb78fc70a7d63573b0",
       "scenario": "controller-setup",
       "frame": 0,
       "fixed_time_us": 16666,
