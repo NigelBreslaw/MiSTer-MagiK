@@ -4120,7 +4120,7 @@ mod macos {
             "",
             "GNU General Public License, version 3",
             "",
-            "Slint 1.17.1",
+            "Slint 1.18.0 (master 72cf7430)",
             "FFmpeg 8.1",
             "Rust third-party license inventory",
         ]);
