@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import argparse
 import os
-from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
-from typing import NoReturn, Sequence
+from collections.abc import Sequence
+from pathlib import Path, PurePosixPath
+from typing import NoReturn
 
 EXPECTED_NAME = "Nigel Breslaw"
 EXPECTED_EMAIL = "nigel.breslaw@gmail.com"
@@ -198,8 +199,7 @@ def run(
             args,
             cwd=repository,
             input=input_bytes,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
             env=environment,
         )
@@ -237,11 +237,7 @@ def staged_paths(repository: Path) -> list[str]:
         repository,
         ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMRD"],
     ).stdout
-    return sorted(
-        os.fsdecode(value)
-        for value in output.split(b"\0")
-        if value
-    )
+    return sorted(os.fsdecode(value) for value in output.split(b"\0") if value)
 
 
 def is_classified(path: str) -> bool:
@@ -275,7 +271,9 @@ def config_value(repository: Path, key: str) -> str:
         ["config", "--get", key],
         allowed_codes=(0, 1),
     )
-    return result.stdout.decode(errors="replace").strip() if result.returncode == 0 else ""
+    return (
+        result.stdout.decode(errors="replace").strip() if result.returncode == 0 else ""
+    )
 
 
 def check_identity(repository: Path) -> None:
@@ -297,12 +295,11 @@ def forbidden_path(path: str) -> bool:
         path.startswith("private/test-fixtures/")
         or ".wrangler" in value.parts
         or name == ".env"
-        or name.startswith(".env.")
-        or (path.startswith("private/") and suffix in PRIVATE_IMAGE_SUFFIXES)
+        or name.startswith((".env.", "credentials.", "secrets."))
+        or path.startswith("private/")
+        and suffix in PRIVATE_IMAGE_SUFFIXES
         or suffix in FORBIDDEN_ARCHIVE_SUFFIXES
         or name in FORBIDDEN_NAMES
-        or name.startswith("credentials.")
-        or name.startswith("secrets.")
     )
 
 
@@ -342,7 +339,10 @@ def check_dropped_frame_terminology(repository: Path, paths: Sequence[str]) -> N
         lines = staged.stdout.decode(errors="replace").splitlines()
         for line_number, line in enumerate(lines, start=1):
             previous = lines[line_number - 2] if line_number > 1 else ""
-            if DROPPED_FRAME_LEGACY_MARKER in line or DROPPED_FRAME_LEGACY_MARKER in previous:
+            if (
+                DROPPED_FRAME_LEGACY_MARKER in line
+                or DROPPED_FRAME_LEGACY_MARKER in previous
+            ):
                 continue
             for term in DEPRECATED_DROPPED_FRAME_TERMS:
                 if term in line:
@@ -386,7 +386,9 @@ def staged_submodules(repository: Path, paths: Sequence[str]) -> list[str]:
 
 def check_submodules(repository: Path, paths: Sequence[str]) -> None:
     submodule_environment = os.environ.copy()
-    local_variables = git(repository, ["rev-parse", "--local-env-vars"]).stdout.splitlines()
+    local_variables = git(
+        repository, ["rev-parse", "--local-env-vars"]
+    ).stdout.splitlines()
     for variable in local_variables:
         submodule_environment.pop(os.fsdecode(variable), None)
     for path in staged_submodules(repository, paths):
@@ -493,7 +495,11 @@ def execute(repository: Path) -> None:
     git(repository, ["diff", "--cached", "--check"])
     run(
         repository,
-        [sys.executable, "scripts/checks/check-unified-agent-surface.py", str(repository)],
+        [
+            sys.executable,
+            "scripts/checks/check-unified-agent-surface.py",
+            str(repository),
+        ],
     )
     for path in shells:
         run(repository, ["bash", "-n", path])

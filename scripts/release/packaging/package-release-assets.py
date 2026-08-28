@@ -25,7 +25,9 @@ def github_asset_name(relative: str) -> str:
     return "mister-magik--" + relative.replace("/", "--")
 
 
-def build_assets(stage: Path, archive: Path, output: Path, version: str, build: int) -> None:
+def build_assets(
+    stage: Path, archive: Path, output: Path, version: str, build: int
+) -> None:
     if version != f"0.2.{build}":
         raise ValueError(f"version/build mismatch: {version} build={build}")
     if not stage.is_dir() or not archive.is_file():

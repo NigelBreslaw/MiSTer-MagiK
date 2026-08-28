@@ -8,9 +8,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-from pathlib import Path
 import tomllib
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA = ROOT / "mister/platform/contracts/platform-v3.schema.toml"
@@ -105,7 +104,9 @@ def main() -> None:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(expected)
     if stale:
-        raise SystemExit("stale generated platform-v3 consumer: " + ", ".join(map(str, stale)))
+        raise SystemExit(
+            "stale generated platform-v3 consumer: " + ", ".join(map(str, stale))
+        )
 
 
 if __name__ == "__main__":

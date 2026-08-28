@@ -4,10 +4,9 @@
 
 import argparse
 import json
-from pathlib import Path
 import sys
 import tomllib
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REGISTRY = ROOT / "apps/mister/config/runtime-environment.toml"
@@ -62,9 +61,9 @@ def render(registry: dict) -> str:
         typed = (
             "—" if sensitive else typed_default(control.get("typed_default"))
         ).replace("|", "\\|")
-        documentation = documentation_text(control.get("documentation"), sensitive).replace(
-            "|", "\\|"
-        )
+        documentation = documentation_text(
+            control.get("documentation"), sensitive
+        ).replace("|", "\\|")
         lines.append(
             f"| `{control['name']}` | {control['classification']} | "
             f"{control['value_shape']} | {default} | {control.get('parser', '—')} | "
@@ -92,7 +91,10 @@ def main() -> int:
         sys.stdout.write(reference)
         return 0
     if args.check:
-        if not args.output.is_file() or args.output.read_text(encoding="utf-8") != reference:
+        if (
+            not args.output.is_file()
+            or args.output.read_text(encoding="utf-8") != reference
+        ):
             print(f"stale generated reference: {args.output}", file=sys.stderr)
             return 1
         return 0

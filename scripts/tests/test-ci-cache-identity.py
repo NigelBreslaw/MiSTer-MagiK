@@ -5,10 +5,9 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import shutil
 import tempfile
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -47,7 +46,10 @@ def main() -> int:
         assert MODULE.identities(fixture) == initial
 
         ui = next(iter(MODULE.files_for(fixture, ("apps/mister/ui/**/*.slint",))))
-        ui.write_text(ui.read_text(encoding="utf-8") + "\n// cache identity test\n", encoding="utf-8")
+        ui.write_text(
+            ui.read_text(encoding="utf-8") + "\n// cache identity test\n",
+            encoding="utf-8",
+        )
         changed_ui = MODULE.identities(fixture)
         assert changed_ui["host_target"] != initial["host_target"]
         assert changed_ui["arm_target"] != initial["arm_target"]
@@ -55,7 +57,10 @@ def main() -> int:
         assert changed_ui["agent_cli"] == initial["agent_cli"]
 
         cross = fixture / "apps/mister/Cross.toml"
-        cross.write_text(cross.read_text(encoding="utf-8").replace("d047ace4d737", "changedimage1"), encoding="utf-8")
+        cross.write_text(
+            cross.read_text(encoding="utf-8").replace("d047ace4d737", "changedimage1"),
+            encoding="utf-8",
+        )
         changed_cross = MODULE.identities(fixture)
         assert changed_cross["cross_abi"] != changed_ui["cross_abi"]
         assert changed_cross["arm_build_cache"] == changed_ui["arm_build_cache"]
@@ -73,7 +78,10 @@ def main() -> int:
         assert changed_arm_lock["cargo_arm"] != changed_cross["cargo_arm"]
 
         lock = fixture / "crates/catalog/Cargo.lock"
-        lock.write_text(lock.read_text(encoding="utf-8") + "\n# cache identity test\n", encoding="utf-8")
+        lock.write_text(
+            lock.read_text(encoding="utf-8") + "\n# cache identity test\n",
+            encoding="utf-8",
+        )
         changed_lock = MODULE.identities(fixture)
         assert changed_lock["arm_build_cache"] == changed_arm_lock["arm_build_cache"]
         assert changed_lock["cargo_host"] != changed_arm_lock["cargo_host"]
@@ -97,11 +105,13 @@ def main() -> int:
         assert changed_toolchain["agent_target"] != changed_lock["agent_target"]
 
         manifest = fixture / "apps/mister/Cargo.toml"
-        manifest.write_text(manifest.read_text(encoding="utf-8") + "\n# cache identity test\n", encoding="utf-8")
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8") + "\n# cache identity test\n",
+            encoding="utf-8",
+        )
         changed_manifest = MODULE.identities(fixture)
         assert (
-            changed_manifest["arm_build_cache"]
-            != changed_toolchain["arm_build_cache"]
+            changed_manifest["arm_build_cache"] != changed_toolchain["arm_build_cache"]
         )
         assert changed_manifest["host_target"] != changed_toolchain["host_target"]
         assert changed_manifest["arm_target"] != changed_toolchain["arm_target"]
@@ -125,8 +135,7 @@ def main() -> int:
         )
         changed_desktop_source = MODULE.identities(fixture)
         assert (
-            changed_desktop_source["host_target"]
-            != changed_desktop_lock["host_target"]
+            changed_desktop_source["host_target"] != changed_desktop_lock["host_target"]
         )
 
         stream_source = next(
@@ -142,8 +151,7 @@ def main() -> int:
             != changed_desktop_source["host_target"]
         )
         assert (
-            changed_stream_source["arm_target"]
-            != changed_desktop_source["arm_target"]
+            changed_stream_source["arm_target"] != changed_desktop_source["arm_target"]
         )
 
         source_expectations = (

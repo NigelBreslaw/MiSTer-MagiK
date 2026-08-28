@@ -10,7 +10,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parents[1] / "release/packaging/package-release-assets.py"
+SCRIPT = (
+    Path(__file__).resolve().parents[1] / "release/packaging/package-release-assets.py"
+)
 SPEC = importlib.util.spec_from_file_location("package_release_assets", SCRIPT)
 assert SPEC and SPEC.loader
 module = importlib.util.module_from_spec(SPEC)
@@ -34,8 +36,13 @@ class ReleaseAssetTests(unittest.TestCase):
             self.assertEqual(receipt["version"], "0.2.42")
             self.assertEqual(receipt["build_number"], 42)
             self.assertEqual(receipt["files"][0]["path"], "Scripts/MiSTer-MagiK.sh")
-            self.assertTrue((output / "files/mister-magik--Scripts--MiSTer-MagiK.sh").is_file())
-            self.assertIn("files/mister-magik--Scripts--MiSTer-MagiK.sh", (output / "SHA256SUMS").read_text())
+            self.assertTrue(
+                (output / "files/mister-magik--Scripts--MiSTer-MagiK.sh").is_file()
+            )
+            self.assertIn(
+                "files/mister-magik--Scripts--MiSTer-MagiK.sh",
+                (output / "SHA256SUMS").read_text(),
+            )
 
     def test_rejects_mismatched_version(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

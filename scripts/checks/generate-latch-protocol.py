@@ -14,7 +14,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SPEC_PATH = ROOT / "mister/platform/fpga/menu-vblank-latch/latch-protocol.json"
 RUST_PATH = ROOT / "mister/platform/contracts/latch/src/generated.rs"
-SV_PATH = ROOT / "mister/platform/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh"
+SV_PATH = (
+    ROOT / "mister/platform/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh"
+)
 
 
 def rust_name(value: str) -> str:
@@ -90,7 +92,9 @@ def render_rust(spec: dict) -> str:
     for name, golden in goldens.items():
         upper = rust_name(name)
         lines.append("#[rustfmt::skip]")
-        lines.append(f"pub const GOLDEN_{upper}_PAYLOAD: [u16; {len(golden['payload'])}] = [")
+        lines.append(
+            f"pub const GOLDEN_{upper}_PAYLOAD: [u16; {len(golden['payload'])}] = ["
+        )
         lines.extend(f"    0x{word:04x}," for word in golden["payload"])
         lines.append("];")
         lines.append(f"pub const GOLDEN_{upper}_CRC: u16 = 0x{golden['crc']:04x};")
@@ -140,10 +144,14 @@ def render_sv(spec: dict) -> str:
         "",
     ]
     for name, value in spec["receipt_dispositions"].items():
-        lines.append(f"localparam [15:0] MAGIK_RECEIPT_{rust_name(name)} = 16'd{value};")
+        lines.append(
+            f"localparam [15:0] MAGIK_RECEIPT_{rust_name(name)} = 16'd{value};"
+        )
     lines.append("")
     for name, bit in capabilities.items():
-        lines.append(f"localparam [15:0] MAGIK_CAP_{rust_name(name)} = 16'h{1 << bit:04X};")
+        lines.append(
+            f"localparam [15:0] MAGIK_CAP_{rust_name(name)} = 16'h{1 << bit:04X};"
+        )
     lines.append("")
     for name, bit in flags.items():
         lines.append(f"localparam integer MAGIK_STATUS_{rust_name(name)} = {bit};")

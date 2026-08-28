@@ -14,14 +14,16 @@ from pathlib import Path
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
-STALE_RE = re.compile(r"mailbox|axi|acp|descriptor|ownership|fence", re.I)
+STALE_RE = re.compile(r"mailbox|axi|acp|descriptor|ownership|fence", re.IGNORECASE)
 ANALYSIS_CONSTRAINT_OVERRIDE = "clock_groups_exclusive_to_asynchronous"
 LEGACY_ANALYSIS_CONSTRAINT_SOURCE_STATUSES = (" M sys/sys_top.sdc",)
 CURRENT_ANALYSIS_CONSTRAINT_SOURCE_STATUSES = (
     " M menu.qsf",
     " M sys/sys_top.sdc",
 )
-LEGACY_SCHEMA14_RBF_SHA256 = "ef1920500c925d35b23808792f0930954446a6030b33d3e92c0f4feccd23106e"
+LEGACY_SCHEMA14_RBF_SHA256 = (
+    "ef1920500c925d35b23808792f0930954446a6030b33d3e92c0f4feccd23106e"
+)
 DIAGNOSTIC_ARCHITECTURES = {
     "scaler-fetch-liveness-first-stall-v1",
     "stock-uninstrumented-v1",
@@ -72,10 +74,20 @@ def verify(
         fields[key] = value
 
     required = {
-        "format", "platform_contract_sha256", "magik_commit", "builder_commit", "source_commit", "patch_sha256",
-        "latch_rtl_sha256", "quartus_seed", "quartus_version",
-        "workflow_url", "rbf_file", "rbf_sha256",
-        "signoff_valid", "build_date",
+        "format",
+        "platform_contract_sha256",
+        "magik_commit",
+        "builder_commit",
+        "source_commit",
+        "patch_sha256",
+        "latch_rtl_sha256",
+        "quartus_seed",
+        "quartus_version",
+        "workflow_url",
+        "rbf_file",
+        "rbf_sha256",
+        "signoff_valid",
+        "build_date",
     }
     if require_protocol:
         required.update(("latch_protocol_sha256", "latch_protocol_version"))
@@ -107,7 +119,9 @@ def verify(
         if not COMMIT_RE.fullmatch(fields[name]):
             raise ValueError(f"{name} must be a full commit SHA")
     for name in (
-        "platform_contract_sha256", "patch_sha256", "latch_rtl_sha256",
+        "platform_contract_sha256",
+        "patch_sha256",
+        "latch_rtl_sha256",
         "rbf_sha256",
     ):
         if not SHA256_RE.fullmatch(fields[name]):
@@ -115,13 +129,21 @@ def verify(
     architecture = fields.get("diagnostic_architecture")
     if architecture is not None and architecture not in DIAGNOSTIC_ARCHITECTURES:
         raise ValueError(f"unsupported diagnostic architecture: {architecture}")
-    if "latch_protocol_sha256" in fields and not SHA256_RE.fullmatch(fields["latch_protocol_sha256"]):
+    if "latch_protocol_sha256" in fields and not SHA256_RE.fullmatch(
+        fields["latch_protocol_sha256"]
+    ):
         raise ValueError("invalid SHA-256 in latch_protocol_sha256")
-    if "latch_bridge_sha256" in fields and not SHA256_RE.fullmatch(fields["latch_bridge_sha256"]):
+    if "latch_bridge_sha256" in fields and not SHA256_RE.fullmatch(
+        fields["latch_bridge_sha256"]
+    ):
         raise ValueError("invalid SHA-256 in latch_bridge_sha256")
-    if "component_input_sha256" in fields and not SHA256_RE.fullmatch(fields["component_input_sha256"]):
+    if "component_input_sha256" in fields and not SHA256_RE.fullmatch(
+        fields["component_input_sha256"]
+    ):
         raise ValueError("invalid component_input_sha256")
-    if "component_revision" in fields and not COMMIT_RE.fullmatch(fields["component_revision"]):
+    if "component_revision" in fields and not COMMIT_RE.fullmatch(
+        fields["component_revision"]
+    ):
         raise ValueError("component_revision must be a full commit SHA")
     if "magik_status" in fields:
         raise ValueError("release source tree was dirty")
@@ -147,7 +169,9 @@ def verify(
         "latch_protocol_version" in fields
         and fields["latch_protocol_version"] != expected_protocol
     ):
-        raise ValueError(f"release must bind latch protocol version {expected_protocol}")
+        raise ValueError(
+            f"release must bind latch protocol version {expected_protocol}"
+        )
     if not historical_v2 and fields["latch_capability_mask"] != "0x03ff":
         raise ValueError("release must bind latch capability mask 0x03ff")
     if not fields["quartus_version"].startswith("17.0"):
@@ -163,7 +187,11 @@ def verify(
     rbf = root / fields["rbf_file"]
     if not rbf.is_file() or digest(rbf) != fields["rbf_sha256"]:
         raise ValueError("RBF hash mismatch")
-    reports = {key.removeprefix("report_sha256."): value for key, value in fields.items() if key.startswith("report_sha256.")}
+    reports = {
+        key.removeprefix("report_sha256."): value
+        for key, value in fields.items()
+        if key.startswith("report_sha256.")
+    }
     if not reports:
         raise ValueError("manifest contains no Quartus reports")
     if "reports/quartus-delta-signoff.tsv" not in reports:

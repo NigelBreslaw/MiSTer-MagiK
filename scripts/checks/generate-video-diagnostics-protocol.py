@@ -12,10 +12,17 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC_PATH = ROOT / "mister/platform/fpga/menu-vblank-latch/video-diagnostics-protocol.json"
-HDMI_EVIDENCE_SPEC_PATH = ROOT / "mister/platform/fpga/menu-vblank-latch/hdmi-evidence-protocol.json"
+SPEC_PATH = (
+    ROOT / "mister/platform/fpga/menu-vblank-latch/video-diagnostics-protocol.json"
+)
+HDMI_EVIDENCE_SPEC_PATH = (
+    ROOT / "mister/platform/fpga/menu-vblank-latch/hdmi-evidence-protocol.json"
+)
 RUST_PATH = ROOT / "mister/platform/contracts/video-diagnostics/src/generated.rs"
-SV_PATH = ROOT / "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_protocol.svh"
+SV_PATH = (
+    ROOT
+    / "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_protocol.svh"
+)
 
 
 def upper(value: str) -> str:
@@ -26,7 +33,11 @@ def crc_word(crc: int, word: int, polynomial: int) -> int:
     for byte in ((word >> 8) & 0xFF, word & 0xFF):
         crc ^= byte << 8
         for _ in range(8):
-            crc = ((crc << 1) ^ polynomial) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+            crc = (
+                ((crc << 1) ^ polynomial) & 0xFFFF
+                if crc & 0x8000
+                else (crc << 1) & 0xFFFF
+            )
     return crc
 
 
@@ -47,34 +58,54 @@ def render_rust(spec: dict) -> str:
         f"pub const VIDEO_DIAGNOSTICS_SCHEMA: u16 = {spec['schema']};",
     ]
     for name, command in spec["commands"].items():
-        lines.append(f"pub const GET_VIDEO_DIAGNOSTICS_{upper(name)}: u16 = 0x{command:02x};")
+        lines.append(
+            f"pub const GET_VIDEO_DIAGNOSTICS_{upper(name)}: u16 = 0x{command:02x};"
+        )
     for name, magic in spec["magic"].items():
-        lines.append(f"pub const VIDEO_DIAGNOSTICS_{upper(name)}_MAGIC: u16 = 0x{magic:04x};")
+        lines.append(
+            f"pub const VIDEO_DIAGNOSTICS_{upper(name)}_MAGIC: u16 = 0x{magic:04x};"
+        )
     lines.append("")
     for name, count in spec["word_counts"].items():
-        lines.append(f"pub const VIDEO_DIAGNOSTICS_{upper(name)}_WORDS: usize = {count};")
+        lines.append(
+            f"pub const VIDEO_DIAGNOSTICS_{upper(name)}_WORDS: usize = {count};"
+        )
     lines.append("")
     for name, value in spec["states"].items():
         lines.append(f"pub const VIDEO_DIAGNOSTICS_STATE_{upper(name)}: u16 = {value};")
     for name, value in spec["domains"].items():
-        lines.append(f"pub const VIDEO_DIAGNOSTICS_DOMAIN_{upper(name)}: u16 = {value};")
+        lines.append(
+            f"pub const VIDEO_DIAGNOSTICS_DOMAIN_{upper(name)}: u16 = {value};"
+        )
     for name, value in spec["dispositions"].items():
-        lines.append(f"pub const VIDEO_DIAGNOSTICS_DISPOSITION_{upper(name)}: u16 = {value};")
+        lines.append(
+            f"pub const VIDEO_DIAGNOSTICS_DISPOSITION_{upper(name)}: u16 = {value};"
+        )
     for name, value in spec["triggers"].items():
-        lines.append(f"pub const VIDEO_DIAGNOSTICS_TRIGGER_{upper(name)}: u16 = {value};")
+        lines.append(
+            f"pub const VIDEO_DIAGNOSTICS_TRIGGER_{upper(name)}: u16 = {value};"
+        )
     for group, flags in spec["flags"].items():
         mask = 0x0003 if group == "state_flags" else 0
         for name, bit in flags.items():
-            lines.append(f"pub const VIDEO_DIAGNOSTICS_{upper(group)}_{upper(name)}: u16 = 1 << {bit};")
+            lines.append(
+                f"pub const VIDEO_DIAGNOSTICS_{upper(group)}_{upper(name)}: u16 = 1 << {bit};"
+            )
             mask |= 1 << bit
-        lines.append(f"pub const VIDEO_DIAGNOSTICS_{upper(group)}_MASK: u16 = 0x{mask:04x};")
+        lines.append(
+            f"pub const VIDEO_DIAGNOSTICS_{upper(group)}_MASK: u16 = 0x{mask:04x};"
+        )
     for group in ("control", "avalon", "output"):
         lines.append("")
         for index, name in enumerate(spec[f"{group}_words"]):
-            lines.append(f"pub const VIDEO_DIAGNOSTICS_{upper(group)}_{upper(name)}: usize = {index};")
+            lines.append(
+                f"pub const VIDEO_DIAGNOSTICS_{upper(group)}_{upper(name)}: usize = {index};"
+            )
         payload = [spec["schema"], *([0] * (spec["word_counts"][group] - 2))]
         crc = message_crc(spec, spec["commands"][group], payload)
-        lines.append(f"pub const VIDEO_DIAGNOSTICS_{upper(group)}_ZERO_GOLDEN_CRC: u16 = 0x{crc:04x};")
+        lines.append(
+            f"pub const VIDEO_DIAGNOSTICS_{upper(group)}_ZERO_GOLDEN_CRC: u16 = 0x{crc:04x};"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -87,27 +118,45 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
         f"localparam [15:0] MAGIK_VIDEO_DIAGNOSTICS_SCHEMA = 16'd{spec['schema']};",
     ]
     for name, command in spec["commands"].items():
-        lines.append(f"localparam [7:0] MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_{upper(name)} = 8'h{command:02X};")
+        lines.append(
+            f"localparam [7:0] MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_{upper(name)} = 8'h{command:02X};"
+        )
     for name, magic in spec["magic"].items():
-        lines.append(f"localparam [15:0] MAGIK_VIDEO_DIAGNOSTICS_{upper(name)}_MAGIC = 16'h{magic:04X};")
+        lines.append(
+            f"localparam [15:0] MAGIK_VIDEO_DIAGNOSTICS_{upper(name)}_MAGIC = 16'h{magic:04X};"
+        )
     for name, count in spec["word_counts"].items():
-        lines.append(f"localparam [5:0] MAGIK_VIDEO_DIAGNOSTICS_{upper(name)}_WORDS = 6'd{count};")
+        lines.append(
+            f"localparam [5:0] MAGIK_VIDEO_DIAGNOSTICS_{upper(name)}_WORDS = 6'd{count};"
+        )
     for name, value in spec["states"].items():
-        lines.append(f"localparam [1:0] MAGIK_VIDEO_DIAGNOSTICS_STATE_{upper(name)} = 2'd{value};")
+        lines.append(
+            f"localparam [1:0] MAGIK_VIDEO_DIAGNOSTICS_STATE_{upper(name)} = 2'd{value};"
+        )
     for name, value in spec["triggers"].items():
-        lines.append(f"localparam [7:0] MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_{upper(name)} = 8'd{value};")
+        lines.append(
+            f"localparam [7:0] MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_{upper(name)} = 8'd{value};"
+        )
     for name, value in spec["dispositions"].items():
-        lines.append(f"localparam [3:0] MAGIK_VIDEO_DIAGNOSTICS_DISPOSITION_{upper(name)} = 4'd{value};")
+        lines.append(
+            f"localparam [3:0] MAGIK_VIDEO_DIAGNOSTICS_DISPOSITION_{upper(name)} = 4'd{value};"
+        )
     for group, flags in spec["flags"].items():
         mask = 0x0003 if group == "state_flags" else 0
         for name, bit in flags.items():
-            lines.append(f"localparam [15:0] MAGIK_VIDEO_DIAGNOSTICS_{upper(group)}_{upper(name)} = 16'h{1 << bit:04X};")
+            lines.append(
+                f"localparam [15:0] MAGIK_VIDEO_DIAGNOSTICS_{upper(group)}_{upper(name)} = 16'h{1 << bit:04X};"
+            )
             mask |= 1 << bit
-        lines.append(f"localparam [15:0] MAGIK_VIDEO_DIAGNOSTICS_{upper(group)}_MASK = 16'h{mask:04X};")
+        lines.append(
+            f"localparam [15:0] MAGIK_VIDEO_DIAGNOSTICS_{upper(group)}_MASK = 16'h{mask:04X};"
+        )
     for group in ("control", "avalon", "output"):
         lines.append("")
         for index, name in enumerate(spec[f"{group}_words"]):
-            lines.append(f"localparam [5:0] MAGIK_VIDEO_DIAGNOSTICS_{upper(group)}_{upper(name)} = 6'd{index};")
+            lines.append(
+                f"localparam [5:0] MAGIK_VIDEO_DIAGNOSTICS_{upper(group)}_{upper(name)} = 6'd{index};"
+            )
     lines.extend(
         [
             "",
@@ -128,7 +177,9 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
     lines.append(f"localparam [15:0] MAGIK_HDMI_EVIDENCE_FLAGS_MASK = 16'h{mask:04X};")
     lines.append("")
     for index, name in enumerate(hdmi_evidence["words"]):
-        lines.append(f"localparam [1:0] MAGIK_HDMI_EVIDENCE_{upper(name)}_WORD = 2'd{index};")
+        lines.append(
+            f"localparam [1:0] MAGIK_HDMI_EVIDENCE_{upper(name)}_WORD = 2'd{index};"
+        )
     activity = hdmi_evidence["output_activity"]
     lines.extend(
         [
@@ -149,7 +200,9 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
             f"localparam [15:0] MAGIK_HDMI_OUTPUT_ACTIVITY_FLAG_{upper(name)} = 16'h{1 << bit:04X};"
         )
         mask |= 1 << bit
-    lines.append(f"localparam [15:0] MAGIK_HDMI_OUTPUT_ACTIVITY_FLAGS_MASK = 16'h{mask:04X};")
+    lines.append(
+        f"localparam [15:0] MAGIK_HDMI_OUTPUT_ACTIVITY_FLAGS_MASK = 16'h{mask:04X};"
+    )
     lines.append("")
     for index, name in enumerate(activity["words"]):
         lines.append(
@@ -177,7 +230,9 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
         )
         mask = 0
         for name, bit in record["flags"].items():
-            lines.append(f"localparam [15:0] {prefix}_FLAG_{upper(name)} = 16'h{1 << bit:04X};")
+            lines.append(
+                f"localparam [15:0] {prefix}_FLAG_{upper(name)} = 16'h{1 << bit:04X};"
+            )
             mask |= 1 << bit
         lines.append(f"localparam [15:0] {prefix}_FLAGS_MASK = 16'h{mask:04X};")
         for index, name in enumerate(record["words"]):
@@ -211,7 +266,9 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
         lines.append(f"localparam [4:0] {prefix}_{upper(name)}_WORD = 5'd{index};")
     mask = 0
     for name, bit in raw_scaler.get("flags", {}).items():
-        lines.append(f"localparam [15:0] {prefix}_FLAG_{upper(name)} = 16'h{1 << bit:04X};")
+        lines.append(
+            f"localparam [15:0] {prefix}_FLAG_{upper(name)} = 16'h{1 << bit:04X};"
+        )
         mask |= 1 << bit
     lines.append(f"localparam [15:0] {prefix}_FLAGS_MASK = 16'h{mask:04X};")
     for word_name, reserved_mask in raw_scaler.get("reserved_zero_masks", {}).items():
@@ -241,7 +298,9 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
         lines.append(f"localparam [3:0] {prefix}_{upper(name)}_WORD = 4'd{index};")
     mask = 0
     for name, bit in liveness.get("flags", {}).items():
-        lines.append(f"localparam [15:0] {prefix}_FLAG_{upper(name)} = 16'h{1 << bit:04X};")
+        lines.append(
+            f"localparam [15:0] {prefix}_FLAG_{upper(name)} = 16'h{1 << bit:04X};"
+        )
         mask |= 1 << bit
     lines.append(f"localparam [15:0] {prefix}_FLAGS_MASK = 16'h{mask:04X};")
     for word_name, reserved_mask in liveness.get("reserved_zero_masks", {}).items():
@@ -253,7 +312,9 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
             f"localparam [3:0] {prefix}_{upper(name)}_WORD = "
             f"{prefix}_{upper(field['word'])}_WORD;"
         )
-        lines.append(f"localparam [3:0] {prefix}_{upper(name)}_BIT = 4'd{field['bit']};")
+        lines.append(
+            f"localparam [3:0] {prefix}_{upper(name)}_BIT = 4'd{field['bit']};"
+        )
         lines.append(
             f"localparam [15:0] {prefix}_{upper(name)}_MASK = 16'h{((1 << field['width']) - 1):04X};"
         )
@@ -282,7 +343,16 @@ def write_or_check(path: Path, expected: str, check: bool) -> None:
     if current == expected:
         return
     if check:
-        raise SystemExit("".join(difflib.unified_diff(current.splitlines(True), expected.splitlines(True), fromfile=str(path), tofile=f"{path} (generated)")))
+        raise SystemExit(
+            "".join(
+                difflib.unified_diff(
+                    current.splitlines(True),
+                    expected.splitlines(True),
+                    fromfile=str(path),
+                    tofile=f"{path} (generated)",
+                )
+            )
+        )
     path.write_text(expected)
 
 
@@ -300,8 +370,10 @@ def main() -> None:
     for name, record in hdmi_evidence["path_activity"]["records"].items():
         for word_name, mask in record.get("reserved_zero_masks", {}).items():
             if word_name not in record["words"]:
-                raise SystemExit(f"HDMI {name} reserved-zero mask names an unknown word")
-            if mask < 0 or mask > 0xffff:
+                raise SystemExit(
+                    f"HDMI {name} reserved-zero mask names an unknown word"
+                )
+            if mask < 0 or mask > 0xFFFF:
                 raise SystemExit(f"HDMI {name} reserved-zero mask is outside one word")
             for field_name, field in record.get("fields", {}).items():
                 if field["word"] == word_name:

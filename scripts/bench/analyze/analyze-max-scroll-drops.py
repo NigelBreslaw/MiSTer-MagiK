@@ -13,8 +13,8 @@ import math
 import sys
 from collections import Counter
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
-
 
 FRAME_BUDGET_US = 16_667
 LATCH_BACKEND = "fpga-vblank-latch-hidden"
@@ -208,9 +208,11 @@ def buffer_alternation_failures(rows: list[dict[str, str]]) -> int:
     previous: int | None = None
     for row in rows:
         buffer_index = int_field(row, "main_present_buffer")
-        if buffer_index not in (1, 2):
-            failures += 1
-        elif previous is not None and buffer_index == previous:
+        if (
+            buffer_index not in (1, 2)
+            or previous is not None
+            and buffer_index == previous
+        ):
             failures += 1
         previous = buffer_index
     return failures
@@ -269,7 +271,11 @@ def home_motion_report(
     }
     missing = sorted(required.difference(rows[0]))
     if missing:
-        return False, "missing_home_motion_fields", f"home_motion_missing={','.join(missing)}"
+        return (
+            False,
+            "missing_home_motion_fields",
+            f"home_motion_missing={','.join(missing)}",
+        )
 
     screens = {row.get("home_screen", "") for row in rows}
     menu_tokens = {row.get("home_menu_token", "") for row in rows}
@@ -290,22 +296,21 @@ def home_motion_report(
             != int_field(previous, "home_selected_index")
         )
         and (int_field(row, "rows") > 0 or int_field(row, "present_bytes") > 0)
-        for previous, row in zip(rows, rows[1:])
+        for previous, row in pairwise(rows)
     )
     scroll_change_pan_frames = sum(
         int_field(row, "home_scroll_x") != int_field(previous, "home_scroll_x")
         and int_field(row, "home_pan_present_active") > 0
         and (int_field(row, "rows") > 0 or int_field(row, "present_bytes") > 0)
-        for previous, row in zip(rows, rows[1:])
+        for previous, row in pairwise(rows)
     )
     scroll_deltas = [
         int_field(row, "home_scroll_x") - int_field(previous, "home_scroll_x")
-        for previous, row in zip(rows, rows[1:])
+        for previous, row in pairwise(rows)
     ]
     scroll_directions = [1 if delta > 0 else -1 for delta in scroll_deltas if delta]
     direction_reversals = sum(
-        current != previous
-        for previous, current in zip(scroll_directions, scroll_directions[1:])
+        current != previous for previous, current in pairwise(scroll_directions)
     )
     extent_max = max(scroll_max_values, default=0)
     reached_start = min(scroll_values, default=0) <= 1
@@ -375,7 +380,9 @@ def print_summary(
     walls = [int_field(row, "wall_us") for row in rows]
     works = [work_us(row) for row in rows]
     over = [row for row in rows if int_field(row, "wall_us") > FRAME_BUDGET_US]
-    loop_over = [row for row in rows if int_field(row, "loop_delta_us") > FRAME_BUDGET_US]
+    loop_over = [
+        row for row in rows if int_field(row, "loop_delta_us") > FRAME_BUDGET_US
+    ]
     cadence_misses = [
         row
         for row in rows
@@ -399,7 +406,9 @@ def print_summary(
         int_field(row, "frame_finish_us") for row in status_due_rows
     ]
     frame_tail_slack = [int_field(row, "frame_tail_slack_us") for row in rows]
-    latch_miss_frame_finish = [int_field(row, "frame_finish_us") for row in latch_misses]
+    latch_miss_frame_finish = [
+        int_field(row, "frame_finish_us") for row in latch_misses
+    ]
     latch_miss_post_finish_tail = [
         int_field(row, "post_finish_tail_us") for row in latch_misses
     ]
@@ -410,16 +419,28 @@ def print_summary(
     }
     phase_counts = Counter(dominant_phase(row, medians) for row in over)
     source_counts = Counter(row.get("vsync_source", "") or "blank" for row in rows)
-    backend_counts = Counter(row.get("main_present_backend", "") or "blank" for row in rows)
-    status_counts = Counter(row.get("main_present_status", "") or "blank" for row in rows)
-    backend_valid = expect_backend is None or backend_counts == Counter({expect_backend: len(rows)})
+    backend_counts = Counter(
+        row.get("main_present_backend", "") or "blank" for row in rows
+    )
+    status_counts = Counter(
+        row.get("main_present_status", "") or "blank" for row in rows
+    )
+    backend_valid = expect_backend is None or backend_counts == Counter(
+        {expect_backend: len(rows)}
+    )
     buffer_failures = buffer_alternation_failures(latch_rows)
-    flip_observed, flip_samples, flip_failures = flip_counter_sample_failures(latch_rows)
+    flip_observed, flip_samples, flip_failures = flip_counter_sample_failures(
+        latch_rows
+    )
     fpga_report_required = expect_backend == LATCH_BACKEND
     fpga_report_present = fpga_after is not None
     fpga_report_supported = fpga_after.supported if fpga_after is not None else False
     fpga_drop_count_max = max(
-        [report.drop_count for report in (fpga_before, fpga_after) if report is not None],
+        [
+            report.drop_count
+            for report in (fpga_before, fpga_after)
+            if report is not None
+        ],
         default=0,
     )
     fpga_flip_delta = (
@@ -457,7 +478,8 @@ def print_summary(
     low_work_high_wall = sum(
         1
         for row in rows
-        if int_field(row, "wall_us") > FRAME_BUDGET_US and work_us(row) <= FRAME_BUDGET_US
+        if int_field(row, "wall_us") > FRAME_BUDGET_US
+        and work_us(row) <= FRAME_BUDGET_US
     )
     home_motion_valid, home_motion_reason, home_motion_detail = home_motion_report(
         rows, home_motion_contract
@@ -526,7 +548,10 @@ def print_summary(
                 "latch_visual_and_scheduler"
                 if missed_deadline and missed_cadence
                 else "scheduler_wake_jitter"
-                if missed_cadence and visual_latch_misses == 0 and backend_valid and fpga_report_valid
+                if missed_cadence
+                and visual_latch_misses == 0
+                and backend_valid
+                and fpga_report_valid
                 else "latch_visual_or_backend"
             )
     else:
@@ -606,7 +631,9 @@ def print_summary(
                 "main_present_status",
             ]
             print(
-                "\t".join(f"{field}={row.get(field, '')}" for field in fields if field in row)
+                "\t".join(
+                    f"{field}={row.get(field, '')}" for field in fields if field in row
+                )
             )
     return 0 if valid else 9
 
@@ -673,19 +700,33 @@ def run_self_test() -> int:
     if latch_deadline_margin_us(missed) >= 0:
         print("self-test expected negative latch margin", file=sys.stderr)
         return 1
-    if print_summary("self-latch-pass", [base, next_frame], [], 1, LATCH_BACKEND, report_before, report_after) != 0:
+    if (
+        print_summary(
+            "self-latch-pass",
+            [base, next_frame],
+            [],
+            1,
+            LATCH_BACKEND,
+            report_before,
+            report_after,
+        )
+        != 0
+    ):
         print("self-test expected latch pass", file=sys.stderr)
         return 1
-    if print_summary(
-        "self-home-root-pass",
-        [base, next_frame],
-        [],
-        1,
-        LATCH_BACKEND,
-        report_before,
-        report_after,
-        "root-focus",
-    ) != 0:
+    if (
+        print_summary(
+            "self-home-root-pass",
+            [base, next_frame],
+            [],
+            1,
+            LATCH_BACKEND,
+            report_before,
+            report_after,
+            "root-focus",
+        )
+        != 0
+    ):
         print("self-test expected Home root focus/repaint pass", file=sys.stderr)
         return 1
     idle_next = dict(next_frame)
@@ -693,16 +734,19 @@ def run_self_test() -> int:
     idle_next["home_selected_index"] = base["home_selected_index"]
     idle_next["rows"] = "0"
     idle_next["present_bytes"] = "0"
-    if print_summary(
-        "self-home-idle-fail",
-        [base | {"rows": "0", "present_bytes": "0"}, idle_next],
-        [],
-        1,
-        LATCH_BACKEND,
-        report_before,
-        report_after,
-        "root-focus",
-    ) == 0:
+    if (
+        print_summary(
+            "self-home-idle-fail",
+            [base | {"rows": "0", "present_bytes": "0"}, idle_next],
+            [],
+            1,
+            LATCH_BACKEND,
+            report_before,
+            report_after,
+            "root-focus",
+        )
+        == 0
+    ):
         print("self-test expected idle Home trace failure", file=sys.stderr)
         return 1
     nested_rows = []
@@ -724,29 +768,106 @@ def run_self_test() -> int:
     fallback["main_present_status"] = "none"
     fallback_next = dict(fallback)
     fallback_next["frame"] = "32"
-    if print_summary("self-latch-backend-fail", [fallback, fallback_next], [], 1, LATCH_BACKEND, report_before, report_after) == 0:
+    if (
+        print_summary(
+            "self-latch-backend-fail",
+            [fallback, fallback_next],
+            [],
+            1,
+            LATCH_BACKEND,
+            report_before,
+            report_after,
+        )
+        == 0
+    ):
         print("self-test expected latch backend failure", file=sys.stderr)
         return 1
-    if print_summary("self-latch-fail", [missed, next_frame], [], 1, LATCH_BACKEND, report_before, report_after) == 0:
+    if (
+        print_summary(
+            "self-latch-fail",
+            [missed, next_frame],
+            [],
+            1,
+            LATCH_BACKEND,
+            report_before,
+            report_after,
+        )
+        == 0
+    ):
         print("self-test expected latch failure", file=sys.stderr)
         return 1
-    if print_summary("self-latch-jitter-pass", [cadence_missed, cadence_next], [], 1, LATCH_BACKEND, report_before, report_after) != 0:
+    if (
+        print_summary(
+            "self-latch-jitter-pass",
+            [cadence_missed, cadence_next],
+            [],
+            1,
+            LATCH_BACKEND,
+            report_before,
+            report_after,
+        )
+        != 0
+    ):
         print("self-test expected latch scheduler-jitter pass", file=sys.stderr)
         return 1
-    if print_summary("self-latch-buffer-fail", [base, repeated_buffer], [], 1, LATCH_BACKEND, report_before, report_after) == 0:
+    if (
+        print_summary(
+            "self-latch-buffer-fail",
+            [base, repeated_buffer],
+            [],
+            1,
+            LATCH_BACKEND,
+            report_before,
+            report_after,
+        )
+        == 0
+    ):
         print("self-test expected latch buffer failure", file=sys.stderr)
         return 1
-    if print_summary("self-latch-flip-gap-fail", [base, flip_gap, flip_gap_later], [], 1, LATCH_BACKEND, report_before, report_after) == 0:
+    if (
+        print_summary(
+            "self-latch-flip-gap-fail",
+            [base, flip_gap, flip_gap_later],
+            [],
+            1,
+            LATCH_BACKEND,
+            report_before,
+            report_after,
+        )
+        == 0
+    ):
         print("self-test expected latch flip gap failure", file=sys.stderr)
         return 1
     dropped_report = FpgaLatchReport(True, 102, 102, 1)
-    if print_summary("self-latch-fpga-drop-fail", [base, next_frame], [], 1, LATCH_BACKEND, report_before, dropped_report) == 0:
+    if (
+        print_summary(
+            "self-latch-fpga-drop-fail",
+            [base, next_frame],
+            [],
+            1,
+            LATCH_BACKEND,
+            report_before,
+            dropped_report,
+        )
+        == 0
+    ):
         print("self-test expected latch FPGA drop failure", file=sys.stderr)
         return 1
     deadline_only = dict(missed)
     deadline_only["wall_us"] = "16300"
     deadline_only["loop_delta_us"] = "16300"
-    if print_summary("self-latch-deadline-only-fail", [deadline_only, next_frame], [], 1, LATCH_BACKEND, report_before, report_after) == 0:
+    if (
+        print_summary(
+            "self-latch-deadline-only-fail",
+            [deadline_only, next_frame],
+            [],
+            1,
+            LATCH_BACKEND,
+            report_before,
+            report_after,
+        )
+        == 0
+    ):
         print("self-test expected latch deadline-only failure", file=sys.stderr)
         return 1
     return 0

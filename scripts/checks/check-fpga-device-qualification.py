@@ -33,7 +33,9 @@ def summary(path: Path) -> dict[str, str]:
     raise ValueError(f"no max_scroll_gate_tsv row: {path}")
 
 
-def check_family(name: str, baseline_paths: list[Path], candidate_paths: list[Path]) -> tuple[list[str], dict[str, float]]:
+def check_family(
+    name: str, baseline_paths: list[Path], candidate_paths: list[Path]
+) -> tuple[list[str], dict[str, float]]:
     reasons: list[str] = []
     if len(baseline_paths) != 2 or len(candidate_paths) != 2:
         return [f"{name}_requires_two_baseline_and_candidate_samples"], {}
@@ -62,8 +64,12 @@ def check_family(name: str, baseline_paths: list[Path], candidate_paths: list[Pa
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for family in ("home", "arcade"):
-        parser.add_argument(f"--baseline-{family}", action="append", type=Path, required=True)
-        parser.add_argument(f"--candidate-{family}", action="append", type=Path, required=True)
+        parser.add_argument(
+            f"--baseline-{family}", action="append", type=Path, required=True
+        )
+        parser.add_argument(
+            f"--candidate-{family}", action="append", type=Path, required=True
+        )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     reasons: list[str] = []
@@ -76,11 +82,18 @@ def main() -> int:
         )
         reasons.extend(family_reasons)
         details.update(family_details)
-    payload = {"valid": int(not reasons), "invalid_reason": ",".join(reasons) or "ok", **details}
+    payload = {
+        "valid": int(not reasons),
+        "invalid_reason": ",".join(reasons) or "ok",
+        **details,
+    }
     if args.json:
         print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
     else:
-        print("fpga_device_qualification_tsv\t" + "\t".join(f"{key}={value}" for key, value in payload.items()))
+        print(
+            "fpga_device_qualification_tsv\t"
+            + "\t".join(f"{key}={value}" for key, value in payload.items())
+        )
     return 0 if not reasons else 1
 
 

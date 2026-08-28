@@ -10,16 +10,12 @@ import argparse
 import glob
 import hashlib
 import json
-import os
-from pathlib import Path
 import re
-
+from pathlib import Path
 
 SCHEMA = "v2"
 GROUPS: dict[str, tuple[str, ...]] = {
-    "rust_abi": (
-        "apps/mister/rust-toolchain.toml",
-    ),
+    "rust_abi": ("apps/mister/rust-toolchain.toml",),
     "cargo_host": (
         "apps/mister/Cargo.lock",
         "crates/magik-core/Cargo.lock",
@@ -225,7 +221,9 @@ def identities(root: Path) -> dict[str, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument(
+        "--root", type=Path, default=Path(__file__).resolve().parents[2]
+    )
     parser.add_argument("--github-output", type=Path)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--value", choices=("cross_image", *GROUPS))

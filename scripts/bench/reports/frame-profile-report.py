@@ -15,7 +15,6 @@ from pathlib import Path
 
 from frame_profile_schema import CANONICAL_PHASES, int_field, percentile, read_rows
 
-
 PHASES = CANONICAL_PHASES
 
 
@@ -24,7 +23,9 @@ def command_output(args: list[str]) -> str:
 
 
 def phase_table(rows: list[dict[str, str]]) -> str:
-    out = ["<table><thead><tr><th>Metric</th><th>Avg</th><th>p50</th><th>p95</th><th>p99</th><th>Max</th></tr></thead><tbody>"]
+    out = [
+        "<table><thead><tr><th>Metric</th><th>Avg</th><th>p50</th><th>p95</th><th>p99</th><th>Max</th></tr></thead><tbody>"
+    ]
     for phase in PHASES:
         values = [int_field(row, phase) for row in rows]
         if not values:
@@ -69,11 +70,17 @@ def main() -> int:
         )
         chart_svg = Path(tmp.name).read_text(encoding="utf-8")
     slow = command_output(
-        [sys.executable, str(here / "frame-profile-slow-frames.py"), str(args.input), "--limit", "8"]
+        [
+            sys.executable,
+            str(here / "frame-profile-slow-frames.py"),
+            str(args.input),
+            "--limit",
+            "8",
+        ]
     )
     trace_link = ""
     if args.trace:
-        trace_link = f'<p>Trace: <code>{html.escape(str(args.trace))}</code></p>'
+        trace_link = f"<p>Trace: <code>{html.escape(str(args.trace))}</code></p>"
     html_doc = f"""<!doctype html>
 <html lang="en">
 <meta charset="utf-8">

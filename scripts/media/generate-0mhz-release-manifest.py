@@ -77,7 +77,9 @@ def parse_launcher(archive: Path, launcher_bytes: bytes) -> ET.Element:
 def package_row(archive: Path, headers: dict[str, str]) -> dict[str, object]:
     with ZipFile(archive) as bundle:
         files = [info for info in bundle.infolist() if not info.is_dir()]
-        by_casefold = {normalized_member(info.filename).casefold(): info for info in files}
+        by_casefold = {
+            normalized_member(info.filename).casefold(): info for info in files
+        }
         launchers = [
             info
             for info in files
@@ -85,7 +87,9 @@ def package_row(archive: Path, headers: dict[str, str]) -> dict[str, object]:
             and normalized_member(info.filename).casefold().endswith(".mgl")
         ]
         if len(launchers) != 1:
-            raise ValueError(f"{archive.name}: expected one MGL, found {len(launchers)}")
+            raise ValueError(
+                f"{archive.name}: expected one MGL, found {len(launchers)}"
+            )
         launcher = launchers[0]
         launcher_bytes = bundle.read(launcher)
         document = parse_launcher(archive, launcher_bytes)
@@ -130,7 +134,9 @@ def generate(source: Path) -> bytes:
     identifier, version = release_identity(source)
     metadata = archive_metadata(source)
     archives = sorted(source.glob("*.zip"), key=lambda path: path.name.casefold())
-    packages = [package_row(archive, metadata.get(archive.name, {})) for archive in archives]
+    packages = [
+        package_row(archive, metadata.get(archive.name, {})) for archive in archives
+    ]
     launchers = [row["launcher_path"].casefold() for row in packages]
     if len(packages) != 319 or len(set(launchers)) != len(packages):
         raise ValueError(

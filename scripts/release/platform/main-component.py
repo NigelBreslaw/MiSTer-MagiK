@@ -57,7 +57,11 @@ def verify(root: Path, revision: str | None = None) -> dict[str, object]:
     payload = json.loads(receipt.read_text())
     if not isinstance(payload, dict):
         raise MainComponentError("Main component receipt must be an object")
-    if payload.get("format") != FORMAT or payload.get("repository") != REPOSITORY or payload.get("branch") != BRANCH:
+    if (
+        payload.get("format") != FORMAT
+        or payload.get("repository") != REPOSITORY
+        or payload.get("branch") != BRANCH
+    ):
         raise MainComponentError("unsupported Main component authority")
     source_revision = payload.get("source_revision")
     toolchain = payload.get("toolchain")
@@ -73,12 +77,19 @@ def verify(root: Path, revision: str | None = None) -> dict[str, object]:
         raise MainComponentError("invalid Main binary metadata")
     size = binary_meta.get("size")
     sha256 = binary_meta.get("sha256")
-    if isinstance(size, bool) or not isinstance(size, int) or size < 0 or not isinstance(sha256, str):
+    if (
+        isinstance(size, bool)
+        or not isinstance(size, int)
+        or size < 0
+        or not isinstance(sha256, str)
+    ):
         raise MainComponentError("invalid Main binary identity")
     require_hex("Main binary sha256", sha256, HEX64)
     if size != binary.stat().st_size or sha256 != digest(binary):
         raise MainComponentError("Main binary identity mismatch")
-    expected = f"{digest(binary)}  MiSTer_MagiK\n{digest(receipt)}  main-component-v0.1.json\n"
+    expected = (
+        f"{digest(binary)}  MiSTer_MagiK\n{digest(receipt)}  main-component-v0.1.json\n"
+    )
     if checksums.read_text() != expected:
         raise MainComponentError("Main component checksums mismatch")
     return payload

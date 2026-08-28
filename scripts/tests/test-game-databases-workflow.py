@@ -6,7 +6,9 @@
 
 from pathlib import Path
 
-text = (Path(__file__).resolve().parents[2] / ".github/workflows/game-databases.yml").read_text()
+text = (
+    Path(__file__).resolve().parents[2] / ".github/workflows/game-databases.yml"
+).read_text()
 trigger = text.split("on:\n", 1)[1].split("\nconcurrency:", 1)[0]
 assert "  workflow_dispatch:\n" in trigger
 assert "force_mame_rebuild:" in trigger

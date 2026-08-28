@@ -7,12 +7,14 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parents[1] / "checks/verify-crt-qualification-evidence.py"
+SCRIPT = (
+    Path(__file__).resolve().parents[1] / "checks/verify-crt-qualification-evidence.py"
+)
 
 
 class CrtEvidenceTest(unittest.TestCase):
@@ -94,7 +96,7 @@ class CrtEvidenceTest(unittest.TestCase):
         if historical_v2:
             command.append("--historical-v2")
         command.append(str(evidence))
-        return subprocess.run(command, text=True, capture_output=True)
+        return subprocess.run(command, text=True, capture_output=True, check=False)
 
     def test_new_evidence_requires_complete_v4_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

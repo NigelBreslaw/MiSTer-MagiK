@@ -1,0 +1,28 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[project]
+name = "mister-magik-host-tools"
+version = "0.1.0"
+description = "MiSTer MagiK host-side CI and release tooling"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+# Keep the quality tool versions aligned with gb-slint so local and CI
+# diagnostics are reproducible.
+dev = ["ruff==0.16.4", "ty==0.0.73", "pytest>=8"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["scripts/tests"]
+pythonpath = ["."]
+
+[tool.ty.src]
+include = ["scripts"]
+exclude = [
+    "scripts/magik_ci", # Added in the CI migration commits.
+    "scripts/tests/test_magik_ci", # Added in the CI migration commits.
+]

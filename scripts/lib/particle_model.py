@@ -15,9 +15,9 @@ import struct
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 MAGIC = b"PCLOUD1\0"
 VERSION = 1
@@ -89,7 +89,9 @@ def _dot(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
     return sum(x * y for x, y in zip(a, b))
 
 
-def _cross(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
+def _cross(
+    a: tuple[float, float, float], b: tuple[float, float, float]
+) -> tuple[float, float, float]:
     return (
         a[1] * b[2] - a[2] * b[1],
         a[2] * b[0] - a[0] * b[2],
@@ -97,11 +99,15 @@ def _cross(a: tuple[float, float, float], b: tuple[float, float, float]) -> tupl
     )
 
 
-def _sub(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
+def _sub(
+    a: tuple[float, float, float], b: tuple[float, float, float]
+) -> tuple[float, float, float]:
     return tuple(x - y for x, y in zip(a, b))
 
 
-def _add(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
+def _add(
+    a: tuple[float, float, float], b: tuple[float, float, float]
+) -> tuple[float, float, float]:
     return tuple(x + y for x, y in zip(a, b))
 
 
@@ -129,12 +135,20 @@ def load_mtl(path: Path) -> dict[str, tuple[float, float, float]]:
     return colors
 
 
-def load_obj(path: Path) -> tuple[list[tuple[float, float, float]], list[Triangle], dict[str, tuple[float, float, float]]]:
+def load_obj(
+    path: Path,
+) -> tuple[
+    list[tuple[float, float, float]],
+    list[Triangle],
+    dict[str, tuple[float, float, float]],
+]:
     vertices: list[tuple[float, float, float]] = []
     triangles: list[Triangle] = []
     colors: dict[str, tuple[float, float, float]] = {}
     material = ""
-    for number, line in enumerate(path.read_text(encoding="utf-8", errors="strict").splitlines(), 1):
+    for number, line in enumerate(
+        path.read_text(encoding="utf-8", errors="strict").splitlines(), 1
+    ):
         fields = line.split()
         if not fields or fields[0].startswith("#"):
             continue
@@ -158,7 +172,9 @@ def load_obj(path: Path) -> tuple[list[tuple[float, float, float]], list[Triangl
                 index = int(raw)
                 index = index - 1 if index > 0 else len(vertices) + index
                 if index < 0 or index >= len(vertices):
-                    raise ValueError(f"{path}:{number}: face index {raw} is out of bounds")
+                    raise ValueError(
+                        f"{path}:{number}: face index {raw} is out of bounds"
+                    )
                 face.append(index)
             for offset in range(1, len(face) - 1):
                 triangle = Triangle((face[0], face[offset], face[offset + 1]), material)
@@ -186,7 +202,10 @@ def _glb_accessor(
     end = start + (accessor["count"] - 1) * stride + record.size
     if end > len(binary):
         raise ValueError("glTF accessor exceeds the binary buffer")
-    return [record.unpack_from(binary, start + index * stride) for index in range(accessor["count"])]
+    return [
+        record.unpack_from(binary, start + index * stride)
+        for index in range(accessor["count"])
+    ]
 
 
 def _decode_texture_image(payload: bytes) -> TextureImage:
@@ -210,8 +229,7 @@ def _decode_texture_image(payload: bytes) -> TextureImage:
                 "pipe:1",
             ),
             input=payload,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
             timeout=30,
         )
@@ -263,7 +281,9 @@ def _matrix_multiply(a: list[float], b: list[float]) -> list[float]:
     return result
 
 
-def _transform_point(matrix: list[float], point: tuple[float, ...]) -> tuple[float, float, float]:
+def _transform_point(
+    matrix: list[float], point: tuple[float, ...]
+) -> tuple[float, float, float]:
     x, y, z = point
     divisor = matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15]
     if abs(divisor) < 1.0e-9:
@@ -318,11 +338,15 @@ def _load_glb(
         colors[name] = tuple(float(value) for value in palette_factor[:3])
         texture = pbr.get("baseColorTexture")
         material_textures.append(int(texture["index"]) if texture is not None else None)
-        material_texture_factors.append(tuple(float(value) for value in texture_factor[:3]))
+        material_texture_factors.append(
+            tuple(float(value) for value in texture_factor[:3])
+        )
     textures: list[TextureImage | None] = [None] * len(document.get("textures", []))
     if decode_textures:
         images = document.get("images", [])
-        for texture_index in {index for index in material_textures if index is not None}:
+        for texture_index in {
+            index for index in material_textures if index is not None
+        }:
             texture = document["textures"][texture_index]
             source = images[texture["source"]]
             if "bufferView" not in source:
@@ -368,7 +392,9 @@ def _load_glb(
             else identity
         )
         parent = parents.get(node_index)
-        world = local if parent is None else _matrix_multiply(world_matrix(parent), local)
+        world = (
+            local if parent is None else _matrix_multiply(world_matrix(parent), local)
+        )
         world_cache[node_index] = world
         return world
 
@@ -378,7 +404,9 @@ def _load_glb(
         if "mesh" in node
     ]
     if not mesh_instances:
-        mesh_instances = [(index, identity) for index in range(len(document.get("meshes", [])))]
+        mesh_instances = [
+            (index, identity) for index in range(len(document.get("meshes", [])))
+        ]
     for mesh_index, matrix in mesh_instances:
         mesh = document["meshes"][mesh_index]
         for primitive in mesh.get("primitives", []):
@@ -391,17 +419,24 @@ def _load_glb(
                 )
             ]
             base = len(vertices)
-            vertices.extend(tuple(float(value) for value in position) for position in positions)
+            vertices.extend(
+                tuple(float(value) for value in position) for position in positions
+            )
             encoded_uvs = primitive.get("attributes", {}).get("TEXCOORD_0")
             if encoded_uvs is None:
                 texture_coordinates.extend([None] * len(positions))
             else:
                 uvs = _glb_accessor(document, binary, encoded_uvs)
                 if len(uvs) != len(positions):
-                    raise ValueError("GLB texture-coordinate count does not match positions")
+                    raise ValueError(
+                        "GLB texture-coordinate count does not match positions"
+                    )
                 texture_coordinates.extend((float(uv[0]), float(uv[1])) for uv in uvs)
             if "indices" in primitive:
-                indices = [int(value[0]) for value in _glb_accessor(document, binary, primitive["indices"])]
+                indices = [
+                    int(value[0])
+                    for value in _glb_accessor(document, binary, primitive["indices"])
+                ]
             else:
                 indices = list(range(len(positions)))
             if len(indices) % 3:
@@ -412,7 +447,11 @@ def _load_glb(
                 if material_index is not None
                 else ""
             )
-            texture = material_textures[material_index] if material_index is not None else None
+            texture = (
+                material_textures[material_index]
+                if material_index is not None
+                else None
+            )
             texture_factor = (
                 material_texture_factors[material_index]
                 if material_index is not None
@@ -432,7 +471,11 @@ def _load_glb(
 
 def load_glb(
     path: Path,
-) -> tuple[list[tuple[float, float, float]], list[Triangle], dict[str, tuple[float, float, float]]]:
+) -> tuple[
+    list[tuple[float, float, float]],
+    list[Triangle],
+    dict[str, tuple[float, float, float]],
+]:
     vertices, triangles, colors, _, _ = _load_glb(path, False)
     return vertices, triangles, colors
 
@@ -464,14 +507,18 @@ def palette_class(material: str, colors: dict[str, tuple[float, float, float]]) 
     rgb = tuple(max(0.0, min(1.0, value)) * 255.0 for value in color)
     return min(
         range(len(PALETTE)),
-        key=lambda index: sum((rgb[channel] - PALETTE[index][channel]) ** 2 for channel in range(3)),
+        key=lambda index: sum(
+            (rgb[channel] - PALETTE[index][channel]) ** 2 for channel in range(3)
+        ),
     )
 
 
 def rgb565(color: tuple[float, float, float]) -> int:
     red, green, blue = (round(max(0.0, min(255.0, value))) for value in color)
-    return ((red * 31 + 127) // 255) << 11 | ((green * 63 + 127) // 255) << 5 | (
-        (blue * 31 + 127) // 255
+    return (
+        ((red * 31 + 127) // 255) << 11
+        | ((green * 63 + 127) // 255) << 5
+        | ((blue * 31 + 127) // 255)
     )
 
 
@@ -484,7 +531,9 @@ def glow_rgb565(color: tuple[float, float, float]) -> int:
     return rgb565((red * scale, green * scale, blue * scale))
 
 
-def sample_texture(texture: TextureImage, uv: tuple[float, float]) -> tuple[float, float, float]:
+def sample_texture(
+    texture: TextureImage, uv: tuple[float, float]
+) -> tuple[float, float, float]:
     # glTF's default sampler repeats and filters linearly. Subtracting half a
     # texel matches the normalized-coordinate sampling convention at borders.
     x = (uv[0] - math.floor(uv[0])) * texture.width - 0.5
@@ -507,7 +556,10 @@ def sample_texture(texture: TextureImage, uv: tuple[float, float]) -> tuple[floa
     return tuple(
         (top_left[channel] * (1.0 - x_fraction) + top_right[channel] * x_fraction)
         * (1.0 - y_fraction)
-        + (bottom_left[channel] * (1.0 - x_fraction) + bottom_right[channel] * x_fraction)
+        + (
+            bottom_left[channel] * (1.0 - x_fraction)
+            + bottom_right[channel] * x_fraction
+        )
         * y_fraction
         for channel in range(3)
     )
@@ -527,11 +579,15 @@ def edge_sets(
             (triangle.vertices[1], triangle.vertices[2]),
             (triangle.vertices[2], triangle.vertices[0]),
         ):
-            uses.setdefault(tuple(sorted((first, second))), []).append((normal, triangle))
+            uses.setdefault(tuple(sorted((first, second))), []).append(
+                (normal, triangle)
+            )
     features: list[EdgeSample] = []
     seams: list[EdgeSample] = []
     for edge, adjacent in uses.items():
-        if len(adjacent) == 1 or any(_dot(adjacent[0][0], other[0]) < 0.75 for other in adjacent[1:]):
+        if len(adjacent) == 1 or any(
+            _dot(adjacent[0][0], other[0]) < 0.75 for other in adjacent[1:]
+        ):
             features.append(EdgeSample(edge, adjacent[0][1]))
         if len({entry[1].material for entry in adjacent}) > 1:
             seams.append(EdgeSample(edge, adjacent[0][1]))
@@ -583,16 +639,22 @@ def sample_points(
             sampled[channel] * triangle.texture_factor[channel] for channel in range(3)
         )
 
-    def append_unique(group: list[Point], amount: int, create: Callable[[], Point]) -> None:
+    def append_unique(
+        group: list[Point], amount: int, create: Callable[[], Point]
+    ) -> None:
         attempts = 0
         limit = max(10_000, amount * 100)
         while len(group) < amount:
             point = create()
-            xyz = tuple(max(-32767, min(32767, round(value * 32767.0))) for value in point.xyz)
+            xyz = tuple(
+                max(-32767, min(32767, round(value * 32767.0))) for value in point.xyz
+            )
             attempts += 1
             if xyz in seen_xyz:
                 if attempts >= limit:
-                    raise ValueError(f"cannot produce {amount} unique quantized particle points")
+                    raise ValueError(
+                        f"cannot produce {amount} unique quantized particle points"
+                    )
                 continue
             seen_xyz.add(xyz)
             group.append(point)
@@ -612,7 +674,9 @@ def sample_points(
             edge = edges[_weighted_choice(rng, lengths, total)]
             value = rng.random()
             first, second = edge.vertices
-            xyz = _add(_mul(vertices[first], 1.0 - value), _mul(vertices[second], value))
+            xyz = _add(
+                _mul(vertices[first], 1.0 - value), _mul(vertices[second], value)
+            )
             uv = None
             if texture_coordinates is not None:
                 first_uv = texture_coordinates[first]
@@ -634,6 +698,7 @@ def sample_points(
         a, b, c = (vertices[index] for index in triangle.vertices)
         areas.append(_length(_cross(_sub(b, a), _sub(c, a))) * 0.5)
     total_area = sum(areas)
+
     def create_surface() -> Point:
         triangle = triangles[_weighted_choice(rng, areas, total_area)]
         a, b, c = (vertices[index] for index in triangle.vertices)
@@ -677,10 +742,14 @@ def sample_points(
     emitted = [0, 0, 0]
     totals = [len(group) for group in groups]
     for output_index in range(count):
-        available = [index for index, group in enumerate(groups) if emitted[index] < len(group)]
+        available = [
+            index for index, group in enumerate(groups) if emitted[index] < len(group)
+        ]
         selected = max(
             available,
-            key=lambda index: totals[index] * (output_index + 1) / count - emitted[index],
+            key=lambda index: (
+                totals[index] * (output_index + 1) / count - emitted[index]
+            ),
         )
         points.append(groups[selected][emitted[selected]])
         emitted[selected] += 1
@@ -691,7 +760,9 @@ def sample_points(
 def encode(points: list[Point]) -> bytes:
     quantized: list[tuple[int, int, int, int, int]] = []
     for point in points:
-        xyz = tuple(max(-32767, min(32767, round(value * 32767.0))) for value in point.xyz)
+        xyz = tuple(
+            max(-32767, min(32767, round(value * 32767.0))) for value in point.xyz
+        )
         quantized.append((*xyz, point.palette, point.flags))
     if len({record[:3] for record in quantized}) != len(quantized):
         raise ValueError("particle cloud contains duplicate quantized coordinates")
@@ -753,13 +824,19 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="scripts/particle-model")
     commands = result.add_subparsers(dest="command", required=True)
     compile_parser = commands.add_parser("compile")
-    compile_parser.add_argument("model", type=Path, help="Wavefront OBJ or binary glTF GLB")
+    compile_parser.add_argument(
+        "model", type=Path, help="Wavefront OBJ or binary glTF GLB"
+    )
     compile_parser.add_argument("--output", type=Path, required=True)
     compile_parser.add_argument("--colors-output", type=Path)
     compile_parser.add_argument("--points", type=int, default=65_536)
     compile_parser.add_argument("--seed", type=int, default=0x1983)
-    compile_parser.add_argument("--up-axis", choices=("x", "y", "z", "-x", "-y", "-z"), default="y")
-    compile_parser.add_argument("--front-axis", choices=("x", "y", "z", "-x", "-y", "-z"), default="-z")
+    compile_parser.add_argument(
+        "--up-axis", choices=("x", "y", "z", "-x", "-y", "-z"), default="y"
+    )
+    compile_parser.add_argument(
+        "--front-axis", choices=("x", "y", "z", "-x", "-y", "-z"), default="-z"
+    )
     return result
 
 

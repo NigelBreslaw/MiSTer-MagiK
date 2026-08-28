@@ -38,8 +38,8 @@ def read_png_rgba(path: Path) -> tuple[int, int, bytes]:
         payload = data[offset + 8 : offset + 8 + length]
         offset += 12 + length
         if tag == b"IHDR":
-            width, height, bit_depth, color_type, compression, filt, interlace = struct.unpack(
-                ">IIBBBBB", payload[:13]
+            width, height, bit_depth, color_type, compression, filt, interlace = (
+                struct.unpack(">IIBBBBB", payload[:13])
             )
             if (bit_depth, color_type, compression, filt, interlace) != (8, 6, 0, 0, 0):
                 raise ValueError(
@@ -91,7 +91,10 @@ def read_png_rgba(path: Path) -> tuple[int, int, bytes]:
 
 def main() -> int:
     if len(sys.argv) != 3:
-        print("usage: scripts/media/png-to-slint-rgba.py INPUT.png OUTPUT.rgba", file=sys.stderr)
+        print(
+            "usage: scripts/media/png-to-slint-rgba.py INPUT.png OUTPUT.rgba",
+            file=sys.stderr,
+        )
         return 2
 
     src = Path(sys.argv[1])
@@ -103,7 +106,11 @@ def main() -> int:
         pixel = rgba[pos : pos + 4]
         count = 1
         next_pos = pos + 4
-        while next_pos < len(rgba) and count < 65535 and rgba[next_pos : next_pos + 4] == pixel:
+        while (
+            next_pos < len(rgba)
+            and count < 65535
+            and rgba[next_pos : next_pos + 4] == pixel
+        ):
             count += 1
             next_pos += 4
         chunks.extend(struct.pack("<H", count))
@@ -111,7 +118,9 @@ def main() -> int:
         pos = next_pos
 
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_bytes(f"MISTER_MAGIK_RGBA_RLE\n{width} {height}\n".encode("ascii") + bytes(chunks))
+    dst.write_bytes(
+        f"MISTER_MAGIK_RGBA_RLE\n{width} {height}\n".encode("ascii") + bytes(chunks)
+    )
     return 0
 
 

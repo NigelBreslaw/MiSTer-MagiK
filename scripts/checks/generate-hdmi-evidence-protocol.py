@@ -13,14 +13,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC_PATH = ROOT / "mister/platform/fpga/menu-vblank-latch/hdmi-evidence-protocol.json"
-RUST_PATH = ROOT / "mister/platform/contracts/video-diagnostics/src/generated_hdmi_evidence.rs"
+RUST_PATH = (
+    ROOT / "mister/platform/contracts/video-diagnostics/src/generated_hdmi_evidence.rs"
+)
 
 
 def crc_word(crc: int, word: int, polynomial: int) -> int:
     for byte in ((word >> 8) & 0xFF, word & 0xFF):
         crc ^= byte << 8
         for _ in range(8):
-            crc = ((crc << 1) ^ polynomial) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+            crc = (
+                ((crc << 1) ^ polynomial) & 0xFFFF
+                if crc & 0x8000
+                else (crc << 1) & 0xFFFF
+            )
     return crc
 
 
@@ -32,7 +38,9 @@ def zero_golden_crc(record: dict, crc_spec: dict) -> int:
     return crc ^ crc_spec["final_xor"]
 
 
-def render_raw_scaler_constants(lines: list[str], prefix: str, record: dict, crc_spec: dict) -> None:
+def render_raw_scaler_constants(
+    lines: list[str], prefix: str, record: dict, crc_spec: dict
+) -> None:
     lines.extend(
         [
             "",
@@ -67,7 +75,7 @@ def render_scaler_fetch_liveness_constants(
             "",
             f"pub const GET_SCALER_FETCH_LIVENESS_STATE: u16 = 0x{record['command']:02x};",
             f"pub const SCALER_FETCH_LIVENESS_STATE_MAGIC: u16 = 0x{record['magic']:04x};",
-            f"pub const {prefix}_ARCHITECTURE: &str = \"{record['architecture']}\";",
+            f'pub const {prefix}_ARCHITECTURE: &str = "{record["architecture"]}";',
         ]
     )
     render_raw_scaler_constants(lines, prefix, record, crc_spec)
@@ -92,7 +100,7 @@ def render_scaler_fetch_liveness_constants(
     for name, value in record.get("monitor_states", {}).items():
         lines.append(f"pub const {prefix}_MONITOR_{name.upper()}: u16 = {value};")
     for name, value in record.get("constants", {}).items():
-        rust_type = "u32" if value > 0xffff else "u16"
+        rust_type = "u32" if value > 0xFFFF else "u16"
         lines.append(f"pub const {prefix}_{name.upper()}: {rust_type} = {value};")
 
 
@@ -134,12 +142,16 @@ def render_rust(spec: dict) -> str:
     )
     mask = 0
     for name, bit in activity["flags"].items():
-        lines.append(f"pub const HDMI_OUTPUT_ACTIVITY_FLAG_{name.upper()}: u16 = 1 << {bit};")
+        lines.append(
+            f"pub const HDMI_OUTPUT_ACTIVITY_FLAG_{name.upper()}: u16 = 1 << {bit};"
+        )
         mask |= 1 << bit
     lines.append(f"pub const HDMI_OUTPUT_ACTIVITY_FLAGS_MASK: u16 = 0x{mask:04x};")
     lines.append("")
     for index, name in enumerate(activity["words"]):
-        lines.append(f"pub const HDMI_OUTPUT_ACTIVITY_{name.upper()}_WORD: usize = {index};")
+        lines.append(
+            f"pub const HDMI_OUTPUT_ACTIVITY_{name.upper()}_WORD: usize = {index};"
+        )
     lines.append(
         "pub const HDMI_OUTPUT_ACTIVITY_ZERO_GOLDEN_CRC: u16 = "
         f"0x{zero_golden_crc(activity, spec['crc']):04x};"
@@ -183,10 +195,14 @@ def render_rust(spec: dict) -> str:
             word_value = f"{prefix}_{word_name}_WORD"
             declaration = f"pub const {word_constant}: usize = {word_value};"
             if len(declaration) > 100:
-                lines.extend((f"pub const {word_constant}: usize =", f"    {word_value};"))
+                lines.extend(
+                    (f"pub const {word_constant}: usize =", f"    {word_value};")
+                )
             else:
                 lines.append(declaration)
-            lines.append(f"pub const {prefix}_{name.upper()}_BIT: usize = {field['bit']};")
+            lines.append(
+                f"pub const {prefix}_{name.upper()}_BIT: usize = {field['bit']};"
+            )
             lines.append(
                 f"pub const {prefix}_{name.upper()}_MASK: u16 = 0x{((1 << field['width']) - 1):04x};"
             )
@@ -243,7 +259,7 @@ def validate_raw_scaler_record(name: str, record: dict) -> None:
             raise SystemExit(f"{name} flag {flag_name} is invalid or overlaps")
         used_mask |= 1 << bit
     for word_name, mask in record.get("reserved_zero_masks", {}).items():
-        if word_name not in record["words"] or mask < 0 or mask > 0xffff:
+        if word_name not in record["words"] or mask < 0 or mask > 0xFFFF:
             raise SystemExit(f"{name} reserved mask {word_name} is invalid")
         if word_name == "flags" and mask & used_mask:
             raise SystemExit(f"{name} flag and reserved masks overlap")
@@ -251,11 +267,17 @@ def validate_raw_scaler_record(name: str, record: dict) -> None:
             if field["word"] == word_name:
                 field_mask = ((1 << field["width"]) - 1) << field["bit"]
                 if field_mask & mask:
-                    raise SystemExit(f"{name} field {field_name} overlaps reserved-zero bits")
+                    raise SystemExit(
+                        f"{name} field {field_name} overlaps reserved-zero bits"
+                    )
     for field_name, field in record.get("fields", {}).items():
         if field["word"] not in record["words"]:
             raise SystemExit(f"{name} field {field_name} names an unknown word")
-        if field["bit"] < 0 or field["width"] <= 0 or field["bit"] + field["width"] > 16:
+        if (
+            field["bit"] < 0
+            or field["width"] <= 0
+            or field["bit"] + field["width"] > 16
+        ):
             raise SystemExit(f"{name} field {field_name} is outside one word")
 
 
@@ -267,8 +289,13 @@ def main() -> None:
     if len(spec["words"]) != spec["word_count"] or spec["words"][-1] != "crc":
         raise SystemExit("HDMI evidence layout must match word count and end in CRC")
     activity = spec["output_activity"]
-    if len(activity["words"]) != activity["word_count"] or activity["words"][-1] != "crc":
-        raise SystemExit("HDMI output activity layout must match word count and end in CRC")
+    if (
+        len(activity["words"]) != activity["word_count"]
+        or activity["words"][-1] != "crc"
+    ):
+        raise SystemExit(
+            "HDMI output activity layout must match word count and end in CRC"
+        )
     path_activity = spec["path_activity"]
     commands = {spec["command"], activity["command"]}
     magics = {spec["magic"], activity["magic"]}
@@ -281,16 +308,26 @@ def main() -> None:
         magics.add(record["magic"])
         for counter, offset in record["counters"].items():
             if offset < 0 or offset + path_activity["counter_bits"] > 32:
-                raise SystemExit(f"HDMI {name} counter {counter} is outside two packed words")
+                raise SystemExit(
+                    f"HDMI {name} counter {counter} is outside two packed words"
+                )
         for field_name, field in record.get("fields", {}).items():
             if field["word"] not in record["words"]:
-                raise SystemExit(f"HDMI {name} field {field_name} names an unknown word")
-            if field["bit"] < 0 or field["width"] <= 0 or field["bit"] + field["width"] > 16:
+                raise SystemExit(
+                    f"HDMI {name} field {field_name} names an unknown word"
+                )
+            if (
+                field["bit"] < 0
+                or field["width"] <= 0
+                or field["bit"] + field["width"] > 16
+            ):
                 raise SystemExit(f"HDMI {name} field {field_name} is outside one word")
         for word_name, mask in record.get("reserved_zero_masks", {}).items():
             if word_name not in record["words"]:
-                raise SystemExit(f"HDMI {name} reserved-zero mask names an unknown word")
-            if mask < 0 or mask > 0xffff:
+                raise SystemExit(
+                    f"HDMI {name} reserved-zero mask names an unknown word"
+                )
+            if mask < 0 or mask > 0xFFFF:
                 raise SystemExit(f"HDMI {name} reserved-zero mask is outside one word")
             for field_name, field in record.get("fields", {}).items():
                 if field["word"] == word_name:
@@ -298,21 +335,33 @@ def main() -> None:
                     if field_mask & mask:
                         raise SystemExit(
                             f"HDMI {name} field {field_name} overlaps reserved-zero bits"
-                    )
+                        )
     raw_scaler = spec["raw_scaler_state"]
     validate_raw_scaler_record("raw scaler state", raw_scaler)
     if raw_scaler["command"] in commands or raw_scaler["magic"] in magics:
         raise SystemExit("raw scaler state command or magic overlaps another record")
     for name, record in spec.get("raw_scaler_rollback_states", {}).items():
         validate_raw_scaler_record(f"raw scaler rollback state {name}", record)
-        if record["command"] != raw_scaler["command"] or record["magic"] != raw_scaler["magic"]:
-            raise SystemExit(f"raw scaler rollback state {name} changed command or magic")
+        if (
+            record["command"] != raw_scaler["command"]
+            or record["magic"] != raw_scaler["magic"]
+        ):
+            raise SystemExit(
+                f"raw scaler rollback state {name} changed command or magic"
+            )
     liveness = spec["scaler_fetch_liveness_state"]
     validate_raw_scaler_record("scaler fetch liveness state", liveness)
     if liveness["command"] in commands or liveness["magic"] in magics:
-        raise SystemExit("scaler fetch liveness command or magic overlaps another record")
-    if liveness["command"] == raw_scaler["command"] or liveness["magic"] == raw_scaler["magic"]:
-        raise SystemExit("scaler fetch liveness overlaps the fixed raw-scaler transport")
+        raise SystemExit(
+            "scaler fetch liveness command or magic overlaps another record"
+        )
+    if (
+        liveness["command"] == raw_scaler["command"]
+        or liveness["magic"] == raw_scaler["magic"]
+    ):
+        raise SystemExit(
+            "scaler fetch liveness overlaps the fixed raw-scaler transport"
+        )
     write_or_check(RUST_PATH, render_rust(spec), args.check)
 
 

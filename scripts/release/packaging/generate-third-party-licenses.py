@@ -19,9 +19,17 @@ FONT_LICENSE = ROOT / "apps/mister/ui/fonts/PressStart2P-Regular.ttf.license"
 
 def metadata():
     command = [
-        "cargo", "metadata", "--format-version", "1", "--locked",
-        "--manifest-path", str(MANIFEST), "--filter-platform",
-        "armv7-unknown-linux-gnueabihf", "--features", "ui",
+        "cargo",
+        "metadata",
+        "--format-version",
+        "1",
+        "--locked",
+        "--manifest-path",
+        str(MANIFEST),
+        "--filter-platform",
+        "armv7-unknown-linux-gnueabihf",
+        "--features",
+        "ui",
     ]
     return json.loads(subprocess.check_output(command, cwd=ROOT))
 
@@ -48,16 +56,22 @@ def license_files(package):
     if package.get("license_file"):
         candidates.append(manifest_dir / package["license_file"])
     for pattern in ("LICENSE*", "COPYING*", "NOTICE*", "COPYRIGHT*"):
-        candidates.extend(sorted(path for path in manifest_dir.glob(pattern) if path.is_file()))
+        candidates.extend(
+            sorted(path for path in manifest_dir.glob(pattern) if path.is_file())
+        )
     licenses_dir = manifest_dir / "LICENSES"
     if licenses_dir.is_dir():
-        candidates.extend(sorted(path for path in licenses_dir.iterdir() if path.is_file()))
+        candidates.extend(
+            sorted(path for path in licenses_dir.iterdir() if path.is_file())
+        )
     result = []
     seen = set()
     for path in candidates:
         if not path.is_file():
             continue
-        text = "\n".join(line.rstrip() for line in path.read_text(errors="replace").splitlines()).strip()
+        text = "\n".join(
+            line.rstrip() for line in path.read_text(errors="replace").splitlines()
+        ).strip()
         if text and text not in seen:
             seen.add(text)
             result.append((path.name, text))
@@ -91,11 +105,24 @@ def main():
         if exact:
             package_files[package["id"]] = exact
             continue
-        tokens = [token for token in package["license"].replace("(", " ").replace(")", " ").replace("/", " ").split() if token not in {"AND", "OR", "WITH"}]
+        tokens = [
+            token
+            for token in package["license"]
+            .replace("(", " ")
+            .replace(")", " ")
+            .replace("/", " ")
+            .split()
+            if token not in {"AND", "OR", "WITH"}
+        ]
         borrowed = []
         for token in tokens:
             donor = next(
-                (files for candidate in packages if token in (candidate.get("license") or "") and (files := package_files[candidate["id"]])),
+                (
+                    files
+                    for candidate in packages
+                    if token in (candidate.get("license") or "")
+                    and (files := package_files[candidate["id"]])
+                ),
                 None,
             )
             if donor:
@@ -115,7 +142,9 @@ def main():
                 bodies.append((body_id, filename, body))
             refs.append(str(body_id))
         if not refs:
-            raise SystemExit(f"no full license text found for {package['name']} {package['version']}")
+            raise SystemExit(
+                f"no full license text found for {package['name']} {package['version']}"
+            )
         entries.append(
             f"{package['name']} {package['version']}\n"
             f"License: {package.get('license') or 'See bundled license file'}\n"
@@ -154,7 +183,9 @@ def main():
     if not FFMPEG_OUTPUT.is_file():
         raise SystemExit("missing vendored FFmpeg LGPL notice")
     FONT_OUTPUT.write_text(FONT_LICENSE.read_text())
-    print(f"wrote {OUTPUT.relative_to(ROOT)}: {len(packages)} packages, {len(bodies)} unique license texts")
+    print(
+        f"wrote {OUTPUT.relative_to(ROOT)}: {len(packages)} packages, {len(bodies)} unique license texts"
+    )
 
 
 if __name__ == "__main__":

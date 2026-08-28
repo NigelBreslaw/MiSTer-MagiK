@@ -10,7 +10,6 @@ import csv
 import math
 import sys
 
-
 REQUIRED_COLUMNS = {
     "frame",
     "wall_us",
@@ -119,7 +118,9 @@ def check_frame_pacing(
         if source != "vsync" or miss > 0:
             dropped_rows += 1
             if len(examples) < 3:
-                examples.append(f"frame={row.get('frame', '?')}:source={source or 'blank'}:miss={miss}")
+                examples.append(
+                    f"frame={row.get('frame', '?')}:source={source or 'blank'}:miss={miss}"
+                )
 
     if policy not in ("auto", "strict", "vsync-integrity"):
         return fail(label, "invalid_policy", policy)
@@ -138,7 +139,9 @@ def check_frame_pacing(
     if wall_policy == "vsync-integrity":
         wall_valid = wall_over_33ms == 0
     else:
-        wall_valid = p99_wall <= p99_wall_us and max_wall <= max_wall_us and wall_over == 0
+        wall_valid = (
+            p99_wall <= p99_wall_us and max_wall <= max_wall_us and wall_over == 0
+        )
     valid = common_valid and wall_valid
     detail = (
         f"frames_after_30={len(measured)} scenario={scenario or 'default'} "

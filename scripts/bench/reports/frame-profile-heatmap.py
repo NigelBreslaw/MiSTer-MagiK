@@ -17,7 +17,15 @@ from pathlib import Path
 from frame_profile_schema import int_field, read_rows
 
 
-def add_rect(grid: list[list[int]], x0: int, y0: int, x1: int, y1: int, surface_w: int, surface_h: int) -> None:
+def add_rect(
+    grid: list[list[int]],
+    x0: int,
+    y0: int,
+    x1: int,
+    y1: int,
+    surface_w: int,
+    surface_h: int,
+) -> None:
     cols = len(grid[0])
     rows = len(grid)
     if x1 <= x0 or y1 <= y0:
@@ -56,7 +64,9 @@ def svg_text(x: float, y: float, text: str, size: int = 12) -> str:
     )
 
 
-def render_heatmap(rows: list[dict[str, str]], cols: int, grid_rows: int, title: str) -> str:
+def render_heatmap(
+    rows: list[dict[str, str]], cols: int, grid_rows: int, title: str
+) -> str:
     surface_w = max(1, max(int_field(row, "present_x1") for row in rows))
     surface_h = max(1, max(int_field(row, "present_y1") for row in rows))
     grid = [[0 for _ in range(cols)] for _ in range(grid_rows)]
@@ -80,7 +90,12 @@ def render_heatmap(rows: list[dict[str, str]], cols: int, grid_rows: int, title:
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
         '<rect width="100%" height="100%" fill="#ffffff"/>',
         svg_text(18, 26, title, 16),
-        svg_text(18, 44, f"{rects} presented rects · surface {surface_w}x{surface_h} · max bucket hits {max_value}", 11),
+        svg_text(
+            18,
+            44,
+            f"{rects} presented rects · surface {surface_w}x{surface_h} · max bucket hits {max_value}",
+            11,
+        ),
     ]
     for gy, row in enumerate(grid):
         for gx, value in enumerate(row):
@@ -90,7 +105,9 @@ def render_heatmap(rows: list[dict[str, str]], cols: int, grid_rows: int, title:
                 f'<rect x="{x}" y="{y}" width="{cell}" height="{cell}" fill="{color(value, max_value)}">'
                 f"<title>x={gx} y={gy} hits={value}</title></rect>"
             )
-    parts.append(f'<rect x="{margin_l}" y="{margin_t}" width="{cols * cell}" height="{grid_rows * cell}" fill="none" stroke="#111827"/>')
+    parts.append(
+        f'<rect x="{margin_l}" y="{margin_t}" width="{cols * cell}" height="{grid_rows * cell}" fill="none" stroke="#111827"/>'
+    )
     parts.append("</svg>")
     return "\n".join(parts)
 
@@ -106,7 +123,9 @@ def main() -> int:
 
     rows = read_rows(args.input)
     title = args.title or args.input.name
-    args.output.write_text(render_heatmap(rows, args.cols, args.rows, title), encoding="utf-8")
+    args.output.write_text(
+        render_heatmap(rows, args.cols, args.rows, title), encoding="utf-8"
+    )
     print(f"wrote {args.output} ({len(rows)} frames)")
     return 0
 

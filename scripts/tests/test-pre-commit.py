@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import importlib.util
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 GATE = ROOT / "scripts/checks/pre-commit.py"
@@ -37,7 +37,9 @@ class Repository:
         self.run("git", "init", "-q")
         self.configure_identity()
         self.run("git", "commit", "--allow-empty", "-qm", "baseline")
-        unified_agent_check = self.root / "scripts/checks/check-unified-agent-surface.py"
+        unified_agent_check = (
+            self.root / "scripts/checks/check-unified-agent-surface.py"
+        )
         unified_agent_check.parent.mkdir(parents=True)
         unified_agent_check.write_text(UNIFIED_AGENT_CHECK.read_text())
         cargo = self.bin / "cargo"
@@ -69,8 +71,7 @@ class Repository:
             args,
             cwd=cwd or self.root,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
         )
         if result.returncode not in allowed:
@@ -99,8 +100,7 @@ class Repository:
             cwd=self.root,
             env=environment,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
         )
 
@@ -149,7 +149,8 @@ class PreCommitTests(unittest.TestCase):
     def test_deprecated_dropped_frame_metrics_are_rejected(self) -> None:
         self.repository.stage(
             "apps/mister/src/lib.rs",
-            "fn probe() { let repeated_" "refreshes = 1; }\n",
+            "// dropped-frame-legacy-fixture: rejection coverage\n"
+            "fn probe() { let repeated_refreshes = 1; }\n",
         )
         result = self.repository.gate()
         self.assertEqual(result.returncode, 1)
@@ -204,7 +205,9 @@ class PreCommitTests(unittest.TestCase):
         self.repository.stage("apps/mister/src/lib.rs", "fn probe() {}\n")
         result = self.repository.gate(PRE_COMMIT_TEST_CARGO_EXIT="7")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("cargo fmt --manifest-path apps/mister/Cargo.toml --check", result.stderr)
+        self.assertIn(
+            "cargo fmt --manifest-path apps/mister/Cargo.toml --check", result.stderr
+        )
 
     def test_deleted_shell_files_are_not_syntax_checked(self) -> None:
         self.repository.stage("scripts/probe.sh", "#!/bin/bash\ntrue\n")
@@ -241,7 +244,9 @@ class PreCommitTests(unittest.TestCase):
                 GIT_DIR=str(self.repository.root / ".git"),
                 GIT_WORK_TREE=str(self.repository.root),
             )
-            self.assertEqual(clean_from_git_hook.returncode, 0, clean_from_git_hook.stderr)
+            self.assertEqual(
+                clean_from_git_hook.returncode, 0, clean_from_git_hook.stderr
+            )
             (self.repository.root / "private/sample/dirty.txt").write_text("dirty\n")
             result = self.repository.gate(GIT_INDEX_FILE=".git/index")
             self.assertEqual(result.returncode, 1)
@@ -263,7 +268,9 @@ class PreCommitTests(unittest.TestCase):
             self.repository.run("git", "add", "tracked.txt", cwd=source)
             self.repository.run("git", "commit", "-qm", "fixture", cwd=source)
             self.repository.run("git", "branch", "-M", "main", cwd=source)
-            self.repository.run("git", "remote", "add", "origin", str(remote), cwd=source)
+            self.repository.run(
+                "git", "remote", "add", "origin", str(remote), cwd=source
+            )
             self.repository.run("git", "push", "-qu", "origin", "main", cwd=source)
             self.repository.run(
                 "git",

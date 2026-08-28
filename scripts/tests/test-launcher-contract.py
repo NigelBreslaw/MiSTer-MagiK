@@ -7,9 +7,9 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path, PurePosixPath
 import sys
 import unittest
+from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[2]
 CHECKER = ROOT / "scripts/checks/check-launcher-contract.py"
@@ -49,8 +49,12 @@ class ContractTests(unittest.TestCase):
 
     def test_retired_bridge_symbols_are_rejected(self) -> None:
         for symbol in CONTRACT.FORBIDDEN_SYMBOLS:
-            with self.assertRaisesRegex(CONTRACT.ContractError, "retired launcher symbol"):
-                CONTRACT.check_sources([source(f"struct Fixture {{ {symbol}: usize }}", ".rs")])
+            with self.assertRaisesRegex(
+                CONTRACT.ContractError, "retired launcher symbol"
+            ):
+                CONTRACT.check_sources(
+                    [source(f"struct Fixture {{ {symbol}: usize }}", ".rs")]
+                )
 
     def test_integer_finite_state_and_legacy_fields_are_rejected(self) -> None:
         for declaration in (

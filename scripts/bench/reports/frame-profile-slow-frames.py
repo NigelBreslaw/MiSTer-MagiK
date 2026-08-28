@@ -15,7 +15,6 @@ from pathlib import Path
 
 from frame_profile_schema import int_field, read_rows
 
-
 PHASES = [
     "prepare_us",
     "anim_us",
@@ -74,7 +73,9 @@ def main() -> int:
     rows = read_rows(args.input)
     indexed = list(enumerate(rows))
     indexed.sort(key=lambda item: int_field(item[1], "wall_us"), reverse=True)
-    slow_count = sum(1 for row in rows if int_field(row, "wall_us") >= args.threshold_us)
+    slow_count = sum(
+        1 for row in rows if int_field(row, "wall_us") >= args.threshold_us
+    )
     print(
         f"{args.input}: frames={len(rows)} slow>={args.threshold_us}us={slow_count} "
         f"showing={min(args.limit, len(rows))}"

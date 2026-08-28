@@ -81,12 +81,18 @@ def generate(
         validate_path(relative)
         source = receipt_path.parent / "files" / entry["asset"]
         if not source.is_file() or source.stat().st_size != entry["size"]:
-            raise ValueError(f"release asset is absent or has wrong size: {entry['asset']}")
+            raise ValueError(
+                f"release asset is absent or has wrong size: {entry['asset']}"
+            )
         source_bytes = source.read_bytes()
         if hashlib.md5(source_bytes).hexdigest() != entry["md5"]:
-            raise ValueError(f"release asset MD5 disagrees with receipt: {entry['asset']}")
+            raise ValueError(
+                f"release asset MD5 disagrees with receipt: {entry['asset']}"
+            )
         if hashlib.sha256(source_bytes).hexdigest() != entry["sha256"]:
-            raise ValueError(f"release asset SHA-256 disagrees with receipt: {entry['asset']}")
+            raise ValueError(
+                f"release asset SHA-256 disagrees with receipt: {entry['asset']}"
+            )
         files[relative] = {
             "hash": entry["md5"],
             "size": entry["size"],
@@ -127,7 +133,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--receipt", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--channel", required=True, choices=("alpha", "beta", "release"))
+    parser.add_argument(
+        "--channel", required=True, choices=("alpha", "beta", "release")
+    )
     parser.add_argument("--repository", default=DEFAULT_REPOSITORY)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--timestamp", required=True, type=int)

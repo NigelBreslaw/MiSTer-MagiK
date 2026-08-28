@@ -7,27 +7,38 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import json
 import math
-from pathlib import Path
 import re
 import sys
-from typing import Iterable
-
+from collections import Counter
+from collections.abc import Iterable
+from pathlib import Path
 
 NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 WARNING_RE = re.compile(r"^\s*Warning(?: \((\d+)\))?:\s*(.*?)\s*$", re.IGNORECASE)
 SLACK_RE = re.compile(
     rf"Worst-case\s+(setup|hold)\s+slack\s+is\s+({NUMBER})", re.IGNORECASE
 )
-TNS_RE = re.compile(rf"Total\s+negative\s+slack(?:\s+is|\s*[:=])\s*({NUMBER})", re.IGNORECASE)
+TNS_RE = re.compile(
+    rf"Total\s+negative\s+slack(?:\s+is|\s*[:=])\s*({NUMBER})", re.IGNORECASE
+)
 TABLE_ROW_RE = re.compile(rf"^\s*(?:Info \(\d+\):\s*)?({NUMBER})\s+({NUMBER})\s+\S")
-CHAIN_COUNT_RE = re.compile(r"(?:Found|Found:)\s+(\d+)\s+synchronizer chains", re.IGNORECASE)
-MTBF_VALUE_RE = re.compile(rf"(?:MTBF|Mean Time Between Failures).*?({NUMBER})\s*(years?|seconds?|s)\b", re.IGNORECASE)
+CHAIN_COUNT_RE = re.compile(
+    r"(?:Found|Found:)\s+(\d+)\s+synchronizer chains", re.IGNORECASE
+)
+MTBF_VALUE_RE = re.compile(
+    rf"(?:MTBF|Mean Time Between Failures).*?({NUMBER})\s*(years?|seconds?|s)\b",
+    re.IGNORECASE,
+)
 UNCONSTRAINED_RE = re.compile(r"\bunconstrained\b|not fully constrained", re.IGNORECASE)
-UNCONSTRAINED_OUTPUT_RE = re.compile(r"Unconstrained Output Port Paths\s*;\s*(\d+)\s*;", re.IGNORECASE)
-UNCALCULATED_FRACTION_RE = re.compile(r"Fraction of Chains for which MTBFs Could Not be Calculated:\s*([0-9.]+)", re.IGNORECASE)
+UNCONSTRAINED_OUTPUT_RE = re.compile(
+    r"Unconstrained Output Port Paths\s*;\s*(\d+)\s*;", re.IGNORECASE
+)
+UNCALCULATED_FRACTION_RE = re.compile(
+    r"Fraction of Chains for which MTBFs Could Not be Calculated:\s*([0-9.]+)",
+    re.IGNORECASE,
+)
 SYNC_ASSIGN_RE = re.compile(
     r"SYNCHRONIZER_IDENTIFICATION\s*;\s*FORCED(?:_IF_ASYNCHRONOUS)?\s*;",
     re.IGNORECASE,
@@ -181,7 +192,12 @@ EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH = {
 
 def normalize_space(value: str) -> str:
     value = re.sub(r"\s+File:\s+\S+\s+Line:\s+\d+\s*$", "", value, flags=re.IGNORECASE)
-    value = re.sub(r'Node "emu\|random\|lc0\|data[a-f]"', 'Node "emu|random|lc0|data*"', value, flags=re.IGNORECASE)
+    value = re.sub(
+        r'Node "emu\|random\|lc0\|data[a-f]"',
+        'Node "emu|random|lc0|data*"',
+        value,
+        flags=re.IGNORECASE,
+    )
     return " ".join(value.split())
 
 
@@ -335,7 +351,9 @@ def parse_report(
     for index, line in enumerate(lines):
         policy = QUARTUS_POLICY_RE.match(line)
         if policy:
-            quartus_policy[policy.group(1).lower()][normalize_space(policy.group(2)).lower()] += 1
+            quartus_policy[policy.group(1).lower()][
+                normalize_space(policy.group(2)).lower()
+            ] += 1
 
         processor_use = QUARTUS_PROCESSOR_USE_RE.search(line)
         if processor_use:
@@ -459,16 +477,21 @@ def is_expected_bootstrap_black_warning_removal(
         loop_count in (5, 7)
         and removed[BOOTSTRAP_BLACK_COMBOUT_WARNING] == loop_count
         and removed[BOOTSTRAP_BLACK_DATA_WARNING] == loop_count * 5
-        and not any(patched[identity] for identity in EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNING_IDENTITIES)
+        and not any(
+            patched[identity]
+            for identity in EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNING_IDENTITIES
+        )
     )
 
 
-def estimated_calculable_chains(chain_counts: list[int], uncalculated_fractions: list[float]) -> int | None:
+def estimated_calculable_chains(
+    chain_counts: list[int], uncalculated_fractions: list[float]
+) -> int | None:
     if not chain_counts or not uncalculated_fractions:
         return None
     total = max(chain_counts)
     uncalculated_fraction = min(uncalculated_fractions)
-    return int(math.floor(total * (1.0 - uncalculated_fraction) + 0.5))
+    return math.floor(total * (1.0 - uncalculated_fraction) + 0.5)
 
 
 def validate_diagnostic_reports(
@@ -536,13 +559,13 @@ def validate_diagnostic_reports(
             if experimental_diagnostic:
                 expected_net_delay_paths.update(EXPERIMENTAL_RAW_SCALER_NET_DELAY_PATH)
             if experimental_scaler_fetch:
-                expected_net_delay_paths.update(EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH)
+                expected_net_delay_paths.update(
+                    EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH
+                )
             if len(detailed_rows) != len(expected_net_delay_paths):
                 reasons.append("diagnostic_cdc_analysis_count")
             detailed_path_identities = {
-                label: sum(
-                    1 for row in detailed_rows if pattern.search(row.group(0))
-                )
+                label: sum(1 for row in detailed_rows if pattern.search(row.group(0)))
                 for label, pattern in expected_net_delay_paths.items()
             }
             detailed_path_counts.update(
@@ -563,11 +586,17 @@ def validate_diagnostic_reports(
     metastability = reports.get("menu.magik-diagnostic-metastability.rpt", "")
     expected_metastability_chains = dict(EXPECTED_METASTABILITY_CHAINS)
     if experimental_diagnostic:
-        expected_metastability_chains.update(EXPERIMENTAL_RAW_SCALER_METASTABILITY_CHAIN)
+        expected_metastability_chains.update(
+            EXPERIMENTAL_RAW_SCALER_METASTABILITY_CHAIN
+        )
     if experimental_scaler_fetch:
-        expected_metastability_chains.update(EXPERIMENTAL_SCALER_FETCH_METASTABILITY_CHAIN)
-    custom_mtbf_years, missing_metastability_chains = parse_expected_metastability_chains(
-        metastability, expected_metastability_chains
+        expected_metastability_chains.update(
+            EXPERIMENTAL_SCALER_FETCH_METASTABILITY_CHAIN
+        )
+    custom_mtbf_years, missing_metastability_chains = (
+        parse_expected_metastability_chains(
+            metastability, expected_metastability_chains
+        )
     )
     if not metastability.strip() or re.search(
         r"\bno (?:valid )?(?:chains?|results?)\b", metastability, re.IGNORECASE
@@ -627,7 +656,11 @@ def compare(
     reasons: list[str] = []
     experimental = experimental_diagnostic or experimental_scaler_fetch
     policy_details: dict[str, dict[str, dict[str, int]]] = {}
-    for flavour, report in (("stock", stock), ("baseline", baseline), ("patched", patched)):
+    for flavour, report in (
+        ("stock", stock),
+        ("baseline", baseline),
+        ("patched", patched),
+    ):
         policy = report["quartus_policy"]
         assert isinstance(policy, dict)
         policy_details[flavour] = {
@@ -651,8 +684,10 @@ def compare(
     added_warnings = counter_delta(stock_warnings, patched_warnings)
     removed_warnings = counter_delta(patched_warnings, stock_warnings)
     removed_warning_counts = stock_warnings - patched_warnings
-    expected_bootstrap_black_warning_removal = is_expected_bootstrap_black_warning_removal(
-        removed_warning_counts, patched_warnings
+    expected_bootstrap_black_warning_removal = (
+        is_expected_bootstrap_black_warning_removal(
+            removed_warning_counts, patched_warnings
+        )
     )
     if added_warnings:
         reasons.append("warning_added")
@@ -661,21 +696,24 @@ def compare(
 
     stock_unconstrained = stock["unconstrained"]
     patched_unconstrained = patched["unconstrained"]
-    assert isinstance(stock_unconstrained, Counter) and isinstance(patched_unconstrained, Counter)
+    assert isinstance(stock_unconstrained, Counter) and isinstance(
+        patched_unconstrained, Counter
+    )
     added_unconstrained = counter_delta(stock_unconstrained, patched_unconstrained)
     if added_unconstrained:
         reasons.append("unconstrained_added")
     baseline_output_paths = baseline["unconstrained_output_paths"]
     patched_output_paths = patched["unconstrained_output_paths"]
-    assert isinstance(baseline_output_paths, list) and isinstance(patched_output_paths, list)
+    assert isinstance(baseline_output_paths, list) and isinstance(
+        patched_output_paths, list
+    )
     diagnostic_output_paths_exception = False
     if not baseline_output_paths or not patched_output_paths:
         reasons.append("unconstrained_output_summary_missing")
     else:
         diagnostic_output_paths_exception = (
             experimental_diagnostic
-            and
-            max(baseline_output_paths) == EXPECTED_UNCONSTRAINED_OUTPUT_PATHS
+            and max(baseline_output_paths) == EXPECTED_UNCONSTRAINED_OUTPUT_PATHS
             and max(patched_output_paths)
             == EXPECTED_DIAGNOSTIC_UNCONSTRAINED_OUTPUT_PATHS
         )
@@ -698,9 +736,7 @@ def compare(
     assert isinstance(slacks, dict)
     assert isinstance(baseline_slacks, dict)
     minimum_slack = (
-        EXPERIMENTAL_DIAGNOSTIC_MINIMUM_SLACK_NS
-        if experimental
-        else MINIMUM_SLACK_NS
+        EXPERIMENTAL_DIAGNOSTIC_MINIMUM_SLACK_NS if experimental else MINIMUM_SLACK_NS
     )
     maximum_slack_degradation = (
         EXPERIMENTAL_DIAGNOSTIC_MAXIMUM_SLACK_DEGRADATION_NS
@@ -848,7 +884,9 @@ def compare(
     baseline_calculable_chains = estimated_calculable_chains(
         baseline_chain_counts, baseline_fractions
     )
-    patched_calculable_chains = estimated_calculable_chains(chain_counts, patched_fractions)
+    patched_calculable_chains = estimated_calculable_chains(
+        chain_counts, patched_fractions
+    )
     completion_delta_calculable = (
         baseline_calculable_chains is not None
         and patched_calculable_chains is not None
@@ -913,7 +951,11 @@ def compare(
         "quartus_policy": policy_details,
         "quartus_processor_use": {
             flavour: report["quartus_processor_use"]
-            for flavour, report in (("stock", stock), ("baseline", baseline), ("patched", patched))
+            for flavour, report in (
+                ("stock", stock),
+                ("baseline", baseline),
+                ("patched", patched),
+            )
         },
         **diagnostic_details,
     }
@@ -930,8 +972,20 @@ def tsv_value(value: object) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stock", action="append", type=Path, required=True, help="stock log/report; repeatable")
-    parser.add_argument("--patched", action="append", type=Path, required=True, help="patched log/report; repeatable")
+    parser.add_argument(
+        "--stock",
+        action="append",
+        type=Path,
+        required=True,
+        help="stock log/report; repeatable",
+    )
+    parser.add_argument(
+        "--patched",
+        action="append",
+        type=Path,
+        required=True,
+        help="patched log/report; repeatable",
+    )
     parser.add_argument(
         "--baseline",
         action="append",
@@ -962,8 +1016,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         sync_re = re.compile(args.synchronizer_regex, re.IGNORECASE)
         stock_text, stock_fitter, stock_diagnostic_reports = read_inputs(args.stock)
-        baseline_text, baseline_fitter, baseline_diagnostic_reports = read_inputs(args.baseline)
-        patched_text, patched_fitter, patched_diagnostic_reports = read_inputs(args.patched)
+        baseline_text, baseline_fitter, baseline_diagnostic_reports = read_inputs(
+            args.baseline
+        )
+        patched_text, patched_fitter, patched_diagnostic_reports = read_inputs(
+            args.patched
+        )
         stock = parse_report(stock_text, sync_re, stock_fitter)
         baseline = parse_report(baseline_text, sync_re, baseline_fitter)
         patched = parse_report(patched_text, sync_re, patched_fitter)
@@ -981,11 +1039,19 @@ def main(argv: list[str] | None = None) -> int:
         experimental_scaler_fetch=args.experimental_scaler_fetch,
     )
     valid = not reasons
-    result = {"valid": int(valid), "invalid_reason": ",".join(reasons) if reasons else "ok", **details}
+    result = {
+        "valid": int(valid),
+        "invalid_reason": ",".join(reasons) if reasons else "ok",
+        **details,
+    }
     if args.json:
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     else:
-        fields = ["quartus_delta_signoff_tsv"] + [f"{key}={tsv_value(value)}" for key, value in result.items() if not isinstance(value, list)]
+        fields = ["quartus_delta_signoff_tsv"] + [
+            f"{key}={tsv_value(value)}"
+            for key, value in result.items()
+            if not isinstance(value, list)
+        ]
         print("\t".join(fields))
         for key in ("added_warnings", "removed_warnings", "added_unconstrained"):
             for value in details[key]:

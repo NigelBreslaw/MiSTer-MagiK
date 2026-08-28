@@ -7,12 +7,13 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
-from typing import Iterable, NoReturn
+from collections.abc import Iterable
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from typing import NoReturn
 
 UI_ROOT = PurePosixPath("apps/mister/ui")
 RAW_TEXT = re.compile(r"(?<![A-Za-z0-9_])Text\s*\{")
@@ -127,8 +128,7 @@ def run_git(repository: Path, *args: str) -> bytes:
     result = subprocess.run(
         ["git", *args],
         cwd=repository,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     if result.returncode != 0:
@@ -143,7 +143,9 @@ def run_git(repository: Path, *args: str) -> bytes:
 def staged_sources(repository: Path) -> list[Source]:
     paths = [
         PurePosixPath(value.decode(errors="surrogateescape"))
-        for value in run_git(repository, "ls-files", "--cached", "-z", "--", str(UI_ROOT)).split(b"\0")
+        for value in run_git(
+            repository, "ls-files", "--cached", "-z", "--", str(UI_ROOT)
+        ).split(b"\0")
         if value
     ]
     return [
@@ -166,7 +168,9 @@ def check_primitive(source: Source, contract: PrimitiveContract) -> list[str]:
     if len(RAW_TEXT.findall(source.text)) != 1:
         errors.append(f"{source.path}: {contract.component} must contain one raw Text")
     if len(DIRECT_FONT_SIZE.findall(source.text)) != 1:
-        errors.append(f"{source.path}: {contract.component} must contain one font-size binding")
+        errors.append(
+            f"{source.path}: {contract.component} must contain one font-size binding"
+        )
     enum = re.search(
         rf"\bexport\s+enum\s+{re.escape(contract.enum_name)}\s*\{{(?P<body>.*?)\}}",
         source.text,
@@ -178,7 +182,14 @@ def check_primitive(source: Source, contract: PrimitiveContract) -> list[str]:
             f"{source.path}: {contract.enum_name} must be exactly {list(contract.values)}, "
             f"got {list(values)}"
         )
-    if len(re.findall(rf'font-family\s*:\s*"{re.escape(contract.family)}"\s*;', source.text)) != 1:
+    if (
+        len(
+            re.findall(
+                rf'font-family\s*:\s*"{re.escape(contract.family)}"\s*;', source.text
+            )
+        )
+        != 1
+    ):
         errors.append(f"{source.path}: family must be {contract.family}")
     if contract.renderer_size not in source.text:
         errors.append(
@@ -208,7 +219,9 @@ def check_sources(sources: Iterable[Source]) -> None:
             violations.append(f"{source.path}: legacy mixed-font text API is forbidden")
     for contract in CONTRACTS:
         if contract.path not in seen:
-            violations.append(f"{contract.path}: {contract.component} primitive is missing")
+            violations.append(
+                f"{contract.path}: {contract.component} primitive is missing"
+            )
     if violations:
         raise ContractError("\n".join(violations))
 
@@ -222,7 +235,11 @@ def main() -> None:
     args = parse_args()
     repository = args.repository.resolve()
     try:
-        sources = staged_sources(repository) if args.staged else working_tree_sources(repository)
+        sources = (
+            staged_sources(repository)
+            if args.staged
+            else working_tree_sources(repository)
+        )
         check_sources(sources)
     except (ContractError, OSError, UnicodeError) as error:
         fail(str(error))

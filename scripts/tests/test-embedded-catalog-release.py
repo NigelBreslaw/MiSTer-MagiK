@@ -4,10 +4,9 @@
 
 """Regression checks for the embedded production catalog boundary."""
 
-from pathlib import Path
 import subprocess
 import sys
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -67,7 +66,9 @@ def main() -> None:
     )
     forbid(constants, "catalog_builder", "generated platform manifest constants")
     for layout in ("public", "development"):
-        fixture = read(f"mister/platform/contracts/generated/platform-v3.{layout}.fixture")
+        fixture = read(
+            f"mister/platform/contracts/generated/platform-v3.{layout}.fixture"
+        )
         require(fixture, "format=mister-magik-platform-v3", f"{layout} fixture")
         forbid(fixture, "catalog_builder", f"{layout} fixture")
 

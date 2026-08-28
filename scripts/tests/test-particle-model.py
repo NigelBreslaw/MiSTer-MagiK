@@ -22,27 +22,31 @@ class ParticleModelTest(unittest.TestCase):
         )
         path = directory / "fixture.obj"
         path.write_text(
-            "\n".join(
-                (
-                    "mtllib fixture.mtl",
-                    "v -1 0 0",
-                    "v 1 0 0",
-                    "v 1 2 0",
-                    "v -1 2 0",
-                    "v 0 1 -1",
-                    "usemtl blue",
-                    "f 1 2 3 4",
-                    "usemtl red",
-                    "f -5 -4 -1",
+            f"""{
+                chr(10).join(
+                    (
+                        "mtllib fixture.mtl",
+                        "v -1 0 0",
+                        "v 1 0 0",
+                        "v 1 2 0",
+                        "v -1 2 0",
+                        "v 0 1 -1",
+                        "usemtl blue",
+                        "f 1 2 3 4",
+                        "usemtl red",
+                        "f -5 -4 -1",
+                    )
                 )
-            ),
+            }""",
             encoding="utf-8",
         )
         return path
 
     def test_triangulates_materials_and_emits_deterministic_cloud(self):
         with tempfile.TemporaryDirectory() as temporary:
-            vertices, triangles, colors = particle_model.load_obj(self.fixture(Path(temporary)))
+            vertices, triangles, colors = particle_model.load_obj(
+                self.fixture(Path(temporary))
+            )
             normalized = particle_model.transform_and_normalize(vertices, "y", "-z")
             first = particle_model.encode(
                 particle_model.sample_points(normalized, triangles, colors, 1024, 7)
@@ -56,10 +60,17 @@ class ParticleModelTest(unittest.TestCase):
         magic, version, stride, count, *_ = particle_model.HEADER.unpack_from(first)
         self.assertEqual(magic, particle_model.MAGIC)
         self.assertEqual((version, stride, count), (1, 8, 1024))
-        flags = [record[4] for record in struct.iter_unpack("<hhhBB", first[particle_model.HEADER.size :])]
+        flags = [
+            record[4]
+            for record in struct.iter_unpack(
+                "<hhhBB", first[particle_model.HEADER.size :]
+            )
+        ]
         self.assertIn(1, flags)
         self.assertIn(2, flags)
-        records = list(struct.iter_unpack("<hhhBB", first[particle_model.HEADER.size :]))
+        records = list(
+            struct.iter_unpack("<hhhBB", first[particle_model.HEADER.size :])
+        )
         self.assertEqual(len({record[:3] for record in records}), 1024)
 
         for prefix in (64, 256, 1024):
@@ -96,10 +107,18 @@ class ParticleModelTest(unittest.TestCase):
             2,
             bytes(
                 (
-                    255, 0, 0,
-                    0, 255, 0,
-                    0, 0, 255,
-                    255, 255, 255,
+                    255,
+                    0,
+                    0,
+                    0,
+                    255,
+                    0,
+                    0,
+                    0,
+                    255,
+                    255,
+                    255,
+                    255,
                 )
             ),
         )

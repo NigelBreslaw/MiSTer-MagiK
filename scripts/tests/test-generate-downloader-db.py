@@ -12,7 +12,9 @@ import zipfile
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parents[1] / "release/databases/generate-downloader-db.py"
+SCRIPT = (
+    Path(__file__).resolve().parents[1] / "release/databases/generate-downloader-db.py"
+)
 SPEC = spec_from_file_location("generate_downloader_db", SCRIPT)
 assert SPEC and SPEC.loader
 MODULE = module_from_spec(SPEC)
@@ -31,13 +33,15 @@ class DownloaderDatabaseTests(unittest.TestCase):
                 "format": "mister-magik-release-assets-v1",
                 "version": "0.2.42",
                 "build_number": 42,
-                "files": [{
-                    "path": "Scripts/MiSTer-MagiK.sh",
-                    "asset": asset.name,
-                    "size": asset.stat().st_size,
-                    "md5": hashlib.md5(asset.read_bytes()).hexdigest(),
-                    "sha256": hashlib.sha256(asset.read_bytes()).hexdigest(),
-                }],
+                "files": [
+                    {
+                        "path": "Scripts/MiSTer-MagiK.sh",
+                        "asset": asset.name,
+                        "size": asset.stat().st_size,
+                        "md5": hashlib.md5(asset.read_bytes()).hexdigest(),
+                        "sha256": hashlib.sha256(asset.read_bytes()).hexdigest(),
+                    }
+                ],
             }
             receipt_path = root / "release-assets.json"
             receipt_path.write_text(json.dumps(receipt))
@@ -53,7 +57,9 @@ class DownloaderDatabaseTests(unittest.TestCase):
                 MODULE.generate(
                     receipt_path, output, channel, "Owner/Repo", tag, 1_700_000_000
                 )
-                database = json.loads((output / f"mister-magik-{channel}-db.json").read_text())
+                database = json.loads(
+                    (output / f"mister-magik-{channel}-db.json").read_text()
+                )
                 self.assertEqual(database["v"], 1)
                 self.assertEqual(database["db_id"], "mister_magik")
                 self.assertEqual(database["timestamp"], 1_700_000_000)
@@ -89,7 +95,9 @@ class DownloaderDatabaseTests(unittest.TestCase):
                 "format": "mister-magik-release-assets-v1",
                 "version": "0.2.7",
                 "build_number": 7,
-                "files": [{"path": "MiSTer.ini", "asset": "bad", "size": 3, "md5": "x"}],
+                "files": [
+                    {"path": "MiSTer.ini", "asset": "bad", "size": 3, "md5": "x"}
+                ],
             }
             receipt.write_text(json.dumps(base))
             with self.assertRaisesRegex(ValueError, "forbidden"):
@@ -98,11 +106,21 @@ class DownloaderDatabaseTests(unittest.TestCase):
                 )
             with self.assertRaisesRegex(ValueError, "disagree"):
                 MODULE.generate(
-                    receipt, root / "out", "release", "Owner/Repo", "v0.2.8", 1_700_000_000
+                    receipt,
+                    root / "out",
+                    "release",
+                    "Owner/Repo",
+                    "v0.2.8",
+                    1_700_000_000,
                 )
             with self.assertRaisesRegex(ValueError, "disagree"):
                 MODULE.generate(
-                    receipt, root / "out", "alpha", "Owner/Repo", "v0.2.7", 1_700_000_000
+                    receipt,
+                    root / "out",
+                    "alpha",
+                    "Owner/Repo",
+                    "v0.2.7",
+                    1_700_000_000,
                 )
 
 

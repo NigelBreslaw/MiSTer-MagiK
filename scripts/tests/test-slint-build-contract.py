@@ -7,12 +7,12 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import time
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD_SCRIPT = ROOT / "apps/mister/ui-generated/build.rs"
@@ -20,12 +20,12 @@ UI_ROOT = ROOT / "apps/mister/ui"
 UI_CRATE = ROOT / "apps/mister/ui-generated"
 
 REQUIRED_BUILD_SCRIPT_FRAGMENTS = (
-    'cargo:rerun-if-env-changed=MISTER_UI_BUILD_SCOPE',
+    "cargo:rerun-if-env-changed=MISTER_UI_BUILD_SCOPE",
     'unwrap_or_else(|_| "production".into())',
     'std::env::var_os("CARGO_FEATURE_BENCH_SCENES")',
     '"launcher" | "arcade" | "production" => true',
-    'cargo:rustc-cfg=mister_ui_scope_launcher',
-    'cargo:rustc-cfg=mister_bench_scenes',
+    "cargo:rustc-cfg=mister_ui_scope_launcher",
+    "cargo:rustc-cfg=mister_bench_scenes",
     '"../ui/controller_test.slint"',
     '"../ui/launcher.slint"',
     '"../ui/bench/tear_pattern.slint"',
@@ -64,8 +64,7 @@ def run_cargo(manifest: Path, target: Path) -> subprocess.CompletedProcess[str]:
         cwd=manifest.parent,
         env=environment,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
 

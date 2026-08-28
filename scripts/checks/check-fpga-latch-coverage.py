@@ -20,7 +20,10 @@ def main() -> None:
 
     matches = list(args.annotation_dir.rglob(args.source))
     if len(matches) != 1:
-        print(f"expected one annotated {args.source}, found {len(matches)}", file=sys.stderr)
+        print(
+            f"expected one annotated {args.source}, found {len(matches)}",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
     annotations = matches[0].read_text().splitlines()
     incomplete = [line for line in annotations if line.startswith(("%", "~"))]

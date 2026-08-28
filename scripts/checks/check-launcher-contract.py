@@ -7,12 +7,13 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
-from typing import Iterable, NoReturn
+from collections.abc import Iterable
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from typing import NoReturn
 
 APP_ROOT = PurePosixPath("apps/mister")
 UI_ROOT = APP_ROOT / "ui"
@@ -100,8 +101,7 @@ def run_git(repository: Path, *args: str) -> bytes:
     result = subprocess.run(
         ["git", *args],
         cwd=repository,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     if result.returncode != 0:
@@ -173,7 +173,9 @@ def check_sources(sources: Iterable[Source]) -> None:
     for source in sources:
         for symbol in FORBIDDEN_SYMBOLS:
             if symbol in source.text:
-                violations.append(f"{source.path}: retired launcher symbol {symbol} is forbidden")
+                violations.append(
+                    f"{source.path}: retired launcher symbol {symbol} is forbidden"
+                )
 
         if not is_production_slint(source):
             continue
@@ -216,7 +218,11 @@ def main() -> None:
     args = parse_args()
     repository = args.repository.resolve()
     try:
-        sources = staged_sources(repository) if args.staged else working_tree_sources(repository)
+        sources = (
+            staged_sources(repository)
+            if args.staged
+            else working_tree_sources(repository)
+        )
         check_sources(sources)
     except (ContractError, OSError, UnicodeError) as error:
         fail(str(error))

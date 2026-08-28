@@ -12,7 +12,6 @@ import struct
 import subprocess
 import zlib
 
-
 MAGIC = b"MM565A1\0"
 
 
@@ -34,9 +33,11 @@ def rgba_pixels(path: pathlib.Path, expected_size: int) -> bytes:
     source_bytes = None
     if path.suffix.lower() == ".svg":
         source = "svg:-"
-        source_bytes = path.read_text(encoding="utf-8").replace(
-            "currentColor", "#ffffff"
-        ).encode("utf-8")
+        source_bytes = (
+            path.read_text(encoding="utf-8")
+            .replace("currentColor", "#ffffff")
+            .encode("utf-8")
+        )
     result = subprocess.run(
         [
             "magick",

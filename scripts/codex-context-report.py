@@ -7,15 +7,15 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
 import json
 import math
 import os
-from pathlib import Path
 import re
 import sys
-from typing import Any, Iterable
-
+from collections import defaultdict
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any
 
 SCHEMA_VERSION = 1
 LARGE_OUTPUT_BYTES = 10 * 1024

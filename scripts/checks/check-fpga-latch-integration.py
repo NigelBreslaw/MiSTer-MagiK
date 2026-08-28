@@ -16,24 +16,60 @@ import tempfile
 from pathlib import Path
 
 COMMAND_PATTERNS = {
-    "0x57": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')57", re.I),
-    "0x58": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')58", re.I),
-    "0x59": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')59", re.I),
-    "0x5a": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')5a", re.I),
-    "0x5b": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')5b", re.I),
-    "0x5c": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')5c", re.I),
-    "0x5d": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')5d", re.I),
-    "0x5e": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')5e", re.I),
-    "0x5f": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')5f", re.I),
-    "0x60": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')60", re.I),
-    "0x61": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')61", re.I),
-    "0x62": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')62", re.I),
-    "0x63": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')63", re.I),
-    "0x64": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')64", re.I),
-    "0x65": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')65", re.I),
-    "0x66": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')66", re.I),
-    "0x67": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')67", re.I),
-    "0x68": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')68", re.I),
+    "0x57": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')57", re.IGNORECASE
+    ),
+    "0x58": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')58", re.IGNORECASE
+    ),
+    "0x59": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')59", re.IGNORECASE
+    ),
+    "0x5a": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')5a", re.IGNORECASE
+    ),
+    "0x5b": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')5b", re.IGNORECASE
+    ),
+    "0x5c": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')5c", re.IGNORECASE
+    ),
+    "0x5d": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')5d", re.IGNORECASE
+    ),
+    "0x5e": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')5e", re.IGNORECASE
+    ),
+    "0x5f": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')5f", re.IGNORECASE
+    ),
+    "0x60": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')60", re.IGNORECASE
+    ),
+    "0x61": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')61", re.IGNORECASE
+    ),
+    "0x62": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')62", re.IGNORECASE
+    ),
+    "0x63": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')63", re.IGNORECASE
+    ),
+    "0x64": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')64", re.IGNORECASE
+    ),
+    "0x65": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')65", re.IGNORECASE
+    ),
+    "0x66": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')66", re.IGNORECASE
+    ),
+    "0x67": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')67", re.IGNORECASE
+    ),
+    "0x68": re.compile(
+        r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')68", re.IGNORECASE
+    ),
 }
 
 IMMUTABLE_LATCH_SHA256 = {
@@ -170,18 +206,10 @@ def main() -> None:
         source_dir / "tb_mister_magik_video_diagnostics_control.sv"
     )
     completion_queue_tb = source_dir / "tb_mister_magik_scaler_completion_queue.vhd"
-    completion_formal_dut = (
-        source_dir / "mister_magik_scaler_completion_formal_dut.vhd"
-    )
-    completion_formal_wrapper = (
-        source_dir / "mister_magik_ascal_completion_formal.sv"
-    )
-    copy_tail_formal_dut = (
-        source_dir / "mister_magik_scaler_copy_tail_formal_dut.vhd"
-    )
-    copy_tail_formal_wrapper = (
-        source_dir / "mister_magik_scaler_copy_tail_formal.sv"
-    )
+    completion_formal_dut = source_dir / "mister_magik_scaler_completion_formal_dut.vhd"
+    completion_formal_wrapper = source_dir / "mister_magik_ascal_completion_formal.sv"
+    copy_tail_formal_dut = source_dir / "mister_magik_scaler_copy_tail_formal_dut.vhd"
+    copy_tail_formal_wrapper = source_dir / "mister_magik_scaler_copy_tail_formal.sv"
     completion_formal_check = (
         root / "scripts/checks/check-fpga-scaler-completion-formal.py"
     )
@@ -329,7 +357,9 @@ def main() -> None:
                 f"{required_observer_fragment}"
             )
     if re.search(r"\breg\s*\[127:0\]", control_source):
-        fail("scaler-fetch observer must not retain a 128-bit return-data isolation register")
+        fail(
+            "scaler-fetch observer must not retain a 128-bit return-data isolation register"
+        )
     if "generation_launch" in control_source:
         fail("rejected placement-heavy generation launch stage remains present")
     for redundant_publication_register in (
@@ -370,7 +400,9 @@ def main() -> None:
         "avl_magik",
     ):
         if forbidden_observer_input in control_source:
-            fail(f"scaler-fetch observer exceeds its passive tap boundary: {forbidden_observer_input}")
+            fail(
+                f"scaler-fetch observer exceeds its passive tap boundary: {forbidden_observer_input}"
+            )
     if re.search(r"\bvbuf_readdata\b", control_source):
         fail("scaler-fetch liveness observer must not tap return data")
     for retired_control_observer in (
@@ -473,8 +505,7 @@ def main() -> None:
     diagnostics_sdc_text = diagnostics_sdc.read_text()
     timing_report_text = timing_report.read_text()
     unconstrained_report = (
-        "report_ucp \\\n"
-        "\t-file output_files/menu.unconstrained-paths.rpt"
+        "report_ucp \\\n\t-file output_files/menu.unconstrained-paths.rpt"
     )
     if timing_report_text.count(unconstrained_report) != 1:
         fail("full unconstrained-path timing report is missing or ambiguous")
@@ -515,7 +546,9 @@ def main() -> None:
         "scaler_copy_tail",
     ):
         if diagnostics_sdc_text.count(fragment) != 1:
-            fail(f"scaler completion request/ack constraint is missing or ambiguous: {fragment}")
+            fail(
+                f"scaler completion request/ack constraint is missing or ambiguous: {fragment}"
+            )
     for forbidden_sdc in (
         "set_false_path",
         "magik_require_data_pin",
@@ -524,17 +557,19 @@ def main() -> None:
     ):
         if forbidden_sdc in diagnostics_sdc_text:
             fail(f"retired HDMI lock constraint remains: {forbidden_sdc}")
-    with tempfile.TemporaryDirectory(prefix="mister-magik-fpga-integration-") as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix="mister-magik-fpga-integration-"
+    ) as temporary:
         work = Path(temporary) / "Menu_MiSTer"
-        shutil.copytree(menu, work, ignore=shutil.ignore_patterns(".git", "db", "output_files"))
+        shutil.copytree(
+            menu, work, ignore=shutil.ignore_patterns(".git", "db", "output_files")
+        )
         subprocess.run(
             ["git", "apply", "--recount", "--check", str(patch)],
             cwd=work,
             check=True,
         )
-        subprocess.run(
-            ["git", "apply", "--recount", str(patch)], cwd=work, check=True
-        )
+        subprocess.run(["git", "apply", "--recount", str(patch)], cwd=work, check=True)
         sys_top_sdc = work / "sys/sys_top.sdc"
         sdc_bytes = sys_top_sdc.read_bytes()
         clock_group = b"set_clock_groups -exclusive"
@@ -548,7 +583,9 @@ def main() -> None:
         for name, expected in IMMUTABLE_LATCH_SHA256.items():
             actual = hashlib.sha256((source_dir / name).read_bytes()).hexdigest()
             if actual != expected:
-                fail(f"immutable latch source changed: {name} expected {expected}, got {actual}")
+                fail(
+                    f"immutable latch source changed: {name} expected {expected}, got {actual}"
+                )
         for source in (
             rtl,
             bridge,
@@ -567,11 +604,11 @@ def main() -> None:
                 "sys/mister_magik_vblank_latch.sv\n"
                 "set_global_assignment -name SYSTEMVERILOG_FILE "
                 "sys/mister_magik_latch_sys_top_bridge.sv\n"
-            "set_global_assignment -name SYSTEMVERILOG_FILE "
-            "sys/mister_magik_bootstrap_black.sv\n"
-            "set_global_assignment -name SYSTEMVERILOG_FILE "
-            "sys/mister_magik_video_diagnostics_control.sv\n"
-            "set_global_assignment -name SDC_FILE "
+                "set_global_assignment -name SYSTEMVERILOG_FILE "
+                "sys/mister_magik_bootstrap_black.sv\n"
+                "set_global_assignment -name SYSTEMVERILOG_FILE "
+                "sys/mister_magik_video_diagnostics_control.sv\n"
+                "set_global_assignment -name SDC_FILE "
                 "sys/mister_magik_video_diagnostics.sdc\n"
             )
 
@@ -629,7 +666,7 @@ def main() -> None:
             r"\.vbuf_read\(vbuf_read\).*?"
             r"\.response_valid\(magik_diag_response_valid\).*?"
             r"\.response_data\(magik_diag_response_data\).*?\);",
-            re.S,
+            re.DOTALL,
         )
         if len(observer_mapping.findall(patched)) != 1:
             fail("scaler-fetch liveness observer mapping is missing or ambiguous")
@@ -676,10 +713,10 @@ def main() -> None:
             "SIGNAL avl_read_accepted : std_logic:='0';": 1,
             "ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;": 1,
             "SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;": 1,
-            "SYNCHRONIZER_IDENTIFICATION FORCED\";": 1,
-            "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS\";": 1,
-            "SYNCHRONIZER_IDENTIFICATION FORCED; -name PRESERVE_REGISTER ON\";": 1,
-            "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS; -name PRESERVE_REGISTER ON\";": 1,
+            'SYNCHRONIZER_IDENTIFICATION FORCED";': 1,
+            'SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS";': 1,
+            'SYNCHRONIZER_IDENTIFICATION FORCED; -name PRESERVE_REGISTER ON";': 1,
+            'SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS; -name PRESERVE_REGISTER ON";': 1,
             "avl_completion_ack_meta<=o_readdataack_sync2; -- <ASYNC>": 1,
             "avl_completion_ack_sync<=avl_completion_ack_meta;": 1,
             "AvalonReturnAccounting:PROCESS(avl_clk) IS": 1,
@@ -769,19 +806,23 @@ def main() -> None:
         scalaire_process = re.search(
             r"Scalaire:PROCESS\s*\(o_clk,o_reset_na\) IS(?P<body>.*?)END PROCESS Scalaire;",
             patched_ascal,
-            re.S,
+            re.DOTALL,
         )
         if scalaire_process is None:
             fail("production Scalaire process is missing")
         scalaire_body = scalaire_process.group("body")
         for exact_tail in (
             "IF copy_shift_active(hcarry_v,o_dshi,o_last) THEN",
-            "IF NOT hcarry_v AND o_dshi=0 AND o_last='1' THEN\n"
-            "\t\t\t\t\t\t\to_copyv(0)<='0';",
+            (
+                "IF NOT hcarry_v AND o_dshi=0 AND o_last='1' THEN\n"
+                "\t\t\t\t\t\t\to_copyv(0)<='0';"
+            ),
             "o_last1<=o_last;\n\t\t\t\t\t\to_last2<=o_last1;",
-            "IF copy_terminal_ready(\n"
-            "\t\t\t\t\t\t\to_adturn,shift_onext((o_acpt+1) MOD 16,o_format),\n"
-            "\t\t\t\t\t\t\to_ad MOD BLEN=0,o_lastv(0),o_last2) THEN",
+            (
+                "IF copy_terminal_ready(\n"
+                "\t\t\t\t\t\t\to_adturn,shift_onext((o_acpt+1) MOD 16,o_format),\n"
+                "\t\t\t\t\t\t\to_ad MOD BLEN=0,o_lastv(0),o_last2) THEN"
+            ),
             "o_copy<=sWAIT;\n\t\t\t\t\t\t\tlev_dec_v:='1';",
         ):
             if scalaire_body.count(exact_tail) != 1:
@@ -809,13 +850,15 @@ def main() -> None:
             "o_readdataack_sync2<='0';",
         ):
             if patched_ascal.count(reset_fragment) != 1:
-                fail(f"completion transport reset is missing or ambiguous: {reset_fragment}")
+                fail(
+                    f"completion transport reset is missing or ambiguous: {reset_fragment}"
+                )
         if patched_ascal.count("avl_wad<=2*BLEN-1;") != 1:
             fail("Avalon write phase must align exactly once at vertical sync")
         avalon_reset = re.search(
             r"IF avl_reset_na='0' THEN(?P<body>.*?)ELSIF rising_edge\(avl_clk\) THEN",
             patched_ascal,
-            re.S,
+            re.DOTALL,
         )
         if avalon_reset is None:
             fail("Avalon reset branch is missing")
@@ -834,7 +877,9 @@ def main() -> None:
         output_copy_reset = re.search(
             r"Scalaire:PROCESS\s*\(o_clk,o_reset_na\) IS.*?IF o_reset_na='0' THEN"
             r"(?P<body>.*?)ELSIF rising_edge\(o_clk\) THEN",
-            patched_ascal, re.S)
+            patched_ascal,
+            re.DOTALL,
+        )
         if output_copy_reset is None:
             fail("HDMI-domain scaler reset branch is missing")
         for last_reset in (
@@ -844,8 +889,7 @@ def main() -> None:
         ):
             if output_copy_reset.group("body").count(last_reset) != 1:
                 fail(
-                    "HDMI-domain copy-tail reset is missing or ambiguous: "
-                    f"{last_reset}"
+                    f"HDMI-domain copy-tail reset is missing or ambiguous: {last_reset}"
                 )
             if scalaire_body.count(last_reset) != 2:
                 fail(f"copy-tail phase must also clear at line start: {last_reset}")
@@ -858,12 +902,17 @@ def main() -> None:
             patched_ascal,
         )
         if vs_release is None:
-            fail("VS phase alignment and drain release are not guarded by empty accounting")
+            fail(
+                "VS phase alignment and drain release are not guarded by empty accounting"
+            )
         for topology_fragment, topology_source in (
             (".reset_core_req(reset_req)", patched),
             (".reset_na   (~reset_req)", patched),
             (".avl_readdatavalid(vbuf_readdatavalid)", patched),
-            ("assign reset_out = ~init_reset_n | ~hps_h2f_reset_n | reset_core_req;", patched_sysmem),
+            (
+                "assign reset_out = ~init_reset_n | ~hps_h2f_reset_n | reset_core_req;",
+                patched_sysmem,
+            ),
             ("vbuf_reset_0 <= reset_out;", patched_sysmem),
             ("vbuf_reset_1 <= vbuf_reset_0;", patched_sysmem),
             (".readdatavalid_slave      (vbuf_readdatavalid)", patched_sysmem),
@@ -891,7 +940,9 @@ def main() -> None:
             patched,
         ):
             fail("diagnostic output reaches a functional datapath assignment")
-        if re.search(r"magik_diag_(?:snapshot|monitor|route|expected|avalon|output)", patched):
+        if re.search(
+            r"magik_diag_(?:snapshot|monitor|route|expected|avalon|output)", patched
+        ):
             fail("retired wide diagnostic wiring remains in patched sys_top")
 
         for evidence_net in (
@@ -918,12 +969,12 @@ def main() -> None:
                 r"\.vs_in\(magik_native_vs\).*?"
                 r"\.de_in\(magik_native_de\).*?"
                 r"\.dout\(vga_data_sl\)",
-                re.S,
+                re.DOTALL,
             ),
             "shared black stage to HDMI scaler": re.compile(
                 r"\.i_r\s*\(hr_out\).*?\.i_g\s*\(hg_out\).*?"
                 r"\.i_b\s*\(hb_out\)",
-                re.S,
+                re.DOTALL,
             ),
             "shared black stage HDMI assignments": re.compile(
                 r"assign\s+hr_out\s*=\s*vga_data_sl\[23:16\];\s*"
@@ -937,7 +988,7 @@ def main() -> None:
                 r".*?osd\s+hdmi_osd\s*\(.*?"
                 r"\.din\(hdmi_data_mask\).*?"
                 r"\.dout\(hdmi_data_osd\)",
-                re.S,
+                re.DOTALL,
             ),
             "analog downstream OSD composition": re.compile(
                 r"osd\s+vga_osd\s*\(.*?"
@@ -946,11 +997,13 @@ def main() -> None:
                 r"\.vs_in\(vga_vs_sl\).*?"
                 r"\.de_in\(vga_de_sl\).*?"
                 r"\.dout\(vga_data_osd\)",
-                re.S,
+                re.DOTALL,
             ),
         }
         missing_video_paths = [
-            label for label, pattern in video_paths.items() if not pattern.search(patched)
+            label
+            for label, pattern in video_paths.items()
+            if not pattern.search(patched)
         ]
         if missing_video_paths:
             fail(
@@ -1056,7 +1109,9 @@ def main() -> None:
             )
             subprocess.run(["vvp", str(raw_scaler_simulation)], check=True)
 
-    print(f"COVER LATCH-009 pinned Menu production bridge and opcode ownership ({commit})")
+    print(
+        f"COVER LATCH-009 pinned Menu production bridge and opcode ownership ({commit})"
+    )
     print("FPGA latch integration check passed")
 
 

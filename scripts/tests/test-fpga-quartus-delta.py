@@ -7,11 +7,10 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-
+from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "checks/check-fpga-quartus-delta.py"
 
@@ -45,6 +44,7 @@ Total PLLs: 3 / 6 ( 50 % )
 Info (20032): Parallel compilation is enabled and will use up to 4 processors
 """
 
+
 def quartus_assignment_section(hierarchy: str, names: tuple[str, ...]) -> str:
     return (
         f"; Source assignments for {hierarchy} ;\n"
@@ -66,25 +66,29 @@ COMPLETION_SYNC_ASSIGNMENTS = quartus_assignment_section(
     "ascal:ascal",
     COMPLETION_SYNC_NAMES,
 )
-SYNC_NAMES = tuple(
-    f"ascal:ascal|{name}"
-    for name in COMPLETION_SYNC_NAMES
-)
+SYNC_NAMES = tuple(f"ascal:ascal|{name}" for name in COMPLETION_SYNC_NAMES)
 SYNC_ASSIGNMENTS = COMPLETION_SYNC_ASSIGNMENTS
-CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
+CUSTOM_SYNC = (
+    SYNC_ASSIGNMENTS
+    + """\
 Info (332114): Report Metastability: Found 7 synchronizer chains.
 Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.571429
 Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
 """
+)
 RAW_SCALER_SYNC_ASSIGNMENTS = quartus_assignment_section(
     "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame",
     ("generation_meta", "generation_sync"),
 )
-EXPERIMENTAL_CUSTOM_SYNC = SYNC_ASSIGNMENTS + RAW_SCALER_SYNC_ASSIGNMENTS + """\
+EXPERIMENTAL_CUSTOM_SYNC = (
+    SYNC_ASSIGNMENTS
+    + RAW_SCALER_SYNC_ASSIGNMENTS
+    + """\
 Info (332114): Report Metastability: Found 8 synchronizer chains.
 Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.500000
 Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
 """
+)
 SCALER_FETCH_SYNC_ASSIGNMENTS = quartus_assignment_section(
     "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state",
     (
@@ -96,11 +100,15 @@ SCALER_FETCH_SYNC_ASSIGNMENTS = quartus_assignment_section(
         "reset_sync",
     ),
 )
-SCALER_FETCH_CUSTOM_SYNC = SYNC_ASSIGNMENTS + SCALER_FETCH_SYNC_ASSIGNMENTS + """\
+SCALER_FETCH_CUSTOM_SYNC = (
+    SYNC_ASSIGNMENTS
+    + SCALER_FETCH_SYNC_ASSIGNMENTS
+    + """\
 Info (332114): Report Metastability: Found 10 synchronizer chains.
 Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.400000
 Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
 """
+)
 
 
 def metastability_chain(
@@ -117,8 +125,16 @@ def metastability_chain(
 
 
 METASTABILITY_CHAINS = [
-    ("ascal:ascal|avl_readdataack", "ascal:ascal|o_readdataack_sync", ("ascal:ascal|o_readdataack_sync",)),
-    ("ascal:ascal|o_readdataack_sync2", "ascal:ascal|avl_completion_ack_meta", ("ascal:ascal|avl_completion_ack_meta", "ascal:ascal|avl_completion_ack_sync")),
+    (
+        "ascal:ascal|avl_readdataack",
+        "ascal:ascal|o_readdataack_sync",
+        ("ascal:ascal|o_readdataack_sync",),
+    ),
+    (
+        "ascal:ascal|o_readdataack_sync2",
+        "ascal:ascal|avl_completion_ack_meta",
+        ("ascal:ascal|avl_completion_ack_meta", "ascal:ascal|avl_completion_ack_sync"),
+    ),
 ]
 
 
@@ -347,19 +363,21 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertEqual(payload["baseline_calculable_synchronizer_chains"], 1)
         self.assertEqual(payload["patched_calculable_synchronizer_chains"], 3)
 
-    def test_experimental_profile_accepts_bounded_timing_and_aggregate_chain_drift(self) -> None:
+    def test_experimental_profile_accepts_bounded_timing_and_aggregate_chain_drift(
+        self,
+    ) -> None:
         baseline = BASE.replace("setup slack is 0.500", "setup slack is 0.660").replace(
             "0.500               0.000", "0.660               0.000"
         )
-        patched = (
-            baseline.replace("setup slack is 0.660", "setup slack is 0.389")
-            .replace("0.660               0.000", "0.389               0.000")
-            + EXPERIMENTAL_CUSTOM_SYNC.replace(
-                "Found 8 synchronizer chains", "Found 6 synchronizer chains"
-            ).replace(
-                "Could Not be Calculated: 0.500000",
-                "Could Not be Calculated: 0.333333",
-            )
+        patched = baseline.replace(
+            "setup slack is 0.660", "setup slack is 0.389"
+        ).replace(
+            "0.660               0.000", "0.389               0.000"
+        ) + EXPERIMENTAL_CUSTOM_SYNC.replace(
+            "Found 8 synchronizer chains", "Found 6 synchronizer chains"
+        ).replace(
+            "Could Not be Calculated: 0.500000",
+            "Could Not be Calculated: 0.333333",
         )
         result, payload = self.run_check(
             BASE,
@@ -377,19 +395,21 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertIn("setup_slack_degradation", payload["invalid_reason"])
         self.assertIn("synchronizer_chain_count_mismatch", payload["invalid_reason"])
 
-    def test_scaler_fetch_profile_accepts_exact_hierarchy_and_canonical_paths(self) -> None:
+    def test_scaler_fetch_profile_accepts_exact_hierarchy_and_canonical_paths(
+        self,
+    ) -> None:
         baseline = BASE.replace("setup slack is 0.500", "setup slack is 0.660").replace(
             "0.500               0.000", "0.660               0.000"
         )
-        patched = (
-            baseline.replace("setup slack is 0.660", "setup slack is 0.389")
-            .replace("0.660               0.000", "0.389               0.000")
-            + SCALER_FETCH_CUSTOM_SYNC.replace(
-                "Found 9 synchronizer chains", "Found 7 synchronizer chains"
-            ).replace(
-                "Could Not be Calculated: 0.444444",
-                "Could Not be Calculated: 0.285714",
-            )
+        patched = baseline.replace(
+            "setup slack is 0.660", "setup slack is 0.389"
+        ).replace(
+            "0.660               0.000", "0.389               0.000"
+        ) + SCALER_FETCH_CUSTOM_SYNC.replace(
+            "Found 9 synchronizer chains", "Found 7 synchronizer chains"
+        ).replace(
+            "Could Not be Calculated: 0.444444",
+            "Could Not be Calculated: 0.285714",
         )
         result, payload = self.run_check(
             BASE,
@@ -404,12 +424,18 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_experimental_profile_has_explicit_resource_ceiling(self) -> None:
         resources = (
-            "Logic utilization (in ALMs) : 7,000\nTotal registers : 20,000\n"
-            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
-            "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,500\n"
-            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
-            "Logic utilization (in ALMs) : 8,008\nTotal registers : 20,724\n"
-            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
+            (
+                "Logic utilization (in ALMs) : 7,000\nTotal registers : 20,000\n"
+                "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n"
+            ),
+            (
+                "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,500\n"
+                "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n"
+            ),
+            (
+                "Logic utilization (in ALMs) : 8,008\nTotal registers : 20,724\n"
+                "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n"
+            ),
         )
         result, payload = self.run_check(
             BASE,
@@ -427,12 +453,20 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertIn("registers_delta", payload["invalid_reason"])
 
     def test_new_warning_fails_even_when_warning_code_is_inherited(self) -> None:
-        result, payload = self.run_check(BASE, BASE + "Warning (10001): different warning\n" + CUSTOM_SYNC)
+        result, payload = self.run_check(
+            BASE, BASE + "Warning (10001): different warning\n" + CUSTOM_SYNC
+        )
         self.assertEqual(result.returncode, 1)
         self.assertIn("warning_added", payload["invalid_reason"])
 
     def test_missing_inherited_warning_fails_exact_baseline(self) -> None:
-        result, payload = self.run_check(BASE, BASE.replace("Warning (10001): inherited warning File: /work/sys/top.v Line: 7\n", "") + CUSTOM_SYNC)
+        result, payload = self.run_check(
+            BASE,
+            BASE.replace(
+                "Warning (10001): inherited warning File: /work/sys/top.v Line: 7\n", ""
+            )
+            + CUSTOM_SYNC,
+        )
         self.assertEqual(result.returncode, 1)
         self.assertIn("warning_baseline_mismatch", payload["invalid_reason"])
 
@@ -470,60 +504,83 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_partial_bootstrap_black_warning_removal_fails(self) -> None:
         stock = BASE + EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNINGS
-        patched = BASE + EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNINGS.replace(
-            "Warning (332125): Found combinational loop of 6 nodes\n",
-            "",
-            1,
-        ) + CUSTOM_SYNC
+        patched = (
+            BASE
+            + EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNINGS.replace(
+                "Warning (332125): Found combinational loop of 6 nodes\n",
+                "",
+                1,
+            )
+            + CUSTOM_SYNC
+        )
         result, payload = self.run_check(stock, patched)
         self.assertEqual(result.returncode, 1)
         self.assertIn("warning_baseline_mismatch", payload["invalid_reason"])
 
     def test_unrelated_warning_removal_still_fails_with_expected_removal(self) -> None:
         stock = BASE + EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNINGS
-        patched = BASE.replace(
-            "Warning (10001): inherited warning File: /work/sys/top.v Line: 7\n",
-            "",
-        ) + CUSTOM_SYNC
+        patched = (
+            BASE.replace(
+                "Warning (10001): inherited warning File: /work/sys/top.v Line: 7\n",
+                "",
+            )
+            + CUSTOM_SYNC
+        )
         result, payload = self.run_check(stock, patched)
         self.assertEqual(result.returncode, 1)
         self.assertIn("warning_baseline_mismatch", payload["invalid_reason"])
 
     def test_negative_slack_and_nonzero_tns_fail(self) -> None:
-        patched = (BASE + CUSTOM_SYNC).replace("setup slack is 0.500", "setup slack is -0.001").replace("0.500               0.000", "-0.001              -0.010")
+        patched = (
+            (BASE + CUSTOM_SYNC)
+            .replace("setup slack is 0.500", "setup slack is -0.001")
+            .replace("0.500               0.000", "-0.001              -0.010")
+        )
         result, payload = self.run_check(BASE, patched)
         self.assertEqual(result.returncode, 1)
         self.assertIn("setup_slack_below_minimum", payload["invalid_reason"])
         self.assertIn("tns_nonzero", payload["invalid_reason"])
 
     def test_new_unconstrained_evidence_fails(self) -> None:
-        result, payload = self.run_check(BASE, BASE + "Info: 1 unconstrained output path: magik_route\n" + CUSTOM_SYNC)
+        result, payload = self.run_check(
+            BASE,
+            BASE + "Info: 1 unconstrained output path: magik_route\n" + CUSTOM_SYNC,
+        )
         self.assertEqual(result.returncode, 1)
         self.assertIn("unconstrained_added", payload["invalid_reason"])
 
     def test_more_paths_to_the_same_unconstrained_ports_fails(self) -> None:
-        patched = BASE.replace(
-            "; Unconstrained Output Port Paths ; 158 ; 158 ;",
-            "; Unconstrained Output Port Paths ; 12 ; 12 ;",
-        ) + CUSTOM_SYNC
+        patched = (
+            BASE.replace(
+                "; Unconstrained Output Port Paths ; 158 ; 158 ;",
+                "; Unconstrained Output Port Paths ; 12 ; 12 ;",
+            )
+            + CUSTOM_SYNC
+        )
         result, payload = self.run_check(BASE, patched)
         self.assertEqual(result.returncode, 1)
         self.assertIn("unconstrained_output_paths_mismatch", payload["invalid_reason"])
 
     def test_fewer_paths_to_the_same_unconstrained_ports_fails(self) -> None:
-        patched = BASE.replace(
-            "; Unconstrained Output Port Paths ; 158 ; 158 ;",
-            "; Unconstrained Output Port Paths ; 8 ; 8 ;",
-        ) + CUSTOM_SYNC
+        patched = (
+            BASE.replace(
+                "; Unconstrained Output Port Paths ; 158 ; 158 ;",
+                "; Unconstrained Output Port Paths ; 8 ; 8 ;",
+            )
+            + CUSTOM_SYNC
+        )
         result, payload = self.run_check(BASE, patched)
         self.assertEqual(result.returncode, 1)
         self.assertIn("unconstrained_output_paths_mismatch", payload["invalid_reason"])
 
     def test_diagnostic_two_path_exception_is_explicit(self) -> None:
-        patched = BASE.replace(
-            "; Unconstrained Output Port Paths ; 158 ; 158 ;",
-            "; Unconstrained Output Port Paths ; 160 ; 160 ;",
-        ) + EXPERIMENTAL_CUSTOM_SYNC
+        patched = (
+            BASE.replace(
+                "; Unconstrained Output Port Paths ; 158 ; 158 ;",
+                "; Unconstrained Output Port Paths ; 160 ; 160 ;",
+            )
+            + EXPERIMENTAL_CUSTOM_SYNC
+        )
         result, payload = self.run_check(
             BASE,
             patched,
@@ -535,18 +592,29 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_repair_budgets_are_relative_to_pre_observer_build(self) -> None:
         stock = BASE.replace("setup slack is 0.500", "setup slack is 0.600")
-        baseline = stock.replace("setup slack is 0.400", "setup slack is 0.300").replace(
+        baseline = stock.replace(
+            "setup slack is 0.400", "setup slack is 0.300"
+        ).replace(
             "; Unconstrained Output Port Paths ; 158 ; 158 ;",
             "; Unconstrained Output Port Paths ; 158 ; 158 ;",
         )
-        patched = baseline.replace("setup slack is 0.600", "setup slack is 0.451") + CUSTOM_SYNC
+        patched = (
+            baseline.replace("setup slack is 0.600", "setup slack is 0.451")
+            + CUSTOM_SYNC
+        )
         fitter_resources = (
-            "Logic utilization (in ALMs) : 7,000 / 41,910 ( 17 % )\n"
-            "Total registers : 20,000\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
-            "Logic utilization (in ALMs) : 7,800 / 41,910 ( 19 % )\n"
-            "Total registers : 20,500\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
-            "Logic utilization (in ALMs) : 7,950 / 41,910 ( 19 % )\n"
-            "Total registers : 20,596\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
+            (
+                "Logic utilization (in ALMs) : 7,000 / 41,910 ( 17 % )\n"
+                "Total registers : 20,000\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n"
+            ),
+            (
+                "Logic utilization (in ALMs) : 7,800 / 41,910 ( 19 % )\n"
+                "Total registers : 20,500\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n"
+            ),
+            (
+                "Logic utilization (in ALMs) : 7,950 / 41,910 ( 19 % )\n"
+                "Total registers : 20,596\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n"
+            ),
         )
         result, payload = self.run_check(stock, patched, baseline, fitter_resources)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -556,12 +624,18 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_alm_budget_excess_fails(self) -> None:
         summaries = (
-            "Logic utilization (in ALMs) : 7,000\nTotal registers : 20,000\n"
-            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
-            "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,000\n"
-            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
-            "Logic utilization (in ALMs) : 7,951\nTotal registers : 20,000\n"
-            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
+            (
+                "Logic utilization (in ALMs) : 7,000\nTotal registers : 20,000\n"
+                "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n"
+            ),
+            (
+                "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,000\n"
+                "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n"
+            ),
+            (
+                "Logic utilization (in ALMs) : 7,951\nTotal registers : 20,000\n"
+                "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n"
+            ),
         )
         result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, BASE, summaries)
         self.assertEqual(result.returncode, 1)
@@ -569,12 +643,18 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_register_budget_excess_fails(self) -> None:
         summaries = (
-            "Logic utilization (in ALMs) : 7,000\nTotal registers : 20,000\n"
-            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
-            "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,500\n"
-            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
-            "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,597\n"
-            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
+            (
+                "Logic utilization (in ALMs) : 7,000\nTotal registers : 20,000\n"
+                "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n"
+            ),
+            (
+                "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,500\n"
+                "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n"
+            ),
+            (
+                "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,597\n"
+                "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n"
+            ),
         )
         result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, BASE, summaries)
         self.assertEqual(result.returncode, 1)
@@ -591,9 +671,7 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertIn("setup_slack_degradation", payload["invalid_reason"])
 
     def test_missing_baseline_timing_fails(self) -> None:
-        baseline = BASE.replace(
-            "Info (332146): Worst-case setup slack is 0.500\n", ""
-        )
+        baseline = BASE.replace("Info (332146): Worst-case setup slack is 0.500\n", "")
         result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, baseline)
         self.assertEqual(result.returncode, 1)
         self.assertIn("baseline_setup_slack_missing", payload["invalid_reason"])
@@ -612,9 +690,11 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertIn("warning_added", payload["invalid_reason"])
 
     def test_resource_and_timing_budgets_are_enforced(self) -> None:
-        patched = (BASE + CUSTOM_SYNC).replace(
-            "Total logic elements: 10,000", "Total logic elements: 10,801"
-        ).replace("Worst-case hold slack is 0.249", "Worst-case hold slack is 0.098")
+        patched = (
+            (BASE + CUSTOM_SYNC)
+            .replace("Total logic elements: 10,000", "Total logic elements: 10,801")
+            .replace("Worst-case hold slack is 0.249", "Worst-case hold slack is 0.098")
+        )
         result, payload = self.run_check(BASE, patched)
         self.assertEqual(result.returncode, 1)
         self.assertIn("logic_elements_delta", payload["invalid_reason"])
@@ -633,16 +713,21 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertIn("custom_synchronizer_mtbf_missing", payload["invalid_reason"])
 
     def test_fraction_change_without_an_extra_calculable_chain_fails(self) -> None:
-        patched = BASE.replace(
-            "Could Not be Calculated: 0.800",
-            "Could Not be Calculated: 0.790",
-        ) + SYNC_ASSIGNMENTS
+        patched = (
+            BASE.replace(
+                "Could Not be Calculated: 0.800",
+                "Could Not be Calculated: 0.790",
+            )
+            + SYNC_ASSIGNMENTS
+        )
         result, payload = self.run_check(BASE, patched)
         self.assertEqual(result.returncode, 1)
         self.assertIn("custom_synchronizer_mtbf_missing", payload["invalid_reason"])
 
     def test_missing_diagnostic_report_fails(self) -> None:
-        result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, diagnostic_reports={})
+        result, payload = self.run_check(
+            BASE, BASE + CUSTOM_SYNC, diagnostic_reports={}
+        )
         self.assertEqual(result.returncode, 1)
         self.assertIn("diagnostic_cdc_report_missing", payload["invalid_reason"])
 
@@ -651,7 +736,9 @@ class QuartusDeltaTest(unittest.TestCase):
         reports["menu.magik-diagnostic-cdc-net-delay.rpt"] = (
             "; set_net_delay ; 1.500 ; 8.000 ; 6.500 ; from ; to ;\n"
         )
-        result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports)
+        result, payload = self.run_check(
+            BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports
+        )
         self.assertEqual(result.returncode, 1)
         self.assertIn("diagnostic_cdc_analysis_count", payload["invalid_reason"])
 
@@ -740,9 +827,7 @@ class QuartusDeltaTest(unittest.TestCase):
         )
 
     def test_pll_count_drift_fails(self) -> None:
-        patched = (BASE + CUSTOM_SYNC).replace(
-            "Total PLLs: 3 / 6", "Total PLLs: 4 / 6"
-        )
+        patched = (BASE + CUSTOM_SYNC).replace("Total PLLs: 3 / 6", "Total PLLs: 4 / 6")
         result, payload = self.run_check(BASE, patched)
         self.assertEqual(result.returncode, 1)
         self.assertIn("pll_count_mismatch", payload["invalid_reason"])

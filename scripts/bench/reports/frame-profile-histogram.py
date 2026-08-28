@@ -15,7 +15,6 @@ from pathlib import Path
 
 from frame_profile_schema import int_field, percentile, read_rows
 
-
 DEFAULT_PHASES = [
     "wall_us",
     "slint_render_us",
@@ -79,7 +78,9 @@ def print_phase(rows: list[dict[str, str]], phase: str, width: int) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, help="frame profile TSV")
-    parser.add_argument("--phase", action="append", dest="phases", help="phase column to print")
+    parser.add_argument(
+        "--phase", action="append", dest="phases", help="phase column to print"
+    )
     parser.add_argument("--width", type=int, default=48, help="maximum bar width")
     args = parser.parse_args()
 

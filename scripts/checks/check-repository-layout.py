@@ -35,8 +35,16 @@ required = (
     "mister/tools/agent",
 )
 
-errors = [f"obsolete source path still exists: {path}" for path in obsolete if (ROOT / path).exists()]
-errors.extend(f"required source path is missing: {path}" for path in required if not (ROOT / path).exists())
+errors = [
+    f"obsolete source path still exists: {path}"
+    for path in obsolete
+    if (ROOT / path).exists()
+]
+errors.extend(
+    f"required source path is missing: {path}"
+    for path in required
+    if not (ROOT / path).exists()
+)
 if errors:
     raise SystemExit("\n".join(errors))
 

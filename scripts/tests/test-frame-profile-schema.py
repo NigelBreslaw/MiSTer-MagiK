@@ -10,7 +10,7 @@ from pathlib import Path
 REPORTS = Path(__file__).resolve().parents[1] / "bench" / "reports"
 sys.path.insert(0, str(REPORTS))
 
-from frame_profile_schema import int_field, phase_stats, read_rows  # noqa: E402
+from frame_profile_schema import int_field, phase_stats, read_rows
 
 
 class FrameProfileSchemaTests(unittest.TestCase):
@@ -22,8 +22,13 @@ class FrameProfileSchemaTests(unittest.TestCase):
                 encoding="utf-8",
             )
             rows = read_rows(fixture)
-        self.assertEqual([int_field(row, "arcade_list_present_us") for row in rows], [4, 8])
-        self.assertEqual(phase_stats(rows, "wall_us"), {"avg": 5, "p50": 0, "p95": 10, "p99": 10, "max": 10})
+        self.assertEqual(
+            [int_field(row, "arcade_list_present_us") for row in rows], [4, 8]
+        )
+        self.assertEqual(
+            phase_stats(rows, "wall_us"),
+            {"avg": 5, "p50": 0, "p95": 10, "p99": 10, "max": 10},
+        )
 
     def test_duplicate_headers_and_extra_columns_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

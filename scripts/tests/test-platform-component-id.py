@@ -13,7 +13,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parents[1] / "release/platform/platform-component-id.py"
+SCRIPT = (
+    Path(__file__).resolve().parents[1] / "release/platform/platform-component-id.py"
+)
 SPEC = importlib.util.spec_from_file_location("platform_component_id", SCRIPT)
 assert SPEC and SPEC.loader
 component_id = importlib.util.module_from_spec(SPEC)
@@ -53,7 +55,10 @@ class ComponentIdentityTests(unittest.TestCase):
         implementation.write_text("identity implementation\n")
         for component in component_id.COMPONENT_INPUT_MANIFESTS:
             for relative in component_id.component_inputs(self.root, component):
-                if relative in (*component_id.COMPONENT_INPUT_MANIFESTS.values(), component_id.IDENTITY_IMPLEMENTATION):
+                if relative in (
+                    *component_id.COMPONENT_INPUT_MANIFESTS.values(),
+                    component_id.IDENTITY_IMPLEMENTATION,
+                ):
                     continue
                 path = self.root / relative
                 if path.suffix or path.name.startswith("."):
@@ -106,8 +111,7 @@ class ComponentIdentityTests(unittest.TestCase):
         kernel_before, _ = component_id.component_id(self.root, "kernel")
         manifest = self.root / component_id.COMPONENT_INPUT_MANIFESTS["fpga"]
         manifest.write_text(
-            manifest.read_text()
-            + "mister/platform/fpga/extra-identity-input.txt\n"
+            manifest.read_text() + "mister/platform/fpga/extra-identity-input.txt\n"
         )
         extra = self.root / "mister/platform/fpga/extra-identity-input.txt"
         extra.write_text("extra FPGA input\n")
@@ -146,8 +150,7 @@ class ComponentIdentityTests(unittest.TestCase):
         kernel_before, _ = component_id.component_id(self.root, "kernel")
         manifest = self.root / component_id.COMPONENT_INPUT_MANIFESTS["kernel"]
         manifest.write_text(
-            manifest.read_text()
-            + "mister/platform/kernel/extra-identity-input.txt\n"
+            manifest.read_text() + "mister/platform/kernel/extra-identity-input.txt\n"
         )
         extra = self.root / "mister/platform/kernel/extra-identity-input.txt"
         extra.write_text("extra kernel input\n")
@@ -189,7 +192,10 @@ class ComponentIdentityTests(unittest.TestCase):
     def test_generated_untracked_file_does_not_change_identity(self) -> None:
         fpga_before, _ = component_id.component_id(self.root, "fpga")
         kernel_before, _ = component_id.component_id(self.root, "kernel")
-        (self.root / "mister/platform/kernel/scanout-slots/mister_magik_scanout_slots.ko").write_bytes(b"generated")
+        (
+            self.root
+            / "mister/platform/kernel/scanout-slots/mister_magik_scanout_slots.ko"
+        ).write_bytes(b"generated")
         fpga_after, _ = component_id.component_id(self.root, "fpga")
         kernel_after, _ = component_id.component_id(self.root, "kernel")
         self.assertEqual(fpga_before, fpga_after)
@@ -203,7 +209,9 @@ class ComponentIdentityTests(unittest.TestCase):
     def test_bundle_identity_is_ordered_and_validated(self) -> None:
         fpga = "a" * 64
         kernel = "b" * 64
-        self.assertNotEqual(component_id.bundle_id(fpga, kernel), component_id.bundle_id(kernel, fpga))
+        self.assertNotEqual(
+            component_id.bundle_id(fpga, kernel), component_id.bundle_id(kernel, fpga)
+        )
         with self.assertRaisesRegex(ValueError, "invalid fpga"):
             component_id.bundle_id("bad", kernel)
 

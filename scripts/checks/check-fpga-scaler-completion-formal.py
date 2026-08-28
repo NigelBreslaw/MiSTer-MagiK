@@ -138,9 +138,7 @@ def main() -> None:
 
     root_commit = run(["git", "rev-parse", "HEAD"], cwd=root, capture=True).strip()
     menu = args.menu_dir.resolve()
-    menu_commit = run(
-        ["git", "rev-parse", "HEAD"], cwd=menu, capture=True
-    ).strip()
+    menu_commit = run(["git", "rev-parse", "HEAD"], cwd=menu, capture=True).strip()
     if not args.allow_unpinned and menu_commit != pin:
         fail(f"Menu commit {menu_commit} is not pinned {pin}")
 
@@ -231,7 +229,7 @@ def main() -> None:
         avalon_reset = re.search(
             r"IF avl_reset_na='0' THEN(?P<body>.*?)ELSIF rising_edge\(avl_clk\) THEN",
             patched_source,
-            re.S,
+            re.DOTALL,
         )
         if avalon_reset is None:
             fail("patched production Avalon reset branch is missing")
@@ -358,7 +356,9 @@ def main() -> None:
         liveness_base_log = run_solver(
             [yosys, "-Q", "-p", liveness_base_command],
             cwd=root,
-            log_path=artifacts / "scaler-fetch-liveness-base.log" if artifacts else None,
+            log_path=artifacts / "scaler-fetch-liveness-base.log"
+            if artifacts
+            else None,
         )
         if "SAT proof finished - no model found" not in liveness_base_log:
             fail("Yosys did not complete the liveness observer bounded proof")

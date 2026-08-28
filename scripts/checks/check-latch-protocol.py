@@ -27,12 +27,20 @@ def crc16_ccitt_false(words: list[int]) -> int:
         for byte in ((word >> 8) & 0xFF, word & 0xFF):
             crc ^= byte << 8
             for _ in range(8):
-                crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+                crc = (
+                    ((crc << 1) ^ 0x1021) & 0xFFFF
+                    if crc & 0x8000
+                    else (crc << 1) & 0xFFFF
+                )
     return crc
 
 
 subprocess.run(
-    [sys.executable, str(ROOT / "scripts/checks/generate-latch-protocol.py"), "--check"],
+    [
+        sys.executable,
+        str(ROOT / "scripts/checks/generate-latch-protocol.py"),
+        "--check",
+    ],
     check=True,
 )
 subprocess.run(
@@ -66,7 +74,9 @@ if (
     len(spec["presentation_telemetry_words_v5"]) != 11
     or spec["presentation_telemetry_words_v5"][-1] != "crc"
 ):
-    raise SystemExit("protocol-v5 presentation telemetry must contain ten payload words plus CRC")
+    raise SystemExit(
+        "protocol-v5 presentation telemetry must contain ten payload words plus CRC"
+    )
 if spec["protocols"]["5"]["flags"] != 0x03FF:
     raise SystemExit("protocol-v5 capability flags must be exactly 0x03ff")
 if spec["capabilities"].get("authoritative_presentation_telemetry") != 9:
@@ -94,13 +104,17 @@ if set(video_diagnostics["commands"].values()) != {0x5D, 0x5E, 0x5F}:
 for group, word_count in video_diagnostics["word_counts"].items():
     words = video_diagnostics[f"{group}_words"]
     if len(words) != word_count or words[-1] != "crc":
-        raise SystemExit(f"video diagnostics {group} layout must match its fixed CRC word count")
+        raise SystemExit(
+            f"video diagnostics {group} layout must match its fixed CRC word count"
+        )
 if len(set(video_diagnostics["magic"].values())) != len(video_diagnostics["magic"]):
     raise SystemExit("video diagnostics magic values must be unique")
 for group, flags in video_diagnostics["flags"].items():
     bits = list(flags.values())
     if len(bits) != len(set(bits)) or any(bit < 0 or bit > 15 for bit in bits):
-        raise SystemExit(f"video diagnostics {group} flag bits must be unique u16 positions")
+        raise SystemExit(
+            f"video diagnostics {group} flag bits must be unique u16 positions"
+        )
 hdmi_evidence = json.loads(HDMI_EVIDENCE_SPEC_PATH.read_text())
 if hdmi_evidence["schema"] != 1:
     raise SystemExit("HDMI evidence protocol schema must be v1")
@@ -117,7 +131,9 @@ if hdmi_evidence["command"] != 0x60:
 if hdmi_evidence["word_count"] != 4:
     raise SystemExit("HDMI lock evidence v1 must contain exactly four words")
 if hdmi_evidence["words"] != ["schema", "flags", "lock_loss_count", "crc"]:
-    raise SystemExit("HDMI lock evidence v1 word layout changed without a schema update")
+    raise SystemExit(
+        "HDMI lock evidence v1 word layout changed without a schema update"
+    )
 hdmi_flag_bits = list(hdmi_evidence["flags"].values())
 if len(hdmi_flag_bits) != len(set(hdmi_flag_bits)) or any(
     bit < 0 or bit > 15 for bit in hdmi_flag_bits
@@ -165,11 +181,15 @@ if output_activity["command"] in (
     | set(video_diagnostics["commands"].values())
     | {hdmi_evidence["command"]}
 ):
-    raise SystemExit("HDMI output activity command overlaps an existing platform command")
+    raise SystemExit(
+        "HDMI output activity command overlaps an existing platform command"
+    )
 if output_activity["magic"] in set(video_diagnostics["magic"].values()) | {
     hdmi_evidence["magic"]
 }:
-    raise SystemExit("HDMI output activity magic overlaps an existing diagnostics record")
+    raise SystemExit(
+        "HDMI output activity magic overlaps an existing diagnostics record"
+    )
 path_activity = hdmi_evidence["path_activity"]
 if path_activity != {
     "counter_bits": 4,
@@ -229,8 +249,8 @@ if path_activity != {
             "words": ["schema", "reserved_state", "events", "flags", "crc"],
             "counters": {},
             "reserved_zero_masks": {
-                "reserved_state": 0xffff,
-                "events": 0xff0c,
+                "reserved_state": 0xFFFF,
+                "events": 0xFF0C,
             },
             "fields": {
                 "batch_two_count": {"word": "events", "bit": 0, "width": 2},
@@ -280,7 +300,9 @@ if raw_scaler != {
     },
     "reserved_zero_masks": {"flags": 0xFF80},
 }:
-    raise SystemExit("scaler-fetch ordered-signature schema 11 changed without an ABI update")
+    raise SystemExit(
+        "scaler-fetch ordered-signature schema 11 changed without an ABI update"
+    )
 if hdmi_evidence.get("raw_scaler_rollback_states") != {
     "ordered_signature_v3": {
         "schema": 10,
@@ -366,13 +388,21 @@ if scaler_fetch_liveness != {
 }:
     raise SystemExit("scaler-fetch liveness schema 14 changed without an ABI update")
 if raw_scaler["command"] in platform_commands:
-    raise SystemExit("raw scaler ordered-frame command overlaps an existing platform command")
+    raise SystemExit(
+        "raw scaler ordered-frame command overlaps an existing platform command"
+    )
 if raw_scaler["magic"] in platform_magics:
-    raise SystemExit("raw scaler ordered-frame magic overlaps an existing diagnostics record")
+    raise SystemExit(
+        "raw scaler ordered-frame magic overlaps an existing diagnostics record"
+    )
 platform_commands.add(raw_scaler["command"])
 platform_magics.add(raw_scaler["magic"])
 if scaler_fetch_liveness["command"] in platform_commands:
-    raise SystemExit("scaler-fetch liveness command overlaps an existing platform command")
+    raise SystemExit(
+        "scaler-fetch liveness command overlaps an existing platform command"
+    )
 if scaler_fetch_liveness["magic"] in platform_magics:
-    raise SystemExit("scaler-fetch liveness magic overlaps an existing diagnostics record")
+    raise SystemExit(
+        "scaler-fetch liveness magic overlaps an existing diagnostics record"
+    )
 print("latch protocol contract: ok")

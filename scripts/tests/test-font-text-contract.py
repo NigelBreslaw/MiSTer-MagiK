@@ -7,9 +7,9 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path, PurePosixPath
 import sys
 import unittest
+from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[2]
 CHECKER = ROOT / "scripts/checks/check-font-text-contract.py"
@@ -50,7 +50,9 @@ class ContractTests(unittest.TestCase):
                 f"    {contract.values[-1]},", f"    {contract.values[-1]},\n    px99,"
             )
             sources = [
-                CONTRACT.Source(item.path, invalid if item.path == contract.path else item.text)
+                CONTRACT.Source(
+                    item.path, invalid if item.path == contract.path else item.text
+                )
                 for item in primitives()
             ]
             with self.assertRaisesRegex(CONTRACT.ContractError, contract.enum_name):
@@ -59,11 +61,19 @@ class ContractTests(unittest.TestCase):
     def test_each_component_has_a_fixed_family_and_renderer_size(self) -> None:
         for contract in CONTRACT.CONTRACTS:
             for invalid, message in (
-                (primitive_text(contract).replace(contract.family, "Wrong Family"), "family"),
-                (primitive_text(contract).replace(contract.renderer_size, "99px"), "resolve"),
+                (
+                    primitive_text(contract).replace(contract.family, "Wrong Family"),
+                    "family",
+                ),
+                (
+                    primitive_text(contract).replace(contract.renderer_size, "99px"),
+                    "resolve",
+                ),
             ):
                 sources = [
-                    CONTRACT.Source(item.path, invalid if item.path == contract.path else item.text)
+                    CONTRACT.Source(
+                        item.path, invalid if item.path == contract.path else item.text
+                    )
                     for item in primitives()
                 ]
                 with self.assertRaisesRegex(CONTRACT.ContractError, message):
@@ -71,7 +81,7 @@ class ContractTests(unittest.TestCase):
 
     def test_raw_text_direct_size_and_legacy_api_are_rejected(self) -> None:
         for body, message in (
-            ("Text { text: \"bad\"; }", "raw Text is forbidden"),
+            ('Text { text: "bad"; }', "raw Text is forbidden"),
             ("Spleen6x12 { font-size: 12px; }", "direct font-size is forbidden"),
             ("PixelText8 { }", "legacy mixed-font text API is forbidden"),
         ):
@@ -79,7 +89,9 @@ class ContractTests(unittest.TestCase):
                 CONTRACT.check_sources(
                     [
                         *primitives(),
-                        CONTRACT.Source(PurePosixPath("apps/mister/ui/fixture.slint"), body),
+                        CONTRACT.Source(
+                            PurePosixPath("apps/mister/ui/fixture.slint"), body
+                        ),
                     ]
                 )
 

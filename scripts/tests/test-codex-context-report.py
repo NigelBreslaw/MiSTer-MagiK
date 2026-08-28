@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 REPORTER = ROOT / "scripts/codex-context-report.py"
@@ -107,8 +106,7 @@ class ContextReportTests(unittest.TestCase):
             cwd=ROOT,
             env=env,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
         )
 
@@ -120,7 +118,9 @@ class ContextReportTests(unittest.TestCase):
 
     def test_json_is_sorted_aggregate_only_and_tracks_context(self) -> None:
         with tempfile.TemporaryDirectory(prefix="codex-context-fixture-") as name:
-            session = self.write_session(Path(name), "private-session.jsonl", fixture_lines())
+            session = self.write_session(
+                Path(name), "private-session.jsonl", fixture_lines()
+            )
             result = self.run_report(str(session), "--json")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn(SECRET, result.stdout)
@@ -132,7 +132,9 @@ class ContextReportTests(unittest.TestCase):
         self.assertEqual(report["context"]["maximum_input_tokens"], 800)
         self.assertEqual(report["context"]["final_input_tokens"], 300)
         self.assertEqual(report["context"]["compactions"], 1)
-        self.assertEqual([row["tool"] for row in report["tools"]], ["exec_command", "web__run"])
+        self.assertEqual(
+            [row["tool"] for row in report["tools"]], ["exec_command", "web__run"]
+        )
         self.assertEqual(report["tools"][0]["over_10_kib"], 1)
         self.assertEqual(
             {warning["code"] for warning in report["warnings"]},
@@ -141,7 +143,9 @@ class ContextReportTests(unittest.TestCase):
 
     def test_human_output_contains_metrics_but_no_content_or_paths(self) -> None:
         with tempfile.TemporaryDirectory(prefix="codex-context-fixture-") as name:
-            session = self.write_session(Path(name), "secret-name.jsonl", fixture_lines())
+            session = self.write_session(
+                Path(name), "secret-name.jsonl", fixture_lines()
+            )
             result = self.run_report(str(session))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Tool | Calls | Output bytes | Est. tokens", result.stdout)

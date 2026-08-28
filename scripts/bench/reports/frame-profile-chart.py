@@ -19,7 +19,6 @@ from pathlib import Path
 
 from frame_profile_schema import int_field, read_rows
 
-
 PHASES = [
     ("prepare_us", "prepare", "#6b7280"),
     ("anim_us", "anim", "#22c55e"),
@@ -68,10 +67,9 @@ def has_detail_phases(rows: list[dict[str, str]]) -> bool:
     if not rows:
         return False
     keys = rows[0].keys()
-    return (
-        {"arcade_list_update_us", "preview_blit_us", "effect_label_us"}.issubset(keys)
-        or {"video_decode_us", "audio_write_us"}.issubset(keys)
-    )
+    return {"arcade_list_update_us", "preview_blit_us", "effect_label_us"}.issubset(
+        keys
+    ) or {"video_decode_us", "audio_write_us"}.issubset(keys)
 
 
 def phase_value(row: dict[str, str], key: str) -> int:
@@ -88,15 +86,14 @@ def phase_value(row: dict[str, str], key: str) -> int:
             int_field(row, "direct_preview_present_us")
             + int_field(row, "arcade_list_present_us")
         )
-        known = (
-            int_field(row, "cached_present_us")
-            + compose_present
-        )
+        known = int_field(row, "cached_present_us") + compose_present
         return max(0, int_field(row, "fb_present_us") - known)
     return int_field(row, key)
 
 
-def svg_text(x: float, y: float, text: str, size: int = 12, anchor: str = "start") -> str:
+def svg_text(
+    x: float, y: float, text: str, size: int = 12, anchor: str = "start"
+) -> str:
     return (
         f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size}" '
         f'font-family="system-ui, sans-serif" text-anchor="{anchor}" '
@@ -116,7 +113,9 @@ def render_svg(rows: list[dict[str, str]], title: str, width: int, height: int) 
     budget_us = 16_667
     max_us = max(
         budget_us,
-        max((int_field(row, "wall_us") or int_field(row, "phases_us")) for row in rows) if rows else 0,
+        max((int_field(row, "wall_us") or int_field(row, "phases_us")) for row in rows)
+        if rows
+        else 0,
     )
     # Leave headroom for labels and occasional slow frames.
     max_us = int(max_us * 1.08)
@@ -128,14 +127,23 @@ def render_svg(rows: list[dict[str, str]], title: str, width: int, height: int) 
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
         '<rect width="100%" height="100%" fill="#ffffff"/>',
         svg_text(18, 26, title, 16),
-        svg_text(18, 44, f"{len(rows)} frames · stacked frame phases · 16.667ms budget line", 11),
+        svg_text(
+            18,
+            44,
+            f"{len(rows)} frames · stacked frame phases · 16.667ms budget line",
+            11,
+        ),
     ]
 
     # Axes and budget line.
     x0 = margin_l
     y0 = margin_t + plot_h
-    parts.append(f'<line x1="{x0}" y1="{margin_t}" x2="{x0}" y2="{y0}" stroke="#9ca3af"/>')
-    parts.append(f'<line x1="{x0}" y1="{y0}" x2="{margin_l + plot_w}" y2="{y0}" stroke="#9ca3af"/>')
+    parts.append(
+        f'<line x1="{x0}" y1="{margin_t}" x2="{x0}" y2="{y0}" stroke="#9ca3af"/>'
+    )
+    parts.append(
+        f'<line x1="{x0}" y1="{y0}" x2="{margin_l + plot_w}" y2="{y0}" stroke="#9ca3af"/>'
+    )
     budget_y = y0 - budget_us * scale
     parts.append(
         f'<line x1="{x0}" y1="{budget_y:.1f}" x2="{margin_l + plot_w}" y2="{budget_y:.1f}" '
@@ -144,7 +152,9 @@ def render_svg(rows: list[dict[str, str]], title: str, width: int, height: int) 
     parts.append(svg_text(8, budget_y + 4, "16.667ms", 10))
     for tick_us in range(0, max_us + 1, 5000):
         y = y0 - tick_us * scale
-        parts.append(f'<line x1="{x0 - 4}" y1="{y:.1f}" x2="{x0}" y2="{y:.1f}" stroke="#9ca3af"/>')
+        parts.append(
+            f'<line x1="{x0 - 4}" y1="{y:.1f}" x2="{x0}" y2="{y:.1f}" stroke="#9ca3af"/>'
+        )
         parts.append(svg_text(x0 - 8, y + 4, f"{tick_us // 1000}ms", 10, "end"))
 
     for idx, row in enumerate(rows):
@@ -168,7 +178,9 @@ def render_svg(rows: list[dict[str, str]], title: str, width: int, height: int) 
     legend_x = margin_l
     legend_y = height - 44
     for key, label, color in phases:
-        parts.append(f'<rect x="{legend_x}" y="{legend_y}" width="10" height="10" fill="{color}"/>')
+        parts.append(
+            f'<rect x="{legend_x}" y="{legend_y}" width="10" height="10" fill="{color}"/>'
+        )
         parts.append(svg_text(legend_x + 14, legend_y + 10, label, 10))
         legend_x += 112
         if legend_x > width - 140:
@@ -191,7 +203,9 @@ def main() -> int:
 
     rows = read_rows(args.input, max_rows=args.max_frames)
     title = args.title or args.input.name
-    args.output.write_text(render_svg(rows, title, args.width, args.height), encoding="utf-8")
+    args.output.write_text(
+        render_svg(rows, title, args.width, args.height), encoding="utf-8"
+    )
     print(f"wrote {args.output} ({len(rows)} frames)")
     return 0
 

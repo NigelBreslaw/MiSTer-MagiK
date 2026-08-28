@@ -35,13 +35,17 @@ def row_for_report(path: Path, root: Path) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("directory", type=Path, nargs="?", default=Path("build/frame-profiles"))
+    parser.add_argument(
+        "directory", type=Path, nargs="?", default=Path("build/frame-profiles")
+    )
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
     root = args.directory
     output = args.output or root / "index.html"
-    reports = sorted(root.glob("*-report.html"), key=lambda p: p.stat().st_mtime, reverse=True)
+    reports = sorted(
+        root.glob("*-report.html"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
     rows = "\n".join(row_for_report(path, root) for path in reports)
     doc = f"""<!doctype html>
 <html lang="en">

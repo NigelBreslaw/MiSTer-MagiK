@@ -61,7 +61,9 @@ def component_inputs(root: Path, component: str) -> tuple[str, ...]:
     manifest_relative = COMPONENT_INPUT_MANIFESTS[component]
     manifest = root / manifest_relative
     if not manifest.is_file() or manifest.is_symlink():
-        raise IdentityError(f"missing or invalid {component} input manifest: {manifest_relative}")
+        raise IdentityError(
+            f"missing or invalid {component} input manifest: {manifest_relative}"
+        )
     inputs: list[str] = []
     seen: set[str] = set()
     for line_number, raw_line in enumerate(manifest.read_text().splitlines(), 1):
@@ -91,7 +93,9 @@ def selected_files(root: Path, component: str) -> tuple[Path, ...]:
     for relative in filter(None, tracked.split("\0")):
         path = root / relative
         if not path.is_file():
-            raise IdentityError(f"tracked {component} input is not a regular file: {relative}")
+            raise IdentityError(
+                f"tracked {component} input is not a regular file: {relative}"
+            )
         files.add(path)
     for relative in inputs:
         path = root / relative
@@ -111,7 +115,9 @@ def selected_files(root: Path, component: str) -> tuple[Path, ...]:
 
 
 def component_revision(root: Path, component: str) -> str:
-    revision = run_git(root, "log", "-1", "--format=%H", "--", *component_inputs(root, component))
+    revision = run_git(
+        root, "log", "-1", "--format=%H", "--", *component_inputs(root, component)
+    )
     if len(revision) != 40 or any(char not in "0123456789abcdef" for char in revision):
         raise IdentityError(f"no complete history is available for {component} inputs")
     return revision
@@ -121,7 +127,9 @@ def component_id(root: Path, component: str) -> tuple[str, str]:
     require_clean_repository(root)
     revision = component_revision(root, component)
     digest = hashlib.sha256()
-    digest.update(f"format={FORMAT}\ncomponent={component}\nrevision={revision}\n".encode())
+    digest.update(
+        f"format={FORMAT}\ncomponent={component}\nrevision={revision}\n".encode()
+    )
     for path in selected_files(root, component):
         relative = path.relative_to(root).as_posix()
         file_hash = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -140,7 +148,9 @@ def bundle_id(fpga_id: str, kernel_id: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[3])
+    parser.add_argument(
+        "--root", type=Path, default=Path(__file__).resolve().parents[3]
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     component = commands.add_parser("component")
     component.add_argument("name", choices=sorted(COMPONENT_INPUT_MANIFESTS))

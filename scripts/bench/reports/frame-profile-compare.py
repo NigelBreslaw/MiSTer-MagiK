@@ -13,8 +13,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from frame_profile_schema import int_field, phase_stats, read_rows
-
+from frame_profile_schema import phase_stats, read_rows
 
 PHASES = [
     "wall_us",
@@ -54,7 +53,9 @@ def main() -> int:
     after = read_rows(args.after)
     print(f"before={args.before} frames={len(before)}")
     print(f"after ={args.after} frames={len(after)}")
-    print("metric\tbefore_avg\tafter_avg\tdelta_avg\tbefore_p50\tafter_p50\tdelta_p50\tbefore_p95\tafter_p95\tdelta_p95")
+    print(
+        "metric\tbefore_avg\tafter_avg\tdelta_avg\tbefore_p50\tafter_p50\tdelta_p50\tbefore_p95\tafter_p95\tdelta_p95"
+    )
     for phase in PHASES:
         b = stats(before, phase)
         a = stats(after, phase)

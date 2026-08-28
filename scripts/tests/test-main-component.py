@@ -30,7 +30,11 @@ class MainComponentTests(unittest.TestCase):
             "branch": component.BRANCH,
             "source_revision": self.revision,
             "toolchain": component.TOOLCHAIN,
-            "binary": {"path": "MiSTer_MagiK", "size": binary.stat().st_size, "sha256": component.digest(binary)},
+            "binary": {
+                "path": "MiSTer_MagiK",
+                "size": binary.stat().st_size,
+                "sha256": component.digest(binary),
+            },
         }
         receipt = self.root / "main-component-v0.1.json"
         receipt.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
@@ -48,13 +52,19 @@ class MainComponentTests(unittest.TestCase):
         )
 
     def test_verify_accepts_exact_artifact(self):
-        self.assertEqual(component.verify(self.root, self.revision)["source_revision"], self.revision)
+        self.assertEqual(
+            component.verify(self.root, self.revision)["source_revision"], self.revision
+        )
 
     def test_verify_rejects_wrong_revision_and_corrupt_binary(self):
-        with self.assertRaisesRegex(component.MainComponentError, "source revision mismatch"):
+        with self.assertRaisesRegex(
+            component.MainComponentError, "source revision mismatch"
+        ):
             component.verify(self.root, "2" * 40)
         (self.root / "MiSTer_MagiK").write_bytes(b"corrupt")
-        with self.assertRaisesRegex(component.MainComponentError, "binary identity mismatch"):
+        with self.assertRaisesRegex(
+            component.MainComponentError, "binary identity mismatch"
+        ):
             component.verify(self.root)
 
     def test_verify_rejects_wrong_toolchain_and_malformed_receipt(self):
@@ -62,7 +72,9 @@ class MainComponentTests(unittest.TestCase):
         payload = json.loads(receipt.read_text())
         payload["toolchain"] = "other"
         receipt.write_text(json.dumps(payload))
-        with self.assertRaisesRegex(component.MainComponentError, "unsupported toolchain"):
+        with self.assertRaisesRegex(
+            component.MainComponentError, "unsupported toolchain"
+        ):
             component.verify(self.root)
         receipt.write_text("[]")
         with self.assertRaisesRegex(component.MainComponentError, "must be an object"):

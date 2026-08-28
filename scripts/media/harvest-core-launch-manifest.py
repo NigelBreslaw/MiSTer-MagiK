@@ -72,7 +72,15 @@ def source_locations(main_dir: Path, row: dict[str, Any]) -> list[str]:
             break
         if not path.is_file():
             continue
-        if path.suffix.lower() not in {".cpp", ".h", ".hpp", ".c", ".ini", ".txt", ".md"}:
+        if path.suffix.lower() not in {
+            ".cpp",
+            ".h",
+            ".hpp",
+            ".c",
+            ".ini",
+            ".txt",
+            ".md",
+        }:
             continue
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
@@ -109,8 +117,7 @@ def observed_cores_from_device(agent: Path) -> list[ObservedCore]:
         [str(agent), "device", "catalog", "cores"],
         check=True,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     cores: list[ObservedCore] = []
     for line in result.stdout.splitlines():
@@ -191,9 +198,15 @@ def parse_args() -> argparse.Namespace:
         default=Path(os.environ.get("MAGIK_AGENT", root / "scripts/agent")),
         help="MiSTer MagiK agent entrypoint used for device core listing",
     )
-    parser.add_argument("--device-core-list", type=Path, help="fixture TSV: size, mtime, path")
-    parser.add_argument("--skip-device", action="store_true", help="do not query the MiSTer")
-    parser.add_argument("--output", type=Path, help="write annotated manifest to this path")
+    parser.add_argument(
+        "--device-core-list", type=Path, help="fixture TSV: size, mtime, path"
+    )
+    parser.add_argument(
+        "--skip-device", action="store_true", help="do not query the MiSTer"
+    )
+    parser.add_argument(
+        "--output", type=Path, help="write annotated manifest to this path"
+    )
     return parser.parse_args()
 
 

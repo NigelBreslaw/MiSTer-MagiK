@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
-from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "checks/verify-fpga-rbf-manifest.py"
 
@@ -28,42 +28,51 @@ class ManifestTest(unittest.TestCase):
         sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
         metadata = root / "release.metadata.txt"
         metadata.write_text(
-            "\n".join((
-                "format="
-                + (
-                    "mister-magik-fpga-release-v1"
-                    if historical_v2
-                    else "mister-magik-fpga-release-v2"
-                ),
-                "platform_contract_sha256=" + "6" * 64,
-                "magik_commit=" + "1" * 40,
-                "builder_commit=" + "5" * 40,
-                "source_commit=" + "2" * 40,
-                "patch_sha256=" + "3" * 64,
-                "latch_rtl_sha256=" + "4" * 64,
-                *(() if historical_v2 else ("latch_bridge_sha256=" + "8" * 64,)),
-                *(
-                    ()
-                    if historical_v2
-                    else (
-                        "component_input_sha256=" + "9" * 64,
-                        "component_revision=" + "a" * 40,
-                    )
-                ),
-                "latch_protocol_sha256=" + "7" * 64,
-                "latch_protocol_version=" + ("2" if historical_v2 else "5"),
-                *(() if historical_v2 else ("latch_capability_mask=0x03ff",)),
-                *(() if historical_v2 else ("diagnostic_architecture=scaler-fetch-liveness-first-stall-v1",)),
-                "quartus_seed=" + ("1" if historical_v2 else "2"),
-                "quartus_version=17.0.0 Build 595",
-                "workflow_url=https://github.example/actions/runs/1",
-                "signoff_valid=1",
-                "build_date=260711",
-                "rbf_file=release.rbf",
-                "rbf_sha256=" + sha(rbf),
-                "report_sha256.reports/fit.rpt=" + sha(report),
-                "report_sha256.reports/quartus-delta-signoff.tsv=" + sha(delta),
-            )) + "\n"
+            "\n".join(
+                (
+                    "format="
+                    + (
+                        "mister-magik-fpga-release-v1"
+                        if historical_v2
+                        else "mister-magik-fpga-release-v2"
+                    ),
+                    "platform_contract_sha256=" + "6" * 64,
+                    "magik_commit=" + "1" * 40,
+                    "builder_commit=" + "5" * 40,
+                    "source_commit=" + "2" * 40,
+                    "patch_sha256=" + "3" * 64,
+                    "latch_rtl_sha256=" + "4" * 64,
+                    *(() if historical_v2 else ("latch_bridge_sha256=" + "8" * 64,)),
+                    *(
+                        ()
+                        if historical_v2
+                        else (
+                            "component_input_sha256=" + "9" * 64,
+                            "component_revision=" + "a" * 40,
+                        )
+                    ),
+                    "latch_protocol_sha256=" + "7" * 64,
+                    "latch_protocol_version=" + ("2" if historical_v2 else "5"),
+                    *(() if historical_v2 else ("latch_capability_mask=0x03ff",)),
+                    *(
+                        ()
+                        if historical_v2
+                        else (
+                            "diagnostic_architecture=scaler-fetch-liveness-first-stall-v1",
+                        )
+                    ),
+                    "quartus_seed=" + ("1" if historical_v2 else "2"),
+                    "quartus_version=17.0.0 Build 595",
+                    "workflow_url=https://github.example/actions/runs/1",
+                    "signoff_valid=1",
+                    "build_date=260711",
+                    "rbf_file=release.rbf",
+                    "rbf_sha256=" + sha(rbf),
+                    "report_sha256.reports/fit.rpt=" + sha(report),
+                    "report_sha256.reports/quartus-delta-signoff.tsv=" + sha(delta),
+                )
+            )
+            + "\n"
         )
         return metadata
 
@@ -77,11 +86,13 @@ class ManifestTest(unittest.TestCase):
         if historical_v2:
             command.append("--historical-v2")
         command.append(str(metadata))
-        return subprocess.run(command, text=True, capture_output=True)
+        return subprocess.run(command, text=True, capture_output=True, check=False)
 
     def test_matching_fixture_passes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            self.assertEqual(self.run_verify(self.fixture(Path(directory))).returncode, 0)
+            self.assertEqual(
+                self.run_verify(self.fixture(Path(directory))).returncode, 0
+            )
 
     def test_modified_rbf_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -92,9 +103,13 @@ class ManifestTest(unittest.TestCase):
     def test_modified_or_missing_metadata_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             metadata = self.fixture(Path(directory))
-            metadata.write_text(metadata.read_text().replace("quartus_seed=2", "quartus_seed=1"))
+            metadata.write_text(
+                metadata.read_text().replace("quartus_seed=2", "quartus_seed=1")
+            )
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
-            self.assertNotEqual(self.run_verify(Path(directory) / "missing.txt").returncode, 0)
+            self.assertNotEqual(
+                self.run_verify(Path(directory) / "missing.txt").returncode, 0
+            )
 
     def test_new_release_requires_supported_diagnostic_architecture(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -109,37 +124,46 @@ class ManifestTest(unittest.TestCase):
             )
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
             metadata.write_text(
-                metadata.read_text()
-                + "diagnostic_architecture=unknown-v1\n"
+                metadata.read_text() + "diagnostic_architecture=unknown-v1\n"
             )
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
 
-    def test_known_schema14_artifact_without_architecture_remains_accepted(self) -> None:
+    def test_known_schema14_artifact_without_architecture_remains_accepted(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             metadata = self.fixture(Path(directory))
             metadata_text = metadata.read_text()
-            metadata_text = "\n".join(
-                line
-                for line in metadata_text.splitlines()
-                if not line.startswith("diagnostic_architecture=")
-            ) + "\n"
+            metadata_text = (
+                "\n".join(
+                    line
+                    for line in metadata_text.splitlines()
+                    if not line.startswith("diagnostic_architecture=")
+                )
+                + "\n"
+            )
             metadata.write_text(metadata_text)
             spec = importlib.util.spec_from_file_location("fpga_manifest", SCRIPT)
             self.assertIsNotNone(spec)
             module = importlib.util.module_from_spec(spec)
             self.assertIsNotNone(spec.loader)
             spec.loader.exec_module(module)
-            module.LEGACY_SCHEMA14_RBF_SHA256 = hashlib.sha256(b"release-rbf").hexdigest()
+            module.LEGACY_SCHEMA14_RBF_SHA256 = hashlib.sha256(
+                b"release-rbf"
+            ).hexdigest()
             self.assertIn("rbf_sha256", module.verify(metadata))
 
     def test_legacy_stock_metadata_without_architecture_remains_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             metadata = self.fixture(Path(directory))
-            metadata_text = "\n".join(
-                line
-                for line in metadata.read_text().splitlines()
-                if not line.startswith("diagnostic_architecture=")
-            ) + "\napply_patch=0\n"
+            metadata_text = (
+                "\n".join(
+                    line
+                    for line in metadata.read_text().splitlines()
+                    if not line.startswith("diagnostic_architecture=")
+                )
+                + "\napply_patch=0\n"
+            )
             metadata.write_text(metadata_text)
             spec = importlib.util.spec_from_file_location("fpga_manifest", SCRIPT)
             self.assertIsNotNone(spec)
@@ -188,15 +212,24 @@ class ManifestTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             metadata = self.fixture(Path(directory))
             valid = metadata.read_text()
-            metadata.write_text(valid.replace("platform_contract_sha256=" + "6" * 64 + "\n", ""))
+            metadata.write_text(
+                valid.replace("platform_contract_sha256=" + "6" * 64 + "\n", "")
+            )
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
-            metadata.write_text(valid.replace("platform_contract_sha256=" + "6" * 64, "platform_contract_sha256=bad"))
+            metadata.write_text(
+                valid.replace(
+                    "platform_contract_sha256=" + "6" * 64,
+                    "platform_contract_sha256=bad",
+                )
+            )
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
 
     def test_mailbox_era_metadata_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             metadata = self.fixture(Path(directory))
-            metadata.write_text(metadata.read_text() + "mailbox_module_sha256=" + "5" * 64 + "\n")
+            metadata.write_text(
+                metadata.read_text() + "mailbox_module_sha256=" + "5" * 64 + "\n"
+            )
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
 
     def test_missing_or_wrong_protocol_identity_fails(self) -> None:

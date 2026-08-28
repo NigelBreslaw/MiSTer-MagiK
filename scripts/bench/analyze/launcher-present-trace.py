@@ -16,10 +16,9 @@ import csv
 import math
 import sys
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
-
 
 REQUIRED_COLUMNS = {
     "frame",
@@ -76,7 +75,7 @@ def int_field(row: dict[str, str], key: str) -> int:
         return 0
 
 
-def percent_delta(before: int | float, after: int | float) -> float:
+def percent_delta(before: float, after: float) -> float:
     if before == 0:
         return 0.0 if after == 0 else math.inf
     return ((after - before) / before) * 100.0
@@ -109,7 +108,9 @@ def metric_stats(rows: list[dict[str, str]], metric: str) -> MetricStats:
     )
 
 
-def read_trace(path: Path, *, ignore_frames_through: int, present_width: int = 960) -> TraceData:
+def read_trace(
+    path: Path, *, ignore_frames_through: int, present_width: int = 960
+) -> TraceData:
     with path.open(newline="") as f:
         reader = csv.DictReader(f, delimiter="\t")
         columns = set(reader.fieldnames or [])
@@ -135,9 +136,13 @@ def read_trace(path: Path, *, ignore_frames_through: int, present_width: int = 9
             if "present_bytes" not in row or not row.get("present_bytes"):
                 row["present_bytes"] = str(int_field(row, "rows") * present_width * 2)
             if "wasted_present_bytes" not in row or not row.get("wasted_present_bytes"):
-                dirty_rows = max(0, int_field(row, "dirty_y1") - int_field(row, "dirty_y0"))
+                dirty_rows = max(
+                    0, int_field(row, "dirty_y1") - int_field(row, "dirty_y0")
+                )
                 dirty_bytes = dirty_rows * present_width * 2
-                row["wasted_present_bytes"] = str(max(0, int_field(row, "present_bytes") - dirty_bytes))
+                row["wasted_present_bytes"] = str(
+                    max(0, int_field(row, "present_bytes") - dirty_bytes)
+                )
             if (
                 not rows
                 and row.get("vsync_source", "") in ("", "none")
@@ -223,7 +228,9 @@ def print_summary_rows(
         if include_all or len(rows) >= min_frames or name.startswith("scroll:")
     ]
     if not selected:
-        selected = sorted(groups.items(), key=lambda item: len(item[1]), reverse=True)[:1]
+        selected = sorted(groups.items(), key=lambda item: len(item[1]), reverse=True)[
+            :1
+        ]
     for group, rows in selected:
         for metric in METRICS:
             stats = metric_stats(rows, metric)
@@ -274,10 +281,7 @@ def verdict_for_metric(
         p95_delta = after.p95 - before.p95
         p99_delta = after.p99 - before.p99
         if p95_delta > max_rows_regression or p99_delta > max_rows_regression:
-            return "fail", (
-                "rows_p95_or_p99_delta_gt_"
-                f"{max_rows_regression}"
-            )
+            return "fail", (f"rows_p95_or_p99_delta_gt_{max_rows_regression}")
         return "pass", "ok"
     if metric in {"fb_present_us", "cached_present_us"}:
         p95_delta_pct = percent_delta(before.p95, after.p95)
@@ -459,34 +463,43 @@ def run_self_test() -> int:
         bad_copy_trace = read_trace(after_bad_copy, ignore_frames_through=30)
         no_scroll_trace = read_trace(after_no_scroll, ignore_frames_through=30)
 
-        if compare_traces(
-            before_trace,
-            good_trace,
-            case="self-good",
-            min_frames=120,
-            max_present_regression_pct=5.0,
-            max_rows_regression=1,
-        ) != 0:
+        if (
+            compare_traces(
+                before_trace,
+                good_trace,
+                case="self-good",
+                min_frames=120,
+                max_present_regression_pct=5.0,
+                max_rows_regression=1,
+            )
+            != 0
+        ):
             print("self-test: expected good comparison to pass", file=sys.stderr)
             return 1
-        if compare_traces(
-            before_trace,
-            bad_copy_trace,
-            case="self-bad-copy",
-            min_frames=120,
-            max_present_regression_pct=5.0,
-            max_rows_regression=1,
-        ) == 0:
+        if (
+            compare_traces(
+                before_trace,
+                bad_copy_trace,
+                case="self-bad-copy",
+                min_frames=120,
+                max_present_regression_pct=5.0,
+                max_rows_regression=1,
+            )
+            == 0
+        ):
             print("self-test: expected copy regression to fail", file=sys.stderr)
             return 1
-        if compare_traces(
-            before_trace,
-            no_scroll_trace,
-            case="self-no-scroll",
-            min_frames=120,
-            max_present_regression_pct=5.0,
-            max_rows_regression=1,
-        ) == 0:
+        if (
+            compare_traces(
+                before_trace,
+                no_scroll_trace,
+                case="self-no-scroll",
+                min_frames=120,
+                max_present_regression_pct=5.0,
+                max_rows_regression=1,
+            )
+            == 0
+        ):
             print("self-test: expected no-scroll comparison to fail", file=sys.stderr)
             return 1
     print("launcher-present-trace self-test ok")
