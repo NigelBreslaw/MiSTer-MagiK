@@ -242,8 +242,17 @@ pub fn build_fresh_catalog_with_progress(
             plan_ready,
             system_complete,
         )?;
-    let snapshot = source_build.snapshot;
-    let source = source_build.report;
+    let crate::fast_catalog_sources::FastSourceRefreshBuild {
+        snapshot,
+        report: source,
+        profiles,
+        generic_watch_observations,
+    } = source_build;
+    let system_ids = snapshot
+        .systems
+        .iter()
+        .map(|system| system.system_id.clone())
+        .collect::<Vec<_>>();
     let publication = crate::fast_five_catalog::publish_snapshot_with_profile(
         catalog_root,
         &snapshot,
@@ -253,9 +262,12 @@ pub fn build_fresh_catalog_with_progress(
     let (states, capture) = capture_refresh_state_with_profiles(
         storage_root,
         &snapshot,
-        &source_build.profiles,
-        Some(&source_build.generic_watch_observations),
+        &profiles,
+        Some(&generic_watch_observations),
     )?;
+    drop(snapshot);
+    drop(profiles);
+    drop(generic_watch_observations);
     let refresh_generation = read_latest_refresh_manifest(catalog_root)
         .map_or(1, |manifest| manifest.generation.saturating_add(1));
     let (_, refresh_state_publish) = publish_refresh_state_with_report(
@@ -292,11 +304,7 @@ pub fn build_fresh_catalog_with_progress(
         capture,
         refresh_state_publish,
         refresh_generation,
-        system_ids: snapshot
-            .systems
-            .into_iter()
-            .map(|system| system.system_id)
-            .collect(),
+        system_ids,
         build_info_persisted,
     })
 }
