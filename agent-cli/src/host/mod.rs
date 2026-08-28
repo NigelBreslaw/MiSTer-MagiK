@@ -19944,6 +19944,8 @@ fn collect_catalog_attribution_profile(
         for (remote_name, local_suffix) in [
             ("catalog-pprof.svg", "flamegraph.svg"),
             ("catalog-pprof.folded", "stacks.folded"),
+            ("catalog-pprof.svg.raw.tsv", "raw-pcs.tsv"),
+            ("catalog-pprof.svg.maps", "process-maps.txt"),
         ] {
             get(
                 session,

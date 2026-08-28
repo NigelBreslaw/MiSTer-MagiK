@@ -285,6 +285,10 @@ pub struct CpuProfileSummary {
     pub hz: i32,
     pub out_path: String,
     pub bytes: u64,
+    pub raw_out_path: String,
+    pub raw_bytes: u64,
+    pub mappings_out_path: String,
+    pub mappings_bytes: u64,
 }
 
 #[cfg(feature = "profile")]
@@ -302,6 +306,8 @@ mod imp {
         hz: i32,
         out_path: String,
         folded_out_path: Option<String>,
+        raw_out_path: String,
+        mappings_out_path: String,
     }
 
     pub fn start(config: &CpuProfileConfig) -> Option<CpuProfiler> {
@@ -345,7 +351,12 @@ mod imp {
         let hz = config.hz;
         let out_path = config.out_path.clone();
         let folded_out_path = config.folded_out_path.clone();
-        for path in std::iter::once(out_path.as_str()).chain(folded_out_path.as_deref()) {
+        let raw_out_path = format!("{out_path}.raw.tsv");
+        let mappings_out_path = format!("{out_path}.maps");
+        for path in std::iter::once(out_path.as_str())
+            .chain(folded_out_path.as_deref())
+            .chain([raw_out_path.as_str(), mappings_out_path.as_str()])
+        {
             if let Some(parent) = std::path::Path::new(path).parent()
                 && let Err(error) = fs::create_dir_all(parent)
             {
@@ -366,6 +377,8 @@ mod imp {
                 hz,
                 out_path,
                 folded_out_path,
+                raw_out_path,
+                mappings_out_path,
             }),
             Err(e) => {
                 crate::ui_errln!("cpu_profile: ProfilerGuard::new failed: {e}");
@@ -376,7 +389,18 @@ mod imp {
 
     pub fn finish(profiler: Option<CpuProfiler>) -> Result<Option<CpuProfileSummary>, String> {
         let Some(p) = profiler else { return Ok(None) };
-        let report = match p.guard.report().build() {
+        let report_builder = p.guard.report();
+        let unresolved = match report_builder.build_unresolved() {
+            Ok(report) => report,
+            Err(e) => return Err(format!("cpu_profile: unresolved report build failed: {e}")),
+        };
+        let raw_bytes = write_unresolved_report(&unresolved, &p.raw_out_path)?;
+        let mappings = fs::read("/proc/self/maps")
+            .map_err(|e| format!("cpu_profile: read process mappings failed: {e}"))?;
+        fs::write(&p.mappings_out_path, &mappings)
+            .map_err(|e| format!("cpu_profile: write process mappings failed: {e}"))?;
+        let mappings_bytes = mappings.len().try_into().unwrap_or(u64::MAX);
+        let report = match report_builder.build() {
             Ok(r) => r,
             Err(e) => return Err(format!("cpu_profile: report build failed: {e}")),
         };
@@ -423,10 +447,47 @@ mod imp {
                     hz: p.hz,
                     out_path: p.out_path,
                     bytes,
+                    raw_out_path: p.raw_out_path,
+                    raw_bytes,
+                    mappings_out_path: p.mappings_out_path,
+                    mappings_bytes,
                 }))
             }
             Err(e) => Err(format!("cpu_profile: create {} failed: {e}", p.out_path)),
         }
+    }
+
+    fn write_unresolved_report(
+        report: &pprof::UnresolvedReport,
+        path: &str,
+    ) -> Result<u64, String> {
+        use std::io::Write;
+
+        let mut rows = report
+            .data
+            .iter()
+            .map(|(frames, hits)| {
+                let thread_name = String::from_utf8_lossy(
+                    &frames.thread_name[..frames.thread_name_length.min(frames.thread_name.len())],
+                );
+                format!(
+                    "{}\t{}\t{}\t{:?}",
+                    hits, thread_name, frames.thread_id, frames.frames
+                )
+            })
+            .collect::<Vec<_>>();
+        rows.sort_unstable();
+        let mut file = fs::File::create(path)
+            .map_err(|e| format!("cpu_profile: create unresolved PC file {path} failed: {e}"))?;
+        writeln!(file, "hits\tthread_name\tthread_id\tframes")
+            .map_err(|e| format!("cpu_profile: write unresolved PC header {path} failed: {e}"))?;
+        for row in rows {
+            writeln!(file, "{row}")
+                .map_err(|e| format!("cpu_profile: write unresolved PC row {path} failed: {e}"))?;
+        }
+        file.metadata()
+            .map(|metadata| metadata.len())
+            .map_err(|e| format!("cpu_profile: stat unresolved PC file {path} failed: {e}"))
     }
 
     pub fn finish_launch_return(
@@ -445,6 +506,10 @@ mod imp {
                 "stackless_sample_hits": summary.stackless_sample_hits,
                 "out_path": summary.out_path,
                 "bytes": summary.bytes,
+                "raw_out_path": summary.raw_out_path,
+                "raw_bytes": summary.raw_bytes,
+                "mappings_out_path": summary.mappings_out_path,
+                "mappings_bytes": summary.mappings_bytes,
             }),
             Ok(None) => json!({
                 "schema": "mister-magik-launch-return-pprof-v1",
@@ -803,6 +868,10 @@ mod imp {
                 "stackless_sample_hits": summary.stackless_sample_hits,
                 "out_path": summary.out_path,
                 "bytes": summary.bytes,
+                "raw_out_path": summary.raw_out_path,
+                "raw_bytes": summary.raw_bytes,
+                "mappings_out_path": summary.mappings_out_path,
+                "mappings_bytes": summary.mappings_bytes,
             }),
             Ok(None) => json!({
                 "schema": "mister-magik-catalog-build-pprof-v1",
