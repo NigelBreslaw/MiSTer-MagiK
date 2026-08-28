@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Fast, typed CI and release helpers.
 
 The package intentionally contains only host-side orchestration.  Device

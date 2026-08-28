@@ -1,8 +1,7 @@
 # AGENTS.md - mister-slint
 
-Use these universal rules plus the nearest scoped `AGENTS.md`. Other links are
-references: open only the needed section and never follow recursively unless
-blocked.
+Use universal rules plus nearest scoped `AGENTS.md`. Other links are
+references: open only needed sections; never follow recursively unless blocked.
 
 ## Safety
 
@@ -19,12 +18,12 @@ blocked.
   `scripts/agent device arming-status` and verify nothing remains armed.
 - `scripts/agent diagnose` may clear stale arming state and issue one raw Linux
   reboot only when the installed platform is coherent and launcher health is
-  down. Never replay that reboot automatically. Stop and use SD-card recovery
+  down. Never replay it. Stop and use SD-card recovery
   plus `bootlogs/main-reboot.log` if rebooting repeats or SSH is unstable.
 - Device, Apple-container, virtualization, and attended `scripts/agent device`
-  commands require first-attempt sandbox escalation. Retry a read-only typed
-  request once after transient transport failure; reconcile mutations instead
-  of replaying them. Authentication failures require changed access.
+  commands require first-attempt sandbox escalation. Retry read-only typed
+  requests once after transport failures; reconcile mutations. Authentication
+  failures require changed access.
 - Never stage screenshots, caches, archives, secrets, `.env`, `.wrangler/`,
   credentials, ignored fixtures, or private-repository contents. Commit and
   push a private submodule before staging its parent gitlink.
@@ -43,10 +42,9 @@ repositories.
 
 ## Workflow
 
-- Use `$magik-rust-lsp` for Rust/Cargo navigation and diagnostics. Use the Slint
-  MCP for Slint behavior. Do not construct Cargo, test, lint, hook, host
-  assurance, ARM, or Apple-container commands; pre-commit, pre-push, native Linux CI,
-  and other CI groups own full assurance.
+- Use `$magik-rust-lsp` for Rust/Cargo navigation and diagnostics. Use Slint MCP
+  for behavior. Do not construct Cargo, test, lint, hook, host
+  assurance, ARM, or Apple-container commands; CI groups own full assurance.
 - `scripts/agent plan` previews affected assurance. Agents use the typed
   `scripts/agent deliver`, `benchmark`, and `diagnose` workflows. Human device
   operations use attended `scripts/agent device` commands. Never use raw
