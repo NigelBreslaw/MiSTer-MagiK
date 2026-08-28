@@ -4,7 +4,7 @@
 import { Spleen6x12, Spleen6x12Size } from "spleen_6x12.slint";
 
 import { MisterUi } from "../mister_window.slint";
-import { FeedbackView, ScreenOrientation, SettingsPopup, SettingsView } from "../api.slint";
+import { AccessibleRole, FeedbackView, ScreenOrientation, SettingsPopup, SettingsView } from "../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter } from "crt_ui.slint";
 
 component CrtResolutionRow inherits Rectangle {
@@ -12,6 +12,11 @@ component CrtResolutionRow inherits Rectangle {
     in property <string> detail;
     in property <bool> focused;
     in property <bool> acknowledged;
+    accessible-role: AccessibleRole.list-item;
+    accessible-label: root.label;
+    accessible-description: root.detail;
+    accessible-item-selected: root.focused;
+    accessible-enabled: true;
 
     background: root.focused ? CrtTheme.accent : CrtTheme.panel-alt;
     border-width: MisterUi.border;
@@ -81,6 +86,9 @@ export component CrtComboBoxOverlay inherits Rectangle {
         : SettingsView.highlighted-orientation == ScreenOrientation.monitor-clockwise ? "monitor-clockwise"
         : "monitor-counterclockwise"
         : SettingsView.highlighted-display.id;
+    accessible-role: AccessibleRole.region;
+    accessible-label: root.orientation ? "Screen orientation" : "Display resolution";
+    accessible-description: root.highlighted-id;
     background: CrtTheme.background;
 
     VerticalLayout {

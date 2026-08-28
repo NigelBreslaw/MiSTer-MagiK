@@ -4,7 +4,7 @@
 import { Spleen6x12, Spleen6x12Size } from "spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "nocive_15.slint";
 
-import { FeedbackView, ScreenOrientation, SettingsPopup, SettingsView } from "../api.slint";
+import { AccessibleRole, FeedbackView, ScreenOrientation, SettingsPopup, SettingsView } from "../api.slint";
 import { MisterUi } from "../mister_window.slint";
 
 export component ComboBoxOverlay inherits Rectangle {
@@ -21,6 +21,9 @@ export component ComboBoxOverlay inherits Rectangle {
         : SettingsView.highlighted-orientation == ScreenOrientation.monitor-clockwise ? "monitor-clockwise"
         : "monitor-counterclockwise"
         : SettingsView.highlighted-display.id;
+    accessible-role: AccessibleRole.region;
+    accessible-label: root.orientation ? "Screen orientation" : "Display resolution";
+    accessible-description: root.highlighted-id;
     background: #000000c8;
     Rectangle {
         width: 94%;
@@ -41,6 +44,11 @@ export component ComboBoxOverlay inherits Rectangle {
                 background: option.id == root.highlighted-id ? #2a2236 : transparent;
                 border-width: option.id == root.highlighted-id ? 2px : acknowledged ? 1px : 0px;
                 border-color: acknowledged ? #4e8f80 : #06d6a0;
+                accessible-role: AccessibleRole.list-item;
+                accessible-label: option.label;
+                accessible-description: option.id == root.selected-id ? "Selected" : "";
+                accessible-item-selected: option.id == root.highlighted-id;
+                accessible-enabled: true;
                 Spleen6x12 {
                     text: (option.id == root.selected-id ? "✓ " : "  ") + option.label;
                     color: option.id == root.highlighted-id ? #06d6a0 : #e8e0f0;

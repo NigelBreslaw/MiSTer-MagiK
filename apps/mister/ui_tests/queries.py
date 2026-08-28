@@ -20,6 +20,18 @@ def element_with_label(driver: MagiKDriver, label: str) -> SlintElement:
     return matches[0]
 
 
+def element_with_any_label(driver: MagiKDriver, labels: tuple[str, ...]) -> SlintElement:
+    for label in labels:
+        matches = [
+            element
+            for element in driver.window.root_element.query_descendants().find_all()
+            if element.accessible_label == label
+        ]
+        if len(matches) == 1:
+            return matches[0]
+    raise AssertionError(f"none of the labels were found: {labels!r}")
+
+
 def selected_labels(driver: MagiKDriver) -> tuple[str, ...]:
     return tuple(
         element.accessible_label
@@ -43,4 +55,9 @@ def open_arcade(driver: MagiKDriver) -> None:
     driver.button("open-arcade-games", Button.A)
 
 
-__all__ = ["element_with_label", "open_arcade", "selected_labels"]
+__all__ = [
+    "element_with_any_label",
+    "element_with_label",
+    "open_arcade",
+    "selected_labels",
+]
