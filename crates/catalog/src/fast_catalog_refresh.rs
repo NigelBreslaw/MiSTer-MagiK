@@ -289,7 +289,6 @@ pub fn build_fresh_catalog_with_progress(
         &snapshot,
         &profiles,
         Some(&generic_watch_observations),
-        false,
     )?;
     drop(snapshot);
     drop(profiles);
@@ -795,7 +794,7 @@ pub fn capture_refresh_state(
 ) -> Result<(Vec<FastRefreshSystemState>, FastRefreshCaptureReport), String> {
     let roots = [storage_root.display().to_string()];
     let profiles = crate::launch_profiles::ProfileSet::try_for_roots(&roots)?.into_profiles();
-    capture_refresh_state_with_profiles(storage_root, snapshot, &profiles, None, true)
+    capture_refresh_state_with_profiles(storage_root, snapshot, &profiles, None)
 }
 
 fn capture_refresh_state_with_profiles(
@@ -803,12 +802,9 @@ fn capture_refresh_state_with_profiles(
     snapshot: &FastFiveSnapshot,
     profiles: &[crate::launch_profiles::LaunchProfile],
     generic_watch_observations: Option<&BTreeMap<String, GenericSourceWatchObservations>>,
-    validate_snapshot: bool,
 ) -> Result<(Vec<FastRefreshSystemState>, FastRefreshCaptureReport), String> {
     let started = std::time::Instant::now();
-    if validate_snapshot {
-        snapshot.validate()?;
-    }
+    snapshot.validate()?;
     let mut anchor_cache = BTreeMap::new();
     let mut states = Vec::with_capacity(snapshot.systems.len());
     let mut report = FastRefreshCaptureReport::default();
