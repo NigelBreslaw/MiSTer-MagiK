@@ -980,6 +980,13 @@ impl LauncherScheduler {
                 "disconnected",
                 "catalog worker channel disconnected without a terminal message",
             );
+            // A worker that exits without a terminal event is itself a
+            // terminal catalog failure. Always surface this to the session;
+            // otherwise a normal cold build can remain unfinished forever
+            // because there is no worker left to produce a later message.
+            out.push(CatalogWorkerMessage::LoadFailed {
+                error: "catalog worker disconnected without a terminal message".to_string(),
+            });
         }
         if scope != CatalogPollScope::Idle {
             return disconnected;
@@ -1986,6 +1993,23 @@ mod tests {
 
         scheduler.poll_catalog(&mut events, CatalogPollScope::Idle);
         assert_eq!(events.len(), 1);
+        assert!(!scheduler.catalog_worker_running());
+    }
+
+    #[test]
+    fn catalog_poll_surfaces_unexpected_disconnect_as_terminal_failure() {
+        let (tx, rx) = mpsc::channel();
+        drop(tx);
+        let mut scheduler = LauncherScheduler::new(false);
+        scheduler.catalog = CatalogJobState::Running(rx);
+        let mut events = CatalogJobEventBuf::new();
+
+        assert!(scheduler.poll_catalog(&mut events, CatalogPollScope::Idle));
+        assert!(matches!(
+            events.events.as_slice(),
+            [CatalogWorkerMessage::LoadFailed { error }]
+                if error == "catalog worker disconnected without a terminal message"
+        ));
         assert!(!scheduler.catalog_worker_running());
     }
 }

@@ -6712,7 +6712,7 @@ pub(super) fn run_launcher_loop(
                 scheduler.catalog_messages_running() || !deferred_catalog_events.is_empty(),
             )
         {
-            let catalog_disconnected =
+            let _catalog_disconnected =
                 scheduler.poll_catalog(&mut catalog_events, catalog_poll_scope);
             deferred_catalog_events.extend(catalog_events.drain());
 
@@ -6825,43 +6825,6 @@ pub(super) fn run_launcher_loop(
                     start,
                 );
                 catalog_messages_processed = catalog_messages_processed.saturating_add(1);
-            }
-            let authoritative_ready_queued = pending_catalog_ready
-                .as_ref()
-                .is_some_and(|message| matches!(message, CatalogWorkerMessage::Ready { .. }))
-                || deferred_catalog_events
-                    .iter()
-                    .any(|message| matches!(message, CatalogWorkerMessage::Ready { .. }));
-            if catalog_disconnected && return_capsule_active && !authoritative_ready_queued {
-                process_catalog_worker_message(
-                    CatalogWorkerMessage::LoadFailed {
-                        error: "catalog worker disconnected before authoritative hydration"
-                            .to_string(),
-                    },
-                    preview_route,
-                    &mut prepare_trace,
-                    &mut launcher_response_trace,
-                    loop_start,
-                    &app,
-                    &mut nav,
-                    &mut catalog,
-                    &mut catalog_ready,
-                    &mut catalog_version,
-                    &mut return_capsule_active,
-                    &mut catalog_generation,
-                    &mut launch_return_session,
-                    &mut preview,
-                    &mut media_session,
-                    &mut scheduler,
-                    &mut catalog_session,
-                    &mut lifecycle,
-                    &mut lifecycle_effects,
-                    &mut full_bridge_dirty,
-                    &mut startup_intro_catalog_ui_replay,
-                    &mut startup_intro_catalog_shells_pending,
-                    startup_intro.is_some(),
-                    start,
-                );
             }
             prepare_trace.catalog_backlog = deferred_catalog_events
                 .len()
