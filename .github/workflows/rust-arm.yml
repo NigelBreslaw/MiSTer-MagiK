@@ -313,6 +313,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Resolve private asset revision
+        id: magik-assets-ref
+        run: echo "sha=$(git rev-parse HEAD:private/magik-assets)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout private build assets
+        uses: actions/checkout@v7
+        with:
+          repository: NigelBreslaw/mister-magik-private-assets
+          ref: ${{ steps.magik-assets-ref.outputs.sha }}
+          path: private/magik-assets
+          ssh-key: ${{ secrets.MAGIK_ASSETS_SSH_KEY }}
+
       - name: Compute cache identities
         id: cache-id
         run: python3 scripts/checks/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
