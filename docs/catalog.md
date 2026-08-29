@@ -50,6 +50,11 @@ The active manifest points to one immutable generation. Each system has:
 - a search-only SQLite database containing the system's canonical searchable
   rows and FTS index.
 
+The FTS index remains enabled and optimized in production. The builder accepts
+bounded diagnostic arms (`MISTER_CATALOG_SEARCH_PIPELINE_BATCH=128|256|512|1024`)
+and an opt-in `MISTER_CATALOG_SEARCH_DETAIL=column` comparison; neither arm
+changes the default full-detail search behavior.
+
 SQLite is not used to populate the first screen. NavPack is the immediate UI
 database; SQLite is opened on demand for search. The registry contains system
 titles, counts, platform kinds, artifact paths, sizes, and checksums.
@@ -97,6 +102,13 @@ The fresh path never reads old catalog artifacts. Removing
 `catalog-fast-v1` and rebooting therefore exercises authoritative cold source
 discovery. Production diagnostics report source, publication, snapshot,
 per-system, byte, and row timings.
+
+The generic source phase emits a bounded phase record separating
+known-profile roots, runtime inventory, runtime profile resolution, resumed
+continuation walks, finalization, and residual envelope time. Streamline
+analysis can be given symbol images through `MISTER_STREAMLINE_SEARCH_IMAGES`
+(a host path-list) so device samples resolve to application functions instead
+of anonymous PCs.
 
 ## Incremental refresh
 
