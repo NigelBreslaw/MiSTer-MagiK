@@ -1281,6 +1281,7 @@ fn collect_matching_files_at_depth(
 fn read_dir_entries_checked(root: &Path) -> Result<Option<Vec<fs::DirEntry>>, String> {
     let mut last_error = None;
     for _ in 0..2 {
+        last_error = None;
         match fs::read_dir(root) {
             Ok(entries) => {
                 let mut collected = Vec::new();
