@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Mapping
+from types import TracebackType
 from typing import Protocol, Self, cast
 
 
@@ -52,7 +53,7 @@ class SlintApplication(Protocol):
         self,
         exception_type: type[BaseException] | None,
         exception: BaseException | None,
-        traceback: object | None,
+        traceback: TracebackType | None,
     ) -> bool | None:
         """Close the test connection and terminate the application."""
 
@@ -84,7 +85,7 @@ def load_application_factory() -> SlintApplicationFactory:
 
     application = getattr(module, "Application", None)
     if not callable(application):
-        raise RuntimeError("installed slint-testing package has no Application client")
+        raise TypeError("installed slint-testing package has no Application client")
     return cast(SlintApplicationFactory, application)
 
 

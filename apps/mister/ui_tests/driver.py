@@ -34,7 +34,7 @@ def environment_for_application() -> dict[str, str]:
     return {
         key: value
         for key, value in environment.items()
-        if (key.startswith("MISTER_") or key.startswith("SLINT_"))
+        if key.startswith(("MISTER_", "SLINT_"))
         and not any(
             marker in key.upper()
             for marker in ("TOKEN", "PASSWORD", "SECRET", "CREDENTIAL")
@@ -71,9 +71,8 @@ class MagiKDriver:
         # Create the evdev devices before launch so the device input pool sees
         # them during its initial discovery rather than relying on hotplug
         # timing after the Slint process is already running.
-        with VirtualKeyboard() as keyboard, VirtualJoystick() as joystick:
-            with application:
-                yield cls(application, keyboard, joystick)
+        with VirtualKeyboard() as keyboard, VirtualJoystick() as joystick, application:
+            yield cls(application, keyboard, joystick)
 
     def key(self, action: str, key: Key, timeout: float = 2.0) -> CorrelatedInput:
         return self.inputs.key(action, key, timeout)
