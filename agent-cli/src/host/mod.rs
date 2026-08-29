@@ -20735,6 +20735,42 @@ fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Ve
                     None,
                     "total_us",
                 ),
+                "generic_known_profile_ms": catalog_phase_metric_ms(
+                    value.get("phase_evidence"),
+                    "fast_catalog_generic_phase_tsv",
+                    None,
+                    "known_profile_us",
+                ),
+                "generic_runtime_inventory_ms": catalog_phase_metric_ms(
+                    value.get("phase_evidence"),
+                    "fast_catalog_generic_phase_tsv",
+                    None,
+                    "runtime_inventory_us",
+                ),
+                "generic_runtime_resolution_ms": catalog_phase_metric_ms(
+                    value.get("phase_evidence"),
+                    "fast_catalog_generic_phase_tsv",
+                    None,
+                    "runtime_resolution_us",
+                ),
+                "generic_continuation_ms": catalog_phase_metric_ms(
+                    value.get("phase_evidence"),
+                    "fast_catalog_generic_phase_tsv",
+                    None,
+                    "continuation_us",
+                ),
+                "generic_finalization_ms": catalog_phase_metric_ms(
+                    value.get("phase_evidence"),
+                    "fast_catalog_generic_phase_tsv",
+                    None,
+                    "finalization_us",
+                ),
+                "generic_residual_ms": catalog_phase_metric_ms(
+                    value.get("phase_evidence"),
+                    "fast_catalog_generic_phase_tsv",
+                    None,
+                    "residual_us",
+                ),
                 "artifact_publish_ms": catalog_phase_metric_ms(
                     value.get("phase_evidence"),
                     "startup_timing",
