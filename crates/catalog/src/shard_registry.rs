@@ -1128,7 +1128,8 @@ fn generation_artifact_name(name: &std::ffi::OsStr) -> bool {
     };
     let number = name
         .strip_suffix(".sqlite3")
-        .or_else(|| name.strip_suffix(".nav.lz4b"));
+        .or_else(|| name.strip_suffix(".nav.lz4b"))
+        .or_else(|| name.strip_suffix(".navpack"));
     number.is_some_and(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
@@ -1457,13 +1458,16 @@ mod tests {
         let second = create_generation(&root, &system_id, 2);
         let third = create_generation(&root, &system_id, 3);
         let obsolete = create_generation(&root, &SystemId::parse("gamegear").unwrap(), 1);
+        let orphaned_navpack = root.join("systems/snes/4.navpack");
+        fs::write(&orphaned_navpack, b"orphaned NavPack").unwrap();
         let manifest = manifest(3, third, Some(second));
         let removed = garbage_collect_unreferenced(&root, &manifest).unwrap();
-        assert_eq!(removed.len(), 4);
+        assert_eq!(removed.len(), 5);
         assert!(!root.join(first.sqlite_path).exists());
         assert!(!root.join(first.navigation_path).exists());
         assert!(!root.join(obsolete.sqlite_path).exists());
         assert!(!root.join(obsolete.navigation_path).exists());
+        assert!(!orphaned_navpack.exists());
         fs::remove_dir_all(root).unwrap();
     }
 
