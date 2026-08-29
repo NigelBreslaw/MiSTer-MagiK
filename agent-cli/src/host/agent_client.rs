@@ -143,6 +143,7 @@ pub(crate) fn bootstrap_agent_with(
                 true,
                 true,
                 true,
+                true,
             ))
         {
             cleanup_agent_backup(&session)?;
@@ -175,6 +176,7 @@ fn apply_installed_version_policy(endpoint: &AgentEndpoint) -> Result<bool> {
         has_device_telemetry_v2,
         has_launcher_automation,
         has_runtime_upload,
+        has_fpga_video_diagnostics,
     )) = installed_identity(endpoint)
     else {
         return Ok(false);
@@ -186,6 +188,7 @@ fn apply_installed_version_policy(endpoint: &AgentEndpoint) -> Result<bool> {
         has_device_telemetry_v2,
         has_launcher_automation,
         has_runtime_upload,
+        has_fpga_video_diagnostics,
     ) {
         VersionAction::Current => Ok(true),
         VersionAction::Upgrade => Ok(false),
@@ -203,6 +206,7 @@ fn version_action(
     has_device_telemetry_v2: bool,
     has_launcher_automation: bool,
     has_runtime_upload: bool,
+    has_fpga_video_diagnostics: bool,
 ) -> VersionAction {
     if agent == agent_protocol::AGENT_VERSION
         && protocol == agent_protocol::PROTOCOL_VERSION
@@ -210,6 +214,7 @@ fn version_action(
         && has_device_telemetry_v2
         && has_launcher_automation
         && has_runtime_upload
+        && has_fpga_video_diagnostics
     {
         VersionAction::Current
     } else if agent > agent_protocol::AGENT_VERSION || protocol > agent_protocol::PROTOCOL_VERSION {
@@ -221,7 +226,7 @@ fn version_action(
 
 fn installed_identity(
     endpoint: &AgentEndpoint,
-) -> std::result::Result<(u64, u64, bool, bool, bool, bool), String> {
+) -> std::result::Result<(u64, u64, bool, bool, bool, bool, bool), String> {
     let reply = agent_request_at(endpoint, "ping", json!({}), Duration::from_millis(500))
         .map_err(|error| error.to_string())?;
     let result = reply.response.get("result").unwrap_or(&Value::Null);
@@ -265,6 +270,14 @@ fn installed_identity(
                 capability.as_str() == Some(agent_protocol::RUNTIME_UPLOAD_CAPABILITY)
             })
         });
+    let has_fpga_video_diagnostics = result
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .is_some_and(|capabilities| {
+            capabilities.iter().any(|capability| {
+                capability.as_str() == Some(agent_protocol::FPGA_VIDEO_DIAGNOSTICS_CAPABILITY)
+            })
+        });
     Ok((
         agent,
         protocol,
@@ -272,6 +285,7 @@ fn installed_identity(
         has_device_telemetry_v2,
         has_launcher_automation,
         has_runtime_upload,
+        has_fpga_video_diagnostics,
     ))
 }
 
@@ -1187,11 +1201,12 @@ mod tests {
                 true,
                 true,
                 true,
+                true,
             ),
             VersionAction::Current
         );
         assert_eq!(
-            version_action(0, 0, false, false, false, false),
+            version_action(0, 0, false, false, false, false, false),
             VersionAction::Upgrade
         );
         assert_eq!(
@@ -1202,6 +1217,7 @@ mod tests {
                 true,
                 true,
                 true,
+                true,
             ),
             VersionAction::Upgrade
         );
@@ -1209,6 +1225,19 @@ mod tests {
             version_action(
                 agent_protocol::AGENT_VERSION,
                 agent_protocol::PROTOCOL_VERSION,
+                true,
+                true,
+                true,
+                false,
+                true,
+            ),
+            VersionAction::Upgrade
+        );
+        assert_eq!(
+            version_action(
+                agent_protocol::AGENT_VERSION,
+                agent_protocol::PROTOCOL_VERSION,
+                true,
                 true,
                 true,
                 true,
@@ -1224,6 +1253,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
             ),
             VersionAction::RejectNewer
         );
@@ -1231,6 +1261,7 @@ mod tests {
             version_action(
                 0,
                 agent_protocol::PROTOCOL_VERSION + 1,
+                false,
                 false,
                 false,
                 false,
