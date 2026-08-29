@@ -8,6 +8,8 @@ use mister_magik_catalog::arcade_catalog::ArcadeCatalog;
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use std::ffi::CString;
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -122,6 +124,7 @@ pub(super) fn catalog_refresh_available() -> bool {
 
 pub(super) struct CatalogChildControl {
     child: Mutex<Option<Child>>,
+    process_group: i32,
 }
 
 impl CatalogChildControl {
@@ -137,7 +140,14 @@ impl CatalogChildControl {
         let Some(child) = child.as_mut() else {
             return false;
         };
-        child.kill().is_ok()
+        let group_result = if self.process_group > 0 {
+            // SAFETY: the process group id was created for this child with
+            // setpgid(0, 0); a negative id targets only that group.
+            unsafe { libc::kill(-self.process_group, libc::SIGKILL) }
+        } else {
+            -1
+        };
+        child.kill().is_ok() || group_result == 0
     }
 }
 
@@ -444,7 +454,8 @@ fn start_library_catalog_worker_process(
             return (rx, None);
         }
     };
-    let mut child = match Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .arg(crate::command_args::CATALOG_WORKER_COMMAND)
         .arg(request.label())
         .arg(match initial_cache {
@@ -456,9 +467,21 @@ fn start_library_catalog_worker_process(
         .env(CATALOG_WORKER_CHILD_ENV, "1")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
     {
+        // Put the worker and any archive helpers it starts into a private
+        // process group so watchdog cancellation cannot strand descendants.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
             let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
@@ -478,8 +501,10 @@ fn start_library_catalog_worker_process(
             return (rx, None);
         }
     };
+    let process_group = child.id().try_into().unwrap_or(-1);
     let control = Arc::new(CatalogChildControl {
         child: Mutex::new(Some(child)),
+        process_group,
     });
     let reader_control = Arc::clone(&control);
     let reader_root = root.clone();
