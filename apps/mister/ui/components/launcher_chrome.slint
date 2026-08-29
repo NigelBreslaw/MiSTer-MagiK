@@ -14,6 +14,9 @@ component ScanningSubtitle inherits VerticalLayout {
 
     alignment: center;
     spacing: 2px;
+    accessible-role: region;
+    accessible-label: "Catalog scanning";
+    accessible-description: root.detail;
 
     HorizontalLayout {
         alignment: center;
@@ -130,6 +133,11 @@ export component LauncherTile inherits Rectangle {
     in property <bool> flat-focus-style: false;
     in property <MenuItemStatus> status: MenuItemStatus.ready;
 
+    accessible-role: list-item;
+    accessible-label: root.label;
+    accessible-description: root.subtitle;
+    accessible-item-selected: root.focused;
+
     border-width: 2px;
     border-color: acknowledged ? #4e8f80
         : status == MenuItemStatus.failed
@@ -214,6 +222,10 @@ component CogIcon inherits Rectangle {
 export component SettingsButton inherits Rectangle {
     in property <bool> focused;
     in property <bool> acknowledged;
+
+    accessible-role: button;
+    accessible-label: "Settings";
+    accessible-item-selected: root.focused;
 
     width: 56px;
     height: 56px;

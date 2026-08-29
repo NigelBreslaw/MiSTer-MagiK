@@ -11,6 +11,11 @@ component AboutRow inherits Rectangle {
     in property <string> detail;
     in property <bool> focused;
     in property <bool> acknowledged;
+    accessible-role: list-item;
+    accessible-label: root.label;
+    accessible-description: root.detail;
+    accessible-item-selected: root.focused;
+    accessible-enabled: true;
 
     height: 52px;
     background: focused ? #2a2236 : #1e1828;
@@ -26,6 +31,8 @@ component AboutRow inherits Rectangle {
 }
 
 export component AboutScreen inherits Rectangle {
+    accessible-role: main;
+    accessible-label: "About";
     VerticalLayout {
         padding: 48px;
         spacing: 24px;

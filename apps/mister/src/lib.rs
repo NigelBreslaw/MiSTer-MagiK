@@ -165,6 +165,9 @@ pub mod screenshot_transitions;
 #[cfg(feature = "ui")]
 #[doc(hidden)]
 pub mod search_bench;
+#[cfg(feature = "ui-device-tests")]
+#[doc(hidden)]
+pub mod ui_test_support;
 pub use mister_magik_mister_runtime::runtime_status;
 pub use mister_magik_mister_runtime::settings;
 pub mod setup_nav;

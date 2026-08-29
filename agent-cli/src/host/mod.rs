@@ -388,7 +388,8 @@ impl NativeDevice {
                         | LauncherCommand::VerifyNeogeoSdram(_)
                         | LauncherCommand::CaptureCrtFontAb(_)
                         | LauncherCommand::CaptureSnesHub(_)
-                        | LauncherCommand::ReturnToLauncher(_),
+                        | LauncherCommand::ReturnToLauncher(_)
+                        | LauncherCommand::UiTest(_),
                 }
                 | DeviceCommand::Catalog {
                     command: CatalogCommand::FastFiveOldCold(_),
@@ -582,6 +583,7 @@ impl NativeDevice {
                     LauncherCommand::ReturnToLauncher(_) => {
                         agent_magik(&device_strings(["return-to-launcher"]))
                     }
+                    LauncherCommand::UiTest(args) => run_ui_test_case(args),
                 },
                 DeviceCommand::Catalog { command } => match command {
                     CatalogCommand::Inspect => {
@@ -1604,116 +1606,6 @@ impl NativeDevice {
             return Err(DeviceFailure::Unhealthy(error));
         }
         parse_catalog_lifecycle_inspect(&inspect.stdout).map_err(device_failure)
-    }
-
-    pub(crate) fn begin_launcher_automation(
-        &mut self,
-        expected_build_version: &str,
-        expected_source_revision: &str,
-        expected_main_generation: u64,
-        lifetime_seconds: u64,
-    ) -> std::result::Result<Value, DeviceFailure> {
-        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
-        let detail = launcher_automation::begin(
-            &prepared.config,
-            expected_build_version,
-            expected_source_revision,
-            expected_main_generation,
-            lifetime_seconds,
-        )
-        .map_err(device_failure)?;
-        serde_json::from_str(&detail).map_err(device_failure)
-    }
-
-    pub(crate) fn send_launcher_automation_action(
-        &mut self,
-        nonce: &str,
-        action: &AutomationAction,
-    ) -> std::result::Result<u64, DeviceFailure> {
-        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
-        let detail = launcher_automation::send_action(&prepared.config, nonce, action)
-            .map_err(device_failure)?;
-        let response: Value = serde_json::from_str(&detail).map_err(device_failure)?;
-        response
-            .get("action_sequence")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                DeviceFailure::OperationFailed("automation action has no sequence".into())
-            })
-    }
-
-    pub(crate) fn await_launcher_automation_presented(
-        &mut self,
-        nonce: &str,
-        action_sequence: u64,
-        timeout_ms: u64,
-    ) -> std::result::Result<(), DeviceFailure> {
-        let prepared = self.prepare(DeviceAccess::AGENT_READ)?;
-        launcher_automation::await_presented(&prepared.config, nonce, action_sequence, timeout_ms)
-            .map(|_| ())
-            .map_err(device_failure)
-    }
-
-    pub(crate) fn launcher_automation_snapshot(
-        &mut self,
-        nonce: &str,
-    ) -> std::result::Result<Value, DeviceFailure> {
-        let prepared = self.prepare(DeviceAccess::AGENT_READ)?;
-        launcher_automation::snapshot(&prepared.config, nonce).map_err(device_failure)
-    }
-
-    pub(crate) fn capture_launcher_automation_checkpoint(
-        &mut self,
-        nonce: &str,
-        action_sequence: u64,
-        label: &str,
-        output_dir: &Path,
-    ) -> std::result::Result<Value, DeviceFailure> {
-        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
-        let detail = launcher_automation::capture_checkpoint(
-            &prepared.config,
-            nonce,
-            action_sequence,
-            label,
-            output_dir,
-        )
-        .map_err(device_failure)?;
-        serde_json::from_str(&detail).map_err(device_failure)
-    }
-
-    pub(crate) fn exercise_launcher_automation_launch_return(
-        &mut self,
-        nonce: &str,
-        expected_game_id: &str,
-        lifetime_seconds: u64,
-    ) -> std::result::Result<Value, DeviceFailure> {
-        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
-        let detail = match launcher_automation::exercise_launch_return(
-            &prepared.config,
-            nonce,
-            expected_game_id,
-            lifetime_seconds,
-            Duration::ZERO,
-        ) {
-            Ok(detail) => detail,
-            Err(launcher_automation::LaunchReturnError::Failed(detail)) => {
-                return Err(DeviceFailure::OperationFailed(detail));
-            }
-            Err(launcher_automation::LaunchReturnError::RecoveryRequired(detail)) => {
-                return Err(DeviceFailure::RecoveryRequired(detail));
-            }
-        };
-        serde_json::from_str(&detail).map_err(device_failure)
-    }
-
-    pub(crate) fn end_launcher_automation(
-        &mut self,
-        nonce: &str,
-    ) -> std::result::Result<(), DeviceFailure> {
-        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
-        launcher_automation::end(&prepared.config, nonce)
-            .map(|_| ())
-            .map_err(device_failure)
     }
 }
 
@@ -31821,6 +31713,31 @@ fn agent_magik(args: &[String]) -> Result<()> {
             format_agent_magik_summary(action, reply.elapsed_ms, result)
         );
     }
+    Ok(())
+}
+
+fn run_ui_test_case(args: &crate::commands::device::UiTestArgs) -> Result<()> {
+    let request = mister_magik_agent_protocol::UiTestCaseRequest {
+        case: args.case.clone(),
+        fixture: args.fixture.clone(),
+        timeout_ms: args.timeout_secs.saturating_mul(1_000),
+    };
+    let reply = agent_request_with_liveness(
+        "ui_test",
+        request.to_value(),
+        Duration::from_secs(args.timeout_secs.saturating_add(5)),
+    )?;
+    let result = reply
+        .response
+        .get("result")
+        .ok_or("ui test agent response missing result")?;
+    if result.get("accepted").and_then(Value::as_bool) != Some(true) {
+        return Err("ui test agent did not accept the requested case".into());
+    }
+    println!(
+        "ui-test case={} fixture={} timeout_ms={} effects=isolated",
+        args.case, args.fixture, request.timeout_ms
+    );
     Ok(())
 }
 

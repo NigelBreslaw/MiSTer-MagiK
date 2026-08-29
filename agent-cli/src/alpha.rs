@@ -6,13 +6,14 @@ use crate::device::DeviceClient;
 use crate::error::{AgentError, AgentResult};
 use crate::platform_manifest::{self, Layout};
 use crate::progress::{EventKind, Reporter};
-use crate::transport::{AlphaCandidateHashes, AutomationAction, AutomationButton};
+use crate::transport::AlphaCandidateHashes;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const ASSET_FORMAT: &str = "mister-magik-release-assets-v1";
@@ -88,29 +89,6 @@ trait AlphaDevice {
     fn ensure_launcher(&mut self, version: String, revision: String) -> AgentResult<()>;
     fn status(&mut self) -> AgentResult<Value>;
     fn inspect_public_catalog(&mut self) -> AgentResult<Value>;
-    fn begin_automation(
-        &mut self,
-        version: String,
-        revision: String,
-        main_generation: u64,
-        lifetime_seconds: u64,
-    ) -> AgentResult<Value>;
-    fn end_automation(&mut self, nonce: String) -> AgentResult<()>;
-    fn action(&mut self, nonce: String, action: AutomationAction) -> AgentResult<u64>;
-    fn snapshot(&mut self, nonce: String) -> AgentResult<Value>;
-    fn checkpoint(
-        &mut self,
-        nonce: String,
-        action_sequence: u64,
-        label: String,
-        output_dir: PathBuf,
-    ) -> AgentResult<Value>;
-    fn exercise_launch_return(
-        &mut self,
-        nonce: String,
-        expected_game_id: String,
-        lifetime_seconds: u64,
-    ) -> AgentResult<Value>;
 }
 
 impl AlphaDevice for DeviceClient {
@@ -137,65 +115,6 @@ impl AlphaDevice for DeviceClient {
 
     fn inspect_public_catalog(&mut self) -> AgentResult<Value> {
         self.read(crate::NativeDevice::inspect_public_catalog)
-    }
-
-    fn begin_automation(
-        &mut self,
-        version: String,
-        revision: String,
-        main_generation: u64,
-        lifetime_seconds: u64,
-    ) -> AgentResult<Value> {
-        self.mutate(|device| {
-            device.begin_launcher_automation(&version, &revision, main_generation, lifetime_seconds)
-        })
-    }
-
-    fn end_automation(&mut self, nonce: String) -> AgentResult<()> {
-        self.mutate(|device| device.end_launcher_automation(&nonce))
-    }
-
-    fn action(&mut self, nonce: String, action: AutomationAction) -> AgentResult<u64> {
-        let sequence =
-            self.mutate(|device| device.send_launcher_automation_action(&nonce, &action))?;
-        self.read(|device| device.await_launcher_automation_presented(&nonce, sequence, 3_000))?;
-        Ok(sequence)
-    }
-
-    fn snapshot(&mut self, nonce: String) -> AgentResult<Value> {
-        self.read(|device| device.launcher_automation_snapshot(&nonce))
-    }
-
-    fn checkpoint(
-        &mut self,
-        nonce: String,
-        action_sequence: u64,
-        label: String,
-        output_dir: PathBuf,
-    ) -> AgentResult<Value> {
-        self.mutate(|device| {
-            device.capture_launcher_automation_checkpoint(
-                &nonce,
-                action_sequence,
-                &label,
-                &output_dir,
-            )
-        })
-    }
-
-    fn exercise_launch_return(
-        &mut self,
-        nonce: String,
-        expected_game_id: String,
-        lifetime_seconds: u64,
-    ) -> AgentResult<Value> {
-        self.mutate(|device| {
-            device.exercise_launcher_automation_launch_return(
-                &nonce,
-                &expected_game_id,
-                lifetime_seconds,
-            )
-        })
     }
 }
 
@@ -416,10 +335,6 @@ fn accept_installed_candidate(
 ) -> AgentResult<AcceptanceReceipt> {
     let status = device.status()?;
     let runtime = require_installed_candidate(&status, &candidate)?;
-    let main_generation = status
-        .pointer("/runtime/main_status/main_generation")
-        .and_then(Value::as_u64)
-        .ok_or("device status has no Main generation")?;
     fs::create_dir_all(output).map_err(|error| error.to_string())?;
 
     reporter.emit(
@@ -428,39 +343,8 @@ fn accept_installed_candidate(
         "Running the deterministic real-UI acceptance journey",
         Some(20),
     )?;
-    let begin = device.begin_automation(
-        candidate.version.clone(),
-        candidate.magik_revision.clone(),
-        main_generation,
-        120,
-    )?;
-    let nonce = begin
-        .get("nonce")
-        .and_then(Value::as_str)
-        .ok_or("automation session has no nonce")?
-        .to_owned();
-    let mut nonce = Some(nonce);
-    let journey = run_ui_journey(device, &mut nonce, output, !framebuffer_only);
-    let ended = match nonce.as_ref() {
-        Some(nonce) => device.end_automation(nonce.clone()),
-        None => Ok(()),
-    };
-    let (checkpoints, launch_return, usb_video) = match (journey, ended) {
-        (Ok(evidence), Ok(_)) => evidence,
-        (Err(error), Ok(_)) => return Err(error),
-        (Ok(_), Err(restore)) => {
-            return Err(AgentError::recovery_required(
-                "UI journey passed but the volatile session did not close",
-                restore.to_string(),
-            ));
-        }
-        (Err(error), Err(restore)) => {
-            return Err(AgentError::recovery_required(
-                error.to_string(),
-                format!("automation cleanup failed: {restore}"),
-            ));
-        }
-    };
+    let (checkpoints, launch_return, usb_video) =
+        run_ui_journey(device, output, !framebuffer_only)?;
     reporter.emit(
         EventKind::Progress,
         "catalog-complete",
@@ -555,462 +439,69 @@ fn complete_alpha_catalog_creation(
 }
 
 fn run_ui_journey(
-    device: &mut impl AlphaDevice,
-    nonce: &mut Option<String>,
+    _device: &mut impl AlphaDevice,
     output: &Path,
-    capture_usb_video: bool,
+    _capture_usb_video: bool,
 ) -> AgentResult<(Vec<Value>, Value, Vec<UsbEvidence>)> {
-    let rgb_dir = output.join("rgb565");
-    let usb_dir = output.join("usb-video");
-    fs::create_dir_all(&rgb_dir).map_err(|error| error.to_string())?;
-    if capture_usb_video {
-        fs::create_dir_all(&usb_dir).map_err(|error| error.to_string())?;
-    }
-    let mut checkpoints = Vec::new();
-    let mut usb = Vec::new();
-
-    let home = tap(device, nonce, AutomationButton::Home)?;
-    let state = await_semantic(device, nonce, "menu_id", "menu:root")?;
-    require_semantic(&state, "effective_view", "home")?;
-    require_bool(&state, "catalog_ready", true)?;
-    checkpoints.push(checkpoint(device, nonce, home, "home", &rgb_dir)?);
-    maybe_capture_usb(capture_usb_video, &mut usb, "home", &usb_dir)?;
-
-    select_home_item(device, nonce, "menu:arcade")?;
-    let arcade = tap(device, nonce, AutomationButton::A)?;
-    let mut state = await_semantic(device, nonce, "effective_view", "arcade")?;
-    require_nonzero(&state, "selected_count")?;
-    require_nonempty(&state, "selected_game_id")?;
-    state = await_semantic_not(device, nonce, "composition_state", "navigation-transition")?;
-    checkpoints.push(checkpoint(device, nonce, arcade, "arcade", &rgb_dir)?);
-    maybe_capture_usb(capture_usb_video, &mut usb, "arcade", &usb_dir)?;
-
-    // `--reuse-installed` intentionally preserves launcher state. Clear any
-    // interrupted search before the directional list-input check; the journey
-    // opens and verifies search explicitly below.
-    if semantic(&state, "search_active").and_then(Value::as_bool) == Some(true) {
-        for _ in 0..64 {
-            let search = snapshot(device, nonce)?;
-            if semantic(&search, "search_active").and_then(Value::as_bool) != Some(true) {
-                break;
-            }
-            tap(device, nonce, AutomationButton::B)?;
-        }
-        state = snapshot(device, nonce)?;
-        require_bool(&state, "search_active", false)?;
-    }
-
-    let before_index = semantic(&state, "selected_index")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let selected_count = semantic(&state, "selected_count")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let (velocity_button, velocity_direction) = if before_index.saturating_add(1) < selected_count {
-        (AutomationButton::Down, "down")
-    } else {
-        (AutomationButton::Up, "up")
-    };
-    let mut velocity_sequence = None;
-    let mut last_velocity_state = None;
-    for _ in 0..3 {
-        let velocity = action(
-            device,
-            nonce,
-            AutomationAction::Hold {
-                button: velocity_button,
-                duration_ms: 800,
-            },
-        )?;
-        std::thread::sleep(std::time::Duration::from_millis(400));
-        let state = snapshot(device, nonce)?;
-        let velocity_settled = action(device, nonce, AutomationAction::ReleaseAll)?;
-        let mut after_count = semantic(&state, "selected_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        let mut after_index = semantic(&state, "selected_index").and_then(Value::as_u64);
-        for _ in 0..300 {
-            if after_count <= 1 || after_index != Some(before_index) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            let state = snapshot(device, nonce)?;
-            after_count = semantic(&state, "selected_count")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            after_index = semantic(&state, "selected_index").and_then(Value::as_u64);
-        }
-        if after_count <= 1 || after_index != Some(before_index) {
-            velocity_sequence = Some(velocity.max(velocity_settled));
-            break;
-        }
-        last_velocity_state = Some((after_index, after_count));
-    }
-    // A transition-router queue can consume a held edge before it becomes
-    // actionable. Preserve the held-input exercise above, then require one
-    // bounded directional step before treating the launcher as unresponsive.
-    if velocity_sequence.is_none() {
-        for _ in 0..3 {
-            let sequence = tap(device, nonce, velocity_button)?;
-            for _ in 0..100 {
-                let state = snapshot(device, nonce)?;
-                let after_index = semantic(&state, "selected_index").and_then(Value::as_u64);
-                let after_count = semantic(&state, "selected_count")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                if after_count <= 1 || after_index != Some(before_index) {
-                    velocity_sequence = Some(sequence);
-                    break;
-                }
-                last_velocity_state = Some((after_index, after_count));
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            if velocity_sequence.is_some() {
-                break;
-            }
-        }
-    }
-    let velocity_sequence = velocity_sequence.ok_or_else(|| {
-        let (after_index, after_count) = last_velocity_state.unwrap_or((None, 0));
-        AgentError::Classified {
-            code: "alpha_ui_assertion_failed",
-            detail: format!(
-                "arcade velocity did not move after bounded input retries: direction={velocity_direction} before_index={before_index} after_index={} before_count={selected_count} after_count={after_count}",
-                after_index.map_or_else(|| "missing".to_string(), |index| index.to_string()),
-            ),
-        }
-    })?;
-    checkpoints.push(checkpoint(
-        device,
-        nonce,
-        velocity_sequence,
-        "arcade-velocity",
-        &rgb_dir,
-    )?);
-
-    let pre_launch = snapshot(device, nonce)?;
-    let expected_game_id = semantic(&pre_launch, "selected_game_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or("arcade launch has no selected game")?
-        .to_owned();
-    let launch_nonce = nonce.take().ok_or("automation session is not active")?;
-    let launch_return =
-        device.exercise_launch_return(launch_nonce, expected_game_id.clone(), 120)?;
-    let replacement_nonce = launch_return
-        .get("nonce")
-        .and_then(Value::as_str)
-        .ok_or("launch-return evidence has no replacement nonce")?
-        .to_owned();
-    let return_sequence = launch_return
-        .get("post_return_action_sequence")
-        .and_then(Value::as_u64)
-        .ok_or("launch-return evidence has no presented sequence")?;
-    *nonce = Some(replacement_nonce);
-    let returned_arcade = snapshot(device, nonce)?;
-    require_semantic(&returned_arcade, "effective_view", "arcade")?;
-    require_semantic(&returned_arcade, "selected_game_id", &expected_game_id)?;
-    checkpoints.push(checkpoint(
-        device,
-        nonce,
-        return_sequence,
-        "arcade-return",
-        &rgb_dir,
-    )?);
-    maybe_capture_usb(capture_usb_video, &mut usb, "arcade-return", &usb_dir)?;
-
-    tap(device, nonce, AutomationButton::Left)?;
-    require_bool(&snapshot(device, nonce)?, "drawer_open", true)?;
-    tap(device, nonce, AutomationButton::B)?;
-    require_semantic(&snapshot(device, nonce)?, "drawer_level", "Filters")?;
-    tap(device, nonce, AutomationButton::Down)?;
-    let search = tap(device, nonce, AutomationButton::A)?;
-    require_bool(&snapshot(device, nonce)?, "search_active", true)?;
-
-    // Search remembers both its query and selected key. Drive to Clear from any
-    // remembered keyboard position, then drive to A for deterministic text input.
-    for _ in 0..9 {
-        tap(device, nonce, AutomationButton::Left)?;
-    }
-    for _ in 0..7 {
-        tap(device, nonce, AutomationButton::Down)?;
-    }
-    for _ in 0..2 {
-        tap(device, nonce, AutomationButton::Right)?;
-    }
-    action(
-        device,
-        nonce,
-        AutomationAction::Hold {
-            button: AutomationButton::A,
-            duration_ms: 120,
-        },
-    )?;
-    require_semantic(&snapshot(device, nonce)?, "search_query", "")?;
-    for _ in 0..7 {
-        tap(device, nonce, AutomationButton::Up)?;
-    }
-    for _ in 0..9 {
-        tap(device, nonce, AutomationButton::Left)?;
-    }
-    let typed = action(
-        device,
-        nonce,
-        AutomationAction::Hold {
-            button: AutomationButton::A,
-            duration_ms: 120,
-        },
-    )?;
-    let search_state = await_semantic(device, nonce, "search_query", "A")?;
-    require_bool(&search_state, "search_active", true)?;
-    checkpoints.push(checkpoint(
-        device,
-        nonce,
-        typed.max(search),
-        "arcade-search",
-        &rgb_dir,
-    )?);
-
-    let returned = tap(device, nonce, AutomationButton::Home)?;
-    let state = await_semantic(device, nonce, "menu_id", "menu:root")?;
-    require_semantic(&state, "effective_view", "home")?;
-    checkpoints.push(checkpoint(
-        device,
-        nonce,
-        returned,
-        "post-navigation",
-        &rgb_dir,
-    )?);
-    maybe_capture_usb(capture_usb_video, &mut usb, "home-restored", &usb_dir)?;
-
-    let root = snapshot(device, nonce)?;
-    let root_count = semantic(&root, "selected_count")
-        .and_then(Value::as_u64)
-        .ok_or("root menu has no selected count")?;
-    let mut root_state = root;
-    for _ in 0..root_count {
-        if semantic(&root_state, "selected_item_id")
-            .and_then(Value::as_str)
-            .is_some_and(|item| item.starts_with("menu:") && item != "menu:arcade")
-        {
-            break;
-        }
-        tap(device, nonce, AutomationButton::Right)?;
-        root_state = snapshot(device, nonce)?;
-    }
-    if !semantic(&root_state, "selected_item_id")
-        .and_then(Value::as_str)
-        .is_some_and(|item| item.starts_with("menu:") && item != "menu:arcade")
+    let repository = std::env::var_os("MISTER_UI_TEST_REPOSITORY")
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or("UI test suite has no repository directory")?;
+    fs::create_dir_all(output).map_err(|error| error.to_string())?;
+    let fixture = std::env::var("MISTER_UI_TEST_FIXTURE")
+        .unwrap_or_else(|_| "deterministic-arcade-v1".to_string());
+    let cases = std::env::var("MISTER_UI_TEST_CASES")
+        .unwrap_or_else(|_| "startup-home system-hub arcade-navigation arcade-filters settings-display screensaver-motion about-licenses effect-sandbox profile-matrix".to_string());
+    let case_names = cases.split_whitespace().collect::<Vec<_>>();
+    if case_names.is_empty()
+        || case_names.iter().any(|case| {
+            case.is_empty()
+                || !case
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
     {
+        return classified("alpha_ui_suite_invalid", "MISTER_UI_TEST_CASES is invalid");
+    }
+    let mut command =
+        Command::new(std::env::var_os("MISTER_UI_TEST_RUNNER").unwrap_or_else(|| "uv".into()));
+    command
+        .arg("run")
+        .arg("python")
+        .arg("-m")
+        .arg("apps.mister.ui_tests.suite");
+    for case in &case_names {
+        command.arg(case);
+    }
+    command
+        .arg("--fixture")
+        .arg(&fixture)
+        .arg("--attended")
+        .current_dir(&repository)
+        .env("MISTER_UI_TEST_FIXTURE", &fixture)
+        .env("MISTER_UI_TEST_REPOSITORY", &repository);
+    if let Some(destination) = std::env::var_os("MISTER_UI_TEST_SSH_DESTINATION") {
+        command.env("MISTER_UI_TEST_SSH_DESTINATION", destination);
+    }
+    let result = command.output().map_err(|error| error.to_string())?;
+    let stdout = String::from_utf8_lossy(&result.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
+    if !result.status.success() {
         return classified(
-            "alpha_ui_assertion_failed",
-            "root catalog has no nested hierarchy",
+            "alpha_ui_suite_failed",
+            format!("runner failed: stdout={stdout:?} stderr={stderr:?}"),
         );
     }
-    let nested = tap(device, nonce, AutomationButton::A)?;
-    let nested_state = snapshot(device, nonce)?;
-    if semantic(&nested_state, "menu_id").and_then(Value::as_str) == Some("menu:root") {
-        return classified("alpha_ui_assertion_failed", "menu hierarchy did not open");
-    }
-    let nested_menu = semantic(&nested_state, "menu_id")
-        .and_then(Value::as_str)
-        .ok_or("nested menu has no identity")?
-        .to_owned();
-    let mut nested_checkpoint_sequence = nested;
-    if semantic(&nested_state, "selected_count")
-        .and_then(Value::as_u64)
-        .is_some_and(|count| count > 1)
-    {
-        nested_checkpoint_sequence = tap(device, nonce, AutomationButton::Right)?;
-    }
-    let remembered_item = semantic(&snapshot(device, nonce)?, "selected_item_id")
-        .and_then(Value::as_str)
-        .ok_or("nested menu has no selected item")?
-        .to_owned();
-    checkpoints.push(checkpoint(
-        device,
-        nonce,
-        nested_checkpoint_sequence,
-        "nested-menu",
-        &rgb_dir,
-    )?);
-    tap(device, nonce, AutomationButton::B)?;
-    await_semantic(device, nonce, "menu_id", "menu:root")?;
-    tap(device, nonce, AutomationButton::A)?;
-    let restored_nested = snapshot(device, nonce)?;
-    require_semantic(&restored_nested, "menu_id", &nested_menu)?;
-    require_semantic(&restored_nested, "selected_item_id", &remembered_item)?;
-    tap(device, nonce, AutomationButton::B)?;
-    await_semantic(device, nonce, "menu_id", "menu:root")?;
-
-    tap(device, nonce, AutomationButton::Up)?;
-    let settings = tap(device, nonce, AutomationButton::A)?;
-    await_semantic(device, nonce, "effective_view", "settings")?;
-    checkpoints.push(checkpoint(device, nonce, settings, "settings", &rgb_dir)?);
-    tap(device, nonce, AutomationButton::Down)?;
-    tap(device, nonce, AutomationButton::B)?;
-    await_semantic(device, nonce, "effective_view", "home")?;
-
-    Ok((checkpoints, launch_return, usb))
-}
-
-fn select_home_item(
-    device: &mut impl AlphaDevice,
-    nonce: &Option<String>,
-    expected_item_id: &str,
-) -> AgentResult<()> {
-    let initial = snapshot(device, nonce)?;
-    let count = semantic(&initial, "selected_count")
-        .and_then(Value::as_u64)
-        .ok_or("home menu has no selected count")?;
-    let mut state = initial;
-    let mut move_left = semantic(&state, "selected_index")
-        .and_then(Value::as_u64)
-        .is_some_and(|index| index > 0);
-    for _ in 0..count.saturating_mul(2) {
-        if semantic(&state, "selected_item_id").and_then(Value::as_str) == Some(expected_item_id) {
-            return Ok(());
-        }
-        let index = semantic(&state, "selected_index")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        if (move_left && index == 0) || (!move_left && index.saturating_add(1) >= count) {
-            move_left = !move_left;
-        }
-        let previous = semantic(&state, "selected_item_id")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned();
-        state = tap_until_semantic_change(
-            device,
-            nonce,
-            if move_left {
-                AutomationButton::Left
-            } else {
-                AutomationButton::Right
-            },
-            "selected_item_id",
-            &previous,
-        )?;
-    }
-    classified(
-        "alpha_ui_assertion_failed",
-        format!("home menu has no {expected_item_id} item"),
-    )
-}
-
-fn tap_until_semantic_change(
-    device: &mut impl AlphaDevice,
-    nonce: &Option<String>,
-    button: AutomationButton,
-    field: &str,
-    previous: &str,
-) -> AgentResult<Value> {
-    for _ in 0..3 {
-        tap(device, nonce, button)?;
-        for _ in 0..100 {
-            let value = snapshot(device, nonce)?;
-            if semantic(&value, field).and_then(Value::as_str) != Some(previous) {
-                return Ok(value);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-    }
-    classified(
-        "alpha_ui_assertion_failed",
-        format!("{field} did not change from {previous} after bounded input retries"),
-    )
-}
-
-fn tap(
-    device: &mut impl AlphaDevice,
-    nonce: &Option<String>,
-    button: AutomationButton,
-) -> AgentResult<u64> {
-    action(device, nonce, AutomationAction::Tap(button))
-}
-
-fn action(
-    device: &mut impl AlphaDevice,
-    nonce: &Option<String>,
-    action: AutomationAction,
-) -> AgentResult<u64> {
-    device.action(active_nonce(nonce)?.to_owned(), action)
-}
-
-fn snapshot(device: &mut impl AlphaDevice, nonce: &Option<String>) -> AgentResult<Value> {
-    device.snapshot(active_nonce(nonce)?.to_owned())
-}
-
-fn checkpoint(
-    device: &mut impl AlphaDevice,
-    nonce: &Option<String>,
-    sequence: u64,
-    label: &str,
-    output: &Path,
-) -> AgentResult<Value> {
-    device.checkpoint(
-        active_nonce(nonce)?.to_owned(),
-        sequence,
-        label.to_owned(),
-        output.to_owned(),
-    )
-}
-
-fn await_semantic(
-    device: &mut impl AlphaDevice,
-    nonce: &Option<String>,
-    field: &str,
-    expected: &str,
-) -> AgentResult<Value> {
-    let mut last_actual = None;
-    for _ in 0..100 {
-        let value = snapshot(device, nonce)?;
-        let actual = semantic(&value, field).and_then(Value::as_str);
-        if actual == Some(expected) {
-            return Ok(value);
-        }
-        last_actual = actual.map(str::to_owned);
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    classified(
-        "alpha_ui_assertion_failed",
-        format!(
-            "{field} did not become {expected}; actual={}",
-            last_actual.as_deref().unwrap_or("missing")
-        ),
-    )
-}
-
-fn await_semantic_not(
-    device: &mut impl AlphaDevice,
-    nonce: &Option<String>,
-    field: &str,
-    unexpected: &str,
-) -> AgentResult<Value> {
-    let mut steady_since = None;
-    for _ in 0..300 {
-        let value = snapshot(device, nonce)?;
-        if semantic(&value, field).and_then(Value::as_str) != Some(unexpected) {
-            let since = steady_since.get_or_insert_with(std::time::Instant::now);
-            if since.elapsed() >= std::time::Duration::from_millis(250) {
-                return Ok(value);
-            }
-        } else {
-            steady_since = None;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    classified(
-        "alpha_ui_assertion_failed",
-        format!("{field} remained {unexpected}"),
-    )
-}
-
-fn active_nonce(nonce: &Option<String>) -> AgentResult<&str> {
-    nonce
-        .as_deref()
-        .ok_or_else(|| "automation session is not active".into())
+    let evidence = json!({
+        "schema": "mister-magik-alpha-ui-suite-v1",
+        "fixture": fixture,
+        "cases": case_names,
+        "stdout": stdout,
+        "stderr": stderr,
+    });
+    let evidence_path = output.join("ui-suite.json");
+    fs::write(&evidence_path, format!("{evidence}\n")).map_err(|error| error.to_string())?;
+    Ok((vec![evidence.clone()], evidence, Vec::new()))
 }
 
 fn require_installed_candidate(
@@ -1042,10 +533,12 @@ fn require_installed_candidate(
     Ok(runtime.clone())
 }
 
+#[cfg(test)]
 fn semantic<'a>(snapshot: &'a Value, field: &str) -> Option<&'a Value> {
     snapshot.get("semantic")?.get(field)
 }
 
+#[cfg(test)]
 fn require_semantic(snapshot: &Value, field: &str, expected: &str) -> AgentResult<()> {
     if semantic(snapshot, field).and_then(Value::as_str) == Some(expected) {
         Ok(())
@@ -1057,6 +550,7 @@ fn require_semantic(snapshot: &Value, field: &str, expected: &str) -> AgentResul
     }
 }
 
+#[cfg(test)]
 fn require_bool(snapshot: &Value, field: &str, expected: bool) -> AgentResult<()> {
     if semantic(snapshot, field).and_then(Value::as_bool) == Some(expected) {
         Ok(())
@@ -1068,6 +562,7 @@ fn require_bool(snapshot: &Value, field: &str, expected: bool) -> AgentResult<()
     }
 }
 
+#[cfg(test)]
 fn require_nonzero(snapshot: &Value, field: &str) -> AgentResult<()> {
     if semantic(snapshot, field)
         .and_then(Value::as_u64)
@@ -1079,6 +574,7 @@ fn require_nonzero(snapshot: &Value, field: &str) -> AgentResult<()> {
     }
 }
 
+#[cfg(test)]
 fn require_nonempty(snapshot: &Value, field: &str) -> AgentResult<()> {
     if semantic(snapshot, field)
         .and_then(Value::as_str)
@@ -1088,31 +584,6 @@ fn require_nonempty(snapshot: &Value, field: &str) -> AgentResult<()> {
     } else {
         classified("alpha_ui_assertion_failed", format!("{field} is empty"))
     }
-}
-
-fn capture_usb(label: &str, output: &Path) -> AgentResult<UsbEvidence> {
-    let path = output.join(format!("{label}.jpg"));
-    let artifact = crate::capture::execute(Some(&path))?;
-    Ok(UsbEvidence {
-        label: label.to_owned(),
-        path: format!("usb-video/{label}.jpg"),
-        bytes: artifact.bytes,
-        width: artifact.width,
-        height: artifact.height,
-        sha256: digest_file(&artifact.path)?,
-    })
-}
-
-fn maybe_capture_usb(
-    capture_usb_video: bool,
-    evidence: &mut Vec<UsbEvidence>,
-    label: &str,
-    output: &Path,
-) -> AgentResult<()> {
-    if capture_usb_video {
-        evidence.push(capture_usb(label, output)?);
-    }
-    Ok(())
 }
 
 fn write_receipt_atomically(path: &Path, receipt: &AcceptanceReceipt) -> AgentResult<()> {
@@ -1518,8 +989,6 @@ mod tests {
         assert!(require_bool(&snapshot, "ready", false).is_err());
         assert!(require_nonzero(&json!({"semantic": {"generation": 0}}), "generation").is_err());
         assert!(require_nonempty(&json!({"semantic": {"selection": ""}}), "selection").is_err());
-        assert!(active_nonce(&None).is_err());
-        assert_eq!(active_nonce(&Some("nonce".into())).unwrap(), "nonce");
     }
 
     #[test]

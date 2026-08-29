@@ -22,6 +22,10 @@ export component SetupOverlay inherits Rectangle {
         (root.list-items.length - root.setup-visible-rows).max(0),
     );
 
+    accessible-role: region;
+    accessible-label: "Controller setup";
+    accessible-description: root.subtitle;
+
     background: CrtTheme.background;
 
     VerticalLayout {

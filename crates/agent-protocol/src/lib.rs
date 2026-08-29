@@ -13,6 +13,24 @@ pub const PROTOCOL_VERSION: u64 = 2;
 pub const FRAMEBUFFER_CAPTURE_CAPABILITY: &str = "framebuffer-capture-v2";
 pub const DEVICE_TELEMETRY_CAPABILITY: &str = "device-telemetry-v2";
 pub const LAUNCHER_AUTOMATION_CAPABILITY: &str = "launcher-automation-v1";
+pub const UI_TEST_CAPABILITY: &str = "ui-test-v1";
+pub const UI_TEST_REQUEST_SCHEMA: &str = "mister-magik-ui-test-request-v1";
+pub const UI_TEST_MAX_CASE_LENGTH: usize = 128;
+pub const UI_TEST_MAX_FIXTURE_LENGTH: usize = 128;
+pub const UI_TEST_MAX_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
+pub const UI_TEST_CASES: &[&str] = &[
+    "smoke",
+    "startup-home",
+    "system-hub",
+    "arcade-navigation",
+    "arcade-filters",
+    "settings-display",
+    "screensaver-motion",
+    "about-licenses",
+    "effect-sandbox",
+    "profile-matrix",
+];
+pub const UI_TEST_FIXTURES: &[&str] = &["deterministic-arcade-v1"];
 pub const LAUNCHER_AUTOMATION_MAX_HOLD_MS: u64 = 40_000;
 pub const ALPHA_CANDIDATE_INSTALL_CAPABILITY: &str = "alpha-candidate-install-v1";
 pub const SCREENSAVER_FRAME_EVIDENCE_CAPABILITY: &str = "screensaver-frame-evidence-v6";
@@ -21,6 +39,86 @@ pub const RUNTIME_UPLOAD_CAPABILITY: &str = "runtime-upload-v1";
 pub const RUNTIME_UPLOAD_SCHEMA: &str = "mister-magik-runtime-upload-v1";
 pub const MAX_RUNTIME_UPLOAD_BYTES: u64 = 128 * 1024 * 1024;
 pub const MAX_BINARY_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
+
+/// A single attended UI journey requested through the device agent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UiTestCaseRequest {
+    pub case: String,
+    pub fixture: String,
+    pub timeout_ms: u64,
+}
+
+impl UiTestCaseRequest {
+    pub fn from_value(value: &Value) -> Result<Self, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "ui test request must be an object".to_string())?;
+        if object.len() != 4
+            || !object.contains_key("schema")
+            || !object.contains_key("case")
+            || !object.contains_key("fixture")
+            || !object.contains_key("timeout_ms")
+        {
+            return Err(
+                "ui test request requires exactly schema, case, fixture, and timeout_ms"
+                    .to_string(),
+            );
+        }
+        if object["schema"].as_str() != Some(UI_TEST_REQUEST_SCHEMA) {
+            return Err("ui test request has an unsupported schema".to_string());
+        }
+        let case = object["case"]
+            .as_str()
+            .ok_or_else(|| "ui test case must be a string".to_string())?;
+        let fixture = object["fixture"]
+            .as_str()
+            .ok_or_else(|| "ui test fixture must be a string".to_string())?;
+        if case.is_empty()
+            || case.len() > UI_TEST_MAX_CASE_LENGTH
+            || !case
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
+            return Err("ui test case contains invalid characters or length".to_string());
+        }
+        if fixture.is_empty()
+            || fixture.len() > UI_TEST_MAX_FIXTURE_LENGTH
+            || !fixture
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
+            return Err("ui test fixture contains invalid characters or length".to_string());
+        }
+        if !UI_TEST_CASES.contains(&case) {
+            return Err(format!("unsupported ui test case: {case}"));
+        }
+        if !UI_TEST_FIXTURES.contains(&fixture) {
+            return Err(format!("unsupported ui test fixture: {fixture}"));
+        }
+        let timeout_ms = object["timeout_ms"]
+            .as_u64()
+            .ok_or_else(|| "ui test timeout_ms must be an unsigned integer".to_string())?;
+        if timeout_ms == 0 || timeout_ms > UI_TEST_MAX_TIMEOUT_MS {
+            return Err(format!(
+                "ui test timeout_ms must be between 1 and {UI_TEST_MAX_TIMEOUT_MS}"
+            ));
+        }
+        Ok(Self {
+            case: case.to_string(),
+            fixture: fixture.to_string(),
+            timeout_ms,
+        })
+    }
+
+    pub fn to_value(&self) -> Value {
+        json!({
+            "schema": UI_TEST_REQUEST_SCHEMA,
+            "case": self.case,
+            "fixture": self.fixture,
+            "timeout_ms": self.timeout_ms,
+        })
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeUploadSpec {

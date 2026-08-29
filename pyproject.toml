@@ -8,6 +8,12 @@ description = "MiSTer MagiK host-side CI and release tooling"
 requires-python = ">=3.12"
 dependencies = ["lz4>=4.3"]
 
+[project.optional-dependencies]
+device-ui-tests = [
+    "pillow>=11,<13",
+    "slint-testing==0.3",
+]
+
 [dependency-groups]
 # Keep the quality tool versions aligned with gb-slint so local and CI
 # diagnostics are reproducible.
@@ -15,6 +21,9 @@ dev = ["ruff==0.16.4", "ty==0.0.73", "pytest>=8"]
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+slint-testing = { index = "slint-private" }
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/codex-context-report.py" = ["N999"]
@@ -26,4 +35,4 @@ python_files = ["test_*.py", "test-*.py"]
 pythonpath = ["."]
 
 [tool.ty.src]
-include = ["scripts/magik_ci", "scripts/tests/test_magik_ci.py"]
+include = ["scripts", "apps/mister/ui_tests"]

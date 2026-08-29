@@ -6,6 +6,8 @@ import { FeedbackView, ScreensaverSetting, SettingsView } from "../../api.slint"
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
 
 export component ScreensaverSettingsScreen inherits Rectangle {
+    accessible-role: main;
+    accessible-label: "Screensaver settings";
     background: CrtTheme.background;
 
     VerticalLayout {

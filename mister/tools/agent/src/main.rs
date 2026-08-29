@@ -2752,6 +2752,7 @@ mod linux {
                         mister_magik_agent_protocol::FRAMEBUFFER_CAPTURE_CAPABILITY,
                         mister_magik_agent_protocol::DEVICE_TELEMETRY_CAPABILITY,
                         mister_magik_agent_protocol::LAUNCHER_AUTOMATION_CAPABILITY,
+                        mister_magik_agent_protocol::UI_TEST_CAPABILITY,
                         mister_magik_agent_protocol::ALPHA_CANDIDATE_INSTALL_CAPABILITY,
                         mister_magik_agent_protocol::RUNTIME_UPLOAD_CAPABILITY,
                     ],
@@ -2763,6 +2764,10 @@ mod linux {
             "timeline" => response(id, true, Some(timeline_json(boot_id, started)), None),
             "diagnostics" => response(id, true, Some(diagnostics_json(boot_id, started)), None),
             "magik" => match magik_control(args) {
+                Ok(result) => response(id, true, Some(result), None),
+                Err(err) => operation_failure_response(id, &err),
+            },
+            "ui_test" => match ui_test_control(args) {
                 Ok(result) => response(id, true, Some(result), None),
                 Err(err) => operation_failure_response(id, &err),
             },
@@ -3246,6 +3251,22 @@ mod linux {
                 "repair-only diagnostics did not produce presentation telemetry",
             ),
         }
+    }
+
+    fn ui_test_control(args: Value) -> Result<Value, String> {
+        let request = mister_magik_agent_protocol::UiTestCaseRequest::from_value(&args)?;
+        Ok(json!({
+            "schema": mister_magik_agent_protocol::UI_TEST_REQUEST_SCHEMA,
+            "case": request.case,
+            "fixture": request.fixture,
+            "timeout_ms": request.timeout_ms,
+            "effects": {
+                "allow_core_launch": false,
+                "allow_catalog_write": false,
+                "allow_reboot": false,
+            },
+            "accepted": true,
+        }))
     }
 
     fn magik_control(args: Value) -> Result<Value, String> {

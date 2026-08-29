@@ -6,6 +6,8 @@ import { InputView } from "../../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
 
 export component CrtControllerPanel inherits Rectangle {
+    accessible-role: main;
+    accessible-label: "Controller test";
     background: CrtTheme.background;
 
     VerticalLayout {

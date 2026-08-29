@@ -4964,6 +4964,13 @@ pub(super) fn run_launcher_loop(
 ) {
     let launcher_ui_actions = LauncherUiActionsAdapter::install(&app);
     let start = Instant::now();
+    #[cfg(feature = "ui-device-tests")]
+    let ui_test_fixture = std::env::var(crate::ui_test_support::FIXTURE_ENV)
+        .ok()
+        .as_deref()
+        == Some(crate::ui_test_support::DETERMINISTIC_FIXTURE);
+    #[cfg(not(feature = "ui-device-tests"))]
+    let ui_test_fixture = false;
     let mut ui_action_sequence = 0u64;
     let startup_monotonic_us = monotonic_clock_us().unwrap_or(0);
     let mut frames = 0u64;
@@ -5064,7 +5071,7 @@ pub(super) fn run_launcher_loop(
         .is_some()
         .then(|| benchmark_config.start_menu().map(str::to_owned))
         .flatten();
-    let start_screen = orientation_benchmark
+    let configured_start_screen = orientation_benchmark
         .enabled()
         .then_some(Screen::Settings)
         .or_else(|| {
@@ -5078,6 +5085,18 @@ pub(super) fn run_launcher_loop(
         .or_else(|| env_start_system.as_ref().map(|_| Screen::Arcade))
         .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade))
         .unwrap_or(Screen::Home);
+    #[cfg(feature = "ui-device-tests")]
+    let start_screen = if ui_test_fixture {
+        match std::env::var("MISTER_UI_TEST_FEATURE").ok().as_deref() {
+            Some("arcade") => Screen::Arcade,
+            Some("settings") => Screen::Settings,
+            _ => Screen::Home,
+        }
+    } else {
+        configured_start_screen
+    };
+    #[cfg(not(feature = "ui-device-tests"))]
+    let start_screen = configured_start_screen;
     let lock_screen = benchmark_config
         .lock_screen()
         .or_else(|| {
@@ -5119,6 +5138,17 @@ pub(super) fn run_launcher_loop(
         FileSettingsStore::new(launcher_config.device_paths().app_path("settings.json"));
     let orientation_store = ConfirmedOrientationStore::for_runtime(settings_store.clone());
     nav.settings = settings_store.load();
+    #[cfg(feature = "ui-device-tests")]
+    if std::env::var(crate::ui_test_support::FIXTURE_ENV)
+        .ok()
+        .as_deref()
+        == Some(crate::ui_test_support::DETERMINISTIC_FIXTURE)
+        && let Some(orientation) = std::env::var("MISTER_UI_TEST_ORIENTATION")
+            .ok()
+            .and_then(|value| ScreenOrientation::parse(&value))
+    {
+        nav.settings.screen_orientation = orientation;
+    }
     if let Err(error) = orientation_store.reconcile_osd_rotation(nav.settings.screen_orientation) {
         crate::ui_errln!("settings: failed to reconcile MiSTer OSD rotation: {error}");
     }
@@ -5429,9 +5459,19 @@ pub(super) fn run_launcher_loop(
         .unwrap_or_else(|| empty_arcade_catalog(&arcade_root));
     let mut catalog_ready = !catalog.is_empty();
     let mut return_capsule_active = catalog_ready;
+    if ui_test_fixture {
+        catalog = crate::ui_test_support::deterministic_catalog();
+        catalog_ready = true;
+        return_capsule_active = false;
+        crate::ui_logln!(
+            "ui_test_fixture={} games={}",
+            crate::ui_test_support::DETERMINISTIC_FIXTURE,
+            catalog.len()
+        );
+    }
     let catalog_refresh_policy = catalog_refresh_policy();
-    let catalog_refresh = catalog_refresh_policy.force_requested();
-    let catalog_worker_enabled = catalog_refresh_policy.worker_enabled();
+    let catalog_refresh = !ui_test_fixture && catalog_refresh_policy.force_requested();
+    let catalog_worker_enabled = !ui_test_fixture && catalog_refresh_policy.worker_enabled();
     let mut lifecycle = LauncherLifecycle::new(
         LauncherLifecycleConfig {
             catalog_worker_enabled,
@@ -5452,7 +5492,7 @@ pub(super) fn run_launcher_loop(
     let mut launcher_input_script =
         LauncherInputScriptDriver::from_config(launcher_config.input().scripted(), start);
     let mut launcher_automation = LauncherAutomation::new();
-    let capsule_seed_ready = catalog_ready;
+    let capsule_seed_ready = catalog_ready && !ui_test_fixture;
     let warm_registry_hydration_pending = defer_warm_registry_hydration(
         capsule_seed_ready,
         startup_return_requested,
@@ -5461,15 +5501,16 @@ pub(super) fn run_launcher_loop(
         ),
         catalog_refresh,
     );
-    let sharded_seed = (!capsule_seed_ready && !warm_registry_hydration_pending)
-        .then(|| {
-            read_sharded_registry_seed(
-                &arcade_root,
-                launcher_config.catalog_paths().sharded_catalog_dir(),
-                start,
-            )
-        })
-        .flatten();
+    let sharded_seed =
+        (!ui_test_fixture && !capsule_seed_ready && !warm_registry_hydration_pending)
+            .then(|| {
+                read_sharded_registry_seed(
+                    &arcade_root,
+                    launcher_config.catalog_paths().sharded_catalog_dir(),
+                    start,
+                )
+            })
+            .flatten();
     let sharded_seed_ready = sharded_seed.is_some();
     let sharded_catalog_fingerprint = sharded_seed
         .as_ref()
@@ -5478,7 +5519,11 @@ pub(super) fn run_launcher_loop(
         catalog = seed.catalog;
         catalog_ready = true;
     }
-    let initial_catalog_fingerprint = return_capsule_fingerprint.or(sharded_catalog_fingerprint);
+    let initial_catalog_fingerprint = if ui_test_fixture {
+        None
+    } else {
+        return_capsule_fingerprint.or(sharded_catalog_fingerprint)
+    };
     let mut catalog_generation =
         initialize_catalog_generation(&mut scheduler, initial_catalog_fingerprint);
     if initial_system_entry_reader_required(capsule_seed_ready, sharded_seed_ready) {
@@ -5500,7 +5545,11 @@ pub(super) fn run_launcher_loop(
         }
     }
     let mut startup_ready_catalog_source = CatalogSource::FreshBuild;
-    if capsule_seed_ready {
+    if ui_test_fixture {
+        startup_ready_catalog_source = CatalogSource::FreshBuild;
+        catalog_session.mark_refresh_done();
+        catalog_version = catalog_version.wrapping_add(1);
+    } else if capsule_seed_ready {
         startup_ready_catalog_source = CatalogSource::ReturnCapsule;
         catalog_session.note_summary_seed_ready();
         if preview_route.allows_preview_work() {

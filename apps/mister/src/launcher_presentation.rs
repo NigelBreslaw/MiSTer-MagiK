@@ -748,6 +748,34 @@ impl LauncherViewPresenters {
             );
         }
         sync_arcade_search(&arcade, nav);
+        arcade.set_drawer_open(nav.screen == Screen::Arcade && nav.arcade_filter.drawer_open);
+        set_view_string_if_changed!(
+            arcade,
+            get_drawer_title,
+            set_drawer_title,
+            nav.arcade_filter.title()
+        );
+        set_if_changed!(
+            arcade,
+            get_drawer_selected_index,
+            set_drawer_selected_index,
+            nav.arcade_filter.selected as i32
+        );
+        set_view_string_if_changed!(
+            arcade,
+            get_active_filter_label,
+            set_active_filter_label,
+            nav.arcade_filter.active_label()
+        );
+        let drawer_items = if nav.screen == Screen::Arcade && nav.arcade_filter.drawer_open {
+            nav.arcade_filter_items(catalog, nav.active_collection_scope_id(catalog))
+                .into_iter()
+                .map(|item| SharedString::from(item.label))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        arcade.set_drawer_items(ModelRc::from(Rc::new(VecModel::from(drawer_items))));
     }
 
     pub fn menu_items(&mut self, nav: &LauncherNav, catalog_version: usize) -> ModelRc<MenuItem> {

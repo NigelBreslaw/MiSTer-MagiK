@@ -47,6 +47,11 @@ impl ArcadeGameFixture {
         self
     }
 
+    pub fn category(mut self, category: impl Into<String>) -> Self {
+        self.category = category.into();
+        self
+    }
+
     pub fn players(mut self, players: u8) -> Self {
         self.players = Some(players);
         self

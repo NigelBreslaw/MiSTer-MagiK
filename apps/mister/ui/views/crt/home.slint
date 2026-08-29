@@ -46,6 +46,8 @@ export component HomeGrid inherits Rectangle {
             vertical-stretch: 1;
             background: CrtTheme.background;
             clip: true;
+            accessible-role: list;
+            accessible-label: NavigationView.menu-title;
 
             for state[index] in NavigationView.menu-item-presentation : CrtCard {
                 y: (index - root.first-visible-row) * root.card-pitch - root.leading-clip;

@@ -12,6 +12,12 @@ component SettingsRow inherits Rectangle {
     in property <bool> focused;
     in property <bool> acknowledged;
 
+    accessible-role: list-item;
+    accessible-label: root.label;
+    accessible-description: root.detail;
+    accessible-item-selected: root.focused;
+    accessible-enabled: true;
+
     height: 52px;
     background: focused ? #2a2236 : #1e1828;
     border-width: focused ? 2px : 1px;
@@ -36,6 +42,9 @@ component SettingsRow inherits Rectangle {
 }
 
 export component SettingsScreen inherits Rectangle {
+
+    accessible-role: main;
+    accessible-label: "Settings";
 
     HorizontalLayout {
 

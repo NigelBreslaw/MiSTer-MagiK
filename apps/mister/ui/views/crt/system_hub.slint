@@ -14,6 +14,12 @@ component HubCard inherits Rectangle {
     in property <bool> focused;
     in property <bool> acknowledged;
     in property <bool> enabled: true;
+    accessible-role: list-item;
+    accessible-label: root.label;
+    accessible-description: root.detail;
+    accessible-enabled: root.enabled;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.focused;
     background: focused ? CrtTheme.panel-alt : CrtTheme.panel;
     border-width: focused ? MisterUi.border * 2 : MisterUi.border;
     border-color: focused ? CrtTheme.accent : acknowledged ? #4e8f80 : CrtTheme.border;

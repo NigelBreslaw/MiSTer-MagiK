@@ -6,6 +6,8 @@ import { FeedbackView, ScreenOrientation, SettingsSection, SettingsView } from "
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
 
 export component SettingsScreen inherits Rectangle {
+    accessible-role: main;
+    accessible-label: "Settings";
     background: CrtTheme.background;
 
     VerticalLayout {

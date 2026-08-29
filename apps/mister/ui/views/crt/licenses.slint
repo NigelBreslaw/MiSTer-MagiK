@@ -8,6 +8,8 @@ import { MisterUi } from "../../mister_window.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
 
 export component LicensesScreen inherits Rectangle {
+    accessible-role: main;
+    accessible-label: "Licenses";
     background: CrtTheme.background;
 
     if !SettingsView.license-expanded : VerticalLayout {
@@ -42,6 +44,9 @@ export component LicensesScreen inherits Rectangle {
             background: CrtTheme.panel;
             border-width: MisterUi.border;
             border-color: CrtTheme.border;
+            accessible-role: region;
+            accessible-label: "License text";
+            accessible-description: SettingsView.license-titles[SettingsView.selected-license-index];
             Flickable {
                 x: 12px;
                 y: 12px;
