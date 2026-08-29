@@ -220,14 +220,18 @@ module mister_magik_ascal_completion_formal;
 				6: if (reference_words == 0) witness_phase <= 7;
 			endcase
 `elsif COVER_WITNESS_COINCIDENT
-			witness_cycle <= witness_cycle + 1'b1;
-			assume(reset_n == (witness_cycle != 0));
+			assume(reset_n == (witness_phase != 0));
 			assume(avl_step && o_step && !waitrequest && !request_copy_retire);
-			assume(vs_edge == (witness_cycle == 2));
-			assume(schedule_read ==
-				(witness_cycle == 2 || witness_cycle == 3));
+			assume(vs_edge == (witness_phase == 1));
+			assume(schedule_read == (witness_phase == 2));
 			assume(return_valid ==
-				(witness_cycle >= 5 && witness_cycle <= 260));
+				(witness_phase == 4 && reference_words != 0));
+			case (witness_phase)
+				0: witness_phase <= 1;
+				1: if (release_event) witness_phase <= 2;
+				2: if (read_start_event) witness_phase <= 3;
+				3: if (issue_event) witness_phase <= 4;
+			endcase
 `elsif COVER_WITNESS_FINAL_RESET
 			assume(reset_n == (witness_phase != 0 && witness_phase != 4));
 			assume(avl_step && o_step && !waitrequest && !request_copy_retire);
