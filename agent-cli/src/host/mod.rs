@@ -19769,32 +19769,6 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
     env
 }
 
-fn catalog_attribution_search_ui_env(arm: CatalogAttributionArm) -> Vec<(String, String)> {
-    let mut env = catalog_attribution_launcher_env(arm)
-        .into_iter()
-        .filter(|(key, _)| {
-            !matches!(
-                key.as_str(),
-                "MISTER_CATALOG_REFRESH"
-                    | "MISTER_LAUNCHER_START_SCREEN"
-                    | "MISTER_LAUNCHER_START_SYSTEM"
-                    | "MISTER_HOME_SELECTED_INDEX"
-                    | "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM"
-            )
-        })
-        .collect::<Vec<_>>();
-    env.extend([
-        ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-        ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
-        ("MISTER_HOME_SELECTED_INDEX".into(), "0".into()),
-        (
-            "MISTER_BENCH_CATALOG_SEARCH_FORCE_PERSISTED".into(),
-            "1".into(),
-        ),
-    ]);
-    env
-}
-
 fn catalog_attribution_runtime_command(subcommand: &str) -> String {
     let root = CATALOG_ATTRIBUTION_REMOTE_DIR;
     let work = CATALOG_ATTRIBUTION_WORK_DIR;
@@ -20378,20 +20352,6 @@ fn run_catalog_attribution_pair(
         },
     )?;
     let fresh_profile = collect_catalog_attribution_profile(session, sample_dir, "fresh", arm)?;
-    let (first_use_search_ui, first_use_search) = if arm == CatalogAttributionArm::Control {
-        let ui_detail = verify_installed_search_ui_with_env(
-            config,
-            &sample_dir.join("first-use-search-ui"),
-            catalog_attribution_search_ui_env(arm),
-            Duration::from_secs(45),
-            120,
-        )?;
-        let ui_summary: Value = serde_json::from_str(&ui_detail)?;
-        let search_summary = run_catalog_attribution_search_bench(session, sample_dir)?;
-        (Some(ui_summary), Some(search_summary))
-    } else {
-        (None, None)
-    };
     let generation = fresh
         .pointer("/catalog/generation")
         .and_then(Value::as_u64)
@@ -20413,30 +20373,7 @@ fn run_catalog_attribution_pair(
     let rebuild_profile = collect_catalog_attribution_profile(session, sample_dir, "rebuild", arm)?;
     fresh["profile"] = fresh_profile;
     rebuild["profile"] = rebuild_profile;
-    let mut pair = json!({"fresh": fresh, "rebuild": rebuild});
-    if let Some(first_use_search_ui) = first_use_search_ui {
-        pair["first_use_search_ui"] = first_use_search_ui;
-    }
-    if let Some(first_use_search) = first_use_search {
-        pair["first_use_search"] = first_use_search;
-    }
-    Ok(pair)
-}
-
-fn run_catalog_attribution_search_bench(session: &Session, sample_dir: &Path) -> Result<Value> {
-    let output = exec_checked_output(
-        session,
-        "measure first-use catalog search",
-        &catalog_attribution_runtime_command("search-bench"),
-    )?;
-    let mut log = output.stdout;
-    log.push_str(&output.stderr);
-    fs::write(sample_dir.join("first-use-search-bench.log"), &log)?;
-    let summary = last_json_line(&log).ok_or("catalog search benchmark returned no JSON")?;
-    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-search-benchmark-v2") {
-        return Err("catalog search benchmark returned the wrong schema".into());
-    }
-    Ok(summary)
+    Ok(json!({"fresh": fresh, "rebuild": rebuild}))
 }
 
 fn collect_catalog_attribution_profile(
