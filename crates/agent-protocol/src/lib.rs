@@ -4,14 +4,14 @@
 use serde_json::{Map, Value, json};
 
 pub const PORT: u16 = 7498;
-// Version 33 adds the launcher controller UI-test case.
+// Version 34 adds the menu confirmation UI-test case.
 // Version 32 keeps the UI-test session stream open after its length-framed upload.
 // Version 30 adds the authenticated UI-test runtime session transport.
 // Version 29 adds the schema-6 scaler copy-retirement diagnostics decoder.
 // Version 28 added the disposable schema-5 scaler pipeline decoder. Version 27
 // introduced bounded, authenticated Runtime staging over the existing
 // outbound host-to-agent connection.
-pub const AGENT_VERSION: u64 = 33;
+pub const AGENT_VERSION: u64 = 34;
 pub const PROTOCOL_VERSION: u64 = 2;
 pub const FRAMEBUFFER_CAPTURE_CAPABILITY: &str = "framebuffer-capture-v2";
 pub const DEVICE_TELEMETRY_CAPABILITY: &str = "device-telemetry-v2";
@@ -35,7 +35,7 @@ pub const UI_TEST_CASES: &[&str] = &[
     "screensaver-motion",
     "about-licenses",
     "controller",
-    "effect-sandbox",
+    "menu-confirmations",
     "profile-matrix",
 ];
 pub const UI_TEST_FIXTURES: &[&str] = &["deterministic-arcade-v1"];

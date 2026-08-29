@@ -22,7 +22,7 @@ then run the smoke journey before the complete suite. On macOS, this typed
 workflow uses the Apple `container` ARM backend; `cross` is only an explicit
 alternate comparison backend. The first typed device operation upgrades an
 older installed agent transactionally; confirm its status reports agent
-version 33 before relying on the `controller` case.
+version 34 before relying on the renamed `menu-confirmations` case.
 
 ```sh
 export SLINT_TESTING_TOKEN="..."
