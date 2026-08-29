@@ -692,8 +692,8 @@ mod tests {
                 features: vec!["ui".into(), "ui-device-tests".into()],
             },
             environment: vec![
-                ("MISTER_UI_TEST_FEATURE".into(), "home".into()),
                 ("MISTER_MAGIK_RUNTIME_DISPLAY_V1".into(), "schema=1".into()),
+                ("MISTER_UI_TEST_FEATURE".into(), "home".into()),
             ],
         };
         let decoded = UiTestSessionRequest::from_value(&request.to_value()).unwrap();
