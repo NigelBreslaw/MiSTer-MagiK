@@ -14,7 +14,8 @@ from scripts.magik_ci.assurance import fast_checks
 from scripts.magik_ci.bundle import bundle_id, update_plan
 from scripts.magik_ci.host import HOST_GROUPS, commands
 from scripts.magik_ci.manifest import candidate_id, serialize
-from scripts.magik_ci.python_tests import SLOW_TEST, commands as python_test_commands
+from scripts.magik_ci.python_tests import SLOW_TEST
+from scripts.magik_ci.python_tests import commands as python_test_commands
 from scripts.magik_ci.quality import QUALITY_COMMANDS, execute
 
 
