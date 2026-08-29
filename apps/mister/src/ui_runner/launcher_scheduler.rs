@@ -578,6 +578,8 @@ pub(super) struct LauncherScheduler {
     archive_cache: mister_magik_catalog::catalog_config::ArchiveCacheConfig,
     media_config: Result<MediaWorkerConfig, String>,
     catalog: CatalogJobState,
+    catalog_child_control: Option<Arc<CatalogChildControl>>,
+    catalog_stop_requested: bool,
     catalog_progress: crate::catalog_progress_report::CatalogProgressMonitor,
     search_query: SearchQueryJobState,
     pending_search_query: Option<launcher::ArcadeSearchRequest>,
@@ -635,6 +637,8 @@ impl LauncherScheduler {
             archive_cache,
             media_config,
             catalog: CatalogJobState::Idle,
+            catalog_child_control: None,
+            catalog_stop_requested: false,
             catalog_progress: crate::catalog_progress_report::CatalogProgressMonitor::new(now),
             search_query: SearchQueryJobState::Idle,
             pending_search_query: None,
@@ -931,14 +935,17 @@ impl LauncherScheduler {
             Instant::now(),
         );
         self.enqueue_catalog_progress(evidence);
-        self.catalog = CatalogJobState::Running(start_library_catalog_worker(
+        let (catalog_receiver, child_control) = start_library_catalog_worker(
             root,
             request,
             initial_cache,
             execution_mode,
             self.catalog_paths.clone(),
             self.archive_cache.clone(),
-        ));
+        );
+        self.catalog_child_control = child_control;
+        self.catalog_stop_requested = false;
+        self.catalog = CatalogJobState::Running(catalog_receiver);
         true
     }
 
@@ -968,6 +975,16 @@ impl LauncherScheduler {
             match received {
                 Ok(message) => {
                     self.record_catalog_progress_message(&message, Instant::now());
+                    if matches!(
+                        message,
+                        CatalogWorkerMessage::Done
+                            | CatalogWorkerMessage::LoadFailed { .. }
+                            | CatalogWorkerMessage::PersistenceFailed { .. }
+                    ) {
+                        self.catalog = CatalogJobState::Idle;
+                        self.catalog_child_control = None;
+                        self.catalog_stop_requested = false;
+                    }
                     out.push(message);
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
@@ -978,18 +995,28 @@ impl LauncherScheduler {
             }
         }
         if disconnected {
-            self.catalog = CatalogJobState::Idle;
-            self.finish_catalog_progress(
-                "disconnected",
-                "catalog worker channel disconnected without a terminal message",
-            );
-            // A worker that exits without a terminal event is itself a
-            // terminal catalog failure. Always surface this to the session;
-            // otherwise a normal cold build can remain unfinished forever
-            // because there is no worker left to produce a later message.
-            out.push(CatalogWorkerMessage::LoadFailed {
-                error: "catalog worker disconnected without a terminal message".to_string(),
-            });
+            if !self.catalog_worker_running() {
+                // A terminal message may have transitioned the state to idle
+                // just before the protocol reader dropped its sender.
+            } else if let Some(control) = self.catalog_child_control.as_ref()
+                && !control.reaped()
+            {
+                // Keep the job in the running state until the protocol reader
+                // reaps the child and emits a terminal event. This prevents a
+                // replacement builder from overlapping an unobserved child.
+                let _ = control.terminate();
+            } else {
+                self.catalog = CatalogJobState::Idle;
+                self.catalog_child_control = None;
+                self.catalog_stop_requested = false;
+                self.finish_catalog_progress(
+                    "disconnected",
+                    "catalog worker channel disconnected without a terminal message",
+                );
+                out.push(CatalogWorkerMessage::LoadFailed {
+                    error: "catalog worker disconnected without a terminal message".to_string(),
+                });
+            }
         }
         if scope != CatalogPollScope::Idle {
             return disconnected;
@@ -1073,10 +1100,29 @@ impl LauncherScheduler {
         {
             self.enqueue_catalog_progress(evidence);
         }
+        if self
+            .catalog_progress
+            .active_stalled(self.catalog_worker_running(), background_work_allowed)
+            && !self.catalog_stop_requested
+        {
+            if let Some(control) = self.catalog_child_control.as_ref()
+                && control.terminate()
+            {
+                self.catalog_stop_requested = true;
+                self.note_catalog_progress(
+                    "watchdog-stop",
+                    "stalled",
+                    "child terminated after 120 seconds without validated progress",
+                    -1,
+                    now,
+                );
+            }
+        }
     }
 
     fn record_catalog_progress_message(&mut self, message: &CatalogWorkerMessage, now: Instant) {
         match message {
+            CatalogWorkerMessage::Heartbeat { .. } => {}
             CatalogWorkerMessage::Timing { name, detail } => {
                 self.note_catalog_progress("timing", name, detail, -1, now);
             }

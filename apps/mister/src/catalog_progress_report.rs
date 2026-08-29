@@ -22,7 +22,7 @@ const MAX_RETAINED_REPORTS: usize = 24;
 const MAX_RETAINED_BYTES: u64 = 2 * 1024 * 1024;
 const RETENTION_MS: u128 = 48 * 60 * 60 * 1000;
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(120);
-const STALL_AFTER_ACTIVE: Duration = Duration::from_secs(5 * 60);
+const STALL_AFTER_ACTIVE: Duration = Duration::from_secs(2 * 60);
 const STALL_REPEAT_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const MAX_JSON_INPUT_BYTES: u64 = 512 * 1024;
 const MAX_LOG_BYTES: usize = 24 * 1024;
@@ -208,6 +208,12 @@ impl CatalogProgressMonitor {
 
     pub fn episode_id(&self) -> Option<&str> {
         self.episode_id.as_deref()
+    }
+
+    pub fn active_stalled(&self, worker_running: bool, background_work_allowed: bool) -> bool {
+        worker_running
+            && (self.execution_mode == "foreground_exclusive" || background_work_allowed)
+            && self.inactive_elapsed >= STALL_AFTER_ACTIVE
     }
 
     fn advance(&mut self, now: Instant) {

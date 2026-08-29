@@ -7,7 +7,14 @@ use crate::preview_state::SystemEntryPreviewPrelude;
 use mister_magik_catalog::arcade_catalog::ArcadeCatalog;
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use std::ffi::CString;
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+const CATALOG_WORKER_CHILD_ENV: &str = "MISTER_CATALOG_WORKER_CHILD";
+const CATALOG_WORKER_PROTOCOL_PREFIX: &str = "MISTER_CATALOG_EVENT ";
 
 fn filesystem_available_bytes(path: &str) -> Option<u64> {
     let path = CString::new(path).ok()?;
@@ -113,7 +120,233 @@ pub(super) fn catalog_refresh_available() -> bool {
     true
 }
 
+pub(super) struct CatalogChildControl {
+    child: Mutex<Option<Child>>,
+}
+
+impl CatalogChildControl {
+    fn reaped(&self) -> bool {
+        self.child
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_none()
+    }
+
+    fn terminate(&self) -> bool {
+        let mut child = self.child.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(child) = child.as_mut() else {
+            return false;
+        };
+        child.kill().is_ok()
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct CatalogWorkerWireEvent {
+    version: u8,
+    kind: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    detail: String,
+    #[serde(default)]
+    error: String,
+    #[serde(default)]
+    system_id: String,
+    #[serde(default)]
+    system_ids: Vec<String>,
+    #[serde(default)]
+    all_published_systems: bool,
+    #[serde(default)]
+    generation: u64,
+    #[serde(default)]
+    rebuilt: Vec<String>,
+    #[serde(default)]
+    removed: Vec<String>,
+    #[serde(default)]
+    elapsed_us: u64,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    durable_save_pending: bool,
+    #[serde(default)]
+    fingerprint: String,
+    #[serde(default)]
+    run_id: String,
+    #[serde(default)]
+    phase: String,
+    #[serde(default)]
+    sequence: u64,
+    #[serde(default)]
+    progress_epoch: u64,
+    #[serde(default)]
+    work_units: u64,
+}
+
+fn write_worker_wire_event(writer: &mut impl Write, event: &CatalogWorkerWireEvent) -> bool {
+    serde_json::to_writer(&mut *writer, event)
+        .and_then(|()| writer.write_all(b"\n"))
+        .and_then(|()| writer.flush())
+        .is_ok()
+}
+
+fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
+    let mut event = CatalogWorkerWireEvent {
+        version: 1,
+        kind: String::new(),
+        name: String::new(),
+        detail: String::new(),
+        error: String::new(),
+        system_id: String::new(),
+        system_ids: Vec::new(),
+        all_published_systems: false,
+        generation: 0,
+        rebuilt: Vec::new(),
+        removed: Vec::new(),
+        elapsed_us: 0,
+        source: String::new(),
+        durable_save_pending: false,
+        fingerprint: String::new(),
+        run_id: String::new(),
+        phase: String::new(),
+        sequence: 0,
+        progress_epoch: 0,
+        work_units: 0,
+    };
+    match message {
+        CatalogWorkerMessage::Timing { name, detail } => {
+            event.kind = "timing".to_string();
+            event.name = name.clone();
+            event.detail = detail.clone();
+        }
+        CatalogWorkerMessage::LoadFailed { error } => {
+            event.kind = "load-failed".to_string();
+            event.error = error.clone();
+        }
+        CatalogWorkerMessage::ReconciliationPlanReady {
+            system_ids,
+            all_published_systems,
+        } => {
+            event.kind = "plan-ready".to_string();
+            event.system_ids = system_ids.clone();
+            event.all_published_systems = *all_published_systems;
+        }
+        CatalogWorkerMessage::SystemScanning { system_id } => {
+            event.kind = "system-scanning".to_string();
+            event.system_id = system_id.clone();
+        }
+        CatalogWorkerMessage::SystemPrepared {
+            system_id,
+            generation,
+        } => {
+            event.kind = "system-prepared".to_string();
+            event.system_id = system_id.clone();
+            event.generation = *generation;
+        }
+        CatalogWorkerMessage::SystemRemoved { system_id } => {
+            event.kind = "system-removed".to_string();
+            event.system_id = system_id.clone();
+        }
+        CatalogWorkerMessage::SystemUpdateFailed { system_id, error } => {
+            event.kind = "system-update-failed".to_string();
+            event.system_id = system_id.clone();
+            event.error = error.clone();
+        }
+        CatalogWorkerMessage::ManifestPublished {
+            generation,
+            rebuilt,
+            removed,
+        } => {
+            event.kind = "manifest-published".to_string();
+            event.generation = *generation;
+            event.rebuilt = rebuilt.clone();
+            event.removed = removed.clone();
+        }
+        CatalogWorkerMessage::BuildCompleted { elapsed_us } => {
+            event.kind = "build-completed".to_string();
+            event.elapsed_us = *elapsed_us;
+        }
+        CatalogWorkerMessage::HydrationDoneNeedsValidation { root } => {
+            event.kind = "hydration-done".to_string();
+            event.detail = root.clone();
+        }
+        CatalogWorkerMessage::Ready {
+            source,
+            durable_save_pending,
+            generation_fingerprint,
+            ..
+        } => {
+            event.kind = "ready".to_string();
+            event.source = source.label().to_string();
+            event.durable_save_pending = *durable_save_pending;
+            event.fingerprint = generation_fingerprint.clone().unwrap_or_default();
+        }
+        CatalogWorkerMessage::PersistenceFailed { error } => {
+            event.kind = "persistence-failed".to_string();
+            event.error = error.clone();
+        }
+        CatalogWorkerMessage::Done => event.kind = "done".to_string(),
+        CatalogWorkerMessage::Heartbeat {
+            run_id,
+            phase,
+            sequence,
+            progress_epoch,
+            work_units,
+        } => {
+            event.kind = "heartbeat".to_string();
+            event.run_id = run_id.clone();
+            event.phase = phase.clone();
+            event.sequence = *sequence;
+            event.progress_epoch = *progress_epoch;
+            event.work_units = *work_units;
+        }
+        CatalogWorkerMessage::SystemShardReady { .. }
+        | CatalogWorkerMessage::SystemShardFailed { .. }
+        | CatalogWorkerMessage::SearchQueryReady { .. }
+        | CatalogWorkerMessage::SearchQueryFailed { .. } => {
+            event.kind = "unsupported".to_string();
+        }
+    }
+    event
+}
+
 pub(super) fn start_library_catalog_worker(
+    root: String,
+    request: CatalogWorkerRequest,
+    initial_cache: CatalogWorkerInitialCache,
+    execution_mode: CatalogExecutionMode,
+    catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
+    archive_cache: mister_magik_catalog::catalog_config::ArchiveCacheConfig,
+) -> (
+    mpsc::Receiver<CatalogWorkerMessage>,
+    Option<Arc<CatalogChildControl>>,
+) {
+    if request != CatalogWorkerRequest::LoadOnly
+        && request != CatalogWorkerRequest::StrictLoad
+        && std::env::var_os(CATALOG_WORKER_CHILD_ENV).is_none()
+    {
+        return start_library_catalog_worker_process(
+            root,
+            request,
+            initial_cache,
+            execution_mode,
+            catalog_paths,
+        );
+    }
+    (
+        start_library_catalog_worker_in_process(
+            root,
+            request,
+            initial_cache,
+            execution_mode,
+            catalog_paths,
+            archive_cache,
+        ),
+        None,
+    )
+}
+
+fn start_library_catalog_worker_in_process(
     root: String,
     request: CatalogWorkerRequest,
     initial_cache: CatalogWorkerInitialCache,
@@ -190,6 +423,368 @@ pub(super) fn start_library_catalog_worker(
         .expect("spawn catalog-refresh");
     rx
 }
+
+fn start_library_catalog_worker_process(
+    root: String,
+    request: CatalogWorkerRequest,
+    initial_cache: CatalogWorkerInitialCache,
+    execution_mode: CatalogExecutionMode,
+    catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
+) -> (
+    mpsc::Receiver<CatalogWorkerMessage>,
+    Option<Arc<CatalogChildControl>>,
+) {
+    let (tx, rx) = mpsc::channel();
+    let executable = match std::env::current_exe() {
+        Ok(executable) => executable,
+        Err(error) => {
+            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                error: format!("locate catalog worker executable: {error}"),
+            });
+            return (rx, None);
+        }
+    };
+    let mut child = match Command::new(executable)
+        .arg(crate::command_args::CATALOG_WORKER_COMMAND)
+        .arg(request.label())
+        .arg(match initial_cache {
+            CatalogWorkerInitialCache::AlreadyLoadedReady => "ready",
+            CatalogWorkerInitialCache::AlreadyProbedMissing => "missing",
+        })
+        .arg(execution_mode.label())
+        .arg(&root)
+        .env(CATALOG_WORKER_CHILD_ENV, "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                error: format!("spawn catalog worker child: {error}"),
+            });
+            return (rx, None);
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                error: "catalog worker child has no protocol stream".to_string(),
+            });
+            return (rx, None);
+        }
+    };
+    let control = Arc::new(CatalogChildControl {
+        child: Mutex::new(Some(child)),
+    });
+    let reader_control = Arc::clone(&control);
+    let reader_root = root.clone();
+    let reader_catalog_root = catalog_paths.sharded_catalog_dir().to_path_buf();
+    std::thread::Builder::new()
+        .name("catalog-worker-protocol".to_string())
+        .spawn(move || {
+            let reader = BufReader::new(stderr);
+            let mut terminal = false;
+            let mut terminal_message = None;
+            for line in reader.lines() {
+                let Ok(line) = line else {
+                    break;
+                };
+                let Some(payload) = line.strip_prefix(CATALOG_WORKER_PROTOCOL_PREFIX) else {
+                    continue;
+                };
+                let event = match serde_json::from_str::<CatalogWorkerWireEvent>(payload) {
+                    Ok(event) => event,
+                    Err(error) => {
+                        terminal_message = Some(CatalogWorkerMessage::PersistenceFailed {
+                            error: format!("decode catalog worker protocol: {error}"),
+                        });
+                        terminal = true;
+                        break;
+                    }
+                };
+                match catalog_worker_message_from_wire(event, &reader_root, &reader_catalog_root) {
+                    Ok(Some(message)) => {
+                        terminal = matches!(
+                            message,
+                            CatalogWorkerMessage::Done
+                                | CatalogWorkerMessage::LoadFailed { .. }
+                                | CatalogWorkerMessage::PersistenceFailed { .. }
+                        );
+                        if terminal {
+                            terminal_message = Some(message);
+                            break;
+                        }
+                        let _ = tx.send(message);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        terminal_message = Some(CatalogWorkerMessage::PersistenceFailed { error });
+                        terminal = true;
+                        break;
+                    }
+                }
+            }
+            let child_status = {
+                let mut child = reader_control
+                    .child
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                child.as_mut().and_then(|child| child.wait().ok())
+            };
+            reader_control
+                .child
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take();
+            if let Some(message) = terminal_message {
+                let _ = tx.send(message);
+            } else if !terminal {
+                let detail = child_status
+                    .map(|status| format!("catalog worker child exited with {status}"))
+                    .unwrap_or_else(|| {
+                        "catalog worker child exited without a terminal event".to_string()
+                    });
+                let _ = tx.send(CatalogWorkerMessage::PersistenceFailed { error: detail });
+            }
+        })
+        .expect("spawn catalog worker protocol reader");
+    (rx, Some(control))
+}
+
+fn catalog_worker_message_from_wire(
+    event: CatalogWorkerWireEvent,
+    root: &str,
+    catalog_root: &Path,
+) -> Result<Option<CatalogWorkerMessage>, String> {
+    if event.version != 1 {
+        return Err(format!(
+            "unsupported catalog worker protocol version {}",
+            event.version
+        ));
+    }
+    let message = match event.kind.as_str() {
+        "heartbeat" => CatalogWorkerMessage::Heartbeat {
+            run_id: event.run_id,
+            phase: event.phase,
+            sequence: event.sequence,
+            progress_epoch: event.progress_epoch,
+            work_units: event.work_units,
+        },
+        "timing" => CatalogWorkerMessage::Timing {
+            name: event.name,
+            detail: event.detail,
+        },
+        "load-failed" => CatalogWorkerMessage::LoadFailed { error: event.error },
+        "plan-ready" => CatalogWorkerMessage::ReconciliationPlanReady {
+            system_ids: event.system_ids,
+            all_published_systems: event.all_published_systems,
+        },
+        "system-scanning" => CatalogWorkerMessage::SystemScanning {
+            system_id: event.system_id,
+        },
+        "system-prepared" => CatalogWorkerMessage::SystemPrepared {
+            system_id: event.system_id,
+            generation: event.generation,
+        },
+        "system-removed" => CatalogWorkerMessage::SystemRemoved {
+            system_id: event.system_id,
+        },
+        "system-update-failed" => CatalogWorkerMessage::SystemUpdateFailed {
+            system_id: event.system_id,
+            error: event.error,
+        },
+        "manifest-published" => CatalogWorkerMessage::ManifestPublished {
+            generation: event.generation,
+            rebuilt: event.rebuilt,
+            removed: event.removed,
+        },
+        "build-completed" => CatalogWorkerMessage::BuildCompleted {
+            elapsed_us: event.elapsed_us,
+        },
+        "hydration-done" => {
+            CatalogWorkerMessage::HydrationDoneNeedsValidation { root: event.detail }
+        }
+        "persistence-failed" => CatalogWorkerMessage::PersistenceFailed { error: event.error },
+        "done" => CatalogWorkerMessage::Done,
+        "ready" if event.source == "sharded-registry" => {
+            let started = Instant::now();
+            let seed = load_sharded_registry_seed_at(root, catalog_root)
+                .map_err(|error| format!("load published catalog from child: {error}"))?;
+            CatalogWorkerMessage::Ready {
+                catalog: seed.catalog,
+                load_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+                source: CatalogSource::ShardedRegistry,
+                durable_save_pending: event.durable_save_pending,
+                generation_fingerprint: (!event.fingerprint.is_empty())
+                    .then_some(event.fingerprint),
+                publication_ack: None,
+            }
+        }
+        "ready" => return Ok(None),
+        _ => {
+            return Err(format!(
+                "unknown catalog worker event kind {:?}",
+                event.kind
+            ));
+        }
+    };
+    Ok(Some(message))
+}
+
+pub(crate) fn run_catalog_worker_child(args: &[String]) {
+    let request = match args
+        .get(2)
+        .map(String::as_str)
+        .and_then(parse_catalog_worker_request)
+    {
+        Some(request) => request,
+        None => {
+            crate::ui_errln!("catalog worker child: invalid request");
+            std::process::exit(2);
+        }
+    };
+    let initial_cache = match args.get(3).map(String::as_str) {
+        Some("ready") => CatalogWorkerInitialCache::AlreadyLoadedReady,
+        Some("missing") => CatalogWorkerInitialCache::AlreadyProbedMissing,
+        _ => {
+            crate::ui_errln!("catalog worker child: invalid cache state");
+            std::process::exit(2);
+        }
+    };
+    let execution_mode = match args.get(4).map(String::as_str) {
+        Some("foreground_exclusive") => CatalogExecutionMode::ForegroundExclusive,
+        Some("background_interactive") => CatalogExecutionMode::BackgroundInteractive,
+        _ => {
+            crate::ui_errln!("catalog worker child: invalid execution mode");
+            std::process::exit(2);
+        }
+    };
+    let root = args
+        .get(5)
+        .cloned()
+        .unwrap_or_else(|| "/media/fat/_Arcade".to_string());
+    let paths = mister_magik_catalog::device_layout::CatalogPaths::capture_process();
+    let archive_cache =
+        mister_magik_catalog::catalog_config::ArchiveCacheConfig::capture_process(&paths);
+    let rx = start_library_catalog_worker_in_process(
+        root,
+        request,
+        initial_cache,
+        execution_mode,
+        paths,
+        archive_cache,
+    );
+    let writer = Arc::new(Mutex::new(std::io::BufWriter::new(std::io::stderr())));
+    let stop = Arc::new(AtomicBool::new(false));
+    let heartbeat_writer = Arc::clone(&writer);
+    let heartbeat_stop = Arc::clone(&stop);
+    let heartbeat_run_id = mister_magik_catalog::catalog_lease::CatalogRunId::new();
+    let heartbeat = std::thread::spawn(move || {
+        let mut sequence = 1u64;
+        while !heartbeat_stop.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            if heartbeat_stop.load(Ordering::Relaxed) {
+                break;
+            }
+            let event = CatalogWorkerWireEvent {
+                version: 1,
+                kind: "heartbeat".to_string(),
+                name: String::new(),
+                detail: String::new(),
+                error: String::new(),
+                system_id: String::new(),
+                system_ids: Vec::new(),
+                all_published_systems: false,
+                generation: 0,
+                rebuilt: Vec::new(),
+                removed: Vec::new(),
+                elapsed_us: 0,
+                source: String::new(),
+                durable_save_pending: false,
+                fingerprint: String::new(),
+                run_id: heartbeat_run_id.as_str().to_string(),
+                phase: "worker-running".to_string(),
+                sequence,
+                progress_epoch: 0,
+                work_units: 0,
+            };
+            sequence = sequence.saturating_add(1);
+            let mut writer = heartbeat_writer
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let _ = writer.write_all(CATALOG_WORKER_PROTOCOL_PREFIX.as_bytes());
+            let _ = write_worker_wire_event(&mut *writer, &event);
+        }
+    });
+    let mut terminal = false;
+    while let Ok(message) = rx.recv() {
+        let event = worker_wire_event(&message);
+        let mut output = writer.lock().unwrap_or_else(|error| error.into_inner());
+        if output
+            .write_all(CATALOG_WORKER_PROTOCOL_PREFIX.as_bytes())
+            .is_err()
+            || !write_worker_wire_event(&mut *output, &event)
+        {
+            break;
+        }
+        terminal = matches!(
+            message,
+            CatalogWorkerMessage::Done
+                | CatalogWorkerMessage::LoadFailed { .. }
+                | CatalogWorkerMessage::PersistenceFailed { .. }
+        );
+        if terminal {
+            break;
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    let _ = heartbeat.join();
+    if !terminal {
+        let mut output = writer.lock().unwrap_or_else(|error| error.into_inner());
+        let event = CatalogWorkerWireEvent {
+            version: 1,
+            kind: "persistence-failed".to_string(),
+            name: String::new(),
+            detail: String::new(),
+            error: "catalog worker channel closed without a terminal event".to_string(),
+            system_id: String::new(),
+            system_ids: Vec::new(),
+            all_published_systems: false,
+            generation: 0,
+            rebuilt: Vec::new(),
+            removed: Vec::new(),
+            elapsed_us: 0,
+            source: String::new(),
+            durable_save_pending: false,
+            fingerprint: String::new(),
+            run_id: String::new(),
+            phase: String::new(),
+            sequence: 0,
+            progress_epoch: 0,
+            work_units: 0,
+        };
+        let _ = output.write_all(CATALOG_WORKER_PROTOCOL_PREFIX.as_bytes());
+        let _ = write_worker_wire_event(&mut *output, &event);
+    }
+}
+
+fn parse_catalog_worker_request(label: &str) -> Option<CatalogWorkerRequest> {
+    Some(match label {
+        "load_only" => CatalogWorkerRequest::LoadOnly,
+        "strict_load" => CatalogWorkerRequest::StrictLoad,
+        "check_stamp" => CatalogWorkerRequest::CheckStamp,
+        "reconcile_changed_inputs" => CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
+        "reconcile_all_systems" => CatalogWorkerRequest::RECONCILE_ALL_SYSTEMS,
+        "fresh_build" => CatalogWorkerRequest::FreshBuild,
+        _ => return None,
+    })
+}
+
 fn run_fast_catalog_refresh_in_process(
     root: &str,
     plan: CatalogWorkerPlan,
@@ -631,6 +1226,13 @@ fn catalog_worker_plan(
 }
 
 pub(super) enum CatalogWorkerMessage {
+    Heartbeat {
+        run_id: String,
+        phase: String,
+        sequence: u64,
+        progress_epoch: u64,
+        work_units: u64,
+    },
     Timing {
         name: String,
         detail: String,

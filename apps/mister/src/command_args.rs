@@ -24,6 +24,7 @@ pub const CATALOG_INSPECT_COMMAND: &str = "catalog-inspect";
 pub const CATALOG_ROM_AUDIT_COMMAND: &str = "catalog-arcade-rom-audit";
 pub const CATALOG_CORPUS_INVENTORY_COMMAND: &str = "catalog-corpus-inventory";
 pub const CATALOG_REGISTRY_REPORT_COMMAND: &str = "catalog-registry-report";
+pub const CATALOG_WORKER_COMMAND: &str = "catalog-worker";
 
 pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("read", CommandKind::Fpga),
@@ -90,6 +91,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(CATALOG_INSPECT_COMMAND, CommandKind::PreFpga),
     CommandSpec::new(CATALOG_ROM_AUDIT_COMMAND, CommandKind::PreFpga),
     CommandSpec::new(CATALOG_REGISTRY_REPORT_COMMAND, CommandKind::PreFpga),
+    // Internal supervised child. It deliberately does not take the UI process lock.
+    CommandSpec::new(CATALOG_WORKER_COMMAND, CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("hbmame-metadata-from-library", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]

@@ -237,6 +237,7 @@ impl LauncherCatalogSession {
     ) -> CatalogSessionEffects {
         let mut effects = CatalogSessionEffects::default();
         match message {
+            CatalogWorkerMessage::Heartbeat { .. } => {}
             CatalogWorkerMessage::Timing { name, detail } => {
                 effects.event(name, detail);
             }

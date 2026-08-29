@@ -132,6 +132,7 @@ mod arcade_drawer;
 // lint exception at the ownership leaf instead of the application root.
 #[allow(dead_code)]
 mod catalog_worker;
+pub(crate) use catalog_worker::run_catalog_worker_child;
 #[cfg(not(mister_ui_scope_launcher))]
 mod controller_loop;
 #[cfg(test)]

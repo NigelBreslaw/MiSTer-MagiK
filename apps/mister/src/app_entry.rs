@@ -394,6 +394,7 @@ fn dispatch_pre_fpga(
         command_args::CATALOG_REGISTRY_REPORT_COMMAND => {
             run_catalog_registry_report(process_config.catalog_paths())
         }
+        command_args::CATALOG_WORKER_COMMAND => ui_runner::run_catalog_worker_child(args),
         #[cfg(feature = "diagnostics")]
         "hbmame-metadata-from-library" => run_hbmame_metadata_from_library(),
         #[cfg(feature = "bench-tools")]
