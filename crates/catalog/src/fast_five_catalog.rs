@@ -11,7 +11,6 @@
 use crate::catalog_classify::SystemId;
 #[cfg(feature = "builder")]
 use crate::catalog_classify::{LauncherSection, system_definition};
-#[cfg(feature = "builder")]
 use crate::shard_registry::CatalogManifest;
 use crate::shard_registry::{RegistryLimits, read_latest_manifest_lazy};
 use crate::system_shard::SystemGame;
@@ -453,6 +452,10 @@ pub fn decode_snapshot(
 pub fn registry_fingerprint(storage_root: &Path, limits: RegistryLimits) -> Result<String, String> {
     let manifest = read_latest_manifest_lazy(storage_root, limits)
         .map_err(|error| format!("read fast-five manifest: {error}"))?;
+    Ok(registry_fingerprint_for_manifest(&manifest))
+}
+
+pub fn registry_fingerprint_for_manifest(manifest: &CatalogManifest) -> String {
     let mut digest = Sha256::new();
     // The launcher fingerprint identifies immutable published artifacts, not
     // the interchange snapshot version used to build them. Keep this stable so
@@ -472,7 +475,7 @@ pub fn registry_fingerprint(storage_root: &Path, limits: RegistryLimits) -> Resu
             digest.update(navpack.hash.as_bytes());
         }
     }
-    Ok(hex(&digest.finalize()))
+    hex(&digest.finalize())
 }
 
 #[cfg(feature = "builder")]

@@ -956,10 +956,7 @@ pub fn plan_fast_refresh(
         crate::shard_registry::production_registry_limits(),
     )
     .map_err(|error| format!("read active fast catalog: {error}"))?;
-    let active_fingerprint = crate::fast_five_catalog::registry_fingerprint(
-        catalog_root,
-        crate::shard_registry::production_registry_limits(),
-    )?;
+    let active_fingerprint = crate::fast_five_catalog::registry_fingerprint_for_manifest(&active);
     let binding_matches = manifest.catalog_generation == active.generation
         && manifest.catalog_fingerprint == active_fingerprint
         && manifest.builder_identity
