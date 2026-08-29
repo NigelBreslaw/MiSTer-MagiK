@@ -47,5 +47,6 @@ include = [
     "scripts/magik_ci",
     "scripts/tests/test_magik_ci.py",
     "scripts/tests/test_ui_test_agent_input.py",
+    "scripts/tests/test_ui_test_suite.py",
     "apps/mister/ui_tests",
 ]

@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from .slint_adapter import load_application_factory
+
 DEFAULT_FIXTURE = "deterministic-arcade-v1"
 DEFAULT_TIMEOUT_SECONDS = 120
 CASE_TARGETS = {
@@ -81,6 +83,12 @@ class ScriptAgentBridge:
         return UiCaseResult(case, output)
 
 
+def _preflight_host_client() -> None:
+    """Validate the private Slint client before the ARM build starts."""
+
+    load_application_factory()
+
+
 def run_cases(cases: list[UiCase], bridge: AgentBridge) -> list[UiCaseResult]:
     """Run cases in declared order; no retries hide flaky behavior."""
 
@@ -148,6 +156,7 @@ def main() -> int:
     arguments = _parse_args()
     if arguments.timeout_secs < 1 or arguments.timeout_secs > 600:
         raise SystemExit("--timeout-secs must be between 1 and 600")
+    _preflight_host_client()
     cases = [
         UiCase(name, arguments.fixture, arguments.timeout_secs)
         for name in arguments.case
