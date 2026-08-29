@@ -1644,7 +1644,7 @@ mod linux {
                 .as_deref()
                 .ok_or_else(|| "UI-test automation response has no nonce".to_string())?;
             let deadline = Instant::now() + Duration::from_millis(request.timeout_ms);
-            let (mut app_stream, _) = loop {
+            let (app_stream, _) = loop {
                 match listener.accept() {
                     Ok(pair) => break pair,
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -1704,8 +1704,13 @@ mod linux {
             stream
                 .flush()
                 .map_err(|error| format!("flush UI-test ready response: {error}"))?;
-            io::copy_bidirectional(stream, &mut app_stream)
-                .map_err(|error| format!("relay Slint UI-test protocol: {error}"))?;
+            relay_ui_test_streams(
+                stream
+                    .try_clone()
+                    .map_err(|error| format!("clone UI-test host stream: {error}"))?,
+                app_stream,
+            )
+            .map_err(|error| format!("relay Slint UI-test protocol: {error}"))?;
             Ok(())
         })();
         if let Some(nonce) = automation_nonce.as_deref() {
@@ -1731,6 +1736,48 @@ mod linux {
             &json!({"operation_id": resume_id, "expected_generation": resume_generation}),
         );
         result.and(resume.map(|_| ()))
+    }
+
+    fn relay_ui_test_streams(left: TcpStream, right: TcpStream) -> Result<(), String> {
+        let mut left_reader = left
+            .try_clone()
+            .map_err(|error| format!("clone UI-test left stream: {error}"))?;
+        let mut right_writer = right
+            .try_clone()
+            .map_err(|error| format!("clone UI-test right stream: {error}"))?;
+        let mut right_reader = right
+            .try_clone()
+            .map_err(|error| format!("clone UI-test right reader: {error}"))?;
+        let mut left_writer = left
+            .try_clone()
+            .map_err(|error| format!("clone UI-test left writer: {error}"))?;
+        let (done_sender, done_receiver) = std::sync::mpsc::channel();
+        let forward_sender = done_sender.clone();
+        let forward = thread::spawn(move || {
+            let result = io::copy(&mut left_reader, &mut right_writer)
+                .map(|_| ())
+                .map_err(|error| error.to_string());
+            let _ = forward_sender.send(result);
+        });
+        let reverse_sender = done_sender;
+        let reverse = thread::spawn(move || {
+            let result = io::copy(&mut right_reader, &mut left_writer)
+                .map(|_| ())
+                .map_err(|error| error.to_string());
+            let _ = reverse_sender.send(result);
+        });
+        let first_result = done_receiver
+            .recv()
+            .map_err(|_| "UI-test relay threads stopped unexpectedly".to_string())?;
+        let _ = left.shutdown(Shutdown::Both);
+        let _ = right.shutdown(Shutdown::Both);
+        forward
+            .join()
+            .map_err(|_| "UI-test forward relay thread panicked".to_string())?;
+        reverse
+            .join()
+            .map_err(|_| "UI-test reverse relay thread panicked".to_string())?;
+        first_result
     }
 
     fn wait_for_ui_test_status(
