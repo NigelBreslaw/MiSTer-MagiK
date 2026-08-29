@@ -48,20 +48,16 @@ fn send_ready_catalog(
 ) {
     let publication_started = Instant::now();
     let publication_source = format!("{source:?}");
-    let (publication_tx, publication_rx) = mpsc::channel();
     let _ = tx.send(CatalogWorkerMessage::Ready {
         catalog,
         load_us,
         source,
         durable_save_pending,
         generation_fingerprint,
-        publication_ack: Some(publication_tx),
+        publication_ack: None,
     });
-    // The launcher must consume the catalog before the worker publishes the
-    // completion message and exits.
-    let _ = publication_rx.recv();
     crate::ui_logln!(
-        "catalog_publication_ack_tsv\tsource={}\telapsed_us={}\tdurable_save_pending={}",
+        "catalog_publication_dispatched_tsv\tsource={}\telapsed_us={}\tdurable_save_pending={}",
         publication_source,
         publication_started.elapsed().as_micros(),
         durable_save_pending as u8,
