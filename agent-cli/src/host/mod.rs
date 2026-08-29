@@ -31835,25 +31835,28 @@ fn run_ui_test_bridge(
         }
         Ok::<(), String>(())
     });
-    let (mut agent_stream, ready_nonce) = agent_ui_test_session_at(
-        config.agent()?,
-        request.to_value(),
-        &artifact,
-        payload_bytes,
-        Duration::from_secs(args.timeout_secs.saturating_add(15)),
-    )?;
-    let _ = control_nonce.set(ready_nonce);
-    let mut local_stream = std::net::TcpStream::connect_timeout(
-        &format!("{local_host}:{local_port}").parse()?,
-        Duration::from_secs(args.timeout_secs.min(20)),
-    )?;
-    local_stream.set_read_timeout(Some(Duration::from_secs(args.timeout_secs)))?;
-    local_stream.set_write_timeout(Some(Duration::from_secs(args.timeout_secs)))?;
-    let relay_result = io::copy_bidirectional(&mut local_stream, &mut agent_stream);
+    let session_result = (|| -> Result<()> {
+        let (mut agent_stream, ready_nonce) = agent_ui_test_session_at(
+            config.agent()?,
+            request.to_value(),
+            &artifact,
+            payload_bytes,
+            Duration::from_secs(args.timeout_secs.saturating_add(15)),
+        )?;
+        let _ = control_nonce.set(ready_nonce);
+        let mut local_stream = std::net::TcpStream::connect_timeout(
+            &format!("{local_host}:{local_port}").parse()?,
+            Duration::from_secs(args.timeout_secs.min(20)),
+        )?;
+        local_stream.set_read_timeout(Some(Duration::from_secs(args.timeout_secs)))?;
+        local_stream.set_write_timeout(Some(Duration::from_secs(args.timeout_secs)))?;
+        io::copy_bidirectional(&mut local_stream, &mut agent_stream)?;
+        Ok(())
+    })();
     stop.store(true, Ordering::Release);
     let _ = control_thread.join();
     let _ = fs::remove_file(control_path);
-    relay_result.map(|_| ()).map_err(Into::into)
+    session_result
 }
 
 fn ui_test_runtime_environment() -> Vec<(String, String)> {
