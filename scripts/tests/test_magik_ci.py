@@ -10,11 +10,46 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.magik_ci.bundle import bundle_id, update_plan
+from scripts.magik_ci.assurance import fast_checks
 from scripts.magik_ci.manifest import candidate_id, serialize
 from scripts.magik_ci.quality import QUALITY_COMMANDS, execute
 
 
 class MagikCiTests(unittest.TestCase):
+    def test_fast_assurance_selects_only_static_checks_for_slint(self) -> None:
+        commands = fast_checks(
+            Path("/repository"), ["apps/mister/ui/components/launcher.slint"]
+        )
+        self.assertEqual(
+            commands,
+            [
+                ["scripts/checks/check-repository-layout.py"],
+                ["scripts/checks/check-unified-agent-surface.py"],
+                [
+                    "scripts/checks/check-font-text-contract.py",
+                    "--repository",
+                    ".",
+                    "--all",
+                ],
+                [
+                    "scripts/checks/check-launcher-contract.py",
+                    "--repository",
+                    ".",
+                    "--all",
+                ],
+            ],
+        )
+        self.assertFalse(any(command[0] in {"cargo", "cross"} for command in commands))
+
+    def test_fast_assurance_handles_deleted_shell_paths(self) -> None:
+        self.assertEqual(
+            fast_checks(Path("/repository"), ["scripts/removed-helper.sh"]),
+            [
+                ["scripts/checks/check-repository-layout.py"],
+                ["scripts/checks/check-unified-agent-surface.py"],
+            ],
+        )
+
     def test_quality_commands_match_ci_scopes(self) -> None:
         self.assertEqual(
             QUALITY_COMMANDS["format"],
