@@ -17,7 +17,7 @@ use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -164,10 +164,10 @@ pub(crate) fn collection_listing_text_with_tool(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     unsafe {
         command.pre_exec(|| {
-            if libc::setpgid(0, 0) != 0 {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
@@ -191,20 +191,18 @@ pub(crate) fn collection_listing_text_with_tool(
             let (output, within_limit) = match result {
                 Ok(result) => result,
                 Err(_) => {
-                    kill_helper_process_group(&mut child);
+                    terminate_archive_helper(&mut child);
                     return None;
                 }
             };
             if !within_limit {
-                kill_helper_process_group(&mut child);
-                let _ = child.wait();
+                terminate_archive_helper(&mut child);
                 return None;
             }
             break output;
         }
         if start.elapsed() >= timeout {
-            kill_helper_process_group(&mut child);
-            let _ = child.wait();
+            terminate_archive_helper(&mut child);
             return None;
         }
         if child.try_wait().ok()?.is_some() {
@@ -224,8 +222,7 @@ pub(crate) fn collection_listing_text_with_tool(
             break status;
         }
         if start.elapsed() >= timeout {
-            kill_helper_process_group(&mut child);
-            let _ = child.wait();
+            terminate_archive_helper(&mut child);
             return None;
         }
         std::thread::sleep(Duration::from_millis(25));
@@ -236,18 +233,15 @@ pub(crate) fn collection_listing_text_with_tool(
     Some(String::from_utf8_lossy(&output).into_owned())
 }
 
-fn kill_helper_process_group(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    {
-        let pid = child.id().try_into().unwrap_or(-1);
-        if pid > 0 {
-            // SAFETY: the helper is placed in its own process group before
-            // exec; a negative id targets only that helper and its children.
-            let _ = unsafe { libc::kill(-pid, libc::SIGKILL) };
+fn terminate_archive_helper(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
         }
     }
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 fn result_is_within_limit(length: usize) -> bool {
