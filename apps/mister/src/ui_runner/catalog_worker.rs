@@ -125,6 +125,7 @@ pub(super) fn catalog_refresh_available() -> bool {
 pub(super) struct CatalogChildControl {
     child: Mutex<Option<Child>>,
     process_group: i32,
+    handshake_seen: AtomicBool,
 }
 
 impl CatalogChildControl {
@@ -323,6 +324,31 @@ fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
     event
 }
 
+fn blank_worker_wire_event(kind: &str) -> CatalogWorkerWireEvent {
+    CatalogWorkerWireEvent {
+        version: 1,
+        kind: kind.to_string(),
+        name: String::new(),
+        detail: String::new(),
+        error: String::new(),
+        system_id: String::new(),
+        system_ids: Vec::new(),
+        all_published_systems: false,
+        generation: 0,
+        rebuilt: Vec::new(),
+        removed: Vec::new(),
+        elapsed_us: 0,
+        source: String::new(),
+        durable_save_pending: false,
+        fingerprint: String::new(),
+        run_id: String::new(),
+        phase: String::new(),
+        sequence: 0,
+        progress_epoch: 0,
+        work_units: 0,
+    }
+}
+
 pub(super) fn start_library_catalog_worker(
     root: String,
     request: CatalogWorkerRequest,
@@ -509,6 +535,15 @@ fn start_library_catalog_worker_process(
     let control = Arc::new(CatalogChildControl {
         child: Mutex::new(Some(child)),
         process_group,
+        handshake_seen: AtomicBool::new(false),
+    });
+    let handshake_control = Arc::clone(&control);
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        if !handshake_control.handshake_seen.load(Ordering::Acquire) && !handshake_control.reaped()
+        {
+            let _ = handshake_control.terminate();
+        }
     });
     let reader_control = Arc::clone(&control);
     let reader_root = root.clone();
@@ -538,6 +573,13 @@ fn start_library_catalog_worker_process(
                 };
                 match catalog_worker_message_from_wire(event, &reader_root, &reader_catalog_root) {
                     Ok(Some(message)) => {
+                        if matches!(
+                            &message,
+                            CatalogWorkerMessage::Timing { name, .. }
+                                if name == "catalog_worker_handshake_v4"
+                        ) {
+                            reader_control.handshake_seen.store(true, Ordering::Release);
+                        }
                         terminal = matches!(
                             message,
                             CatalogWorkerMessage::Done
@@ -710,9 +752,21 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
     );
     let writer = Arc::new(Mutex::new(std::io::BufWriter::new(std::io::stderr())));
     let stop = Arc::new(AtomicBool::new(false));
+    let heartbeat_run_id = mister_magik_catalog::catalog_lease::CatalogRunId::new();
+    {
+        let mut output = writer.lock().unwrap_or_else(|error| error.into_inner());
+        let mut event = blank_worker_wire_event("timing");
+        event.name = "catalog_worker_handshake_v4".to_string();
+        event.detail = format!(
+            "operation={} run_id={}",
+            request.label(),
+            heartbeat_run_id.as_str()
+        );
+        let _ = output.write_all(CATALOG_WORKER_PROTOCOL_PREFIX.as_bytes());
+        let _ = write_worker_wire_event(&mut *output, &event);
+    }
     let heartbeat_writer = Arc::clone(&writer);
     let heartbeat_stop = Arc::clone(&stop);
-    let heartbeat_run_id = mister_magik_catalog::catalog_lease::CatalogRunId::new();
     let heartbeat = std::thread::spawn(move || {
         let mut sequence = 1u64;
         while !heartbeat_stop.load(Ordering::Relaxed) {
