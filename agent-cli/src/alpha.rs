@@ -480,9 +480,6 @@ fn run_ui_journey(
         .current_dir(&repository)
         .env("MISTER_UI_TEST_FIXTURE", &fixture)
         .env("MISTER_UI_TEST_REPOSITORY", &repository);
-    if let Some(destination) = std::env::var_os("MISTER_UI_TEST_SSH_DESTINATION") {
-        command.env("MISTER_UI_TEST_SSH_DESTINATION", destination);
-    }
     let result = command.output().map_err(|error| error.to_string())?;
     let stdout = String::from_utf8_lossy(&result.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&result.stderr).into_owned();

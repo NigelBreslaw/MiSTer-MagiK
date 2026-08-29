@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -52,20 +54,15 @@ class ScriptAgentBridge:
 
     def __init__(self, repository: Path) -> None:
         self._command = repository / "scripts" / "agent"
+        self._prepared = False
 
     def run(self, case: UiCase) -> UiCaseResult:
+        if self._prepared:
+            return UiCaseResult(case, "")
         command = [
             str(self._command),
-            "device",
-            "launcher",
-            "ui-test",
-            "--case",
-            case.name,
-            "--fixture",
-            case.fixture,
-            "--timeout-secs",
-            str(case.timeout_seconds),
-            "--attended",
+            "build",
+            "runtime-ui-tests",
         ]
         completed = subprocess.run(
             command,
@@ -78,9 +75,9 @@ class ScriptAgentBridge:
         ).strip()
         if completed.returncode != 0:
             raise RuntimeError(
-                f"device UI case {case.name!r} failed ({completed.returncode}): "
-                f"{output}"
+                f"UI-test runtime build failed ({completed.returncode}): {output}"
             )
+        self._prepared = True
         return UiCaseResult(case, output)
 
 
@@ -91,24 +88,48 @@ def run_cases(cases: list[UiCase], bridge: AgentBridge) -> list[UiCaseResult]:
 
 
 def run_pytest(cases: list[UiCase], repository: Path) -> str:
-    """Run mapped pytest modules after the agent has accepted each case."""
+    """Run each mapped pytest module in its own managed agent session."""
 
-    targets = [CASE_TARGETS[case.name] for case in cases]
-    completed = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", *targets],
-        check=False,
-        cwd=repository,
-        capture_output=True,
-        text=True,
-    )
-    output = "\n".join(
-        part for part in (completed.stdout, completed.stderr) if part
-    ).strip()
-    if completed.returncode != 0:
-        raise RuntimeError(
-            f"device UI pytest run failed ({completed.returncode}): {output}"
+    outputs: list[str] = []
+    bridge = repository / "scripts" / "agent"
+    for case in cases:
+        environment = os.environ.copy()
+        environment["MISTER_UI_TEST_CASE"] = case.name
+        environment["MISTER_UI_TEST_FIXTURE"] = case.fixture
+        environment["MISTER_UI_TEST_COMMAND"] = shlex.join(
+            [
+                str(bridge),
+                "device",
+                "launcher",
+                "ui-test-bridge",
+                "--case",
+                case.name,
+                "--fixture",
+                case.fixture,
+                "--timeout-secs",
+                str(case.timeout_seconds),
+                "--attended",
+            ]
         )
-    return output
+        completed = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", CASE_TARGETS[case.name]],
+            check=False,
+            cwd=repository,
+            env=environment,
+            capture_output=True,
+            text=True,
+        )
+        output = "\n".join(
+            part for part in (completed.stdout, completed.stderr) if part
+        ).strip()
+        if output:
+            outputs.append(f"[{case.name}]\n{output}")
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"device UI pytest case {case.name!r} failed "
+                f"({completed.returncode}): {output}"
+            )
+    return "\n".join(outputs)
 
 
 def _parse_args() -> argparse.Namespace:
