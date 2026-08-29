@@ -15,7 +15,7 @@ from apps.mister.ui_tests.driver import (
 )
 
 
-def pytest_sessionfinish(session: pytest.Session, _exitstatus: int) -> None:
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Make skipped tests fatal when invoked by the attended suite."""
 
     if os.environ.get("MISTER_UI_TEST_FAIL_ON_SKIP") != "1":
