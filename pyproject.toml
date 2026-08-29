@@ -35,4 +35,8 @@ testpaths = ["scripts/tests"]
 pythonpath = ["."]
 
 [tool.ty.src]
-include = ["scripts", "apps/mister/ui_tests"]
+include = [
+    "scripts/magik_ci",
+    "scripts/tests/test_magik_ci.py",
+    "apps/mister/ui_tests",
+]

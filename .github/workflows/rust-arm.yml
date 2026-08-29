@@ -103,7 +103,7 @@ jobs:
       - name: Type-check migrated tooling
         id: typecheck
         continue-on-error: true
-        run: uv run ty check scripts apps/mister/ui_tests
+        run: uv run ty check scripts/magik_ci scripts/tests/test_magik_ci.py apps/mister/ui_tests
       - name: Run Python tests
         id: tests
         continue-on-error: true
