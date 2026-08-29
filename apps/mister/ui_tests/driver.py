@@ -68,8 +68,11 @@ class MagiKDriver:
             env=config.environment,
             launch_timeout=config.launch_timeout,
         )
-        with application:
-            with VirtualKeyboard() as keyboard, VirtualJoystick() as joystick:
+        # Create the evdev devices before launch so the device input pool sees
+        # them during its initial discovery rather than relying on hotplug
+        # timing after the Slint process is already running.
+        with VirtualKeyboard() as keyboard, VirtualJoystick() as joystick:
+            with application:
                 yield cls(application, keyboard, joystick)
 
     def key(self, action: str, key: Key, timeout: float = 2.0) -> CorrelatedInput:
