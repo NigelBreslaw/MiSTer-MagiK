@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +22,21 @@ from scripts.magik_ci.quality import QUALITY_COMMANDS, execute
 
 
 class MagikCiTests(unittest.TestCase):
+    def test_cli_import_does_not_require_platform_manifest_dependencies(self) -> None:
+        command = """
+import builtins
+real_import = builtins.__import__
+def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == 'scripts.magik_ci.manifest' or (
+        name == 'scripts.magik_ci' and 'manifest' in fromlist
+    ):
+        raise ModuleNotFoundError(name)
+    return real_import(name, globals, locals, fromlist, level)
+builtins.__import__ = guarded_import
+import scripts.magik_ci.cli
+"""
+        subprocess.run([sys.executable, "-c", command], check=True)
+
     def test_failed_platform_run_is_eligible_only_for_verified_components(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run = Path(directory) / "run.json"

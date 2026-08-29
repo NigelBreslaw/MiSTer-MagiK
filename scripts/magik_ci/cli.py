@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-from . import architecture, build, bundle, databases, host, manifest, metadata, quality
+from . import architecture, build, bundle, databases, host, metadata, quality
 from .common import github_output, repository_root
 
 
@@ -235,6 +235,8 @@ def main() -> int:
                 args.channel, args.alpha_sha, args.candidate_sha
             )
         elif args.command == "platform-manifest":
+            from . import manifest
+
             if args.action == "generate":
                 bundle_payload = (
                     cast(
