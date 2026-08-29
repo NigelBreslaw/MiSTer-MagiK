@@ -22,7 +22,7 @@ use ssh2::Session;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -31836,7 +31836,7 @@ fn run_ui_test_bridge(
         Ok::<(), String>(())
     });
     let session_result = (|| -> Result<()> {
-        let (mut agent_stream, ready_nonce) = agent_ui_test_session_at(
+        let (agent_stream, ready_nonce) = agent_ui_test_session_at(
             config.agent()?,
             request.to_value(),
             &artifact,
@@ -31844,19 +31844,53 @@ fn run_ui_test_bridge(
             Duration::from_secs(args.timeout_secs.saturating_add(15)),
         )?;
         let _ = control_nonce.set(ready_nonce);
-        let mut local_stream = std::net::TcpStream::connect_timeout(
+        let local_stream = std::net::TcpStream::connect_timeout(
             &format!("{local_host}:{local_port}").parse()?,
             Duration::from_secs(args.timeout_secs.min(20)),
         )?;
         local_stream.set_read_timeout(Some(Duration::from_secs(args.timeout_secs)))?;
         local_stream.set_write_timeout(Some(Duration::from_secs(args.timeout_secs)))?;
-        io::copy_bidirectional(&mut local_stream, &mut agent_stream)?;
+        relay_ui_test_streams(local_stream, agent_stream)?;
         Ok(())
     })();
     stop.store(true, Ordering::Release);
     let _ = control_thread.join();
     let _ = fs::remove_file(control_path);
     session_result
+}
+
+fn relay_ui_test_streams(left: std::net::TcpStream, right: std::net::TcpStream) -> Result<()> {
+    let mut left_reader = left.try_clone()?;
+    let mut right_writer = right.try_clone()?;
+    let mut right_reader = right.try_clone()?;
+    let mut left_writer = left.try_clone()?;
+    let (done_sender, done_receiver) = std::sync::mpsc::channel();
+    let forward_sender = done_sender.clone();
+    let forward = thread::spawn(move || {
+        let result = io::copy(&mut left_reader, &mut right_writer)
+            .map(|_| ())
+            .map_err(|error| error.to_string());
+        let _ = forward_sender.send(result);
+    });
+    let reverse_sender = done_sender;
+    let reverse = thread::spawn(move || {
+        let result = io::copy(&mut right_reader, &mut left_writer)
+            .map(|_| ())
+            .map_err(|error| error.to_string());
+        let _ = reverse_sender.send(result);
+    });
+    let first_result = done_receiver
+        .recv()
+        .map_err(|_| "UI-test relay threads stopped unexpectedly")?;
+    let _ = left.shutdown(std::net::Shutdown::Both);
+    let _ = right.shutdown(std::net::Shutdown::Both);
+    forward
+        .join()
+        .map_err(|_| "UI-test forward relay thread panicked")?;
+    reverse
+        .join()
+        .map_err(|_| "UI-test reverse relay thread panicked")?;
+    first_result.map_err(Into::into)
 }
 
 fn ui_test_runtime_environment() -> Vec<(String, String)> {

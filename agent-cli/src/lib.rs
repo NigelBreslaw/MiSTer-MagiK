@@ -40,8 +40,6 @@ pub mod redact;
 pub mod release;
 pub mod request;
 pub mod return_qualification;
-#[cfg(test)]
-mod shell;
 pub mod startup_particles;
 pub mod transport;
 pub mod workflow;

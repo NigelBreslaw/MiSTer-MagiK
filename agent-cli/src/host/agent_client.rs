@@ -591,7 +591,7 @@ pub(crate) fn agent_ui_test_session_at(
     let mut response_reader = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
     response_reader.read_line(&mut line)?;
-    let first = parse_agent_response_line(line, start)?;
+    let first = parse_agent_response_line(line.clone(), start)?;
     let first_result = first.response.get("result").unwrap_or(&Value::Null);
     let ready = if first_result.get("state").and_then(Value::as_str) == Some("upload_required") {
         let mut payload = fs::File::open(artifact)?;
