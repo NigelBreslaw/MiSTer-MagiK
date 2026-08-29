@@ -565,6 +565,72 @@ pub(crate) fn agent_request_at(
     parse_agent_response_line(line, start)
 }
 
+pub(crate) fn agent_ui_test_session_at(
+    endpoint: &AgentEndpoint,
+    args: Value,
+    artifact: &Path,
+    payload_bytes: u64,
+    timeout: Duration,
+) -> Result<(TcpStream, String)> {
+    let addr = format!("{}:{AGENT_PORT}", endpoint.host)
+        .to_socket_addrs()?
+        .next()
+        .ok_or("could not resolve MiSTer agent host")?;
+    let request = agent_protocol::request(
+        &endpoint.token,
+        1,
+        agent_protocol::UI_TEST_SESSION_COMMAND,
+        args,
+    );
+    let start = Instant::now();
+    let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
+    writeln!(stream, "{request}")?;
+    stream.flush()?;
+    let mut response_reader = BufReader::new(stream.try_clone()?);
+    let mut line = String::new();
+    response_reader.read_line(&mut line)?;
+    let first = parse_agent_response_line(line, start)?;
+    let first_result = first.response.get("result").unwrap_or(&Value::Null);
+    let ready = if first_result.get("state").and_then(Value::as_str) == Some("upload_required") {
+        let mut payload = fs::File::open(artifact)?;
+        if payload.metadata()?.len() != payload_bytes {
+            return Err("UI-test runtime changed before transfer".into());
+        }
+        let mut remaining = payload_bytes;
+        let mut buffer = [0_u8; 64 * 1024];
+        while remaining != 0 {
+            let limit = usize::try_from(remaining.min(buffer.len() as u64))
+                .expect("UI-test upload buffer length fits usize");
+            let read = payload.read(&mut buffer[..limit])?;
+            if read == 0 {
+                return Err("UI-test runtime truncated during transfer".into());
+            }
+            stream.write_all(&buffer[..read])?;
+            remaining = remaining.saturating_sub(read as u64);
+        }
+        if payload.read(&mut [0_u8; 1])? != 0 {
+            return Err("UI-test runtime grew during transfer".into());
+        }
+        stream.flush()?;
+        line.clear();
+        response_reader.read_line(&mut line)?;
+        parse_agent_response_line(line, start)?
+    } else if first_result.get("state").and_then(Value::as_str) != Some("ready") {
+        return Err("MiSTer agent did not start the UI-test session".into());
+    } else {
+        first
+    };
+    let nonce = ready
+        .response
+        .pointer("/result/automation_nonce")
+        .and_then(Value::as_str)
+        .ok_or("UI-test ready response has no automation nonce")?
+        .to_string();
+    Ok((stream, nonce))
+}
+
 pub(crate) fn agent_runtime_upload_at(
     endpoint: &AgentEndpoint,
     path: &Path,
