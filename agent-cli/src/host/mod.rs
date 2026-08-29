@@ -16540,7 +16540,35 @@ fn analyze_streamline_capture(capture: &Path, output_dir: &Path) -> Result<()> {
     let stderr_path = analysis_dir.join("sl-analyze.stderr.log");
     let stdout = fs::File::create(&stdout_path)?;
     let stderr = fs::File::create(&stderr_path)?;
-    let mut child = Command::new(&analyzer)
+    let search_images = env::var_os("MISTER_STREAMLINE_SEARCH_IMAGES")
+        .map(|value| {
+            env::split_paths(&value)
+                .map(PathBuf::from)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for image_dir in &search_images {
+        if !image_dir.is_absolute() {
+            return Err(format!(
+                "MISTER_STREAMLINE_SEARCH_IMAGES entries must be absolute paths: {}",
+                image_dir.display()
+            )
+            .into());
+        }
+        let metadata = fs::metadata(image_dir)?;
+        if !metadata.is_dir() {
+            return Err(format!(
+                "MISTER_STREAMLINE_SEARCH_IMAGES entry must name a directory: {}",
+                image_dir.display()
+            )
+            .into());
+        }
+    }
+    let mut command = Command::new(&analyzer);
+    for image_dir in &search_images {
+        command.arg("--search-images").arg(image_dir);
+    }
+    let mut child = command
         .arg("-o")
         .arg(&analysis_dir)
         .arg(capture)
@@ -16590,6 +16618,7 @@ fn analyze_streamline_capture(capture: &Path, output_dir: &Path) -> Result<()> {
                 "analyzer": analyzer,
                 "capture": capture,
                 "output_directory": analysis_dir,
+                "search_images": search_images,
                 "csv_files": csv_files,
                 "timeout_seconds": STREAMLINE_ANALYZER_TIMEOUT.as_secs(),
             }))?
