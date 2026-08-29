@@ -137,8 +137,6 @@ pub struct DisplayMatrixArgs {
     pub(crate) out: PathBuf,
     #[arg(long)]
     pub(crate) usb_video: bool,
-    #[arg(long)]
-    pub(crate) screensaver_wait: Option<u64>,
 }
 
 #[derive(Debug, Subcommand)]

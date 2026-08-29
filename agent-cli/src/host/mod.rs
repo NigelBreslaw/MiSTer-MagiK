@@ -455,9 +455,6 @@ impl NativeDevice {
                         if args.usb_video {
                             values.push("--usb-video".into());
                         }
-                        if let Some(seconds) = args.screensaver_wait {
-                            values.extend(["--screensaver-wait".into(), seconds.to_string()]);
-                        }
                         display_matrix_cli(&values)
                     }
                 },
@@ -5009,7 +5006,6 @@ static ATTENDED_OPERATION_INTERRUPTED: std::sync::atomic::AtomicBool =
 #[derive(Clone, Copy)]
 struct DisplayMatrixEvidence {
     usb_video: bool,
-    screensaver_wait_secs: Option<u64>,
 }
 
 extern "C" fn display_matrix_interrupt_handler(_: libc::c_int) {
@@ -5286,7 +5282,7 @@ fn display_transaction_complete(reply: &str, interrupted: bool) -> Result<bool> 
 }
 
 fn display_matrix_cli(args: &[String]) -> Result<()> {
-    let (directory, capture_usb_video, screensaver_wait_secs) = parse_display_matrix_args(args)?;
+    let (directory, capture_usb_video) = parse_display_matrix_args(args)?;
     if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
         return Err("display matrix is attended and requires an interactive terminal".into());
     }
@@ -5353,7 +5349,6 @@ fn display_matrix_cli(args: &[String]) -> Result<()> {
                 &mut seen_usb_hashes,
                 DisplayMatrixEvidence {
                     usb_video: capture_usb_video,
-                    screensaver_wait_secs,
                 },
                 started,
             );
@@ -5425,22 +5420,7 @@ fn confirm_display_matrix_route(token: &str, instruction: &str) -> Result<()> {
     Ok(())
 }
 
-fn wait_display_matrix_interval(duration: Duration) -> Result<()> {
-    let deadline = Instant::now() + duration;
-    while Instant::now() < deadline {
-        if DISPLAY_MATRIX_INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err("display matrix interrupted".into());
-        }
-        std::thread::sleep(
-            deadline
-                .saturating_duration_since(Instant::now())
-                .min(Duration::from_millis(100)),
-        );
-    }
-    Ok(())
-}
-
-fn parse_display_matrix_args(args: &[String]) -> Result<(&str, bool, Option<u64>)> {
+fn parse_display_matrix_args(args: &[String]) -> Result<(&str, bool)> {
     if args.first().map(String::as_str) != Some("--attended") {
         return Err(
             "usage: scripts/agent device display matrix --attended --out DIRECTORY [--usb-video]"
@@ -5449,7 +5429,6 @@ fn parse_display_matrix_args(args: &[String]) -> Result<(&str, bool, Option<u64>
     }
     let mut directory = None;
     let mut capture_usb_video = false;
-    let mut screensaver_wait_secs = None;
     let mut index = 1;
     while index < args.len() {
         match args[index].as_str() {
@@ -5464,16 +5443,6 @@ fn parse_display_matrix_args(args: &[String]) -> Result<(&str, bool, Option<u64>
                 capture_usb_video = true;
                 index += 1;
             }
-            "--screensaver-wait" => {
-                let value = args
-                    .get(index + 1)
-                    .ok_or("--screensaver-wait needs SECONDS")?
-                    .parse::<u64>()?;
-                if value == 0 || screensaver_wait_secs.replace(value).is_some() {
-                    return Err("--screensaver-wait must be specified once with SECONDS > 0".into());
-                }
-                index += 2;
-            }
             argument => {
                 return Err(format!("unsupported display matrix argument: {argument}").into());
             }
@@ -5482,7 +5451,6 @@ fn parse_display_matrix_args(args: &[String]) -> Result<(&str, bool, Option<u64>
     Ok((
         directory.ok_or("display matrix requires --out DIRECTORY")?,
         capture_usb_video,
-        screensaver_wait_secs,
     ))
 }
 
@@ -5580,42 +5548,8 @@ fn capture_display_matrix_mode(
     } else {
         None
     };
-    let screensaver = if let Some(wait_secs) = evidence.screensaver_wait_secs {
-        wait_display_matrix_interval(Duration::from_secs(wait_secs))?;
-        let saver_capture = request_framebuffer_png()?;
-        validate_visible_launcher_capture(&saver_capture)?;
-        let saver_sha256 = encode_hex(&Sha256::digest(&saver_capture.png));
-        if saver_sha256 == sha256 || !seen_hashes.insert(saver_sha256.clone()) {
-            return Err(format!(
-                "screensaver did not advance to distinct content for {}",
-                mode.id
-            )
-            .into());
-        }
-        let saver_path = directory.join(format!("{}-screensaver.png", mode.id));
-        fs::write(&saver_path, &saver_capture.png)?;
-        let saver_usb = if evidence.usb_video {
-            let saver_usb_path = directory.join(format!("{}-screensaver-usb-video.jpg", mode.id));
-            crt_qualification::capture_usb_video_frame(&saver_usb_path)?;
-            let bytes = fs::read(&saver_usb_path)?;
-            let saver_usb_sha256 = encode_hex(&Sha256::digest(&bytes));
-            if bytes.len() < 1_024 || !seen_usb_hashes.insert(saver_usb_sha256.clone()) {
-                return Err(
-                    format!("invalid or stale screensaver USB Video for {}", mode.id).into(),
-                );
-            }
-            Some(json!({"path": saver_usb_path, "bytes": bytes.len(), "sha256": saver_usb_sha256}))
-        } else {
-            None
-        };
-        Some(
-            json!({"path": saver_path, "sha256": saver_sha256, "usb_video": saver_usb, "wait_secs": wait_secs}),
-        )
-    } else {
-        None
-    };
     Ok((
-        json!({"mode": mode.id, "status": "pass", "path": path, "usb_video": usb_video, "screensaver": screensaver, "requested_output": mode.output.map(|(w,h)| format!("{w}x{h}")), "output_geometry": format!("{}x{}", output.0, output.1), "framebuffer_geometry": format!("{}x{}", framebuffer.0, framebuffer.1), "stride": stride, "capture_width": width, "capture_height": height, "bpp": bpp, "png_bytes": capture.png.len(), "sha256": sha256, "launcher_pid": ready.launcher_pid, "frames_before": frames_before, "frames_after": frames_after, "agent_elapsed_ms": capture.elapsed_ms, "elapsed_ms": started.elapsed().as_millis()}),
+        json!({"mode": mode.id, "status": "pass", "path": path, "usb_video": usb_video, "requested_output": mode.output.map(|(w,h)| format!("{w}x{h}")), "output_geometry": format!("{}x{}", output.0, output.1), "framebuffer_geometry": format!("{}x{}", framebuffer.0, framebuffer.1), "stride": stride, "capture_width": width, "capture_height": height, "bpp": bpp, "png_bytes": capture.png.len(), "sha256": sha256, "launcher_pid": ready.launcher_pid, "frames_before": frames_before, "frames_after": frames_after, "agent_elapsed_ms": capture.elapsed_ms, "elapsed_ms": started.elapsed().as_millis()}),
         ready.launcher_pid,
     ))
 }
@@ -5625,7 +5559,7 @@ fn write_display_matrix_manifest(
     original_mode: &str,
     entries: &[Value],
 ) -> Result<()> {
-    let manifest = json!({"schema":"mister-magik-display-matrix-v2", "original_mode": original_mode, "captures": entries});
+    let manifest = json!({"schema":"mister-magik-display-matrix-v3", "original_mode": original_mode, "captures": entries});
     fs::write(
         directory.join("manifest.json"),
         serde_json::to_vec_pretty(&manifest)?,
@@ -37648,23 +37582,15 @@ mod tests {
 
     #[test]
     fn display_matrix_args_enable_usb_video_without_exposing_credentials() {
-        let args = [
-            "--attended",
-            "--out",
-            "/tmp/evidence",
-            "--usb-video",
-            "--screensaver-wait",
-            "65",
-        ]
-        .map(str::to_string);
+        let args = ["--attended", "--out", "/tmp/evidence", "--usb-video"].map(str::to_string);
         assert_eq!(
             parse_display_matrix_args(&args).unwrap(),
-            ("/tmp/evidence", true, Some(65))
+            ("/tmp/evidence", true)
         );
         let args = ["--attended", "--out", "/tmp/evidence"].map(str::to_string);
         assert_eq!(
             parse_display_matrix_args(&args).unwrap(),
-            ("/tmp/evidence", false, None)
+            ("/tmp/evidence", false)
         );
         let duplicate = [
             "--attended",
@@ -37675,13 +37601,6 @@ mod tests {
         ]
         .map(str::to_string);
         assert!(parse_display_matrix_args(&duplicate).is_err());
-    }
-
-    #[test]
-    fn display_matrix_wait_honors_interruption() {
-        DISPLAY_MATRIX_INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
-        assert!(wait_display_matrix_interval(Duration::from_secs(1)).is_err());
-        DISPLAY_MATRIX_INTERRUPTED.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     #[test]

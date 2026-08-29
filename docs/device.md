@@ -255,8 +255,8 @@ restart without RBF reload, game return, and injected preflight failure. Each
 movie is retained beside Main events/status and latch status; none of these
 physical checks may be replaced by `/dev/fb0` inspection.
 
-`scripts/agent device display matrix --attended --out DIRECTORY [--usb-video]
-[--screensaver-wait SECONDS]` performs the bounded runtime display
+`scripts/agent device display matrix --attended --out DIRECTORY [--usb-video]`
+performs the bounded runtime display
 matrix without rebooting Linux. Main applies each supported resolution as a
 provisional transaction, the launcher restarts, and the authenticated MagiK
 agent returns one PNG per mode. The command writes deterministic PNG names and
@@ -264,7 +264,7 @@ agent returns one PNG per mode. The command writes deterministic PNG names and
 original working mode is restored between cases. It requires an interactive
 `31KHZ` acknowledgement because the matrix includes 480p/576p CRT modes, then
 checks launcher PID replacement, output/framebuffer geometry, advancing frame
-counters, RGB565 stride, nonblank content, and unique capture hashes. The v2
+counters, RGB565 stride, nonblank content, and unique capture hashes. The v3
 manifest records partial failures before cleanup. Framebuffer evidence still
 requires attended sink observation for HDMI or CRT visibility claims.
 
@@ -274,9 +274,6 @@ and records its path, size, and hash in the manifest. CRT/VGA acceptance
 requires routing Morph 4K Port B before those cases and restoring HDMI afterward.
 Morph credentials are runtime-only operator input and must never be passed as
 command arguments or written to artifacts.
-`--screensaver-wait` adds a second authoritative framebuffer capture after the
-bounded idle interval and, when combined with `--usb-video`, a second sink
-capture. The case fails if screensaver content is not distinct from the launcher.
 
 The launcher keeps output geometry one-to-one through 1280x720 and uses half
 width and height when the output is at least 1366 pixels wide or 900 pixels
