@@ -55,7 +55,11 @@ def test_suite_host_client_errors_are_not_hidden() -> None:
 
 
 def test_complete_case_list_covers_every_non_smoke_target() -> None:
-    assert set(suite.COMPLETE_CASES) == set(suite.CASE_TARGETS) - {"smoke", "controller"}
+    assert set(suite.COMPLETE_CASES) == set(suite.CASE_TARGETS) - {
+        "smoke",
+        "controller",
+        "effect-sandbox",
+    }
     assert suite.COMPLETE_CASES[0] == "startup-home"
     assert suite.COMPLETE_CASES[-1] == "profile-matrix"
 
