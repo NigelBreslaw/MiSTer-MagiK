@@ -306,6 +306,13 @@ fn write_worker_wire_event(writer: &mut impl Write, event: &CatalogWorkerWireEve
         .is_ok()
 }
 
+fn heartbeat_interval_elapsed(stop: &mpsc::Receiver<()>, interval: std::time::Duration) -> bool {
+    matches!(
+        stop.recv_timeout(interval),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    )
+}
+
 fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
     let mut event = CatalogWorkerWireEvent {
         version: CATALOG_WORKER_PROTOCOL_VERSION,
@@ -882,7 +889,7 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
         archive_cache,
     );
     let writer = Arc::new(Mutex::new(std::io::BufWriter::new(std::io::stderr())));
-    let stop = Arc::new(AtomicBool::new(false));
+    let (heartbeat_stop, heartbeat_stop_rx) = mpsc::sync_channel(1);
     let heartbeat_run_id = mister_magik_catalog::catalog_lease::CatalogRunId::new();
     let wire_run_id = heartbeat_run_id.as_str().to_string();
     let progress = Arc::new(Mutex::new(CatalogHeartbeatProgress::new()));
@@ -896,16 +903,11 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
         let _ = write_worker_wire_event(&mut *output, &event);
     }
     let heartbeat_writer = Arc::clone(&writer);
-    let heartbeat_stop = Arc::clone(&stop);
     let heartbeat_progress = Arc::clone(&progress);
     let heartbeat_sequence = Arc::clone(&wire_sequence);
     let heartbeat_wire_run_id = wire_run_id.clone();
     let heartbeat = std::thread::spawn(move || {
-        while !heartbeat_stop.load(Ordering::Relaxed) {
-            std::thread::sleep(std::time::Duration::from_secs(10));
-            if heartbeat_stop.load(Ordering::Relaxed) {
-                break;
-            }
+        while heartbeat_interval_elapsed(&heartbeat_stop_rx, std::time::Duration::from_secs(10)) {
             let snapshot = heartbeat_progress
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
@@ -970,7 +972,7 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
             break;
         }
     }
-    stop.store(true, Ordering::Relaxed);
+    let _ = heartbeat_stop.send(());
     let _ = heartbeat.join();
     if !terminal {
         let mut output = writer.lock().unwrap_or_else(|error| error.into_inner());
@@ -1703,6 +1705,20 @@ mod tests {
         wrong_run.run_id = "run-2".to_string();
         wrong_run.sequence = 4;
         assert!(state.validate(&wrong_run).is_err());
+    }
+
+    #[test]
+    fn heartbeat_stop_interrupts_interval_wait() {
+        let (stop, stop_rx) = mpsc::sync_channel(1);
+        let started = Instant::now();
+        let waiter = std::thread::spawn(move || {
+            heartbeat_interval_elapsed(&stop_rx, std::time::Duration::from_secs(10))
+        });
+
+        stop.send(()).unwrap();
+
+        assert!(!waiter.join().unwrap());
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[cfg(unix)]
