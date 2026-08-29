@@ -245,7 +245,10 @@ fn hex_digest(digest: impl AsRef<[u8]>) -> String {
 mod tests {
     use super::*;
     use std::io::Cursor;
+    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static RECEIVE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn spec(payload: &[u8]) -> UiTestRuntimeSpec {
         UiTestRuntimeSpec {
@@ -267,6 +270,7 @@ mod tests {
 
     #[test]
     fn receive_verifies_and_reuses_exact_runtime() {
+        let _serial = RECEIVE_TEST_LOCK.lock().expect("receive test lock");
         let payload = b"runtime";
         let root = root();
         let spec = spec(payload);
@@ -287,6 +291,7 @@ mod tests {
 
     #[test]
     fn receive_rejects_truncation_and_hash_mismatch() {
+        let _serial = RECEIVE_TEST_LOCK.lock().expect("receive test lock");
         let root = root();
         let payload = b"runtime";
         let mut short = spec(payload);
@@ -300,6 +305,7 @@ mod tests {
 
     #[test]
     fn receive_leaves_following_session_bytes_unread() {
+        let _serial = RECEIVE_TEST_LOCK.lock().expect("receive test lock");
         let root = root();
         let payload = b"runtime";
         let mut framed = Cursor::new(b"runtime-next".to_vec());
@@ -315,6 +321,7 @@ mod tests {
 
     #[test]
     fn prepare_rejects_corrupted_runtime_and_allows_replacement() {
+        let _serial = RECEIVE_TEST_LOCK.lock().expect("receive test lock");
         let payload = b"runtime";
         let root = root();
         let spec = spec(payload);
