@@ -38,6 +38,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Resolve private asset revision
+        if: matrix.group == 'app'
+        id: host-magik-assets-ref
+        run: echo "sha=$(git rev-parse HEAD:private/magik-assets)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout private build assets
+        if: matrix.group == 'app'
+        uses: actions/checkout@v7
+        with:
+          repository: NigelBreslaw/mister-magik-private-assets
+          ref: ${{ steps.host-magik-assets-ref.outputs.sha }}
+          path: private/magik-assets
+          ssh-key: ${{ secrets.MAGIK_ASSETS_SSH_KEY }}
 
       - name: Compute cache identities
         if: matrix.group != 'static'
