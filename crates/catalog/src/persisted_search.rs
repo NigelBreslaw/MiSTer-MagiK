@@ -25,11 +25,22 @@ const SEARCH_MULTIROW_INSERT: usize = 32;
 
 #[cfg(feature = "builder")]
 fn search_pipeline_batch_size() -> Result<usize, PersistedSearchError> {
-    let requested = std::env::var("MISTER_CATALOG_SEARCH_PIPELINE_BATCH")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok());
-    match requested.unwrap_or(SEARCH_PIPELINE_BATCH) {
-        128 | 256 | 512 | 1024 => Ok(requested.unwrap_or(SEARCH_PIPELINE_BATCH)),
+    let requested = match std::env::var("MISTER_CATALOG_SEARCH_PIPELINE_BATCH") {
+        Ok(value) => value.parse::<usize>().map_err(|_| {
+            PersistedSearchError::new(format!(
+                "invalid search pipeline batch size {value:?}; expected 128, 256, 512, or 1024"
+            ))
+        })?,
+        Err(std::env::VarError::NotPresent) => SEARCH_PIPELINE_BATCH,
+        Err(error) => {
+            return Err(PersistedSearchError::with(
+                "read search pipeline batch size",
+                error,
+            ));
+        }
+    };
+    match requested {
+        128 | 256 | 512 | 1024 => Ok(requested),
         value => Err(PersistedSearchError::new(format!(
             "unsupported search pipeline batch size {value}; expected 128, 256, 512, or 1024"
         ))),
