@@ -1077,6 +1077,7 @@ mod linux {
     const FPGA_SPIN_LIMIT: u32 = 2_000_000;
     const CONTROL_AUTH_DISABLED: bool = false;
     const MAX_ACTIVE_CONTROL_CLIENTS: usize = 16;
+    const UI_TEST_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
     pub(super) const MAX_CONTROL_REQUEST_BYTES: usize = 64 * 1024;
     const CONTROL_REQUEST_DEADLINE: Duration = Duration::from_secs(10);
     const LOG: &str = "/tmp/mister-magik-agent.log";
@@ -1095,6 +1096,10 @@ mod linux {
         "/media/fat/mister-magik/diagnostics/catalog",
         "/media/fat/mister-magik-dev/diagnostics/catalog",
     ];
+
+    fn ui_test_startup_timeout(timeout_ms: u64) -> Duration {
+        UI_TEST_STARTUP_TIMEOUT.min(Duration::from_millis(timeout_ms))
+    }
     const CATALOG_PROGRESS_PATHS: [&str; 2] = [
         "/media/fat/mister-magik/diagnostics/catalog/progress-latest.json",
         "/media/fat/mister-magik-dev/diagnostics/catalog/progress-latest.json",
@@ -1620,7 +1625,15 @@ mod linux {
                 .map_err(|error| format!("launch UI-test runtime: {error}"))?;
             child = Some(spawned);
             let child_pid = child.as_ref().map(Child::id).unwrap_or(0);
-            wait_for_ui_test_status(&old_status, child_pid, &request.runtime.source_revision)?;
+            let child_process = child
+                .as_mut()
+                .ok_or_else(|| "UI-test runtime process handle missing".to_string())?;
+            wait_for_ui_test_status(
+                &old_status,
+                child_process,
+                &request.runtime.source_revision,
+                ui_test_startup_timeout(request.timeout_ms),
+            )?;
             let status = read_json_value("/tmp/mister-magik/status.json");
             let build_version = status
                 .pointer("/build/version")
@@ -1785,10 +1798,12 @@ mod linux {
 
     fn wait_for_ui_test_status(
         old_status: &Value,
-        child_pid: u32,
+        child: &mut Child,
         source_revision: &str,
+        timeout: Duration,
     ) -> Result<(), String> {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let child_pid = child.id();
+        let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             let status = read_json_value("/tmp/mister-magik/status.json");
             if status.get("pid").and_then(Value::as_u64) == Some(u64::from(child_pid))
@@ -1800,9 +1815,20 @@ mod linux {
             {
                 return Ok(());
             }
+            if let Some(exit_status) = child
+                .try_wait()
+                .map_err(|error| format!("check UI-test runtime status: {error}"))?
+            {
+                return Err(format!(
+                    "UI-test runtime exited before publishing its build identity: {exit_status}"
+                ));
+            }
             thread::sleep(Duration::from_millis(20));
         }
-        Err("UI-test runtime did not publish its build identity".to_string())
+        Err(format!(
+            "UI-test runtime did not publish its build identity within {} ms",
+            timeout.as_millis()
+        ))
     }
 
     fn maybe_handle_runtime_upload_v1(
@@ -7257,6 +7283,19 @@ mod tests {
     use std::io::{BufReader, Cursor};
     #[cfg(target_os = "linux")]
     use std::time::Duration;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ui_test_startup_timeout_is_bounded_by_session_timeout() {
+        assert_eq!(
+            linux::ui_test_startup_timeout(1_000),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            linux::ui_test_startup_timeout(120_000),
+            Duration::from_secs(30)
+        );
+    }
 
     fn decode_truecolor_png(png: &[u8]) -> (usize, usize, Vec<u8>) {
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
