@@ -3644,6 +3644,17 @@ fn assess_fpga_evidence(expected: &str, evidence: &Value) -> FpgaActivationAsses
                 .into(),
         });
     }
+    if evidence.get("available").and_then(Value::as_bool) != Some(true) {
+        failures.push(FpgaCheckFailure {
+            check: "availability".into(),
+            expected: "available".into(),
+            actual: evidence
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("unavailable")
+                .into(),
+        });
+    }
     let current = observed == expected && experimental_fpga_evidence_is_current(evidence);
     if !current {
         failures.push(FpgaCheckFailure {
@@ -38821,6 +38832,11 @@ H: Handlers=event3 js0"#
             FpgaActivationAssessment::NotReady { .. }
         ));
         assert!(!unavailable.reloadable_fallback());
+        assert!(
+            unavailable
+                .reason()
+                .contains("diagnostic readout requires stable LauncherActive ownership")
+        );
     }
 
     #[test]
