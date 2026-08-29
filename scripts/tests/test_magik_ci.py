@@ -11,11 +11,25 @@ from unittest.mock import patch
 
 from scripts.magik_ci.bundle import bundle_id, update_plan
 from scripts.magik_ci.assurance import fast_checks
+from scripts.magik_ci.host import HOST_GROUPS, commands
 from scripts.magik_ci.manifest import candidate_id, serialize
 from scripts.magik_ci.quality import QUALITY_COMMANDS, execute
 
 
 class MagikCiTests(unittest.TestCase):
+    def test_host_groups_have_unique_commands_and_no_preview_build(self) -> None:
+        self.assertEqual(
+            HOST_GROUPS, ("static", "agent", "domain", "catalog", "app", "tools")
+        )
+        all_commands = [command for group in HOST_GROUPS for command in commands(group)]
+        self.assertEqual(len(all_commands), len({tuple(command) for command in all_commands}))
+        self.assertFalse(
+            any(
+                "ui-preview" in command[1:] and command[1] == "build"
+                for command in all_commands
+            )
+        )
+
     def test_fast_assurance_selects_only_static_checks_for_slint(self) -> None:
         commands = fast_checks(
             Path("/repository"), ["apps/mister/ui/components/launcher.slint"]

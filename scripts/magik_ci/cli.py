@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-from . import architecture, build, bundle, databases, manifest, metadata, quality
+from . import architecture, build, bundle, databases, host, manifest, metadata, quality
 from .common import github_output, repository_root
 
 
@@ -31,7 +31,9 @@ def parser() -> argparse.ArgumentParser:
     ci = sub.add_parser("ci")
     ci_sub = ci.add_subparsers(dest="command", required=True)
     assurance = ci_sub.add_parser("host-assurance")
-    assurance.add_argument("--paths", nargs="+", required=True)
+    assurance_scope = assurance.add_mutually_exclusive_group(required=True)
+    assurance_scope.add_argument("--paths", nargs="+")
+    assurance_scope.add_argument("--group", choices=host.HOST_GROUPS)
     candidates = ci_sub.add_parser("platform-candidates")
     candidates.add_argument("artifacts", type=Path)
     candidates.add_argument("name")
@@ -208,7 +210,10 @@ def main() -> int:
         quality.execute(root, args.checks)
     elif args.group == "ci":
         if args.command == "host-assurance":
-            metadata.host_assurance(args.paths)
+            if args.group:
+                host.execute(root, args.group)
+            else:
+                metadata.host_assurance(args.paths)
         elif args.command == "platform-candidates":
             for item in metadata.platform_candidates(args.artifacts, args.name):
                 item_data = cast(dict[str, Any], item)
