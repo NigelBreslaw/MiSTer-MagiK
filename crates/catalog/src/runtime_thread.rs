@@ -22,6 +22,7 @@ pub enum RuntimeThreadRole {
     SystemEntryPrepare,
     CatalogForeground,
     SearchIndex,
+    SearchDocumentBuilder,
     LibraryWalker,
     LibraryWalkerForeground,
     PreviewSelected,
@@ -53,6 +54,7 @@ impl RuntimeThreadRole {
             Self::SystemEntryPrepare => "system-entry-prepare",
             Self::CatalogForeground => "catalog-foreground",
             Self::SearchIndex => "search-index",
+            Self::SearchDocumentBuilder => "search-document-builder",
             Self::LibraryWalker => "library-walker",
             Self::LibraryWalkerForeground => "library-walker-foreground",
             Self::PreviewSelected => "preview-selected",
@@ -98,6 +100,10 @@ impl RuntimeThreadRole {
             // catalog fully usable. Give it both A9 cores until the P4
             // coordinator can yield it to an actual foreground request.
             Self::SearchIndex => RuntimeThreadPolicy::new(0, ThreadAffinity::AllOnline),
+            // Search document normalization is CPU-only work. Keep it on the
+            // launcher core so the serial filesystem/catalog worker on CPU0
+            // is not displaced while it consumes prepared batches.
+            Self::SearchDocumentBuilder => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu1),
             Self::CatalogForeground | Self::LibraryWalkerForeground => {
                 RuntimeThreadPolicy::new(0, ThreadAffinity::AllOnline)
             }
@@ -734,6 +740,11 @@ mod tests {
                 RuntimeThreadRole::CatalogForeground,
                 0,
                 ThreadAffinity::AllOnline,
+            ),
+            (
+                RuntimeThreadRole::SearchDocumentBuilder,
+                10,
+                ThreadAffinity::Cpu1,
             ),
             (RuntimeThreadRole::LibraryWalker, 10, ThreadAffinity::Cpu0),
             (

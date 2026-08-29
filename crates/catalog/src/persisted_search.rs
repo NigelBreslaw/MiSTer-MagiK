@@ -552,7 +552,7 @@ pub(crate) fn populate_with_options(
             .name("catalog-search-docs".to_string())
             .spawn_scoped(scope, move || {
                 crate::runtime_thread::apply_runtime_thread_policy(
-                    crate::runtime_thread::RuntimeThreadRole::LibraryWalker,
+                    crate::runtime_thread::RuntimeThreadRole::SearchDocumentBuilder,
                 );
                 let _background_scope = crate::cooperative_work::BackgroundScope::enter();
                 for (batch_index, chunk) in games.chunks(SEARCH_PIPELINE_BATCH).enumerate() {
