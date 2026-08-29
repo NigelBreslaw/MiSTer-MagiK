@@ -264,12 +264,31 @@ pub fn build_fresh_catalog_with_progress(
     plan_ready: impl FnMut(&[String]),
     system_complete: impl FnMut(&FastFiveSystem),
 ) -> Result<FastCatalogFreshBuildReport, String> {
+    let lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
+        .map_err(|error| error.to_string())?;
+    cleanup_refresh_temporary_files(catalog_root)?;
+    build_fresh_catalog_with_lease(
+        storage_root,
+        catalog_root,
+        &lease,
+        plan_ready,
+        system_complete,
+    )
+}
+
+pub fn build_fresh_catalog_with_lease(
+    storage_root: &Path,
+    catalog_root: &Path,
+    _lease: &crate::catalog_lease::CatalogMutationLease,
+    mut plan_ready: impl FnMut(&[String]),
+    mut system_complete: impl FnMut(&FastFiveSystem),
+) -> Result<FastCatalogFreshBuildReport, String> {
     let started = std::time::Instant::now();
     let source_build =
         crate::fast_catalog_sources::build_independent_fast_snapshot_for_refresh_with_progress(
             storage_root,
-            plan_ready,
-            system_complete,
+            &mut plan_ready,
+            &mut system_complete,
         )?;
     let crate::fast_catalog_sources::FastSourceRefreshBuild {
         snapshot,
@@ -1255,8 +1274,11 @@ pub fn execute_fast_refresh(
     catalog_root: &Path,
     request: FastCatalogRefreshRequest,
 ) -> Result<FastCatalogRefreshReport, String> {
+    let lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
+        .map_err(|error| error.to_string())?;
+    cleanup_refresh_temporary_files(catalog_root)?;
     let plan = plan_fast_refresh(storage_root, catalog_root, request)?;
-    execute_planned_fast_refresh(storage_root, catalog_root, request, plan)
+    execute_planned_fast_refresh_with_lease(storage_root, catalog_root, request, plan, &lease)
 }
 
 pub fn execute_planned_fast_refresh(
@@ -1264,6 +1286,19 @@ pub fn execute_planned_fast_refresh(
     catalog_root: &Path,
     request: FastCatalogRefreshRequest,
     plan: FastRefreshPlanReport,
+) -> Result<FastCatalogRefreshReport, String> {
+    let lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
+        .map_err(|error| error.to_string())?;
+    cleanup_refresh_temporary_files(catalog_root)?;
+    execute_planned_fast_refresh_with_lease(storage_root, catalog_root, request, plan, &lease)
+}
+
+pub fn execute_planned_fast_refresh_with_lease(
+    storage_root: &Path,
+    catalog_root: &Path,
+    request: FastCatalogRefreshRequest,
+    plan: FastRefreshPlanReport,
+    _lease: &crate::catalog_lease::CatalogMutationLease,
 ) -> Result<FastCatalogRefreshReport, String> {
     execute_planned_fast_refresh_with(
         storage_root,

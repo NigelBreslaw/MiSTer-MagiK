@@ -431,6 +431,7 @@ fn start_library_catalog_worker_in_process(
                 plan,
                 catalog_paths.sharded_catalog_dir(),
                 &tx,
+                &_mutation_lease,
             );
         })
         .expect("spawn catalog-refresh");
@@ -818,6 +819,7 @@ fn run_fast_catalog_refresh_in_process(
     plan: CatalogWorkerPlan,
     catalog_root: &Path,
     tx: &mpsc::Sender<CatalogWorkerMessage>,
+    mutation_lease: &mister_magik_catalog::catalog_lease::CatalogMutationLease,
 ) {
     use mister_magik_catalog::fast_catalog_refresh::{
         FastCatalogRefreshRequest, FastCatalogSystemOutcome, FastSourceCheckStatus,
@@ -834,7 +836,7 @@ fn run_fast_catalog_refresh_in_process(
         plan,
         CatalogWorkerPlan::InitialBuild | CatalogWorkerPlan::FreshBuild
     ) {
-        run_fast_catalog_fresh_build(root, catalog_root, tx, catalog_profile);
+        run_fast_catalog_fresh_build(root, catalog_root, tx, catalog_profile, mutation_lease);
         return;
     }
     let request = if plan == CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS {
@@ -875,22 +877,24 @@ fn run_fast_catalog_refresh_in_process(
             });
         }
     }
-    let report = match mister_magik_catalog::fast_catalog_refresh::execute_planned_fast_refresh(
-        &storage_root,
-        catalog_root,
-        request,
-        planned,
-    ) {
-        Ok(report) => report,
-        Err(error) => {
-            report_catalog_filesystem_headroom(tx, "refresh-error");
-            catalog_profile.fail("refresh-failed");
-            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-                error: format!("fast catalog refresh failed: {error}"),
-            });
-            return;
-        }
-    };
+    let report =
+        match mister_magik_catalog::fast_catalog_refresh::execute_planned_fast_refresh_with_lease(
+            &storage_root,
+            catalog_root,
+            request,
+            planned,
+            mutation_lease,
+        ) {
+            Ok(report) => report,
+            Err(error) => {
+                report_catalog_filesystem_headroom(tx, "refresh-error");
+                catalog_profile.fail("refresh-failed");
+                let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                    error: format!("fast catalog refresh failed: {error}"),
+                });
+                return;
+            }
+        };
     let mut rebuilt = Vec::new();
     let mut removed = Vec::new();
     for system in &report.system_reports {
@@ -985,14 +989,16 @@ fn run_fast_catalog_fresh_build(
     catalog_root: &Path,
     tx: &mpsc::Sender<CatalogWorkerMessage>,
     mut catalog_profile: CatalogBuildProfiler,
+    mutation_lease: &mister_magik_catalog::catalog_lease::CatalogMutationLease,
 ) {
     let storage_root = PathBuf::from("/media/fat");
     report_catalog_filesystem_headroom(tx, "fresh-begin");
     let mut planned_system_ids = Vec::new();
     let mut completed_system_ids = std::collections::BTreeSet::new();
-    let report = match mister_magik_catalog::fast_catalog_refresh::build_fresh_catalog_with_progress(
+    let report = match mister_magik_catalog::fast_catalog_refresh::build_fresh_catalog_with_lease(
         &storage_root,
         catalog_root,
+        mutation_lease,
         |system_ids| {
             planned_system_ids = system_ids.to_vec();
             let _ = tx.send(CatalogWorkerMessage::ReconciliationPlanReady {
