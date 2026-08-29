@@ -3803,6 +3803,48 @@ aliases = []
 documentation = { summary = "Controls ui fb size behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
+name = "MISTER_UI_TEST_FEATURE"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "test"
+value_shape = "enum token"
+default_behavior = "uses the home screen when unset or unrecognized"
+visibility = "test only"
+parser = "enum"
+scope = "command"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Selects the deterministic UI test start feature", accepted_values = ["home", "arcade", "settings"], value_policy = "document" }
+
+[[control]]
+name = "MISTER_UI_TEST_FIXTURE"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "test"
+value_shape = "enum token"
+default_behavior = "uses the production catalog when unset or unrecognized"
+visibility = "test only"
+parser = "enum"
+scope = "command"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Selects the deterministic UI test catalog fixture", accepted_values = ["deterministic-arcade-v1"], value_policy = "document" }
+
+[[control]]
+name = "MISTER_UI_TEST_ORIENTATION"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "test"
+value_shape = "enum token"
+default_behavior = "uses the persisted display orientation when unset or unrecognized"
+visibility = "test only"
+parser = "enum"
+scope = "command"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Selects the deterministic UI test display orientation", accepted_values = ["normal", "monitor-clockwise", "monitor-counterclockwise"], value_policy = "document" }
+
+[[control]]
 name = "MISTER_USER_STATE_SQLITE"
 owner = "crates/catalog/src/catalog_config.rs"
 classification = "production"
