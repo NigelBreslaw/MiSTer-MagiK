@@ -213,6 +213,92 @@ struct CatalogWorkerWireEvent {
     work_units: u64,
 }
 
+#[derive(Default)]
+struct CatalogWorkerProtocolState {
+    run_id: String,
+    sequence: u64,
+    heartbeat_phase: String,
+    progress_epoch: u64,
+    work_units: u64,
+}
+
+impl CatalogWorkerProtocolState {
+    fn validate(&mut self, event: &CatalogWorkerWireEvent) -> Result<bool, String> {
+        if event.version != CATALOG_WORKER_PROTOCOL_VERSION {
+            return Err(format!(
+                "unsupported catalog worker protocol version {}",
+                event.version
+            ));
+        }
+        if event.kind == "handshake" {
+            if !self.run_id.is_empty() || event.run_id.is_empty() || event.sequence != 0 {
+                return Err("invalid catalog worker handshake".to_string());
+            }
+            self.run_id.clone_from(&event.run_id);
+            return Ok(true);
+        }
+        if self.run_id.is_empty() {
+            return Err("catalog worker event arrived before handshake".to_string());
+        }
+        if event.run_id != self.run_id {
+            return Err("catalog worker run id changed".to_string());
+        }
+        if event.sequence <= self.sequence {
+            return Err("catalog worker sequence did not advance".to_string());
+        }
+        self.sequence = event.sequence;
+        if event.kind != "heartbeat" {
+            return Ok(false);
+        }
+        if event.phase.is_empty()
+            || event.progress_epoch < self.progress_epoch
+            || event.work_units < self.work_units
+        {
+            return Err("catalog worker heartbeat progress regressed".to_string());
+        }
+        if !self.heartbeat_phase.is_empty()
+            && ((event.phase == self.heartbeat_phase
+                && event.progress_epoch != self.progress_epoch)
+                || (event.phase != self.heartbeat_phase
+                    && event.progress_epoch <= self.progress_epoch))
+        {
+            return Err("catalog worker heartbeat phase transition is invalid".to_string());
+        }
+        self.heartbeat_phase.clone_from(&event.phase);
+        self.progress_epoch = event.progress_epoch;
+        self.work_units = event.work_units;
+        Ok(false)
+    }
+}
+
+#[derive(Clone)]
+struct CatalogHeartbeatProgress {
+    phase: String,
+    progress_epoch: u64,
+    work_units: u64,
+}
+
+impl CatalogHeartbeatProgress {
+    fn new() -> Self {
+        Self {
+            phase: "starting".to_string(),
+            progress_epoch: 0,
+            work_units: 0,
+        }
+    }
+
+    fn advance(&mut self, phase: &str, work_units: u64) {
+        if work_units <= self.work_units {
+            return;
+        }
+        if self.phase != phase {
+            self.phase = phase.to_string();
+            self.progress_epoch = self.progress_epoch.saturating_add(1);
+        }
+        self.work_units = work_units;
+    }
+}
+
 fn write_worker_wire_event(writer: &mut impl Write, event: &CatalogWorkerWireEvent) -> bool {
     serde_json::to_writer(&mut *writer, event)
         .and_then(|()| writer.write_all(b"\n"))
@@ -329,6 +415,9 @@ fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
             event.sequence = *sequence;
             event.progress_epoch = *progress_epoch;
             event.work_units = *work_units;
+        }
+        CatalogWorkerMessage::Progress { .. } => {
+            unreachable!("internal catalog progress must not cross the worker protocol")
         }
         CatalogWorkerMessage::SystemShardReady { .. }
         | CatalogWorkerMessage::SystemShardFailed { .. }
@@ -572,6 +661,7 @@ fn start_library_catalog_worker_process(
             let mut terminal = false;
             let mut terminal_message = None;
             let mut protocol_failed = false;
+            let mut protocol_state = CatalogWorkerProtocolState::default();
             for line in reader.lines() {
                 let line = match line {
                     Ok(line) => line,
@@ -596,15 +686,24 @@ fn start_library_catalog_worker_process(
                         break;
                     }
                 };
+                match protocol_state.validate(&event) {
+                    Ok(true) => {
+                        reader_control.handshake_seen.store(true, Ordering::Release);
+                        let _ = tx.send(CatalogWorkerMessage::Timing {
+                            name: "catalog_worker_handshake_v4".to_string(),
+                            detail: format!("run_id={}", event.run_id),
+                        });
+                        continue;
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        terminal_message = Some(CatalogWorkerMessage::PersistenceFailed { error });
+                        protocol_failed = true;
+                        break;
+                    }
+                }
                 match catalog_worker_message_from_wire(event, &reader_root, &reader_catalog_root) {
                     Ok(Some(message)) => {
-                        if matches!(
-                            &message,
-                            CatalogWorkerMessage::Timing { name, .. }
-                                if name == "catalog_worker_handshake_v4"
-                        ) {
-                            reader_control.handshake_seen.store(true, Ordering::Release);
-                        }
                         terminal = matches!(
                             message,
                             CatalogWorkerMessage::Done
@@ -785,28 +884,33 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
     let writer = Arc::new(Mutex::new(std::io::BufWriter::new(std::io::stderr())));
     let stop = Arc::new(AtomicBool::new(false));
     let heartbeat_run_id = mister_magik_catalog::catalog_lease::CatalogRunId::new();
+    let wire_run_id = heartbeat_run_id.as_str().to_string();
+    let progress = Arc::new(Mutex::new(CatalogHeartbeatProgress::new()));
+    let wire_sequence = Arc::new(std::sync::atomic::AtomicU64::new(1));
     {
         let mut output = writer.lock().unwrap_or_else(|error| error.into_inner());
-        let mut event = blank_worker_wire_event("timing");
-        event.name = "catalog_worker_handshake_v4".to_string();
-        event.detail = format!(
-            "operation={} run_id={}",
-            request.label(),
-            heartbeat_run_id.as_str()
-        );
+        let mut event = blank_worker_wire_event("handshake");
+        event.run_id.clone_from(&wire_run_id);
+        event.detail = format!("operation={}", request.label());
         let _ = output.write_all(CATALOG_WORKER_PROTOCOL_PREFIX.as_bytes());
         let _ = write_worker_wire_event(&mut *output, &event);
     }
     let heartbeat_writer = Arc::clone(&writer);
     let heartbeat_stop = Arc::clone(&stop);
+    let heartbeat_progress = Arc::clone(&progress);
+    let heartbeat_sequence = Arc::clone(&wire_sequence);
+    let heartbeat_wire_run_id = wire_run_id.clone();
     let heartbeat = std::thread::spawn(move || {
-        let mut sequence = 1u64;
         while !heartbeat_stop.load(Ordering::Relaxed) {
             std::thread::sleep(std::time::Duration::from_secs(10));
             if heartbeat_stop.load(Ordering::Relaxed) {
                 break;
             }
-            let event = CatalogWorkerWireEvent {
+            let snapshot = heartbeat_progress
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone();
+            let mut event = CatalogWorkerWireEvent {
                 version: CATALOG_WORKER_PROTOCOL_VERSION,
                 kind: "heartbeat".to_string(),
                 name: String::new(),
@@ -822,24 +926,33 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
                 source: String::new(),
                 durable_save_pending: false,
                 fingerprint: String::new(),
-                run_id: heartbeat_run_id.as_str().to_string(),
-                phase: "worker-running".to_string(),
-                sequence,
-                progress_epoch: 0,
-                work_units: 0,
+                run_id: heartbeat_wire_run_id.clone(),
+                phase: snapshot.phase,
+                sequence: 0,
+                progress_epoch: snapshot.progress_epoch,
+                work_units: snapshot.work_units,
             };
-            sequence = sequence.saturating_add(1);
             let mut writer = heartbeat_writer
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
+            event.sequence = heartbeat_sequence.fetch_add(1, Ordering::Relaxed);
             let _ = writer.write_all(CATALOG_WORKER_PROTOCOL_PREFIX.as_bytes());
             let _ = write_worker_wire_event(&mut *writer, &event);
         }
     });
     let mut terminal = false;
     while let Ok(message) = rx.recv() {
-        let event = worker_wire_event(&message);
+        if let CatalogWorkerMessage::Progress { phase, work_units } = &message {
+            progress
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .advance(phase, *work_units);
+            continue;
+        }
+        let mut event = worker_wire_event(&message);
         let mut output = writer.lock().unwrap_or_else(|error| error.into_inner());
+        event.run_id.clone_from(&wire_run_id);
+        event.sequence = wire_sequence.fetch_add(1, Ordering::Relaxed);
         if output
             .write_all(CATALOG_WORKER_PROTOCOL_PREFIX.as_bytes())
             .is_err()
@@ -877,9 +990,9 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
             source: String::new(),
             durable_save_pending: false,
             fingerprint: String::new(),
-            run_id: String::new(),
+            run_id: wire_run_id,
             phase: String::new(),
-            sequence: 0,
+            sequence: wire_sequence.fetch_add(1, Ordering::Relaxed),
             progress_epoch: 0,
             work_units: 0,
         };
@@ -956,6 +1069,10 @@ fn run_fast_catalog_refresh_in_process(
         system_ids,
         all_published_systems: false,
     });
+    let _ = tx.send(CatalogWorkerMessage::Progress {
+        phase: "planning".to_string(),
+        work_units: 1,
+    });
     for check in &planned.checks {
         if check.status != FastSourceCheckStatus::Unchanged {
             let _ = tx.send(CatalogWorkerMessage::SystemScanning {
@@ -963,13 +1080,18 @@ fn run_fast_catalog_refresh_in_process(
             });
         }
     }
-    let report =
-        match mister_magik_catalog::fast_catalog_refresh::execute_planned_fast_refresh_with_lease(
+    let report = match mister_magik_catalog::fast_catalog_refresh::execute_planned_fast_refresh_with_lease_and_progress(
             &storage_root,
             catalog_root,
             request,
             planned,
             mutation_lease,
+            |phase, work_units| {
+                let _ = tx.send(CatalogWorkerMessage::Progress {
+                    phase: phase.to_string(),
+                    work_units: work_units.saturating_add(1),
+                });
+            },
         ) {
             Ok(report) => report,
             Err(error) => {
@@ -1081,6 +1203,7 @@ fn run_fast_catalog_fresh_build(
     report_catalog_filesystem_headroom(tx, "fresh-begin");
     let mut planned_system_ids = Vec::new();
     let mut completed_system_ids = std::collections::BTreeSet::new();
+    let progress_units = std::cell::Cell::new(0u64);
     let report = match mister_magik_catalog::fast_catalog_refresh::build_fresh_catalog_with_lease(
         &storage_root,
         catalog_root,
@@ -1090,6 +1213,11 @@ fn run_fast_catalog_fresh_build(
             let _ = tx.send(CatalogWorkerMessage::ReconciliationPlanReady {
                 system_ids: system_ids.to_vec(),
                 all_published_systems: true,
+            });
+            progress_units.set(progress_units.get().saturating_add(1));
+            let _ = tx.send(CatalogWorkerMessage::Progress {
+                phase: "planning".to_string(),
+                work_units: progress_units.get(),
             });
             for system_id in system_ids {
                 if system_id == "arcade" {
@@ -1111,6 +1239,11 @@ fn run_fast_catalog_fresh_build(
                 let _ = tx.send(CatalogWorkerMessage::SystemPrepared {
                     system_id: system.system_id.clone(),
                     generation: 0,
+                });
+                progress_units.set(progress_units.get().saturating_add(1));
+                let _ = tx.send(CatalogWorkerMessage::Progress {
+                    phase: "systems".to_string(),
+                    work_units: progress_units.get(),
                 });
             }
             if system.system_id == "arcade" && !system.games.is_empty() {
@@ -1154,8 +1287,18 @@ fn run_fast_catalog_fresh_build(
                 system_id: system_id.clone(),
                 generation: report.publication.generation,
             });
+            progress_units.set(progress_units.get().saturating_add(1));
+            let _ = tx.send(CatalogWorkerMessage::Progress {
+                phase: "systems".to_string(),
+                work_units: progress_units.get(),
+            });
         }
     }
+    progress_units.set(progress_units.get().saturating_add(1));
+    let _ = tx.send(CatalogWorkerMessage::Progress {
+        phase: "artifacts".to_string(),
+        work_units: progress_units.get(),
+    });
     let _ = tx.send(CatalogWorkerMessage::ManifestPublished {
         generation: report.publication.generation,
         rebuilt: report.system_ids.clone(),
@@ -1346,6 +1489,10 @@ fn catalog_worker_plan(
 }
 
 pub(super) enum CatalogWorkerMessage {
+    Progress {
+        phase: String,
+        work_units: u64,
+    },
     Heartbeat {
         run_id: String,
         phase: String,
@@ -1526,6 +1673,36 @@ mod tests {
         .unwrap()
         .expect("heartbeat event");
         assert!(matches!(message, CatalogWorkerMessage::Heartbeat { .. }));
+    }
+
+    #[test]
+    fn protocol_requires_one_run_and_monotonic_progress() {
+        let mut state = CatalogWorkerProtocolState::default();
+        let mut handshake = blank_worker_wire_event("handshake");
+        handshake.run_id = "run-1".to_string();
+        assert_eq!(state.validate(&handshake), Ok(true));
+        assert!(state.validate(&handshake).is_err());
+
+        let mut heartbeat = blank_worker_wire_event("heartbeat");
+        heartbeat.run_id = "run-1".to_string();
+        heartbeat.sequence = 1;
+        heartbeat.phase = "systems".to_string();
+        heartbeat.progress_epoch = 1;
+        heartbeat.work_units = 4;
+        assert_eq!(state.validate(&heartbeat), Ok(false));
+
+        heartbeat.sequence = 2;
+        heartbeat.work_units = 4;
+        assert_eq!(state.validate(&heartbeat), Ok(false));
+
+        heartbeat.sequence = 3;
+        heartbeat.work_units = 3;
+        assert!(state.validate(&heartbeat).is_err());
+
+        let mut wrong_run = blank_worker_wire_event("done");
+        wrong_run.run_id = "run-2".to_string();
+        wrong_run.sequence = 4;
+        assert!(state.validate(&wrong_run).is_err());
     }
 
     #[cfg(unix)]

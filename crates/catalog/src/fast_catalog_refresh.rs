@@ -1342,12 +1342,31 @@ pub fn execute_planned_fast_refresh_with_lease(
     plan: FastRefreshPlanReport,
     _lease: &crate::catalog_lease::CatalogMutationLease,
 ) -> Result<FastCatalogRefreshReport, String> {
+    execute_planned_fast_refresh_with_lease_and_progress(
+        storage_root,
+        catalog_root,
+        request,
+        plan,
+        _lease,
+        |_, _| {},
+    )
+}
+
+pub fn execute_planned_fast_refresh_with_lease_and_progress(
+    storage_root: &Path,
+    catalog_root: &Path,
+    request: FastCatalogRefreshRequest,
+    plan: FastRefreshPlanReport,
+    _lease: &crate::catalog_lease::CatalogMutationLease,
+    progress: impl FnMut(&'static str, u64),
+) -> Result<FastCatalogRefreshReport, String> {
     execute_planned_fast_refresh_with(
         storage_root,
         catalog_root,
         request,
         plan,
         prepare_system_refresh,
+        progress,
     )
 }
 
@@ -1396,6 +1415,7 @@ fn execute_planned_fast_refresh_with(
         &FastFiveSnapshot,
         &str,
     ) -> Result<Option<PreparedSystemRefresh>, String>,
+    mut progress: impl FnMut(&'static str, u64),
 ) -> Result<FastCatalogRefreshReport, String> {
     let started = std::time::Instant::now();
     let planning_us = plan.elapsed_us;
@@ -1440,6 +1460,7 @@ fn execute_planned_fast_refresh_with(
     let mut artifact_writes = BTreeSet::new();
     let mut removed_system_ids = BTreeSet::new();
     let mut reports = Vec::with_capacity(plan.systems);
+    let mut work_units = 0u64;
     for check in &plan.checks {
         let system_started = std::time::Instant::now();
         let previous_ref = previous_refs.get(check.system_id.as_str()).copied();
@@ -1457,6 +1478,8 @@ fn execute_planned_fast_refresh_with(
                     .unwrap_or(u64::MAX),
                 detail: "source identities match".to_string(),
             });
+            work_units = work_units.saturating_add(1);
+            progress("systems", work_units);
             continue;
         }
         let was_active = snapshot
@@ -1553,6 +1576,8 @@ fn execute_planned_fast_refresh_with(
                 detail: error,
             }),
         }
+        work_units = work_units.saturating_add(1);
+        progress("systems", work_units);
     }
     let source_rebuild_us = source_started
         .elapsed()
@@ -1569,6 +1594,8 @@ fn execute_planned_fast_refresh_with(
             fast_catalog_artifact_profile(),
         )?;
     }
+    work_units = work_units.saturating_add(1);
+    progress("artifacts", work_units);
     let artifact_publish_us = artifact_started
         .elapsed()
         .as_micros()
@@ -1593,6 +1620,8 @@ fn execute_planned_fast_refresh_with(
         )?
         .generation
     };
+    work_units = work_units.saturating_add(1);
+    progress("refresh-state", work_units);
     let snapshot_publish_us = snapshot_started
         .elapsed()
         .as_micros()
@@ -2765,6 +2794,7 @@ mod tests {
 
         let plan = plan_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::RebuildAll)
             .expect("plan rebuild");
+        let mut checkpoints = Vec::new();
         let report = execute_planned_fast_refresh_with(
             &storage,
             &catalog,
@@ -2782,8 +2812,16 @@ mod tests {
                 }
                 prepare_system_refresh(storage_root, snapshot, system_id)
             },
+            |phase, work_units| checkpoints.push((phase, work_units)),
         )
         .expect("publish successful systems");
+        assert!(checkpoints.windows(2).all(|pair| pair[0].1 < pair[1].1));
+        assert!(checkpoints.iter().any(|(phase, _)| *phase == "artifacts"));
+        assert!(
+            checkpoints
+                .iter()
+                .any(|(phase, _)| *phase == "refresh-state")
+        );
         assert!(report.system_reports.iter().any(|system| {
             system.system_id == "snes" && system.outcome == FastCatalogSystemOutcome::Updated
         }));

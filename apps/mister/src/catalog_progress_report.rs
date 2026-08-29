@@ -151,6 +151,26 @@ impl CatalogProgressMonitor {
         })
     }
 
+    pub fn note_observation(
+        &mut self,
+        activity_kind: &str,
+        phase: &str,
+        detail: &str,
+        percent: i32,
+        now: Instant,
+    ) {
+        if self.episode_id.is_none() {
+            return;
+        }
+        self.advance(now);
+        self.activity_kind = activity_kind.to_string();
+        self.phase = phase.to_string();
+        self.detail = detail.to_string();
+        truncate_string(&mut self.detail, 8 * 1024);
+        self.percent = percent;
+        self.activity_count = self.activity_count.saturating_add(1);
+    }
+
     pub fn tick(
         &mut self,
         worker_running: bool,
@@ -771,6 +791,27 @@ mod tests {
         assert_eq!(monitor.inactive_elapsed, Duration::ZERO);
         assert!(!monitor.stall_reported);
         assert!(recovered.is_some_and(|report| report.state == "running"));
+    }
+
+    #[test]
+    fn observations_do_not_reset_validated_progress_timeout() {
+        let start = Instant::now();
+        let mut monitor = CatalogProgressMonitor::new(start);
+        monitor.start(
+            "/media/fat".to_string(),
+            "build",
+            "background_interactive",
+            start,
+        );
+        monitor.note_observation(
+            "timing",
+            "repeated",
+            "still running",
+            -1,
+            start + STALL_AFTER_ACTIVE,
+        );
+
+        assert!(monitor.active_stalled(true, true));
     }
 
     #[test]

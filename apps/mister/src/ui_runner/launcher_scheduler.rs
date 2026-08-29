@@ -580,6 +580,7 @@ pub(super) struct LauncherScheduler {
     catalog: CatalogJobState,
     catalog_child_control: Option<Arc<CatalogChildControl>>,
     catalog_stop_requested: bool,
+    catalog_progress_work_units: u64,
     catalog_progress: crate::catalog_progress_report::CatalogProgressMonitor,
     search_query: SearchQueryJobState,
     pending_search_query: Option<launcher::ArcadeSearchRequest>,
@@ -639,6 +640,7 @@ impl LauncherScheduler {
             catalog: CatalogJobState::Idle,
             catalog_child_control: None,
             catalog_stop_requested: false,
+            catalog_progress_work_units: 0,
             catalog_progress: crate::catalog_progress_report::CatalogProgressMonitor::new(now),
             search_query: SearchQueryJobState::Idle,
             pending_search_query: None,
@@ -951,6 +953,7 @@ impl LauncherScheduler {
         );
         self.catalog_child_control = child_control;
         self.catalog_stop_requested = false;
+        self.catalog_progress_work_units = 0;
         self.catalog = CatalogJobState::Running(catalog_receiver);
         true
     }
@@ -1134,7 +1137,21 @@ impl LauncherScheduler {
 
     fn record_catalog_progress_message(&mut self, message: &CatalogWorkerMessage, now: Instant) {
         match message {
-            CatalogWorkerMessage::Heartbeat { .. } => {}
+            CatalogWorkerMessage::Progress { .. } => {}
+            CatalogWorkerMessage::Heartbeat {
+                phase, work_units, ..
+            } => {
+                if *work_units > self.catalog_progress_work_units {
+                    self.catalog_progress_work_units = *work_units;
+                    self.note_validated_catalog_progress(
+                        "heartbeat",
+                        phase,
+                        &format!("work_units={work_units}"),
+                        -1,
+                        now,
+                    );
+                }
+            }
             CatalogWorkerMessage::Timing { name, detail } => {
                 self.note_catalog_progress("timing", name, detail, -1, now);
             }
@@ -1277,6 +1294,18 @@ impl LauncherScheduler {
     }
 
     fn note_catalog_progress(
+        &mut self,
+        activity_kind: &str,
+        phase: &str,
+        detail: &str,
+        percent: i32,
+        now: Instant,
+    ) {
+        self.catalog_progress
+            .note_observation(activity_kind, phase, detail, percent, now);
+    }
+
+    fn note_validated_catalog_progress(
         &mut self,
         activity_kind: &str,
         phase: &str,
