@@ -15,10 +15,7 @@ from .uinput_keyboard import Key, VirtualKeyboard
 class AccessibilitySnapshot:
     """Stable, serializable projection of the accessibility tree."""
 
-    elements: tuple[
-        tuple[str, str, str, bool, bool, bool, bool],
-        ...
-    ]
+    elements: tuple[tuple[str, str, str, bool, bool, bool, bool], ...]
 
     @classmethod
     def capture(cls, root: SlintElement) -> AccessibilitySnapshot:

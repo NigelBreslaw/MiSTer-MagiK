@@ -46,9 +46,7 @@ class Key(IntEnum):
 def _user_dev(name: str) -> bytes:
     """Encode the legacy ``uinput_user_dev`` structure for this ABI."""
 
-    data = bytearray(
-        struct.calcsize("80sHHHHi") + struct.calcsize(f"{_ABS_CNT * 4}i")
-    )
+    data = bytearray(struct.calcsize("80sHHHHi") + struct.calcsize(f"{_ABS_CNT * 4}i"))
     struct.pack_into(
         "80sHHHHi",
         data,

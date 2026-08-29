@@ -24,9 +24,7 @@ def magik() -> Iterator[MagiKDriver]:
         pytest.skip("set MISTER_UI_TEST_COMMAND for attended device UI tests")
     command = tuple(shlex.split(command_text))
     environment = environment_for_application()
-    environment.setdefault(
-        "MISTER_UI_TEST_FIXTURE", "deterministic-arcade-v1"
-    )
+    environment.setdefault("MISTER_UI_TEST_FIXTURE", "deterministic-arcade-v1")
     config = DriverConfig(
         command=command,
         environment=environment,

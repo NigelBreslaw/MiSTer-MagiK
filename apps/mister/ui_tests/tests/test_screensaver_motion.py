@@ -15,9 +15,7 @@ def test_screensaver_and_reduce_motion_settings(magik: MagiKDriver) -> None:
     magik.button("open-screensaver-settings", Button.A)
     element_with_label(magik, "Screensaver settings")
 
-    enabled = element_with_any_label(
-        magik, ("Screensaver enabled", "Enabled")
-    )
+    enabled = element_with_any_label(magik, ("Screensaver enabled", "Enabled"))
     before = enabled.accessible_description
     magik.button("toggle-screensaver", Button.A)
     after = element_with_any_label(
