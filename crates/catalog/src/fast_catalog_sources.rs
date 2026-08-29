@@ -29,12 +29,18 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 13;
 const PREPARED_SYSTEM_IDS: [&str; 5] = ["arcade", "amiga", "c64", "dos", "x68000"];
+const MAX_DISCOVERY_ENTRIES: usize = 4_000_000;
+const MAX_DISCOVERY_DEPTH: usize = 256;
+const MAX_DIRECTORY_ENTRIES: usize = 1_000_000;
+const MAX_MRA_BYTES: u64 = 1024 * 1024;
+const MAX_COLLECTION_LISTING_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FastSourceBuildReport {
@@ -692,9 +698,9 @@ fn scan_arcade_candidates(
             continue;
         }
         updater_misses = updater_misses.saturating_add(1);
-        let bytes = match fs::read(&path) {
-            Ok(bytes) if bytes.len() <= 1024 * 1024 => bytes,
-            _ => {
+        let bytes = match read_bounded_file(&path, MAX_MRA_BYTES) {
+            Ok(bytes) => bytes,
+            Err(_) => {
                 report.invalid += 1;
                 continue;
             }
@@ -869,12 +875,34 @@ fn collect_arcade_mras(
     visited: &mut usize,
     output: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
+    collect_arcade_mras_at_depth(root, visited, output, 0)
+}
+
+fn collect_arcade_mras_at_depth(
+    root: &Path,
+    visited: &mut usize,
+    output: &mut Vec<PathBuf>,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > MAX_DISCOVERY_DEPTH {
+        return Err(format!(
+            "arcade discovery exceeded directory depth limit {} at {}",
+            MAX_DISCOVERY_DEPTH,
+            root.display()
+        ));
+    }
     let Some(mut entries) = read_dir_entries_checked(root)? else {
         return Ok(());
     };
     entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
     for entry in entries {
         *visited = visited.saturating_add(1);
+        if *visited > MAX_DISCOVERY_ENTRIES {
+            return Err(format!(
+                "arcade discovery exceeded {} entries",
+                MAX_DISCOVERY_ENTRIES
+            ));
+        }
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if should_ignore_arcade_component(&name) {
@@ -888,7 +916,7 @@ fn collect_arcade_mras(
         }
         let path = entry.path();
         if file_type.is_dir() {
-            collect_arcade_mras(&path, visited, output)?;
+            collect_arcade_mras_at_depth(&path, visited, output, depth.saturating_add(1))?;
         } else if file_type.is_file()
             && extension_is(&path, "mra")
             && !matches!(
@@ -1199,12 +1227,35 @@ fn collect_matching_files(
     output: &mut Vec<PathBuf>,
     matches: impl Fn(&Path) -> bool + Copy,
 ) -> Result<(), String> {
+    collect_matching_files_at_depth(root, visited, output, matches, 0)
+}
+
+fn collect_matching_files_at_depth(
+    root: &Path,
+    visited: &mut usize,
+    output: &mut Vec<PathBuf>,
+    matches: impl Fn(&Path) -> bool + Copy,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > MAX_DISCOVERY_DEPTH {
+        return Err(format!(
+            "file discovery exceeded directory depth limit {} at {}",
+            MAX_DISCOVERY_DEPTH,
+            root.display()
+        ));
+    }
     let Some(mut entries) = read_dir_entries_checked(root)? else {
         return Ok(());
     };
     entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
     for entry in entries {
-        *visited += 1;
+        *visited = visited.saturating_add(1);
+        if *visited > MAX_DISCOVERY_ENTRIES {
+            return Err(format!(
+                "file discovery exceeded {} entries",
+                MAX_DISCOVERY_ENTRIES
+            ));
+        }
         let file_type = entry
             .file_type()
             .map_err(|error| format!("inspect {}: {error}", entry.path().display()))?;
@@ -1213,7 +1264,13 @@ fn collect_matching_files(
         }
         let path = entry.path();
         if file_type.is_dir() {
-            collect_matching_files(&path, visited, output, matches)?;
+            collect_matching_files_at_depth(
+                &path,
+                visited,
+                output,
+                matches,
+                depth.saturating_add(1),
+            )?;
         } else if file_type.is_file() && matches(&path) {
             output.push(path);
         }
@@ -1225,10 +1282,28 @@ fn read_dir_entries_checked(root: &Path) -> Result<Option<Vec<fs::DirEntry>>, St
     let mut last_error = None;
     for _ in 0..2 {
         match fs::read_dir(root) {
-            Ok(entries) => match entries.collect::<Result<Vec<_>, _>>() {
-                Ok(entries) => return Ok(Some(entries)),
-                Err(error) => last_error = Some(error),
-            },
+            Ok(entries) => {
+                let mut collected = Vec::new();
+                for entry in entries {
+                    if collected.len() >= MAX_DIRECTORY_ENTRIES {
+                        return Err(format!(
+                            "enumerate {}: directory exceeds {} entries",
+                            root.display(),
+                            MAX_DIRECTORY_ENTRIES
+                        ));
+                    }
+                    match entry {
+                        Ok(entry) => collected.push(entry),
+                        Err(error) => {
+                            last_error = Some(error);
+                            break;
+                        }
+                    }
+                }
+                if last_error.is_none() {
+                    return Ok(Some(collected));
+                }
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => last_error = Some(error),
         }
@@ -1241,6 +1316,28 @@ fn read_dir_entries_checked(root: &Path) -> Result<Option<Vec<fs::DirEntry>>, St
             .map(|error| error.to_string())
             .unwrap_or_else(|| "unknown directory error".to_string())
     ))
+}
+
+fn read_bounded_file(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
+    let metadata =
+        fs::metadata(path).map_err(|error| format!("metadata {}: {error}", path.display()))?;
+    if metadata.len() > maximum {
+        return Err(format!(
+            "{} is {} bytes, larger than the {} byte limit",
+            path.display(),
+            metadata.len(),
+            maximum
+        ));
+    }
+    let file = fs::File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
+    let mut bytes = Vec::with_capacity(metadata.len().try_into().unwrap_or(usize::MAX));
+    file.take(maximum.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    if bytes.len() as u64 > maximum {
+        return Err(format!("{} grew beyond its size limit", path.display()));
+    }
+    Ok(bytes)
 }
 
 fn direct_row(system_id: &str, category: &str, path: &Path, title: String) -> SystemGame {

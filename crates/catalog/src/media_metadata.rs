@@ -19,9 +19,12 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 const MGL_PREFIX_BYTES: usize = 32 * 1024;
+const MAX_COLLECTION_LISTING_BYTES: usize = 8 * 1024 * 1024;
+const MAX_MRA_BYTES: u64 = 1024 * 1024;
 
 pub(crate) fn collection_discoveries_from_container(
     file: &FoundFile,
@@ -161,13 +164,47 @@ pub(crate) fn collection_listing_text_with_tool(
         .spawn()
         .ok()?;
     let start = Instant::now();
-    loop {
-        if child.try_wait().ok()?.is_some() {
-            let output = child.wait_with_output().ok()?;
-            if !output.status.success() {
+    let stdout = child.stdout.take()?;
+    let (output_tx, output_rx) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut limited = stdout.take((MAX_COLLECTION_LISTING_BYTES + 1) as u64);
+        let result = limited.read_to_end(&mut output).map(|()| {
+            let within_limit = result_is_within_limit(output.len());
+            (output, within_limit)
+        });
+        let _ = output_tx.send(result);
+    });
+    let output = loop {
+        if let Ok(result) = output_rx.try_recv() {
+            let (output, within_limit) = result.ok()?;
+            if !within_limit {
+                let _ = child.kill();
+                let _ = child.wait();
                 return None;
             }
-            return Some(String::from_utf8_lossy(&output.stdout).into_owned());
+            break output;
+        }
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        if child.try_wait().ok()?.is_some() {
+            let (output, within_limit) = output_rx
+                .recv_timeout(Duration::from_millis(100))
+                .ok()?
+                .ok()?;
+            if !within_limit {
+                return None;
+            }
+            break output;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    let status = loop {
+        if let Some(status) = child.try_wait().ok()? {
+            break status;
         }
         if start.elapsed() >= timeout {
             let _ = child.kill();
@@ -175,7 +212,15 @@ pub(crate) fn collection_listing_text_with_tool(
             return None;
         }
         std::thread::sleep(Duration::from_millis(25));
+    };
+    if !status.success() {
+        return None;
     }
+    Some(String::from_utf8_lossy(&output).into_owned())
+}
+
+fn result_is_within_limit(length: usize) -> bool {
+    length <= MAX_COLLECTION_LISTING_BYTES
 }
 
 pub(crate) fn collection_discoveries_from_listing_text(
@@ -311,8 +356,28 @@ pub(crate) fn read_mra_metadata(path: &Path) -> Option<MraMetadata> {
 }
 
 pub(crate) fn inspect_mra_path(path: &Path) -> Result<MraInspection, String> {
-    let bytes =
-        std::fs::read(path).map_err(|error| format!("read MRA {}: {error}", path.display()))?;
+    let metadata = std::fs::metadata(path)
+        .map_err(|error| format!("metadata MRA {}: {error}", path.display()))?;
+    if metadata.len() > MAX_MRA_BYTES {
+        return Err(format!(
+            "MRA {} exceeds {} bytes",
+            path.display(),
+            MAX_MRA_BYTES
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len().try_into().unwrap_or(usize::MAX));
+    File::open(path)
+        .map_err(|error| format!("open MRA {}: {error}", path.display()))?
+        .take(MAX_MRA_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("read MRA {}: {error}", path.display()))?;
+    if bytes.len() as u64 > MAX_MRA_BYTES {
+        return Err(format!(
+            "MRA {} grew beyond {} bytes",
+            path.display(),
+            MAX_MRA_BYTES
+        ));
+    }
     inspect_mra_bytes(&bytes)
 }
 
@@ -1454,6 +1519,49 @@ mod tests {
 
         assert!(text.is_none());
         assert!(start.elapsed() < Duration::from_secs(1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn collection_listing_helper_rejects_unbounded_output() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("collection-listing-output-limit");
+        let helper = root.join("large-7za.sh");
+        std::fs::write(&helper, "#!/bin/sh\nhead -c 9000000 /dev/zero\n").expect("write helper");
+        let mut permissions = std::fs::metadata(&helper)
+            .expect("stat helper")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&helper, permissions).expect("chmod helper");
+        let archive = root.join("AmigaVision.7z");
+        std::fs::write(&archive, "fixture").expect("write archive fixture");
+        let file = FoundFile {
+            path: archive,
+            ext: "7z".to_string(),
+            size: 7,
+            mtime_secs: 0,
+        };
+        let listing = CollectionListing {
+            entry_path: "listings/games.txt".to_string(),
+            genre: "AmigaVision".to_string(),
+        };
+
+        assert!(
+            collection_listing_text_with_tool(&file, &listing, &helper, Duration::from_secs(1),)
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn inspect_mra_path_rejects_oversized_input_before_reading() {
+        let root = unique_temp_dir("mra-size-limit");
+        let path = root.join("oversized.mra");
+        let file = File::create(&path).expect("create oversized fixture");
+        file.set_len(MAX_MRA_BYTES + 1).expect("grow fixture");
+        let error = inspect_mra_path(&path).expect_err("oversized MRA must fail");
+        assert!(error.contains("exceeds"));
         let _ = std::fs::remove_dir_all(root);
     }
 
