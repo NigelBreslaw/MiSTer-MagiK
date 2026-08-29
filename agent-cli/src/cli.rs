@@ -1083,9 +1083,9 @@ mod tests {
     }
 
     #[test]
-    fn git_hook_commands_have_closed_interfaces() {
-        assert!(Cli::try_parse_from(["agent-cli", "pre-push", "--remote", "origin"]).is_ok());
-        assert!(Cli::try_parse_from(["agent-cli", "pre-push"]).is_err());
+    fn retired_rust_assurance_commands_are_not_available() {
+        assert!(Cli::try_parse_from(["agent-cli", "pre-push", "--remote", "origin"]).is_err());
+        assert!(Cli::try_parse_from(["agent-cli", "plan"]).is_err());
     }
 
     #[test]

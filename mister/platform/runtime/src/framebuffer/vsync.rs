@@ -1078,18 +1078,24 @@ mod tests {
             at: Instant::now() - Duration::from_micros(DEFAULT_FRESH_HIT_MAX_AGE_US + 1_000),
         })
         .expect("stale hit queued");
-        let sender = std::thread::spawn(move || {
-            let fresh_at = Instant::now();
-            tx.send(VsyncWaitStatus::Hit {
-                wait_us: 16_000,
-                at: fresh_at,
-            })
-            .expect("fresh hit queued after stale one is drained");
-            fresh_at
-        });
-
-        let pace = pacer.wait();
-        let fresh_at = sender.join().expect("fresh sender joins");
+        let mut polls = 0;
+        let mut fresh_at = None;
+        let VsyncWaitOutcome::Pace(pace) = pacer.wait_interruptible(|| {
+            polls += 1;
+            if polls == 2 {
+                let at = Instant::now();
+                tx.try_send(VsyncWaitStatus::Hit {
+                    wait_us: 16_000,
+                    at,
+                })
+                .expect("fresh hit queued after stale one is classified");
+                fresh_at = Some(at);
+            }
+            false
+        }) else {
+            panic!("vsync wait was interrupted");
+        };
+        let fresh_at = fresh_at.expect("fresh hit timestamp captured");
 
         assert_eq!(pace.source, VsyncPaceSource::Vsync);
         assert_eq!(pace.hit_at, Some(fresh_at));
