@@ -175,6 +175,10 @@ pub struct FastSystemSourceCheck {
 #[derive(Clone, Debug, Serialize)]
 pub struct FastRefreshPlanReport {
     pub elapsed_us: u64,
+    pub manifest_read_us: u64,
+    pub active_read_us: u64,
+    pub system_discovery_us: u64,
+    pub checks_us: u64,
     pub watch_read_us: u64,
     pub metadata_probe_us: u64,
     pub metadata_parents: usize,
@@ -1006,13 +1010,25 @@ pub fn plan_fast_refresh(
     request: FastCatalogRefreshRequest,
 ) -> Result<FastRefreshPlanReport, String> {
     let started = std::time::Instant::now();
+    let phase_started = std::time::Instant::now();
     let manifest = read_latest_refresh_manifest(catalog_root)?;
+    let manifest_read_us = phase_started
+        .elapsed()
+        .as_micros()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let phase_started = std::time::Instant::now();
     let active = crate::shard_registry::read_latest_manifest_lazy(
         catalog_root,
         crate::shard_registry::production_registry_limits(),
     )
     .map_err(|error| format!("read active fast catalog: {error}"))?;
     let active_fingerprint = crate::fast_five_catalog::registry_fingerprint_for_manifest(&active);
+    let active_read_us = phase_started
+        .elapsed()
+        .as_micros()
+        .try_into()
+        .unwrap_or(u64::MAX);
     let binding_matches = manifest.catalog_generation == active.generation
         && manifest.catalog_fingerprint == active_fingerprint
         && manifest.builder_identity
@@ -1122,7 +1138,13 @@ pub fn plan_fast_refresh(
             .unwrap_or(u64::MAX);
         check
     };
+    let phase_started = std::time::Instant::now();
     let mut systems = crate::fast_catalog_sources::discover_independent_system_ids(storage_root)?;
+    let system_discovery_us = phase_started
+        .elapsed()
+        .as_micros()
+        .try_into()
+        .unwrap_or(u64::MAX);
     systems.extend(
         active
             .systems
@@ -1131,10 +1153,16 @@ pub fn plan_fast_refresh(
     );
     systems.sort();
     systems.dedup();
+    let phase_started = std::time::Instant::now();
     let checks = systems
         .iter()
         .map(|system_id| build_check(system_id))
         .collect::<Vec<_>>();
+    let checks_us = phase_started
+        .elapsed()
+        .as_micros()
+        .try_into()
+        .unwrap_or(u64::MAX);
     let unchanged = checks
         .iter()
         .filter(|check| check.status == FastSourceCheckStatus::Unchanged)
@@ -1146,6 +1174,10 @@ pub fn plan_fast_refresh(
     let rescans = checks.len().saturating_sub(unchanged + changed);
     Ok(FastRefreshPlanReport {
         elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+        manifest_read_us,
+        active_read_us,
+        system_discovery_us,
+        checks_us,
         watch_read_us,
         metadata_probe_us,
         metadata_parents,
