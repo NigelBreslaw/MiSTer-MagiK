@@ -531,7 +531,8 @@ def main() -> None:
             "cover_issue_empty_vs": ("COVER_WITNESS_ISSUE_EMPTY_VS", 20),
             "cover_final_return_vs_wait": (
                 "COVER_WITNESS_FINAL_RETURN_VS_WAIT",
-                270,
+                # One full return burst plus reset/release/scheduler overhead.
+                320,
             ),
         }
         cover_results: dict[str, int] = {}
