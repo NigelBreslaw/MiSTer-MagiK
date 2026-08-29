@@ -7,7 +7,7 @@ sidebar:
 
 Work in small, focused changes and preserve unrelated user work. The repository may already contain local edits, generated outputs, or private submodule state.
 
-Preview the full affected assurance plan without executing it:
+Preview the local fast checks and CI-owned assurance without executing it:
 
 ```bash
 scripts/agent plan
@@ -16,8 +16,9 @@ scripts/agent plan
 During Rust work, AI agents use the repository's bounded, lazy Rust analyzer
 integration. Stage intentional paths and commit normally; the bootstrap-free
 pre-commit hook provides the fast format, whitespace, policy, and shell-syntax
-gate under a strict ten-second deadline. Pre-push and CI run the full affected
-tests, builds, feature matrices, and policy checks.
+gate under a strict ten-second deadline. Pre-push runs the fast Python policy
+checks plus Ruff format, Ruff lint, and Ty. CI runs Cargo, feature matrices,
+pytest, ARM, and visual assurance.
 
 For documentation work in this site:
 

@@ -8,8 +8,9 @@ Public installation and removal are handled by the dedicated Rust
 `mister-magik-manager`; see [installer.md](installer.md). The Scripts-menu shell
 file is only a fail-closed, hash-verifying bootstrap.
 
-Push committed host-tool changes through pre-push assurance. `scripts/agent`
-builds and runs the repository's sole `agent-cli` binary before device access.
+Push committed host-tool changes through the bootstrap-free Python pre-push
+assurance. Device operations themselves continue through the repository's sole
+typed `scripts/agent` entrypoint, which builds its Rust client when required.
 Common attended commands are:
 
 ```text

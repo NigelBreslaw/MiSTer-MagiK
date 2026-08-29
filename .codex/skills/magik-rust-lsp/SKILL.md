@@ -6,7 +6,8 @@ description: Use the repository's bounded lspi/rust-analyzer MCP for Rust and Ca
 # MiSTer MagiK Rust LSP
 
 Use semantic Rust tools during editing. Leave tests, special feature builds, ARM
-validation, and repository assurance to pre-push and CI.
+validation, and repository assurance to CI; pre-push owns only the bootstrap-free
+Python fast gate and quality checks.
 
 ## Load And Route
 
@@ -49,8 +50,9 @@ validation, and repository assurance to pre-push and CI.
 
 ## Failure And Assurance
 
-- Do not invoke repository validation commands. Pre-commit, pre-push, and CI
-  own formatting, tests, feature matrices, platform checks, and full assurance.
+- Do not invoke repository validation commands. Pre-commit and pre-push own
+  bounded fast checks; CI owns formatting, tests, feature matrices, platform
+  checks, and full assurance.
 - If the MCP is missing or fails once, report reduced edit-time assurance and
   fall back to `rg` for navigation. Do not repeatedly retry or construct Cargo
   validation commands.

@@ -24,13 +24,12 @@ operational categories are rejected by the typed
 Normal repository work uses bounded Rust analyzer diagnostics where applicable,
 explicit-path `git add`, ordinary `git commit`, and `git push`; the pre-commit
 hook runs the bootstrap-free Python fast gate under its ten-second deadline.
-The pre-push hook enters `agent-cli` for full affected assurance before
-committed work reaches the remote. Pre-push and CI run every selected check
-after individual failures, then return one actionable end-of-run report for
-all failures. Committed runtime/platform work then uses `deliver`.
+The pre-push hook runs the bootstrap-free Python fast gate and Python quality
+checks directly. CI owns Cargo, ARM, visual, and pytest assurance. Committed
+runtime/platform work then uses `deliver`.
 Performance and diagnosis use the flag-free `benchmark` and `diagnose`
 commands.
 
 Native Linux CI owns Linux-specific Rust and Clippy assurance. Local planning
-with `scripts/agent plan` shows the full affected operations without executing
-them.
+with `scripts/agent plan` shows the fast local checks and CI-owned operations
+without executing them.

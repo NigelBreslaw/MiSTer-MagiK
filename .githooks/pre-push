@@ -7,4 +7,4 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-exec "$ROOT/scripts/agent" pre-push --remote "$1"
+exec python3 "$ROOT/scripts/checks/pre-push.py" --repository "$ROOT" --remote "$1"

@@ -12,6 +12,10 @@ for argument in "$@"; do
 done
 WRAPPER_STARTED=$SECONDS
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${1:-}" == "plan" ]]; then
+  shift
+  exec python3 "$ROOT/scripts/checks/pre-push.py" --repository "$ROOT" --plan "$@"
+fi
 MANIFEST="${MISTER_AGENT_CLI_MANIFEST:-$ROOT/agent-cli/Cargo.toml}"
 SOURCE_ROOT="$(dirname "$MANIFEST")"
 TARGET_ROOT="${CARGO_TARGET_DIR:-$SOURCE_ROOT/target}"

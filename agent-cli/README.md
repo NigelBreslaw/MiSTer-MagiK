@@ -1,8 +1,8 @@
 # agent-cli
 
 `agent-cli` is the repository workflow engine behind `scripts/agent`. It owns
-Git-aware affected validation, exact-SHA builds, transactional delivery,
-benchmarks, diagnosis, and attended release qualification.
+exact-SHA builds, transactional delivery, benchmarks, diagnosis, and attended
+release qualification. Python owns pre-push and CI host assurance.
 
 The AI-facing commands are:
 
@@ -19,11 +19,11 @@ scripts/agent clean
 
 The normal AI loop is edit with bounded Rust analyzer diagnostics where
 applicable, stage intentional paths with ordinary Git, commit, and push.
-`scripts/agent plan` previews the full affected assurance plan without executing
-it. The Git pre-commit hook runs a bootstrap-free Python gate against the index
-under a fail-closed ten-second deadline. The pre-push hook enters `agent-cli`
-for full affected assurance of the exact branch commit, while CI remains
-authoritative.
+`scripts/agent plan` previews the bootstrap-free Python pre-push checks and CI
+ownership without executing them. The Git pre-commit hook runs a bootstrap-free
+Python gate against the index under a fail-closed ten-second deadline. The
+pre-push hook runs the Python gate directly; CI owns Cargo, ARM, visual, and
+pytest assurance.
 Workflow evidence analysis uses the hidden typed
 `scripts/agent db report` command rather than direct SQL.
 

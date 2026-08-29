@@ -43,9 +43,10 @@ repositories.
 ## Workflow
 
 - Use `$magik-rust-lsp` for Rust/Cargo navigation and diagnostics. Use Slint MCP
-  for behavior. Do not construct Cargo, test, lint, hook, host
-  assurance, ARM, or Apple-container commands; CI owns assurance (native Linux CI).
-- `scripts/agent plan` previews affected assurance. Agents use the typed
+  for behavior. Do not construct Cargo, test, lint, hook, host assurance, ARM, or
+  Apple-container commands; CI owns expensive assurance. Pre-push runs only the
+  bootstrap-free Python fast gate.
+- `scripts/agent plan` previews the Python pre-push checks and CI ownership. Agents use the typed
   `scripts/agent deliver`, `benchmark`, and `diagnose` workflows. Human device
   operations use attended `scripts/agent device` commands. Never use raw
   SSH/SCP or generic remote-shell orchestration. Use `scripts/agent db report`,
@@ -57,8 +58,9 @@ repositories.
   include only the owning manifest plus adjacent lockfile.
 - Stage exact paths with `git add -- PATH...` and commit with
   `git commit -m MESSAGE`; both require first-attempt sandbox escalation. The
-  pre-commit hook is the index-only gate and the pre-push hook owns full
-  clean-`HEAD` assurance. Use `gh`, never the Codex GitHub plugin.
+  pre-commit hook is the index-only gate, the pre-push hook owns bootstrap-free
+  fast clean-`HEAD` assurance, and CI owns full assurance. Use `gh`, never the
+  Codex GitHub plugin.
 - “Build and deploy” means commit, then `scripts/agent deliver`. Delivery uses
   the exact clean app commit and the latest qualified platform. Use
   `scripts/agent deliver local-main` only for committed Dev Main work.
