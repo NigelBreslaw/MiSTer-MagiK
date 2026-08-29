@@ -438,6 +438,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up platform Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12.14"
+
       - name: Trust checkout and fetch pinned kernel
         run: |
           set -eu
