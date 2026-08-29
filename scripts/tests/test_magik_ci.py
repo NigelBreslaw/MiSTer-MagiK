@@ -14,6 +14,7 @@ from scripts.magik_ci.assurance import fast_checks
 from scripts.magik_ci.bundle import bundle_id, update_plan
 from scripts.magik_ci.host import HOST_GROUPS, commands
 from scripts.magik_ci.manifest import candidate_id, serialize
+from scripts.magik_ci.python_tests import SLOW_TEST, commands as python_test_commands
 from scripts.magik_ci.quality import QUALITY_COMMANDS, execute
 
 
@@ -58,6 +59,42 @@ class MagikCiTests(unittest.TestCase):
                 "ui-preview" in command[1:] and command[1] == "build"
                 for command in all_commands
             )
+        )
+
+    def test_python_tests_skip_unrelated_paths(self) -> None:
+        self.assertEqual(python_test_commands(["agent-cli/src/main.rs"]), [])
+
+    def test_python_changes_run_fast_tests_only(self) -> None:
+        self.assertEqual(
+            python_test_commands(["scripts/magik_ci/assurance.py"]),
+            [
+                [
+                    "uv",
+                    "run",
+                    "pytest",
+                    "scripts/tests",
+                    "-q",
+                    "--ignore",
+                    SLOW_TEST,
+                ],
+            ],
+        )
+
+    def test_ui_changes_run_only_the_slint_contract(self) -> None:
+        self.assertEqual(
+            python_test_commands(["apps/mister/ui/components/combo_box.slint"]),
+            [["python3", SLOW_TEST]],
+        )
+
+    def test_combined_python_and_ui_changes_run_the_full_suite_once(self) -> None:
+        self.assertEqual(
+            python_test_commands(
+                [
+                    "scripts/magik_ci/assurance.py",
+                    "apps/mister/ui/components/combo_box.slint",
+                ]
+            ),
+            [["uv", "run", "pytest", "scripts/tests", "-q"]],
         )
 
     def test_fast_assurance_selects_only_static_checks_for_slint(self) -> None:

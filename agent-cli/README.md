@@ -22,8 +22,8 @@ applicable, stage intentional paths with ordinary Git, commit, and push.
 `scripts/agent plan` previews the bootstrap-free Python pre-push checks and CI
 ownership without executing them. The Git pre-commit hook runs a bootstrap-free
 Python gate against the index under a fail-closed ten-second deadline. The
-pre-push hook runs the Python gate directly; CI owns Cargo, ARM, visual, and
-pytest assurance.
+pre-push hook runs the Python gate and affected Python tests directly; CI owns
+Cargo, ARM, visual, and full Python assurance.
 Workflow evidence analysis uses the hidden typed
 `scripts/agent db report` command rather than direct SQL.
 

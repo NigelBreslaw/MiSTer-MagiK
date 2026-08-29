@@ -44,8 +44,8 @@ repositories.
 
 - Use `$magik-rust-lsp` for Rust/Cargo navigation and diagnostics. Use Slint MCP
   for behavior. Do not construct Cargo, test, lint, hook, host assurance, ARM, or
-  Apple-container commands; CI owns expensive assurance. Pre-push runs only the
-  bootstrap-free Python fast gate.
+  Apple-container commands; CI owns expensive assurance. Pre-push runs the
+  bootstrap-free Python fast gate and affected Python tests.
 - `scripts/agent plan` previews the Python pre-push checks and CI ownership. Agents use the typed
   `scripts/agent deliver`, `benchmark`, and `diagnose` workflows. Human device
   operations use attended `scripts/agent device` commands. Never use raw

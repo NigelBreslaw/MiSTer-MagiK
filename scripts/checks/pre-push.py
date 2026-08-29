@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from scripts.checks.repository_policy import is_classified
-from scripts.magik_ci import assurance, quality
+from scripts.magik_ci import assurance, python_tests, quality
 
 ZERO_OID = "0" * 40
 
@@ -151,13 +151,19 @@ def run_checks(repository: Path, paths: list[str]) -> None:
         failures.append(str(error))
     if failures:
         raise PrePushError("\n".join(failures))
+    try:
+        python_tests.execute(repository, paths)
+    except subprocess.CalledProcessError as error:
+        raise PrePushError(f"Python tests exited {error.returncode}") from error
 
 
 def print_plan(paths: list[str]) -> None:
     check_classification(paths)
     local = assurance.fast_checks(ROOT, paths)
+    tests = python_tests.commands(paths)
     print(f"pre-push: {len(local)} fast static checks + 3 Python quality checks")
-    print("pre-push: CI owns Cargo, ARM, visual, and pytest assurance")
+    print(f"pre-push: {len(tests)} affected Python test command(s)")
+    print("pre-push: CI owns Cargo, ARM, visual, and full Python assurance")
 
 
 def parse_args() -> argparse.Namespace:

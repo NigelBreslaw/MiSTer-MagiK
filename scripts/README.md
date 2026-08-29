@@ -24,9 +24,9 @@ assurance in `scripts/magik_ci/assurance.py`.
 Normal repository work uses bounded Rust analyzer diagnostics where applicable,
 explicit-path `git add`, ordinary `git commit`, and `git push`; the pre-commit
 hook runs the bootstrap-free Python fast gate under its ten-second deadline.
-The pre-push hook runs the bootstrap-free Python fast gate and Python quality
-checks directly. CI owns Cargo, ARM, visual, and pytest assurance. Committed
-runtime/platform work then uses `deliver`.
+The pre-push hook runs the bootstrap-free Python fast gate, Python quality
+checks, and affected Python tests directly. CI owns Cargo, ARM, visual, and
+full Python assurance. Committed runtime/platform work then uses `deliver`.
 Performance and diagnosis use the flag-free `benchmark` and `diagnose`
 commands.
 

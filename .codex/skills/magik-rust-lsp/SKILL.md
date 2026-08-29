@@ -5,9 +5,9 @@ description: Use the repository's bounded lspi/rust-analyzer MCP for Rust and Ca
 
 # MiSTer MagiK Rust LSP
 
-Use semantic Rust tools during editing. Leave tests, special feature builds, ARM
-validation, and repository assurance to CI; pre-push owns only the bootstrap-free
-Python fast gate and quality checks.
+Use semantic Rust tools during editing. Leave Rust tests, special feature
+builds, ARM validation, and repository assurance to CI; pre-push owns the
+bootstrap-free Python fast gate, quality checks, and affected Python tests.
 
 ## Load And Route
 
