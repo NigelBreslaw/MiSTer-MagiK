@@ -320,7 +320,7 @@ pub fn build_fresh_catalog_with_lease(
     drop(generic_watch_observations);
     let refresh_generation = read_latest_refresh_manifest(catalog_root)
         .map_or(1, |manifest| manifest.generation.saturating_add(1));
-    let (_, refresh_state_publish) = publish_refresh_state_with_report(
+    let (_, refresh_state_publish) = publish_refresh_state_with_report_held(
         catalog_root,
         refresh_generation,
         publication.generation,
@@ -727,6 +727,27 @@ pub fn publish_refresh_state_with_report(
     builder_identity: String,
     systems: &[FastRefreshSystemState],
 ) -> Result<(FastRefreshManifest, FastRefreshStatePublishReport), String> {
+    let _lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
+        .map_err(|error| error.to_string())?;
+    cleanup_refresh_temporary_files(catalog_root)?;
+    publish_refresh_state_with_report_held(
+        catalog_root,
+        generation,
+        catalog_generation,
+        catalog_fingerprint,
+        builder_identity,
+        systems,
+    )
+}
+
+fn publish_refresh_state_with_report_held(
+    catalog_root: &Path,
+    generation: u64,
+    catalog_generation: u64,
+    catalog_fingerprint: String,
+    builder_identity: String,
+    systems: &[FastRefreshSystemState],
+) -> Result<(FastRefreshManifest, FastRefreshStatePublishReport), String> {
     let started = std::time::Instant::now();
     if generation == 0 {
         return Err("fast refresh generation must be non-zero".to_string());
@@ -820,6 +841,27 @@ pub fn publish_refresh_state_with_report(
 }
 
 pub fn publish_refresh_update(
+    catalog_root: &Path,
+    previous: &FastRefreshManifest,
+    catalog_generation: u64,
+    catalog_fingerprint: String,
+    updated: &[FastRefreshSystemState],
+    removed_system_ids: &BTreeSet<String>,
+) -> Result<FastRefreshManifest, String> {
+    let _lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
+        .map_err(|error| error.to_string())?;
+    cleanup_refresh_temporary_files(catalog_root)?;
+    publish_refresh_update_held(
+        catalog_root,
+        previous,
+        catalog_generation,
+        catalog_fingerprint,
+        updated,
+        removed_system_ids,
+    )
+}
+
+fn publish_refresh_update_held(
     catalog_root: &Path,
     previous: &FastRefreshManifest,
     catalog_generation: u64,
@@ -1541,7 +1583,7 @@ fn execute_planned_fast_refresh_with(
             crate::shard_registry::production_registry_limits(),
         )
         .map_err(|error| format!("read refreshed fast catalog: {error}"))?;
-        publish_refresh_update(
+        publish_refresh_update_held(
             catalog_root,
             &previous,
             active.generation,
