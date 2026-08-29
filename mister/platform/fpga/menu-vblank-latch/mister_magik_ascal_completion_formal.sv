@@ -202,16 +202,23 @@ module mister_magik_ascal_completion_formal;
 			// Cover-only builds select one deterministic legal witness. These
 			// assumptions are never compiled into the safety proof.
 `ifdef COVER_WITNESS_TWO_STOPPED
-			witness_cycle <= witness_cycle + 1'b1;
-			assume(reset_n == (witness_cycle != 0));
+			assume(reset_n == (witness_phase != 0));
 			assume(avl_step && !waitrequest && !request_copy_retire);
-			assume(vs_edge == (witness_cycle == 2));
+			assume(vs_edge == (witness_phase == 1));
 			assume(schedule_read ==
-				(witness_cycle == 2 || witness_cycle == 3));
+				(witness_phase == 2 || witness_phase == 4));
 			assume(return_valid ==
-				(witness_cycle >= 5 && witness_cycle <= 260));
-			assume(o_step ==
-				!(witness_cycle >= 5 && witness_cycle <= 260));
+				(witness_phase == 6 && reference_words != 0));
+			assume(o_step == (witness_phase != 6));
+			case (witness_phase)
+				0: witness_phase <= 1;
+				1: if (release_event) witness_phase <= 2;
+				2: if (read_start_event) witness_phase <= 3;
+				3: if (issue_event) witness_phase <= 4;
+				4: if (read_start_event) witness_phase <= 5;
+				5: if (issue_event) witness_phase <= 6;
+				6: if (reference_words == 0) witness_phase <= 7;
+			endcase
 `elsif COVER_WITNESS_COINCIDENT
 			witness_cycle <= witness_cycle + 1'b1;
 			assume(reset_n == (witness_cycle != 0));

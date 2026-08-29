@@ -517,7 +517,7 @@ def main() -> None:
                 fail("Yosys did not report a completed temporal induction proof")
 
         cover_witnesses = {
-            "cover_two_stopped_delivered": ("COVER_WITNESS_TWO_STOPPED", 560),
+            "cover_two_stopped_delivered": ("COVER_WITNESS_TWO_STOPPED", 620),
             "cover_coincident_ack_completion": ("COVER_WITNESS_COINCIDENT", 530),
             "cover_final_old_beat_during_reset": ("COVER_WITNESS_FINAL_RESET", 270),
             "cover_old_beat_after_reset": ("COVER_WITNESS_OLD_POST_RESET", 20),
