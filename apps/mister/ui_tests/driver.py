@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import contextlib
 import tempfile
-from collections.abc import Iterator, Mapping
+import time
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from .agent_input import AgentInput, Button, Key
+from .agent_input import AgentInput, Button, Key, UiSemanticState
 from .input_correlation import CorrelatedInput, InputCorrelation
 from .slint_adapter import SlintApplication, load_application_factory, require_window
 
@@ -99,6 +100,29 @@ class MagiKDriver:
         """Renew the device automation lease during long read-only queries."""
 
         self.inputs.keep_alive()
+
+    def wait_for_semantic(
+        self,
+        predicate: Callable[[UiSemanticState], bool],
+        timeout: float = 2.0,
+    ) -> UiSemanticState:
+        """Wait for a presented runtime snapshot satisfying ``predicate``."""
+
+        deadline = time.monotonic() + timeout
+        while True:
+            snapshot = self.inputs.snapshot()
+            if (
+                snapshot.state_revision > 0
+                and snapshot.presented_state_revision >= snapshot.state_revision
+                and predicate(snapshot.semantic)
+            ):
+                return snapshot.semantic
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    "runtime semantic state did not satisfy the expected profile "
+                    f"within {timeout}s: {snapshot.semantic!r}"
+                )
+            time.sleep(0.02)
 
 
 __all__ = ["DriverConfig", "MagiKDriver", "environment_for_application"]

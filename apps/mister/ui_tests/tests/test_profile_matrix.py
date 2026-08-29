@@ -25,6 +25,22 @@ DISPLAY_CONTRACTS = {
     "crt-480p": ("crt-480p60", "crt-480p60"),
 }
 
+PROFILE_EXPECTATIONS = {
+    "hdmi-720p": ("hdmi", (1280, 720), (1280, 720)),
+    "hdmi-1080p": ("hdmi", (1920, 1080), (960, 540)),
+    "crt-240p": ("crt-240p60", (640, 240), (640, 480)),
+    "crt-480p": ("crt-480p60", (640, 480), (640, 480)),
+}
+ORIENTATION_LABELS = {
+    "normal": "Normal",
+    "monitor-clockwise": "Monitor right (clockwise)",
+}
+FEATURE_LABELS = {
+    "home": "MiSTer MagiK Launcher",
+    "arcade": "Arcade games",
+    "settings": "Settings",
+}
+
 
 @pytest.mark.parametrize("display", DISPLAY_PROFILES)
 @pytest.mark.parametrize("orientation", ORIENTATIONS)
@@ -56,6 +72,16 @@ def test_profile_feature_matrix(
     with MagiKDriver.start(config) as driver:
         launcher = element_with_label(driver, "MiSTer MagiK Launcher")
         assert launcher.accessible_enabled
+        expected_route, expected_output, expected_render = PROFILE_EXPECTATIONS[display]
+        semantic = driver.wait_for_semantic(
+            lambda state: state.effective_view == feature
+            and state.screen_orientation == ORIENTATION_LABELS[orientation]
+            and state.output_route == expected_route
+            and (state.output_width, state.output_height) == expected_output
+            and (state.render_width, state.render_height) == expected_render
+        )
+        assert semantic.effective_view == feature
+        element_with_label(driver, FEATURE_LABELS[feature])
 
 
 __all__ = ["DISPLAY_PROFILES", "FEATURES", "ORIENTATIONS"]
