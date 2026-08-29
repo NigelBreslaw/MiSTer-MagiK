@@ -864,8 +864,11 @@ def main() -> None:
                 fail(
                     f"completion transport reset is missing or ambiguous: {reset_fragment}"
                 )
-        if patched_ascal.count("avl_wad<=2*BLEN-1;") != 1:
-            fail("Avalon write phase must align exactly once at vertical sync")
+        if patched_ascal.count("avl_wad<=2*BLEN-1;") != 2:
+            fail(
+                "Avalon write phase needs exactly one VS alignment and one "
+                "closed-drain pre-alignment"
+            )
         avalon_reset = re.search(
             r"IF avl_reset_na='0' THEN(?P<body>.*?)ELSIF rising_edge\(avl_clk\) THEN",
             patched_ascal,
