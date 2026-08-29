@@ -37,9 +37,7 @@ def element_with_label(driver: MagiKDriver, label: str) -> SlintElement:
     return matches[0]
 
 
-def elements_with_label(
-    driver: MagiKDriver, label: str
-) -> tuple[SlintElement, ...]:
+def elements_with_label(driver: MagiKDriver, label: str) -> tuple[SlintElement, ...]:
     return tuple(
         element
         for element, properties in _elements_with_properties(driver)

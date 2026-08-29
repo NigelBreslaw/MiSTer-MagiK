@@ -97,7 +97,10 @@ def test_agent_input_parses_presented_runtime_snapshot(tmp_path: Path) -> None:
 
     assert snapshot.presented_state_revision == snapshot.state_revision == 4
     assert snapshot.semantic.output_route == "hdmi"
-    assert (snapshot.semantic.output_width, snapshot.semantic.output_height) == (1280, 720)
+    assert (snapshot.semantic.output_width, snapshot.semantic.output_height) == (
+        1280,
+        720,
+    )
 
 
 def test_agent_input_rejects_malformed_runtime_snapshot(tmp_path: Path) -> None:
@@ -159,7 +162,9 @@ def test_driver_waits_for_a_presented_semantic_snapshot() -> None:
             return next(self.snapshots)
 
     driver = cast(MagiKDriver, SimpleNamespace(inputs=FakeInputs()))
-    assert driver.wait_for_semantic(lambda value: value.effective_view == "home") == state
+    assert (
+        driver.wait_for_semantic(lambda value: value.effective_view == "home") == state
+    )
 
 
 def test_application_environment_excludes_private_testing_credentials(

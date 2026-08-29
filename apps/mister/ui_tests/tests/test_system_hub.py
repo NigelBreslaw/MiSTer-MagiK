@@ -7,8 +7,8 @@ from apps.mister.ui_tests.driver import MagiKDriver
 from apps.mister.ui_tests.queries import (
     element_with_label,
     elements_with_label,
-    selected_labels,
     selected_element_with_label,
+    selected_labels,
     wait_for_label,
 )
 
