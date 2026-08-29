@@ -95,5 +95,10 @@ class MagiKDriver:
     def screenshot(self, path: Path) -> None:
         path.write_bytes(self.window.grab_window_as_png())
 
+    def keep_alive(self) -> None:
+        """Renew the device automation lease during long read-only queries."""
+
+        self.inputs.keep_alive()
+
 
 __all__ = ["DriverConfig", "MagiKDriver", "environment_for_application"]

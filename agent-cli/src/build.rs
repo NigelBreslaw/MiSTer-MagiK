@@ -37,6 +37,10 @@ const FFMPEG_APPLE_CONTAINER_ENV: [(&str, &str); 5] = [
         "-I/project/apps/mister/target/ffmpeg-minimal/armv7/dist/include",
     ),
 ];
+const UI_TEST_BUILD_ENV: [(&str, &str); 2] = [
+    ("RUST_FONTCONFIG_DLOPEN", "1"),
+    ("SLINT_EMIT_DEBUG_INFO", "1"),
+];
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -997,9 +1001,9 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
         if self.spec.profile == "release-device-ui-tests" {
             // Slint's system-testing backend enables shared font discovery. The
             // MiSTer image does not provide a cross-compilable fontconfig
-            // development package, so use Slint's optional runtime loader for
-            // this attended-only profile.
-            command.env("RUST_FONTCONFIG_DLOPEN", "1");
+            // development package, so use Slint's optional runtime loader. The
+            // test client also requires compiler-emitted element metadata.
+            command.envs(UI_TEST_BUILD_ENV);
         }
         configure_cross_environment(&mut command, self.session.repository)?;
         if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
@@ -1150,8 +1154,11 @@ fn apple_container_cargo_command(
     }
     if spec.profile == "release-device-ui-tests" {
         // See the cross build path above: system-testing must not add a
-        // compile-time fontconfig dependency to the device image.
-        command.arg("--env").arg("RUST_FONTCONFIG_DLOPEN=1");
+        // compile-time fontconfig dependency to the device image and requires
+        // compiler-emitted element metadata for introspection.
+        for (name, value) in UI_TEST_BUILD_ENV {
+            command.arg("--env").arg(format!("{name}={value}"));
+        }
     }
     for value in metadata.environment() {
         command.arg("--env").arg(value);
@@ -2022,7 +2029,7 @@ mod tests {
     }
 
     #[test]
-    fn ui_test_container_build_uses_runtime_fontconfig_loader() {
+    fn ui_test_container_build_enables_system_testing_metadata() {
         let spec = BuildSpec::for_command(BuildCommand::RuntimeUiTests).unwrap();
         let command = apple_container_cargo_command(
             Path::new("/checkout"),
@@ -2036,11 +2043,14 @@ mod tests {
             .get_args()
             .map(|argument| argument.to_string_lossy().into_owned())
             .collect();
-        assert!(
-            arguments
-                .windows(2)
-                .any(|pair| pair == ["--env", "RUST_FONTCONFIG_DLOPEN=1"])
-        );
+        for (name, value) in UI_TEST_BUILD_ENV {
+            let expected = format!("{name}={value}");
+            assert!(
+                arguments
+                    .windows(2)
+                    .any(|pair| pair == ["--env", expected.as_str()])
+            );
+        }
     }
 
     #[test]

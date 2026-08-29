@@ -612,7 +612,6 @@ pub(crate) fn agent_ui_test_session_at(
             return Err("UI-test runtime grew during transfer".into());
         }
         stream.flush()?;
-        stream.shutdown(Shutdown::Write)?;
         let line = read_unbuffered_agent_line(&mut stream)?;
         parse_agent_response_line(line, start)?
     } else if first_result.get("state").and_then(Value::as_str) != Some("ready") {

@@ -18,6 +18,17 @@ class SlintQuery(Protocol):
         """Return all matching descendants."""
 
 
+class SlintElementProperties(Protocol):
+    """Single-response accessibility projection from the private client."""
+
+    accessible_checked: bool
+    accessible_description: str
+    accessible_enabled: bool
+    accessible_item_selected: bool
+    accessible_label: str
+    accessible_value: str
+
+
 class SlintElement(Protocol):
     """Accessibility properties exposed by the system-test protocol."""
 
@@ -27,6 +38,9 @@ class SlintElement(Protocol):
     accessible_item_selected: bool
     accessible_label: str
     accessible_value: str
+
+    def _get_props(self) -> SlintElementProperties:
+        """Fetch all element properties in one system-test round trip."""
 
     def query_descendants(self) -> SlintQuery:
         """Start a descendant query."""

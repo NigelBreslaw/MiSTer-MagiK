@@ -146,14 +146,6 @@ fn receive_to_part(
         hasher.update(&buffer[..read]);
         remaining = remaining.saturating_sub(read as u64);
     }
-    let mut surplus = [0_u8; 1];
-    if reader
-        .read(&mut surplus)
-        .map_err(|error| format!("finish UI-test runtime payload: {error}"))?
-        != 0
-    {
-        return Err("UI-test runtime payload contains bytes beyond payload_bytes".to_string());
-    }
     let actual_sha256 = hex_digest(hasher.finalize());
     if actual_sha256 != spec.sha256 {
         return Err(format!(
@@ -294,16 +286,30 @@ mod tests {
     }
 
     #[test]
-    fn receive_rejects_truncation_surplus_and_hash_mismatch() {
+    fn receive_rejects_truncation_and_hash_mismatch() {
         let root = root();
         let payload = b"runtime";
         let mut short = spec(payload);
         short.payload_bytes += 1;
         assert!(receive_at(&mut Cursor::new(payload), &root, &short).is_err());
-        assert!(receive_at(&mut Cursor::new(b"runtime-extra"), &root, &spec(payload)).is_err());
         let mut wrong = spec(payload);
         wrong.sha256 = "a".repeat(64);
         assert!(receive_at(&mut Cursor::new(payload), &root, &wrong).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn receive_leaves_following_session_bytes_unread() {
+        let root = root();
+        let payload = b"runtime";
+        let mut framed = Cursor::new(b"runtime-next".to_vec());
+
+        let received = receive_at(&mut framed, &root, &spec(payload)).unwrap();
+        let mut following = Vec::new();
+        framed.read_to_end(&mut following).unwrap();
+
+        assert!(!received.reused);
+        assert_eq!(following, b"-next");
         let _ = fs::remove_dir_all(root);
     }
 

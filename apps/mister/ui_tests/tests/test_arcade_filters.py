@@ -1,4 +1,4 @@
-"""Arcade filters, favourites confirmation, and recent/favourites hubs."""
+"""Arcade filters, favourites confirmation, and return navigation."""
 
 from __future__ import annotations
 
@@ -13,15 +13,15 @@ from apps.mister.ui_tests.queries import (
 
 def test_arcade_filter_drawer_and_favourite_confirmation(magik: MagiKDriver) -> None:
     open_arcade(magik)
-    magik.button("open-arcade-filters", Button.X)
-    drawer = element_with_label(magik, "Filters")
+    magik.hat("open-arcade-filters", -1, 0)
+    drawer = element_with_label(magik, "Games A-Z")
     assert drawer.accessible_enabled
     assert drawer.accessible_description == "Games A-Z"
 
-    magik.hat("choose-category-filter", 0, 1)
+    magik.hat("choose-next-letter", 0, 1)
     selected = selected_labels(magik)
     assert selected
-    magik.button("apply-category-filter", Button.A)
+    magik.button("apply-letter-filter", Button.A)
     assert element_with_label(magik, "Arcade games").accessible_enabled
 
     magik.button("open-favourite-confirmation", Button.X)
@@ -30,8 +30,9 @@ def test_arcade_filter_drawer_and_favourite_confirmation(magik: MagiKDriver) -> 
     magik.button("cancel-favourite-confirmation", Button.B)
 
 
-def test_system_hub_exposes_recent_and_favourites_cards(magik: MagiKDriver) -> None:
+def test_arcade_back_returns_to_launcher(magik: MagiKDriver) -> None:
     open_arcade(magik)
     magik.button("leave-arcade", Button.B)
-    element_with_label(magik, "RECENT")
-    element_with_label(magik, "FAVORITES")
+    launcher = element_with_label(magik, "MiSTer MagiK Launcher")
+    assert launcher.accessible_enabled
+    assert "Arcade" in selected_labels(magik)

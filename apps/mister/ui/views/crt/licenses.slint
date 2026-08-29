@@ -9,7 +9,8 @@ import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt
 
 export component LicensesScreen inherits Rectangle {
     accessible-role: main;
-    accessible-label: "Licenses";
+    accessible-label: "Licenses screen";
+    accessible-enabled: true;
     background: CrtTheme.background;
 
     if !SettingsView.license-expanded : VerticalLayout {
@@ -47,6 +48,7 @@ export component LicensesScreen inherits Rectangle {
             accessible-role: region;
             accessible-label: "License text";
             accessible-description: SettingsView.license-titles[SettingsView.selected-license-index];
+            accessible-enabled: true;
             Flickable {
                 x: 12px;
                 y: 12px;

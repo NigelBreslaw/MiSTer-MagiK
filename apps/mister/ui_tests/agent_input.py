@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import socket
+import time
 from enum import StrEnum
 from pathlib import Path
 
@@ -39,6 +40,7 @@ class AgentInput:
     def __init__(self, socket_path: Path, timeout: float = 5.0) -> None:
         self._socket_path = socket_path
         self._timeout = timeout
+        self._last_activity = 0.0
 
     def key(self, key: Key) -> None:
         self._request({"kind": "tap", "key": key.value})
@@ -50,6 +52,13 @@ class AgentInput:
         if horizontal not in (-1, 0, 1) or vertical not in (-1, 0, 1):
             raise ValueError("logical UI-test hat values must be -1, 0, or 1")
         self._request({"kind": "hat", "horizontal": horizontal, "vertical": vertical})
+
+    def keep_alive(self) -> None:
+        """Renew the automation lease without changing logical input state."""
+
+        if time.monotonic() - self._last_activity < 2.0:
+            return
+        self._request({"kind": "snapshot"})
 
     def _request(self, payload: dict[str, object]) -> None:
         payload["schema"] = "mister-magik-ui-test-input-v1"
@@ -75,6 +84,7 @@ class AgentInput:
             raise RuntimeError(
                 str(decoded.get("error", "MagiK UI-test input was rejected"))
             )
+        self._last_activity = time.monotonic()
 
 
 __all__ = ["AgentInput", "Button", "Key"]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from apps.mister.ui_tests.agent_input import Button
 from apps.mister.ui_tests.driver import MagiKDriver
-from apps.mister.ui_tests.queries import element_with_label, open_arcade
+from apps.mister.ui_tests.queries import element_with_label, open_arcade, wait_for_label
 
 
 def test_arcade_list_and_search_keyboard_are_accessible(magik: MagiKDriver) -> None:
@@ -13,8 +13,8 @@ def test_arcade_list_and_search_keyboard_are_accessible(magik: MagiKDriver) -> N
     assert games.accessible_enabled
 
     magik.button("open-arcade-search", Button.Y)
-    keyboard = element_with_label(magik, "Search keyboard")
-    query = element_with_label(magik, "Search query")
+    keyboard = wait_for_label(magik, "Search keyboard")
+    query = wait_for_label(magik, "Search query")
     assert keyboard.accessible_enabled
     assert query.accessible_value == ""
 

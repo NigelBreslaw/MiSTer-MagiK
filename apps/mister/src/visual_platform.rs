@@ -2,17 +2,63 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use slint::platform::software_renderer::{RenderingRotation, RepaintBufferType, SoftwareRenderer};
-use slint::platform::{Platform, WindowAdapter};
-use slint::{PhysicalSize, Window};
+use slint::platform::{EventLoopProxy, Platform, WindowAdapter};
+use slint::{EventLoopError, PhysicalSize, Window};
 use std::cell::Cell;
+use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+type EventLoopCallback = Box<dyn FnOnce() + Send + 'static>;
+
+#[derive(Clone, Default)]
+struct MisterEventLoop {
+    callbacks: Arc<Mutex<VecDeque<EventLoopCallback>>>,
+    terminated: Arc<AtomicBool>,
+}
+
+impl MisterEventLoop {
+    fn process_pending_callbacks(&self) {
+        loop {
+            let callback = self
+                .callbacks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pop_front();
+            let Some(callback) = callback else {
+                break;
+            };
+            callback();
+        }
+    }
+}
+
+impl EventLoopProxy for MisterEventLoop {
+    fn quit_event_loop(&self) -> Result<(), EventLoopError> {
+        self.terminated.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    fn invoke_from_event_loop(&self, event: EventLoopCallback) -> Result<(), EventLoopError> {
+        if self.terminated.load(Ordering::Acquire) {
+            return Err(EventLoopError::EventLoopTerminated);
+        }
+        self.callbacks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_back(event);
+        Ok(())
+    }
+}
 
 pub struct MisterSoftwareWindow {
     window: Window,
     renderer: SoftwareRenderer,
     redraw_pending: Cell<bool>,
     size: Cell<PhysicalSize>,
+    event_loop: MisterEventLoop,
 }
 
 impl MisterSoftwareWindow {
@@ -22,6 +68,7 @@ impl MisterSoftwareWindow {
             renderer: SoftwareRenderer::new_with_repaint_buffer_type(repaint_buffer_type),
             redraw_pending: Cell::new(false),
             size: Cell::new(PhysicalSize::default()),
+            event_loop: MisterEventLoop::default(),
         });
         crate::bitmap_font_resource::register_bitmap_fonts(&window.renderer);
         window
@@ -32,6 +79,7 @@ impl MisterSoftwareWindow {
     }
 
     pub fn draw_if_needed(&self, render_callback: impl FnOnce(&SoftwareRenderer)) -> bool {
+        self.event_loop.process_pending_callbacks();
         if self.redraw_pending.replace(false) {
             render_callback(&self.renderer);
             true
@@ -44,6 +92,7 @@ impl MisterSoftwareWindow {
         &self,
         render_callback: impl FnOnce(&SoftwareRenderer),
     ) -> bool {
+        self.event_loop.process_pending_callbacks();
         if !self.redraw_pending.replace(false) {
             return false;
         }
@@ -68,6 +117,7 @@ impl MisterSoftwareWindow {
     ) -> bool {
         use i_slint_core::renderer::RendererSealed;
 
+        self.event_loop.process_pending_callbacks();
         if !self.redraw_pending.replace(false) {
             return false;
         }
@@ -95,6 +145,10 @@ impl MisterSoftwareWindow {
 
     pub fn rendering_rotation(&self) -> RenderingRotation {
         self.renderer.rendering_rotation()
+    }
+
+    fn event_loop_proxy(&self) -> MisterEventLoop {
+        self.event_loop.clone()
     }
 }
 
@@ -333,6 +387,11 @@ impl Platform for MisterPlatform {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
         Ok(self.window.clone())
     }
+
+    fn new_event_loop_proxy(&self) -> Option<Box<dyn EventLoopProxy>> {
+        Some(Box::new(self.window.event_loop_proxy()))
+    }
+
     fn duration_since_start(&self) -> core::time::Duration {
         self.fixed_time
             .as_ref()
@@ -379,6 +438,25 @@ mod tests {
         assert!(rendered);
         assert!(!window.redraw_pending());
         assert!(!window.draw_if_needed(|_| panic!("idle window rendered")));
+    }
+
+    #[test]
+    fn software_window_drains_event_loop_callbacks_before_drawing() {
+        use std::sync::atomic::AtomicBool;
+
+        let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+        let called = Arc::new(AtomicBool::new(false));
+        let callback_called = Arc::clone(&called);
+        window
+            .event_loop_proxy()
+            .invoke_from_event_loop(Box::new(move || {
+                callback_called.store(true, Ordering::Release);
+            }))
+            .expect("event-loop callback should be queued");
+
+        assert!(!called.load(Ordering::Acquire));
+        window.draw_if_needed(|_| {});
+        assert!(called.load(Ordering::Acquire));
     }
 
     #[test]

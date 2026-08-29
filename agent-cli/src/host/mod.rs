@@ -31798,7 +31798,7 @@ fn run_ui_test_bridge(
     };
     let local_server = env::var("SLINT_TEST_SERVER")
         .map_err(|_| "SLINT_TEST_SERVER is missing from the bridge environment")?;
-    let (local_host, local_port) = parse_loopback_endpoint(&local_server)?;
+    let local_endpoint = parse_loopback_endpoint(&local_server)?;
     let control_path = &args.control_socket;
     if control_path.exists() {
         fs::remove_file(control_path)?;
@@ -31821,11 +31821,18 @@ fn run_ui_test_bridge(
         while !control_stop.load(Ordering::Acquire) {
             match control_listener.accept() {
                 Ok((stream, _)) => {
-                    let _ = handle_ui_test_input(
-                        stream,
+                    let mut stream = stream;
+                    if let Err(error) = handle_ui_test_input(
+                        &mut stream,
                         &control_config,
                         control_nonce_thread.get().map(String::as_str),
-                    );
+                    ) {
+                        let _ = writeln!(
+                            stream,
+                            "{}",
+                            json!({"ok": false, "error": error.to_string()})
+                        );
+                    }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(10));
@@ -31845,7 +31852,7 @@ fn run_ui_test_bridge(
         )?;
         let _ = control_nonce.set(ready_nonce);
         let local_stream = std::net::TcpStream::connect_timeout(
-            &format!("{local_host}:{local_port}").parse()?,
+            &local_endpoint,
             Duration::from_secs(args.timeout_secs.min(20)),
         )?;
         local_stream.set_read_timeout(Some(Duration::from_secs(args.timeout_secs)))?;
@@ -31908,18 +31915,18 @@ fn ui_test_runtime_environment() -> Vec<(String, String)> {
     .collect()
 }
 
-fn parse_loopback_endpoint(value: &str) -> Result<(&str, u16)> {
+fn parse_loopback_endpoint(value: &str) -> Result<std::net::SocketAddr> {
     let (host, port) = value
         .rsplit_once(':')
         .ok_or("SLINT_TEST_SERVER must be host:port")?;
     if host != "127.0.0.1" && host != "localhost" {
         return Err("SLINT_TEST_SERVER must use a loopback host".into());
     }
-    Ok((host, port.parse()?))
+    Ok(std::net::SocketAddr::from(([127, 0, 0, 1], port.parse()?)))
 }
 
 fn handle_ui_test_input(
-    mut stream: UnixStream,
+    stream: &mut UnixStream,
     config: &NativeDeviceConfig,
     nonce: Option<&str>,
 ) -> Result<()> {
@@ -31930,6 +31937,11 @@ fn handle_ui_test_input(
         return Err("unsupported UI-test input schema".into());
     }
     let nonce = nonce.ok_or("UI-test automation is not ready")?;
+    if request.get("kind").and_then(Value::as_str) == Some("snapshot") {
+        let snapshot = launcher_automation::snapshot(config, nonce)?;
+        writeln!(stream, "{}", json!({"ok": true, "snapshot": snapshot}))?;
+        return Ok(());
+    }
     let action = ui_test_action(&request)?;
     let sent = launcher_automation::send_action(config, nonce, &action)?;
     let sequence: Value = serde_json::from_str(&sent)?;
@@ -36115,6 +36127,24 @@ fn unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ui_test_loopback_endpoint_normalizes_localhost() {
+        assert_eq!(
+            parse_loopback_endpoint("localhost:43123").unwrap(),
+            std::net::SocketAddr::from(([127, 0, 0, 1], 43123))
+        );
+        assert_eq!(
+            parse_loopback_endpoint("127.0.0.1:43123").unwrap(),
+            std::net::SocketAddr::from(([127, 0, 0, 1], 43123))
+        );
+    }
+
+    #[test]
+    fn ui_test_loopback_endpoint_rejects_non_loopback_hosts() {
+        assert!(parse_loopback_endpoint("192.0.2.1:43123").is_err());
+        assert!(parse_loopback_endpoint("localhost:not-a-port").is_err());
+    }
 
     #[test]
     fn neogeo_setname_reads_structured_and_direct_launches() {

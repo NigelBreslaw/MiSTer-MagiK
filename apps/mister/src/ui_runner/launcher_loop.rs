@@ -107,6 +107,16 @@ fn accepted_selection_feedback_input(event: Option<&crate::input_event::InputEve
     event.is_some_and(|event| event.phase == InputPhase::Pressed)
 }
 
+fn ui_test_uses_automation_only_input(
+    ui_test_fixture: bool,
+    batch: &crate::input_event::InputBatch,
+) -> bool {
+    ui_test_fixture
+        && batch.health.protocol != crate::input_event::InputProtocolHealth::ProxyV2
+        && batch.events.is_empty()
+        && batch.held_after_last == crate::input_event::HeldState::default()
+}
+
 fn system_entry_benchmark_settled(elapsed_ms: u64, input_enabled_ms: u64) -> bool {
     elapsed_ms.saturating_sub(input_enabled_ms) >= SYSTEM_ENTRY_BENCHMARK_SETTLE_MS
 }
@@ -7367,7 +7377,12 @@ pub(super) fn run_launcher_loop(
             let frame_now = Instant::now();
             let mut incoming_input_events = VecDeque::new();
             let mut screensaver_wake = false;
-            let input_batch_result = input_router.accept_batch(&input_batch);
+            let input_batch_result =
+                if ui_test_uses_automation_only_input(ui_test_fixture, &input_batch) {
+                    Ok(())
+                } else {
+                    input_router.accept_batch(&input_batch)
+                };
             launcher_response_trace
                 .record_input_batch_gate(&input_batch, input_batch_result.as_ref().err().copied());
             let input_batch_healthy = match input_batch_result {
@@ -14264,6 +14279,36 @@ fn apply_home_selected(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deterministic_ui_test_accepts_neutral_automation_without_main_proxy() {
+        let batch = crate::input_event::InputBatch::default();
+
+        assert!(ui_test_uses_automation_only_input(true, &batch));
+        assert!(!ui_test_uses_automation_only_input(false, &batch));
+    }
+
+    #[test]
+    fn deterministic_ui_test_does_not_bypass_non_neutral_input() {
+        let mut batch = crate::input_event::InputBatch::default();
+        batch
+            .held_after_last
+            .apply_event(&crate::input_event::InputEvent {
+                source: crate::input_event::InputSourceId {
+                    kind: InputSourceKind::RawDevice,
+                    instance: 1,
+                },
+                source_epoch: crate::input_event::SourceEpoch(1),
+                sequence: 1,
+                press_id: crate::input_event::PressId(1),
+                captured_at_us: 1,
+                action: LogicalAction::Activate,
+                phase: InputPhase::Pressed,
+            })
+            .expect("test press is valid");
+
+        assert!(!ui_test_uses_automation_only_input(true, &batch));
+    }
 
     #[test]
     fn disjoint_damage_exposes_bounding_box_false_positive() {
