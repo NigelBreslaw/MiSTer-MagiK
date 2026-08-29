@@ -588,10 +588,8 @@ pub(crate) fn agent_ui_test_session_at(
     stream.set_write_timeout(Some(timeout))?;
     writeln!(stream, "{request}")?;
     stream.flush()?;
-    let mut response_reader = BufReader::new(stream.try_clone()?);
-    let mut line = String::new();
-    response_reader.read_line(&mut line)?;
-    let first = parse_agent_response_line(line.clone(), start)?;
+    let line = read_unbuffered_agent_line(&mut stream)?;
+    let first = parse_agent_response_line(line, start)?;
     let first_result = first.response.get("result").unwrap_or(&Value::Null);
     let ready = if first_result.get("state").and_then(Value::as_str) == Some("upload_required") {
         let mut payload = fs::File::open(artifact)?;
@@ -615,8 +613,7 @@ pub(crate) fn agent_ui_test_session_at(
         }
         stream.flush()?;
         stream.shutdown(Shutdown::Write)?;
-        line.clear();
-        response_reader.read_line(&mut line)?;
+        let line = read_unbuffered_agent_line(&mut stream)?;
         parse_agent_response_line(line, start)?
     } else if first_result.get("state").and_then(Value::as_str) != Some("ready") {
         return Err("MiSTer agent did not start the UI-test session".into());
@@ -630,6 +627,25 @@ pub(crate) fn agent_ui_test_session_at(
         .ok_or("UI-test ready response has no automation nonce")?
         .to_string();
     Ok((stream, nonce))
+}
+
+fn read_unbuffered_agent_line(stream: &mut TcpStream) -> Result<String> {
+    const MAX_LINE_BYTES: usize = 1024 * 1024;
+    let mut line = Vec::new();
+    loop {
+        let mut byte = [0_u8; 1];
+        let read = stream.read(&mut byte)?;
+        if read == 0 {
+            return Err("MiSTer agent closed the session envelope".into());
+        }
+        line.push(byte[0]);
+        if byte[0] == b'\n' {
+            return String::from_utf8(line).map_err(Into::into);
+        }
+        if line.len() >= MAX_LINE_BYTES {
+            return Err("MiSTer agent session envelope exceeds 1 MiB".into());
+        }
+    }
 }
 
 pub(crate) fn agent_runtime_upload_at(
