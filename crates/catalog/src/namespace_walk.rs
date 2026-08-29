@@ -218,6 +218,86 @@ pub(crate) fn visit_with_signature_capture(
     )
 }
 
+/// Visit a target while transferring fd-relative entries to the caller.
+///
+/// The Linux backend already owns each captured `PathBuf`; consuming the
+/// capture avoids cloning that path once more merely to hand it to an
+/// inventory builder. The WalkDir fallback remains exact and clones only on
+/// that slow path.
+pub(crate) fn visit_owned_with_signature_capture(
+    target: &Path,
+    max_depth: Option<usize>,
+    signature_capture: NamespaceSignatureCapture,
+    ignore: impl Fn(&Path) -> bool,
+    mut visitor: impl FnMut(NamespaceEntry) -> bool,
+) -> NamespaceWalkStats {
+    let requested =
+        std::env::var("MISTER_LIBRARY_NAMESPACE_BACKEND").unwrap_or_else(|_| "auto".to_string());
+    if requested == "walkdir" {
+        return visit_walkdir_owned(
+            target,
+            max_depth,
+            NamespaceRootPolicy::NoFollow,
+            signature_capture,
+            &ignore,
+            &mut visitor,
+            None,
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    if requested == "fd-relative" || requested == "auto" {
+        let visit_started = Instant::now();
+        match linux::collect_fd_relative(
+            target,
+            max_depth,
+            NamespaceRootPolicy::NoFollow,
+            signature_capture,
+            &ignore,
+        ) {
+            Ok(mut capture) => {
+                for entry in capture.entries.drain(..) {
+                    let elapsed_us = visit_started.elapsed().as_micros() as u64;
+                    capture.stats.first_entry_us.get_or_insert(elapsed_us);
+                    capture.stats.final_entry_us = Some(elapsed_us);
+                    if !visitor(entry) {
+                        break;
+                    }
+                }
+                return capture.stats;
+            }
+            Err(reason) => {
+                return visit_walkdir_owned(
+                    target,
+                    max_depth,
+                    NamespaceRootPolicy::NoFollow,
+                    signature_capture,
+                    &ignore,
+                    &mut visitor,
+                    Some(reason),
+                );
+            }
+        }
+    }
+
+    let reason = if requested == "auto" {
+        None
+    } else if requested == "fd-relative" {
+        Some("fd-relative backend unsupported on this operating system".to_string())
+    } else {
+        Some(format!("unknown namespace backend {requested:?}"))
+    };
+    visit_walkdir_owned(
+        target,
+        max_depth,
+        NamespaceRootPolicy::NoFollow,
+        signature_capture,
+        &ignore,
+        &mut visitor,
+        reason,
+    )
+}
+
 pub(crate) fn visit_with_root_policy_and_signature_capture(
     target: &Path,
     max_depth: Option<usize>,
@@ -478,6 +558,34 @@ fn visit_walkdir(
         final_entry_us,
         target_signature,
     }
+}
+
+fn visit_walkdir_owned(
+    target: &Path,
+    max_depth: Option<usize>,
+    root_policy: NamespaceRootPolicy,
+    signature_capture: NamespaceSignatureCapture,
+    ignore: &dyn Fn(&Path) -> bool,
+    visitor: &mut dyn FnMut(NamespaceEntry) -> bool,
+    fallback_reason: Option<String>,
+) -> NamespaceWalkStats {
+    let mut borrowed = |entry: &NamespaceEntry| {
+        visitor(NamespaceEntry {
+            path: entry.path.clone(),
+            kind: entry.kind,
+            zip_signature: entry.zip_signature,
+            directory_signature: entry.directory_signature,
+        })
+    };
+    visit_walkdir(
+        target,
+        max_depth,
+        root_policy,
+        signature_capture,
+        ignore,
+        &mut borrowed,
+        fallback_reason,
+    )
 }
 
 fn metadata_signature(len: u64, modified: Option<std::time::SystemTime>) -> Option<(u64, i64)> {

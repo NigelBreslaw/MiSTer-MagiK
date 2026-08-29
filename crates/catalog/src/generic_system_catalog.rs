@@ -757,7 +757,7 @@ fn collect_generic_namespace_inventory(
     let mut watch_containers = Vec::new();
     let mut continuation_roots = Vec::new();
     let mut watch_complete = true;
-    let namespace = namespace_walk::visit_with_signature_capture(
+    let namespace = namespace_walk::visit_owned_with_signature_capture(
         &header.path,
         max_depth,
         NamespaceSignatureCapture::AllDirectories,
@@ -834,7 +834,7 @@ fn collect_generic_namespace_inventory(
                 watch_containers.push(entry.path.clone());
             }
             entries.push(GenericInventoryEntry {
-                path: entry.path.clone(),
+                path: entry.path,
                 kind: entry.kind,
                 zip_signature: entry.zip_signature,
             });
