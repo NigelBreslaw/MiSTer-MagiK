@@ -93,6 +93,7 @@ pub(crate) struct FastSourceRefreshBuild {
     pub report: FastSourceBuildReport,
     pub profiles: Vec<LaunchProfile>,
     pub generic_watch_observations: BTreeMap<String, GenericSourceWatchObservations>,
+    pub row_fingerprints: BTreeMap<String, String>,
 }
 
 pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
@@ -184,7 +185,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         .map(|report| report.elapsed_us)
         .sum();
     let phase_started = Instant::now();
-    let source_fingerprint = fingerprint_systems(systems.values())?;
+    let (source_fingerprint, row_fingerprints) = fingerprint_systems(systems.values())?;
     let fingerprint_us = elapsed_us(phase_started);
     let snapshot = FastFiveSnapshot {
         schema: FAST_FIVE_SNAPSHOT_SCHEMA.to_string(),
@@ -243,6 +244,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         },
         profiles,
         generic_watch_observations,
+        row_fingerprints,
     })
 }
 
@@ -1409,19 +1411,23 @@ fn load_fast_console_preview_title_index(
 
 fn fingerprint_systems<'a>(
     systems: impl IntoIterator<Item = &'a FastFiveSystem>,
-) -> Result<String, String> {
+) -> Result<(String, BTreeMap<String, String>), String> {
     let mut digest = Sha256::new();
+    let mut row_fingerprints = BTreeMap::new();
     digest.update(b"mister-magik-independent-fast-sources-v1\0");
     for system in systems {
-        digest.update(
-            postcard::to_allocvec(system)
-                .map_err(|error| format!("encode {} source rows: {error}", system.system_id))?,
-        );
+        let bytes = postcard::to_allocvec(system)
+            .map_err(|error| format!("encode {} source rows: {error}", system.system_id))?;
+        digest.update(&bytes);
+        let mut row_digest = Sha256::new();
+        row_digest.update(b"mister-magik-row-fingerprint-v3\0");
+        row_digest.update(&bytes);
+        row_fingerprints.insert(system.system_id.clone(), hex_lower(&row_digest.finalize()));
     }
-    Ok(hex_lower(&digest.finalize()))
+    Ok((hex_lower(&digest.finalize()), row_fingerprints))
 }
 
-fn display_title(system_id: &str) -> &'static str {
+pub(crate) fn display_title(system_id: &str) -> &'static str {
     match system_id {
         "amiga" => "Commodore Amiga",
         "arcade" => "Arcade",
