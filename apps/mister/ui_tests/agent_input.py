@@ -35,13 +35,13 @@ class UiTestSnapshot:
 
 def _required_mapping(value: object, name: str) -> dict[str, object]:
     if not isinstance(value, dict):
-        raise RuntimeError(f"MagiK UI-test snapshot field {name!r} is not an object")
+        raise TypeError(f"MagiK UI-test snapshot field {name!r} is not an object")
     return cast(dict[str, object], value)
 
 
 def _required_text(value: object, name: str) -> str:
     if not isinstance(value, str):
-        raise RuntimeError(f"MagiK UI-test snapshot field {name!r} is not text")
+        raise TypeError(f"MagiK UI-test snapshot field {name!r} is not text")
     return value
 
 
@@ -110,7 +110,9 @@ class AgentInput:
                 screen_orientation=_required_text(
                     semantic.get("screen_orientation"), "screen_orientation"
                 ),
-                output_route=_required_text(semantic.get("output_route"), "output_route"),
+                output_route=_required_text(
+                    semantic.get("output_route"), "output_route"
+                ),
                 output_width=_required_integer(
                     semantic.get("output_width"), "output_width"
                 ),

@@ -70,11 +70,13 @@ def test_profile_feature_matrix(
         assert launcher.accessible_enabled
         expected_route, expected_output, expected_render = PROFILE_EXPECTATIONS[display]
         semantic = driver.wait_for_semantic(
-            lambda state: state.effective_view == feature
-            and state.screen_orientation == ORIENTATION_LABELS[orientation]
-            and state.output_route == expected_route
-            and (state.output_width, state.output_height) == expected_output
-            and (state.render_width, state.render_height) == expected_render
+            lambda state: (
+                state.effective_view == feature
+                and state.screen_orientation == ORIENTATION_LABELS[orientation]
+                and state.output_route == expected_route
+                and (state.output_width, state.output_height) == expected_output
+                and (state.render_width, state.render_height) == expected_render
+            )
         )
         assert semantic.effective_view == feature
         assert elements_with_label(driver, FEATURE_LABELS[feature]), (
