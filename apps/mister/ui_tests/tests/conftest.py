@@ -36,14 +36,17 @@ def magik() -> Iterator[MagiKDriver]:
 
 @pytest.fixture
 def controller() -> Iterator[MagiKDriver]:
-    """Launch the dedicated controller-test scene when configured."""
+    """Launch the launcher controller screen with logical test input."""
 
-    command_text = os.environ.get("MISTER_UI_TEST_CONTROLLER_COMMAND")
+    command_text = os.environ.get("MISTER_UI_TEST_COMMAND")
     if not command_text:
-        pytest.skip("set MISTER_UI_TEST_CONTROLLER_COMMAND for controller UI tests")
+        pytest.skip("set MISTER_UI_TEST_COMMAND for attended device UI tests")
+    environment = environment_for_application()
+    environment.setdefault("MISTER_UI_TEST_FIXTURE", "deterministic-arcade-v1")
+    environment["MISTER_UI_TEST_FEATURE"] = "controller"
     config = DriverConfig(
         command=tuple(shlex.split(command_text)),
-        environment=environment_for_application(),
+        environment=environment,
         launch_timeout=float(os.environ.get("MISTER_UI_TEST_LAUNCH_TIMEOUT", "20")),
     )
     with MagiKDriver.start(config) as driver:

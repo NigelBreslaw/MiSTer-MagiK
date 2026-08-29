@@ -107,6 +107,16 @@ fn accepted_selection_feedback_input(event: Option<&crate::input_event::InputEve
     event.is_some_and(|event| event.phase == InputPhase::Pressed)
 }
 
+#[cfg(feature = "ui-device-tests")]
+fn ui_test_start_screen(feature: Option<&str>) -> Screen {
+    match feature {
+        Some("arcade") => Screen::Arcade,
+        Some("settings") => Screen::Settings,
+        Some("controller") => Screen::Controller,
+        _ => Screen::Home,
+    }
+}
+
 fn ui_test_uses_automation_only_input(
     ui_test_fixture: bool,
     batch: &crate::input_event::InputBatch,
@@ -5099,11 +5109,7 @@ pub(super) fn run_launcher_loop(
         .unwrap_or(Screen::Home);
     #[cfg(feature = "ui-device-tests")]
     let start_screen = if ui_test_fixture {
-        match std::env::var("MISTER_UI_TEST_FEATURE").ok().as_deref() {
-            Some("arcade") => Screen::Arcade,
-            Some("settings") => Screen::Settings,
-            _ => Screen::Home,
-        }
+        ui_test_start_screen(std::env::var("MISTER_UI_TEST_FEATURE").ok().as_deref())
     } else {
         configured_start_screen
     };
@@ -14279,6 +14285,15 @@ fn apply_home_selected(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "ui-device-tests")]
+    #[test]
+    fn deterministic_ui_test_start_screen_supports_controller() {
+        assert_eq!(ui_test_start_screen(Some("controller")), Screen::Controller);
+        assert_eq!(ui_test_start_screen(Some("arcade")), Screen::Arcade);
+        assert_eq!(ui_test_start_screen(Some("settings")), Screen::Settings);
+        assert_eq!(ui_test_start_screen(None), Screen::Home);
+    }
 
     #[test]
     fn deterministic_ui_test_accepts_neutral_automation_without_main_proxy() {

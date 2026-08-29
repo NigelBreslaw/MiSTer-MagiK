@@ -24,11 +24,3 @@ def test_about_and_license_text_are_accessible(magik: MagiKDriver) -> None:
     magik.button("open-first-license", Button.A)
     license_text = element_with_label(magik, "License text")
     assert license_text.accessible_description
-
-
-def test_controller_scene_reports_real_button_state(controller: MagiKDriver) -> None:
-    panel = element_with_label(controller, "Controller test")
-    assert panel.accessible_enabled
-    controller.button("press-a", Button.A)
-    state = element_with_label(controller, "Controller input state")
-    assert "A" in state.accessible_description
