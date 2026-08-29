@@ -49,6 +49,8 @@ pub struct FastSourcePhaseReport {
     pub prepared_systems_us: u64,
     pub profile_discovery_us: u64,
     pub system_planning_us: u64,
+    pub plan_ready_us: u64,
+    pub system_complete_us: u64,
     pub generic_systems_us: u64,
     pub preview_identity_us: u64,
     pub merge_us: u64,
@@ -102,13 +104,19 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
     let mut systems = BTreeMap::new();
     let mut reports = BTreeMap::new();
     let mut prepared_watch_observations = BTreeMap::new();
+    let mut system_complete_us: u64 = 0;
+    let mut timed_system_complete = |system: &FastFiveSystem| {
+        let callback_started = Instant::now();
+        system_complete(system);
+        system_complete_us = system_complete_us.saturating_add(elapsed_us(callback_started));
+    };
     build_and_record_prepared_system(
         storage_root,
         "arcade",
         &mut systems,
         &mut reports,
         &mut prepared_watch_observations,
-        &mut system_complete,
+        &mut timed_system_complete,
     )?;
     let roots = [storage_root.display().to_string()];
     let phase_started = Instant::now();
@@ -124,8 +132,10 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
     let generic_systems_us = generic.elapsed_us;
     let phase_started = Instant::now();
     let planned_system_ids = discover_independent_system_ids_from_profiles(storage_root, &profiles);
-    plan_ready(&planned_system_ids);
     let system_planning_us = elapsed_us(phase_started);
+    let plan_ready_started = Instant::now();
+    plan_ready(&planned_system_ids);
+    let plan_ready_us = elapsed_us(plan_ready_started);
     for system_id in PREPARED_SYSTEM_IDS
         .iter()
         .copied()
@@ -137,12 +147,12 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
             &mut systems,
             &mut reports,
             &mut prepared_watch_observations,
-            &mut system_complete,
+            &mut timed_system_complete,
         )?;
     }
     generic_watch_observations.extend(prepared_watch_observations);
     for system in &generic_systems {
-        system_complete(system);
+        timed_system_complete(system);
     }
     let phase_started = Instant::now();
     enrich_fast_preview_identities(storage_root, &mut generic_systems);
@@ -188,6 +198,8 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
     let accounted_us = prepared_systems_us
         .saturating_add(profile_discovery_us)
         .saturating_add(system_planning_us)
+        .saturating_add(plan_ready_us)
+        .saturating_add(system_complete_us)
         .saturating_add(generic_systems_us)
         .saturating_add(preview_identity_us)
         .saturating_add(merge_us)
@@ -197,6 +209,8 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         prepared_systems_us,
         profile_discovery_us,
         system_planning_us,
+        plan_ready_us,
+        system_complete_us,
         generic_systems_us,
         preview_identity_us,
         merge_us,
@@ -205,11 +219,13 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         residual_us: total_us.saturating_sub(accounted_us),
     };
     crate::catalog_logln!(
-        "fast_catalog_source_phase_tsv\ttotal_us={}\tprepared_us={}\tprofiles_us={}\tplanning_us={}\tgeneric_us={}\tpreview_identity_us={}\tmerge_us={}\tfingerprint_us={}\tvalidation_us={}\tresidual_us={}",
+        "fast_catalog_source_phase_tsv\ttotal_us={}\tprepared_us={}\tprofiles_us={}\tplanning_us={}\tplan_ready_us={}\tsystem_complete_us={}\tgeneric_us={}\tpreview_identity_us={}\tmerge_us={}\tfingerprint_us={}\tvalidation_us={}\tresidual_us={}",
         total_us,
         phases.prepared_systems_us,
         phases.profile_discovery_us,
         phases.system_planning_us,
+        phases.plan_ready_us,
+        phases.system_complete_us,
         phases.generic_systems_us,
         phases.preview_identity_us,
         phases.merge_us,
