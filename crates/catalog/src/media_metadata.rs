@@ -17,6 +17,8 @@ use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -154,15 +156,24 @@ pub(crate) fn collection_listing_text_with_tool(
     tool: &Path,
     timeout: Duration,
 ) -> Option<String> {
-    let mut child = Command::new(tool)
+    let mut command = Command::new(tool);
+    command
         .args(["e", "-so"])
         .arg(&file.path)
         .arg(&listing.entry_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().ok()?;
     let start = Instant::now();
     let stdout = child.stdout.take()?;
     let (output_tx, output_rx) = mpsc::sync_channel(1);
@@ -177,24 +188,30 @@ pub(crate) fn collection_listing_text_with_tool(
     });
     let output = loop {
         if let Ok(result) = output_rx.try_recv() {
-            let (output, within_limit) = result.ok()?;
+            let (output, within_limit) = match result {
+                Ok(result) => result,
+                Err(_) => {
+                    kill_helper_process_group(&mut child);
+                    return None;
+                }
+            };
             if !within_limit {
-                let _ = child.kill();
+                kill_helper_process_group(&mut child);
                 let _ = child.wait();
                 return None;
             }
             break output;
         }
         if start.elapsed() >= timeout {
-            let _ = child.kill();
+            kill_helper_process_group(&mut child);
             let _ = child.wait();
             return None;
         }
         if child.try_wait().ok()?.is_some() {
-            let (output, within_limit) = output_rx
-                .recv_timeout(Duration::from_millis(100))
-                .ok()?
-                .ok()?;
+            let (output, within_limit) = match output_rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(Ok(result)) => result,
+                _ => return None,
+            };
             if !within_limit {
                 return None;
             }
@@ -207,7 +224,7 @@ pub(crate) fn collection_listing_text_with_tool(
             break status;
         }
         if start.elapsed() >= timeout {
-            let _ = child.kill();
+            kill_helper_process_group(&mut child);
             let _ = child.wait();
             return None;
         }
@@ -217,6 +234,20 @@ pub(crate) fn collection_listing_text_with_tool(
         return None;
     }
     Some(String::from_utf8_lossy(&output).into_owned())
+}
+
+fn kill_helper_process_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id().try_into().unwrap_or(-1);
+        if pid > 0 {
+            // SAFETY: the helper is placed in its own process group before
+            // exec; a negative id targets only that helper and its children.
+            let _ = unsafe { libc::kill(-pid, libc::SIGKILL) };
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn result_is_within_limit(length: usize) -> bool {
