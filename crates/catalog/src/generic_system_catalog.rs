@@ -495,6 +495,17 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
     mut system_complete: impl FnMut(&FastFiveSystem),
 ) -> Result<GenericSystemPlanDiscovery, String> {
     let started = Instant::now();
+    let mut known_profile_us = 0_u64;
+    let mut runtime_inventory_us = 0_u64;
+    let mut runtime_resolution_us = 0_u64;
+    let mut continuation_us = 0_u64;
+    let mut finalization_us = 0_u64;
+    let mut known_roots_considered = 0_usize;
+    let mut known_roots_found = 0_usize;
+    let mut runtime_headers = 0_usize;
+    let mut runtime_resolved = 0_usize;
+    let mut runtime_unresolved = 0_usize;
+    let mut continuation_root_count = 0_usize;
     let mut profiles = plan.base_profiles().to_vec();
     let mut accumulators = BTreeMap::<String, GenericSystemAccumulator>::new();
     let mut visited_roots = BTreeSet::new();
@@ -504,12 +515,19 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
             continue;
         }
         for game_dir in &profile.game_dirs {
+            known_roots_considered = known_roots_considered.saturating_add(1);
+            let known_started = Instant::now();
             let candidate = storage_root.join("games").join(game_dir);
             if !candidate.is_dir() {
+                known_profile_us =
+                    known_profile_us.saturating_add(known_started.elapsed().as_micros() as u64);
                 continue;
             }
+            known_roots_found = known_roots_found.saturating_add(1);
             let root_key = candidate.to_string_lossy().to_ascii_lowercase();
             if !visited_roots.insert(root_key) {
+                known_profile_us =
+                    known_profile_us.saturating_add(known_started.elapsed().as_micros() as u64);
                 continue;
             }
             let header = GameDirHeader {
@@ -528,15 +546,28 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
                 &mut accumulator.watch,
                 true,
             );
+            known_profile_us =
+                known_profile_us.saturating_add(known_started.elapsed().as_micros() as u64);
         }
     }
 
     for header in plan.game_dir_headers() {
+        runtime_headers = runtime_headers.saturating_add(1);
+        let inventory_started = Instant::now();
         let mut inventory = collect_generic_namespace_inventory(header, Some(2))?;
+        runtime_inventory_us =
+            runtime_inventory_us.saturating_add(inventory_started.elapsed().as_micros() as u64);
+        let resolution_started = Instant::now();
         let Some(profile) = plan.profile_for_game_dir_facts(&inventory.fact) else {
+            runtime_unresolved = runtime_unresolved.saturating_add(1);
+            runtime_resolution_us = runtime_resolution_us
+                .saturating_add(resolution_started.elapsed().as_micros() as u64);
             continue;
         };
+        runtime_resolved = runtime_resolved.saturating_add(1);
         merge_resolved_profile(&mut profiles, profile.clone());
+        runtime_resolution_us =
+            runtime_resolution_us.saturating_add(resolution_started.elapsed().as_micros() as u64);
         if excluded_system_ids.contains(&profile.system_id.as_str()) {
             continue;
         }
@@ -556,6 +587,8 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
             true,
         );
         for continuation_root in continuation_roots {
+            continuation_root_count = continuation_root_count.saturating_add(1);
+            let continuation_started = Instant::now();
             let continuation_header = GameDirHeader {
                 name: header.name.clone(),
                 signature: GameDirSignature::from_path(&continuation_root),
@@ -571,9 +604,12 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
                 &mut accumulator.watch,
                 false,
             );
+            continuation_us =
+                continuation_us.saturating_add(continuation_started.elapsed().as_micros() as u64);
         }
     }
 
+    let finalization_started = Instant::now();
     let mut systems = Vec::new();
     let mut reports = Vec::new();
     let mut watch_observations = BTreeMap::new();
@@ -627,12 +663,35 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
         reports.push(accumulator.stats);
         watch_observations.insert(system_id, accumulator.watch);
     }
+    finalization_us = finalization_started.elapsed().as_micros() as u64;
     systems.sort_by(|left, right| left.system_id.cmp(&right.system_id));
     reports.sort_by(|left, right| left.system_id.cmp(&right.system_id));
+    let elapsed_us = started.elapsed().as_micros() as u64;
+    let accounted_us = known_profile_us
+        .saturating_add(runtime_inventory_us)
+        .saturating_add(runtime_resolution_us)
+        .saturating_add(continuation_us)
+        .saturating_add(finalization_us);
+    crate::catalog_logln!(
+        "fast_catalog_generic_phase_tsv\telapsed_us={}\tknown_profile_us={}\truntime_inventory_us={}\truntime_resolution_us={}\tcontinuation_us={}\tfinalization_us={}\tresidual_us={}\tknown_roots_considered={}\tknown_roots_found={}\truntime_headers={}\truntime_resolved={}\truntime_unresolved={}\tcontinuation_roots={}",
+        elapsed_us,
+        known_profile_us,
+        runtime_inventory_us,
+        runtime_resolution_us,
+        continuation_us,
+        finalization_us,
+        elapsed_us.saturating_sub(accounted_us),
+        known_roots_considered,
+        known_roots_found,
+        runtime_headers,
+        runtime_resolved,
+        runtime_unresolved,
+        continuation_root_count,
+    );
     Ok((
         systems,
         GenericSystemScanReport {
-            elapsed_us: started.elapsed().as_micros() as u64,
+            elapsed_us,
             games: reports.iter().map(|system| system.games).sum(),
             systems: reports,
         },
