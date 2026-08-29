@@ -178,6 +178,10 @@ pub struct FastRefreshPlanReport {
     pub rescans: usize,
     pub artifact_writes: usize,
     pub checks: Vec<FastSystemSourceCheck>,
+    #[serde(skip)]
+    pub(crate) previous_manifest: Option<FastRefreshManifest>,
+    #[serde(skip)]
+    pub(crate) active_manifest: Option<crate::shard_registry::CatalogManifest>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -1061,6 +1065,8 @@ pub fn plan_fast_refresh(
         rescans,
         artifact_writes: 0,
         checks,
+        previous_manifest: Some(manifest),
+        active_manifest: Some(active),
     })
 }
 
@@ -1136,12 +1142,18 @@ fn execute_planned_fast_refresh_with(
 ) -> Result<FastCatalogRefreshReport, String> {
     let started = std::time::Instant::now();
     let planning_us = plan.elapsed_us;
-    let previous = read_latest_refresh_manifest(catalog_root)?;
-    let active = crate::shard_registry::read_latest_manifest_lazy(
-        catalog_root,
-        crate::shard_registry::production_registry_limits(),
-    )
-    .map_err(|error| format!("read active fast catalog: {error}"))?;
+    let previous = match &plan.previous_manifest {
+        Some(manifest) => manifest.clone(),
+        None => read_latest_refresh_manifest(catalog_root)?,
+    };
+    let active = match &plan.active_manifest {
+        Some(manifest) => manifest.clone(),
+        None => crate::shard_registry::read_latest_manifest_lazy(
+            catalog_root,
+            crate::shard_registry::production_registry_limits(),
+        )
+        .map_err(|error| format!("read active fast catalog: {error}"))?,
+    };
     let mut snapshot = FastFiveSnapshot {
         schema: crate::fast_five_catalog::FAST_FIVE_SNAPSHOT_SCHEMA.to_string(),
         source_fingerprint: "0".repeat(64),
@@ -1306,22 +1318,19 @@ fn execute_planned_fast_refresh_with(
         .try_into()
         .unwrap_or(u64::MAX);
     let snapshot_started = std::time::Instant::now();
-    let active = crate::shard_registry::read_latest_manifest_lazy(
-        catalog_root,
-        crate::shard_registry::production_registry_limits(),
-    )
-    .map_err(|error| format!("read refreshed fast catalog: {error}"))?;
     let refresh_generation = if updated_states.is_empty() && removed_system_ids.is_empty() {
         previous.generation
     } else {
+        let active = crate::shard_registry::read_latest_manifest_lazy(
+            catalog_root,
+            crate::shard_registry::production_registry_limits(),
+        )
+        .map_err(|error| format!("read refreshed fast catalog: {error}"))?;
         publish_refresh_update(
             catalog_root,
             &previous,
             active.generation,
-            crate::fast_five_catalog::registry_fingerprint(
-                catalog_root,
-                crate::shard_registry::production_registry_limits(),
-            )?,
+            crate::fast_five_catalog::registry_fingerprint_for_manifest(&active),
             &updated_states,
             &removed_system_ids,
         )?
