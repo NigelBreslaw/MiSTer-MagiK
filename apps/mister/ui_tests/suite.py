@@ -146,8 +146,8 @@ if __name__ == "__main__":
 
 
 __all__ = [
-    "AgentBridge",
     "CASE_TARGETS",
+    "AgentBridge",
     "ScriptAgentBridge",
     "UiCase",
     "UiCaseResult",

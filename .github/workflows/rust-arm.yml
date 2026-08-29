@@ -93,13 +93,45 @@ jobs:
       - name: Install Python toolchain
         uses: ./.github/actions/setup-python-tools
       - name: Check formatting
+        id: format
+        continue-on-error: true
         run: uv run ruff format --check scripts apps/mister/ui_tests
       - name: Lint maintained scripts
+        id: lint
+        continue-on-error: true
         run: uv run ruff check scripts apps/mister/ui_tests
       - name: Type-check migrated tooling
+        id: typecheck
+        continue-on-error: true
         run: uv run ty check scripts apps/mister/ui_tests
       - name: Run Python tests
+        id: tests
+        continue-on-error: true
         run: uv run pytest scripts/tests -q
+      - name: Summarize Python quality
+        if: always()
+        env:
+          FORMAT_OUTCOME: ${{ steps.format.outcome }}
+          LINT_OUTCOME: ${{ steps.lint.outcome }}
+          TYPECHECK_OUTCOME: ${{ steps.typecheck.outcome }}
+          TESTS_OUTCOME: ${{ steps.tests.outcome }}
+        run: |
+          status=0
+          report() {
+            label="$1"
+            outcome="$2"
+            if [ "$outcome" = success ]; then
+              echo "$label: passed"
+            else
+              echo "::error::$label: $outcome"
+              status=1
+            fi
+          }
+          report format "$FORMAT_OUTCOME"
+          report lint "$LINT_OUTCOME"
+          report typecheck "$TYPECHECK_OUTCOME"
+          report tests "$TESTS_OUTCOME"
+          exit "$status"
 
   launcher-visual-matrix:
     name: launcher-visual-matrix
