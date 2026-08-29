@@ -3448,7 +3448,7 @@ const EXPERIMENTAL_FPGA_RBF_REMOTE: &str =
     mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.latch_rbf;
 const EXPERIMENTAL_FPGA_METADATA_REMOTE: &str =
     mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.latch_metadata;
-const PATCHED_DIAGNOSTIC_ARCHITECTURE: &str = "scaler-fetch-liveness-first-stall-v1";
+const PATCHED_DIAGNOSTIC_ARCHITECTURE: &str = "scaler-fetch-no-request-gates-v1";
 const PLATFORM_V0_34_SCHEMA14_RBF_SHA256: &str =
     "ef1920500c925d35b23808792f0930954446a6030b33d3e92c0f4feccd23106e";
 const FPGA_READINESS_TIMEOUT: Duration = Duration::from_secs(10);
@@ -4046,7 +4046,11 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                     .and_then(Value::as_array)
                     .is_some_and(|samples| samples.len() == 3)
         }
-        Some("scaler-fetch-liveness-first-stall-v1") => {
+        Some(
+            architecture @ ("scaler-fetch-liveness-first-stall-v1"
+            | "scaler-fetch-no-request-gates-v1"),
+        ) => {
+            let scheduler_state = architecture == "scaler-fetch-no-request-gates-v1";
             matches!(
                 diagnostics.get("classification").and_then(Value::as_str),
                 Some(
@@ -4056,11 +4060,26 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                         | "scaler_fetch_first_return_missing"
                         | "scaler_fetch_return_incomplete"
                         | "scaler_fetch_request_cancelled"
+                        | "scaler_fetch_reset_stuck"
+                        | "scaler_fetch_return_drain_outstanding"
+                        | "scaler_fetch_return_drain_waiting_for_vsync"
+                        | "scaler_fetch_return_drain_release_failed"
+                        | "scaler_fetch_return_drain_not_ready"
+                        | "scaler_fetch_write_starvation"
+                        | "scaler_fetch_read_intent_missing"
+                        | "scaler_fetch_acceptance_guard_stuck"
+                        | "scaler_fetch_output_request_stopped_after_activity"
+                        | "scaler_fetch_output_request_never_started"
+                        | "scaler_fetch_scheduler_pending_stuck"
                 )
             ) && diagnostics
                 .pointer("/capabilities/passive_video_observer")
                 .and_then(Value::as_bool)
                 == Some(true)
+                && diagnostics
+                    .pointer("/capabilities/scaler_scheduler_state")
+                    .and_then(Value::as_bool)
+                    == Some(scheduler_state)
                 && diagnostics
                     .pointer("/capabilities/scaler_fetch_liveness")
                     .and_then(Value::as_bool)
@@ -4808,7 +4827,12 @@ fn scaler_fetch_liveness_preload_evidence_available(evidence: &Value) -> bool {
         && evidence
             .get("diagnostic_architecture")
             .and_then(Value::as_str)
-            == Some("scaler-fetch-liveness-first-stall-v1")
+            .is_some_and(|architecture| {
+                matches!(
+                    architecture,
+                    "scaler-fetch-liveness-first-stall-v1" | "scaler-fetch-no-request-gates-v1"
+                )
+            })
         && evidence.get("available").and_then(Value::as_bool) == Some(true)
         && evidence.get("sink_visibility").and_then(Value::as_str) == Some("unobserved")
         && evidence
@@ -38733,7 +38757,7 @@ H: Handlers=event3 js0"#
     fn installed_fpga_metadata_identifies_the_expected_observer() {
         assert_eq!(
             expected_fpga_architecture(
-                "rbf_sha256=ignored\ndiagnostic_architecture=scaler-fetch-liveness-first-stall-v1\n"
+                "rbf_sha256=ignored\ndiagnostic_architecture=scaler-fetch-no-request-gates-v1\n"
             )
             .unwrap(),
             PATCHED_DIAGNOSTIC_ARCHITECTURE
@@ -39223,10 +39247,10 @@ H: Handlers=event3 js0"#
         ));
         let scaler_fetch_liveness = json!({
             "schema": "mister-magik-fpga-video-diagnostics-v2",
-            "diagnostic_architecture": "scaler-fetch-liveness-first-stall-v1",
+            "diagnostic_architecture": "scaler-fetch-no-request-gates-v1",
             "available": true,
             "coherent": true,
-            "classification": "scaler_fetch_no_request_seen",
+            "classification": "scaler_fetch_return_drain_outstanding",
             "sink_visibility": "unobserved",
             "owner_epoch_before": 13,
             "owner_epoch_after": 13,
@@ -39240,6 +39264,7 @@ H: Handlers=event3 js0"#
             },
             "capabilities": {
                 "passive_video_observer": true,
+                "scaler_scheduler_state": true,
                 "scaler_fetch_liveness": true,
                 "scaler_fetch_ordered_signature": false,
                 "raw_scaler_ordered_signature": false,

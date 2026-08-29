@@ -323,8 +323,8 @@ if hdmi_evidence.get("raw_scaler_rollback_states") != {
     raise SystemExit("raw scaler ordered-signature schema-10 rollback ABI changed")
 scaler_fetch_liveness = hdmi_evidence.get("scaler_fetch_liveness_state")
 if scaler_fetch_liveness != {
-    "schema": 14,
-    "architecture": "scaler-fetch-liveness-first-stall-v1",
+    "schema": 15,
+    "architecture": "scaler-fetch-no-request-gates-v1",
     "command": 0x68,
     "magic": 0x4D58,
     "word_count": 4,
@@ -341,12 +341,12 @@ if scaler_fetch_liveness != {
         "observer_fault": 3,
         "reset_ambiguity": 4,
         "reset_level": 5,
-        "reset_seen": 6,
-        "bad_burstcount": 7,
-        "unexpected_return": 8,
-        "fifo_phase_error": 9,
-        "request_cancelled": 10,
-        "counter_ambiguous": 11,
+        "reset_since_normal_liveness": 6,
+        "no_request_seen": 7,
+        "accept_blocked": 8,
+        "first_return_missing": 9,
+        "return_incomplete": 10,
+        "request_cancelled": 11,
     },
     "reserved_zero_masks": {},
     "fields": {
@@ -362,6 +362,20 @@ if scaler_fetch_liveness != {
         "frozen_return_phase": {"word": "state", "bit": 3, "width": 7},
         "frozen_fifo_depth": {"word": "state", "bit": 10, "width": 2},
         "frozen_address_fold": {"word": "state", "bit": 12, "width": 4},
+        "no_request_avl_state": {"word": "state", "bit": 0, "width": 2},
+        "no_request_read_intent": {"word": "state", "bit": 2, "width": 1},
+        "no_request_read_accepted": {"word": "state", "bit": 3, "width": 1},
+        "no_request_return_drain": {"word": "state", "bit": 4, "width": 1},
+        "no_request_return_credits": {"word": "state", "bit": 5, "width": 2},
+        "no_request_return_phase_nonzero": {"word": "state", "bit": 7, "width": 1},
+        "no_request_read_pending": {"word": "state", "bit": 8, "width": 1},
+        "no_request_write_pending": {"word": "state", "bit": 9, "width": 1},
+        "no_request_reset_released": {"word": "state", "bit": 10, "width": 1},
+        "no_request_completion_pending": {"word": "state", "bit": 11, "width": 1},
+        "no_request_read_pulse_seen": {"word": "state", "bit": 12, "width": 1},
+        "no_request_vsync_seen": {"word": "state", "bit": 13, "width": 1},
+        "no_request_drain_ready_seen": {"word": "state", "bit": 14, "width": 1},
+        "no_request_external_read_seen": {"word": "state", "bit": 15, "width": 1},
     },
     "causes": {
         "none": 0,
@@ -386,7 +400,7 @@ if scaler_fetch_liveness != {
         "watchdog_cycles": 0xFFFFFF,
     },
 }:
-    raise SystemExit("scaler-fetch liveness schema 14 changed without an ABI update")
+    raise SystemExit("scaler-fetch no-request gate schema 15 changed without an ABI update")
 if raw_scaler["command"] in platform_commands:
     raise SystemExit(
         "raw scaler ordered-frame command overlaps an existing platform command"

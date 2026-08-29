@@ -4294,19 +4294,65 @@ mod linux {
             .all(|pair| pair[1] == (pair[0].wrapping_add(1) & 0x0f))
     }
 
+    fn scaler_fetch_no_request_gate_classification(
+        sample: &mister_magik_video_diagnostics_contract::ScalerFetchLivenessState,
+    ) -> &'static str {
+        const AVL_IDLE: u16 = 0;
+        const AVL_WRITE: u16 = 1;
+        const AVL_READ: u16 = 2;
+
+        if !sample.no_request_reset_released() {
+            return "scaler_fetch_reset_stuck";
+        }
+        if sample.no_request_return_drain() {
+            if sample.no_request_return_credits() != 0 {
+                return "scaler_fetch_return_drain_outstanding";
+            }
+            if !sample.no_request_vsync_seen() {
+                return "scaler_fetch_return_drain_waiting_for_vsync";
+            }
+            if sample.no_request_drain_ready_seen() {
+                return "scaler_fetch_return_drain_release_failed";
+            }
+            return "scaler_fetch_return_drain_not_ready";
+        }
+        let state = sample.no_request_avl_state();
+        if state == AVL_WRITE || sample.no_request_write_pending() {
+            return "scaler_fetch_write_starvation";
+        }
+        if state == AVL_READ && !sample.no_request_read_intent() {
+            return "scaler_fetch_read_intent_missing";
+        }
+        if state == AVL_READ && sample.no_request_read_accepted() {
+            return "scaler_fetch_acceptance_guard_stuck";
+        }
+        if state == AVL_IDLE && !sample.no_request_read_pending() {
+            return if sample.no_request_read_pulse_seen() {
+                "scaler_fetch_output_request_stopped_after_activity"
+            } else {
+                "scaler_fetch_output_request_never_started"
+            };
+        }
+        if state == AVL_IDLE && sample.no_request_read_pending() {
+            return "scaler_fetch_scheduler_pending_stuck";
+        }
+        "scaler_fetch_liveness_evidence_inconclusive"
+    }
+
     pub(super) fn scaler_fetch_liveness_classification(
         samples: [&mister_magik_video_diagnostics_contract::ScalerFetchLivenessState; 3],
     ) -> &'static str {
         use mister_magik_video_diagnostics_contract as contract;
 
-        let flags = samples
+        let same_schema = samples[1..]
             .iter()
-            .fold(0, |flags, sample| flags | sample.flags());
-        let invalid_flags = contract::SCALER_FETCH_LIVENESS_STATE_FLAG_OBSERVER_FAULT
-            | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_RESET_AMBIGUITY
-            | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_COUNTER_AMBIGUOUS;
+            .all(|sample| sample.schema() == samples[0].schema());
+        let invalid = samples.iter().any(|sample| {
+            sample.observer_fault() || sample.reset_ambiguity() || sample.counter_ambiguous()
+        });
         if !samples.iter().all(|sample| sample.record_valid())
-            || flags & invalid_flags != 0
+            || !same_schema
+            || invalid
             || !nibble_sequences_advance(samples.map(|sample| sample.publication_sequence()))
         {
             return "scaler_fetch_liveness_evidence_inconclusive";
@@ -4317,15 +4363,17 @@ mod linux {
             if !samples.iter().all(|sample| {
                 sample.first_stall_valid()
                     && sample.frozen_cause() == first.frozen_cause()
-                    && sample.frozen_return_phase() == first.frozen_return_phase()
-                    && sample.frozen_fifo_depth() == first.frozen_fifo_depth()
-                    && sample.frozen_address_fold() == first.frozen_address_fold()
+                    && sample.state() == first.state()
             }) {
                 return "scaler_fetch_liveness_evidence_inconclusive";
             }
             return match first.frozen_cause() {
                 contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN => {
-                    "scaler_fetch_no_request_seen"
+                    if first.schema() == contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA {
+                        scaler_fetch_no_request_gate_classification(first)
+                    } else {
+                        "scaler_fetch_no_request_seen"
+                    }
                 }
                 contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_ACCEPT_BLOCKED => {
                     "scaler_fetch_accept_blocked"
@@ -4855,6 +4903,10 @@ mod linux {
                         &readout.samples[1],
                         &readout.samples[2],
                     ];
+                    let architecture = samples[0].architecture();
+                    let scheduler_state = samples.iter().all(|sample| {
+                        sample.schema() == contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA
+                    });
                     let classification = scaler_fetch_liveness_classification(samples);
                     let valid_samples = samples.iter().all(|sample| sample.record_valid());
                     let advancing = nibble_sequences_advance(
@@ -4870,7 +4922,7 @@ mod linux {
                         && classification_stable;
                     json!({
                         "schema": "mister-magik-fpga-video-diagnostics-v2",
-                        "diagnostic_architecture": contract::SCALER_FETCH_LIVENESS_STATE_ARCHITECTURE,
+                        "diagnostic_architecture": architecture,
                         "available": true,
                         "coherent": coherent,
                         "classification": if coherent { classification } else { "scaler_fetch_liveness_evidence_inconclusive" },
@@ -4891,7 +4943,7 @@ mod linux {
                         },
                         "capabilities": {
                             "passive_video_observer": true,
-                            "scaler_scheduler_state": false,
+                            "scaler_scheduler_state": scheduler_state,
                             "scaler_pipeline_state": false,
                             "scaler_copy_retirement": false,
                             "scaler_fetch_liveness": true,
@@ -4914,6 +4966,23 @@ mod linux {
                             "frozen_cause": samples.iter().map(|sample| sample.frozen_cause()).collect::<Vec<_>>(),
                             "frozen_return_phase": samples.iter().map(|sample| sample.frozen_return_phase()).collect::<Vec<_>>(),
                             "frozen_fifo_depth": samples.iter().map(|sample| sample.frozen_fifo_depth()).collect::<Vec<_>>(),
+                            "reset_since_normal_liveness": samples.iter().map(|sample| sample.reset_since_normal_liveness()).collect::<Vec<_>>(),
+                            "no_request_seen": samples.iter().map(|sample| sample.no_request_seen()).collect::<Vec<_>>(),
+                            "state": samples.iter().map(|sample| sample.state()).collect::<Vec<_>>(),
+                            "no_request_avl_state": samples.iter().map(|sample| sample.no_request_avl_state()).collect::<Vec<_>>(),
+                            "no_request_read_intent": samples.iter().map(|sample| sample.no_request_read_intent()).collect::<Vec<_>>(),
+                            "no_request_read_accepted": samples.iter().map(|sample| sample.no_request_read_accepted()).collect::<Vec<_>>(),
+                            "no_request_return_drain": samples.iter().map(|sample| sample.no_request_return_drain()).collect::<Vec<_>>(),
+                            "no_request_return_credits": samples.iter().map(|sample| sample.no_request_return_credits()).collect::<Vec<_>>(),
+                            "no_request_return_phase_nonzero": samples.iter().map(|sample| sample.no_request_return_phase_nonzero()).collect::<Vec<_>>(),
+                            "no_request_read_pending": samples.iter().map(|sample| sample.no_request_read_pending()).collect::<Vec<_>>(),
+                            "no_request_write_pending": samples.iter().map(|sample| sample.no_request_write_pending()).collect::<Vec<_>>(),
+                            "no_request_reset_released": samples.iter().map(|sample| sample.no_request_reset_released()).collect::<Vec<_>>(),
+                            "no_request_completion_pending": samples.iter().map(|sample| sample.no_request_completion_pending()).collect::<Vec<_>>(),
+                            "no_request_read_pulse_seen": samples.iter().map(|sample| sample.no_request_read_pulse_seen()).collect::<Vec<_>>(),
+                            "no_request_vsync_seen": samples.iter().map(|sample| sample.no_request_vsync_seen()).collect::<Vec<_>>(),
+                            "no_request_drain_ready_seen": samples.iter().map(|sample| sample.no_request_drain_ready_seen()).collect::<Vec<_>>(),
+                            "no_request_external_read_seen": samples.iter().map(|sample| sample.no_request_external_read_seen()).collect::<Vec<_>>(),
                             "raw_samples": readout.samples.iter().map(|sample| sample.words).collect::<Vec<_>>(),
                         },
                     })
@@ -8743,8 +8812,7 @@ mod tests {
 
         let sample = |sequence: u8, frozen_address_fold: u8, flags: u16, cause: u16| {
             let mut words = [0; contract::SCALER_FETCH_LIVENESS_STATE_WORDS];
-            words[contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD] =
-                contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA;
+            words[contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD] = 14;
             words[contract::SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] = flags
                 | (u16::from(sequence)
                     << contract::SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_BIT);
@@ -8820,6 +8888,41 @@ mod tests {
                 expected
             );
         }
+
+        let gate_sample = |sequence: u8, state: u16| {
+            let mut words = [0; contract::SCALER_FETCH_LIVENESS_STATE_WORDS];
+            words[contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD] =
+                contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA;
+            words[contract::SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] = valid
+                | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
+                | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN
+                | (u16::from(sequence)
+                    << contract::SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_BIT);
+            words[contract::SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = state;
+            contract::ScalerFetchLivenessState { words }
+        };
+        let drain_stuck = [
+            gate_sample(10, 0x0430),
+            gate_sample(11, 0x0430),
+            gate_sample(12, 0x0430),
+        ];
+        assert_eq!(
+            linux::scaler_fetch_liveness_classification([
+                &drain_stuck[0],
+                &drain_stuck[1],
+                &drain_stuck[2],
+            ]),
+            "scaler_fetch_return_drain_outstanding"
+        );
+        let reset_stuck = [gate_sample(10, 0), gate_sample(11, 0), gate_sample(12, 0)];
+        assert_eq!(
+            linux::scaler_fetch_liveness_classification([
+                &reset_stuck[0],
+                &reset_stuck[1],
+                &reset_stuck[2],
+            ]),
+            "scaler_fetch_reset_stuck"
+        );
 
         let changed_frozen_tuple = [
             sample(

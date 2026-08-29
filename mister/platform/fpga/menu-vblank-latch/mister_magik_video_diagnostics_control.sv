@@ -19,6 +19,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 	input  wire        vbuf_waitrequest,
 	input  wire        vbuf_readdatavalid,
 	input  wire        vbuf_read,
+	input  wire [15:0] scaler_diag_state,
 	input  wire        io_uio,
 	input  wire        io_strobe,
 	input  wire [15:0] io_din,
@@ -83,12 +84,16 @@ module mister_magik_scaler_fetch_liveness_state #(
 	reg first_stall_valid = 1'b0;
 	reg observer_fault = 1'b0;
 	reg reset_ambiguity = 1'b0;
-	reg reset_seen = 1'b0;
-	reg bad_burstcount = 1'b0;
-	reg unexpected_return = 1'b0;
-	reg fifo_phase_error = 1'b0;
+	reg reset_since_normal_liveness = 1'b0;
+	reg no_request_seen = 1'b0;
+	reg accept_blocked_seen = 1'b0;
+	reg first_return_missing = 1'b0;
+	reg return_incomplete = 1'b0;
 	reg request_cancelled = 1'b0;
-	reg counter_ambiguous = 1'b0;
+	reg read_pulse_seen_since_reset = 1'b0;
+	reg vsync_seen_since_reset = 1'b0;
+	reg drain_ready_seen_since_reset = 1'b0;
+	reg external_read_seen_since_reset = 1'b0;
 	reg [2:0] frozen_cause =
 		MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NONE;
 	reg [6:0] frozen_return_phase = 7'd0;
@@ -182,12 +187,12 @@ module mister_magik_scaler_fetch_liveness_state #(
 
 	wire [15:0] live_flags = {
 		4'd0,
-		counter_ambiguous,
 		request_cancelled,
-		fifo_phase_error,
-		unexpected_return,
-		bad_burstcount,
-		reset_seen,
+		return_incomplete,
+		first_return_missing,
+		accept_blocked_seen,
+		no_request_seen,
+		reset_since_normal_liveness,
 		reset_sync,
 		reset_ambiguity,
 		observer_fault,
@@ -255,14 +260,18 @@ module mister_magik_scaler_fetch_liveness_state #(
 		acknowledge_meta <= acknowledged_generation;
 		acknowledge_sync <= acknowledge_meta;
 
-		if(reset_sync && !reset_sync_d)
-			reset_seen <= 1'b1;
+		if(reset_sync && !reset_sync_d && normal_liveness_seen)
+			reset_since_normal_liveness <= 1'b1;
 
 		if(reset_sync) begin
 			reset_low_count <= 3'd0;
 			reset_qualified <= 1'b0;
 			progress_watchdog <= 24'd0;
 			blocked_request_seen <= 1'b0;
+			read_pulse_seen_since_reset <= 1'b0;
+			vsync_seen_since_reset <= 1'b0;
+			drain_ready_seen_since_reset <= 1'b0;
+			external_read_seen_since_reset <= 1'b0;
 		end
 		else if(!reset_qualified) begin
 			if(reset_low_count + 1'd1 >= RESET_QUALIFY_LIMIT) begin
@@ -275,6 +284,16 @@ module mister_magik_scaler_fetch_liveness_state #(
 			progress_watchdog <= 24'd0;
 		end
 		else begin
+			if(scaler_diag_state[12])
+				read_pulse_seen_since_reset <= 1'b1;
+			if(scaler_diag_state[13]) begin
+				vsync_seen_since_reset <= 1'b1;
+				if(scaler_diag_state[14])
+					drain_ready_seen_since_reset <= 1'b1;
+			end
+			if(vbuf_read)
+				external_read_seen_since_reset <= 1'b1;
+
 			if(expected_progress)
 				progress_watchdog <= 24'd0;
 			else if(!watchdog_terminal)
@@ -341,14 +360,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 			frozen_return_phase <= return_phase;
 			frozen_fifo_depth <= fifo_count;
 			frozen_address_fold <= event_address_fold;
-			if(bad_burst_event)
-				bad_burstcount <= 1'b1;
-			if(fifo_overflow_event)
-				fifo_phase_error <= 1'b1;
 			if(unexpected_return_event) begin
-				if(ever_qualified)
-					unexpected_return <= 1'b1;
-				else
+				if(!ever_qualified)
 					reset_ambiguity <= 1'b1;
 			end
 		end
@@ -371,10 +384,35 @@ module mister_magik_scaler_fetch_liveness_state #(
 			else
 				timeout_cause = MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN;
 			first_stall_valid <= 1'b1;
-			frozen_cause <= timeout_cause;
-			frozen_return_phase <= return_phase;
-			frozen_fifo_depth <= fifo_count;
-			frozen_address_fold <= previous_address_fold;
+			case(timeout_cause)
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN:
+					no_request_seen <= 1'b1;
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_ACCEPT_BLOCKED:
+					accept_blocked_seen <= 1'b1;
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_FIRST_RETURN_MISSING:
+					first_return_missing <= 1'b1;
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_RETURN_INCOMPLETE:
+					return_incomplete <= 1'b1;
+				default: begin end
+			endcase
+			if(timeout_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN) begin
+				frozen_cause <= scaler_diag_state[2:0];
+				frozen_return_phase <= scaler_diag_state[9:3];
+				frozen_fifo_depth <= scaler_diag_state[11:10];
+				frozen_address_fold <= {
+					external_read_seen_since_reset | vbuf_read,
+					drain_ready_seen_since_reset |
+						(scaler_diag_state[13] & scaler_diag_state[14]),
+					vsync_seen_since_reset | scaler_diag_state[13],
+					read_pulse_seen_since_reset | scaler_diag_state[12]
+				};
+			end
+			else begin
+				frozen_cause <= timeout_cause;
+				frozen_return_phase <= return_phase;
+				frozen_fifo_depth <= fifo_count;
+				frozen_address_fold <= previous_address_fold;
+			end
 		end
 
 		// Capture one immutable bank and serialize its CRC before advertising it.
