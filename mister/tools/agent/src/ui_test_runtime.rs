@@ -67,6 +67,9 @@ fn prepare_at(root: &Path, spec: &UiTestRuntimeSpec) -> Result<Option<CachedRunt
     if actual_bytes != spec.payload_bytes {
         return Ok(None);
     }
+    if file_sha256(&path)? != spec.sha256 {
+        return Ok(None);
+    }
     Ok(Some(CachedRuntime { path, reused: true }))
 }
 
@@ -80,6 +83,12 @@ fn receive_at(
         return Ok(cached);
     }
     fs::create_dir_all(root).map_err(|error| format!("create UI-test runtime cache: {error}"))?;
+    for path in [runtime_path(root, spec), metadata_path(root, spec)] {
+        if path.is_file() {
+            fs::remove_file(&path)
+                .map_err(|error| format!("replace invalid UI-test runtime cache: {error}"))?;
+        }
+    }
     remove_stale_entries(root, spec)?;
     let path = runtime_path(root, spec);
     let part = part_path(root, spec);
@@ -197,6 +206,23 @@ fn metadata_value(spec: &UiTestRuntimeSpec) -> String {
     )
 }
 
+fn file_sha256(path: &Path) -> Result<String, String> {
+    let mut input = File::open(path)
+        .map_err(|error| format!("open cached UI-test runtime for verification: {error}"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; COPY_BUFFER_BYTES];
+    loop {
+        let read = input
+            .read(&mut buffer)
+            .map_err(|error| format!("read cached UI-test runtime for verification: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex_digest(hasher.finalize()))
+}
+
 fn set_executable(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
@@ -274,6 +300,20 @@ mod tests {
         let mut wrong = spec(payload);
         wrong.sha256 = "a".repeat(64);
         assert!(receive_at(&mut Cursor::new(payload), &root, &wrong).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prepare_rejects_corrupted_runtime_and_allows_replacement() {
+        let payload = b"runtime";
+        let root = root();
+        let spec = spec(payload);
+        let first = receive_at(&mut Cursor::new(payload), &root, &spec).unwrap();
+        fs::write(&first.path, b"corrupt").unwrap();
+        assert_eq!(prepare_at(&root, &spec).unwrap(), None);
+        let replacement = receive_at(&mut Cursor::new(payload), &root, &spec).unwrap();
+        assert!(!replacement.reused);
+        assert_eq!(fs::read(replacement.path).unwrap(), payload);
         let _ = fs::remove_dir_all(root);
     }
 }
