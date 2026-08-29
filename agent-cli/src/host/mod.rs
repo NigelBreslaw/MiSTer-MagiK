@@ -16549,11 +16549,7 @@ fn analyze_streamline_capture(capture: &Path, output_dir: &Path) -> Result<()> {
     let stdout = fs::File::create(&stdout_path)?;
     let stderr = fs::File::create(&stderr_path)?;
     let search_images = env::var_os("MISTER_STREAMLINE_SEARCH_IMAGES")
-        .map(|value| {
-            env::split_paths(&value)
-                .map(PathBuf::from)
-                .collect::<Vec<_>>()
-        })
+        .map(|value| env::split_paths(&value).collect::<Vec<_>>())
         .unwrap_or_default();
     for image_dir in &search_images {
         if !image_dir.is_absolute() {

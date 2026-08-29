@@ -495,7 +495,6 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
     let mut runtime_inventory_us = 0_u64;
     let mut runtime_resolution_us = 0_u64;
     let mut continuation_us = 0_u64;
-    let finalization_us;
     let mut known_roots_considered = 0_usize;
     let mut known_roots_found = 0_usize;
     let mut runtime_headers = 0_usize;
@@ -658,7 +657,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
         reports.push(accumulator.stats);
         watch_observations.insert(system_id, accumulator.watch);
     }
-    finalization_us = finalization_started.elapsed().as_micros() as u64;
+    let finalization_us = finalization_started.elapsed().as_micros() as u64;
     systems.sort_by(|left, right| left.system_id.cmp(&right.system_id));
     reports.sort_by(|left, right| left.system_id.cmp(&right.system_id));
     let elapsed_us = started.elapsed().as_micros() as u64;
