@@ -20,8 +20,6 @@ pub const SEARCH_SCHEMA_VERSION: u32 = 2;
 const SEARCH_WEIGHTS: &str = "10.0,9.0,8.0,7.0,7.0,6.0,6.8,6.5,6.0,4.0,3.5";
 #[cfg(feature = "builder")]
 const SEARCH_PIPELINE_BATCH: usize = 256;
-#[cfg(feature = "builder")]
-const SEARCH_MULTIROW_INSERT: usize = 32;
 
 #[cfg(feature = "builder")]
 fn search_pipeline_batch_size() -> Result<usize, PersistedSearchError> {
@@ -542,61 +540,6 @@ fn merge_autocomplete_words(
 }
 
 #[cfg(feature = "builder")]
-fn insert_search_documents(
-    connection: &Connection,
-    documents: &[PreparedSearchDocument],
-) -> Result<(), PersistedSearchError> {
-    use rusqlite::types::Value;
-
-    for chunk in documents.chunks(SEARCH_MULTIROW_INSERT) {
-        let mut sql = String::from(
-            "INSERT INTO game_search_fts(\
-                 rowid,title,compact_title,manufacturer,compact_manufacturer,\
-                 control,compact_control,players,year,decade,path,compact_path\
-             ) VALUES ",
-        );
-        let mut values = Vec::with_capacity(chunk.len().saturating_mul(12));
-        for (row_index, document) in chunk.iter().enumerate() {
-            if row_index > 0 {
-                sql.push(',');
-            }
-            let first_parameter = row_index.saturating_mul(12).saturating_add(1);
-            sql.push('(');
-            for parameter in 0..12 {
-                if parameter > 0 {
-                    sql.push(',');
-                }
-                sql.push('?');
-                sql.push_str(&(first_parameter + parameter).to_string());
-            }
-            sql.push(')');
-            values.push(Value::Integer(
-                i64::try_from(document.ordinal.saturating_add(1)).map_err(|_| {
-                    PersistedSearchError::new("game ordinal exceeds SQLite integer")
-                })?,
-            ));
-            values.extend([
-                Value::Text(document.title.clone()),
-                Value::Text(document.compact_title.clone()),
-                Value::Text(document.manufacturer.clone()),
-                Value::Text(document.compact_manufacturer.clone()),
-                Value::Text(document.control.clone()),
-                Value::Text(document.compact_control.clone()),
-                Value::Text(document.players.clone()),
-                Value::Text(document.year.clone()),
-                Value::Text(document.decade.clone()),
-                Value::Text(document.path.clone()),
-                Value::Text(document.compact_path.clone()),
-            ]);
-        }
-        connection
-            .execute(&sql, rusqlite::params_from_iter(values.iter()))
-            .map_err(|error| PersistedSearchError::with("insert search batch", error))?;
-    }
-    Ok(())
-}
-
-#[cfg(feature = "builder")]
 pub(crate) fn populate_with_options(
     connection: &Connection,
     games: &[crate::system_shard::SystemGame],
@@ -613,6 +556,14 @@ pub(crate) fn populate_with_options(
             [],
         )
         .map_err(|error| PersistedSearchError::with("suspend FTS automerge", error))?;
+    let mut insert_search = connection
+        .prepare(
+            "INSERT INTO game_search_fts(
+                 rowid,title,compact_title,manufacturer,compact_manufacturer,
+                 control,compact_control,players,year,decade,path,compact_path
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+        )
+        .map_err(|error| PersistedSearchError::with("prepare search rows", error))?;
     let row_loop_started = Instant::now();
     let row_loop_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SEARCH_ROWS);
     let mut words = HashMap::<String, AutocompleteStats>::new();
@@ -655,8 +606,33 @@ pub(crate) fn populate_with_options(
             }
             merge_autocomplete_words(&mut words, batch.words);
             let insert_started = Instant::now();
-            if let Err(error) = insert_search_documents(connection, &batch.documents) {
-                failure = Some(error);
+            for document in batch.documents {
+                let rowid = match i64::try_from(document.ordinal.saturating_add(1)) {
+                    Ok(rowid) => rowid,
+                    Err(_) => {
+                        failure = Some(PersistedSearchError::new(
+                            "game ordinal exceeds SQLite integer",
+                        ));
+                        break;
+                    }
+                };
+                if let Err(error) = insert_search.execute(rusqlite::params![
+                    rowid,
+                    document.title,
+                    document.compact_title,
+                    document.manufacturer,
+                    document.compact_manufacturer,
+                    document.control,
+                    document.compact_control,
+                    document.players,
+                    document.year,
+                    document.decade,
+                    document.path,
+                    document.compact_path,
+                ]) {
+                    failure = Some(PersistedSearchError::with("insert search row", error));
+                    break;
+                }
             }
             fts_insert_us = fts_insert_us.saturating_add(elapsed_us(insert_started));
         }
@@ -669,6 +645,7 @@ pub(crate) fn populate_with_options(
         Ok(())
     })?;
     drop(main_background_scope);
+    drop(insert_search);
     drop(row_loop_pmu);
     let row_loop_us = elapsed_us(row_loop_started);
     let word_count = words.len();
