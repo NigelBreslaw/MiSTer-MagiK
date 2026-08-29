@@ -103,7 +103,7 @@ jobs:
       - name: Run Python tests
         id: tests
         continue-on-error: true
-        run: uv run pytest scripts/tests -q
+        run: uv run pytest scripts/tests -q --ignore scripts/tests/test-slint-build-contract.py
       - name: Summarize Python quality
         if: always()
         env:

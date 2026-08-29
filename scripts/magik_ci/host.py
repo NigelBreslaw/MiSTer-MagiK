@@ -231,6 +231,7 @@ def commands(group: str) -> list[list[str]]:
                 "ui,signed-media-manifests",
                 "media_http::tests",
             ],
+            ["python3", "scripts/tests/test-slint-build-contract.py"],
         ]
     if group == "tools":
         return [

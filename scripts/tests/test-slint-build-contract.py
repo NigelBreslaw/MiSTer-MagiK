@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 BUILD_SCRIPT = ROOT / "apps/mister/ui-generated/build.rs"
 UI_ROOT = ROOT / "apps/mister/ui"
 UI_CRATE = ROOT / "apps/mister/ui-generated"
+SHARED_TARGET = ROOT / "apps/mister/target"
 
 REQUIRED_BUILD_SCRIPT_FRAGMENTS = (
     "cargo:rerun-if-env-changed=MISTER_UI_BUILD_SCOPE",
@@ -93,8 +94,7 @@ class SlintBuildContractTests(unittest.TestCase):
             )
 
             manifest = ui_crate / "Cargo.toml"
-            target = fixture / "target"
-            initial = run_cargo(manifest, target)
+            initial = run_cargo(manifest, SHARED_TARGET)
             self.assertEqual(
                 initial.returncode,
                 0,
@@ -106,7 +106,7 @@ class SlintBuildContractTests(unittest.TestCase):
             advanced_mtime = time.time_ns() + 2_000_000_000
             os.utime(imported, ns=(advanced_mtime, advanced_mtime))
 
-            rebuilt = run_cargo(manifest, target)
+            rebuilt = run_cargo(manifest, SHARED_TARGET)
             combined = f"{rebuilt.stdout}\n{rebuilt.stderr}"
             self.assertNotEqual(
                 rebuilt.returncode,

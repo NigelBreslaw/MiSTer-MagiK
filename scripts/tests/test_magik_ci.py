@@ -60,6 +60,7 @@ class MagikCiTests(unittest.TestCase):
                 for command in all_commands
             )
         )
+        self.assertIn(["python3", SLOW_TEST], commands("app"))
 
     def test_python_tests_skip_unrelated_paths(self) -> None:
         self.assertEqual(python_test_commands(["agent-cli/src/main.rs"]), [])
