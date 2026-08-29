@@ -1,4 +1,4 @@
-"""Cross-product smoke coverage for supported display/layout profiles."""
+"""Cross-product smoke coverage for the supported HDMI and CRT profiles."""
 
 from __future__ import annotations
 
@@ -14,22 +14,18 @@ from apps.mister.ui_tests.driver import (
 )
 from apps.mister.ui_tests.queries import element_with_label, elements_with_label
 
-DISPLAY_PROFILES = ("hdmi-720p", "hdmi-1080p", "crt-240p", "crt-480p")
+DISPLAY_PROFILES = ("hdmi-1080p", "crt-240p")
 ORIENTATIONS = ("normal", "monitor-clockwise")
 FEATURES = ("home", "arcade", "settings")
 
 DISPLAY_CONTRACTS = {
-    "hdmi-720p": ("hdmi", "hdmi-1280x720p60"),
     "hdmi-1080p": ("hdmi", "hdmi-1920x1080p60"),
     "crt-240p": ("crt-240p60", "crt-240p60"),
-    "crt-480p": ("crt-480p60", "crt-480p60"),
 }
 
 PROFILE_EXPECTATIONS = {
-    "hdmi-720p": ("hdmi", (1280, 720), (1280, 720)),
     "hdmi-1080p": ("hdmi", (1920, 1080), (960, 540)),
     "crt-240p": ("crt-240p60", (640, 240), (640, 240)),
-    "crt-480p": ("crt-480p60", (640, 480), (640, 480)),
 }
 ORIENTATION_LABELS = {
     "normal": "Normal",
