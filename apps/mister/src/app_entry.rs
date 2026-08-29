@@ -603,6 +603,14 @@ fn print_experiment_capabilities() {
 fn run_library_refresh(paths: &mister_magik_catalog::device_layout::CatalogPaths) {
     let storage_root = Path::new("/media/fat");
     let catalog_root = paths.sharded_catalog_dir();
+    let _mutation_lease =
+        match mister_magik_catalog::catalog_lease::CatalogMutationLease::acquire_default() {
+            Ok(lease) => lease,
+            Err(error) => {
+                crate::ui_errln!("library_refresh\tbusy\t{error}");
+                std::process::exit(75);
+            }
+        };
     let result =
         if mister_magik_catalog::fast_catalog_refresh::read_latest_refresh_manifest(catalog_root)
             .is_ok()

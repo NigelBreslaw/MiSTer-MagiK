@@ -23,6 +23,7 @@ pub mod catalog_config;
 mod catalog_discovery;
 pub mod catalog_domain;
 pub mod catalog_format;
+pub mod catalog_lease;
 mod catalog_load_metrics;
 pub mod catalog_navigation;
 mod catalog_progress;

@@ -920,8 +920,10 @@ impl LauncherScheduler {
         request: CatalogWorkerRequest,
         initial_cache: CatalogWorkerInitialCache,
         execution_mode: CatalogExecutionMode,
-    ) {
-        self.finish_catalog_progress("replaced", "a new catalog worker replaced this worker");
+    ) -> bool {
+        if self.catalog_worker_running() {
+            return false;
+        }
         let evidence = self.catalog_progress.start(
             root.clone(),
             request.label(),
@@ -937,6 +939,7 @@ impl LauncherScheduler {
             self.catalog_paths.clone(),
             self.archive_cache.clone(),
         ));
+        true
     }
 
     pub(super) fn poll_catalog(
@@ -1536,6 +1539,21 @@ mod tests {
         assert!(!scheduler.media_worker_running());
         assert!(!scheduler.media_worker_unavailable());
         assert!(!scheduler.launch_benchmark_enabled());
+    }
+
+    #[test]
+    fn starting_catalog_worker_does_not_detach_existing_worker() {
+        let (_tx, rx) = mpsc::channel();
+        let mut scheduler = LauncherScheduler::new(false);
+        scheduler.catalog = CatalogJobState::Running(rx);
+
+        assert!(!scheduler.start_catalog_worker(
+            "/tmp/catalog-test".to_string(),
+            CatalogWorkerRequest::LoadOnly,
+            CatalogWorkerInitialCache::AlreadyProbedMissing,
+            CatalogExecutionMode::BackgroundInteractive,
+        ));
+        assert!(scheduler.catalog_worker_running());
     }
 
     #[test]

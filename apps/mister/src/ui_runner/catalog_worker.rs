@@ -145,6 +145,16 @@ pub(super) fn start_library_catalog_worker(
                 }
                 return;
             }
+            let _mutation_lease =
+                match mister_magik_catalog::catalog_lease::CatalogMutationLease::acquire_default() {
+                    Ok(lease) => lease,
+                    Err(error) => {
+                        let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                            error: error.to_string(),
+                        });
+                        return;
+                    }
+                };
             let cache_state = match initial_cache {
                 CatalogWorkerInitialCache::AlreadyLoadedReady => CatalogCacheState::Ready,
                 _ => CatalogCacheState::Missing,
