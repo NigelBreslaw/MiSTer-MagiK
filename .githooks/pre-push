@@ -4,6 +4,11 @@
 
 set -euo pipefail
 
+# Git exports these variables while invoking a hook. Clear them before the
+# fixture tests create temporary repositories, otherwise their Git commands
+# can accidentally operate on this repository's worktree administration.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
