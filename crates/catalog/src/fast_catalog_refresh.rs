@@ -552,6 +552,43 @@ pub fn refresh_state_root(catalog_root: &Path) -> PathBuf {
     catalog_root.join("state").join(STATE_DIRECTORY)
 }
 
+/// Remove only temporary files created by refresh publication.
+///
+/// A crashed builder may leave a fully-written temporary file behind.  These
+/// files are never considered active state, so removing them while holding the
+/// mutation lease makes the next run deterministic without touching manifests,
+/// packs, or registry generations.
+pub fn cleanup_refresh_temporary_files(catalog_root: &Path) -> Result<usize, String> {
+    let root = refresh_state_root(catalog_root);
+    if !root.exists() {
+        return Ok(0);
+    }
+    let mut removed = 0usize;
+    for entry in walkdir::WalkDir::new(&root)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy();
+        if !name.contains(".tmp-") {
+            continue;
+        }
+        fs::remove_file(entry.path()).map_err(|error| {
+            format!(
+                "remove refresh temporary {}: {error}",
+                entry.path().display()
+            )
+        })?;
+        removed = removed.saturating_add(1);
+    }
+    if removed != 0 {
+        sync_directory(&root)?;
+    }
+    Ok(removed)
+}
+
 pub fn build_info_path(catalog_root: &Path) -> PathBuf {
     refresh_state_root(catalog_root).join(BUILD_INFO_FILE)
 }
@@ -2093,38 +2130,74 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
             path.display()
         ));
     }
-    write_unsynced(path, bytes)
+    let temporary = path.with_extension(format!(
+        "tmp-new-{}",
+        crate::catalog_lease::CatalogRunId::new().as_str()
+    ));
+    let result =
+        write_synced(&temporary, bytes).and_then(|()| match fs::hard_link(&temporary, path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let existing = fs::read(path).map_err(|read_error| {
+                    format!("read existing {}: {read_error}", path.display())
+                })?;
+                if existing == bytes {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "immutable refresh state changed concurrently: {}",
+                        path.display()
+                    ))
+                }
+            }
+            Err(error) => Err(format!("publish immutable {}: {error}", path.display())),
+        });
+    match result {
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            Err(error)
+        }
+        Ok(()) => {
+            let cleanup = fs::remove_file(&temporary);
+            if let Err(error) = cleanup {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    return Err(format!(
+                        "remove refresh temporary {}: {error}",
+                        temporary.display()
+                    ));
+                }
+            }
+            if let Some(parent) = path.parent() {
+                sync_directory(parent)?;
+            }
+            Ok(())
+        }
+    }
 }
 
 fn write_replace_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
-    write_synced(&temporary, bytes, true)?;
-    fs::rename(&temporary, path).map_err(|error| format!("publish {}: {error}", path.display()))
+    let temporary = path.with_extension(format!(
+        "tmp-{}",
+        crate::catalog_lease::CatalogRunId::new().as_str()
+    ));
+    let result = write_synced(&temporary, bytes).and_then(|()| {
+        fs::rename(&temporary, path).map_err(|error| format!("publish {}: {error}", path.display()))
+    });
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
-fn write_synced(path: &Path, bytes: &[u8], replace: bool) -> Result<(), String> {
+fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut options = OpenOptions::new();
     options.write(true).create(true);
-    if replace {
-        options.truncate(true);
-    } else {
-        options.create_new(true);
-    }
+    options.create_new(true);
     let mut file = options
         .open(path)
         .map_err(|error| format!("create {}: {error}", path.display()))?;
     file.write_all(bytes)
         .and_then(|()| file.sync_all())
-        .map_err(|error| format!("write {}: {error}", path.display()))
-}
-
-fn write_unsynced(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|error| format!("create {}: {error}", path.display()))?;
-    file.write_all(bytes)
         .map_err(|error| format!("write {}: {error}", path.display()))
 }
 
@@ -2652,5 +2725,32 @@ mod tests {
         assert!(read_current_build_info(&catalog).is_err());
         assert_eq!(format_build_elapsed(1_499_999), "1 second");
         assert_eq!(format_build_elapsed(1_500_000), "2 seconds");
+    }
+
+    #[test]
+    fn immutable_publication_is_atomic_and_never_clobbers_existing_bytes() {
+        let root = crate::test_support::unique_temp_dir("fast-publication-atomic");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("packs/1.watchpack");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        write_new_file(&path, b"first").expect("initial immutable publication");
+        assert_eq!(fs::read(&path).unwrap(), b"first");
+        assert!(!root.join("packs/1.watchpack.tmp-new").exists());
+        assert!(write_new_file(&path, b"second").is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"first");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stale_refresh_temporaries_are_recovered_without_touching_state() {
+        let catalog = crate::test_support::unique_temp_dir("fast-publication-recovery");
+        let root = refresh_state_root(&catalog);
+        fs::create_dir_all(root.join("packs")).unwrap();
+        fs::write(root.join("packs/old.watchpack.tmp-crashed"), b"partial").unwrap();
+        fs::write(root.join("manifest-a.bin"), b"active").unwrap();
+        assert_eq!(cleanup_refresh_temporary_files(&catalog).unwrap(), 1);
+        assert!(!root.join("packs/old.watchpack.tmp-crashed").exists());
+        assert_eq!(fs::read(root.join("manifest-a.bin")).unwrap(), b"active");
+        let _ = fs::remove_dir_all(catalog);
     }
 }

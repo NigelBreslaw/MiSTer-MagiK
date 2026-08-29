@@ -611,6 +611,12 @@ fn run_library_refresh(paths: &mister_magik_catalog::device_layout::CatalogPaths
                 std::process::exit(75);
             }
         };
+    if let Err(error) =
+        mister_magik_catalog::fast_catalog_refresh::cleanup_refresh_temporary_files(catalog_root)
+    {
+        crate::ui_errln!("library_refresh\trecovery_failed\t{error}");
+        std::process::exit(1);
+    }
     let result =
         if mister_magik_catalog::fast_catalog_refresh::read_latest_refresh_manifest(catalog_root)
             .is_ok()

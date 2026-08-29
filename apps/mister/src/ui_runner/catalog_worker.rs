@@ -155,6 +155,16 @@ pub(super) fn start_library_catalog_worker(
                         return;
                     }
                 };
+            if let Err(error) =
+                mister_magik_catalog::fast_catalog_refresh::cleanup_refresh_temporary_files(
+                    catalog_paths.sharded_catalog_dir(),
+                )
+            {
+                let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                    error: format!("catalog temporary recovery failed: {error}"),
+                });
+                return;
+            }
             let cache_state = match initial_cache {
                 CatalogWorkerInitialCache::AlreadyLoadedReady => CatalogCacheState::Ready,
                 _ => CatalogCacheState::Missing,

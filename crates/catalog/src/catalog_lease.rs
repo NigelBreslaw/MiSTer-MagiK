@@ -12,9 +12,40 @@ use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_CATALOG_BUILDER_LOCK_PATH: &str = "/tmp/mister-magik/catalog-builder.lock";
 const CATALOG_BUILDER_LOCK_ENV: &str = "MISTER_CATALOG_BUILDER_LOCK";
+static RUN_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+/// A process-local identity used to keep temporary publication files unique.
+///
+/// The value is deliberately opaque: it is only ever embedded in filenames and
+/// diagnostics, never parsed as a generation or used for authorization.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogRunId(String);
+
+impl CatalogRunId {
+    pub fn new() -> Self {
+        let sequence = RUN_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        Self(format!("{}-{now:x}-{sequence:x}", std::process::id()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Default for CatalogRunId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[derive(Debug)]
 pub enum CatalogLeaseError {
@@ -42,6 +73,7 @@ impl std::error::Error for CatalogLeaseError {}
 pub struct CatalogMutationLease {
     path: PathBuf,
     file: File,
+    run_id: CatalogRunId,
 }
 
 impl CatalogMutationLease {
@@ -99,7 +131,11 @@ impl CatalogMutationLease {
             }
             return Err(CatalogLeaseError::Io { path, source });
         }
-        Ok(Self { path, file })
+        Ok(Self {
+            path,
+            file,
+            run_id: CatalogRunId::new(),
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -108,6 +144,10 @@ impl CatalogMutationLease {
 
     pub fn file(&self) -> &File {
         &self.file
+    }
+
+    pub fn run_id(&self) -> &CatalogRunId {
+        &self.run_id
     }
 }
 
