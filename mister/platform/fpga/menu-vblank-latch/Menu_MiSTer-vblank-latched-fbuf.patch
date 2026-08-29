@@ -254,7 +254,7 @@ index a735e6b..b1d403c 100644
 @@ -254,5 +496,6 @@ ENTITY ascal IS
  		avl_read           : OUT   std_logic;
  		avl_byteenable     : OUT   std_logic_vector(N_DW/8-1 DOWNTO 0);
-+		magik_diag_state   : OUT   std_logic_vector(15 DOWNTO 0);
++		magik_fetch_state  : OUT   std_logic_vector(15 DOWNTO 0);
  
  		------------------------------------
  		reset_na           : IN    std_logic
@@ -467,26 +467,26 @@ index a735e6b..b1d403c 100644
 -	avl_read<=avl_read_i;
 +	avl_read<=avl_read_i AND NOT avl_read_accepted
 +		WHEN avl_reset_na='0' OR avl_state=sREAD ELSE '0';
-+	WITH avl_state SELECT magik_diag_state(1 DOWNTO 0) <=
++	WITH avl_state SELECT magik_fetch_state(1 DOWNTO 0) <=
 +		"00" WHEN sIDLE,
 +		"01" WHEN sWRITE,
 +		"10" WHEN sREAD;
-+	magik_diag_state(2)<=avl_read_i;
-+	magik_diag_state(3)<=avl_read_accepted;
-+	magik_diag_state(4)<=avl_return_drain;
-+	magik_diag_state(6 DOWNTO 5)<=
++	magik_fetch_state(2)<=avl_read_i;
++	magik_fetch_state(3)<=avl_read_accepted;
++	magik_fetch_state(4)<=avl_return_drain;
++	magik_fetch_state(6 DOWNTO 5)<=
 +		std_logic_vector(to_unsigned(avl_return_credits,2));
-+	magik_diag_state(7)<='1' WHEN avl_return_phase/=0 ELSE '0';
-+	magik_diag_state(8)<=avl_read_sr;
-+	magik_diag_state(9)<=avl_write_sr;
-+	magik_diag_state(10)<=avl_reset_na;
-+	magik_diag_state(11)<=avl_completion_pending;
-+	magik_diag_state(12)<=avl_read_pulse;
-+	magik_diag_state(13)<='1' WHEN
++	magik_fetch_state(7)<='1' WHEN avl_return_phase/=0 ELSE '0';
++	magik_fetch_state(8)<=avl_read_sr;
++	magik_fetch_state(9)<=avl_write_sr;
++	magik_fetch_state(10)<=avl_reset_na;
++	magik_fetch_state(11)<=avl_completion_pending;
++	magik_fetch_state(12)<=avl_read_pulse;
++	magik_fetch_state(13)<='1' WHEN
 +		avl_o_vs_sync='0' AND avl_o_vs='1' ELSE '0';
-+	magik_diag_state(14)<='1' WHEN return_drain_ready(
++	magik_fetch_state(14)<='1' WHEN return_drain_ready(
 +		avl_return_credits,avl_return_phase) ELSE '0';
-+	magik_diag_state(15)<=avl_read_i AND NOT avl_read_accepted
++	magik_fetch_state(15)<=avl_read_i AND NOT avl_read_accepted
 +		WHEN avl_reset_na='0' OR avl_state=sREAD ELSE '0';
  	avl_write<=avl_write_i;
  	avl_writedata<=std_logic_vector(swap(avl_dr));
@@ -664,7 +664,7 @@ index a416879..4d81fc6 100644
 @@ -825,6 +907,24 @@ wire         freeze;
 -		.avl_byteenable   (vbuf_byteenable)
 +		.avl_byteenable   (vbuf_byteenable),
-+		.magik_diag_state (magik_scaler_diag_state)
++		.magik_fetch_state(magik_scaler_diag_state)
  	);
 +
 +mister_magik_scaler_fetch_liveness_state magik_scaler_fetch_liveness_state
