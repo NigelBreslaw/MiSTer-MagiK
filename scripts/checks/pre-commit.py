@@ -15,6 +15,11 @@ from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from typing import NoReturn
 
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from scripts.checks.repository_policy import is_classified
+
 EXPECTED_NAME = "Nigel Breslaw"
 EXPECTED_EMAIL = "nigel.breslaw@gmail.com"
 
@@ -33,30 +38,6 @@ FORBIDDEN_ARCHIVE_SUFFIXES = {
 }
 PRIVATE_IMAGE_SUFFIXES = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
 FORBIDDEN_NAMES = {"credentials", "id_ed25519", "id_rsa", "secrets"}
-
-CLASSIFIED_PREFIXES = (
-    ".github",
-    ".githooks",
-    "LICENSES",
-    "agent-cli",
-    "apps/desktop",
-    "apps/framebuffer-lab",
-    "apps/framebuffer-scene-lab",
-    "apps/mister",
-    "crates",
-    "docs",
-    "documentation",
-    "history",
-    "mister/platform/contracts",
-    "mister/platform/fpga",
-    "mister/platform/kernel",
-    "mister/platform/runtime",
-    "mister/tools/agent",
-    "mister/tools/manager",
-    "private",
-    "scripts",
-    "tools",
-)
 
 CRATE_FORMATTERS = (
     (
@@ -238,21 +219,6 @@ def staged_paths(repository: Path) -> list[str]:
         ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMRD"],
     ).stdout
     return sorted(os.fsdecode(value) for value in output.split(b"\0") if value)
-
-
-def is_classified(path: str) -> bool:
-    value = PurePosixPath(path)
-    first = value.parts[0] if value.parts else ""
-    if path in {"Cargo.toml", "Cargo.lock"}:
-        return True
-    if len(value.parts) == 1 or value.name == "AGENTS.md":
-        return True
-    if first.startswith(".") and first not in {".github", ".githooks"}:
-        return True
-    return any(
-        path == prefix or path.startswith(f"{prefix}/")
-        for prefix in CLASSIFIED_PREFIXES
-    )
 
 
 def check_classification(paths: Sequence[str]) -> None:
