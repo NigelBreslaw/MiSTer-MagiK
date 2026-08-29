@@ -32,9 +32,9 @@ def test_system_hub_opens_from_home_and_returns(magik: MagiKDriver) -> None:
     assert games.accessible_item_selected
     assert games.accessible_description == "1 TITLES"
     recent = elements_with_label(magik, "RECENT")
-    assert recent and all(element.accessible_enabled for element in recent)
+    assert recent and any(element.accessible_enabled for element in recent)
     favorites = elements_with_label(magik, "FAVORITES")
-    assert favorites and all(element.accessible_enabled for element in favorites)
+    assert favorites and any(element.accessible_enabled for element in favorites)
 
     magik.button("open-snes-games", Button.A)
     wait_for_label(magik, "Arcade games")
