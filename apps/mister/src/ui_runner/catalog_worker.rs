@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 
 const CATALOG_WORKER_CHILD_ENV: &str = "MISTER_CATALOG_WORKER_CHILD";
 const CATALOG_WORKER_PROTOCOL_PREFIX: &str = "MISTER_CATALOG_EVENT ";
+const CATALOG_WORKER_PROTOCOL_VERSION: u8 = 4;
 
 fn filesystem_available_bytes(path: &str) -> Option<u64> {
     let path = CString::new(path).ok()?;
@@ -206,7 +207,7 @@ fn write_worker_wire_event(writer: &mut impl Write, event: &CatalogWorkerWireEve
 
 fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
     let mut event = CatalogWorkerWireEvent {
-        version: 1,
+        version: CATALOG_WORKER_PROTOCOL_VERSION,
         kind: String::new(),
         name: String::new(),
         detail: String::new(),
@@ -326,7 +327,7 @@ fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
 
 fn blank_worker_wire_event(kind: &str) -> CatalogWorkerWireEvent {
     CatalogWorkerWireEvent {
-        version: 1,
+        version: CATALOG_WORKER_PROTOCOL_VERSION,
         kind: kind.to_string(),
         name: String::new(),
         detail: String::new(),
@@ -632,7 +633,7 @@ fn catalog_worker_message_from_wire(
     root: &str,
     catalog_root: &Path,
 ) -> Result<Option<CatalogWorkerMessage>, String> {
-    if event.version != 1 {
+    if event.version != CATALOG_WORKER_PROTOCOL_VERSION {
         return Err(format!(
             "unsupported catalog worker protocol version {}",
             event.version
@@ -775,7 +776,7 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
                 break;
             }
             let event = CatalogWorkerWireEvent {
-                version: 1,
+                version: CATALOG_WORKER_PROTOCOL_VERSION,
                 kind: "heartbeat".to_string(),
                 name: String::new(),
                 detail: String::new(),
@@ -830,7 +831,7 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
     if !terminal {
         let mut output = writer.lock().unwrap_or_else(|error| error.into_inner());
         let event = CatalogWorkerWireEvent {
-            version: 1,
+            version: CATALOG_WORKER_PROTOCOL_VERSION,
             kind: "persistence-failed".to_string(),
             name: String::new(),
             detail: String::new(),
@@ -1463,7 +1464,7 @@ mod tests {
     #[test]
     fn heartbeat_protocol_is_decodable_without_counting_as_progress() {
         let event = CatalogWorkerWireEvent {
-            version: 1,
+            version: CATALOG_WORKER_PROTOCOL_VERSION,
             kind: "heartbeat".to_string(),
             name: String::new(),
             detail: String::new(),
