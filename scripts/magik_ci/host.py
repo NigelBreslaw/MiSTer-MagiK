@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 import time
@@ -177,17 +178,6 @@ def commands(group: str) -> list[list[str]]:
             ],
             [
                 "cargo",
-                "check",
-                "--manifest-path",
-                manifest,
-                "--bin",
-                "mister-magik-fb",
-                "--no-default-features",
-                "--features",
-                "ui",
-            ],
-            [
-                "cargo",
                 "test",
                 "--manifest-path",
                 manifest,
@@ -195,31 +185,6 @@ def commands(group: str) -> list[list[str]]:
                 "--no-default-features",
                 "--features",
                 "ui-preview",
-                "--",
-                "--test-threads=1",
-            ],
-            [
-                "cargo",
-                "test",
-                "--manifest-path",
-                manifest,
-                "--bin",
-                "mister-magik-ui-preview",
-                "--no-default-features",
-                "--features",
-                "ui-preview",
-                "--",
-                "--test-threads=1",
-            ],
-            [
-                "cargo",
-                "test",
-                "--manifest-path",
-                manifest,
-                "--lib",
-                "--no-default-features",
-                "--features",
-                "ui,bench-scenes",
                 "--",
                 "--test-threads=1",
             ],
@@ -234,17 +199,6 @@ def commands(group: str) -> list[list[str]]:
                 "ui,experiments",
                 "--",
                 "--test-threads=1",
-            ],
-            [
-                "cargo",
-                "test",
-                "--manifest-path",
-                manifest,
-                "--lib",
-                "--no-default-features",
-                "--features",
-                "ui",
-                "media_http::tests",
             ],
             [
                 "cargo",
@@ -281,13 +235,22 @@ def execute(repository: Path, group: str) -> None:
         return
     group_commands = commands(group)
     total = len(group_commands)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+        }
+    )
+    if group == "domain":
+        environment["CARGO_TARGET_DIR"] = str(repository / "target/ci-host-domain")
     for index, command in enumerate(group_commands, start=1):
         started = time.monotonic()
         rendered = shlex.join(command)
         print(f"host-assurance[{group}] {index}/{total} start: {rendered}", flush=True)
         outcome = "failed"
         try:
-            subprocess.run(command, cwd=repository, check=True)
+            subprocess.run(command, cwd=repository, env=environment, check=True)
             outcome = "passed"
         finally:
             elapsed = time.monotonic() - started

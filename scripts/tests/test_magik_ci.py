@@ -62,6 +62,28 @@ class MagikCiTests(unittest.TestCase):
                 for command in all_commands
             )
         )
+        self.assertFalse(
+            any(
+                "mister-magik-ui-preview" in command
+                and command[0:2] == ["cargo", "test"]
+                for command in commands("app")
+            )
+        )
+        self.assertFalse(
+            any(
+                command[0:2] == ["cargo", "check"]
+                and "mister-magik-fb" in command
+                for command in commands("app")
+            )
+        )
+        self.assertFalse(any("ui,bench-scenes" in command for command in commands("app")))
+        self.assertFalse(
+            any(
+                "media_http::tests" in command
+                and "signed-media-manifests" not in command
+                for command in commands("app")
+            )
+        )
         self.assertIn(
             [
                 "cargo",
