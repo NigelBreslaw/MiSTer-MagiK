@@ -112,7 +112,10 @@ pub fn is_known_command(name: &str) -> bool {
 }
 
 pub fn command_names() -> impl Iterator<Item = &'static str> {
-    COMMANDS.iter().map(|command| command.name)
+    COMMANDS
+        .iter()
+        .filter(|command| command.name != CATALOG_WORKER_COMMAND)
+        .map(|command| command.name)
 }
 
 pub fn command_usage() -> String {
