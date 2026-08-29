@@ -16,7 +16,8 @@ __pypackages__/
 venv/
 ENV/
 
-# uv — uv.lock is committed for reproducible installs
+# uv — uv.lock is committed for reproducible installs; the local cache is not
+.uv-cache/
 
 # Test / lint / type-check caches
 .agent-cli/
