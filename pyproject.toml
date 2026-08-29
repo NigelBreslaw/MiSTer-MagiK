@@ -22,6 +22,11 @@ dev = ["ruff==0.16.4", "ty==0.0.73", "pytest>=8"]
 [tool.uv]
 package = false
 
+[[tool.uv.index]]
+name = "slint-private"
+url = "https://testing.slint.dev/simple/"
+explicit = true
+
 [tool.uv.sources]
 slint-testing = { index = "slint-private" }
 
