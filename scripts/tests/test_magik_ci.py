@@ -71,12 +71,13 @@ class MagikCiTests(unittest.TestCase):
         )
         self.assertFalse(
             any(
-                command[0:2] == ["cargo", "check"]
-                and "mister-magik-fb" in command
+                command[0:2] == ["cargo", "check"] and "mister-magik-fb" in command
                 for command in commands("app")
             )
         )
-        self.assertFalse(any("ui,bench-scenes" in command for command in commands("app")))
+        self.assertFalse(
+            any("ui,bench-scenes" in command for command in commands("app"))
+        )
         self.assertFalse(
             any(
                 "media_http::tests" in command
