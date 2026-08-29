@@ -688,6 +688,23 @@ pub fn read_latest_refresh_manifest(catalog_root: &Path) -> Result<FastRefreshMa
         .ok_or_else(|| "no valid fast refresh manifest".to_string())
 }
 
+fn next_refresh_generation(catalog_root: &Path) -> Result<u64, String> {
+    match read_latest_refresh_manifest(catalog_root) {
+        Ok(manifest) => manifest
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| "fast refresh generation overflow".to_string()),
+        Err(error) => {
+            let root = refresh_state_root(catalog_root);
+            if root.join(MANIFEST_A).exists() || root.join(MANIFEST_B).exists() {
+                Err(error)
+            } else {
+                Ok(1)
+            }
+        }
+    }
+}
+
 pub fn read_system_watch(
     catalog_root: &Path,
     reference: &FastRefreshSystemRef,
@@ -731,6 +748,35 @@ pub fn publish_refresh_state(
     .map(|(manifest, _)| manifest)
 }
 
+pub fn capture_and_publish_refresh_state(
+    storage_root: &Path,
+    catalog_root: &Path,
+    snapshot: &FastFiveSnapshot,
+) -> Result<(FastRefreshManifest, FastRefreshCaptureReport), String> {
+    let _lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
+        .map_err(|error| error.to_string())?;
+    cleanup_refresh_temporary_files(catalog_root)?;
+    let (states, capture) = capture_refresh_state(storage_root, snapshot)?;
+    let active = crate::shard_registry::read_latest_manifest_lazy(
+        catalog_root,
+        crate::shard_registry::production_registry_limits(),
+    )
+    .map_err(|error| format!("read published fast catalog: {error}"))?;
+    let generation = next_refresh_generation(catalog_root)?;
+    let (manifest, _) = publish_refresh_state_with_report_held(
+        catalog_root,
+        generation,
+        active.generation,
+        crate::fast_five_catalog::registry_fingerprint_for_manifest(&active),
+        format!(
+            "independent-fast-sources-v{}",
+            crate::fast_catalog_sources::FAST_SOURCE_ADAPTER_VERSION
+        ),
+        &states,
+    )?;
+    Ok((manifest, capture))
+}
+
 pub fn publish_refresh_state_with_report(
     catalog_root: &Path,
     generation: u64,
@@ -763,6 +809,12 @@ fn publish_refresh_state_with_report_held(
     let started = std::time::Instant::now();
     if generation == 0 {
         return Err("fast refresh generation must be non-zero".to_string());
+    }
+    let expected_generation = next_refresh_generation(catalog_root)?;
+    if generation != expected_generation {
+        return Err(format!(
+            "stale fast refresh generation {generation}; expected {expected_generation}"
+        ));
     }
     let root = refresh_state_root(catalog_root);
     fs::create_dir_all(root.join("packs"))
@@ -881,6 +933,9 @@ fn publish_refresh_update_held(
     updated: &[FastRefreshSystemState],
     removed_system_ids: &BTreeSet<String>,
 ) -> Result<FastRefreshManifest, String> {
+    if read_latest_refresh_manifest(catalog_root)? != *previous {
+        return Err("stale fast refresh manifest".to_string());
+    }
     let generation = previous
         .generation
         .checked_add(1)
@@ -1339,11 +1394,12 @@ pub fn execute_planned_fast_refresh(
     storage_root: &Path,
     catalog_root: &Path,
     request: FastCatalogRefreshRequest,
-    plan: FastRefreshPlanReport,
+    _plan: FastRefreshPlanReport,
 ) -> Result<FastCatalogRefreshReport, String> {
     let lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
         .map_err(|error| error.to_string())?;
     cleanup_refresh_temporary_files(catalog_root)?;
+    let plan = plan_fast_refresh(storage_root, catalog_root, request)?;
     execute_planned_fast_refresh_with_lease(storage_root, catalog_root, request, plan, &lease)
 }
 
@@ -2544,6 +2600,18 @@ mod tests {
                 .exists()
         );
         assert_eq!(reference.row_fingerprint, state("snes").row_fingerprint);
+        assert!(
+            publish_refresh_state(
+                &root,
+                1,
+                11,
+                "b".repeat(64),
+                "builder-1".to_string(),
+                &[state("snes")],
+            )
+            .is_err()
+        );
+        assert_eq!(read_latest_refresh_manifest(&root).unwrap(), first);
 
         let second = publish_refresh_state(
             &root,
@@ -2727,12 +2795,19 @@ mod tests {
                 .iter()
                 .any(|system| system.system_id.as_str() == "snes")
         );
+        let stale_plan = plan_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update)
+            .expect("plan before source change");
 
         fs::create_dir_all(storage.join("games/NES")).unwrap();
         fs::write(storage.join("_Console/NES.rbf"), b"core").unwrap();
         fs::write(storage.join("games/NES/Game.nes"), b"rom").unwrap();
-        let added = execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update)
-            .expect("add NES incrementally");
+        let added = execute_planned_fast_refresh(
+            &storage,
+            &catalog,
+            FastCatalogRefreshRequest::Update,
+            stale_plan,
+        )
+        .expect("replan and add NES incrementally");
         assert!(added.system_reports.iter().any(|system| {
             system.system_id == "nes" && system.outcome == FastCatalogSystemOutcome::Updated
         }));

@@ -4,8 +4,8 @@
 //! Standalone interchange and publication tool for the fast five-system catalog.
 
 use mister_magik_catalog::fast_catalog_refresh::{
-    FastCatalogRefreshRequest, capture_refresh_state, execute_fast_refresh, plan_fast_refresh,
-    publish_refresh_state, read_latest_refresh_manifest,
+    FastCatalogRefreshRequest, capture_and_publish_refresh_state, execute_fast_refresh,
+    plan_fast_refresh,
 };
 use mister_magik_catalog::fast_catalog_sources::{
     build_independent_fast_snapshot, rebuild_independent_system,
@@ -145,28 +145,8 @@ fn run(arguments: Vec<String>) -> Result<(), String> {
                 ],
             )?;
             let (snapshot, _, _) = read_snapshot_input(&input, input_encoding)?;
-            let (states, capture) = capture_refresh_state(&storage_root, &snapshot)?;
-            let catalog_manifest = mister_magik_catalog::shard_registry::read_latest_manifest_lazy(
-                &catalog_root,
-                production_registry_limits(),
-            )
-            .map_err(|error| format!("read published fast catalog: {error}"))?;
-            let generation = read_latest_refresh_manifest(&catalog_root)
-                .map_or(1, |manifest| manifest.generation.saturating_add(1));
-            let manifest = publish_refresh_state(
-                &catalog_root,
-                generation,
-                catalog_manifest.generation,
-                mister_magik_catalog::fast_five_catalog::registry_fingerprint(
-                    &catalog_root,
-                    production_registry_limits(),
-                )?,
-                format!(
-                    "independent-fast-sources-v{}",
-                    mister_magik_catalog::fast_catalog_sources::FAST_SOURCE_ADAPTER_VERSION
-                ),
-                &states,
-            )?;
+            let (manifest, capture) =
+                capture_and_publish_refresh_state(&storage_root, &catalog_root, &snapshot)?;
             print_json(&serde_json::json!({
                 "command": "write-refresh-state",
                 "generation": manifest.generation,
