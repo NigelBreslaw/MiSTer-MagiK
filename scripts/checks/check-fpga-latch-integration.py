@@ -738,7 +738,7 @@ def main() -> None:
             "ELSIF issued_v THEN": 1,
             "avl_read_accepted<='1';": 1,
             "avl_return_drain<='1';": 1,
-            "IF return_drain_ready(": 1,
+            "IF return_drain_ready(": 2,
             "avl_return_credits,avl_return_phase) THEN": 1,
             "IF avl_return_drain='0' THEN": 1,
             "IF avl_read_i='1' AND avl_read_accepted='0' AND": 1,
@@ -905,12 +905,16 @@ def main() -> None:
             if scalaire_body.count(last_reset) != 2:
                 fail(f"copy-tail phase must also clear at line start: {last_reset}")
         drain_release = re.search(
+            r"IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN\s*"
             r"IF return_drain_ready\(\s*"
-            r"avl_return_credits,avl_return_phase\) AND\s*"
-            r"\(avl_return_drain='1' OR\s*"
-            r"\(avl_o_vs_sync='0' AND avl_o_vs='1'\)\) THEN\s*"
+            r"avl_return_credits,avl_return_phase\) THEN\s*"
             r"avl_wad<=2\*BLEN-1;\s*"
-            r"avl_return_drain<='0';\s*END IF;",
+            r"END IF;\s*END IF;\s*"
+            r"IF avl_return_drain='1' THEN\s*"
+            r"avl_wad<=2\*BLEN-1;\s*"
+            r"IF return_drain_ready\(\s*"
+            r"avl_return_credits,avl_return_phase\) THEN\s*"
+            r"avl_return_drain<='0';\s*END IF;\s*END IF;",
             patched_ascal,
         )
         if drain_release is None:

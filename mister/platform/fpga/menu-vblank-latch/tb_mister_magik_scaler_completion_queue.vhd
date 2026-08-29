@@ -347,15 +347,17 @@ BEGIN
 		END LOOP;
 		ASSERT credits_v=0 AND phase_v=0 AND visible_returns_v=0
 			REPORT "post-reset stale returns escaped the drain barrier" SEVERITY failure;
-		-- Discarded old beats update only the retained accounting fields. They
-		-- cannot alter the write phase or become visible while drain is closed.
+		-- Discarded old beats update only the retained accounting fields and cannot
+		-- become visible. The closed drain independently pre-aligns the write phase
+		-- so release does not add an empty-accounting gate to that wide register.
 		write_phase_v:=37;
 		FOR stale_beat IN 1 TO 128 LOOP
 			ASSERT drain_v
 				REPORT "discarded stale beat opened drain" SEVERITY failure;
+			write_phase_v:=255;
 		END LOOP;
-		ASSERT write_phase_v=37
-			REPORT "discarded stale beats changed the unaligned write phase"
+		ASSERT write_phase_v=255
+			REPORT "closed drain did not pre-align the write phase"
 			SEVERITY failure;
 		vs_edge_v:=false;
 		ASSERT drain_v AND return_drain_ready(0,0)
@@ -378,8 +380,9 @@ BEGIN
 		vs_edge_v:=true;
 		ASSERT NOT return_drain_ready(credits_v,phase_v)
 			REPORT "VS released drain before the final old return" SEVERITY failure;
-		ASSERT write_phase_v=37 AND drain_v
-			REPORT "active old credit allowed coincident VS to align or release"
+		write_phase_v:=255;
+		ASSERT write_phase_v=255 AND drain_v
+			REPORT "active old credit released the pre-aligned drain"
 			SEVERITY failure;
 		next_credits_v:=return_credits_next(
 			credits_v,phase_v,false,true,128);

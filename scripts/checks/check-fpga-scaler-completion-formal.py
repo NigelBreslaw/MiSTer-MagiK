@@ -241,12 +241,16 @@ def main() -> None:
             if retained in avalon_reset.group("body"):
                 fail(f"production reset does not retain {retained}")
         guarded_drain_release = re.search(
+            r"IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN\s*"
             r"IF return_drain_ready\(\s*"
-            r"avl_return_credits,avl_return_phase\) AND\s*"
-            r"\(avl_return_drain='1' OR\s*"
-            r"\(avl_o_vs_sync='0' AND avl_o_vs='1'\)\) THEN\s*"
+            r"avl_return_credits,avl_return_phase\) THEN\s*"
             r"avl_wad<=2\*BLEN-1;\s*"
-            r"avl_return_drain<='0';\s*END IF;",
+            r"END IF;\s*END IF;\s*"
+            r"IF avl_return_drain='1' THEN\s*"
+            r"avl_wad<=2\*BLEN-1;\s*"
+            r"IF return_drain_ready\(\s*"
+            r"avl_return_credits,avl_return_phase\) THEN\s*"
+            r"avl_return_drain<='0';\s*END IF;\s*END IF;",
             patched_source,
         )
         if guarded_drain_release is None:

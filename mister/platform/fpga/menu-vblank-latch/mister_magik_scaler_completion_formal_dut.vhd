@@ -113,9 +113,11 @@ BEGIN
 	completion_event<='1' WHEN write_event='1' AND
 		(write_phase MOD BLEN)=BLEN-2 ELSE '0';
 	align_event<='1' WHEN avl_step='1' AND avl_reset_n='1' AND
-		return_drain_ready(return_credits,return_phase) AND
-		(return_drain='1' OR vs_edge='1') ELSE '0';
-	release_event<=align_event AND return_drain;
+		(return_drain='1' OR (vs_edge='1' AND
+		return_drain_ready(return_credits,return_phase))) ELSE '0';
+	release_event<='1' WHEN avl_step='1' AND avl_reset_n='1' AND
+		return_drain='1' AND
+		return_drain_ready(return_credits,return_phase) ELSE '0';
 	completion_seen<=o_step AND o_reset_n AND completion_pulse;
 	queue_overflow<='1' WHEN completion_queue_overflow(
 		request_toggle,completion_pending,ack_sync,completion_event) ELSE '0';
