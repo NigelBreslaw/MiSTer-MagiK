@@ -12,8 +12,6 @@ use crate::catalog_discovery;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-#[cfg(feature = "builder")]
-use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -467,39 +465,6 @@ pub(crate) struct CatalogScanPlan {
     game_dir_headers: Vec<catalog_discovery::GameDirHeader>,
     base_profiles: Vec<LaunchProfile>,
     active_game_dirs: BTreeSet<String>,
-    #[cfg(feature = "builder")]
-    known_game_dir_is_dir: BTreeMap<PathBuf, bool>,
-}
-
-#[cfg(feature = "builder")]
-fn known_game_directory_status(
-    headers: &[catalog_discovery::GameDirHeader],
-) -> BTreeMap<PathBuf, bool> {
-    let mut grouped = BTreeMap::<PathBuf, BTreeSet<PathBuf>>::new();
-    for header in headers {
-        if let Some(parent) = header
-            .path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            grouped
-                .entry(parent.to_path_buf())
-                .or_default()
-                .insert(header.path.clone());
-        }
-    }
-    let mut status = BTreeMap::new();
-    for (parent, paths) in grouped {
-        let paths = paths.into_iter().collect::<Vec<_>>();
-        let observations = crate::namespace_walk::probe_known_path_metadata(&parent, &paths);
-        status.extend(
-            paths
-                .into_iter()
-                .zip(observations)
-                .map(|(path, metadata)| (path, metadata.is_some_and(|metadata| metadata.is_dir))),
-        );
-    }
-    status
 }
 
 impl CatalogScanPlan {
@@ -515,8 +480,6 @@ impl CatalogScanPlan {
                 roots,
                 &BTreeSet::new(),
             );
-        #[cfg(feature = "builder")]
-        let known_game_dir_is_dir = known_game_directory_status(&all_game_dir_headers);
         let game_headers_us = game_headers_started.elapsed().as_micros() as u64;
         crate::library_db::report_library_scan_timing(
             "scan_plan_cores",
@@ -551,8 +514,6 @@ impl CatalogScanPlan {
             game_dir_headers,
             base_profiles,
             active_game_dirs,
-            #[cfg(feature = "builder")]
-            known_game_dir_is_dir,
         }
     }
 
@@ -569,7 +530,6 @@ impl CatalogScanPlan {
                 roots,
                 &BTreeSet::new(),
             )?;
-        let known_game_dir_is_dir = known_game_directory_status(&all_game_dir_headers);
         let game_headers_us = game_headers_started.elapsed().as_micros() as u64;
         crate::library_db::report_library_scan_timing(
             "scan_plan_cores",
@@ -604,7 +564,6 @@ impl CatalogScanPlan {
             game_dir_headers,
             base_profiles,
             active_game_dirs,
-            known_game_dir_is_dir,
         })
     }
 
@@ -629,7 +588,7 @@ impl CatalogScanPlan {
     /// `for_roots` has performed the one top-level directory probe already;
     /// callers should use this lookup instead of resolving the full path and
     /// issuing another `is_dir` call.
-    #[cfg(feature = "builder")]
+    #[expect(dead_code, reason = "used by the builder feature")]
     pub(crate) fn header_for_known_game_dir(
         &self,
         storage_root: &Path,
@@ -639,11 +598,6 @@ impl CatalogScanPlan {
         self.all_game_dir_headers.iter().find(|header| {
             header.path.parent() == Some(games_root.as_path())
                 && header.name.eq_ignore_ascii_case(game_dir)
-                && self
-                    .known_game_dir_is_dir
-                    .get(&header.path)
-                    .copied()
-                    .unwrap_or(false)
         })
     }
 
