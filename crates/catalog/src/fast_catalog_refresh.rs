@@ -1100,9 +1100,10 @@ pub fn plan_fast_refresh(
         .as_micros()
         .try_into()
         .unwrap_or(u64::MAX);
+    let discovery_anchor_paths = discovery_anchor_paths(storage_root);
     let metadata_started = std::time::Instant::now();
     let (metadata_cache, metadata_parents, metadata_paths) =
-        build_watch_metadata_cache(watch_indices.values());
+        build_watch_metadata_cache(watch_indices.values(), &discovery_anchor_paths);
     let metadata_probe_us = metadata_started
         .elapsed()
         .as_micros()
@@ -1138,19 +1139,27 @@ pub fn plan_fast_refresh(
             .unwrap_or(u64::MAX);
         check
     };
+    let discovery_needed = request == FastCatalogRefreshRequest::RebuildAll
+        || !binding_matches
+        || !discovery_anchors_unchanged(
+            &discovery_anchor_paths,
+            watch_indices.values(),
+            &metadata_cache,
+        );
     let phase_started = std::time::Instant::now();
-    let mut systems = crate::fast_catalog_sources::discover_independent_system_ids(storage_root)?;
+    let mut systems = active
+        .systems
+        .iter()
+        .map(|system| system.system_id.as_str().to_string())
+        .collect::<Vec<_>>();
+    if discovery_needed {
+        systems.extend(crate::fast_catalog_sources::discover_independent_system_ids(storage_root)?);
+    }
     let system_discovery_us = phase_started
         .elapsed()
         .as_micros()
         .try_into()
         .unwrap_or(u64::MAX);
-    systems.extend(
-        active
-            .systems
-            .iter()
-            .map(|system| system.system_id.as_str().to_string()),
-    );
     systems.sort();
     systems.dedup();
     let phase_started = std::time::Instant::now();
@@ -1561,12 +1570,24 @@ fn check_watch_index(
 
 fn build_watch_metadata_cache<'a>(
     watches: impl Iterator<Item = &'a FastSystemWatchIndex>,
+    extra_paths: &[PathBuf],
 ) -> (
     HashMap<PathBuf, Option<crate::namespace_walk::KnownPathMetadata>>,
     usize,
     usize,
 ) {
     let mut grouped = BTreeMap::<PathBuf, BTreeSet<PathBuf>>::new();
+    let mut add_path = |path: PathBuf| {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            grouped
+                .entry(parent.to_path_buf())
+                .or_default()
+                .insert(path);
+        }
+    };
     for watch in watches {
         for path in watch
             .roots
@@ -1575,16 +1596,11 @@ fn build_watch_metadata_cache<'a>(
             .chain(watch.containers.iter().map(|entry| &entry.path))
             .map(PathBuf::from)
         {
-            if let Some(parent) = path
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-            {
-                grouped
-                    .entry(parent.to_path_buf())
-                    .or_default()
-                    .insert(path);
-            }
+            add_path(path);
         }
+    }
+    for path in extra_paths {
+        add_path(path.clone());
     }
     let metadata_parents = grouped.len();
     let mut cache = HashMap::new();
@@ -1595,6 +1611,35 @@ fn build_watch_metadata_cache<'a>(
     }
     let metadata_paths = cache.len();
     (cache, metadata_parents, metadata_paths)
+}
+
+fn discovery_anchor_paths(storage_root: &Path) -> Vec<PathBuf> {
+    vec![
+        storage_root.join("games"),
+        storage_root.join("_Arcade"),
+        storage_root.join("_DOS Games"),
+        storage_root.join("_Computer"),
+    ]
+}
+
+fn discovery_anchors_unchanged<'a>(
+    anchors: &[PathBuf],
+    watches: impl Iterator<Item = &'a FastSystemWatchIndex>,
+    metadata_cache: &HashMap<PathBuf, Option<crate::namespace_walk::KnownPathMetadata>>,
+) -> bool {
+    let expected = watches
+        .flat_map(|watch| watch.directories.iter())
+        .map(|directory| (PathBuf::from(&directory.path), directory))
+        .collect::<BTreeMap<_, _>>();
+    anchors.iter().all(|path| {
+        let observed = metadata_cache.get(path).and_then(|metadata| *metadata);
+        match expected.get(path) {
+            Some(directory) => observed.is_some_and(|metadata| {
+                metadata.is_dir && metadata.modified_ns == directory.modified_ns
+            }),
+            None => observed.is_none(),
+        }
+    })
 }
 
 #[derive(Debug)]
@@ -2342,7 +2387,7 @@ mod tests {
             elapsed_us: 0,
             reason: String::new(),
         };
-        let (metadata_cache, _, _) = build_watch_metadata_cache(std::iter::once(&watch));
+        let (metadata_cache, _, _) = build_watch_metadata_cache(std::iter::once(&watch), &[]);
         check_watch_index(&watch, &metadata_cache, &mut check);
         assert_eq!(check.status, FastSourceCheckStatus::Unchanged);
         assert_eq!(check.directories_checked, watch.directories.len());
@@ -2368,7 +2413,7 @@ mod tests {
             elapsed_us: 0,
             reason: String::new(),
         };
-        let (metadata_cache, _, _) = build_watch_metadata_cache(std::iter::once(&watch));
+        let (metadata_cache, _, _) = build_watch_metadata_cache(std::iter::once(&watch), &[]);
         check_watch_index(&watch, &metadata_cache, &mut check);
         assert_eq!(check.status, FastSourceCheckStatus::Changed);
     }
