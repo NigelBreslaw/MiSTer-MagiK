@@ -80,7 +80,19 @@ impl CatalogMutationLease {
     pub fn acquire_default() -> Result<Self, CatalogLeaseError> {
         let path = std::env::var_os(CATALOG_BUILDER_LOCK_ENV)
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_CATALOG_BUILDER_LOCK_PATH));
+            .unwrap_or_else(|| {
+                #[cfg(test)]
+                {
+                    let thread =
+                        format!("{:?}", std::thread::current().id()).replace(['(', ')'], "");
+                    return std::env::temp_dir()
+                        .join(format!("mister-magik-catalog-builder-test-{thread}.lock"));
+                }
+                #[cfg(not(test))]
+                {
+                    PathBuf::from(DEFAULT_CATALOG_BUILDER_LOCK_PATH)
+                }
+            });
         Self::acquire(path)
     }
 
