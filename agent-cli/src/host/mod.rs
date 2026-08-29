@@ -42072,7 +42072,8 @@ catalog_target_checkpoint_io_tsv\tenabled=1 snapshot_us=2 encode_us=3 write_us=4
 catalog_shard_staging_tsv\trequested=auto selected=tmpfs\n\
 catalog_v3_projection_phases_tsv\tplanning_us=1\treconciliation_us=2\ttotal_us=3\n\
 catalog_v3_reconciliation_tsv\tgeneration=2\trebuilt=3\n\
-catalog_v3_persist_phases_tsv\tprojection_us=4\tscanner_cache_us=5\n";
+catalog_v3_persist_phases_tsv\tprojection_us=4\tscanner_cache_us=5\n\
+fast_catalog_generic_phase_tsv\tphase=complete\n";
         let evidence = catalog_phase_evidence(log);
         assert_eq!(evidence["complete"], true);
         assert_eq!(evidence["required"]["scan_complete"], true);

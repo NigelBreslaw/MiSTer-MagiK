@@ -495,7 +495,6 @@ impl FastSystemRowsSnapshot {
     }
 }
 
-#[cfg(test)]
 #[derive(Serialize)]
 struct FastSystemRowsSnapshotRef<'a> {
     schema: u32,
