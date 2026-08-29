@@ -156,6 +156,17 @@ pub(crate) fn collection_listing_text_with_tool(
     tool: &Path,
     timeout: Duration,
 ) -> Option<String> {
+    collection_listing_text_with_tool_result(file, listing, tool, timeout)
+        .ok()
+        .flatten()
+}
+
+pub(crate) fn collection_listing_text_with_tool_result(
+    file: &FoundFile,
+    listing: &CollectionListing,
+    tool: &Path,
+    timeout: Duration,
+) -> Result<Option<String>, String> {
     let mut command = Command::new(tool);
     command
         .args(["e", "-so"])
@@ -173,9 +184,14 @@ pub(crate) fn collection_listing_text_with_tool(
             Ok(())
         });
     }
-    let mut child = command.spawn().ok()?;
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("start archive listing helper: {error}"))?;
     let start = Instant::now();
-    let stdout = child.stdout.take()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "archive listing helper has no output pipe".to_string())?;
     let (output_tx, output_rx) = mpsc::sync_channel(1);
     std::thread::spawn(move || {
         let mut output = Vec::new();
@@ -190,47 +206,67 @@ pub(crate) fn collection_listing_text_with_tool(
         if let Ok(result) = output_rx.try_recv() {
             let (output, within_limit) = match result {
                 Ok(result) => result,
-                Err(_) => {
+                Err(error) => {
                     terminate_archive_helper(&mut child);
-                    return None;
+                    return Err(format!("read archive listing: {error}"));
                 }
             };
             if !within_limit {
                 terminate_archive_helper(&mut child);
-                return None;
+                return Err(format!(
+                    "archive listing exceeds {} bytes",
+                    MAX_COLLECTION_LISTING_BYTES
+                ));
             }
             break output;
         }
         if start.elapsed() >= timeout {
             terminate_archive_helper(&mut child);
-            return None;
+            return Err(format!(
+                "archive listing helper exceeded {} ms",
+                timeout.as_millis()
+            ));
         }
-        if child.try_wait().ok()?.is_some() {
+        if child
+            .try_wait()
+            .map_err(|error| format!("poll archive listing helper: {error}"))?
+            .is_some()
+        {
             let (output, within_limit) = match output_rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(Ok(result)) => result,
-                _ => return None,
+                Ok(Err(error)) => return Err(format!("read archive listing: {error}")),
+                Err(_) => return Err("archive listing output did not close".to_string()),
             };
             if !within_limit {
-                return None;
+                return Err(format!(
+                    "archive listing exceeds {} bytes",
+                    MAX_COLLECTION_LISTING_BYTES
+                ));
             }
             break output;
         }
         std::thread::sleep(Duration::from_millis(25));
     };
     let status = loop {
-        if let Some(status) = child.try_wait().ok()? {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("poll archive listing helper: {error}"))?
+        {
             break status;
         }
         if start.elapsed() >= timeout {
             terminate_archive_helper(&mut child);
-            return None;
+            return Err(format!(
+                "archive listing helper exceeded {} ms",
+                timeout.as_millis()
+            ));
         }
         std::thread::sleep(Duration::from_millis(25));
     };
     if !status.success() {
-        return None;
+        return Ok(None);
     }
-    Some(String::from_utf8_lossy(&output).into_owned())
+    Ok(Some(String::from_utf8_lossy(&output).into_owned()))
 }
 
 fn terminate_archive_helper(child: &mut std::process::Child) {
@@ -1539,10 +1575,14 @@ mod tests {
         };
         let start = Instant::now();
 
-        let text =
-            collection_listing_text_with_tool(&file, &listing, &helper, Duration::from_millis(75));
+        let text = collection_listing_text_with_tool_result(
+            &file,
+            &listing,
+            &helper,
+            Duration::from_millis(75),
+        );
 
-        assert!(text.is_none());
+        assert!(text.is_err());
         assert!(start.elapsed() < Duration::from_secs(1));
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1573,8 +1613,13 @@ mod tests {
         };
 
         assert!(
-            collection_listing_text_with_tool(&file, &listing, &helper, Duration::from_secs(1),)
-                .is_none()
+            collection_listing_text_with_tool_result(
+                &file,
+                &listing,
+                &helper,
+                Duration::from_secs(1),
+            )
+            .is_err()
         );
         let _ = std::fs::remove_dir_all(root);
     }

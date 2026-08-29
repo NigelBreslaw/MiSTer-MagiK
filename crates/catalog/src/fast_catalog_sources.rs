@@ -1050,10 +1050,11 @@ fn scan_amiga(
             } else {
                 "games"
             };
-            let contents = match fs::read_to_string(path) {
-                Ok(contents) => contents,
-                Err(_) => continue,
-            };
+            let contents = String::from_utf8(read_bounded_file(
+                path,
+                MAX_COLLECTION_LISTING_BYTES as u64,
+            )?)
+            .map_err(|error| format!("decode AmigaVision listing {}: {error}", path.display()))?;
             has_collection = true;
             for title in contents
                 .lines()
@@ -1106,12 +1107,21 @@ fn scan_amiga(
                     }
                     .to_string(),
                 };
-                let Some(contents) = crate::media_metadata::collection_listing_text_with_tool(
-                    &found,
-                    &listing,
-                    Path::new("/media/fat/linux/7za"),
-                    Duration::from_secs(10),
-                ) else {
+                let Some(contents) =
+                    crate::media_metadata::collection_listing_text_with_tool_result(
+                        &found,
+                        &listing,
+                        Path::new("/media/fat/linux/7za"),
+                        Duration::from_secs(10),
+                    )
+                    .map_err(|error| {
+                        format!(
+                            "read AmigaVision listing {} from {}: {error}",
+                            entry_path,
+                            found.path.display()
+                        )
+                    })?
+                else {
                     continue;
                 };
                 has_collection = true;
@@ -1687,6 +1697,23 @@ mod tests {
             games[1].preview_asset_key,
             ScreenshotAssetId::from_amigavision_title("Agony & Pain").as_str()
         );
+    }
+
+    #[test]
+    fn amigavision_scan_rejects_oversized_installed_listing() {
+        let root = crate::test_support::unique_temp_dir("fast-source-amiga-listing-limit");
+        fs::create_dir_all(root.join("games/Amiga/listings")).unwrap();
+        fs::write(root.join("games/Amiga/AmigaVision.hdf"), b"hdf").unwrap();
+        let listing = fs::File::create(root.join("games/Amiga/listings/games.txt")).unwrap();
+        listing
+            .set_len(MAX_COLLECTION_LISTING_BYTES as u64 + 1)
+            .unwrap();
+        let mut report = FastSourceSystemReport::default();
+
+        let error = scan_amiga(&root, &mut report).expect_err("oversized listing must fail closed");
+
+        assert!(error.contains("larger than"));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
