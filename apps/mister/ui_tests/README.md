@@ -20,7 +20,9 @@ The suite is attended and intentionally absent from CI discovery. Build the
 isolated ARM binary with the typed build workflow, install it in the Dev slot,
 then run the smoke journey before the complete suite. On macOS, this typed
 workflow uses the Apple `container` ARM backend; `cross` is only an explicit
-alternate comparison backend.
+alternate comparison backend. The first typed device operation upgrades an
+older installed agent transactionally; confirm its status reports agent
+version 33 before relying on the `controller` case.
 
 ```sh
 export SLINT_TESTING_TOKEN="..."
@@ -42,15 +44,34 @@ UV_INDEX_SLINT_PRIVATE_USERNAME=__token__ \
 UV_INDEX_SLINT_PRIVATE_PASSWORD="$SLINT_TESTING_TOKEN" \
 uv run --extra device-ui-tests python -m apps.mister.ui_tests.suite \
   startup-home system-hub arcade-navigation arcade-filters \
-  settings-display screensaver-motion about-licenses effect-sandbox \
+  settings-display screensaver-motion about-licenses controller effect-sandbox \
   profile-matrix \
   --fixture deterministic-arcade-v1 --attended
 ```
 
-For reliability qualification, run the complete command twice consecutively;
-the suite does not retry cases to hide flaky behavior. The first typed device
-operation may transactionally bootstrap or upgrade an older agent before the
-requested status or test operation begins.
+Expand device qualification in this order, stopping at the first failure:
+
+1. Run `smoke`.
+2. Run `system-hub` and `controller`.
+3. Run each remaining ordinary journey independently.
+4. Run `profile-matrix` (24 display/orientation/feature sessions).
+5. Run the complete command once.
+6. Run the complete command a second time immediately afterward.
+
+Only the two consecutive complete runs qualify the suite. A diagnostic rerun
+of one failed case helps isolate a fault but does not count as qualification;
+the ladder restarts from `smoke` after a fix. Suite subprocesses fail if pytest
+reports a skip, so a green run contains no silently omitted test.
+
+The automated `controller` case starts the launcher’s controller screen and
+proves its accessibility tree plus logical B/Home navigation through the
+authenticated transport. It does not claim a physical gamepad is connected.
+Qualify real button-state reporting separately with the attended hardware
+journey:
+
+```sh
+scripts/agent device scene controller-test --attended --seconds 10
+```
 
 `slint-testing` stays on the operator host. Its local test socket is bridged by
 the typed MagiK agent connection, while logical keyboard and joystick actions
