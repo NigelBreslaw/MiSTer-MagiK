@@ -374,22 +374,19 @@ module mister_magik_ascal_completion_formal;
 			end
 			if (align_event) begin
 				assert(avl_step && avl_reset_n);
+				assert(reference_words == 0);
+				assert(return_credits == 0 && return_phase == 0);
+				assert(release_event || vs_edge);
 				visible_beat <= 0;
-				if (return_drain) begin
-					if (release_event) begin
-						assert(reference_words == 0);
-						assert(return_credits == 0 && return_phase == 0);
-						first_post_drain_active <= 1'b1;
-						if (vs_edge)
-							cover_vs_alignment_during_drain <= 1'b1;
-						else
-							cover_drain_release_without_vs <= 1'b1;
-					end
+				if (release_event) begin
+					assert(return_drain);
+					first_post_drain_active <= 1'b1;
+					if (vs_edge)
+						cover_vs_alignment_during_drain <= 1'b1;
+					else
+						cover_drain_release_without_vs <= 1'b1;
 				end else begin
-					assert(vs_edge);
-					assert(reference_words == 0);
-					assert(return_credits == 0 && return_phase == 0);
-					assert(!release_event);
+					assert(!return_drain);
 				end
 			end else if (write_event) begin
 				assert(completion_event == (visible_beat == BLEN-1));
@@ -401,14 +398,14 @@ module mister_magik_ascal_completion_formal;
 			end
 			if (vs_edge && avl_step && avl_reset_n && reset_n &&
 				reference_words != 0) begin
-				assert(return_drain || !align_event);
+				assert(!align_event);
 				cover_active_credit_vs <= 1'b1;
 			end
 			if (align_event && issue_event && reference_words == 0)
 				cover_issue_empty_vs <= 1'b1;
 			if (vs_edge && return_drain && return_event &&
 				reference_words == 1) begin
-				assert(!release_event && align_event);
+				assert(!release_event && !align_event);
 				cover_final_return_vs_wait <= 1'b1;
 			end
 
@@ -454,16 +451,15 @@ module mister_magik_ascal_completion_formal;
 		if (past_valid && avl_reset_n &&
 			$past(proof_edge && avl_step && avl_reset_n &&
 			vs_edge && words_remaining != 0)) begin
-			if ($past(return_drain))
-				assert(write_phase == 2*BLEN-1);
-			else if ($past(write_event))
+			assert(!$past(align_event));
+			if ($past(write_event))
 				assert(write_phase == (($past(write_phase) + 1) % (2*BLEN)));
 			else
 				assert(write_phase == $past(write_phase));
 		end
 		if (past_valid && $past(proof_edge && return_drain && return_event &&
 			!release_event && !vs_edge))
-			assert(write_phase == 2*BLEN-1);
+			assert(write_phase == $past(write_phase));
 
 		cover(cover_two_stopped_delivered);
 		cover(cover_coincident_ack_completion);
