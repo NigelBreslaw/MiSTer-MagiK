@@ -748,15 +748,6 @@ fn collect_generic_namespace_inventory(
     max_depth: Option<usize>,
 ) -> Result<GenericNamespaceInventory, String> {
     let started = Instant::now();
-    let canonical_path = header
-        .path
-        .canonicalize()
-        .unwrap_or_else(|_| header.path.clone());
-    let header = GameDirHeader {
-        name: header.name.clone(),
-        signature: header.signature,
-        path: canonical_path,
-    };
     let mut entries = Vec::new();
     let mut has_payload_files = false;
     let mut has_zip_files = false;
