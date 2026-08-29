@@ -1055,6 +1055,8 @@ fn publish_snapshot_selection(
     snapshot.validate()?;
     fs::create_dir_all(storage_root)
         .map_err(|error| format!("create fast-five root {}: {error}", storage_root.display()))?;
+    crate::shard_registry::cleanup_registry_temporary_files(storage_root)
+        .map_err(|error| error.to_string())?;
     let current = match read_latest_manifest_lazy(storage_root, limits) {
         Ok(manifest) => Some(manifest),
         Err(_) if manifest_slots_present(storage_root) => {

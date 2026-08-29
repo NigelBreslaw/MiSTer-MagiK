@@ -47,6 +47,34 @@ pub fn production_registry_limits() -> RegistryLimits {
     }
 }
 
+#[cfg(feature = "builder")]
+pub fn cleanup_registry_temporary_files(storage_root: &Path) -> Result<usize, RegistryError> {
+    let registry_root = storage_root.join("registry");
+    if !registry_root.exists() {
+        return Ok(0);
+    }
+    let mut removed = 0usize;
+    for entry in walkdir::WalkDir::new(&registry_root)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy();
+        if !name.starts_with('.') || !name.contains(".tmp.") {
+            continue;
+        }
+        fs::remove_file(entry.path())
+            .map_err(|error| RegistryError::with("remove stale registry temporary", error))?;
+        removed = removed.saturating_add(1);
+    }
+    if removed != 0 {
+        sync_directory(&registry_root)?;
+    }
+    Ok(removed)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogManifest {
     pub format: Option<CatalogFormatDescriptor>,
@@ -338,12 +366,13 @@ fn copy_staged_artifact(
                 )
             })?;
     let temporary = target.with_file_name(format!(
-        ".{}.tmp.{}",
+        ".{}.tmp.{}-{}",
         target
             .file_name()
             .and_then(|value| value.to_str())
             .unwrap_or("artifact"),
-        std::process::id()
+        std::process::id(),
+        crate::catalog_lease::CatalogRunId::new().as_str(),
     ));
     let mut cleanup = TemporaryCleanup(Some(temporary.clone()));
     match fs::remove_file(&temporary) {
@@ -609,12 +638,13 @@ fn publish_manifest_with_hash_policy(
     fs::create_dir_all(directory)
         .map_err(|error| RegistryError::with("create registry directory", error))?;
     let temporary = directory.join(format!(
-        ".{}.tmp.{}",
+        ".{}.tmp.{}-{}",
         target
             .file_name()
             .and_then(|value| value.to_str())
             .unwrap_or("manifest"),
-        std::process::id()
+        std::process::id(),
+        crate::catalog_lease::CatalogRunId::new().as_str(),
     ));
     let mut cleanup = TemporaryCleanup(Some(temporary.clone()));
     let mut file = OpenOptions::new()
@@ -1297,11 +1327,30 @@ mod tests {
 
         assert!(error.message().contains("size does not match"));
         assert!(!target.exists());
-        assert!(
-            !root
-                .join(format!(".target.tmp.{}", std::process::id()))
-                .exists()
-        );
+        let stale_temporary = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".target.tmp.")
+            });
+        assert!(!stale_temporary);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "builder")]
+    fn registry_recovery_removes_only_scoped_publication_temporaries() {
+        let root = temporary_root("registry-temporary-recovery");
+        fs::create_dir_all(root.join("registry")).unwrap();
+        fs::write(root.join("registry/.manifest-a.tmp.crashed"), b"partial").unwrap();
+        fs::write(root.join(".keep.tmp.crashed"), b"unrelated").unwrap();
+
+        assert_eq!(cleanup_registry_temporary_files(&root).unwrap(), 1);
+        assert!(!root.join("registry/.manifest-a.tmp.crashed").exists());
+        assert!(root.join(".keep.tmp.crashed").exists());
         fs::remove_dir_all(root).unwrap();
     }
 
