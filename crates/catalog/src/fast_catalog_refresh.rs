@@ -861,10 +861,36 @@ fn capture_system_watch_from_specification(
     anchor_cache: &mut BTreeMap<PathBuf, FastWatchedDirectory>,
     generic_observations: Option<&GenericSourceWatchObservations>,
 ) -> Result<FastSystemWatchIndex, String> {
+    let mut metadata_groups = BTreeMap::<PathBuf, BTreeSet<PathBuf>>::new();
+    for path in specification
+        .anchors
+        .iter()
+        .chain(&specification.scan_roots)
+    {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            metadata_groups
+                .entry(parent.to_path_buf())
+                .or_default()
+                .insert(path.clone());
+        }
+    }
+    let mut path_metadata = BTreeMap::new();
+    for (parent, paths) in metadata_groups {
+        let paths = paths.into_iter().collect::<Vec<_>>();
+        let observations = crate::namespace_walk::probe_known_path_metadata(&parent, &paths);
+        path_metadata.extend(paths.into_iter().zip(observations));
+    }
     let mut directories = Vec::new();
     let mut containers = Vec::new();
     for anchor in &specification.anchors {
-        if anchor.is_dir() {
+        if path_metadata
+            .get(anchor)
+            .and_then(Option::as_ref)
+            .is_some_and(|metadata| metadata.is_dir)
+        {
             let directory = match anchor_cache.get(anchor) {
                 Some(directory) => directory.clone(),
                 None => {
@@ -879,7 +905,12 @@ fn capture_system_watch_from_specification(
     let expected_roots = specification
         .scan_roots
         .iter()
-        .filter(|root| root.is_dir())
+        .filter(|root| {
+            path_metadata
+                .get(*root)
+                .and_then(Option::as_ref)
+                .is_some_and(|metadata| metadata.is_dir)
+        })
         .map(|root| root.to_string_lossy().into_owned())
         .collect::<BTreeSet<_>>();
     let reused_generic_observations = generic_observations
@@ -902,7 +933,11 @@ fn capture_system_watch_from_specification(
         }
     } else {
         for root in &specification.scan_roots {
-            if root.is_dir() {
+            if path_metadata
+                .get(root)
+                .and_then(Option::as_ref)
+                .is_some_and(|metadata| metadata.is_dir)
+            {
                 if system_id == "arcade" && root.ends_with("_Arcade") {
                     directories.push(capture_directory(root)?);
                 } else {
