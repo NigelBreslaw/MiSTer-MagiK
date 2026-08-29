@@ -517,24 +517,21 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
         for game_dir in &profile.game_dirs {
             known_roots_considered = known_roots_considered.saturating_add(1);
             let known_started = Instant::now();
-            let candidate = storage_root.join("games").join(game_dir);
-            if !candidate.is_dir() {
+            let Some(header) = plan
+                .header_for_known_game_dir(storage_root, game_dir)
+                .cloned()
+            else {
                 known_profile_us =
                     known_profile_us.saturating_add(known_started.elapsed().as_micros() as u64);
                 continue;
-            }
+            };
             known_roots_found = known_roots_found.saturating_add(1);
-            let root_key = candidate.to_string_lossy().to_ascii_lowercase();
+            let root_key = header.path.to_string_lossy().to_ascii_lowercase();
             if !visited_roots.insert(root_key) {
                 known_profile_us =
                     known_profile_us.saturating_add(known_started.elapsed().as_micros() as u64);
                 continue;
             }
-            let header = GameDirHeader {
-                name: game_dir.clone(),
-                signature: GameDirSignature::from_path(&candidate),
-                path: candidate,
-            };
             let inventory = collect_generic_namespace_inventory(&header, None)?;
             let accumulator = accumulator_for_profile(&mut accumulators, profile);
             accumulator.stats.roots = accumulator.stats.roots.saturating_add(1);

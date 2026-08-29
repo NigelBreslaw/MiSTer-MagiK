@@ -464,6 +464,7 @@ pub(crate) struct CatalogScanPlan {
     all_game_dir_headers: Vec<catalog_discovery::GameDirHeader>,
     game_dir_headers: Vec<catalog_discovery::GameDirHeader>,
     base_profiles: Vec<LaunchProfile>,
+    active_game_dirs: BTreeSet<String>,
 }
 
 impl CatalogScanPlan {
@@ -512,6 +513,7 @@ impl CatalogScanPlan {
             all_game_dir_headers,
             game_dir_headers,
             base_profiles,
+            active_game_dirs,
         }
     }
 
@@ -561,6 +563,7 @@ impl CatalogScanPlan {
             all_game_dir_headers,
             game_dir_headers,
             base_profiles,
+            active_game_dirs,
         })
     }
 
@@ -580,6 +583,23 @@ impl CatalogScanPlan {
         &self.base_profiles
     }
 
+    /// Returns the already-enumerated header for a known profile directory.
+    ///
+    /// `for_roots` has performed the one top-level directory probe already;
+    /// callers should use this lookup instead of resolving the full path and
+    /// issuing another `is_dir` call.
+    pub(crate) fn header_for_known_game_dir(
+        &self,
+        storage_root: &Path,
+        game_dir: &str,
+    ) -> Option<&catalog_discovery::GameDirHeader> {
+        let games_root = storage_root.join("games");
+        self.all_game_dir_headers.iter().find(|header| {
+            header.path.parent() == Some(games_root.as_path())
+                && header.name.eq_ignore_ascii_case(game_dir)
+        })
+    }
+
     pub(crate) fn finalize_profiles(
         &self,
         game_dirs: &[catalog_discovery::GameDirFact],
@@ -596,14 +616,17 @@ impl CatalogScanPlan {
         &self,
         game_dir: &catalog_discovery::GameDirFact,
     ) -> Option<LaunchProfile> {
-        self.finalize_profiles(std::slice::from_ref(game_dir))
-            .into_iter()
-            .find(|profile| {
-                profile
-                    .game_dirs
-                    .iter()
-                    .any(|dir| dir.eq_ignore_ascii_case(&game_dir.name))
-            })
+        runtime_profile_plans_for_game_dirs_with_cores(
+            std::slice::from_ref(game_dir),
+            &self.installed_cores,
+            &self.active_game_dirs,
+        )
+        .into_iter()
+        .find_map(|plan| match plan.decision {
+            RuntimeProfileDecision::Catalogable { profile } => Some(profile),
+            _ => None,
+        })
+        .map(|profile| *profile)
     }
 }
 
