@@ -400,7 +400,9 @@ if scaler_fetch_liveness != {
         "watchdog_cycles": 0xFFFFFF,
     },
 }:
-    raise SystemExit("scaler-fetch no-request gate schema 15 changed without an ABI update")
+    raise SystemExit(
+        "scaler-fetch no-request gate schema 15 changed without an ABI update"
+    )
 if raw_scaler["command"] in platform_commands:
     raise SystemExit(
         "raw scaler ordered-frame command overlaps an existing platform command"
