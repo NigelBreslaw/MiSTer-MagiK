@@ -140,6 +140,7 @@ impl CatalogChildControl {
         let Some(child) = child.as_mut() else {
             return false;
         };
+        #[cfg(unix)]
         let group_result = if self.process_group > 0 {
             // SAFETY: the process group id was created for this child with
             // setpgid(0, 0); a negative id targets only that group.
@@ -147,6 +148,8 @@ impl CatalogChildControl {
         } else {
             -1
         };
+        #[cfg(not(unix))]
+        let group_result = -1;
         child.kill().is_ok() || group_result == 0
     }
 }

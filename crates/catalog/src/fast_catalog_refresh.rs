@@ -34,6 +34,9 @@ const STATE_DIRECTORY: &str = "fast-refresh-v2";
 const MANIFEST_A: &str = "manifest-a.bin";
 const MANIFEST_B: &str = "manifest-b.bin";
 const BUILD_INFO_FILE: &str = "build-info.bin";
+const MAX_WATCH_DEPTH: usize = 256;
+const MAX_WATCH_ENTRIES: usize = 4_000_000;
+const MAX_WATCH_DIRECTORY_ENTRIES: usize = 1_000_000;
 
 fn fast_catalog_artifact_profile() -> crate::fast_five_catalog::FastFiveArtifactProfile {
     if std::env::var("MISTER_CATALOG_SEARCH_DETAIL")
@@ -1770,6 +1773,25 @@ fn capture_tree(
     directories: &mut Vec<FastWatchedDirectory>,
     containers: &mut Vec<FastWatchedContainer>,
 ) -> Result<(), String> {
+    let mut visited = 0usize;
+    capture_tree_at_depth(root, system_id, directories, containers, 0, &mut visited)
+}
+
+fn capture_tree_at_depth(
+    root: &Path,
+    system_id: &str,
+    directories: &mut Vec<FastWatchedDirectory>,
+    containers: &mut Vec<FastWatchedContainer>,
+    depth: usize,
+    visited: &mut usize,
+) -> Result<(), String> {
+    if depth > MAX_WATCH_DEPTH {
+        return Err(format!(
+            "watch snapshot exceeded directory depth limit {} at {}",
+            MAX_WATCH_DEPTH,
+            root.display()
+        ));
+    }
     let metadata = fs::metadata(root)
         .map_err(|error| format!("stat watch directory {}: {error}", root.display()))?;
     let mut entries = fs::read_dir(root)
@@ -1785,6 +1807,13 @@ fn capture_tree(
     });
     let mut digest = Sha256::new();
     for entry in entries {
+        *visited = visited.saturating_add(1);
+        if *visited > MAX_WATCH_ENTRIES {
+            return Err(format!(
+                "watch snapshot exceeded {} entries",
+                MAX_WATCH_ENTRIES
+            ));
+        }
         let path = entry.path();
         let file_type = entry
             .file_type()
@@ -1809,8 +1838,14 @@ fn capture_tree(
             continue;
         }
         if file_type.is_dir() {
-            if let Err(error) = capture_tree(&path, system_id, directories, containers)
-                && path.exists()
+            if let Err(error) = capture_tree_at_depth(
+                &path,
+                system_id,
+                directories,
+                containers,
+                depth.saturating_add(1),
+                visited,
+            ) && path.exists()
             {
                 return Err(error);
             }
@@ -1833,8 +1868,15 @@ fn capture_tree(
 fn capture_directory(path: &Path) -> Result<FastWatchedDirectory, String> {
     let metadata = fs::metadata(path)
         .map_err(|error| format!("stat watch directory {}: {error}", path.display()))?;
-    let mut entries = fs::read_dir(path)
-        .map_err(|error| format!("read watch directory {}: {error}", path.display()))?
+    let raw_entries = fs::read_dir(path)
+        .map_err(|error| format!("read watch directory {}: {error}", path.display()))?;
+    let mut raw_count = 0usize;
+    let mut entries = raw_entries
+        .take(MAX_WATCH_DIRECTORY_ENTRIES.saturating_add(1))
+        .map(|entry| {
+            raw_count = raw_count.saturating_add(1);
+            entry
+        })
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let entry_path = entry.path();
@@ -1856,6 +1898,13 @@ fn capture_directory(path: &Path) -> Result<FastWatchedDirectory, String> {
             Some((entry.file_name().to_string_lossy().into_owned(), kind))
         })
         .collect::<Vec<_>>();
+    if raw_count > MAX_WATCH_DIRECTORY_ENTRIES {
+        return Err(format!(
+            "watch directory {} exceeds {} entries",
+            path.display(),
+            MAX_WATCH_DIRECTORY_ENTRIES
+        ));
+    }
     entries.sort_by(|left, right| {
         left.0
             .to_ascii_lowercase()
@@ -2752,5 +2801,22 @@ mod tests {
         assert!(!root.join("packs/old.watchpack.tmp-crashed").exists());
         assert_eq!(fs::read(root.join("manifest-a.bin")).unwrap(), b"active");
         let _ = fs::remove_dir_all(catalog);
+    }
+
+    #[test]
+    fn watch_snapshot_rejects_pathological_directory_depth() {
+        let root = crate::test_support::unique_temp_dir("fast-watch-depth");
+        let mut current = root.clone();
+        fs::create_dir_all(&current).unwrap();
+        for index in 0..=MAX_WATCH_DEPTH {
+            current = current.join(format!("d{index}"));
+            fs::create_dir(&current).unwrap();
+        }
+        let mut directories = Vec::new();
+        let mut containers = Vec::new();
+        let error = capture_tree(&root, "snes", &mut directories, &mut containers)
+            .expect_err("pathological depth must fail closed");
+        assert!(error.contains("depth limit"));
+        let _ = fs::remove_dir_all(root);
     }
 }
