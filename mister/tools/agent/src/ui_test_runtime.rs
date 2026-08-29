@@ -58,7 +58,7 @@ fn prepare_at(root: &Path, spec: &UiTestRuntimeSpec) -> Result<Option<CachedRunt
     }
     let metadata_text = fs::read_to_string(&metadata)
         .map_err(|error| format!("read UI-test runtime metadata: {error}"))?;
-    if metadata_text.trim() != metadata_value(spec) {
+    if metadata_text != metadata_value(spec) {
         return Ok(None);
     }
     let actual_bytes = fs::metadata(&path)
@@ -188,10 +188,11 @@ fn metadata_path(root: &Path, spec: &UiTestRuntimeSpec) -> PathBuf {
 
 fn metadata_value(spec: &UiTestRuntimeSpec) -> String {
     format!(
-        "{}\t{}\t{}\t{}\n",
+        "{}\t{}\t{}\t{}\t{}\n",
         spec.payload_bytes,
         spec.sha256,
         spec.source_revision,
+        spec.profile,
         spec.features.join(",")
     )
 }
