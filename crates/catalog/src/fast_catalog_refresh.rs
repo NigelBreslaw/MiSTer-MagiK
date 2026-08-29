@@ -34,6 +34,20 @@ const MANIFEST_A: &str = "manifest-a.bin";
 const MANIFEST_B: &str = "manifest-b.bin";
 const BUILD_INFO_FILE: &str = "build-info.bin";
 
+fn release_catalog_build_allocations(stage: &str) {
+    #[cfg(target_os = "linux")]
+    {
+        let started = std::time::Instant::now();
+        let released = unsafe { libc::malloc_trim(0) };
+        crate::catalog_logln!(
+            "fast_catalog_allocator_trim_tsv\tstage={stage}\telapsed_us={}\treleased={released}",
+            started.elapsed().as_micros(),
+        );
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = stage;
+}
+
 fn fast_catalog_artifact_profile() -> crate::fast_five_catalog::FastFiveArtifactProfile {
     if std::env::var("MISTER_CATALOG_SEARCH_DETAIL")
         .is_ok_and(|value| value.eq_ignore_ascii_case("column"))
@@ -283,6 +297,7 @@ pub fn build_fresh_catalog_with_progress(
     drop(profiles);
     drop(generic_watch_observations);
     drop(row_fingerprints);
+    release_catalog_build_allocations("fresh-post-capture");
     let refresh_generation = read_latest_refresh_manifest(catalog_root)
         .map_or(1, |manifest| manifest.generation.saturating_add(1));
     let (_, refresh_state_publish) = publish_refresh_state_with_report(
