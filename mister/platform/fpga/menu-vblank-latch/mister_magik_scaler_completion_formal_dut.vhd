@@ -39,6 +39,7 @@ ENTITY mister_magik_scaler_completion_formal_dut IS
 		completion_event_o   : OUT std_logic;
 		align_event_o        : OUT std_logic;
 		release_event_o      : OUT std_logic;
+		release_pending_o    : OUT std_logic;
 		read_start_event_o   : OUT std_logic;
 		copy_retire_event_o  : OUT std_logic;
 		completion_seen_o    : OUT std_logic;
@@ -68,6 +69,7 @@ END ENTITY;
 ARCHITECTURE rtl OF mister_magik_scaler_completion_formal_dut IS
 	SIGNAL avl_reset_n,o_reset_n : std_logic:='0';
 	SIGNAL return_drain : std_logic:='1';
+	SIGNAL return_release_pending : std_logic:='0';
 	SIGNAL return_credits : natural RANGE 0 TO 2:=0;
 	SIGNAL return_phase : natural RANGE 0 TO BLEN-1:=0;
 	SIGNAL write_phase : natural RANGE 0 TO 2*BLEN-1:=0;
@@ -81,7 +83,8 @@ ARCHITECTURE rtl OF mister_magik_scaler_completion_formal_dut IS
 
 	SIGNAL issue_event,return_event,write_event,completion_event : std_logic;
 	SIGNAL align_event : std_logic;
-	SIGNAL release_event,read_start_event,copy_retire_event : std_logic;
+	SIGNAL release_event,schedule_release_event : std_logic;
+	SIGNAL read_start_event,copy_retire_event : std_logic;
 	SIGNAL request_start_event : std_logic;
 	SIGNAL completion_seen,queue_overflow,accounting_invalid : std_logic;
 BEGIN
@@ -113,10 +116,12 @@ BEGIN
 	completion_event<='1' WHEN write_event='1' AND
 		(write_phase MOD BLEN)=BLEN-2 ELSE '0';
 	align_event<='1' WHEN avl_step='1' AND avl_reset_n='1' AND
-		vs_edge='1' AND
-		return_drain_ready(return_credits,return_phase) ELSE '0';
+		((vs_edge='1' AND return_drain_ready(return_credits,return_phase)) OR
+		(return_drain='1' AND return_release_pending='1')) ELSE '0';
 	release_event<='1' WHEN avl_step='1' AND avl_reset_n='1' AND
-		return_drain='1' AND
+		return_drain='1' AND return_release_pending='1' ELSE '0';
+	schedule_release_event<='1' WHEN avl_step='1' AND avl_reset_n='1' AND
+		return_drain='1' AND return_release_pending='0' AND
 		return_drain_ready(return_credits,return_phase) ELSE '0';
 	completion_seen<=o_step AND o_reset_n AND completion_pulse;
 	queue_overflow<='1' WHEN completion_queue_overflow(
@@ -132,6 +137,7 @@ BEGIN
 	completion_event_o<=completion_event;
 	align_event_o<=align_event;
 	release_event_o<=release_event;
+	release_pending_o<=return_release_pending;
 	read_start_event_o<=read_start_event;
 	copy_retire_event_o<=copy_retire_event;
 	completion_seen_o<=completion_seen;
@@ -181,7 +187,6 @@ BEGIN
 		-- Production domain state has asynchronous assertion through reset_na and
 		-- synchronous release through its independently stepped domain clock.
 		IF reset_n='0' THEN
-				write_phase<=2*BLEN-1;
 				request_meta<='0';
 				request_sync<='0';
 				completion_pulse<='0';
@@ -189,6 +194,7 @@ BEGIN
 				copylev<=0;
 				read_pending<=0;
 				return_drain<='1';
+				return_release_pending<='0';
 				request_toggle<='0';
 				completion_pending<='0';
 				ack_meta<='0';
@@ -246,8 +252,8 @@ BEGIN
 
 			-- Source-domain request, return drain, and Avalon request hold.
 			IF avl_reset_n='0' THEN
-				write_phase<=2*BLEN-1;
 				return_drain<='1';
+				return_release_pending<='0';
 				request_toggle<='0';
 				completion_pending<='0';
 				ack_meta<='0';
@@ -265,6 +271,9 @@ BEGIN
 				END IF;
 				IF release_event='1' THEN
 					return_drain<='0';
+					return_release_pending<='0';
+				ELSIF schedule_release_event='1' THEN
+					return_release_pending<='1';
 				END IF;
 
 				queue_state_v:=completion_queue_next(

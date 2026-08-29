@@ -239,6 +239,8 @@ def main() -> None:
         "completion_queue_overflow(",
         "align_event<='1' WHEN",
         "release_event<='1' WHEN avl_step='1' AND avl_reset_n='1' AND",
+        "schedule_release_event<='1' WHEN avl_step='1' AND avl_reset_n='1' AND",
+        "release_pending_o<=return_release_pending;",
         "IF align_event='1' THEN",
         "read_obligation_accept(",
         "avl_reset_n='0' OR read_reset_seen='0')",
@@ -738,6 +740,7 @@ def main() -> None:
             "ELSIF issued_v THEN": 1,
             "avl_read_accepted<='1';": 1,
             "avl_return_drain<='1';": 1,
+            "SIGNAL avl_return_release_pending : std_logic:='0';": 1,
             "IF return_drain_ready(": 1,
             "avl_return_credits,avl_return_phase) THEN": 2,
             "IF avl_return_drain='0' THEN": 1,
@@ -865,7 +868,7 @@ def main() -> None:
                     f"completion transport reset is missing or ambiguous: {reset_fragment}"
                 )
         if patched_ascal.count("avl_wad<=2*BLEN-1;") != 2:
-            fail("Avalon write phase needs one reset preset and one guarded alignment")
+            fail("Avalon write phase needs one VS and one pending-release alignment")
         avalon_reset = re.search(
             r"IF avl_reset_na='0' THEN(?P<body>.*?)ELSIF rising_edge\(avl_clk\) THEN",
             patched_ascal,
@@ -873,8 +876,12 @@ def main() -> None:
         )
         if avalon_reset is None:
             fail("Avalon reset branch is missing")
-        if avalon_reset.group("body").count("avl_wad<=2*BLEN-1;") != 1:
-            fail("Avalon reset must establish the drained write phase exactly once")
+        if "avl_wad<=2*BLEN-1;" in avalon_reset.group("body"):
+            fail("Avalon write phase must not use a wide reset preset")
+        if avalon_reset.group("body").count(
+            "avl_return_release_pending<='0';"
+        ) != 1:
+            fail("Avalon reset must clear the release pipeline exactly once")
         for retained_accounting in (
             "avl_return_credits",
             "avl_return_phase",
@@ -909,15 +916,20 @@ def main() -> None:
             r"IF return_drain_ready\(\s*"
             r"avl_return_credits,avl_return_phase\) THEN\s*"
             r"avl_wad<=2\*BLEN-1;\s*"
-            r"avl_return_drain<='0';\s*END IF;\s*END IF;\s*"
-            r"IF avl_return_drain='1' AND return_drain_ready\(\s*"
+            r"END IF;\s*END IF;\s*"
+            r"IF avl_return_drain='1' THEN\s*"
+            r"IF avl_return_release_pending='1' THEN\s*"
+            r"avl_wad<=2\*BLEN-1;\s*"
+            r"avl_return_drain<='0';\s*"
+            r"avl_return_release_pending<='0';\s*"
+            r"ELSIF return_drain_ready\(\s*"
             r"avl_return_credits,avl_return_phase\) THEN\s*"
-            r"avl_return_drain<='0';\s*END IF;",
+            r"avl_return_release_pending<='1';\s*END IF;\s*END IF;",
             patched_ascal,
         )
         if drain_release is None:
             fail(
-                "reset-aligned drain release is not independent of the guarded VS path"
+                "drain release is not isolated from accounting by one pending stage"
             )
         for topology_fragment, topology_source in (
             (".reset_core_req(reset_req)", patched),

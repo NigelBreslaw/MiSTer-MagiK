@@ -52,6 +52,7 @@ module mister_magik_ascal_completion_formal;
 	wire completion_event;
 	wire align_event;
 	wire release_event;
+	wire release_pending;
 	wire read_start_event;
 	wire copy_retire_event;
 	wire completion_seen;
@@ -110,6 +111,7 @@ module mister_magik_ascal_completion_formal;
 		.completion_event_o(completion_event),
 		.align_event_o(align_event),
 		.release_event_o(release_event),
+		.release_pending_o(release_pending),
 		.read_start_event_o(read_start_event),
 		.copy_retire_event_o(copy_retire_event),
 		.completion_seen_o(completion_seen),
@@ -152,6 +154,10 @@ module mister_magik_ascal_completion_formal;
 		assert(copylev <= 2);
 		assert(read_pending <= 2);
 		assert(read_pending <= readlev);
+		if (release_pending) begin
+			assert(return_drain);
+			assert(words_remaining == 0);
+		end
 		if (request_toggle == request_sync)
 			assert(request_meta == request_sync);
 		if (completion_pulse)
@@ -373,7 +379,8 @@ module mister_magik_ascal_completion_formal;
 				assert(!completion_event);
 			end
 			if (align_event) begin
-				assert(avl_step && avl_reset_n && vs_edge);
+				assert(avl_step && avl_reset_n);
+				assert(vs_edge || release_event);
 				assert(reference_words == 0);
 				assert(return_credits == 0 && return_phase == 0);
 				visible_beat <= 0;
@@ -387,15 +394,14 @@ module mister_magik_ascal_completion_formal;
 			end
 			if (release_event) begin
 				assert(return_drain);
+				assert(release_pending);
+				assert(align_event);
 				assert(reference_words == 0);
 				assert(return_credits == 0 && return_phase == 0);
-				assert(write_phase == 2*BLEN-1);
 				first_post_drain_active <= 1'b1;
 				if (vs_edge) begin
-					assert(align_event);
 					cover_vs_alignment_during_drain <= 1'b1;
 				end else begin
-					assert(!align_event);
 					cover_drain_release_without_vs <= 1'b1;
 				end
 			end

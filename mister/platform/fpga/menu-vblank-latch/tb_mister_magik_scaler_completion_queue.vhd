@@ -84,6 +84,7 @@ BEGIN
 		VARIABLE remaining_v,next_remaining_v,expected_remaining_v : natural;
 		VARIABLE issued_v,returned_v : boolean;
 		VARIABLE drain_v : boolean;
+		VARIABLE release_pending_v : boolean;
 		VARIABLE visible_returns_v : natural;
 		VARIABLE write_phase_v : natural;
 		VARIABLE block_complete_v : boolean;
@@ -347,36 +348,45 @@ BEGIN
 		END LOOP;
 		ASSERT credits_v=0 AND phase_v=0 AND visible_returns_v=0
 			REPORT "post-reset stale returns escaped the drain barrier" SEVERITY failure;
-		-- Reset establishes the write phase before drain can reopen. Discarded old
-		-- beats update only retained accounting and cannot disturb that phase.
-		write_phase_v:=255;
+		-- Discarded old beats update only retained accounting. Once empty, a
+		-- one-bit pending state separates the wide phase alignment from the
+		-- accounting comparator before drain reopens on the following edge.
+		write_phase_v:=37;
+		release_pending_v:=false;
 		FOR stale_beat IN 1 TO 128 LOOP
 			ASSERT drain_v
 				REPORT "discarded stale beat opened drain" SEVERITY failure;
 		END LOOP;
-		ASSERT write_phase_v=255
-			REPORT "discarded stale beats changed the reset-aligned write phase"
+		ASSERT write_phase_v=37
+			REPORT "discarded stale beats changed the retained write phase"
 			SEVERITY failure;
 		vs_edge_v:=false;
 		ASSERT drain_v AND return_drain_ready(0,0)
 			REPORT "empty accounting was not eligible for drain release"
 			SEVERITY failure;
+		release_pending_v:=true;
+		ASSERT drain_v AND release_pending_v AND write_phase_v=37
+			REPORT "empty accounting did not schedule an isolated release"
+			SEVERITY failure;
+		write_phase_v:=255;
 		drain_v:=false;
-		ASSERT write_phase_v=255 AND NOT drain_v
-			REPORT "empty drain did not release from the reset-aligned phase"
+		release_pending_v:=false;
+		ASSERT write_phase_v=255 AND NOT drain_v AND NOT release_pending_v
+			REPORT "pending release did not align phase before opening drain"
 			SEVERITY failure;
 
 		-- A final old return and VS can coincide, but both decisions observe the
-		-- old nonempty accounting. The following cycle releases independently;
-		-- reset has already established phase 2*BLEN-1 for the first new burst.
+		-- old nonempty accounting. The next cycle schedules release and the one
+		-- after that aligns phase and opens drain before a new request can start.
 		credits_v:=1;
 		phase_v:=127;
-		write_phase_v:=255;
+		write_phase_v:=37;
 		drain_v:=true;
+		release_pending_v:=false;
 		vs_edge_v:=true;
 		ASSERT NOT return_drain_ready(credits_v,phase_v)
 			REPORT "VS released drain before the final old return" SEVERITY failure;
-		ASSERT write_phase_v=255 AND drain_v
+		ASSERT write_phase_v=37 AND drain_v AND NOT release_pending_v
 			REPORT "active old credit allowed coincident VS to align or release"
 			SEVERITY failure;
 		next_credits_v:=return_credits_next(
@@ -390,9 +400,15 @@ BEGIN
 		ASSERT drain_v AND return_drain_ready(credits_v,phase_v)
 			REPORT "drained accounting was not eligible on the next scheduler edge"
 			SEVERITY failure;
+		release_pending_v:=true;
+		ASSERT drain_v AND release_pending_v AND write_phase_v=37
+			REPORT "drained accounting did not enter pending release"
+			SEVERITY failure;
+		write_phase_v:=255;
 		drain_v:=false;
-		ASSERT write_phase_v=255 AND NOT drain_v
-			REPORT "independent release disturbed the reset-aligned phase"
+		release_pending_v:=false;
+		ASSERT write_phase_v=255 AND NOT drain_v AND NOT release_pending_v
+			REPORT "pending release did not align and open the drain"
 			SEVERITY failure;
 		ASSERT return_words_remaining(
 			return_credits_next(credits_v,phase_v,true,false,128),
