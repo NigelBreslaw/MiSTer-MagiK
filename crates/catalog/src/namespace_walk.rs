@@ -224,7 +224,6 @@ pub(crate) fn visit_with_signature_capture(
 /// capture avoids cloning that path once more merely to hand it to an
 /// inventory builder. The WalkDir fallback remains exact and clones only on
 /// that slow path.
-#[expect(dead_code, reason = "used by generic builder scans")]
 pub(crate) fn visit_owned_with_signature_capture(
     target: &Path,
     max_depth: Option<usize>,
@@ -561,7 +560,6 @@ fn visit_walkdir(
     }
 }
 
-#[expect(dead_code, reason = "used by owned namespace handoff")]
 fn visit_walkdir_owned(
     target: &Path,
     max_depth: Option<usize>,
