@@ -90,10 +90,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 	reg first_return_missing = 1'b0;
 	reg return_incomplete = 1'b0;
 	reg request_cancelled = 1'b0;
-	reg read_pulse_seen_since_reset = 1'b0;
-	reg vsync_seen_since_reset = 1'b0;
-	reg drain_ready_seen_since_reset = 1'b0;
-	reg external_read_seen_since_reset = 1'b0;
 	reg [2:0] frozen_cause =
 		MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NONE;
 	reg [6:0] frozen_return_phase = 7'd0;
@@ -268,10 +264,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 			reset_qualified <= 1'b0;
 			progress_watchdog <= 24'd0;
 			blocked_request_seen <= 1'b0;
-			read_pulse_seen_since_reset <= 1'b0;
-			vsync_seen_since_reset <= 1'b0;
-			drain_ready_seen_since_reset <= 1'b0;
-			external_read_seen_since_reset <= 1'b0;
 		end
 		else if(!reset_qualified) begin
 			if(reset_low_count + 1'd1 >= RESET_QUALIFY_LIMIT) begin
@@ -284,16 +276,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 			progress_watchdog <= 24'd0;
 		end
 		else begin
-			if(scaler_diag_state[12])
-				read_pulse_seen_since_reset <= 1'b1;
-			if(scaler_diag_state[13]) begin
-				vsync_seen_since_reset <= 1'b1;
-				if(scaler_diag_state[14])
-					drain_ready_seen_since_reset <= 1'b1;
-			end
-			if(vbuf_read)
-				external_read_seen_since_reset <= 1'b1;
-
 			if(expected_progress)
 				progress_watchdog <= 24'd0;
 			else if(!watchdog_terminal)
@@ -399,13 +381,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 				frozen_cause <= scaler_diag_state[2:0];
 				frozen_return_phase <= scaler_diag_state[9:3];
 				frozen_fifo_depth <= scaler_diag_state[11:10];
-				frozen_address_fold <= {
-					external_read_seen_since_reset | vbuf_read,
-					drain_ready_seen_since_reset |
-						(scaler_diag_state[13] & scaler_diag_state[14]),
-					vsync_seen_since_reset | scaler_diag_state[13],
-					read_pulse_seen_since_reset | scaler_diag_state[12]
-				};
+				frozen_address_fold <= scaler_diag_state[15:12];
 			end
 			else begin
 				frozen_cause <= timeout_cause;

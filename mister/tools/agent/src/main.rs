@@ -4308,10 +4308,7 @@ mod linux {
             if sample.no_request_return_credits() != 0 {
                 return "scaler_fetch_return_drain_outstanding";
             }
-            if !sample.no_request_vsync_seen() {
-                return "scaler_fetch_return_drain_waiting_for_vsync";
-            }
-            if sample.no_request_drain_ready_seen() {
+            if sample.no_request_drain_ready() {
                 return "scaler_fetch_return_drain_release_failed";
             }
             return "scaler_fetch_return_drain_not_ready";
@@ -4327,7 +4324,7 @@ mod linux {
             return "scaler_fetch_acceptance_guard_stuck";
         }
         if state == AVL_IDLE && !sample.no_request_read_pending() {
-            return if sample.no_request_read_pulse_seen() {
+            return if sample.normal_liveness_seen() {
                 "scaler_fetch_output_request_stopped_after_activity"
             } else {
                 "scaler_fetch_output_request_never_started"
@@ -4979,10 +4976,10 @@ mod linux {
                             "no_request_write_pending": samples.iter().map(|sample| sample.no_request_write_pending()).collect::<Vec<_>>(),
                             "no_request_reset_released": samples.iter().map(|sample| sample.no_request_reset_released()).collect::<Vec<_>>(),
                             "no_request_completion_pending": samples.iter().map(|sample| sample.no_request_completion_pending()).collect::<Vec<_>>(),
-                            "no_request_read_pulse_seen": samples.iter().map(|sample| sample.no_request_read_pulse_seen()).collect::<Vec<_>>(),
-                            "no_request_vsync_seen": samples.iter().map(|sample| sample.no_request_vsync_seen()).collect::<Vec<_>>(),
-                            "no_request_drain_ready_seen": samples.iter().map(|sample| sample.no_request_drain_ready_seen()).collect::<Vec<_>>(),
-                            "no_request_external_read_seen": samples.iter().map(|sample| sample.no_request_external_read_seen()).collect::<Vec<_>>(),
+                            "no_request_read_pulse": samples.iter().map(|sample| sample.no_request_read_pulse()).collect::<Vec<_>>(),
+                            "no_request_vsync_edge": samples.iter().map(|sample| sample.no_request_vsync_edge()).collect::<Vec<_>>(),
+                            "no_request_drain_ready": samples.iter().map(|sample| sample.no_request_drain_ready()).collect::<Vec<_>>(),
+                            "no_request_external_read": samples.iter().map(|sample| sample.no_request_external_read()).collect::<Vec<_>>(),
                             "raw_samples": readout.samples.iter().map(|sample| sample.words).collect::<Vec<_>>(),
                         },
                     })

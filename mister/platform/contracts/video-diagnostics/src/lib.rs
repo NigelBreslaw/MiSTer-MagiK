@@ -392,35 +392,35 @@ impl ScalerFetchLivenessState {
         ) != 0
     }
 
-    pub fn no_request_read_pulse_seen(&self) -> bool {
+    pub fn no_request_read_pulse(&self) -> bool {
         self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_PULSE_SEEN_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_PULSE_SEEN_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_PULSE_SEEN_MASK,
+            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_PULSE_WORD,
+            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_PULSE_BIT,
+            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_PULSE_MASK,
         ) != 0
     }
 
-    pub fn no_request_vsync_seen(&self) -> bool {
+    pub fn no_request_vsync_edge(&self) -> bool {
         self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_VSYNC_SEEN_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_VSYNC_SEEN_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_VSYNC_SEEN_MASK,
+            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_VSYNC_EDGE_WORD,
+            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_VSYNC_EDGE_BIT,
+            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_VSYNC_EDGE_MASK,
         ) != 0
     }
 
-    pub fn no_request_drain_ready_seen(&self) -> bool {
+    pub fn no_request_drain_ready(&self) -> bool {
         self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_DRAIN_READY_SEEN_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_DRAIN_READY_SEEN_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_DRAIN_READY_SEEN_MASK,
+            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_DRAIN_READY_WORD,
+            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_DRAIN_READY_BIT,
+            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_DRAIN_READY_MASK,
         ) != 0
     }
 
-    pub fn no_request_external_read_seen(&self) -> bool {
+    pub fn no_request_external_read(&self) -> bool {
         self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_EXTERNAL_READ_SEEN_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_EXTERNAL_READ_SEEN_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_EXTERNAL_READ_SEEN_MASK,
+            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_EXTERNAL_READ_WORD,
+            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_EXTERNAL_READ_BIT,
+            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_EXTERNAL_READ_MASK,
         ) != 0
     }
 }
@@ -1350,10 +1350,10 @@ mod tests {
         assert!(decoded.no_request_return_phase_nonzero());
         assert!(decoded.no_request_reset_released());
         assert!(decoded.no_request_completion_pending());
-        assert!(decoded.no_request_read_pulse_seen());
-        assert!(decoded.no_request_vsync_seen());
-        assert!(decoded.no_request_drain_ready_seen());
-        assert!(decoded.no_request_external_read_seen());
+        assert!(decoded.no_request_read_pulse());
+        assert!(decoded.no_request_vsync_edge());
+        assert!(decoded.no_request_drain_ready());
+        assert!(decoded.no_request_external_read());
         assert_eq!(
             decoded.frozen_cause(),
             SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN

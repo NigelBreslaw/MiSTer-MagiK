@@ -4062,7 +4062,6 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                         | "scaler_fetch_request_cancelled"
                         | "scaler_fetch_reset_stuck"
                         | "scaler_fetch_return_drain_outstanding"
-                        | "scaler_fetch_return_drain_waiting_for_vsync"
                         | "scaler_fetch_return_drain_release_failed"
                         | "scaler_fetch_return_drain_not_ready"
                         | "scaler_fetch_write_starvation"

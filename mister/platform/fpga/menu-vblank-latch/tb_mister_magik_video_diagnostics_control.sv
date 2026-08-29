@@ -228,14 +228,10 @@ module tb_mister_magik_video_diagnostics_control;
 		repeat(6) @(posedge clk_100m);
 		finish_return_with_accept(28'h0000000);
 		drive_return_beats(128);
-		// Record that the scaler scheduler saw a read pulse and a drain-ready
-		// vertical edge after reset release, then freeze a no-request state with
-		// return draining still asserted and one production credit outstanding.
+		// Freeze the exact no-request gate snapshot with return draining still
+		// asserted and one production credit outstanding.
 		@(negedge clk_100m);
-		scaler_diag_state = 16'h7000;
-		@(posedge clk_100m);
-		@(negedge clk_100m);
-		scaler_diag_state = 16'h0cb0;
+		scaler_diag_state = 16'hfcb0;
 
 		// Leave the qualified, empty boundary idle long enough to freeze the
 		// exact no-request observation. Consume a bounded pending publication:
