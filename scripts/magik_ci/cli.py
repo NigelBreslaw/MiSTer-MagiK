@@ -40,6 +40,7 @@ def parser() -> argparse.ArgumentParser:
     eligible = ci_sub.add_parser("platform-eligible-run")
     eligible.add_argument("run", type=Path)
     eligible.add_argument("head_sha")
+    eligible.add_argument("--allow-failed", action="store_true")
     alpha = ci_sub.add_parser("require-alpha-promotion")
     alpha.add_argument("channel")
     alpha.add_argument("alpha_sha")
@@ -223,7 +224,11 @@ def main() -> int:
                 )
         elif args.command == "platform-eligible-run":
             raise SystemExit(
-                0 if metadata.platform_eligible_run(args.run, args.head_sha) else 1
+                0
+                if metadata.platform_eligible_run(
+                    args.run, args.head_sha, allow_failed=args.allow_failed
+                )
+                else 1
             )
         elif args.command == "require-alpha-promotion":
             metadata.require_alpha_promotion(

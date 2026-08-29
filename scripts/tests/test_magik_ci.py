@@ -21,6 +21,36 @@ from scripts.magik_ci.quality import QUALITY_COMMANDS, execute
 
 
 class MagikCiTests(unittest.TestCase):
+    def test_failed_platform_run_is_eligible_only_for_verified_components(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory) / "run.json"
+            run.write_text(
+                '{"headSha":"0123456789012345678901234567890123456789",'
+                '"headBranch":"main","status":"completed","conclusion":"failure"}',
+                encoding="utf-8",
+            )
+            head_sha = "0123456789012345678901234567890123456789"
+            self.assertFalse(metadata.platform_eligible_run(run, head_sha))
+            self.assertTrue(
+                metadata.platform_eligible_run(run, head_sha, allow_failed=True)
+            )
+
+    def test_cancelled_platform_run_remains_ineligible_for_components(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory) / "run.json"
+            run.write_text(
+                '{"headSha":"0123456789012345678901234567890123456789",'
+                '"headBranch":"main","status":"completed","conclusion":"cancelled"}',
+                encoding="utf-8",
+            )
+            self.assertFalse(
+                metadata.platform_eligible_run(
+                    run,
+                    "0123456789012345678901234567890123456789",
+                    allow_failed=True,
+                )
+            )
+
     @patch("scripts.magik_ci.metadata.subprocess.run")
     def test_visual_host_assurance_runs_the_real_matrix(self, run) -> None:
         metadata.host_assurance(["apps/mister/tests/visual-baselines/launcher"])

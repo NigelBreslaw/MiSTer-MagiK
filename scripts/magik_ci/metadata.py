@@ -34,16 +34,19 @@ def platform_candidates(artifacts: Path, name: str) -> list[dict[str, object]]:
     ]
 
 
-def platform_eligible_run(path: Path, head_sha: str) -> bool:
+def platform_eligible_run(
+    path: Path, head_sha: str, *, allow_failed: bool = False
+) -> bool:
     payload = json.loads(path.read_text(encoding="utf-8"))
     origin = payload.get("workflow_run", payload)
     actual_sha = origin.get("head_sha", origin.get("headSha"))
     branch = origin.get("head_branch", origin.get("headBranch"))
+    allowed_conclusions = {"success", "failure"} if allow_failed else {"success"}
     return bool(
         actual_sha == head_sha
         and branch in {"main", "mister-magik"}
         and origin.get("status", "completed") == "completed"
-        and origin.get("conclusion", "success") == "success"
+        and origin.get("conclusion", "success") in allowed_conclusions
     )
 
 

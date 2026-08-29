@@ -4,6 +4,8 @@
 
 """Bounded host model for the pinned scanout platform admission policy."""
 
+from __future__ import annotations
+
 import re
 from pathlib import Path
 
