@@ -24865,7 +24865,7 @@ fn catalog_artifact_set_valid(catalog: &Value) -> bool {
 }
 
 fn catalog_phase_evidence(log: &str) -> Value {
-    const RECORDS: [&str; 21] = [
+    const RECORDS: [&str; 22] = [
         "startup_timing",
         "catalog_scan_attribution_tsv",
         "catalog_scan_handoff_tsv",
@@ -24887,6 +24887,7 @@ fn catalog_phase_evidence(log: &str) -> Value {
         "fast_catalog_refresh_publish_tsv",
         "catalog_artifact_copy_tsv",
         "catalog_shard_allocator_trim_tsv",
+        "fast_catalog_generic_phase_tsv",
     ];
     let mut records = Vec::new();
     for line in log.lines() {
@@ -24951,6 +24952,8 @@ fn catalog_phase_evidence(log: &str) -> Value {
         "projection": post_scan_unchanged || has("catalog_v3_projection_phases_tsv", None),
         "reconciliation": post_scan_unchanged || has("catalog_v3_reconciliation_tsv", None),
         "persist": post_scan_unchanged || has("catalog_v3_persist_phases_tsv", None),
+        "generic_discovery": post_scan_unchanged
+            || has("fast_catalog_generic_phase_tsv", None),
     });
     let complete = required
         .as_object()
