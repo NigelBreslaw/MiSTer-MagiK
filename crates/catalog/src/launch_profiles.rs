@@ -588,6 +588,7 @@ impl CatalogScanPlan {
     /// `for_roots` has performed the one top-level directory probe already;
     /// callers should use this lookup instead of resolving the full path and
     /// issuing another `is_dir` call.
+    #[expect(dead_code, reason = "used by the builder feature")]
     pub(crate) fn header_for_known_game_dir(
         &self,
         storage_root: &Path,
