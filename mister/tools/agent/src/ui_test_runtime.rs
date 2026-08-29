@@ -83,7 +83,11 @@ fn receive_at(
         return Ok(cached);
     }
     fs::create_dir_all(root).map_err(|error| format!("create UI-test runtime cache: {error}"))?;
-    for path in [runtime_path(root, spec), metadata_path(root, spec)] {
+    for path in [
+        runtime_path(root, spec),
+        part_path(root, spec),
+        metadata_path(root, spec),
+    ] {
         if path.is_file() {
             fs::remove_file(&path)
                 .map_err(|error| format!("replace invalid UI-test runtime cache: {error}"))?;
