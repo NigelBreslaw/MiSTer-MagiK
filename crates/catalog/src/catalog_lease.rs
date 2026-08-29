@@ -192,4 +192,14 @@ mod tests {
         assert_eq!(second.path(), path);
         let _ = fs::remove_file(path);
     }
+
+    #[test]
+    #[cfg(unix)]
+    fn lease_descriptor_is_close_on_exec() {
+        let path = unique_path("catalog-lease-cloexec");
+        let lease = CatalogMutationLease::acquire(&path).expect("lease");
+        let flags = unsafe { libc::fcntl(lease.file().as_raw_fd(), libc::F_GETFD) };
+        assert!(flags >= 0 && flags & libc::FD_CLOEXEC != 0);
+        let _ = fs::remove_file(path);
+    }
 }
