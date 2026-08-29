@@ -36,6 +36,53 @@ pub const EXPANDED_FAST_SYSTEM_IDS: [&str; 9] = [
     "x68000",
     "zx-spectrum",
 ];
+
+#[cfg(feature = "builder")]
+struct FastFiveStagingCleanup(Option<std::path::PathBuf>);
+
+#[cfg(feature = "builder")]
+impl FastFiveStagingCleanup {
+    fn new(path: std::path::PathBuf) -> Self {
+        Self(Some(path))
+    }
+
+    fn remove(&mut self) -> Result<(), String> {
+        let Some(path) = self.0.take() else {
+            return Ok(());
+        };
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!("remove staging {}: {error}", path.display())),
+        }
+    }
+}
+
+#[cfg(feature = "builder")]
+impl Drop for FastFiveStagingCleanup {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+}
+
+#[cfg(feature = "builder")]
+fn cleanup_fast_five_staging_root(root: &Path) -> Result<(), String> {
+    let metadata = match std::fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("inspect staging {}: {error}", root.display())),
+    };
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        return Err(format!(
+            "refusing to clean unexpected staging path {}",
+            root.display()
+        ));
+    }
+    std::fs::remove_dir_all(root)
+        .map_err(|error| format!("clean staging {}: {error}", root.display()))
+}
 #[cfg(feature = "builder")]
 const FAST_FIVE_BINARY_MAGIC: &[u8; 8] = b"MGK5SNAP";
 #[cfg(feature = "builder")]
@@ -1053,6 +1100,8 @@ fn publish_snapshot_selection(
 
     let started = Instant::now();
     snapshot.validate()?;
+    #[cfg(target_os = "linux")]
+    cleanup_fast_five_staging_root(Path::new("/tmp/mister-magik/fast-five-catalog"))?;
     fs::create_dir_all(storage_root)
         .map_err(|error| format!("create fast-five root {}: {error}", storage_root.display()))?;
     crate::shard_registry::cleanup_registry_temporary_files(storage_root)
@@ -1179,6 +1228,7 @@ fn publish_snapshot_selection(
         ));
         fs::create_dir_all(&staging)
             .map_err(|error| format!("create {} staging: {error}", source.system_id))?;
+        let mut staging_cleanup = FastFiveStagingCleanup::new(staging.clone());
         let sqlite = staging.join("system.sqlite3");
         let navigation = staging.join("system.nav.lz4b");
         let data = SystemShardData {
@@ -1262,7 +1312,7 @@ fn publish_snapshot_selection(
             )
             .map_err(|error| format!("publish {} shard: {error}", source.system_id))?
         };
-        let _ = fs::remove_dir(staging);
+        staging_cleanup.remove()?;
         let previous = current.as_ref().and_then(|manifest| {
             manifest
                 .systems
@@ -1716,6 +1766,28 @@ mod builder_tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn staging_cleanup_removes_only_the_scoped_directory() {
+        let parent = std::env::temp_dir().join(format!(
+            "mister-magik-fast-five-staging-cleanup-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let staging = parent.join("fast-five-catalog");
+        fs::create_dir_all(staging.join("run-1")).unwrap();
+        fs::write(staging.join("run-1/system.sqlite3"), b"partial").unwrap();
+        fs::write(parent.join("keep"), b"unrelated").unwrap();
+
+        cleanup_fast_five_staging_root(&staging).unwrap();
+
+        assert!(!staging.exists());
+        assert!(parent.join("keep").exists());
+        fs::remove_dir_all(parent).unwrap();
     }
 
     fn c64_game(title: &str, launch_ref: &str) -> SystemGame {

@@ -49,28 +49,33 @@ pub fn production_registry_limits() -> RegistryLimits {
 
 #[cfg(feature = "builder")]
 pub fn cleanup_registry_temporary_files(storage_root: &Path) -> Result<usize, RegistryError> {
-    let registry_root = storage_root.join("registry");
-    if !registry_root.exists() {
-        return Ok(0);
-    }
     let mut removed = 0usize;
-    for entry in walkdir::WalkDir::new(&registry_root)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
-        if !entry.file_type().is_file() {
+    for scoped_root in [storage_root.join("registry"), storage_root.join("systems")] {
+        if !scoped_root.exists() {
             continue;
         }
-        let name = entry.file_name().to_string_lossy();
-        if !name.starts_with('.') || !name.contains(".tmp.") {
-            continue;
+        let mut changed_directories = BTreeSet::new();
+        for entry in walkdir::WalkDir::new(&scoped_root)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy();
+            if !name.starts_with('.') || !name.contains(".tmp.") {
+                continue;
+            }
+            fs::remove_file(entry.path())
+                .map_err(|error| RegistryError::with("remove stale registry temporary", error))?;
+            removed = removed.saturating_add(1);
+            if let Some(parent) = entry.path().parent() {
+                changed_directories.insert(parent.to_path_buf());
+            }
         }
-        fs::remove_file(entry.path())
-            .map_err(|error| RegistryError::with("remove stale registry temporary", error))?;
-        removed = removed.saturating_add(1);
-    }
-    if removed != 0 {
-        sync_directory(&registry_root)?;
+        for directory in changed_directories {
+            sync_directory(&directory)?;
+        }
     }
     Ok(removed)
 }
@@ -1346,11 +1351,16 @@ mod tests {
     fn registry_recovery_removes_only_scoped_publication_temporaries() {
         let root = temporary_root("registry-temporary-recovery");
         fs::create_dir_all(root.join("registry")).unwrap();
+        fs::create_dir_all(root.join("systems/snes")).unwrap();
         fs::write(root.join("registry/.manifest-a.tmp.crashed"), b"partial").unwrap();
+        fs::write(root.join("systems/snes/.2.navpack.tmp.crashed"), b"partial").unwrap();
+        fs::write(root.join("systems/snes/keep.tmp.data"), b"unrelated").unwrap();
         fs::write(root.join(".keep.tmp.crashed"), b"unrelated").unwrap();
 
-        assert_eq!(cleanup_registry_temporary_files(&root).unwrap(), 1);
+        assert_eq!(cleanup_registry_temporary_files(&root).unwrap(), 2);
         assert!(!root.join("registry/.manifest-a.tmp.crashed").exists());
+        assert!(!root.join("systems/snes/.2.navpack.tmp.crashed").exists());
+        assert!(root.join("systems/snes/keep.tmp.data").exists());
         assert!(root.join(".keep.tmp.crashed").exists());
         fs::remove_dir_all(root).unwrap();
     }
