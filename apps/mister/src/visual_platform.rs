@@ -382,12 +382,14 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires exclusive ownership of Slint's process-global platform"]
     fn cache_preserving_full_raster_refreshes_moved_deleted_and_rotated_content() {
         let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
-        let _ = slint::platform::set_platform(Box::new(MisterPlatform::new(
+        slint::platform::set_platform(Box::new(MisterPlatform::new(
             window.clone(),
             Some(Rc::new(Cell::new(Duration::ZERO))),
-        )));
+        )))
+        .expect("exclusive test platform");
         let ui = ReusedRasterProbe::new().expect("probe component");
         window.set_size(PhysicalSize::new(64, 48));
         ui.set_tile_x(4.0);

@@ -62,6 +62,23 @@ class MagikCiTests(unittest.TestCase):
                 for command in all_commands
             )
         )
+        self.assertIn(
+            [
+                "cargo",
+                "test",
+                "--manifest-path",
+                "apps/mister/Cargo.toml",
+                "--lib",
+                "--no-default-features",
+                "--features",
+                "ui",
+                "visual_platform::tests::cache_preserving_full_raster_refreshes_moved_deleted_and_rotated_content",
+                "--",
+                "--ignored",
+                "--exact",
+            ],
+            commands("app"),
+        )
         self.assertIn(["python3", SLOW_TEST], commands("app"))
 
     def test_host_group_does_not_shadow_the_top_level_command(self) -> None:
