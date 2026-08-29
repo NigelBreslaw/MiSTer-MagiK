@@ -241,10 +241,10 @@ def main() -> None:
             if retained in avalon_reset.group("body"):
                 fail(f"production reset does not retain {retained}")
         if "avl_wad<=2*BLEN-1;" in avalon_reset.group("body"):
-            fail("production reset retains the write phase instead of pipelining release")
-        if avalon_reset.group("body").count(
-            "avl_return_release_pending<='0';"
-        ) != 1:
+            fail(
+                "production reset retains the write phase instead of pipelining release"
+            )
+        if avalon_reset.group("body").count("avl_return_release_pending<='0';") != 1:
             fail("production reset does not clear the release pipeline")
         guarded_drain_release = re.search(
             r"IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN\s*"
@@ -263,9 +263,7 @@ def main() -> None:
             patched_source,
         )
         if guarded_drain_release is None:
-            fail(
-                "production drain release is not isolated by one pending stage"
-            )
+            fail("production drain release is not isolated by one pending stage")
 
         ghdl_work = temporary / "ghdl-work"
         ghdl_work.mkdir()

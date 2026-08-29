@@ -878,9 +878,7 @@ def main() -> None:
             fail("Avalon reset branch is missing")
         if "avl_wad<=2*BLEN-1;" in avalon_reset.group("body"):
             fail("Avalon write phase must not use a wide reset preset")
-        if avalon_reset.group("body").count(
-            "avl_return_release_pending<='0';"
-        ) != 1:
+        if avalon_reset.group("body").count("avl_return_release_pending<='0';") != 1:
             fail("Avalon reset must clear the release pipeline exactly once")
         for retained_accounting in (
             "avl_return_credits",
@@ -928,9 +926,7 @@ def main() -> None:
             patched_ascal,
         )
         if drain_release is None:
-            fail(
-                "drain release is not isolated from accounting by one pending stage"
-            )
+            fail("drain release is not isolated from accounting by one pending stage")
         for topology_fragment, topology_source in (
             (".reset_core_req(reset_req)", patched),
             (".reset_na   (~reset_req)", patched),
