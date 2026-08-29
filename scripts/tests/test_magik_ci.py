@@ -276,6 +276,20 @@ import scripts.magik_ci.cli
         self.assertEqual(plan["next_version"], 1)
         self.assertTrue(plan["update_needed"])
 
+    def test_legacy_bundle_identity_requires_current_assembly(self) -> None:
+        values = ("a" * 64, "b" * 64, "c" * 64)
+        current: dict[str, object] = {
+            "main_input_sha256": values[0],
+            "fpga_input_sha256": values[1],
+            "kernel_input_sha256": values[2],
+            "bundle_id": bundle_id(*values, assembly_revision=0),
+        }
+        plan = update_plan(current, 35, *values)
+        self.assertTrue(plan["update_needed"])
+        self.assertFalse(plan["main_changed"])
+        self.assertFalse(plan["fpga_changed"])
+        self.assertFalse(plan["kernel_changed"])
+
     def test_manifest_candidate_is_ordered(self) -> None:
         values = {
             field: "x"
@@ -297,7 +311,16 @@ import scripts.magik_ci.cli
             (root / "fpga" / "patched").mkdir()
             (
                 root / "fpga" / "patched" / "menu-magik-vblank-latch.metadata.txt"
-            ).write_text("platform_contract_sha256=" + "1" * 64 + "\n")
+            ).write_text(
+                "platform_contract_sha256="
+                + "1" * 64
+                + "\nrbf_sha256="
+                + "2" * 64
+                + "\nlatch_protocol_sha256="
+                + "3" * 64
+                + "\nlatch_protocol_version=5"
+                + "\ndiagnostic_architecture=scaler-fetch-no-request-gates-v1\n"
+            )
             archive = create(
                 main=root / "main",
                 fpga=root / "fpga",
@@ -317,7 +340,16 @@ import scripts.magik_ci.cli
                 release_version=1,
                 output=root / "out",
             )
-            self.assertEqual(verify(archive)["release_version"], 1)
+            payload = verify(archive)
+            self.assertEqual(payload["release_version"], 1)
+            self.assertEqual(payload["assembly_revision"], 1)
+            self.assertEqual(payload["latch_rbf_sha256"], "2" * 64)
+            self.assertEqual(payload["latch_protocol_sha256"], "3" * 64)
+            self.assertEqual(payload["latch_protocol_version"], 5)
+            self.assertEqual(
+                payload["diagnostic_architecture"],
+                "scaler-fetch-no-request-gates-v1",
+            )
 
     def test_database_round_trip(self) -> None:
         from scripts.magik_ci.databases import create, verify

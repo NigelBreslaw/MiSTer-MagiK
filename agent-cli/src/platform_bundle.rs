@@ -18,6 +18,7 @@ use zip::{CompressionMethod, ZipWriter};
 
 pub const FORMAT: &str = "mister-magik-platform-bundle-v0.2";
 pub const MANIFEST: &str = "platform-bundle-v0.2.json";
+const ASSEMBLY_REVISION: u64 = 1;
 const ORIGIN: &str = "platform-component-origin-v1.json";
 const COMPONENT_CHECKSUMS: &str = "platform-component-SHA256SUMS";
 const LEGACY_SCHEMA14_RBF_SHA256: &str =
@@ -46,12 +47,38 @@ pub struct Create<'a> {
 }
 
 pub fn bundle_id(main: &str, fpga: &str, kernel: &str) -> AgentResult<String> {
+    bundle_id_for_revision(main, fpga, kernel, ASSEMBLY_REVISION)
+}
+
+fn bundle_id_for_revision(
+    main: &str,
+    fpga: &str,
+    kernel: &str,
+    assembly_revision: u64,
+) -> AgentResult<String> {
     for (name, value) in [("main", main), ("fpga", fpga), ("kernel", kernel)] {
         require_hex(name, value, 64)?;
     }
+    if !matches!(assembly_revision, 0 | ASSEMBLY_REVISION) {
+        return classified("platform_assembly_revision", assembly_revision.to_string());
+    }
+    let revision = if assembly_revision == 0 {
+        String::new()
+    } else {
+        format!("assembly_revision={assembly_revision}\n")
+    };
     Ok(digest_bytes(
-        format!("format={FORMAT}\nmain={main}\nfpga={fpga}\nkernel={kernel}\n").as_bytes(),
+        format!("format={FORMAT}\nmain={main}\nfpga={fpga}\nkernel={kernel}\n{revision}")
+            .as_bytes(),
     ))
+}
+
+fn assembly_revision(payload: &Value) -> AgentResult<u64> {
+    match payload.get("assembly_revision") {
+        None => Ok(0),
+        Some(value) if value.as_u64() == Some(ASSEMBLY_REVISION) => Ok(ASSEMBLY_REVISION),
+        Some(value) => classified("platform_assembly_revision", value.to_string()),
+    }
 }
 
 pub fn update_plan(
@@ -77,7 +104,8 @@ pub fn update_plan(
     let old_main = current["main_input_sha256"].as_str().unwrap_or_default();
     let old_fpga = current["fpga_input_sha256"].as_str().unwrap_or_default();
     let old_kernel = current["kernel_input_sha256"].as_str().unwrap_or_default();
-    let old_identity = bundle_id(old_main, old_fpga, old_kernel)?;
+    let old_identity =
+        bundle_id_for_revision(old_main, old_fpga, old_kernel, assembly_revision(current)?)?;
     if current["bundle_id"] != old_identity {
         return classified(
             "platform_bundle_identity",
@@ -296,7 +324,7 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
         .map(|(name, bytes)| json!({"path":name,"size":bytes.len(),"sha256":digest_bytes(bytes)}))
         .collect();
     let payload = json!({
-        "format":FORMAT,"release_version":request.release_version,"bundle_id":identity,
+        "format":FORMAT,"assembly_revision":ASSEMBLY_REVISION,"release_version":request.release_version,"bundle_id":identity,
         "main_input_sha256":request.main_id,"fpga_input_sha256":request.fpga_id,"kernel_input_sha256":request.kernel_id,
         "platform_contract_sha256":fpga_contract,
         "latch_protocol_sha256":fpga_metadata.get("latch_protocol_sha256").cloned().unwrap_or_default(),
@@ -371,10 +399,11 @@ pub fn verify(
             "release manifest differs from archive",
         );
     }
-    let expected_id = bundle_id(
+    let expected_id = bundle_id_for_revision(
         payload["main_input_sha256"].as_str().unwrap_or_default(),
         payload["fpga_input_sha256"].as_str().unwrap_or_default(),
         payload["kernel_input_sha256"].as_str().unwrap_or_default(),
+        assembly_revision(&payload)?,
     )?;
     if payload["bundle_id"] != expected_id {
         return classified(
@@ -487,6 +516,7 @@ fn validate_manifest(payload: &Value, version: Option<u64>) -> AgentResult<()> {
     if payload["format"] != FORMAT || payload["release_version"].as_u64().is_none_or(|v| v == 0) {
         return classified("invalid_platform_manifest", "format or version");
     }
+    let _ = assembly_revision(payload)?;
     if version.is_some_and(|v| payload["release_version"] != v) {
         return classified("platform_release_version", "tag and manifest differ");
     }
@@ -886,11 +916,15 @@ mod tests {
 
     #[test]
     fn identity_is_stable() {
-        let id = bundle_id(&"a".repeat(64), &"b".repeat(64), &"c".repeat(64)).unwrap();
+        let main = "a".repeat(64);
+        let fpga = "b".repeat(64);
+        let kernel = "c".repeat(64);
+        let id = bundle_id(&main, &fpga, &kernel).unwrap();
         assert_eq!(id.len(), 64);
-        assert_eq!(
+        assert_eq!(id, bundle_id(&main, &fpga, &kernel).unwrap());
+        assert_ne!(
             id,
-            bundle_id(&"a".repeat(64), &"b".repeat(64), &"c".repeat(64)).unwrap()
+            bundle_id_for_revision(&main, &fpga, &kernel, 0).unwrap()
         );
     }
 

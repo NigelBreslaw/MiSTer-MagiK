@@ -16,14 +16,24 @@ FORMAT = "mister-magik-platform-bundle-v0.2"
 MANIFEST = "platform-bundle-v0.2.json"
 ORIGIN = "platform-component-origin-v1.json"
 CHECKSUMS = "platform-component-SHA256SUMS"
+ASSEMBLY_REVISION = 1
+PATCHED_DIAGNOSTIC_ARCHITECTURE = "scaler-fetch-no-request-gates-v1"
 
 
-def bundle_id(main: str, fpga: str, kernel: str) -> str:
+def bundle_id(
+    main: str,
+    fpga: str,
+    kernel: str,
+    assembly_revision: int = ASSEMBLY_REVISION,
+) -> str:
     for value in (main, fpga, kernel):
         if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
             raise ValueError("invalid component identity")
+    if assembly_revision not in (0, ASSEMBLY_REVISION):
+        raise ValueError("unsupported platform assembly revision")
+    revision = f"assembly_revision={assembly_revision}\n" if assembly_revision else ""
     return sha256_bytes(
-        f"format={FORMAT}\nmain={main}\nfpga={fpga}\nkernel={kernel}\n".encode()
+        f"format={FORMAT}\nmain={main}\nfpga={fpga}\nkernel={kernel}\n{revision}".encode()
     )
 
 
@@ -47,10 +57,14 @@ def update_plan(
         }
     else:
         old = current
+        old_revision = old.get("assembly_revision", 0)
+        if not isinstance(old_revision, int) or isinstance(old_revision, bool):
+            raise TypeError("platform_assembly_revision")
         if old.get("bundle_id") != bundle_id(
             str(old["main_input_sha256"]),
             str(old["fpga_input_sha256"]),
             str(old["kernel_input_sha256"]),
+            old_revision,
         ):
             raise ValueError("platform_bundle_identity")
     return {
@@ -113,6 +127,7 @@ def create(
     entries.sort()
     payload = {
         "format": FORMAT,
+        "assembly_revision": ASSEMBLY_REVISION,
         "release_version": release_version,
         "bundle_id": identity,
         "main_input_sha256": main_id,
@@ -121,6 +136,23 @@ def create(
         "platform_contract_sha256": _metadata_value(
             fpga / "patched/menu-magik-vblank-latch.metadata.txt",
             "platform_contract_sha256",
+        ),
+        "latch_rbf_sha256": _metadata_value(
+            fpga / "patched/menu-magik-vblank-latch.metadata.txt", "rbf_sha256"
+        ),
+        "latch_protocol_sha256": _metadata_value(
+            fpga / "patched/menu-magik-vblank-latch.metadata.txt",
+            "latch_protocol_sha256",
+        ),
+        "latch_protocol_version": int(
+            _metadata_value(
+                fpga / "patched/menu-magik-vblank-latch.metadata.txt",
+                "latch_protocol_version",
+            )
+        ),
+        "diagnostic_architecture": _metadata_value(
+            fpga / "patched/menu-magik-vblank-latch.metadata.txt",
+            "diagnostic_architecture",
         ),
         "components": {
             "main": {
@@ -183,10 +215,14 @@ def verify(
         and payload.get("release_version") != release_version
     ):
         raise ValueError("platform_bundle_manifest")
+    assembly_revision = payload.get("assembly_revision", 0)
+    if not isinstance(assembly_revision, int) or isinstance(assembly_revision, bool):
+        raise TypeError("platform_assembly_revision")
     expected = bundle_id(
         str(payload["main_input_sha256"]),
         str(payload["fpga_input_sha256"]),
         str(payload["kernel_input_sha256"]),
+        assembly_revision,
     )
     if payload.get("bundle_id") != expected:
         raise ValueError("platform_bundle_identity")
@@ -201,6 +237,34 @@ def verify(
     }
     if actual != declared:
         raise ValueError("platform_file_manifest")
+    if assembly_revision >= 1:
+        metadata = files.get(
+            "fpga/patched/menu-magik-vblank-latch.metadata.txt", b""
+        ).decode()
+        embedded_rbf = _metadata_text_value(metadata, "rbf_sha256")
+        embedded_contract = _metadata_text_value(metadata, "platform_contract_sha256")
+        embedded_protocol = _metadata_text_value(metadata, "latch_protocol_sha256")
+        embedded_protocol_version = _metadata_text_value(
+            metadata, "latch_protocol_version"
+        )
+        embedded_architecture = _metadata_text_value(
+            metadata, "diagnostic_architecture"
+        )
+        if payload.get("platform_contract_sha256") != embedded_contract:
+            raise ValueError("platform_contract_mismatch")
+        if payload.get("latch_rbf_sha256") != embedded_rbf:
+            raise ValueError("fpga_rbf_identity")
+        if (
+            payload.get("latch_protocol_sha256") != embedded_protocol
+            or str(payload.get("latch_protocol_version", ""))
+            != embedded_protocol_version
+        ):
+            raise ValueError("latch_protocol_identity")
+        if (
+            embedded_architecture != PATCHED_DIAGNOSTIC_ARCHITECTURE
+            or payload.get("diagnostic_architecture") != embedded_architecture
+        ):
+            raise ValueError("fpga_diagnostic_architecture")
     for line in files.get("SHA256SUMS", b"").decode().splitlines():
         digest, name = line.split("  ", 1)
         if name not in files or sha256_bytes(files[name]) != digest:
@@ -208,6 +272,13 @@ def verify(
     if manifest is not None and manifest.read_bytes() != files[MANIFEST]:
         raise ValueError("platform_release_manifest_mismatch")
     return payload
+
+
+def _metadata_text_value(text: str, key: str) -> str:
+    for line in text.splitlines():
+        if line.startswith(f"{key}="):
+            return line.split("=", 1)[1]
+    return ""
 
 
 def extract_component(
