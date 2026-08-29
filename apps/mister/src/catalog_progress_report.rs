@@ -743,6 +743,7 @@ mod tests {
                 .is_some_and(|report| report.state == "paused")
         );
         assert_eq!(monitor.inactive_elapsed, Duration::ZERO);
+        assert!(!monitor.active_stalled(true, false));
     }
 
     #[test]
@@ -760,6 +761,7 @@ mod tests {
             .unwrap();
         assert_eq!(stalled.state, "stalled");
         assert_eq!(stalled.inactive_elapsed_ms, duration_ms(STALL_AFTER_ACTIVE));
+        assert!(monitor.active_stalled(true, true));
 
         let recovered_at = start + STALL_AFTER_ACTIVE + Duration::from_secs(1);
         let recovered = monitor.note_activity(
