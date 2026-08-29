@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from apps.mister.ui_tests.agent_input import Button
 from apps.mister.ui_tests.driver import MagiKDriver
 from apps.mister.ui_tests.queries import element_with_label
-from apps.mister.ui_tests.uinput_joystick import Button
 
 
 def test_startup_exposes_launcher_and_moves_home_selection(magik: MagiKDriver) -> None:

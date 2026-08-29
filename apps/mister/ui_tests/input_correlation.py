@@ -1,4 +1,4 @@
-"""Correlate physical uinput events with observable Slint state."""
+"""Correlate logical agent input with observable Slint state."""
 
 from __future__ import annotations
 
@@ -6,9 +6,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from .agent_input import AgentInput, Button, Key
 from .slint_adapter import SlintElement
-from .uinput_joystick import Button, VirtualJoystick
-from .uinput_keyboard import Key, VirtualKeyboard
 
 
 @dataclass(frozen=True)
@@ -56,24 +55,20 @@ class InputCorrelation:
     def __init__(
         self,
         root: SlintElement,
-        keyboard: VirtualKeyboard,
-        joystick: VirtualJoystick,
+        inputs: AgentInput,
     ) -> None:
         self._root = root
-        self._keyboard = keyboard
-        self._joystick = joystick
+        self._inputs = inputs
         self._history: list[CorrelatedInput] = []
 
     def key(self, action: str, key: Key, timeout: float = 2.0) -> CorrelatedInput:
-        return self._record(
-            action, "keyboard", lambda: self._keyboard.tap(key), timeout
-        )
+        return self._record(action, "keyboard", lambda: self._inputs.key(key), timeout)
 
     def button(
         self, action: str, button: Button, timeout: float = 2.0
     ) -> CorrelatedInput:
         return self._record(
-            action, "joystick", lambda: self._joystick.tap(button), timeout
+            action, "joystick", lambda: self._inputs.button(button), timeout
         )
 
     def hat(
@@ -86,10 +81,10 @@ class InputCorrelation:
         result = self._record(
             action,
             "joystick",
-            lambda: self._joystick.hat(horizontal, vertical),
+            lambda: self._inputs.hat(horizontal, vertical),
             timeout,
         )
-        self._joystick.hat(0, 0)
+        self._inputs.hat(0, 0)
         return result
 
     def history(self) -> tuple[CorrelatedInput, ...]:

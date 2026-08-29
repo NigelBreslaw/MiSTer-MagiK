@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from apps.mister.ui_tests.agent_input import Button
 from apps.mister.ui_tests.driver import MagiKDriver
 from apps.mister.ui_tests.queries import element_with_label, selected_labels
-from apps.mister.ui_tests.uinput_joystick import Button
 
 
 def _select_home_item(driver: MagiKDriver, label: str) -> None:

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from .agent_input import Button
 from .driver import MagiKDriver
 from .slint_adapter import SlintElement
-from .uinput_joystick import Button
 
 
 def element_with_label(driver: MagiKDriver, label: str) -> SlintElement:

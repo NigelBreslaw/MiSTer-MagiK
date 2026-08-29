@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+from apps.mister.ui_tests.agent_input import Button, Key
 from apps.mister.ui_tests.driver import MagiKDriver
 from apps.mister.ui_tests.queries import element_with_label
-from apps.mister.ui_tests.uinput_joystick import Button
-from apps.mister.ui_tests.uinput_keyboard import Key
 
 
 def test_exit_and_rebuild_are_confirmation_only(magik: MagiKDriver) -> None:
