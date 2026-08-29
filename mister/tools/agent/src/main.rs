@@ -37,6 +37,7 @@ mod launcher_automation;
 mod runtime_upload;
 #[cfg(target_os = "linux")]
 mod scanout_slots_contract;
+mod ui_test_runtime;
 
 #[cfg(any(target_os = "linux", test))]
 #[derive(Debug, PartialEq)]
