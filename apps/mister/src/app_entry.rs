@@ -622,16 +622,30 @@ fn run_library_refresh(paths: &mister_magik_catalog::device_layout::CatalogPaths
         if mister_magik_catalog::fast_catalog_refresh::read_latest_refresh_manifest(catalog_root)
             .is_ok()
         {
-            mister_magik_catalog::fast_catalog_refresh::execute_fast_refresh(
+            let request =
+                mister_magik_catalog::fast_catalog_refresh::FastCatalogRefreshRequest::Update;
+            mister_magik_catalog::fast_catalog_refresh::plan_fast_refresh(
                 storage_root,
                 catalog_root,
-                mister_magik_catalog::fast_catalog_refresh::FastCatalogRefreshRequest::Update,
+                request,
             )
+            .and_then(|plan| {
+                mister_magik_catalog::fast_catalog_refresh::execute_planned_fast_refresh_with_lease(
+                    storage_root,
+                    catalog_root,
+                    request,
+                    plan,
+                    &_mutation_lease,
+                )
+            })
             .and_then(|report| serde_json::to_string(&report).map_err(|error| error.to_string()))
         } else {
-            mister_magik_catalog::fast_catalog_refresh::build_fresh_catalog(
+            mister_magik_catalog::fast_catalog_refresh::build_fresh_catalog_with_lease(
                 storage_root,
                 catalog_root,
+                &_mutation_lease,
+                |_| {},
+                |_| {},
             )
             .and_then(|report| serde_json::to_string(&report).map_err(|error| error.to_string()))
         };
