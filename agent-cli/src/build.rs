@@ -787,7 +787,7 @@ impl<'a> BuildSession<'a> {
 }
 
 fn requires_private_ui_assets(spec: &BuildSpec) -> bool {
-    spec.target == BuildTarget::Runtime && spec.features.iter().any(|feature| *feature == "ui")
+    spec.target == BuildTarget::Runtime && spec.features.contains(&"ui")
 }
 
 fn ensure_private_ui_assets(repository: &Path) -> AgentResult<()> {

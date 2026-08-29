@@ -1097,7 +1097,7 @@ mod linux {
         "/media/fat/mister-magik-dev/diagnostics/catalog",
     ];
 
-    fn ui_test_startup_timeout(timeout_ms: u64) -> Duration {
+    pub(super) fn ui_test_startup_timeout(timeout_ms: u64) -> Duration {
         UI_TEST_STARTUP_TIMEOUT.min(Duration::from_millis(timeout_ms))
     }
     const CATALOG_PROGRESS_PATHS: [&str; 2] = [
