@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
+import time
 from pathlib import Path
 
 HOST_GROUPS = (
@@ -277,5 +279,20 @@ def execute(repository: Path, group: str) -> None:
             repository, ["scripts", "docs", "apps/mister/src", "apps/mister/ui/"]
         )
         return
-    for command in commands(group):
-        subprocess.run(command, cwd=repository, check=True)
+    group_commands = commands(group)
+    total = len(group_commands)
+    for index, command in enumerate(group_commands, start=1):
+        started = time.monotonic()
+        rendered = shlex.join(command)
+        print(f"host-assurance[{group}] {index}/{total} start: {rendered}", flush=True)
+        outcome = "failed"
+        try:
+            subprocess.run(command, cwd=repository, check=True)
+            outcome = "passed"
+        finally:
+            elapsed = time.monotonic() - started
+            print(
+                f"host-assurance[{group}] {index}/{total} {outcome} "
+                f"elapsed={elapsed:.2f}s: {rendered}",
+                flush=True,
+            )
