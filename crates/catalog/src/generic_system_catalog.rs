@@ -204,12 +204,9 @@ pub(crate) fn inventory_prepared_extension_under_named_roots(
             watch_complete = false;
             continue;
         };
-        builder.entries.sort_by(|left, right| {
-            left.0
-                .to_ascii_lowercase()
-                .cmp(&right.0.to_ascii_lowercase())
-                .then_with(|| left.0.cmp(&right.0))
-        });
+        builder
+            .entries
+            .sort_by_cached_key(|(name, _)| (name.to_ascii_lowercase(), name.clone()));
         let mut digest = Sha256::new();
         for (name, kind) in builder.entries {
             digest.update([kind]);
@@ -323,12 +320,11 @@ pub fn scan_prepared_system_with_generic_walker(
                 .contains("oneload64")
         });
     }
-    scanned.sort_by(|left, right| {
-        left.game
-            .title
-            .to_ascii_lowercase()
-            .cmp(&right.game.title.to_ascii_lowercase())
-            .then_with(|| left.game.stable_key.cmp(&right.game.stable_key))
+    scanned.sort_by_cached_key(|row| {
+        (
+            row.game.title.to_ascii_lowercase(),
+            row.game.stable_key.clone(),
+        )
     });
     scanned.dedup_by(|left, right| left.game.launch_ref == right.game.launch_ref);
     stats.games = scanned.len();
@@ -614,12 +610,11 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
         if accumulator.stats.roots == 0 {
             continue;
         }
-        accumulator.games.sort_by(|left, right| {
-            left.game
-                .title
-                .to_ascii_lowercase()
-                .cmp(&right.game.title.to_ascii_lowercase())
-                .then_with(|| left.game.stable_key.cmp(&right.game.stable_key))
+        accumulator.games.sort_by_cached_key(|row| {
+            (
+                row.game.title.to_ascii_lowercase(),
+                row.game.stable_key.clone(),
+            )
         });
         accumulator
             .games
@@ -862,12 +857,9 @@ fn collect_generic_namespace_inventory(
             watch_complete = false;
             continue;
         };
-        builder.entries.sort_by(|left, right| {
-            left.0
-                .to_ascii_lowercase()
-                .cmp(&right.0.to_ascii_lowercase())
-                .then_with(|| left.0.cmp(&right.0))
-        });
+        builder
+            .entries
+            .sort_by_cached_key(|(name, _)| (name.to_ascii_lowercase(), name.clone()));
         let mut digest = Sha256::new();
         for (name, kind) in builder.entries {
             digest.update([kind]);
