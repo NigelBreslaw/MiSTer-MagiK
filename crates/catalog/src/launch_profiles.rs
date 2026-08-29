@@ -11,7 +11,9 @@
 use crate::catalog_discovery;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "builder")]
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Instant;
 
