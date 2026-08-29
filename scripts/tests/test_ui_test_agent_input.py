@@ -163,7 +163,10 @@ def test_driver_waits_for_a_presented_semantic_snapshot() -> None:
 
     driver = cast(MagiKDriver, SimpleNamespace(inputs=FakeInputs()))
     assert (
-        driver.wait_for_semantic(lambda value: value.effective_view == "home") == state
+        MagiKDriver.wait_for_semantic(
+            driver, lambda value: value.effective_view == "home"
+        )
+        == state
     )
 
 
