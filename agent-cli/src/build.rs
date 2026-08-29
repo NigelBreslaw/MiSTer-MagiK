@@ -782,6 +782,44 @@ impl<'a> BuildSession<'a> {
     }
 }
 
+fn requires_private_ui_assets(spec: &BuildSpec) -> bool {
+    spec.target == BuildTarget::Runtime && spec.features.iter().any(|feature| *feature == "ui")
+}
+
+fn ensure_private_ui_assets(repository: &Path) -> AgentResult<()> {
+    let output = Command::new("git")
+        .args(["submodule", "status", "--", "private/magik-assets"])
+        .current_dir(repository)
+        .output()
+        .map_err(|error| format!("cannot inspect private UI assets: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cannot inspect private UI assets; run git submodule update --init private/magik-assets ({})",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    let status = String::from_utf8_lossy(&output.stdout);
+    validate_private_ui_assets_status(&status)
+}
+
+fn validate_private_ui_assets_status(status: &str) -> AgentResult<()> {
+    let valid = status.lines().any(|line| {
+        let bytes = line.as_bytes();
+        bytes.first() == Some(&b' ')
+            && bytes.len() >= 42
+            && bytes[1..41].iter().all(u8::is_ascii_hexdigit)
+            && bytes[41].is_ascii_whitespace()
+    });
+    if valid {
+        return Ok(());
+    }
+    Err(
+        "private UI assets are unavailable; run git submodule update --init private/magik-assets"
+            .into(),
+    )
+}
+
 fn validate_source_identity(
     metadata: &BuildMetadata,
     source_revision: &str,
@@ -1387,7 +1425,12 @@ impl BuildActions for ProcessBuildActions<'_, '_, '_> {
         let started = Instant::now();
         let result = match phase {
             Phase::Infer | Phase::Complete => Ok(()),
-            Phase::Preflight => self.session.ensure_preflight(),
+            Phase::Preflight => {
+                if requires_private_ui_assets(self.spec) {
+                    ensure_private_ui_assets(self.session.repository)?;
+                }
+                self.session.ensure_preflight()
+            }
             Phase::PrepareContainer => {
                 if self.session.backend == BuildBackend::AppleContainer {
                     create_target_dir(&self.target_dir)?;
@@ -2200,6 +2243,33 @@ mod tests {
             assert!(error.to_string().starts_with(phase.label()));
             assert_eq!(actions.visited, phases[..=index]);
         }
+    }
+
+    #[test]
+    fn runtime_ui_builds_require_initialized_private_assets() {
+        let ui_tests = BuildSpec::for_command(BuildCommand::RuntimeUiTests).unwrap();
+        let library = BuildSpec::for_command(BuildCommand::ValidateLibrary).unwrap();
+        assert!(requires_private_ui_assets(&ui_tests));
+        assert!(!requires_private_ui_assets(&library));
+
+        let initialized = " 20e7a4d302e07a5327e3334c5b35fc8f51a599fc private/magik-assets\n";
+        assert!(validate_private_ui_assets_status(initialized).is_ok());
+        for prefix in ['-', '+', 'U'] {
+            let status =
+                format!("{prefix}20e7a4d302e07a5327e3334c5b35fc8f51a599fc private/magik-assets\n");
+            let error = validate_private_ui_assets_status(&status).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("git submodule update --init private/magik-assets")
+            );
+        }
+        let error = validate_private_ui_assets_status("").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("git submodule update --init private/magik-assets")
+        );
     }
 
     #[test]
