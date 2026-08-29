@@ -928,6 +928,12 @@ impl LauncherScheduler {
         if self.catalog_worker_running() {
             return false;
         }
+        if let Some(control) = self.catalog_child_control.as_ref() {
+            if !control.reaped() {
+                return false;
+            }
+            self.catalog_child_control = None;
+        }
         let evidence = self.catalog_progress.start(
             root.clone(),
             request.label(),
@@ -982,7 +988,13 @@ impl LauncherScheduler {
                             | CatalogWorkerMessage::PersistenceFailed { .. }
                     ) {
                         self.catalog = CatalogJobState::Idle;
-                        self.catalog_child_control = None;
+                        if self
+                            .catalog_child_control
+                            .as_ref()
+                            .is_some_and(|control| control.reaped())
+                        {
+                            self.catalog_child_control = None;
+                        }
                         self.catalog_stop_requested = false;
                     }
                     out.push(message);
@@ -2075,5 +2087,31 @@ mod tests {
                 if error == "catalog worker disconnected without a terminal message"
         ));
         assert!(!scheduler.catalog_worker_running());
+    }
+
+    #[test]
+    fn terminal_failure_retains_retry_gate_until_child_is_reaped() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(CatalogWorkerMessage::PersistenceFailed {
+            error: "protocol failed".to_string(),
+        })
+        .unwrap();
+        let control = Arc::new(CatalogChildControl::test_unreaped());
+        let mut scheduler = LauncherScheduler::new(false);
+        scheduler.catalog = CatalogJobState::Running(rx);
+        scheduler.catalog_child_control = Some(Arc::clone(&control));
+        let mut events = CatalogJobEventBuf::new();
+
+        scheduler.poll_catalog(&mut events, CatalogPollScope::Idle);
+
+        assert!(!scheduler.catalog_worker_running());
+        assert!(scheduler.catalog_child_control.is_some());
+        assert!(!scheduler.start_catalog_worker(
+            "/tmp/catalog-test".to_string(),
+            CatalogWorkerRequest::LoadOnly,
+            CatalogWorkerInitialCache::AlreadyProbedMissing,
+            CatalogExecutionMode::BackgroundInteractive,
+        ));
+        control.mark_reaped_for_test();
     }
 }

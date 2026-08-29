@@ -127,21 +127,15 @@ pub(super) struct CatalogChildControl {
     child: Mutex<Option<Child>>,
     process_group: i32,
     handshake_seen: AtomicBool,
+    reaped: AtomicBool,
 }
 
 impl CatalogChildControl {
-    fn reaped(&self) -> bool {
-        self.child
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .is_none()
+    pub(super) fn reaped(&self) -> bool {
+        self.reaped.load(Ordering::Acquire)
     }
 
-    fn terminate(&self) -> bool {
-        let mut child = self.child.lock().unwrap_or_else(|error| error.into_inner());
-        let Some(child) = child.as_mut() else {
-            return false;
-        };
+    pub(super) fn terminate(&self) -> bool {
         #[cfg(unix)]
         let group_result = if self.process_group > 0 {
             // SAFETY: the process group id was created for this child with
@@ -152,7 +146,28 @@ impl CatalogChildControl {
         };
         #[cfg(not(unix))]
         let group_result = -1;
-        child.kill().is_ok() || group_result == 0
+        if group_result == 0 {
+            return true;
+        }
+        let Ok(mut child) = self.child.try_lock() else {
+            return false;
+        };
+        child.as_mut().is_some_and(|child| child.kill().is_ok())
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_unreaped() -> Self {
+        Self {
+            child: Mutex::new(None),
+            process_group: -1,
+            handshake_seen: AtomicBool::new(true),
+            reaped: AtomicBool::new(false),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn mark_reaped_for_test(&self) {
+        self.reaped.store(true, Ordering::Release);
     }
 }
 
@@ -537,6 +552,7 @@ fn start_library_catalog_worker_process(
         child: Mutex::new(Some(child)),
         process_group,
         handshake_seen: AtomicBool::new(false),
+        reaped: AtomicBool::new(false),
     });
     let handshake_control = Arc::clone(&control);
     std::thread::spawn(move || {
@@ -617,19 +633,17 @@ fn start_library_catalog_worker_process(
             }
             if protocol_failed {
                 let _ = reader_control.terminate();
+                if let Some(message) = terminal_message.take() {
+                    let _ = tx.send(message);
+                }
             }
-            let child_status = {
-                let mut child = reader_control
-                    .child
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner());
-                child.as_mut().and_then(|child| child.wait().ok())
-            };
-            reader_control
+            let mut child = reader_control
                 .child
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .take();
+            let child_status = child.as_mut().and_then(|child| child.wait().ok());
+            reader_control.reaped.store(true, Ordering::Release);
             if let Some(message) = terminal_message {
                 let _ = tx.send(message);
             } else if !terminal {
@@ -1512,5 +1526,40 @@ mod tests {
         .unwrap()
         .expect("heartbeat event");
         assert!(matches!(message, CatalogWorkerMessage::Heartbeat { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn child_control_terminates_without_owning_the_child_handle() {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("exec sleep 30");
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let child = command.spawn().expect("spawn isolated child");
+        let process_group = child.id().try_into().unwrap();
+        let control = CatalogChildControl {
+            child: Mutex::new(Some(child)),
+            process_group,
+            handshake_seen: AtomicBool::new(true),
+            reaped: AtomicBool::new(false),
+        };
+        let mut owned_child = control.child.lock().unwrap().take().unwrap();
+
+        let terminated = control.terminate();
+        if !terminated {
+            let _ = owned_child.kill();
+        }
+        let status = owned_child.wait().expect("reap isolated child");
+        control.reaped.store(true, Ordering::Release);
+
+        assert!(terminated);
+        assert!(!status.success());
+        assert!(control.reaped());
     }
 }
