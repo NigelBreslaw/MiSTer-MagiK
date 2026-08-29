@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 // Keep this compatible with the previous builder during an in-place deploy. The
 // new operation and events are additive; an old launcher never requests them.
-pub const CATALOG_BUILDER_PROTOCOL_VERSION: u32 = 3;
+pub const CATALOG_BUILDER_PROTOCOL_VERSION: u32 = 4;
 pub const DEFAULT_CATALOG_BUILDER_LOCK_PATH: &str = "/tmp/mister-magik/catalog-builder.lock";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -92,6 +92,14 @@ pub enum CatalogBuilderEvent {
         protocol: u32,
         operation: String,
         run_id: String,
+    },
+    Heartbeat {
+        protocol: u32,
+        run_id: String,
+        phase: String,
+        sequence: u64,
+        progress_epoch: u64,
+        work_units: u64,
     },
     Progress {
         protocol: u32,
@@ -180,6 +188,7 @@ impl CatalogBuilderEvent {
     pub fn protocol(&self) -> u32 {
         match self {
             Self::Handshake { protocol, .. }
+            | Self::Heartbeat { protocol, .. }
             | Self::Progress { protocol, .. }
             | Self::PlanReady { protocol, .. }
             | Self::SystemDiscovered { protocol, .. }
@@ -247,6 +256,23 @@ mod tests {
             title: "Finding games".into(),
             detail: "42 games found".into(),
             metadata: None,
+        };
+        let encoded = serde_json::to_string(&event).unwrap();
+        assert_eq!(
+            serde_json::from_str::<CatalogBuilderEvent>(&encoded).unwrap(),
+            event
+        );
+    }
+
+    #[test]
+    fn heartbeat_round_trips_without_being_progress() {
+        let event = CatalogBuilderEvent::Heartbeat {
+            protocol: CATALOG_BUILDER_PROTOCOL_VERSION,
+            run_id: "run-1".into(),
+            phase: "scan".into(),
+            sequence: 7,
+            progress_epoch: 3,
+            work_units: 128,
         };
         let encoded = serde_json::to_string(&event).unwrap();
         assert_eq!(
