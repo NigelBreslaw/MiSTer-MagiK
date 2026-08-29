@@ -37,7 +37,6 @@ COMPLETE_CASES = (
     "settings-display",
     "screensaver-motion",
     "about-licenses",
-    "controller",
     "effect-sandbox",
     "profile-matrix",
 )

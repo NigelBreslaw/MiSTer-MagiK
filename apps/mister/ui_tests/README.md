@@ -44,7 +44,7 @@ UV_INDEX_SLINT_PRIVATE_USERNAME=__token__ \
 UV_INDEX_SLINT_PRIVATE_PASSWORD="$SLINT_TESTING_TOKEN" \
 uv run --extra device-ui-tests python -m apps.mister.ui_tests.suite \
   startup-home system-hub arcade-navigation arcade-filters \
-  settings-display screensaver-motion about-licenses controller effect-sandbox \
+  settings-display screensaver-motion about-licenses effect-sandbox \
   profile-matrix \
   --fixture deterministic-arcade-v1 --attended
 ```
@@ -52,7 +52,7 @@ uv run --extra device-ui-tests python -m apps.mister.ui_tests.suite \
 Expand device qualification in this order, stopping at the first failure:
 
 1. Run `smoke`.
-2. Run `system-hub` and `controller`.
+2. Run `system-hub`.
 3. Run each remaining ordinary journey independently.
 4. Run `profile-matrix` (24 display/orientation/feature sessions).
 5. Run the complete command once.
@@ -63,15 +63,9 @@ of one failed case helps isolate a fault but does not count as qualification;
 the ladder restarts from `smoke` after a fix. Suite subprocesses fail if pytest
 reports a skip, so a green run contains no silently omitted test.
 
-The automated `controller` case starts the launcher’s controller screen and
-proves its accessibility tree plus logical B/Home navigation through the
-authenticated transport. It does not claim a physical gamepad is connected.
-Qualify real button-state reporting separately with the attended hardware
-journey:
-
-```sh
-scripts/agent device scene controller-test --attended --seconds 10
-```
+The controller screen is a future, currently unreachable feature and is
+therefore excluded from this qualification ladder. Its explicit test target
+remains available for a later feature milestone.
 
 `slint-testing` stays on the operator host. Its local test socket is bridged by
 the typed MagiK agent connection, while logical keyboard and joystick actions
