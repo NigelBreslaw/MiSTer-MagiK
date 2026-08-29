@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 12;
+pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 13;
 const PREPARED_SYSTEM_IDS: [&str; 5] = ["arcade", "amiga", "c64", "dos", "x68000"];
 
 #[derive(Clone, Debug, Serialize)]
@@ -93,6 +93,7 @@ pub(crate) struct FastSourceRefreshBuild {
     pub report: FastSourceBuildReport,
     pub profiles: Vec<LaunchProfile>,
     pub generic_watch_observations: BTreeMap<String, GenericSourceWatchObservations>,
+    pub row_fingerprint_payloads: BTreeMap<String, Vec<u8>>,
 }
 
 pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
@@ -184,7 +185,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         .map(|report| report.elapsed_us)
         .sum();
     let phase_started = Instant::now();
-    let source_fingerprint = fingerprint_systems(systems.values())?;
+    let (source_fingerprint, row_fingerprint_payloads) = fingerprint_systems(systems.values())?;
     let fingerprint_us = elapsed_us(phase_started);
     let snapshot = FastFiveSnapshot {
         schema: FAST_FIVE_SNAPSHOT_SCHEMA.to_string(),
@@ -243,6 +244,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         },
         profiles,
         generic_watch_observations,
+        row_fingerprint_payloads,
     })
 }
 
@@ -1409,16 +1411,17 @@ fn load_fast_console_preview_title_index(
 
 fn fingerprint_systems<'a>(
     systems: impl IntoIterator<Item = &'a FastFiveSystem>,
-) -> Result<String, String> {
+) -> Result<(String, BTreeMap<String, Vec<u8>>), String> {
     let mut digest = Sha256::new();
-    digest.update(b"mister-magik-independent-fast-sources-v1\0");
+    let mut row_fingerprint_payloads = BTreeMap::new();
+    digest.update(b"mister-magik-independent-fast-sources-v2\0");
     for system in systems {
-        digest.update(
-            postcard::to_allocvec(system)
-                .map_err(|error| format!("encode {} source rows: {error}", system.system_id))?,
-        );
+        let payload =
+            crate::fast_catalog_refresh::encode_row_fingerprint_payload_for_system(system)?;
+        digest.update(&payload);
+        row_fingerprint_payloads.insert(system.system_id.clone(), payload);
     }
-    Ok(hex_lower(&digest.finalize()))
+    Ok((hex_lower(&digest.finalize()), row_fingerprint_payloads))
 }
 
 fn display_title(system_id: &str) -> &'static str {
@@ -1667,7 +1670,7 @@ mod tests {
 
     #[test]
     fn independent_source_set_contains_no_legacy_input_kind() {
-        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 12);
+        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 13);
     }
 
     #[test]
