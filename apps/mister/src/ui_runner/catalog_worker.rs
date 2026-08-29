@@ -555,9 +555,17 @@ fn start_library_catalog_worker_process(
             let reader = BufReader::new(stderr);
             let mut terminal = false;
             let mut terminal_message = None;
+            let mut protocol_failed = false;
             for line in reader.lines() {
-                let Ok(line) = line else {
-                    break;
+                let line = match line {
+                    Ok(line) => line,
+                    Err(error) => {
+                        terminal_message = Some(CatalogWorkerMessage::PersistenceFailed {
+                            error: format!("read catalog worker protocol: {error}"),
+                        });
+                        protocol_failed = true;
+                        break;
+                    }
                 };
                 let Some(payload) = line.strip_prefix(CATALOG_WORKER_PROTOCOL_PREFIX) else {
                     continue;
@@ -568,7 +576,7 @@ fn start_library_catalog_worker_process(
                         terminal_message = Some(CatalogWorkerMessage::PersistenceFailed {
                             error: format!("decode catalog worker protocol: {error}"),
                         });
-                        terminal = true;
+                        protocol_failed = true;
                         break;
                     }
                 };
@@ -596,10 +604,19 @@ fn start_library_catalog_worker_process(
                     Ok(None) => {}
                     Err(error) => {
                         terminal_message = Some(CatalogWorkerMessage::PersistenceFailed { error });
-                        terminal = true;
+                        protocol_failed = true;
                         break;
                     }
                 }
+            }
+            if !terminal && terminal_message.is_none() {
+                terminal_message = Some(CatalogWorkerMessage::PersistenceFailed {
+                    error: "catalog worker protocol ended without a terminal event".to_string(),
+                });
+                protocol_failed = true;
+            }
+            if protocol_failed {
+                let _ = reader_control.terminate();
             }
             let child_status = {
                 let mut child = reader_control
