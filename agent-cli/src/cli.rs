@@ -7,7 +7,7 @@ use crate::compile_time::CompileTimeCommand;
 use crate::dependencies::DependenciesCommand;
 use crate::fpga::FpgaCommand;
 use crate::live_particles::LiveParticlesCommand;
-use crate::model::{ArcadeVelocityScrollArm, ArcadeVelocityScrollRoute, BenchmarkScenario, Scope};
+use crate::model::{ArcadeVelocityScrollArm, ArcadeVelocityScrollRoute, BenchmarkScenario};
 use crate::startup_particles::{SceneLabCommand, StartupParticlesCommand};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -34,12 +34,6 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 #[allow(clippy::large_enum_variant)] // Parsed once; keeping Clap's command tree direct avoids dispatch indirection.
 pub enum Command {
-    #[command(hide = true)]
-    PrePush {
-        #[arg(long)]
-        remote: String,
-    },
-    Plan(ScopeArgs),
     /// Print the bounded guidance and authority record for one path.
     Guidance {
         path: PathBuf,
@@ -474,22 +468,6 @@ pub enum DbCommand {
     Report,
 }
 
-#[derive(Clone, Debug, Args)]
-pub struct ScopeArgs {
-    #[arg(long, value_name = "PATH", num_args = 1..)]
-    pub paths: Vec<PathBuf>,
-}
-
-impl ScopeArgs {
-    pub fn scope(&self) -> Scope {
-        if !self.paths.is_empty() {
-            Scope::Paths(self.paths.clone())
-        } else {
-            Scope::WorkingTree
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -796,18 +774,6 @@ mod tests {
     fn clean_is_a_flag_free_repository_command() {
         assert!(Cli::try_parse_from(["agent-cli", "clean"]).is_ok());
         assert!(Cli::try_parse_from(["agent-cli", "clean", "--package", "catalog"]).is_err());
-    }
-
-    #[test]
-    fn explicit_paths_are_preserved() {
-        let cli = Cli::try_parse_from(["agent-cli", "plan", "--paths", "a", "b"]).unwrap();
-        let Some(Command::Plan(scope)) = cli.command else {
-            panic!("expected plan command");
-        };
-        assert_eq!(
-            scope.scope(),
-            Scope::Paths(vec![PathBuf::from("a"), PathBuf::from("b")])
-        );
     }
 
     #[test]

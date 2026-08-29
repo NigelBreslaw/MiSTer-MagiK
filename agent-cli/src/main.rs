@@ -7,14 +7,10 @@ use agent_cli::cli::{
 };
 use agent_cli::error::{AgentError, AgentResult};
 use agent_cli::evidence::Evidence;
-use agent_cli::executor;
-use agent_cli::model::{AssuranceRequest, Outcome};
-use agent_cli::planner;
+use agent_cli::model::Outcome;
 use agent_cli::progress::{EventKind, Reporter};
 use agent_cli::request::RawRequest;
-use agent_cli::scope;
 use clap::Parser;
-use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -112,8 +108,6 @@ impl RepoContext {
 
 fn command_label(command: &CliCommand) -> &'static str {
     match command {
-        CliCommand::PrePush { .. } => "pre-push",
-        CliCommand::Plan(_) => "plan",
         CliCommand::Guidance { .. } => "guidance",
         CliCommand::Run { .. } => "run",
         CliCommand::Db { .. } => "db",
@@ -144,46 +138,6 @@ fn dispatch(
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     match command {
-        CliCommand::PrePush { remote } => {
-            let mut updates = String::new();
-            std::io::stdin()
-                .read_to_string(&mut updates)
-                .map_err(|error| format!("pre_push_input_failed: {error}"))?;
-            let paths = agent_cli::hooks::pre_push_paths(repository, remote, &updates)?;
-            if paths.is_empty() {
-                reporter.emit(
-                    EventKind::Progress,
-                    "pre-push",
-                    "No branch updates require verification",
-                    Some(100),
-                )?;
-                return Ok(Outcome::NoOp);
-            }
-            let plan = planner::affected_plan_at(
-                repository,
-                AssuranceRequest::PrePush {
-                    remote: remote.clone(),
-                },
-                paths.clone(),
-            )?;
-            evidence.record_plan(request_id, &plan)?;
-            reporter.emit(
-                EventKind::Progress,
-                "pre-push",
-                &format!("{} full checks planned", plan.operations.len()),
-                Some(0),
-            )?;
-            let outcome = executor::execute_with_changes(
-                evidence, request_id, repository, &plan, &paths, reporter,
-            )?;
-            if !plan.external_requirements.is_empty() {
-                for requirement in &plan.external_requirements {
-                    reporter.emit(EventKind::Warning, "external", &requirement.message, None)?;
-                }
-                return Ok(Outcome::ExternalRequired);
-            }
-            return Ok(outcome);
-        }
         CliCommand::Deliver {
             target: None,
             game_databases_release_dir,
@@ -400,18 +354,6 @@ fn dispatch(
             agent_cli::build::execute_command(repository, *intent, reporter)?;
             return Ok(Outcome::Passed);
         }
-        CliCommand::Plan(scope) => {
-            return run_assurance(
-                evidence,
-                request_id,
-                repository,
-                AssuranceRequest::Plan {
-                    scope: scope.scope(),
-                },
-                false,
-                reporter,
-            );
-        }
         CliCommand::Guidance { path } => {
             print!("{}", agent_cli::guidance::report(repository, path)?);
             return Ok(Outcome::Passed);
@@ -437,59 +379,6 @@ fn dispatch(
         }
     }
     Ok(Outcome::NoOp)
-}
-
-fn run_assurance(
-    evidence: &Evidence,
-    request_id: &str,
-    repository: &Path,
-    intent: AssuranceRequest,
-    execute: bool,
-    reporter: &mut Reporter<'_>,
-) -> AgentResult<Outcome> {
-    let selected = match &intent {
-        AssuranceRequest::Plan { scope } | AssuranceRequest::CiHostAssurance { scope } => scope,
-        AssuranceRequest::PrePush { .. } => {
-            unreachable!("pre-push paths are collected by the hook")
-        }
-    };
-    let paths = scope::collect(evidence, request_id, repository, selected)?;
-    let claimed_paths = paths.clone();
-    let plan = planner::affected_plan_at(repository, intent, paths)?;
-    evidence.record_plan(request_id, &plan)?;
-    let summary = if plan.operations.is_empty() {
-        "No lint operations selected".to_owned()
-    } else {
-        format!("{} checks planned", plan.operations.len())
-    };
-    reporter.emit(
-        EventKind::Progress,
-        if execute { "ci-assurance" } else { "plan" },
-        &summary,
-        Some(0),
-    )?;
-    let outcome = if execute {
-        executor::execute_with_changes(
-            evidence,
-            request_id,
-            repository,
-            &plan,
-            &claimed_paths,
-            reporter,
-        )?
-    } else if plan.operations.is_empty() {
-        Outcome::NoOp
-    } else {
-        Outcome::Passed
-    };
-    for requirement in &plan.external_requirements {
-        reporter.emit(EventKind::Warning, "external", &requirement.message, None)?;
-    }
-    Ok(if plan.external_requirements.is_empty() {
-        outcome
-    } else {
-        Outcome::ExternalRequired
-    })
 }
 
 fn deliver(

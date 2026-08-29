@@ -3,9 +3,9 @@
 This is the current handoff from completed P1 Enforce and typed shared launcher
 contract work to the remaining launcher-loop decomposition and typed runtime
 configuration streams. It records enforced boundaries and edit ownership;
-it is not an acceptance target based on file length. The typed checks in
-`agent-cli/src/checks.rs` and their selection in `agent-cli/src/planner.rs`
-remain the executable containment boundary.
+it is not an acceptance target based on file length. The fast static checks in
+`scripts/magik_ci/assurance.py` and their selection in
+`scripts/checks/pre-push.py` remain the executable containment boundary.
 
 The post-FPGA baseline and completed Enforce runtime comparison is recorded in
 `history/2026-08-15-p1-enforce-acceptance.md`. The two pre-existing incomplete
@@ -362,8 +362,8 @@ The following are no-concurrent-edit seams regardless of worktree separation:
 - `apps/mister/src/ui_runner/launcher_loop.rs`
 - `apps/mister/src/ui_runner/launcher_bridge.rs`
 - `crates/catalog/src/device_layout.rs`
-- `agent-cli/src/checks.rs`
-- `agent-cli/src/planner.rs`
+- `scripts/magik_ci/assurance.py`
+- `scripts/checks/pre-push.py`
 
 Before starting a P1 commit, run `scripts/agent guidance PATH` for the owning
 path, confirm the exception or seam still exists, and use `scripts/agent plan`

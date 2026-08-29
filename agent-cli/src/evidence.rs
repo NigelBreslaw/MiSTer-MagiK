@@ -6,7 +6,6 @@ use crate::progress::{FailureEvidence, ProgressEvent};
 use crate::request::RawRequest;
 use rusqlite::backup::Backup;
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::Serialize;
 use std::fs::{self, File, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -21,7 +20,6 @@ CREATE TABLE IF NOT EXISTS requests (
     args_json TEXT NOT NULL,
     parse_status TEXT NOT NULL DEFAULT 'captured',
     intent_json TEXT,
-    plan_json TEXT,
     rejection_reason TEXT,
     outcome TEXT,
     bootstrap_ms INTEGER,
@@ -30,7 +28,6 @@ CREATE TABLE IF NOT EXISTS requests (
     cohort_id INTEGER,
     parent_request_id TEXT,
     git_sha TEXT,
-    planner_schema INTEGER NOT NULL DEFAULT 3,
     queue_ms INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS commands (
@@ -60,36 +57,8 @@ CREATE TABLE IF NOT EXISTS events (
     failure_json TEXT,
     PRIMARY KEY (request_id, sequence)
 );
-CREATE TABLE IF NOT EXISTS validation_results (
-    operation_id TEXT NOT NULL,
-    fingerprint TEXT NOT NULL,
-    result TEXT NOT NULL,
-    detail TEXT,
-    completed_ms INTEGER NOT NULL,
-    expires_ms INTEGER NOT NULL,
-    PRIMARY KEY (operation_id, fingerprint)
-);
-CREATE TABLE IF NOT EXISTS operation_leases (
-    operation_id TEXT NOT NULL,
-    fingerprint TEXT NOT NULL,
-    owner_request_id TEXT NOT NULL,
-    acquired_ms INTEGER NOT NULL,
-    expires_ms INTEGER NOT NULL,
-    PRIMARY KEY (operation_id, fingerprint)
-);
 PRAGMA user_version = 12;
 "#;
-
-const RECLAIM_INACTIVE_VALIDATION_LEASE: &str = "DELETE FROM operation_leases
-     WHERE operation_id=?1 AND fingerprint=?2
-       AND (
-           expires_ms<?3
-           OR EXISTS (
-               SELECT 1 FROM requests
-               WHERE requests.id=operation_leases.owner_request_id
-                 AND requests.completed_ms IS NOT NULL
-           )
-       )";
 
 #[derive(Debug)]
 pub struct Evidence {
@@ -283,165 +252,11 @@ impl Evidence {
         Ok(())
     }
 
-    pub fn record_plan<T: Serialize>(&self, request_id: &str, plan: &T) -> Result<(), String> {
-        let plan = serde_json::to_string(plan).map_err(|error| error.to_string())?;
-        self.connection
-            .execute(
-                "UPDATE requests SET plan_json = ?2 WHERE id = ?1",
-                params![request_id, plan],
-            )
-            .map_err(|error| format!("cannot record plan: {error}"))?;
-        Ok(())
-    }
-
-    pub fn has_cached_validation_success(
-        &self,
-        operation_id: &str,
-        fingerprint: &str,
-    ) -> Result<bool, String> {
-        self.connection
-            .query_row(
-                "SELECT 1 FROM validation_results WHERE operation_id=?1 AND fingerprint=?2 AND result='passed' AND expires_ms>=?3",
-                params![operation_id, fingerprint, now_ms()],
-                |_| Ok(()),
-            )
-            .optional()
-            .map(|result| result.is_some())
-            .map_err(|error| error.to_string())
-    }
-
-    pub fn cache_validation_success(
-        &self,
-        operation_id: &str,
-        fingerprint: &str,
-    ) -> Result<(), String> {
-        let lifetime_ms = 30 * 24 * 60 * 60 * 1_000_i64;
-        let completed = now_ms();
-        self.connection
-            .execute(
-                "INSERT OR REPLACE INTO validation_results (operation_id, fingerprint, result, detail, completed_ms, expires_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![operation_id, fingerprint, "passed", Option::<&str>::None, completed, completed.saturating_add(lifetime_ms)],
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(())
-    }
-
-    pub fn claim_validation(
-        &self,
-        operation_id: &str,
-        fingerprint: &str,
-        request_id: &str,
-    ) -> Result<bool, String> {
-        self.reclaim_terminated_validation_owner(operation_id, fingerprint)?;
-        let now = now_ms();
-        let transaction = self
-            .connection
-            .unchecked_transaction()
-            .map_err(|error| error.to_string())?;
-        transaction
-            .execute(
-                RECLAIM_INACTIVE_VALIDATION_LEASE,
-                params![operation_id, fingerprint, now],
-            )
-            .map_err(|error| error.to_string())?;
-        let inserted = transaction
-            .execute(
-                "INSERT OR IGNORE INTO operation_leases (operation_id, fingerprint, owner_request_id, acquired_ms, expires_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![operation_id, fingerprint, request_id, now, now.saturating_add(31 * 60 * 1_000)],
-            )
-            .map_err(|error| error.to_string())?;
-        transaction.commit().map_err(|error| error.to_string())?;
-        Ok(inserted == 1)
-    }
-
-    pub fn validation_owner(
-        &self,
-        operation_id: &str,
-        fingerprint: &str,
-    ) -> Result<Option<String>, String> {
-        self.connection
-            .execute(
-                RECLAIM_INACTIVE_VALIDATION_LEASE,
-                params![operation_id, fingerprint, now_ms()],
-            )
-            .map_err(|error| error.to_string())?;
-        self.reclaim_terminated_validation_owner(operation_id, fingerprint)?;
-        self.connection
-            .query_row(
-                "SELECT owner_request_id FROM operation_leases WHERE operation_id=?1 AND fingerprint=?2",
-                params![operation_id, fingerprint],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| error.to_string())
-    }
-
-    fn reclaim_terminated_validation_owner(
-        &self,
-        operation_id: &str,
-        fingerprint: &str,
-    ) -> Result<(), String> {
-        let owner = self
-            .connection
-            .query_row(
-                "SELECT owner_request_id FROM operation_leases WHERE operation_id=?1 AND fingerprint=?2",
-                params![operation_id, fingerprint],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|error| error.to_string())?;
-        if owner.as_deref().and_then(request_owner_process_is_alive) != Some(false) {
-            return Ok(());
-        }
-        self.connection
-            .execute(
-                "DELETE FROM operation_leases WHERE operation_id=?1 AND fingerprint=?2 AND owner_request_id=?3",
-                params![operation_id, fingerprint, owner],
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(())
-    }
-
-    pub fn heartbeat_validation(
-        &self,
-        operation_id: &str,
-        fingerprint: &str,
-        request_id: &str,
-    ) -> Result<(), String> {
-        self.connection
-            .execute(
-                "UPDATE operation_leases SET expires_ms=?4 WHERE operation_id=?1 AND fingerprint=?2 AND owner_request_id=?3",
-                params![
-                    operation_id,
-                    fingerprint,
-                    request_id,
-                    now_ms().saturating_add(31 * 60 * 1_000)
-                ],
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(())
-    }
-
     pub fn add_queue_ms(&self, request_id: &str, elapsed_ms: i64) -> Result<(), String> {
         self.connection
             .execute(
                 "UPDATE requests SET queue_ms=queue_ms+?2 WHERE id=?1",
                 params![request_id, elapsed_ms],
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(())
-    }
-
-    pub fn release_validation(
-        &self,
-        operation_id: &str,
-        fingerprint: &str,
-        request_id: &str,
-    ) -> Result<(), String> {
-        self.connection
-            .execute(
-                "DELETE FROM operation_leases WHERE operation_id=?1 AND fingerprint=?2 AND owner_request_id=?3",
-                params![operation_id, fingerprint, request_id],
             )
             .map_err(|error| error.to_string())?;
         Ok(())
@@ -644,29 +459,6 @@ impl Evidence {
     }
 }
 
-#[cfg(unix)]
-fn request_owner_process_is_alive(request_id: &str) -> Option<bool> {
-    let (_, pid_hex) = request_id.rsplit_once('-')?;
-    let pid = i32::try_from(u32::from_str_radix(pid_hex, 16).ok()?).ok()?;
-    if pid <= 0 {
-        return None;
-    }
-    // SAFETY: signal 0 performs no mutation; it only probes whether the encoded owner PID exists.
-    if unsafe { libc::kill(pid, 0) } == 0 {
-        return Some(true);
-    }
-    match std::io::Error::last_os_error().raw_os_error() {
-        Some(libc::ESRCH) => Some(false),
-        Some(libc::EPERM) => Some(true),
-        _ => None,
-    }
-}
-
-#[cfg(not(unix))]
-fn request_owner_process_is_alive(_request_id: &str) -> Option<bool> {
-    None
-}
-
 struct EvidenceMigrationLock(File);
 
 impl EvidenceMigrationLock {
@@ -747,14 +539,6 @@ fn migrate_v11_to_v12(connection: &Connection) -> Result<(), String> {
 }
 
 fn retain_recent_evidence(connection: &Connection) -> Result<(), String> {
-    connection
-        .execute(
-            "DELETE FROM validation_results WHERE expires_ms < ?1 OR rowid NOT IN (
-                SELECT rowid FROM validation_results ORDER BY completed_ms DESC LIMIT 10000
-            )",
-            [now_ms()],
-        )
-        .map_err(|error| format!("cannot prune validation cache: {error}"))?;
     connection
         .execute_batch(
             "DELETE FROM events WHERE request_id IN (
@@ -1262,170 +1046,6 @@ mod tests {
     }
 
     #[test]
-    fn validation_cache_is_content_scoped_and_leases_recover_after_expiry() {
-        let root = temporary_root("validation-cache");
-        let evidence = Evidence::open_at(&root).unwrap();
-        evidence
-            .cache_validation_success("check.one", "fingerprint")
-            .unwrap();
-        assert!(
-            evidence
-                .has_cached_validation_success("check.one", "fingerprint")
-                .unwrap()
-        );
-        assert!(
-            evidence
-                .claim_validation("check.two", "fingerprint", "owner-one")
-                .unwrap()
-        );
-        assert!(
-            !evidence
-                .claim_validation("check.two", "fingerprint", "owner-two")
-                .unwrap()
-        );
-        evidence
-            .connection
-            .execute(
-                "UPDATE operation_leases SET expires_ms=0 WHERE operation_id='check.two'",
-                [],
-            )
-            .unwrap();
-        assert!(
-            evidence
-                .claim_validation("check.two", "fingerprint", "owner-two")
-                .unwrap()
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn separate_connections_share_one_validation_lease() {
-        let root = temporary_root("shared-lease");
-        let first = Evidence::open_at(&root).unwrap();
-        let second = Evidence::open_at(&root).unwrap();
-        assert!(
-            first
-                .claim_validation("check.one", "fingerprint", "owner")
-                .unwrap()
-        );
-        assert!(
-            !second
-                .claim_validation("check.one", "fingerprint", "waiter")
-                .unwrap()
-        );
-        first
-            .cache_validation_success("check.one", "fingerprint")
-            .unwrap();
-        first
-            .release_validation("check.one", "fingerprint", "owner")
-            .unwrap();
-        assert!(
-            second
-                .has_cached_validation_success("check.one", "fingerprint")
-                .unwrap()
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn terminated_request_owner_lease_is_reclaimed_immediately() {
-        let root = temporary_root("terminated-request-owner");
-        let evidence = Evidence::open_at(&root).unwrap();
-        let active_owner = RawRequest::capture([OsString::from("agent-cli")]);
-        assert!(
-            evidence
-                .claim_validation("check.active", "fingerprint", &active_owner.id)
-                .unwrap()
-        );
-        assert!(
-            !evidence
-                .claim_validation("check.active", "fingerprint", "waiter")
-                .unwrap()
-        );
-
-        let mut child = Command::new("true").spawn().unwrap();
-        let dead_owner = format!("1-{:x}", child.id());
-        child.wait().unwrap();
-        assert!(
-            evidence
-                .claim_validation("check.dead", "fingerprint", &dead_owner)
-                .unwrap()
-        );
-        assert!(
-            evidence
-                .claim_validation("check.dead", "fingerprint", "waiter")
-                .unwrap()
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn completed_request_leases_are_reclaimed_immediately() {
-        let root = temporary_root("completed-request-lease");
-        let evidence = Evidence::open_at(&root).unwrap();
-        let owner = RawRequest::capture([OsString::from("agent-cli"), OsString::from("check")]);
-        let waiter = RawRequest::capture([OsString::from("agent-cli"), OsString::from("check")]);
-        evidence.begin_request(&owner).unwrap();
-        evidence.begin_request(&waiter).unwrap();
-        assert!(
-            evidence
-                .claim_validation("check.one", "fingerprint", &owner.id)
-                .unwrap()
-        );
-        assert!(
-            !evidence
-                .claim_validation("check.one", "fingerprint", &waiter.id)
-                .unwrap()
-        );
-        evidence.finish(&owner.id, Outcome::Failed).unwrap();
-        assert_eq!(
-            evidence
-                .validation_owner("check.one", "fingerprint")
-                .unwrap(),
-            None
-        );
-        assert!(
-            evidence
-                .claim_validation("check.one", "fingerprint", &waiter.id)
-                .unwrap()
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn failed_validation_rows_never_block_an_immediate_retry() {
-        let root = temporary_root("failed-validation-cache");
-        let evidence = Evidence::open_at(&root).unwrap();
-        let completed = now_ms();
-        evidence
-            .connection
-            .execute(
-                "INSERT INTO validation_results (operation_id, fingerprint, result, detail, completed_ms, expires_ms) VALUES (?1, ?2, 'failed', ?3, ?4, ?5)",
-                params![
-                    "check.one",
-                    "fingerprint",
-                    "No space left on device",
-                    completed,
-                    completed.saturating_add(10 * 60 * 1_000),
-                ],
-            )
-            .unwrap();
-
-        assert!(
-            !evidence
-                .has_cached_validation_success("check.one", "fingerprint")
-                .unwrap()
-        );
-        assert!(
-            evidence
-                .claim_validation("check.one", "fingerprint", "retry")
-                .unwrap()
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
     fn request_timing_includes_bootstrap() {
         let root = temporary_root("request-timing");
         let _ = fs::remove_dir_all(&root);
@@ -1435,12 +1055,7 @@ mod tests {
         thread::sleep(std::time::Duration::from_millis(5));
         evidence.begin_request(&request).unwrap();
         evidence
-            .record_intent(
-                &request.id,
-                &crate::model::AssuranceRequest::Plan {
-                    scope: crate::model::Scope::WorkingTree,
-                },
-            )
+            .record_intent(&request.id, &serde_json::json!({"command": "plan"}))
             .unwrap();
         evidence.finish(&request.id, Outcome::Passed).unwrap();
         let (bootstrap_ms, execution_ms): (i64, i64) = evidence

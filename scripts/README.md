@@ -18,8 +18,8 @@ ARM-build, deployment, profiling, acceptance, recovery, and scene orchestration
 belongs behind its typed Rust operations. `apps/mister/scripts/dev-ui-mac.sh`
 is the deliberate non-operational exception: it launches only the local macOS
 UI preview and cannot contact or mutate a MiSTer. New shell interfaces in the
-operational categories are rejected by the typed
-`BuiltinOperation::ShellOwnership` assurance in `agent-cli`.
+operational categories are rejected by the bootstrap-free Python static
+assurance in `scripts/magik_ci/assurance.py`.
 
 Normal repository work uses bounded Rust analyzer diagnostics where applicable,
 explicit-path `git add`, ordinary `git commit`, and `git push`; the pre-commit
