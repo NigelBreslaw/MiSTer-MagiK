@@ -24901,7 +24901,7 @@ fn catalog_artifact_set_valid(catalog: &Value) -> bool {
 }
 
 fn catalog_phase_evidence(log: &str) -> Value {
-    const RECORDS: [&str; 23] = [
+    const RECORDS: [&str; 24] = [
         "startup_timing",
         "catalog_scan_attribution_tsv",
         "catalog_scan_handoff_tsv",
@@ -24925,6 +24925,7 @@ fn catalog_phase_evidence(log: &str) -> Value {
         "catalog_shard_allocator_trim_tsv",
         "fast_catalog_generic_phase_tsv",
         "fast_catalog_allocator_trim_tsv",
+        "fast_catalog_generic_inventory_tsv",
     ];
     let mut records = Vec::new();
     for line in log.lines() {

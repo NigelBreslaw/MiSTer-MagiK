@@ -757,6 +757,7 @@ fn collect_generic_namespace_inventory(
     let mut watch_containers = Vec::new();
     let mut continuation_roots = Vec::new();
     let mut watch_complete = true;
+    let namespace_started = Instant::now();
     let namespace = namespace_walk::visit_owned_with_signature_capture(
         &header.path,
         max_depth,
@@ -841,6 +842,7 @@ fn collect_generic_namespace_inventory(
             true
         },
     );
+    let namespace_us = namespace_started.elapsed().as_micros() as u64;
     if namespace.errors > 0 {
         return Err(format!(
             "incomplete {} inventory: {} directory errors",
@@ -881,6 +883,16 @@ fn collect_generic_namespace_inventory(
     nested_probe_signatures.sort_by_cached_key(|(path, _)| {
         (path.to_string_lossy().to_ascii_lowercase(), path.clone())
     });
+    let total_us = started.elapsed().as_micros() as u64;
+    crate::catalog_logln!(
+        "fast_catalog_generic_inventory_tsv\tpath={}\tbackend={}\tentries={}\tnamespace_us={}\tpost_walk_us={}\ttotal_us={}",
+        header.path.display(),
+        namespace.backend,
+        entries.len(),
+        namespace_us,
+        total_us.saturating_sub(namespace_us),
+        total_us,
+    );
     Ok(GenericNamespaceInventory {
         fact: GameDirFact {
             name: header.name.clone(),
@@ -901,7 +913,7 @@ fn collect_generic_namespace_inventory(
             complete: watch_complete,
         },
         continuation_roots,
-        elapsed_us: started.elapsed().as_micros() as u64,
+        elapsed_us: total_us,
     })
 }
 
