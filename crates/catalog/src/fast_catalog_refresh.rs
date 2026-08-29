@@ -273,7 +273,6 @@ pub fn build_fresh_catalog_with_progress(
         report: source,
         profiles,
         generic_watch_observations,
-        row_fingerprint_payloads,
     } = source_build;
     let system_ids = snapshot
         .systems
@@ -291,7 +290,6 @@ pub fn build_fresh_catalog_with_progress(
         &snapshot,
         &profiles,
         Some(&generic_watch_observations),
-        Some(&row_fingerprint_payloads),
     )?;
     drop(snapshot);
     drop(profiles);
@@ -840,7 +838,7 @@ pub fn capture_refresh_state(
 ) -> Result<(Vec<FastRefreshSystemState>, FastRefreshCaptureReport), String> {
     let roots = [storage_root.display().to_string()];
     let profiles = crate::launch_profiles::ProfileSet::try_for_roots(&roots)?.into_profiles();
-    capture_refresh_state_with_profiles(storage_root, snapshot, &profiles, None, None)
+    capture_refresh_state_with_profiles(storage_root, snapshot, &profiles, None)
 }
 
 fn capture_refresh_state_with_profiles(
@@ -848,7 +846,6 @@ fn capture_refresh_state_with_profiles(
     snapshot: &FastFiveSnapshot,
     profiles: &[crate::launch_profiles::LaunchProfile],
     generic_watch_observations: Option<&BTreeMap<String, GenericSourceWatchObservations>>,
-    precomputed_row_fingerprint_payloads: Option<&BTreeMap<String, Vec<u8>>>,
 ) -> Result<(Vec<FastRefreshSystemState>, FastRefreshCaptureReport), String> {
     let started = std::time::Instant::now();
     snapshot.validate()?;
@@ -875,13 +872,8 @@ fn capture_refresh_state_with_profiles(
         );
         report.directories = report.directories.saturating_add(watch.directories.len());
         report.containers = report.containers.saturating_add(watch.containers.len());
-        let row_fingerprint = precomputed_row_fingerprint_payloads
-            .and_then(|payloads| payloads.get(&system.system_id))
-            .map(|payload| sha256_hex(payload))
-            .map(Ok)
-            .unwrap_or_else(|| {
-                row_fingerprint_parts(&system.system_id, &system.games, &system.variants)
-            })?;
+        let row_fingerprint =
+            row_fingerprint_parts(&system.system_id, &system.games, &system.variants)?;
         states.push(FastRefreshSystemState {
             watch,
             row_fingerprint,
@@ -1962,33 +1954,21 @@ pub fn row_fingerprint(rows: &FastSystemRowsSnapshot) -> Result<String, String> 
     row_fingerprint_parts(&rows.system_id, &rows.games, &rows.variants)
 }
 
-pub(crate) fn encode_row_fingerprint_payload_for_system(
-    system: &FastFiveSystem,
-) -> Result<Vec<u8>, String> {
-    encode_row_fingerprint_payload(&system.system_id, &system.games, &system.variants)
-}
-
 fn row_fingerprint_parts(
     system_id: &str,
     games: &[SystemGame],
     variants: &[FastFiveGameVariant],
 ) -> Result<String, String> {
     validate_row_parts(system_id, games, variants)?;
-    encode_row_fingerprint_payload(system_id, games, variants).map(|bytes| sha256_hex(&bytes))
-}
-
-fn encode_row_fingerprint_payload(
-    system_id: &str,
-    games: &[SystemGame],
-    variants: &[FastFiveGameVariant],
-) -> Result<Vec<u8>, String> {
     let rows = FastSystemRowsSnapshotRef {
         schema: REFRESH_SCHEMA,
         system_id,
         games,
         variants,
     };
-    postcard::to_allocvec(&rows).map_err(|error| format!("encode row fingerprint: {error}"))
+    postcard::to_allocvec(&rows)
+        .map(|bytes| sha256_hex(&bytes))
+        .map_err(|error| format!("encode row fingerprint: {error}"))
 }
 
 fn validate_row_parts(
