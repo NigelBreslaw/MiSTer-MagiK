@@ -1725,7 +1725,10 @@ mod linux {
         let _ = fs::remove_file("/tmp/mister-magik/ui-automation-session.json");
         let _ = fs::remove_file("/tmp/mister-magik/ui-automation.sock");
         let _ = fs::remove_file("/tmp/mister-magik/ui-automation-failure.json");
-        let resume_generation = main_generation(&current_main_ready()?).unwrap_or(generation);
+        let resume_generation = current_main_ready()
+            .ok()
+            .and_then(|status| main_generation(&status))
+            .unwrap_or(generation);
         let resume_id = format!(
             "ui-test-resume-{}-{}",
             std::process::id(),
