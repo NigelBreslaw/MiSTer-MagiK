@@ -156,6 +156,8 @@ def commands(group: str) -> list[list[str]]:
                 "--no-default-features",
                 "--features",
                 "ui",
+                "--",
+                "--test-threads=1",
             ],
             [
                 "cargo",
@@ -191,6 +193,8 @@ def commands(group: str) -> list[list[str]]:
                 "--no-default-features",
                 "--features",
                 "ui-preview",
+                "--",
+                "--test-threads=1",
             ],
             [
                 "cargo",
@@ -202,6 +206,8 @@ def commands(group: str) -> list[list[str]]:
                 "--no-default-features",
                 "--features",
                 "ui-preview",
+                "--",
+                "--test-threads=1",
             ],
             [
                 "cargo",
@@ -212,6 +218,8 @@ def commands(group: str) -> list[list[str]]:
                 "--no-default-features",
                 "--features",
                 "ui,bench-scenes",
+                "--",
+                "--test-threads=1",
             ],
             [
                 "cargo",
@@ -222,6 +230,8 @@ def commands(group: str) -> list[list[str]]:
                 "--no-default-features",
                 "--features",
                 "ui,experiments",
+                "--",
+                "--test-threads=1",
             ],
             [
                 "cargo",

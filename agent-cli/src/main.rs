@@ -11,7 +11,6 @@ use agent_cli::model::Outcome;
 use agent_cli::progress::{EventKind, Reporter};
 use agent_cli::request::RawRequest;
 use clap::Parser;
-use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
@@ -64,7 +63,6 @@ fn run() -> AgentResult<ExitCode> {
     reporter.emit(EventKind::Started, "request", "Accepted request", None)?;
     let outcome = match dispatch(
         &context.evidence,
-        &raw.id,
         &context.repository,
         &command,
         output,
@@ -131,7 +129,6 @@ fn command_label(command: &CliCommand) -> &'static str {
 
 fn dispatch(
     evidence: &Evidence,
-    request_id: &str,
     repository: &std::path::Path,
     command: &CliCommand,
     output: OutputFormat,
