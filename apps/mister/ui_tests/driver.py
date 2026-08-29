@@ -23,7 +23,7 @@ class DriverConfig:
 
 
 def environment_for_application() -> dict[str, str]:
-    """Return host bridge variables without the private Slint package token."""
+    """Return bridge variables and safe process paths without private tokens."""
 
     import os
 
@@ -31,7 +31,10 @@ def environment_for_application() -> dict[str, str]:
     return {
         key: value
         for key, value in environment.items()
-        if key.startswith(("MISTER_", "SLINT_", "UV_"))
+        if (
+            key.startswith(("MISTER_", "SLINT_", "UV_"))
+            or key in {"HOME", "PATH", "TMPDIR", "XDG_CONFIG_HOME", "LANG", "LC_ALL"}
+        )
         and key
         not in {
             "SLINT_TESTING_TOKEN",

@@ -60,6 +60,8 @@ def test_application_environment_excludes_private_testing_credentials(
     monkeypatch.setenv("UV_INDEX_SLINT_PRIVATE_PASSWORD", "private")
     monkeypatch.setenv("MISTER_AGENT_TOKEN", "agent")
     monkeypatch.setenv("MISTER_DEVICE_ID", "device")
+    monkeypatch.setenv("HOME", "/operator-home")
+    monkeypatch.setenv("PATH", "/operator-bin")
 
     environment = environment_for_application()
 
@@ -67,3 +69,5 @@ def test_application_environment_excludes_private_testing_credentials(
     assert "UV_INDEX_SLINT_PRIVATE_PASSWORD" not in environment
     assert environment["MISTER_AGENT_TOKEN"] == "agent"
     assert environment["MISTER_DEVICE_ID"] == "device"
+    assert environment["HOME"] == "/operator-home"
+    assert environment["PATH"] == "/operator-bin"
