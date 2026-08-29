@@ -30,6 +30,8 @@ pub fn bootstrap_global_fixture(
     scan_unit_id: &ScanUnitId,
     limits: RegistryLimits,
 ) -> Result<MultiSystemOutcome, MultiSystemError> {
+    let _lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
+        .map_err(|error| MultiSystemError::new("lease", error.to_string()))?;
     let source_root = config
         .source_roots()
         .first()

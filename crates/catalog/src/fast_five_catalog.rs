@@ -791,6 +791,8 @@ pub fn run_c64_artifact_experiment(
     use std::fs;
     use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+    let _lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
+        .map_err(|error| error.to_string())?;
     let started = Instant::now();
     snapshot.validate()?;
     let source = snapshot
@@ -1025,17 +1027,18 @@ pub fn publish_snapshot_with_profile(
     limits: RegistryLimits,
     artifact_profile: FastFiveArtifactProfile,
 ) -> Result<FastFivePublishReport, String> {
-    let _lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
+    let lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
         .map_err(|error| error.to_string())?;
-    publish_snapshot_with_profile_held(storage_root, snapshot, limits, artifact_profile)
+    publish_snapshot_with_profile_held(storage_root, snapshot, limits, artifact_profile, &lease)
 }
 
 #[cfg(feature = "builder")]
-pub fn publish_snapshot_with_profile_held(
+pub(crate) fn publish_snapshot_with_profile_held(
     storage_root: &Path,
     snapshot: &FastFiveSnapshot,
     limits: RegistryLimits,
     artifact_profile: FastFiveArtifactProfile,
+    _lease: &crate::catalog_lease::CatalogMutationLease,
 ) -> Result<FastFivePublishReport, String> {
     publish_snapshot_selection(storage_root, snapshot, limits, artifact_profile, None)
 }
@@ -1048,7 +1051,7 @@ pub fn publish_changed_snapshot_with_profile(
     limits: RegistryLimits,
     artifact_profile: FastFiveArtifactProfile,
 ) -> Result<FastFivePublishReport, String> {
-    let _lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
+    let lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
         .map_err(|error| error.to_string())?;
     publish_changed_snapshot_with_profile_held(
         storage_root,
@@ -1056,16 +1059,18 @@ pub fn publish_changed_snapshot_with_profile(
         changed_system_ids,
         limits,
         artifact_profile,
+        &lease,
     )
 }
 
 #[cfg(feature = "builder")]
-pub fn publish_changed_snapshot_with_profile_held(
+pub(crate) fn publish_changed_snapshot_with_profile_held(
     storage_root: &Path,
     snapshot: &FastFiveSnapshot,
     changed_system_ids: &BTreeSet<String>,
     limits: RegistryLimits,
     artifact_profile: FastFiveArtifactProfile,
+    _lease: &crate::catalog_lease::CatalogMutationLease,
 ) -> Result<FastFivePublishReport, String> {
     publish_snapshot_selection(
         storage_root,
@@ -1788,6 +1793,31 @@ mod builder_tests {
         assert!(!staging.exists());
         assert!(parent.join("keep").exists());
         fs::remove_dir_all(parent).unwrap();
+    }
+
+    #[test]
+    fn public_publisher_fails_busy_before_mutating() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-fast-five-lease-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let lease = crate::catalog_lease::CatalogMutationLease::acquire_default().unwrap();
+
+        let error = publish_snapshot_with_profile(
+            &root,
+            &empty_snapshot(),
+            crate::shard_registry::production_registry_limits(),
+            FastFiveArtifactProfile::SearchOnly,
+        )
+        .expect_err("publisher must respect held mutation lease");
+
+        assert!(error.contains("busy"));
+        assert!(!root.exists());
+        drop(lease);
     }
 
     fn c64_game(title: &str, launch_ref: &str) -> SystemGame {

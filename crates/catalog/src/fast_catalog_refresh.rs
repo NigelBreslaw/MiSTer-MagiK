@@ -307,6 +307,7 @@ pub fn build_fresh_catalog_with_lease(
         &snapshot,
         crate::shard_registry::production_registry_limits(),
         fast_catalog_artifact_profile(),
+        _lease,
     )?;
     let (states, capture) = capture_refresh_state_with_profiles(
         storage_root,
@@ -1603,6 +1604,7 @@ fn execute_planned_fast_refresh_with(
             &artifact_changes,
             crate::shard_registry::production_registry_limits(),
             fast_catalog_artifact_profile(),
+            _lease,
         )?;
     }
     work_units = work_units.saturating_add(1);

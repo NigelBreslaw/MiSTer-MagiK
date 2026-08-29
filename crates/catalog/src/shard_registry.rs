@@ -162,7 +162,7 @@ struct StoredNavPack {
 }
 
 #[cfg(feature = "builder")]
-pub fn publish_system_artifacts(
+pub(crate) fn publish_system_artifacts(
     storage_root: &Path,
     staged_sqlite: &Path,
     staged_navigation: &Path,
@@ -575,7 +575,7 @@ pub(crate) fn sync_artifact_batch(storage_root: &Path) -> Result<(), RegistryErr
 }
 
 #[cfg(feature = "builder")]
-pub fn publish_manifest(
+pub(crate) fn publish_manifest(
     storage_root: &Path,
     manifest: &CatalogManifest,
     limits: RegistryLimits,
@@ -1044,7 +1044,7 @@ fn generation_from_stored(generation: StoredGeneration) -> PublishedGeneration {
 }
 
 #[cfg(feature = "builder")]
-pub fn garbage_collect_unreferenced(
+pub(crate) fn garbage_collect_unreferenced(
     storage_root: &Path,
     manifest: &CatalogManifest,
 ) -> Result<Vec<PathBuf>, RegistryError> {
