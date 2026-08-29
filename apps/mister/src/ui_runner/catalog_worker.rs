@@ -1459,4 +1459,40 @@ mod tests {
     fn refresh_has_no_external_builder_lock() {
         assert!(catalog_refresh_available());
     }
+
+    #[test]
+    fn heartbeat_protocol_is_decodable_without_counting_as_progress() {
+        let event = CatalogWorkerWireEvent {
+            version: 1,
+            kind: "heartbeat".to_string(),
+            name: String::new(),
+            detail: String::new(),
+            error: String::new(),
+            system_id: String::new(),
+            system_ids: Vec::new(),
+            all_published_systems: false,
+            generation: 0,
+            rebuilt: Vec::new(),
+            removed: Vec::new(),
+            elapsed_us: 0,
+            source: String::new(),
+            durable_save_pending: false,
+            fingerprint: String::new(),
+            run_id: "run-1".to_string(),
+            phase: "scan".to_string(),
+            sequence: 4,
+            progress_epoch: 2,
+            work_units: 99,
+        };
+        let encoded = serde_json::to_string(&event).unwrap();
+        let decoded: CatalogWorkerWireEvent = serde_json::from_str(&encoded).unwrap();
+        let message = catalog_worker_message_from_wire(
+            decoded,
+            "/media/fat/_Arcade",
+            Path::new("/tmp/catalog-fast-v1"),
+        )
+        .unwrap()
+        .expect("heartbeat event");
+        assert!(matches!(message, CatalogWorkerMessage::Heartbeat { .. }));
+    }
 }
