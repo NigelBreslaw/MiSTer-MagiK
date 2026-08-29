@@ -3818,7 +3818,7 @@ documentation = { summary = "Selects the deterministic UI test start feature", a
 
 [[control]]
 name = "MISTER_UI_TEST_FIXTURE"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/ui_test_support.rs"
 classification = "test"
 value_shape = "enum token"
 default_behavior = "uses the production catalog when unset or unrecognized"
