@@ -20,7 +20,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const REFRESH_SCHEMA: u32 = 3;
+const REFRESH_SCHEMA: u32 = 2;
 const ENVELOPE_VERSION: u32 = 1;
 const ENVELOPE_BYTES: usize = 64;
 const MANIFEST_MAGIC: &[u8; 8] = b"MGKRFSMF";
@@ -272,7 +272,6 @@ pub fn build_fresh_catalog_with_progress(
         report: source,
         profiles,
         generic_watch_observations,
-        row_fingerprints,
     } = source_build;
     let system_ids = snapshot
         .systems
@@ -290,13 +289,11 @@ pub fn build_fresh_catalog_with_progress(
         &snapshot,
         &profiles,
         Some(&generic_watch_observations),
-        Some(&row_fingerprints),
         false,
     )?;
     drop(snapshot);
     drop(profiles);
     drop(generic_watch_observations);
-    drop(row_fingerprints);
     release_catalog_build_allocations("fresh-post-capture");
     let refresh_generation = read_latest_refresh_manifest(catalog_root)
         .map_or(1, |manifest| manifest.generation.saturating_add(1));
@@ -798,7 +795,7 @@ pub fn capture_refresh_state(
 ) -> Result<(Vec<FastRefreshSystemState>, FastRefreshCaptureReport), String> {
     let roots = [storage_root.display().to_string()];
     let profiles = crate::launch_profiles::ProfileSet::try_for_roots(&roots)?.into_profiles();
-    capture_refresh_state_with_profiles(storage_root, snapshot, &profiles, None, None, true)
+    capture_refresh_state_with_profiles(storage_root, snapshot, &profiles, None, true)
 }
 
 fn capture_refresh_state_with_profiles(
@@ -806,7 +803,6 @@ fn capture_refresh_state_with_profiles(
     snapshot: &FastFiveSnapshot,
     profiles: &[crate::launch_profiles::LaunchProfile],
     generic_watch_observations: Option<&BTreeMap<String, GenericSourceWatchObservations>>,
-    precomputed_row_fingerprints: Option<&BTreeMap<String, String>>,
     validate_snapshot: bool,
 ) -> Result<(Vec<FastRefreshSystemState>, FastRefreshCaptureReport), String> {
     let started = std::time::Instant::now();
@@ -836,12 +832,8 @@ fn capture_refresh_state_with_profiles(
         );
         report.directories = report.directories.saturating_add(watch.directories.len());
         report.containers = report.containers.saturating_add(watch.containers.len());
-        let row_fingerprint = precomputed_row_fingerprints
-            .and_then(|fingerprints| fingerprints.get(&system.system_id).cloned())
-            .map(Ok)
-            .unwrap_or_else(|| {
-                row_fingerprint_parts(&system.system_id, &system.games, &system.variants)
-            })?;
+        let row_fingerprint =
+            row_fingerprint_parts(&system.system_id, &system.games, &system.variants)?;
         states.push(FastRefreshSystemState {
             watch,
             row_fingerprint,
@@ -877,36 +869,10 @@ fn capture_system_watch_from_specification(
     anchor_cache: &mut BTreeMap<PathBuf, FastWatchedDirectory>,
     generic_observations: Option<&GenericSourceWatchObservations>,
 ) -> Result<FastSystemWatchIndex, String> {
-    let mut metadata_groups = BTreeMap::<PathBuf, BTreeSet<PathBuf>>::new();
-    for path in specification
-        .anchors
-        .iter()
-        .chain(&specification.scan_roots)
-    {
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            metadata_groups
-                .entry(parent.to_path_buf())
-                .or_default()
-                .insert(path.clone());
-        }
-    }
-    let mut path_metadata = BTreeMap::new();
-    for (parent, paths) in metadata_groups {
-        let paths = paths.into_iter().collect::<Vec<_>>();
-        let observations = crate::namespace_walk::probe_known_path_metadata(&parent, &paths);
-        path_metadata.extend(paths.into_iter().zip(observations));
-    }
     let mut directories = Vec::new();
     let mut containers = Vec::new();
     for anchor in &specification.anchors {
-        if path_metadata
-            .get(anchor)
-            .and_then(Option::as_ref)
-            .is_some_and(|metadata| metadata.is_dir)
-        {
+        if anchor.is_dir() {
             let directory = match anchor_cache.get(anchor) {
                 Some(directory) => directory.clone(),
                 None => {
@@ -921,12 +887,7 @@ fn capture_system_watch_from_specification(
     let expected_roots = specification
         .scan_roots
         .iter()
-        .filter(|root| {
-            path_metadata
-                .get(*root)
-                .and_then(Option::as_ref)
-                .is_some_and(|metadata| metadata.is_dir)
-        })
+        .filter(|root| root.is_dir())
         .map(|root| root.to_string_lossy().into_owned())
         .collect::<BTreeSet<_>>();
     let reused_generic_observations = generic_observations
@@ -949,11 +910,7 @@ fn capture_system_watch_from_specification(
         }
     } else {
         for root in &specification.scan_roots {
-            if path_metadata
-                .get(root)
-                .and_then(Option::as_ref)
-                .is_some_and(|metadata| metadata.is_dir)
-            {
+            if root.is_dir() {
                 if system_id == "arcade" && root.ends_with("_Arcade") {
                     directories.push(capture_directory(root)?);
                 } else {
@@ -1849,19 +1806,14 @@ fn row_fingerprint_parts(
     variants: &[FastFiveGameVariant],
 ) -> Result<String, String> {
     validate_row_parts(system_id, games, variants)?;
-    let rows = crate::fast_five_catalog::FastFiveSystem {
-        system_id: system_id.to_string(),
-        display_title: crate::fast_catalog_sources::display_title(system_id).to_string(),
-        games: games.to_vec(),
-        variants: variants.to_vec(),
+    let rows = FastSystemRowsSnapshotRef {
+        schema: REFRESH_SCHEMA,
+        system_id,
+        games,
+        variants,
     };
     postcard::to_allocvec(&rows)
-        .map(|bytes| {
-            let mut digest = sha2::Sha256::new();
-            digest.update(b"mister-magik-row-fingerprint-v3\0");
-            digest.update(bytes);
-            sha256_digest_hex(digest.finalize())
-        })
+        .map(|bytes| sha256_hex(&bytes))
         .map_err(|error| format!("encode row fingerprint: {error}"))
 }
 
