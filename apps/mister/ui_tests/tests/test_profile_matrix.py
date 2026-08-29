@@ -51,6 +51,7 @@ def test_profile_feature_matrix(
     config = DriverConfig(
         command=tuple(shlex.split(command_text)),
         environment=environment,
+        ssh_destination=os.environ.get("MISTER_UI_TEST_SSH_DESTINATION"),
         launch_timeout=float(os.environ.get("MISTER_UI_TEST_LAUNCH_TIMEOUT", "20")),
     )
     with MagiKDriver.start(config) as driver:
