@@ -12,6 +12,7 @@ from unittest.mock import patch
 from scripts.magik_ci import build, metadata
 from scripts.magik_ci.assurance import fast_checks
 from scripts.magik_ci.bundle import bundle_id, update_plan
+from scripts.magik_ci.cli import parser
 from scripts.magik_ci.host import HOST_GROUPS, commands
 from scripts.magik_ci.manifest import candidate_id, serialize
 from scripts.magik_ci.python_tests import SLOW_TEST
@@ -62,6 +63,11 @@ class MagikCiTests(unittest.TestCase):
             )
         )
         self.assertIn(["python3", SLOW_TEST], commands("app"))
+
+    def test_host_group_does_not_shadow_the_top_level_command(self) -> None:
+        args = parser().parse_args(["ci", "host-assurance", "--group", "app"])
+        self.assertEqual(args.group, "ci")
+        self.assertEqual(args.host_group, "app")
 
     def test_python_tests_skip_unrelated_paths(self) -> None:
         self.assertEqual(python_test_commands(["agent-cli/src/main.rs"]), [])

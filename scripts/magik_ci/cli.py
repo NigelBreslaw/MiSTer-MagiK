@@ -33,7 +33,9 @@ def parser() -> argparse.ArgumentParser:
     assurance = ci_sub.add_parser("host-assurance")
     assurance_scope = assurance.add_mutually_exclusive_group(required=True)
     assurance_scope.add_argument("--paths", nargs="+")
-    assurance_scope.add_argument("--group", choices=host.HOST_GROUPS)
+    assurance_scope.add_argument(
+        "--group", dest="host_group", choices=host.HOST_GROUPS
+    )
     candidates = ci_sub.add_parser("platform-candidates")
     candidates.add_argument("artifacts", type=Path)
     candidates.add_argument("name")
@@ -210,8 +212,8 @@ def main() -> int:
         quality.execute(root, args.checks)
     elif args.group == "ci":
         if args.command == "host-assurance":
-            if args.group:
-                host.execute(root, args.group)
+            if args.host_group:
+                host.execute(root, args.host_group)
             else:
                 metadata.host_assurance(args.paths)
         elif args.command == "platform-candidates":
