@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 13;
+pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 12;
 const PREPARED_SYSTEM_IDS: [&str; 5] = ["arcade", "amiga", "c64", "dos", "x68000"];
 
 #[derive(Clone, Debug, Serialize)]
@@ -93,7 +93,6 @@ pub(crate) struct FastSourceRefreshBuild {
     pub report: FastSourceBuildReport,
     pub profiles: Vec<LaunchProfile>,
     pub generic_watch_observations: BTreeMap<String, GenericSourceWatchObservations>,
-    pub row_fingerprints: BTreeMap<String, String>,
 }
 
 pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
@@ -185,7 +184,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         .map(|report| report.elapsed_us)
         .sum();
     let phase_started = Instant::now();
-    let (source_fingerprint, row_fingerprints) = fingerprint_systems(systems.values())?;
+    let source_fingerprint = fingerprint_systems(systems.values())?;
     let fingerprint_us = elapsed_us(phase_started);
     let snapshot = FastFiveSnapshot {
         schema: FAST_FIVE_SNAPSHOT_SCHEMA.to_string(),
@@ -244,7 +243,6 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         },
         profiles,
         generic_watch_observations,
-        row_fingerprints,
     })
 }
 
@@ -1411,20 +1409,16 @@ fn load_fast_console_preview_title_index(
 
 fn fingerprint_systems<'a>(
     systems: impl IntoIterator<Item = &'a FastFiveSystem>,
-) -> Result<(String, BTreeMap<String, String>), String> {
+) -> Result<String, String> {
     let mut digest = Sha256::new();
-    let mut row_fingerprints = BTreeMap::new();
-    digest.update(b"mister-magik-independent-fast-sources-v2\0");
+    digest.update(b"mister-magik-independent-fast-sources-v1\0");
     for system in systems {
-        let payload =
-            crate::fast_catalog_refresh::encode_row_fingerprint_payload_for_system(system)?;
-        digest.update(&payload);
-        row_fingerprints.insert(
-            system.system_id.clone(),
-            hex_lower(&Sha256::digest(&payload)),
+        digest.update(
+            postcard::to_allocvec(system)
+                .map_err(|error| format!("encode {} source rows: {error}", system.system_id))?,
         );
     }
-    Ok((hex_lower(&digest.finalize()), row_fingerprints))
+    Ok(hex_lower(&digest.finalize()))
 }
 
 fn display_title(system_id: &str) -> &'static str {
@@ -1673,7 +1667,7 @@ mod tests {
 
     #[test]
     fn independent_source_set_contains_no_legacy_input_kind() {
-        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 13);
+        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 12);
     }
 
     #[test]
