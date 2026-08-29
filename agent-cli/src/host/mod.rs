@@ -19976,6 +19976,11 @@ fn profile_installed_catalog_attribution(
                 "timing_authority": arm == CatalogAttributionArm::Control,
                 "fts_optimize": experiment_value("MISTER_BENCH_CATALOG_FTS_OPTIMIZE", "default"),
                 "fts_integrity": experiment_value("MISTER_BENCH_CATALOG_FTS_INTEGRITY", "default"),
+                "fts_pipeline_batch": experiment_value(
+                    "MISTER_BENCH_CATALOG_SEARCH_PIPELINE_BATCH",
+                    "default-256",
+                ),
+                "fts_search_detail": experiment_value("MISTER_BENCH_CATALOG_SEARCH_DETAIL", "full"),
                 "media_update": experiment_value("MISTER_BENCH_CATALOG_MEDIA_UPDATE", "default"),
             },
             "samples": samples,
