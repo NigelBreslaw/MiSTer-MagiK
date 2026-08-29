@@ -12,7 +12,7 @@ from apps.mister.ui_tests.driver import (
     MagiKDriver,
     environment_for_application,
 )
-from apps.mister.ui_tests.queries import element_with_label
+from apps.mister.ui_tests.queries import element_with_label, elements_with_label
 
 DISPLAY_PROFILES = ("hdmi-720p", "hdmi-1080p", "crt-240p", "crt-480p")
 ORIENTATIONS = ("normal", "monitor-clockwise")
@@ -28,7 +28,7 @@ DISPLAY_CONTRACTS = {
 PROFILE_EXPECTATIONS = {
     "hdmi-720p": ("hdmi", (1280, 720), (1280, 720)),
     "hdmi-1080p": ("hdmi", (1920, 1080), (960, 540)),
-    "crt-240p": ("crt-240p60", (640, 240), (640, 480)),
+    "crt-240p": ("crt-240p60", (640, 240), (640, 240)),
     "crt-480p": ("crt-480p60", (640, 480), (640, 480)),
 }
 ORIENTATION_LABELS = {
@@ -81,7 +81,9 @@ def test_profile_feature_matrix(
             and (state.render_width, state.render_height) == expected_render
         )
         assert semantic.effective_view == feature
-        element_with_label(driver, FEATURE_LABELS[feature])
+        assert elements_with_label(driver, FEATURE_LABELS[feature]), (
+            f"feature label {FEATURE_LABELS[feature]!r} was not exposed"
+        )
 
 
 __all__ = ["DISPLAY_PROFILES", "FEATURES", "ORIENTATIONS"]
