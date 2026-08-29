@@ -360,29 +360,68 @@ fn discover_independent_system_ids_from_profiles(
     storage_root: &Path,
     profiles: &[LaunchProfile],
 ) -> Vec<String> {
+    #[cfg(feature = "builder")]
+    let present = |parent: &Path, names: &[String]| {
+        crate::namespace_walk::probe_known_path_metadata(
+            parent,
+            &names
+                .iter()
+                .map(|name| parent.join(name))
+                .collect::<Vec<_>>(),
+        )
+        .into_iter()
+        .zip(names)
+        .filter_map(|(metadata, name)| metadata.filter(|value| value.is_dir).map(|_| name.clone()))
+        .collect::<BTreeSet<_>>()
+    };
+    #[cfg(not(feature = "builder"))]
+    let present = |parent: &Path, names: &[String]| {
+        names
+            .iter()
+            .filter(|name| parent.join(name).is_dir())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+    };
+    let game_names = profiles
+        .iter()
+        .flat_map(|profile| profile.game_dirs.iter().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let present_game_dirs = present(&storage_root.join("games"), &game_names);
     let mut systems = profiles
         .iter()
         .filter(|profile| {
             profile
                 .game_dirs
                 .iter()
-                .any(|game_dir| storage_root.join("games").join(game_dir).is_dir())
+                .any(|game_dir| present_game_dirs.contains(game_dir))
         })
         .map(|profile| profile.system_id.clone())
         .collect::<BTreeSet<_>>();
-    for (system_id, present) in [
-        ("amiga", storage_root.join("games/Amiga").is_dir()),
-        ("arcade", storage_root.join("_Arcade").is_dir()),
-        ("c64", storage_root.join("games/C64").is_dir()),
-        ("dos", storage_root.join("_DOS Games").is_dir()),
-        (
-            "x68000",
-            storage_root.join("_Computer/_X68000 Games").is_dir()
-                || storage_root.join("_Computer/X68000 Games").is_dir(),
-        ),
-    ] {
-        if present {
+    let games_names = vec!["Amiga".to_string(), "C64".to_string()];
+    let present_games = present(&storage_root.join("games"), &games_names);
+    for (system_id, name) in [("amiga", "Amiga"), ("c64", "C64")] {
+        if present_games.contains(name) {
             systems.insert(system_id.to_string());
+        }
+    }
+    let root_names = vec![
+        "_Arcade".to_string(),
+        "_DOS Games".to_string(),
+        "_Computer".to_string(),
+    ];
+    let present_root = present(storage_root, &root_names);
+    if present_root.contains("_Arcade") {
+        systems.insert("arcade".to_string());
+    }
+    if present_root.contains("_DOS Games") {
+        systems.insert("dos".to_string());
+    }
+    if present_root.contains("_Computer") {
+        let computer_names = vec!["_X68000 Games".to_string(), "X68000 Games".to_string()];
+        if !present(&storage_root.join("_Computer"), &computer_names).is_empty() {
+            systems.insert("x68000".to_string());
         }
     }
     systems.into_iter().collect()
