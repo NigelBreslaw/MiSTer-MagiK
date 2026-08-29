@@ -45,6 +45,7 @@ UV_INDEX_SLINT_PRIVATE_PASSWORD="$SLINT_TESTING_TOKEN" \
 uv run --extra device-ui-tests python -m apps.mister.ui_tests.suite \
   startup-home system-hub arcade-navigation arcade-filters \
   settings-display screensaver-motion about-licenses \
+  menu-confirmations \
   profile-matrix \
   --fixture deterministic-arcade-v1 --attended
 ```
@@ -55,18 +56,19 @@ Expand device qualification in this order, stopping at the first failure:
 2. Run `system-hub`.
 3. Run `arcade-navigation`, `arcade-filters`, `settings-display`,
    `screensaver-motion`, and `about-licenses` independently.
-4. Run `profile-matrix` (24 display/orientation/feature sessions).
-5. Run the complete command once.
-6. Run the complete command a second time immediately afterward.
+4. Run `menu-confirmations`.
+5. Run `profile-matrix` (24 display/orientation/feature sessions).
+6. Run the complete command once.
+7. Run the complete command a second time immediately afterward.
 
 Only the two consecutive complete runs qualify the suite. A diagnostic rerun
 of one failed case helps isolate a fault but does not count as qualification;
 the ladder restarts from `smoke` after a fix. Suite subprocesses fail if pytest
 reports a skip, so a green run contains no silently omitted test.
 
-The controller screen and effect-sandbox journey are future or destructive
-scenarios and are therefore excluded from this qualification ladder. Their
-explicit test targets remain available for later feature milestones.
+The controller screen is a future feature and is therefore excluded from this
+qualification ladder. Its explicit test target remains available for a later
+feature milestone.
 
 `slint-testing` stays on the operator host. Its local test socket is bridged by
 the typed MagiK agent connection, while logical keyboard and joystick actions

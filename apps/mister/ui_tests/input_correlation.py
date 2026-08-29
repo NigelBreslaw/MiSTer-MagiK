@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .agent_input import AgentInput, Button, Key
+from .agent_input import AgentInput, Button, Key, UiTestSnapshot
 from .slint_adapter import SlintElement
 
 
@@ -108,6 +108,11 @@ class InputCorrelation:
 
     def keep_alive(self) -> None:
         self._inputs.keep_alive()
+
+    def snapshot(self) -> UiTestSnapshot:
+        """Return the latest runtime semantic snapshot from the bridge."""
+
+        return self._inputs.snapshot()
 
     def _record(
         self,

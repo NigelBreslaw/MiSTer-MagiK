@@ -26,7 +26,7 @@ CASE_TARGETS = {
     "screensaver-motion": "apps/mister/ui_tests/tests/test_screensaver_motion.py",
     "about-licenses": "apps/mister/ui_tests/tests/test_about_licenses.py",
     "controller": "apps/mister/ui_tests/tests/test_controller.py",
-    "effect-sandbox": "apps/mister/ui_tests/tests/test_effect_sandbox.py",
+    "menu-confirmations": "apps/mister/ui_tests/tests/test_menu_confirmations.py",
     "profile-matrix": "apps/mister/ui_tests/tests/test_profile_matrix.py",
 }
 COMPLETE_CASES = (
@@ -37,6 +37,7 @@ COMPLETE_CASES = (
     "settings-display",
     "screensaver-motion",
     "about-licenses",
+    "menu-confirmations",
     "profile-matrix",
 )
 
