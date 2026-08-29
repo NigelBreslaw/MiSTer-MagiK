@@ -361,10 +361,21 @@ pub fn build_fresh_catalog_with_lease(
 
 pub fn remove_default_catalog_artifacts() -> Result<usize, String> {
     let paths = crate::device_layout::CatalogPaths::capture_process();
-    remove_catalog_artifacts(paths.sharded_catalog_dir())
+    let lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
+        .map_err(|error| error.to_string())?;
+    remove_catalog_artifacts_with_lease(paths.sharded_catalog_dir(), &lease)
 }
 
 pub fn remove_catalog_artifacts(catalog_root: &Path) -> Result<usize, String> {
+    let lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
+        .map_err(|error| error.to_string())?;
+    remove_catalog_artifacts_with_lease(catalog_root, &lease)
+}
+
+fn remove_catalog_artifacts_with_lease(
+    catalog_root: &Path,
+    _lease: &crate::catalog_lease::CatalogMutationLease,
+) -> Result<usize, String> {
     if catalog_root.file_name().and_then(|name| name.to_str()) != Some("catalog-fast-v1") {
         return Err(format!(
             "refusing to remove unexpected catalog path {}",
@@ -2946,6 +2957,23 @@ mod tests {
         assert!(!root.join("packs/old.watchpack.tmp-crashed").exists());
         assert_eq!(fs::read(root.join("manifest-a.bin")).unwrap(), b"active");
         let _ = fs::remove_dir_all(catalog);
+    }
+
+    #[test]
+    fn catalog_purge_fails_busy_without_deleting_artifacts() {
+        let root = crate::test_support::unique_temp_dir("catalog-purge-lease");
+        let catalog = root.join("catalog-fast-v1");
+        fs::create_dir_all(&catalog).unwrap();
+        fs::write(catalog.join("manifest-a.bin"), b"active").unwrap();
+        let lease = crate::catalog_lease::CatalogMutationLease::acquire_default().unwrap();
+
+        let error = remove_catalog_artifacts(&catalog).expect_err("purge must respect held lease");
+
+        assert!(error.contains("busy"));
+        assert!(catalog.join("manifest-a.bin").exists());
+        drop(lease);
+        assert_eq!(remove_catalog_artifacts(&catalog).unwrap(), 2);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
