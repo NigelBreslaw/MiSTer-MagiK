@@ -16,7 +16,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD_SCRIPT = ROOT / "apps/mister/ui-generated/build.rs"
-UI_ROOT = ROOT / "apps/mister/ui"
 UI_CRATE = ROOT / "apps/mister/ui-generated"
 SHARED_TARGET = ROOT / "apps/mister/target"
 
@@ -86,12 +85,20 @@ class SlintBuildContractTests(unittest.TestCase):
             app_root = fixture / "apps/mister"
             ui_root = app_root / "ui"
             ui_crate = app_root / "ui-generated"
-            shutil.copytree(UI_ROOT, ui_root)
-            shutil.copytree(
-                UI_CRATE,
-                ui_crate,
-                ignore=shutil.ignore_patterns("target", "__pycache__"),
+            components = ui_root / "components"
+            components.mkdir(parents=True)
+            (ui_root / "launcher.slint").write_text(
+                'import { ComboBox } from "components/combo_box.slint";\n'
+                "export component Launcher inherits Rectangle { ComboBox {} }\n"
             )
+            (components / "combo_box.slint").write_text(
+                "export component ComboBox inherits Rectangle {}\n"
+            )
+            (ui_crate / "src").mkdir(parents=True)
+            for relative in ("Cargo.toml", "build.rs", "src/lib.rs"):
+                source = UI_CRATE / relative
+                destination = ui_crate / relative
+                shutil.copy2(source, destination)
 
             manifest = ui_crate / "Cargo.toml"
             initial = run_cargo(manifest, SHARED_TARGET)
