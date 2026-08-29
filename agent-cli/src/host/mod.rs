@@ -3451,7 +3451,7 @@ const EXPERIMENTAL_FPGA_METADATA_REMOTE: &str =
 const PATCHED_DIAGNOSTIC_ARCHITECTURE: &str = "scaler-fetch-no-request-gates-v1";
 const PLATFORM_V0_34_SCHEMA14_RBF_SHA256: &str =
     "ef1920500c925d35b23808792f0930954446a6030b33d3e92c0f4feccd23106e";
-const FPGA_READINESS_TIMEOUT: Duration = Duration::from_secs(10);
+const FPGA_READINESS_TIMEOUT: Duration = Duration::from_secs(45);
 const FPGA_READINESS_POLL: Duration = Duration::from_millis(100);
 const FPGA_FALLBACK_STREAK: usize = 3;
 
@@ -3504,12 +3504,14 @@ impl FpgaActivationAssessment {
     }
 
     fn reloadable_fallback(&self) -> bool {
+        // "unavailable" also describes normal boot before Main owns the FPGA.
+        // Never turn missing evidence into a stale identity that permits reload.
         matches!(
             self,
             Self::NotReady {
                 observed,
                 ..
-            } if observed == "unavailable" || observed == "unverified-observer-fallback-v1"
+            } if observed == "unverified-observer-fallback-v1"
         )
     }
 
@@ -38803,6 +38805,22 @@ H: Handlers=event3 js0"#
             FpgaActivationAssessment::NotReady { .. }
         ));
         assert!(not_ready.reason().contains("coherence"));
+
+        let unavailable = assess_fpga_evidence(
+            PATCHED_DIAGNOSTIC_ARCHITECTURE,
+            &json!({
+                "schema": "mister-magik-fpga-video-diagnostics-v1",
+                "available": false,
+                "coherent": false,
+                "classification": "unclassified",
+                "reason": "diagnostic readout requires stable LauncherActive ownership"
+            }),
+        );
+        assert!(matches!(
+            &unavailable,
+            FpgaActivationAssessment::NotReady { .. }
+        ));
+        assert!(!unavailable.reloadable_fallback());
     }
 
     #[test]
@@ -38830,15 +38848,24 @@ H: Handlers=event3 js0"#
             fpga_readiness_action(&stale, 1, Duration::from_millis(1)),
             FpgaReadinessAction::Reload
         );
-        let fallback = FpgaActivationAssessment::NotReady {
+        let unavailable = FpgaActivationAssessment::NotReady {
             expected: "patched".into(),
             observed: "unavailable".into(),
             failures: Vec::new(),
         };
         assert_eq!(
-            fpga_readiness_action(&fallback, 2, Duration::from_secs(1)),
+            fpga_readiness_action(&unavailable, 3, Duration::from_millis(500)),
             FpgaReadinessAction::Continue
         );
+        assert_eq!(
+            fpga_readiness_action(&unavailable, 100, FPGA_READINESS_TIMEOUT),
+            FpgaReadinessAction::Fail
+        );
+        let fallback = FpgaActivationAssessment::NotReady {
+            expected: "patched".into(),
+            observed: "unverified-observer-fallback-v1".into(),
+            failures: Vec::new(),
+        };
         assert_eq!(
             fpga_readiness_action(&fallback, 3, Duration::from_millis(500)),
             FpgaReadinessAction::Reload
