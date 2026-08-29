@@ -19739,6 +19739,18 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
             value.to_string_lossy().into_owned(),
         ));
     }
+    if let Some(value) = env::var_os("MISTER_BENCH_CATALOG_SEARCH_PIPELINE_BATCH") {
+        env.push((
+            "MISTER_CATALOG_SEARCH_PIPELINE_BATCH".into(),
+            value.to_string_lossy().into_owned(),
+        ));
+    }
+    if let Some(value) = env::var_os("MISTER_BENCH_CATALOG_SEARCH_DETAIL") {
+        env.push((
+            "MISTER_CATALOG_SEARCH_DETAIL".into(),
+            value.to_string_lossy().into_owned(),
+        ));
+    }
     if let Some(value) = env::var_os("MISTER_BENCH_CATALOG_MEDIA_UPDATE") {
         // Keep catalog attribution runs reproducible when screenshot downloads
         // would otherwise overlap the final catalog publication seconds. The

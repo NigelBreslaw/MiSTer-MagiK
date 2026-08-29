@@ -136,6 +136,7 @@ pub(crate) enum ShardArtifactProfile {
     NoAdjacentNavigation,
     NavpackOnly,
     SearchOnly,
+    SearchColumn,
     SearchDetailNone,
 }
 
@@ -150,7 +151,10 @@ impl ShardArtifactProfile {
     }
 
     fn stores_games(self) -> bool {
-        !matches!(self, Self::SearchOnly | Self::SearchDetailNone)
+        !matches!(
+            self,
+            Self::SearchOnly | Self::SearchColumn | Self::SearchDetailNone
+        )
     }
 }
 
@@ -382,6 +386,9 @@ fn write_system_shard_with_options_and_profile(
     let search_detail = match (artifact_profile, search_tuning) {
         (ShardArtifactProfile::SearchDetailNone, _) => {
             crate::persisted_search::PersistedSearchDetail::None
+        }
+        (ShardArtifactProfile::SearchColumn, _) => {
+            crate::persisted_search::PersistedSearchDetail::Column
         }
         (_, ShardSearchTuning::FullOptimized | ShardSearchTuning::FullUnoptimized) => {
             crate::persisted_search::PersistedSearchDetail::Full

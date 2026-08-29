@@ -593,6 +593,7 @@ pub enum FastFiveArtifactProfile {
     NoAdjacentNavigation,
     NavpackOnly,
     SearchOnly,
+    SearchColumn,
     SearchDetailNone,
 }
 
@@ -606,6 +607,7 @@ impl FastFiveArtifactProfile {
             "no-adjacent-navigation" => Ok(Self::NoAdjacentNavigation),
             "navpack-only" => Ok(Self::NavpackOnly),
             "search-only" => Ok(Self::SearchOnly),
+            "search-column" => Ok(Self::SearchColumn),
             "search-detail-none" => Ok(Self::SearchDetailNone),
             _ => Err(format!("unknown fast-five artifact profile {value}")),
         }
@@ -1124,6 +1126,7 @@ fn publish_snapshot_selection(
             artifact_profile,
             FastFiveArtifactProfile::SinglePass
                 | FastFiveArtifactProfile::SearchOnly
+                | FastFiveArtifactProfile::SearchColumn
                 | FastFiveArtifactProfile::SearchDetailNone
         );
         let stage_in_tmpfs =
@@ -1166,6 +1169,7 @@ fn publish_snapshot_selection(
             }
             FastFiveArtifactProfile::NavpackOnly => ShardArtifactProfile::NavpackOnly,
             FastFiveArtifactProfile::SearchOnly => ShardArtifactProfile::SearchOnly,
+            FastFiveArtifactProfile::SearchColumn => ShardArtifactProfile::SearchColumn,
             FastFiveArtifactProfile::SearchDetailNone => ShardArtifactProfile::SearchDetailNone,
         };
         if artifact_profile == FastFiveArtifactProfile::Legacy && stage_in_tmpfs {
@@ -1782,6 +1786,7 @@ mod builder_tests {
             FastFiveArtifactProfile::NavpackOnly,
             FastFiveArtifactProfile::SinglePass,
             FastFiveArtifactProfile::SearchOnly,
+            FastFiveArtifactProfile::SearchColumn,
             FastFiveArtifactProfile::SearchDetailNone,
         ] {
             let root = std::env::temp_dir().join(format!(

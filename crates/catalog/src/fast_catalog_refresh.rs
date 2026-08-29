@@ -34,6 +34,16 @@ const MANIFEST_A: &str = "manifest-a.bin";
 const MANIFEST_B: &str = "manifest-b.bin";
 const BUILD_INFO_FILE: &str = "build-info.bin";
 
+fn fast_catalog_artifact_profile() -> crate::fast_five_catalog::FastFiveArtifactProfile {
+    if std::env::var("MISTER_CATALOG_SEARCH_DETAIL")
+        .is_ok_and(|value| value.eq_ignore_ascii_case("column"))
+    {
+        crate::fast_five_catalog::FastFiveArtifactProfile::SearchColumn
+    } else {
+        crate::fast_five_catalog::FastFiveArtifactProfile::SearchOnly
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FastRefreshManifest {
     pub schema: u32,
@@ -258,7 +268,7 @@ pub fn build_fresh_catalog_with_progress(
         catalog_root,
         &snapshot,
         crate::shard_registry::production_registry_limits(),
-        crate::fast_five_catalog::FastFiveArtifactProfile::SearchOnly,
+        fast_catalog_artifact_profile(),
     )?;
     let (states, capture) = capture_refresh_state_with_profiles(
         storage_root,
@@ -1290,7 +1300,7 @@ fn execute_planned_fast_refresh_with(
             &snapshot,
             &artifact_changes,
             crate::shard_registry::production_registry_limits(),
-            crate::fast_five_catalog::FastFiveArtifactProfile::SearchOnly,
+            fast_catalog_artifact_profile(),
         )?;
     }
     let artifact_publish_us = artifact_started
