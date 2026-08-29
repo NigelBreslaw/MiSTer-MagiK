@@ -383,7 +383,9 @@ def main() -> None:
             "drained_during_reset": 20,
             "first_stall_valid": 24,
             "observer_fault": 8,
-            "simultaneous_event_seen": 140,
+            # formal_clk consumes two solver steps per observed Avalon edge;
+            # allow one accepted burst, all 128 returns, and the replacement.
+            "simultaneous_event_seen": 270,
         }
         liveness_cover_results: dict[str, int] = {}
         for witness, depth in liveness_covers.items():
