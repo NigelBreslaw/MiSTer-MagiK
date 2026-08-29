@@ -42,7 +42,7 @@ def environment_for_application() -> dict[str, str]:
 
 
 class MagiKDriver:
-    """Window oracle and physical-input driver for one application session."""
+    """Window oracle and logical-input driver for one application session."""
 
     def __init__(
         self,

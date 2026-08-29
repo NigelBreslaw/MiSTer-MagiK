@@ -41,7 +41,7 @@ class AccessibilitySnapshot:
 
 @dataclass(frozen=True)
 class CorrelatedInput:
-    """One physical action and the state transition it caused."""
+    """One logical action and the state transition it caused."""
 
     action: str
     source: str
