@@ -61,7 +61,9 @@ def execute(repository: Path, intent: str) -> None:
             raise ValueError(f"unsupported CI build intent: {intent}")
         manifest, profile, features = CHECKS[intent]
         runner = (
-            "cross" if os.environ.get("MISTER_ARM_BUILD_BACKEND") == "cross" else "cargo"
+            "cross"
+            if os.environ.get("MISTER_ARM_BUILD_BACKEND") == "cross"
+            else "cargo"
         )
         command = [
             runner,

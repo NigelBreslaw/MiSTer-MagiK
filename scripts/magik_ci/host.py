@@ -79,7 +79,9 @@ def commands(group: str) -> list[list[str]]:
             "mister/platform/contracts/video-diagnostics/Cargo.toml",
             "mister/platform/contracts/manifest/Cargo.toml",
         ]
-        result = [command for manifest in manifests for command in _crate_commands(manifest)]
+        result = [
+            command for manifest in manifests for command in _crate_commands(manifest)
+        ]
         result.append(
             [
                 "cargo",
@@ -246,7 +248,9 @@ def execute(repository: Path, group: str) -> None:
     if group == "static":
         from .assurance import execute as execute_fast
 
-        execute_fast(repository, ["scripts", "docs", "apps/mister/src", "apps/mister/ui/"])
+        execute_fast(
+            repository, ["scripts", "docs", "apps/mister/src", "apps/mister/ui/"]
+        )
         return
     for command in commands(group):
         subprocess.run(command, cwd=repository, check=True)

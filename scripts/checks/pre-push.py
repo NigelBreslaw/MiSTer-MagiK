@@ -65,9 +65,7 @@ def require_clean_tracked_tree(repository: Path) -> None:
 def git_paths(repository: Path, args: list[str]) -> list[str]:
     output = run_git(repository, args).stdout
     return sorted(
-        value.decode(errors="surrogateescape")
-        for value in output.split(b"\0")
-        if value
+        value.decode(errors="surrogateescape") for value in output.split(b"\0") if value
     )
 
 
@@ -96,9 +94,7 @@ def new_branch_paths(repository: Path, remote: str, head: str) -> list[str]:
             allowed_codes=(0, 1, 128),
         )
         if merge_base.returncode == 0:
-            return diff_paths(
-                repository, merge_base.stdout.decode().strip(), head
-            )
+            return diff_paths(repository, merge_base.stdout.decode().strip(), head)
     return git_paths(repository, ["ls-tree", "--name-only", "-z", "-r", head])
 
 

@@ -39,7 +39,8 @@ def fast_checks(repository: Path, paths: list[str]) -> list[list[str]]:
         )
     if any(
         path.startswith(("apps/mister/src", "apps/mister/ui", "apps/mister/examples"))
-        or path in {
+        or path
+        in {
             "scripts/checks/check-launcher-contract.py",
             "scripts/tests/test-launcher-contract.py",
         }

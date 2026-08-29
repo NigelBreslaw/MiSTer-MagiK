@@ -9,11 +9,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.magik_ci.bundle import bundle_id, update_plan
+from scripts.magik_ci import build, metadata
 from scripts.magik_ci.assurance import fast_checks
-from scripts.magik_ci import metadata
+from scripts.magik_ci.bundle import bundle_id, update_plan
 from scripts.magik_ci.host import HOST_GROUPS, commands
-from scripts.magik_ci import build
 from scripts.magik_ci.manifest import candidate_id, serialize
 from scripts.magik_ci.quality import QUALITY_COMMANDS, execute
 
@@ -51,7 +50,9 @@ class MagikCiTests(unittest.TestCase):
             HOST_GROUPS, ("static", "agent", "domain", "catalog", "app", "tools")
         )
         all_commands = [command for group in HOST_GROUPS for command in commands(group)]
-        self.assertEqual(len(all_commands), len({tuple(command) for command in all_commands}))
+        self.assertEqual(
+            len(all_commands), len({tuple(command) for command in all_commands})
+        )
         self.assertFalse(
             any(
                 "ui-preview" in command[1:] and command[1] == "build"
@@ -96,7 +97,15 @@ class MagikCiTests(unittest.TestCase):
     def test_quality_commands_match_ci_scopes(self) -> None:
         self.assertEqual(
             QUALITY_COMMANDS["format"],
-            ("uv", "run", "ruff", "format", "--check", "scripts", "apps/mister/ui_tests"),
+            (
+                "uv",
+                "run",
+                "ruff",
+                "format",
+                "--check",
+                "scripts",
+                "apps/mister/ui_tests",
+            ),
         )
         self.assertEqual(
             QUALITY_COMMANDS["lint"],
