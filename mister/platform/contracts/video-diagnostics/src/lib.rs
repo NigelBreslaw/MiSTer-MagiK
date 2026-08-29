@@ -1078,7 +1078,6 @@ pub fn decode_scaler_fetch_liveness_state(
     let mut owned = [0; SCALER_FETCH_LIVENESS_STATE_WORDS];
     owned.copy_from_slice(words);
     let decoded = ScalerFetchLivenessState { words: owned };
-    let flags = decoded.flags();
     let stall = decoded.first_stall_valid();
     let fault = decoded.observer_fault();
     let cause = decoded.frozen_cause();
