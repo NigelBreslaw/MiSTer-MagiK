@@ -1969,10 +1969,7 @@ fn capture_tree_at_depth(
     }
     let metadata = fs::metadata(root)
         .map_err(|error| format!("stat watch directory {}: {error}", root.display()))?;
-    let mut entries = fs::read_dir(root)
-        .map_err(|error| format!("read watch directory {}: {error}", root.display()))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("enumerate watch directory {}: {error}", root.display()))?;
+    let mut entries = read_watch_directory_entries(root)?;
     entries.sort_by(|left, right| {
         let left = left.file_name().to_string_lossy().into_owned();
         let right = right.file_name().to_string_lossy().into_owned();
@@ -2040,19 +2037,39 @@ fn capture_tree_at_depth(
     Ok(())
 }
 
+fn read_watch_directory_entries(path: &Path) -> Result<Vec<fs::DirEntry>, String> {
+    read_watch_directory_entries_with_limit(path, MAX_WATCH_DIRECTORY_ENTRIES)
+}
+
+fn read_watch_directory_entries_with_limit(
+    path: &Path,
+    limit: usize,
+) -> Result<Vec<fs::DirEntry>, String> {
+    let entries = fs::read_dir(path)
+        .map_err(|error| format!("read watch directory {}: {error}", path.display()))?;
+    let mut bounded = Vec::new();
+    for entry in entries {
+        if bounded.len() >= limit {
+            return Err(format!(
+                "watch directory {} exceeds {} entries",
+                path.display(),
+                limit
+            ));
+        }
+        bounded.push(
+            entry.map_err(|error| {
+                format!("enumerate watch directory {}: {error}", path.display())
+            })?,
+        );
+    }
+    Ok(bounded)
+}
+
 fn capture_directory(path: &Path) -> Result<FastWatchedDirectory, String> {
     let metadata = fs::metadata(path)
         .map_err(|error| format!("stat watch directory {}: {error}", path.display()))?;
-    let raw_entries = fs::read_dir(path)
-        .map_err(|error| format!("read watch directory {}: {error}", path.display()))?;
-    let mut raw_count = 0usize;
-    let mut entries = raw_entries
-        .take(MAX_WATCH_DIRECTORY_ENTRIES.saturating_add(1))
-        .map(|entry| {
-            raw_count = raw_count.saturating_add(1);
-            entry
-        })
-        .filter_map(Result::ok)
+    let mut entries = read_watch_directory_entries(path)?
+        .into_iter()
         .filter_map(|entry| {
             let entry_path = entry.path();
             let kind = entry.file_type().ok()?;
@@ -2073,13 +2090,6 @@ fn capture_directory(path: &Path) -> Result<FastWatchedDirectory, String> {
             Some((entry.file_name().to_string_lossy().into_owned(), kind))
         })
         .collect::<Vec<_>>();
-    if raw_count > MAX_WATCH_DIRECTORY_ENTRIES {
-        return Err(format!(
-            "watch directory {} exceeds {} entries",
-            path.display(),
-            MAX_WATCH_DIRECTORY_ENTRIES
-        ));
-    }
     entries.sort_by(|left, right| {
         left.0
             .to_ascii_lowercase()
@@ -3067,6 +3077,21 @@ mod tests {
         let error = capture_tree(&root, "snes", &mut directories, &mut containers)
             .expect_err("pathological depth must fail closed");
         assert!(error.contains("depth limit"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn watch_enumeration_stops_before_collecting_past_limit() {
+        let root = crate::test_support::unique_temp_dir("fast-watch-entry-limit");
+        fs::create_dir_all(&root).unwrap();
+        for name in ["one", "two", "three"] {
+            fs::write(root.join(name), b"fixture").unwrap();
+        }
+
+        let error = read_watch_directory_entries_with_limit(&root, 2)
+            .expect_err("third entry must exceed bounded collection");
+
+        assert!(error.contains("exceeds 2 entries"));
         let _ = fs::remove_dir_all(root);
     }
 }
