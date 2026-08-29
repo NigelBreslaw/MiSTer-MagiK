@@ -999,6 +999,11 @@ mod linux {
     const PERF_EVENT_IOC_ID: libc::c_ulong = 0x8008_2407;
     const PERF_IOC_FLAG_GROUP: libc::c_ulong = 1;
 
+    #[allow(clippy::unnecessary_cast)] // c_ulong is u32 on MiSTer and u64 on CI hosts.
+    const fn perf_flags_as_u64(flags: libc::c_ulong) -> u64 {
+        flags as u64
+    }
+
     #[repr(C)]
     #[derive(Default)]
     struct PerfEventAttr {
@@ -1308,7 +1313,7 @@ mod linux {
             },
             scope: CounterScope::CallingThreadAnyCpu,
             cpu: -1,
-            perf_flags: u64::from(PERF_FLAG_FD_CLOEXEC),
+            perf_flags: perf_flags_as_u64(PERF_FLAG_FD_CLOEXEC),
             disabled: flags & PERF_ATTR_DISABLED != 0,
             exclude_kernel: flags & PERF_ATTR_EXCLUDE_KERNEL != 0,
             exclude_hypervisor: flags & PERF_ATTR_EXCLUDE_HYPERVISOR != 0,
@@ -1333,7 +1338,7 @@ mod linux {
             read_format: Some(options.read_format),
             scope: options.scope,
             cpu: options.cpu,
-            perf_flags: u64::from(options.perf_flags),
+            perf_flags: perf_flags_as_u64(options.perf_flags),
             disabled: true,
             exclude_kernel: false,
             exclude_hypervisor: false,
