@@ -29,6 +29,8 @@ use crate::launcher_ui_actions::{
 };
 use crate::preview_state::PreviewApplyTrace;
 use crate::preview_worker;
+#[cfg(feature = "ui-device-tests")]
+use crate::ui_test_support::UiTestSandbox;
 #[cfg(test)]
 use mister_magik_fb::framebuffer::target::PhysicalLayerBacking;
 use mister_magik_fb::process_config::{ScreensaverStartMode, ScriptedInputConfig};
@@ -5134,9 +5136,50 @@ pub(super) fn run_launcher_loop(
     let preview_route = PreviewRoutePolicy::for_output_route(ui.output_route());
     let mut nav =
         LauncherNav::for_crt_layout_with_row_height(crt_layout, crt_metrics.game_row_height);
-    let settings_store =
-        FileSettingsStore::new(launcher_config.device_paths().app_path("settings.json"));
-    let orientation_store = ConfirmedOrientationStore::for_runtime(settings_store.clone());
+    #[cfg(feature = "ui-device-tests")]
+    let ui_test_sandbox = ui_test_fixture.then(|| {
+        let sandbox = UiTestSandbox::new().expect("create volatile UI-test sandbox");
+        let ini_path = sandbox
+            .path_for("MiSTer.ini")
+            .expect("UI-test MiSTer.ini path stays inside sandbox");
+        std::fs::write(&ini_path, "[MiSTer]\nosd_rotate=0 ; UI-test sandbox\n")
+            .expect("initialize UI-test MiSTer.ini sandbox");
+        sandbox
+    });
+    let settings_path = {
+        #[cfg(feature = "ui-device-tests")]
+        if let Some(sandbox) = ui_test_sandbox.as_ref() {
+            sandbox
+                .path_for("settings.json")
+                .expect("UI-test settings path stays inside sandbox")
+        } else {
+            launcher_config.device_paths().app_path("settings.json")
+        }
+        #[cfg(not(feature = "ui-device-tests"))]
+        {
+            launcher_config.device_paths().app_path("settings.json")
+        }
+    };
+    let settings_store = FileSettingsStore::new(settings_path);
+    let orientation_store = {
+        #[cfg(feature = "ui-device-tests")]
+        if let Some(sandbox) = ui_test_sandbox.as_ref() {
+            ConfirmedOrientationStore::with_mister_ini_path(
+                settings_store.clone(),
+                Some(
+                    sandbox
+                        .path_for("MiSTer.ini")
+                        .expect("UI-test MiSTer.ini path stays inside sandbox"),
+                ),
+            )
+        } else {
+            ConfirmedOrientationStore::for_runtime(settings_store.clone())
+        }
+        #[cfg(not(feature = "ui-device-tests"))]
+        {
+            ConfirmedOrientationStore::for_runtime(settings_store.clone())
+        }
+    };
     nav.settings = settings_store.load();
     #[cfg(feature = "ui-device-tests")]
     if std::env::var(crate::ui_test_support::FIXTURE_ENV)
@@ -5390,13 +5433,36 @@ pub(super) fn run_launcher_loop(
         cpu_profile::ScreensaverProfiler::from_config(profile_config.cpu());
     let mut bridge_models = LauncherViewModels::default();
     let mut catalog_version = 0usize;
-    let user_state_session = UserStateSession::start(
-        launcher_config
-            .catalog_paths()
-            .user_state_sqlite()
-            .to_path_buf(),
-        PathBuf::from("/media/fat"),
-    );
+    let (user_state_path, user_state_media_root) = {
+        #[cfg(feature = "ui-device-tests")]
+        if let Some(sandbox) = ui_test_sandbox.as_ref() {
+            (
+                sandbox
+                    .path_for("state.sqlite3")
+                    .expect("UI-test state path stays inside sandbox"),
+                sandbox.root().to_path_buf(),
+            )
+        } else {
+            (
+                launcher_config
+                    .catalog_paths()
+                    .user_state_sqlite()
+                    .to_path_buf(),
+                PathBuf::from("/media/fat"),
+            )
+        }
+        #[cfg(not(feature = "ui-device-tests"))]
+        {
+            (
+                launcher_config
+                    .catalog_paths()
+                    .user_state_sqlite()
+                    .to_path_buf(),
+                PathBuf::from("/media/fat"),
+            )
+        }
+    };
+    let user_state_session = UserStateSession::start(user_state_path, user_state_media_root);
     let mut user_state_catalog_version = None;
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
@@ -8071,6 +8137,12 @@ pub(super) fn run_launcher_loop(
                                         }
                                     }
                                     LauncherAction::ExitToMister => {
+                                        if ui_test_fixture {
+                                            crate::ui_logln!(
+                                                "ui_test_effect_blocked effect=exit_to_mister"
+                                            );
+                                            continue 'launcher;
+                                        }
                                         loading_title = "Exit to MiSTer".to_string();
                                         sync_bridge_launcher(
                                             &app,
@@ -8108,6 +8180,12 @@ pub(super) fn run_launcher_loop(
                                         }
                                     }
                                     LauncherAction::RebuildDatabase => {
+                                        if ui_test_fixture {
+                                            crate::ui_logln!(
+                                                "ui_test_effect_blocked effect=rebuild_database"
+                                            );
+                                            continue 'launcher;
+                                        }
                                         let effects =
                                             catalog_session.rebuild_database(arcade_root.clone());
                                         apply_catalog_session_effects(
@@ -8138,6 +8216,12 @@ pub(super) fn run_launcher_loop(
                                         continue 'launcher;
                                     }
                                     LauncherAction::Restart => {
+                                        if ui_test_fixture {
+                                            crate::ui_logln!(
+                                                "ui_test_effect_blocked effect=restart"
+                                            );
+                                            continue 'launcher;
+                                        }
                                         loading_title = "Shutting down…".to_string();
                                         sync_bridge_launcher(
                                             &app,
@@ -8205,6 +8289,12 @@ pub(super) fn run_launcher_loop(
                                         continue 'launcher;
                                     }
                                     LauncherAction::RebuildLibrary => {
+                                        if ui_test_fixture {
+                                            crate::ui_logln!(
+                                                "ui_test_effect_blocked effect=rebuild_library"
+                                            );
+                                            continue 'launcher;
+                                        }
                                         let effects =
                                             catalog_session.rebuild_library(arcade_root.clone());
                                         apply_catalog_session_effects(
@@ -8421,7 +8511,14 @@ pub(super) fn run_launcher_loop(
                                                     i64::try_from(duration.as_secs()).ok()
                                                 })
                                                 .unwrap_or(0);
-                                            user_state_session.set_favourite(game, favourite, now);
+                                            if !ui_test_fixture {
+                                                user_state_session
+                                                    .set_favourite(game, favourite, now);
+                                            } else {
+                                                crate::ui_logln!(
+                                                    "ui_test_effect_blocked effect=favourite_persist"
+                                                );
+                                            }
                                             full_bridge_dirty = true;
                                             request_launcher_redraw!();
                                         }
@@ -8429,6 +8526,12 @@ pub(super) fn run_launcher_loop(
                                     LauncherAction::LaunchGame => {}
                                 }
                                 if event.action == LauncherAction::LaunchGame {
+                                    if ui_test_fixture {
+                                        crate::ui_logln!(
+                                            "ui_test_effect_blocked effect=launch_game"
+                                        );
+                                        continue 'launcher;
+                                    }
                                     let Some(mra) = event.path else {
                                         continue;
                                     };
@@ -13144,6 +13247,11 @@ fn apply_lifecycle_effects(
     scheduler: &mut LauncherScheduler,
     start: Instant,
 ) {
+    let ui_test_fixture = cfg!(feature = "ui-device-tests")
+        && std::env::var(crate::ui_test_support::FIXTURE_ENV)
+            .ok()
+            .as_deref()
+            == Some(crate::ui_test_support::DETERMINISTIC_FIXTURE);
     for effect in effects.drain() {
         match effect {
             LauncherEffect::StartupEvent { name, detail } => {
@@ -13181,6 +13289,10 @@ fn apply_lifecycle_effects(
                 print_startup_event(start, "launcher_lifecycle_recovered", "state=idle");
             }
             LauncherEffect::StartCatalogRetry { root } => {
+                if ui_test_fixture {
+                    crate::ui_logln!("ui_test_effect_blocked effect=catalog_retry root={root}");
+                    continue;
+                }
                 print_startup_event(start, "catalog_retry_started", &root);
                 scheduler.start_catalog_worker(
                     root,
@@ -13190,6 +13302,10 @@ fn apply_lifecycle_effects(
                 );
             }
             LauncherEffect::StartCatalogRebuild { root } => {
+                if ui_test_fixture {
+                    crate::ui_logln!("ui_test_effect_blocked effect=catalog_rebuild root={root}");
+                    continue;
+                }
                 print_startup_event(start, "catalog_rebuild_started", &root);
                 scheduler.start_catalog_worker(
                     root,
@@ -13199,6 +13315,12 @@ fn apply_lifecycle_effects(
                 );
             }
             LauncherEffect::StartFreshCatalogBuild { root } => {
+                if ui_test_fixture {
+                    crate::ui_logln!(
+                        "ui_test_effect_blocked effect=fresh_catalog_build root={root}"
+                    );
+                    continue;
+                }
                 print_startup_event(start, "catalog_fresh_build_started", &root);
                 scheduler.start_catalog_worker(
                     root,
@@ -13208,6 +13330,10 @@ fn apply_lifecycle_effects(
                 );
             }
             LauncherEffect::ExitToMister => {
+                if ui_test_fixture {
+                    crate::ui_logln!("ui_test_effect_blocked effect=exit_to_mister");
+                    continue;
+                }
                 print_startup_event(start, "catalog_recovery_exit_requested", "target=mister");
                 match launcher::exit_to_mister() {
                     Ok(()) => std::process::exit(0),
