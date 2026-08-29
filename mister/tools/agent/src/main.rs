@@ -1048,6 +1048,7 @@ mod linux {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::OpenOptionsExt;
     use std::path::{Path, PathBuf};
+    use std::process::{Child, Command, Stdio};
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::thread;
@@ -1460,6 +1461,9 @@ mod linux {
                 false,
             ),
             Ok(line) => {
+                if maybe_handle_ui_test_session_v1(&line, &token, &mut reader, &mut stream) {
+                    return;
+                }
                 if maybe_handle_runtime_upload_v1(&line, &token, &mut reader, &mut stream) {
                     return;
                 }
@@ -1495,6 +1499,260 @@ mod linux {
             Err(err) => unavailable_failure_response(None, &format!("read error: {err}")),
         };
         let _ = writeln!(stream, "{response}");
+    }
+
+    fn maybe_handle_ui_test_session_v1(
+        line: &str,
+        token: &str,
+        reader: &mut BufReader<TcpStream>,
+        stream: &mut TcpStream,
+    ) -> bool {
+        let is_session = serde_json::from_str::<Value>(line.trim())
+            .ok()
+            .and_then(|value| value.get("cmd").and_then(Value::as_str).map(str::to_owned))
+            .as_deref()
+            == Some(mister_magik_agent_protocol::UI_TEST_SESSION_COMMAND);
+        if !is_session {
+            return false;
+        }
+        let request = match parse_control_request(line, token, CONTROL_AUTH_DISABLED) {
+            Ok(request) => request,
+            Err(error) => {
+                let response = if error.message == "unauthorized" {
+                    authentication_failure_response(error.id)
+                } else {
+                    operation_failure_response(error.id, &error.message)
+                };
+                let _ = writeln!(stream, "{response}");
+                return true;
+            }
+        };
+        let request =
+            match mister_magik_agent_protocol::UiTestSessionRequest::from_value(&request.args) {
+                Ok(request) => request,
+                Err(error) => {
+                    let _ = writeln!(stream, "{}", operation_failure_response(request.id, &error));
+                    return true;
+                }
+            };
+        match run_ui_test_session(reader, stream, request) {
+            Ok(()) => true,
+            Err(error) => {
+                let _ = writeln!(stream, "{}", operation_failure_response(None, &error));
+                true
+            }
+        }
+    }
+
+    fn run_ui_test_session(
+        reader: &mut BufReader<TcpStream>,
+        stream: &mut TcpStream,
+        request: mister_magik_agent_protocol::UiTestSessionRequest,
+    ) -> Result<(), String> {
+        if Path::new("/tmp/mister-magik/ui-automation-session.json").exists() {
+            return Err("another launcher automation session is active".to_string());
+        }
+        let cached = crate::ui_test_runtime::prepare(&request.runtime)?;
+        let runtime = if let Some(cached) = cached {
+            cached
+        } else {
+            writeln!(
+                stream,
+                "{}",
+                response(
+                    None,
+                    true,
+                    Some(json!({
+                        "schema": mister_magik_agent_protocol::UI_TEST_SESSION_SCHEMA,
+                        "state": "upload_required",
+                        "payload_bytes": request.runtime.payload_bytes,
+                        "sha256": request.runtime.sha256,
+                    })),
+                    None,
+                )
+            )
+            .map_err(|error| format!("send UI-test upload request: {error}"))?;
+            stream
+                .flush()
+                .map_err(|error| format!("flush UI-test upload request: {error}"))?;
+            crate::ui_test_runtime::receive(reader, &request.runtime)?
+        };
+        let old_status = read_json_value("/tmp/mister-magik/status.json");
+        let main_status = current_main_ready()?;
+        let generation = main_generation(&main_status)
+            .ok_or_else(|| "Main status has no generation".to_string())?;
+        let operation_id = format!(
+            "ui-test-suspend-{}-{}",
+            std::process::id(),
+            monotonic_us_now()
+        );
+        magik_acknowledged_action(
+            "suspend",
+            &json!({"operation_id": operation_id, "expected_generation": generation}),
+        )?;
+        let mut child = None;
+        let mut automation_nonce = None;
+        let result = (|| {
+            let listener = TcpListener::bind(("127.0.0.1", 0))
+                .map_err(|error| format!("bind UI-test Slint endpoint: {error}"))?;
+            listener
+                .set_nonblocking(true)
+                .map_err(|error| format!("configure UI-test Slint endpoint: {error}"))?;
+            let port = listener
+                .local_addr()
+                .map_err(|error| format!("read UI-test Slint endpoint: {error}"))?
+                .port();
+            let mut command = Command::new(&runtime.path);
+            command
+                .args(["ui", "launcher", "0"])
+                .env_clear()
+                .env("SLINT_TEST_SERVER", format!("127.0.0.1:{port}"))
+                .env("MISTER_UI_TEST_CASE", &request.case)
+                .env("MISTER_UI_TEST_FIXTURE", &request.fixture)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            for (name, value) in &request.environment {
+                command.env(name, value);
+            }
+            let spawned = command
+                .spawn()
+                .map_err(|error| format!("launch UI-test runtime: {error}"))?;
+            child = Some(spawned);
+            let child_pid = child.as_ref().map(Child::id).unwrap_or(0);
+            wait_for_ui_test_status(&old_status, child_pid, &request.runtime.source_revision)?;
+            let status = read_json_value("/tmp/mister-magik/status.json");
+            let build_version = status
+                .pointer("/build/version")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "UI-test runtime status has no build version".to_string())?;
+            let source_revision = status
+                .pointer("/build/source_revision")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "UI-test runtime status has no source revision".to_string())?;
+            let automation = crate::launcher_automation::begin(json!({
+                "expected_build_version": build_version,
+                "expected_source_revision": source_revision,
+                "expected_main_generation": generation,
+                "lifetime_seconds": (request.timeout_ms / 1_000).clamp(1, 120),
+            }))?;
+            automation_nonce = automation
+                .get("nonce")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let nonce = automation_nonce
+                .as_deref()
+                .ok_or_else(|| "UI-test automation response has no nonce".to_string())?;
+            let deadline = Instant::now() + Duration::from_millis(request.timeout_ms);
+            let (mut app_stream, _) = loop {
+                match listener.accept() {
+                    Ok(pair) => break pair,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return Err(
+                                "UI-test runtime did not connect to Slint endpoint".to_string()
+                            );
+                        }
+                        if child
+                            .as_mut()
+                            .is_some_and(|child| child.try_wait().ok().flatten().is_some())
+                        {
+                            return Err(
+                                "UI-test runtime exited before Slint connection".to_string()
+                            );
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => return Err(format!("accept UI-test Slint connection: {error}")),
+                }
+            };
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err("UI-test session timed out before ready".to_string());
+            }
+            stream
+                .set_read_timeout(Some(remaining))
+                .map_err(|error| format!("set UI-test host read timeout: {error}"))?;
+            stream
+                .set_write_timeout(Some(remaining))
+                .map_err(|error| format!("set UI-test host write timeout: {error}"))?;
+            app_stream
+                .set_read_timeout(Some(remaining))
+                .map_err(|error| format!("set UI-test app read timeout: {error}"))?;
+            app_stream
+                .set_write_timeout(Some(remaining))
+                .map_err(|error| format!("set UI-test app write timeout: {error}"))?;
+            writeln!(
+                stream,
+                "{}",
+                response(
+                    None,
+                    true,
+                    Some(json!({
+                        "schema": mister_magik_agent_protocol::UI_TEST_SESSION_SCHEMA,
+                        "state": "ready",
+                        "case": request.case,
+                        "fixture": request.fixture,
+                        "runtime_reused": runtime.reused,
+                        "child_pid": child_pid,
+                        "automation_nonce": nonce,
+                    })),
+                    None,
+                )
+            )
+            .map_err(|error| format!("send UI-test ready response: {error}"))?;
+            stream
+                .flush()
+                .map_err(|error| format!("flush UI-test ready response: {error}"))?;
+            io::copy_bidirectional(stream, &mut app_stream)
+                .map_err(|error| format!("relay Slint UI-test protocol: {error}"))?;
+            Ok(())
+        })();
+        if let Some(nonce) = automation_nonce.as_deref() {
+            let _ =
+                crate::launcher_automation::request(json!({"nonce": nonce, "kind": "release_all"}));
+            let _ = crate::launcher_automation::request(json!({"nonce": nonce, "kind": "end"}));
+        }
+        if let Some(mut child) = child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let _ = fs::remove_file("/tmp/mister-magik/ui-automation-session.json");
+        let _ = fs::remove_file("/tmp/mister-magik/ui-automation.sock");
+        let _ = fs::remove_file("/tmp/mister-magik/ui-automation-failure.json");
+        let resume_generation = main_generation(&current_main_ready()?).unwrap_or(generation);
+        let resume_id = format!(
+            "ui-test-resume-{}-{}",
+            std::process::id(),
+            monotonic_us_now()
+        );
+        let resume = magik_acknowledged_action(
+            "resume",
+            &json!({"operation_id": resume_id, "expected_generation": resume_generation}),
+        );
+        result.and(resume.map(|_| ()))
+    }
+
+    fn wait_for_ui_test_status(
+        old_status: &Value,
+        child_pid: u32,
+        source_revision: &str,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            let status = read_json_value("/tmp/mister-magik/status.json");
+            if status.get("pid").and_then(Value::as_u64) == Some(u64::from(child_pid))
+                && status
+                    .pointer("/build/source_revision")
+                    .and_then(Value::as_str)
+                    == Some(source_revision)
+                && status.get("pid") != old_status.get("pid")
+            {
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        Err("UI-test runtime did not publish its build identity".to_string())
     }
 
     fn maybe_handle_runtime_upload_v1(
