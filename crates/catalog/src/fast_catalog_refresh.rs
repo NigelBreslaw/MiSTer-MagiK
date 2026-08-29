@@ -14,7 +14,7 @@ use crate::generic_system_catalog::GenericSourceWatchObservations;
 use crate::system_shard::SystemGame;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -1473,7 +1473,7 @@ fn execute_planned_fast_refresh_with(
 
 fn check_watch_index(
     watch: &FastSystemWatchIndex,
-    metadata_cache: &BTreeMap<PathBuf, Option<crate::namespace_walk::KnownPathMetadata>>,
+    metadata_cache: &HashMap<PathBuf, Option<crate::namespace_walk::KnownPathMetadata>>,
     check: &mut FastSystemSourceCheck,
 ) {
     let known_directories = watch
@@ -1530,7 +1530,7 @@ fn check_watch_index(
 fn build_watch_metadata_cache<'a>(
     watches: impl Iterator<Item = &'a FastSystemWatchIndex>,
 ) -> (
-    BTreeMap<PathBuf, Option<crate::namespace_walk::KnownPathMetadata>>,
+    HashMap<PathBuf, Option<crate::namespace_walk::KnownPathMetadata>>,
     usize,
     usize,
 ) {
@@ -1555,7 +1555,7 @@ fn build_watch_metadata_cache<'a>(
         }
     }
     let metadata_parents = grouped.len();
-    let mut cache = BTreeMap::new();
+    let mut cache = HashMap::new();
     for (parent, paths) in grouped {
         let paths = paths.into_iter().collect::<Vec<_>>();
         let observations = crate::namespace_walk::probe_known_path_metadata(&parent, &paths);
