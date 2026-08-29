@@ -1476,17 +1476,16 @@ fn check_watch_index(
     metadata_cache: &HashMap<PathBuf, Option<crate::namespace_walk::KnownPathMetadata>>,
     check: &mut FastSystemSourceCheck,
 ) {
-    let known_directories = watch
-        .directories
-        .iter()
-        .map(|directory| directory.path.as_str())
-        .collect::<BTreeSet<_>>();
     for root in &watch.roots {
         let observed_is_dir = metadata_cache
             .get(Path::new(root))
             .and_then(|metadata| *metadata)
             .is_some_and(|metadata| metadata.is_dir);
-        if observed_is_dir != known_directories.contains(root.as_str()) {
+        let known_is_dir = watch
+            .directories
+            .binary_search_by(|directory| directory.path.as_str().cmp(root.as_str()))
+            .is_ok();
+        if observed_is_dir != known_is_dir {
             check.status = FastSourceCheckStatus::Changed;
             check.reason = format!("root availability changed: {root}");
             return;
