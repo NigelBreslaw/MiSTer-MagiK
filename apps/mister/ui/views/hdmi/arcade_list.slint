@@ -61,6 +61,7 @@ component SearchKeyboard inherits Rectangle {
     accessible-role: region;
     accessible-label: "Search keyboard";
     accessible-description: "Use the keyboard to enter an arcade search";
+    accessible-enabled: true;
 
     background: #1a1424;
 
@@ -161,6 +162,7 @@ export component ArcadeListScreen inherits Rectangle {
         accessible-role: list;
         accessible-label: ArcadeView.drawer-title;
         accessible-description: ArcadeView.active-filter-label;
+        accessible-enabled: true;
         for item[index] in ArcadeView.drawer-items : Rectangle {
             accessible-role: list-item;
             accessible-label: item;
@@ -176,9 +178,6 @@ export component ArcadeListScreen inherits Rectangle {
             horizontal-stretch: 1;
             vertical-stretch: 1;
             visible: ArcadeView.list-visible;
-            accessible-role: list;
-            accessible-label: ArcadeView.active-title + " games";
-            accessible-description: root.count + " games";
 
             if ArcadeView.search-mode == ArcadeSearchMode.active : SearchKeyboard { }
 
@@ -195,6 +194,7 @@ export component ArcadeListScreen inherits Rectangle {
                 accessible-role: list;
                 accessible-label: "Arcade games";
                 accessible-description: root.count + " games";
+                accessible-enabled: true;
             }
 
             if ArcadeView.search-mode == ArcadeSearchMode.inactive : Rectangle {
@@ -267,6 +267,7 @@ export component ArcadeListScreen inherits Rectangle {
                     accessible-role: list;
                     accessible-label: "Search results";
                     accessible-description: root.count + " matches";
+                    accessible-enabled: true;
 
                     Spleen6x12 {
                         width: parent.width;
@@ -319,6 +320,7 @@ export component ArcadeListScreen inherits Rectangle {
             accessible-role: list;
             accessible-label: ArcadeView.search-mode == ArcadeSearchMode.active ? "Search results" : "Arcade games";
             accessible-description: root.count + (ArcadeView.search-mode == ArcadeSearchMode.active ? " matches" : " games");
+            accessible-enabled: true;
         }
 
         if ArcadeView.search-mode == ArcadeSearchMode.active : SearchKeyboard {

@@ -22,8 +22,9 @@ export component ComboBoxOverlay inherits Rectangle {
         : "monitor-counterclockwise"
         : SettingsView.highlighted-display.id;
     accessible-role: region;
-    accessible-label: root.orientation ? "Screen orientation" : "Display resolution";
+    accessible-label: root.orientation ? "Screen orientation choices" : "Display resolution choices";
     accessible-description: root.highlighted-id;
+    accessible-enabled: true;
     background: #000000c8;
     Rectangle {
         width: 94%;

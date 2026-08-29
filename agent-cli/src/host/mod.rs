@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use crate::build::{BuildCommand, BuildSpec};
 use crate::model::{
     ArcadeVelocityScrollArm, ArcadeVelocityScrollInputMode as ArcadeRunInputMode,
     ArcadeVelocityScrollProfiler, ArcadeVelocityScrollRunSpec,
@@ -21,11 +22,13 @@ use ssh2::Session;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::os::fd::AsRawFd;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -51,7 +54,8 @@ use agent_client::{
     agent_framebuffer_stream_for_duration, agent_request, agent_request_at,
     agent_request_with_liveness, agent_runtime_upload_at, agent_telemetry_for_duration,
     agent_telemetry_for_duration_at_cadence, agent_telemetry_for_duration_with_mode,
-    agent_telemetry_until_screensaver_profile_complete, bootstrap_agent_with,
+    agent_telemetry_until_screensaver_profile_complete, agent_ui_test_session_at,
+    bootstrap_agent_with,
 };
 use platform_deploy::*;
 use remote::{
@@ -389,7 +393,8 @@ impl NativeDevice {
                         | LauncherCommand::CaptureCrtFontAb(_)
                         | LauncherCommand::CaptureSnesHub(_)
                         | LauncherCommand::ReturnToLauncher(_)
-                        | LauncherCommand::UiTest(_),
+                        | LauncherCommand::UiTest(_)
+                        | LauncherCommand::UiTestBridge(_),
                 }
                 | DeviceCommand::Catalog {
                     command: CatalogCommand::FastFiveOldCold(_),
@@ -581,6 +586,9 @@ impl NativeDevice {
                         agent_magik(&device_strings(["return-to-launcher"]))
                     }
                     LauncherCommand::UiTest(args) => run_ui_test_case(args),
+                    LauncherCommand::UiTestBridge(args) => {
+                        run_ui_test_bridge(args, &prepared.config)
+                    }
                 },
                 DeviceCommand::Catalog { command } => match command {
                     CatalogCommand::Inspect => {
@@ -31761,6 +31769,245 @@ fn run_ui_test_case(args: &crate::commands::device::UiTestArgs) -> Result<()> {
     Ok(())
 }
 
+fn run_ui_test_bridge(
+    args: &crate::commands::device::UiTestBridgeArgs,
+    config: &NativeDeviceConfig,
+) -> Result<()> {
+    let repository = env::current_dir()?;
+    let spec = BuildSpec::for_command(BuildCommand::RuntimeUiTests)
+        .ok_or("runtime UI-test build specification is unavailable")?;
+    let receipt = spec.verify(&repository)?;
+    let artifact = repository.join(spec.artifact());
+    let payload_bytes = fs::metadata(&artifact)?.len();
+    if payload_bytes == 0 {
+        return Err("UI-test runtime artifact has an invalid size".into());
+    }
+    let environment = ui_test_runtime_environment();
+    let request = mister_magik_agent_protocol::UiTestSessionRequest {
+        case: args.case.clone(),
+        fixture: args.fixture.clone(),
+        timeout_ms: args.timeout_secs.saturating_mul(1_000),
+        runtime: mister_magik_agent_protocol::UiTestRuntimeSpec {
+            payload_bytes,
+            sha256: receipt.binary_sha256.clone(),
+            source_revision: receipt.source_commit.clone(),
+            profile: receipt.profile.clone(),
+            features: receipt.features.split(',').map(str::to_owned).collect(),
+        },
+        environment,
+    };
+    let local_server = env::var("SLINT_TEST_SERVER")
+        .map_err(|_| "SLINT_TEST_SERVER is missing from the bridge environment")?;
+    let local_endpoint = parse_loopback_endpoint(&local_server)?;
+    let control_path = &args.control_socket;
+    if control_path.exists() {
+        fs::remove_file(control_path)?;
+    }
+    let control_listener = UnixListener::bind(control_path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(control_path, fs::Permissions::from_mode(0o600))?;
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let control_stop = Arc::clone(&stop);
+    let control_config = config.clone();
+    let control_nonce = Arc::new(std::sync::OnceLock::<String>::new());
+    let control_nonce_thread = Arc::clone(&control_nonce);
+    let control_thread = thread::spawn(move || {
+        control_listener
+            .set_nonblocking(true)
+            .map_err(|error| error.to_string())?;
+        while !control_stop.load(Ordering::Acquire) {
+            match control_listener.accept() {
+                Ok((stream, _)) => {
+                    let mut stream = stream;
+                    if let Err(error) = handle_ui_test_input(
+                        &mut stream,
+                        &control_config,
+                        control_nonce_thread.get().map(String::as_str),
+                    ) {
+                        let _ = writeln!(
+                            stream,
+                            "{}",
+                            json!({"ok": false, "error": error.to_string()})
+                        );
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        Ok::<(), String>(())
+    });
+    let session_result = (|| -> Result<()> {
+        let (agent_stream, ready_nonce) = agent_ui_test_session_at(
+            config.agent()?,
+            request.to_value(),
+            &artifact,
+            payload_bytes,
+            Duration::from_secs(args.timeout_secs.saturating_add(15)),
+        )?;
+        let _ = control_nonce.set(ready_nonce);
+        let local_stream = std::net::TcpStream::connect_timeout(
+            &local_endpoint,
+            Duration::from_secs(args.timeout_secs.min(20)),
+        )?;
+        local_stream.set_read_timeout(Some(Duration::from_secs(args.timeout_secs)))?;
+        local_stream.set_write_timeout(Some(Duration::from_secs(args.timeout_secs)))?;
+        relay_ui_test_streams(local_stream, agent_stream)?;
+        Ok(())
+    })();
+    stop.store(true, Ordering::Release);
+    let _ = control_thread.join();
+    let _ = fs::remove_file(control_path);
+    session_result
+}
+
+fn relay_ui_test_streams(left: std::net::TcpStream, right: std::net::TcpStream) -> Result<()> {
+    let mut left_reader = left.try_clone()?;
+    let mut right_writer = right.try_clone()?;
+    let mut right_reader = right.try_clone()?;
+    let mut left_writer = left.try_clone()?;
+    let (done_sender, done_receiver) = std::sync::mpsc::channel();
+    let forward_sender = done_sender.clone();
+    let forward = thread::spawn(move || {
+        let result = io::copy(&mut left_reader, &mut right_writer)
+            .map(|_| ())
+            .map_err(|error| error.to_string());
+        let _ = forward_sender.send(result);
+    });
+    let reverse_sender = done_sender;
+    let reverse = thread::spawn(move || {
+        let result = io::copy(&mut right_reader, &mut left_writer)
+            .map(|_| ())
+            .map_err(|error| error.to_string());
+        let _ = reverse_sender.send(result);
+    });
+    let first_result = done_receiver
+        .recv()
+        .map_err(|_| "UI-test relay threads stopped unexpectedly")?;
+    let _ = left.shutdown(std::net::Shutdown::Both);
+    let _ = right.shutdown(std::net::Shutdown::Both);
+    forward
+        .join()
+        .map_err(|_| "UI-test forward relay thread panicked")?;
+    reverse
+        .join()
+        .map_err(|_| "UI-test reverse relay thread panicked")?;
+    first_result.map_err(Into::into)
+}
+
+fn ui_test_runtime_environment() -> Vec<(String, String)> {
+    [
+        "MISTER_UI_TEST_CASE",
+        "MISTER_UI_TEST_FIXTURE",
+        "MISTER_UI_TEST_DISPLAY",
+        "MISTER_UI_TEST_ORIENTATION",
+        "MISTER_UI_TEST_FEATURE",
+        "MISTER_MAGIK_RUNTIME_SETTINGS_V1",
+        "MISTER_MAGIK_RUNTIME_DISPLAY_V1",
+    ]
+    .into_iter()
+    .filter_map(|name| env::var(name).ok().map(|value| (name.to_string(), value)))
+    .collect()
+}
+
+fn parse_loopback_endpoint(value: &str) -> Result<std::net::SocketAddr> {
+    let (host, port) = value
+        .rsplit_once(':')
+        .ok_or("SLINT_TEST_SERVER must be host:port")?;
+    if host != "127.0.0.1" && host != "localhost" {
+        return Err("SLINT_TEST_SERVER must use a loopback host".into());
+    }
+    Ok(std::net::SocketAddr::from(([127, 0, 0, 1], port.parse()?)))
+}
+
+fn handle_ui_test_input(
+    stream: &mut UnixStream,
+    config: &NativeDeviceConfig,
+    nonce: Option<&str>,
+) -> Result<()> {
+    let mut line = String::new();
+    std::io::BufReader::new(stream.try_clone()?).read_line(&mut line)?;
+    let request: Value = serde_json::from_str(line.trim())?;
+    if request.get("schema").and_then(Value::as_str) != Some("mister-magik-ui-test-input-v1") {
+        return Err("unsupported UI-test input schema".into());
+    }
+    let nonce = nonce.ok_or("UI-test automation is not ready")?;
+    if request.get("kind").and_then(Value::as_str) == Some("snapshot") {
+        let snapshot = launcher_automation::snapshot(config, nonce)?;
+        writeln!(stream, "{}", json!({"ok": true, "snapshot": snapshot}))?;
+        return Ok(());
+    }
+    let action = ui_test_action(&request)?;
+    let sent = launcher_automation::send_action(config, nonce, &action)?;
+    let sequence: Value = serde_json::from_str(&sent)?;
+    let sequence = sequence
+        .get("action_sequence")
+        .and_then(Value::as_u64)
+        .ok_or("UI-test action response has no sequence")?;
+    let presented = launcher_automation::await_presented(config, nonce, sequence, 3_000)?;
+    writeln!(
+        stream,
+        "{}",
+        json!({"ok":true,"action_sequence":sequence,"presented":presented})
+    )?;
+    Ok(())
+}
+
+fn ui_test_action(request: &Value) -> Result<AutomationAction> {
+    let kind = request
+        .get("kind")
+        .and_then(Value::as_str)
+        .ok_or("UI-test input kind is missing")?;
+    if kind == "release_all" {
+        return Ok(AutomationAction::ReleaseAll);
+    }
+    if kind == "hat" {
+        let horizontal = request
+            .get("horizontal")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let vertical = request.get("vertical").and_then(Value::as_i64).unwrap_or(0);
+        if horizontal != 0 && vertical != 0 {
+            return Err("diagonal UI-test hat input is unsupported".into());
+        }
+        return Ok(if horizontal > 0 {
+            AutomationAction::Tap(AutomationButton::Right)
+        } else if horizontal < 0 {
+            AutomationAction::Tap(AutomationButton::Left)
+        } else if vertical > 0 {
+            AutomationAction::Tap(AutomationButton::Down)
+        } else if vertical < 0 {
+            AutomationAction::Tap(AutomationButton::Up)
+        } else {
+            AutomationAction::ReleaseAll
+        });
+    }
+    let button = request
+        .get("button")
+        .or_else(|| request.get("key"))
+        .and_then(Value::as_str)
+        .ok_or("UI-test input button is missing")?
+        .to_ascii_lowercase();
+    let button = match button.as_str() {
+        "up" => AutomationButton::Up,
+        "down" => AutomationButton::Down,
+        "left" => AutomationButton::Left,
+        "right" => AutomationButton::Right,
+        "a" | "enter" | "space" => AutomationButton::A,
+        "b" | "escape" | "backspace" => AutomationButton::B,
+        "home" | "f12" => AutomationButton::Home,
+        "x" => AutomationButton::X,
+        "y" => AutomationButton::Y,
+        _ => return Err("unsupported UI-test input button".into()),
+    };
+    Ok(AutomationAction::Tap(button))
+}
+
 fn format_agent_magik_summary(action: &str, request_ms: u128, result: &Value) -> String {
     let status = if action == "status" {
         result.pointer("/files/main_status").unwrap_or(&Value::Null)
@@ -35880,6 +36127,24 @@ fn unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ui_test_loopback_endpoint_normalizes_localhost() {
+        assert_eq!(
+            parse_loopback_endpoint("localhost:43123").unwrap(),
+            std::net::SocketAddr::from(([127, 0, 0, 1], 43123))
+        );
+        assert_eq!(
+            parse_loopback_endpoint("127.0.0.1:43123").unwrap(),
+            std::net::SocketAddr::from(([127, 0, 0, 1], 43123))
+        );
+    }
+
+    #[test]
+    fn ui_test_loopback_endpoint_rejects_non_loopback_hosts() {
+        assert!(parse_loopback_endpoint("192.0.2.1:43123").is_err());
+        assert!(parse_loopback_endpoint("localhost:not-a-port").is_err());
+    }
 
     #[test]
     fn neogeo_setname_reads_structured_and_direct_launches() {

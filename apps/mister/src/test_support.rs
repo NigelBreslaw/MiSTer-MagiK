@@ -116,6 +116,7 @@ pub fn arcade_catalog(games: Vec<ArcadeGameEntry>, systems: Vec<GameSystemEntry>
 fn system_title(id: &str) -> String {
     match id {
         "arcade" => "Arcade".to_string(),
+        "snes" => "SNES".to_string(),
         "amiga" => "Amiga".to_string(),
         other => other.to_string(),
     }

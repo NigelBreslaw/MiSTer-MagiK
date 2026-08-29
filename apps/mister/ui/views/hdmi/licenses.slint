@@ -27,7 +27,8 @@ component LicenseRow inherits Rectangle {
 
 export component LicensesScreen inherits Rectangle {
     accessible-role: main;
-    accessible-label: "Licenses";
+    accessible-label: "Licenses screen";
+    accessible-enabled: true;
     if !SettingsView.license-expanded : VerticalLayout {
         padding: 24px;
         spacing: 12px;
@@ -62,6 +63,7 @@ export component LicensesScreen inherits Rectangle {
             accessible-role: region;
             accessible-label: "License text";
             accessible-description: SettingsView.license-titles[SettingsView.selected-license-index];
+            accessible-enabled: true;
             Flickable {
                 x: 12px;
                 y: 12px;

@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import os
+import shlex
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+
+from .slint_adapter import load_application_factory
 
 DEFAULT_FIXTURE = "deterministic-arcade-v1"
 DEFAULT_TIMEOUT_SECONDS = 120
@@ -20,9 +25,21 @@ CASE_TARGETS = {
     "settings-display": "apps/mister/ui_tests/tests/test_settings_display.py",
     "screensaver-motion": "apps/mister/ui_tests/tests/test_screensaver_motion.py",
     "about-licenses": "apps/mister/ui_tests/tests/test_about_licenses.py",
-    "effect-sandbox": "apps/mister/ui_tests/tests/test_effect_sandbox.py",
+    "controller": "apps/mister/ui_tests/tests/test_controller.py",
+    "menu-confirmations": "apps/mister/ui_tests/tests/test_menu_confirmations.py",
     "profile-matrix": "apps/mister/ui_tests/tests/test_profile_matrix.py",
 }
+COMPLETE_CASES = (
+    "startup-home",
+    "system-hub",
+    "arcade-navigation",
+    "arcade-filters",
+    "settings-display",
+    "screensaver-motion",
+    "about-licenses",
+    "menu-confirmations",
+    "profile-matrix",
+)
 
 
 @dataclass(frozen=True)
@@ -52,20 +69,15 @@ class ScriptAgentBridge:
 
     def __init__(self, repository: Path) -> None:
         self._command = repository / "scripts" / "agent"
+        self._prepared = False
 
     def run(self, case: UiCase) -> UiCaseResult:
+        if self._prepared:
+            return UiCaseResult(case, "")
         command = [
             str(self._command),
-            "device",
-            "launcher",
-            "ui-test",
-            "--case",
-            case.name,
-            "--fixture",
-            case.fixture,
-            "--timeout-secs",
-            str(case.timeout_seconds),
-            "--attended",
+            "build",
+            "runtime-ui-tests",
         ]
         completed = subprocess.run(
             command,
@@ -78,10 +90,16 @@ class ScriptAgentBridge:
         ).strip()
         if completed.returncode != 0:
             raise RuntimeError(
-                f"device UI case {case.name!r} failed ({completed.returncode}): "
-                f"{output}"
+                f"UI-test runtime build failed ({completed.returncode}): {output}"
             )
+        self._prepared = True
         return UiCaseResult(case, output)
+
+
+def _preflight_host_client() -> None:
+    """Validate the private Slint client before the ARM build starts."""
+
+    load_application_factory()
 
 
 def run_cases(cases: list[UiCase], bridge: AgentBridge) -> list[UiCaseResult]:
@@ -91,24 +109,51 @@ def run_cases(cases: list[UiCase], bridge: AgentBridge) -> list[UiCaseResult]:
 
 
 def run_pytest(cases: list[UiCase], repository: Path) -> str:
-    """Run mapped pytest modules after the agent has accepted each case."""
+    """Run each mapped pytest module in its own managed agent session."""
 
-    targets = [CASE_TARGETS[case.name] for case in cases]
-    completed = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", *targets],
-        check=False,
-        cwd=repository,
-        capture_output=True,
-        text=True,
-    )
-    output = "\n".join(
-        part for part in (completed.stdout, completed.stderr) if part
-    ).strip()
-    if completed.returncode != 0:
-        raise RuntimeError(
-            f"device UI pytest run failed ({completed.returncode}): {output}"
+    outputs: list[str] = []
+    bridge = repository / "scripts" / "agent"
+    for case in cases:
+        environment = os.environ.copy()
+        environment["MISTER_UI_TEST_CASE"] = case.name
+        environment["MISTER_UI_TEST_FAIL_ON_SKIP"] = "1"
+        environment["MISTER_UI_TEST_FIXTURE"] = case.fixture
+        environment["MISTER_UI_TEST_COMMAND"] = shlex.join(
+            [
+                str(bridge),
+                "device",
+                "launcher",
+                "ui-test-bridge",
+                "--case",
+                case.name,
+                "--fixture",
+                case.fixture,
+                "--timeout-secs",
+                str(case.timeout_seconds),
+                "--attended",
+            ]
         )
-    return output
+        started = time.monotonic()
+        completed = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", CASE_TARGETS[case.name]],
+            check=False,
+            cwd=repository,
+            env=environment,
+            capture_output=True,
+            text=True,
+        )
+        output = "\n".join(
+            part for part in (completed.stdout, completed.stderr) if part
+        ).strip()
+        if output:
+            elapsed = time.monotonic() - started
+            outputs.append(f"[{case.name} elapsed={elapsed:.1f}s]\n{output}")
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"device UI pytest case {case.name!r} failed "
+                f"({completed.returncode}): {output}"
+            )
+    return "\n".join(outputs)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -127,6 +172,7 @@ def main() -> int:
     arguments = _parse_args()
     if arguments.timeout_secs < 1 or arguments.timeout_secs > 600:
         raise SystemExit("--timeout-secs must be between 1 and 600")
+    _preflight_host_client()
     cases = [
         UiCase(name, arguments.fixture, arguments.timeout_secs)
         for name in arguments.case
@@ -147,6 +193,7 @@ if __name__ == "__main__":
 
 __all__ = [
     "CASE_TARGETS",
+    "COMPLETE_CASES",
     "AgentBridge",
     "ScriptAgentBridge",
     "UiCase",

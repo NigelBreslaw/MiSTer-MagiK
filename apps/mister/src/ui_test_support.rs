@@ -147,8 +147,20 @@ pub fn deterministic_catalog() -> ArcadeCatalog {
             .players(2)
             .control("Buttons")
             .build(),
+        arcade_game("F-Zero")
+            .path("/media/fat/games/SNES/F-Zero.sfc")
+            .system_id("snes")
+            .year(1991)
+            .manufacturer("Nintendo")
+            .category("Racing")
+            .players(2)
+            .control("Gamepad")
+            .build(),
     ];
-    arcade_catalog(games, vec![arcade_system("arcade", 6)])
+    arcade_catalog(
+        games,
+        vec![arcade_system("arcade", 6), arcade_system("snes", 1)],
+    )
 }
 
 /// A compact state record that can be asserted without reading framebuffer
@@ -193,5 +205,26 @@ impl MemoryPresenter {
 
     pub fn clear(&mut self) {
         self.states.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deterministic_fixture_keeps_arcade_contract_and_adds_snes_hub_data() {
+        let catalog = deterministic_catalog();
+
+        assert_eq!(catalog.system_game_count("arcade"), 6);
+        assert_eq!(catalog.system_game_count("snes"), 1);
+        assert_eq!(
+            catalog
+                .systems
+                .iter()
+                .map(|system| (system.id.as_str(), system.title.as_str(), system.count))
+                .collect::<Vec<_>>(),
+            vec![("arcade", "Arcade", 6), ("snes", "SNES", 1)]
+        );
     }
 }

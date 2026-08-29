@@ -451,7 +451,7 @@ fn run_ui_journey(
     let fixture = std::env::var("MISTER_UI_TEST_FIXTURE")
         .unwrap_or_else(|_| "deterministic-arcade-v1".to_string());
     let cases = std::env::var("MISTER_UI_TEST_CASES")
-        .unwrap_or_else(|_| "startup-home system-hub arcade-navigation arcade-filters settings-display screensaver-motion about-licenses effect-sandbox profile-matrix".to_string());
+        .unwrap_or_else(|_| "startup-home system-hub arcade-navigation arcade-filters settings-display screensaver-motion about-licenses menu-confirmations profile-matrix".to_string());
     let case_names = cases.split_whitespace().collect::<Vec<_>>();
     if case_names.is_empty()
         || case_names.iter().any(|case| {
@@ -480,9 +480,6 @@ fn run_ui_journey(
         .current_dir(&repository)
         .env("MISTER_UI_TEST_FIXTURE", &fixture)
         .env("MISTER_UI_TEST_REPOSITORY", &repository);
-    if let Some(destination) = std::env::var_os("MISTER_UI_TEST_SSH_DESTINATION") {
-        command.env("MISTER_UI_TEST_SSH_DESTINATION", destination);
-    }
     let result = command.output().map_err(|error| error.to_string())?;
     let stdout = String::from_utf8_lossy(&result.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&result.stderr).into_owned();

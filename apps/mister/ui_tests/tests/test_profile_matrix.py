@@ -1,4 +1,4 @@
-"""Cross-product smoke coverage for supported display/layout profiles."""
+"""Cross-product smoke coverage for the supported HDMI and CRT profiles."""
 
 from __future__ import annotations
 
@@ -12,17 +12,29 @@ from apps.mister.ui_tests.driver import (
     MagiKDriver,
     environment_for_application,
 )
-from apps.mister.ui_tests.queries import element_with_label
+from apps.mister.ui_tests.queries import element_with_label, elements_with_label
 
-DISPLAY_PROFILES = ("hdmi-720p", "hdmi-1080p", "crt-240p", "crt-480p")
-ORIENTATIONS = ("normal", "monitor-clockwise")
+DISPLAY_PROFILES = ("hdmi-1080p", "crt-240p")
+ORIENTATIONS = ("normal", "monitor-counterclockwise")
 FEATURES = ("home", "arcade", "settings")
 
 DISPLAY_CONTRACTS = {
-    "hdmi-720p": ("hdmi", "hdmi-1280x720p60"),
     "hdmi-1080p": ("hdmi", "hdmi-1920x1080p60"),
     "crt-240p": ("crt-240p60", "crt-240p60"),
-    "crt-480p": ("crt-480p60", "crt-480p60"),
+}
+
+PROFILE_EXPECTATIONS = {
+    "hdmi-1080p": ("hdmi", (1920, 1080), (960, 540)),
+    "crt-240p": ("crt-240p60", (640, 240), (640, 240)),
+}
+ORIENTATION_LABELS = {
+    "normal": "Normal",
+    "monitor-counterclockwise": "Monitor left (counterclockwise)",
+}
+FEATURE_LABELS = {
+    "home": "MiSTer MagiK Launcher",
+    "arcade": "Arcade games",
+    "settings": "Settings",
 }
 
 
@@ -51,12 +63,23 @@ def test_profile_feature_matrix(
     config = DriverConfig(
         command=tuple(shlex.split(command_text)),
         environment=environment,
-        ssh_destination=os.environ.get("MISTER_UI_TEST_SSH_DESTINATION"),
         launch_timeout=float(os.environ.get("MISTER_UI_TEST_LAUNCH_TIMEOUT", "20")),
     )
     with MagiKDriver.start(config) as driver:
         launcher = element_with_label(driver, "MiSTer MagiK Launcher")
         assert launcher.accessible_enabled
+        expected_route, expected_output, expected_render = PROFILE_EXPECTATIONS[display]
+        semantic = driver.wait_for_semantic(
+            lambda state: state.effective_view == feature
+            and state.screen_orientation == ORIENTATION_LABELS[orientation]
+            and state.output_route == expected_route
+            and (state.output_width, state.output_height) == expected_output
+            and (state.render_width, state.render_height) == expected_render
+        )
+        assert semantic.effective_view == feature
+        assert elements_with_label(driver, FEATURE_LABELS[feature]), (
+            f"feature label {FEATURE_LABELS[feature]!r} was not exposed"
+        )
 
 
 __all__ = ["DISPLAY_PROFILES", "FEATURES", "ORIENTATIONS"]

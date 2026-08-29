@@ -51,18 +51,27 @@ impl ConfirmedOrientationStore {
         ));
         #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
         let mister_ini_path = None;
+        Self::with_mister_ini_path(settings, mister_ini_path)
+    }
+
+    /// Construct a runtime store with an explicitly selected MiSTer.ini path.
+    ///
+    /// Attended UI-test runtimes use this to keep orientation confirmation
+    /// writes inside their volatile sandbox instead of touching the device
+    /// configuration. Production callers should use [`Self::for_runtime`].
+    pub fn with_mister_ini_path(settings: FileSettingsStore, path: Option<PathBuf>) -> Self {
         Self {
             settings,
-            mister_ini_path,
+            mister_ini_path: path,
         }
     }
 
     #[cfg(test)]
-    fn with_mister_ini_path(settings: FileSettingsStore, path: impl Into<PathBuf>) -> Self {
-        Self {
-            settings,
-            mister_ini_path: Some(path.into()),
-        }
+    fn with_required_mister_ini_path(
+        settings: FileSettingsStore,
+        path: impl Into<PathBuf>,
+    ) -> Self {
+        Self::with_mister_ini_path(settings, Some(path.into()))
     }
 
     pub fn reconcile_osd_rotation(&self, orientation: ScreenOrientation) -> io::Result<bool> {
@@ -155,7 +164,8 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(&ini_path, "[MiSTer]\nosd_rotate=0 ; keep\n").unwrap();
         let settings = FileSettingsStore::new(&settings_path);
-        let store = ConfirmedOrientationStore::with_mister_ini_path(settings.clone(), &ini_path);
+        let store =
+            ConfirmedOrientationStore::with_required_mister_ini_path(settings.clone(), &ini_path);
         let previous = MagikSettings::default();
         settings.save(&previous).unwrap();
         let mut confirmed = previous.clone();
@@ -195,7 +205,7 @@ mod tests {
         let settings_path = root.join("settings.json");
         std::fs::create_dir_all(&root).unwrap();
         let settings = FileSettingsStore::new(&settings_path);
-        let store = ConfirmedOrientationStore::with_mister_ini_path(
+        let store = ConfirmedOrientationStore::with_required_mister_ini_path(
             settings.clone(),
             root.join("missing-MiSTer.ini"),
         );

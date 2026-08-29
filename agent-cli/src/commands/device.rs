@@ -284,6 +284,7 @@ pub enum LauncherCommand {
     CaptureSnesHub(FirstArcadeCaptureArgs),
     ReturnToLauncher(AttendedArgs),
     UiTest(UiTestArgs),
+    UiTestBridge(UiTestBridgeArgs),
 }
 
 #[derive(Debug, Args)]
@@ -340,6 +341,20 @@ pub struct UiTestArgs {
     pub(crate) fixture: String,
     #[arg(long, default_value_t = 120, value_parser = clap::value_parser!(u64).range(1..=600))]
     pub(crate) timeout_secs: u64,
+    #[arg(long, required = true)]
+    attended: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct UiTestBridgeArgs {
+    #[arg(long, default_value = "smoke")]
+    pub(crate) case: String,
+    #[arg(long, default_value = "deterministic-arcade-v1")]
+    pub(crate) fixture: String,
+    #[arg(long, default_value_t = 120, value_parser = clap::value_parser!(u64).range(1..=600))]
+    pub(crate) timeout_secs: u64,
+    #[arg(long, required = true)]
+    pub(crate) control_socket: PathBuf,
     #[arg(long, required = true)]
     attended: bool,
 }

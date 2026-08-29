@@ -57,6 +57,7 @@ component SearchKeyboard inherits Rectangle {
     accessible-role: region;
     accessible-label: "Search keyboard";
     accessible-description: "Use the keyboard to enter an arcade search";
+    accessible-enabled: true;
     background: CrtTheme.background;
 
     VerticalLayout {
@@ -102,6 +103,7 @@ export component ArcadeListScreen inherits Rectangle {
         accessible-role: list;
         accessible-label: ArcadeView.drawer-title;
         accessible-description: ArcadeView.active-filter-label;
+        accessible-enabled: true;
         for item[index] in ArcadeView.drawer-items : Rectangle {
             accessible-role: list-item;
             accessible-label: item;
@@ -146,6 +148,7 @@ export component ArcadeListScreen inherits Rectangle {
         accessible-role: list;
         accessible-label: ArcadeView.search-mode == ArcadeSearchMode.active ? "Search results" : "Arcade games";
         accessible-description: root.count + (ArcadeView.search-mode == ArcadeSearchMode.active ? " matches" : " games");
+        accessible-enabled: true;
 
         Spleen6x12 {
             width: parent.width;

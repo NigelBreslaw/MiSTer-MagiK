@@ -2710,6 +2710,10 @@ impl LauncherNav {
             self.leave_arcade(false, &collection_id);
             return None;
         }
+        if pressed.btn_y {
+            self.enter_arcade_search(catalog, &collection_id);
+            return None;
+        }
 
         if count == 0 {
             if pressed.dpad_left {
@@ -6670,6 +6674,20 @@ mod tests {
         assert_eq!(nav.arcade_search.pane, ArcadeSearchPane::Keyboard);
         assert_eq!(nav.active_arcade_game_count(&catalog, "arcade"), 2);
         assert!(!catalog.text_indexes_ready());
+    }
+
+    #[test]
+    fn arcade_y_opens_search_from_the_game_list() {
+        let catalog = filter_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+
+        let event = nav.handle_input(&pad_with(|pad| pad.btn_y = true), Instant::now(), &catalog);
+
+        assert!(event.is_none());
+        assert_eq!(nav.arcade_filter.active, ArcadeFilter::Search);
+        assert_eq!(nav.arcade_search.pane, ArcadeSearchPane::Keyboard);
+        assert_eq!(nav.arcade_search.query, "");
     }
 
     #[test]

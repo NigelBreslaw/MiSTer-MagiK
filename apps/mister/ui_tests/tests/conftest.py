@@ -15,6 +15,17 @@ from apps.mister.ui_tests.driver import (
 )
 
 
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Make skipped tests fatal when invoked by the attended suite."""
+
+    if os.environ.get("MISTER_UI_TEST_FAIL_ON_SKIP") != "1":
+        return
+    terminal = session.config.pluginmanager.get_plugin("terminalreporter")
+    skipped = terminal.stats.get("skipped", []) if terminal is not None else []
+    if skipped:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
 @pytest.fixture
 def magik() -> Iterator[MagiKDriver]:
     """Launch the configured device binary for one isolated test case."""
@@ -28,7 +39,6 @@ def magik() -> Iterator[MagiKDriver]:
     config = DriverConfig(
         command=command,
         environment=environment,
-        ssh_destination=os.environ.get("MISTER_UI_TEST_SSH_DESTINATION"),
         launch_timeout=float(os.environ.get("MISTER_UI_TEST_LAUNCH_TIMEOUT", "20")),
     )
     with MagiKDriver.start(config) as driver:
@@ -37,15 +47,17 @@ def magik() -> Iterator[MagiKDriver]:
 
 @pytest.fixture
 def controller() -> Iterator[MagiKDriver]:
-    """Launch the dedicated controller-test scene when configured."""
+    """Launch the launcher controller screen with logical test input."""
 
-    command_text = os.environ.get("MISTER_UI_TEST_CONTROLLER_COMMAND")
+    command_text = os.environ.get("MISTER_UI_TEST_COMMAND")
     if not command_text:
-        pytest.skip("set MISTER_UI_TEST_CONTROLLER_COMMAND for controller UI tests")
+        pytest.skip("set MISTER_UI_TEST_COMMAND for attended device UI tests")
+    environment = environment_for_application()
+    environment.setdefault("MISTER_UI_TEST_FIXTURE", "deterministic-arcade-v1")
+    environment["MISTER_UI_TEST_FEATURE"] = "controller"
     config = DriverConfig(
         command=tuple(shlex.split(command_text)),
-        environment=environment_for_application(),
-        ssh_destination=os.environ.get("MISTER_UI_TEST_SSH_DESTINATION"),
+        environment=environment,
         launch_timeout=float(os.environ.get("MISTER_UI_TEST_LAUNCH_TIMEOUT", "20")),
     )
     with MagiKDriver.start(config) as driver:
