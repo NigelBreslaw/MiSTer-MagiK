@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from apps.mister.ui_tests.agent_input import Button
 from apps.mister.ui_tests.driver import MagiKDriver
-from apps.mister.ui_tests.queries import element_with_label, selected_labels, wait_for_label
+from apps.mister.ui_tests.queries import (
+    element_with_label,
+    selected_labels,
+    wait_for_label,
+)
 
 
 def test_startup_exposes_launcher_and_opens_arcade(magik: MagiKDriver) -> None:

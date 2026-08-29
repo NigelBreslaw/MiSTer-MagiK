@@ -13,7 +13,9 @@ def test_suite_preflights_host_client_before_build_and_pytest() -> None:
     events: list[str] = []
 
     with (
-        patch.object(suite, "load_application_factory", lambda: events.append("client")),
+        patch.object(
+            suite, "load_application_factory", lambda: events.append("client")
+        ),
         patch.object(
             suite,
             "run_cases",
@@ -39,11 +41,13 @@ def test_suite_host_client_errors_are_not_hidden() -> None:
     def fail() -> None:
         raise RuntimeError("slint-testing==0.3 is required")
 
-    with patch.object(suite, "load_application_factory", fail):
-        with patch.object(sys, "argv", ["suite", "smoke", "--attended"]):
-            try:
-                suite.main()
-            except RuntimeError as error:
-                assert str(error) == "slint-testing==0.3 is required"
-            else:
-                raise AssertionError("missing host client should fail before the build")
+    with (
+        patch.object(suite, "load_application_factory", fail),
+        patch.object(sys, "argv", ["suite", "smoke", "--attended"]),
+    ):
+        try:
+            suite.main()
+        except RuntimeError as error:
+            assert str(error) == "slint-testing==0.3 is required"
+        else:
+            raise AssertionError("missing host client should fail before the build")

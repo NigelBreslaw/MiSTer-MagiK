@@ -69,8 +69,7 @@ def selected_element_with_label(driver: MagiKDriver, label: str) -> SlintElement
     matches = [
         element
         for element, properties in _elements_with_properties(driver)
-        if properties.accessible_label == label
-        and properties.accessible_item_selected
+        if properties.accessible_label == label and properties.accessible_item_selected
     ]
     if len(matches) != 1:
         raise AssertionError(
@@ -139,8 +138,8 @@ __all__ = [
     "element_with_label",
     "open_arcade",
     "open_settings",
-    "selected_labels",
     "selected_element_with_label",
+    "selected_labels",
     "wait_for_label",
     "wait_for_unique_label",
 ]
