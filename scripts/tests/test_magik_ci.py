@@ -11,12 +11,41 @@ from unittest.mock import patch
 
 from scripts.magik_ci.bundle import bundle_id, update_plan
 from scripts.magik_ci.assurance import fast_checks
+from scripts.magik_ci import metadata
 from scripts.magik_ci.host import HOST_GROUPS, commands
+from scripts.magik_ci import build
 from scripts.magik_ci.manifest import candidate_id, serialize
 from scripts.magik_ci.quality import QUALITY_COMMANDS, execute
 
 
 class MagikCiTests(unittest.TestCase):
+    @patch("scripts.magik_ci.metadata.subprocess.run")
+    def test_visual_host_assurance_runs_the_real_matrix(self, run) -> None:
+        metadata.host_assurance(["apps/mister/tests/visual-baselines/launcher"])
+        self.assertEqual(
+            run.call_args_list[-1].args[0],
+            [
+                "cargo",
+                "run",
+                "--manifest-path",
+                "apps/mister/Cargo.toml",
+                "--bin",
+                "mister-magik-ui-preview",
+                "--no-default-features",
+                "--features",
+                "ui-preview",
+                "--",
+                "--check-baselines",
+                "apps/mister/tests/visual-baselines/launcher",
+            ],
+        )
+
+    def test_arm_library_check_is_a_no_default_feature_check(self) -> None:
+        self.assertEqual(
+            build.CHECKS["runtime-library-ci"],
+            ("apps/mister/Cargo.toml", "all", ""),
+        )
+
     def test_host_groups_have_unique_commands_and_no_preview_build(self) -> None:
         self.assertEqual(
             HOST_GROUPS, ("static", "agent", "domain", "catalog", "app", "tools")

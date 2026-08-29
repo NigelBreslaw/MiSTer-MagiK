@@ -13,6 +13,9 @@ COMMANDS = {
     "device-agent-ci": ("mister/tools/agent/Cargo.toml", "ci-fast", ""),
     "manager-device": ("mister/tools/manager/Cargo.toml", "release", ""),
 }
+CHECKS = {
+    "runtime-library-ci": ("apps/mister/Cargo.toml", "all", ""),
+}
 
 
 def _environment(
@@ -20,7 +23,7 @@ def _environment(
 ) -> dict[str, str]:
     environment = {key: value for key, value in os.environ.items()}
     feature_set = set(features.split(","))
-    if intent == "runtime-ci":
+    if intent in {"runtime-ci", "runtime-library-ci"}:
         environment.setdefault("MISTER_UI_BUILD_SCOPE", "all")
     elif intent == "runtime-device":
         environment.setdefault("MISTER_UI_BUILD_SCOPE", "production")
@@ -33,7 +36,7 @@ def _environment(
         environment["CFLAGS_armv7_unknown_linux_gnueabihf"] = "-fno-omit-frame-pointer"
     environment["RUSTFLAGS"] = rustflags
 
-    if intent.startswith("runtime-"):
+    if runner == "cross" and intent in {"runtime-ci", "runtime-device"}:
         dist = repository / "apps/mister/target/ffmpeg-minimal/armv7/dist"
         include = dist / "include"
         environment.update(
@@ -54,7 +57,26 @@ def execute(repository: Path, intent: str) -> None:
         execute(repository, "manager-device")
         return
     if intent not in COMMANDS:
-        raise ValueError(f"unsupported CI build intent: {intent}")
+        if intent not in CHECKS:
+            raise ValueError(f"unsupported CI build intent: {intent}")
+        manifest, profile, features = CHECKS[intent]
+        runner = (
+            "cross" if os.environ.get("MISTER_ARM_BUILD_BACKEND") == "cross" else "cargo"
+        )
+        command = [
+            runner,
+            "check",
+            "--manifest-path",
+            str(repository / manifest),
+            "--target",
+            "armv7-unknown-linux-gnueabihf",
+            "--locked",
+            "--lib",
+            "--no-default-features",
+        ]
+        environment = _environment(repository, intent, profile, features, runner)
+        subprocess.run(command, cwd=repository, env=environment, check=True)
+        return
     manifest, profile, features = COMMANDS[intent]
     runner = (
         "cross" if os.environ.get("MISTER_ARM_BUILD_BACKEND") == "cross" else "cargo"

@@ -54,9 +54,6 @@ def require_alpha_promotion(channel: str, alpha_sha: str, candidate_sha: str) ->
 
 def host_assurance(paths: list[str]) -> None:
     """Run the bounded host checks selected by a CI path group."""
-    missing = [path for path in paths if not Path(path).exists()]
-    if missing:
-        raise FileNotFoundError(", ".join(missing))
     root = Path.cwd()
     checks: list[tuple[Path, list[str]]] = [
         (root / "scripts/checks/check-repository-layout.py", []),
@@ -73,6 +70,25 @@ def host_assurance(paths: list[str]) -> None:
         checks.append((root / "scripts/tests/test-launcher-contract.py", []))
     for check, arguments in checks:
         subprocess.run([str(check), *arguments], cwd=root, check=True)
+    if any("visual-baselines/launcher" in path for path in paths):
+        subprocess.run(
+            [
+                "cargo",
+                "run",
+                "--manifest-path",
+                "apps/mister/Cargo.toml",
+                "--bin",
+                "mister-magik-ui-preview",
+                "--no-default-features",
+                "--features",
+                "ui-preview",
+                "--",
+                "--check-baselines",
+                "apps/mister/tests/visual-baselines/launcher",
+            ],
+            cwd=root,
+            check=True,
+        )
 
 
 def write_plan(path: Path | None, value: dict[str, object]) -> None:

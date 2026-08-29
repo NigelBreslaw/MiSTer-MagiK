@@ -23,7 +23,9 @@ def parser() -> argparse.ArgumentParser:
     report.add_argument("--format", choices=("json", "markdown"), default="json")
     report.add_argument("--output", type=Path)
     build_parser = sub.add_parser("build")
-    build_parser.add_argument("intent", choices=tuple(build.COMMANDS))
+    build_parser.add_argument(
+        "intent", choices=tuple((*build.COMMANDS, *build.CHECKS))
+    )
     quality_parser = sub.add_parser("quality")
     quality_parser.add_argument(
         "checks", nargs="+", choices=("format", "lint", "typecheck", "all")

@@ -305,6 +305,54 @@ jobs:
           path: apps/mister/target/armv7-unknown-linux-gnueabihf/ci-fast/mister-magik-fb
           if-no-files-found: error
 
+  arm-library-check:
+    name: arm-library-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Compute cache identities
+        id: cache-id
+        run: python3 scripts/checks/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        working-directory: apps/mister
+        run: rustup show
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-arm-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.cargo_arm }}
+          restore-keys: |
+            cargo-arm-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
+
+      - name: Cache cross binary
+        uses: actions/cache@v6
+        id: cross-cache
+        with:
+          path: ~/.cargo/bin/cross
+          key: cross-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.CROSS_VERSION }}-${{ steps.cache-id.outputs.cross_abi }}
+
+      - name: Install cross
+        if: steps.cross-cache.outputs.cache-hit != 'true'
+        run: cargo install cross --version "$CROSS_VERSION" --locked
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Pull cross image
+        run: docker pull "${{ steps.cache-id.outputs.cross_image }}"
+
+      - name: Check ARM no-default library
+        run: MISTER_ARM_BUILD_BACKEND=cross scripts/magik-ci build runtime-library-ci
+
   device-agent-arm-build:
     name: device-agent-arm-build
     runs-on: ubuntu-24.04
