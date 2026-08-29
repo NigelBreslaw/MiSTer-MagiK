@@ -15,6 +15,17 @@ from apps.mister.ui_tests.driver import (
 )
 
 
+def pytest_sessionfinish(session: pytest.Session, _exitstatus: int) -> None:
+    """Make skipped tests fatal when invoked by the attended suite."""
+
+    if os.environ.get("MISTER_UI_TEST_FAIL_ON_SKIP") != "1":
+        return
+    terminal = session.config.pluginmanager.get_plugin("terminalreporter")
+    skipped = terminal.stats.get("skipped", []) if terminal is not None else []
+    if skipped:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
 @pytest.fixture
 def magik() -> Iterator[MagiKDriver]:
     """Launch the configured device binary for one isolated test case."""

@@ -7,6 +7,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -28,6 +29,18 @@ CASE_TARGETS = {
     "effect-sandbox": "apps/mister/ui_tests/tests/test_effect_sandbox.py",
     "profile-matrix": "apps/mister/ui_tests/tests/test_profile_matrix.py",
 }
+COMPLETE_CASES = (
+    "startup-home",
+    "system-hub",
+    "arcade-navigation",
+    "arcade-filters",
+    "settings-display",
+    "screensaver-motion",
+    "about-licenses",
+    "controller",
+    "effect-sandbox",
+    "profile-matrix",
+)
 
 
 @dataclass(frozen=True)
@@ -104,6 +117,7 @@ def run_pytest(cases: list[UiCase], repository: Path) -> str:
     for case in cases:
         environment = os.environ.copy()
         environment["MISTER_UI_TEST_CASE"] = case.name
+        environment["MISTER_UI_TEST_FAIL_ON_SKIP"] = "1"
         environment["MISTER_UI_TEST_FIXTURE"] = case.fixture
         environment["MISTER_UI_TEST_COMMAND"] = shlex.join(
             [
@@ -120,6 +134,7 @@ def run_pytest(cases: list[UiCase], repository: Path) -> str:
                 "--attended",
             ]
         )
+        started = time.monotonic()
         completed = subprocess.run(
             [sys.executable, "-m", "pytest", "-q", CASE_TARGETS[case.name]],
             check=False,
@@ -132,7 +147,8 @@ def run_pytest(cases: list[UiCase], repository: Path) -> str:
             part for part in (completed.stdout, completed.stderr) if part
         ).strip()
         if output:
-            outputs.append(f"[{case.name}]\n{output}")
+            elapsed = time.monotonic() - started
+            outputs.append(f"[{case.name} elapsed={elapsed:.1f}s]\n{output}")
         if completed.returncode != 0:
             raise RuntimeError(
                 f"device UI pytest case {case.name!r} failed "
@@ -178,6 +194,7 @@ if __name__ == "__main__":
 
 __all__ = [
     "CASE_TARGETS",
+    "COMPLETE_CASES",
     "AgentBridge",
     "ScriptAgentBridge",
     "UiCase",
