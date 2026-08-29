@@ -25,6 +25,7 @@ const ENVELOPE_VERSION: u32 = 1;
 const ENVELOPE_BYTES: usize = 64;
 const MANIFEST_MAGIC: &[u8; 8] = b"MGKRFSMF";
 const WATCH_MAGIC: &[u8; 8] = b"MGKRFSWI";
+const WATCH_PACK_MAGIC: &[u8; 8] = b"MGKRFSPK";
 const BUILD_INFO_MAGIC: &[u8; 8] = b"MGKRFBIN";
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_WATCH_BYTES: usize = 16 * 1024 * 1024;
@@ -74,6 +75,12 @@ pub struct FastSystemWatchIndex {
     pub roots: Vec<String>,
     pub directories: Vec<FastWatchedDirectory>,
     pub containers: Vec<FastWatchedContainer>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct FastSystemWatchPack {
+    schema: u32,
+    watches: Vec<FastSystemWatchIndex>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -474,6 +481,34 @@ impl FastSystemWatchIndex {
     }
 }
 
+impl FastSystemWatchPack {
+    fn new(watches: Vec<FastSystemWatchIndex>) -> Result<Self, String> {
+        let pack = Self {
+            schema: REFRESH_SCHEMA,
+            watches,
+        };
+        pack.validate()?;
+        Ok(pack)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != REFRESH_SCHEMA {
+            return Err("unsupported fast refresh watch pack".to_string());
+        }
+        let mut systems = BTreeSet::new();
+        for watch in &self.watches {
+            if !systems.insert(watch.system_id.as_str()) {
+                return Err(format!(
+                    "duplicate packed refresh watch {}",
+                    watch.system_id
+                ));
+            }
+            watch.validate(&watch.system_id)?;
+        }
+        Ok(())
+    }
+}
+
 impl FastSystemRowsSnapshot {
     pub fn new(
         system_id: String,
@@ -583,6 +618,18 @@ pub fn read_system_watch(
     let path = refresh_state_root(catalog_root).join(&reference.watch_path);
     let bytes = fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
     verify_file_checksum(&bytes, &reference.watch_sha256, &path)?;
+    if let Ok(pack) =
+        decode_envelope::<FastSystemWatchPack>(&bytes, WATCH_PACK_MAGIC, MAX_WATCH_BYTES)
+    {
+        pack.validate()?;
+        let watch = pack
+            .watches
+            .into_iter()
+            .find(|watch| watch.system_id == reference.system_id)
+            .ok_or_else(|| format!("packed refresh watch is missing {}", reference.system_id))?;
+        watch.validate(&reference.system_id)?;
+        return Ok(watch);
+    }
     let watch: FastSystemWatchIndex = decode_envelope(&bytes, WATCH_MAGIC, MAX_WATCH_BYTES)?;
     watch.validate(&reference.system_id)?;
     Ok(watch)
@@ -620,7 +667,7 @@ pub fn publish_refresh_state_with_report(
         return Err("fast refresh generation must be non-zero".to_string());
     }
     let root = refresh_state_root(catalog_root);
-    fs::create_dir_all(root.join("systems"))
+    fs::create_dir_all(root.join("packs"))
         .map_err(|error| format!("create refresh state root: {error}"))?;
     let mut references = Vec::with_capacity(systems.len());
     let mut report = FastRefreshStatePublishReport {
@@ -634,32 +681,29 @@ pub fn publish_refresh_state_with_report(
         report.validation_us = report
             .validation_us
             .saturating_add(phase_started.elapsed().as_micros() as u64);
-        let system_dir = root.join("systems").join(&state.watch.system_id);
-        fs::create_dir_all(&system_dir)
-            .map_err(|error| format!("create {} refresh state: {error}", state.watch.system_id))?;
-        let watch_relative = format!("systems/{}/{generation}.watch", state.watch.system_id);
-        let encoding_started = std::time::Instant::now();
-        let (watch_bytes, source_fingerprint) =
-            encode_envelope_with_payload_fingerprint(&state.watch, WATCH_MAGIC)?;
-        report.encoding_us = report
-            .encoding_us
-            .saturating_add(encoding_started.elapsed().as_micros() as u64);
-        report.bytes = report.bytes.saturating_add(watch_bytes.len() as u64);
-        report.files = report.files.saturating_add(1);
-        let fingerprint_started = std::time::Instant::now();
-        let watch_sha256 = sha256_hex(&watch_bytes);
-        report.fingerprint_us = report
-            .fingerprint_us
-            .saturating_add(fingerprint_started.elapsed().as_micros() as u64);
-        let write_started = std::time::Instant::now();
-        write_new_file(&root.join(&watch_relative), &watch_bytes)?;
-        report.write_us = report
-            .write_us
-            .saturating_add(write_started.elapsed().as_micros() as u64);
+    }
+    let pack = FastSystemWatchPack::new(systems.iter().map(|state| state.watch.clone()).collect())?;
+    let encoding_started = std::time::Instant::now();
+    let (pack_bytes, _) = encode_envelope_with_payload_fingerprint(&pack, WATCH_PACK_MAGIC)?;
+    report.encoding_us = encoding_started.elapsed().as_micros() as u64;
+    report.bytes = pack_bytes.len() as u64;
+    report.files = 1;
+    let fingerprint_started = std::time::Instant::now();
+    let watch_sha256 = sha256_hex(&pack_bytes);
+    let pack_watch_fingerprints = systems
+        .iter()
+        .map(|state| source_fingerprint(&state.watch))
+        .collect::<Vec<_>>();
+    report.fingerprint_us = fingerprint_started.elapsed().as_micros() as u64;
+    let watch_relative = format!("packs/{generation}.watchpack");
+    let write_started = std::time::Instant::now();
+    write_new_file(&root.join(&watch_relative), &pack_bytes)?;
+    report.write_us = write_started.elapsed().as_micros() as u64;
+    for (state, source_fingerprint) in systems.iter().zip(pack_watch_fingerprints) {
         references.push(FastRefreshSystemRef {
             system_id: state.watch.system_id.clone(),
-            watch_path: watch_relative,
-            watch_sha256,
+            watch_path: watch_relative.clone(),
+            watch_sha256: watch_sha256.clone(),
             source_fingerprint,
             row_fingerprint: state.row_fingerprint.clone(),
             games: state.games,
@@ -723,7 +767,7 @@ pub fn publish_refresh_update(
         .checked_add(1)
         .ok_or_else(|| "fast refresh generation overflow".to_string())?;
     let root = refresh_state_root(catalog_root);
-    fs::create_dir_all(root.join("systems"))
+    fs::create_dir_all(root.join("packs"))
         .map_err(|error| format!("create refresh state root: {error}"))?;
     let mut references = previous
         .systems
@@ -737,20 +781,28 @@ pub fn publish_refresh_update(
     for state in updated {
         state.watch.validate(&state.watch.system_id)?;
         validate_sha256(&state.row_fingerprint, "row fingerprint")?;
-        let system_dir = root.join("systems").join(&state.watch.system_id);
-        fs::create_dir_all(&system_dir)
-            .map_err(|error| format!("create {} refresh state: {error}", state.watch.system_id))?;
-        let watch_relative = format!("systems/{}/{generation}.watch", state.watch.system_id);
-        let (watch_bytes, source_fingerprint) =
-            encode_envelope_with_payload_fingerprint(&state.watch, WATCH_MAGIC)?;
-        write_new_file(&root.join(&watch_relative), &watch_bytes)?;
+    }
+    let packed_watches = updated
+        .iter()
+        .map(|state| state.watch.clone())
+        .collect::<Vec<_>>();
+    let (watch_relative, watch_sha256) = if packed_watches.is_empty() {
+        (String::new(), String::new())
+    } else {
+        let pack = FastSystemWatchPack::new(packed_watches)?;
+        let (pack_bytes, _) = encode_envelope_with_payload_fingerprint(&pack, WATCH_PACK_MAGIC)?;
+        let watch_relative = format!("packs/{generation}.watchpack");
+        write_new_file(&root.join(&watch_relative), &pack_bytes)?;
+        (watch_relative, sha256_hex(&pack_bytes))
+    };
+    for state in updated {
         references.insert(
             state.watch.system_id.clone(),
             FastRefreshSystemRef {
                 system_id: state.watch.system_id.clone(),
-                watch_path: watch_relative,
-                watch_sha256: sha256_hex(&watch_bytes),
-                source_fingerprint,
+                watch_path: watch_relative.clone(),
+                watch_sha256: watch_sha256.clone(),
+                source_fingerprint: source_fingerprint(&state.watch),
                 row_fingerprint: state.row_fingerprint.clone(),
                 games: state.games,
                 variants: state.variants,
@@ -976,8 +1028,47 @@ pub fn plan_fast_refresh(
     let watch_started = std::time::Instant::now();
     let mut watch_indices = BTreeMap::new();
     let mut watch_errors = BTreeMap::new();
+    let mut packed_watch_indices =
+        BTreeMap::<(String, String), BTreeMap<String, FastSystemWatchIndex>>::new();
     if request != FastCatalogRefreshRequest::RebuildAll && binding_matches {
         for reference in &manifest.systems {
+            let cache_key = (reference.watch_path.clone(), reference.watch_sha256.clone());
+            if !packed_watch_indices.contains_key(&cache_key) {
+                let path = refresh_state_root(catalog_root).join(&reference.watch_path);
+                let packed = fs::read(&path)
+                    .map_err(|error| format!("read {}: {error}", path.display()))
+                    .and_then(|bytes| {
+                        verify_file_checksum(&bytes, &reference.watch_sha256, &path)?;
+                        let pack = decode_envelope::<FastSystemWatchPack>(
+                            &bytes,
+                            WATCH_PACK_MAGIC,
+                            MAX_WATCH_BYTES,
+                        )?;
+                        pack.validate()?;
+                        Ok(pack
+                            .watches
+                            .into_iter()
+                            .map(|watch| (watch.system_id.clone(), watch))
+                            .collect::<BTreeMap<_, _>>())
+                    });
+                if let Ok(packed) = packed {
+                    packed_watch_indices.insert(cache_key.clone(), packed);
+                }
+            }
+            if let Some(packed) = packed_watch_indices.get(&cache_key) {
+                match packed.get(&reference.system_id).cloned() {
+                    Some(watch) => {
+                        watch_indices.insert(reference.system_id.clone(), watch);
+                    }
+                    None => {
+                        watch_errors.insert(
+                            reference.system_id.clone(),
+                            format!("packed refresh watch is missing {}", reference.system_id),
+                        );
+                    }
+                }
+                continue;
+            }
             match read_system_watch(catalog_root, reference) {
                 Ok(watch) => {
                     watch_indices.insert(reference.system_id.clone(), watch);
