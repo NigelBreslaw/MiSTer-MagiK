@@ -358,17 +358,23 @@ BEGIN
 			REPORT "discarded stale beats changed the unaligned write phase"
 			SEVERITY failure;
 		vs_edge_v:=false;
-		ASSERT NOT (vs_edge_v AND return_drain_ready(0,0))
-			REPORT "empty accounting opened drain without post-reset VS"
+		ASSERT drain_v AND return_drain_ready(0,0)
+			REPORT "empty accounting was not eligible for drain release"
+			SEVERITY failure;
+		write_phase_v:=255;
+		drain_v:=false;
+		ASSERT write_phase_v=255 AND NOT drain_v
+			REPORT "empty accounting did not release without post-reset VS"
 			SEVERITY failure;
 
 		-- VS before the last old return cannot release. If the final return and VS
-		-- coincide, the release decision observes the old nonempty state and must
-		-- wait for the next VS. That next edge both opens drain and establishes
+		-- coincide, the release decision observes the old nonempty state. The next
+		-- scheduler edge releases without waiting for another VS and establishes
 		-- phase 2*BLEN-1 for the first admitted burst.
 		credits_v:=1;
 		phase_v:=127;
 		write_phase_v:=37;
+		drain_v:=true;
 		vs_edge_v:=true;
 		ASSERT NOT return_drain_ready(credits_v,phase_v)
 			REPORT "VS released drain before the final old return" SEVERITY failure;
@@ -383,23 +389,21 @@ BEGIN
 		ASSERT credits_v=0 AND phase_v=0
 			REPORT "final old return did not empty accounting" SEVERITY failure;
 		vs_edge_v:=false;
-		ASSERT NOT (vs_edge_v AND return_drain_ready(credits_v,phase_v))
-			REPORT "coincident final return reused the old VS edge" SEVERITY failure;
-		vs_edge_v:=true;
-		ASSERT vs_edge_v AND return_drain_ready(credits_v,phase_v)
-			REPORT "first post-drain VS did not release empty accounting"
+		ASSERT drain_v AND return_drain_ready(credits_v,phase_v)
+			REPORT "drained accounting was not eligible on the next scheduler edge"
 			SEVERITY failure;
 		write_phase_v:=255;
 		drain_v:=false;
 		ASSERT write_phase_v=255 AND NOT drain_v
-			REPORT "empty next VS did not align and release drain" SEVERITY failure;
+			REPORT "empty next scheduler edge did not align and release drain"
+			SEVERITY failure;
 		ASSERT return_words_remaining(
 			return_credits_next(credits_v,phase_v,true,false,128),
 			return_phase_next(phase_v,false,128),128)=128
 			REPORT "new epoch did not start from empty return accounting" SEVERITY failure;
 
-		-- An issue coincident with an empty-accounting VS observes the pre-edge
-		-- empty state, aligns phase, and charges the new burst on the same edge.
+		-- An issue coincident with an empty-accounting VS after release observes
+		-- the pre-edge empty state, aligns phase, and charges the new burst.
 		write_phase_v:=91;
 		vs_edge_v:=true;
 		ASSERT return_drain_ready(credits_v,phase_v)

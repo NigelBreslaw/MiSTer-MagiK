@@ -252,6 +252,7 @@ def main() -> None:
         "cover_final_old_beat_during_reset",
         "cover_old_beat_after_reset",
         "cover_vs_alignment_during_drain",
+        "cover_drain_release_without_vs",
         "cover_first_post_drain_completion",
         "cover_active_credit_vs",
         "cover_issue_empty_vs",
@@ -903,17 +904,18 @@ def main() -> None:
                 )
             if scalaire_body.count(last_reset) != 2:
                 fail(f"copy-tail phase must also clear at line start: {last_reset}")
-        vs_release = re.search(
-            r"IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN\s*"
+        drain_release = re.search(
             r"IF return_drain_ready\(\s*"
-            r"avl_return_credits,avl_return_phase\) THEN\s*"
+            r"avl_return_credits,avl_return_phase\) AND\s*"
+            r"\(avl_return_drain='1' OR\s*"
+            r"\(avl_o_vs_sync='0' AND avl_o_vs='1'\)\) THEN\s*"
             r"avl_wad<=2\*BLEN-1;\s*"
-            r"avl_return_drain<='0';\s*END IF;\s*END IF;",
+            r"avl_return_drain<='0';\s*END IF;",
             patched_ascal,
         )
-        if vs_release is None:
+        if drain_release is None:
             fail(
-                "VS phase alignment and drain release are not guarded by empty accounting"
+                "drain release and VS phase alignment are not guarded by empty accounting"
             )
         for topology_fragment, topology_source in (
             (".reset_core_req(reset_req)", patched),

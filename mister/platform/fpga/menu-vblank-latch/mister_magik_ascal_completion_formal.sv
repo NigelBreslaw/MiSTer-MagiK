@@ -28,6 +28,7 @@ module mister_magik_ascal_completion_formal;
 	reg cover_final_old_beat_during_reset = 1'b0;
 	reg cover_old_beat_after_reset = 1'b0;
 	reg cover_vs_alignment_during_drain = 1'b0;
+	reg cover_drain_release_without_vs = 1'b0;
 	reg cover_first_post_drain_completion = 1'b0;
 	reg cover_active_credit_vs = 1'b0;
 	reg cover_issue_empty_vs = 1'b0;
@@ -252,6 +253,14 @@ module mister_magik_ascal_completion_formal;
 				0: witness_phase <= 1;
 				1: if (release_event) witness_phase <= 2;
 			endcase
+`elsif COVER_WITNESS_DRAIN_NO_VS
+			assume(reset_n == (witness_phase != 0));
+			assume(avl_step && o_step && !waitrequest && !return_valid);
+			assume(!vs_edge && !schedule_read && !request_copy_retire);
+			case (witness_phase)
+				0: witness_phase <= 1;
+				1: if (release_event) witness_phase <= 2;
+			endcase
 `elsif COVER_WITNESS_FIRST_COMPLETION
 			assume(reset_n == (witness_phase != 0));
 			assume(avl_step && o_step && !waitrequest && !request_copy_retire);
@@ -364,14 +373,18 @@ module mister_magik_ascal_completion_formal;
 				assert(!completion_event);
 			end
 			if (align_event) begin
-				assert(avl_step && avl_reset_n && vs_edge);
+				assert(avl_step && avl_reset_n);
 				assert(reference_words == 0);
 				assert(return_credits == 0 && return_phase == 0);
+				assert(release_event || vs_edge);
 				visible_beat <= 0;
 				if (release_event) begin
 					assert(return_drain);
 					first_post_drain_active <= 1'b1;
-					cover_vs_alignment_during_drain <= 1'b1;
+					if (vs_edge)
+						cover_vs_alignment_during_drain <= 1'b1;
+					else
+						cover_drain_release_without_vs <= 1'b1;
 				end else begin
 					assert(!return_drain);
 				end
@@ -453,6 +466,7 @@ module mister_magik_ascal_completion_formal;
 		cover(cover_final_old_beat_during_reset);
 		cover(cover_old_beat_after_reset);
 		cover(cover_vs_alignment_during_drain);
+		cover(cover_drain_release_without_vs);
 		cover(cover_first_post_drain_completion);
 		cover(cover_active_credit_vs);
 		cover(cover_issue_empty_vs);

@@ -240,16 +240,19 @@ def main() -> None:
         ):
             if retained in avalon_reset.group("body"):
                 fail(f"production reset does not retain {retained}")
-        guarded_vs = re.search(
-            r"IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN\s*"
+        guarded_drain_release = re.search(
             r"IF return_drain_ready\(\s*"
-            r"avl_return_credits,avl_return_phase\) THEN\s*"
+            r"avl_return_credits,avl_return_phase\) AND\s*"
+            r"\(avl_return_drain='1' OR\s*"
+            r"\(avl_o_vs_sync='0' AND avl_o_vs='1'\)\) THEN\s*"
             r"avl_wad<=2\*BLEN-1;\s*"
-            r"avl_return_drain<='0';\s*END IF;\s*END IF;",
+            r"avl_return_drain<='0';\s*END IF;",
             patched_source,
         )
-        if guarded_vs is None:
-            fail("production VS alignment is not guarded by empty accounting")
+        if guarded_drain_release is None:
+            fail(
+                "production drain release and VS alignment are not guarded by empty accounting"
+            )
 
         ghdl_work = temporary / "ghdl-work"
         ghdl_work.mkdir()
@@ -504,6 +507,7 @@ def main() -> None:
             "cover_final_old_beat_during_reset": ("COVER_WITNESS_FINAL_RESET", 270),
             "cover_old_beat_after_reset": ("COVER_WITNESS_OLD_POST_RESET", 20),
             "cover_vs_alignment_during_drain": ("COVER_WITNESS_VS_ALIGN", 10),
+            "cover_drain_release_without_vs": ("COVER_WITNESS_DRAIN_NO_VS", 10),
             "cover_first_post_drain_completion": (
                 "COVER_WITNESS_FIRST_COMPLETION",
                 270,
