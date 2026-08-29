@@ -206,7 +206,7 @@ pub(crate) fn inventory_prepared_extension_under_named_roots(
         };
         builder
             .entries
-            .sort_by_cached_key(|(name, _)| (name.to_ascii_lowercase(), name.clone()));
+            .sort_unstable_by(|left, right| left.0.cmp(&right.0));
         let mut digest = Sha256::new();
         for (name, kind) in builder.entries {
             digest.update([kind]);
@@ -890,10 +890,8 @@ fn collect_generic_namespace_inventory(
     watch_containers.dedup();
     continuation_roots.sort();
     continuation_roots.dedup();
-    direct_zip_paths.sort_by_cached_key(|path| path.to_string_lossy().to_ascii_lowercase());
-    nested_probe_signatures.sort_by_cached_key(|(path, _)| {
-        (path.to_string_lossy().to_ascii_lowercase(), path.clone())
-    });
+    direct_zip_paths.sort_unstable();
+    nested_probe_signatures.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     let total_us = started.elapsed().as_micros() as u64;
     crate::catalog_logln!(
         "fast_catalog_generic_inventory_tsv\tpath={}\tbackend={}\tentries={}\tnamespace_us={}\tpost_walk_us={}\ttotal_us={}",
