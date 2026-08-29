@@ -91,6 +91,12 @@ class MagikCiTests(unittest.TestCase):
             [
                 ["scripts/checks/check-repository-layout.py"],
                 ["scripts/checks/check-unified-agent-surface.py"],
+                [
+                    "scripts/checks/check-font-text-contract.py",
+                    "--repository",
+                    ".",
+                    "--all",
+                ],
             ],
         )
 
