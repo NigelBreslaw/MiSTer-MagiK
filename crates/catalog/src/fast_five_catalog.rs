@@ -978,11 +978,42 @@ pub fn publish_snapshot_with_profile(
     limits: RegistryLimits,
     artifact_profile: FastFiveArtifactProfile,
 ) -> Result<FastFivePublishReport, String> {
+    let _lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
+        .map_err(|error| error.to_string())?;
+    publish_snapshot_with_profile_held(storage_root, snapshot, limits, artifact_profile)
+}
+
+#[cfg(feature = "builder")]
+pub fn publish_snapshot_with_profile_held(
+    storage_root: &Path,
+    snapshot: &FastFiveSnapshot,
+    limits: RegistryLimits,
+    artifact_profile: FastFiveArtifactProfile,
+) -> Result<FastFivePublishReport, String> {
     publish_snapshot_selection(storage_root, snapshot, limits, artifact_profile, None)
 }
 
 #[cfg(feature = "builder")]
 pub fn publish_changed_snapshot_with_profile(
+    storage_root: &Path,
+    snapshot: &FastFiveSnapshot,
+    changed_system_ids: &BTreeSet<String>,
+    limits: RegistryLimits,
+    artifact_profile: FastFiveArtifactProfile,
+) -> Result<FastFivePublishReport, String> {
+    let _lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
+        .map_err(|error| error.to_string())?;
+    publish_changed_snapshot_with_profile_held(
+        storage_root,
+        snapshot,
+        changed_system_ids,
+        limits,
+        artifact_profile,
+    )
+}
+
+#[cfg(feature = "builder")]
+pub fn publish_changed_snapshot_with_profile_held(
     storage_root: &Path,
     snapshot: &FastFiveSnapshot,
     changed_system_ids: &BTreeSet<String>,

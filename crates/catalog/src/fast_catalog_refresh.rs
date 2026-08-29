@@ -302,7 +302,7 @@ pub fn build_fresh_catalog_with_lease(
         .iter()
         .map(|system| system.system_id.clone())
         .collect::<Vec<_>>();
-    let publication = crate::fast_five_catalog::publish_snapshot_with_profile(
+    let publication = crate::fast_five_catalog::publish_snapshot_with_profile_held(
         catalog_root,
         &snapshot,
         crate::shard_registry::production_registry_limits(),
@@ -1561,7 +1561,7 @@ fn execute_planned_fast_refresh_with(
         .unwrap_or(u64::MAX);
     let artifact_started = std::time::Instant::now();
     if !artifact_changes.is_empty() {
-        crate::fast_five_catalog::publish_changed_snapshot_with_profile(
+        crate::fast_five_catalog::publish_changed_snapshot_with_profile_held(
             catalog_root,
             &snapshot,
             &artifact_changes,
