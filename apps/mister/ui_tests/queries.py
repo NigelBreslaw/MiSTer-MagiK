@@ -29,16 +29,22 @@ def _elements_with_properties(
 
 
 def element_with_label(driver: MagiKDriver, label: str) -> SlintElement:
-    matches = [
-        element
-        for element, properties in _elements_with_properties(driver)
-        if properties.accessible_label == label
-    ]
+    matches = elements_with_label(driver, label)
     if len(matches) != 1:
         raise AssertionError(
             f"expected one element labeled {label!r}, got {len(matches)}"
         )
     return matches[0]
+
+
+def elements_with_label(
+    driver: MagiKDriver, label: str
+) -> tuple[SlintElement, ...]:
+    return tuple(
+        element
+        for element, properties in _elements_with_properties(driver)
+        if properties.accessible_label == label
+    )
 
 
 def element_with_any_label(
@@ -136,6 +142,7 @@ def open_settings(driver: MagiKDriver) -> None:
 __all__ = [
     "element_with_any_label",
     "element_with_label",
+    "elements_with_label",
     "open_arcade",
     "open_settings",
     "selected_element_with_label",
