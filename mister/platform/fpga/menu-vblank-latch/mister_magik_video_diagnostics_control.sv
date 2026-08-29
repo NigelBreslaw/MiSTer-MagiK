@@ -460,12 +460,15 @@ module mister_magik_scaler_fetch_liveness_state #(
 		end
 	end
 
+	// Solver backends cannot model simulation-only print cells.
+`ifndef FORMAL
 	initial begin
 		if(WATCHDOG_LIMIT != CONTRACT_WATCHDOG_LIMIT)
 			$display("MagiK liveness watchdog overridden for simulation");
 		if(RESET_QUALIFY_LIMIT != CONTRACT_RESET_QUALIFY_LIMIT)
 			$display("MagiK liveness reset qualification overridden for simulation");
 	end
+`endif
 
 endmodule
 
