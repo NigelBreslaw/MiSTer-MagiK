@@ -205,6 +205,7 @@ mod tests {
     #[test]
     fn recognizes_explicit_commands() {
         assert_command_kind("library-refresh", CommandKind::PreFpga);
+        assert_command_kind(CATALOG_WORKER_COMMAND, CommandKind::PreFpga);
         assert_command_kind("purge-library-data", CommandKind::PreFpga);
         assert_command_kind("reset-delete-screenshot-packs", CommandKind::PreFpga);
         assert_command_kind("ui", CommandKind::Fpga);
@@ -236,6 +237,7 @@ mod tests {
         assert!(!requires_display_owner("library-refresh"));
         assert!(!requires_display_owner("catalog-inspect"));
         assert!(!requires_display_owner("catalog-registry-report"));
+        assert!(!requires_display_owner(CATALOG_WORKER_COMMAND));
         assert!(!requires_display_owner("read"));
     }
 
@@ -248,6 +250,7 @@ mod tests {
         assert!(!requires_process_exclusive("media-bench-download"));
         assert!(!requires_process_exclusive("catalog-inspect"));
         assert!(!requires_process_exclusive("catalog-registry-report"));
+        assert!(!requires_process_exclusive(CATALOG_WORKER_COMMAND));
         assert!(!requires_process_exclusive("read"));
         assert!(!requires_process_exclusive("vsync-probe"));
         assert!(!requires_process_exclusive("cpu-profile-smoke"));
