@@ -95,15 +95,15 @@ jobs:
       - name: Check formatting
         id: format
         continue-on-error: true
-        run: uv run ruff format --check scripts apps/mister/ui_tests
+        run: scripts/magik-ci quality format
       - name: Lint maintained scripts
         id: lint
         continue-on-error: true
-        run: uv run ruff check scripts apps/mister/ui_tests
+        run: scripts/magik-ci quality lint
       - name: Type-check migrated tooling
         id: typecheck
         continue-on-error: true
-        run: uv run ty check scripts/magik_ci scripts/tests/test_magik_ci.py apps/mister/ui_tests
+        run: scripts/magik-ci quality typecheck
       - name: Run Python tests
         id: tests
         continue-on-error: true

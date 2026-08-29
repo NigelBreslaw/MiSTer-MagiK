@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-from . import architecture, build, bundle, databases, manifest, metadata
+from . import architecture, build, bundle, databases, manifest, metadata, quality
 from .common import github_output, repository_root
 
 
@@ -24,6 +24,10 @@ def parser() -> argparse.ArgumentParser:
     report.add_argument("--output", type=Path)
     build_parser = sub.add_parser("build")
     build_parser.add_argument("intent", choices=tuple(build.COMMANDS))
+    quality_parser = sub.add_parser("quality")
+    quality_parser.add_argument(
+        "checks", nargs="+", choices=("format", "lint", "typecheck", "all")
+    )
     ci = sub.add_parser("ci")
     ci_sub = ci.add_subparsers(dest="command", required=True)
     assurance = ci_sub.add_parser("host-assurance")
@@ -200,6 +204,8 @@ def main() -> int:
         architecture.execute(root, args)
     elif args.group == "build":
         build.execute(root, args.intent)
+    elif args.group == "quality":
+        quality.execute(root, args.checks)
     elif args.group == "ci":
         if args.command == "host-assurance":
             metadata.host_assurance(args.paths)

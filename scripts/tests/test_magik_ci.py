@@ -3,15 +3,44 @@
 
 from __future__ import annotations
 
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.magik_ci.bundle import bundle_id, update_plan
 from scripts.magik_ci.manifest import candidate_id, serialize
+from scripts.magik_ci.quality import QUALITY_COMMANDS, execute
 
 
 class MagikCiTests(unittest.TestCase):
+    def test_quality_commands_match_ci_scopes(self) -> None:
+        self.assertEqual(
+            QUALITY_COMMANDS["format"],
+            ("uv", "run", "ruff", "format", "--check", "scripts", "apps/mister/ui_tests"),
+        )
+        self.assertEqual(
+            QUALITY_COMMANDS["lint"],
+            ("uv", "run", "ruff", "check", "scripts", "apps/mister/ui_tests"),
+        )
+        self.assertEqual(QUALITY_COMMANDS["typecheck"], ("uv", "run", "ty", "check"))
+
+    @patch("scripts.magik_ci.quality.subprocess.run")
+    def test_quality_all_runs_every_check_and_aggregates_failures(self, run) -> None:
+        run.side_effect = [
+            subprocess.CompletedProcess([], 1),
+            subprocess.CompletedProcess([], 0),
+            subprocess.CompletedProcess([], 2),
+        ]
+        with self.assertRaisesRegex(RuntimeError, "format.*typecheck"):
+            execute(Path("/repository"), ["all"])
+        self.assertEqual(run.call_count, 3)
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            [list(QUALITY_COMMANDS[name]) for name in ("format", "lint", "typecheck")],
+        )
+
     def test_bundle_identity_is_deterministic(self) -> None:
         values = ("a" * 64, "b" * 64, "c" * 64)
         self.assertEqual(bundle_id(*values), bundle_id(*values))
