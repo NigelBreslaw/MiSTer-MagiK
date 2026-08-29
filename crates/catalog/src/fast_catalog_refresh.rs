@@ -1079,8 +1079,8 @@ pub fn plan_fast_refresh(
                     packed_watch_indices.insert(cache_key.clone(), packed);
                 }
             }
-            if let Some(packed) = packed_watch_indices.get(&cache_key) {
-                match packed.get(&reference.system_id).cloned() {
+            if let Some(packed) = packed_watch_indices.get_mut(&cache_key) {
+                match packed.remove(&reference.system_id) {
                     Some(watch) => {
                         watch_indices.insert(reference.system_id.clone(), watch);
                     }
