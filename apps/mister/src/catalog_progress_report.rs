@@ -121,7 +121,7 @@ impl CatalogProgressMonitor {
         self.last_persisted_at = now;
         self.active_elapsed = Duration::ZERO;
         self.inactive_elapsed = Duration::ZERO;
-        self.last_tick_active = execution_mode == "foreground_exclusive";
+        self.last_tick_active = true;
         self.stall_reported = false;
         self.evidence("running", true)
     }
@@ -154,13 +154,12 @@ impl CatalogProgressMonitor {
     pub fn tick(
         &mut self,
         worker_running: bool,
-        background_work_allowed: bool,
+        _background_work_allowed: bool,
         now: Instant,
     ) -> Option<CatalogProgressEvidence> {
         self.episode_id.as_ref()?;
         self.advance(now);
-        self.last_tick_active = worker_running
-            && (self.execution_mode == "foreground_exclusive" || background_work_allowed);
+        self.last_tick_active = worker_running;
 
         let stalled = worker_running && self.inactive_elapsed >= STALL_AFTER_ACTIVE;
         let persist_due = now.saturating_duration_since(self.last_persisted_at)
@@ -210,10 +209,8 @@ impl CatalogProgressMonitor {
         self.episode_id.as_deref()
     }
 
-    pub fn active_stalled(&self, worker_running: bool, background_work_allowed: bool) -> bool {
-        worker_running
-            && (self.execution_mode == "foreground_exclusive" || background_work_allowed)
-            && self.inactive_elapsed >= STALL_AFTER_ACTIVE
+    pub fn active_stalled(&self, worker_running: bool, _background_work_allowed: bool) -> bool {
+        worker_running && self.inactive_elapsed >= STALL_AFTER_ACTIVE
     }
 
     fn advance(&mut self, now: Instant) {
@@ -728,7 +725,7 @@ mod tests {
     }
 
     #[test]
-    fn monitor_ignores_intentional_background_pauses() {
+    fn monitor_keeps_watchdog_active_during_launcher_pauses() {
         let start = Instant::now();
         let mut monitor = CatalogProgressMonitor::new(start);
         monitor.start(
@@ -740,10 +737,10 @@ mod tests {
         assert!(
             monitor
                 .tick(true, false, start + Duration::from_secs(10 * 60))
-                .is_some_and(|report| report.state == "paused")
+                .is_some_and(|report| report.state == "stalled")
         );
-        assert_eq!(monitor.inactive_elapsed, Duration::ZERO);
-        assert!(!monitor.active_stalled(true, false));
+        assert_eq!(monitor.inactive_elapsed, Duration::from_secs(10 * 60));
+        assert!(monitor.active_stalled(true, false));
     }
 
     #[test]
