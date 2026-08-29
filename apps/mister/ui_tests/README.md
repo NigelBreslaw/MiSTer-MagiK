@@ -15,8 +15,8 @@ configured:
 
 ```sh
 export SLINT_TESTING_TOKEN="..."
-export MISTER_UI_TEST_SSH_DESTINATION="root@192.0.2.10"
-export MISTER_UI_TEST_COMMAND="/media/fat/mister-magik-dev/mister-magik-fb ui launcher 0"
+export MISTER_IP="192.0.2.10"
+export MISTER_DEVICE_ID="mister-living-room"
 scripts/agent build runtime-ui-tests
 UV_INDEX="slint-private=https://testing.slint.dev/simple/" \
 UV_INDEX_SLINT_PRIVATE_USERNAME=__token__ \
@@ -28,14 +28,22 @@ uv run --extra device-ui-tests python -m apps.mister.ui_tests.suite \
   --fixture deterministic-arcade-v1 --attended
 ```
 
-`slint-testing` launches the ARM process through its SSH reverse tunnel. The
-test command receives only the bounded `MISTER_*`/`SLINT_*` controls; credentials
-are filtered before a remote command is constructed. Virtual keyboard and
-joystick devices are Linux-only and require uinput access where the Python
-suite runs. SSH forwarding moves the Slint test protocol, not `/dev/uinput`, so
-an operator running the suite on macOS cannot currently drive a remote MiSTer
-with these virtual devices; use a Linux runner sharing the device kernel or add
-a future typed device-side input relay. Use one operator session at a time so
-the device display and input ownership remain unambiguous. The
-`scripts/agent device launcher ui-test` command is the typed per-case handshake
-used by the suite; it denies core launches, catalog writes, and reboots.
+`slint-testing` stays on the operator host. Its local test socket is bridged by
+the typed MagiK agent connection, while logical keyboard and joystick actions
+are sent through the launcher's authenticated automation queue. No touchscreen,
+SSH forwarding, or `/dev/uinput` access is required. The agent stages the exact
+verified ARM test runtime in volatile `/tmp` storage, suspends the normal
+launcher for the session, and resumes it on success, timeout, disconnect, or
+failure. Use one operator session at a time so display and input ownership
+remain unambiguous. Dangerous test effects are intercepted by the test runtime
+and never reach production settings, catalog files, reboot, or core-launch
+paths.
+
+`SLINT_TESTING_TOKEN` is used only by `uv` on the operator host to install the
+private `slint-testing` wheel. It is removed from the bridge environment and is
+never copied to the MiSTer. The MagiK agent credential is separate and remains
+inside the typed host client; it is not included in test payloads or runtime
+environment variables.
+
+The suite is attended and intentionally absent from CI discovery. CI still
+formats, lints, and type-checks every Python harness file with Ruff and `ty`.
