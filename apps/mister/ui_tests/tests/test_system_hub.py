@@ -7,6 +7,7 @@ from apps.mister.ui_tests.driver import MagiKDriver
 from apps.mister.ui_tests.queries import (
     element_with_label,
     selected_labels,
+    selected_element_with_label,
     wait_for_label,
 )
 
@@ -26,7 +27,7 @@ def test_system_hub_opens_from_home_and_returns(magik: MagiKDriver) -> None:
     _select_home_item(magik, "Nintendo SNES")
     magik.button("open-snes", Button.A)
 
-    games = element_with_label(magik, "GAMES")
+    games = selected_element_with_label(magik, "GAMES")
     assert games.accessible_item_selected
     assert games.accessible_description == "1 TITLES"
     assert element_with_label(magik, "RECENT").accessible_enabled
@@ -35,7 +36,7 @@ def test_system_hub_opens_from_home_and_returns(magik: MagiKDriver) -> None:
     magik.button("open-snes-games", Button.A)
     wait_for_label(magik, "Arcade games")
     magik.button("return-to-system-hub", Button.B)
-    assert element_with_label(magik, "GAMES").accessible_item_selected
+    assert selected_element_with_label(magik, "GAMES").accessible_item_selected
 
     magik.button("return-to-home", Button.B)
     launcher = element_with_label(magik, "MiSTer MagiK Launcher")
