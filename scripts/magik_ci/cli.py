@@ -33,9 +33,7 @@ def parser() -> argparse.ArgumentParser:
     assurance = ci_sub.add_parser("host-assurance")
     assurance_scope = assurance.add_mutually_exclusive_group(required=True)
     assurance_scope.add_argument("--paths", nargs="+")
-    assurance_scope.add_argument(
-        "--group", dest="host_group", choices=host.HOST_GROUPS
-    )
+    assurance_scope.add_argument("--group", dest="host_group", choices=host.HOST_GROUPS)
     candidates = ci_sub.add_parser("platform-candidates")
     candidates.add_argument("artifacts", type=Path)
     candidates.add_argument("name")
