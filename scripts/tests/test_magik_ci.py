@@ -81,7 +81,9 @@ class MagikCiTests(unittest.TestCase):
         self.assertFalse(
             any(
                 "media_http::tests" in command
-                and not any("signed-media-manifests" in argument for argument in command)
+                and not any(
+                    "signed-media-manifests" in argument for argument in command
+                )
                 for command in commands("app")
             )
         )
