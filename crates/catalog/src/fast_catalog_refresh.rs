@@ -783,7 +783,7 @@ fn publish_refresh_state_with_report_held(
     report.fingerprint_us = fingerprint_started.elapsed().as_micros() as u64;
     let watch_relative = format!("packs/{generation}.watchpack");
     let write_started = std::time::Instant::now();
-    write_new_file(&root.join(&watch_relative), &pack_bytes)?;
+    write_new_file(&root, &root.join(&watch_relative), &pack_bytes)?;
     report.write_us = write_started.elapsed().as_micros() as u64;
     for (state, source_fingerprint) in systems.iter().zip(pack_watch_fingerprints) {
         references.push(FastRefreshSystemRef {
@@ -899,7 +899,7 @@ fn publish_refresh_update_held(
         let pack = FastSystemWatchPack::new(packed_watches)?;
         let (pack_bytes, _) = encode_envelope_with_payload_fingerprint(&pack, WATCH_PACK_MAGIC)?;
         let watch_relative = format!("packs/{generation}.watchpack");
-        write_new_file(&root.join(&watch_relative), &pack_bytes)?;
+        write_new_file(&root, &root.join(&watch_relative), &pack_bytes)?;
         (watch_relative, sha256_hex(&pack_bytes))
     };
     for state in updated {
@@ -2244,55 +2244,64 @@ fn decode_envelope<T: DeserializeOwned>(
     postcard::from_bytes(payload).map_err(|error| format!("decode refresh state: {error}"))
 }
 
-fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+fn refresh_pack_is_referenced(root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return true;
+    };
+    [MANIFEST_A, MANIFEST_B].into_iter().any(|slot| {
+        read_envelope::<FastRefreshManifest>(&root.join(slot), MANIFEST_MAGIC, MAX_MANIFEST_BYTES)
+            .ok()
+            .and_then(|manifest| manifest.validate().ok().map(|()| manifest))
+            .is_some_and(|manifest| {
+                manifest
+                    .systems
+                    .iter()
+                    .any(|system| Path::new(&system.watch_path) == relative)
+            })
+    })
+}
+
+fn write_new_file(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), String> {
     if path.exists() {
         let existing =
             fs::read(path).map_err(|error| format!("read existing {}: {error}", path.display()))?;
         if existing == bytes {
             return Ok(());
         }
-        return Err(format!(
-            "immutable refresh state already exists: {}",
-            path.display()
-        ));
+        if refresh_pack_is_referenced(root, path) {
+            return Err(format!(
+                "active immutable refresh state already exists: {}",
+                path.display()
+            ));
+        }
+        let metadata = fs::symlink_metadata(path)
+            .map_err(|error| format!("inspect stale refresh state {}: {error}", path.display()))?;
+        if !metadata.file_type().is_file() {
+            return Err(format!(
+                "refusing to replace non-file refresh state: {}",
+                path.display()
+            ));
+        }
+        fs::remove_file(path)
+            .map_err(|error| format!("remove stale refresh state {}: {error}", path.display()))?;
+        if let Some(parent) = path.parent() {
+            sync_directory(parent)?;
+        }
     }
     let temporary = path.with_extension(format!(
         "tmp-new-{}",
         crate::catalog_lease::CatalogRunId::new().as_str()
     ));
-    let result =
-        write_synced(&temporary, bytes).and_then(|()| match fs::hard_link(&temporary, path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                let existing = fs::read(path).map_err(|read_error| {
-                    format!("read existing {}: {read_error}", path.display())
-                })?;
-                if existing == bytes {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "immutable refresh state changed concurrently: {}",
-                        path.display()
-                    ))
-                }
-            }
-            Err(error) => Err(format!("publish immutable {}: {error}", path.display())),
-        });
+    let result = write_synced(&temporary, bytes).and_then(|()| {
+        fs::rename(&temporary, path)
+            .map_err(|error| format!("publish immutable {}: {error}", path.display()))
+    });
     match result {
         Err(error) => {
             let _ = fs::remove_file(&temporary);
             Err(error)
         }
         Ok(()) => {
-            let cleanup = fs::remove_file(&temporary);
-            if let Err(error) = cleanup {
-                if error.kind() != std::io::ErrorKind::NotFound {
-                    return Err(format!(
-                        "remove refresh temporary {}: {error}",
-                        temporary.display()
-                    ));
-                }
-            }
             if let Some(parent) = path.parent() {
                 sync_directory(parent)?;
             }
@@ -2859,11 +2868,32 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let path = root.join("packs/1.watchpack");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        write_new_file(&path, b"first").expect("initial immutable publication");
+        write_new_file(&root, &path, b"first").expect("initial immutable publication");
         assert_eq!(fs::read(&path).unwrap(), b"first");
         assert!(!root.join("packs/1.watchpack.tmp-new").exists());
-        assert!(write_new_file(&path, b"second").is_err());
-        assert_eq!(fs::read(&path).unwrap(), b"first");
+        write_new_file(&root, &path, b"second").expect("replace unreferenced crash residue");
+        assert_eq!(fs::read(&path).unwrap(), b"second");
+
+        let manifest = FastRefreshManifest::new(
+            1,
+            1,
+            "a".repeat(64),
+            "builder".to_string(),
+            vec![FastRefreshSystemRef {
+                system_id: "snes".to_string(),
+                watch_path: "packs/1.watchpack".to_string(),
+                watch_sha256: "b".repeat(64),
+                source_fingerprint: "c".repeat(64),
+                row_fingerprint: "d".repeat(64),
+                games: 0,
+                variants: 0,
+            }],
+        )
+        .unwrap();
+        let manifest_bytes = encode_envelope(&manifest, MANIFEST_MAGIC).unwrap();
+        fs::write(root.join(MANIFEST_A), manifest_bytes).unwrap();
+        assert!(write_new_file(&root, &path, b"third").is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"second");
         let _ = fs::remove_dir_all(root);
     }
 
