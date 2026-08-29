@@ -15,7 +15,7 @@ from apps.mister.ui_tests.driver import (
 from apps.mister.ui_tests.queries import element_with_label, elements_with_label
 
 DISPLAY_PROFILES = ("hdmi-1080p", "crt-240p")
-ORIENTATIONS = ("normal", "monitor-clockwise")
+ORIENTATIONS = ("normal", "monitor-counterclockwise")
 FEATURES = ("home", "arcade", "settings")
 
 DISPLAY_CONTRACTS = {
@@ -29,7 +29,7 @@ PROFILE_EXPECTATIONS = {
 }
 ORIENTATION_LABELS = {
     "normal": "Normal",
-    "monitor-clockwise": "Monitor right (clockwise)",
+    "monitor-counterclockwise": "Monitor left (counterclockwise)",
 }
 FEATURE_LABELS = {
     "home": "MiSTer MagiK Launcher",

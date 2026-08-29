@@ -58,7 +58,8 @@ Expand device qualification in this order, stopping at the first failure:
    `screensaver-motion`, and `about-licenses` independently.
 4. Run `menu-confirmations`.
 5. Run `profile-matrix` (12 display/orientation/feature sessions: HDMI
-   1920×1080 and CRT 240p, each in both orientations across three views).
+   1920×1080 and CRT 240p, each in normal and monitor-left orientation across
+   three views).
 6. Run the complete command once.
 7. Run the complete command a second time immediately afterward.
 
