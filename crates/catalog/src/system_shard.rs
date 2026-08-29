@@ -514,10 +514,11 @@ fn write_system_shard_with_options_and_profile(
         crate::persisted_search::populate_with_options(&transaction, &data.games, optimize_search)
             .map_err(|error| SystemShardError::new("write", error.to_string()))?;
     crate::catalog_logln!(
-        "catalog_search_build_tsv\tsystem={}\tdocuments={}\twords={}\tbatches={}\tdocument_build_us={}\tfts_insert_us={}\tpipeline_wait_us={}\trow_loop_us={}\tautocomplete_sort_us={}\tautocomplete_insert_us={}\toptimize_mode={}\toptimize_us={}\tautomerge_restore_us={}\tintegrity_mode={}\tintegrity_us={}\ttotal_us={}",
+        "catalog_search_build_tsv\tsystem={}\tdocuments={}\twords={}\tbatch_size={}\tbatches={}\tdocument_build_us={}\tfts_insert_us={}\tpipeline_wait_us={}\trow_loop_us={}\tautocomplete_sort_us={}\tautocomplete_insert_us={}\toptimize_mode={}\toptimize_us={}\tautomerge_restore_us={}\tintegrity_mode={}\tintegrity_us={}\ttotal_us={}",
         data.system_id.as_str(),
         data.games.len(),
         search.words,
+        search.batch_size,
         search.batches,
         search.document_build_us,
         search.fts_insert_us,

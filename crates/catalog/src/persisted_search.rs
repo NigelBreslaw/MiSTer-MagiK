@@ -22,6 +22,19 @@ const SEARCH_WEIGHTS: &str = "10.0,9.0,8.0,7.0,7.0,6.0,6.8,6.5,6.0,4.0,3.5";
 const SEARCH_PIPELINE_BATCH: usize = 256;
 
 #[cfg(feature = "builder")]
+fn search_pipeline_batch_size() -> Result<usize, PersistedSearchError> {
+    let requested = std::env::var("MISTER_CATALOG_SEARCH_PIPELINE_BATCH")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok());
+    match requested.unwrap_or(SEARCH_PIPELINE_BATCH) {
+        128 | 256 | 512 | 1024 => Ok(requested.unwrap_or(SEARCH_PIPELINE_BATCH)),
+        value => Err(PersistedSearchError::new(format!(
+            "unsupported search pipeline batch size {value}; expected 128, 256, 512, or 1024"
+        ))),
+    }
+}
+
+#[cfg(feature = "builder")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PersistedSearchDetail {
     Full,
@@ -395,6 +408,7 @@ pub(crate) fn create_schema_with_detail(
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PersistedSearchBuildOutcome {
     pub(crate) words: usize,
+    pub(crate) batch_size: usize,
     pub(crate) batches: usize,
     pub(crate) document_build_us: u64,
     pub(crate) fts_insert_us: u64,
@@ -523,6 +537,7 @@ pub(crate) fn populate_with_options(
     use std::collections::HashMap;
 
     let total_started = Instant::now();
+    let batch_size = search_pipeline_batch_size()?;
     let source_checksum = search_source_checksum(games);
     connection
         .execute(
@@ -555,12 +570,9 @@ pub(crate) fn populate_with_options(
                     crate::runtime_thread::RuntimeThreadRole::SearchDocumentBuilder,
                 );
                 let _background_scope = crate::cooperative_work::BackgroundScope::enter();
-                for (batch_index, chunk) in games.chunks(SEARCH_PIPELINE_BATCH).enumerate() {
+                for (batch_index, chunk) in games.chunks(batch_size).enumerate() {
                     crate::cooperative_work::checkpoint();
-                    let batch = prepare_search_batch(
-                        batch_index.saturating_mul(SEARCH_PIPELINE_BATCH),
-                        chunk,
-                    );
+                    let batch = prepare_search_batch(batch_index.saturating_mul(batch_size), chunk);
                     if sender.send(batch).is_err() {
                         break;
                     }
@@ -688,6 +700,7 @@ pub(crate) fn populate_with_options(
     drop(integrity_pmu);
     Ok(PersistedSearchBuildOutcome {
         words: word_count,
+        batch_size,
         batches,
         document_build_us,
         fts_insert_us,
