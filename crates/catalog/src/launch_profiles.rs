@@ -515,6 +515,8 @@ impl CatalogScanPlan {
                 roots,
                 &BTreeSet::new(),
             );
+        #[cfg(feature = "builder")]
+        let known_game_dir_is_dir = known_game_directory_status(&all_game_dir_headers);
         let game_headers_us = game_headers_started.elapsed().as_micros() as u64;
         crate::library_db::report_library_scan_timing(
             "scan_plan_cores",
@@ -549,6 +551,8 @@ impl CatalogScanPlan {
             game_dir_headers,
             base_profiles,
             active_game_dirs,
+            #[cfg(feature = "builder")]
+            known_game_dir_is_dir,
         }
     }
 
