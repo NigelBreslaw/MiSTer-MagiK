@@ -20,7 +20,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const REFRESH_SCHEMA: u32 = 3;
+const REFRESH_SCHEMA: u32 = 2;
 const ENVELOPE_VERSION: u32 = 1;
 const ENVELOPE_BYTES: usize = 64;
 const MANIFEST_MAGIC: &[u8; 8] = b"MGKRFSMF";
@@ -269,7 +269,6 @@ pub fn build_fresh_catalog_with_progress(
         report: source,
         profiles,
         generic_watch_observations,
-        row_fingerprints,
     } = source_build;
     let system_ids = snapshot
         .systems
@@ -287,12 +286,10 @@ pub fn build_fresh_catalog_with_progress(
         &snapshot,
         &profiles,
         Some(&generic_watch_observations),
-        Some(&row_fingerprints),
     )?;
     drop(snapshot);
     drop(profiles);
     drop(generic_watch_observations);
-    drop(row_fingerprints);
     let refresh_generation = read_latest_refresh_manifest(catalog_root)
         .map_or(1, |manifest| manifest.generation.saturating_add(1));
     let (_, refresh_state_publish) = publish_refresh_state_with_report(
@@ -539,8 +536,8 @@ impl FastSystemRowsSnapshot {
 
 #[derive(Serialize)]
 struct FastSystemRowsSnapshotRef<'a> {
+    schema: u32,
     system_id: &'a str,
-    display_title: &'a str,
     games: &'a [SystemGame],
     variants: &'a [FastFiveGameVariant],
 }
@@ -837,7 +834,7 @@ pub fn capture_refresh_state(
 ) -> Result<(Vec<FastRefreshSystemState>, FastRefreshCaptureReport), String> {
     let roots = [storage_root.display().to_string()];
     let profiles = crate::launch_profiles::ProfileSet::try_for_roots(&roots)?.into_profiles();
-    capture_refresh_state_with_profiles(storage_root, snapshot, &profiles, None, None)
+    capture_refresh_state_with_profiles(storage_root, snapshot, &profiles, None)
 }
 
 fn capture_refresh_state_with_profiles(
@@ -845,7 +842,6 @@ fn capture_refresh_state_with_profiles(
     snapshot: &FastFiveSnapshot,
     profiles: &[crate::launch_profiles::LaunchProfile],
     generic_watch_observations: Option<&BTreeMap<String, GenericSourceWatchObservations>>,
-    precomputed_row_fingerprints: Option<&BTreeMap<String, String>>,
 ) -> Result<(Vec<FastRefreshSystemState>, FastRefreshCaptureReport), String> {
     let started = std::time::Instant::now();
     snapshot.validate()?;
@@ -872,12 +868,8 @@ fn capture_refresh_state_with_profiles(
         );
         report.directories = report.directories.saturating_add(watch.directories.len());
         report.containers = report.containers.saturating_add(watch.containers.len());
-        let row_fingerprint = precomputed_row_fingerprints
-            .and_then(|fingerprints| fingerprints.get(&system.system_id).cloned())
-            .map(Ok)
-            .unwrap_or_else(|| {
-                row_fingerprint_parts(&system.system_id, &system.games, &system.variants)
-            })?;
+        let row_fingerprint =
+            row_fingerprint_parts(&system.system_id, &system.games, &system.variants)?;
         states.push(FastRefreshSystemState {
             watch,
             row_fingerprint,
@@ -1892,18 +1884,13 @@ fn row_fingerprint_parts(
 ) -> Result<String, String> {
     validate_row_parts(system_id, games, variants)?;
     let rows = FastSystemRowsSnapshotRef {
+        schema: REFRESH_SCHEMA,
         system_id,
-        display_title: crate::fast_catalog_sources::display_title(system_id),
         games,
         variants,
     };
     postcard::to_allocvec(&rows)
-        .map(|bytes| {
-            let mut digest = Sha256::new();
-            digest.update(b"mister-magik-row-fingerprint-v3\0");
-            digest.update(bytes);
-            sha256_digest_hex(digest.finalize())
-        })
+        .map(|bytes| sha256_hex(&bytes))
         .map_err(|error| format!("encode row fingerprint: {error}"))
 }
 
