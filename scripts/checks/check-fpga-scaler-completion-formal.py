@@ -240,18 +240,22 @@ def main() -> None:
         ):
             if retained in avalon_reset.group("body"):
                 fail(f"production reset does not retain {retained}")
+        if avalon_reset.group("body").count("avl_wad<=2*BLEN-1;") != 1:
+            fail("production reset does not establish the drained write phase")
         guarded_drain_release = re.search(
-            r"IF \(avl_o_vs_sync='0' AND avl_o_vs='1'\) OR\s*"
-            r"avl_return_drain='1' THEN\s*"
+            r"IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN\s*"
             r"IF return_drain_ready\(\s*"
             r"avl_return_credits,avl_return_phase\) THEN\s*"
             r"avl_wad<=2\*BLEN-1;\s*"
-            r"avl_return_drain<='0';\s*END IF;\s*END IF;",
+            r"avl_return_drain<='0';\s*END IF;\s*END IF;\s*"
+            r"IF avl_return_drain='1' AND return_drain_ready\(\s*"
+            r"avl_return_credits,avl_return_phase\) THEN\s*"
+            r"avl_return_drain<='0';\s*END IF;",
             patched_source,
         )
         if guarded_drain_release is None:
             fail(
-                "production drain release and VS alignment are not guarded by empty accounting"
+                "production reset-aligned drain release is not independent of guarded VS alignment"
             )
 
         ghdl_work = temporary / "ghdl-work"

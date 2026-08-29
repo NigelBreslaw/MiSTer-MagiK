@@ -113,9 +113,11 @@ BEGIN
 	completion_event<='1' WHEN write_event='1' AND
 		(write_phase MOD BLEN)=BLEN-2 ELSE '0';
 	align_event<='1' WHEN avl_step='1' AND avl_reset_n='1' AND
-		return_drain_ready(return_credits,return_phase) AND
-		(return_drain='1' OR vs_edge='1') ELSE '0';
-	release_event<=align_event AND return_drain;
+		vs_edge='1' AND
+		return_drain_ready(return_credits,return_phase) ELSE '0';
+	release_event<='1' WHEN avl_step='1' AND avl_reset_n='1' AND
+		return_drain='1' AND
+		return_drain_ready(return_credits,return_phase) ELSE '0';
 	completion_seen<=o_step AND o_reset_n AND completion_pulse;
 	queue_overflow<='1' WHEN completion_queue_overflow(
 		request_toggle,completion_pending,ack_sync,completion_event) ELSE '0';
@@ -179,6 +181,7 @@ BEGIN
 		-- Production domain state has asynchronous assertion through reset_na and
 		-- synchronous release through its independently stepped domain clock.
 		IF reset_n='0' THEN
+				write_phase<=2*BLEN-1;
 				request_meta<='0';
 				request_sync<='0';
 				completion_pulse<='0';
@@ -243,6 +246,7 @@ BEGIN
 
 			-- Source-domain request, return drain, and Avalon request hold.
 			IF avl_reset_n='0' THEN
+				write_phase<=2*BLEN-1;
 				return_drain<='1';
 				request_toggle<='0';
 				completion_pending<='0';
@@ -256,11 +260,11 @@ BEGIN
 
 				IF align_event='1' THEN
 					write_phase<=2*BLEN-1;
-					IF return_drain='1' THEN
-						return_drain<='0';
-					END IF;
 				ELSIF write_event='1' THEN
 					write_phase<=(write_phase+1) MOD (2*BLEN);
+				END IF;
+				IF release_event='1' THEN
+					return_drain<='0';
 				END IF;
 
 				queue_state_v:=completion_queue_next(

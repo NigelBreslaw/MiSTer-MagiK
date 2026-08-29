@@ -373,27 +373,30 @@ module mister_magik_ascal_completion_formal;
 				assert(!completion_event);
 			end
 			if (align_event) begin
-				assert(avl_step && avl_reset_n);
+				assert(avl_step && avl_reset_n && vs_edge);
 				assert(reference_words == 0);
 				assert(return_credits == 0 && return_phase == 0);
-				assert(release_event || vs_edge);
 				visible_beat <= 0;
-				if (release_event) begin
-					assert(return_drain);
-					first_post_drain_active <= 1'b1;
-					if (vs_edge)
-						cover_vs_alignment_during_drain <= 1'b1;
-					else
-						cover_drain_release_without_vs <= 1'b1;
-				end else begin
-					assert(!return_drain);
-				end
 			end else if (write_event) begin
 				assert(completion_event == (visible_beat == BLEN-1));
 				visible_beat <= visible_beat + 1'b1;
 				if (first_post_drain_active && completion_event) begin
 					first_post_drain_active <= 1'b0;
 					cover_first_post_drain_completion <= 1'b1;
+				end
+			end
+			if (release_event) begin
+				assert(return_drain);
+				assert(reference_words == 0);
+				assert(return_credits == 0 && return_phase == 0);
+				assert(write_phase == 2*BLEN-1);
+				first_post_drain_active <= 1'b1;
+				if (vs_edge) begin
+					assert(align_event);
+					cover_vs_alignment_during_drain <= 1'b1;
+				end else begin
+					assert(!align_event);
+					cover_drain_release_without_vs <= 1'b1;
 				end
 			end
 			if (vs_edge && avl_step && avl_reset_n && reset_n &&
@@ -445,8 +448,11 @@ module mister_magik_ascal_completion_formal;
 		if (past_valid && avl_reset_n &&
 			$past(proof_edge && align_event)) begin
 			assert(write_phase == 2*BLEN-1);
-			if ($past(release_event))
-				assert(!return_drain);
+		end
+		if (past_valid && avl_reset_n &&
+			$past(proof_edge && release_event)) begin
+			assert(!return_drain);
+			assert(write_phase == 2*BLEN-1);
 		end
 		if (past_valid && avl_reset_n &&
 			$past(proof_edge && avl_step && avl_reset_n &&

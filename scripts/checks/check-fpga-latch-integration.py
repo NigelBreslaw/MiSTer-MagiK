@@ -238,7 +238,7 @@ def main() -> None:
         "completion_queue_next(",
         "completion_queue_overflow(",
         "align_event<='1' WHEN",
-        "release_event<=align_event AND return_drain;",
+        "release_event<='1' WHEN avl_step='1' AND avl_reset_n='1' AND",
         "IF align_event='1' THEN",
         "read_obligation_accept(",
         "avl_reset_n='0' OR read_reset_seen='0')",
@@ -739,7 +739,7 @@ def main() -> None:
             "avl_read_accepted<='1';": 1,
             "avl_return_drain<='1';": 1,
             "IF return_drain_ready(": 1,
-            "avl_return_credits,avl_return_phase) THEN": 1,
+            "avl_return_credits,avl_return_phase) THEN": 2,
             "IF avl_return_drain='0' THEN": 1,
             "IF avl_read_i='1' AND avl_read_accepted='0' AND": 1,
             "avl_read<=avl_read_i AND NOT avl_read_accepted": 1,
@@ -864,8 +864,8 @@ def main() -> None:
                 fail(
                     f"completion transport reset is missing or ambiguous: {reset_fragment}"
                 )
-        if patched_ascal.count("avl_wad<=2*BLEN-1;") != 1:
-            fail("Avalon write phase must have exactly one guarded alignment")
+        if patched_ascal.count("avl_wad<=2*BLEN-1;") != 2:
+            fail("Avalon write phase needs one reset preset and one guarded alignment")
         avalon_reset = re.search(
             r"IF avl_reset_na='0' THEN(?P<body>.*?)ELSIF rising_edge\(avl_clk\) THEN",
             patched_ascal,
@@ -873,8 +873,8 @@ def main() -> None:
         )
         if avalon_reset is None:
             fail("Avalon reset branch is missing")
-        if "avl_wad<=2*BLEN-1;" in avalon_reset.group("body"):
-            fail("Avalon write phase must not use a nonzero asynchronous reset preset")
+        if avalon_reset.group("body").count("avl_wad<=2*BLEN-1;") != 1:
+            fail("Avalon reset must establish the drained write phase exactly once")
         for retained_accounting in (
             "avl_return_credits",
             "avl_return_phase",
@@ -905,17 +905,19 @@ def main() -> None:
             if scalaire_body.count(last_reset) != 2:
                 fail(f"copy-tail phase must also clear at line start: {last_reset}")
         drain_release = re.search(
-            r"IF \(avl_o_vs_sync='0' AND avl_o_vs='1'\) OR\s*"
-            r"avl_return_drain='1' THEN\s*"
+            r"IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN\s*"
             r"IF return_drain_ready\(\s*"
             r"avl_return_credits,avl_return_phase\) THEN\s*"
             r"avl_wad<=2\*BLEN-1;\s*"
-            r"avl_return_drain<='0';\s*END IF;\s*END IF;",
+            r"avl_return_drain<='0';\s*END IF;\s*END IF;\s*"
+            r"IF avl_return_drain='1' AND return_drain_ready\(\s*"
+            r"avl_return_credits,avl_return_phase\) THEN\s*"
+            r"avl_return_drain<='0';\s*END IF;",
             patched_ascal,
         )
         if drain_release is None:
             fail(
-                "drain release and VS phase alignment are not guarded by empty accounting"
+                "reset-aligned drain release is not independent of the guarded VS path"
             )
         for topology_fragment, topology_source in (
             (".reset_core_req(reset_req)", patched),
