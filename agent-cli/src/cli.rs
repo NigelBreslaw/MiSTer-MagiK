@@ -9,7 +9,7 @@ use crate::fpga::FpgaCommand;
 use crate::live_particles::LiveParticlesCommand;
 use crate::model::{ArcadeVelocityScrollArm, ArcadeVelocityScrollRoute, BenchmarkScenario};
 use crate::startup_particles::{SceneLabCommand, StartupParticlesCommand};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

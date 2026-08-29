@@ -6,6 +6,7 @@ use crate::progress::{FailureEvidence, ProgressEvent};
 use crate::request::RawRequest;
 use rusqlite::backup::Backup;
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::Serialize;
 use std::fs::{self, File, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
