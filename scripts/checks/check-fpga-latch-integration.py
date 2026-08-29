@@ -238,7 +238,7 @@ def main() -> None:
         "completion_queue_next(",
         "completion_queue_overflow(",
         "align_event<='1' WHEN",
-        "release_event<=align_event AND return_drain;",
+        "release_event<='1' WHEN avl_step='1' AND avl_reset_n='1' AND",
         "IF align_event='1' THEN",
         "read_obligation_accept(",
         "avl_reset_n='0' OR read_reset_seen='0')",
