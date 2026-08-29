@@ -35,12 +35,13 @@ def environment_for_application() -> dict[str, str]:
             key.startswith(("MISTER_", "SLINT_", "UV_"))
             or key in {"HOME", "PATH", "TMPDIR", "XDG_CONFIG_HOME", "LANG", "LC_ALL"}
         )
-        and key
-        not in {
-            "SLINT_TESTING_TOKEN",
-            "UV_INDEX_SLINT_PRIVATE_PASSWORD",
-            "MISTER_UI_TEST_SSH_DESTINATION",
-        }
+        and (
+            key == "MISTER_AGENT_TOKEN"
+            or not any(
+                marker in key.upper()
+                for marker in ("TOKEN", "PASSWORD", "SECRET", "CREDENTIAL")
+            )
+        )
     }
 
 
