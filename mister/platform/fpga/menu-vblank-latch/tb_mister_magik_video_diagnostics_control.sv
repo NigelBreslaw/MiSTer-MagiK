@@ -14,6 +14,7 @@ module tb_mister_magik_video_diagnostics_control;
 	reg vbuf_waitrequest = 1'b0;
 	reg vbuf_readdatavalid = 1'b0;
 	reg vbuf_read = 1'b0;
+	reg [15:0] scaler_diag_state = 16'd0;
 	reg io_uio = 1'b0;
 	reg io_strobe = 1'b0;
 	reg [15:0] io_din = 16'd0;
@@ -35,6 +36,7 @@ module tb_mister_magik_video_diagnostics_control;
 		.vbuf_waitrequest(vbuf_waitrequest),
 		.vbuf_readdatavalid(vbuf_readdatavalid),
 		.vbuf_read(vbuf_read),
+		.scaler_diag_state(scaler_diag_state),
 		.io_uio(io_uio),
 		.io_strobe(io_strobe),
 		.io_din(io_din),
@@ -226,6 +228,10 @@ module tb_mister_magik_video_diagnostics_control;
 		repeat(6) @(posedge clk_100m);
 		finish_return_with_accept(28'h0000000);
 		drive_return_beats(128);
+		// Freeze the exact no-request gate snapshot with return draining still
+		// asserted and one production credit outstanding.
+		@(negedge clk_100m);
+		scaler_diag_state = 16'hfcb0;
 
 		// Leave the qualified, empty boundary idle long enough to freeze the
 		// exact no-request observation. Consume a bounded pending publication:
@@ -246,9 +252,10 @@ module tb_mister_magik_video_diagnostics_control;
 			fail("first stall was not frozen");
 		if(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_OBSERVER_FAULT)
 			fail("reset-retained obligation produced observer fault");
-		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD][2:0] !=
-			MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN)
-			fail("wrong first-stall cause");
+		if(!(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN))
+			fail("no-request classification flag was not frozen");
+		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD] != 16'hfcb0)
+			fail("wrong no-request gate snapshot");
 		for(index = 0; index < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS;
 			index = index + 1)
 			prior_words[index] = words[index];

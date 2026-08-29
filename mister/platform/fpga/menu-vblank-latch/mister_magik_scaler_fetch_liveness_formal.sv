@@ -13,6 +13,7 @@ module mister_magik_scaler_fetch_liveness_formal;
 	(* anyseq *) wire vbuf_waitrequest;
 	(* anyseq *) wire vbuf_readdatavalid;
 	(* anyseq *) wire vbuf_read;
+	(* anyseq *) wire [15:0] scaler_diag_state;
 
 	wire [1:0] fifo_count;
 	wire [6:0] return_phase;
@@ -45,6 +46,7 @@ module mister_magik_scaler_fetch_liveness_formal;
 		.vbuf_waitrequest(vbuf_waitrequest),
 		.vbuf_readdatavalid(vbuf_readdatavalid),
 		.vbuf_read(vbuf_read),
+		.scaler_diag_state(scaler_diag_state),
 		.io_uio(1'b0),
 		.io_strobe(1'b0),
 		.io_din(16'd0),

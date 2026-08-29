@@ -22,7 +22,7 @@ const ORIGIN: &str = "platform-component-origin-v1.json";
 const COMPONENT_CHECKSUMS: &str = "platform-component-SHA256SUMS";
 const LEGACY_SCHEMA14_RBF_SHA256: &str =
     "ef1920500c925d35b23808792f0930954446a6030b33d3e92c0f4feccd23106e";
-const PATCHED_DIAGNOSTIC_ARCHITECTURE: &str = "scaler-fetch-liveness-first-stall-v1";
+const PATCHED_DIAGNOSTIC_ARCHITECTURE: &str = "scaler-fetch-no-request-gates-v1";
 const STOCK_DIAGNOSTIC_ARCHITECTURE: &str = "stock-uninstrumented-v1";
 
 pub struct Create<'a> {

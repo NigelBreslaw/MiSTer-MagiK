@@ -102,6 +102,7 @@ module mister_magik_sys_top_latch_path (
 		.vbuf_waitrequest(1'b0),
 		.vbuf_readdatavalid(1'b0),
 		.vbuf_read(1'b0),
+		.scaler_diag_state(16'd0),
 		.io_uio(io_uio),
 		.io_strobe(io_strobe),
 		.io_din(io_din),

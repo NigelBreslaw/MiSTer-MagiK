@@ -1117,7 +1117,7 @@ mod tests {
             &mut self,
         ) -> AgentResult<crate::host::FpgaActivationAssessment> {
             Ok(crate::host::FpgaActivationAssessment::Current {
-                architecture: "scaler-fetch-liveness-first-stall-v1".into(),
+                architecture: "scaler-fetch-no-request-gates-v1".into(),
             })
         }
 

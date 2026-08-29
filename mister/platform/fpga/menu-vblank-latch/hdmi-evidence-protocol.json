@@ -81,8 +81,8 @@
     }
   },
   "scaler_fetch_liveness_state": {
-    "schema": 14,
-    "architecture": "scaler-fetch-liveness-first-stall-v1",
+    "schema": 15,
+    "architecture": "scaler-fetch-no-request-gates-v1",
     "command": 104,
     "magic": 19800,
     "word_count": 4,
@@ -99,12 +99,12 @@
       "observer_fault": 3,
       "reset_ambiguity": 4,
       "reset_level": 5,
-      "reset_seen": 6,
-      "bad_burstcount": 7,
-      "unexpected_return": 8,
-      "fifo_phase_error": 9,
-      "request_cancelled": 10,
-      "counter_ambiguous": 11
+      "reset_since_normal_liveness": 6,
+      "no_request_seen": 7,
+      "accept_blocked": 8,
+      "first_return_missing": 9,
+      "return_incomplete": 10,
+      "request_cancelled": 11
     },
     "reserved_zero_masks": {},
     "fields": {
@@ -119,7 +119,21 @@
       "frozen_cause": {"word": "state", "bit": 0, "width": 3},
       "frozen_return_phase": {"word": "state", "bit": 3, "width": 7},
       "frozen_fifo_depth": {"word": "state", "bit": 10, "width": 2},
-      "frozen_address_fold": {"word": "state", "bit": 12, "width": 4}
+      "frozen_address_fold": {"word": "state", "bit": 12, "width": 4},
+      "no_request_avl_state": {"word": "state", "bit": 0, "width": 2},
+      "no_request_read_intent": {"word": "state", "bit": 2, "width": 1},
+      "no_request_read_accepted": {"word": "state", "bit": 3, "width": 1},
+      "no_request_return_drain": {"word": "state", "bit": 4, "width": 1},
+      "no_request_return_credits": {"word": "state", "bit": 5, "width": 2},
+      "no_request_return_phase_nonzero": {"word": "state", "bit": 7, "width": 1},
+      "no_request_read_pending": {"word": "state", "bit": 8, "width": 1},
+      "no_request_write_pending": {"word": "state", "bit": 9, "width": 1},
+      "no_request_reset_released": {"word": "state", "bit": 10, "width": 1},
+      "no_request_completion_pending": {"word": "state", "bit": 11, "width": 1},
+      "no_request_read_pulse": {"word": "state", "bit": 12, "width": 1},
+      "no_request_vsync_edge": {"word": "state", "bit": 13, "width": 1},
+      "no_request_drain_ready": {"word": "state", "bit": 14, "width": 1},
+      "no_request_external_read": {"word": "state", "bit": 15, "width": 1}
     },
     "causes": {
       "none": 0,
