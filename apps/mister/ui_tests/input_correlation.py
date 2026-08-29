@@ -50,7 +50,7 @@ class CorrelatedInput:
 
 
 class InputCorrelation:
-    """Drive uinput and wait for an accessibility-observable transition."""
+    """Send logical agent input and await an accessibility-observable transition."""
 
     def __init__(
         self,
