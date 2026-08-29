@@ -24,14 +24,18 @@ UV_INDEX_SLINT_PRIVATE_PASSWORD="$SLINT_TESTING_TOKEN" \
 uv run --extra device-ui-tests python -m apps.mister.ui_tests.suite \
   startup-home system-hub arcade-navigation arcade-filters \
   settings-display screensaver-motion about-licenses effect-sandbox \
+  profile-matrix \
   --fixture deterministic-arcade-v1 --attended
 ```
 
 `slint-testing` launches the ARM process through its SSH reverse tunnel. The
 test command receives only the bounded `MISTER_*`/`SLINT_*` controls; credentials
 are filtered before a remote command is constructed. Virtual keyboard and
-joystick devices require uinput access on the machine running the Python suite.
-Use one operator session at a time so the device display and input ownership
-remain unambiguous. The `scripts/agent device launcher ui-test` command is the
-typed per-case handshake used by the suite; it denies core launches, catalog
-writes, and reboots.
+joystick devices are Linux-only and require uinput access where the Python
+suite runs. SSH forwarding moves the Slint test protocol, not `/dev/uinput`, so
+an operator running the suite on macOS cannot currently drive a remote MiSTer
+with these virtual devices; use a Linux runner sharing the device kernel or add
+a future typed device-side input relay. Use one operator session at a time so
+the device display and input ownership remain unambiguous. The
+`scripts/agent device launcher ui-test` command is the typed per-case handshake
+used by the suite; it denies core launches, catalog writes, and reboots.
