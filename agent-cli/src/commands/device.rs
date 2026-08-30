@@ -373,6 +373,8 @@ pub struct CrtFontAbCaptureArgs {
 pub enum CatalogCommand {
     Inspect,
     RomAudit(CatalogRomAuditArgs),
+    #[command(name = "neogeo-family-audit")]
+    NeoGeoFamilyAudit(CatalogNeoGeoFamilyAuditArgs),
     Query(CatalogQueryArgs),
     Cores,
     /// Publish and open the isolated five-system prototype in the Dev UI.
@@ -522,6 +524,12 @@ pub struct CatalogFastFiveOldColdArgs {
 
 #[derive(Debug, Args)]
 pub struct CatalogRomAuditArgs {
+    #[arg(long)]
+    pub(crate) out: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct CatalogNeoGeoFamilyAuditArgs {
     #[arg(long)]
     pub(crate) out: PathBuf,
 }

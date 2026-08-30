@@ -372,6 +372,9 @@ pub fn rebuild_independent_system(
     if system_id == "c64" {
         collapse_c64_cross_source_variants(&mut system);
     }
+    if system_id == "neogeo" {
+        project_neogeo_system(&mut system, &mut family_resolver);
+    }
     enrich_fast_preview_identities(storage_root, std::slice::from_mut(&mut system));
     report.elapsed_us = elapsed_us(started);
     report.games = system.games.len();
@@ -852,7 +855,9 @@ fn scan_arcade_candidates(
     let resolved = resolver.resolve_many(requests);
     for candidate in &mut games {
         if candidate.family_id.is_empty() {
-            if let Some(Some(machine)) = resolved.get(&candidate.identity_id) {
+            if let Some(Some(machine)) =
+                resolved.get(&(candidate.identity_id.clone(), candidate.namespace.clone()))
+            {
                 candidate.family_id = machine.family.clone();
             }
             if candidate.family_id.is_empty() {
@@ -1533,9 +1538,20 @@ fn project_neogeo_system(system: &mut FastFiveSystem, resolver: &mut MachineFami
     if system.system_id != "neogeo" || system.games.is_empty() {
         return;
     }
-    let mut candidates = system
-        .games
-        .drain(..)
+    let (projection, _) = project_neogeo_games(system.games.drain(..), resolver);
+    system.games = projection.games;
+    system.variants = projection.variants;
+}
+
+fn project_neogeo_games(
+    games: impl IntoIterator<Item = SystemGame>,
+    resolver: &mut MachineFamilyResolver,
+) -> (
+    crate::machine_family_projection::MachineFamilyProjection,
+    BTreeMap<String, (String, String)>,
+) {
+    let mut candidates = games
+        .into_iter()
         .map(|game| {
             let identity = neogeo_identity(&game.launch_ref);
             MachineFamilyCandidate {
@@ -1553,15 +1569,88 @@ fn project_neogeo_system(system: &mut FastFiveSystem, resolver: &mut MachineFami
         .collect::<Vec<_>>();
     let resolved = resolver.resolve_many(requests);
     for candidate in &mut candidates {
-        if let Some(Some(machine)) = resolved.get(&candidate.identity_id) {
+        if let Some(Some(machine)) = resolved.get(&(candidate.identity_id.clone(), None)) {
             candidate.family_id = machine.family.clone();
             candidate.game.preview_asset_key = machine.family.clone();
         }
     }
+    let metadata = candidates
+        .iter()
+        .map(|candidate| {
+            (
+                candidate.game.launch_ref.clone(),
+                (candidate.identity_id.clone(), candidate.family_id.clone()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let projection = project_machine_families(candidates);
-    system.games = projection.games;
-    system.variants = projection.variants;
     resolver.finish_log("neogeo");
+    (projection, metadata)
+}
+
+/// Audit the installed Neo Geo source through the same scanner, resolver, and
+/// contiguous family projector used by publication.
+pub fn audit_installed_neogeo_families(storage_root: &Path) -> Result<String, String> {
+    let mut resolver = MachineFamilyResolver::for_storage_root(storage_root)?;
+    let installed = rebuild_installed_generic_system(storage_root, "neogeo")?;
+    let Some((system, _report)) = installed else {
+        return Ok("neogeo_family_summary_tsv\tinstalled_games=0\tvisible_games=0\tvariants=0\tfamilies=0\tunresolved=0\n".to_string());
+    };
+    let (projection, metadata) = project_neogeo_games(system.games, &mut resolver);
+    let mut family_keys = projection
+        .games
+        .iter()
+        .map(|game| game.stable_key.as_str())
+        .collect::<BTreeSet<_>>();
+    family_keys.extend(
+        projection
+            .variants
+            .iter()
+            .map(|variant| variant.family_stable_key.as_str()),
+    );
+    let unresolved = metadata
+        .values()
+        .filter(|(_, family)| family.is_empty())
+        .count();
+    let mut rows = String::new();
+    for game in &projection.games {
+        let (identity, family) = metadata.get(&game.launch_ref).cloned().unwrap_or_default();
+        rows.push_str(&format!(
+            "neogeo_family_row_tsv\tstatus=visible\ttitle={}\tlaunch_ref={}\tidentity_id={}\tfamily_id={}\tfamily_stable_key={}\n",
+            sanitize_family_audit_field(&game.title),
+            sanitize_family_audit_field(&game.launch_ref),
+            sanitize_family_audit_field(&identity),
+            sanitize_family_audit_field(&family),
+            sanitize_family_audit_field(&game.stable_key),
+        ));
+    }
+    for variant in &projection.variants {
+        let (identity, family) = metadata
+            .get(&variant.game.launch_ref)
+            .cloned()
+            .unwrap_or_default();
+        rows.push_str(&format!(
+            "neogeo_family_row_tsv\tstatus=variant\ttitle={}\tlaunch_ref={}\tidentity_id={}\tfamily_id={}\tfamily_stable_key={}\n",
+            sanitize_family_audit_field(&variant.game.title),
+            sanitize_family_audit_field(&variant.game.launch_ref),
+            sanitize_family_audit_field(&identity),
+            sanitize_family_audit_field(&family),
+            sanitize_family_audit_field(&variant.family_stable_key),
+        ));
+    }
+    let summary = format!(
+        "neogeo_family_summary_tsv\tinstalled_games={}\tvisible_games={}\tvariants={}\tfamilies={}\tunresolved={}\n",
+        metadata.len(),
+        projection.games.len(),
+        projection.variants.len(),
+        family_keys.len(),
+        unresolved,
+    );
+    Ok(summary + &rows)
+}
+
+fn sanitize_family_audit_field(value: &str) -> String {
+    value.replace(['\t', '\r', '\n'], " ")
 }
 
 fn neogeo_identity(launch_ref: &str) -> String {
@@ -2083,5 +2172,37 @@ mod tests {
             "mame-software__saturn__vf2"
         );
         assert!(systems[2].games[1].preview_asset_key.is_empty());
+    }
+
+    #[test]
+    fn neogeo_family_audit_reports_installed_projection() {
+        let root = crate::test_support::unique_temp_dir("fast-neogeo-family-audit");
+        let database = root.join("mister-magik/mame.sqlite3");
+        fs::create_dir_all(database.parent().unwrap()).unwrap();
+        crate::test_support::write_mame_fixture_db(
+            &database,
+            &[
+                ("mslug3", None, "Metal Slug 3", None, None),
+                (
+                    "mslug3j",
+                    Some("mslug3"),
+                    "Metal Slug 3 (Japan)",
+                    None,
+                    None,
+                ),
+            ],
+        );
+        fs::create_dir_all(root.join("games/NEOGEO")).unwrap();
+        fs::write(root.join("games/NEOGEO/Metal Slug 3 (mslug3).neo"), b"rom").unwrap();
+        fs::write(root.join("games/NEOGEO/Metal Slug 3 (mslug3j).neo"), b"rom").unwrap();
+
+        let report = audit_installed_neogeo_families(&root).unwrap();
+
+        assert!(report.contains(
+            "neogeo_family_summary_tsv\tinstalled_games=2\tvisible_games=1\tvariants=1\tfamilies=1"
+        ));
+        assert!(report.contains("neogeo_family_row_tsv\tstatus=visible"));
+        assert!(report.contains("neogeo_family_row_tsv\tstatus=variant"));
+        assert!(report.contains("\tfamily_id=mslug3\t"));
     }
 }

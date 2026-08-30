@@ -22,6 +22,7 @@ impl CommandSpec {
 
 pub const CATALOG_INSPECT_COMMAND: &str = "catalog-inspect";
 pub const CATALOG_ROM_AUDIT_COMMAND: &str = "catalog-arcade-rom-audit";
+pub const CATALOG_NEOGEO_FAMILY_AUDIT_COMMAND: &str = "catalog-neogeo-family-audit";
 pub const CATALOG_CORPUS_INVENTORY_COMMAND: &str = "catalog-corpus-inventory";
 pub const CATALOG_REGISTRY_REPORT_COMMAND: &str = "catalog-registry-report";
 pub const CATALOG_WORKER_COMMAND: &str = "catalog-worker";
@@ -90,6 +91,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("preview-index-refresh-bench", CommandKind::PreFpga),
     CommandSpec::new(CATALOG_INSPECT_COMMAND, CommandKind::PreFpga),
     CommandSpec::new(CATALOG_ROM_AUDIT_COMMAND, CommandKind::PreFpga),
+    CommandSpec::new(CATALOG_NEOGEO_FAMILY_AUDIT_COMMAND, CommandKind::PreFpga),
     CommandSpec::new(CATALOG_REGISTRY_REPORT_COMMAND, CommandKind::PreFpga),
     // Internal supervised child. It deliberately does not take the UI process lock.
     CommandSpec::new(CATALOG_WORKER_COMMAND, CommandKind::PreFpga),
@@ -263,6 +265,7 @@ mod tests {
     #[cfg(all(not(feature = "diagnostics"), not(feature = "bench-tools")))]
     fn production_command_list_hides_diagnostics() {
         assert!(is_known_command("catalog-inspect"));
+        assert!(is_known_command("catalog-neogeo-family-audit"));
         assert!(is_known_command("catalog-registry-report"));
         assert!(is_known_command("benchmark-capabilities"));
         assert!(is_known_command("pmu-probe"));

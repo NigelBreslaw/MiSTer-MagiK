@@ -391,6 +391,9 @@ fn dispatch_pre_fpga(
             process_config.catalog_paths(),
             process_config.archive_cache(),
         ),
+        command_args::CATALOG_NEOGEO_FAMILY_AUDIT_COMMAND => {
+            run_catalog_neogeo_family_audit(process_config.device_paths().device_root())
+        }
         command_args::CATALOG_REGISTRY_REPORT_COMMAND => {
             run_catalog_registry_report(process_config.catalog_paths())
         }
@@ -504,6 +507,17 @@ fn run_catalog_arcade_rom_audit(
         Ok(report) => crate::ui_log!("{report}"),
         Err(error) => {
             crate::ui_errln!("arcade_rom_visibility_summary_tsv\tvalid=0\terror={error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_catalog_neogeo_family_audit(storage_root: &std::path::Path) {
+    match mister_magik_catalog::fast_catalog_sources::audit_installed_neogeo_families(storage_root)
+    {
+        Ok(report) => crate::ui_log!("{report}"),
+        Err(error) => {
+            crate::ui_errln!("neogeo_family_summary_tsv\tvalid=0\terror={error}");
             std::process::exit(1);
         }
     }

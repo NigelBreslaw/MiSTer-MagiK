@@ -11,8 +11,8 @@
 use crate::library_db;
 use crate::mra_header::RomNamespace;
 use rusqlite::{Connection, params_from_iter};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 
 const QUERY_CHUNK: usize = 400;
 
@@ -38,7 +38,7 @@ struct MachineDatabase {
 pub(crate) struct MachineFamilyResolver {
     mame: Option<MachineDatabase>,
     hbmame: Option<MachineDatabase>,
-    cache: HashMap<(String, Option<RomNamespace>), Option<ResolvedMachine>>,
+    cache: BTreeMap<(String, Option<RomNamespace>), Option<ResolvedMachine>>,
     pub(crate) requested: usize,
     pub(crate) cache_hits: usize,
     pub(crate) mame_matches: usize,
@@ -86,35 +86,34 @@ impl MachineFamilyResolver {
         if normalized.is_empty() {
             return None;
         }
-        self.resolve_many([(normalized, namespace)])
-            .into_iter()
-            .next()
-            .and_then(|(_, row)| row)
+        self.resolve_many([(normalized.clone(), namespace.clone())])
+            .remove(&(normalized, namespace))
+            .and_then(|row| row)
     }
 
     pub(crate) fn resolve_many<I>(
         &mut self,
         identities: I,
-    ) -> HashMap<String, Option<ResolvedMachine>>
+    ) -> BTreeMap<(String, Option<RomNamespace>), Option<ResolvedMachine>>
     where
         I: IntoIterator<Item = (String, Option<RomNamespace>)>,
     {
-        let mut requested = HashMap::<String, Option<RomNamespace>>::new();
+        let mut requested = BTreeMap::<(String, Option<RomNamespace>), ()>::new();
         for (identity, namespace) in identities {
             let identity = normalize(&identity);
             if identity.is_empty() {
                 continue;
             }
-            requested.entry(identity).or_insert(namespace);
+            requested.insert((identity, namespace), ());
         }
         self.requested = self.requested.saturating_add(requested.len());
         let mut unresolved = Vec::new();
-        let mut output = HashMap::with_capacity(requested.len());
-        for (identity, namespace) in requested {
+        let mut output = BTreeMap::new();
+        for (identity, namespace) in requested.keys().cloned() {
             let cache_key = (identity.clone(), namespace.clone());
             if let Some(value) = self.cache.get(&cache_key) {
                 self.cache_hits = self.cache_hits.saturating_add(1);
-                output.insert(identity, value.clone());
+                output.insert(cache_key, value.clone());
             } else {
                 unresolved.push((identity, namespace));
             }
@@ -128,35 +127,44 @@ impl MachineFamilyResolver {
                 mame_ids.push(identity.clone());
             }
         }
-        let mut rows = HashMap::new();
+        let mut mame_rows = HashMap::new();
+        let mut hbmame_rows = HashMap::new();
         if let Some(database) = self.hbmame.as_ref() {
-            rows.extend(query_database(database, &hbmame_ids));
+            hbmame_rows.extend(query_database(database, &hbmame_ids));
         }
         if let Some(database) = self.mame.as_ref() {
-            rows.extend(query_database(database, &mame_ids));
+            mame_rows.extend(query_database(database, &mame_ids));
         }
         // Unnamespaced identities prefer MAME, then fall back to HBMAME when
         // the set is absent from the main database.
         let hbmame_fallback = mame_ids
             .iter()
-            .filter(|identity| !rows.contains_key(*identity))
+            .filter(|identity| !mame_rows.contains_key(*identity))
             .cloned()
             .collect::<Vec<_>>();
         if let Some(database) = self.hbmame.as_ref() {
-            rows.extend(query_database(database, &hbmame_fallback));
+            hbmame_rows.extend(query_database(database, &hbmame_fallback));
         }
         // Explicit HBMAME requests may still be absent there.  Falling back
         // to MAME preserves useful family projection for shared set names.
         let mame_fallback = hbmame_ids
             .iter()
-            .filter(|identity| !rows.contains_key(*identity))
+            .filter(|identity| !hbmame_rows.contains_key(*identity))
             .cloned()
             .collect::<Vec<_>>();
         if let Some(database) = self.mame.as_ref() {
-            rows.extend(query_database(database, &mame_fallback));
+            mame_rows.extend(query_database(database, &mame_fallback));
         }
         for (identity, namespace) in unresolved {
-            let row = rows.remove(&identity);
+            let row = match namespace {
+                Some(RomNamespace::Hbmame) => hbmame_rows
+                    .get(&identity)
+                    .or_else(|| mame_rows.get(&identity)),
+                Some(RomNamespace::Mame) | None => mame_rows
+                    .get(&identity)
+                    .or_else(|| hbmame_rows.get(&identity)),
+            }
+            .cloned();
             if let Some(row) = &row {
                 match row.source {
                     MachineSource::Mame => self.mame_matches = self.mame_matches.saturating_add(1),
@@ -168,8 +176,8 @@ impl MachineFamilyResolver {
                 self.unresolved = self.unresolved.saturating_add(1);
             }
             self.cache
-                .insert((identity.clone(), namespace), row.clone());
-            output.insert(identity, row);
+                .insert((identity.clone(), namespace.clone()), row.clone());
+            output.insert((identity, namespace), row);
         }
         output
     }
@@ -292,12 +300,54 @@ mod tests {
             ("same".to_string(), None),
             ("missing".to_string(), None),
         ]);
-        assert_eq!(rows["clone"].as_ref().unwrap().family, "parent");
-        assert_eq!(rows["parent"].as_ref().unwrap().family, "parent");
-        assert_eq!(rows["same"].as_ref().unwrap().family, "same");
-        assert!(rows["missing"].is_none());
+        assert_eq!(
+            rows[&("clone".to_string(), None)].as_ref().unwrap().family,
+            "parent"
+        );
+        assert_eq!(
+            rows[&("parent".to_string(), None)].as_ref().unwrap().family,
+            "parent"
+        );
+        assert_eq!(
+            rows[&("same".to_string(), None)].as_ref().unwrap().family,
+            "same"
+        );
+        assert!(rows[&("missing".to_string(), None)].is_none());
         assert!(resolver.resolve("missing", None).is_none());
         assert_eq!(resolver.cache_hits, 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn namespace_keeps_same_identity_rows_separate() {
+        let (root, _path) = fixture();
+        let hbmame = root.join("mister-magik-dev/hbmame.sqlite3");
+        let connection = Connection::open(&hbmame).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE mame_machines(setname TEXT PRIMARY KEY,parent_setname TEXT);
+                 INSERT INTO mame_machines VALUES ('clone','hbmame-parent');",
+            )
+            .unwrap();
+        drop(connection);
+
+        let mut resolver = MachineFamilyResolver::for_storage_root(&root).unwrap();
+        let rows = resolver.resolve_many([
+            ("clone".to_string(), None),
+            ("clone".to_string(), Some(RomNamespace::Hbmame)),
+        ]);
+
+        assert_eq!(
+            rows[&("clone".to_string(), None)].as_ref().unwrap().family,
+            "parent"
+        );
+        assert_eq!(
+            rows[&("clone".to_string(), Some(RomNamespace::Hbmame))]
+                .as_ref()
+                .unwrap()
+                .family,
+            "hbmame-parent"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }
