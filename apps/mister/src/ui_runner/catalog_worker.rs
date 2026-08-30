@@ -37,7 +37,7 @@ const CATALOG_WORKER_REGISTRY_SNAPSHOT_SUFFIX: &str = "registry-seed";
 const CATALOG_WORKER_REGISTRY_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-struct RegistrySeedTransport {
+pub(super) struct RegistrySeedTransport {
     generation: u64,
     fingerprint: String,
     systems: Vec<RegistrySeedSystem>,
