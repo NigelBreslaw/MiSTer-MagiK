@@ -911,6 +911,13 @@ mod linux {
             };
             stats.read_calls = stats.read_calls.saturating_add(1);
             if read < 0 {
+                if io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                    // Profilers such as pprof deliver SIGPROF asynchronously.
+                    // Retry the directory read so an interrupted syscall does
+                    // not force an otherwise healthy fd-relative walk onto the
+                    // slower full-path fallback backend.
+                    continue;
+                }
                 return Err(format!(
                     "getdents64 {}: {}",
                     directory_path.display(),
