@@ -933,16 +933,14 @@ mod imp {
         outcome: &'static str,
         completed: Arc<AtomicBool>,
     ) {
-        let completed_for_thread = completed.clone();
-        if let Err(error) = std::thread::Builder::new()
-            .name("catalog-build-profile".into())
-            .spawn(move || {
-                finalize_catalog_build(session, complete_path, state, outcome, completed_for_thread)
-            })
-        {
-            completed.store(true, Ordering::Release);
-            crate::ui_errln!("catalog-build cpu profile finalizer spawn failed: {error}");
-        }
+        // Keep pprof report extraction on the catalog worker that owns the
+        // profiler guard.  A detached finalizer leaves the worker and
+        // heartbeat threads eligible for SIGPROF while the report takes the
+        // profiler's global lock, which can strand that lock in signal
+        // context on ARM.  The catalog has already reached its terminal
+        // event at each call site, so this bounded diagnostic work is safe to
+        // perform synchronously here.
+        finalize_catalog_build(session, complete_path, state, outcome, completed);
     }
 
     fn finalize_catalog_build(
