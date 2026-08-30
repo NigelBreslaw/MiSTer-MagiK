@@ -12,6 +12,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
+use std::os::unix::io::FromRawFd;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -21,6 +23,8 @@ use std::sync::{Arc, Mutex};
 const CATALOG_WORKER_CHILD_ENV: &str = "MISTER_CATALOG_WORKER_CHILD";
 const CATALOG_WORKER_PROTOCOL_PREFIX: &str = "MISTER_CATALOG_EVENT ";
 const CATALOG_WORKER_PROTOCOL_VERSION: u8 = 4;
+const MAX_CATALOG_WORKER_PROTOCOL_LINE_BYTES: u64 = 256 * 1024;
+const CATALOG_WORKER_EVENT_QUEUE_CAPACITY: usize = 16_384;
 const CATALOG_WORKER_SNAPSHOT_DIRECTORY: &str = "/tmp/mister-magik/catalog-worker";
 
 fn filesystem_available_bytes(path: &str) -> Option<u64> {
@@ -632,6 +636,108 @@ fn blank_worker_wire_event(kind: &str) -> CatalogWorkerWireEvent {
     }
 }
 
+pub(super) enum CatalogWorkerReceiver {
+    Direct(mpsc::Receiver<CatalogWorkerMessage>),
+    Process {
+        events: mpsc::Receiver<CatalogWorkerMessage>,
+        terminal: mpsc::Receiver<CatalogWorkerMessage>,
+        pending_terminal: Mutex<Option<CatalogWorkerMessage>>,
+    },
+}
+
+impl CatalogWorkerReceiver {
+    pub(super) fn try_recv(&self) -> Result<CatalogWorkerMessage, mpsc::TryRecvError> {
+        match self {
+            Self::Direct(receiver) => receiver.try_recv(),
+            Self::Process {
+                events,
+                terminal,
+                pending_terminal,
+            } => {
+                let mut pending = pending_terminal
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                if let Some(message) = pending.as_ref()
+                    && !matches!(message, CatalogWorkerMessage::Done)
+                {
+                    return Ok(pending.take().expect("pending terminal message"));
+                }
+                if pending.is_none()
+                    && let Ok(message) = terminal.try_recv()
+                {
+                    if !matches!(message, CatalogWorkerMessage::Done) {
+                        return Ok(message);
+                    }
+                    *pending = Some(message);
+                }
+                match events.try_recv() {
+                    Ok(message) => Ok(message),
+                    Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => {
+                        pending.take().map(Ok).unwrap_or_else(|| events.try_recv())
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl From<mpsc::Receiver<CatalogWorkerMessage>> for CatalogWorkerReceiver {
+    fn from(receiver: mpsc::Receiver<CatalogWorkerMessage>) -> Self {
+        Self::Direct(receiver)
+    }
+}
+
+fn read_catalog_worker_protocol_line(reader: &mut impl BufRead) -> Result<Option<String>, String> {
+    let mut bytes = Vec::new();
+    let read = reader
+        .take(MAX_CATALOG_WORKER_PROTOCOL_LINE_BYTES + 1)
+        .read_until(b'\n', &mut bytes)
+        .map_err(|error| format!("read catalog worker protocol: {error}"))?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if read as u64 > MAX_CATALOG_WORKER_PROTOCOL_LINE_BYTES {
+        return Err("catalog worker protocol line exceeds size limit".to_string());
+    }
+    if bytes.pop() != Some(b'\n') {
+        return Err("catalog worker protocol ended with an incomplete line".to_string());
+    }
+    if bytes.last() == Some(&b'\r') {
+        bytes.pop();
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| "catalog worker protocol line is not UTF-8".to_string())
+}
+
+fn prepare_catalog_worker_protocol_output() -> Result<Box<dyn Write + Send>, String> {
+    #[cfg(unix)]
+    {
+        // Preserve the piped stdout exclusively for protocol records, then
+        // redirect ordinary stdout logging to the inherited diagnostic stream.
+        let protocol_fd = unsafe { libc::dup(libc::STDOUT_FILENO) };
+        if protocol_fd < 0 {
+            return Err(format!(
+                "duplicate catalog worker protocol stream: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        if unsafe { libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) } < 0 {
+            unsafe { libc::close(protocol_fd) };
+            return Err(format!(
+                "redirect catalog worker diagnostics: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let output = unsafe { std::fs::File::from_raw_fd(protocol_fd) };
+        return Ok(Box::new(output));
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(Box::new(std::io::stdout()))
+    }
+}
+
 pub(super) fn start_library_catalog_worker(
     root: String,
     request: CatalogWorkerRequest,
@@ -639,10 +745,7 @@ pub(super) fn start_library_catalog_worker(
     execution_mode: CatalogExecutionMode,
     catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
     archive_cache: mister_magik_catalog::catalog_config::ArchiveCacheConfig,
-) -> (
-    mpsc::Receiver<CatalogWorkerMessage>,
-    Option<Arc<CatalogChildControl>>,
-) {
+) -> (CatalogWorkerReceiver, Option<Arc<CatalogChildControl>>) {
     if request != CatalogWorkerRequest::LoadOnly
         && request != CatalogWorkerRequest::StrictLoad
         && std::env::var_os(CATALOG_WORKER_CHILD_ENV).is_none()
@@ -663,7 +766,8 @@ pub(super) fn start_library_catalog_worker(
             execution_mode,
             catalog_paths,
             archive_cache,
-        ),
+        )
+        .into(),
         None,
     )
 }
@@ -753,18 +857,21 @@ fn start_library_catalog_worker_process(
     initial_cache: CatalogWorkerInitialCache,
     execution_mode: CatalogExecutionMode,
     catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
-) -> (
-    mpsc::Receiver<CatalogWorkerMessage>,
-    Option<Arc<CatalogChildControl>>,
-) {
-    let (tx, rx) = mpsc::channel();
+) -> (CatalogWorkerReceiver, Option<Arc<CatalogChildControl>>) {
+    let (event_tx, event_rx) = mpsc::sync_channel(CATALOG_WORKER_EVENT_QUEUE_CAPACITY);
+    let (terminal_tx, terminal_rx) = mpsc::sync_channel(1);
+    let receiver = CatalogWorkerReceiver::Process {
+        events: event_rx,
+        terminal: terminal_rx,
+        pending_terminal: Mutex::new(None),
+    };
     let executable = match std::env::current_exe() {
         Ok(executable) => executable,
         Err(error) => {
-            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+            let _ = terminal_tx.send(CatalogWorkerMessage::PersistenceFailed {
                 error: format!("locate catalog worker executable: {error}"),
             });
-            return (rx, None);
+            return (receiver, None);
         }
     };
     let mut command = Command::new(executable);
@@ -779,8 +886,8 @@ fn start_library_catalog_worker_process(
         .arg(&root)
         .env(CATALOG_WORKER_CHILD_ENV, "1")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
     #[cfg(unix)]
     {
         // Put the worker and any archive helpers it starts into a private
@@ -797,21 +904,21 @@ fn start_library_catalog_worker_process(
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
-            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+            let _ = terminal_tx.send(CatalogWorkerMessage::PersistenceFailed {
                 error: format!("spawn catalog worker child: {error}"),
             });
-            return (rx, None);
+            return (receiver, None);
         }
     };
-    let stderr = match child.stderr.take() {
-        Some(stderr) => stderr,
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
         None => {
             let _ = child.kill();
             let _ = child.wait();
-            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+            let _ = terminal_tx.send(CatalogWorkerMessage::PersistenceFailed {
                 error: "catalog worker child has no protocol stream".to_string(),
             });
-            return (rx, None);
+            return (receiver, None);
         }
     };
     let process_group = child.id().try_into().unwrap_or(-1);
@@ -835,18 +942,17 @@ fn start_library_catalog_worker_process(
     std::thread::Builder::new()
         .name("catalog-worker-protocol".to_string())
         .spawn(move || {
-            let reader = BufReader::new(stderr);
+            let mut reader = BufReader::new(stdout);
             let mut terminal = false;
             let mut terminal_message = None;
             let mut protocol_failed = false;
             let mut protocol_state = CatalogWorkerProtocolState::default();
-            for line in reader.lines() {
-                let line = match line {
-                    Ok(line) => line,
+            loop {
+                let line = match read_catalog_worker_protocol_line(&mut reader) {
+                    Ok(Some(line)) => line,
+                    Ok(None) => break,
                     Err(error) => {
-                        terminal_message = Some(CatalogWorkerMessage::PersistenceFailed {
-                            error: format!("read catalog worker protocol: {error}"),
-                        });
+                        terminal_message = Some(CatalogWorkerMessage::PersistenceFailed { error });
                         protocol_failed = true;
                         break;
                     }
@@ -867,7 +973,7 @@ fn start_library_catalog_worker_process(
                 match protocol_state.validate(&event) {
                     Ok(true) => {
                         reader_control.handshake_seen.store(true, Ordering::Release);
-                        let _ = tx.send(CatalogWorkerMessage::Timing {
+                        let _ = event_tx.try_send(CatalogWorkerMessage::Timing {
                             name: "catalog_worker_handshake_v4".to_string(),
                             detail: format!("run_id={}", event.run_id),
                         });
@@ -892,7 +998,23 @@ fn start_library_catalog_worker_process(
                             terminal_message = Some(message);
                             break;
                         }
-                        let _ = tx.send(message);
+                        match event_tx.try_send(message) {
+                            Ok(()) => {}
+                            Err(mpsc::TrySendError::Full(
+                                CatalogWorkerMessage::Heartbeat { .. }
+                                | CatalogWorkerMessage::Timing { .. },
+                            )) => {}
+                            Err(mpsc::TrySendError::Full(_)) => {
+                                terminal_message = Some(CatalogWorkerMessage::PersistenceFailed {
+                                    error:
+                                        "catalog worker event queue exceeded its bounded capacity"
+                                            .to_string(),
+                                });
+                                protocol_failed = true;
+                                break;
+                            }
+                            Err(mpsc::TrySendError::Disconnected(_)) => break,
+                        }
                     }
                     Ok(None) => {}
                     Err(error) => {
@@ -911,7 +1033,7 @@ fn start_library_catalog_worker_process(
             if protocol_failed {
                 let _ = reader_control.terminate();
                 if let Some(message) = terminal_message.take() {
-                    let _ = tx.send(message);
+                    let _ = terminal_tx.try_send(message);
                 }
             }
             let mut child = reader_control
@@ -922,18 +1044,19 @@ fn start_library_catalog_worker_process(
             let child_status = child.as_mut().and_then(|child| child.wait().ok());
             reader_control.reaped.store(true, Ordering::Release);
             if let Some(message) = terminal_message {
-                let _ = tx.send(message);
+                let _ = terminal_tx.try_send(message);
             } else if !terminal {
                 let detail = child_status
                     .map(|status| format!("catalog worker child exited with {status}"))
                     .unwrap_or_else(|| {
                         "catalog worker child exited without a terminal event".to_string()
                     });
-                let _ = tx.send(CatalogWorkerMessage::PersistenceFailed { error: detail });
+                let _ =
+                    terminal_tx.try_send(CatalogWorkerMessage::PersistenceFailed { error: detail });
             }
         })
         .expect("spawn catalog worker protocol reader");
-    (rx, Some(control))
+    (receiver, Some(control))
 }
 
 fn catalog_worker_message_from_wire(
@@ -1043,6 +1166,13 @@ fn catalog_worker_message_from_wire(
 }
 
 pub(crate) fn run_catalog_worker_child(args: &[String]) {
+    let protocol_output = match prepare_catalog_worker_protocol_output() {
+        Ok(output) => output,
+        Err(error) => {
+            crate::ui_errln!("catalog worker child: {error}");
+            std::process::exit(2);
+        }
+    };
     let request = match args
         .get(2)
         .map(String::as_str)
@@ -1085,7 +1215,7 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
         paths,
         archive_cache,
     );
-    let writer = Arc::new(Mutex::new(std::io::BufWriter::new(std::io::stderr())));
+    let writer = Arc::new(Mutex::new(std::io::BufWriter::new(protocol_output)));
     let (heartbeat_stop, heartbeat_stop_rx) = mpsc::sync_channel(1);
     let heartbeat_run_id = mister_magik_catalog::catalog_lease::CatalogRunId::new();
     let wire_run_id = heartbeat_run_id.as_str().to_string();
@@ -1993,6 +2123,60 @@ mod tests {
 
         assert!(!waiter.join().unwrap());
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn protocol_reader_rejects_oversized_and_incomplete_lines() {
+        let mut oversized = vec![b'x'; MAX_CATALOG_WORKER_PROTOCOL_LINE_BYTES as usize];
+        oversized.push(b'\n');
+        assert!(read_catalog_worker_protocol_line(&mut std::io::Cursor::new(oversized)).is_err());
+        assert!(
+            read_catalog_worker_protocol_line(&mut std::io::Cursor::new(b"incomplete")).is_err()
+        );
+    }
+
+    #[test]
+    fn process_receiver_preserves_success_order_and_prioritizes_failure() {
+        let (event_tx, event_rx) = mpsc::sync_channel(2);
+        let (terminal_tx, terminal_rx) = mpsc::sync_channel(1);
+        let receiver = CatalogWorkerReceiver::Process {
+            events: event_rx,
+            terminal: terminal_rx,
+            pending_terminal: Mutex::new(None),
+        };
+        event_tx
+            .send(CatalogWorkerMessage::Timing {
+                name: "before-done".to_string(),
+                detail: String::new(),
+            })
+            .unwrap();
+        terminal_tx.send(CatalogWorkerMessage::Done).unwrap();
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(CatalogWorkerMessage::Timing { .. })
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(CatalogWorkerMessage::Done)
+        ));
+
+        let (event_tx, event_rx) = mpsc::sync_channel(1);
+        let (terminal_tx, terminal_rx) = mpsc::sync_channel(1);
+        let receiver = CatalogWorkerReceiver::Process {
+            events: event_rx,
+            terminal: terminal_rx,
+            pending_terminal: Mutex::new(None),
+        };
+        event_tx.send(CatalogWorkerMessage::Done).unwrap();
+        terminal_tx
+            .send(CatalogWorkerMessage::PersistenceFailed {
+                error: "failed".to_string(),
+            })
+            .unwrap();
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(CatalogWorkerMessage::PersistenceFailed { .. })
+        ));
     }
 
     #[cfg(unix)]

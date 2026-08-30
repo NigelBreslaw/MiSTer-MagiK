@@ -147,7 +147,7 @@ impl MediaJobEventBuf {
 
 enum CatalogJobState {
     Idle,
-    Running(mpsc::Receiver<CatalogWorkerMessage>),
+    Running(CatalogWorkerReceiver),
 }
 
 enum SearchQueryJobState {
@@ -1636,7 +1636,7 @@ mod tests {
     fn starting_catalog_worker_does_not_detach_existing_worker() {
         let (_tx, rx) = mpsc::channel();
         let mut scheduler = LauncherScheduler::new(false);
-        scheduler.catalog = CatalogJobState::Running(rx);
+        scheduler.catalog = CatalogJobState::Running(rx.into());
 
         assert!(!scheduler.start_catalog_worker(
             "/tmp/catalog-test".to_string(),
@@ -1902,7 +1902,7 @@ mod tests {
             .unwrap();
         }
         let mut scheduler = LauncherScheduler::new(false);
-        scheduler.catalog = CatalogJobState::Running(rx);
+        scheduler.catalog = CatalogJobState::Running(rx.into());
         let mut events = CatalogJobEventBuf::new();
 
         scheduler.poll_catalog(&mut events, CatalogPollScope::Idle);
@@ -1946,7 +1946,7 @@ mod tests {
             })
             .unwrap();
         let mut scheduler = LauncherScheduler::new(false);
-        scheduler.catalog = CatalogJobState::Running(catalog_rx);
+        scheduler.catalog = CatalogJobState::Running(catalog_rx.into());
         scheduler.search_query = SearchQueryJobState::Running(search_rx);
         let mut events = CatalogJobEventBuf::new();
 
@@ -1997,7 +1997,7 @@ mod tests {
         let (requests, _request_rx) = mpsc::channel();
         let (_liveness_tx, liveness) = mpsc::channel();
         let mut scheduler = LauncherScheduler::new(false);
-        scheduler.catalog = CatalogJobState::Running(catalog_rx);
+        scheduler.catalog = CatalogJobState::Running(catalog_rx.into());
         scheduler.system_entry_prepare = Some(SystemEntryPrepareWorker {
             requests,
             results: Arc::clone(&results),
@@ -2046,7 +2046,7 @@ mod tests {
         let (requests, _request_rx) = mpsc::channel();
         let (_liveness_tx, liveness) = mpsc::channel();
         let mut scheduler = LauncherScheduler::new(false);
-        scheduler.catalog = CatalogJobState::Running(catalog_rx);
+        scheduler.catalog = CatalogJobState::Running(catalog_rx.into());
         scheduler.system_entry_prepare = Some(SystemEntryPrepareWorker {
             requests,
             results: Arc::clone(&results),
@@ -2097,7 +2097,7 @@ mod tests {
         tx.send(CatalogWorkerMessage::Done).unwrap();
         drop(tx);
         let mut scheduler = LauncherScheduler::new(false);
-        scheduler.catalog = CatalogJobState::Running(rx);
+        scheduler.catalog = CatalogJobState::Running(rx.into());
         let mut events = CatalogJobEventBuf::new();
 
         scheduler.poll_catalog(&mut events, CatalogPollScope::Idle);
@@ -2110,7 +2110,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         drop(tx);
         let mut scheduler = LauncherScheduler::new(false);
-        scheduler.catalog = CatalogJobState::Running(rx);
+        scheduler.catalog = CatalogJobState::Running(rx.into());
         let mut events = CatalogJobEventBuf::new();
 
         assert!(scheduler.poll_catalog(&mut events, CatalogPollScope::Idle));
@@ -2131,7 +2131,7 @@ mod tests {
         .unwrap();
         let control = Arc::new(CatalogChildControl::test_unreaped());
         let mut scheduler = LauncherScheduler::new(false);
-        scheduler.catalog = CatalogJobState::Running(rx);
+        scheduler.catalog = CatalogJobState::Running(rx.into());
         scheduler.catalog_child_control = Some(Arc::clone(&control));
         let mut events = CatalogJobEventBuf::new();
 
