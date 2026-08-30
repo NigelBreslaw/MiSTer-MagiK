@@ -87,8 +87,8 @@ impl CatalogMutationLease {
                 {
                     let thread =
                         format!("{:?}", std::thread::current().id()).replace(['(', ')'], "");
-                    return std::env::temp_dir()
-                        .join(format!("mister-magik-catalog-builder-test-{thread}.lock"));
+                    std::env::temp_dir()
+                        .join(format!("mister-magik-catalog-builder-test-{thread}.lock"))
                 }
                 #[cfg(not(test))]
                 {
@@ -110,6 +110,7 @@ impl CatalogMutationLease {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&path)
             .map_err(|source| CatalogLeaseError::Io {
                 path: path.clone(),

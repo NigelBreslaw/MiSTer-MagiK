@@ -460,8 +460,8 @@ mod tests {
         assert!(inner_progress_units() >= before);
         report_inner_progress_at(4096);
         let after_first = inner_progress_units();
-        assert!(after_first >= before + 1);
+        assert!(after_first > before);
         report_inner_progress_at(8192);
-        assert!(inner_progress_units() >= after_first + 1);
+        assert!(inner_progress_units() > after_first);
     }
 }

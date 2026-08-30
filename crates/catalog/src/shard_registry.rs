@@ -862,19 +862,18 @@ pub(crate) fn validate_published_system(
         )
         .map_err(|error| RegistryError::new("validate-manifest", error))?;
     }
-    if let Some(previous) = &system.previous {
-        if let (Some(navigation_path), Some(navigation_hash)) =
+    if let Some(previous) = &system.previous
+        && let (Some(navigation_path), Some(navigation_hash)) =
             (&previous.navigation_path, &previous.navigation_hash)
-        {
-            crate::system_shard::open_verified_system_navigation_with_timing(
-                &storage_root.join(navigation_path),
-                &system.system_id,
-                previous.generation,
-                navigation_hash,
-                limits.shard,
-            )
-            .map_err(|error| RegistryError::new("validate-manifest", error.to_string()))?;
-        }
+    {
+        crate::system_shard::open_verified_system_navigation_with_timing(
+            &storage_root.join(navigation_path),
+            &system.system_id,
+            previous.generation,
+            navigation_hash,
+            limits.shard,
+        )
+        .map_err(|error| RegistryError::new("validate-manifest", error.to_string()))?;
     }
     Ok(())
 }
