@@ -25,6 +25,7 @@ DISPLAY_CONTRACTS = {
     (
         ("warm-ready", "hdmi-1080p", ("launcher",)),
         ("warm-ready", "crt-240p", ("launcher",)),
+        ("warm-hydrating", "hdmi-1080p", ("launcher",)),
         ("cold-delayed", "hdmi-1080p", ("particle-intro", "launcher")),
         ("cold-intro-failure", "hdmi-1080p", ("catalog-progress", "launcher")),
     ),
@@ -68,6 +69,8 @@ def test_startup_presentation_sequence(
             for index, entry in enumerate(trace.entries)
             if entry.kind == "launcher"
         )
+        if mode == "warm-hydrating":
+            assert trace.entries[launcher_position].catalog_ready
         assert all(
             not entry.input_enabled for entry in trace.entries[:launcher_position]
         )

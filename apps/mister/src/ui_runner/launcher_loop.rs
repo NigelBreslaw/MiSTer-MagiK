@@ -5575,14 +5575,16 @@ pub(super) fn run_launcher_loop(
         LauncherInputScriptDriver::from_config(launcher_config.input().scripted(), start);
     let mut launcher_automation = LauncherAutomation::new();
     let capsule_seed_ready = catalog_ready && !ui_test_fixture;
-    let warm_registry_hydration_pending = defer_warm_registry_hydration(
-        capsule_seed_ready,
-        startup_return_requested,
-        mister_magik_catalog::shard_registry::manifest_slots_present(
-            launcher_config.catalog_paths().sharded_catalog_dir(),
-        ),
-        catalog_refresh,
-    );
+    let warm_registry_hydration_pending = catalog_publication_test
+        .startup_catalog_hydration_pending()
+        || defer_warm_registry_hydration(
+            capsule_seed_ready,
+            startup_return_requested,
+            mister_magik_catalog::shard_registry::manifest_slots_present(
+                launcher_config.catalog_paths().sharded_catalog_dir(),
+            ),
+            catalog_refresh,
+        );
     let sharded_seed =
         (!ui_test_fixture && !capsule_seed_ready && !warm_registry_hydration_pending)
             .then(|| {
@@ -5721,7 +5723,7 @@ pub(super) fn run_launcher_loop(
             start,
             "catalog_registry_deferred",
             format!(
-                "path={} reveal=first_visible_copy",
+                "path={} reveal=catalog_ready",
                 launcher_config
                     .catalog_paths()
                     .sharded_catalog_dir()
@@ -5870,6 +5872,7 @@ pub(super) fn run_launcher_loop(
             arcade_catalog_required_at_start,
             catalog_worker_enabled,
             catalog_session.foreground_update(),
+            warm_registry_hydration_pending,
         ),
         false,
         catalog_scan_message(catalog_session.foreground_update()),
@@ -5920,7 +5923,9 @@ pub(super) fn run_launcher_loop(
     };
     let startup_mode = if startup_return_requested || launch_return_restored {
         StartupMode::ReturnFromGame
-    } else if catalog_ready || warm_registry_hydration_pending {
+    } else if warm_registry_hydration_pending {
+        StartupMode::WarmCatalogHydrating
+    } else if catalog_ready {
         StartupMode::WarmCatalog
     } else {
         StartupMode::ColdNoCatalog
@@ -6661,12 +6666,15 @@ pub(super) fn run_launcher_loop(
             catalog_ready,
             frame_accounting.first_visible_copy_done(),
             startup_return_waiting_for_catalog,
+            lifecycle.startup_waiting_for_initial_catalog(),
             lifecycle.catalog_worker_start_delay(catalog_background_validation_delay()),
         );
         if background_work_allowed
             && let Some(worker) = catalog_session.maybe_start_deferred_worker(
                 scheduler.catalog_worker_running(),
-                frame_accounting.first_visible_copy_done() || startup_return_waiting_for_catalog,
+                frame_accounting.first_visible_copy_done()
+                    || startup_return_waiting_for_catalog
+                    || lifecycle.startup_waiting_for_initial_catalog(),
                 deferred_worker_policy.allowed && catalog_publication_test.catalog_worker_allowed(),
                 loop_start,
                 deferred_worker_policy.delay,
@@ -8765,6 +8773,8 @@ pub(super) fn run_launcher_loop(
             startup_intro_launcher_ui_plan == StartupIntroLauncherUiPlan::PrepareLiveFrame;
         let startup_intro_suppress_launcher_ui =
             startup_intro_launcher_ui_plan == StartupIntroLauncherUiPlan::Suppress;
+        let startup_reveal_suppress_launcher_ui =
+            startup_intro.is_none() && !lifecycle.startup_can_present_frame();
         if startup_intro_suppress_launcher_ui {
             startup_intro_bridge_dirty_pending |= full_bridge_dirty || light_bridge_dirty;
             full_bridge_dirty = false;
@@ -10014,6 +10024,8 @@ pub(super) fn run_launcher_loop(
                 None
             }
         } else if screensaver.active {
+            None
+        } else if startup_reveal_suppress_launcher_ui {
             None
         } else if startup_intro_suppress_launcher_ui {
             None
@@ -14012,6 +14024,7 @@ fn deferred_catalog_worker_start_policy(
     catalog_ready: bool,
     first_visible_copy_done: bool,
     startup_return_waiting_for_catalog: bool,
+    startup_waiting_for_initial_catalog: bool,
     background_delay: Duration,
 ) -> DeferredCatalogWorkerStartPolicy {
     if catalog_ready {
@@ -14022,7 +14035,9 @@ fn deferred_catalog_worker_start_policy(
         }
     } else {
         DeferredCatalogWorkerStartPolicy {
-            allowed: first_visible_copy_done || startup_return_waiting_for_catalog,
+            allowed: first_visible_copy_done
+                || startup_return_waiting_for_catalog
+                || startup_waiting_for_initial_catalog,
             delay: Duration::ZERO,
             foreground: true,
         }
@@ -14071,8 +14086,11 @@ fn initial_catalog_scan_visible(
     _arcade_catalog_required_at_start: bool,
     catalog_worker_enabled: bool,
     foreground_update: bool,
+    startup_waiting_for_initial_catalog: bool,
 ) -> bool {
-    catalog_worker_enabled && (foreground_update || !catalog_ready)
+    catalog_worker_enabled
+        && !startup_waiting_for_initial_catalog
+        && (foreground_update || !catalog_ready)
 }
 
 fn arcade_catalog_rows_ready(catalog: &ArcadeCatalog) -> bool {
@@ -17431,8 +17449,10 @@ mod tests {
 
     #[test]
     pub(super) fn home_boot_with_ready_catalog_hides_catalog_popup() {
-        assert!(!initial_catalog_scan_visible(true, false, true, false));
-        assert!(initial_catalog_scan_visible(true, false, true, true));
+        assert!(!initial_catalog_scan_visible(
+            true, false, true, false, false
+        ));
+        assert!(initial_catalog_scan_visible(true, false, true, true, false));
     }
 
     #[test]
@@ -17648,10 +17668,21 @@ mod tests {
 
     #[test]
     pub(super) fn missing_catalog_shows_catalog_popup_on_home_or_arcade_boot() {
-        assert!(initial_catalog_scan_visible(false, false, true, false));
-        assert!(initial_catalog_scan_visible(false, true, true, false));
-        assert!(!initial_catalog_scan_visible(true, true, true, false));
-        assert!(!initial_catalog_scan_visible(false, true, false, false));
+        assert!(initial_catalog_scan_visible(
+            false, false, true, false, false
+        ));
+        assert!(initial_catalog_scan_visible(
+            false, true, true, false, false
+        ));
+        assert!(!initial_catalog_scan_visible(
+            true, true, true, false, false
+        ));
+        assert!(!initial_catalog_scan_visible(
+            false, true, false, false, false
+        ));
+        assert!(!initial_catalog_scan_visible(
+            false, false, true, false, true
+        ));
     }
 
     #[test]
@@ -18213,14 +18244,19 @@ mod tests {
 
     #[test]
     pub(super) fn cold_catalog_worker_starts_after_first_copy_without_delay() {
-        let before_copy =
-            deferred_catalog_worker_start_policy(false, false, false, Duration::from_secs(2));
+        let before_copy = deferred_catalog_worker_start_policy(
+            false,
+            false,
+            false,
+            false,
+            Duration::from_secs(2),
+        );
         assert!(!before_copy.allowed);
         assert_eq!(before_copy.delay, Duration::ZERO);
         assert!(before_copy.foreground);
 
         let after_copy =
-            deferred_catalog_worker_start_policy(false, true, false, Duration::from_secs(2));
+            deferred_catalog_worker_start_policy(false, true, false, false, Duration::from_secs(2));
         assert!(after_copy.allowed);
         assert_eq!(after_copy.delay, Duration::ZERO);
         assert!(matches!(
@@ -18239,7 +18275,16 @@ mod tests {
     #[test]
     pub(super) fn return_hydration_can_start_before_a_visible_copy() {
         let policy =
-            deferred_catalog_worker_start_policy(false, false, true, Duration::from_secs(2));
+            deferred_catalog_worker_start_policy(false, false, true, false, Duration::from_secs(2));
+        assert!(policy.allowed);
+        assert_eq!(policy.delay, Duration::ZERO);
+        assert!(policy.foreground);
+    }
+
+    #[test]
+    pub(super) fn initial_hydration_can_start_before_a_visible_copy() {
+        let policy =
+            deferred_catalog_worker_start_policy(false, false, false, true, Duration::from_secs(2));
         assert!(policy.allowed);
         assert_eq!(policy.delay, Duration::ZERO);
         assert!(policy.foreground);
@@ -18248,7 +18293,7 @@ mod tests {
     #[test]
     pub(super) fn warm_catalog_worker_starts_without_an_interaction_gate() {
         let delay = Duration::from_secs(2);
-        let allowed = deferred_catalog_worker_start_policy(true, true, false, delay);
+        let allowed = deferred_catalog_worker_start_policy(true, true, false, false, delay);
         assert!(allowed.allowed);
         assert_eq!(allowed.delay, delay);
         assert!(matches!(

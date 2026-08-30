@@ -277,6 +277,7 @@ pub struct LauncherTestConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LauncherStartupTestMode {
     WarmReady,
+    WarmHydrating,
     ColdDelayed,
     ColdIntroFailure,
 }
@@ -285,6 +286,7 @@ impl LauncherStartupTestMode {
     fn parse(value: &str) -> Option<Self> {
         match value {
             "warm-ready" => Some(Self::WarmReady),
+            "warm-hydrating" => Some(Self::WarmHydrating),
             "cold-delayed" => Some(Self::ColdDelayed),
             "cold-intro-failure" => Some(Self::ColdIntroFailure),
             _ => None,
@@ -1264,6 +1266,10 @@ mod tests {
     fn startup_ui_test_modes_are_captured_as_typed_values() {
         for (value, expected) in [
             ("warm-ready", Some(LauncherStartupTestMode::WarmReady)),
+            (
+                "warm-hydrating",
+                Some(LauncherStartupTestMode::WarmHydrating),
+            ),
             ("cold-delayed", Some(LauncherStartupTestMode::ColdDelayed)),
             (
                 "cold-intro-failure",

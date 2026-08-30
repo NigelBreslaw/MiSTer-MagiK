@@ -74,7 +74,11 @@ impl CatalogPublicationTestDriver {
     ) -> bool {
         let cold_mode = matches!(
             self.startup_mode,
-            Some(LauncherStartupTestMode::ColdDelayed | LauncherStartupTestMode::ColdIntroFailure)
+            Some(
+                LauncherStartupTestMode::WarmHydrating
+                    | LauncherStartupTestMode::ColdDelayed
+                    | LauncherStartupTestMode::ColdIntroFailure,
+            )
         );
         if (!cold_mode && self.ready_gate.is_none()) || !*catalog_ready {
             return false;
@@ -91,6 +95,13 @@ impl CatalogPublicationTestDriver {
             self.ready_at = Some(start + Duration::from_millis(500));
         }
         true
+    }
+
+    pub(super) fn startup_catalog_hydration_pending(&self) -> bool {
+        matches!(
+            self.startup_mode,
+            Some(LauncherStartupTestMode::WarmHydrating)
+        )
     }
 
     pub(super) fn catalog_worker_allowed(&self) -> bool {
@@ -187,6 +198,7 @@ impl CatalogPublicationTestDriver {
 fn startup_mode_label(mode: Option<LauncherStartupTestMode>) -> &'static str {
     match mode {
         Some(LauncherStartupTestMode::WarmReady) => "warm-ready",
+        Some(LauncherStartupTestMode::WarmHydrating) => "warm-hydrating",
         Some(LauncherStartupTestMode::ColdDelayed) => "cold-delayed",
         Some(LauncherStartupTestMode::ColdIntroFailure) => "cold-intro-failure",
         None => "unconfigured",
