@@ -580,6 +580,7 @@ impl CatalogScanPlan {
     /// exact requested path was proved to be an ordinary directory. A case
     /// variant or uncertain entry deliberately falls through to the old
     /// path-based check in the generic scanner.
+    #[cfg(feature = "builder")]
     pub(crate) fn header_for_known_game_dir(
         &self,
         storage_root: &Path,
