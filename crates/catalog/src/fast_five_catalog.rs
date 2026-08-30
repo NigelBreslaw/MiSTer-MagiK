@@ -22,7 +22,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 pub const FAST_FIVE_SNAPSHOT_SCHEMA: &str = "mister-magik-fast-five-snapshot-v2";
-pub const MAX_FAST_SYSTEM_TRANSPORT_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_FAST_SYSTEM_TRANSPORT_BYTES: usize = 16 * 1024 * 1024;
 const FAST_FIVE_REGISTRY_FINGERPRINT_SCHEMA: &str = "mister-magik-fast-five-snapshot-v1";
 pub const FAST_FIVE_SYSTEM_IDS: [&str; 5] = ["amiga", "arcade", "c64", "dos", "x68000"];
 pub const GENERIC_EXAMPLE_SYSTEM_IDS: [&str; 4] = ["neogeo", "saturn", "snes", "zx-spectrum"];
@@ -138,11 +138,14 @@ pub struct FastFiveSystem {
 }
 
 pub fn encode_fast_system_transport(system: &FastFiveSystem) -> Result<Vec<u8>, String> {
-    let bytes = postcard::to_allocvec(system)
-        .map_err(|error| format!("encode fast system transport: {error}"))?;
-    if bytes.len() > MAX_FAST_SYSTEM_TRANSPORT_BYTES {
+    let encoded_size = postcard::serialized_size(system)
+        .map_err(|error| format!("measure fast system transport: {error}"))?;
+    if encoded_size > MAX_FAST_SYSTEM_TRANSPORT_BYTES {
         return Err("fast system transport exceeds size limit".to_string());
     }
+    let mut bytes = vec![0; encoded_size as usize];
+    postcard::to_slice(system, &mut bytes)
+        .map_err(|error| format!("encode fast system transport: {error}"))?;
     Ok(bytes)
 }
 
@@ -1787,6 +1790,18 @@ mod tests {
         assert!(
             decode_fast_system_transport(&vec![0; MAX_FAST_SYSTEM_TRANSPORT_BYTES + 1]).is_err()
         );
+    }
+
+    #[test]
+    fn fast_system_transport_rejects_over_budget_before_allocating_output() {
+        let system = FastFiveSystem {
+            system_id: "arcade".to_string(),
+            display_title: "x".repeat(MAX_FAST_SYSTEM_TRANSPORT_BYTES + 1),
+            games: Vec::new(),
+            variants: Vec::new(),
+        };
+
+        assert!(encode_fast_system_transport(&system).is_err());
     }
 }
 
