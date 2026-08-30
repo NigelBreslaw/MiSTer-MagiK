@@ -161,6 +161,10 @@ pub(super) struct CatalogChildControl {
 }
 
 impl CatalogChildControl {
+    pub(super) fn pid(&self) -> Option<u32> {
+        self.process_group.try_into().ok()
+    }
+
     pub(super) fn reaped(&self) -> bool {
         self.reaped.load(Ordering::Acquire)
     }

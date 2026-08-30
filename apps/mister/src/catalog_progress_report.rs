@@ -49,6 +49,12 @@ pub struct CatalogProgressEvidence {
     pub inactive_elapsed_ms: u64,
     pub intentionally_paused: bool,
     pub worker_running: bool,
+    pub worker_run_id: String,
+    pub child_pid: Option<u32>,
+    pub heartbeat_phase: String,
+    pub heartbeat_progress_epoch: u64,
+    pub heartbeat_work_units: u64,
+    pub stall_cause: String,
 }
 
 pub struct CatalogProgressMonitor {
@@ -69,6 +75,12 @@ pub struct CatalogProgressMonitor {
     inactive_elapsed: Duration,
     last_tick_active: bool,
     stall_reported: bool,
+    worker_run_id: String,
+    child_pid: Option<u32>,
+    heartbeat_phase: String,
+    heartbeat_progress_epoch: u64,
+    heartbeat_work_units: u64,
+    stall_cause: String,
 }
 
 impl CatalogProgressMonitor {
@@ -91,6 +103,12 @@ impl CatalogProgressMonitor {
             inactive_elapsed: Duration::ZERO,
             last_tick_active: false,
             stall_reported: false,
+            worker_run_id: String::new(),
+            child_pid: None,
+            heartbeat_phase: String::new(),
+            heartbeat_progress_epoch: 0,
+            heartbeat_work_units: 0,
+            stall_cause: String::new(),
         }
     }
 
@@ -123,7 +141,39 @@ impl CatalogProgressMonitor {
         self.inactive_elapsed = Duration::ZERO;
         self.last_tick_active = true;
         self.stall_reported = false;
+        self.worker_run_id.clear();
+        self.child_pid = None;
+        self.heartbeat_phase.clear();
+        self.heartbeat_progress_epoch = 0;
+        self.heartbeat_work_units = 0;
+        self.stall_cause.clear();
         self.evidence("running", true)
+    }
+
+    pub fn note_worker_process(&mut self, child_pid: Option<u32>) {
+        self.child_pid = child_pid;
+    }
+
+    pub fn note_worker_run(&mut self, run_id: &str) {
+        self.worker_run_id = run_id.to_string();
+    }
+
+    pub fn note_heartbeat(
+        &mut self,
+        run_id: &str,
+        phase: &str,
+        progress_epoch: u64,
+        work_units: u64,
+    ) {
+        self.worker_run_id = run_id.to_string();
+        self.heartbeat_phase = phase.to_string();
+        self.heartbeat_progress_epoch = progress_epoch;
+        self.heartbeat_work_units = work_units;
+    }
+
+    pub fn note_stall_cause(&mut self, cause: &str) {
+        self.stall_cause = cause.to_string();
+        truncate_string(&mut self.stall_cause, 2 * 1024);
     }
 
     pub fn note_activity(
@@ -145,6 +195,7 @@ impl CatalogProgressMonitor {
         self.activity_count = self.activity_count.saturating_add(1);
         self.inactive_elapsed = Duration::ZERO;
         self.stall_reported = false;
+        self.stall_cause.clear();
         recovered_from_stall.then(|| {
             self.last_persisted_at = now;
             self.evidence("running", true)
@@ -194,6 +245,12 @@ impl CatalogProgressMonitor {
         self.last_persisted_at = now;
         if stalled {
             self.stall_reported = true;
+            if self.stall_cause.is_empty() {
+                self.stall_cause = format!(
+                    "no validated heartbeat progress for {} seconds",
+                    STALL_AFTER_ACTIVE.as_secs()
+                );
+            }
         }
         Some(self.evidence(
             if stalled {
@@ -259,6 +316,12 @@ impl CatalogProgressMonitor {
             inactive_elapsed_ms: duration_ms(self.inactive_elapsed),
             intentionally_paused: worker_running && !self.last_tick_active,
             worker_running,
+            worker_run_id: self.worker_run_id.clone(),
+            child_pid: self.child_pid,
+            heartbeat_phase: self.heartbeat_phase.clone(),
+            heartbeat_progress_epoch: self.heartbeat_progress_epoch,
+            heartbeat_work_units: self.heartbeat_work_units,
+            stall_cause: self.stall_cause.clone(),
         }
     }
 }
@@ -778,6 +841,7 @@ mod tests {
             .unwrap();
         assert_eq!(stalled.state, "stalled");
         assert_eq!(stalled.inactive_elapsed_ms, duration_ms(STALL_AFTER_ACTIVE));
+        assert!(stalled.stall_cause.contains("120 seconds"));
         assert!(monitor.active_stalled(true, true));
 
         let recovered_at = start + STALL_AFTER_ACTIVE + Duration::from_secs(1);
@@ -791,6 +855,29 @@ mod tests {
         assert_eq!(monitor.inactive_elapsed, Duration::ZERO);
         assert!(!monitor.stall_reported);
         assert!(recovered.is_some_and(|report| report.state == "running"));
+    }
+
+    #[test]
+    fn evidence_identifies_the_child_and_last_validated_heartbeat() {
+        let start = Instant::now();
+        let mut monitor = CatalogProgressMonitor::new(start);
+        monitor.start(
+            "/media/fat".to_string(),
+            "build",
+            "background_interactive",
+            start,
+        );
+        monitor.note_worker_process(Some(42));
+        monitor.note_worker_run("run-42");
+        monitor.note_heartbeat("run-42", "systems", 3, 900);
+
+        let evidence = monitor.tick(true, true, start + SNAPSHOT_INTERVAL).unwrap();
+
+        assert_eq!(evidence.child_pid, Some(42));
+        assert_eq!(evidence.worker_run_id, "run-42");
+        assert_eq!(evidence.heartbeat_phase, "systems");
+        assert_eq!(evidence.heartbeat_progress_epoch, 3);
+        assert_eq!(evidence.heartbeat_work_units, 900);
     }
 
     #[test]
@@ -869,6 +956,12 @@ mod tests {
                     inactive_elapsed_ms: 0,
                     intentionally_paused: false,
                     worker_running: true,
+                    worker_run_id: "run-test".to_string(),
+                    child_pid: Some(42),
+                    heartbeat_phase: "systems".to_string(),
+                    heartbeat_progress_epoch: 1,
+                    heartbeat_work_units: 10,
+                    stall_cause: String::new(),
                 },
                 0,
             )

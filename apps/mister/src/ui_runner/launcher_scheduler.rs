@@ -951,6 +951,8 @@ impl LauncherScheduler {
             self.catalog_paths.clone(),
             self.archive_cache.clone(),
         );
+        self.catalog_progress
+            .note_worker_process(child_control.as_ref().and_then(|control| control.pid()));
         self.catalog_child_control = child_control;
         self.catalog_stop_requested = false;
         self.catalog_progress_work_units = 0;
@@ -1124,6 +1126,9 @@ impl LauncherScheduler {
                 && control.terminate()
             {
                 self.catalog_stop_requested = true;
+                self.catalog_progress.note_stall_cause(
+                    "watchdog terminated the child after 120 seconds without validated progress",
+                );
                 self.note_catalog_progress(
                     "watchdog-stop",
                     "stalled",
@@ -1139,8 +1144,14 @@ impl LauncherScheduler {
         match message {
             CatalogWorkerMessage::Progress { .. } => {}
             CatalogWorkerMessage::Heartbeat {
-                phase, work_units, ..
+                run_id,
+                phase,
+                progress_epoch,
+                work_units,
+                ..
             } => {
+                self.catalog_progress
+                    .note_heartbeat(run_id, phase, *progress_epoch, *work_units);
                 if *work_units > self.catalog_progress_work_units {
                     self.catalog_progress_work_units = *work_units;
                     self.note_validated_catalog_progress(
@@ -1153,6 +1164,11 @@ impl LauncherScheduler {
                 }
             }
             CatalogWorkerMessage::Timing { name, detail } => {
+                if name == "catalog_worker_handshake_v4"
+                    && let Some(run_id) = detail.strip_prefix("run_id=")
+                {
+                    self.catalog_progress.note_worker_run(run_id);
+                }
                 self.note_catalog_progress("timing", name, detail, -1, now);
             }
             CatalogWorkerMessage::ReconciliationPlanReady {
