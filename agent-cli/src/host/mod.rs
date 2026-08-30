@@ -19928,9 +19928,9 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
             ("MISTER_PPROF_TRIGGER".into(), "catalog-build-full".into()),
             // Full-build sampling includes exFAT namespace traversal. The
             // worker-thread finalizer now suppresses SIGPROF before extracting
-            // reports; use the established 19 Hz rate so the short rebuild
+            // reports; use 99 Hz so the short rebuild
             // pass reliably captures at least one sample.
-            ("MISTER_PPROF_HZ".into(), "19".into()),
+            ("MISTER_PPROF_HZ".into(), "99".into()),
             ("MISTER_PPROF_DURATION_SECS".into(), "600".into()),
             (
                 "MISTER_PPROF_OUT".into(),
