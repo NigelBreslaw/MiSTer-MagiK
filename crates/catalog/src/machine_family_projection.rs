@@ -80,11 +80,12 @@ pub(crate) fn project_machine_families(
         games: Vec::new(),
         variants: Vec::new(),
     };
+    let mut visible_games = Vec::new();
     let mut prepared = prepared.into_iter().peekable();
     while let Some(head) = prepared.next() {
         let family = head.family.clone();
         let family_stable_key = head.candidate.game.stable_key.clone();
-        projection.games.push(head.candidate.game);
+        visible_games.push((head.normalized_title, head.candidate.game));
         while prepared
             .peek()
             .is_some_and(|candidate| candidate.family == family)
@@ -97,15 +98,17 @@ pub(crate) fn project_machine_families(
             });
         }
     }
-    projection.games.sort_unstable_by_cached_key(|game| {
-        (game.title.to_ascii_lowercase(), game.stable_key.clone())
+    visible_games.sort_unstable_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.stable_key.cmp(&right.1.stable_key))
     });
-    projection.variants.sort_unstable_by_cached_key(|variant| {
-        (
-            variant.family_stable_key.clone(),
-            variant.game.launch_ref.clone(),
-            variant.game.stable_key.clone(),
-        )
+    projection.games = visible_games.into_iter().map(|(_, game)| game).collect();
+    projection.variants.sort_unstable_by(|left, right| {
+        left.family_stable_key
+            .cmp(&right.family_stable_key)
+            .then_with(|| left.game.launch_ref.cmp(&right.game.launch_ref))
+            .then_with(|| left.game.stable_key.cmp(&right.game.stable_key))
     });
     projection
 }

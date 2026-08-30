@@ -315,9 +315,6 @@ fn build_and_record_prepared_system(
     if system_id == "c64" {
         collapse_c64_cross_source_variants(&mut system);
     }
-    if system_id == "neogeo" {
-        project_neogeo_system(&mut system, &mut family_resolver)?;
-    }
     enrich_fast_preview_identities(storage_root, std::slice::from_mut(&mut system));
     report.elapsed_us = elapsed_us(system_started);
     report.games = system.games.len();
@@ -893,7 +890,7 @@ fn scan_arcade_candidates(
             updater_families
                 .get(&identity_id)
                 .cloned()
-                .unwrap_or_default();
+                .unwrap_or_default()
         } else {
             family_id
         };

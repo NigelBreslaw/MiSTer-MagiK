@@ -398,7 +398,7 @@ mod tests {
         assert!(resolver.mame.is_none());
         assert!(
             resolver
-                .resolve_many(std::iter::empty::<(String, Option<RomNamespace)> >())
+                .resolve_many(std::iter::empty::<(String, Option<RomNamespace>)>())
                 .unwrap()
                 .is_empty()
         );
