@@ -4,8 +4,30 @@
 //! Structured catalog progress phases and the legacy title/detail adapter.
 
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+const INNER_PROGRESS_BATCH: u64 = 4096;
+static INNER_PROGRESS_UNITS: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
+
+/// Record that a bounded batch of catalog work completed. The counter is
+/// intentionally process-wide and monotonic so a supervising worker can poll
+/// it without adding a callback or allocation to hot traversal loops.
+pub(crate) fn report_inner_progress() {
+    INNER_PROGRESS_UNITS.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn report_inner_progress_at(count: usize) {
+    if count.is_multiple_of(INNER_PROGRESS_BATCH as usize) {
+        report_inner_progress();
+    }
+}
+
+/// Return the monotonic inner-work counter for a supervising worker.
+pub fn inner_progress_units() -> u64 {
+    INNER_PROGRESS_UNITS.load(Ordering::Relaxed)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CatalogProgressPhase {
@@ -428,5 +450,17 @@ mod tests {
             messages,
             vec![("Finding games".to_string(), "Games found: 50".to_string())]
         );
+    }
+
+    #[test]
+    fn inner_progress_reports_only_completed_batches_and_is_monotonic() {
+        let before = inner_progress_units();
+        report_inner_progress_at(4095);
+        assert!(inner_progress_units() >= before);
+        report_inner_progress_at(4096);
+        let after_first = inner_progress_units();
+        assert!(after_first >= before + 1);
+        report_inner_progress_at(8192);
+        assert!(inner_progress_units() >= after_first + 1);
     }
 }

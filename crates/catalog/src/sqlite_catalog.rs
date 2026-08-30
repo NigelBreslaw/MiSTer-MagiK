@@ -58,6 +58,7 @@ use std::time::{Duration, Instant};
 
 const NEW_GAME_BADGE_SECS: i64 = 14 * 24 * 60 * 60;
 const SQLITE_PUBLISH_COPY_CHUNK_BYTES: usize = 256 * 1024;
+const SQLITE_INNER_PROGRESS_BYTES: u64 = 8 * 1024 * 1024;
 const SQLITE_PATH_CHUNK_BYTES: usize = 256 * 1024;
 const MAX_SQLITE_PATH_CHUNK_BYTES: usize = SQLITE_PATH_CHUNK_BYTES + 64 * 1024;
 
@@ -1998,6 +1999,7 @@ fn copy_sqlite_temp_with_progress(
     let mut output = File::create(destination).map_err(|e| format!("create sqlite temp: {e}"))?;
     let mut progress_events = 0u64;
     let mut bytes_done = 0u64;
+    let mut next_inner_progress = SQLITE_INNER_PROGRESS_BYTES;
     let mut buffer = vec![0u8; SQLITE_PUBLISH_COPY_CHUNK_BYTES];
     emit_sqlite_save_progress(progress, 0, total);
     progress_events += 1;
@@ -2012,6 +2014,10 @@ fn copy_sqlite_temp_with_progress(
             .write_all(&buffer[..read])
             .map_err(|e| format!("write sqlite temp: {e}"))?;
         bytes_done += read as u64;
+        if bytes_done >= next_inner_progress {
+            crate::catalog_progress::report_inner_progress();
+            next_inner_progress = bytes_done.saturating_add(SQLITE_INNER_PROGRESS_BYTES);
+        }
         emit_sqlite_save_progress(progress, bytes_done, total);
         progress_events += 1;
     }

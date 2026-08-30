@@ -26,7 +26,7 @@ pub mod catalog_format;
 pub mod catalog_lease;
 mod catalog_load_metrics;
 pub mod catalog_navigation;
-mod catalog_progress;
+pub mod catalog_progress;
 mod catalog_projection;
 mod catalog_scan;
 pub use catalog_scan::catalog_corpus_inventory_tsv;

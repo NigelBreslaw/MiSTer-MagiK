@@ -423,14 +423,17 @@ impl CatalogHeartbeatProgress {
     }
 
     fn advance(&mut self, phase: &str, work_units: u64) {
-        if work_units <= self.work_units {
+        if phase == self.phase && work_units <= self.work_units {
             return;
         }
         if self.phase != phase {
             self.phase = phase.to_string();
             self.progress_epoch = self.progress_epoch.saturating_add(1);
         }
-        self.work_units = work_units;
+        self.work_units = self.work_units.max(work_units);
+        if self.work_units == 0 {
+            self.work_units = 1;
+        }
     }
 }
 
@@ -1413,12 +1416,23 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
     let heartbeat_progress = Arc::clone(&progress);
     let heartbeat_sequence = Arc::clone(&wire_sequence);
     let heartbeat_wire_run_id = wire_run_id.clone();
+    let inner_progress_baseline = mister_magik_catalog::catalog_progress::inner_progress_units();
     let heartbeat = std::thread::spawn(move || {
+        let mut inner_progress_reported = 0_u64;
         while heartbeat_interval_elapsed(&heartbeat_stop_rx, std::time::Duration::from_secs(10)) {
-            let snapshot = heartbeat_progress
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .clone();
+            let inner_progress = mister_magik_catalog::catalog_progress::inner_progress_units()
+                .saturating_sub(inner_progress_baseline);
+            let snapshot = {
+                let mut progress = heartbeat_progress
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                if inner_progress > inner_progress_reported {
+                    let delta = inner_progress - inner_progress_reported;
+                    progress.advance("inner-work", progress.work_units.saturating_add(delta));
+                    inner_progress_reported = inner_progress;
+                }
+                progress.clone()
+            };
             let mut event = CatalogWorkerWireEvent {
                 version: CATALOG_WORKER_PROTOCOL_VERSION,
                 kind: "heartbeat".to_string(),
@@ -2256,6 +2270,20 @@ mod tests {
         .unwrap()
         .expect("heartbeat event");
         assert!(matches!(message, CatalogWorkerMessage::Heartbeat { .. }));
+    }
+
+    #[test]
+    fn heartbeat_progress_remains_monotonic_across_inner_work_checkpoints() {
+        let mut progress = CatalogHeartbeatProgress::new();
+        progress.advance("systems", 4);
+        progress.advance("inner-work", 1);
+        assert_eq!(progress.phase, "inner-work");
+        assert!(progress.work_units >= 4);
+        let inner_units = progress.work_units;
+        progress.advance("artifacts", 1);
+        assert_eq!(progress.phase, "artifacts");
+        assert!(progress.work_units >= inner_units);
+        assert!(progress.progress_epoch >= 2);
     }
 
     #[test]

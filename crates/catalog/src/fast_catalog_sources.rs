@@ -897,6 +897,7 @@ fn collect_arcade_mras_at_depth(
     entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
     for entry in entries {
         *visited = visited.saturating_add(1);
+        crate::catalog_progress::report_inner_progress_at(*visited);
         if *visited > MAX_DISCOVERY_ENTRIES {
             return Err(format!(
                 "arcade discovery exceeded {} entries",
@@ -964,6 +965,7 @@ fn arcade_rom_inventory(
             };
             for entry in entries {
                 report.files_visited = report.files_visited.saturating_add(1);
+                crate::catalog_progress::report_inner_progress_at(report.files_visited);
                 let path = entry.path();
                 if extension_is(&path, "zip")
                     && let Some(stem) = path.file_stem().and_then(|stem| stem.to_str())
@@ -1260,6 +1262,7 @@ fn collect_matching_files_at_depth(
     entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
     for entry in entries {
         *visited = visited.saturating_add(1);
+        crate::catalog_progress::report_inner_progress_at(*visited);
         if *visited > MAX_DISCOVERY_ENTRIES {
             return Err(format!(
                 "file discovery exceeded {} entries",
@@ -1304,7 +1307,10 @@ fn read_dir_entries_checked(root: &Path) -> Result<Option<Vec<fs::DirEntry>>, St
                         ));
                     }
                     match entry {
-                        Ok(entry) => collected.push(entry),
+                        Ok(entry) => {
+                            collected.push(entry);
+                            crate::catalog_progress::report_inner_progress_at(collected.len());
+                        }
                         Err(error) => {
                             last_error = Some(error);
                             break;
@@ -1430,8 +1436,11 @@ fn arcade_requirement_preview_asset_key(requirement: &PrimaryRomRequirement) -> 
 
 fn enrich_fast_preview_identities(storage_root: &Path, systems: &mut [FastFiveSystem]) {
     let title_index = load_fast_console_preview_title_index(storage_root);
+    let mut visited = 0usize;
     for system in systems {
         for game in &mut system.games {
+            visited = visited.saturating_add(1);
+            crate::catalog_progress::report_inner_progress_at(visited);
             match system.system_id.as_str() {
                 "neogeo" => {
                     game.preview_asset_key = Path::new(&game.launch_ref)

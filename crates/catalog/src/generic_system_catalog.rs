@@ -156,6 +156,7 @@ pub(crate) fn inventory_prepared_extension_under_named_roots(
         ignore,
         |entry| {
             files_visited = files_visited.saturating_add(1);
+            crate::catalog_progress::report_inner_progress_at(files_visited);
             if let (Some(parent), Some(name)) = (entry.path.parent(), entry.path.file_name()) {
                 let kind = match entry.kind {
                     NamespaceEntryKind::Directory => b'd',
@@ -768,6 +769,7 @@ fn collect_generic_namespace_inventory(
     let mut watch_containers = Vec::new();
     let mut continuation_roots = Vec::new();
     let mut watch_complete = true;
+    let mut walked_entries = 0usize;
     let namespace_started = Instant::now();
     let namespace = namespace_walk::visit_with_signature_capture(
         &header.path,
@@ -775,6 +777,8 @@ fn collect_generic_namespace_inventory(
         NamespaceSignatureCapture::AllDirectories,
         should_ignore_path,
         |entry| {
+            walked_entries = walked_entries.saturating_add(1);
+            crate::catalog_progress::report_inner_progress_at(walked_entries);
             let depth = entry
                 .path
                 .strip_prefix(&header.path)
@@ -947,7 +951,8 @@ fn apply_generic_namespace_inventory(
         .saturating_add(inventory.entries.len());
     stats.directories = stats.directories.saturating_add(1);
     merge_namespace_stats(stats, &inventory.namespace);
-    for entry in inventory.entries {
+    for (position, entry) in inventory.entries.into_iter().enumerate() {
+        crate::catalog_progress::report_inner_progress_at(position.saturating_add(1));
         if entry.kind == NamespaceEntryKind::Directory {
             stats.directories = stats.directories.saturating_add(1);
             continue;
@@ -1466,6 +1471,8 @@ fn scan_directory(
     };
     entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
     for entry in entries {
+        let work_units = stats.files.saturating_add(stats.directories);
+        crate::catalog_progress::report_inner_progress_at(work_units);
         let path = entry.path();
         let file_type = match entry.file_type() {
             Ok(file_type) => file_type,
@@ -1524,9 +1531,11 @@ fn scan_namespace_borrowed(
     games: &mut Vec<ScannedGame>,
 ) {
     stats.directories += 1;
+    crate::catalog_progress::report_inner_progress_at(stats.directories);
     let namespace = namespace_walk::visit(root, None, should_ignore_path, |entry| {
         if entry.kind == NamespaceEntryKind::Directory {
             stats.directories += 1;
+            crate::catalog_progress::report_inner_progress_at(stats.directories);
             return true;
         }
         if entry.kind != NamespaceEntryKind::File {
@@ -1534,6 +1543,7 @@ fn scan_namespace_borrowed(
         }
         let path = entry.path.as_path();
         stats.files += 1;
+        crate::catalog_progress::report_inner_progress_at(stats.files);
         match profile.classify_path_borrowed(path) {
             BorrowedProfilePathClass::Payload { rule }
                 if rule.disposition == PayloadDisposition::Playable =>
@@ -1617,7 +1627,8 @@ fn scan_archive_with_signature(
     match scan_zip_central_directory(&found, profile) {
         Ok(entries) => {
             stats.archive_members += entries.len();
-            for entry in entries {
+            for (position, entry) in entries.into_iter().enumerate() {
+                crate::catalog_progress::report_inner_progress_at(position.saturating_add(1));
                 let member_path = PathBuf::from(&entry.entry_path);
                 let signature = format!("{}\u{1f}{}", profile.system_id, entry.launch_ref);
                 games.push(ScannedGame {

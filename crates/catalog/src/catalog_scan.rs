@@ -1831,6 +1831,7 @@ fn scan_zip_central_directory_entries(
     let mut remaining = cd_size;
     let mut scanned = 0usize;
     while remaining >= 46 && scanned < cd_entries {
+        crate::catalog_progress::report_inner_progress_at(scanned.saturating_add(1));
         let entry_offset = cd_size - remaining;
         let mut header = [0u8; 46];
         central_directory
