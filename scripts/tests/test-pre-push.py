@@ -108,6 +108,12 @@ class PrePushTests(unittest.TestCase):
             ["removed.txt"],
         )
 
+    def test_fast_gate_does_not_claim_full_ci_coverage(self) -> None:
+        self.assertIn("NOT RUN LOCALLY", PRE_PUSH.CI_BOUNDARY)
+        self.assertIn("Cargo tests/Clippy", PRE_PUSH.CI_BOUNDARY)
+        self.assertIn("ARM builds", PRE_PUSH.CI_BOUNDARY)
+        self.assertIn("visual matrix", PRE_PUSH.CI_BOUNDARY)
+
     def run_git(self, *args: str) -> None:
         self.repository.run("git", *args)
 

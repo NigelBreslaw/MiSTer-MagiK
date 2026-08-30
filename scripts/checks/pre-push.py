@@ -18,6 +18,10 @@ from scripts.checks.repository_policy import is_classified
 from scripts.magik_ci import assurance, python_tests, quality
 
 ZERO_OID = "0" * 40
+CI_BOUNDARY = (
+    "pre-push: NOT RUN LOCALLY: Cargo tests/Clippy, ARM builds, visual matrix, "
+    "and full Python assurance; a fast-gate pass is not a CI pass"
+)
 
 
 class PrePushError(Exception):
@@ -163,7 +167,7 @@ def print_plan(paths: list[str]) -> None:
     tests = python_tests.commands(paths)
     print(f"pre-push: {len(local)} fast static checks + 3 Python quality checks")
     print(f"pre-push: {len(tests)} affected Python test command(s)")
-    print("pre-push: CI owns Cargo, ARM, visual, and full Python assurance")
+    print(CI_BOUNDARY)
 
 
 def parse_args() -> argparse.Namespace:
@@ -188,8 +192,9 @@ def main() -> int:
             return 0
         check_classification(paths)
         print(f"pre-push: fast assurance for {len(paths)} changed paths")
+        print(CI_BOUNDARY)
         run_checks(repository, paths)
-        print("pre-push: passed")
+        print("pre-push: fast gate passed; full CI remains authoritative")
         return 0
     except PrePushError as error:
         print(f"error: {error}", file=sys.stderr)

@@ -68,7 +68,7 @@ impl Drop for FastFiveStagingCleanup {
     }
 }
 
-#[cfg(feature = "builder")]
+#[cfg(all(feature = "builder", any(test, target_os = "linux")))]
 fn cleanup_fast_five_staging_root(root: &Path) -> Result<(), String> {
     let metadata = match std::fs::symlink_metadata(root) {
         Ok(metadata) => metadata,
@@ -1816,6 +1816,7 @@ mod tests {
 mod builder_tests {
     use super::*;
     use crate::lazy_sharded_reader::LazyShardedCatalogReader;
+    use crate::shard_registry::read_latest_manifest;
     use crate::sharded_catalog::CatalogReader;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2012,7 +2013,7 @@ mod builder_tests {
                     | FastFiveArtifactProfile::SearchColumn
                     | FastFiveArtifactProfile::SearchDetailNone
             ) {
-                let manifest = read_latest_manifest(&root, limits()).unwrap();
+                let manifest = read_latest_manifest(&root, limits).unwrap();
                 assert!(
                     manifest
                         .systems
@@ -2040,7 +2041,7 @@ mod builder_tests {
                 assert!(
                     fs::read_dir(root.join("systems"))
                         .unwrap()
-                        .flat_map(Result::unwrap)
+                        .filter_map(Result::ok)
                         .flat_map(|system| fs::read_dir(system.path())
                             .unwrap()
                             .filter_map(Result::ok))

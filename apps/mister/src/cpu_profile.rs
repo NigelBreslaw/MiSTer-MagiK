@@ -1446,6 +1446,8 @@ mod stub {
         pub fn unchanged(&mut self) {}
 
         pub fn fail(&mut self, _reason: &'static str) {}
+
+        pub fn wait_for_finalization(&self) {}
     }
 }
 

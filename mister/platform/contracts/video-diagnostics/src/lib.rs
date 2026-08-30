@@ -315,7 +315,7 @@ impl ScalerFetchLivenessState {
     }
 
     pub fn no_request_avl_state(&self) -> u16 {
-        (self.state() >> 0) & 0x0003
+        self.state() & 0x0003
     }
 
     pub fn no_request_read_intent(&self) -> bool {

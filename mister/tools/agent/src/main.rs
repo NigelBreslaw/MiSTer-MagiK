@@ -4974,7 +4974,8 @@ mod linux {
                         && valid_samples
                         && advancing
                         && classification_stable;
-                    let scaler_fetch_liveness_state = json!({
+                    let scaler_fetch_liveness_sections = [
+                        json!({
                         "record_valid": samples.iter().map(|sample| sample.record_valid()).collect::<Vec<_>>(),
                         "normal_liveness_seen": samples.iter().map(|sample| sample.normal_liveness_seen()).collect::<Vec<_>>(),
                         "first_stall_valid": samples.iter().map(|sample| sample.first_stall_valid()).collect::<Vec<_>>(),
@@ -4991,6 +4992,9 @@ mod linux {
                         "reset_since_normal_liveness": samples.iter().map(|sample| sample.reset_since_normal_liveness()).collect::<Vec<_>>(),
                         "no_request_seen": samples.iter().map(|sample| sample.no_request_seen()).collect::<Vec<_>>(),
                         "state": samples.iter().map(|sample| sample.state()).collect::<Vec<_>>(),
+                        "raw_samples": readout.samples.iter().map(|sample| sample.words).collect::<Vec<_>>(),
+                        }),
+                        json!({
                         "no_request_avl_state": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_avl_state()).collect::<Vec<_>>()),
                         "no_request_read_intent": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_read_intent()).collect::<Vec<_>>()),
                         "no_request_read_accepted": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_read_accepted()).collect::<Vec<_>>()),
@@ -5005,6 +5009,8 @@ mod linux {
                         "no_request_vsync_edge": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_vsync_edge()).collect::<Vec<_>>()),
                         "no_request_drain_ready": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_drain_ready()).collect::<Vec<_>>()),
                         "no_request_external_read": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_external_read()).collect::<Vec<_>>()),
+                        }),
+                        json!({
                         "output_state": output_scheduler_state.then(|| samples.iter().map(|sample| sample.output_state()).collect::<Vec<_>>()),
                         "copy_state": output_scheduler_state.then(|| samples.iter().map(|sample| sample.copy_state()).collect::<Vec<_>>()),
                         "read_level": output_scheduler_state.then(|| samples.iter().map(|sample| sample.read_level()).collect::<Vec<_>>()),
@@ -5017,8 +5023,16 @@ mod linux {
                         "copy_shift_next": output_scheduler_state.then(|| samples.iter().map(|sample| sample.copy_shift_next()).collect::<Vec<_>>()),
                         "copy_line_last": output_scheduler_state.then(|| samples.iter().map(|sample| sample.copy_line_last()).collect::<Vec<_>>()),
                         "copy_terminal_ready": output_scheduler_state.then(|| samples.iter().map(|sample| sample.copy_terminal_ready()).collect::<Vec<_>>()),
-                        "raw_samples": readout.samples.iter().map(|sample| sample.words).collect::<Vec<_>>(),
-                    });
+                        }),
+                    ];
+                    let mut scaler_fetch_liveness_fields = serde_json::Map::new();
+                    for section in scaler_fetch_liveness_sections {
+                        let Value::Object(fields) = section else {
+                            unreachable!("scaler fetch liveness section must be an object");
+                        };
+                        scaler_fetch_liveness_fields.extend(fields);
+                    }
+                    let scaler_fetch_liveness_state = Value::Object(scaler_fetch_liveness_fields);
                     json!({
                         "schema": "mister-magik-fpga-video-diagnostics-v2",
                         "diagnostic_architecture": architecture,
