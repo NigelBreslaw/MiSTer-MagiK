@@ -20104,13 +20104,29 @@ fn reboot_for_catalog_attribution(config: &NativeDeviceConfig) -> Result<Value> 
     }))
 }
 
+fn prepare_and_reboot_for_catalog_attribution(config: &NativeDeviceConfig) -> Result<Value> {
+    let session = connect_with(&config.connection, 10)?;
+    require_catalog_benchmark_active("catalog attribution preparation")?;
+    exec_checked(
+        &session,
+        "delete catalog attribution state before reboot",
+        &catalog_attribution_prepare_command(),
+    )?;
+    drop(session);
+    let mut reboot = reboot_for_catalog_attribution(config)?;
+    if let Some(object) = reboot.as_object_mut() {
+        object.insert("preparation".into(), json!("completed-before-reboot"));
+    }
+    Ok(reboot)
+}
+
 fn profile_installed_catalog_attribution(
     config: &NativeDeviceConfig,
     output_dir: &Path,
     arm: CatalogAttributionArm,
 ) -> Result<String> {
     let _signal_guard = AttendedOperationSignalGuard::install();
-    let reboot = reboot_for_catalog_attribution(config)?;
+    let reboot = prepare_and_reboot_for_catalog_attribution(config)?;
     match arm {
         CatalogAttributionArm::Storage => {
             return profile_catalog_attribution_trace(
@@ -20307,12 +20323,6 @@ fn run_catalog_attribution_trace_pair(
     arm: CatalogAttributionArm,
     spec: tracefs::TracefsCaptureSpec,
 ) -> Result<Value> {
-    require_catalog_benchmark_active("traced catalog attribution preparation")?;
-    exec_checked(
-        session,
-        "prepare traced catalog attribution sample",
-        &catalog_attribution_prepare_command(),
-    )?;
     let fresh = run_catalog_attribution_trace_leg(
         config, session, endpoint, sample_dir, "fresh", None, arm, spec,
     )?;
@@ -20432,12 +20442,6 @@ fn profile_catalog_attribution_streamline(
         .to_string();
     fs::create_dir_all(output_dir)?;
     let run_result = (|| -> Result<Value> {
-        require_catalog_benchmark_active("Streamline catalog attribution preparation")?;
-        exec_checked(
-            &session,
-            "prepare Streamline catalog attribution sample",
-            &catalog_attribution_prepare_command(),
-        )?;
         let fresh = run_catalog_attribution_streamline_leg(
             config,
             &session,
@@ -20581,12 +20585,6 @@ fn run_catalog_attribution_pair(
     sample_dir: &Path,
     arm: CatalogAttributionArm,
 ) -> Result<Value> {
-    require_catalog_benchmark_active("matched catalog attribution preparation")?;
-    exec_checked(
-        session,
-        "prepare matched catalog attribution sample",
-        &catalog_attribution_prepare_command(),
-    )?;
     let mut fresh = run_catalog_build_rebuild_leg(
         config,
         session,

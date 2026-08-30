@@ -3089,6 +3089,16 @@ fn evaluate_catalog_attribution_summary(summary: &Value, arm: &str) -> AgentResu
     {
         return Err(format!("catalog {arm} attribution is not a passing v1 arm").into());
     }
+    if summary
+        .pointer("/configuration/reboot_before_pair/preparation")
+        .and_then(Value::as_str)
+        != Some("completed-before-reboot")
+    {
+        return Err(format!(
+            "catalog {arm} attribution did not delete isolated catalog state before reboot"
+        )
+        .into());
+    }
     Ok(())
 }
 
