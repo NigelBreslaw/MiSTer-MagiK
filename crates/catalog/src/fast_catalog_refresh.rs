@@ -2386,6 +2386,15 @@ fn refresh_pack_is_referenced(root: &Path, path: &Path) -> bool {
 }
 
 fn write_new_file(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), String> {
+    write_new_file_with_writer(root, path, bytes, write_synced)
+}
+
+fn write_new_file_with_writer(
+    root: &Path,
+    path: &Path,
+    bytes: &[u8],
+    write: impl FnOnce(&Path, &[u8]) -> Result<(), String>,
+) -> Result<(), String> {
     if path.exists() {
         let existing =
             fs::read(path).map_err(|error| format!("read existing {}: {error}", path.display()))?;
@@ -2416,7 +2425,7 @@ fn write_new_file(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), String> 
         "tmp-new-{}",
         crate::catalog_lease::CatalogRunId::new().as_str()
     ));
-    let result = write_synced(&temporary, bytes).and_then(|()| {
+    let result = write(&temporary, bytes).and_then(|()| {
         fs::rename(&temporary, path)
             .map_err(|error| format!("publish immutable {}: {error}", path.display()))
     });
@@ -2426,6 +2435,8 @@ fn write_new_file(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), String> 
             Err(error)
         }
         Ok(()) => {
+            #[cfg(test)]
+            publication_barrier("after_rename_before_parent_sync", path);
             if let Some(parent) = path.parent() {
                 sync_directory(parent)?;
             }
@@ -2442,6 +2453,10 @@ fn write_replace_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let result = write_synced(&temporary, bytes).and_then(|()| {
         fs::rename(&temporary, path).map_err(|error| format!("publish {}: {error}", path.display()))
     });
+    #[cfg(test)]
+    if result.is_ok() {
+        publication_barrier("after_rename_before_parent_sync", path);
+    }
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
@@ -2457,7 +2472,39 @@ fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .map_err(|error| format!("create {}: {error}", path.display()))?;
     file.write_all(bytes)
         .and_then(|()| file.sync_all())
-        .map_err(|error| format!("write {}: {error}", path.display()))
+        .map_err(|error| format!("write {}: {error}", path.display()))?;
+    #[cfg(test)]
+    publication_barrier("after_temp_sync", path);
+    Ok(())
+}
+
+#[cfg(test)]
+fn publication_barrier(point: &str, path: &Path) {
+    const POINT_ENV: &str = "MISTER_MAGIK_TEST_PUBLICATION_BARRIER_POINT";
+    const MARKER_ENV: &str = "MISTER_MAGIK_TEST_PUBLICATION_BARRIER_MARKER";
+    const RELEASE_ENV: &str = "MISTER_MAGIK_TEST_PUBLICATION_BARRIER_RELEASE";
+    let Some(configured_point) = std::env::var_os(POINT_ENV) else {
+        return;
+    };
+    if configured_point != point {
+        return;
+    }
+    let marker = PathBuf::from(
+        std::env::var_os(MARKER_ENV).expect("publication barrier marker must be configured"),
+    );
+    let release = PathBuf::from(
+        std::env::var_os(RELEASE_ENV).expect("publication barrier release must be configured"),
+    );
+    fs::write(&marker, path.to_string_lossy().as_bytes())
+        .expect("write publication barrier marker");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !release.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "publication barrier release timed out"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 fn sync_filesystem(path: &Path) -> Result<(), String> {
@@ -3047,6 +3094,170 @@ mod tests {
         assert!(write_new_file(&root, &path, b"third").is_err());
         assert_eq!(fs::read(&path).unwrap(), b"second");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn injected_publication_write_failures_leave_no_partial_artifacts() {
+        fn write_partial_then_fail(
+            path: &Path,
+            bytes: &[u8],
+            error: std::io::Error,
+        ) -> Result<(), String> {
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            let mut file = options
+                .open(path)
+                .map_err(|error| format!("create {}: {error}", path.display()))?;
+            let partial_len = bytes.len().min(1);
+            file.write_all(&bytes[..partial_len])
+                .map_err(|error| format!("write {}: {error}", path.display()))?;
+            Err(format!("write {}: {error}", path.display()))
+        }
+
+        for (label, error) in [
+            ("enospc", std::io::Error::from_raw_os_error(libc::ENOSPC)),
+            ("eio", std::io::Error::from_raw_os_error(libc::EIO)),
+        ] {
+            let root = crate::test_support::unique_temp_dir(&format!("fast-publication-{label}"));
+            let path = root.join("packs/1.watchpack");
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let result =
+                write_new_file_with_writer(&root, &path, b"replacement", |temporary, bytes| {
+                    write_partial_then_fail(temporary, bytes, error)
+                });
+            assert!(result.is_err());
+            assert!(!path.exists());
+            assert!(
+                walkdir::WalkDir::new(&root)
+                    .into_iter()
+                    .filter_map(Result::ok)
+                    .all(|entry| !entry.file_type().is_file())
+            );
+            write_new_file(&root, &path, b"replacement").expect("retry after I/O failure");
+            assert_eq!(fs::read(&path).unwrap(), b"replacement");
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn publication_recovery_subprocess_worker() {
+        const ROOT_ENV: &str = "MISTER_MAGIK_TEST_PUBLICATION_ROOT";
+        let Some(root) = std::env::var_os(ROOT_ENV) else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let lease = crate::catalog_lease::CatalogMutationLease::acquire(root.join("lease.lock"))
+            .expect("acquire subprocess publication lease");
+        cleanup_refresh_temporary_files_with_lease(&root, &lease)
+            .expect("clean subprocess publication residue");
+        publish_refresh_state_with_report_held(
+            &root,
+            1,
+            10,
+            "a".repeat(64),
+            "builder-1".to_string(),
+            &[state("snes")],
+        )
+        .expect("subprocess publication should block at the configured barrier");
+        panic!("subprocess publication completed before interruption");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn publication_recovers_after_subprocess_interruption() {
+        const ROOT_ENV: &str = "MISTER_MAGIK_TEST_PUBLICATION_ROOT";
+        const POINT_ENV: &str = "MISTER_MAGIK_TEST_PUBLICATION_BARRIER_POINT";
+        const MARKER_ENV: &str = "MISTER_MAGIK_TEST_PUBLICATION_BARRIER_MARKER";
+        const RELEASE_ENV: &str = "MISTER_MAGIK_TEST_PUBLICATION_BARRIER_RELEASE";
+        const POINTS: [&str; 2] = ["after_temp_sync", "after_rename_before_parent_sync"];
+
+        for point in POINTS {
+            let root = crate::test_support::unique_temp_dir("fast-publication-subprocess");
+            let marker = root.join("barrier.marker");
+            let release = root.join("barrier.release");
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("publication_recovery_subprocess_worker")
+                .arg("--nocapture")
+                .env(ROOT_ENV, &root)
+                .env(POINT_ENV, point)
+                .env(MARKER_ENV, &marker)
+                .env(RELEASE_ENV, &release)
+                .spawn()
+                .expect("spawn publication subprocess");
+
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let mut failure = None;
+            loop {
+                if marker.exists() {
+                    break;
+                }
+                if let Some(status) = child.try_wait().expect("poll publication subprocess") {
+                    failure = Some(format!(
+                        "publication subprocess exited before barrier: {status}"
+                    ));
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    failure = Some("publication subprocess barrier timed out".to_string());
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            if let Some(failure) = failure {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("{failure}");
+            }
+            child.kill().expect("interrupt publication subprocess");
+            let _ = child.wait().expect("reap publication subprocess");
+
+            let lease =
+                crate::catalog_lease::CatalogMutationLease::acquire(root.join("lease.lock"))
+                    .expect("acquire recovery publication lease");
+            cleanup_refresh_temporary_files_with_lease(&root, &lease)
+                .expect("recover publication residue");
+            let expected = publish_refresh_state_with_report_held(
+                &root,
+                1,
+                10,
+                "a".repeat(64),
+                "builder-1".to_string(),
+                &[state("snes")],
+            )
+            .expect("retry publication with a fresh lease")
+            .0;
+            drop(lease);
+            assert_eq!(read_latest_refresh_manifest(&root).unwrap(), expected);
+            let reference = &expected.systems[0];
+            assert_eq!(
+                read_system_watch(&root, reference).unwrap(),
+                state("snes").watch
+            );
+            verify_file_checksum(
+                &fs::read(refresh_state_root(&root).join(&reference.watch_path)).unwrap(),
+                &reference.watch_sha256,
+                Path::new(&reference.watch_path),
+            )
+            .unwrap();
+
+            let mut files = walkdir::WalkDir::new(refresh_state_root(&root))
+                .into_iter()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_type().is_file())
+                .map(|entry| {
+                    entry
+                        .path()
+                        .strip_prefix(refresh_state_root(&root))
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect::<Vec<_>>();
+            files.sort();
+            assert_eq!(files, vec!["manifest-b.bin", "packs/1.watchpack"]);
+            let _ = fs::remove_dir_all(root);
+        }
     }
 
     #[test]
