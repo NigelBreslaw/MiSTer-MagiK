@@ -150,6 +150,10 @@ impl ShardArtifactProfile {
         matches!(self, Self::Legacy | Self::NoEmbeddedNavigation)
     }
 
+    fn writes_adjacent_navigation(self) -> bool {
+        self.writes_navigation() || matches!(self, Self::NoAdjacentNavigation | Self::NavpackOnly)
+    }
+
     fn stores_games(self) -> bool {
         !matches!(
             self,
@@ -293,11 +297,13 @@ fn write_system_shard_with_options_and_profile(
         Vec::new()
     };
     let navigation_hash = checksum_hex(&navigation);
-    let adjacent_navigation = if artifact_profile.writes_navigation() {
-        navigation.as_slice()
-    } else {
-        b"mister-magik-navpack-only-v1".as_slice()
-    };
+    let adjacent_navigation = artifact_profile.writes_adjacent_navigation().then_some(
+        if artifact_profile.writes_navigation() {
+            navigation.as_slice()
+        } else {
+            b"mister-magik-navpack-only-v1".as_slice()
+        },
+    );
     let navpack = crate::navpack::encode(
         data.system_id.as_str(),
         data.generation,
@@ -316,8 +322,11 @@ fn write_system_shard_with_options_and_profile(
     let preview_archive_default = common_preview_archive_path(&data.games);
     drop(navigation_pmu);
     create_parent(sqlite_path)?;
-    create_parent(navigation_path)?;
-    if sqlite_path.exists() || navigation_path.exists() || navpack_path.exists() {
+    create_parent(&navpack_path)?;
+    if sqlite_path.exists()
+        || (adjacent_navigation.is_some() && navigation_path.exists())
+        || navpack_path.exists()
+    {
         return Err(SystemShardError::new(
             "write",
             "staging artifact already exists",
@@ -572,17 +581,21 @@ fn write_system_shard_with_options_and_profile(
         .commit()
         .map_err(|error| SystemShardError::with("commit shard", error))?;
     drop(connection);
-    fs::write(navigation_path, adjacent_navigation)
-        .map_err(|error| SystemShardError::with("write adjacent navigation", error))?;
+    if let Some(adjacent_navigation) = adjacent_navigation {
+        fs::write(navigation_path, adjacent_navigation)
+            .map_err(|error| SystemShardError::with("write adjacent navigation", error))?;
+    }
     fs::write(&navpack_path, &navpack)
         .map_err(|error| SystemShardError::with("write adjacent NavPack", error))?;
     if durability == ShardDurability::Immediate {
         fs::File::open(sqlite_path)
             .and_then(|file| file.sync_all())
             .map_err(|error| SystemShardError::with("sync shard SQLite", error))?;
-        fs::File::open(navigation_path)
-            .and_then(|file| file.sync_all())
-            .map_err(|error| SystemShardError::with("sync shard navigation", error))?;
+        if adjacent_navigation.is_some() {
+            fs::File::open(navigation_path)
+                .and_then(|file| file.sync_all())
+                .map_err(|error| SystemShardError::with("sync shard navigation", error))?;
+        }
         fs::File::open(&navpack_path)
             .and_then(|file| file.sync_all())
             .map_err(|error| SystemShardError::with("sync shard NavPack", error))?;
@@ -596,7 +609,7 @@ fn write_system_shard_with_options_and_profile(
         Some(LoadedSystemShard {
             system_id: system_id.clone(),
             generation,
-            navigation_hash: checksum_hex(adjacent_navigation),
+            navigation_hash: adjacent_navigation.map_or_else(String::new, checksum_hex),
             projection_stats: data.projection_stats,
             navigation_indexes,
             games: std::mem::take(&mut data.games),

@@ -278,9 +278,10 @@ mod tests {
                 .all(|system| system.producers == vec![ScanUnitId::parse("source-root").unwrap()])
         );
         for system in &manifest.systems {
+            let navigation_path = system.active.navigation_path.as_ref().unwrap();
             let loaded = open_system_shard(
                 &config.storage_root().join(&system.active.sqlite_path),
-                &config.storage_root().join(&system.active.navigation_path),
+                &config.storage_root().join(navigation_path),
                 &system.system_id,
                 manifest.generation,
                 limits().shard,

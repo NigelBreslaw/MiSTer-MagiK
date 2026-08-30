@@ -176,11 +176,23 @@ impl LazyShardedCatalogReader {
             .ok_or_else(|| CatalogError::new("open-system", "system is absent from manifest"))?;
         let descriptor_lookup_us = elapsed_us(descriptor_started);
         let generation = &system.active;
+        let navigation_path = generation.navigation_path.as_ref().ok_or_else(|| {
+            CatalogError::new(
+                "open-system",
+                "active system generation has no adjacent navigation; use NavPack",
+            )
+        })?;
+        let navigation_hash = generation.navigation_hash.as_ref().ok_or_else(|| {
+            CatalogError::new(
+                "open-system",
+                "active system generation has no adjacent navigation hash",
+            )
+        })?;
         let (loaded, navigation) = open_verified_system_navigation_with_timing(
-            &self.storage_root.join(&generation.navigation_path),
+            &self.storage_root.join(navigation_path),
             system_id,
             generation.generation,
-            &generation.navigation_hash,
+            navigation_hash,
             self.limits.shard,
         )
         .map_err(|error| CatalogError::new("open-system", error.to_string()))?;

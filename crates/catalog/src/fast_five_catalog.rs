@@ -541,7 +541,9 @@ pub fn registry_fingerprint_for_manifest(manifest: &CatalogManifest) -> String {
         digest.update(system.active.generation.to_le_bytes());
         digest.update(system.active.games.to_le_bytes());
         digest.update(system.active.sqlite_hash.as_bytes());
-        digest.update(system.active.navigation_hash.as_bytes());
+        if let Some(navigation_hash) = &system.active.navigation_hash {
+            digest.update(navigation_hash.as_bytes());
+        }
         if let Some(navpack) = &system.active.navpack {
             digest.update(navpack.hash.as_bytes());
         }
@@ -942,7 +944,12 @@ pub fn run_c64_artifact_experiment(
     let validate_started = Instant::now();
     let loaded = open_system_shard(
         &storage_root.join(&published.sqlite_path),
-        &storage_root.join(&published.navigation_path),
+        &storage_root.join(
+            published
+                .navigation_path
+                .as_ref()
+                .ok_or_else(|| "C64 experiment publication has no navigation".to_string())?,
+        ),
         &system_id,
         1,
         limits.shard,
@@ -965,7 +972,7 @@ pub fn run_c64_artifact_experiment(
         published_validate_us,
         elapsed_us: elapsed_us(started),
         sqlite_bytes: published.sqlite_bytes,
-        navigation_bytes: published.navigation_bytes,
+        navigation_bytes: published.navigation_bytes.unwrap_or(0),
         navpack_bytes: published.navpack.map_or(0, |navpack| navpack.bytes),
         search_probe_us,
         search_fingerprint,
@@ -1170,7 +1177,7 @@ fn publish_snapshot_selection(
                         games: source.games.len(),
                         variants: source.variants.len(),
                         sqlite_bytes: published.active.sqlite_bytes,
-                        navigation_bytes: published.active.navigation_bytes,
+                        navigation_bytes: published.active.navigation_bytes.unwrap_or(0),
                         navpack_bytes: published
                             .active
                             .navpack
@@ -1225,7 +1232,7 @@ fn publish_snapshot_selection(
                 games: source.games.len(),
                 variants: source.variants.len(),
                 sqlite_bytes: published.active.sqlite_bytes,
-                navigation_bytes: published.active.navigation_bytes,
+                navigation_bytes: published.active.navigation_bytes.unwrap_or(0),
                 navpack_bytes: published
                     .active
                     .navpack
@@ -1351,7 +1358,7 @@ fn publish_snapshot_selection(
         });
         let definition = system_definition(&source.system_id);
         let active_sqlite_bytes = active.sqlite_bytes;
-        let active_navigation_bytes = active.navigation_bytes;
+        let active_navigation_bytes = active.navigation_bytes.unwrap_or(0);
         let active_navpack_bytes = active.navpack.as_ref().map_or(0, |navpack| navpack.bytes);
         manifest_systems.push(ManifestSystem {
             system_id,
@@ -1999,6 +2006,47 @@ mod builder_tests {
                     .status,
                 "exact"
             );
+            if matches!(
+                profile,
+                FastFiveArtifactProfile::SearchOnly
+                    | FastFiveArtifactProfile::SearchColumn
+                    | FastFiveArtifactProfile::SearchDetailNone
+            ) {
+                let manifest = read_latest_manifest(&root, limits()).unwrap();
+                assert!(
+                    manifest
+                        .systems
+                        .iter()
+                        .all(|system| system.active.navigation_path.is_none())
+                );
+                assert!(
+                    manifest
+                        .systems
+                        .iter()
+                        .all(|system| system.active.navigation_bytes.is_none())
+                );
+                assert!(
+                    manifest
+                        .systems
+                        .iter()
+                        .all(|system| system.active.navigation_hash.is_none())
+                );
+                assert!(
+                    manifest
+                        .systems
+                        .iter()
+                        .all(|system| system.active.navpack.is_some())
+                );
+                assert!(
+                    fs::read_dir(root.join("systems"))
+                        .unwrap()
+                        .flat_map(Result::unwrap)
+                        .flat_map(|system| fs::read_dir(system.path())
+                            .unwrap()
+                            .filter_map(Result::ok))
+                        .all(|entry| !entry.file_name().to_string_lossy().ends_with(".nav.lz4b"))
+                );
+            }
             fs::remove_dir_all(root).unwrap();
         }
     }
