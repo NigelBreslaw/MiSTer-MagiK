@@ -299,7 +299,7 @@ index a735e6b..b1d403c 100644
  	SIGNAL o_pshift : natural RANGE 0 TO 15;
  	SIGNAL o_readack,o_readack_sync,o_readack_sync2 : std_logic;
  	SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;
-+	SIGNAL magik_pre_read_summary : std_logic_vector(15 DOWNTO 0):=(OTHERS =>'0');
++	SIGNAL magik_pre_read_summary : std_logic_vector(8 DOWNTO 0):=(OTHERS =>'0');
 +	ATTRIBUTE altera_attribute OF o_readdataack_sync : SIGNAL IS
 +		"-name SYNCHRONIZER_IDENTIFICATION FORCED; -name PRESERVE_REGISTER ON";
 +	ATTRIBUTE altera_attribute OF o_readdataack_sync2 : SIGNAL IS
@@ -480,9 +480,25 @@ index a735e6b..b1d403c 100644
 -	avl_read<=avl_read_i;
 +	avl_read<=avl_read_i AND NOT avl_read_accepted
 +		WHEN avl_reset_na='0' OR avl_state=sREAD ELSE '0';
-+	-- Sticky pre-read evidence has no functional fanout and reuses the existing
-+	-- 16-bit observer port without widening the ascal or sys_top interface.
-+	magik_fetch_state<=magik_pre_read_summary;
++	-- A four-bit ordered milestone and five independent branch flags retain the
++	-- pre-read distinctions without spending one register per observer bit.
++	magik_fetch_state(0)<='1' WHEN unsigned(magik_pre_read_summary(3 DOWNTO 0))>=1 ELSE '0';
++	magik_fetch_state(1)<='1' WHEN unsigned(magik_pre_read_summary(3 DOWNTO 0))>=2 ELSE '0';
++	magik_fetch_state(2)<='1' WHEN unsigned(magik_pre_read_summary(3 DOWNTO 0))>=3 ELSE '0';
++	magik_fetch_state(3)<='1' WHEN unsigned(magik_pre_read_summary(3 DOWNTO 0))>=4 ELSE '0';
++	magik_fetch_state(4)<='1' WHEN unsigned(magik_pre_read_summary(3 DOWNTO 0))>=5 ELSE '0';
++	magik_fetch_state(5)<=magik_pre_read_summary(4);
++	magik_fetch_state(6)<='1' WHEN unsigned(magik_pre_read_summary(3 DOWNTO 0))>=6 ELSE '0';
++	magik_fetch_state(7)<='1' WHEN unsigned(magik_pre_read_summary(3 DOWNTO 0))>=7 AND
++		magik_pre_read_summary(5)='0' ELSE '0';
++	magik_fetch_state(8)<=magik_pre_read_summary(5);
++	magik_fetch_state(9)<=magik_pre_read_summary(6);
++	magik_fetch_state(10)<=magik_pre_read_summary(7);
++	magik_fetch_state(11)<='1' WHEN unsigned(magik_pre_read_summary(3 DOWNTO 0))>=8 ELSE '0';
++	magik_fetch_state(12)<='1' WHEN unsigned(magik_pre_read_summary(3 DOWNTO 0))>=9 ELSE '0';
++	magik_fetch_state(13)<='1' WHEN unsigned(magik_pre_read_summary(3 DOWNTO 0))>=10 ELSE '0';
++	magik_fetch_state(14)<='1' WHEN unsigned(magik_pre_read_summary(3 DOWNTO 0))>=11 ELSE '0';
++	magik_fetch_state(15)<=magik_pre_read_summary(8);
  	avl_write<=avl_write_i;
  	avl_writedata<=std_logic_vector(swap(avl_dr));
  	avl_burstcount<=std_logic_vector(to_unsigned(BLEN,8));
@@ -495,7 +511,7 @@ index a735e6b..b1d403c 100644
  		VARIABLE hcarry_v,vcarry_v : boolean;
  		VARIABLE dif_v : natural RANGE 0 TO 8*OHRESH-1;
  		VARIABLE off_v : natural RANGE 0 TO 15;
-+		VARIABLE magik_summary_v : std_logic_vector(15 DOWNTO 0);
++		VARIABLE magik_summary_v : std_logic_vector(8 DOWNTO 0);
  	BEGIN
  		IF o_reset_na='0' THEN
  			o_copy<=sWAIT;
@@ -517,11 +533,11 @@ index a735e6b..b1d403c 100644
 @@ -2028,6 +2326,17 @@ BEGIN
  			o_readdataack<=o_readdataack_sync XOR o_readdataack_sync2;
 +			magik_summary_v:=magik_pre_read_summary;
-+			IF o_ce='1' THEN
-+				magik_summary_v(1):='1';
++			IF o_ce='1' AND unsigned(magik_summary_v(3 DOWNTO 0))=1 THEN
++				magik_summary_v(3 DOWNTO 0):="0010";
 +			END IF;
 +			IF o_vsize=0 THEN
-+				magik_summary_v(15):='1';
++				magik_summary_v(8):='1';
 +			END IF;
  
  			------------------------------------------------------
@@ -529,7 +545,9 @@ index a735e6b..b1d403c 100644
  			lev_dec_v:='0';
 @@ -2038,6 +2347,7 @@ BEGIN
  			IF o_hsv(0)='1' AND o_hsv(1)='0' THEN
-+				magik_summary_v(2):='1';
++				IF unsigned(magik_summary_v(3 DOWNTO 0))=2 THEN
++					magik_summary_v(3 DOWNTO 0):="0011";
++				END IF;
  				IF o_vcpt_pre3=o_vmin THEN
  					o_fload<=2;
  					o_bibu<='0';
@@ -538,14 +556,18 @@ index a735e6b..b1d403c 100644
 @@ -2060,6 +2370,7 @@ BEGIN
  				WHEN sDISP =>
  					IF o_hsp='1' THEN
-+						magik_summary_v(3):='1';
++						IF unsigned(magik_summary_v(3 DOWNTO 0))=3 THEN
++							magik_summary_v(3 DOWNTO 0):="0100";
++						END IF;
  						o_state<=sHSYNC;
  						o_hsp<='0';
  					END IF;
  					o_prim<=true;
 @@ -2069,6 +2380,7 @@ BEGIN
  				WHEN sHSYNC =>
-+					magik_summary_v(4):='1';
++					IF unsigned(magik_summary_v(3 DOWNTO 0))=4 THEN
++						magik_summary_v(3 DOWNTO 0):="0101";
++					END IF;
  					dif_v :=(o_vacc_next - 2*o_vsize + 16384) MOD 16384;
  					IF o_prim THEN
  						IF dif_v>=8192 THEN
@@ -553,7 +575,7 @@ index a735e6b..b1d403c 100644
  						ELSE
 @@ -2094,6 +2406,9 @@ BEGIN
  					IF vcarry_v THEN
-+						magik_summary_v(5):='1';
++						magik_summary_v(4):='1';
  						o_vacpt<=o_vacpt+1;
  					END IF;
  					IF vcarry_v AND o_prim THEN
@@ -564,34 +586,50 @@ index a735e6b..b1d403c 100644
  					o_hbcpt<=0; -- Clear burst counter on line
  					o_divstart<=to_std_logic(NOT vcarry_v);
  					IF NOT vcarry_v  OR o_fload>0 THEN
-+						magik_summary_v(6):='1';
++						IF unsigned(magik_summary_v(3 DOWNTO 0))=5 THEN
++							magik_summary_v(3 DOWNTO 0):="0110";
++						END IF;
  						IF (o_vpe='1' AND o_vcarrym) OR o_fload>0 THEN
-+							magik_summary_v(7):='1';
++							IF unsigned(magik_summary_v(3 DOWNTO 0))=6 THEN
++								magik_summary_v(3 DOWNTO 0):="0111";
++							END IF;
  							o_state<=sREAD;
  						ELSE
-+							magik_summary_v(8):='1';
++							magik_summary_v(5):='1';
++							IF unsigned(magik_summary_v(3 DOWNTO 0))=6 THEN
++								magik_summary_v(3 DOWNTO 0):="0111";
++							END IF;
 +							IF o_vpe='0' THEN
-+								magik_summary_v(9):='1';
++								magik_summary_v(6):='1';
 +							END IF;
 +							IF NOT o_vcarrym THEN
-+								magik_summary_v(10):='1';
++								magik_summary_v(7):='1';
 +							END IF;
  							o_state<=sDISP;
  						END IF;
  					END IF;
  
  				WHEN sREAD =>
-+					magik_summary_v(11):='1';
++					IF unsigned(magik_summary_v(3 DOWNTO 0))=7 AND
++						magik_summary_v(5)='0' THEN
++						magik_summary_v(3 DOWNTO 0):="1000";
++					END IF;
 +					IF o_adrsb='1' THEN
-+						magik_summary_v(12):='1';
++						IF unsigned(magik_summary_v(3 DOWNTO 0))=8 THEN
++							magik_summary_v(3 DOWNTO 0):="1001";
++						END IF;
 +					END IF;
  					-- Read a block
  					IF o_readlev<2 AND o_adrsb='1' THEN
-+						magik_summary_v(13):='1';
++						IF unsigned(magik_summary_v(3 DOWNTO 0))=9 THEN
++							magik_summary_v(3 DOWNTO 0):="1010";
++						END IF;
  						lev_inc_v:='1';
 @@ -2129,6 +2458,7 @@ BEGIN
  				WHEN sWAITREAD =>
-+					magik_summary_v(14):='1';
++					IF unsigned(magik_summary_v(3 DOWNTO 0))=10 THEN
++						magik_summary_v(3 DOWNTO 0):="1011";
++					END IF;
  					IF o_readack='1' THEN
  						o_hbcpt<=o_hbcpt+1;
  						IF o_hbcpt<o_hburst-1 THEN
@@ -602,9 +640,9 @@ index a735e6b..b1d403c 100644
  
  					--------------------------------------------------
  			END CASE;
-+			IF o_readack='1' THEN
++			IF o_readack='1' AND NOT (o_hbcpt<o_hburst-1) THEN
 +				magik_summary_v:=(OTHERS =>'0');
-+				magik_summary_v(0):='1'; -- Acknowledged request starts the window.
++				magik_summary_v(3 DOWNTO 0):="0001"; -- Final acknowledgement starts the window.
 +			END IF;
 +			magik_pre_read_summary<=magik_summary_v;
  
