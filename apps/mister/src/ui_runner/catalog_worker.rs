@@ -22,9 +22,12 @@ use std::sync::{Arc, Mutex};
 
 const CATALOG_WORKER_CHILD_ENV: &str = "MISTER_CATALOG_WORKER_CHILD";
 const CATALOG_WORKER_PROTOCOL_PREFIX: &str = "MISTER_CATALOG_EVENT ";
-const CATALOG_WORKER_PROTOCOL_VERSION: u8 = 4;
+const CATALOG_WORKER_PROTOCOL_VERSION: u8 = 6;
 const MAX_CATALOG_WORKER_PROTOCOL_LINE_BYTES: u64 = 256 * 1024;
 const CATALOG_WORKER_EVENT_QUEUE_CAPACITY: usize = 16_384;
+const MAX_CATALOG_WORKER_COLLECTION_CHUNK_ITEMS: usize = 512;
+const MAX_CATALOG_WORKER_COLLECTION_ITEM_BYTES: usize = 256;
+const MAX_CATALOG_WORKER_COLLECTION_ITEMS_TOTAL: usize = 65_536;
 const CATALOG_WORKER_SNAPSHOT_DIRECTORY: &str = "/tmp/mister-magik/catalog-worker";
 const CATALOG_WORKER_REGISTRY_SNAPSHOT_SUFFIX: &str = "registry-seed";
 const CATALOG_WORKER_REGISTRY_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
@@ -346,15 +349,73 @@ struct CatalogWorkerWireEvent {
     snapshot_path: String,
     #[serde(default)]
     snapshot_sha256: String,
+    #[serde(default)]
+    collection: String,
+    #[serde(default)]
+    collection_index: u32,
+    #[serde(default)]
+    collection_chunks: u32,
+    #[serde(default)]
+    collection_items_total: u64,
+    #[serde(default)]
+    collection_items: Vec<String>,
+    #[serde(default)]
+    collection_checksum: String,
 }
 
-#[derive(Default)]
 struct CatalogWorkerProtocolState {
     run_id: String,
     sequence: u64,
     heartbeat_phase: String,
     progress_epoch: u64,
     work_units: u64,
+    plan: Option<CatalogWorkerCollectionAssembly>,
+    manifest_rebuilt: Option<CatalogWorkerCollectionAssembly>,
+    manifest_removed: Option<CatalogWorkerCollectionAssembly>,
+    manifest_rebuilt_items: Option<Vec<String>>,
+    manifest_removed_items: Option<Vec<String>>,
+    manifest_generation: Option<u64>,
+}
+
+struct CatalogWorkerCollectionAssembly {
+    chunks: u32,
+    total_items: usize,
+    next_index: u32,
+    checksum: String,
+    items: Vec<String>,
+    generation: u64,
+    all_published_systems: bool,
+}
+
+impl Default for CatalogWorkerProtocolState {
+    fn default() -> Self {
+        Self {
+            run_id: String::new(),
+            sequence: 0,
+            heartbeat_phase: String::new(),
+            progress_epoch: 0,
+            work_units: 0,
+            plan: None,
+            manifest_rebuilt: None,
+            manifest_removed: None,
+            manifest_rebuilt_items: None,
+            manifest_removed_items: None,
+            manifest_generation: None,
+        }
+    }
+}
+
+fn catalog_worker_collection_checksum(items: &[String]) -> String {
+    let mut digest = Sha256::new();
+    for item in items {
+        digest.update(item.as_bytes());
+        digest.update([0]);
+    }
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 impl CatalogWorkerProtocolState {
@@ -382,6 +443,24 @@ impl CatalogWorkerProtocolState {
             return Err("catalog worker sequence did not advance".to_string());
         }
         self.sequence = event.sequence;
+        if event.kind == "collection-chunk"
+            && (event.collection.is_empty()
+                || event.collection_chunks == 0
+                || event.collection_index >= event.collection_chunks
+                || event.collection_items.len() > MAX_CATALOG_WORKER_COLLECTION_CHUNK_ITEMS
+                || event.collection_items_total > MAX_CATALOG_WORKER_COLLECTION_ITEMS_TOTAL as u64
+                || event.collection_checksum.len() != 64
+                || !event
+                    .collection_checksum
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+                || event
+                    .collection_items
+                    .iter()
+                    .any(|item| item.len() > MAX_CATALOG_WORKER_COLLECTION_ITEM_BYTES))
+        {
+            return Err("invalid catalog worker collection chunk".to_string());
+        }
         if event.kind != "heartbeat" {
             return Ok(false);
         }
@@ -403,6 +482,148 @@ impl CatalogWorkerProtocolState {
         self.progress_epoch = event.progress_epoch;
         self.work_units = event.work_units;
         Ok(false)
+    }
+
+    fn collect_collection(
+        &mut self,
+        event: &CatalogWorkerWireEvent,
+    ) -> Result<Option<CatalogWorkerMessage>, String> {
+        if event.kind != "collection-chunk" {
+            if event.kind == "done"
+                && (self.plan.is_some()
+                    || self.manifest_rebuilt.is_some()
+                    || self.manifest_removed.is_some()
+                    || self.manifest_rebuilt_items.is_some()
+                    || self.manifest_removed_items.is_some()
+                    || self.manifest_generation.is_some())
+            {
+                return Err("catalog worker collection ended before all chunks".to_string());
+            }
+            return Ok(None);
+        }
+        let slot = match event.collection.as_str() {
+            "plan" => &mut self.plan,
+            "manifest-rebuilt" => &mut self.manifest_rebuilt,
+            "manifest-removed" => &mut self.manifest_removed,
+            _ => return Err("unknown catalog worker collection".to_string()),
+        };
+        if event.collection_index == 0 {
+            if slot.is_some() {
+                return Err("catalog worker collection restarted before completion".to_string());
+            }
+            *slot = Some(CatalogWorkerCollectionAssembly {
+                chunks: event.collection_chunks,
+                total_items: event.collection_items_total as usize,
+                next_index: 0,
+                checksum: event.collection_checksum.clone(),
+                items: Vec::with_capacity(event.collection_items_total as usize),
+                generation: event.generation,
+                all_published_systems: event.all_published_systems,
+            });
+        }
+        let assembly = slot
+            .as_mut()
+            .ok_or_else(|| "catalog worker collection chunk arrived out of order".to_string())?;
+        if assembly.chunks != event.collection_chunks
+            || assembly.total_items != event.collection_items_total as usize
+            || assembly.checksum != event.collection_checksum
+            || assembly.generation != event.generation
+            || assembly.all_published_systems != event.all_published_systems
+            || assembly.next_index != event.collection_index
+        {
+            return Err("catalog worker collection chunk metadata changed".to_string());
+        }
+        if assembly
+            .items
+            .len()
+            .saturating_add(event.collection_items.len())
+            > assembly.total_items
+        {
+            return Err("catalog worker collection contains too many items".to_string());
+        }
+        assembly
+            .items
+            .extend(event.collection_items.iter().cloned());
+        assembly.next_index = assembly.next_index.saturating_add(1);
+        if assembly.next_index != assembly.chunks {
+            return Ok(None);
+        }
+        let assembly = slot.take().expect("collection assembly");
+        if assembly.items.len() != assembly.total_items
+            || catalog_worker_collection_checksum(&assembly.items) != assembly.checksum
+        {
+            return Err("catalog worker collection checksum or count differs".to_string());
+        }
+        match event.collection.as_str() {
+            "plan" => Ok(Some(CatalogWorkerMessage::ReconciliationPlanReady {
+                system_ids: assembly.items,
+                all_published_systems: assembly.all_published_systems,
+            })),
+            "manifest-rebuilt" => {
+                if self
+                    .manifest_generation
+                    .is_some_and(|generation| generation != assembly.generation)
+                {
+                    return Err("catalog worker manifest generation changed".to_string());
+                }
+                self.manifest_generation = Some(assembly.generation);
+                self.manifest_rebuilt_items = Some(assembly.items);
+                match (
+                    self.manifest_rebuilt_items.take(),
+                    self.manifest_removed_items.take(),
+                ) {
+                    (Some(rebuilt), Some(removed)) => {
+                        self.manifest_generation = None;
+                        Ok(Some(CatalogWorkerMessage::ManifestPublished {
+                            generation: assembly.generation,
+                            rebuilt,
+                            removed,
+                        }))
+                    }
+                    (Some(rebuilt), None) => {
+                        self.manifest_rebuilt_items = Some(rebuilt);
+                        Ok(None)
+                    }
+                    (None, removed) => {
+                        self.manifest_removed_items = removed;
+                        Ok(None)
+                    }
+                }
+            }
+            "manifest-removed" => {
+                if self
+                    .manifest_generation
+                    .is_some_and(|generation| generation != assembly.generation)
+                {
+                    return Err("catalog worker manifest generation changed".to_string());
+                }
+                self.manifest_generation = Some(assembly.generation);
+                self.manifest_removed_items = Some(assembly.items);
+                match (
+                    self.manifest_rebuilt_items.take(),
+                    self.manifest_removed_items.take(),
+                ) {
+                    (Some(rebuilt), Some(removed)) => {
+                        self.manifest_generation = None;
+                        Ok(Some(CatalogWorkerMessage::ManifestPublished {
+                            generation: assembly.generation,
+                            rebuilt,
+                            removed,
+                        }))
+                    }
+                    (rebuilt, Some(removed)) => {
+                        self.manifest_rebuilt_items = rebuilt;
+                        self.manifest_removed_items = Some(removed);
+                        Ok(None)
+                    }
+                    (rebuilt, None) => {
+                        self.manifest_rebuilt_items = rebuilt;
+                        Ok(None)
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -667,6 +888,12 @@ fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
         work_units: 0,
         snapshot_path: String::new(),
         snapshot_sha256: String::new(),
+        collection: String::new(),
+        collection_index: 0,
+        collection_chunks: 0,
+        collection_items_total: 0,
+        collection_items: Vec::new(),
+        collection_checksum: String::new(),
     };
     match message {
         CatalogWorkerMessage::Timing { name, detail } => {
@@ -678,13 +905,8 @@ fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
             event.kind = "load-failed".to_string();
             event.error = error.clone();
         }
-        CatalogWorkerMessage::ReconciliationPlanReady {
-            system_ids,
-            all_published_systems,
-        } => {
-            event.kind = "plan-ready".to_string();
-            event.system_ids = system_ids.clone();
-            event.all_published_systems = *all_published_systems;
+        CatalogWorkerMessage::ReconciliationPlanReady { .. } => {
+            unreachable!("reconciliation plans must use bounded collection chunks")
         }
         CatalogWorkerMessage::SystemScanning { system_id } => {
             event.kind = "system-scanning".to_string();
@@ -707,15 +929,8 @@ fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
             event.system_id = system_id.clone();
             event.error = error.clone();
         }
-        CatalogWorkerMessage::ManifestPublished {
-            generation,
-            rebuilt,
-            removed,
-        } => {
-            event.kind = "manifest-published".to_string();
-            event.generation = *generation;
-            event.rebuilt = rebuilt.clone();
-            event.removed = removed.clone();
+        CatalogWorkerMessage::ManifestPublished { .. } => {
+            unreachable!("manifest publications must use bounded collection chunks")
         }
         CatalogWorkerMessage::BuildCompleted { elapsed_us } => {
             event.kind = "build-completed".to_string();
@@ -774,6 +989,95 @@ fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
     event
 }
 
+fn catalog_worker_collection_chunk_events(
+    collection: &str,
+    items: &[String],
+    generation: u64,
+    all_published_systems: bool,
+) -> Result<Vec<CatalogWorkerWireEvent>, String> {
+    if items.len() > MAX_CATALOG_WORKER_COLLECTION_ITEMS_TOTAL {
+        return Err("catalog worker collection exceeds item limit".to_string());
+    }
+    if items
+        .iter()
+        .any(|item| item.len() > MAX_CATALOG_WORKER_COLLECTION_ITEM_BYTES)
+    {
+        return Err("catalog worker collection item exceeds size limit".to_string());
+    }
+    let chunk_count = items
+        .len()
+        .div_ceil(MAX_CATALOG_WORKER_COLLECTION_CHUNK_ITEMS)
+        .max(1);
+    let checksum = catalog_worker_collection_checksum(items);
+    let mut events = Vec::with_capacity(chunk_count);
+    let mut append_chunk = |index: usize, chunk: &[String]| -> Result<(), String> {
+        let mut event = blank_worker_wire_event("collection-chunk");
+        event.collection = collection.to_string();
+        event.collection_index = index as u32;
+        event.collection_chunks = chunk_count as u32;
+        event.collection_items_total = items.len() as u64;
+        event.collection_items = chunk.to_vec();
+        event.collection_checksum = checksum.clone();
+        event.generation = generation;
+        event.all_published_systems = all_published_systems;
+        let encoded_bytes = serde_json::to_vec(&event)
+            .map_err(|error| format!("encode catalog worker collection chunk: {error}"))?;
+        if encoded_bytes.len() + CATALOG_WORKER_PROTOCOL_PREFIX.len() + 1
+            > MAX_CATALOG_WORKER_PROTOCOL_LINE_BYTES as usize
+        {
+            return Err("catalog worker collection chunk exceeds line size limit".to_string());
+        }
+        events.push(event);
+        Ok(())
+    };
+    if items.is_empty() {
+        append_chunk(0, &[])?;
+    } else {
+        for (index, chunk) in items
+            .chunks(MAX_CATALOG_WORKER_COLLECTION_CHUNK_ITEMS)
+            .enumerate()
+        {
+            append_chunk(index, chunk)?;
+        }
+    }
+    Ok(events)
+}
+
+fn worker_wire_events(
+    message: &CatalogWorkerMessage,
+) -> Result<Vec<CatalogWorkerWireEvent>, String> {
+    match message {
+        CatalogWorkerMessage::ReconciliationPlanReady {
+            system_ids,
+            all_published_systems,
+        } => catalog_worker_collection_chunk_events("plan", system_ids, 0, *all_published_systems),
+        CatalogWorkerMessage::ManifestPublished {
+            generation,
+            rebuilt,
+            removed,
+        } => {
+            let mut events = catalog_worker_collection_chunk_events(
+                "manifest-rebuilt",
+                rebuilt,
+                *generation,
+                false,
+            )?;
+            events.extend(catalog_worker_collection_chunk_events(
+                "manifest-removed",
+                removed,
+                *generation,
+                false,
+            )?);
+            Ok(events)
+        }
+        CatalogWorkerMessage::PublishedRegistrySeed { .. }
+        | CatalogWorkerMessage::ArcadeBootstrapReady { .. } => {
+            unreachable!("bounded snapshot messages have dedicated wire handling")
+        }
+        _ => Ok(vec![worker_wire_event(message)]),
+    }
+}
+
 fn blank_worker_wire_event(kind: &str) -> CatalogWorkerWireEvent {
     CatalogWorkerWireEvent {
         version: CATALOG_WORKER_PROTOCOL_VERSION,
@@ -798,6 +1102,12 @@ fn blank_worker_wire_event(kind: &str) -> CatalogWorkerWireEvent {
         work_units: 0,
         snapshot_path: String::new(),
         snapshot_sha256: String::new(),
+        collection: String::new(),
+        collection_index: 0,
+        collection_chunks: 0,
+        collection_items_total: 0,
+        collection_items: Vec::new(),
+        collection_checksum: String::new(),
     }
 }
 
@@ -1179,7 +1489,7 @@ fn start_library_catalog_worker_process(
                     Ok(true) => {
                         reader_control.handshake_seen.store(true, Ordering::Release);
                         let _ = event_tx.try_send(CatalogWorkerMessage::Timing {
-                            name: "catalog_worker_handshake_v4".to_string(),
+                            name: "catalog_worker_handshake_v6".to_string(),
                             detail: format!("run_id={}", event.run_id),
                         });
                         continue;
@@ -1191,7 +1501,21 @@ fn start_library_catalog_worker_process(
                         break;
                     }
                 }
-                match catalog_worker_message_from_wire(event, &reader_root, &reader_catalog_root) {
+                let collection_message = match protocol_state.collect_collection(&event) {
+                    Ok(message) => message,
+                    Err(error) => {
+                        terminal_message = Some(CatalogWorkerMessage::PersistenceFailed { error });
+                        protocol_failed = true;
+                        break;
+                    }
+                };
+                if event.kind == "collection-chunk" && collection_message.is_none() {
+                    continue;
+                }
+                let decoded_message = collection_message.map(Ok).unwrap_or_else(|| {
+                    catalog_worker_message_from_wire(event, &reader_root, &reader_catalog_root)
+                });
+                match decoded_message {
                     Ok(Some(message)) => {
                         terminal = matches!(
                             message,
@@ -1485,6 +1809,12 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
                 work_units: snapshot.work_units,
                 snapshot_path: String::new(),
                 snapshot_sha256: String::new(),
+                collection: String::new(),
+                collection_index: 0,
+                collection_chunks: 0,
+                collection_items_total: 0,
+                collection_items: Vec::new(),
+                collection_checksum: String::new(),
             };
             let mut writer = heartbeat_writer
                 .lock()
@@ -1503,7 +1833,7 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
                 .advance(phase, *work_units);
             continue;
         }
-        let mut event = match &message {
+        let events = match &message {
             CatalogWorkerMessage::PublishedRegistrySeed { transport } => {
                 match write_registry_seed_snapshot(&wire_run_id, transport) {
                     Ok((snapshot_path, snapshot_sha256)) => {
@@ -1513,13 +1843,13 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
                         event.fingerprint = transport.fingerprint.clone();
                         event.snapshot_path = snapshot_path;
                         event.snapshot_sha256 = snapshot_sha256;
-                        event
+                        Ok(vec![event])
                     }
                     Err(error) => {
                         let mut event = blank_worker_wire_event("persistence-failed");
                         event.error = format!("write registry seed snapshot: {error}");
                         terminal = true;
-                        event
+                        Ok(vec![event])
                     }
                 }
             }
@@ -1534,19 +1864,31 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
                 event.elapsed_us = *load_us;
                 event.snapshot_path = snapshot_path.clone();
                 event.snapshot_sha256 = snapshot_sha256.clone();
-                event
+                Ok(vec![event])
             }
-            _ => worker_wire_event(&message),
+            _ => worker_wire_events(&message),
+        };
+        let events = match events {
+            Ok(events) => events,
+            Err(error) => {
+                terminal = true;
+                let mut event = blank_worker_wire_event("persistence-failed");
+                event.error = error;
+                vec![event]
+            }
         };
         let mut output = writer.lock().unwrap_or_else(|error| error.into_inner());
-        event.run_id.clone_from(&wire_run_id);
-        event.sequence = wire_sequence.fetch_add(1, Ordering::Relaxed);
-        if output
-            .write_all(CATALOG_WORKER_PROTOCOL_PREFIX.as_bytes())
-            .is_err()
-            || !write_worker_wire_event(&mut *output, &event)
-        {
-            break;
+        for mut event in events {
+            event.run_id.clone_from(&wire_run_id);
+            event.sequence = wire_sequence.fetch_add(1, Ordering::Relaxed);
+            if output
+                .write_all(CATALOG_WORKER_PROTOCOL_PREFIX.as_bytes())
+                .is_err()
+                || !write_worker_wire_event(&mut *output, &event)
+            {
+                terminal = true;
+                break;
+            }
         }
         terminal = terminal
             || matches!(
@@ -1586,6 +1928,12 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
             work_units: 0,
             snapshot_path: String::new(),
             snapshot_sha256: String::new(),
+            collection: String::new(),
+            collection_index: 0,
+            collection_chunks: 0,
+            collection_items_total: 0,
+            collection_items: Vec::new(),
+            collection_checksum: String::new(),
         };
         let _ = output.write_all(CATALOG_WORKER_PROTOCOL_PREFIX.as_bytes());
         let _ = write_worker_wire_event(&mut *output, &event);
@@ -2303,6 +2651,12 @@ mod tests {
             work_units: 99,
             snapshot_path: String::new(),
             snapshot_sha256: String::new(),
+            collection: String::new(),
+            collection_index: 0,
+            collection_chunks: 0,
+            collection_items_total: 0,
+            collection_items: Vec::new(),
+            collection_checksum: String::new(),
         };
         let encoded = serde_json::to_string(&event).unwrap();
         let decoded: CatalogWorkerWireEvent = serde_json::from_str(&encoded).unwrap();
@@ -2328,6 +2682,86 @@ mod tests {
         assert_eq!(progress.phase, "artifacts");
         assert!(progress.work_units >= inner_units);
         assert!(progress.progress_epoch >= 2);
+    }
+
+    #[test]
+    fn protocol_collection_chunks_reassemble_large_plan_without_oversized_lines() {
+        let system_ids = (0..4096)
+            .map(|index| format!("system-{index:04}"))
+            .collect::<Vec<_>>();
+        let message = CatalogWorkerMessage::ReconciliationPlanReady {
+            system_ids: system_ids.clone(),
+            all_published_systems: true,
+        };
+        let events = worker_wire_events(&message).unwrap();
+        assert!(events.len() > 1);
+        assert!(events.iter().all(|event| {
+            serde_json::to_vec(event).unwrap().len() + CATALOG_WORKER_PROTOCOL_PREFIX.len() + 1
+                <= MAX_CATALOG_WORKER_PROTOCOL_LINE_BYTES as usize
+        }));
+
+        let mut state = CatalogWorkerProtocolState::default();
+        let mut handshake = blank_worker_wire_event("handshake");
+        handshake.run_id = "run-chunks".to_string();
+        assert_eq!(state.validate(&handshake), Ok(true));
+        let mut result = None;
+        for (sequence, mut event) in events.into_iter().enumerate() {
+            event.run_id = "run-chunks".to_string();
+            event.sequence = sequence as u64 + 1;
+            assert_eq!(state.validate(&event), Ok(false));
+            result = state.collect_collection(&event).unwrap().or(result);
+        }
+        assert!(matches!(
+            result,
+            Some(CatalogWorkerMessage::ReconciliationPlanReady {
+                system_ids: actual,
+                all_published_systems: true,
+            }) if actual == system_ids
+        ));
+    }
+
+    #[test]
+    fn protocol_collection_chunks_reassemble_manifest_and_reject_reordering() {
+        let message = CatalogWorkerMessage::ManifestPublished {
+            generation: 17,
+            rebuilt: vec!["arcade".to_string(), "amiga".to_string()],
+            removed: vec!["dos".to_string()],
+        };
+        let events = worker_wire_events(&message).unwrap();
+        let mut state = CatalogWorkerProtocolState::default();
+        let mut handshake = blank_worker_wire_event("handshake");
+        handshake.run_id = "run-manifest".to_string();
+        assert_eq!(state.validate(&handshake), Ok(true));
+        let mut result = None;
+        for (sequence, mut event) in events.into_iter().enumerate() {
+            event.run_id = "run-manifest".to_string();
+            event.sequence = sequence as u64 + 1;
+            assert_eq!(state.validate(&event), Ok(false));
+            result = state.collect_collection(&event).unwrap().or(result);
+        }
+        assert!(matches!(
+            result,
+            Some(CatalogWorkerMessage::ManifestPublished {
+                generation: 17,
+                rebuilt,
+                removed,
+            }) if rebuilt == vec!["arcade", "amiga"] && removed == vec!["dos"]
+        ));
+
+        let mut malformed = worker_wire_events(&CatalogWorkerMessage::ReconciliationPlanReady {
+            system_ids: vec!["one".to_string(), "two".to_string()],
+            all_published_systems: false,
+        })
+        .unwrap();
+        malformed[0].run_id = "run-bad".to_string();
+        malformed[0].sequence = 1;
+        let mut malformed_state = CatalogWorkerProtocolState::default();
+        let mut bad_handshake = blank_worker_wire_event("handshake");
+        bad_handshake.run_id = "run-bad".to_string();
+        assert_eq!(malformed_state.validate(&bad_handshake), Ok(true));
+        malformed[0].collection_checksum = "0".repeat(64);
+        assert_eq!(malformed_state.validate(&malformed[0]), Ok(false));
+        assert!(malformed_state.collect_collection(&malformed[0]).is_err());
     }
 
     #[test]

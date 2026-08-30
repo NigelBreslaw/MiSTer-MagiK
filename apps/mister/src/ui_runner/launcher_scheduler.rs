@@ -1165,7 +1165,7 @@ impl LauncherScheduler {
                 }
             }
             CatalogWorkerMessage::Timing { name, detail } => {
-                if name == "catalog_worker_handshake_v4"
+                if name == "catalog_worker_handshake_v6"
                     && let Some(run_id) = detail.strip_prefix("run_id=")
                 {
                     self.catalog_progress.note_worker_run(run_id);
