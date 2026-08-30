@@ -19878,8 +19878,11 @@ const CATALOG_ATTRIBUTION_REMOTE_DIR: &str =
 const CATALOG_ATTRIBUTION_WORK_DIR: &str = "/tmp/mister-magik/catalog-attribution";
 const CATALOG_ATTRIBUTION_C64_ROOT: &str = CATALOG_BUILD_REBUILD_C64_ROOT;
 const CATALOG_FAST_FIVE_STAGING_REMOTE: &str = "/tmp/mister-magik/fast-five-catalog";
-const CATALOG_COMPLETION_MANIFEST_RETRY_LIMIT: usize = 20;
-const CATALOG_COMPLETION_MANIFEST_RETRY_DELAY: Duration = Duration::from_millis(50);
+// Function-graph tracing can delay the final manifest publication after the
+// launcher has reported refresh completion. Keep inspection bounded, but allow
+// enough time for the traced durability path to settle before declaring failure.
+const CATALOG_COMPLETION_MANIFEST_RETRY_LIMIT: usize = 200;
+const CATALOG_COMPLETION_MANIFEST_RETRY_DELAY: Duration = Duration::from_millis(100);
 const CATALOG_ATTRIBUTION_PROFILE_FINALIZE_TIMEOUT: Duration = Duration::from_secs(180);
 
 fn catalog_attribution_prepare_command() -> String {
