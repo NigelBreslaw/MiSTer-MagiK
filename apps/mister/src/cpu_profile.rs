@@ -393,21 +393,26 @@ mod imp {
 
     pub fn finish(profiler: Option<CpuProfiler>) -> Result<Option<CpuProfileSummary>, String> {
         let Some(p) = profiler else { return Ok(None) };
+        crate::ui_logln!("cpu_profile: finalization begin");
         let report_builder = p.guard.report();
+        crate::ui_logln!("cpu_profile: building unresolved report");
         let unresolved = match report_builder.build_unresolved() {
             Ok(report) => report,
             Err(e) => return Err(format!("cpu_profile: unresolved report build failed: {e}")),
         };
+        crate::ui_logln!("cpu_profile: unresolved report ready");
         let raw_bytes = write_unresolved_report(&unresolved, &p.raw_out_path)?;
         let mappings = fs::read("/proc/self/maps")
             .map_err(|e| format!("cpu_profile: read process mappings failed: {e}"))?;
         fs::write(&p.mappings_out_path, &mappings)
             .map_err(|e| format!("cpu_profile: write process mappings failed: {e}"))?;
         let mappings_bytes = mappings.len().try_into().unwrap_or(u64::MAX);
+        crate::ui_logln!("cpu_profile: building symbolized report");
         let report = match report_builder.build() {
             Ok(r) => r,
             Err(e) => return Err(format!("cpu_profile: report build failed: {e}")),
         };
+        crate::ui_logln!("cpu_profile: symbolized report ready");
         let sample_stacks = report.data.len();
         let sample_hits: isize = report.data.values().sum();
         let stackless_sample_hits: isize = report
@@ -433,6 +438,7 @@ mod imp {
         if let Some(path) = p.folded_out_path.as_deref() {
             write_folded_report(&report, path)?;
         }
+        crate::ui_logln!("cpu_profile: writing flamegraph");
         match std::fs::File::create(&p.out_path) {
             Ok(mut file) => {
                 if let Err(e) = report.flamegraph(&mut file) {
@@ -900,6 +906,10 @@ mod imp {
                 session.scope,
             )
         };
+        crate::ui_logln!(
+            "catalog-build cpu profile finalizer begin operation={} scope={scope}",
+            operation.as_deref().unwrap_or("unknown")
+        );
         let result = finish(profiler);
         let mut metadata = match &result {
             Ok(Some(summary)) => json!({
