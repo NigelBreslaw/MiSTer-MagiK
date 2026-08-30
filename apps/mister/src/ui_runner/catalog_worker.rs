@@ -663,8 +663,11 @@ impl CatalogHeartbeatProgress {
 }
 
 fn write_worker_wire_event(writer: &mut impl Write, event: &CatalogWorkerWireEvent) -> bool {
-    serde_json::to_writer(&mut *writer, event)
-        .and_then(|()| writer.write_all(b"\n"))
+    if serde_json::to_writer(&mut *writer, event).is_err() {
+        return false;
+    }
+    writer
+        .write_all(b"\n")
         .and_then(|()| writer.flush())
         .is_ok()
 }
