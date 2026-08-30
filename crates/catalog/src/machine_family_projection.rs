@@ -80,27 +80,22 @@ pub(crate) fn project_machine_families(
         games: Vec::new(),
         variants: Vec::new(),
     };
-    while !prepared.is_empty() {
-        let family = prepared[0].family.clone();
-        let end = prepared
-            .iter()
-            .position(|candidate| candidate.family != family)
-            .unwrap_or(prepared.len());
-        let mut family_candidates = prepared.drain(..end).collect::<Vec<_>>();
-        let head = family_candidates.remove(0);
+    let mut prepared = prepared.into_iter().peekable();
+    while let Some(head) = prepared.next() {
+        let family = head.family.clone();
         let family_stable_key = head.candidate.game.stable_key.clone();
         projection.games.push(head.candidate.game);
-        projection
-            .variants
-            .extend(
-                family_candidates
-                    .into_iter()
-                    .map(|prepared| FastFiveGameVariant {
-                        family_stable_key: family_stable_key.clone(),
-                        relation: prepared.candidate.relation,
-                        game: prepared.candidate.game,
-                    }),
-            );
+        while prepared
+            .peek()
+            .is_some_and(|candidate| candidate.family == family)
+        {
+            let variant = prepared.next().expect("peeked family candidate");
+            projection.variants.push(FastFiveGameVariant {
+                family_stable_key: family_stable_key.clone(),
+                relation: variant.candidate.relation,
+                game: variant.candidate.game,
+            });
+        }
     }
     projection.games.sort_unstable_by_cached_key(|game| {
         (game.title.to_ascii_lowercase(), game.stable_key.clone())
