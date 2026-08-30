@@ -166,6 +166,7 @@ pub enum FastFiveVariantRelation {
     LanguageEdition,
     TitleFormatting,
     ArcadeVariant,
+    NeoGeoVariant,
 }
 
 #[cfg(feature = "builder")]
@@ -175,6 +176,7 @@ impl FastFiveVariantRelation {
             Self::LanguageEdition => "language-edition",
             Self::TitleFormatting => "title-formatting",
             Self::ArcadeVariant => "arcade-variant",
+            Self::NeoGeoVariant => "neogeo-variant",
         }
     }
 }

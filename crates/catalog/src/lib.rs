@@ -57,6 +57,8 @@ mod library_cli;
 pub mod library_db;
 mod library_indexer;
 mod machine_family;
+#[cfg(feature = "builder")]
+mod machine_family_projection;
 pub mod media_identity;
 mod media_metadata;
 pub mod mra_header {

@@ -19,6 +19,7 @@ use crate::generic_system_catalog::{
     inventory_prepared_extension_under_named_roots, rebuild_installed_generic_system,
 };
 use crate::launch_profiles::{CatalogScanPlan, CollectionListing, LaunchProfile, ProfileSet};
+use crate::machine_family_projection::{MachineFamilyCandidate, project_machine_families};
 use crate::media_identity::ScreenshotAssetId;
 use crate::mra_header::{PrimaryRomRequirement, RomNamespace};
 use crate::prepared_collections::{
@@ -787,45 +788,21 @@ fn scan_arcade_candidates(
 }
 
 fn collapse_arcade_candidates(mut candidates: Vec<ArcadeCandidate>) -> ArcadeScan {
-    candidates.sort_by(|left, right| left.game.launch_ref.cmp(&right.game.launch_ref));
-    candidates.dedup_by(|left, right| left.game.launch_ref == right.game.launch_ref);
-    let mut families = BTreeMap::<String, Vec<ArcadeCandidate>>::new();
-    for candidate in candidates {
-        let family = if candidate.family_id.trim().is_empty() {
-            format!("launch:{}", candidate.game.launch_ref.to_ascii_lowercase())
-        } else {
-            format!("family:{}", candidate.family_id.to_ascii_lowercase())
-        };
-        families.entry(family).or_default().push(candidate);
+    let projection = project_machine_families(
+        candidates
+            .drain(..)
+            .map(|candidate| MachineFamilyCandidate {
+                game: candidate.game,
+                identity_id: candidate.identity_id,
+                family_id: candidate.family_id,
+                relation: FastFiveVariantRelation::ArcadeVariant,
+            })
+            .collect(),
+    );
+    ArcadeScan {
+        games: projection.games,
+        variants: projection.variants,
     }
-    let mut games = Vec::with_capacity(families.len());
-    let mut variants = Vec::new();
-    for mut family in families.into_values() {
-        family.sort_by(|left, right| {
-            let left_parent = !left.family_id.is_empty()
-                && left.identity_id.eq_ignore_ascii_case(&left.family_id);
-            let right_parent = !right.family_id.is_empty()
-                && right.identity_id.eq_ignore_ascii_case(&right.family_id);
-            right_parent
-                .cmp(&left_parent)
-                .then_with(|| {
-                    left.game
-                        .title
-                        .to_ascii_lowercase()
-                        .cmp(&right.game.title.to_ascii_lowercase())
-                })
-                .then_with(|| left.game.launch_ref.cmp(&right.game.launch_ref))
-        });
-        let preferred = family.remove(0).game;
-        let family_stable_key = preferred.stable_key.clone();
-        games.push(preferred);
-        variants.extend(family.into_iter().map(|candidate| FastFiveGameVariant {
-            family_stable_key: family_stable_key.clone(),
-            relation: FastFiveVariantRelation::ArcadeVariant,
-            game: candidate.game,
-        }));
-    }
-    ArcadeScan { games, variants }
 }
 
 fn arcade_updater_rows(
