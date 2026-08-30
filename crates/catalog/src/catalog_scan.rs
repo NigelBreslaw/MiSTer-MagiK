@@ -2682,6 +2682,10 @@ mod tests {
                         first_entry_us: Some(9),
                         final_entry_us: Some(10),
                         target_signature: None,
+                        advice_calls: 0,
+                        advice_errors: 0,
+                        advice_exfat_dirs: 0,
+                        advice_directory_bytes: 0,
                     },
                 },
             );

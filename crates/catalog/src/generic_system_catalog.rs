@@ -968,13 +968,19 @@ fn collect_generic_namespace_inventory(
     });
     let total_us = started.elapsed().as_micros() as u64;
     crate::catalog_logln!(
-        "fast_catalog_generic_inventory_tsv\tpath={}\tbackend={}\tentries={}\tnamespace_us={}\tpost_walk_us={}\ttotal_us={}",
+        "fast_catalog_generic_inventory_tsv\tpath={}\tbackend={}\tentries={}\tnamespace_us={}\tpost_walk_us={}\ttotal_us={}\tadvice_calls={}\tadvice_errors={}\tadvice_exfat_dirs={}\tadvice_directory_bytes={}\tgetdents_calls={}\tgetdents_bytes={}",
         header.path.display(),
         namespace.backend,
         entries.len(),
         namespace_us,
         total_us.saturating_sub(namespace_us),
         total_us,
+        namespace.advice_calls,
+        namespace.advice_errors,
+        namespace.advice_exfat_dirs,
+        namespace.advice_directory_bytes,
+        namespace.read_calls,
+        namespace.read_bytes,
     );
     Ok(GenericNamespaceInventory {
         fact: GameDirFact {
