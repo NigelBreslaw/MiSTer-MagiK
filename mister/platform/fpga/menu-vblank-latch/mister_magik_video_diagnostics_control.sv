@@ -4,6 +4,94 @@
 `timescale 1ns/1ps
 `default_nettype none
 
+// Source-clock evidence collector and closed-loop multi-cycle-path mailbox.
+// The live bus is consumed only on scaler_clk. Every source-clock event in the
+// bounded window is ORed into evidence_hold before response_toggle crosses to
+// the destination. evidence_hold then remains immutable until another request,
+// so the destination never samples a changing asynchronous multi-bit value.
+module mister_magik_scaler_scheduler_snapshot #(
+	parameter [13:0] OBSERVATION_CYCLES = 14'd8192
+) (
+	input  wire        scaler_clk,
+	input  wire [15:0] live_state,
+	input  wire        request_toggle,
+	output reg         response_toggle = 1'b0,
+	output reg  [15:0] evidence_hold = 16'd0
+`ifdef FORMAL
+	,output wire        formal_capture_active
+	,output wire [13:0] formal_capture_count
+	,output wire [15:0] formal_accumulated_evidence
+	,output wire [15:0] formal_event_evidence
+`endif
+);
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg request_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg request_sync = 1'b0;
+	reg capture_active = 1'b0;
+	reg [13:0] capture_count = 14'd0;
+	reg [15:0] accumulated_evidence = 16'd0;
+	reg [1:0] previous_output_state = 2'd0;
+	reg previous_vertical_pixel_enable = 1'b0;
+	reg previous_vertical_carry = 1'b0;
+
+	wire [1:0] output_state = live_state[1:0];
+	wire left_hsync = previous_output_state == 2'd1 && output_state != 2'd1;
+	wire [15:0] event_evidence = {
+		live_state[12],
+		(output_state == 2'd3),
+		(previous_output_state == 2'd2 && output_state == 2'd3),
+		(output_state == 2'd2 && live_state[8]),
+		(output_state == 2'd2),
+		(left_hsync && output_state == 2'd0 && !previous_vertical_carry),
+		(left_hsync && output_state == 2'd0 && !previous_vertical_pixel_enable),
+		(left_hsync && output_state == 2'd0),
+		(left_hsync && output_state == 2'd2),
+		left_hsync,
+		(previous_output_state == 2'd1 && output_state == 2'd1),
+		(output_state == 2'd1),
+		(output_state == 2'd0 && live_state[4]),
+		live_state[3],
+		live_state[2],
+		1'b0
+	};
+	wire [15:0] next_evidence = accumulated_evidence | event_evidence;
+
+`ifdef FORMAL
+	assign formal_capture_active = capture_active;
+	assign formal_capture_count = capture_count;
+	assign formal_accumulated_evidence = accumulated_evidence;
+	assign formal_event_evidence = event_evidence;
+`endif
+
+	always @(posedge scaler_clk) begin
+		request_meta <= request_toggle;
+		request_sync <= request_meta;
+
+		if(!capture_active && request_sync != response_toggle) begin
+			capture_active <= 1'b1;
+			capture_count <= 14'd0;
+			accumulated_evidence <= 16'd0;
+			previous_output_state <= output_state;
+			previous_vertical_pixel_enable <= live_state[5];
+			previous_vertical_carry <= live_state[6];
+		end
+		else if(capture_active) begin
+			previous_output_state <= output_state;
+			previous_vertical_pixel_enable <= live_state[5];
+			previous_vertical_carry <= live_state[6];
+			accumulated_evidence <= next_evidence;
+			if(capture_count + 1'd1 >= OBSERVATION_CYCLES) begin
+				evidence_hold <= next_evidence | 16'h0001;
+				response_toggle <= request_sync;
+				capture_active <= 1'b0;
+			end
+			else
+				capture_count <= capture_count + 1'd1;
+		end
+	end
+endmodule
+
 // Replacement-only passive observer at the external scaler Avalon boundary.
 // reset_req is observed as data: it never clears accepted return obligations,
 // telemetry, or the publication handshake. A no-request timeout freezes the
@@ -11,10 +99,12 @@
 // production.
 module mister_magik_scaler_fetch_liveness_state #(
 	parameter [23:0] WATCHDOG_LIMIT = 24'hffffff,
-	parameter [2:0] RESET_QUALIFY_LIMIT = 3'd4
+	parameter [2:0] RESET_QUALIFY_LIMIT = 3'd4,
+	parameter [13:0] SNAPSHOT_CYCLES = 14'd8192
 ) (
 	input  wire        clk_100m,
 	input  wire        clk_sys,
+	input  wire        scaler_clk,
 	input  wire        reset_req,
 	input  wire [27:0] vbuf_address,
 	input  wire [7:0]  vbuf_burstcount,
@@ -57,6 +147,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 		MAGIK_SCALER_FETCH_LIVENESS_STATE_WATCHDOG_CYCLES;
 	localparam [2:0] CONTRACT_RESET_QUALIFY_LIMIT =
 		MAGIK_SCALER_FETCH_LIVENESS_STATE_RESET_QUALIFY_CYCLES;
+	localparam [13:0] CONTRACT_SNAPSHOT_CYCLES =
+		MAGIK_SCALER_FETCH_LIVENESS_STATE_SNAPSHOT_CYCLES;
 
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg reset_meta = 1'b1;
@@ -80,6 +172,15 @@ module mister_magik_scaler_fetch_liveness_state #(
 	reg address_wrap_seen = 1'b0;
 	reg blocked_request_seen = 1'b0;
 	reg [23:0] progress_watchdog = 24'd0;
+	reg snapshot_request_toggle = 1'b0;
+	reg snapshot_pending = 1'b0;
+	reg snapshot_invalidated = 1'b0;
+	wire snapshot_response_toggle;
+	wire [15:0] snapshot_evidence_hold;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg snapshot_response_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg snapshot_response_sync = 1'b0;
 
 	// Sticky first-stall/fault evidence. Rolling live state and publication keep
 	// advancing after this bank freezes.
@@ -164,8 +265,23 @@ module mister_magik_scaler_fetch_liveness_state #(
 	wire fifo_overflow_event = accepted && request_shape_valid &&
 		fifo_count == 2'd2 && !return_last;
 	wire unexpected_return_event = returned && fifo_count == 2'd0;
+	wire snapshot_complete = snapshot_pending &&
+		snapshot_response_sync == snapshot_request_toggle;
+	wire snapshot_timeout_event = snapshot_pending && watchdog_terminal &&
+		!snapshot_complete;
 	wire observer_fault_event =
-		bad_burst_event || fifo_overflow_event || unexpected_return_event;
+		bad_burst_event || fifo_overflow_event || unexpected_return_event ||
+		snapshot_timeout_event;
+
+	mister_magik_scaler_scheduler_snapshot #(
+		.OBSERVATION_CYCLES(SNAPSHOT_CYCLES)
+	) scheduler_snapshot (
+		.scaler_clk(scaler_clk),
+		.live_state(scaler_diag_state),
+		.request_toggle(snapshot_request_toggle),
+		.response_toggle(snapshot_response_toggle),
+		.evidence_hold(snapshot_evidence_hold)
+	);
 
 `ifdef FORMAL
 	assign formal_fifo_count = fifo_count;
@@ -264,6 +380,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 		reset_meta <= reset_req;
 		reset_sync <= reset_meta;
 		reset_sync_d <= reset_sync;
+		snapshot_response_meta <= snapshot_response_toggle;
+		snapshot_response_sync <= snapshot_response_meta;
 		acknowledge_meta <= acknowledged_generation;
 		acknowledge_sync <= acknowledge_meta;
 
@@ -274,6 +392,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 			reset_low_count <= 3'd0;
 			progress_watchdog <= 24'd0;
 			blocked_request_seen <= 1'b0;
+			if(snapshot_pending)
+				snapshot_invalidated <= 1'b1;
 		end
 		else if(!reset_qualified) begin
 			if(reset_low_count + 1'd1 >= RESET_QUALIFY_LIMIT) begin
@@ -285,7 +405,15 @@ module mister_magik_scaler_fetch_liveness_state #(
 			progress_watchdog <= 24'd0;
 		end
 		else begin
-			if(expected_progress)
+			if(snapshot_pending) begin
+				if(snapshot_complete)
+					progress_watchdog <= 24'd0;
+				else if(!watchdog_terminal)
+					progress_watchdog <= progress_watchdog + 1'd1;
+				if(expected_progress)
+					snapshot_invalidated <= 1'b1;
+			end
+			else if(expected_progress)
 				progress_watchdog <= 24'd0;
 			else if(!watchdog_terminal)
 				progress_watchdog <= progress_watchdog + 1'd1;
@@ -361,8 +489,27 @@ module mister_magik_scaler_fetch_liveness_state #(
 			frozen_fifo_depth <= fifo_count;
 			frozen_address_fold <= previous_address_fold;
 		end
+		else if(!first_stall_valid && !observer_fault && snapshot_complete) begin
+			snapshot_pending <= 1'b0;
+			progress_watchdog <= 24'd0;
+			if(snapshot_invalidated || expected_progress || reset_sync) begin
+				frozen_cause <= MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT;
+				frozen_return_phase <= return_phase;
+				frozen_fifo_depth <= fifo_count;
+				frozen_address_fold <= previous_address_fold;
+			end
+			else begin
+				no_request_seen <= 1'b1;
+				// The source mailbox held this complete evidence word stable before
+				// its response toggle crossed into clk_100m.
+				frozen_cause <= snapshot_evidence_hold[2:0];
+				frozen_return_phase <= snapshot_evidence_hold[9:3];
+				frozen_fifo_depth <= snapshot_evidence_hold[11:10];
+				frozen_address_fold <= snapshot_evidence_hold[15:12];
+			end
+		end
 		else if(!first_stall_valid && !observer_fault && reset_qualified &&
-			watchdog_terminal && !expected_progress) begin
+			watchdog_terminal && !expected_progress && !snapshot_pending) begin
 			if(monitor_state == MAGIK_SCALER_FETCH_LIVENESS_STATE_MONITOR_RETURN_PROGRESS)
 				timeout_cause = return_phase == 7'd0 ?
 					MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_FIRST_RETURN_MISSING :
@@ -371,16 +518,11 @@ module mister_magik_scaler_fetch_liveness_state #(
 				timeout_cause = MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_ACCEPT_BLOCKED;
 			else
 				timeout_cause = MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN;
-			if(timeout_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN)
-				no_request_seen <= 1'b1;
 			if(timeout_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN) begin
-				// Reuse the existing 16-bit frozen storage exactly: the legacy
-				// cause/phase/depth/fold slices reconstruct the complete packed
-				// output-scheduler snapshot without adding another bank.
-				frozen_cause <= scaler_diag_state[2:0];
-				frozen_return_phase <= scaler_diag_state[9:3];
-				frozen_fifo_depth <= scaler_diag_state[11:10];
-				frozen_address_fold <= scaler_diag_state[15:12];
+				snapshot_request_toggle <= ~snapshot_request_toggle;
+				snapshot_pending <= 1'b1;
+				snapshot_invalidated <= 1'b0;
+				progress_watchdog <= 24'd0;
 			end
 			else begin
 				frozen_cause <= timeout_cause;
@@ -466,6 +608,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 			$display("MagiK liveness watchdog overridden for simulation");
 		if(RESET_QUALIFY_LIMIT != CONTRACT_RESET_QUALIFY_LIMIT)
 			$display("MagiK liveness reset qualification overridden for simulation");
+		if(SNAPSHOT_CYCLES != CONTRACT_SNAPSHOT_CYCLES)
+			$display("MagiK liveness snapshot window overridden for simulation");
 	end
 `endif
 

@@ -54,4 +54,35 @@ set_net_delay -max 10.0 \
 	-from $magik_fetch_publication_ack \
 	-to $magik_fetch_publication_ack_meta
 
-post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_liveness_publication_request_ack_reset_observed"
+set magik_scheduler_snapshot_request [magik_require_registers scheduler_snapshot_request \
+	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_request_toggle} 1]
+set magik_scheduler_snapshot_request_meta [magik_require_registers scheduler_snapshot_request_meta \
+	{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_meta} 1]
+set_net_delay -max 10.0 \
+	-from $magik_scheduler_snapshot_request \
+	-to $magik_scheduler_snapshot_request_meta
+
+set magik_scheduler_snapshot_response [magik_require_registers scheduler_snapshot_response \
+	{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|response_toggle} 1]
+set magik_scheduler_snapshot_response_meta [magik_require_registers scheduler_snapshot_response_meta \
+	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_meta} 1]
+set_net_delay -max 10.0 \
+	-from $magik_scheduler_snapshot_response \
+	-to $magik_scheduler_snapshot_response_meta
+
+# evidence_hold is a closed-loop multi-cycle path: it is written before the
+# response toggle and remains immutable until a later request. The two-stage
+# response synchronizer supplies more than one destination period of settling.
+set magik_scheduler_snapshot_data [magik_require_registers scheduler_snapshot_data \
+	{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold*} 16]
+set magik_scheduler_snapshot_destination [get_registers -nowarn -no_duplicates \
+	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|frozen_*}]
+if {[get_collection_size $magik_scheduler_snapshot_destination] != 16} {
+	post_message -type error "MagiK scheduler snapshot destination collection mismatch"
+	error "MagiK scheduler snapshot destination collection mismatch"
+}
+set_net_delay -max 10.0 \
+	-from $magik_scheduler_snapshot_data \
+	-to $magik_scheduler_snapshot_destination
+
+post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_liveness_publication_request_ack scheduler_snapshot_request_response_data reset_observed"

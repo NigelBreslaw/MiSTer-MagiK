@@ -152,6 +152,24 @@ EXPERIMENTAL_SCALER_FETCH_METASTABILITY_CHAIN = {
             "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|reset_sync",
         ),
     },
+    "scheduler_snapshot_request": {
+        "source": "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_request_toggle",
+        "synchronization_node": "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_meta",
+        "allow_source_duplicate": False,
+        "registers": (
+            "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_meta",
+            "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_sync",
+        ),
+    },
+    "scheduler_snapshot_response": {
+        "source": "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|response_toggle",
+        "synchronization_node": "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_meta",
+        "allow_source_duplicate": False,
+        "registers": (
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_meta",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_sync",
+        ),
+    },
 }
 EXPECTED_CDC_ANALYSIS_LABELS: frozenset[str] = frozenset(
     {"scaler_completion_request_ack"}
@@ -186,6 +204,15 @@ EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH = {
     ),
     "scaler_fetch_publication_ack": re.compile(
         r"acknowledged_generation\s*;[^\n]*acknowledge_meta\s*;", re.IGNORECASE
+    ),
+    "scheduler_snapshot_request": re.compile(
+        r"snapshot_request_toggle\s*;[^\n]*request_meta\s*;", re.IGNORECASE
+    ),
+    "scheduler_snapshot_response": re.compile(
+        r"response_toggle\s*;[^\n]*snapshot_response_meta\s*;", re.IGNORECASE
+    ),
+    "scheduler_snapshot_data": re.compile(
+        r"evidence_hold(?:\[\d+\])?\s*;[^\n]*frozen_", re.IGNORECASE
     ),
 }
 
@@ -524,7 +551,7 @@ def validate_diagnostic_reports(
     if experimental_scaler_fetch:
         expected_report_analyses["menu.magik-diagnostic-cdc-net-delay.rpt"] = (
             "set_net_delay",
-            4,
+            7,
         )
     for name, (command, expected_count) in expected_report_analyses.items():
         text = reports.get(name, "")
@@ -562,7 +589,11 @@ def validate_diagnostic_reports(
                 expected_net_delay_paths.update(
                     EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH
                 )
-            if len(detailed_rows) != len(expected_net_delay_paths):
+            expected_identity_counts = {
+                label: 16 if label == "scheduler_snapshot_data" else 1
+                for label in expected_net_delay_paths
+            }
+            if len(detailed_rows) != sum(expected_identity_counts.values()):
                 reasons.append("diagnostic_cdc_analysis_count")
             detailed_path_identities = {
                 label: sum(1 for row in detailed_rows if pattern.search(row.group(0)))
@@ -574,7 +605,6 @@ def validate_diagnostic_reports(
                     for label, count in detailed_path_identities.items()
                 }
             )
-            expected_identity_counts = {label: 1 for label in expected_net_delay_paths}
             if detailed_path_identities != expected_identity_counts:
                 reasons.append("diagnostic_cdc_path_identity_mismatch")
             detailed_slacks = [finite_number(row.group(1)) for row in detailed_rows]
@@ -867,6 +897,10 @@ def compare(
                 "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledge_sync",
                 "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|reset_meta",
                 "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|reset_sync",
+                "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_meta",
+                "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_sync",
+                "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_meta",
+                "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_sync",
             )
         )
     missing_sync_assignments = [
@@ -893,7 +927,7 @@ def compare(
         and patched_calculable_chains
         == baseline_calculable_chains
         + EXPECTED_ADDED_CALCULABLE_COMPLETION_SYNCHRONIZER_CHAINS
-        + (3 if experimental_scaler_fetch else 1 if experimental_diagnostic else 0)
+        + (5 if experimental_scaler_fetch else 1 if experimental_diagnostic else 0)
     )
     if not custom_assignment_seen:
         reasons.append("custom_synchronizer_missing")

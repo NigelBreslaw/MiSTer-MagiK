@@ -96,6 +96,7 @@ module mister_magik_sys_top_latch_path (
 	mister_magik_scaler_fetch_liveness_state diagnostic (
 		.clk_100m(clk_sys),
 		.clk_sys(clk_sys),
+		.scaler_clk(clk_sys),
 		.reset_req(1'b0),
 		.vbuf_address(28'd0),
 		.vbuf_burstcount(8'd128),

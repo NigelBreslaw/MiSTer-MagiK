@@ -75,7 +75,8 @@ def render_scaler_fetch_liveness_constants(
             "",
             f"pub const GET_SCALER_FETCH_LIVENESS_STATE: u16 = 0x{record['command']:02x};",
             f"pub const SCALER_FETCH_LIVENESS_STATE_MAGIC: u16 = 0x{record['magic']:04x};",
-            f'pub const {prefix}_ARCHITECTURE: &str = "{record["architecture"]}";',
+            f"pub const {prefix}_ARCHITECTURE: &str =",
+            f'    "{record["architecture"]}";',
         ]
     )
     render_raw_scaler_constants(lines, prefix, record, crc_spec)

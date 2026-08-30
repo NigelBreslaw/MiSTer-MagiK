@@ -8,6 +8,7 @@ module tb_mister_magik_video_diagnostics_control;
 
 	reg clk_100m = 1'b0;
 	reg clk_sys = 1'b0;
+	reg scaler_clk = 1'b0;
 	reg reset_req = 1'b1;
 	reg [27:0] vbuf_address = 28'd0;
 	reg [7:0] vbuf_burstcount = 8'd128;
@@ -15,6 +16,8 @@ module tb_mister_magik_video_diagnostics_control;
 	reg vbuf_readdatavalid = 1'b0;
 	reg vbuf_read = 1'b0;
 	reg [15:0] scaler_diag_state = 16'd0;
+	reg drive_scheduler_pattern = 1'b0;
+	reg [1:0] scheduler_phase = 2'd0;
 	reg io_uio = 1'b0;
 	reg io_strobe = 1'b0;
 	reg [15:0] io_din = 16'd0;
@@ -26,10 +29,12 @@ module tb_mister_magik_video_diagnostics_control;
 
 	mister_magik_scaler_fetch_liveness_state #(
 		.WATCHDOG_LIMIT(24'd20),
-		.RESET_QUALIFY_LIMIT(3'd4)
+		.RESET_QUALIFY_LIMIT(3'd4),
+		.SNAPSHOT_CYCLES(14'd8)
 	) dut (
 		.clk_100m(clk_100m),
 		.clk_sys(clk_sys),
+		.scaler_clk(scaler_clk),
 		.reset_req(reset_req),
 		.vbuf_address(vbuf_address),
 		.vbuf_burstcount(vbuf_burstcount),
@@ -46,6 +51,21 @@ module tb_mister_magik_video_diagnostics_control;
 
 	always #5 clk_100m = ~clk_100m;
 	always #7 clk_sys = ~clk_sys;
+	always #3 scaler_clk = ~scaler_clk;
+
+	// Repeated live scheduler sequence. The external source-clock observer must
+	// reconstruct 16'h78df even though every transition is only one scaler cycle.
+	always @(negedge scaler_clk) begin
+		if(drive_scheduler_pattern) begin
+			case(scheduler_phase)
+				2'd0: scaler_diag_state = 16'h001c; // DISP: CE, HS edge, hstart.
+				2'd1: scaler_diag_state = 16'h0061; // HSYNC: vpe and carry open.
+				2'd2: scaler_diag_state = 16'h0102; // READ: address ready.
+				default: scaler_diag_state = 16'h0003; // WAITREAD.
+			endcase
+			scheduler_phase = scheduler_phase + 1'd1;
+		end
+	end
 
 	task automatic fail(input [8*112-1:0] message);
 		begin
@@ -226,13 +246,13 @@ module tb_mister_magik_video_diagnostics_control;
 		drive_return_beats(128);
 		// Freeze a complete request-delimited pre-read interval through request
 		// issue and sWAITREAD, without a new external Avalon request.
-		@(negedge clk_100m);
-		scaler_diag_state = 16'h78df;
+		@(negedge scaler_clk);
+		drive_scheduler_pattern = 1'b1;
 
 		// Leave the qualified, empty boundary idle long enough to freeze the
 		// exact no-request observation. Consume a bounded pending publication:
 		// its acknowledgement lets the source publish the already-frozen tuple.
-		repeat(24) @(posedge clk_100m);
+		repeat(48) @(posedge clk_100m);
 		for(qualified_attempt = 0;
 			qualified_attempt < 4 &&
 			!(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID &&

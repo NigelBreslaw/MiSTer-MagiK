@@ -29,6 +29,7 @@ DIAGNOSTIC_ARCHITECTURES = {
     "scaler-fetch-no-request-gates-v1",
     "scaler-output-scheduler-gates-v1",
     "scaler-pre-read-scheduler-evidence-v1",
+    "scaler-off-domain-scheduler-snapshot-v1",
     "stock-uninstrumented-v1",
 }
 CANONICAL_QUARTUS_SEED_SOURCE = (

@@ -81,8 +81,8 @@
     }
   },
   "scaler_fetch_liveness_state": {
-    "schema": 17,
-    "architecture": "scaler-pre-read-scheduler-evidence-v1",
+    "schema": 18,
+    "architecture": "scaler-off-domain-scheduler-snapshot-v1",
     "command": 104,
     "magic": 19800,
     "word_count": 4,
@@ -157,6 +157,7 @@
       "required_burstcount": 128,
       "return_beats": 128,
       "reset_qualify_cycles": 4,
+      "snapshot_cycles": 8192,
       "watchdog_cycles": 16777215
     }
   },

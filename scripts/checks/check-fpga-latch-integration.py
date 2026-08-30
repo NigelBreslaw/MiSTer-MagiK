@@ -310,6 +310,7 @@ def main() -> None:
     for required_observer_fragment in (
         "input  wire        clk_100m",
         "input  wire        clk_sys",
+        "input  wire        scaler_clk",
         "input  wire        reset_req",
         "input  wire [27:0] vbuf_address",
         "input  wire [7:0]  vbuf_burstcount",
@@ -344,7 +345,14 @@ def main() -> None:
         "MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_RETURN_INCOMPLETE",
         "MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_ACCEPT_BLOCKED",
         "MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN",
-        "frozen_cause <= scaler_diag_state[2:0];",
+        "module mister_magik_scaler_scheduler_snapshot #(",
+        "request_meta <= request_toggle;",
+        "request_sync <= request_meta;",
+        "evidence_hold <= next_evidence | 16'h0001;",
+        "response_toggle <= request_sync;",
+        "snapshot_response_meta <= snapshot_response_toggle;",
+        "snapshot_response_sync <= snapshot_response_meta;",
+        "frozen_cause <= snapshot_evidence_hold[2:0];",
         "no_request_seen <= 1'b1;",
         "(* preserve, dont_replicate *) reg publication_generation = 1'b0;",
         "generation_meta <= publication_generation;",
@@ -374,6 +382,15 @@ def main() -> None:
         )
     if "generation_launch" in control_source:
         fail("rejected placement-heavy generation launch stage remains present")
+    for forbidden_scaler_storage in (
+        "magik_pre_read_summary",
+        "magik_summary_v",
+    ):
+        if forbidden_scaler_storage in patch.read_text():
+            fail(
+                "schema-18 diagnostics retained state inside Scalaire: "
+                f"{forbidden_scaler_storage}"
+            )
     for redundant_publication_register in (
         "reg [15:0] published_sequence_identity",
         "reg [15:0] published_crc",
@@ -534,8 +551,8 @@ def main() -> None:
     timing_commands = re.findall(
         r"(?m)^\s*(set_[A-Za-z0-9_]+\b[^\n]*)$", diagnostics_sdc_text
     )
-    if timing_commands != ["set_net_delay -max 10.0 \\"] * 4:
-        fail("diagnostic SDC must contain two completion and two handshake bounds")
+    if timing_commands != ["set_net_delay -max 10.0 \\"] * 7:
+        fail("diagnostic SDC must contain completion, publication, and snapshot bounds")
     for fragment in (
         "{*ascal:ascal|avl_readdataack} 1",
         "{*ascal:ascal|o_readdataack_sync} 1",
@@ -553,7 +570,18 @@ def main() -> None:
         "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledge_meta} 1",
         "-from $magik_fetch_publication_ack",
         "-to $magik_fetch_publication_ack_meta",
-        "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_liveness_publication_request_ack_reset_observed",
+        "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_request_toggle} 1",
+        "{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_meta} 1",
+        "-from $magik_scheduler_snapshot_request",
+        "-to $magik_scheduler_snapshot_request_meta",
+        "{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|response_toggle} 1",
+        "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_meta} 1",
+        "-from $magik_scheduler_snapshot_response",
+        "-to $magik_scheduler_snapshot_response_meta",
+        "{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold*} 16",
+        "-from $magik_scheduler_snapshot_data",
+        "-to $magik_scheduler_snapshot_destination",
+        "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_liveness_publication_request_ack scheduler_snapshot_request_response_data reset_observed",
         "*ascal:ascal|o_readdataack_sync2*",
         "scaler_copy_tail",
     ):
@@ -671,6 +699,7 @@ def main() -> None:
             r"mister_magik_scaler_fetch_liveness_state\s+"
             r"magik_scaler_fetch_liveness_state\s*\(.*?"
             r"\.clk_100m\(clk_100m\).*?\.clk_sys\(clk_sys\).*?"
+            r"\.scaler_clk\(clk_hdmi\).*?"
             r"\.reset_req\(reset_req\).*?\.vbuf_address\(vbuf_address\).*?"
             r"\.vbuf_burstcount\(vbuf_burstcount\).*?"
             r"\.vbuf_waitrequest\(vbuf_waitrequest\).*?"
@@ -754,28 +783,21 @@ def main() -> None:
             "IF avl_read_i='1' AND avl_read_accepted='0' AND": 1,
             "avl_read<=avl_read_i AND NOT avl_read_accepted": 1,
             "WHEN avl_reset_na='0' OR avl_state=sREAD ELSE '0';": 1,
-            "SIGNAL magik_pre_read_summary : std_logic_vector(15 DOWNTO 0)": 1,
-            "VARIABLE magik_summary_v : std_logic_vector(15 DOWNTO 0);": 1,
-            "magik_fetch_state<=magik_pre_read_summary;": 1,
-            "magik_pre_read_summary<=(OTHERS =>'0');": 1,
-            "magik_summary_v:=magik_pre_read_summary;": 1,
-            "magik_summary_v(0):='1'; -- Acknowledged request starts the window.": 1,
-            "magik_summary_v(1):='1';": 1,
-            "magik_summary_v(2):='1';": 1,
-            "magik_summary_v(3):='1';": 1,
-            "magik_summary_v(4):='1';": 1,
-            "magik_summary_v(5):='1';": 1,
-            "magik_summary_v(6):='1';": 1,
-            "magik_summary_v(7):='1';": 1,
-            "magik_summary_v(8):='1';": 1,
-            "magik_summary_v(9):='1';": 1,
-            "magik_summary_v(10):='1';": 1,
-            "magik_summary_v(11):='1';": 1,
-            "magik_summary_v(12):='1';": 1,
-            "magik_summary_v(13):='1';": 1,
-            "magik_summary_v(14):='1';": 1,
-            "magik_summary_v(15):='1';": 1,
-            "magik_pre_read_summary<=magik_summary_v;": 1,
+            "WITH o_state SELECT magik_fetch_state(1 DOWNTO 0) <=": 1,
+            "magik_fetch_state(2)<=o_ce;": 1,
+            "magik_fetch_state(3)<=o_hsv(0) AND NOT o_hsv(1);": 1,
+            "magik_fetch_state(4)<=o_hsp;": 1,
+            "magik_fetch_state(5)<=o_vpe;": 1,
+            "magik_fetch_state(6)<=to_std_logic(o_vcarrym);": 1,
+            "magik_fetch_state(7)<=to_std_logic(o_fload>0);": 1,
+            "magik_fetch_state(8)<=o_adrsb;": 1,
+            "magik_fetch_state(9)<=to_std_logic(o_readlev<2);": 1,
+            "magik_fetch_state(10)<=o_readack;": 1,
+            "magik_fetch_state(11)<=o_run;": 1,
+            "magik_fetch_state(12)<=to_std_logic(o_vsize=0);": 1,
+            "magik_fetch_state(13)<=to_std_logic(o_prim);": 1,
+            "magik_fetch_state(14)<=to_std_logic(o_hburst=0);": 1,
+            "magik_fetch_state(15)<=o_read_pre XOR o_readack_sync2;": 1,
             "IF avl_readdatavalid='1' AND avl_return_drain='0' THEN": 1,
             "avl_wad<=(avl_wad+1) MOD (2*BLEN);": 1,
             "IF (avl_wad MOD BLEN)=BLEN-2 THEN": 1,

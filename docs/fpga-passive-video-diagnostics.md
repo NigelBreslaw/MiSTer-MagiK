@@ -1,6 +1,6 @@
 # Passive FPGA HDMI evidence
 
-## Active moving-band campaign: schema 17
+## Active moving-band campaign: schema 18
 
 The preserved 2026-08-28 recurrence showed a byte-stable framebuffer and
 visible moving-band corruption while schema 11 returned CRC-valid but
@@ -87,6 +87,26 @@ size. This separates the missing pre-read boundaries without widening the
 port, changing command `0x68`, or adding a functional recovery path. The host
 retains schema-14 through schema-16 rollback decoding and rejects impossible
 event orderings.
+
+The schema-17 implementation was diagnostically correct but did not qualify:
+its best fixed-seed build was three ALMs above the unchanged experimental
+resource ceiling. More importantly, all schema-17 variants retained temporal
+state inside the physically sensitive `Scalaire` process. That made placement
+depend on which diagnostic bits were registered even though they had no
+functional fanout.
+
+Schema 18, `scaler-off-domain-scheduler-snapshot-v1`, removes every diagnostic
+register and sticky update from `Scalaire`. The existing 16-bit port now
+exports only live registered scheduler gates. After the 100 MHz watchdog proves
+there has been no external request, it toggles a closed-loop mailbox request.
+A separate SystemVerilog observer, clocked by `clk_hdmi`, samples those gates
+for 8,192 source clocks and reconstructs the same event-order summary. Because
+the observer uses the source clock, it cannot miss a one-cycle scheduler state.
+It holds the completed 16-bit word before toggling its response; the two-stage
+destination synchronizer therefore qualifies a coherent multi-cycle data path.
+If the scaler clock stops, reset or progress interrupts capture, or the mailbox
+does not answer within the watchdog bound, attribution fails closed as an
+observer fault. Schema 14 through schema 17 remain rollback-decodable.
 
 The wide and staged FPGA video observers are retired from production. Their
 field evidence was decisive, but every expanded implementation made the dense
