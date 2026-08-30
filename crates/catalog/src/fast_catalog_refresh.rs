@@ -1434,7 +1434,7 @@ pub fn execute_planned_fast_refresh_with_lease_and_progress(
     catalog_root: &Path,
     request: FastCatalogRefreshRequest,
     plan: FastRefreshPlanReport,
-    _lease: &crate::catalog_lease::CatalogMutationLease,
+    lease: &crate::catalog_lease::CatalogMutationLease,
     progress: impl FnMut(&'static str, u64),
 ) -> Result<FastCatalogRefreshReport, String> {
     execute_planned_fast_refresh_with(
@@ -1442,6 +1442,7 @@ pub fn execute_planned_fast_refresh_with_lease_and_progress(
         catalog_root,
         request,
         plan,
+        lease,
         prepare_system_refresh,
         progress,
     )
@@ -1487,6 +1488,7 @@ fn execute_planned_fast_refresh_with(
     catalog_root: &Path,
     request: FastCatalogRefreshRequest,
     plan: FastRefreshPlanReport,
+    lease: &crate::catalog_lease::CatalogMutationLease,
     mut prepare_system: impl FnMut(
         &Path,
         &FastFiveSnapshot,
@@ -1669,7 +1671,7 @@ fn execute_planned_fast_refresh_with(
             &artifact_changes,
             crate::shard_registry::production_registry_limits(),
             fast_catalog_artifact_profile(),
-            _lease,
+            lease,
         )?;
     }
     work_units = work_units.saturating_add(1);
@@ -2956,12 +2958,14 @@ mod tests {
 
         let plan = plan_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::RebuildAll)
             .expect("plan rebuild");
+        let lease = crate::catalog_lease::CatalogMutationLease::acquire_default().expect("lease");
         let mut checkpoints = Vec::new();
         let report = execute_planned_fast_refresh_with(
             &storage,
             &catalog,
             FastCatalogRefreshRequest::RebuildAll,
             plan,
+            &lease,
             |storage_root, snapshot, system_id| {
                 if system_id == "nes" {
                     let rebuilt = crate::fast_catalog_sources::rebuild_independent_system(
