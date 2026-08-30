@@ -603,6 +603,9 @@ impl NativeDevice {
                         let session = connect(10)?;
                         run_catalog_neogeo_family_audit(&session, &args.out)
                     }
+                    CatalogCommand::Screenshots(args) => {
+                        run_catalog_screenshot_export(&args.system, &args.out)
+                    }
                     CatalogCommand::Query(args) => catalog_query(&device_strings([
                         "--database",
                         &args.database,
@@ -35391,6 +35394,109 @@ fn run_catalog_neogeo_family_audit(sess: &Session, output: &Path) -> Result<()> 
     Ok(())
 }
 
+fn run_catalog_screenshot_export(system: &str, output: &Path) -> Result<()> {
+    let system_id = mister_magik_catalog::catalog_classify::SystemId::parse(system)?;
+    let session = connect(10)?;
+    let remote_root = active_catalog_root(&session)?;
+    let temporary = CatalogQueryTemporary::create()?;
+    let registry = temporary.path().join("registry");
+    fs::create_dir_all(&registry)?;
+    let mut slots = 0_u8;
+    for slot in ["manifest-a.json", "manifest-b.json"] {
+        if get(
+            &session,
+            &format!("{remote_root}/registry/{slot}"),
+            &registry.join(slot),
+        )
+        .is_ok()
+        {
+            slots += 1;
+        }
+    }
+    if slots == 0 {
+        return Err("device catalog has no readable registry manifest".into());
+    }
+    let limits = mister_magik_catalog::shard_registry::production_registry_limits();
+    let manifest =
+        mister_magik_catalog::shard_registry::read_latest_manifest_lazy(temporary.path(), limits)?;
+    let generation = &manifest
+        .systems
+        .iter()
+        .find(|candidate| candidate.system_id == system_id)
+        .ok_or_else(|| format!("catalog has no active system '{system}'"))?
+        .active;
+    let navpack = generation
+        .navpack
+        .as_ref()
+        .ok_or_else(|| format!("catalog has no active system NavPack for '{system}'"))?;
+    let navpack_path = navpack
+        .path
+        .to_str()
+        .filter(|path| !path.starts_with('/') && !path.contains(".."))
+        .ok_or("catalog manifest contains an invalid system NavPack path")?;
+    let local_navpack = temporary.path().join(navpack_path);
+    if let Some(parent) = local_navpack.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    get(
+        &session,
+        &format!("{remote_root}/{navpack_path}"),
+        &local_navpack,
+    )?;
+    let games = usize::try_from(generation.games)?;
+    let (mapped, _) = mister_magik_catalog::navpack::MappedNavPack::open(
+        &local_navpack,
+        navpack.bytes,
+        system_id.as_str(),
+        generation.generation,
+        games,
+    )?;
+    let mut report = String::from(
+        "ordinal\ttitle\tpreview_asset_key\tpreview_archive_path\thas_preview\tlaunch_ref\n",
+    );
+    let mut screenshot_games = 0_usize;
+    for ordinal in 0..games {
+        let game = mapped.row(ordinal)?;
+        screenshot_games += usize::from(!game.preview_asset_key.is_empty());
+        use std::fmt::Write as _;
+        writeln!(
+            report,
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            ordinal,
+            tsv_field(&game.title),
+            tsv_field(&game.preview_asset_key),
+            tsv_field(&game.preview_archive_path),
+            u8::from(game.has_preview),
+            tsv_field(&game.launch_ref),
+        )?;
+    }
+    if let Some(parent) = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(output, report)?;
+    println!(
+        "catalog_screenshot_export_tsv\tsystem={}\tgames={}\tscreenshot_games={}\tout={}",
+        system_id.as_str(),
+        games,
+        screenshot_games,
+        output.display(),
+    );
+    Ok(())
+}
+
+fn tsv_field(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| match character {
+            '\t' | '\n' | '\r' => ' ',
+            other => other,
+        })
+        .collect()
+}
+
 fn purge_development_library_data_and_reboot() -> Result<()> {
     let session = connect(10)?;
     purge_development_library_data(&session)?;
@@ -35587,7 +35693,8 @@ fn is_catalog_database_path(path: &str) -> bool {
         .map(|layout| {
             format!(
                 "{}/",
-                installed_layout::app_path(layout, "catalog-v3").expect("static installed path")
+                installed_layout::app_path(layout, "catalog-fast-v1")
+                    .expect("static installed path")
             )
         })
         .find_map(|root| path.strip_prefix(&root).map(str::to_owned));
@@ -35600,8 +35707,8 @@ fn is_catalog_database_path(path: &str) -> bool {
 }
 
 fn active_catalog_root(session: &Session) -> Result<String> {
-    let public = installed_layout::app_path(Layout::Public, "catalog-v3")?;
-    let development = installed_layout::app_path(Layout::Development, "catalog-v3")?;
+    let public = installed_layout::app_path(Layout::Public, "catalog-fast-v1")?;
+    let development = installed_layout::app_path(Layout::Development, "catalog-fast-v1")?;
     let output = exec(
         session,
         &format!(
@@ -42855,13 +42962,13 @@ fast_catalog_generic_phase_tsv\tphase=complete\n";
     #[test]
     fn catalog_snapshots_accept_only_catalog_sqlite_databases() {
         assert!(is_catalog_database_path(
-            "/media/fat/mister-magik/catalog-v3/state/catalog-state.sqlite3"
+            "/media/fat/mister-magik/catalog-fast-v1/state/catalog-state.sqlite3"
         ));
         assert!(is_catalog_database_path(
-            "/media/fat/mister-magik-dev/catalog-v3/systems/arcade/active.sqlite3"
+            "/media/fat/mister-magik-dev/catalog-fast-v1/systems/arcade/active.sqlite3"
         ));
         assert!(!is_catalog_database_path(
-            "/media/fat/mister-magik-dev/catalog-v3/../agent.token"
+            "/media/fat/mister-magik-dev/catalog-fast-v1/../agent.token"
         ));
         assert!(!is_catalog_database_path("/media/fat/MiSTer.ini"));
     }

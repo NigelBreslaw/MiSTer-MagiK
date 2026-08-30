@@ -375,6 +375,8 @@ pub enum CatalogCommand {
     RomAudit(CatalogRomAuditArgs),
     #[command(name = "neogeo-family-audit")]
     NeoGeoFamilyAudit(CatalogNeoGeoFamilyAuditArgs),
+    /// Export exact screenshot identities from one live Catalog V3 system shard.
+    Screenshots(CatalogScreenshotsArgs),
     Query(CatalogQueryArgs),
     Cores,
     /// Publish and open the isolated five-system prototype in the Dev UI.
@@ -530,6 +532,14 @@ pub struct CatalogRomAuditArgs {
 
 #[derive(Debug, Args)]
 pub struct CatalogNeoGeoFamilyAuditArgs {
+    #[arg(long)]
+    pub(crate) out: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct CatalogScreenshotsArgs {
+    #[arg(long)]
+    pub(crate) system: String,
     #[arg(long)]
     pub(crate) out: PathBuf,
 }
