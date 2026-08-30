@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import socket
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import cast
@@ -40,11 +40,11 @@ class StartupPresentation:
 class StartupPresentationTrace:
     """Bounded startup presentation history retained before bridge attach."""
 
-    entries: tuple[StartupPresentation, ...]
-    first_launcher_frame: int | None
-    first_input_enabled_frame: int | None
-    intro_failure: str | None
-    truncated: bool
+    entries: tuple[StartupPresentation, ...] = ()
+    first_launcher_frame: int | None = None
+    first_input_enabled_frame: int | None = None
+    intro_failure: str | None = None
+    truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -54,7 +54,9 @@ class UiTestSnapshot:
     state_revision: int
     presented_state_revision: int
     semantic: UiSemanticState
-    startup_trace: StartupPresentationTrace
+    startup_trace: StartupPresentationTrace = field(
+        default_factory=StartupPresentationTrace
+    )
 
 
 def _required_mapping(value: object, name: str) -> dict[str, object]:
@@ -129,26 +131,47 @@ class AgentInput:
         response = self._request({"kind": "snapshot"})
         snapshot = _required_mapping(response.get("snapshot"), "snapshot")
         semantic = _required_mapping(snapshot.get("semantic"), "semantic")
-        startup_trace = _required_mapping(snapshot.get("startup_trace"), "startup_trace")
+        raw_startup_trace = snapshot.get("startup_trace")
+        startup_trace = (
+            {
+                "entries": [],
+                "first_launcher_frame": None,
+                "first_input_enabled_frame": None,
+                "intro_failure": None,
+                "truncated": False,
+            }
+            if raw_startup_trace is None
+            else _required_mapping(raw_startup_trace, "startup_trace")
+        )
         raw_entries = startup_trace.get("entries")
         if not isinstance(raw_entries, list):
-            raise TypeError("MagiK UI-test snapshot field 'startup_trace.entries' is not a list")
+            raise TypeError(
+                "MagiK UI-test snapshot field 'startup_trace.entries' is not a list"
+            )
         entries: list[StartupPresentation] = []
         for index, raw_entry in enumerate(raw_entries):
             entry = _required_mapping(raw_entry, f"startup_trace.entries[{index}]")
             entries.append(
                 StartupPresentation(
-                    kind=_required_text(entry.get("kind"), "startup_trace.entries.kind"),
-                    frame=_required_integer(entry.get("frame"), "startup_trace.entries.frame"),
-                    latch=_required_integer(entry.get("latch"), "startup_trace.entries.latch"),
+                    kind=_required_text(
+                        entry.get("kind"), "startup_trace.entries.kind"
+                    ),
+                    frame=_required_integer(
+                        entry.get("frame"), "startup_trace.entries.frame"
+                    ),
+                    latch=_required_integer(
+                        entry.get("latch"), "startup_trace.entries.latch"
+                    ),
                     elapsed_ms=_required_integer(
                         entry.get("elapsed_ms"), "startup_trace.entries.elapsed_ms"
                     ),
                     catalog_ready=_required_boolean(
-                        entry.get("catalog_ready"), "startup_trace.entries.catalog_ready"
+                        entry.get("catalog_ready"),
+                        "startup_trace.entries.catalog_ready",
                     ),
                     input_enabled=_required_boolean(
-                        entry.get("input_enabled"), "startup_trace.entries.input_enabled"
+                        entry.get("input_enabled"),
+                        "startup_trace.entries.input_enabled",
                     ),
                 )
             )
@@ -204,7 +227,8 @@ class AgentInput:
                     None
                     if startup_trace.get("intro_failure") is None
                     else _required_text(
-                        startup_trace.get("intro_failure"), "startup_trace.intro_failure"
+                        startup_trace.get("intro_failure"),
+                        "startup_trace.intro_failure",
                     )
                 ),
                 truncated=_required_boolean(

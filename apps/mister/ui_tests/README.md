@@ -36,6 +36,17 @@ uv run --extra device-ui-tests python -m apps.mister.ui_tests.suite \
   smoke --fixture deterministic-arcade-v1 --attended
 ```
 
+Run the startup qualification after smoke to cover warm HDMI/CRT, cold
+particle intro, and intro-failure fallback ordering:
+
+```sh
+UV_INDEX="slint-private=https://testing.slint.dev/simple/" \
+UV_INDEX_SLINT_PRIVATE_USERNAME=__token__ \
+UV_INDEX_SLINT_PRIVATE_PASSWORD="$SLINT_TESTING_TOKEN" \
+uv run --extra device-ui-tests python -m apps.mister.ui_tests.suite \
+  startup-sequence --fixture deterministic-arcade-v1 --attended
+```
+
 The complete suite is:
 
 ```sh
@@ -43,7 +54,7 @@ UV_INDEX="slint-private=https://testing.slint.dev/simple/" \
 UV_INDEX_SLINT_PRIVATE_USERNAME=__token__ \
 UV_INDEX_SLINT_PRIVATE_PASSWORD="$SLINT_TESTING_TOKEN" \
 uv run --extra device-ui-tests python -m apps.mister.ui_tests.suite \
-  startup-home system-hub arcade-navigation arcade-filters \
+  startup-home startup-sequence system-hub arcade-navigation arcade-filters \
   settings-display screensaver-motion about-licenses \
   menu-confirmations \
   profile-matrix \
@@ -53,15 +64,16 @@ uv run --extra device-ui-tests python -m apps.mister.ui_tests.suite \
 Expand device qualification in this order, stopping at the first failure:
 
 1. Run `smoke`.
-2. Run `system-hub`.
-3. Run `arcade-navigation`, `arcade-filters`, `settings-display`,
+2. Run `startup-sequence`.
+3. Run `system-hub`.
+4. Run `arcade-navigation`, `arcade-filters`, `settings-display`,
    `screensaver-motion`, and `about-licenses` independently.
-4. Run `menu-confirmations`.
-5. Run `profile-matrix` (12 display/orientation/feature sessions: HDMI
+5. Run `menu-confirmations`.
+6. Run `profile-matrix` (12 display/orientation/feature sessions: HDMI
    1920×1080 and CRT 240p, each in normal and monitor-left orientation across
    three views).
-6. Run the complete command once.
-7. Run the complete command a second time immediately afterward.
+7. Run the complete command once.
+8. Run the complete command a second time immediately afterward.
 
 Only the two consecutive complete runs qualify the suite. A diagnostic rerun
 of one failed case helps isolate a fault but does not count as qualification;

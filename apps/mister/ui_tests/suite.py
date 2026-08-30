@@ -19,6 +19,7 @@ DEFAULT_TIMEOUT_SECONDS = 120
 CASE_TARGETS = {
     "smoke": "apps/mister/ui_tests/tests/test_startup_home.py",
     "startup-home": "apps/mister/ui_tests/tests/test_startup_home.py",
+    "startup-sequence": "apps/mister/ui_tests/tests/test_startup_sequence.py",
     "system-hub": "apps/mister/ui_tests/tests/test_system_hub.py",
     "arcade-navigation": "apps/mister/ui_tests/tests/test_arcade_navigation.py",
     "arcade-filters": "apps/mister/ui_tests/tests/test_arcade_filters.py",
@@ -31,6 +32,7 @@ CASE_TARGETS = {
 }
 COMPLETE_CASES = (
     "startup-home",
+    "startup-sequence",
     "system-hub",
     "arcade-navigation",
     "arcade-filters",
