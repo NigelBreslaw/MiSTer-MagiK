@@ -846,9 +846,9 @@ jobs:
           archive="$(find build/platform-current -name 'mister-magik-platform-v0.*.zip' -print -quit)"
           manifest="build/platform-current/platform-bundle-v0.2.json"
           test -n "$archive" && test -f "$manifest"
-          [ "$MAIN_CHANGED" = true ] || scripts/magik-ci ci platform-bundle extract-component "$archive" --manifest "$manifest" --component main --component-id "$MAIN_ID" --output build/platform-input/main
-          [ "$FPGA_CHANGED" = true ] || scripts/magik-ci ci platform-bundle extract-component "$archive" --manifest "$manifest" --component fpga --component-id "$FPGA_ID" --output build/platform-input/fpga
-          [ "$KERNEL_CHANGED" = true ] || scripts/magik-ci ci platform-bundle extract-component "$archive" --manifest "$manifest" --component kernel --component-id "$KERNEL_ID" --output build/platform-input/scanout
+          [ "$MAIN_CHANGED" = true ] || scripts/magik-ci ci platform-bundle extract-component "$archive" --manifest "$manifest" --component main --component-id "$MAIN_ID" --output build/platform-input/main --historical-baseline
+          [ "$FPGA_CHANGED" = true ] || scripts/magik-ci ci platform-bundle extract-component "$archive" --manifest "$manifest" --component fpga --component-id "$FPGA_ID" --output build/platform-input/fpga --historical-baseline
+          [ "$KERNEL_CHANGED" = true ] || scripts/magik-ci ci platform-bundle extract-component "$archive" --manifest "$manifest" --component kernel --component-id "$KERNEL_ID" --output build/platform-input/scanout --historical-baseline
 
       - name: Assemble and verify candidate
         env:

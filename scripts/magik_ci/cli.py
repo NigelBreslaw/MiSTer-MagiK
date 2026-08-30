@@ -163,6 +163,7 @@ def parser() -> argparse.ArgumentParser:
     pb_extract.add_argument("--component", required=True)
     pb_extract.add_argument("--component-id", required=True)
     pb_extract.add_argument("--output", type=Path, required=True)
+    pb_extract.add_argument("--historical-baseline", action="store_true")
     pb_cache = pb_sub.add_parser("write-component-cache")
     pb_cache.add_argument("--component", required=True)
     pb_cache.add_argument("--artifact", type=Path, required=True)
@@ -369,6 +370,7 @@ def main() -> int:
                             args.component,
                             args.component_id,
                             args.output,
+                            historical_baseline=args.historical_baseline,
                         ),
                         sort_keys=True,
                     )

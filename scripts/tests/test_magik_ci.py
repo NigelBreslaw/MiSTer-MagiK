@@ -9,10 +9,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.magik_ci import build, databases, metadata
+from scripts.magik_ci import build, bundle, databases, metadata
 from scripts.magik_ci.assurance import fast_checks
 from scripts.magik_ci.bundle import bundle_id, update_plan
 from scripts.magik_ci.cli import parser
@@ -525,6 +526,54 @@ import scripts.magik_ci.cli
             ]
         )
         self.assertTrue(arguments.historical_baseline)
+        extract_arguments = parser().parse_args(
+            [
+                "ci",
+                "platform-bundle",
+                "extract-component",
+                "platform.zip",
+                "--manifest",
+                "platform.json",
+                "--component",
+                "main",
+                "--component-id",
+                "a" * 64,
+                "--output",
+                "main",
+                "--historical-baseline",
+            ]
+        )
+        self.assertTrue(extract_arguments.historical_baseline)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "platform.zip"
+            manifest = root / "platform.json"
+            output = root / "main"
+            with zipfile.ZipFile(archive, "w") as stream:
+                stream.writestr("main/component.bin", b"component")
+            with patch.object(
+                bundle,
+                "verify",
+                return_value={
+                    "main_input_sha256": "a" * 64,
+                    "components": {"main": {}},
+                    "release_version": 37,
+                },
+            ) as verify_bundle:
+                bundle.extract_component(
+                    archive,
+                    manifest,
+                    "main",
+                    "a" * 64,
+                    output,
+                    historical_baseline=True,
+                )
+            verify_bundle.assert_called_once_with(
+                archive,
+                manifest,
+                historical_baseline=True,
+            )
+            self.assertEqual((output / "component.bin").read_bytes(), b"component")
         _validate_diagnostic_architecture(
             "scaler-fetch-no-request-gates-v1",
             "scaler-fetch-no-request-gates-v1",
@@ -560,6 +609,13 @@ import scripts.magik_ci.cli
             workflow,
         )
         self.assertIn("--historical-baseline >/dev/null", workflow)
+        extraction_lines = [
+            line for line in workflow.splitlines() if "extract-component" in line
+        ]
+        self.assertEqual(len(extraction_lines), 3)
+        self.assertTrue(
+            all("--historical-baseline" in line for line in extraction_lines)
+        )
 
     def test_database_round_trip(self) -> None:
         from scripts.magik_ci.databases import create, verify

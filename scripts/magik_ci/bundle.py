@@ -304,9 +304,18 @@ def _metadata_text_value(text: str, key: str) -> str:
 
 
 def extract_component(
-    archive: Path, manifest: Path, component: str, component_id: str, output: Path
+    archive: Path,
+    manifest: Path,
+    component: str,
+    component_id: str,
+    output: Path,
+    *,
+    historical_baseline: bool = False,
 ) -> dict[str, object]:
-    payload = cast(dict[str, Any], verify(archive, manifest))
+    payload = cast(
+        dict[str, Any],
+        verify(archive, manifest, historical_baseline=historical_baseline),
+    )
     expected = {
         "main": "main_input_sha256",
         "fpga": "fpga_input_sha256",
