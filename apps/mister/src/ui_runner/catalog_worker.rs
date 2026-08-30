@@ -26,6 +26,91 @@ const CATALOG_WORKER_PROTOCOL_VERSION: u8 = 4;
 const MAX_CATALOG_WORKER_PROTOCOL_LINE_BYTES: u64 = 256 * 1024;
 const CATALOG_WORKER_EVENT_QUEUE_CAPACITY: usize = 16_384;
 const CATALOG_WORKER_SNAPSHOT_DIRECTORY: &str = "/tmp/mister-magik/catalog-worker";
+const CATALOG_WORKER_REGISTRY_SNAPSHOT_SUFFIX: &str = "registry-seed";
+const CATALOG_WORKER_REGISTRY_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+struct RegistrySeedTransport {
+    generation: u64,
+    fingerprint: String,
+    systems: Vec<RegistrySeedSystem>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+struct RegistrySeedSystem {
+    system_id: String,
+    display_title: String,
+    games: u64,
+}
+
+impl RegistrySeedTransport {
+    fn encode(&self) -> Result<Vec<u8>, String> {
+        let bytes = serde_json::to_vec(self)
+            .map_err(|error| format!("encode registry seed transport: {error}"))?;
+        if bytes.len() > CATALOG_WORKER_REGISTRY_SNAPSHOT_BYTES {
+            return Err("registry seed transport exceeds size limit".to_string());
+        }
+        Ok(bytes)
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() > CATALOG_WORKER_REGISTRY_SNAPSHOT_BYTES {
+            return Err("registry seed transport exceeds size limit".to_string());
+        }
+        serde_json::from_slice(bytes)
+            .map_err(|error| format!("decode registry seed transport: {error}"))
+    }
+
+    fn from_seed(seed: &crate::launcher_runtime::catalog::ShardedCatalogSeed) -> Self {
+        Self {
+            generation: seed.generation,
+            fingerprint: seed.catalog_fingerprint.clone(),
+            systems: seed
+                .catalog
+                .systems
+                .iter()
+                .map(|system| RegistrySeedSystem {
+                    system_id: system.id.clone(),
+                    display_title: system.title.clone(),
+                    games: system.count as u64,
+                })
+                .collect(),
+        }
+    }
+
+    fn into_catalog(self, root: &str) -> ArcadeCatalog {
+        let platform_kinds = self
+            .systems
+            .iter()
+            .map(|system| {
+                (
+                    system.system_id.clone(),
+                    mister_magik_catalog::catalog_classify::platform_kind_for_system(
+                        &system.system_id,
+                    ),
+                )
+            })
+            .collect();
+        let systems = self
+            .systems
+            .into_iter()
+            .map(
+                |system| mister_magik_catalog::arcade_catalog::GameSystemEntry {
+                    id: system.system_id,
+                    title: system.display_title,
+                    count: system.games.try_into().unwrap_or(usize::MAX),
+                },
+            )
+            .collect();
+        ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
+            root.into(),
+            Vec::new(),
+            systems,
+            Vec::new(),
+            platform_kinds,
+        )
+    }
+}
 
 fn filesystem_available_bytes(path: &str) -> Option<u64> {
     let path = CString::new(path).ok()?;
@@ -92,6 +177,16 @@ fn publish_strict_registry_seed_at(
         Ok(seed) => {
             let load_us = load_started.elapsed().as_micros() as u64;
             let fingerprint = seed.catalog_fingerprint.clone();
+            if std::env::var_os(CATALOG_WORKER_CHILD_ENV).is_some() {
+                let transport = RegistrySeedTransport::from_seed(&seed);
+                tx.send(CatalogWorkerMessage::PublishedRegistrySeed {
+                    transport: Box::new(transport),
+                })
+                .map_err(|_| {
+                    "catalog worker receiver closed before registry publication".to_string()
+                })?;
+                return Ok(());
+            }
             let _ = tx.send(CatalogWorkerMessage::Timing {
                 name: "catalog_strict_registry_load".to_string(),
                 detail: format!(
@@ -132,21 +227,7 @@ fn publish_registry_ready_at(
     root: &str,
     storage: &Path,
 ) -> Result<(), String> {
-    if std::env::var_os(CATALOG_WORKER_CHILD_ENV).is_none() {
-        return publish_strict_registry_seed_at(tx, root, storage);
-    }
-    let manifest = mister_magik_catalog::shard_registry::read_latest_manifest_lazy(
-        storage,
-        mister_magik_catalog::shard_registry::production_registry_limits(),
-    )
-    .map_err(|error| format!("read published catalog manifest: {error}"))?;
-    let fingerprint =
-        mister_magik_catalog::fast_five_catalog::registry_fingerprint_for_manifest(&manifest);
-    tx.send(CatalogWorkerMessage::PublishedRegistryReady {
-        generation: manifest.generation,
-        fingerprint,
-    })
-    .map_err(|_| "catalog worker receiver closed before registry publication".to_string())
+    publish_strict_registry_seed_at(tx, root, storage)
 }
 
 pub(super) fn catalog_refresh_available() -> bool {
@@ -378,12 +459,7 @@ fn cleanup_catalog_worker_snapshots(root: &Path) -> Result<(), String> {
         let file_type = entry
             .file_type()
             .map_err(|error| format!("inspect catalog worker snapshot: {error}"))?;
-        if file_type.is_file()
-            && entry
-                .file_name()
-                .to_string_lossy()
-                .ends_with(".arcade-system.bin")
-        {
+        if file_type.is_file() && entry.file_name().to_string_lossy().ends_with(".bin") {
             std::fs::remove_file(entry.path())
                 .map_err(|error| format!("remove stale catalog worker snapshot: {error}"))?;
         }
@@ -403,11 +479,30 @@ fn write_arcade_system_snapshot_at(
     run_id: &str,
     system: &mister_magik_catalog::fast_five_catalog::FastFiveSystem,
 ) -> Result<(String, String), String> {
-    cleanup_catalog_worker_snapshots(root)?;
     let bytes = mister_magik_catalog::fast_five_catalog::encode_fast_system_transport(system)?;
+    write_catalog_worker_snapshot_at(
+        root,
+        run_id,
+        "arcade-system",
+        &bytes,
+        mister_magik_catalog::fast_five_catalog::MAX_FAST_SYSTEM_TRANSPORT_BYTES,
+    )
+}
+
+fn write_catalog_worker_snapshot_at(
+    root: &Path,
+    run_id: &str,
+    suffix: &str,
+    bytes: &[u8],
+    max_bytes: usize,
+) -> Result<(String, String), String> {
+    cleanup_catalog_worker_snapshots(root)?;
+    if bytes.len() > max_bytes {
+        return Err(format!("catalog worker snapshot exceeds {max_bytes} bytes"));
+    }
     std::fs::create_dir_all(root)
         .map_err(|error| format!("create catalog worker snapshot root: {error}"))?;
-    let path = root.join(format!("{run_id}.arcade-system.bin"));
+    let path = root.join(format!("{run_id}.{suffix}.bin"));
     let mut options = std::fs::OpenOptions::new();
     options.create_new(true).write(true);
     #[cfg(unix)]
@@ -440,30 +535,14 @@ fn load_arcade_system_snapshot_at(
     arcade_root: &str,
     event: &CatalogWorkerWireEvent,
 ) -> Result<ArcadeCatalog, String> {
-    let expected = snapshot_root.join(format!("{}.arcade-system.bin", event.run_id));
-    if Path::new(&event.snapshot_path) != expected {
-        return Err("catalog worker snapshot path does not match its run".to_string());
-    }
-    let metadata = std::fs::symlink_metadata(&expected)
-        .map_err(|error| format!("inspect catalog worker snapshot: {error}"))?;
-    if !metadata.file_type().is_file()
-        || metadata.len()
-            > mister_magik_catalog::fast_five_catalog::MAX_FAST_SYSTEM_TRANSPORT_BYTES as u64
-    {
-        return Err("catalog worker snapshot is not a bounded regular file".to_string());
-    }
-    let mut bytes = Vec::with_capacity(metadata.len().try_into().unwrap_or(0));
-    std::fs::File::open(&expected)
-        .map_err(|error| format!("open catalog worker snapshot: {error}"))?
-        .take(mister_magik_catalog::fast_five_catalog::MAX_FAST_SYSTEM_TRANSPORT_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("read catalog worker snapshot: {error}"))?;
-    let _ = std::fs::remove_file(&expected);
-    if bytes.len() > mister_magik_catalog::fast_five_catalog::MAX_FAST_SYSTEM_TRANSPORT_BYTES
-        || snapshot_sha256(&bytes) != event.snapshot_sha256
-    {
-        return Err("catalog worker snapshot checksum or size differs".to_string());
-    }
+    let bytes = load_catalog_worker_snapshot_at(
+        snapshot_root,
+        &event.run_id,
+        "arcade-system",
+        &event.snapshot_path,
+        &event.snapshot_sha256,
+        mister_magik_catalog::fast_five_catalog::MAX_FAST_SYSTEM_TRANSPORT_BYTES,
+    )?;
     let system = mister_magik_catalog::fast_five_catalog::decode_fast_system_transport(&bytes)?;
     if system.system_id != "arcade" {
         return Err("catalog worker snapshot is not Arcade".to_string());
@@ -474,6 +553,79 @@ fn load_arcade_system_snapshot_at(
             &system,
         ),
     )
+}
+
+fn write_registry_seed_snapshot(
+    run_id: &str,
+    transport: &RegistrySeedTransport,
+) -> Result<(String, String), String> {
+    let bytes = transport.encode()?;
+    write_catalog_worker_snapshot_at(
+        Path::new(CATALOG_WORKER_SNAPSHOT_DIRECTORY),
+        run_id,
+        CATALOG_WORKER_REGISTRY_SNAPSHOT_SUFFIX,
+        &bytes,
+        CATALOG_WORKER_REGISTRY_SNAPSHOT_BYTES,
+    )
+}
+
+fn load_registry_seed_snapshot(
+    event: &CatalogWorkerWireEvent,
+    root: &str,
+) -> Result<(ArcadeCatalog, u64, String), String> {
+    load_registry_seed_snapshot_at(Path::new(CATALOG_WORKER_SNAPSHOT_DIRECTORY), event, root)
+}
+
+fn load_registry_seed_snapshot_at(
+    snapshot_root: &Path,
+    event: &CatalogWorkerWireEvent,
+    root: &str,
+) -> Result<(ArcadeCatalog, u64, String), String> {
+    let bytes = load_catalog_worker_snapshot_at(
+        snapshot_root,
+        &event.run_id,
+        CATALOG_WORKER_REGISTRY_SNAPSHOT_SUFFIX,
+        &event.snapshot_path,
+        &event.snapshot_sha256,
+        CATALOG_WORKER_REGISTRY_SNAPSHOT_BYTES,
+    )?;
+    let transport = RegistrySeedTransport::decode(&bytes)?;
+    if transport.generation != event.generation || transport.fingerprint != event.fingerprint {
+        return Err("registry seed transport identity differs from protocol event".to_string());
+    }
+    let generation = transport.generation;
+    let fingerprint = transport.fingerprint.clone();
+    Ok((transport.into_catalog(root), generation, fingerprint))
+}
+
+fn load_catalog_worker_snapshot_at(
+    snapshot_root: &Path,
+    run_id: &str,
+    suffix: &str,
+    snapshot_path: &str,
+    expected_sha256: &str,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let expected = snapshot_root.join(format!("{run_id}.{suffix}.bin"));
+    if Path::new(snapshot_path) != expected {
+        return Err("catalog worker snapshot path does not match its run".to_string());
+    }
+    let metadata = std::fs::symlink_metadata(&expected)
+        .map_err(|error| format!("inspect catalog worker snapshot: {error}"))?;
+    if !metadata.file_type().is_file() || metadata.len() > max_bytes as u64 {
+        return Err("catalog worker snapshot is not a bounded regular file".to_string());
+    }
+    let mut bytes = Vec::with_capacity(metadata.len().try_into().unwrap_or(0));
+    std::fs::File::open(&expected)
+        .map_err(|error| format!("open catalog worker snapshot: {error}"))?
+        .take(max_bytes as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("read catalog worker snapshot: {error}"))?;
+    let _ = std::fs::remove_file(&expected);
+    if bytes.len() > max_bytes || snapshot_sha256(&bytes) != expected_sha256 {
+        return Err("catalog worker snapshot checksum or size differs".to_string());
+    }
+    Ok(bytes)
 }
 
 fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
@@ -569,14 +721,8 @@ fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
             event.durable_save_pending = *durable_save_pending;
             event.fingerprint = generation_fingerprint.clone().unwrap_or_default();
         }
-        CatalogWorkerMessage::PublishedRegistryReady {
-            generation,
-            fingerprint,
-        } => {
-            event.kind = "ready".to_string();
-            event.source = CatalogSource::ShardedRegistry.label().to_string();
-            event.generation = *generation;
-            event.fingerprint.clone_from(fingerprint);
+        CatalogWorkerMessage::PublishedRegistrySeed { .. } => {
+            unreachable!("registry seed must use the bounded snapshot transport")
         }
         CatalogWorkerMessage::ArcadeBootstrapReady { .. } => {
             unreachable!("Arcade bootstrap must use the bounded snapshot transport")
@@ -1073,7 +1219,7 @@ fn start_library_catalog_worker_process(
 fn catalog_worker_message_from_wire(
     event: CatalogWorkerWireEvent,
     root: &str,
-    catalog_root: &Path,
+    _catalog_root: &Path,
 ) -> Result<Option<CatalogWorkerMessage>, String> {
     if event.version != CATALOG_WORKER_PROTOCOL_VERSION {
         return Err(format!(
@@ -1125,26 +1271,15 @@ fn catalog_worker_message_from_wire(
         }
         "persistence-failed" => CatalogWorkerMessage::PersistenceFailed { error: event.error },
         "done" => CatalogWorkerMessage::Done,
-        "ready" if event.source == "sharded-registry" => {
+        "ready" if event.source == "sharded-registry-snapshot" => {
             let started = Instant::now();
-            let seed = load_sharded_registry_seed_at(root, catalog_root)
-                .map_err(|error| format!("load published catalog from child: {error}"))?;
-            if seed.generation != event.generation {
-                return Err(format!(
-                    "published catalog generation changed: expected {}, loaded {}",
-                    event.generation, seed.generation
-                ));
-            }
-            if seed.catalog_fingerprint != event.fingerprint {
-                return Err("published catalog fingerprint changed before loading".to_string());
-            }
+            let (catalog, _generation, fingerprint) = load_registry_seed_snapshot(&event, root)?;
             CatalogWorkerMessage::Ready {
-                catalog: seed.catalog,
+                catalog,
                 load_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
                 source: CatalogSource::ShardedRegistry,
                 durable_save_pending: event.durable_save_pending,
-                generation_fingerprint: (!event.fingerprint.is_empty())
-                    .then_some(event.fingerprint),
+                generation_fingerprint: Some(fingerprint),
                 publication_ack: None,
             }
         }
@@ -1292,6 +1427,25 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
             continue;
         }
         let mut event = match &message {
+            CatalogWorkerMessage::PublishedRegistrySeed { transport } => {
+                match write_registry_seed_snapshot(&wire_run_id, transport) {
+                    Ok((snapshot_path, snapshot_sha256)) => {
+                        let mut event = blank_worker_wire_event("ready");
+                        event.source = "sharded-registry-snapshot".to_string();
+                        event.generation = transport.generation;
+                        event.fingerprint = transport.fingerprint.clone();
+                        event.snapshot_path = snapshot_path;
+                        event.snapshot_sha256 = snapshot_sha256;
+                        event
+                    }
+                    Err(error) => {
+                        let mut event = blank_worker_wire_event("persistence-failed");
+                        event.error = format!("write registry seed snapshot: {error}");
+                        terminal = true;
+                        event
+                    }
+                }
+            }
             CatalogWorkerMessage::ArcadeBootstrapReady { system, load_us } => {
                 match write_arcade_system_snapshot(&wire_run_id, system) {
                     Ok((snapshot_path, snapshot_sha256)) => {
@@ -1939,9 +2093,8 @@ pub(super) enum CatalogWorkerMessage {
         system: Box<mister_magik_catalog::fast_five_catalog::FastFiveSystem>,
         load_us: u64,
     },
-    PublishedRegistryReady {
-        generation: u64,
-        fingerprint: String,
+    PublishedRegistrySeed {
+        transport: Box<RegistrySeedTransport>,
     },
     PersistenceFailed {
         error: String,
@@ -2104,6 +2257,83 @@ mod tests {
             load_arcade_system_snapshot_at(&snapshot_root, "/media/fat/_Arcade", &event).unwrap();
 
         assert_eq!(catalog.len(), 1);
+        assert!(!Path::new(&path).exists());
+        std::fs::remove_dir_all(snapshot_root).unwrap();
+    }
+
+    #[test]
+    fn registry_seed_transport_round_trips_without_catalog_storage_reads() {
+        let transport = RegistrySeedTransport {
+            generation: 41,
+            fingerprint: "fingerprint-41".to_string(),
+            systems: vec![
+                RegistrySeedSystem {
+                    system_id: "arcade".to_string(),
+                    display_title: "Arcade".to_string(),
+                    games: 120,
+                },
+                RegistrySeedSystem {
+                    system_id: "computer".to_string(),
+                    display_title: "Computer".to_string(),
+                    games: 7,
+                },
+            ],
+        };
+
+        let decoded = RegistrySeedTransport::decode(&transport.encode().unwrap()).unwrap();
+        let catalog = decoded.into_catalog("/unavailable/catalog");
+
+        assert_eq!(catalog.systems.len(), 2);
+        assert_eq!(catalog.systems[0].id, "arcade");
+        assert_eq!(catalog.systems[0].count, 120);
+        assert_eq!(catalog.systems[1].id, "computer");
+        assert_eq!(catalog.systems[1].count, 7);
+        assert!(catalog.games.is_empty());
+        assert_eq!(catalog.root, Path::new("/unavailable/catalog"));
+    }
+
+    #[test]
+    fn registry_seed_snapshot_is_bounded_verified_and_consumed() {
+        let snapshot_root = std::env::temp_dir().join(format!(
+            "mister-magik-catalog-registry-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let run_id = "run-registry-test";
+        let transport = RegistrySeedTransport {
+            generation: 9,
+            fingerprint: "registry-fingerprint".to_string(),
+            systems: vec![RegistrySeedSystem {
+                system_id: "arcade".to_string(),
+                display_title: "Arcade".to_string(),
+                games: 3,
+            }],
+        };
+        let bytes = transport.encode().unwrap();
+        let (path, checksum) = write_catalog_worker_snapshot_at(
+            &snapshot_root,
+            run_id,
+            CATALOG_WORKER_REGISTRY_SNAPSHOT_SUFFIX,
+            &bytes,
+            CATALOG_WORKER_REGISTRY_SNAPSHOT_BYTES,
+        )
+        .unwrap();
+        let mut event = blank_worker_wire_event("ready");
+        event.run_id = run_id.to_string();
+        event.generation = transport.generation;
+        event.fingerprint = transport.fingerprint.clone();
+        event.snapshot_path = path.clone();
+        event.snapshot_sha256 = checksum;
+
+        let (catalog, generation, fingerprint) =
+            load_registry_seed_snapshot_at(&snapshot_root, &event, "/unavailable/catalog").unwrap();
+
+        assert_eq!(generation, 9);
+        assert_eq!(fingerprint, "registry-fingerprint");
+        assert_eq!(catalog.systems[0].count, 3);
         assert!(!Path::new(&path).exists());
         std::fs::remove_dir_all(snapshot_root).unwrap();
     }

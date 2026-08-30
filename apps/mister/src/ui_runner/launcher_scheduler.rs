@@ -1293,7 +1293,7 @@ impl LauncherScheduler {
                 );
             }
             CatalogWorkerMessage::ArcadeBootstrapReady { .. }
-            | CatalogWorkerMessage::PublishedRegistryReady { .. } => {
+            | CatalogWorkerMessage::PublishedRegistrySeed { .. } => {
                 unreachable!("internal catalog publication crossed the child protocol")
             }
             CatalogWorkerMessage::HydrationDoneNeedsValidation { root } => {
