@@ -5497,12 +5497,37 @@ pub(super) fn run_launcher_loop(
         present_timing.delay_us(),
         pacer.fresh_hit_max_age_us()
     );
-    let return_capsule_target = launch_return_session.state().and_then(|state| {
-        Some((
-            state.collection_id()?.to_string(),
-            state.game_path().to_string(),
-        ))
-    });
+    let predecessor_catalog_migration_required = !ui_test_fixture
+        && mister_magik_catalog::predecessor_cleanup::predecessor_catalog_artifacts_present(
+            launcher_config.catalog_paths(),
+        );
+    if predecessor_catalog_migration_required {
+        print_startup_event(
+            start,
+            "predecessor_catalog_detected",
+            format!(
+                "path={}",
+                launcher_config
+                    .catalog_paths()
+                    .sharded_catalog_dir()
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .join("catalog-v3")
+                    .display()
+            ),
+        );
+        return_catalog_capsule::remove_return_catalog_capsule();
+    }
+    let return_capsule_target = if predecessor_catalog_migration_required {
+        None
+    } else {
+        launch_return_session.state().and_then(|state| {
+            Some((
+                state.collection_id()?.to_string(),
+                state.game_path().to_string(),
+            ))
+        })
+    };
     let return_capsule = return_capsule_target.and_then(|(collection_id, game_path)| {
         let capsule_started = Instant::now();
         match return_catalog_capsule::take_return_catalog_capsule(
@@ -5553,7 +5578,8 @@ pub(super) fn run_launcher_loop(
     }
     let catalog_refresh_policy = catalog_refresh_policy();
     let catalog_refresh = !ui_test_fixture && catalog_refresh_policy.force_requested();
-    let catalog_worker_enabled = !ui_test_fixture && catalog_refresh_policy.worker_enabled();
+    let catalog_worker_enabled = !ui_test_fixture
+        && (predecessor_catalog_migration_required || catalog_refresh_policy.worker_enabled());
     let mut lifecycle = LauncherLifecycle::new(
         LauncherLifecycleConfig {
             catalog_worker_enabled,
@@ -5575,26 +5601,28 @@ pub(super) fn run_launcher_loop(
         LauncherInputScriptDriver::from_config(launcher_config.input().scripted(), start);
     let mut launcher_automation = LauncherAutomation::new();
     let capsule_seed_ready = catalog_ready && !ui_test_fixture;
-    let warm_registry_hydration_pending = catalog_publication_test
-        .startup_catalog_hydration_pending()
-        || defer_warm_registry_hydration(
-            capsule_seed_ready,
-            startup_return_requested,
-            mister_magik_catalog::shard_registry::manifest_slots_present(
-                launcher_config.catalog_paths().sharded_catalog_dir(),
-            ),
-            catalog_refresh,
-        );
-    let sharded_seed =
-        (!ui_test_fixture && !capsule_seed_ready && !warm_registry_hydration_pending)
-            .then(|| {
-                read_sharded_registry_seed(
-                    &arcade_root,
+    let warm_registry_hydration_pending = !predecessor_catalog_migration_required
+        && (catalog_publication_test.startup_catalog_hydration_pending()
+            || defer_warm_registry_hydration(
+                capsule_seed_ready,
+                startup_return_requested,
+                mister_magik_catalog::shard_registry::manifest_slots_present(
                     launcher_config.catalog_paths().sharded_catalog_dir(),
-                    start,
-                )
-            })
-            .flatten();
+                ),
+                catalog_refresh,
+            ));
+    let sharded_seed = (!ui_test_fixture
+        && !predecessor_catalog_migration_required
+        && !capsule_seed_ready
+        && !warm_registry_hydration_pending)
+        .then(|| {
+            read_sharded_registry_seed(
+                &arcade_root,
+                launcher_config.catalog_paths().sharded_catalog_dir(),
+                start,
+            )
+        })
+        .flatten();
     let sharded_seed_ready = sharded_seed.is_some();
     let sharded_catalog_fingerprint = sharded_seed
         .as_ref()
@@ -5921,7 +5949,9 @@ pub(super) fn run_launcher_loop(
             has_stale_catalog: false,
         }
     };
-    let startup_mode = if startup_return_requested || launch_return_restored {
+    let startup_mode = if predecessor_catalog_migration_required {
+        StartupMode::ColdNoCatalog
+    } else if startup_return_requested || launch_return_restored {
         StartupMode::ReturnFromGame
     } else if warm_registry_hydration_pending {
         StartupMode::WarmCatalogHydrating
@@ -5931,7 +5961,10 @@ pub(super) fn run_launcher_loop(
         StartupMode::ColdNoCatalog
     };
     lifecycle.begin_startup_reveal(startup_mode, start, &mut lifecycle_effects);
-    if startup_return_requested && !launch_return_restored {
+    if !predecessor_catalog_migration_required
+        && startup_return_requested
+        && !launch_return_restored
+    {
         lifecycle.handle(
             LauncherLifecycleInput::StartupReturnCatalogHydrationNeeded,
             &mut lifecycle_effects,
@@ -5965,10 +5998,13 @@ pub(super) fn run_launcher_loop(
         start,
     );
     window.request_redraw();
-    let startup_intro_eligible = startup_mode == StartupMode::ColdNoCatalog
-        && launcher_bench_scenario.is_none()
-        && screensaver_start_mode == ScreensaverStartMode::Inactive
-        && !layout.is_portrait();
+    let startup_intro_eligible = startup_intro_is_eligible(
+        startup_mode,
+        predecessor_catalog_migration_required,
+        launcher_bench_scenario.is_some(),
+        screensaver_start_mode,
+        layout.is_portrait(),
+    );
     let mut startup_intro = if startup_intro_eligible
         && launcher_presenter.startup_intro_native_hidden_slots_available(ui)
     {
@@ -14005,12 +14041,29 @@ fn catalog_startup_without_registry_plan(
 ) -> CatalogStartupWithoutSummaryPlan {
     if catalog_worker_enabled {
         return CatalogStartupWithoutSummaryPlan::DeferredWorker {
-            request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
+            // No registry means there is no refresh manifest to reconcile.
+            // Select the build operation before intro/latch eligibility so
+            // every cold-start route can create the first fast catalog.
+            request: CatalogWorkerRequest::FreshBuild,
             initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
             execution_mode: CatalogExecutionMode::ForegroundExclusive,
         };
     }
     CatalogStartupWithoutSummaryPlan::NoCatalog
+}
+
+fn startup_intro_is_eligible(
+    startup_mode: StartupMode,
+    predecessor_catalog_migration_required: bool,
+    benchmark_active: bool,
+    screensaver_start_mode: ScreensaverStartMode,
+    portrait: bool,
+) -> bool {
+    startup_mode == StartupMode::ColdNoCatalog
+        && (predecessor_catalog_migration_required
+            || (!benchmark_active
+                && screensaver_start_mode == ScreensaverStartMode::Inactive
+                && !portrait))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18785,7 +18838,7 @@ mod tests {
         assert_eq!(
             catalog_startup_without_registry_plan(true),
             CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
+                request: CatalogWorkerRequest::FreshBuild,
                 initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
                 execution_mode: CatalogExecutionMode::ForegroundExclusive,
             }
@@ -18794,5 +18847,95 @@ mod tests {
             catalog_startup_without_registry_plan(false),
             CatalogStartupWithoutSummaryPlan::NoCatalog
         );
+    }
+
+    #[test]
+    pub(super) fn first_build_survives_non_intro_startup_sequences() {
+        for (startup_mode, benchmark_active, screensaver_start_mode, portrait) in [
+            (
+                StartupMode::ColdNoCatalog,
+                true,
+                ScreensaverStartMode::Inactive,
+                false,
+            ),
+            (
+                StartupMode::ColdNoCatalog,
+                false,
+                ScreensaverStartMode::IdleWhenReady,
+                false,
+            ),
+            (
+                StartupMode::ColdNoCatalog,
+                false,
+                ScreensaverStartMode::Inactive,
+                true,
+            ),
+            (
+                StartupMode::ReturnFromGame,
+                false,
+                ScreensaverStartMode::Inactive,
+                false,
+            ),
+        ] {
+            assert!(!startup_intro_is_eligible(
+                startup_mode,
+                false,
+                benchmark_active,
+                screensaver_start_mode,
+                portrait,
+            ));
+
+            let CatalogStartupWithoutSummaryPlan::DeferredWorker {
+                request,
+                initial_cache,
+                execution_mode,
+            } = catalog_startup_without_registry_plan(true)
+            else {
+                panic!("cold startup must schedule a catalog worker");
+            };
+            let mut session = LauncherCatalogSession::new(false);
+            let now = Instant::now();
+            session.defer_catalog_worker(
+                "/media/fat/_Arcade".to_string(),
+                request,
+                initial_cache,
+                execution_mode,
+            );
+            assert!(
+                session
+                    .maybe_start_deferred_worker(false, false, true, now, Duration::ZERO, || false)
+                    .is_none()
+            );
+            let worker = session
+                .maybe_start_deferred_worker(false, true, true, now, Duration::ZERO, || false)
+                .expect("first visible copy starts the first build");
+            assert_eq!(worker.request, CatalogWorkerRequest::FreshBuild);
+            assert_eq!(
+                worker.initial_cache,
+                CatalogWorkerInitialCache::AlreadyProbedMissing
+            );
+            assert_eq!(
+                worker.execution_mode,
+                CatalogExecutionMode::ForegroundExclusive
+            );
+        }
+    }
+
+    #[test]
+    pub(super) fn predecessor_migration_keeps_the_particle_intro_eligible() {
+        assert!(startup_intro_is_eligible(
+            StartupMode::ColdNoCatalog,
+            true,
+            true,
+            ScreensaverStartMode::IdleWhenReady,
+            true,
+        ));
+        assert!(!startup_intro_is_eligible(
+            StartupMode::WarmCatalog,
+            true,
+            false,
+            ScreensaverStartMode::Inactive,
+            false,
+        ));
     }
 }

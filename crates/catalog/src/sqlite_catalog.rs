@@ -384,7 +384,7 @@ pub(crate) fn remove_catalog_artifacts_with_cache_paths(
     )
 }
 
-fn remove_catalog_artifacts_at(
+pub(crate) fn remove_catalog_artifacts_at(
     sqlite_path: &Path,
     build_dir: &Path,
     configured_snapshot: Option<&Path>,
@@ -465,7 +465,7 @@ fn remove_matching_files(
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
             continue;
         };
-        if file_type.is_file() && matches(&name) {
+        if (file_type.is_file() || file_type.is_symlink()) && matches(&name) {
             removed += usize::from(remove_file_if_exists_counted(&entry.path(), label)?);
         }
     }

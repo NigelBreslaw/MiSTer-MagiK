@@ -155,6 +155,14 @@ update; an explicit rebuild runs the fresh path. Progress advances exactly once
 per checked system as `Updating systems X/N`, where `N` is the dynamic union
 of published and currently recognized systems.
 
+When startup detects the retired `catalog-v3` or its top-level SQLite catalog
+sidecars, it selects the cold particle-intro route, removes only those generated
+predecessor artifacts, and runs a fresh fast-catalog build. Screenshot assets,
+user state, game-database metadata, and installed games are preserved. If no
+fast registry exists, startup selects that fresh build before deciding whether
+the particle intro can run; portrait, benchmark, screensaver, return-from-game,
+and unavailable-intro paths therefore never attempt manifest reconciliation.
+
 The existing generation remains usable while a refresh runs. The launcher
 reloads the registry only after successful manifest publication. Returning from
 a launched core therefore restores into the same catalog architecture rather

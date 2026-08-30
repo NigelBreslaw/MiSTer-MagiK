@@ -1329,6 +1329,35 @@ fn start_library_catalog_worker_in_process(
                         return;
                     }
                 };
+            if request == CatalogWorkerRequest::FreshBuild
+                && mister_magik_catalog::predecessor_cleanup::predecessor_catalog_artifacts_present(
+                    &catalog_paths,
+                )
+            {
+                let _ = tx.send(CatalogWorkerMessage::BuildStatus {
+                    title: "Removing retired catalog...".to_string(),
+                });
+                match mister_magik_catalog::predecessor_cleanup::remove_predecessor_catalog_artifacts(
+                    &catalog_paths,
+                ) {
+                    Ok(report) if report.detected => {
+                        let _ = tx.send(CatalogWorkerMessage::Timing {
+                            name: "predecessor_catalog_removed".to_string(),
+                            detail: format!(
+                                "removed_artifacts={}",
+                                report.removed_artifacts
+                            ),
+                        });
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                            error: format!("remove predecessor catalog: {error}"),
+                        });
+                        return;
+                    }
+                }
+            }
             if let Err(error) =
                 mister_magik_catalog::fast_catalog_refresh::cleanup_refresh_temporary_files_with_lease(
                     catalog_paths.sharded_catalog_dir(),

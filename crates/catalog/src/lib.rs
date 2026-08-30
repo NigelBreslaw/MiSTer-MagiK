@@ -85,6 +85,7 @@ pub mod multi_system_projection;
 mod namespace_walk;
 pub mod navpack;
 pub mod persisted_search;
+pub mod predecessor_cleanup;
 pub mod prepared_bundle_helper;
 pub mod prepared_collections;
 mod prepared_release_manifest;
