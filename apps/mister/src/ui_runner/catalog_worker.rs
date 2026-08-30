@@ -475,10 +475,8 @@ impl CatalogWorkerProtocolState {
             return Err("catalog worker heartbeat progress regressed".to_string());
         }
         if !self.heartbeat_phase.is_empty()
-            && ((event.phase == self.heartbeat_phase
-                && event.progress_epoch != self.progress_epoch)
-                || (event.phase != self.heartbeat_phase
-                    && event.progress_epoch <= self.progress_epoch))
+            && event.phase != self.heartbeat_phase
+            && event.progress_epoch <= self.progress_epoch
         {
             return Err("catalog worker heartbeat phase transition is invalid".to_string());
         }
@@ -2973,6 +2971,33 @@ mod tests {
         wrong_run.run_id = "run-2".to_string();
         wrong_run.sequence = 4;
         assert!(state.validate(&wrong_run).is_err());
+    }
+
+    #[test]
+    fn protocol_allows_heartbeat_sampling_to_skip_intermediate_phases() {
+        let mut state = CatalogWorkerProtocolState::default();
+        let mut handshake = blank_worker_wire_event("handshake");
+        handshake.run_id = "run-1".to_string();
+        assert_eq!(state.validate(&handshake), Ok(true));
+
+        let mut heartbeat = blank_worker_wire_event("heartbeat");
+        heartbeat.run_id = "run-1".to_string();
+        heartbeat.sequence = 1;
+        heartbeat.phase = "systems".to_string();
+        heartbeat.progress_epoch = 1;
+        heartbeat.work_units = 4;
+        assert_eq!(state.validate(&heartbeat), Ok(false));
+
+        // The heartbeat interval may miss transitions through other phases and
+        // observe the worker back in the same named phase at a later epoch.
+        heartbeat.sequence = 2;
+        heartbeat.progress_epoch = 3;
+        heartbeat.work_units = 8;
+        assert_eq!(state.validate(&heartbeat), Ok(false));
+
+        heartbeat.sequence = 3;
+        heartbeat.phase = "artifacts".to_string();
+        assert!(state.validate(&heartbeat).is_err());
     }
 
     #[test]
