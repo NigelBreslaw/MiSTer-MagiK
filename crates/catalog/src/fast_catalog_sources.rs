@@ -19,6 +19,7 @@ use crate::generic_system_catalog::{
     inventory_prepared_extension_under_named_roots, rebuild_installed_generic_system,
 };
 use crate::launch_profiles::{CatalogScanPlan, CollectionListing, LaunchProfile, ProfileSet};
+use crate::machine_family::MachineFamilyResolver;
 use crate::machine_family_projection::{MachineFamilyCandidate, project_machine_families};
 use crate::media_identity::ScreenshotAssetId;
 use crate::mra_header::{PrimaryRomRequirement, RomNamespace};
@@ -111,6 +112,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
     mut system_complete: impl FnMut(&FastFiveSystem),
 ) -> Result<FastSourceRefreshBuild, String> {
     let started = Instant::now();
+    let mut family_resolver = MachineFamilyResolver::for_storage_root(storage_root)?;
     let mut systems = BTreeMap::new();
     let mut reports = BTreeMap::new();
     let mut prepared_watch_observations = BTreeMap::new();
@@ -127,6 +129,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         &mut systems,
         &mut reports,
         &mut prepared_watch_observations,
+        &mut family_resolver,
         &mut timed_system_complete,
     )?;
     let roots = [storage_root.display().to_string()];
@@ -159,6 +162,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
             &mut systems,
             &mut reports,
             &mut prepared_watch_observations,
+            &mut family_resolver,
             &mut timed_system_complete,
         )?;
     }
@@ -265,10 +269,12 @@ fn build_and_record_prepared_system(
     systems: &mut BTreeMap<String, FastFiveSystem>,
     reports: &mut BTreeMap<String, FastSourceSystemReport>,
     watch_observations: &mut BTreeMap<String, GenericSourceWatchObservations>,
+    family_resolver: &mut MachineFamilyResolver,
     system_complete: &mut impl FnMut(&FastFiveSystem),
 ) -> Result<(), String> {
     let system_started = Instant::now();
-    let (mut system, mut report, watch) = build_prepared_system(storage_root, system_id, true)?;
+    let (mut system, mut report, watch) =
+        build_prepared_system(storage_root, system_id, true, family_resolver)?;
     if system_id == "c64" {
         collapse_c64_cross_source_variants(&mut system);
     }
@@ -302,9 +308,10 @@ pub fn rebuild_independent_system(
     system_id: &str,
 ) -> Result<Option<(FastFiveSystem, FastSourceSystemReport)>, String> {
     let started = Instant::now();
+    let mut family_resolver = MachineFamilyResolver::for_storage_root(storage_root)?;
     let prepared = PREPARED_SYSTEM_IDS
         .contains(&system_id)
-        .then(|| build_prepared_system(storage_root, system_id, false))
+        .then(|| build_prepared_system(storage_root, system_id, false, &mut family_resolver))
         .transpose()?;
     let generic = if prepared.is_some() {
         None
@@ -482,6 +489,7 @@ fn build_prepared_system(
     storage_root: &Path,
     system_id: &str,
     capture_watch: bool,
+    family_resolver: &mut MachineFamilyResolver,
 ) -> Result<
     (
         FastFiveSystem,
@@ -497,7 +505,7 @@ fn build_prepared_system(
     let mut watch = None;
     let (mut games, mut variants) = match system_id {
         "arcade" => {
-            let scan = scan_arcade(storage_root, &mut report)?;
+            let scan = scan_arcade_with_resolver(storage_root, &mut report, family_resolver)?;
             (scan.games, scan.variants)
         }
         "amiga" => (scan_amiga(storage_root, &mut report)?, Vec::new()),
@@ -565,6 +573,7 @@ struct ArcadeCandidate {
     game: SystemGame,
     identity_id: String,
     family_id: String,
+    namespace: Option<RomNamespace>,
 }
 
 #[derive(Clone, Debug)]
@@ -594,15 +603,26 @@ fn scan_arcade(
     storage_root: &Path,
     report: &mut FastSourceSystemReport,
 ) -> Result<ArcadeScan, String> {
+    let mut resolver = MachineFamilyResolver::for_storage_root(storage_root)?;
+    scan_arcade_with_resolver(storage_root, report, &mut resolver)
+}
+
+fn scan_arcade_with_resolver(
+    storage_root: &Path,
+    report: &mut FastSourceSystemReport,
+    resolver: &mut MachineFamilyResolver,
+) -> Result<ArcadeScan, String> {
     Ok(collapse_arcade_candidates(scan_arcade_candidates(
         storage_root,
         report,
+        resolver,
     )?))
 }
 
 pub(crate) fn audit_arcade_candidates(storage_root: &Path) -> Vec<FastArcadeAuditCandidate> {
     let mut report = FastSourceSystemReport::default();
-    scan_arcade_candidates(storage_root, &mut report)
+    let mut resolver = MachineFamilyResolver::for_storage_root(storage_root).unwrap_or_default();
+    scan_arcade_candidates(storage_root, &mut report, &mut resolver)
         .unwrap_or_default()
         .into_iter()
         .map(|candidate| FastArcadeAuditCandidate {
@@ -616,6 +636,7 @@ pub(crate) fn audit_arcade_candidates(storage_root: &Path) -> Vec<FastArcadeAudi
 fn scan_arcade_candidates(
     storage_root: &Path,
     report: &mut FastSourceSystemReport,
+    resolver: &mut MachineFamilyResolver,
 ) -> Result<Vec<ArcadeCandidate>, String> {
     let roms = arcade_rom_inventory(storage_root, report)?;
     let cores = arcade_core_inventory(storage_root, report)?;
@@ -627,6 +648,15 @@ fn scan_arcade_candidates(
         &mut files,
     )?;
     let mut games = Vec::new();
+    let updater_families = updater
+        .values()
+        .filter_map(|row| row.catalog_metadata.as_ref())
+        .filter_map(|metadata| {
+            let identity = normalize_machine_id(&metadata.identity_id);
+            let family = normalize_machine_id(&metadata.family_id);
+            (!identity.is_empty() && !family.is_empty()).then_some((identity, family))
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut updater_hits = 0usize;
     let mut updater_misses = 0usize;
     for path in files {
@@ -699,6 +729,7 @@ fn scan_arcade_candidates(
                 game,
                 identity_id,
                 family_id,
+                namespace: primary_rom_namespace(&row.primary_rom),
             });
             continue;
         }
@@ -735,6 +766,20 @@ fn scan_arcade_candidates(
             report.invalid += 1;
             continue;
         }
+        let namespace = primary_rom_namespace(&inspection.primary_rom);
+        let identity_id = inspection
+            .header
+            .setname
+            .as_deref()
+            .map(normalize_machine_id)
+            .filter(|identity| !identity.is_empty())
+            .or_else(|| match &inspection.primary_rom {
+                PrimaryRomRequirement::Archive { setname, .. } => {
+                    Some(normalize_machine_id(setname)).filter(|identity| !identity.is_empty())
+                }
+                PrimaryRomRequirement::None | PrimaryRomRequirement::Ambiguous => None,
+            })
+            .unwrap_or_default();
         let title = inspection
             .catalog_metadata
             .as_ref()
@@ -759,17 +804,48 @@ fn scan_arcade_candidates(
             .as_deref()
             .and_then(|year| year.parse::<u16>().ok());
         game.manufacturer = inspection.header.manufacturer.unwrap_or_default();
-        let (identity_id, family_id) = inspection
+        let mut family_id = inspection
             .catalog_metadata
             .as_ref()
-            .map(|metadata| (metadata.identity_id.clone(), metadata.family_id.clone()))
+            .map(|metadata| normalize_machine_id(&metadata.family_id))
             .unwrap_or_default();
+        if family_id.is_empty() {
+            family_id = updater_families
+                .get(&identity_id)
+                .cloned()
+                .or_else(|| {
+                    inspection
+                        .header
+                        .parent
+                        .as_deref()
+                        .map(normalize_machine_id)
+                })
+                .unwrap_or_default();
+        }
         games.push(ArcadeCandidate {
             game,
             identity_id,
             family_id,
+            namespace,
         });
     }
+    let requests = games
+        .iter()
+        .filter(|candidate| candidate.family_id.is_empty() && !candidate.identity_id.is_empty())
+        .map(|candidate| (candidate.identity_id.clone(), candidate.namespace.clone()))
+        .collect::<Vec<_>>();
+    let resolved = resolver.resolve_many(requests);
+    for candidate in &mut games {
+        if candidate.family_id.is_empty() {
+            if let Some(Some(machine)) = resolved.get(&candidate.identity_id) {
+                candidate.family_id = machine.family.clone();
+            }
+            if candidate.family_id.is_empty() {
+                candidate.family_id = candidate.identity_id.clone();
+            }
+        }
+    }
+    resolver.finish_log("arcade");
     crate::catalog_logln!(
         "library_scan_timing\tarcade_mra_prefetch\t{}\tindex_status={} index_path={} index_error={} index_rows={} index_file_sha256={} index_hits={} index_misses={} fallback_reads={} files={} index_load_us={}",
         updater_evidence.load_us,
@@ -989,6 +1065,13 @@ fn rom_namespace_label(namespace: &RomNamespace) -> &'static str {
     match namespace {
         RomNamespace::Mame => "mame",
         RomNamespace::Hbmame => "hbmame",
+    }
+}
+
+fn primary_rom_namespace(requirement: &PrimaryRomRequirement) -> Option<RomNamespace> {
+    match requirement {
+        PrimaryRomRequirement::Archive { namespace, .. } => Some(namespace.clone()),
+        PrimaryRomRequirement::None | PrimaryRomRequirement::Ambiguous => None,
     }
 }
 
@@ -1578,6 +1661,13 @@ fn normalize_name(value: &str) -> String {
         .collect()
 }
 
+fn normalize_machine_id(value: &str) -> String {
+    let normalized = crate::library_db::normalize_id(value);
+    (normalized != "unknown")
+        .then_some(normalized)
+        .unwrap_or_default()
+}
+
 fn encode_component(value: &str) -> String {
     let mut output = String::new();
     for byte in value.as_bytes() {
@@ -1653,16 +1743,19 @@ mod tests {
                 game: clone,
                 identity_id: "examplej".to_string(),
                 family_id: "example".to_string(),
+                namespace: None,
             },
             ArcadeCandidate {
                 game: parent,
                 identity_id: "example".to_string(),
                 family_id: "example".to_string(),
+                namespace: None,
             },
             ArcadeCandidate {
                 game: standalone,
                 identity_id: String::new(),
                 family_id: String::new(),
+                namespace: None,
             },
         ]);
         assert_eq!(scan.games.len(), 2);

@@ -38,7 +38,7 @@ struct MachineDatabase {
 pub(crate) struct MachineFamilyResolver {
     mame: Option<MachineDatabase>,
     hbmame: Option<MachineDatabase>,
-    cache: HashMap<String, Option<ResolvedMachine>>,
+    cache: HashMap<(String, Option<RomNamespace>), Option<ResolvedMachine>>,
     pub(crate) requested: usize,
     pub(crate) cache_hits: usize,
     pub(crate) mame_matches: usize,
@@ -111,7 +111,8 @@ impl MachineFamilyResolver {
         let mut unresolved = Vec::new();
         let mut output = HashMap::with_capacity(requested.len());
         for (identity, namespace) in requested {
-            if let Some(value) = self.cache.get(&identity) {
+            let cache_key = (identity.clone(), namespace.clone());
+            if let Some(value) = self.cache.get(&cache_key) {
                 self.cache_hits = self.cache_hits.saturating_add(1);
                 output.insert(identity, value.clone());
             } else {
@@ -144,7 +145,7 @@ impl MachineFamilyResolver {
         if let Some(database) = self.mame.as_ref() {
             rows.extend(query_database(database, &mame_fallback));
         }
-        for (identity, _) in unresolved {
+        for (identity, namespace) in unresolved {
             let row = rows.remove(&identity);
             if let Some(row) = &row {
                 match row.source {
@@ -156,7 +157,8 @@ impl MachineFamilyResolver {
             } else {
                 self.unresolved = self.unresolved.saturating_add(1);
             }
-            self.cache.insert(identity.clone(), row.clone());
+            self.cache
+                .insert((identity.clone(), namespace), row.clone());
             output.insert(identity, row);
         }
         output
