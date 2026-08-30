@@ -20023,12 +20023,6 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
             value.to_string_lossy().into_owned(),
         ));
     }
-    if let Some(value) = env::var_os("MISTER_BENCH_CATALOG_EXFAT_SHADOW") {
-        env.push((
-            "MISTER_CATALOG_EXFAT_SHADOW".into(),
-            value.to_string_lossy().into_owned(),
-        ));
-    }
     env
 }
 

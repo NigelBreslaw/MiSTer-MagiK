@@ -936,31 +936,6 @@ fn collect_generic_namespace_inventory(
         },
     );
     let namespace_us = namespace_started.elapsed().as_micros() as u64;
-    #[cfg(target_os = "linux")]
-    if let Some(shadow) = crate::exfat_shadow::configured_shadow(&header.path)? {
-        let (expected, actual) =
-            exfat_shadow_entry_sets(&header.path, max_depth, &entries, &shadow);
-        let missing = expected.difference(&actual).count();
-        let extra = actual.difference(&expected).count();
-        crate::catalog_logln!(
-            "fast_catalog_exfat_shadow_tsv\tpath={}\tstatus={}\texpected_entries={}\traw_entries={}\tmissing={}\textra={}\traw_directories={}\traw_requests={}\traw_bytes={}\traw_elapsed_us={}\tdevice={}",
-            header.path.display(),
-            if missing == 0 && extra == 0 {
-                "matched"
-            } else {
-                "mismatch"
-            },
-            expected.len(),
-            actual.len(),
-            missing,
-            extra,
-            shadow.directories,
-            shadow.requests,
-            shadow.bytes_read,
-            shadow.elapsed_us,
-            shadow.device.display(),
-        );
-    }
     if namespace.errors > 0 {
         return Err(format!(
             "incomplete {} inventory: {} directory errors",
@@ -1034,49 +1009,6 @@ fn collect_generic_namespace_inventory(
         canonicalized,
         elapsed_us: total_us,
     })
-}
-
-#[cfg(target_os = "linux")]
-fn exfat_shadow_entry_sets(
-    root: &Path,
-    max_depth: Option<usize>,
-    entries: &[GenericInventoryEntry],
-    shadow: &crate::exfat_shadow::ShadowReport,
-) -> (BTreeSet<(PathBuf, u8)>, BTreeSet<(PathBuf, u8)>) {
-    let in_scope = |path: &Path| {
-        let Some(relative) = path.strip_prefix(root).ok() else {
-            return false;
-        };
-        max_depth.is_none_or(|depth| relative.components().count() <= depth)
-    };
-    let mut expected = BTreeSet::new();
-    for entry in entries {
-        if !in_scope(&entry.path) || entry.kind == NamespaceEntryKind::Other {
-            continue;
-        }
-        expected.insert((entry.path.clone(), namespace_kind_code(entry.kind)));
-    }
-    let mut actual = BTreeSet::new();
-    for (path, entry) in &shadow.entries {
-        if !in_scope(path) || should_ignore_path(path) {
-            continue;
-        }
-        let kind = match entry.kind {
-            crate::exfat_shadow::ShadowEntryKind::Directory => b'd',
-            crate::exfat_shadow::ShadowEntryKind::File => b'f',
-        };
-        actual.insert((path.clone(), kind));
-    }
-    (expected, actual)
-}
-
-#[cfg(target_os = "linux")]
-fn namespace_kind_code(kind: NamespaceEntryKind) -> u8 {
-    match kind {
-        NamespaceEntryKind::Directory => b'd',
-        NamespaceEntryKind::File => b'f',
-        NamespaceEntryKind::Other => b'o',
-    }
 }
 
 fn apply_generic_namespace_inventory(
