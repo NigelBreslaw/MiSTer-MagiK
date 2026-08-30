@@ -35370,9 +35370,6 @@ fn run_catalog_neogeo_family_audit(sess: &Session, output: &Path) -> Result<()> 
     if !out.stderr.trim().is_empty() {
         eprint!("[stderr] {}", out.stderr);
     }
-    if let Some(error) = exec_failure_message("Neo Geo family audit", &out) {
-        return Err(error.into());
-    }
     if let Some(parent) = output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -35387,6 +35384,9 @@ fn run_catalog_neogeo_family_audit(sess: &Session, output: &Path) -> Result<()> 
         .find(|line| line.starts_with("neogeo_family_summary_tsv\t"))
     {
         println!("{summary}");
+    }
+    if let Some(error) = exec_failure_message("Neo Geo family audit", &out) {
+        return Err(error.into());
     }
     Ok(())
 }

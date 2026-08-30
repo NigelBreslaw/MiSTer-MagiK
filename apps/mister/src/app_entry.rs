@@ -515,7 +515,12 @@ fn run_catalog_arcade_rom_audit(
 fn run_catalog_neogeo_family_audit(storage_root: &std::path::Path) {
     match mister_magik_catalog::fast_catalog_sources::audit_installed_neogeo_families(storage_root)
     {
-        Ok(report) => crate::ui_log!("{report}"),
+        Ok(report) => {
+            crate::ui_log!("{}", report.text);
+            if !report.valid {
+                std::process::exit(1);
+            }
+        }
         Err(error) => {
             crate::ui_errln!("neogeo_family_summary_tsv\tvalid=0\terror={error}");
             std::process::exit(1);

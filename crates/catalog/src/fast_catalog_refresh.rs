@@ -2972,6 +2972,102 @@ mod tests {
     }
 
     #[test]
+    fn family_watch_detects_absent_to_present_and_dev_takeover() {
+        let root = crate::test_support::unique_temp_dir("fast-refresh-family-watch");
+        fs::create_dir_all(root.join("games/NEOGEO")).unwrap();
+        let initial = capture_system_watch(&root, "neogeo").unwrap();
+        let stable = root.join("mister-magik/mame.sqlite3");
+        fs::create_dir_all(stable.parent().unwrap()).unwrap();
+        fs::write(&stable, b"stable").unwrap();
+        let cache = build_watch_metadata_cache(std::iter::once(&initial), &[]).0;
+        let mut check = FastSystemSourceCheck {
+            system_id: "neogeo".to_string(),
+            status: FastSourceCheckStatus::Rescan,
+            directories_checked: 0,
+            containers_checked: 0,
+            elapsed_us: 0,
+            reason: String::new(),
+        };
+        check_watch_index(&initial, &cache, &mut check);
+        assert_eq!(check.status, FastSourceCheckStatus::Changed);
+
+        let selected = capture_system_watch(&root, "neogeo").unwrap();
+        let dev = root.join("mister-magik-dev/mame.sqlite3");
+        fs::create_dir_all(dev.parent().unwrap()).unwrap();
+        fs::write(&dev, b"dev").unwrap();
+        let cache = build_watch_metadata_cache(std::iter::once(&selected), &[]).0;
+        let mut check = FastSystemSourceCheck {
+            system_id: "neogeo".to_string(),
+            status: FastSourceCheckStatus::Rescan,
+            directories_checked: 0,
+            containers_checked: 0,
+            elapsed_us: 0,
+            reason: String::new(),
+        };
+        check_watch_index(&selected, &cache, &mut check);
+        assert_eq!(check.status, FastSourceCheckStatus::Changed);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn family_watch_uses_ctime_and_inode_for_same_size_replacement() {
+        let root = crate::test_support::unique_temp_dir("fast-refresh-family-replacement");
+        fs::create_dir_all(root.join("games/NEOGEO")).unwrap();
+        let mame = root.join("mister-magik/mame.sqlite3");
+        fs::create_dir_all(mame.parent().unwrap()).unwrap();
+        fs::write(&mame, b"first").unwrap();
+        let watch = capture_system_watch(&root, "neogeo").unwrap();
+        let replacement = mame.with_extension("sqlite3.tmp");
+        fs::write(&replacement, b"other").unwrap();
+        fs::rename(&replacement, &mame).unwrap();
+        let cache = build_watch_metadata_cache(std::iter::once(&watch), &[]).0;
+        let mut check = FastSystemSourceCheck {
+            system_id: "neogeo".to_string(),
+            status: FastSourceCheckStatus::Rescan,
+            directories_checked: 0,
+            containers_checked: 0,
+            elapsed_us: 0,
+            reason: String::new(),
+        };
+        check_watch_index(&watch, &cache, &mut check);
+        assert_eq!(check.status, FastSourceCheckStatus::Changed);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn family_watch_ignores_lower_priority_stable_database_during_dev_takeover() {
+        let root = crate::test_support::unique_temp_dir("fast-refresh-family-priority");
+        fs::create_dir_all(root.join("games/NEOGEO")).unwrap();
+        let stable = root.join("mister-magik/mame.sqlite3");
+        let dev = root.join("mister-magik-dev/mame.sqlite3");
+        fs::create_dir_all(stable.parent().unwrap()).unwrap();
+        fs::create_dir_all(dev.parent().unwrap()).unwrap();
+        fs::write(&stable, b"stable").unwrap();
+        fs::write(&dev, b"dev").unwrap();
+        let watch = capture_system_watch(&root, "neogeo").unwrap();
+        let stable_path = stable.to_string_lossy().into_owned();
+        assert!(
+            watch
+                .containers
+                .iter()
+                .all(|container| container.path != stable_path)
+        );
+        fs::write(&stable, b"changed stable").unwrap();
+        let cache = build_watch_metadata_cache(std::iter::once(&watch), &[]).0;
+        let mut check = FastSystemSourceCheck {
+            system_id: "neogeo".to_string(),
+            status: FastSourceCheckStatus::Rescan,
+            directories_checked: 0,
+            containers_checked: 0,
+            elapsed_us: 0,
+            reason: String::new(),
+        };
+        check_watch_index(&watch, &cache, &mut check);
+        assert_eq!(check.status, FastSourceCheckStatus::Unchanged);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn one_pass_tree_capture_matches_directory_fingerprint_contract() {
         let root = crate::test_support::unique_temp_dir("fast-refresh-one-pass");
         fs::create_dir_all(root.join("nested")).unwrap();

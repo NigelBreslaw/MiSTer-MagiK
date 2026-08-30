@@ -12,7 +12,7 @@ use crate::library_db;
 use crate::mra_header::RomNamespace;
 use rusqlite::{Connection, params_from_iter};
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const QUERY_CHUNK: usize = 400;
 
@@ -31,11 +31,14 @@ pub(crate) enum MachineSource {
 
 struct MachineDatabase {
     source: MachineSource,
+    path: PathBuf,
     connection: Connection,
 }
 
 #[derive(Default)]
 pub(crate) struct MachineFamilyResolver {
+    mame_path: Option<PathBuf>,
+    hbmame_path: Option<PathBuf>,
     mame: Option<MachineDatabase>,
     hbmame: Option<MachineDatabase>,
     cache: BTreeMap<(String, Option<RomNamespace>), Option<ResolvedMachine>>,
@@ -47,7 +50,7 @@ pub(crate) struct MachineFamilyResolver {
 }
 
 impl MachineFamilyResolver {
-    /// Select one installation root and open each database lazily once.
+    /// Select one installation root without opening its databases.
     ///
     /// A Dev MAME database and a stable HBMAME database are intentionally not
     /// mixed: both databases come from the selected root.
@@ -64,15 +67,10 @@ impl MachineFamilyResolver {
             return Ok(Self::default());
         };
         let mame_path = root.join("mame.sqlite3");
-        let mame = Some(open_database(&mame_path, MachineSource::Mame)?);
         let hbmame_path = root.join("hbmame.sqlite3");
-        let hbmame = hbmame_path
-            .is_file()
-            .then(|| open_database(&hbmame_path, MachineSource::Hbmame))
-            .transpose()?;
         Ok(Self {
-            mame,
-            hbmame,
+            mame_path: Some(mame_path),
+            hbmame_path: hbmame_path.is_file().then_some(hbmame_path),
             ..Self::default()
         })
     }
@@ -81,20 +79,21 @@ impl MachineFamilyResolver {
         &mut self,
         identity: &str,
         namespace: Option<RomNamespace>,
-    ) -> Option<ResolvedMachine> {
+    ) -> Result<Option<ResolvedMachine>, String> {
         let normalized = normalize(identity);
         if normalized.is_empty() {
-            return None;
+            return Ok(None);
         }
-        self.resolve_many([(normalized.clone(), namespace.clone())])
+        Ok(self
+            .resolve_many([(normalized.clone(), namespace.clone())])?
             .remove(&(normalized, namespace))
-            .and_then(|row| row)
+            .and_then(|row| row))
     }
 
     pub(crate) fn resolve_many<I>(
         &mut self,
         identities: I,
-    ) -> BTreeMap<(String, Option<RomNamespace>), Option<ResolvedMachine>>
+    ) -> Result<BTreeMap<(String, Option<RomNamespace>), Option<ResolvedMachine>>, String>
     where
         I: IntoIterator<Item = (String, Option<RomNamespace>)>,
     {
@@ -127,13 +126,22 @@ impl MachineFamilyResolver {
                 mame_ids.push(identity.clone());
             }
         }
+        if unresolved.is_empty() {
+            return Ok(output);
+        }
         let mut mame_rows = HashMap::new();
         let mut hbmame_rows = HashMap::new();
-        if let Some(database) = self.hbmame.as_ref() {
-            hbmame_rows.extend(query_database(database, &hbmame_ids));
+        if !hbmame_ids.is_empty() {
+            self.ensure_hbmame()?;
+            if let Some(database) = self.hbmame.as_ref() {
+                hbmame_rows.extend(query_database(database, &hbmame_ids)?);
+            }
         }
-        if let Some(database) = self.mame.as_ref() {
-            mame_rows.extend(query_database(database, &mame_ids));
+        if !mame_ids.is_empty() {
+            self.ensure_mame()?;
+            if let Some(database) = self.mame.as_ref() {
+                mame_rows.extend(query_database(database, &mame_ids)?);
+            }
         }
         // Unnamespaced identities prefer MAME, then fall back to HBMAME when
         // the set is absent from the main database.
@@ -142,8 +150,11 @@ impl MachineFamilyResolver {
             .filter(|identity| !mame_rows.contains_key(*identity))
             .cloned()
             .collect::<Vec<_>>();
-        if let Some(database) = self.hbmame.as_ref() {
-            hbmame_rows.extend(query_database(database, &hbmame_fallback));
+        if !hbmame_fallback.is_empty() {
+            self.ensure_hbmame()?;
+            if let Some(database) = self.hbmame.as_ref() {
+                hbmame_rows.extend(query_database(database, &hbmame_fallback)?);
+            }
         }
         // Explicit HBMAME requests may still be absent there.  Falling back
         // to MAME preserves useful family projection for shared set names.
@@ -152,8 +163,11 @@ impl MachineFamilyResolver {
             .filter(|identity| !hbmame_rows.contains_key(*identity))
             .cloned()
             .collect::<Vec<_>>();
-        if let Some(database) = self.mame.as_ref() {
-            mame_rows.extend(query_database(database, &mame_fallback));
+        if !mame_fallback.is_empty() {
+            self.ensure_mame()?;
+            if let Some(database) = self.mame.as_ref() {
+                mame_rows.extend(query_database(database, &mame_fallback)?);
+            }
         }
         for (identity, namespace) in unresolved {
             let row = match namespace {
@@ -179,7 +193,21 @@ impl MachineFamilyResolver {
                 .insert((identity.clone(), namespace.clone()), row.clone());
             output.insert((identity, namespace), row);
         }
-        output
+        Ok(output)
+    }
+
+    fn ensure_mame(&mut self) -> Result<(), String> {
+        if let Some(path) = self.mame_path.take() {
+            self.mame = Some(open_database(&path, MachineSource::Mame)?);
+        }
+        Ok(())
+    }
+
+    fn ensure_hbmame(&mut self) -> Result<(), String> {
+        if let Some(path) = self.hbmame_path.take() {
+            self.hbmame = Some(open_database(&path, MachineSource::Hbmame)?);
+        }
+        Ok(())
     }
 
     pub(crate) fn finish_log(&self, system: &str) {
@@ -210,13 +238,17 @@ fn open_database(path: &Path, source: MachineSource) -> Result<MachineDatabase, 
             path.display()
         ));
     }
-    Ok(MachineDatabase { source, connection })
+    Ok(MachineDatabase {
+        source,
+        path: path.to_path_buf(),
+        connection,
+    })
 }
 
 fn query_database(
     database: &MachineDatabase,
     identities: &[String],
-) -> HashMap<String, ResolvedMachine> {
+) -> Result<HashMap<String, ResolvedMachine>, String> {
     let mut output = HashMap::with_capacity(identities.len());
     let mut identities = identities.to_vec();
     identities.sort_unstable();
@@ -228,30 +260,34 @@ fn query_database(
         let sql = format!(
             "SELECT setname,parent_setname FROM mame_machines WHERE setname IN ({placeholders})"
         );
-        let Ok(mut statement) = database.connection.prepare(&sql) else {
-            continue;
-        };
-        let Ok(rows) = statement.query_map(params_from_iter(chunk.iter()), |row| {
-            let identity = normalize(&row.get::<_, String>(0)?);
-            let parent = row
-                .get::<_, Option<String>>(1)?
-                .map(|value| normalize(&value));
-            let family = parent
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| identity.clone());
-            Ok(ResolvedMachine {
-                identity,
-                family,
-                source: database.source,
+        let mut statement = database.connection.prepare(&sql).map_err(|error| {
+            format!("prepare family query {}: {error}", database.path.display())
+        })?;
+        let rows = statement
+            .query_map(params_from_iter(chunk.iter()), |row| {
+                let identity = normalize(&row.get::<_, String>(0)?);
+                let parent = row
+                    .get::<_, Option<String>>(1)?
+                    .map(|value| normalize(&value));
+                let family = parent
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| identity.clone());
+                Ok(ResolvedMachine {
+                    identity,
+                    family,
+                    source: database.source,
+                })
             })
-        }) else {
-            continue;
-        };
-        for row in rows.flatten() {
+            .map_err(|error| {
+                format!("query family database {}: {error}", database.path.display())
+            })?;
+        for row in rows {
+            let row = row
+                .map_err(|error| format!("read family row {}: {error}", database.path.display()))?;
             output.insert(row.identity.clone(), row);
         }
     }
-    output
+    Ok(output)
 }
 
 fn normalize(value: &str) -> String {
@@ -294,12 +330,14 @@ mod tests {
     fn resolves_parent_and_self_family_and_caches_misses() {
         let (root, _path) = fixture();
         let mut resolver = MachineFamilyResolver::for_storage_root(&root).unwrap();
-        let rows = resolver.resolve_many([
-            ("clone".to_string(), None),
-            ("parent".to_string(), None),
-            ("same".to_string(), None),
-            ("missing".to_string(), None),
-        ]);
+        let rows = resolver
+            .resolve_many([
+                ("clone".to_string(), None),
+                ("parent".to_string(), None),
+                ("same".to_string(), None),
+                ("missing".to_string(), None),
+            ])
+            .unwrap();
         assert_eq!(
             rows[&("clone".to_string(), None)].as_ref().unwrap().family,
             "parent"
@@ -313,7 +351,7 @@ mod tests {
             "same"
         );
         assert!(rows[&("missing".to_string(), None)].is_none());
-        assert!(resolver.resolve("missing", None).is_none());
+        assert!(resolver.resolve("missing", None).unwrap().is_none());
         assert_eq!(resolver.cache_hits, 1);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -332,10 +370,12 @@ mod tests {
         drop(connection);
 
         let mut resolver = MachineFamilyResolver::for_storage_root(&root).unwrap();
-        let rows = resolver.resolve_many([
-            ("clone".to_string(), None),
-            ("clone".to_string(), Some(RomNamespace::Hbmame)),
-        ]);
+        let rows = resolver
+            .resolve_many([
+                ("clone".to_string(), None),
+                ("clone".to_string(), Some(RomNamespace::Hbmame)),
+            ])
+            .unwrap();
 
         assert_eq!(
             rows[&("clone".to_string(), None)].as_ref().unwrap().family,
@@ -347,6 +387,53 @@ mod tests {
                 .unwrap()
                 .family,
             "hbmame-parent"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn selecting_a_database_is_lazy_until_a_non_empty_batch() {
+        let (root, _path) = fixture();
+        let mut resolver = MachineFamilyResolver::for_storage_root(&root).unwrap();
+        assert!(resolver.mame.is_none());
+        assert!(
+            resolver
+                .resolve_many(std::iter::empty::<(String, Option<RomNamespace)> >())
+                .unwrap()
+                .is_empty()
+        );
+        assert!(resolver.mame.is_none());
+        let rows = resolver
+            .resolve_many([(String::from("parent"), None)])
+            .unwrap();
+        assert!(rows[&(String::from("parent"), None)].is_some());
+        assert!(resolver.mame.is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn malformed_selected_schema_is_reported_on_query() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-family-malformed-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("mister-magik-dev")).unwrap();
+        let path = root.join("mister-magik-dev/mame.sqlite3");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch("CREATE TABLE mame_machines(setname TEXT PRIMARY KEY);")
+            .unwrap();
+        drop(connection);
+        let mut resolver = MachineFamilyResolver::for_storage_root(&root).unwrap();
+        assert!(
+            resolver
+                .resolve_many([(String::from("broken"), None)])
+                .expect_err("missing parent_setname must not be flattened")
+                .contains("family")
         );
         std::fs::remove_dir_all(root).unwrap();
     }

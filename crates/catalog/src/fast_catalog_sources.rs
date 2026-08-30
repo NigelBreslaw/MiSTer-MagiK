@@ -19,7 +19,7 @@ use crate::generic_system_catalog::{
     inventory_prepared_extension_under_named_roots, rebuild_installed_generic_system,
 };
 use crate::launch_profiles::{CatalogScanPlan, CollectionListing, LaunchProfile, ProfileSet};
-use crate::machine_family::MachineFamilyResolver;
+use crate::machine_family::{MachineFamilyResolver, MachineSource};
 use crate::machine_family_projection::{MachineFamilyCandidate, project_machine_families};
 use crate::media_identity::ScreenshotAssetId;
 use crate::mra_header::{PrimaryRomRequirement, RomNamespace};
@@ -76,6 +76,18 @@ pub struct FastSourceSystemReport {
     pub elapsed_us: u64,
     pub helper_hits: usize,
     pub fallback_validations: usize,
+    pub family_raw: usize,
+    pub family_resolved: usize,
+    pub family_visible: usize,
+    pub family_variants: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct FamilyProjectionStats {
+    raw: usize,
+    resolved: usize,
+    visible: usize,
+    variants: usize,
 }
 
 pub fn build_independent_fast_snapshot(
@@ -168,9 +180,13 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
     }
     generic_watch_observations.extend(prepared_watch_observations);
     let phase_started = Instant::now();
+    let mut generic_family_stats = BTreeMap::new();
     for system in &mut generic_systems {
         if system.system_id == "neogeo" {
-            project_neogeo_system(system, &mut family_resolver);
+            generic_family_stats.insert(
+                system.system_id.clone(),
+                project_neogeo_system(system, &mut family_resolver)?,
+            );
         }
     }
     enrich_fast_preview_identities(storage_root, &mut generic_systems);
@@ -182,16 +198,25 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
             .map(|system| (system.system_id.clone(), system)),
     );
     reports.extend(generic.systems.into_iter().map(|system| {
+        let system_id = system.system_id.clone();
+        let family_stats = generic_family_stats
+            .get(&system_id)
+            .copied()
+            .unwrap_or_default();
         (
-            system.system_id.clone(),
+            system_id.clone(),
             FastSourceSystemReport {
-                system_id: system.system_id,
+                system_id,
                 files_visited: system.files,
                 games: system.games,
                 invalid: system.read_errors.saturating_add(system.archive_errors),
                 elapsed_us: system.elapsed_us,
                 helper_hits: 0,
                 fallback_validations: 0,
+                family_raw: family_stats.raw,
+                family_resolved: family_stats.resolved,
+                family_visible: family_stats.visible,
+                family_variants: family_stats.variants,
             },
         )
     }));
@@ -291,13 +316,13 @@ fn build_and_record_prepared_system(
         collapse_c64_cross_source_variants(&mut system);
     }
     if system_id == "neogeo" {
-        project_neogeo_system(&mut system, &mut family_resolver);
+        project_neogeo_system(&mut system, &mut family_resolver)?;
     }
     enrich_fast_preview_identities(storage_root, std::slice::from_mut(&mut system));
     report.elapsed_us = elapsed_us(system_started);
     report.games = system.games.len();
     crate::catalog_logln!(
-        "fast_catalog_source_tsv\tadapter=prepared\tsystem={}\telapsed_us={}\tfiles={}\tgames={}\tinvalid={}\thelper_hits={}\tfallback_validations={}",
+        "fast_catalog_source_tsv\tadapter=prepared\tsystem={}\telapsed_us={}\tfiles={}\tgames={}\tinvalid={}\thelper_hits={}\tfallback_validations={}\tfamily_raw={}\tfamily_resolved={}\tfamily_visible={}\tfamily_variants={}",
         report.system_id,
         report.elapsed_us,
         report.files_visited,
@@ -305,6 +330,10 @@ fn build_and_record_prepared_system(
         report.invalid,
         report.helper_hits,
         report.fallback_validations,
+        report.family_raw,
+        report.family_resolved,
+        report.family_visible,
+        report.family_variants,
     );
     if !system.games.is_empty() || !system.variants.is_empty() {
         if let Some(watch) = watch {
@@ -348,6 +377,10 @@ pub fn rebuild_independent_system(
                     elapsed_us: generic_report.elapsed_us,
                     helper_hits: 0,
                     fallback_validations: 0,
+                    family_raw: 0,
+                    family_resolved: 0,
+                    family_visible: 0,
+                    family_variants: 0,
                 },
             );
             (prepared, report)
@@ -365,6 +398,10 @@ pub fn rebuild_independent_system(
                 elapsed_us: generic_report.elapsed_us,
                 helper_hits: 0,
                 fallback_validations: 0,
+                family_raw: 0,
+                family_resolved: 0,
+                family_visible: 0,
+                family_variants: 0,
             },
         ),
         (None, None) => return Ok(None),
@@ -373,7 +410,11 @@ pub fn rebuild_independent_system(
         collapse_c64_cross_source_variants(&mut system);
     }
     if system_id == "neogeo" {
-        project_neogeo_system(&mut system, &mut family_resolver);
+        let stats = project_neogeo_system(&mut system, &mut family_resolver)?;
+        report.family_raw = stats.raw;
+        report.family_resolved = stats.resolved;
+        report.family_visible = stats.visible;
+        report.family_variants = stats.variants;
     }
     enrich_fast_preview_identities(storage_root, std::slice::from_mut(&mut system));
     report.elapsed_us = elapsed_us(started);
@@ -501,6 +542,16 @@ fn merge_source_report(target: &mut FastSourceSystemReport, additional: &FastSou
     target.fallback_validations = target
         .fallback_validations
         .saturating_add(additional.fallback_validations);
+    target.family_raw = target.family_raw.saturating_add(additional.family_raw);
+    target.family_resolved = target
+        .family_resolved
+        .saturating_add(additional.family_resolved);
+    target.family_visible = target
+        .family_visible
+        .saturating_add(additional.family_visible);
+    target.family_variants = target
+        .family_variants
+        .saturating_add(additional.family_variants);
 }
 
 fn build_prepared_system(
@@ -591,6 +642,7 @@ struct ArcadeCandidate {
     game: SystemGame,
     identity_id: String,
     family_id: String,
+    parent_id: String,
     namespace: Option<RomNamespace>,
 }
 
@@ -630,11 +682,20 @@ fn scan_arcade_with_resolver(
     report: &mut FastSourceSystemReport,
     resolver: &mut MachineFamilyResolver,
 ) -> Result<ArcadeScan, String> {
-    Ok(collapse_arcade_candidates(scan_arcade_candidates(
-        storage_root,
-        report,
-        resolver,
-    )?))
+    let resolved_before = resolver
+        .mame_matches
+        .saturating_add(resolver.hbmame_matches);
+    let candidates = scan_arcade_candidates(storage_root, report, resolver)?;
+    let raw = candidates.len();
+    let scan = collapse_arcade_candidates(candidates);
+    report.family_raw = raw;
+    report.family_resolved = resolver
+        .mame_matches
+        .saturating_add(resolver.hbmame_matches)
+        .saturating_sub(resolved_before);
+    report.family_visible = scan.games.len();
+    report.family_variants = scan.variants.len();
+    Ok(scan)
 }
 
 pub(crate) fn audit_arcade_candidates(storage_root: &Path) -> Vec<FastArcadeAuditCandidate> {
@@ -747,6 +808,7 @@ fn scan_arcade_candidates(
                 game,
                 identity_id,
                 family_id,
+                parent_id: String::new(),
                 namespace: primary_rom_namespace(&row.primary_rom),
             });
             continue;
@@ -822,28 +884,30 @@ fn scan_arcade_candidates(
             .as_deref()
             .and_then(|year| year.parse::<u16>().ok());
         game.manufacturer = inspection.header.manufacturer.unwrap_or_default();
-        let mut family_id = inspection
+        let family_id = inspection
             .catalog_metadata
             .as_ref()
             .map(|metadata| normalize_machine_id(&metadata.family_id))
             .unwrap_or_default();
-        if family_id.is_empty() {
-            family_id = updater_families
+        let family_id = if family_id.is_empty() {
+            updater_families
                 .get(&identity_id)
                 .cloned()
-                .or_else(|| {
-                    inspection
-                        .header
-                        .parent
-                        .as_deref()
-                        .map(normalize_machine_id)
-                })
                 .unwrap_or_default();
-        }
+        } else {
+            family_id
+        };
+        let parent_id = inspection
+            .header
+            .parent
+            .as_deref()
+            .map(normalize_machine_id)
+            .unwrap_or_default();
         games.push(ArcadeCandidate {
             game,
             identity_id,
             family_id,
+            parent_id,
             namespace,
         });
     }
@@ -852,13 +916,16 @@ fn scan_arcade_candidates(
         .filter(|candidate| candidate.family_id.is_empty() && !candidate.identity_id.is_empty())
         .map(|candidate| (candidate.identity_id.clone(), candidate.namespace.clone()))
         .collect::<Vec<_>>();
-    let resolved = resolver.resolve_many(requests);
+    let resolved = resolver.resolve_many(requests)?;
     for candidate in &mut games {
         if candidate.family_id.is_empty() {
             if let Some(Some(machine)) =
                 resolved.get(&(candidate.identity_id.clone(), candidate.namespace.clone()))
             {
                 candidate.family_id = machine.family.clone();
+            }
+            if candidate.family_id.is_empty() {
+                candidate.family_id = candidate.parent_id.clone();
             }
             if candidate.family_id.is_empty() {
                 candidate.family_id = candidate.identity_id.clone();
@@ -1534,126 +1601,257 @@ fn arcade_requirement_preview_asset_key(requirement: &PrimaryRomRequirement) -> 
     }
 }
 
-fn project_neogeo_system(system: &mut FastFiveSystem, resolver: &mut MachineFamilyResolver) {
+fn project_neogeo_system(
+    system: &mut FastFiveSystem,
+    resolver: &mut MachineFamilyResolver,
+) -> Result<FamilyProjectionStats, String> {
     if system.system_id != "neogeo" || system.games.is_empty() {
-        return;
+        return Ok(FamilyProjectionStats::default());
     }
-    let (projection, _) = project_neogeo_games(system.games.drain(..), resolver);
+    let (projection, _, stats) = project_neogeo_games(system.games.drain(..), resolver)?;
     system.games = projection.games;
     system.variants = projection.variants;
+    Ok(stats)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NeoGeoIdentityStrength {
+    Strong,
+    Weak,
+}
+
+#[derive(Clone, Debug)]
+struct NeoGeoIdentity {
+    id: String,
+    strength: NeoGeoIdentityStrength,
+}
+
+#[derive(Clone, Debug)]
+struct NeoGeoProjectionMetadata {
+    identity_id: String,
+    family_id: String,
+    strength: NeoGeoIdentityStrength,
+    source: Option<MachineSource>,
 }
 
 fn project_neogeo_games(
     games: impl IntoIterator<Item = SystemGame>,
     resolver: &mut MachineFamilyResolver,
-) -> (
-    crate::machine_family_projection::MachineFamilyProjection,
-    BTreeMap<String, (String, String)>,
-) {
+) -> Result<
+    (
+        crate::machine_family_projection::MachineFamilyProjection,
+        BTreeMap<String, NeoGeoProjectionMetadata>,
+        FamilyProjectionStats,
+    ),
+    String,
+> {
     let mut candidates = games
         .into_iter()
         .map(|game| {
             let identity = neogeo_identity(&game.launch_ref);
             MachineFamilyCandidate {
                 game,
-                identity_id: identity,
+                identity_id: identity
+                    .as_ref()
+                    .map_or_else(String::new, |item| item.id.clone()),
                 family_id: String::new(),
                 relation: FastFiveVariantRelation::NeoGeoVariant,
             }
         })
         .collect::<Vec<_>>();
+    candidates.sort_unstable_by(|left, right| {
+        left.game
+            .launch_ref
+            .cmp(&right.game.launch_ref)
+            .then_with(|| left.game.stable_key.cmp(&right.game.stable_key))
+    });
+    candidates.dedup_by(|left, right| left.game.launch_ref == right.game.launch_ref);
+    let raw = candidates.len();
+    let strengths = candidates
+        .iter()
+        .map(|candidate| {
+            (
+                candidate.game.launch_ref.clone(),
+                neogeo_identity(&candidate.game.launch_ref)
+                    .map_or(NeoGeoIdentityStrength::Weak, |item| item.strength),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let requests = candidates
         .iter()
         .filter(|candidate| !candidate.identity_id.is_empty())
         .map(|candidate| (candidate.identity_id.clone(), None))
         .collect::<Vec<_>>();
-    let resolved = resolver.resolve_many(requests);
+    let resolved = resolver.resolve_many(requests)?;
+    let mut metadata = BTreeMap::new();
     for candidate in &mut candidates {
+        let strength = strengths
+            .get(&candidate.game.launch_ref)
+            .copied()
+            .unwrap_or(NeoGeoIdentityStrength::Weak);
+        let mut source = None;
         if let Some(Some(machine)) = resolved.get(&(candidate.identity_id.clone(), None)) {
             candidate.family_id = machine.family.clone();
             candidate.game.preview_asset_key = machine.family.clone();
+            source = Some(machine.source);
         }
+        metadata.insert(
+            candidate.game.launch_ref.clone(),
+            NeoGeoProjectionMetadata {
+                identity_id: candidate.identity_id.clone(),
+                family_id: candidate.family_id.clone(),
+                strength,
+                source,
+            },
+        );
     }
-    let metadata = candidates
-        .iter()
-        .map(|candidate| {
-            (
-                candidate.game.launch_ref.clone(),
-                (candidate.identity_id.clone(), candidate.family_id.clone()),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
     let projection = project_machine_families(candidates);
     resolver.finish_log("neogeo");
-    (projection, metadata)
+    let stats = FamilyProjectionStats {
+        raw,
+        resolved: metadata
+            .values()
+            .filter(|item| item.source.is_some())
+            .count(),
+        visible: projection.games.len(),
+        variants: projection.variants.len(),
+    };
+    Ok((projection, metadata, stats))
+}
+
+#[derive(Clone, Debug)]
+pub struct NeoGeoFamilyAuditReport {
+    pub valid: bool,
+    pub text: String,
 }
 
 /// Audit the installed Neo Geo source through the same scanner, resolver, and
 /// contiguous family projector used by publication.
-pub fn audit_installed_neogeo_families(storage_root: &Path) -> Result<String, String> {
+pub fn audit_installed_neogeo_families(
+    storage_root: &Path,
+) -> Result<NeoGeoFamilyAuditReport, String> {
     let mut resolver = MachineFamilyResolver::for_storage_root(storage_root)?;
     let installed = rebuild_installed_generic_system(storage_root, "neogeo")?;
     let Some((system, _report)) = installed else {
-        return Ok("neogeo_family_summary_tsv\tinstalled_games=0\tvisible_games=0\tvariants=0\tfamilies=0\tunresolved=0\n".to_string());
+        return Ok(NeoGeoFamilyAuditReport {
+            valid: true,
+            text: "neogeo_family_summary_tsv\tvalid=1\traw_deduplicated=0\tinstalled_games=0\tvisible_games=0\tvariants=0\tfamilies=0\tmame=0\thbmame=0\tunresolved=0\tstrong_unresolved=0\traw_visible_variant_mismatch=0\tduplicate_visible_families=0\tmissing_variant_heads=0\n".to_string(),
+        });
     };
-    let (projection, metadata) = project_neogeo_games(system.games, &mut resolver);
-    let mut family_keys = projection
+    let (projection, metadata, stats) = project_neogeo_games(system.games, &mut resolver)?;
+    let family_keys = projection
         .games
         .iter()
         .map(|game| game.stable_key.as_str())
         .collect::<BTreeSet<_>>();
-    family_keys.extend(
-        projection
-            .variants
-            .iter()
-            .map(|variant| variant.family_stable_key.as_str()),
-    );
+    let mame = metadata
+        .values()
+        .filter(|item| item.source == Some(MachineSource::Mame))
+        .count();
+    let hbmame = metadata
+        .values()
+        .filter(|item| item.source == Some(MachineSource::Hbmame))
+        .count();
     let unresolved = metadata
         .values()
-        .filter(|(_, family)| family.is_empty())
+        .filter(|item| item.source.is_none())
         .count();
+    let strong_unresolved = metadata
+        .values()
+        .filter(|item| item.source.is_none() && item.strength == NeoGeoIdentityStrength::Strong)
+        .count();
+    let mut resolved_visible_families = BTreeMap::<&str, usize>::new();
+    for game in &projection.games {
+        if let Some(item) = metadata.get(&game.launch_ref)
+            && !item.family_id.is_empty()
+        {
+            *resolved_visible_families
+                .entry(item.family_id.as_str())
+                .or_default() += 1;
+        }
+    }
+    let duplicate_visible_families = resolved_visible_families
+        .values()
+        .filter(|count| **count > 1)
+        .count();
+    let missing_variant_heads = projection
+        .variants
+        .iter()
+        .filter(|variant| !family_keys.contains(variant.family_stable_key.as_str()))
+        .count();
+    let raw_mismatch = stats.raw != stats.visible.saturating_add(stats.variants);
+    let valid = !raw_mismatch
+        && duplicate_visible_families == 0
+        && missing_variant_heads == 0
+        && strong_unresolved == 0;
     let mut rows = String::new();
     for game in &projection.games {
-        let (identity, family) = metadata.get(&game.launch_ref).cloned().unwrap_or_default();
+        let item = metadata.get(&game.launch_ref);
+        let fallback = NeoGeoProjectionMetadata {
+            identity_id: String::new(),
+            family_id: String::new(),
+            strength: NeoGeoIdentityStrength::Weak,
+            source: None,
+        };
+        let item = item.unwrap_or(&fallback);
         rows.push_str(&format!(
-            "neogeo_family_row_tsv\tstatus=visible\ttitle={}\tlaunch_ref={}\tidentity_id={}\tfamily_id={}\tfamily_stable_key={}\n",
+            "neogeo_family_row_tsv\tstatus=visible\ttitle={}\tlaunch_ref={}\tidentity_id={}\tfamily_id={}\tidentity_strength={}\tfamily_source={}\tfamily_stable_key={}\n",
             sanitize_family_audit_field(&game.title),
             sanitize_family_audit_field(&game.launch_ref),
-            sanitize_family_audit_field(&identity),
-            sanitize_family_audit_field(&family),
+            sanitize_family_audit_field(&item.identity_id),
+            sanitize_family_audit_field(&item.family_id),
+            neogeo_strength_label(item.strength),
+            machine_source_label(item.source),
             sanitize_family_audit_field(&game.stable_key),
         ));
     }
     for variant in &projection.variants {
-        let (identity, family) = metadata
-            .get(&variant.game.launch_ref)
-            .cloned()
-            .unwrap_or_default();
+        let item = metadata.get(&variant.game.launch_ref);
+        let fallback = NeoGeoProjectionMetadata {
+            identity_id: String::new(),
+            family_id: String::new(),
+            strength: NeoGeoIdentityStrength::Weak,
+            source: None,
+        };
+        let item = item.unwrap_or(&fallback);
         rows.push_str(&format!(
-            "neogeo_family_row_tsv\tstatus=variant\ttitle={}\tlaunch_ref={}\tidentity_id={}\tfamily_id={}\tfamily_stable_key={}\n",
+            "neogeo_family_row_tsv\tstatus=variant\ttitle={}\tlaunch_ref={}\tidentity_id={}\tfamily_id={}\tidentity_strength={}\tfamily_source={}\tfamily_stable_key={}\n",
             sanitize_family_audit_field(&variant.game.title),
             sanitize_family_audit_field(&variant.game.launch_ref),
-            sanitize_family_audit_field(&identity),
-            sanitize_family_audit_field(&family),
+            sanitize_family_audit_field(&item.identity_id),
+            sanitize_family_audit_field(&item.family_id),
+            neogeo_strength_label(item.strength),
+            machine_source_label(item.source),
             sanitize_family_audit_field(&variant.family_stable_key),
         ));
     }
     let summary = format!(
-        "neogeo_family_summary_tsv\tinstalled_games={}\tvisible_games={}\tvariants={}\tfamilies={}\tunresolved={}\n",
-        metadata.len(),
-        projection.games.len(),
-        projection.variants.len(),
+        "neogeo_family_summary_tsv\tvalid={}\traw_deduplicated={}\tinstalled_games={}\tvisible_games={}\tvariants={}\tfamilies={}\tmame={}\thbmame={}\tunresolved={}\tstrong_unresolved={}\traw_visible_variant_mismatch={}\tduplicate_visible_families={}\tmissing_variant_heads={}\n",
+        if valid { 1 } else { 0 },
+        stats.raw,
+        stats.raw,
+        stats.visible,
+        stats.variants,
         family_keys.len(),
+        mame,
+        hbmame,
         unresolved,
+        strong_unresolved,
+        if raw_mismatch { 1 } else { 0 },
+        duplicate_visible_families,
+        missing_variant_heads,
     );
-    Ok(summary + &rows)
+    Ok(NeoGeoFamilyAuditReport {
+        valid,
+        text: summary + &rows,
+    })
 }
 
 fn sanitize_family_audit_field(value: &str) -> String {
     value.replace(['\t', '\r', '\n'], " ")
 }
 
-fn neogeo_identity(launch_ref: &str) -> String {
+fn neogeo_identity(launch_ref: &str) -> Option<NeoGeoIdentity> {
     let path = match crate::archive_member::decode_archive_member_ref(launch_ref) {
         Ok(Some(member)) => member.member_path,
         _ => launch_ref.to_string(),
@@ -1664,17 +1862,43 @@ fn neogeo_identity(launch_ref: &str) -> String {
         .and_then(|extension| extension.to_str())
         .unwrap_or_default();
     if !extension.eq_ignore_ascii_case("zip") && !extension.eq_ignore_ascii_case("neo") {
-        return String::new();
+        return None;
     }
     if let Some(identity) =
         crate::media_metadata::parenthesized_setname(path.to_string_lossy().as_ref())
     {
-        return identity;
+        return Some(NeoGeoIdentity {
+            id: identity,
+            strength: NeoGeoIdentityStrength::Strong,
+        });
     }
     path.file_stem()
         .and_then(|stem| stem.to_str())
         .map(normalize_machine_id)
-        .unwrap_or_default()
+        .filter(|identity| !identity.is_empty())
+        .map(|id| NeoGeoIdentity {
+            id,
+            strength: if extension.eq_ignore_ascii_case("zip") {
+                NeoGeoIdentityStrength::Strong
+            } else {
+                NeoGeoIdentityStrength::Weak
+            },
+        })
+}
+
+fn neogeo_strength_label(strength: NeoGeoIdentityStrength) -> &'static str {
+    match strength {
+        NeoGeoIdentityStrength::Strong => "strong",
+        NeoGeoIdentityStrength::Weak => "weak",
+    }
+}
+
+fn machine_source_label(source: Option<MachineSource>) -> &'static str {
+    match source {
+        Some(MachineSource::Mame) => "mame",
+        Some(MachineSource::Hbmame) => "hbmame",
+        None => "unresolved",
+    }
 }
 
 fn enrich_fast_preview_identities(storage_root: &Path, systems: &mut [FastFiveSystem]) {
@@ -1912,18 +2136,21 @@ mod tests {
                 game: clone,
                 identity_id: "examplej".to_string(),
                 family_id: "example".to_string(),
+                parent_id: String::new(),
                 namespace: None,
             },
             ArcadeCandidate {
                 game: parent,
                 identity_id: "example".to_string(),
                 family_id: "example".to_string(),
+                parent_id: String::new(),
                 namespace: None,
             },
             ArcadeCandidate {
                 game: standalone,
                 identity_id: String::new(),
                 family_id: String::new(),
+                parent_id: String::new(),
                 namespace: None,
             },
         ]);
@@ -1941,6 +2168,56 @@ mod tests {
             .find(|game| game.title == "Example")
             .unwrap();
         assert_eq!(scan.variants[0].family_stable_key, parent.stable_key);
+    }
+
+    #[test]
+    fn arcade_updater_miss_uses_resolver_before_mra_parent_and_projects_four_candidates() {
+        let root = crate::test_support::unique_temp_dir("fast-source-arcade-family-fallback");
+        fs::create_dir_all(root.join("_Arcade/cores")).unwrap();
+        fs::create_dir_all(root.join("games/mame")).unwrap();
+        fs::write(
+            root.join("_Arcade/cores/ArkanoidCore_20260830.rbf"),
+            b"core",
+        )
+        .unwrap();
+        fs::write(root.join("games/mame/arkanoid.zip"), b"rom").unwrap();
+        let database = root.join("mister-magik/mame.sqlite3");
+        fs::create_dir_all(database.parent().unwrap()).unwrap();
+        crate::test_support::write_mame_fixture_db(
+            &database,
+            &[
+                ("arkanoid", None, "Arkanoid", None, None),
+                (
+                    "arkanoidj",
+                    Some("arkanoid"),
+                    "Arkanoid (Japan)",
+                    None,
+                    None,
+                ),
+                ("arkanoid2", Some("arkanoid"), "Arkanoid 2", None, None),
+                ("arkanoid3", Some("arkanoid"), "Arkanoid 3", None, None),
+            ],
+        );
+        for (name, setname) in [
+            ("Arkanoid.mra", "arkanoid"),
+            ("Arkanoid Japan.mra", "arkanoidj"),
+            ("Arkanoid 2.mra", "arkanoid2"),
+            ("Arkanoid 3.mra", "arkanoid3"),
+        ] {
+            fs::write(
+                root.join("_Arcade").join(name),
+                format!(
+                    "<misterromdescription><name>{name}</name><setname>{setname}</setname><parent>mra-parent-{setname}</parent><rbf>ArkanoidCore</rbf><rom zip=\"arkanoid.zip\"><part>00</part></rom></misterromdescription>"
+                ),
+            )
+            .unwrap();
+        }
+        let mut report = FastSourceSystemReport::default();
+        let scan = scan_arcade(&root, &mut report).unwrap();
+        assert_eq!(scan.games.len(), 1);
+        assert_eq!(scan.variants.len(), 3);
+        assert_eq!(report.family_resolved, 4);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2198,11 +2475,38 @@ mod tests {
 
         let report = audit_installed_neogeo_families(&root).unwrap();
 
-        assert!(report.contains(
-            "neogeo_family_summary_tsv\tinstalled_games=2\tvisible_games=1\tvariants=1\tfamilies=1"
+        assert!(report.valid);
+        assert!(report.text.contains(
+            "neogeo_family_summary_tsv\tvalid=1\traw_deduplicated=2\tinstalled_games=2\tvisible_games=1\tvariants=1\tfamilies=1\tmame=2"
         ));
-        assert!(report.contains("neogeo_family_row_tsv\tstatus=visible"));
-        assert!(report.contains("neogeo_family_row_tsv\tstatus=variant"));
-        assert!(report.contains("\tfamily_id=mslug3\t"));
+        assert!(
+            report
+                .text
+                .contains("neogeo_family_row_tsv\tstatus=visible")
+        );
+        assert!(
+            report
+                .text
+                .contains("neogeo_family_row_tsv\tstatus=variant")
+        );
+        assert!(report.text.contains("\tfamily_id=mslug3\t"));
+    }
+
+    #[test]
+    fn neogeo_audit_distinguishes_strong_and_weak_unresolved_identities() {
+        let root = crate::test_support::unique_temp_dir("fast-neogeo-family-strength");
+        let directory = root.join("games/NEOGEO");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("unresolved.zip"), b"rom").unwrap();
+        fs::write(directory.join("unresolved.neo"), b"rom").unwrap();
+
+        let report = audit_installed_neogeo_families(&root).unwrap();
+
+        assert!(!report.valid);
+        assert!(report.text.contains("strong_unresolved=1"));
+        assert!(report.text.contains("unresolved=2"));
+        assert!(report.text.contains("identity_strength=strong"));
+        assert!(report.text.contains("identity_strength=weak"));
+        let _ = fs::remove_dir_all(root);
     }
 }

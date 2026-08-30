@@ -823,6 +823,39 @@ fn encode_variant_payload(
 }
 
 #[cfg(feature = "builder")]
+fn decode_variant_payload(
+    system_id: &str,
+    expected_count: usize,
+    format: &str,
+    stored_count: i64,
+    decoded_sha256: &str,
+    compressed_payload: &[u8],
+) -> Result<Vec<FastFiveGameVariant>, String> {
+    if format != FAST_FIVE_VARIANT_PAYLOAD_FORMAT {
+        return Err(format!(
+            "candidate {system_id} has unsupported variant payload {format}"
+        ));
+    }
+    if i64::try_from(expected_count).unwrap_or(i64::MAX) != stored_count {
+        return Err(format!(
+            "candidate {system_id} variant payload count differs"
+        ));
+    }
+    let decoded = crate::bounded_lz4::decompress_size_prepended(
+        compressed_payload,
+        MAX_FAST_SYSTEM_TRANSPORT_BYTES,
+        "fast-five variant payload",
+    )?;
+    if decoded_sha256 != hex(&Sha256::digest(&decoded)) {
+        return Err(format!(
+            "candidate {system_id} variant payload metadata differs"
+        ));
+    }
+    postcard::from_bytes::<Vec<FastFiveGameVariant>>(&decoded)
+        .map_err(|error| format!("decode candidate {system_id} variants: {error}"))
+}
+
+#[cfg(feature = "builder")]
 pub fn run_c64_artifact_experiment(
     storage_root: &Path,
     scratch_root: &Path,
@@ -1588,9 +1621,30 @@ pub fn verify_snapshot_artifacts(
             };
             changed = changed.saturating_add(usize::from(&actual != expected));
         }
+        let has_variant_payload: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='fast_five_variant_payload')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| {
+                format!("inspect candidate {} variant payload: {error}", source.system_id)
+            })?;
         let stored_variants = if source.variants.is_empty() {
+            if has_variant_payload {
+                return Err(format!(
+                    "candidate {} has an unexpected empty variant payload table",
+                    source.system_id
+                ));
+            }
             Vec::new()
         } else {
+            if !has_variant_payload {
+                return Err(format!(
+                    "candidate {} has no variant payload table",
+                    source.system_id
+                ));
+            }
             let stored = connection
                 .query_row(
                     "SELECT format,variant_count,decoded_sha256,compressed_payload
@@ -1608,32 +1662,14 @@ pub fn verify_snapshot_artifacts(
                 .optional()
                 .map_err(|error| format!("query candidate {} variants: {error}", source.system_id))?
                 .ok_or_else(|| format!("candidate {} has no variant payload", source.system_id))?;
-            if stored.0 != FAST_FIVE_VARIANT_PAYLOAD_FORMAT {
-                return Err(format!(
-                    "candidate {} has unsupported variant payload {}",
-                    source.system_id, stored.0
-                ));
-            }
-            if i64::try_from(source.variants.len()).unwrap_or(i64::MAX) != stored.1 {
-                return Err(format!(
-                    "candidate {} variant payload count differs",
-                    source.system_id
-                ));
-            }
-            let decoded = crate::bounded_lz4::decompress_size_prepended(
+            decode_variant_payload(
+                &source.system_id,
+                source.variants.len(),
+                &stored.0,
+                stored.1,
+                &stored.2,
                 &stored.3,
-                MAX_FAST_SYSTEM_TRANSPORT_BYTES,
-                "fast-five variant payload",
-            )?;
-            if stored.2 != hex(&Sha256::digest(&decoded)) {
-                return Err(format!(
-                    "candidate {} variant payload metadata differs",
-                    source.system_id
-                ));
-            }
-            postcard::from_bytes::<Vec<FastFiveGameVariant>>(&decoded).map_err(|error| {
-                format!("decode candidate {} variants: {error}", source.system_id)
-            })?
+            )?
         };
         changed = changed.saturating_add(source.variants.len().abs_diff(stored_variants.len()));
         changed = changed.saturating_add(
@@ -2067,6 +2103,124 @@ mod builder_tests {
         assert_eq!(verified.status, "exact");
         assert_eq!(verified.games, 1);
         assert_eq!(verified.variants, 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn variant_payload_compresses_exactly_and_rejects_corruption_count_and_digest_changes() {
+        let mut source = FastFiveSystem {
+            system_id: "c64".to_string(),
+            display_title: "C64".to_string(),
+            games: vec![c64_game("Head", "/media/fat/games/C64/head.crt")],
+            variants: vec![FastFiveGameVariant {
+                family_stable_key: "c64\u{1f}Head\u{1f}/media/fat/games/C64/head.crt".to_string(),
+                relation: FastFiveVariantRelation::TitleFormatting,
+                game: c64_game("Variant", "/media/fat/games/C64/variant.d64"),
+            }],
+        };
+        source.variants[0].game.stable_key =
+            "c64\u{1f}Variant\u{1f}/media/fat/games/C64/variant.d64".to_string();
+        let payload = encode_variant_payload(&source).unwrap().unwrap();
+        let decoded = crate::bounded_lz4::decompress_size_prepended(
+            &payload.compressed_payload,
+            MAX_FAST_SYSTEM_TRANSPORT_BYTES,
+            "test variant payload",
+        )
+        .unwrap();
+        assert_eq!(
+            postcard::from_bytes::<Vec<FastFiveGameVariant>>(&decoded).unwrap(),
+            source.variants
+        );
+        assert_eq!(payload.count, 1);
+        assert_eq!(payload.decoded_sha256, hex(&Sha256::digest(&decoded)));
+
+        let mut corrupted = decoded.clone();
+        corrupted[0] ^= 1;
+        let corrupted_compressed = lz4_flex::compress_prepend_size(&corrupted);
+        assert!(
+            decode_variant_payload(
+                "c64",
+                payload.count,
+                &payload.format,
+                payload.count as i64,
+                &payload.decoded_sha256,
+                &corrupted_compressed,
+            )
+            .is_err()
+        );
+        assert!(
+            decode_variant_payload(
+                "c64",
+                payload.count,
+                &payload.format,
+                2,
+                &payload.decoded_sha256,
+                &payload.compressed_payload,
+            )
+            .is_err()
+        );
+        assert!(
+            decode_variant_payload(
+                "c64",
+                payload.count,
+                &payload.format,
+                payload.count as i64,
+                &"0".repeat(64),
+                &payload.compressed_payload,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn empty_variant_payload_table_is_rejected_by_artifact_verification() {
+        let mut snapshot = empty_snapshot();
+        let c64 = snapshot
+            .systems
+            .iter_mut()
+            .find(|system| system.system_id == "c64")
+            .unwrap();
+        c64.games
+            .push(c64_game("Head", "/media/fat/games/C64/head.crt"));
+        snapshot.validate().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-fast-five-empty-variant-table-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let limits = crate::shard_registry::production_registry_limits();
+        publish_snapshot(&root, &snapshot, limits).unwrap();
+        let manifest = read_latest_manifest(&root, limits).unwrap();
+        let sqlite_path = manifest
+            .systems
+            .iter()
+            .find(|system| system.system_id.as_str() == "c64")
+            .unwrap()
+            .active
+            .sqlite_path
+            .as_ref()
+            .unwrap();
+        let connection = rusqlite::Connection::open(root.join(sqlite_path)).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE fast_five_variant_payload(
+                    singleton INTEGER PRIMARY KEY,
+                    format TEXT NOT NULL,
+                    variant_count INTEGER NOT NULL,
+                    decoded_sha256 TEXT NOT NULL,
+                    compressed_payload BLOB NOT NULL
+                )",
+            )
+            .unwrap();
+        drop(connection);
+        assert!(
+            verify_snapshot_artifacts(&root, &snapshot, limits)
+                .unwrap_err()
+                .contains("unexpected empty variant payload table")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

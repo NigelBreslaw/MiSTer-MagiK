@@ -21,6 +21,13 @@ pub(crate) struct MachineFamilyProjection {
     pub(crate) variants: Vec<FastFiveGameVariant>,
 }
 
+struct PreparedCandidate {
+    family: String,
+    is_parent: bool,
+    normalized_title: String,
+    candidate: MachineFamilyCandidate,
+}
+
 pub(crate) fn project_machine_families(
     mut candidates: Vec<MachineFamilyCandidate>,
 ) -> MachineFamilyProjection {
@@ -41,58 +48,69 @@ pub(crate) fn project_machine_families(
             let family = family_key(&candidate);
             let is_parent = !candidate.identity_id.is_empty()
                 && candidate.identity_id.eq_ignore_ascii_case(&family);
-            (family, is_parent, candidate)
+            let normalized_title = candidate.game.title.to_ascii_lowercase();
+            PreparedCandidate {
+                family,
+                is_parent,
+                normalized_title,
+                candidate,
+            }
         })
         .collect::<Vec<_>>();
     prepared.sort_unstable_by(|left, right| {
-        left.0
-            .cmp(&right.0)
-            .then_with(|| right.1.cmp(&left.1))
+        left.family
+            .cmp(&right.family)
+            .then_with(|| right.is_parent.cmp(&left.is_parent))
+            .then_with(|| left.normalized_title.cmp(&right.normalized_title))
             .then_with(|| {
-                left.2
+                left.candidate
                     .game
-                    .title
-                    .to_ascii_lowercase()
-                    .cmp(&right.2.game.title.to_ascii_lowercase())
+                    .launch_ref
+                    .cmp(&right.candidate.game.launch_ref)
             })
-            .then_with(|| left.2.game.launch_ref.cmp(&right.2.game.launch_ref))
-            .then_with(|| left.2.game.stable_key.cmp(&right.2.game.stable_key))
+            .then_with(|| {
+                left.candidate
+                    .game
+                    .stable_key
+                    .cmp(&right.candidate.game.stable_key)
+            })
     });
 
     let mut projection = MachineFamilyProjection {
         games: Vec::new(),
         variants: Vec::new(),
     };
-    let mut position = 0;
-    while position < prepared.len() {
-        let family = prepared[position].0.clone();
-        let end = prepared[position..]
+    while !prepared.is_empty() {
+        let family = prepared[0].family.clone();
+        let end = prepared
             .iter()
-            .position(|candidate| candidate.0 != family)
-            .map_or(prepared.len(), |offset| position + offset);
-        let head = prepared[position].2.game.clone();
-        let family_stable_key = head.stable_key.clone();
-        projection.games.push(head);
-        for (_, _, candidate) in prepared[position + 1..end].iter() {
-            projection.variants.push(FastFiveGameVariant {
-                family_stable_key: family_stable_key.clone(),
-                relation: candidate.relation,
-                game: candidate.game.clone(),
-            });
-        }
-        position = end;
+            .position(|candidate| candidate.family != family)
+            .unwrap_or(prepared.len());
+        let mut family_candidates = prepared.drain(..end).collect::<Vec<_>>();
+        let head = family_candidates.remove(0);
+        let family_stable_key = head.candidate.game.stable_key.clone();
+        projection.games.push(head.candidate.game);
+        projection
+            .variants
+            .extend(
+                family_candidates
+                    .into_iter()
+                    .map(|prepared| FastFiveGameVariant {
+                        family_stable_key: family_stable_key.clone(),
+                        relation: prepared.candidate.relation,
+                        game: prepared.candidate.game,
+                    }),
+            );
     }
-    projection.games.sort_unstable_by(|left, right| {
-        left.title
-            .to_ascii_lowercase()
-            .cmp(&right.title.to_ascii_lowercase())
-            .then_with(|| left.stable_key.cmp(&right.stable_key))
+    projection.games.sort_unstable_by_cached_key(|game| {
+        (game.title.to_ascii_lowercase(), game.stable_key.clone())
     });
-    projection.variants.sort_unstable_by(|left, right| {
-        left.family_stable_key
-            .cmp(&right.family_stable_key)
-            .then_with(|| left.game.launch_ref.cmp(&right.game.launch_ref))
-            .then_with(|| left.game.stable_key.cmp(&right.game.stable_key))
+    projection.variants.sort_unstable_by_cached_key(|variant| {
+        (
+            variant.family_stable_key.clone(),
+            variant.game.launch_ref.clone(),
+            variant.game.stable_key.clone(),
+        )
     });
     projection
 }
@@ -176,5 +194,52 @@ mod tests {
         ]);
         assert_eq!(projection.games.len(), 1);
         assert_eq!(projection.games[0].title, "A");
+    }
+
+    #[test]
+    fn shuffled_candidates_have_identical_projection_and_absent_parent_is_standalone() {
+        let candidates = vec![
+            MachineFamilyCandidate {
+                game: row("Clone B", "b.mra"),
+                identity_id: "cloneb".to_string(),
+                family_id: "parent".to_string(),
+                relation: FastFiveVariantRelation::ArcadeVariant,
+            },
+            MachineFamilyCandidate {
+                game: row("Clone A", "a.mra"),
+                identity_id: "clonea".to_string(),
+                family_id: "parent".to_string(),
+                relation: FastFiveVariantRelation::ArcadeVariant,
+            },
+            MachineFamilyCandidate {
+                game: row("Other", "other.mra"),
+                identity_id: "other".to_string(),
+                family_id: "missing-parent".to_string(),
+                relation: FastFiveVariantRelation::ArcadeVariant,
+            },
+        ];
+        let mut shuffled = candidates.clone();
+        shuffled.reverse();
+        let first = project_machine_families(candidates);
+        let second = project_machine_families(shuffled);
+        assert_eq!(
+            first
+                .games
+                .iter()
+                .map(|game| (&game.title, &game.launch_ref))
+                .collect::<Vec<_>>(),
+            second
+                .games
+                .iter()
+                .map(|game| (&game.title, &game.launch_ref))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(first.variants.len(), 2);
+        assert!(first.variants.iter().all(|variant| {
+            first
+                .games
+                .iter()
+                .any(|game| game.stable_key == variant.family_stable_key)
+        }));
     }
 }
