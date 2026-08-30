@@ -1797,7 +1797,8 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
                     .unwrap_or_else(|error| error.into_inner());
                 if inner_progress > inner_progress_reported {
                     let delta = inner_progress - inner_progress_reported;
-                    progress.advance("inner-work", progress.work_units.saturating_add(delta));
+                    let work_units = progress.work_units.saturating_add(delta);
+                    progress.advance("inner-work", work_units);
                     inner_progress_reported = inner_progress;
                 }
                 progress.clone()
