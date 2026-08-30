@@ -29,8 +29,7 @@ module tb_mister_magik_video_diagnostics_control;
 
 	mister_magik_scaler_fetch_liveness_state #(
 		.WATCHDOG_LIMIT(24'd20),
-		.RESET_QUALIFY_LIMIT(3'd4),
-		.SNAPSHOT_CYCLES(14'd8)
+		.RESET_QUALIFY_LIMIT(3'd4)
 	) dut (
 		.clk_100m(clk_100m),
 		.clk_sys(clk_sys),

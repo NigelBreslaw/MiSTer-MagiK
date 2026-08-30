@@ -79,7 +79,7 @@ set_net_delay -max 10.0 \
 set magik_scheduler_snapshot_data [magik_require_registers scheduler_snapshot_data \
 	{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold*} 15]
 set magik_scheduler_snapshot_destination [get_registers -nowarn -no_duplicates \
-	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|frozen_*}]
+	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_state*}]
 if {[get_collection_size $magik_scheduler_snapshot_destination] != 16} {
 	post_message -type error "MagiK scheduler snapshot destination collection mismatch"
 	error "MagiK scheduler snapshot destination collection mismatch"

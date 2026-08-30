@@ -154,15 +154,15 @@ EXPERIMENTAL_SCALER_FETCH_METASTABILITY_CHAIN = {
     },
     "scheduler_snapshot_request": {
         "source": "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_request_toggle",
-        "synchronization_node": "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_meta",
+        "synchronization_node": "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_meta",
         "allow_source_duplicate": False,
         "registers": (
-            "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_meta",
-            "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_sync",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_meta",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_sync",
         ),
     },
     "scheduler_snapshot_response": {
-        "source": "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|response_toggle",
+        "source": "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|response_toggle",
         "synchronization_node": "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_meta",
         "allow_source_duplicate": False,
         "registers": (
@@ -212,7 +212,8 @@ EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH = {
         r"response_toggle\s*;[^\n]*snapshot_response_meta\s*;", re.IGNORECASE
     ),
     "scheduler_snapshot_data": re.compile(
-        r"evidence_hold(?:\[\d+\])?\s*;[^\n]*frozen_", re.IGNORECASE
+        r"evidence_hold(?:\[\d+\])?\s*;[^\n]*scheduler_snapshot_state",
+        re.IGNORECASE,
     ),
 }
 

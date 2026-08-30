@@ -100,7 +100,8 @@ register and sticky update from `Scalaire`. The existing 16-bit port now
 exports only live registered scheduler gates. After the 100 MHz watchdog proves
 there has been no external request, it toggles a closed-loop mailbox request.
 A separate SystemVerilog observer, clocked by `clk_hdmi`, samples those gates
-for 8,192 source clocks and reconstructs the same event-order summary. Because
+from one HSYNC entry through the next and reconstructs the same event-order
+summary. Because
 the observer uses the source clock, it cannot miss a one-cycle scheduler state.
 It holds the completed 16-bit word before toggling its response; the two-stage
 destination synchronizer therefore qualifies a coherent multi-cycle data path.

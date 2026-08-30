@@ -21,7 +21,6 @@ module mister_magik_scaler_fetch_liveness_formal;
 	wire snapshot_response;
 	wire [15:0] snapshot_evidence;
 	wire snapshot_capture_active;
-	wire [13:0] snapshot_capture_count;
 	wire [15:0] snapshot_accumulated;
 	wire [15:0] snapshot_events;
 
@@ -46,8 +45,7 @@ module mister_magik_scaler_fetch_liveness_formal;
 
 	mister_magik_scaler_fetch_liveness_state #(
 		.WATCHDOG_LIMIT(24'd15),
-		.RESET_QUALIFY_LIMIT(3'd4),
-		.SNAPSHOT_CYCLES(14'd4)
+		.RESET_QUALIFY_LIMIT(3'd4)
 	) dut (
 		.clk_100m(formal_clk),
 		.clk_sys(formal_clk),
@@ -84,16 +82,13 @@ module mister_magik_scaler_fetch_liveness_formal;
 		.formal_request_cancel_event(request_cancel_event)
 	);
 
-	mister_magik_scaler_scheduler_snapshot #(
-		.OBSERVATION_CYCLES(14'd4)
-	) snapshot_proof (
+	mister_magik_scaler_scheduler_snapshot snapshot_proof (
 		.scaler_clk(formal_clk),
 		.live_state(snapshot_live_state),
 		.request_toggle(snapshot_request),
 		.response_toggle(snapshot_response),
 		.evidence_hold(snapshot_evidence),
 		.formal_capture_active(snapshot_capture_active),
-		.formal_capture_count(snapshot_capture_count),
 		.formal_accumulated_evidence(snapshot_accumulated),
 		.formal_event_evidence(snapshot_events)
 	);
@@ -128,7 +123,8 @@ module mister_magik_scaler_fetch_liveness_formal;
 				assert((snapshot_accumulated & $past(snapshot_accumulated)) ==
 					$past(snapshot_accumulated));
 			if(snapshot_response == $past(snapshot_response) &&
-				!$past(snapshot_capture_active))
+				!$past(snapshot_capture_active) &&
+				$past(snapshot_request == snapshot_response))
 				assert(snapshot_evidence == $past(snapshot_evidence));
 			case({$past(enqueue), $past(dequeue)})
 				2'b10: assert(fifo_count == $past(fifo_count) + 1'b1);

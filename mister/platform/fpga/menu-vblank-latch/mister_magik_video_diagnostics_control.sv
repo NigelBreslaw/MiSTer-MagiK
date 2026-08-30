@@ -4,22 +4,21 @@
 `timescale 1ns/1ps
 `default_nettype none
 
-// Source-clock evidence collector and closed-loop multi-cycle-path mailbox.
-// The live bus is consumed only on scaler_clk. Every source-clock event in the
-// bounded window is ORed into evidence_hold before response_toggle crosses to
-// the destination. evidence_hold then remains immutable until another request,
-// so the destination never samples a changing asynchronous multi-bit value.
-module mister_magik_scaler_scheduler_snapshot #(
-	parameter [13:0] OBSERVATION_CYCLES = 14'd8192
-) (
+// Source-clock evidence collector and closed-loop multi-cycle-path snapshot.
+// The live bus is consumed only on scaler_clk. Every source-clock event in one
+// complete scheduler revolution is ORed directly into evidence_hold before
+// response_toggle crosses to the destination. evidence_hold then remains
+// immutable until another request, so the destination never samples a changing
+// asynchronous multi-bit value. Failure to complete a revolution is detected
+// by the existing destination-domain watchdog and fails closed.
+module mister_magik_scaler_scheduler_snapshot (
 	input  wire        scaler_clk,
 	input  wire [15:0] live_state,
 	input  wire        request_toggle,
 	output reg         response_toggle = 1'b0,
-	output reg  [15:0] evidence_hold = 16'd0
+	output reg  [15:0] evidence_hold = 16'h0001
 `ifdef FORMAL
 	,output wire        formal_capture_active
-	,output wire [13:0] formal_capture_count
 	,output wire [15:0] formal_accumulated_evidence
 	,output wire [15:0] formal_event_evidence
 `endif
@@ -28,14 +27,12 @@ module mister_magik_scaler_scheduler_snapshot #(
 	reg request_meta = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg request_sync = 1'b0;
-	reg capture_active = 1'b0;
-	reg [13:0] capture_count = 14'd0;
-	reg [15:0] accumulated_evidence = 16'd0;
 	reg [1:0] previous_output_state = 2'd0;
 	reg previous_vertical_pixel_enable = 1'b0;
 	reg previous_vertical_carry = 1'b0;
 
 	wire [1:0] output_state = live_state[1:0];
+	wire hsync_entry = previous_output_state != 2'd1 && output_state == 2'd1;
 	wire left_hsync = previous_output_state == 2'd1 && output_state != 2'd1;
 	wire [15:0] event_evidence = {
 		live_state[12],
@@ -55,39 +52,35 @@ module mister_magik_scaler_scheduler_snapshot #(
 		live_state[2],
 		1'b0
 	};
-	wire [15:0] next_evidence = accumulated_evidence | event_evidence;
+	wire [15:0] next_evidence = evidence_hold | event_evidence;
 
 `ifdef FORMAL
-	assign formal_capture_active = capture_active;
-	assign formal_capture_count = capture_count;
-	assign formal_accumulated_evidence = accumulated_evidence;
+	assign formal_capture_active = request_sync != response_toggle &&
+		!evidence_hold[0];
+	assign formal_accumulated_evidence = evidence_hold;
 	assign formal_event_evidence = event_evidence;
 `endif
 
 	always @(posedge scaler_clk) begin
 		request_meta <= request_toggle;
 		request_sync <= request_meta;
+		previous_output_state <= output_state;
+		previous_vertical_pixel_enable <= live_state[5];
+		previous_vertical_carry <= live_state[6];
 
-		if(!capture_active && request_sync != response_toggle) begin
-			capture_active <= 1'b1;
-			capture_count <= 14'd0;
-			accumulated_evidence <= 16'd0;
-			previous_output_state <= output_state;
-			previous_vertical_pixel_enable <= live_state[5];
-			previous_vertical_carry <= live_state[6];
+		if(request_sync == response_toggle) begin
 		end
-		else if(capture_active) begin
-			previous_output_state <= output_state;
-			previous_vertical_pixel_enable <= live_state[5];
-			previous_vertical_carry <= live_state[6];
-			accumulated_evidence <= next_evidence;
-			if(capture_count + 1'd1 >= OBSERVATION_CYCLES) begin
-				evidence_hold <= next_evidence | 16'h0001;
-				response_toggle <= request_sync;
-				capture_active <= 1'b0;
-			end
-			else
-				capture_count <= capture_count + 1'd1;
+		else if(evidence_hold[0]) begin
+			// Bit zero doubles as the idle/completed marker, avoiding a second
+			// accumulator bank or capture-state registers.
+			evidence_hold <= event_evidence;
+		end
+		else if(hsync_entry && evidence_hold[4]) begin
+			evidence_hold <= next_evidence | 16'h0001;
+			response_toggle <= request_sync;
+		end
+		else begin
+			evidence_hold <= next_evidence;
 		end
 	end
 endmodule
@@ -99,8 +92,7 @@ endmodule
 // production.
 module mister_magik_scaler_fetch_liveness_state #(
 	parameter [23:0] WATCHDOG_LIMIT = 24'hffffff,
-	parameter [2:0] RESET_QUALIFY_LIMIT = 3'd4,
-	parameter [13:0] SNAPSHOT_CYCLES = 14'd8192
+	parameter [2:0] RESET_QUALIFY_LIMIT = 3'd4
 ) (
 	input  wire        clk_100m,
 	input  wire        clk_sys,
@@ -147,8 +139,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 		MAGIK_SCALER_FETCH_LIVENESS_STATE_WATCHDOG_CYCLES;
 	localparam [2:0] CONTRACT_RESET_QUALIFY_LIMIT =
 		MAGIK_SCALER_FETCH_LIVENESS_STATE_RESET_QUALIFY_CYCLES;
-	localparam [13:0] CONTRACT_SNAPSHOT_CYCLES =
-		MAGIK_SCALER_FETCH_LIVENESS_STATE_SNAPSHOT_CYCLES;
+	localparam [1:0] CONTRACT_SNAPSHOT_HSYNC_ENTRIES =
+		MAGIK_SCALER_FETCH_LIVENESS_STATE_SNAPSHOT_HSYNC_ENTRIES;
 
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg reset_meta = 1'b1;
@@ -207,6 +199,10 @@ module mister_magik_scaler_fetch_liveness_state #(
 	reg [6:0] frozen_return_phase = 7'd0;
 	reg [1:0] frozen_fifo_depth = 2'd0;
 	reg [3:0] frozen_address_fold = 4'd0;
+	// Dedicated destination bank for the closed-loop scaler snapshot. Keeping
+	// it separate from fault attribution prevents synthesis from proving away
+	// individual CDC payload paths through mutually exclusive fault branches.
+	(* preserve, dont_replicate *) reg [15:0] scheduler_snapshot_state = 16'd0;
 	// The destination acknowledges only after a complete command. The source
 	// publication bank remains immutable until that acknowledgement returns.
 	reg [3:0] publication_sequence = 4'd0;
@@ -273,9 +269,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 		bad_burst_event || fifo_overflow_event || unexpected_return_event ||
 		snapshot_timeout_event;
 
-	mister_magik_scaler_scheduler_snapshot #(
-		.OBSERVATION_CYCLES(SNAPSHOT_CYCLES)
-	) scheduler_snapshot (
+	mister_magik_scaler_scheduler_snapshot scheduler_snapshot (
 		.scaler_clk(scaler_clk),
 		.live_state(scaler_diag_state),
 		.request_toggle(snapshot_request_toggle),
@@ -333,12 +327,14 @@ module mister_magik_scaler_fetch_liveness_state #(
 		fifo_count,
 		return_phase
 	};
-	wire [15:0] frozen_state = {
+	wire [15:0] fault_frozen_state = {
 		frozen_address_fold,
 		frozen_fifo_depth,
 		frozen_return_phase,
 		frozen_cause
 	};
+	wire [15:0] frozen_state = no_request_seen ?
+		scheduler_snapshot_state : fault_frozen_state;
 
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
@@ -502,10 +498,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 				no_request_seen <= 1'b1;
 				// The source mailbox held this complete evidence word stable before
 				// its response toggle crossed into clk_100m.
-				frozen_cause <= snapshot_evidence_hold[2:0];
-				frozen_return_phase <= snapshot_evidence_hold[9:3];
-				frozen_fifo_depth <= snapshot_evidence_hold[11:10];
-				frozen_address_fold <= snapshot_evidence_hold[15:12];
+				scheduler_snapshot_state <= snapshot_evidence_hold;
 			end
 		end
 		else if(!first_stall_valid && !observer_fault && reset_qualified &&
@@ -608,8 +601,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 			$display("MagiK liveness watchdog overridden for simulation");
 		if(RESET_QUALIFY_LIMIT != CONTRACT_RESET_QUALIFY_LIMIT)
 			$display("MagiK liveness reset qualification overridden for simulation");
-		if(SNAPSHOT_CYCLES != CONTRACT_SNAPSHOT_CYCLES)
-			$display("MagiK liveness snapshot window overridden for simulation");
+		if(CONTRACT_SNAPSHOT_HSYNC_ENTRIES != 2)
+			$error("MagiK liveness snapshot contract must span two HSYNC entries");
 	end
 `endif
 

@@ -224,7 +224,7 @@ SCALER_FETCH_DIAGNOSTIC_REPORTS = {
         + "".join(
             net_delay_detail(
                 f"mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold[{bit}]",
-                f"mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|frozen_state[{bit}]",
+                f"mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_state[{bit}]",
             )
             for bit in range(1, 16)
         )
@@ -261,15 +261,15 @@ SCALER_FETCH_DIAGNOSTIC_REPORTS = {
         + metastability_chain(
             6,
             "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_request_toggle",
-            "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_meta",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_meta",
             (
-                "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_meta",
-                "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_sync",
+                "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_meta",
+                "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_sync",
             ),
         )
         + metastability_chain(
             7,
-            "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|response_toggle",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|response_toggle",
             "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_meta",
             (
                 "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_meta",
@@ -876,7 +876,7 @@ class QuartusDeltaTest(unittest.TestCase):
         reports = dict(SCALER_FETCH_DIAGNOSTIC_REPORTS)
         missing = net_delay_detail(
             "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold[15]",
-            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|frozen_state[15]",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_state[15]",
         )
         reports["menu.magik-diagnostic-cdc-net-delay.rpt"] = reports[
             "menu.magik-diagnostic-cdc-net-delay.rpt"
@@ -894,7 +894,7 @@ class QuartusDeltaTest(unittest.TestCase):
         reports = dict(SCALER_FETCH_DIAGNOSTIC_REPORTS)
         reports["menu.magik-diagnostic-cdc-net-delay.rpt"] += net_delay_detail(
             "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold[0]",
-            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|frozen_state[0]",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_state[0]",
         )
         result, payload = self.run_check(
             BASE,

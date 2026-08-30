@@ -400,7 +400,7 @@ if scaler_fetch_liveness != {
         "required_burstcount": 128,
         "return_beats": 128,
         "reset_qualify_cycles": 4,
-        "snapshot_cycles": 8192,
+        "snapshot_hsync_entries": 2,
         "watchdog_cycles": 0xFFFFFF,
     },
 }:

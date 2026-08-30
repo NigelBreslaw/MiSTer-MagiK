@@ -26,20 +26,22 @@ scaler bus asynchronously. It toggles `snapshot_request_toggle` and starts a
 second bounded watchdog interval.
 
 `mister_magik_scaler_scheduler_snapshot` receives that request through two
-synchronizer stages in the scaler clock domain. It then observes 8,192
-consecutive `clk_hdmi` edges. The live two-bit output state and existing gates
-are converted into the schema-17 event-order fields and ORed into a monotonic
-16-bit accumulator. State transitions such as `sHSYNC -> sREAD` and
-`sREAD -> sWAITREAD` are detected from adjacent source-clock samples, so a
-one-source-cycle event cannot be missed.
+synchronizer stages in the scaler clock domain. It observes one complete
+scheduler revolution, from the first `sHSYNC` entry through the next. The live
+two-bit output state and existing gates are converted into the schema-17
+event-order fields and ORed directly into the held 16-bit bank. State
+transitions such as `sHSYNC -> sREAD` and `sREAD -> sWAITREAD` are detected from
+adjacent source-clock samples, so a one-source-cycle event cannot be missed.
+Failure to complete the revolution leaves the response pending and the
+existing destination watchdog publishes `observer_fault`.
 
-At the end of the window, the source copies the complete accumulator into
-`evidence_hold`, sets `window_valid`, and only then mirrors the request into
+At the end of the revolution, the source sets `window_valid` in the already
+complete `evidence_hold` bank and only then mirrors the request into
 `response_toggle`. `evidence_hold` remains unchanged until a later request.
 The response crosses through two destination synchronizer stages before the
 100 MHz observer copies the held bus into its existing frozen storage. Explicit
-10 ns net-delay constraints bound request, response, and all sixteen held-data
-paths. There is no false path or timing waiver.
+10 ns net-delay constraints bound request, response, and every synthesized
+held-data path. There is no false path or timing waiver.
 
 The capture fails closed as `observer_fault` if its response times out, reset
 or Avalon progress occurs during the evidence window, burst/return accounting
@@ -62,7 +64,7 @@ rejects impossible event ordering.
 - Icarus must reconstruct `0x78df` from a repeating sequence in which each
   DISP, HSYNC, READ, and WAITREAD transition lasts one scaler clock.
 - Formal proof must show every event present on a capture edge appears in the
-  accumulator or in the acknowledged held result, accumulated bits are
+  held accumulator or in the acknowledged result, accumulated bits are
   monotonic, and held evidence is immutable between completed captures.
 - Existing completion accounting safety, temporal induction, and every
   non-vacuity cover remain mandatory.
