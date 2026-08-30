@@ -26,7 +26,10 @@ const DEFAULT_DESCRIPTOR_PATH: &str = "/tmp/mister-magik/ui-automation-session.j
 const DEFAULT_SOCKET_PATH: &str = "/tmp/mister-magik/ui-automation.sock";
 const DEFAULT_FAILURE_PATH: &str = "/tmp/mister-magik/ui-automation-failure.json";
 const MAX_SESSION_AGE: Duration = Duration::from_secs(120);
-const REQUEST_LEASE: Duration = Duration::from_secs(5);
+// Cold startup may spend the full intro interval preparing and presenting
+// frames before the automation socket is serviced again. Keep the dead-client
+// release bounded while allowing that 20-second startup path to complete.
+const REQUEST_LEASE: Duration = Duration::from_secs(30);
 const CLOCK_SKEW: Duration = Duration::from_secs(10);
 const INTERRUPTED_SYSCALL_RETRIES: usize = 16;
 const STARTUP_PRESENTATION_TRACE_LIMIT: usize = 64;
