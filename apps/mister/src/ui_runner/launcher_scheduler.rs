@@ -451,19 +451,32 @@ fn prepare_system_shard(
         let generation = reader.active_system_generation(&parsed)?;
         drop(descriptor_pmu);
         let descriptor_lookup_us = elapsed_us(descriptor_started);
-        let navpack_pmu = mister_magik_perf_events::sampled_span("system-entry-navpack-open");
-        let (collection, navpack) = arcade_catalog::SystemCollection::open_navpack(
-            artifact_system_id.as_str(),
-            &generation.navpack_path,
-            generation.navpack_bytes,
-            generation.generation,
-            generation.games,
-            base_catalog.platform_kind(&artifact_system_id),
-        )
-        .map_err(|error| {
-            mister_magik_catalog::sharded_catalog::CatalogError::new("open-system", error)
-        })?;
-        drop(navpack_pmu);
+        let (collection, navpack) = if let Some(navpack_path) = generation.navpack_path {
+            let navpack_pmu = mister_magik_perf_events::sampled_span("system-entry-navpack-open");
+            let opened = arcade_catalog::SystemCollection::open_navpack(
+                artifact_system_id.as_str(),
+                &navpack_path,
+                generation.navpack_bytes,
+                generation.generation,
+                generation.games,
+                base_catalog.platform_kind(&artifact_system_id),
+            )
+            .map_err(|error| {
+                mister_magik_catalog::sharded_catalog::CatalogError::new("open-system", error)
+            })?;
+            drop(navpack_pmu);
+            opened
+        } else {
+            (
+                arcade_catalog::SystemCollection::new(
+                    artifact_system_id.as_str(),
+                    Vec::new(),
+                    Vec::new(),
+                    base_catalog.platform_kind(&artifact_system_id),
+                ),
+                Default::default(),
+            )
+        };
         Ok((
             collection,
             generation.games,

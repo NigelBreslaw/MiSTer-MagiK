@@ -35630,7 +35630,7 @@ fn resolve_catalog_database(
                 .systems
                 .into_iter()
                 .find(|system| system.system_id.as_str() == system_id)
-                .map(|system| system.active.sqlite_path)
+                .and_then(|system| system.active.sqlite_path)
                 .ok_or_else(|| format!("catalog has no active system '{system_id}'"))?;
             let relative = relative
                 .to_str()

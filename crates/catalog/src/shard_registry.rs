@@ -102,14 +102,46 @@ pub struct ManifestSystem {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PublishedGeneration {
     pub generation: u64,
-    pub sqlite_path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sqlite_path: Option<PathBuf>,
     pub navigation_path: Option<PathBuf>,
-    pub sqlite_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sqlite_bytes: Option<u64>,
     pub navigation_bytes: Option<u64>,
-    pub sqlite_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sqlite_hash: Option<String>,
     pub navigation_hash: Option<String>,
     pub games: u64,
     pub navpack: Option<PublishedNavPack>,
+}
+
+impl PublishedGeneration {
+    /// Returns true when this generation intentionally carries no per-system
+    /// artifacts. The registry entry and display metadata remain authoritative
+    /// for an installed system with no launchable games.
+    pub fn is_artifactless(&self) -> bool {
+        self.sqlite_path.is_none()
+            && self.navigation_path.is_none()
+            && self.sqlite_bytes.is_none()
+            && self.navigation_bytes.is_none()
+            && self.sqlite_hash.is_none()
+            && self.navigation_hash.is_none()
+            && self.navpack.is_none()
+    }
+
+    pub fn artifactless(generation: u64) -> Self {
+        Self {
+            generation,
+            sqlite_path: None,
+            navigation_path: None,
+            sqlite_bytes: None,
+            navigation_bytes: None,
+            sqlite_hash: None,
+            navigation_hash: None,
+            games: 0,
+            navpack: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -143,13 +175,16 @@ struct StoredSystem {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct StoredGeneration {
     generation: u64,
-    sqlite_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sqlite_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     navigation_path: Option<String>,
-    sqlite_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sqlite_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     navigation_bytes: Option<u64>,
-    sqlite_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sqlite_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     navigation_hash: Option<String>,
     games: u64,
@@ -331,11 +366,11 @@ fn publish_system_artifacts_with_options(
     Ok(ArtifactPublication {
         generation: PublishedGeneration {
             generation,
-            sqlite_path,
+            sqlite_path: Some(sqlite_path),
             navigation_path: navigation_bytes.map(|_| navigation_path),
-            sqlite_bytes,
+            sqlite_bytes: Some(sqlite_bytes),
             navigation_bytes,
-            sqlite_hash,
+            sqlite_hash: Some(sqlite_hash),
             navigation_hash,
             games,
             navpack: Some(PublishedNavPack {
@@ -840,9 +875,11 @@ pub(crate) fn validate_published_system(
     limits: RegistryLimits,
 ) -> Result<(), RegistryError> {
     validate_manifest_system_with_options(storage_root, system, limits, true, true)?;
-    if let Some(navigation_path) = &system.active.navigation_path {
+    if let (Some(sqlite_path), Some(navigation_path)) =
+        (&system.active.sqlite_path, &system.active.navigation_path)
+    {
         open_system_shard(
-            &storage_root.join(&system.active.sqlite_path),
+            &storage_root.join(sqlite_path),
             &storage_root.join(navigation_path),
             &system.system_id,
             system.active.generation,
@@ -891,8 +928,23 @@ fn validate_generation(
     let expected_navigation =
         expected_directory.join(format!("{}.nav.lz4b", generation.generation));
     let expected_navpack = expected_directory.join(format!("{}.navpack", generation.generation));
-    if generation.sqlite_path != expected_sqlite
-        || !safe_relative_path(&generation.sqlite_path)
+    let artifactless = generation.is_artifactless();
+    if artifactless {
+        if generation.games != 0 {
+            return Err(RegistryError::new(
+                "validate-manifest",
+                "artifact-less generation has games",
+            ));
+        }
+        return Ok(());
+    }
+    if generation.sqlite_path.as_ref() != Some(&expected_sqlite)
+        || generation
+            .sqlite_path
+            .as_ref()
+            .is_none_or(|path| !safe_relative_path(path))
+        || generation.sqlite_bytes.is_none()
+        || generation.sqlite_hash.is_none()
         || generation
             .navigation_path
             .as_ref()
@@ -912,11 +964,16 @@ fn validate_generation(
         ));
     }
     if generation.games > limits.shard.max_games as u64
-        || generation.sqlite_bytes > limits.shard.max_sqlite_bytes
+        || generation
+            .sqlite_bytes
+            .is_some_and(|bytes| bytes > limits.shard.max_sqlite_bytes)
         || generation
             .navigation_bytes
             .is_some_and(|bytes| bytes > limits.shard.max_navigation_compressed_bytes as u64)
-        || !valid_hash(&generation.sqlite_hash)
+        || generation
+            .sqlite_hash
+            .as_ref()
+            .is_none_or(|hash| !valid_hash(hash))
         || generation
             .navigation_hash
             .as_ref()
@@ -930,7 +987,9 @@ fn validate_generation(
     if !validate_artifacts {
         return Ok(());
     }
-    let sqlite = storage_root.join(&generation.sqlite_path);
+    let sqlite = storage_root.join(generation.sqlite_path.as_ref().ok_or_else(|| {
+        RegistryError::new("validate-manifest", "manifest SQLite path is missing")
+    })?);
     let navigation = generation
         .navigation_path
         .as_ref()
@@ -939,7 +998,9 @@ fn validate_generation(
         .navpack
         .as_ref()
         .map(|published| (storage_root.join(&published.path), published));
-    if regular_file_size(&sqlite, limits.shard.max_sqlite_bytes)? != generation.sqlite_bytes {
+    if regular_file_size(&sqlite, limits.shard.max_sqlite_bytes)?
+        != generation.sqlite_bytes.expect("validated SQLite bytes")
+    {
         return Err(RegistryError::new(
             "validate-manifest",
             "manifest artifact size does not match file",
@@ -964,7 +1025,13 @@ fn validate_generation(
             "manifest NavPack size does not match file",
         ));
     }
-    if verify_hashes && file_checksum(&sqlite)? != generation.sqlite_hash {
+    if verify_hashes
+        && file_checksum(&sqlite)?
+            != generation
+                .sqlite_hash
+                .as_deref()
+                .expect("validated SQLite hash")
+    {
         return Err(RegistryError::new(
             "validate-manifest",
             "manifest artifact hash does not match file",
@@ -1023,7 +1090,7 @@ fn to_stored(manifest: &CatalogManifest) -> StoredManifest {
 fn generation_to_stored(generation: &PublishedGeneration) -> StoredGeneration {
     StoredGeneration {
         generation: generation.generation,
-        sqlite_path: path_string(&generation.sqlite_path),
+        sqlite_path: generation.sqlite_path.as_deref().map(path_string),
         navigation_path: generation.navigation_path.as_deref().map(path_string),
         sqlite_bytes: generation.sqlite_bytes,
         navigation_bytes: generation.navigation_bytes,
@@ -1079,7 +1146,7 @@ fn from_stored(stored: StoredManifest) -> Result<CatalogManifest, RegistryError>
 fn generation_from_stored(generation: StoredGeneration) -> PublishedGeneration {
     PublishedGeneration {
         generation: generation.generation,
-        sqlite_path: PathBuf::from(generation.sqlite_path),
+        sqlite_path: generation.sqlite_path.map(PathBuf::from),
         navigation_path: generation.navigation_path.map(PathBuf::from),
         sqlite_bytes: generation.sqlite_bytes,
         navigation_bytes: generation.navigation_bytes,
@@ -1115,7 +1182,7 @@ pub(crate) fn garbage_collect_unreferenced_with_retained(
             std::iter::once(&system.active)
                 .chain(system.previous.iter())
                 .flat_map(|generation| {
-                    let mut paths = vec![generation.sqlite_path.clone()];
+                    let mut paths = generation.sqlite_path.iter().cloned().collect::<Vec<_>>();
                     paths.extend(generation.navigation_path.iter().cloned());
                     paths.extend(
                         generation
@@ -1436,7 +1503,10 @@ mod tests {
         assert_eq!(publication.copied_bytes, 0);
         assert!(!sqlite.exists());
         assert!(!navigation.exists());
-        assert!(root.join(publication.generation.sqlite_path).is_file());
+        assert!(
+            root.join(publication.generation.sqlite_path.as_ref().unwrap())
+                .is_file()
+        );
         assert!(
             root.join(publication.generation.navigation_path.unwrap())
                 .is_file()
@@ -1525,10 +1595,10 @@ mod tests {
         let manifest = manifest(3, third, Some(second));
         let removed = garbage_collect_unreferenced(&root, &manifest).unwrap();
         assert_eq!(removed.len(), 7);
-        assert!(!root.join(first.sqlite_path).exists());
+        assert!(!root.join(first.sqlite_path.unwrap()).exists());
         assert!(!root.join(first.navigation_path.unwrap()).exists());
         assert!(!root.join(first.navpack.unwrap().path).exists());
-        assert!(!root.join(obsolete.sqlite_path).exists());
+        assert!(!root.join(obsolete.sqlite_path.unwrap()).exists());
         assert!(!root.join(obsolete.navigation_path.unwrap()).exists());
         assert!(!root.join(obsolete.navpack.unwrap().path).exists());
         assert!(!orphaned_navpack.exists());
@@ -1544,7 +1614,7 @@ mod tests {
         let unpublished = create_generation(&root, &system_id, 2);
         let obsolete = create_generation(&root, &SystemId::parse("gamegear").unwrap(), 1);
         let retained = [
-            unpublished.sqlite_path.clone(),
+            unpublished.sqlite_path.clone().unwrap(),
             unpublished.navigation_path.clone().unwrap(),
             unpublished.navpack.as_ref().unwrap().path.clone(),
         ];
@@ -1554,10 +1624,10 @@ mod tests {
                 .unwrap();
 
         assert_eq!(removed.len(), 3);
-        assert!(root.join(unpublished.sqlite_path).exists());
+        assert!(root.join(unpublished.sqlite_path.unwrap()).exists());
         assert!(root.join(unpublished.navigation_path.unwrap()).exists());
         assert!(root.join(unpublished.navpack.unwrap().path).exists());
-        assert!(!root.join(obsolete.sqlite_path).exists());
+        assert!(!root.join(obsolete.sqlite_path.unwrap()).exists());
         assert!(!root.join(obsolete.navigation_path.unwrap()).exists());
         assert!(!root.join(obsolete.navpack.unwrap().path).exists());
         fs::remove_dir_all(root).unwrap();
@@ -1601,11 +1671,11 @@ mod tests {
                 producers: vec!["snes-root".to_string()],
                 active: StoredGeneration {
                     generation: 1,
-                    sqlite_path: "../escape.sqlite3".to_string(),
+                    sqlite_path: Some("../escape.sqlite3".to_string()),
                     navigation_path: Some("systems/snes/1.nav.lz4b".to_string()),
-                    sqlite_bytes: 1,
+                    sqlite_bytes: Some(1),
                     navigation_bytes: Some(1),
-                    sqlite_hash: "0000000000000000".to_string(),
+                    sqlite_hash: Some("0000000000000000".to_string()),
                     navigation_hash: Some("0000000000000000".to_string()),
                     games: 1,
                     navpack: None,

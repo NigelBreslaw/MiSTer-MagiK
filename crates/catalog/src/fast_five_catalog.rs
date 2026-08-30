@@ -540,7 +540,11 @@ pub fn registry_fingerprint_for_manifest(manifest: &CatalogManifest) -> String {
         digest.update([0]);
         digest.update(system.active.generation.to_le_bytes());
         digest.update(system.active.games.to_le_bytes());
-        digest.update(system.active.sqlite_hash.as_bytes());
+        if let Some(sqlite_hash) = &system.active.sqlite_hash {
+            digest.update(sqlite_hash.as_bytes());
+        } else {
+            digest.update(b"artifactless");
+        }
         if let Some(navigation_hash) = &system.active.navigation_hash {
             digest.update(navigation_hash.as_bytes());
         }
@@ -942,8 +946,12 @@ pub fn run_c64_artifact_experiment(
     };
     let publish_us = elapsed_us(publish_started);
     let validate_started = Instant::now();
+    let published_sqlite = published
+        .sqlite_path
+        .as_ref()
+        .ok_or_else(|| "C64 experiment publication has no SQLite".to_string())?;
     let loaded = open_system_shard(
-        &storage_root.join(&published.sqlite_path),
+        &storage_root.join(published_sqlite),
         &storage_root.join(
             published
                 .navigation_path
@@ -960,7 +968,7 @@ pub fn run_c64_artifact_experiment(
         return Err("published C64 experiment rows differ from the snapshot".to_string());
     }
     let (search_probe_us, search_fingerprint) =
-        c64_search_probe(&storage_root.join(&published.sqlite_path), &source.games)?;
+        c64_search_probe(&storage_root.join(published_sqlite), &source.games)?;
     let _ = fs::remove_dir_all(&staging);
     Ok(C64ArtifactExperimentReport {
         status: "exact",
@@ -971,7 +979,7 @@ pub fn run_c64_artifact_experiment(
         publish_us,
         published_validate_us,
         elapsed_us: elapsed_us(started),
-        sqlite_bytes: published.sqlite_bytes,
+        sqlite_bytes: published.sqlite_bytes.unwrap_or(0),
         navigation_bytes: published.navigation_bytes.unwrap_or(0),
         navpack_bytes: published.navpack.map_or(0, |navpack| navpack.bytes),
         search_probe_us,
@@ -1204,7 +1212,7 @@ fn publish_snapshot_selection(
                         system_id: source.system_id.clone(),
                         games: source.games.len(),
                         variants: source.variants.len(),
-                        sqlite_bytes: published.active.sqlite_bytes,
+                        sqlite_bytes: published.active.sqlite_bytes.unwrap_or(0),
                         navigation_bytes: published.active.navigation_bytes.unwrap_or(0),
                         navpack_bytes: published
                             .active
@@ -1261,7 +1269,7 @@ fn publish_snapshot_selection(
                 system_id: source.system_id.clone(),
                 games: source.games.len(),
                 variants: source.variants.len(),
-                sqlite_bytes: published.active.sqlite_bytes,
+                sqlite_bytes: published.active.sqlite_bytes.unwrap_or(0),
                 navigation_bytes: published.active.navigation_bytes.unwrap_or(0),
                 navpack_bytes: published
                     .active
@@ -1282,6 +1290,51 @@ fn publish_snapshot_selection(
         );
         let stage_in_tmpfs = cfg!(all(target_os = "linux", not(test)))
             && (stage_all_in_tmpfs || source.system_id == "c64");
+        if source.games.is_empty() && source.variants.is_empty() {
+            let active = crate::shard_registry::PublishedGeneration::artifactless(generation);
+            let previous = current.as_ref().and_then(|manifest| {
+                manifest
+                    .systems
+                    .iter()
+                    .find(|system| system.system_id == system_id)
+                    .map(|system| system.active.clone())
+            });
+            let definition = system_definition(&source.system_id);
+            manifest_systems.push(ManifestSystem {
+                system_id,
+                display_title: source.display_title.clone(),
+                section: definition
+                    .map(|value| section_label(value.section))
+                    .unwrap_or("Other")
+                    .to_string(),
+                family: definition
+                    .map(|value| value.family.as_str())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("Other")
+                    .to_string(),
+                order: definition.map_or(1000, |value| u32::from(value.order)),
+                producers: vec![
+                    ScanUnitId::parse(&format!("fast-five-{}", source.system_id))
+                        .map_err(|error| format!("create producer id: {error}"))?,
+                ],
+                active,
+                previous,
+            });
+            system_builds.push(FastFiveSystemBuildReport {
+                system_id: source.system_id.clone(),
+                games: 0,
+                variants: 0,
+                sqlite_bytes: 0,
+                navigation_bytes: 0,
+                navpack_bytes: 0,
+                elapsed_us: system_started
+                    .elapsed()
+                    .as_micros()
+                    .try_into()
+                    .unwrap_or(u64::MAX),
+            });
+            continue;
+        }
         let staging_parent = if stage_in_tmpfs {
             std::path::PathBuf::from("/tmp/mister-magik/fast-five-catalog")
         } else {
@@ -1387,7 +1440,7 @@ fn publish_snapshot_selection(
                 .map(|system| system.active.clone())
         });
         let definition = system_definition(&source.system_id);
-        let active_sqlite_bytes = active.sqlite_bytes;
+        let active_sqlite_bytes = active.sqlite_bytes.unwrap_or(0);
         let active_navigation_bytes = active.navigation_bytes.unwrap_or(0);
         let active_navpack_bytes = active.navpack.as_ref().map_or(0, |navpack| navpack.bytes);
         manifest_systems.push(ManifestSystem {
@@ -1473,6 +1526,15 @@ pub fn verify_snapshot_artifacts(
             .iter()
             .find(|candidate| candidate.system_id == system_id)
             .ok_or_else(|| format!("candidate is missing {}", source.system_id))?;
+        if source.games.is_empty() && source.variants.is_empty() {
+            if !system.active.is_artifactless() {
+                return Err(format!(
+                    "candidate {} has artifacts for an empty system",
+                    source.system_id
+                ));
+            }
+            continue;
+        }
         let navpack = system
             .active
             .navpack
@@ -1485,7 +1547,12 @@ pub fn verify_snapshot_artifacts(
             system.active.generation,
             source.games.len(),
         )?;
-        let connection = Connection::open(storage_root.join(&system.active.sqlite_path))
+        let sqlite_path = system
+            .active
+            .sqlite_path
+            .as_ref()
+            .ok_or_else(|| format!("candidate {} has no SQLite", source.system_id))?;
+        let connection = Connection::open(storage_root.join(sqlite_path))
             .map_err(|error| format!("open candidate {} SQLite: {error}", source.system_id))?;
         let has_full_games: bool = connection
             .query_row(
@@ -1662,8 +1729,12 @@ pub fn fast_five_search_probe(
         queries.sort();
         queries.dedup();
         for query in queries {
+            let sqlite_path =
+                system.active.sqlite_path.as_ref().ok_or_else(|| {
+                    format!("search candidate {} has no SQLite", source.system_id)
+                })?;
             let result = crate::persisted_search::search_system_shard(
-                &storage_root.join(&system.active.sqlite_path),
+                &storage_root.join(sqlite_path),
                 &query,
             )
             .map_err(|error| format!("search {} for {query}: {error}", source.system_id))?;
@@ -1867,6 +1938,19 @@ mod builder_tests {
         }
     }
 
+    fn populated_snapshot() -> FastFiveSnapshot {
+        let mut snapshot = empty_snapshot();
+        for system in &mut snapshot.systems {
+            system.games.push(SystemGame {
+                stable_key: format!("{}\u{1f}game", system.system_id),
+                title: "Game".to_string(),
+                launch_ref: format!("/media/fat/games/{}/Game.rom", system.system_id),
+                ..SystemGame::default()
+            });
+        }
+        snapshot
+    }
+
     #[test]
     fn staging_cleanup_removes_only_the_scoped_directory() {
         let parent = std::env::temp_dir().join(format!(
@@ -1912,6 +1996,35 @@ mod builder_tests {
         assert!(error.contains("busy"));
         assert!(!root.exists());
         drop(lease);
+    }
+
+    #[test]
+    fn empty_systems_are_published_without_per_system_artifacts() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-fast-five-empty-artifacts-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let limits = crate::shard_registry::production_registry_limits();
+        publish_snapshot(&root, &empty_snapshot(), limits).unwrap();
+        let manifest = read_latest_manifest(&root, limits).unwrap();
+        assert_eq!(manifest.systems.len(), FAST_FIVE_SYSTEM_IDS.len());
+        assert!(
+            manifest
+                .systems
+                .iter()
+                .all(|system| system.active.is_artifactless())
+        );
+        assert!(!root.join("systems").exists());
+        let reader = LazyShardedCatalogReader::open(&root, limits).unwrap();
+        let system = reader
+            .open_system(&SystemId::parse("amiga").unwrap())
+            .unwrap();
+        assert!(system.games().is_empty());
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn c64_game(title: &str, launch_ref: &str) -> SystemGame {
@@ -2010,7 +2123,7 @@ mod builder_tests {
 
     #[test]
     fn artifact_profiles_publish_exact_navpacks() {
-        let snapshot = empty_snapshot();
+        let snapshot = populated_snapshot();
         let limits = crate::shard_registry::production_registry_limits();
         for profile in [
             FastFiveArtifactProfile::NoEmbeddedNavigation,

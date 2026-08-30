@@ -24,7 +24,7 @@ pub struct LazyShardedCatalogReader {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LazySystemGeneration {
     pub generation: u64,
-    pub navpack_path: PathBuf,
+    pub navpack_path: Option<PathBuf>,
     pub navpack_bytes: u64,
     pub games: usize,
 }
@@ -176,6 +176,22 @@ impl LazyShardedCatalogReader {
             .ok_or_else(|| CatalogError::new("open-system", "system is absent from manifest"))?;
         let descriptor_lookup_us = elapsed_us(descriptor_started);
         let generation = &system.active;
+        if generation.is_artifactless() {
+            return Ok((
+                LoadedSystemShard {
+                    system_id: system.system_id.clone(),
+                    generation: generation.generation,
+                    navigation_hash: String::new(),
+                    projection_stats: None,
+                    navigation_indexes: Default::default(),
+                    games: Vec::new(),
+                },
+                LazySystemOpenTiming {
+                    descriptor_lookup_us,
+                    ..Default::default()
+                },
+            ));
+        }
         let navigation_path = generation.navigation_path.as_ref().ok_or_else(|| {
             CatalogError::new(
                 "open-system",
@@ -219,13 +235,11 @@ impl LazyShardedCatalogReader {
             .find(|system| &system.system_id == system_id)
             .ok_or_else(|| CatalogError::new("open-system", "system is absent from manifest"))?;
         let generation = &system.active;
-        let navpack = generation.navpack.as_ref().ok_or_else(|| {
-            CatalogError::new("open-system", "active system generation has no NavPack")
-        })?;
+        let navpack = generation.navpack.as_ref();
         Ok(LazySystemGeneration {
             generation: generation.generation,
-            navpack_path: self.storage_root.join(&navpack.path),
-            navpack_bytes: navpack.bytes,
+            navpack_path: navpack.map(|navpack| self.storage_root.join(&navpack.path)),
+            navpack_bytes: navpack.map_or(0, |navpack| navpack.bytes),
             games: usize::try_from(generation.games).map_err(|_| {
                 CatalogError::new("open-system", "system game count exceeds platform size")
             })?,

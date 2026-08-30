@@ -1551,7 +1551,7 @@ pub(crate) fn sharded_cached_summary(
     .map_err(|error| format!("read cached V3 manifest: {error}"))?;
     let shard_bytes = manifest.systems.iter().try_fold(0u64, |total, system| {
         total
-            .checked_add(system.active.sqlite_bytes)
+            .checked_add(system.active.sqlite_bytes.unwrap_or(0))
             .and_then(|value| value.checked_add(system.active.navigation_bytes.unwrap_or(0)))
             .ok_or_else(|| "cached V3 byte count overflow".to_string())
     })?;

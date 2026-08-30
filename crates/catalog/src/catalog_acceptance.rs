@@ -68,6 +68,22 @@ pub fn inspect_catalog(storage: &Path) -> Result<String, String> {
     let mut search_digest = Sha256::new();
     let mut artifact_digest = Sha256::new();
     for system in &manifest.systems {
+        if system.active.is_artifactless() {
+            digest_fields(&mut artifact_digest, [system.system_id.as_str(), "empty"]);
+            writeln!(
+                output,
+                "catalog_system_tsv\tsystem={}\tgeneration={}\tgames=0",
+                system.system_id, system.active.generation
+            )
+            .expect("write to String");
+            writeln!(
+                output,
+                "catalog_v3_system_tsv\tsystem={}\tregistry_games=0\trole=fast-catalog\tsource_games=0\tvisible_families=0\tcollapsed_variants=0",
+                system.system_id
+            )
+            .expect("write to String");
+            continue;
+        }
         let navpack = system.active.navpack.as_ref().ok_or_else(|| {
             format!(
                 "open system {}: active generation has no NavPack",
@@ -161,9 +177,20 @@ pub fn inspect_catalog(storage: &Path) -> Result<String, String> {
         for (kind, path, bytes, hash) in [
             (
                 "sqlite",
-                &system.active.sqlite_path,
-                system.active.sqlite_bytes,
-                system.active.sqlite_hash.as_str(),
+                system
+                    .active
+                    .sqlite_path
+                    .as_ref()
+                    .ok_or_else(|| format!("system {} has no SQLite path", system.system_id))?,
+                system
+                    .active
+                    .sqlite_bytes
+                    .ok_or_else(|| format!("system {} has no SQLite size", system.system_id))?,
+                system
+                    .active
+                    .sqlite_hash
+                    .as_deref()
+                    .ok_or_else(|| format!("system {} has no SQLite hash", system.system_id))?,
             ),
             (
                 "navpack",

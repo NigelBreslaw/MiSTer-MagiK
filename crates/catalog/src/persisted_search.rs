@@ -203,7 +203,12 @@ fn search_system_shards_in_manifest(
                     "search system {system_id} is absent from the manifest"
                 ))
             })?;
-        let shard = search_system_shard(&storage_root.join(&system.active.sqlite_path), query)?;
+        let Some(sqlite_path) = system.active.sqlite_path.as_ref() else {
+            // Empty registered systems have no searchable rows or SQLite
+            // artifact. Treat them as an empty result without touching disk.
+            continue;
+        };
+        let shard = search_system_shard(&storage_root.join(sqlite_path), query)?;
         result.matches.extend(
             shard
                 .matches
@@ -1145,11 +1150,11 @@ mod tests {
                     producers: Vec::new(),
                     active: PublishedGeneration {
                         generation: 1,
-                        sqlite_path: sqlite.file_name().unwrap().into(),
+                        sqlite_path: Some(sqlite.file_name().unwrap().into()),
                         navigation_path: Some("1.nav.lz4b".into()),
-                        sqlite_bytes,
+                        sqlite_bytes: Some(sqlite_bytes),
                         navigation_bytes: Some(0),
-                        sqlite_hash: String::new(),
+                        sqlite_hash: Some(String::new()),
                         navigation_hash: Some(String::new()),
                         games: 2,
                         navpack: None,
