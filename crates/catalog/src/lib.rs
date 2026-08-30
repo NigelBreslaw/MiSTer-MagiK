@@ -37,6 +37,8 @@ pub mod catalog_summary;
 mod cooperative_work;
 mod core_audit;
 pub mod device_layout;
+#[cfg(feature = "builder")]
+pub(crate) mod exfat_shadow;
 mod fallible_log;
 #[cfg(feature = "builder")]
 pub mod fast_catalog_refresh;
