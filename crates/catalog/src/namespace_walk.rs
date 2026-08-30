@@ -85,10 +85,6 @@ pub(crate) struct NamespaceWalkStats {
     pub(crate) first_entry_us: Option<u64>,
     pub(crate) final_entry_us: Option<u64>,
     pub(crate) target_signature: Option<(u64, i64)>,
-    pub(crate) advice_calls: usize,
-    pub(crate) advice_errors: usize,
-    pub(crate) advice_exfat_dirs: usize,
-    pub(crate) advice_directory_bytes: u64,
 }
 
 #[derive(Debug)]
@@ -181,14 +177,6 @@ impl NamespaceWalkStats {
         // Aggregated stats no longer describe one target. Callers that need a
         // target signature consume it before combining subordinate walks.
         self.target_signature = None;
-        self.advice_calls = self.advice_calls.saturating_add(other.advice_calls);
-        self.advice_errors = self.advice_errors.saturating_add(other.advice_errors);
-        self.advice_exfat_dirs = self
-            .advice_exfat_dirs
-            .saturating_add(other.advice_exfat_dirs);
-        self.advice_directory_bytes = self
-            .advice_directory_bytes
-            .saturating_add(other.advice_directory_bytes);
     }
 }
 
@@ -570,10 +558,6 @@ fn visit_walkdir(
         first_entry_us,
         final_entry_us,
         target_signature,
-        advice_calls: 0,
-        advice_errors: 0,
-        advice_exfat_dirs: 0,
-        advice_directory_bytes: 0,
     }
 }
 
@@ -654,7 +638,6 @@ mod linux {
     const MAX_CAPTURED_ENTRIES: usize = 65_536;
     const MAX_CAPTURED_PATH_BYTES: usize = 16 * 1024 * 1024;
     const MAX_OPEN_DIRECTORY_FDS: usize = 64;
-    const EXFAT_SUPER_MAGIC: i64 = 0x2011_BAB0;
 
     pub(super) struct NamespaceCapture {
         pub(super) entries: Vec<NamespaceEntry>,
@@ -811,10 +794,6 @@ mod linux {
                     first_entry_us: None,
                     final_entry_us: None,
                     target_signature: None,
-                    advice_calls: 0,
-                    advice_errors: 0,
-                    advice_exfat_dirs: 0,
-                    advice_directory_bytes: 0,
                 },
             });
         }
@@ -865,10 +844,6 @@ mod linux {
             first_entry_us: None,
             final_entry_us: None,
             target_signature: None,
-            advice_calls: 0,
-            advice_errors: 0,
-            advice_exfat_dirs: 0,
-            advice_directory_bytes: 0,
         };
         collect_directory(
             &root,
@@ -905,7 +880,6 @@ mod linux {
         stats: &mut NamespaceWalkStats,
         budget: CaptureBudget,
     ) -> Result<(), String> {
-        advise_serial_exfat_directory(directory.as_raw_fd(), stats);
         let mut buffer = Vec::new();
         buffer
             .try_reserve_exact(GETDENTS_INITIAL_BUFFER_BYTES)
@@ -1125,37 +1099,6 @@ mod linux {
                 })?;
                 buffer.resize(GETDENTS_MAX_BUFFER_BYTES, 0u8);
                 stats.buffer_allocations = stats.buffer_allocations.saturating_add(1);
-            }
-        }
-    }
-
-    /// Give the exFAT driver sequential, read-ahead-friendly advice for the
-    /// directory fd that the walker already owns.  This stays strictly
-    /// synchronous: no other directory is opened or read while the advice is
-    /// issued, and unsupported advice is recorded rather than treated as a
-    /// traversal failure.
-    fn advise_serial_exfat_directory(directory: RawFd, stats: &mut NamespaceWalkStats) {
-        let mut value = std::mem::MaybeUninit::<libc::statfs>::uninit();
-        let result = unsafe { libc::fstatfs(directory, value.as_mut_ptr()) };
-        if result != 0 {
-            stats.advice_errors = stats.advice_errors.saturating_add(1);
-            return;
-        }
-        let value = unsafe { value.assume_init() };
-        if value.f_type as i64 != EXFAT_SUPER_MAGIC {
-            return;
-        }
-        stats.advice_exfat_dirs = stats.advice_exfat_dirs.saturating_add(1);
-        if let Ok(metadata) = stat_fd(directory) {
-            stats.advice_directory_bytes = stats
-                .advice_directory_bytes
-                .saturating_add(u64::try_from(metadata.st_size).unwrap_or(0));
-        }
-        for advice in [libc::POSIX_FADV_SEQUENTIAL, libc::POSIX_FADV_WILLNEED] {
-            stats.advice_calls = stats.advice_calls.saturating_add(1);
-            let result = unsafe { libc::posix_fadvise(directory, 0, 0, advice) };
-            if result != 0 {
-                stats.advice_errors = stats.advice_errors.saturating_add(1);
             }
         }
     }
