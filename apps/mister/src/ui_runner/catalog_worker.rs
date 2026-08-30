@@ -1525,9 +1525,12 @@ fn start_library_catalog_worker_process(
                 if event.kind == "collection-chunk" && collection_message.is_none() {
                     continue;
                 }
-                let decoded_message = collection_message.map(Ok).unwrap_or_else(|| {
-                    catalog_worker_message_from_wire(event, &reader_root, &reader_catalog_root)
-                });
+                let decoded_message = match collection_message {
+                    Some(message) => Ok(Some(message)),
+                    None => {
+                        catalog_worker_message_from_wire(event, &reader_root, &reader_catalog_root)
+                    }
+                };
                 match decoded_message {
                     Ok(Some(message)) => {
                         terminal = matches!(
