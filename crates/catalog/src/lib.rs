@@ -56,6 +56,7 @@ pub mod library_bench;
 mod library_cli;
 pub mod library_db;
 mod library_indexer;
+mod machine_family;
 pub mod media_identity;
 mod media_metadata;
 pub mod mra_header {
