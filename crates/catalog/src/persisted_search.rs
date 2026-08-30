@@ -519,6 +519,9 @@ fn prepare_search_batch(
             compact_path: compact_if_different(&path),
             path,
         });
+        crate::catalog_progress::report_inner_progress_at(
+            first_ordinal.saturating_add(offset).saturating_add(1),
+        );
     }
     PreparedSearchBatch {
         documents,
@@ -571,6 +574,7 @@ pub(crate) fn populate_with_options(
     let mut document_build_us = 0u64;
     let mut fts_insert_us = 0u64;
     let mut pipeline_wait_us = 0u64;
+    let mut documents_inserted = 0usize;
     let main_background_scope = crate::cooperative_work::BackgroundScope::enter();
     std::thread::scope(|scope| -> Result<(), PersistedSearchError> {
         let (sender, receiver) = std::sync::mpsc::sync_channel::<PreparedSearchBatch>(1);
@@ -633,6 +637,8 @@ pub(crate) fn populate_with_options(
                     failure = Some(PersistedSearchError::with("insert search row", error));
                     break;
                 }
+                documents_inserted = documents_inserted.saturating_add(1);
+                crate::catalog_progress::report_inner_progress_at(documents_inserted);
             }
             fts_insert_us = fts_insert_us.saturating_add(elapsed_us(insert_started));
         }
@@ -663,10 +669,11 @@ pub(crate) fn populate_with_options(
     let mut insert_word = connection
         .prepare("INSERT INTO autocomplete_words(word,source_rank,score) VALUES (?1,?2,?3)")
         .map_err(|error| PersistedSearchError::with("prepare autocomplete rows", error))?;
-    for (word, stats) in &ordered_words {
+    for (inserted, (word, stats)) in ordered_words.iter().enumerate() {
         insert_word
             .execute(rusqlite::params![word, stats.source_rank, stats.score])
             .map_err(|error| PersistedSearchError::with("insert autocomplete row", error))?;
+        crate::catalog_progress::report_inner_progress_at(inserted.saturating_add(1));
     }
     drop(insert_word);
     drop(autocomplete_insert_pmu);

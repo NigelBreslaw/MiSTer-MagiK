@@ -357,6 +357,7 @@ pub fn encode(
             launches.push(plan.delay_secs);
             launches.extend_from_slice(&[0; NAVPACK_LAUNCH_BYTES - 50]);
         }
+        crate::catalog_progress::report_inner_progress_at(ordinal.saturating_add(1));
     }
     let mut index_bytes = Vec::new();
     encode_ordinals(&mut index_bytes, &indexes.title_ordinals)?;

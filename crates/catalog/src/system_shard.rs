@@ -457,7 +457,7 @@ fn write_system_shard_with_options_and_profile(
                 .stable_key
                 .cmp(&data.games[*right].stable_key)
         });
-        for ordinal in insertion_order {
+        for (inserted, ordinal) in insertion_order.into_iter().enumerate() {
             let game = &data.games[ordinal];
             statement
                 .execute(rusqlite::params![
@@ -485,6 +485,7 @@ fn write_system_shard_with_options_and_profile(
                         .map_err(|error| SystemShardError::with("encode launch plan", error))?,
                 ])
                 .map_err(|error| SystemShardError::with("insert shard game", error))?;
+            crate::catalog_progress::report_inner_progress_at(inserted.saturating_add(1));
         }
     } else {
         let mut statement = transaction
@@ -496,7 +497,7 @@ fn write_system_shard_with_options_and_profile(
                 .stable_key
                 .cmp(&data.games[*right].stable_key)
         });
-        for ordinal in insertion_order {
+        for (inserted, ordinal) in insertion_order.into_iter().enumerate() {
             statement
                 .execute(rusqlite::params![
                     data.games[ordinal].stable_key,
@@ -506,6 +507,7 @@ fn write_system_shard_with_options_and_profile(
                     ))?,
                 ])
                 .map_err(|error| SystemShardError::with("insert shard identity", error))?;
+            crate::catalog_progress::report_inner_progress_at(inserted.saturating_add(1));
         }
     }
     drop(games_pmu);
@@ -944,7 +946,7 @@ fn validate_games(games: &[SystemGame], max_games: usize) -> Result<(), SystemSh
         ));
     }
     let mut keys = BTreeSet::new();
-    for game in games {
+    for (index, game) in games.iter().enumerate() {
         if game.stable_key.is_empty()
             || game.title.is_empty()
             || game.launch_ref.is_empty()
@@ -955,6 +957,7 @@ fn validate_games(games: &[SystemGame], max_games: usize) -> Result<(), SystemSh
                 "games need non-empty unique keys, titles, and launch references",
             ));
         }
+        crate::catalog_progress::report_inner_progress_at(index.saturating_add(1));
     }
     Ok(())
 }
@@ -1051,6 +1054,7 @@ pub(crate) fn build_navigation_indexes(
                 .or_default()
                 .push(ordinal);
         }
+        crate::catalog_progress::report_inner_progress_at(index.saturating_add(1));
     }
     launch_ordinals.sort_unstable_by(|left, right| {
         games[*left as usize]
