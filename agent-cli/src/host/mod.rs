@@ -19931,7 +19931,7 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
             // unresolved stacks. Keep this diagnostic arm sparse; the ordinary
             // post-scan catalog trigger remains at its configured rate and is
             // the preferred symbol-level timing source.
-            ("MISTER_PPROF_HZ".into(), "3".into()),
+            ("MISTER_PPROF_HZ".into(), "1".into()),
             ("MISTER_PPROF_DURATION_SECS".into(), "600".into()),
             (
                 "MISTER_PPROF_OUT".into(),
