@@ -32,17 +32,16 @@ publication bank, CRC serializer, and two-stage acknowledgement handshake are
 unchanged. Schema 14, 15, and 16 remain rollback-decodable by the host.
 
 Only the existing 16-bit `magik_fetch_state` interface is replaced. The vector
-becomes an output-clock sticky summary with no functional fanout. The last
-acceptance acknowledgement for a scaler line starts each new summary window;
-mid-line burst acknowledgements leave it intact. The summary then records
-monotonic evidence until the next completed line. Consequently, when the
-external watchdog proves that no new request has appeared, the packed word
-describes the complete interval after the last successful line rather than one
-arbitrary output-clock cycle.
+becomes an output-clock sticky summary with no functional fanout. A synchronized
+Avalon acceptance acknowledgement already consumed by the scaler starts each
+new summary window. The summary then records monotonic evidence until the next
+acknowledged request. Consequently, when the external watchdog proves that no
+new request has appeared, the packed word describes the complete interval
+after the last successful request rather than one arbitrary output-clock cycle.
 
-| Bit | Field | Sticky event since the last completed scaler line |
+| Bit | Field | Sticky event since the last acknowledged request |
 | --- | --- | --- |
-| 0 | `window_valid` | a final burst acknowledgement started this evidence window |
+| 0 | `window_valid` | an acknowledged request started this evidence window |
 | 1 | `output_enable_seen` | output pixel clock-enable `o_ce` was observed |
 | 2 | `horizontal_sync_edge_seen` | the scheduler's `o_hsv(0:1)` rising edge occurred |
 | 3 | `horizontal_start_seen` | `sDISP` consumed the latched `o_hsp` start event |
@@ -59,14 +58,13 @@ arbitrary output-clock cycle.
 | 14 | `wait_read_state_seen` | the scheduler executed `sWAITREAD` |
 | 15 | `vertical_size_zero_seen` | the derived vertical output size was zero |
 
-The internal source is cleared only by output reset or the final acknowledgement
-of a scaler line. It stores ten independent facts; a registered projection
-reconstructs six causally implied fields in the same 16-bit external sticky
-word. This preserves the schema while avoiding milestone comparators and
-combinational clock crossings. Event accumulation begins on the following output clock so prior-line
-state cannot leak into the new interval. The no-request interval therefore
-leaves a stable multi-bit CDC source long before the 100 MHz watchdog freezes
-it. Impossible event orderings fail closed in the host decoder.
+The vector is cleared only by output reset or an acknowledged request. On an
+acknowledgement it is initialized to `window_valid`; event accumulation begins
+on the following output clock so pre-acknowledgement state cannot leak into the
+new request-delimited interval. Every other update is zero-to-one, so the
+no-request interval leaves a stable multi-bit CDC source long before the
+100 MHz watchdog freezes it. Impossible event orderings fail closed in the
+host decoder.
 
 ## Decision table
 
@@ -95,11 +93,16 @@ For a coherent `no_request_seen` freeze after normal liveness:
 
 There is no new opcode, command word, acknowledgement, clock domain, reset,
 port width, latch capability, platform protocol, pixel tap, return-data tap,
-or functional recovery path. The diagnostic adds ten compressed sticky facts
-and a registered schema-17 projection at the already-exported scaler observer
-port. The fixed seed, timing,
-TNS, relationship, ALM,
+or functional recovery path. The diagnostic adds one 16-bit sticky register
+at the already-exported scaler observer port and replaces the schema-16
+combinational packing. The fixed seed, timing, TNS, relationship, ALM,
 register, RAM/DSP/PLL, and MTBF gates remain unchanged.
+
+The 100 MHz observer does not retain separate registers for flags already
+encoded by `frozen_cause`; it decodes those flags combinationally. Likewise,
+`reset_qualified` is decoded from the existing saturating qualification
+counter. These seven bookkeeping bits do not alter the record or watchdog
+architecture and offset the schema-17 scaler evidence storage.
 
 ## Proof and certification sequence
 

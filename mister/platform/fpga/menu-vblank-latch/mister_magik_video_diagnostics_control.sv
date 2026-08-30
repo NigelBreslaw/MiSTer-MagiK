@@ -64,7 +64,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 	reg reset_sync = 1'b1;
 	reg reset_sync_d = 1'b1;
 	reg [2:0] reset_low_count = 3'd0;
-	reg reset_qualified = 1'b0;
+	wire reset_qualified = reset_low_count >= RESET_QUALIFY_LIMIT;
 	reg ever_qualified = 1'b0;
 
 	// Independent two-entry accepted-obligation scoreboard. Production caps the
@@ -83,17 +83,26 @@ module mister_magik_scaler_fetch_liveness_state #(
 
 	// Sticky first-stall/fault evidence. Rolling live state and publication keep
 	// advancing after this bank freezes.
-	reg first_stall_valid = 1'b0;
-	reg observer_fault = 1'b0;
 	reg reset_ambiguity = 1'b0;
 	reg reset_since_normal_liveness = 1'b0;
 	reg no_request_seen = 1'b0;
-	reg accept_blocked_seen = 1'b0;
-	reg first_return_missing = 1'b0;
-	reg return_incomplete = 1'b0;
-	reg request_cancelled = 1'b0;
 	reg [2:0] frozen_cause =
 		MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NONE;
+	wire observer_fault = !no_request_seen &&
+		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT;
+	wire first_stall_valid = no_request_seen ||
+		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_ACCEPT_BLOCKED ||
+		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_FIRST_RETURN_MISSING ||
+		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_RETURN_INCOMPLETE ||
+		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED;
+	wire accept_blocked_seen = !no_request_seen &&
+		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_ACCEPT_BLOCKED;
+	wire first_return_missing = !no_request_seen &&
+		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_FIRST_RETURN_MISSING;
+	wire return_incomplete = !no_request_seen &&
+		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_RETURN_INCOMPLETE;
+	wire request_cancelled = !no_request_seen &&
+		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED;
 	reg [6:0] frozen_return_phase = 7'd0;
 	reg [1:0] frozen_fifo_depth = 2'd0;
 	reg [3:0] frozen_address_fold = 4'd0;
@@ -263,14 +272,12 @@ module mister_magik_scaler_fetch_liveness_state #(
 
 		if(reset_sync) begin
 			reset_low_count <= 3'd0;
-			reset_qualified <= 1'b0;
 			progress_watchdog <= 24'd0;
 			blocked_request_seen <= 1'b0;
 		end
 		else if(!reset_qualified) begin
 			if(reset_low_count + 1'd1 >= RESET_QUALIFY_LIMIT) begin
 				reset_low_count <= RESET_QUALIFY_LIMIT;
-				reset_qualified <= 1'b1;
 				ever_qualified <= 1'b1;
 			end
 			else
@@ -339,7 +346,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 		// Faults outrank cancellation and watchdog attribution. Real progress on
 		// the terminal watchdog cycle wins over timeout.
 		if(!first_stall_valid && !observer_fault && observer_fault_event) begin
-			observer_fault <= 1'b1;
 			frozen_cause <= MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT;
 			frozen_return_phase <= return_phase;
 			frozen_fifo_depth <= fifo_count;
@@ -350,8 +356,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 			end
 		end
 		else if(!first_stall_valid && !observer_fault && request_cancel_event) begin
-			first_stall_valid <= 1'b1;
-			request_cancelled <= 1'b1;
 			frozen_cause <= MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED;
 			frozen_return_phase <= return_phase;
 			frozen_fifo_depth <= fifo_count;
@@ -367,18 +371,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 				timeout_cause = MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_ACCEPT_BLOCKED;
 			else
 				timeout_cause = MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN;
-			first_stall_valid <= 1'b1;
-			case(timeout_cause)
-				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN:
-					no_request_seen <= 1'b1;
-				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_ACCEPT_BLOCKED:
-					accept_blocked_seen <= 1'b1;
-				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_FIRST_RETURN_MISSING:
-					first_return_missing <= 1'b1;
-				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_RETURN_INCOMPLETE:
-					return_incomplete <= 1'b1;
-				default: begin end
-			endcase
+			if(timeout_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN)
+				no_request_seen <= 1'b1;
 			if(timeout_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN) begin
 				// Reuse the existing 16-bit frozen storage exactly: the legacy
 				// cause/phase/depth/fold slices reconstruct the complete packed
