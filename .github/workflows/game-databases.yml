@@ -13,6 +13,11 @@ on:
         required: true
         type: boolean
         default: false
+      force_arcade_updater_rebuild:
+        description: Rebuild the Update_All Arcade index even when its upstream revisions are unchanged
+        required: true
+        type: boolean
+        default: false
 
 concurrency:
   group: promote-mister-magik-game-databases
@@ -134,6 +139,7 @@ jobs:
         env:
           CURRENT_MANIFEST: ${{ steps.current.outputs.manifest }}
           FORCE_MAME_REBUILD: ${{ inputs.force_mame_rebuild }}
+          FORCE_ARCADE_UPDATER_REBUILD: ${{ inputs.force_arcade_updater_rebuild }}
           MAME_TAG: ${{ steps.upstream.outputs.mame_tag }}
           MAME_SHA: ${{ steps.upstream.outputs.mame_sha }}
           HBMAME_TAG: ${{ steps.upstream.outputs.hbmame_tag }}
@@ -162,6 +168,10 @@ jobs:
             --github-output "$GITHUB_OUTPUT"
           if [ "$FORCE_MAME_REBUILD" = true ]; then
             echo "mame_changed=true" >> "$GITHUB_OUTPUT"
+            echo "update_needed=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$FORCE_ARCADE_UPDATER_REBUILD" = true ]; then
+            echo "arcade_updater_changed=true" >> "$GITHUB_OUTPUT"
             echo "update_needed=true" >> "$GITHUB_OUTPUT"
           fi
 
