@@ -70,6 +70,15 @@ pub struct SystemShardProjectionStats {
     pub collapsed_variants: usize,
 }
 
+#[cfg(feature = "builder")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SystemShardVariantPayload {
+    pub(crate) format: String,
+    pub(crate) count: usize,
+    pub(crate) decoded_sha256: String,
+    pub(crate) compressed_payload: Vec<u8>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoadedSystemShard {
     pub system_id: SystemId,
@@ -197,6 +206,24 @@ pub fn write_system_shard(
     )
 }
 
+#[cfg(feature = "builder")]
+pub(crate) fn write_system_shard_with_variant_payload(
+    sqlite_path: &Path,
+    navigation_path: &Path,
+    data: SystemShardData,
+    limits: SystemShardLimits,
+    variant_payload: Option<SystemShardVariantPayload>,
+) -> Result<LoadedSystemShard, SystemShardError> {
+    write_system_shard_with_durability_and_variant_payload(
+        sqlite_path,
+        navigation_path,
+        data,
+        limits,
+        ShardDurability::Immediate,
+        variant_payload,
+    )
+}
+
 pub fn navpack_path_for_navigation(navigation_path: &Path) -> std::path::PathBuf {
     let filename = navigation_path
         .file_name()
@@ -226,6 +253,27 @@ pub(crate) fn write_system_shard_with_durability(
 }
 
 #[cfg(feature = "builder")]
+pub(crate) fn write_system_shard_with_durability_and_variant_payload(
+    sqlite_path: &Path,
+    navigation_path: &Path,
+    data: SystemShardData,
+    limits: SystemShardLimits,
+    durability: ShardDurability,
+    variant_payload: Option<SystemShardVariantPayload>,
+) -> Result<LoadedSystemShard, SystemShardError> {
+    write_system_shard_with_options_and_variant_payload(
+        sqlite_path,
+        navigation_path,
+        data,
+        limits,
+        durability,
+        ShardSqliteTuning::Conservative,
+        ShardSearchTuning::FullOptimized,
+        variant_payload,
+    )
+}
+
+#[cfg(feature = "builder")]
 pub(crate) fn write_system_shard_with_artifact_profile(
     sqlite_path: &Path,
     navigation_path: &Path,
@@ -243,6 +291,30 @@ pub(crate) fn write_system_shard_with_artifact_profile(
         ShardSqliteTuning::Conservative,
         ShardSearchTuning::FullOptimized,
         profile,
+        None,
+    )
+}
+
+#[cfg(feature = "builder")]
+pub(crate) fn write_system_shard_with_artifact_profile_and_variant_payload(
+    sqlite_path: &Path,
+    navigation_path: &Path,
+    data: SystemShardData,
+    limits: SystemShardLimits,
+    durability: ShardDurability,
+    profile: ShardArtifactProfile,
+    variant_payload: Option<SystemShardVariantPayload>,
+) -> Result<LoadedSystemShard, SystemShardError> {
+    write_system_shard_with_options_and_profile(
+        sqlite_path,
+        navigation_path,
+        data,
+        limits,
+        durability,
+        ShardSqliteTuning::Conservative,
+        ShardSearchTuning::FullOptimized,
+        profile,
+        variant_payload,
     )
 }
 
@@ -256,6 +328,29 @@ pub(crate) fn write_system_shard_with_options(
     sqlite_tuning: ShardSqliteTuning,
     search_tuning: ShardSearchTuning,
 ) -> Result<LoadedSystemShard, SystemShardError> {
+    write_system_shard_with_options_and_variant_payload(
+        sqlite_path,
+        navigation_path,
+        data,
+        limits,
+        durability,
+        sqlite_tuning,
+        search_tuning,
+        None,
+    )
+}
+
+#[cfg(feature = "builder")]
+pub(crate) fn write_system_shard_with_options_and_variant_payload(
+    sqlite_path: &Path,
+    navigation_path: &Path,
+    data: SystemShardData,
+    limits: SystemShardLimits,
+    durability: ShardDurability,
+    sqlite_tuning: ShardSqliteTuning,
+    search_tuning: ShardSearchTuning,
+    variant_payload: Option<SystemShardVariantPayload>,
+) -> Result<LoadedSystemShard, SystemShardError> {
     write_system_shard_with_options_and_profile(
         sqlite_path,
         navigation_path,
@@ -265,6 +360,7 @@ pub(crate) fn write_system_shard_with_options(
         sqlite_tuning,
         search_tuning,
         ShardArtifactProfile::Legacy,
+        variant_payload,
     )
 }
 
@@ -279,6 +375,7 @@ fn write_system_shard_with_options_and_profile(
     sqlite_tuning: ShardSqliteTuning,
     search_tuning: ShardSearchTuning,
     artifact_profile: ShardArtifactProfile,
+    variant_payload: Option<SystemShardVariantPayload>,
 ) -> Result<LoadedSystemShard, SystemShardError> {
     validate_games(&data.games, limits.max_games)?;
     let navigation_indexes = build_navigation_indexes(&data.games)?;
@@ -379,6 +476,18 @@ fn write_system_shard_with_options_and_profile(
     } else {
         ""
     };
+    let variant_schema = variant_payload
+        .as_ref()
+        .map(|_| {
+            "CREATE TABLE fast_five_variant_payload (
+                 singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                 format TEXT NOT NULL,
+                 variant_count INTEGER NOT NULL,
+                 decoded_sha256 TEXT NOT NULL,
+                 compressed_payload BLOB NOT NULL
+             ) WITHOUT ROWID;"
+        })
+        .unwrap_or("");
     connection
         .execute_batch(&format!(
             "PRAGMA page_size=4096;
@@ -389,7 +498,8 @@ fn write_system_shard_with_options_and_profile(
                  value TEXT NOT NULL
              ) WITHOUT ROWID;
              {games_schema}
-             {navigation_schema}"
+             {navigation_schema}
+             {variant_schema}"
         ))
         .map_err(|error| SystemShardError::with("create shard schema", error))?;
     let search_detail = match (artifact_profile, search_tuning) {
@@ -449,6 +559,22 @@ fn write_system_shard_with_options_and_profile(
                     SystemShardError::with("insert shard projection metadata", error)
                 })?;
         }
+    }
+    if let Some(payload) = variant_payload {
+        transaction
+            .execute(
+                "INSERT INTO fast_five_variant_payload(singleton,format,variant_count,decoded_sha256,compressed_payload)
+                 VALUES (1,?1,?2,?3,?4)",
+                rusqlite::params![
+                    payload.format,
+                    i64::try_from(payload.count).map_err(|_| {
+                        SystemShardError::new("write", "variant count exceeds SQLite integer")
+                    })?,
+                    payload.decoded_sha256,
+                    payload.compressed_payload,
+                ],
+            )
+            .map_err(|error| SystemShardError::with("insert shard variant payload", error))?;
     }
     if artifact_profile.stores_games() {
         let mut statement = transaction

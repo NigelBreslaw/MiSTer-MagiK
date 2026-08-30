@@ -169,18 +169,6 @@ pub enum FastFiveVariantRelation {
     NeoGeoVariant,
 }
 
-#[cfg(feature = "builder")]
-impl FastFiveVariantRelation {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::LanguageEdition => "language-edition",
-            Self::TitleFormatting => "title-formatting",
-            Self::ArcadeVariant => "arcade-variant",
-            Self::NeoGeoVariant => "neogeo-variant",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FastFiveGameVariant {
     pub family_stable_key: String,
@@ -805,6 +793,36 @@ fn c64_search_probe(sqlite_path: &Path, games: &[SystemGame]) -> Result<(u64, St
 }
 
 #[cfg(feature = "builder")]
+const FAST_FIVE_VARIANT_PAYLOAD_FORMAT: &str = "mister-magik-fast-five-variants-v1";
+
+#[cfg(feature = "builder")]
+fn encode_variant_payload(
+    source: &FastFiveSystem,
+) -> Result<Option<crate::system_shard::SystemShardVariantPayload>, String> {
+    if source.variants.is_empty() {
+        return Ok(None);
+    }
+    let encoded_size = postcard::experimental::serialized_size(&source.variants)
+        .map_err(|error| format!("measure {} variant payload: {error}", source.system_id))?;
+    if encoded_size > MAX_FAST_SYSTEM_TRANSPORT_BYTES {
+        return Err(format!(
+            "{} variant payload exceeds size limit",
+            source.system_id
+        ));
+    }
+    let mut decoded = vec![0; encoded_size as usize];
+    postcard::to_slice(&source.variants, &mut decoded)
+        .map_err(|error| format!("encode {} variant payload: {error}", source.system_id))?;
+    let decoded_sha256 = hex(&Sha256::digest(&decoded));
+    Ok(Some(crate::system_shard::SystemShardVariantPayload {
+        format: FAST_FIVE_VARIANT_PAYLOAD_FORMAT.to_string(),
+        count: source.variants.len(),
+        decoded_sha256,
+        compressed_payload: lz4_flex::compress_prepend_size(&decoded),
+    }))
+}
+
+#[cfg(feature = "builder")]
 pub fn run_c64_artifact_experiment(
     storage_root: &Path,
     scratch_root: &Path,
@@ -818,7 +836,7 @@ pub fn run_c64_artifact_experiment(
     };
     use crate::system_shard::{
         ShardDurability, ShardSearchTuning, ShardSqliteTuning, SystemShardData, open_system_shard,
-        write_system_shard_with_options,
+        write_system_shard_with_options_and_variant_payload,
     };
     use std::fs;
     use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -893,7 +911,7 @@ pub fn run_c64_artifact_experiment(
     let sqlite = staging.join("system.sqlite3");
     let navigation = staging.join("system.nav.lz4b");
     let build_started = Instant::now();
-    let staged = write_system_shard_with_options(
+    let staged = write_system_shard_with_options_and_variant_payload(
         &sqlite,
         &navigation,
         SystemShardData {
@@ -912,9 +930,9 @@ pub fn run_c64_artifact_experiment(
         durability,
         sqlite_tuning,
         search_tuning,
+        encode_variant_payload(source)?,
     )
     .map_err(|error| format!("build C64 experiment shard: {error}"))?;
-    write_fast_five_variants(&sqlite, source)?;
     let build_us = elapsed_us(build_started);
     if staged.games != source.games {
         return Err("staged C64 experiment rows differ from the snapshot".to_string());
@@ -1001,64 +1019,6 @@ pub fn publish_snapshot(
         limits,
         FastFiveArtifactProfile::Legacy,
     )
-}
-
-#[cfg(feature = "builder")]
-fn write_fast_five_variants(sqlite_path: &Path, source: &FastFiveSystem) -> Result<(), String> {
-    if source.variants.is_empty() {
-        return Ok(());
-    }
-    let mut connection = rusqlite::Connection::open(sqlite_path)
-        .map_err(|error| format!("open {} variant SQLite: {error}", source.system_id))?;
-    connection
-        .execute_batch(
-            "CREATE TABLE fast_five_game_variants (
-                 variant_stable_key TEXT PRIMARY KEY,
-                 family_stable_key TEXT NOT NULL,
-                 relation TEXT NOT NULL,
-                 title TEXT NOT NULL,
-                 launch_ref TEXT NOT NULL,
-                 game_json TEXT NOT NULL
-             ) WITHOUT ROWID;
-             CREATE INDEX fast_five_game_variants_family
-                 ON fast_five_game_variants(family_stable_key, title);",
-        )
-        .map_err(|error| format!("create {} variant schema: {error}", source.system_id))?;
-    let transaction = connection
-        .transaction()
-        .map_err(|error| format!("begin {} variant transaction: {error}", source.system_id))?;
-    {
-        let mut statement = transaction
-            .prepare(
-                "INSERT INTO fast_five_game_variants(
-                     variant_stable_key,family_stable_key,relation,title,launch_ref,game_json
-                 ) VALUES (?1,?2,?3,?4,?5,?6)",
-            )
-            .map_err(|error| format!("prepare {} variants: {error}", source.system_id))?;
-        for variant in &source.variants {
-            let game_json = serde_json::to_string(&variant.game)
-                .map_err(|error| format!("encode {} variant: {error}", source.system_id))?;
-            statement
-                .execute(rusqlite::params![
-                    variant.game.stable_key,
-                    variant.family_stable_key,
-                    variant.relation.as_str(),
-                    variant.game.title,
-                    variant.game.launch_ref,
-                    game_json,
-                ])
-                .map_err(|error| format!("insert {} variant: {error}", source.system_id))?;
-        }
-    }
-    transaction
-        .execute(
-            "INSERT INTO shard_meta(key,value) VALUES ('fast_five_variant_count',?1)",
-            [source.variants.len().to_string()],
-        )
-        .map_err(|error| format!("record {} variant count: {error}", source.system_id))?;
-    transaction
-        .commit()
-        .map_err(|error| format!("commit {} variants: {error}", source.system_id))
 }
 
 #[cfg(feature = "builder")]
@@ -1166,8 +1126,10 @@ fn publish_snapshot_selection(
         publish_system_artifacts, sync_artifact_batch,
     };
     use crate::system_shard::{
-        ShardArtifactProfile, ShardDurability, SystemShardData, write_system_shard,
-        write_system_shard_with_artifact_profile, write_system_shard_with_durability,
+        ShardArtifactProfile, ShardDurability, SystemShardData,
+        write_system_shard_with_artifact_profile_and_variant_payload,
+        write_system_shard_with_durability_and_variant_payload,
+        write_system_shard_with_variant_payload,
     };
     use std::fs;
     use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -1364,6 +1326,7 @@ fn publish_snapshot_selection(
             ),
             games: source.games.clone(),
         };
+        let variant_payload = encode_variant_payload(source)?;
         let shard_profile = match artifact_profile {
             FastFiveArtifactProfile::Legacy | FastFiveArtifactProfile::SinglePass => {
                 ShardArtifactProfile::Legacy
@@ -1380,27 +1343,34 @@ fn publish_snapshot_selection(
             FastFiveArtifactProfile::SearchDetailNone => ShardArtifactProfile::SearchDetailNone,
         };
         if artifact_profile == FastFiveArtifactProfile::Legacy && stage_in_tmpfs {
-            write_system_shard_with_durability(
+            write_system_shard_with_durability_and_variant_payload(
                 &sqlite,
                 &navigation,
                 data,
                 limits.shard,
                 ShardDurability::Immediate,
+                variant_payload,
             )
         } else if artifact_profile == FastFiveArtifactProfile::Legacy {
-            write_system_shard(&sqlite, &navigation, &data, limits.shard)
+            write_system_shard_with_variant_payload(
+                &sqlite,
+                &navigation,
+                data,
+                limits.shard,
+                variant_payload,
+            )
         } else {
-            write_system_shard_with_artifact_profile(
+            write_system_shard_with_artifact_profile_and_variant_payload(
                 &sqlite,
                 &navigation,
                 data,
                 limits.shard,
                 ShardDurability::Immediate,
                 shard_profile,
+                variant_payload,
             )
         }
         .map_err(|error| format!("write {} shard: {error}", source.system_id))?;
-        write_fast_five_variants(&sqlite, source)?;
         let active = if stage_in_tmpfs || artifact_profile != FastFiveArtifactProfile::Legacy {
             let publication = publish_prevalidated_system_artifacts_deferred(
                 storage_root,
@@ -1513,7 +1483,7 @@ pub fn verify_snapshot_artifacts(
 ) -> Result<FastFiveVerificationReport, String> {
     use crate::navpack::MappedNavPack;
     use crate::system_shard::SystemLaunchPlan;
-    use rusqlite::Connection;
+    use rusqlite::{Connection, OptionalExtension};
 
     snapshot.validate()?;
     let manifest = read_latest_manifest_lazy(storage_root, limits)
@@ -1618,62 +1588,52 @@ pub fn verify_snapshot_artifacts(
             };
             changed = changed.saturating_add(usize::from(&actual != expected));
         }
-        let has_variants: bool = connection
-            .query_row(
-                "SELECT EXISTS(
-                     SELECT 1 FROM sqlite_master
-                     WHERE type='table' AND name='fast_five_game_variants'
-                 )",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|error| format!("inspect candidate {} variants: {error}", source.system_id))?;
-        let stored_variants = if has_variants {
-            let mut statement = connection
-                .prepare(
-                    "SELECT family_stable_key,relation,game_json
-                     FROM fast_five_game_variants
-                     ORDER BY family_stable_key,variant_stable_key",
-                )
-                .map_err(|error| {
-                    format!("prepare candidate {} variants: {error}", source.system_id)
-                })?;
-            statement
-                .query_map([], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                })
-                .map_err(|error| format!("query candidate {} variants: {error}", source.system_id))?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| format!("read candidate {} variants: {error}", source.system_id))?
-                .into_iter()
-                .map(|(family_stable_key, relation, game_json)| {
-                    let relation = match relation.as_str() {
-                        "language-edition" => FastFiveVariantRelation::LanguageEdition,
-                        "title-formatting" => FastFiveVariantRelation::TitleFormatting,
-                        "arcade-variant" => FastFiveVariantRelation::ArcadeVariant,
-                        _ => {
-                            return Err(format!(
-                                "candidate {} has unknown variant relation {relation}",
-                                source.system_id
-                            ));
-                        }
-                    };
-                    let game = serde_json::from_str(&game_json).map_err(|error| {
-                        format!("decode candidate {} variant: {error}", source.system_id)
-                    })?;
-                    Ok(FastFiveGameVariant {
-                        family_stable_key,
-                        relation,
-                        game,
-                    })
-                })
-                .collect::<Result<Vec<_>, String>>()?
-        } else {
+        let stored_variants = if source.variants.is_empty() {
             Vec::new()
+        } else {
+            let stored = connection
+                .query_row(
+                    "SELECT format,variant_count,decoded_sha256,compressed_payload
+                     FROM fast_five_variant_payload WHERE singleton=1",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, Vec<u8>>(3)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(|error| format!("query candidate {} variants: {error}", source.system_id))?
+                .ok_or_else(|| format!("candidate {} has no variant payload", source.system_id))?;
+            if stored.0 != FAST_FIVE_VARIANT_PAYLOAD_FORMAT {
+                return Err(format!(
+                    "candidate {} has unsupported variant payload {}",
+                    source.system_id, stored.0
+                ));
+            }
+            if i64::try_from(source.variants.len()).unwrap_or(i64::MAX) != stored.1 {
+                return Err(format!(
+                    "candidate {} variant payload count differs",
+                    source.system_id
+                ));
+            }
+            let decoded = crate::bounded_lz4::decompress_size_prepended(
+                &stored.3,
+                MAX_FAST_SYSTEM_TRANSPORT_BYTES,
+                "fast-five variant payload",
+            )?;
+            if stored.2 != hex(&Sha256::digest(&decoded)) {
+                return Err(format!(
+                    "candidate {} variant payload metadata differs",
+                    source.system_id
+                ));
+            }
+            postcard::from_bytes::<Vec<FastFiveGameVariant>>(&decoded).map_err(|error| {
+                format!("decode candidate {} variants: {error}", source.system_id)
+            })?
         };
         changed = changed.saturating_add(source.variants.len().abs_diff(stored_variants.len()));
         changed = changed.saturating_add(
