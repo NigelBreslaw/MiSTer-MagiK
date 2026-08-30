@@ -445,6 +445,17 @@ mod imp {
         unsafe {
             libc::setitimer(libc::ITIMER_PROF, &mut timer, std::ptr::null_mut());
         }
+        // The interval timer is process-wide, so blocking SIGPROF on this
+        // finalizer thread does not stop a signal already queued for another
+        // catalog worker thread.  Restore the harmless disposition installed
+        // before pprof started before taking its global read lock.  This keeps
+        // another handler from entering pprof while report extraction runs.
+        if unsafe { libc::signal(libc::SIGPROF, libc::SIG_IGN) } == libc::SIG_ERR {
+            crate::ui_errln!(
+                "cpu_profile: failed to ignore SIGPROF before report extraction: {}",
+                std::io::Error::last_os_error()
+            );
+        }
         let report_builder = p.guard.report();
         crate::ui_logln!("cpu_profile: building unresolved report");
         let unresolved = match report_builder.build_unresolved() {
