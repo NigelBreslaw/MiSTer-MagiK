@@ -750,10 +750,10 @@ pub(super) fn start_library_catalog_worker(
     catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
     archive_cache: mister_magik_catalog::catalog_config::ArchiveCacheConfig,
 ) -> (CatalogWorkerReceiver, Option<Arc<CatalogChildControl>>) {
-    if request != CatalogWorkerRequest::LoadOnly
-        && request != CatalogWorkerRequest::StrictLoad
-        && std::env::var_os(CATALOG_WORKER_CHILD_ENV).is_none()
-    {
+    if should_supervise_catalog_worker(
+        request,
+        std::env::var_os(CATALOG_WORKER_CHILD_ENV).is_some(),
+    ) {
         return start_library_catalog_worker_process(
             root,
             request,
@@ -774,6 +774,13 @@ pub(super) fn start_library_catalog_worker(
         .into(),
         None,
     )
+}
+
+fn should_supervise_catalog_worker(
+    _request: CatalogWorkerRequest,
+    running_inside_child: bool,
+) -> bool {
+    !running_inside_child
 }
 
 fn start_library_catalog_worker_in_process(
@@ -2003,6 +2010,22 @@ mod tests {
             catalog_worker_plan(CatalogCacheState::Ready, CatalogWorkerRequest::FreshBuild),
             CatalogWorkerPlan::FreshBuild
         );
+    }
+
+    #[test]
+    fn every_catalog_request_is_supervised_outside_the_child() {
+        let requests = [
+            CatalogWorkerRequest::LoadOnly,
+            CatalogWorkerRequest::StrictLoad,
+            CatalogWorkerRequest::CheckStamp,
+            CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
+            CatalogWorkerRequest::RECONCILE_ALL_SYSTEMS,
+            CatalogWorkerRequest::FreshBuild,
+        ];
+        for request in requests {
+            assert!(should_supervise_catalog_worker(request, false));
+            assert!(!should_supervise_catalog_worker(request, true));
+        }
     }
 
     #[test]
