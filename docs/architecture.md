@@ -677,10 +677,10 @@ Launcher orchestration runs through an explicit Rust lifecycle state chart:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> BootSplash
-    BootSplash --> CatalogBuilding: catalog missing or empty
-    BootSplash --> CatalogReady: catalog loaded
-    BootSplash --> CatalogLoadFailed: existing catalog unreadable
+    [*] --> StartupCatalogPending
+    StartupCatalogPending --> CatalogBuilding: catalog missing or empty
+    StartupCatalogPending --> CatalogReady: catalog loaded
+    StartupCatalogPending --> CatalogLoadFailed: existing catalog unreadable
 
     CatalogReady --> WarmUpdating: exact or all-system reconciliation
     WarmUpdating --> WarmUpdating: queued / scanning / prepared per system

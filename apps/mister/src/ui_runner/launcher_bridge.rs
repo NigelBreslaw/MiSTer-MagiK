@@ -2015,7 +2015,7 @@ mod tests {
         assert_eq!(arcade.get_active_count(), 2);
 
         let mut effects = LifecycleEffects::new();
-        lifecycle.after_boot_splash_presented(
+        lifecycle.classify_startup_catalog(
             StartupCatalogState::LoadFailed {
                 error: "database disk image is malformed".to_string(),
                 has_stale_catalog: false,

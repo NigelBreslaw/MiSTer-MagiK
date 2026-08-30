@@ -56,6 +56,15 @@ class ContractTests(unittest.TestCase):
                     [source(f"struct Fixture {{ {symbol}: usize }}", ".rs")]
                 )
 
+    def test_retired_startup_view_symbols_are_rejected(self) -> None:
+        for symbol in CONTRACT.FORBIDDEN_STARTUP_SYMBOLS:
+            with self.assertRaisesRegex(
+                CONTRACT.ContractError, "retired startup-view symbol"
+            ):
+                CONTRACT.check_sources(
+                    [source(f"struct Fixture {{ {symbol}: usize }}", ".rs")]
+                )
+
     def test_integer_finite_state_and_legacy_fields_are_rejected(self) -> None:
         for declaration in (
             "in property <int> screen-orientation;",

@@ -29,7 +29,7 @@ impl CatalogSource {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LauncherLifecycleState {
-    BootSplash,
+    StartupCatalogPending,
     CatalogBuilding {
         mode: CatalogBuildMode,
         foreground: bool,
@@ -63,7 +63,7 @@ pub enum LauncherLifecycleState {
 impl LauncherLifecycleState {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::BootSplash => "boot-splash",
+            Self::StartupCatalogPending => "startup-catalog-pending",
             Self::CatalogBuilding { .. } => "catalog-building",
             Self::CatalogLoadFailed { .. } => "catalog-load-failed",
             Self::CatalogRetrying { .. } => "catalog-retrying",
@@ -248,7 +248,6 @@ impl StartupMode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StartupRevealState {
-    SplashVisible,
     CatalogProgressVisible,
     HoldBlack,
     HoldBlackReturn,
@@ -262,7 +261,6 @@ pub enum StartupRevealState {
 impl StartupRevealState {
     pub fn label(self) -> &'static str {
         match self {
-            Self::SplashVisible => "splash_visible",
             Self::CatalogProgressVisible => "catalog_progress_visible",
             Self::HoldBlack => "hold_black",
             Self::HoldBlackReturn => "hold_black_return",
@@ -536,7 +534,7 @@ impl LauncherView {
 pub struct LauncherLifecycle {
     state: LauncherLifecycleState,
     config: LauncherLifecycleConfig,
-    boot_splash_presented: bool,
+    startup_catalog_classified: bool,
     startup_mode: StartupMode,
     startup_reveal_state: StartupRevealState,
     startup_started_at: Instant,
@@ -547,16 +545,15 @@ pub struct LauncherLifecycle {
 }
 
 impl LauncherLifecycle {
-    pub const COLD_SPLASH_DURATION: Duration = Duration::from_secs(2);
     pub const COLD_STARTUP_MAX_DURATION: Duration = Duration::from_secs(20);
     pub const RETURN_PREVIEW_HOLD_TIMEOUT: Duration = Duration::from_millis(250);
     pub const RETURN_BLACK_SCREEN_TIMEOUT: Duration = Duration::from_secs(5);
 
     pub fn new(config: LauncherLifecycleConfig, now: Instant) -> Self {
         Self {
-            state: LauncherLifecycleState::BootSplash,
+            state: LauncherLifecycleState::StartupCatalogPending,
             config,
-            boot_splash_presented: false,
+            startup_catalog_classified: false,
             startup_mode: StartupMode::WarmCatalog,
             startup_reveal_state: StartupRevealState::HoldBlack,
             startup_started_at: now,
@@ -583,14 +580,14 @@ impl LauncherLifecycle {
         self.startup_revealed_at = None;
         self.startup_input_enabled_at = None;
         self.startup_reveal_state = match mode {
-            StartupMode::ColdNoCatalog => StartupRevealState::SplashVisible,
+            StartupMode::ColdNoCatalog => StartupRevealState::CatalogProgressVisible,
             StartupMode::WarmCatalog => StartupRevealState::RevealLauncher,
             StartupMode::ReturnFromGame => StartupRevealState::HoldBlackReturn,
         };
         out.startup_event("startup_entry_classified", format!("mode={}", mode.label()));
         match self.startup_reveal_state {
-            StartupRevealState::SplashVisible => {
-                out.startup_event("startup_splash_visible", "mode=cold_no_catalog");
+            StartupRevealState::CatalogProgressVisible => {
+                out.startup_event("catalog_progress_revealed", "mode=cold_no_catalog");
             }
             StartupRevealState::RevealLauncher => {
                 out.startup_event("startup_shell_visible", "mode=warm_catalog");
@@ -629,14 +626,6 @@ impl LauncherLifecycle {
             return;
         }
         match self.startup_reveal_state {
-            StartupRevealState::SplashVisible if startup_elapsed >= Self::COLD_SPLASH_DURATION => {
-                self.startup_reveal_state = StartupRevealState::CatalogProgressVisible;
-                out.startup_event(
-                    "startup_splash_done",
-                    format!("elapsed_ms={}", startup_elapsed.as_millis()),
-                );
-                out.startup_event("catalog_progress_revealed", "mode=cold_no_catalog");
-            }
             StartupRevealState::CatalogProgressVisible if catalog_ready => {
                 self.mark_reveal_ready("preview_state=not_required", out);
             }
@@ -672,15 +661,10 @@ impl LauncherLifecycle {
         }
     }
 
-    pub fn startup_should_show_splash(&self) -> bool {
-        self.startup_reveal_state == StartupRevealState::SplashVisible
-    }
-
     pub fn startup_can_present_frame(&self) -> bool {
         matches!(
             self.startup_reveal_state,
-            StartupRevealState::SplashVisible
-                | StartupRevealState::CatalogProgressVisible
+            StartupRevealState::CatalogProgressVisible
                 | StartupRevealState::RevealLauncher
                 | StartupRevealState::InputEnabled
         )
@@ -758,12 +742,12 @@ impl LauncherLifecycle {
         }
     }
 
-    pub fn after_boot_splash_presented(
+    pub fn classify_startup_catalog(
         &mut self,
         input: StartupCatalogState,
         out: &mut LifecycleEffects,
     ) -> LauncherLifecycleStep {
-        self.boot_splash_presented = true;
+        self.startup_catalog_classified = true;
         match input {
             StartupCatalogState::Ready {
                 source,
@@ -775,7 +759,7 @@ impl LauncherLifecycle {
                         validating: validation_scheduled,
                     },
                     out,
-                    "boot_splash_presented",
+                    "startup_catalog_classified",
                 );
                 if !validation_scheduled {
                     self.transition(LauncherLifecycleState::Idle, out, "catalog_idle");
@@ -793,7 +777,7 @@ impl LauncherLifecycle {
                         has_stale_catalog,
                     },
                     out,
-                    "boot_splash_presented",
+                    "startup_catalog_classified",
                 );
             }
             StartupCatalogState::LoadFailed {
@@ -881,7 +865,7 @@ impl LauncherLifecycle {
             }
             _ => {}
         }
-        if !self.boot_splash_presented {
+        if !self.startup_catalog_classified {
             return self.step(BridgeSyncPlan::None);
         }
         match input {
@@ -1295,7 +1279,7 @@ mod tests {
         lifecycle.begin_startup_reveal(StartupMode::WarmCatalog, now, &mut effects);
         lifecycle.tick_startup_reveal(now, true, &mut effects);
         lifecycle.note_startup_frame_presented(0, now, &mut effects);
-        lifecycle.after_boot_splash_presented(
+        lifecycle.classify_startup_catalog(
             StartupCatalogState::Ready {
                 source: CatalogSource::FullSqlite,
                 validation_scheduled: false,
@@ -1341,14 +1325,17 @@ mod tests {
     }
 
     #[test]
-    fn boot_splash_does_not_emit_work_before_presented() {
+    fn startup_catalog_is_pending_before_classification() {
         let lifecycle = lifecycle();
 
-        assert_eq!(lifecycle.state(), &LauncherLifecycleState::BootSplash);
+        assert_eq!(
+            lifecycle.state(),
+            &LauncherLifecycleState::StartupCatalogPending
+        );
     }
 
     #[test]
-    fn launch_before_boot_splash_is_rejected() {
+    fn launch_before_startup_catalog_classification_is_rejected() {
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
 
@@ -1359,12 +1346,15 @@ mod tests {
             &mut effects,
         );
 
-        assert_eq!(lifecycle.state(), &LauncherLifecycleState::BootSplash);
+        assert_eq!(
+            lifecycle.state(),
+            &LauncherLifecycleState::StartupCatalogPending
+        );
         assert!(effects.as_slice().is_empty());
     }
 
     #[test]
-    fn cold_start_shows_splash_for_two_seconds_before_progress() {
+    fn cold_start_shows_catalog_progress_immediately() {
         let now = Instant::now();
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
@@ -1372,37 +1362,19 @@ mod tests {
         lifecycle.begin_startup_reveal(StartupMode::ColdNoCatalog, now, &mut effects);
         assert_eq!(
             lifecycle.startup_status().state,
-            StartupRevealState::SplashVisible
+            StartupRevealState::CatalogProgressVisible
         );
-        assert!(lifecycle.startup_should_show_splash());
         assert!(lifecycle.startup_can_present_frame());
         assert!(!lifecycle.startup_input_enabled());
-        assert!(effect_names(&effects).contains(&"startup_splash_visible"));
+        assert!(effect_names(&effects).contains(&"catalog_progress_revealed"));
         effects.clear();
 
-        lifecycle.tick_startup_reveal(
-            now + LauncherLifecycle::COLD_SPLASH_DURATION - Duration::from_millis(1),
-            false,
-            &mut effects,
-        );
-        assert_eq!(
-            lifecycle.startup_status().state,
-            StartupRevealState::SplashVisible
-        );
-        assert!(effects.as_slice().is_empty());
-
-        lifecycle.tick_startup_reveal(
-            now + LauncherLifecycle::COLD_SPLASH_DURATION,
-            false,
-            &mut effects,
-        );
+        lifecycle.tick_startup_reveal(now + Duration::from_millis(1), false, &mut effects);
         assert_eq!(
             lifecycle.startup_status().state,
             StartupRevealState::CatalogProgressVisible
         );
-        assert!(!lifecycle.startup_should_show_splash());
-        assert!(effect_names(&effects).contains(&"startup_splash_done"));
-        assert!(effect_names(&effects).contains(&"catalog_progress_revealed"));
+        assert!(effects.as_slice().is_empty());
     }
 
     #[test]
@@ -1411,11 +1383,6 @@ mod tests {
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
         lifecycle.begin_startup_reveal(StartupMode::ColdNoCatalog, now, &mut effects);
-        lifecycle.tick_startup_reveal(
-            now + LauncherLifecycle::COLD_SPLASH_DURATION,
-            false,
-            &mut effects,
-        );
         effects.clear();
 
         lifecycle.tick_startup_reveal(
@@ -1791,7 +1758,7 @@ mod tests {
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
 
-        lifecycle.after_boot_splash_presented(
+        lifecycle.classify_startup_catalog(
             StartupCatalogState::Ready {
                 source: CatalogSource::SummaryProjection,
                 validation_scheduled: true,
@@ -1817,7 +1784,7 @@ mod tests {
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
 
-        lifecycle.after_boot_splash_presented(
+        lifecycle.classify_startup_catalog(
             StartupCatalogState::Building {
                 mode: CatalogBuildMode::FirstBuild,
                 foreground_catalog_update: false,
@@ -1841,7 +1808,7 @@ mod tests {
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
 
-        lifecycle.after_boot_splash_presented(
+        lifecycle.classify_startup_catalog(
             StartupCatalogState::Building {
                 mode: CatalogBuildMode::FirstBuild,
                 foreground_catalog_update: false,
@@ -1867,7 +1834,7 @@ mod tests {
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
 
-        lifecycle.after_boot_splash_presented(
+        lifecycle.classify_startup_catalog(
             StartupCatalogState::Ready {
                 source: CatalogSource::FullSqlite,
                 validation_scheduled: false,
@@ -1887,7 +1854,7 @@ mod tests {
         lifecycle.begin_startup_reveal(StartupMode::WarmCatalog, now, &mut effects);
         lifecycle.tick_startup_reveal(now, true, &mut effects);
         lifecycle.note_startup_frame_presented(0, now, &mut effects);
-        lifecycle.after_boot_splash_presented(
+        lifecycle.classify_startup_catalog(
             StartupCatalogState::Ready {
                 source: CatalogSource::FullSqlite,
                 validation_scheduled: true,
@@ -1928,7 +1895,7 @@ mod tests {
         let now = Instant::now();
 
         lifecycle.begin_startup_reveal(StartupMode::WarmCatalog, now, &mut effects);
-        lifecycle.after_boot_splash_presented(
+        lifecycle.classify_startup_catalog(
             StartupCatalogState::Ready {
                 source: CatalogSource::FullSqlite,
                 validation_scheduled: false,
@@ -1959,7 +1926,7 @@ mod tests {
         lifecycle.tick_startup_reveal(now, true, &mut effects);
         lifecycle.note_startup_frame_presented(0, now, &mut effects);
 
-        lifecycle.after_boot_splash_presented(
+        lifecycle.classify_startup_catalog(
             StartupCatalogState::Ready {
                 source: CatalogSource::SummaryProjection,
                 validation_scheduled: true,
@@ -2043,7 +2010,7 @@ mod tests {
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
 
-        lifecycle.after_boot_splash_presented(
+        lifecycle.classify_startup_catalog(
             StartupCatalogState::Ready {
                 source: CatalogSource::SummaryProjection,
                 validation_scheduled: true,
@@ -2251,7 +2218,7 @@ mod tests {
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
         lifecycle.begin_startup_reveal(StartupMode::ColdNoCatalog, Instant::now(), &mut effects);
-        lifecycle.after_boot_splash_presented(
+        lifecycle.classify_startup_catalog(
             StartupCatalogState::LoadFailed {
                 error: "corrupt sqlite".to_string(),
                 has_stale_catalog: false,

@@ -5943,7 +5943,7 @@ pub(super) fn run_launcher_loop(
             start,
         );
     }
-    let _ = lifecycle.after_boot_splash_presented(startup_catalog_state, &mut lifecycle_effects);
+    let _ = lifecycle.classify_startup_catalog(startup_catalog_state, &mut lifecycle_effects);
     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
     let mut modal_input_test_dialog_pending =
         modal_input_catalog_recovery_test_requested(launcher_config.tests(), start);

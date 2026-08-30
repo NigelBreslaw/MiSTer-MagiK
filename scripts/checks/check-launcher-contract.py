@@ -26,6 +26,15 @@ FORBIDDEN_SYMBOLS = (
     "Launcher" + "BridgePresenter",
     "Launcher" + "BridgeKey",
 )
+# Build the retired startup-view spellings so the checker does not flag its own source.
+FORBIDDEN_STARTUP_SYMBOLS = (
+    "Startup" + "Splash",
+    "startup" + "-state",
+    "startup" + "_state",
+    "startup" + "_splash",
+    "Boot" + "Splash",
+    "boot" + "_splash",
+)
 FINITE_NAME_TOKENS = frozenset(
     {
         "activity",
@@ -175,6 +184,11 @@ def check_sources(sources: Iterable[Source]) -> None:
             if symbol in source.text:
                 violations.append(
                     f"{source.path}: retired launcher symbol {symbol} is forbidden"
+                )
+        for symbol in FORBIDDEN_STARTUP_SYMBOLS:
+            if symbol in source.text:
+                violations.append(
+                    f"{source.path}: retired startup-view symbol {symbol} is forbidden"
                 )
 
         if not is_production_slint(source):
