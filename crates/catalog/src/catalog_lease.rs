@@ -11,7 +11,9 @@
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -71,9 +73,9 @@ impl std::fmt::Display for CatalogLeaseError {
 impl std::error::Error for CatalogLeaseError {}
 
 pub struct CatalogMutationLease {
+    #[cfg(test)]
     path: PathBuf,
-    file: File,
-    run_id: CatalogRunId,
+    _file: File,
 }
 
 impl CatalogMutationLease {
@@ -144,22 +146,20 @@ impl CatalogMutationLease {
             return Err(CatalogLeaseError::Io { path, source });
         }
         Ok(Self {
+            #[cfg(test)]
             path,
-            file,
-            run_id: CatalogRunId::new(),
+            _file: file,
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
 
+    #[cfg(test)]
     pub(crate) fn file(&self) -> &File {
-        &self.file
-    }
-
-    pub(crate) fn run_id(&self) -> &CatalogRunId {
-        &self.run_id
+        &self._file
     }
 }
 
