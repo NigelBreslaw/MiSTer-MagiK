@@ -978,13 +978,14 @@ fn collect_generic_namespace_inventory(
     });
     let total_us = started.elapsed().as_micros() as u64;
     crate::catalog_logln!(
-        "fast_catalog_generic_inventory_tsv\tpath={}\tbackend={}\tentries={}\tnamespace_us={}\tpost_walk_us={}\ttotal_us={}",
+        "fast_catalog_generic_inventory_tsv\tpath={}\tbackend={}\tentries={}\tnamespace_us={}\tpost_walk_us={}\ttotal_us={}\tfallback={}",
         header.path.display(),
         namespace.backend,
         entries.len(),
         namespace_us,
         total_us.saturating_sub(namespace_us),
         total_us,
+        namespace.fallback_reason.as_deref().unwrap_or("none"),
     );
     Ok(GenericNamespaceInventory {
         fact: GameDirFact {
