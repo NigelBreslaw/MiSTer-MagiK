@@ -29,6 +29,70 @@ const MAX_SESSION_AGE: Duration = Duration::from_secs(120);
 const REQUEST_LEASE: Duration = Duration::from_secs(5);
 const CLOCK_SKEW: Duration = Duration::from_secs(10);
 const INTERRUPTED_SYSCALL_RETRIES: usize = 16;
+const STARTUP_PRESENTATION_TRACE_LIMIT: usize = 64;
+
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct StartupPresentationTraceEntry {
+    pub(super) kind: &'static str,
+    pub(super) frame: u64,
+    pub(super) latch: u16,
+    pub(super) elapsed_ms: u64,
+    pub(super) catalog_ready: bool,
+    pub(super) input_enabled: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub(super) struct StartupPresentationTrace {
+    pub(super) entries: Vec<StartupPresentationTraceEntry>,
+    pub(super) first_launcher_frame: Option<u64>,
+    pub(super) first_input_enabled_frame: Option<u64>,
+    pub(super) intro_failure: Option<String>,
+    pub(super) truncated: bool,
+}
+
+impl StartupPresentationTrace {
+    fn record(
+        &mut self,
+        kind: &'static str,
+        frame: u64,
+        latch: u16,
+        elapsed_ms: u64,
+        catalog_ready: bool,
+        input_enabled: bool,
+    ) {
+        if kind == "launcher" && self.first_launcher_frame.is_none() {
+            self.first_launcher_frame = Some(frame);
+        }
+        if input_enabled && self.first_input_enabled_frame.is_none() {
+            self.first_input_enabled_frame = Some(frame);
+        }
+        if let Some(last) = self.entries.last_mut()
+            && last.kind == kind
+        {
+            last.catalog_ready |= catalog_ready;
+            last.input_enabled |= input_enabled;
+            return;
+        }
+        if self.entries.len() == STARTUP_PRESENTATION_TRACE_LIMIT {
+            self.truncated = true;
+            return;
+        }
+        self.entries.push(StartupPresentationTraceEntry {
+            kind,
+            frame,
+            latch,
+            elapsed_ms,
+            catalog_ready,
+            input_enabled,
+        });
+    }
+
+    fn note_intro_failure(&mut self, failure: &str) {
+        if self.intro_failure.is_none() {
+            self.intro_failure = Some(failure.chars().take(160).collect());
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize)]
 struct AutomationSessionDescriptor {
@@ -98,6 +162,7 @@ struct AutomationSnapshot {
     presented_action_sequence: u64,
     presented_latch_sequence: u16,
     semantic: AutomationSemanticState,
+    startup_trace: StartupPresentationTrace,
 }
 
 #[derive(Debug, Deserialize)]
@@ -176,6 +241,7 @@ pub(super) struct LauncherAutomation {
     presented_action_sequence: u64,
     presented_latch_sequence: u16,
     pending_releases: VecDeque<InputEvent>,
+    startup_trace: StartupPresentationTrace,
 }
 
 impl LauncherAutomation {
@@ -200,6 +266,7 @@ impl LauncherAutomation {
             presented_action_sequence: 0,
             presented_latch_sequence: 0,
             pending_releases: VecDeque::new(),
+            startup_trace: StartupPresentationTrace::default(),
         }
     }
 
@@ -285,6 +352,23 @@ impl LauncherAutomation {
         self.presented_state_revision = stamp.state_revision;
         self.presented_action_sequence = stamp.action_sequence;
         self.presented_latch_sequence = latch_sequence;
+    }
+
+    pub(super) fn record_startup_presentation(
+        &mut self,
+        kind: &'static str,
+        frame: u64,
+        latch: u16,
+        elapsed_ms: u64,
+        catalog_ready: bool,
+        input_enabled: bool,
+    ) {
+        self.startup_trace
+            .record(kind, frame, latch, elapsed_ms, catalog_ready, input_enabled);
+    }
+
+    pub(super) fn note_startup_intro_failure(&mut self, failure: &str) {
+        self.startup_trace.note_intro_failure(failure);
     }
 
     fn refresh_session(&mut self, now: Instant) {
@@ -493,6 +577,7 @@ impl LauncherAutomation {
             presented_action_sequence: self.presented_action_sequence,
             presented_latch_sequence: self.presented_latch_sequence,
             semantic: self.semantic.clone(),
+            startup_trace: self.startup_trace.clone(),
         }
     }
 
@@ -938,6 +1023,42 @@ mod tests {
         let first = automation.observe_state(state.clone());
         let second = automation.observe_state(state);
         assert_eq!(first.state_revision, second.state_revision);
+    }
+
+    #[test]
+    fn startup_presentation_trace_collapses_runs_and_records_readiness() {
+        let mut trace = StartupPresentationTrace::default();
+        trace.record("particle-intro", 4, 9, 80, false, false);
+        trace.record("particle-intro", 5, 10, 96, false, false);
+        trace.record("catalog-progress", 6, 11, 112, false, false);
+        trace.record("launcher", 7, 12, 128, true, false);
+        trace.record("launcher", 8, 13, 144, true, true);
+
+        assert_eq!(trace.entries.len(), 3);
+        assert_eq!(trace.entries[0].kind, "particle-intro");
+        assert_eq!(trace.entries[0].frame, 4);
+        assert_eq!(trace.entries[2].frame, 7);
+        assert_eq!(trace.entries[2].catalog_ready, true);
+        assert_eq!(trace.entries[2].input_enabled, true);
+        assert_eq!(trace.first_launcher_frame, Some(7));
+        assert_eq!(trace.first_input_enabled_frame, Some(8));
+        assert!(!trace.truncated);
+    }
+
+    #[test]
+    fn startup_presentation_trace_is_bounded() {
+        let mut trace = StartupPresentationTrace::default();
+        for index in 0..(STARTUP_PRESENTATION_TRACE_LIMIT + 1) {
+            let kind = if index % 2 == 0 {
+                "launcher"
+            } else {
+                "catalog-progress"
+            };
+            trace.record(kind, index as u64, index as u16, index as u64, false, false);
+        }
+
+        assert_eq!(trace.entries.len(), STARTUP_PRESENTATION_TRACE_LIMIT);
+        assert!(trace.truncated);
     }
 
     #[test]

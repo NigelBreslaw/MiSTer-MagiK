@@ -25,12 +25,36 @@ class UiSemanticState:
 
 
 @dataclass(frozen=True)
+class StartupPresentation:
+    """One physically confirmed startup content run."""
+
+    kind: str
+    frame: int
+    latch: int
+    elapsed_ms: int
+    catalog_ready: bool
+    input_enabled: bool
+
+
+@dataclass(frozen=True)
+class StartupPresentationTrace:
+    """Bounded startup presentation history retained before bridge attach."""
+
+    entries: tuple[StartupPresentation, ...]
+    first_launcher_frame: int | None
+    first_input_enabled_frame: int | None
+    intro_failure: str | None
+    truncated: bool
+
+
+@dataclass(frozen=True)
 class UiTestSnapshot:
     """Presented semantic state and its monotonic revisions."""
 
     state_revision: int
     presented_state_revision: int
     semantic: UiSemanticState
+    startup_trace: StartupPresentationTrace
 
 
 def _required_mapping(value: object, name: str) -> dict[str, object]:
@@ -48,6 +72,12 @@ def _required_text(value: object, name: str) -> str:
 def _required_integer(value: object, name: str) -> int:
     if type(value) is not int:
         raise RuntimeError(f"MagiK UI-test snapshot field {name!r} is not an integer")
+    return value
+
+
+def _required_boolean(value: object, name: str) -> bool:
+    if type(value) is not bool:
+        raise RuntimeError(f"MagiK UI-test snapshot field {name!r} is not a boolean")
     return value
 
 
@@ -99,6 +129,29 @@ class AgentInput:
         response = self._request({"kind": "snapshot"})
         snapshot = _required_mapping(response.get("snapshot"), "snapshot")
         semantic = _required_mapping(snapshot.get("semantic"), "semantic")
+        startup_trace = _required_mapping(snapshot.get("startup_trace"), "startup_trace")
+        raw_entries = startup_trace.get("entries")
+        if not isinstance(raw_entries, list):
+            raise TypeError("MagiK UI-test snapshot field 'startup_trace.entries' is not a list")
+        entries: list[StartupPresentation] = []
+        for index, raw_entry in enumerate(raw_entries):
+            entry = _required_mapping(raw_entry, f"startup_trace.entries[{index}]")
+            entries.append(
+                StartupPresentation(
+                    kind=_required_text(entry.get("kind"), "startup_trace.entries.kind"),
+                    frame=_required_integer(entry.get("frame"), "startup_trace.entries.frame"),
+                    latch=_required_integer(entry.get("latch"), "startup_trace.entries.latch"),
+                    elapsed_ms=_required_integer(
+                        entry.get("elapsed_ms"), "startup_trace.entries.elapsed_ms"
+                    ),
+                    catalog_ready=_required_boolean(
+                        entry.get("catalog_ready"), "startup_trace.entries.catalog_ready"
+                    ),
+                    input_enabled=_required_boolean(
+                        entry.get("input_enabled"), "startup_trace.entries.input_enabled"
+                    ),
+                )
+            )
         return UiTestSnapshot(
             state_revision=_required_integer(
                 snapshot.get("state_revision"), "state_revision"
@@ -127,6 +180,35 @@ class AgentInput:
                 ),
                 effective_view=_required_text(
                     semantic.get("effective_view"), "effective_view"
+                ),
+            ),
+            startup_trace=StartupPresentationTrace(
+                entries=tuple(entries),
+                first_launcher_frame=(
+                    None
+                    if startup_trace.get("first_launcher_frame") is None
+                    else _required_integer(
+                        startup_trace.get("first_launcher_frame"),
+                        "startup_trace.first_launcher_frame",
+                    )
+                ),
+                first_input_enabled_frame=(
+                    None
+                    if startup_trace.get("first_input_enabled_frame") is None
+                    else _required_integer(
+                        startup_trace.get("first_input_enabled_frame"),
+                        "startup_trace.first_input_enabled_frame",
+                    )
+                ),
+                intro_failure=(
+                    None
+                    if startup_trace.get("intro_failure") is None
+                    else _required_text(
+                        startup_trace.get("intro_failure"), "startup_trace.intro_failure"
+                    )
+                ),
+                truncated=_required_boolean(
+                    startup_trace.get("truncated"), "startup_trace.truncated"
                 ),
             ),
         )
@@ -166,4 +248,12 @@ class AgentInput:
         return cast(dict[str, object], decoded)
 
 
-__all__ = ["AgentInput", "Button", "Key", "UiSemanticState", "UiTestSnapshot"]
+__all__ = [
+    "AgentInput",
+    "Button",
+    "Key",
+    "StartupPresentation",
+    "StartupPresentationTrace",
+    "UiSemanticState",
+    "UiTestSnapshot",
+]

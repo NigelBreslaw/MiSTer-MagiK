@@ -9861,6 +9861,7 @@ pub(super) fn run_launcher_loop(
         }
         if let Some(error) = startup_intro_failure.take() {
             crate::ui_errln!("startup intro stopped: {error}");
+            launcher_automation.note_startup_intro_failure(&error);
             startup_intro = None;
             launcher_presenter.invalidate_external_hidden_mode();
             full_frame_present = true;
@@ -11892,6 +11893,31 @@ pub(super) fn run_launcher_loop(
                     presented_frame.automation,
                     presented_frame.main_present_sequence,
                 );
+                let startup_content_kind = if startup_intro_frame_posted {
+                    Some("particle-intro")
+                } else {
+                    match lifecycle.startup_status().state {
+                        StartupRevealState::CatalogProgressVisible => Some("catalog-progress"),
+                        StartupRevealState::RevealLauncher | StartupRevealState::InputEnabled => {
+                            Some("launcher")
+                        }
+                        _ => None,
+                    }
+                };
+                if let Some(kind) = startup_content_kind {
+                    launcher_automation.record_startup_presentation(
+                        kind,
+                        frames,
+                        presented_frame.main_present_sequence,
+                        frame_t4
+                            .saturating_duration_since(start)
+                            .as_millis()
+                            .try_into()
+                            .unwrap_or(u64::MAX),
+                        catalog_ready,
+                        lifecycle.startup_input_enabled(),
+                    );
+                }
                 launcher_response_trace.confirm(
                     launcher_response_frame_stamp.as_ref(),
                     launcher_response_present_receipt,

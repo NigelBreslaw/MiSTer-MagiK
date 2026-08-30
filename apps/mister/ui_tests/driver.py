@@ -9,7 +9,13 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from .agent_input import AgentInput, Button, Key, UiSemanticState
+from .agent_input import (
+    AgentInput,
+    Button,
+    Key,
+    StartupPresentationTrace,
+    UiSemanticState,
+)
 from .input_correlation import CorrelatedInput, InputCorrelation
 from .slint_adapter import SlintApplication, load_application_factory, require_window
 
@@ -121,6 +127,26 @@ class MagiKDriver:
                 raise AssertionError(
                     "runtime semantic state did not satisfy the expected profile "
                     f"within {timeout}s: {snapshot.semantic!r}"
+                )
+            time.sleep(0.02)
+
+    def wait_for_startup_sequence(
+        self,
+        predicate: Callable[[StartupPresentationTrace], bool],
+        timeout: float = 2.0,
+    ) -> StartupPresentationTrace:
+        """Wait for a startup presentation trace satisfying ``predicate``."""
+
+        deadline = time.monotonic() + timeout
+        while True:
+            snapshot = self.inputs.snapshot()
+            trace = snapshot.startup_trace
+            if predicate(trace):
+                return trace
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    "startup presentation trace did not satisfy the expected profile "
+                    f"within {timeout}s: {trace!r}"
                 )
             time.sleep(0.02)
 
