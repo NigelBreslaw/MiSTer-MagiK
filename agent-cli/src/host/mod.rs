@@ -14130,6 +14130,11 @@ fn validate_catalog_pmu_workload(summary: &Value) -> Result<()> {
         .iter()
         .zip(["fresh-build", "rebuild", "rebuild-all"])
     {
+        let no_op_rebuild_all = expected == "rebuild-all"
+            && operation
+                .get("rebuilt_systems")
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty);
         if operation.get("operation").and_then(Value::as_str) != Some(expected)
             || operation.get("status").and_then(Value::as_str) != Some("ok")
             || operation
@@ -14157,10 +14162,11 @@ fn validate_catalog_pmu_workload(summary: &Value) -> Result<()> {
                         .pointer("/profile/dropped_spans")
                         .and_then(Value::as_u64)
                         != Some(0)
-                    || entry
-                        .pointer("/profile/records")
-                        .and_then(Value::as_array)
-                        .is_none_or(Vec::is_empty)
+                    || (!no_op_rebuild_all
+                        && entry
+                            .pointer("/profile/records")
+                            .and_then(Value::as_array)
+                            .is_none_or(Vec::is_empty))
             })
         {
             return Err(format!("catalog PMU operation {expected} lost PMU evidence").into());

@@ -344,7 +344,20 @@ fn profile_catalog_operation(
             total.checked_add(system.active.games)
         })
         .ok_or_else(|| format!("{operation_label} manifest game count overflow"))?;
-    let status = process_profile_status(&profile);
+    // A rebuild-all that finds identical rows has no work spans by design;
+    // retain the PMU evidence as successful as long as the collector itself
+    // remained enabled and loss-free.
+    let status = if matches!(operation, CatalogProfileOperation::RebuildAll)
+        && profile.dropped_profiles == 0
+        && profile.profiles.iter().all(|entry| {
+            entry.profile.enabled
+                && entry.profile.failure.is_none()
+                && entry.profile.dropped_spans == 0
+        }) {
+        "ok"
+    } else {
+        process_profile_status(&profile)
+    };
     let aggregate = aggregate_process_profile(&profile);
     Ok(CatalogOperationReport {
         operation: operation_label,
