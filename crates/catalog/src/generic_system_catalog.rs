@@ -937,48 +937,29 @@ fn collect_generic_namespace_inventory(
     );
     let namespace_us = namespace_started.elapsed().as_micros() as u64;
     #[cfg(target_os = "linux")]
-    match crate::exfat_shadow::configured_shadow(&header.path) {
-        Ok(Some(shadow)) => {
-            let (expected, actual) =
-                exfat_shadow_entry_sets(&header.path, max_depth, &entries, &shadow);
-            let missing = expected.difference(&actual).count();
-            let extra = actual.difference(&expected).count();
-            let raw_payload_bytes = shadow.entries.values().map(|entry| entry.size).sum::<u64>();
-            let raw_allocated_entries = shadow
-                .entries
-                .values()
-                .filter(|entry| entry.first_cluster >= 2)
-                .count();
-            crate::catalog_logln!(
-                "fast_catalog_exfat_shadow_tsv\tpath={}\tmountpoint={}\tstatus={}\texpected_entries={}\traw_entries={}\tmissing={}\textra={}\traw_directories={}\traw_allocated_entries={}\traw_payload_bytes={}\traw_requests={}\traw_bytes={}\traw_elapsed_us={}\tdevice={}",
-                header.path.display(),
-                shadow.mountpoint.display(),
-                if missing == 0 && extra == 0 {
-                    "matched"
-                } else {
-                    "mismatch"
-                },
-                expected.len(),
-                actual.len(),
-                missing,
-                extra,
-                shadow.directories,
-                raw_allocated_entries,
-                raw_payload_bytes,
-                shadow.requests,
-                shadow.bytes_read,
-                shadow.elapsed_us,
-                shadow.device.display(),
-            );
-        }
-        Ok(None) => {}
-        Err(error) => {
-            crate::catalog_logln!(
-                "fast_catalog_exfat_shadow_tsv\tpath={}\tstatus=fallback\terror={}",
-                header.path.display(),
-                error.replace(['\t', '\n'], " "),
-            );
-        }
+    if let Some(shadow) = crate::exfat_shadow::configured_shadow(&header.path)? {
+        let (expected, actual) =
+            exfat_shadow_entry_sets(&header.path, max_depth, &entries, &shadow);
+        let missing = expected.difference(&actual).count();
+        let extra = actual.difference(&expected).count();
+        crate::catalog_logln!(
+            "fast_catalog_exfat_shadow_tsv\tpath={}\tstatus={}\texpected_entries={}\traw_entries={}\tmissing={}\textra={}\traw_directories={}\traw_requests={}\traw_bytes={}\traw_elapsed_us={}\tdevice={}",
+            header.path.display(),
+            if missing == 0 && extra == 0 {
+                "matched"
+            } else {
+                "mismatch"
+            },
+            expected.len(),
+            actual.len(),
+            missing,
+            extra,
+            shadow.directories,
+            shadow.requests,
+            shadow.bytes_read,
+            shadow.elapsed_us,
+            shadow.device.display(),
+        );
     }
     if namespace.errors > 0 {
         return Err(format!(
