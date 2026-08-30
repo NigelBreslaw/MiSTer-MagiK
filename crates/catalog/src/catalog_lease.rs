@@ -96,7 +96,7 @@ impl CatalogMutationLease {
         Self::acquire(path)
     }
 
-    pub fn acquire(path: impl Into<PathBuf>) -> Result<Self, CatalogLeaseError> {
+    pub(crate) fn acquire(path: impl Into<PathBuf>) -> Result<Self, CatalogLeaseError> {
         let path = path.into();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|source| CatalogLeaseError::Io {
@@ -150,15 +150,15 @@ impl CatalogMutationLease {
         })
     }
 
-    pub fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.path
     }
 
-    pub fn file(&self) -> &File {
+    pub(crate) fn file(&self) -> &File {
         &self.file
     }
 
-    pub fn run_id(&self) -> &CatalogRunId {
+    pub(crate) fn run_id(&self) -> &CatalogRunId {
         &self.run_id
     }
 }

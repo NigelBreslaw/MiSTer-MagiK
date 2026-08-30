@@ -266,7 +266,7 @@ pub fn build_fresh_catalog_with_progress(
 ) -> Result<FastCatalogFreshBuildReport, String> {
     let lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
         .map_err(|error| error.to_string())?;
-    cleanup_refresh_temporary_files(catalog_root)?;
+    cleanup_refresh_temporary_files_with_lease(catalog_root, &lease)?;
     build_fresh_catalog_with_lease(
         storage_root,
         catalog_root,
@@ -593,6 +593,15 @@ pub fn refresh_state_root(catalog_root: &Path) -> PathBuf {
 /// mutation lease makes the next run deterministic without touching manifests,
 /// packs, or registry generations.
 pub fn cleanup_refresh_temporary_files(catalog_root: &Path) -> Result<usize, String> {
+    let lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
+        .map_err(|error| error.to_string())?;
+    cleanup_refresh_temporary_files_with_lease(catalog_root, &lease)
+}
+
+pub fn cleanup_refresh_temporary_files_with_lease(
+    catalog_root: &Path,
+    _lease: &crate::catalog_lease::CatalogMutationLease,
+) -> Result<usize, String> {
     let root = refresh_state_root(catalog_root);
     if !root.exists() {
         return Ok(0);
@@ -755,7 +764,7 @@ pub fn capture_and_publish_refresh_state(
 ) -> Result<(FastRefreshManifest, FastRefreshCaptureReport), String> {
     let _lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
         .map_err(|error| error.to_string())?;
-    cleanup_refresh_temporary_files(catalog_root)?;
+    cleanup_refresh_temporary_files_with_lease(catalog_root, &_lease)?;
     let (states, capture) = capture_refresh_state(storage_root, snapshot)?;
     let active = crate::shard_registry::read_latest_manifest_lazy(
         catalog_root,
@@ -787,7 +796,7 @@ pub fn publish_refresh_state_with_report(
 ) -> Result<(FastRefreshManifest, FastRefreshStatePublishReport), String> {
     let _lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
         .map_err(|error| error.to_string())?;
-    cleanup_refresh_temporary_files(catalog_root)?;
+    cleanup_refresh_temporary_files_with_lease(catalog_root, &_lease)?;
     publish_refresh_state_with_report_held(
         catalog_root,
         generation,
@@ -914,7 +923,7 @@ pub fn publish_refresh_update(
 ) -> Result<FastRefreshManifest, String> {
     let _lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
         .map_err(|error| error.to_string())?;
-    cleanup_refresh_temporary_files(catalog_root)?;
+    cleanup_refresh_temporary_files_with_lease(catalog_root, &_lease)?;
     publish_refresh_update_held(
         catalog_root,
         previous,
@@ -1385,7 +1394,7 @@ pub fn execute_fast_refresh(
 ) -> Result<FastCatalogRefreshReport, String> {
     let lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
         .map_err(|error| error.to_string())?;
-    cleanup_refresh_temporary_files(catalog_root)?;
+    cleanup_refresh_temporary_files_with_lease(catalog_root, &lease)?;
     let plan = plan_fast_refresh(storage_root, catalog_root, request)?;
     execute_planned_fast_refresh_with_lease(storage_root, catalog_root, request, plan, &lease)
 }
@@ -1398,7 +1407,7 @@ pub fn execute_planned_fast_refresh(
 ) -> Result<FastCatalogRefreshReport, String> {
     let lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
         .map_err(|error| error.to_string())?;
-    cleanup_refresh_temporary_files(catalog_root)?;
+    cleanup_refresh_temporary_files_with_lease(catalog_root, &lease)?;
     let plan = plan_fast_refresh(storage_root, catalog_root, request)?;
     execute_planned_fast_refresh_with_lease(storage_root, catalog_root, request, plan, &lease)
 }

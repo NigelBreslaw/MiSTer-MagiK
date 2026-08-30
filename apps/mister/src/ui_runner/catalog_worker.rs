@@ -994,8 +994,9 @@ fn start_library_catalog_worker_in_process(
                     }
                 };
             if let Err(error) =
-                mister_magik_catalog::fast_catalog_refresh::cleanup_refresh_temporary_files(
+                mister_magik_catalog::fast_catalog_refresh::cleanup_refresh_temporary_files_with_lease(
                     catalog_paths.sharded_catalog_dir(),
+                    &_mutation_lease,
                 )
             {
                 let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
