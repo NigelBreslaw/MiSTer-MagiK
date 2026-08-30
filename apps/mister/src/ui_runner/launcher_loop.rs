@@ -41,8 +41,7 @@ use std::sync::mpsc::{Sender, channel};
 
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
 const CATALOG_READY_STATIONARY_EDGE_SETTLE: Duration = Duration::from_millis(250);
-const CATALOG_IDLE_BURST_SETTLE: Duration = Duration::from_millis(150);
-const CATALOG_IDLE_BURST_SLEEP_LIMIT: Duration = Duration::from_millis(250);
+const CATALOG_IDLE_BURST_SETTLE: Duration = Duration::from_millis(1_000);
 const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200);
 const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
 const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
@@ -3988,12 +3987,12 @@ enum CatalogWorkMode {
     DualCoreBurst,
 }
 
-fn launcher_idle_sleep_duration(pacer: &VsyncPacer, work_mode: CatalogWorkMode) -> Duration {
-    let frame_period = if work_mode == CatalogWorkMode::DualCoreBurst {
-        CATALOG_IDLE_BURST_SLEEP_LIMIT
-    } else {
-        Duration::from_micros(pacer.period_us().max(1))
-    };
+fn launcher_max_sleep_duration(frame_period_us: u64) -> Duration {
+    Duration::from_micros(frame_period_us.max(1))
+}
+
+fn launcher_idle_sleep_duration(pacer: &VsyncPacer) -> Duration {
+    let frame_period = launcher_max_sleep_duration(pacer.period_us());
     slint::platform::duration_until_next_timer_update()
         .map_or(frame_period, |timer| frame_period.min(timer))
 }
@@ -9594,8 +9593,8 @@ pub(super) fn run_launcher_loop(
                 .record_scheduler_interval("idle-accounting", scheduler_phase);
             record_launcher_frame_phase!(LauncherFramePhase::IdleWait);
             let idle_sleep = input_latency_lab.time_until_next_work().map_or_else(
-                || launcher_idle_sleep_duration(&pacer, catalog_work_mode),
-                |lab| launcher_idle_sleep_duration(&pacer, catalog_work_mode).min(lab),
+                || launcher_idle_sleep_duration(&pacer),
+                |lab| launcher_idle_sleep_duration(&pacer).min(lab),
             );
             let idle_sleep = catalog_scan_blink
                 .time_until_toggle(loop_start)
@@ -17760,9 +17759,22 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn catalog_work_pauses_for_interaction_and_bursts_after_static_settle() {
+    pub(super) fn launcher_sleep_is_capped_to_one_physical_frame() {
+        assert_eq!(
+            launcher_max_sleep_duration(16_667),
+            Duration::from_micros(16_667)
+        );
+        assert_eq!(
+            launcher_max_sleep_duration(20_000),
+            Duration::from_micros(20_000)
+        );
+    }
+
+    #[test]
+    pub(super) fn catalog_work_pauses_for_interaction_and_waits_one_second_to_burst() {
         let started = Instant::now();
         let mut idle_since = None;
+        assert_eq!(CATALOG_IDLE_BURST_SETTLE, Duration::from_millis(1_000));
         assert_eq!(
             launcher_catalog_work_mode(false, false, true, started, &mut idle_since),
             CatalogWorkMode::DualCoreBurst
@@ -17773,6 +17785,16 @@ mod tests {
         );
         assert_eq!(
             launcher_catalog_work_mode(true, false, false, started, &mut idle_since),
+            CatalogWorkMode::Cpu0
+        );
+        assert_eq!(
+            launcher_catalog_work_mode(
+                true,
+                false,
+                false,
+                started + CATALOG_IDLE_BURST_SETTLE - Duration::from_millis(1),
+                &mut idle_since,
+            ),
             CatalogWorkMode::Cpu0
         );
         assert_eq!(
