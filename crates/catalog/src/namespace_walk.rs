@@ -1155,6 +1155,10 @@ mod linux {
 
     #[cfg(feature = "builder")]
     fn known_path_metadata_from_stat(value: libc::stat) -> KnownPathMetadata {
+        #[cfg(target_pointer_width = "32")]
+        let inode = u64::from(value.st_ino);
+        #[cfg(target_pointer_width = "64")]
+        let inode = value.st_ino;
         KnownPathMetadata {
             is_dir: kind_from_mode(value.st_mode) == NamespaceEntryKind::Directory,
             is_file: kind_from_mode(value.st_mode) == NamespaceEntryKind::File,
@@ -1163,7 +1167,7 @@ mod linux {
                 + i128::from(value.st_mtime_nsec),
             changed_ns: i128::from(value.st_ctime) * 1_000_000_000
                 + i128::from(value.st_ctime_nsec),
-            inode: u64::from(value.st_ino),
+            inode,
         }
     }
 
