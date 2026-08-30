@@ -2227,9 +2227,10 @@ fn validate_delivery_present_state(
     match (present_backend, present_status) {
         ("fpga-vblank-latch-hidden", "ok") => {
             if !input_enabled {
-                let catalog_migration = status.get("catalog_ready").and_then(Value::as_bool)
-                    == Some(false)
-                    && status.get("catalog_scan_visible").and_then(Value::as_bool) == Some(true)
+                let catalog_migration = status
+                    .get("catalog_scan_visible")
+                    .and_then(Value::as_bool)
+                    == Some(true)
                     && status.get("startup_mode").and_then(Value::as_str)
                         == Some("cold_no_catalog")
                     && status.get("startup_reveal_state").and_then(Value::as_str)
@@ -40606,7 +40607,7 @@ H: Handlers=event3 js0"#
 
         let mut migration = latch.clone();
         migration["input_enabled"] = json!(false);
-        migration["catalog_ready"] = json!(false);
+        migration["catalog_ready"] = json!(true);
         migration["catalog_scan_visible"] = json!(true);
         migration["startup_mode"] = json!("cold_no_catalog");
         migration["startup_reveal_state"] = json!("catalog_progress_visible");
