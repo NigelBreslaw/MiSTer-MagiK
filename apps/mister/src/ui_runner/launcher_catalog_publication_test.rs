@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
+use crate::process_config::LauncherStartupTestMode;
 use std::path::{Path, PathBuf};
 
 const READY_FAIL_OPEN: Duration = Duration::from_secs(20);

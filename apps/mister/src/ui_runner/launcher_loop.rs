@@ -33,9 +33,7 @@ use crate::preview_worker;
 use crate::ui_test_support::UiTestSandbox;
 #[cfg(test)]
 use mister_magik_fb::framebuffer::target::PhysicalLayerBacking;
-use mister_magik_fb::process_config::{
-    LauncherStartupTestMode, ScreensaverStartMode, ScriptedInputConfig,
-};
+use mister_magik_fb::process_config::{ScreensaverStartMode, ScriptedInputConfig};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::path::{Path, PathBuf};
