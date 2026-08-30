@@ -239,6 +239,7 @@ pub(super) struct CatalogChildControl {
     process_group: i32,
     handshake_seen: AtomicBool,
     reaped: AtomicBool,
+    watchdog_terminal: Arc<Mutex<Option<CatalogWorkerMessage>>>,
 }
 
 impl CatalogChildControl {
@@ -270,6 +271,20 @@ impl CatalogChildControl {
         child.as_mut().is_some_and(|child| child.kill().is_ok())
     }
 
+    pub(super) fn fail_and_terminate(&self, error: impl Into<String>) {
+        let mut terminal = self
+            .watchdog_terminal
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if terminal.is_none() {
+            *terminal = Some(CatalogWorkerMessage::PersistenceFailed {
+                error: error.into(),
+            });
+        }
+        drop(terminal);
+        let _ = self.terminate();
+    }
+
     #[cfg(test)]
     pub(super) fn test_unreaped() -> Self {
         Self {
@@ -277,6 +292,7 @@ impl CatalogChildControl {
             process_group: -1,
             handshake_seen: AtomicBool::new(true),
             reaped: AtomicBool::new(false),
+            watchdog_terminal: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -792,6 +808,7 @@ pub(super) enum CatalogWorkerReceiver {
         events: mpsc::Receiver<CatalogWorkerMessage>,
         terminal: mpsc::Receiver<CatalogWorkerMessage>,
         pending_terminal: Mutex<Option<CatalogWorkerMessage>>,
+        watchdog_terminal: Arc<Mutex<Option<CatalogWorkerMessage>>>,
     },
 }
 
@@ -803,7 +820,15 @@ impl CatalogWorkerReceiver {
                 events,
                 terminal,
                 pending_terminal,
+                watchdog_terminal,
             } => {
+                if let Some(message) = watchdog_terminal
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .take()
+                {
+                    return Ok(message);
+                }
                 let mut pending = pending_terminal
                     .lock()
                     .unwrap_or_else(|error| error.into_inner());
@@ -1017,10 +1042,12 @@ fn start_library_catalog_worker_process(
 ) -> (CatalogWorkerReceiver, Option<Arc<CatalogChildControl>>) {
     let (event_tx, event_rx) = mpsc::sync_channel(CATALOG_WORKER_EVENT_QUEUE_CAPACITY);
     let (terminal_tx, terminal_rx) = mpsc::sync_channel(1);
+    let watchdog_terminal = Arc::new(Mutex::new(None));
     let receiver = CatalogWorkerReceiver::Process {
         events: event_rx,
         terminal: terminal_rx,
         pending_terminal: Mutex::new(None),
+        watchdog_terminal: Arc::clone(&watchdog_terminal),
     };
     let executable = match std::env::current_exe() {
         Ok(executable) => executable,
@@ -1084,13 +1111,31 @@ fn start_library_catalog_worker_process(
         process_group,
         handshake_seen: AtomicBool::new(false),
         reaped: AtomicBool::new(false),
+        watchdog_terminal,
     });
+    let reaper_control = Arc::clone(&control);
+    std::thread::Builder::new()
+        .name("catalog-worker-reaper".to_string())
+        .spawn(move || {
+            let mut child = reaper_control
+                .child
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take();
+            if let Some(child) = child.as_mut() {
+                let _ = child.wait();
+            }
+            reaper_control.reaped.store(true, Ordering::Release);
+        })
+        .expect("spawn catalog-worker-reaper");
     let handshake_control = Arc::clone(&control);
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(5));
         if !handshake_control.handshake_seen.load(Ordering::Acquire) && !handshake_control.reaped()
         {
-            let _ = handshake_control.terminate();
+            handshake_control.fail_and_terminate(
+                "catalog worker handshake timed out before the child became observable",
+            );
         }
     });
     let reader_control = Arc::clone(&control);
@@ -1189,27 +1234,16 @@ fn start_library_catalog_worker_process(
             }
             if protocol_failed {
                 let _ = reader_control.terminate();
-                if let Some(message) = terminal_message.take() {
+            }
+            if let Some(message) = terminal_message {
+                if let CatalogWorkerMessage::PersistenceFailed { error } = message {
+                    reader_control.fail_and_terminate(error);
+                } else {
                     let _ = terminal_tx.try_send(message);
                 }
-            }
-            let mut child = reader_control
-                .child
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .take();
-            let child_status = child.as_mut().and_then(|child| child.wait().ok());
-            reader_control.reaped.store(true, Ordering::Release);
-            if let Some(message) = terminal_message {
-                let _ = terminal_tx.try_send(message);
             } else if !terminal {
-                let detail = child_status
-                    .map(|status| format!("catalog worker child exited with {status}"))
-                    .unwrap_or_else(|| {
-                        "catalog worker child exited without a terminal event".to_string()
-                    });
-                let _ =
-                    terminal_tx.try_send(CatalogWorkerMessage::PersistenceFailed { error: detail });
+                reader_control
+                    .fail_and_terminate("catalog worker child exited without a terminal event");
             }
         })
         .expect("spawn catalog worker protocol reader");
@@ -2400,6 +2434,7 @@ mod tests {
             events: event_rx,
             terminal: terminal_rx,
             pending_terminal: Mutex::new(None),
+            watchdog_terminal: Arc::new(Mutex::new(None)),
         };
         event_tx
             .send(CatalogWorkerMessage::Timing {
@@ -2423,6 +2458,7 @@ mod tests {
             events: event_rx,
             terminal: terminal_rx,
             pending_terminal: Mutex::new(None),
+            watchdog_terminal: Arc::new(Mutex::new(None)),
         };
         event_tx.send(CatalogWorkerMessage::Done).unwrap();
         terminal_tx
@@ -2456,6 +2492,7 @@ mod tests {
             process_group,
             handshake_seen: AtomicBool::new(true),
             reaped: AtomicBool::new(false),
+            watchdog_terminal: Arc::new(Mutex::new(None)),
         };
         let mut owned_child = control.child.lock().unwrap().take().unwrap();
 
@@ -2469,5 +2506,33 @@ mod tests {
         assert!(terminated);
         assert!(!status.success());
         assert!(control.reaped());
+    }
+
+    #[test]
+    fn watchdog_failure_is_visible_while_protocol_reader_is_blocked() {
+        let (_, event_rx) = mpsc::sync_channel(1);
+        let (_, terminal_rx) = mpsc::sync_channel(1);
+        let watchdog_terminal = Arc::new(Mutex::new(None));
+        let receiver = CatalogWorkerReceiver::Process {
+            events: event_rx,
+            terminal: terminal_rx,
+            pending_terminal: Mutex::new(None),
+            watchdog_terminal: Arc::clone(&watchdog_terminal),
+        };
+        let control = CatalogChildControl {
+            child: Mutex::new(None),
+            process_group: -1,
+            handshake_seen: AtomicBool::new(false),
+            reaped: AtomicBool::new(false),
+            watchdog_terminal,
+        };
+
+        control.fail_and_terminate("watchdog test failure");
+
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(CatalogWorkerMessage::PersistenceFailed { error })
+                if error == "watchdog test failure"
+        ));
     }
 }

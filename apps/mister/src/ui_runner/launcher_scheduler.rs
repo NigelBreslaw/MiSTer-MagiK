@@ -1122,9 +1122,10 @@ impl LauncherScheduler {
             .active_stalled(self.catalog_worker_running(), background_work_allowed)
             && !self.catalog_stop_requested
         {
-            if let Some(control) = self.catalog_child_control.as_ref()
-                && control.terminate()
-            {
+            if let Some(control) = self.catalog_child_control.as_ref() {
+                control.fail_and_terminate(
+                    "catalog worker watchdog terminated a job after 120 seconds without validated progress",
+                );
                 self.catalog_stop_requested = true;
                 self.catalog_progress.note_stall_cause(
                     "watchdog terminated the child after 120 seconds without validated progress",
