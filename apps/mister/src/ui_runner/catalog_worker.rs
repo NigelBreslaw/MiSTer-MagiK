@@ -660,6 +660,13 @@ impl CatalogHeartbeatProgress {
             self.work_units = 1;
         }
     }
+
+    fn add_work_units(&mut self, work_units: u64) {
+        self.work_units = self.work_units.saturating_add(work_units);
+        if self.work_units == 0 {
+            self.work_units = 1;
+        }
+    }
 }
 
 fn write_worker_wire_event(writer: &mut impl Write, event: &CatalogWorkerWireEvent) -> bool {
@@ -1797,8 +1804,7 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
                     .unwrap_or_else(|error| error.into_inner());
                 if inner_progress > inner_progress_reported {
                     let delta = inner_progress - inner_progress_reported;
-                    let work_units = progress.work_units.saturating_add(delta);
-                    progress.advance("inner-work", work_units);
+                    progress.add_work_units(delta);
                     inner_progress_reported = inner_progress;
                 }
                 progress.clone()
@@ -2691,8 +2697,8 @@ mod tests {
     fn heartbeat_progress_remains_monotonic_across_inner_work_checkpoints() {
         let mut progress = CatalogHeartbeatProgress::new();
         progress.advance("systems", 4);
-        progress.advance("inner-work", 1);
-        assert_eq!(progress.phase, "inner-work");
+        progress.add_work_units(1);
+        assert_eq!(progress.phase, "systems");
         assert!(progress.work_units >= 4);
         let inner_units = progress.work_units;
         progress.advance("artifacts", 1);
