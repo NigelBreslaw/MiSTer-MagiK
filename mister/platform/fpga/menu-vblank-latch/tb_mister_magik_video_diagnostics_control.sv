@@ -144,10 +144,6 @@ module tb_mister_magik_video_diagnostics_control;
 				fail("schema mismatch");
 			if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_CRC_WORD] != response_crc())
 				fail("response CRC mismatch");
-			if(!(words[1] & (MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID |
-				MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_OBSERVER_FAULT)) &&
-				words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD][15])
-				fail("reserved live-state bit set");
 		end
 	endtask
 
@@ -228,10 +224,10 @@ module tb_mister_magik_video_diagnostics_control;
 		repeat(6) @(posedge clk_100m);
 		finish_return_with_accept(28'h0000000);
 		drive_return_beats(128);
-		// Freeze an output scheduler snapshot: sREAD/sCOPY, both levels full,
-		// copy active past adturn/next-word, but no terminal predicate.
+		// Freeze a complete request-delimited pre-read interval through request
+		// issue and sWAITREAD, without a new external Avalon request.
 		@(negedge clk_100m);
-		scaler_diag_state = 16'h38aa;
+		scaler_diag_state = 16'h78df;
 
 		// Leave the qualified, empty boundary idle long enough to freeze the
 		// exact no-request observation. Consume a bounded pending publication:
@@ -254,8 +250,8 @@ module tb_mister_magik_video_diagnostics_control;
 			fail("reset-retained obligation produced observer fault");
 		if(!(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN))
 			fail("no-request classification flag was not frozen");
-		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD] != 16'h38aa)
-			fail("wrong output-scheduler gate snapshot");
+		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD] != 16'h78df)
+			fail("wrong pre-read scheduler evidence summary");
 		for(index = 0; index < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS;
 			index = index + 1)
 			prior_words[index] = words[index];

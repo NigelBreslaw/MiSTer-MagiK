@@ -1,6 +1,6 @@
 # Passive FPGA HDMI evidence
 
-## Active moving-band campaign: schema 16
+## Active moving-band campaign: schema 17
 
 The preserved 2026-08-28 recurrence showed a byte-stable framebuffer and
 visible moving-band corruption while schema 11 returned CRC-valid but
@@ -65,6 +65,28 @@ or counter ambiguity invalidates attribution. For schema 16, a coherent
 separate address readiness, request acknowledgement, credit saturation,
 copy-start, copy-shift, and copy-terminal retirement stalls without adding a
 functional recovery path.
+
+A preserved schema-16 recurrence then produced three coherent advancing
+publications classified as `scaler_output_scheduler_state_stuck`. Normal
+liveness preceded `no_request_seen`; reset stayed released, and the frozen
+word was exactly zero: `sDISP`, `sWAIT`, empty read/copy levels, and no request
+phase. The framebuffer remained clean while USB video showed moving horizontal
+bands and a corrupt green lower region. Latch posts and flips advanced with
+zero drops or rejects. This rules out every schema-16 post-read class but an
+instantaneous `sDISP` sample cannot show what happened across the preceding
+167.8 ms no-request interval.
+
+Schema 17, `scaler-pre-read-scheduler-evidence-v1`, therefore replaces only
+the same 16-bit tap with a sticky request-delimited summary. A synchronized
+Avalon acceptance acknowledgement starts the window; subsequent output-clock
+events set monotonic bits until the next acknowledgement. At a no-request
+freeze the word reports output enable, horizontal-sync edge and start
+consumption, `sHSYNC` vertical iteration and decision, read/skip predicates,
+`sREAD` address readiness and request issue, `sWAITREAD`, and a zero vertical
+size. This separates the missing pre-read boundaries without widening the
+port, changing command `0x68`, or adding a functional recovery path. The host
+retains schema-14 through schema-16 rollback decoding and rejects impossible
+event orderings.
 
 The wide and staged FPGA video observers are retired from production. Their
 field evidence was decisive, but every expanded implementation made the dense

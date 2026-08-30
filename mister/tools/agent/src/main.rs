@@ -4388,6 +4388,53 @@ mod linux {
         "scaler_output_scheduler_state_stuck"
     }
 
+    fn scaler_pre_read_scheduler_classification(
+        sample: &mister_magik_video_diagnostics_contract::ScalerFetchLivenessState,
+    ) -> &'static str {
+        if !sample.window_valid() {
+            return "scaler_pre_read_ack_window_missing";
+        }
+        if !sample.output_enable_seen() {
+            return "scaler_pre_read_output_enable_missing";
+        }
+        if !sample.horizontal_sync_edge_seen() {
+            return "scaler_pre_read_horizontal_sync_edge_missing";
+        }
+        if !sample.horizontal_start_seen() {
+            return "scaler_pre_read_horizontal_start_missing";
+        }
+        if !sample.hsync_state_seen() {
+            return "scaler_pre_read_hsync_state_missing";
+        }
+        if !sample.vertical_decision_seen() {
+            return if sample.vertical_size_zero_seen() {
+                "scaler_pre_read_vertical_size_zero"
+            } else if sample.vertical_iteration_seen() {
+                "scaler_pre_read_vertical_iteration_stuck"
+            } else {
+                "scaler_pre_read_vertical_decision_missing"
+            };
+        }
+        if sample.no_read_exit_seen() {
+            return match (
+                sample.skip_vertical_pixel_seen(),
+                sample.skip_vertical_carry_seen(),
+            ) {
+                (true, true) => "scaler_pre_read_vertical_pixel_and_carry_gates_closed",
+                (true, false) => "scaler_pre_read_vertical_pixel_gate_closed",
+                (false, true) => "scaler_pre_read_vertical_carry_gate_closed",
+                (false, false) => "scaler_fetch_liveness_evidence_inconclusive",
+            };
+        }
+        if !sample.address_ready_seen() {
+            return "scaler_pre_read_address_ready_missing";
+        }
+        if !sample.request_issue_seen() {
+            return "scaler_pre_read_request_issue_missing";
+        }
+        "scaler_pre_read_request_boundary_stuck"
+    }
+
     pub(super) fn scaler_fetch_liveness_classification(
         samples: [&mister_magik_video_diagnostics_contract::ScalerFetchLivenessState; 3],
     ) -> &'static str {
@@ -4418,7 +4465,9 @@ mod linux {
             }
             return match first.frozen_cause() {
                 contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN => {
-                    if first.architecture() == "scaler-output-scheduler-gates-v1" {
+                    if first.architecture() == contract::SCALER_FETCH_LIVENESS_STATE_ARCHITECTURE {
+                        scaler_pre_read_scheduler_classification(first)
+                    } else if first.architecture() == "scaler-output-scheduler-gates-v1" {
                         scaler_output_scheduler_gate_classification(first)
                     } else if first.architecture() == "scaler-fetch-no-request-gates-v1" {
                         scaler_fetch_no_request_gate_classification(first)
@@ -4956,10 +5005,14 @@ mod linux {
                     let architecture = samples[0].architecture();
                     let scheduler_state = matches!(
                         architecture,
-                        "scaler-fetch-no-request-gates-v1" | "scaler-output-scheduler-gates-v1"
+                        "scaler-fetch-no-request-gates-v1"
+                            | "scaler-output-scheduler-gates-v1"
+                            | "scaler-pre-read-scheduler-evidence-v1"
                     );
                     let output_scheduler_state = architecture == "scaler-output-scheduler-gates-v1";
                     let avalon_gate_state = architecture == "scaler-fetch-no-request-gates-v1";
+                    let pre_read_scheduler_state =
+                        architecture == "scaler-pre-read-scheduler-evidence-v1";
                     let classification = scaler_fetch_liveness_classification(samples);
                     let valid_samples = samples.iter().all(|sample| sample.record_valid());
                     let advancing = nibble_sequences_advance(
@@ -4981,13 +5034,13 @@ mod linux {
                         "observer_fault": samples.iter().map(|sample| sample.observer_fault()).collect::<Vec<_>>(),
                         "flags": samples.iter().map(|sample| sample.flags()).collect::<Vec<_>>(),
                         "publication_sequence": samples.iter().map(|sample| sample.publication_sequence()).collect::<Vec<_>>(),
-                        "frozen_address_fold": (!output_scheduler_state).then(|| samples.iter().map(|sample| sample.frozen_address_fold()).collect::<Vec<_>>()),
-                        "return_phase": samples.iter().map(|sample| sample.return_phase()).collect::<Vec<_>>(),
-                        "fifo_depth": samples.iter().map(|sample| sample.fifo_depth()).collect::<Vec<_>>(),
-                        "monitor_state": samples.iter().map(|sample| sample.monitor_state()).collect::<Vec<_>>(),
+                        "frozen_address_fold": (!output_scheduler_state && !pre_read_scheduler_state).then(|| samples.iter().map(|sample| sample.frozen_address_fold()).collect::<Vec<_>>()),
+                        "return_phase": (!pre_read_scheduler_state).then(|| samples.iter().map(|sample| sample.return_phase()).collect::<Vec<_>>()),
+                        "fifo_depth": (!pre_read_scheduler_state).then(|| samples.iter().map(|sample| sample.fifo_depth()).collect::<Vec<_>>()),
+                        "monitor_state": (!pre_read_scheduler_state).then(|| samples.iter().map(|sample| sample.monitor_state()).collect::<Vec<_>>()),
                         "frozen_cause": samples.iter().map(|sample| sample.frozen_cause()).collect::<Vec<_>>(),
-                        "frozen_return_phase": (!output_scheduler_state).then(|| samples.iter().map(|sample| sample.frozen_return_phase()).collect::<Vec<_>>()),
-                        "frozen_fifo_depth": (!output_scheduler_state).then(|| samples.iter().map(|sample| sample.frozen_fifo_depth()).collect::<Vec<_>>()),
+                        "frozen_return_phase": (!output_scheduler_state && !pre_read_scheduler_state).then(|| samples.iter().map(|sample| sample.frozen_return_phase()).collect::<Vec<_>>()),
+                        "frozen_fifo_depth": (!output_scheduler_state && !pre_read_scheduler_state).then(|| samples.iter().map(|sample| sample.frozen_fifo_depth()).collect::<Vec<_>>()),
                         "reset_since_normal_liveness": samples.iter().map(|sample| sample.reset_since_normal_liveness()).collect::<Vec<_>>(),
                         "no_request_seen": samples.iter().map(|sample| sample.no_request_seen()).collect::<Vec<_>>(),
                         "state": samples.iter().map(|sample| sample.state()).collect::<Vec<_>>(),
@@ -5023,6 +5076,24 @@ mod linux {
                         "copy_line_last": output_scheduler_state.then(|| samples.iter().map(|sample| sample.copy_line_last()).collect::<Vec<_>>()),
                         "copy_terminal_ready": output_scheduler_state.then(|| samples.iter().map(|sample| sample.copy_terminal_ready()).collect::<Vec<_>>()),
                         }),
+                        json!({
+                        "window_valid": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.window_valid()).collect::<Vec<_>>()),
+                        "output_enable_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.output_enable_seen()).collect::<Vec<_>>()),
+                        "horizontal_sync_edge_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.horizontal_sync_edge_seen()).collect::<Vec<_>>()),
+                        "horizontal_start_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.horizontal_start_seen()).collect::<Vec<_>>()),
+                        "hsync_state_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.hsync_state_seen()).collect::<Vec<_>>()),
+                        "vertical_iteration_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.vertical_iteration_seen()).collect::<Vec<_>>()),
+                        "vertical_decision_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.vertical_decision_seen()).collect::<Vec<_>>()),
+                        "read_entry_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.read_entry_seen()).collect::<Vec<_>>()),
+                        "no_read_exit_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.no_read_exit_seen()).collect::<Vec<_>>()),
+                        "skip_vertical_pixel_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.skip_vertical_pixel_seen()).collect::<Vec<_>>()),
+                        "skip_vertical_carry_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.skip_vertical_carry_seen()).collect::<Vec<_>>()),
+                        "read_state_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.read_state_seen()).collect::<Vec<_>>()),
+                        "address_ready_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.address_ready_seen()).collect::<Vec<_>>()),
+                        "request_issue_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.request_issue_seen()).collect::<Vec<_>>()),
+                        "wait_read_state_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.wait_read_state_seen()).collect::<Vec<_>>()),
+                        "vertical_size_zero_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.vertical_size_zero_seen()).collect::<Vec<_>>()),
+                        }),
                     ];
                     let mut scaler_fetch_liveness_fields = serde_json::Map::new();
                     for section in scaler_fetch_liveness_sections {
@@ -5056,6 +5127,7 @@ mod linux {
                         "capabilities": {
                             "passive_video_observer": true,
                             "scaler_scheduler_state": scheduler_state,
+                            "scaler_pre_read_scheduler_evidence": pre_read_scheduler_state,
                             "scaler_pipeline_state": false,
                             "scaler_copy_retirement": false,
                             "scaler_fetch_liveness": true,
@@ -9005,8 +9077,7 @@ mod tests {
 
         let scheduler_sample = |sequence: u8, state: u16| {
             let mut words = [0; contract::SCALER_FETCH_LIVENESS_STATE_WORDS];
-            words[contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD] =
-                contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA;
+            words[contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD] = 16;
             words[contract::SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] = normal
                 | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
                 | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN
@@ -9041,6 +9112,39 @@ mod tests {
             ]),
             "scaler_output_read_acknowledgement_stuck"
         );
+
+        let pre_read_sample = |sequence: u8, state: u16| {
+            let mut words = [0; contract::SCALER_FETCH_LIVENESS_STATE_WORDS];
+            words[contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD] =
+                contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA;
+            words[contract::SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] = normal
+                | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
+                | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN
+                | (u16::from(sequence)
+                    << contract::SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_BIT);
+            words[contract::SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = state;
+            contract::ScalerFetchLivenessState { words }
+        };
+        for (state, expected) in [
+            (0x0007, "scaler_pre_read_horizontal_start_missing"),
+            (0x035f, "scaler_pre_read_vertical_pixel_gate_closed"),
+            (0x08df, "scaler_pre_read_address_ready_missing"),
+            (0x78df, "scaler_pre_read_request_boundary_stuck"),
+        ] {
+            let samples = [
+                pre_read_sample(10, state),
+                pre_read_sample(11, state),
+                pre_read_sample(12, state),
+            ];
+            assert_eq!(
+                linux::scaler_fetch_liveness_classification([
+                    &samples[0],
+                    &samples[1],
+                    &samples[2],
+                ]),
+                expected
+            );
+        }
 
         let changed_frozen_tuple = [
             sample(

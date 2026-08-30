@@ -1117,7 +1117,7 @@ mod tests {
             &mut self,
         ) -> AgentResult<crate::host::FpgaActivationAssessment> {
             Ok(crate::host::FpgaActivationAssessment::Current {
-                architecture: "scaler-output-scheduler-gates-v1".into(),
+                architecture: "scaler-pre-read-scheduler-evidence-v1".into(),
             })
         }
 

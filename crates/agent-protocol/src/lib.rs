@@ -4,6 +4,7 @@
 use serde_json::{Map, Value, json};
 
 pub const PORT: u16 = 7498;
+// Version 38 advertises the schema-17 FPGA video diagnostics decoder.
 // Version 37 adds the launcher startup-sequence UI-test case.
 // Version 36 advertises the schema-16 FPGA video diagnostics decoder.
 // Version 35 advertises the schema-15 FPGA video diagnostics decoder.
@@ -14,7 +15,7 @@ pub const PORT: u16 = 7498;
 // Version 28 added the disposable schema-5 scaler pipeline decoder. Version 27
 // introduced bounded, authenticated Runtime staging over the existing
 // outbound host-to-agent connection.
-pub const AGENT_VERSION: u64 = 37;
+pub const AGENT_VERSION: u64 = 38;
 pub const PROTOCOL_VERSION: u64 = 2;
 pub const FRAMEBUFFER_CAPTURE_CAPABILITY: &str = "framebuffer-capture-v2";
 pub const DEVICE_TELEMETRY_CAPABILITY: &str = "device-telemetry-v2";
@@ -48,7 +49,7 @@ pub const ALPHA_CANDIDATE_INSTALL_CAPABILITY: &str = "alpha-candidate-install-v1
 pub const SCREENSAVER_FRAME_EVIDENCE_CAPABILITY: &str = "screensaver-frame-evidence-v6";
 pub const RUNTIME_UPLOAD_COMMAND: &str = "runtime_upload_v1";
 pub const RUNTIME_UPLOAD_CAPABILITY: &str = "runtime-upload-v1";
-pub const FPGA_VIDEO_DIAGNOSTICS_CAPABILITY: &str = "fpga-video-diagnostics-schema-16";
+pub const FPGA_VIDEO_DIAGNOSTICS_CAPABILITY: &str = "fpga-video-diagnostics-schema-17";
 pub const RUNTIME_UPLOAD_SCHEMA: &str = "mister-magik-runtime-upload-v1";
 pub const MAX_RUNTIME_UPLOAD_BYTES: u64 = 128 * 1024 * 1024;
 pub const MAX_BINARY_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;

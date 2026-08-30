@@ -148,6 +148,8 @@ const LEGACY_SCALER_FETCH_LIVENESS_FLAG_REQUEST_CANCELLED: u16 = 1 << 10;
 const LEGACY_SCALER_FETCH_LIVENESS_FLAG_COUNTER_AMBIGUOUS: u16 = 1 << 11;
 const NO_REQUEST_GATES_SCHEMA: u16 = 15;
 const NO_REQUEST_GATES_ARCHITECTURE: &str = "scaler-fetch-no-request-gates-v1";
+const OUTPUT_SCHEDULER_GATES_SCHEMA: u16 = 16;
+const OUTPUT_SCHEDULER_GATES_ARCHITECTURE: &str = "scaler-output-scheduler-gates-v1";
 
 impl ScalerFetchLivenessState {
     fn field(&self, word: usize, bit: u32, mask: u16) -> u16 {
@@ -166,6 +168,7 @@ impl ScalerFetchLivenessState {
         match self.schema() {
             LEGACY_SCALER_FETCH_LIVENESS_SCHEMA => LEGACY_SCALER_FETCH_LIVENESS_ARCHITECTURE,
             NO_REQUEST_GATES_SCHEMA => NO_REQUEST_GATES_ARCHITECTURE,
+            OUTPUT_SCHEDULER_GATES_SCHEMA => OUTPUT_SCHEDULER_GATES_ARCHITECTURE,
             _ => SCALER_FETCH_LIVENESS_STATE_ARCHITECTURE,
         }
     }
@@ -371,103 +374,119 @@ impl ScalerFetchLivenessState {
     }
 
     pub fn output_state(&self) -> u16 {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_OUTPUT_STATE_WORD,
-            SCALER_FETCH_LIVENESS_STATE_OUTPUT_STATE_BIT,
-            SCALER_FETCH_LIVENESS_STATE_OUTPUT_STATE_MASK,
-        )
+        self.state() & 0x0003
     }
 
     pub fn copy_state(&self) -> u16 {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_COPY_STATE_WORD,
-            SCALER_FETCH_LIVENESS_STATE_COPY_STATE_BIT,
-            SCALER_FETCH_LIVENESS_STATE_COPY_STATE_MASK,
-        )
+        (self.state() >> 2) & 0x0003
     }
 
     pub fn read_level(&self) -> u16 {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_READ_LEVEL_WORD,
-            SCALER_FETCH_LIVENESS_STATE_READ_LEVEL_BIT,
-            SCALER_FETCH_LIVENESS_STATE_READ_LEVEL_MASK,
-        )
+        (self.state() >> 4) & 0x0003
     }
 
     pub fn copy_level(&self) -> u16 {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_COPY_LEVEL_WORD,
-            SCALER_FETCH_LIVENESS_STATE_COPY_LEVEL_BIT,
-            SCALER_FETCH_LIVENESS_STATE_COPY_LEVEL_MASK,
-        )
+        (self.state() >> 6) & 0x0003
     }
 
-    fn scheduler_flag(&self, word: usize, bit: u32, mask: u16) -> bool {
-        self.field(word, bit, mask) != 0
+    fn state_flag(&self, bit: u32) -> bool {
+        self.state() & (1 << bit) != 0
     }
 
     pub fn address_ready(&self) -> bool {
-        self.scheduler_flag(
-            SCALER_FETCH_LIVENESS_STATE_ADDRESS_READY_WORD,
-            SCALER_FETCH_LIVENESS_STATE_ADDRESS_READY_BIT,
-            SCALER_FETCH_LIVENESS_STATE_ADDRESS_READY_MASK,
-        )
+        self.state_flag(8)
     }
 
     pub fn read_pending(&self) -> bool {
-        self.scheduler_flag(
-            SCALER_FETCH_LIVENESS_STATE_READ_PENDING_WORD,
-            SCALER_FETCH_LIVENESS_STATE_READ_PENDING_BIT,
-            SCALER_FETCH_LIVENESS_STATE_READ_PENDING_MASK,
-        )
+        self.state_flag(9)
     }
 
     pub fn read_toggle(&self) -> bool {
-        self.scheduler_flag(
-            SCALER_FETCH_LIVENESS_STATE_READ_TOGGLE_WORD,
-            SCALER_FETCH_LIVENESS_STATE_READ_TOGGLE_BIT,
-            SCALER_FETCH_LIVENESS_STATE_READ_TOGGLE_MASK,
-        )
+        self.state_flag(10)
     }
 
     pub fn copy_write_active(&self) -> bool {
-        self.scheduler_flag(
-            SCALER_FETCH_LIVENESS_STATE_COPY_WRITE_ACTIVE_WORD,
-            SCALER_FETCH_LIVENESS_STATE_COPY_WRITE_ACTIVE_BIT,
-            SCALER_FETCH_LIVENESS_STATE_COPY_WRITE_ACTIVE_MASK,
-        )
+        self.state_flag(11)
     }
 
     pub fn copy_adturn(&self) -> bool {
-        self.scheduler_flag(
-            SCALER_FETCH_LIVENESS_STATE_COPY_ADTURN_WORD,
-            SCALER_FETCH_LIVENESS_STATE_COPY_ADTURN_BIT,
-            SCALER_FETCH_LIVENESS_STATE_COPY_ADTURN_MASK,
-        )
+        self.state_flag(12)
     }
 
     pub fn copy_shift_next(&self) -> bool {
-        self.scheduler_flag(
-            SCALER_FETCH_LIVENESS_STATE_COPY_SHIFT_NEXT_WORD,
-            SCALER_FETCH_LIVENESS_STATE_COPY_SHIFT_NEXT_BIT,
-            SCALER_FETCH_LIVENESS_STATE_COPY_SHIFT_NEXT_MASK,
-        )
+        self.state_flag(13)
     }
 
     pub fn copy_line_last(&self) -> bool {
-        self.scheduler_flag(
-            SCALER_FETCH_LIVENESS_STATE_COPY_LINE_LAST_WORD,
-            SCALER_FETCH_LIVENESS_STATE_COPY_LINE_LAST_BIT,
-            SCALER_FETCH_LIVENESS_STATE_COPY_LINE_LAST_MASK,
-        )
+        self.state_flag(14)
     }
 
     pub fn copy_terminal_ready(&self) -> bool {
-        self.scheduler_flag(
-            SCALER_FETCH_LIVENESS_STATE_COPY_TERMINAL_READY_WORD,
-            SCALER_FETCH_LIVENESS_STATE_COPY_TERMINAL_READY_BIT,
-            SCALER_FETCH_LIVENESS_STATE_COPY_TERMINAL_READY_MASK,
-        )
+        self.state_flag(15)
+    }
+
+    pub fn window_valid(&self) -> bool {
+        self.state_flag(0)
+    }
+
+    pub fn output_enable_seen(&self) -> bool {
+        self.state_flag(1)
+    }
+
+    pub fn horizontal_sync_edge_seen(&self) -> bool {
+        self.state_flag(2)
+    }
+
+    pub fn horizontal_start_seen(&self) -> bool {
+        self.state_flag(3)
+    }
+
+    pub fn hsync_state_seen(&self) -> bool {
+        self.state_flag(4)
+    }
+
+    pub fn vertical_iteration_seen(&self) -> bool {
+        self.state_flag(5)
+    }
+
+    pub fn vertical_decision_seen(&self) -> bool {
+        self.state_flag(6)
+    }
+
+    pub fn read_entry_seen(&self) -> bool {
+        self.state_flag(7)
+    }
+
+    pub fn no_read_exit_seen(&self) -> bool {
+        self.state_flag(8)
+    }
+
+    pub fn skip_vertical_pixel_seen(&self) -> bool {
+        self.state_flag(9)
+    }
+
+    pub fn skip_vertical_carry_seen(&self) -> bool {
+        self.state_flag(10)
+    }
+
+    pub fn read_state_seen(&self) -> bool {
+        self.state_flag(11)
+    }
+
+    pub fn address_ready_seen(&self) -> bool {
+        self.state_flag(12)
+    }
+
+    pub fn request_issue_seen(&self) -> bool {
+        self.state_flag(13)
+    }
+
+    pub fn wait_read_state_seen(&self) -> bool {
+        self.state_flag(14)
+    }
+
+    pub fn vertical_size_zero_seen(&self) -> bool {
+        self.state_flag(15)
     }
 }
 
@@ -1105,6 +1124,7 @@ pub fn decode_scaler_fetch_liveness_state(
         schema,
         LEGACY_SCALER_FETCH_LIVENESS_SCHEMA
             | NO_REQUEST_GATES_SCHEMA
+            | OUTPUT_SCHEDULER_GATES_SCHEMA
             | SCALER_FETCH_LIVENESS_STATE_SCHEMA
     ) {
         return Err(format!(
@@ -1157,13 +1177,41 @@ pub fn decode_scaler_fetch_liveness_state(
         {
             return Err("scaler fetch no-request gate snapshot is impossible".to_string());
         }
-        if schema == SCALER_FETCH_LIVENESS_STATE_SCHEMA
+        if schema == OUTPUT_SCHEDULER_GATES_SCHEMA
             && decoded.no_request_seen()
             && (decoded.copy_state() > 2 || decoded.read_level() > 2 || decoded.copy_level() > 2)
         {
             return Err("scaler output-scheduler gate snapshot is impossible".to_string());
         }
-    } else {
+        if schema == SCALER_FETCH_LIVENESS_STATE_SCHEMA && decoded.no_request_seen() {
+            let read_decisions =
+                u8::from(decoded.read_entry_seen()) + u8::from(decoded.no_read_exit_seen());
+            let invalid_pre_read_order = (decoded.state() & !0x0001 != 0
+                && !decoded.window_valid())
+                || (decoded.horizontal_start_seen() && !decoded.horizontal_sync_edge_seen())
+                || (decoded.hsync_state_seen() && !decoded.horizontal_start_seen())
+                || ((decoded.vertical_iteration_seen() || decoded.vertical_decision_seen())
+                    && !decoded.hsync_state_seen())
+                || ((decoded.read_entry_seen() || decoded.no_read_exit_seen())
+                    && !decoded.vertical_decision_seen())
+                || (decoded.vertical_decision_seen() && read_decisions != 1)
+                || ((decoded.skip_vertical_pixel_seen() || decoded.skip_vertical_carry_seen())
+                    && !decoded.no_read_exit_seen())
+                || (decoded.no_read_exit_seen()
+                    && !decoded.skip_vertical_pixel_seen()
+                    && !decoded.skip_vertical_carry_seen())
+                || (decoded.read_state_seen() && !decoded.read_entry_seen())
+                || (decoded.read_entry_seen() && !decoded.read_state_seen())
+                || (decoded.address_ready_seen() && !decoded.read_state_seen())
+                || (decoded.request_issue_seen()
+                    && (!decoded.read_state_seen() || !decoded.address_ready_seen()))
+                || (decoded.wait_read_state_seen() && !decoded.request_issue_seen())
+                || (decoded.request_issue_seen() && !decoded.wait_read_state_seen());
+            if invalid_pre_read_order {
+                return Err("scaler pre-read scheduler evidence ordering is impossible".to_string());
+            }
+        }
+    } else if schema != SCALER_FETCH_LIVENESS_STATE_SCHEMA {
         let live_state = words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD];
         if live_state & 0x8000 != 0 {
             return Err(format!(
@@ -1382,7 +1430,7 @@ mod tests {
             | SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN
             | SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
             | SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN;
-        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = 0x38aa;
+        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = 0x78ff;
         words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
             GET_SCALER_FETCH_LIVENESS_STATE,
             SCALER_FETCH_LIVENESS_STATE_SCHEMA,
@@ -1397,6 +1445,45 @@ mod tests {
             decoded.architecture(),
             SCALER_FETCH_LIVENESS_STATE_ARCHITECTURE
         );
+        assert!(decoded.window_valid());
+        assert!(decoded.output_enable_seen());
+        assert!(decoded.horizontal_sync_edge_seen());
+        assert!(decoded.horizontal_start_seen());
+        assert!(decoded.hsync_state_seen());
+        assert!(decoded.vertical_iteration_seen());
+        assert!(decoded.vertical_decision_seen());
+        assert!(decoded.read_entry_seen());
+        assert!(!decoded.no_read_exit_seen());
+        assert!(!decoded.skip_vertical_pixel_seen());
+        assert!(!decoded.skip_vertical_carry_seen());
+        assert!(decoded.read_state_seen());
+        assert!(decoded.address_ready_seen());
+        assert!(decoded.request_issue_seen());
+        assert!(decoded.wait_read_state_seen());
+        assert!(!decoded.vertical_size_zero_seen());
+        assert_eq!(
+            decoded.frozen_cause(),
+            SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN
+        );
+    }
+
+    #[test]
+    fn scaler_fetch_liveness_retains_schema_16_decode_support() {
+        let mut words = [0; SCALER_FETCH_LIVENESS_STATE_WORDS];
+        words[SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD] = OUTPUT_SCHEDULER_GATES_SCHEMA;
+        words[SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] =
+            SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID
+                | SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN
+                | SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
+                | SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN;
+        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = 0x38aa;
+        words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
+            GET_SCALER_FETCH_LIVENESS_STATE,
+            OUTPUT_SCHEDULER_GATES_SCHEMA,
+            &words[..SCALER_FETCH_LIVENESS_STATE_CRC_WORD],
+        );
+        let decoded = decode_scaler_fetch_liveness_state(&words).unwrap();
+        assert_eq!(decoded.architecture(), OUTPUT_SCHEDULER_GATES_ARCHITECTURE);
         assert_eq!(decoded.output_state(), 2);
         assert_eq!(decoded.copy_state(), 2);
         assert_eq!(decoded.read_level(), 2);
@@ -1409,10 +1496,6 @@ mod tests {
         assert!(decoded.copy_shift_next());
         assert!(!decoded.copy_line_last());
         assert!(!decoded.copy_terminal_ready());
-        assert_eq!(
-            decoded.frozen_cause(),
-            SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN
-        );
     }
 
     #[test]
@@ -1476,7 +1559,13 @@ mod tests {
             GET_SCALER_FETCH_LIVENESS_STATE,
             SCALER_FETCH_LIVENESS_STATE_SCHEMA,
         );
-        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = 1 << 15;
+        words[SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] =
+            SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID
+                | SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN
+                | SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
+                | SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN;
+        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] =
+            1 << SCALER_FETCH_LIVENESS_STATE_HORIZONTAL_START_SEEN_BIT;
         words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
             GET_SCALER_FETCH_LIVENESS_STATE,
             SCALER_FETCH_LIVENESS_STATE_SCHEMA,
@@ -1502,6 +1591,20 @@ mod tests {
             SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID;
         words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] =
             3 << SCALER_FETCH_LIVENESS_STATE_FIFO_DEPTH_BIT;
+        words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
+            GET_SCALER_FETCH_LIVENESS_STATE,
+            SCALER_FETCH_LIVENESS_STATE_SCHEMA,
+            &words[..SCALER_FETCH_LIVENESS_STATE_CRC_WORD],
+        );
+        assert!(decode_scaler_fetch_liveness_state(&words).is_err());
+
+        words[SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] =
+            SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID
+                | SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN
+                | SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
+                | SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN;
+        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] =
+            1 << SCALER_FETCH_LIVENESS_STATE_REQUEST_ISSUE_SEEN_BIT;
         words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
             GET_SCALER_FETCH_LIVENESS_STATE,
             SCALER_FETCH_LIVENESS_STATE_SCHEMA,
