@@ -18960,6 +18960,15 @@ fn profile_installed_catalog_changed_refresh(
         )?;
         let sample_dir = output_dir.join("sample-1");
         fs::create_dir_all(&sample_dir)?;
+        let fixture_inventory = exec_checked_output(
+            &session,
+            "inspect changed-system catalog fixture",
+            &catalog_build_rebuild_runtime_command("catalog-corpus-inventory"),
+        )?;
+        fs::write(
+            sample_dir.join("prepared-inventory.tsv"),
+            &fixture_inventory.stdout,
+        )?;
         let fresh = run_catalog_build_rebuild_leg(
             config,
             &session,
