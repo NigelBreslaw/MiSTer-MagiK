@@ -11,6 +11,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import patch
 
 from scripts.magik_ci import build, bundle, databases, metadata
@@ -636,7 +637,7 @@ import scripts.magik_ci.cli
                 path.write_bytes(data)
             mra = (
                 b"<misterromdescription><name>Fixture Game</name>"
-                b"<rom zip=\"fixture.zip\"/></misterromdescription>"
+                b'<rom zip="fixture.zip"/></misterromdescription>'
             )
             source_order = (
                 "distribution",
@@ -706,12 +707,10 @@ import scripts.magik_ci.cli
                 arcade_updater_index=index,
                 output=root / "release",
             )
-            payload = verify(archive)
+            payload = cast(dict[str, Any], verify(archive))
             self.assertEqual(payload["release_version"], 1)
             updater = payload["sources"]["arcade_updater"]
-            self.assertEqual(
-                updater["format"], "mister-magik-arcade-updater-index-v1"
-            )
+            self.assertEqual(updater["format"], "mister-magik-arcade-updater-index-v1")
             self.assertEqual(
                 [source["id"] for source in updater["sources"]],
                 sorted(source_order),

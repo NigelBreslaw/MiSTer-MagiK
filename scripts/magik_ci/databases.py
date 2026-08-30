@@ -441,13 +441,13 @@ def _decode_updater_index_bytes(encoded: bytes) -> dict[str, Any]:
     except json.JSONDecodeError as error:
         raise ValueError("Arcade updater index JSON is invalid") from error
     if not isinstance(payload, dict):
-        raise ValueError("Arcade updater index payload is not an object")
+        raise TypeError("Arcade updater index payload is not an object")
     if payload.get("format") != "mister-magik-arcade-updater-index-v1":
         raise ValueError("Arcade updater index format is invalid")
     if not isinstance(payload.get("sources"), list) or not isinstance(
         payload.get("rows"), list
     ):
-        raise ValueError("Arcade updater index payload is incomplete")
+        raise TypeError("Arcade updater index payload is incomplete")
     return cast(dict[str, Any], payload)
 
 
