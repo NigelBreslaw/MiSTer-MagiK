@@ -741,7 +741,7 @@ def main() -> None:
             "avl_read_accepted<='1';": 1,
             "avl_return_drain<='1';": 1,
             "SIGNAL avl_return_release_pending : std_logic:='0';": 1,
-            "IF return_drain_ready(": 1,
+            "IF return_drain_ready(": 2,
             "avl_return_credits,avl_return_phase) THEN": 2,
             "IF avl_return_drain='0' THEN": 1,
             "IF avl_read_i='1' AND avl_read_accepted='0' AND": 1,
