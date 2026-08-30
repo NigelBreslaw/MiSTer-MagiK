@@ -4,6 +4,7 @@
 use serde_json::{Map, Value, json};
 
 pub const PORT: u16 = 7498;
+// Version 37 adds the launcher startup-sequence UI-test case.
 // Version 36 advertises the schema-16 FPGA video diagnostics decoder.
 // Version 35 advertises the schema-15 FPGA video diagnostics decoder.
 // Version 34 adds the menu confirmation UI-test case.
@@ -13,7 +14,7 @@ pub const PORT: u16 = 7498;
 // Version 28 added the disposable schema-5 scaler pipeline decoder. Version 27
 // introduced bounded, authenticated Runtime staging over the existing
 // outbound host-to-agent connection.
-pub const AGENT_VERSION: u64 = 36;
+pub const AGENT_VERSION: u64 = 37;
 pub const PROTOCOL_VERSION: u64 = 2;
 pub const FRAMEBUFFER_CAPTURE_CAPABILITY: &str = "framebuffer-capture-v2";
 pub const DEVICE_TELEMETRY_CAPABILITY: &str = "device-telemetry-v2";
@@ -30,6 +31,7 @@ pub const UI_TEST_MAX_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
 pub const UI_TEST_CASES: &[&str] = &[
     "smoke",
     "startup-home",
+    "startup-sequence",
     "system-hub",
     "arcade-navigation",
     "arcade-filters",
