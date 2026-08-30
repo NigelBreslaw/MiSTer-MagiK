@@ -274,28 +274,6 @@ pub(crate) fn write_system_shard_with_durability_and_variant_payload(
 }
 
 #[cfg(feature = "builder")]
-pub(crate) fn write_system_shard_with_artifact_profile(
-    sqlite_path: &Path,
-    navigation_path: &Path,
-    data: SystemShardData,
-    limits: SystemShardLimits,
-    durability: ShardDurability,
-    profile: ShardArtifactProfile,
-) -> Result<LoadedSystemShard, SystemShardError> {
-    write_system_shard_with_options_and_profile(
-        sqlite_path,
-        navigation_path,
-        data,
-        limits,
-        durability,
-        ShardSqliteTuning::Conservative,
-        ShardSearchTuning::FullOptimized,
-        profile,
-        None,
-    )
-}
-
-#[cfg(feature = "builder")]
 pub(crate) fn write_system_shard_with_artifact_profile_and_variant_payload(
     sqlite_path: &Path,
     navigation_path: &Path,
@@ -341,6 +319,7 @@ pub(crate) fn write_system_shard_with_options(
 }
 
 #[cfg(feature = "builder")]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn write_system_shard_with_options_and_variant_payload(
     sqlite_path: &Path,
     navigation_path: &Path,

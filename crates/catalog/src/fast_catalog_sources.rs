@@ -666,6 +666,7 @@ pub(crate) struct FastArcadeAuditCandidate {
     pub family_id: String,
 }
 
+#[cfg(test)]
 fn scan_arcade(
     storage_root: &Path,
     report: &mut FastSourceSystemReport,
@@ -1899,11 +1900,14 @@ fn machine_source_label(source: Option<MachineSource>) -> &'static str {
 }
 
 fn enrich_fast_preview_identities(storage_root: &Path, systems: &mut [FastFiveSystem]) {
-    let title_index = systems
+    let title_index = if systems
         .iter()
         .any(|system| matches!(system.system_id.as_str(), "snes" | "saturn"))
-        .then(|| load_fast_console_preview_title_index(storage_root))
-        .unwrap_or_default();
+    {
+        load_fast_console_preview_title_index(storage_root)
+    } else {
+        BTreeMap::new()
+    };
     let mut visited = 0usize;
     for system in systems {
         for game in &mut system.games {
@@ -2053,9 +2057,11 @@ fn normalize_name(value: &str) -> String {
 
 fn normalize_machine_id(value: &str) -> String {
     let normalized = crate::library_db::normalize_id(value);
-    (normalized != "unknown")
-        .then_some(normalized)
-        .unwrap_or_default()
+    if normalized == "unknown" {
+        String::new()
+    } else {
+        normalized
+    }
 }
 
 fn encode_component(value: &str) -> String {

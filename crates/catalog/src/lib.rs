@@ -56,6 +56,7 @@ pub mod library_bench;
 mod library_cli;
 pub mod library_db;
 mod library_indexer;
+#[cfg(feature = "builder")]
 mod machine_family;
 #[cfg(feature = "builder")]
 mod machine_family_projection;

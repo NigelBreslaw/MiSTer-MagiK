@@ -232,7 +232,8 @@ mod tests {
                 .map(|game| (&game.title, &game.launch_ref))
                 .collect::<Vec<_>>()
         );
-        assert_eq!(first.variants.len(), 2);
+        assert_eq!(first.games.len(), 2);
+        assert_eq!(first.variants.len(), 1);
         assert!(first.variants.iter().all(|variant| {
             first
                 .games

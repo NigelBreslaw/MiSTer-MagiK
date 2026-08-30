@@ -16,6 +16,9 @@ use std::path::{Path, PathBuf};
 
 const QUERY_CHUNK: usize = 400;
 
+type MachineLookupKey = (String, Option<RomNamespace>);
+type MachineLookupResults = BTreeMap<MachineLookupKey, Option<ResolvedMachine>>;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResolvedMachine {
     pub identity: String,
@@ -41,7 +44,7 @@ pub(crate) struct MachineFamilyResolver {
     hbmame_path: Option<PathBuf>,
     mame: Option<MachineDatabase>,
     hbmame: Option<MachineDatabase>,
-    cache: BTreeMap<(String, Option<RomNamespace>), Option<ResolvedMachine>>,
+    cache: MachineLookupResults,
     pub(crate) requested: usize,
     pub(crate) cache_hits: usize,
     pub(crate) mame_matches: usize,
@@ -75,6 +78,7 @@ impl MachineFamilyResolver {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn resolve(
         &mut self,
         identity: &str,
@@ -90,14 +94,11 @@ impl MachineFamilyResolver {
             .and_then(|row| row))
     }
 
-    pub(crate) fn resolve_many<I>(
-        &mut self,
-        identities: I,
-    ) -> Result<BTreeMap<(String, Option<RomNamespace>), Option<ResolvedMachine>>, String>
+    pub(crate) fn resolve_many<I>(&mut self, identities: I) -> Result<MachineLookupResults, String>
     where
         I: IntoIterator<Item = (String, Option<RomNamespace>)>,
     {
-        let mut requested = BTreeMap::<(String, Option<RomNamespace>), ()>::new();
+        let mut requested = BTreeMap::<MachineLookupKey, ()>::new();
         for (identity, namespace) in identities {
             let identity = normalize(&identity);
             if identity.is_empty() {
@@ -303,16 +304,20 @@ fn normalize(value: &str) -> String {
 mod tests {
     use super::*;
     use rusqlite::Connection;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
     fn fixture() -> (std::path::PathBuf, std::path::PathBuf) {
         let root = std::env::temp_dir().join(format!(
-            "mister-magik-family-{}-{}",
+            "mister-magik-family-{}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(root.join("mister-magik-dev")).unwrap();
         let path = root.join("mister-magik-dev/mame.sqlite3");
