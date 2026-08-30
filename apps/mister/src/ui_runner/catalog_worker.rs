@@ -9,7 +9,7 @@ use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thre
 use sha2::{Digest, Sha256};
 use std::ffi::CString;
 use std::io::{BufRead, BufReader, Read, Write};
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
