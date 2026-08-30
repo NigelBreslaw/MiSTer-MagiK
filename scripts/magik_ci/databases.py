@@ -73,6 +73,29 @@ def verify(
         digest, name = line.split("  ", 1)
         if name not in files or sha256_bytes(files[name]) != digest:
             raise ValueError(f"database_checksum:{name}")
+    if payload["format"] == FORMAT:
+        sources = payload.get("sources")
+        updater_manifest = (
+            sources.get("arcade_updater")
+            if isinstance(sources, dict)
+            else None
+        )
+        if not isinstance(updater_manifest, dict):
+            raise ValueError("invalid_database_manifest: Arcade updater source")
+        updater_index = _decode_updater_index_bytes(files[INDEX])
+        if updater_manifest.get("format") != updater_index["format"]:
+            raise ValueError("invalid_database_manifest: Arcade updater format")
+        if updater_manifest.get("sources") != updater_index["sources"]:
+            raise ValueError("invalid_database_manifest: Arcade updater sources")
+        metadata_rows = sum(
+            1
+            for row in updater_index["rows"]
+            if isinstance(row, dict) and row.get("catalog_metadata") is not None
+        )
+        if updater_manifest.get("catalog_metadata_rows") != metadata_rows:
+            raise ValueError(
+                "invalid_database_manifest: Arcade updater catalog metadata rows"
+            )
     return payload
 
 
@@ -113,6 +136,9 @@ def create(
     arcade_updater_index: Path,
     output: Path,
 ) -> Path:
+    updater_index_payload = _decode_updater_index(arcade_updater_index)
+    updater_sources = updater_index_payload["sources"]
+    updater_rows = updater_index_payload["rows"]
     files = [
         ("mame.sqlite3", mame.read_bytes()),
         ("hbmame.sqlite3", hbmame.read_bytes()),
@@ -145,7 +171,14 @@ def create(
                 "builder_sha": arcade_database_builder_sha,
             },
             "arcade_updater": {
+                "format": updater_index_payload["format"],
                 "sha256": sha256_file(arcade_updater_index),
+                "sources": updater_sources,
+                "catalog_metadata_rows": sum(
+                    1
+                    for row in updater_rows
+                    if isinstance(row, dict) and row.get("catalog_metadata") is not None
+                ),
                 "builder_sha": arcade_updater_builder_sha,
             },
         },
@@ -358,11 +391,64 @@ def build_updater(input_manifest: Path, output: Path) -> dict[str, object]:
     atomic_write(output, encoded)
     return {
         "format": "mister-magik-arcade-updater-index-v1",
+        "sources": sources,
         "rows": len(ordered_rows),
         "source_rows": source_counts,
+        "catalog_metadata_rows": 0,
         "compressed_bytes": len(encoded),
         "output": str(output),
     }
+
+
+def _decode_updater_index(path: Path) -> dict[str, Any]:
+    """Decode the size-prepended LZ4 index used by the Rust catalog."""
+    return _decode_updater_index_bytes(path.read_bytes())
+
+
+def _decode_updater_index_bytes(encoded: bytes) -> dict[str, Any]:
+    import ctypes
+    import ctypes.util
+
+    if len(encoded) < 4:
+        raise ValueError("Arcade updater index is truncated")
+    decoded_size = int.from_bytes(encoded[:4], "little")
+    if decoded_size <= 0 or decoded_size > 16 * 1024 * 1024:
+        raise ValueError("Arcade updater index decoded size is invalid")
+    library_name = ctypes.util.find_library("lz4")
+    if not library_name:
+        raise RuntimeError("liblz4 is required to read the updater index")
+    library = ctypes.CDLL(library_name)
+    decompressor = library.LZ4_decompress_safe
+    decompressor.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_int,
+    ]
+    decompressor.restype = ctypes.c_int
+    source = ctypes.create_string_buffer(encoded[4:])
+    destination = ctypes.create_string_buffer(decoded_size)
+    result = decompressor(
+        source,
+        destination,
+        len(encoded) - 4,
+        decoded_size,
+    )
+    if result != decoded_size:
+        raise ValueError("Arcade updater index decompression failed")
+    try:
+        payload = json.loads(destination.raw[:result])
+    except json.JSONDecodeError as error:
+        raise ValueError("Arcade updater index JSON is invalid") from error
+    if not isinstance(payload, dict):
+        raise ValueError("Arcade updater index payload is not an object")
+    if payload.get("format") != "mister-magik-arcade-updater-index-v1":
+        raise ValueError("Arcade updater index format is invalid")
+    if not isinstance(payload.get("sources"), list) or not isinstance(
+        payload.get("rows"), list
+    ):
+        raise ValueError("Arcade updater index payload is incomplete")
+    return cast(dict[str, Any], payload)
 
 
 def _require_lower_hex(label: str, value: object, length: int) -> None:

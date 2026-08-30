@@ -632,9 +632,60 @@ import scripts.magik_ci.cli
                 (hbmame, b"hbmame"),
                 (csv, b"name\n"),
                 (license_file, b"license"),
-                (index, b"index"),
             ):
                 path.write_bytes(data)
+            mra = (
+                b"<misterromdescription><name>Fixture Game</name>"
+                b"<rom zip=\"fixture.zip\"/></misterromdescription>"
+            )
+            source_order = (
+                "distribution",
+                "alternatives",
+                "jtcores",
+                "coinop",
+                "arcade-offset",
+            )
+            updater_sources = []
+            for position, source_id in enumerate(source_order):
+                source_root = root / source_id
+                mra_path = source_root / "_Arcade" / "Fixture Game.mra"
+                mra_path.parent.mkdir(parents=True)
+                mra_path.write_bytes(mra)
+                database_path = root / f"{source_id}.json"
+                database_path.write_text(
+                    json.dumps(
+                        {
+                            "files": {
+                                "_Arcade/Fixture Game.mra": {
+                                    "hash": hashlib.md5(
+                                        mra, usedforsecurity=False
+                                    ).hexdigest(),
+                                    "size": len(mra),
+                                }
+                            }
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                updater_sources.append(
+                    {
+                        "id": source_id,
+                        "revision": f"{position + 1:040x}",
+                        "database": str(database_path),
+                        "roots": [str(source_root)],
+                    }
+                )
+            inputs = root / "updater-inputs.json"
+            inputs.write_text(
+                json.dumps(
+                    {
+                        "format": "mister-magik-arcade-updater-inputs-v1",
+                        "sources": updater_sources,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            databases.build_updater(inputs, index)
             archive = create(
                 mame=mame,
                 hbmame=hbmame,
@@ -655,7 +706,17 @@ import scripts.magik_ci.cli
                 arcade_updater_index=index,
                 output=root / "release",
             )
-            self.assertEqual(verify(archive)["release_version"], 1)
+            payload = verify(archive)
+            self.assertEqual(payload["release_version"], 1)
+            updater = payload["sources"]["arcade_updater"]
+            self.assertEqual(
+                updater["format"], "mister-magik-arcade-updater-index-v1"
+            )
+            self.assertEqual(
+                [source["id"] for source in updater["sources"]],
+                sorted(source_order),
+            )
+            self.assertEqual(updater["catalog_metadata_rows"], 0)
 
 
 if __name__ == "__main__":
