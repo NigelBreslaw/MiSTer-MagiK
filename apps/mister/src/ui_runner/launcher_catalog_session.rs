@@ -627,6 +627,9 @@ impl LauncherCatalogSession {
 
 fn catalog_failure_is_transient(error: &str) -> bool {
     let error = error.to_ascii_lowercase();
+    if error.contains(mister_magik_catalog::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE) {
+        return false;
+    }
     ![
         "unsupported",
         "schema",
@@ -1546,5 +1549,15 @@ mod tests {
             "unsupported shard schema version for snes generation 1: expected 3, found 4"
         ));
         assert!(!catalog_failure_is_format_upgrade("disk full"));
+    }
+
+    #[test]
+    fn safety_limit_failures_are_not_transient_or_auto_retried() {
+        let error = format!(
+            "{} kind=entries observed=4000001 configured=4000000 path=/media/fat/_Arcade",
+            mister_magik_catalog::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE
+        );
+        assert!(!catalog_failure_is_transient(&error));
+        assert!(catalog_failure_is_transient("disk full"));
     }
 }

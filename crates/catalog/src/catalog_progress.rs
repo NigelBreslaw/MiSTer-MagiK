@@ -10,6 +10,7 @@ const INNER_PROGRESS_BATCH: u64 = 4096;
 static INNER_PROGRESS_UNITS: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
+pub const CATALOG_SAFETY_LIMIT_NONRETRYABLE: &str = "catalog-safety-limit-nonretryable";
 
 /// Record that a bounded batch of catalog work completed. The counter is
 /// intentionally process-wide and monotonic so a supervising worker can poll

@@ -886,7 +886,9 @@ fn collect_arcade_mras_at_depth(
 ) -> Result<(), String> {
     if depth > MAX_DISCOVERY_DEPTH {
         return Err(format!(
-            "arcade discovery exceeded directory depth limit {} at {}",
+            "{} kind=directory-depth observed={} configured={} path={}",
+            crate::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE,
+            depth,
             MAX_DISCOVERY_DEPTH,
             root.display()
         ));
@@ -900,8 +902,11 @@ fn collect_arcade_mras_at_depth(
         crate::catalog_progress::report_inner_progress_at(*visited);
         if *visited > MAX_DISCOVERY_ENTRIES {
             return Err(format!(
-                "arcade discovery exceeded {} entries",
-                MAX_DISCOVERY_ENTRIES
+                "{} kind=entries observed={} configured={} path={}",
+                crate::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE,
+                *visited,
+                MAX_DISCOVERY_ENTRIES,
+                root.display()
             ));
         }
         let name = entry.file_name();
@@ -1251,7 +1256,9 @@ fn collect_matching_files_at_depth(
 ) -> Result<(), String> {
     if depth > MAX_DISCOVERY_DEPTH {
         return Err(format!(
-            "file discovery exceeded directory depth limit {} at {}",
+            "{} kind=directory-depth observed={} configured={} path={}",
+            crate::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE,
+            depth,
             MAX_DISCOVERY_DEPTH,
             root.display()
         ));
@@ -1265,8 +1272,11 @@ fn collect_matching_files_at_depth(
         crate::catalog_progress::report_inner_progress_at(*visited);
         if *visited > MAX_DISCOVERY_ENTRIES {
             return Err(format!(
-                "file discovery exceeded {} entries",
-                MAX_DISCOVERY_ENTRIES
+                "{} kind=entries observed={} configured={} path={}",
+                crate::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE,
+                *visited,
+                MAX_DISCOVERY_ENTRIES,
+                root.display()
             ));
         }
         let file_type = entry
@@ -1301,9 +1311,11 @@ fn read_dir_entries_checked(root: &Path) -> Result<Option<Vec<fs::DirEntry>>, St
                 for entry in entries {
                     if collected.len() >= MAX_DIRECTORY_ENTRIES {
                         return Err(format!(
-                            "enumerate {}: directory exceeds {} entries",
+                            "{} kind=directory-entries observed={} configured={} path={}",
+                            crate::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE,
+                            collected.len().saturating_add(1),
+                            MAX_DIRECTORY_ENTRIES,
                             root.display(),
-                            MAX_DIRECTORY_ENTRIES
                         ));
                     }
                     match entry {
@@ -1340,10 +1352,11 @@ fn read_bounded_file(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
         fs::metadata(path).map_err(|error| format!("metadata {}: {error}", path.display()))?;
     if metadata.len() > maximum {
         return Err(format!(
-            "{} is {} bytes, larger than the {} byte limit",
-            path.display(),
+            "{} kind=file-bytes observed={} configured={} path={}",
+            crate::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE,
             metadata.len(),
-            maximum
+            maximum,
+            path.display(),
         ));
     }
     let file = fs::File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
@@ -1352,7 +1365,13 @@ fn read_bounded_file(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
         .read_to_end(&mut bytes)
         .map_err(|error| format!("read {}: {error}", path.display()))?;
     if bytes.len() as u64 > maximum {
-        return Err(format!("{} grew beyond its size limit", path.display()));
+        return Err(format!(
+            "{} kind=file-bytes observed={} configured={} path={}",
+            crate::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE,
+            bytes.len(),
+            maximum,
+            path.display(),
+        ));
     }
     Ok(bytes)
 }
@@ -1721,7 +1740,9 @@ mod tests {
 
         let error = scan_amiga(&root, &mut report).expect_err("oversized listing must fail closed");
 
-        assert!(error.contains("larger than"));
+        assert!(error.contains(crate::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE));
+        assert!(error.contains("observed="));
+        assert!(error.contains("configured="));
         let _ = fs::remove_dir_all(root);
     }
 

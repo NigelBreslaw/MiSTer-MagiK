@@ -1971,7 +1971,9 @@ fn capture_tree_at_depth(
 ) -> Result<(), String> {
     if depth > MAX_WATCH_DEPTH {
         return Err(format!(
-            "watch snapshot exceeded directory depth limit {} at {}",
+            "{} kind=directory-depth observed={} configured={} path={}",
+            crate::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE,
+            depth,
             MAX_WATCH_DEPTH,
             root.display()
         ));
@@ -1991,8 +1993,11 @@ fn capture_tree_at_depth(
         *visited = visited.saturating_add(1);
         if *visited > MAX_WATCH_ENTRIES {
             return Err(format!(
-                "watch snapshot exceeded {} entries",
-                MAX_WATCH_ENTRIES
+                "{} kind=entries observed={} configured={} path={}",
+                crate::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE,
+                *visited,
+                MAX_WATCH_ENTRIES,
+                root.display()
             ));
         }
         let path = entry.path();
@@ -2060,9 +2065,11 @@ fn read_watch_directory_entries_with_limit(
     for entry in entries {
         if bounded.len() >= limit {
             return Err(format!(
-                "watch directory {} exceeds {} entries",
-                path.display(),
-                limit
+                "{} kind=directory-entries observed={} configured={} path={}",
+                crate::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE,
+                bounded.len().saturating_add(1),
+                limit,
+                path.display()
             ));
         }
         bounded.push(
