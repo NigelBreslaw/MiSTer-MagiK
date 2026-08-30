@@ -14,6 +14,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io;
 use std::os::unix::fs::FileExt;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::FileTypeExt;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -536,6 +540,7 @@ fn mounted_block_source(path: &Path) -> Result<Option<(PathBuf, PathBuf)>, Strin
         if !source.starts_with("/dev/") {
             continue;
         }
+        let source = resolve_mount_device(&mountpoint, source)?;
         if best.as_ref().is_some_and(|(existing, _)| {
             existing.components().count() >= mountpoint.components().count()
         }) {
@@ -544,6 +549,43 @@ fn mounted_block_source(path: &Path) -> Result<Option<(PathBuf, PathBuf)>, Strin
         best = Some((mountpoint, PathBuf::from(source)));
     }
     Ok(best)
+}
+
+fn resolve_mount_device(mountpoint: &Path, source: PathBuf) -> Result<PathBuf, String> {
+    if source.exists() {
+        return Ok(source);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let mount_device = std::fs::metadata(mountpoint)
+            .map_err(|error| format!("stat exFAT mountpoint {}: {error}", mountpoint.display()))?
+            .dev();
+        let directory = std::fs::read_dir("/dev")
+            .map_err(|error| format!("read /dev while resolving exFAT backing device: {error}"))?;
+        for entry in directory {
+            let entry = entry.map_err(|error| format!("read /dev entry: {error}"))?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !(name.starts_with("mmcblk") || name.starts_with("sd")) {
+                continue;
+            }
+            let candidate = entry.path();
+            let metadata = match std::fs::metadata(&candidate) {
+                Ok(metadata) if metadata.file_type().is_block_device() => metadata,
+                _ => continue,
+            };
+            if metadata.rdev() == mount_device {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    Err(format!(
+        "exFAT backing device {} is unavailable and could not be resolved from mount {}",
+        source.display(),
+        mountpoint.display()
+    ))
 }
 
 fn decode_mount_field(value: &str) -> PathBuf {
