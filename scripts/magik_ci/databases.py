@@ -76,9 +76,7 @@ def verify(
     if payload["format"] == FORMAT:
         sources = payload.get("sources")
         updater_manifest = (
-            sources.get("arcade_updater")
-            if isinstance(sources, dict)
-            else None
+            sources.get("arcade_updater") if isinstance(sources, dict) else None
         )
         if not isinstance(updater_manifest, dict):
             raise ValueError("invalid_database_manifest: Arcade updater source")

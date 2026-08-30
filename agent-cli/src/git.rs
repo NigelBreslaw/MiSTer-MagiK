@@ -183,6 +183,8 @@ mod tests {
                     "user.name=Agent",
                     "-c",
                     "user.email=agent@example.invalid",
+                    "-c",
+                    "maintenance.auto=false",
                 ])
                 .args(["commit", "-qm", message])
                 .current_dir(root)
@@ -250,6 +252,8 @@ mod tests {
                     "user.name=Agent",
                     "-c",
                     "user.email=agent@example.invalid",
+                    "-c",
+                    "maintenance.auto=false",
                 ])
                 .args(["merge", "-q", "--no-ff", "side", "-m", "merge"])
                 .current_dir(&root)
