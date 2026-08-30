@@ -78,6 +78,7 @@ const TEST_AUTO_LAUNCH_GATE: &str = "MISTER_MAGIK_TEST_AUTO_LAUNCH_GATE";
 const TEST_CATALOG_PUBLICATION_GATE: &str = "MISTER_MAGIK_TEST_CATALOG_PUBLICATION_GATE";
 const TEST_FIRST_FRAME_RELEASE_GATE: &str = "MISTER_MAGIK_TEST_FIRST_FRAME_RELEASE_GATE";
 const TEST_CATALOG_PUBLICATION_SESSION: &str = "MISTER_MAGIK_TEST_CATALOG_PUBLICATION_SESSION";
+const TEST_STARTUP_MODE: &str = "MISTER_UI_TEST_STARTUP_MODE";
 const MODAL_TEST_PATH_INPUTS: &[&str] = &[
     "MISTER_SHARDED_CATALOG_DIR",
     "MISTER_LIBRARY_SQLITE",
@@ -269,7 +270,26 @@ pub struct LauncherTestConfig {
     catalog_publication_gate: Option<PathBuf>,
     first_frame_release_gate: Option<PathBuf>,
     catalog_publication_session: Option<PathBuf>,
+    startup_mode: Option<LauncherStartupTestMode>,
     modal_path_inputs: Vec<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LauncherStartupTestMode {
+    WarmReady,
+    ColdDelayed,
+    ColdIntroFailure,
+}
+
+impl LauncherStartupTestMode {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "warm-ready" => Some(Self::WarmReady),
+            "cold-delayed" => Some(Self::ColdDelayed),
+            "cold-intro-failure" => Some(Self::ColdIntroFailure),
+            _ => None,
+        }
+    }
 }
 
 impl LauncherTestConfig {
@@ -293,6 +313,9 @@ impl LauncherTestConfig {
             catalog_publication_session: volatile_test_path(
                 environment.get_path(TEST_CATALOG_PUBLICATION_SESSION),
             ),
+            startup_mode: environment
+                .get(TEST_STARTUP_MODE)
+                .and_then(LauncherStartupTestMode::parse),
             modal_path_inputs: MODAL_TEST_PATH_INPUTS
                 .iter()
                 .filter_map(|name| environment.get_path(name).map(Path::to_path_buf))
@@ -322,6 +345,10 @@ impl LauncherTestConfig {
 
     pub fn catalog_publication_session(&self) -> Option<&Path> {
         self.catalog_publication_session.as_deref()
+    }
+
+    pub fn startup_mode(&self) -> Option<LauncherStartupTestMode> {
+        self.startup_mode
     }
 
     pub fn modal_path_inputs(&self) -> &[PathBuf] {
@@ -1231,6 +1258,25 @@ mod tests {
             config.catalog_publication_session(),
             Some(Path::new("/tmp/session"))
         );
+    }
+
+    #[test]
+    fn startup_ui_test_modes_are_captured_as_typed_values() {
+        for (value, expected) in [
+            ("warm-ready", Some(LauncherStartupTestMode::WarmReady)),
+            ("cold-delayed", Some(LauncherStartupTestMode::ColdDelayed)),
+            (
+                "cold-intro-failure",
+                Some(LauncherStartupTestMode::ColdIntroFailure),
+            ),
+            ("unexpected", None),
+        ] {
+            let environment = EnvironmentSnapshot::from_values([(TEST_STARTUP_MODE, value)]);
+            assert_eq!(
+                LauncherTestConfig::capture(&environment).startup_mode(),
+                expected
+            );
+        }
     }
 
     #[test]

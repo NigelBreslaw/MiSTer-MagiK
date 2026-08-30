@@ -33,7 +33,9 @@ use crate::preview_worker;
 use crate::ui_test_support::UiTestSandbox;
 #[cfg(test)]
 use mister_magik_fb::framebuffer::target::PhysicalLayerBacking;
-use mister_magik_fb::process_config::{ScreensaverStartMode, ScriptedInputConfig};
+use mister_magik_fb::process_config::{
+    LauncherStartupTestMode, ScreensaverStartMode, ScriptedInputConfig,
+};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -5567,7 +5569,7 @@ pub(super) fn run_launcher_loop(
     // First creation remains foreground through the !catalog_ready lifecycle.
     let mut catalog_session = LauncherCatalogSession::new(false);
     let mut catalog_publication_test =
-        CatalogPublicationTestDriver::from_config(launcher_config.tests(), start);
+        CatalogPublicationTestDriver::from_config(launcher_config.tests(), start, ui_test_fixture);
     let mut media_session = ScreenshotMediaUpdateSession::default();
     let mut library_changed_dialog_test =
         LibraryChangedDialogTestDriver::from_config(launcher_config.tests(), start);
@@ -5978,6 +5980,7 @@ pub(super) fn run_launcher_loop(
             }
             Err(error) => {
                 crate::ui_errln!("startup intro preparation failed: {error}");
+                launcher_automation.note_startup_intro_failure(&error);
                 None
             }
         }

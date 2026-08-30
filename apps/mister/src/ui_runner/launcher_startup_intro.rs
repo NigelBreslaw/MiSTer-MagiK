@@ -14,6 +14,12 @@ pub(super) struct PreparedStartupIntro {
 
 impl PreparedStartupIntro {
     pub(super) fn new(ui: &UiDisplay) -> Result<Self, String> {
+        #[cfg(feature = "ui-device-tests")]
+        if std::env::var("MISTER_UI_TEST_STARTUP_MODE").ok().as_deref()
+            == Some("cold-intro-failure")
+        {
+            return Err("UI-test injected startup intro preparation failure".to_string());
+        }
         Ok(Self {
             playback: StartupIntroPlayback::new(ui)?,
         })

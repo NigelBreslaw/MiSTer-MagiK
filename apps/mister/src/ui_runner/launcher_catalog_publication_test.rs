@@ -11,8 +11,10 @@ pub(super) struct CatalogPublicationTestDriver {
     ready_gate: Option<PathBuf>,
     first_frame_release_gate: Option<PathBuf>,
     replay_catalog: Option<ArcadeCatalog>,
+    startup_mode: Option<LauncherStartupTestMode>,
     ready_sent: bool,
     ready_deadline: Option<Instant>,
+    ready_at: Option<Instant>,
     holding_first_frame: bool,
     hold_deadline: Option<Instant>,
 }
@@ -21,6 +23,7 @@ impl CatalogPublicationTestDriver {
     pub(super) fn from_config(
         config: &mister_magik_fb::process_config::LauncherTestConfig,
         start: Instant,
+        enabled: bool,
     ) -> Self {
         let ready_gate = config.catalog_publication_gate().map(Path::to_path_buf);
         let first_frame_release_gate = config.first_frame_release_gate().map(Path::to_path_buf);
@@ -40,12 +43,22 @@ impl CatalogPublicationTestDriver {
                 "scenario=fresh-ready",
             );
         }
+        let startup_mode = enabled.then(|| config.startup_mode()).flatten();
+        if startup_mode.is_some() {
+            print_startup_event(
+                start,
+                "startup_ui_test_mode",
+                format!("mode={}", startup_mode_label(startup_mode)),
+            );
+        }
         Self {
             ready_gate: armed.then_some(ready_gate).flatten(),
             first_frame_release_gate: armed.then_some(first_frame_release_gate).flatten(),
             replay_catalog: None,
+            startup_mode,
             ready_sent: false,
             ready_deadline: armed.then_some(start + READY_FAIL_OPEN),
+            ready_at: None,
             holding_first_frame: false,
             hold_deadline: None,
         }
@@ -58,7 +71,11 @@ impl CatalogPublicationTestDriver {
         catalog_ready: &mut bool,
         start: Instant,
     ) -> bool {
-        if self.ready_gate.is_none() || !*catalog_ready {
+        let cold_mode = matches!(
+            self.startup_mode,
+            Some(LauncherStartupTestMode::ColdDelayed | LauncherStartupTestMode::ColdIntroFailure)
+        );
+        if (!cold_mode && self.ready_gate.is_none()) || !*catalog_ready {
             return false;
         }
         self.replay_catalog = Some(catalog.clone());
@@ -67,13 +84,16 @@ impl CatalogPublicationTestDriver {
         print_startup_event(
             start,
             "catalog_publication_test_waiting",
-            "scenario=fresh-ready",
+            format!("scenario={}", self.scenario_label()),
         );
+        if cold_mode {
+            self.ready_at = Some(start + Duration::from_millis(500));
+        }
         true
     }
 
     pub(super) fn catalog_worker_allowed(&self) -> bool {
-        self.ready_gate.is_none()
+        self.ready_gate.is_none() && self.startup_mode.is_none()
     }
 
     pub(super) fn tick(&mut self, now: Instant, start: Instant) -> Option<CatalogWorkerMessage> {
@@ -84,8 +104,9 @@ impl CatalogPublicationTestDriver {
             .ready_gate
             .as_deref()
             .is_some_and(|path| Path::new(path).exists());
+        let startup_mode_ready = self.ready_at.is_some_and(|ready_at| now >= ready_at);
         let fail_open = self.ready_deadline.is_some_and(|deadline| now >= deadline);
-        if !gate_open && !fail_open {
+        if !gate_open && !startup_mode_ready && !fail_open {
             return None;
         }
         if fail_open {
@@ -100,7 +121,12 @@ impl CatalogPublicationTestDriver {
         print_startup_event(
             start,
             "catalog_publication_test_ready",
-            format!("games={} systems={}", catalog.len(), catalog.systems.len()),
+            format!(
+                "games={} systems={} scenario={}",
+                catalog.len(),
+                catalog.systems.len(),
+                self.scenario_label()
+            ),
         );
         Some(CatalogWorkerMessage::Ready {
             catalog,
@@ -119,7 +145,7 @@ impl CatalogPublicationTestDriver {
             print_startup_event(
                 start,
                 "catalog_publication_test_first_frame_held",
-                "scenario=fresh-ready",
+                format!("scenario={}", self.scenario_label()),
             );
         }
     }
@@ -147,6 +173,23 @@ impl CatalogPublicationTestDriver {
         }
         true
     }
+
+    fn scenario_label(&self) -> &'static str {
+        if self.ready_gate.is_some() {
+            "fresh-ready"
+        } else {
+            startup_mode_label(self.startup_mode)
+        }
+    }
+}
+
+fn startup_mode_label(mode: Option<LauncherStartupTestMode>) -> &'static str {
+    match mode {
+        Some(LauncherStartupTestMode::WarmReady) => "warm-ready",
+        Some(LauncherStartupTestMode::ColdDelayed) => "cold-delayed",
+        Some(LauncherStartupTestMode::ColdIntroFailure) => "cold-intro-failure",
+        None => "unconfigured",
+    }
 }
 
 #[cfg(test)]
@@ -158,6 +201,7 @@ mod tests {
         let driver = CatalogPublicationTestDriver::from_config(
             &mister_magik_fb::process_config::LauncherTestConfig::default(),
             Instant::now(),
+            false,
         );
         assert!(driver.ready_gate.is_none());
         assert!(driver.first_frame_release_gate.is_none());
