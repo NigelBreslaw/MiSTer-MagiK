@@ -156,6 +156,7 @@ def parser() -> argparse.ArgumentParser:
     pb_verify.add_argument("archive", type=Path)
     pb_verify.add_argument("--manifest", type=Path)
     pb_verify.add_argument("--release-version", type=int)
+    pb_verify.add_argument("--historical-baseline", action="store_true")
     pb_extract = pb_sub.add_parser("extract-component")
     pb_extract.add_argument("archive", type=Path)
     pb_extract.add_argument("--manifest", type=Path, required=True)
@@ -353,7 +354,12 @@ def main() -> int:
                 github_output(args.github_output, value)
                 print(json.dumps(value, sort_keys=True))
             elif args.action == "verify":
-                bundle.verify(args.archive, args.manifest, args.release_version)
+                bundle.verify(
+                    args.archive,
+                    args.manifest,
+                    args.release_version,
+                    historical_baseline=args.historical_baseline,
+                )
             elif args.action == "extract-component":
                 print(
                     json.dumps(

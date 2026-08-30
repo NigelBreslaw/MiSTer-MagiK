@@ -18,6 +18,12 @@ ORIGIN = "platform-component-origin-v1.json"
 CHECKSUMS = "platform-component-SHA256SUMS"
 ASSEMBLY_REVISION = 1
 PATCHED_DIAGNOSTIC_ARCHITECTURE = "scaler-output-scheduler-gates-v1"
+HISTORICAL_DIAGNOSTIC_ARCHITECTURES = frozenset(
+    {
+        "scaler-fetch-no-request-gates-v1",
+        PATCHED_DIAGNOSTIC_ARCHITECTURE,
+    }
+)
 
 
 def bundle_id(
@@ -204,8 +210,24 @@ def _metadata_value(path: Path, key: str) -> str:
     return ""
 
 
+def _validate_diagnostic_architecture(
+    embedded: str, declared: object, *, historical_baseline: bool
+) -> None:
+    allowed = (
+        HISTORICAL_DIAGNOSTIC_ARCHITECTURES
+        if historical_baseline
+        else frozenset({PATCHED_DIAGNOSTIC_ARCHITECTURE})
+    )
+    if embedded not in allowed or declared != embedded:
+        raise ValueError("fpga_diagnostic_architecture")
+
+
 def verify(
-    archive: Path, manifest: Path | None = None, release_version: int | None = None
+    archive: Path,
+    manifest: Path | None = None,
+    release_version: int | None = None,
+    *,
+    historical_baseline: bool = False,
 ) -> dict[str, object]:
     with zipfile.ZipFile(archive) as stream:
         files = {name: stream.read(name) for name in stream.namelist()}
@@ -260,11 +282,11 @@ def verify(
             != embedded_protocol_version
         ):
             raise ValueError("latch_protocol_identity")
-        if (
-            embedded_architecture != PATCHED_DIAGNOSTIC_ARCHITECTURE
-            or payload.get("diagnostic_architecture") != embedded_architecture
-        ):
-            raise ValueError("fpga_diagnostic_architecture")
+        _validate_diagnostic_architecture(
+            embedded_architecture,
+            payload.get("diagnostic_architecture"),
+            historical_baseline=historical_baseline,
+        )
     for line in files.get("SHA256SUMS", b"").decode().splitlines():
         digest, name = line.split("  ", 1)
         if name not in files or sha256_bytes(files[name]) != digest:

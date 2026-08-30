@@ -499,6 +499,68 @@ import scripts.magik_ci.cli
                 "scaler-output-scheduler-gates-v1",
             )
 
+    def test_platform_bundle_historical_baseline_architectures_are_bounded(
+        self,
+    ) -> None:
+        from scripts.magik_ci.bundle import (
+            HISTORICAL_DIAGNOSTIC_ARCHITECTURES,
+            PATCHED_DIAGNOSTIC_ARCHITECTURE,
+            _validate_diagnostic_architecture,
+        )
+
+        self.assertEqual(
+            HISTORICAL_DIAGNOSTIC_ARCHITECTURES,
+            {
+                "scaler-fetch-no-request-gates-v1",
+                PATCHED_DIAGNOSTIC_ARCHITECTURE,
+            },
+        )
+        arguments = parser().parse_args(
+            [
+                "ci",
+                "platform-bundle",
+                "verify",
+                "platform.zip",
+                "--historical-baseline",
+            ]
+        )
+        self.assertTrue(arguments.historical_baseline)
+        _validate_diagnostic_architecture(
+            "scaler-fetch-no-request-gates-v1",
+            "scaler-fetch-no-request-gates-v1",
+            historical_baseline=True,
+        )
+        with self.assertRaisesRegex(ValueError, "fpga_diagnostic_architecture"):
+            _validate_diagnostic_architecture(
+                "scaler-fetch-no-request-gates-v1",
+                "scaler-fetch-no-request-gates-v1",
+                historical_baseline=False,
+            )
+        with self.assertRaisesRegex(ValueError, "fpga_diagnostic_architecture"):
+            _validate_diagnostic_architecture(
+                "unknown-diagnostic-v1",
+                "unknown-diagnostic-v1",
+                historical_baseline=True,
+            )
+        with self.assertRaisesRegex(ValueError, "fpga_diagnostic_architecture"):
+            _validate_diagnostic_architecture(
+                "scaler-fetch-no-request-gates-v1",
+                PATCHED_DIAGNOSTIC_ARCHITECTURE,
+                historical_baseline=True,
+            )
+
+    def test_platform_assembly_requires_successful_planning(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[2]
+            / ".github/workflows/platform-bundle.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "always() && needs.plan.result == 'success' &&",
+            workflow,
+        )
+        self.assertIn("--historical-baseline >/dev/null", workflow)
+
     def test_database_round_trip(self) -> None:
         from scripts.magik_ci.databases import create, verify
 

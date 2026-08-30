@@ -350,7 +350,8 @@ jobs:
           archive="$(find build/platform-current/release -name 'mister-magik-platform-v0.*.zip' -print -quit)"
           test -n "$archive"
           scripts/magik-ci ci platform-bundle verify "$archive" \
-            --manifest build/platform-current/release/platform-bundle-v0.2.json --release-version "$VERSION" >/dev/null
+            --manifest build/platform-current/release/platform-bundle-v0.2.json \
+            --release-version "$VERSION" --historical-baseline >/dev/null
           printf 'baseline download and verification: %ss, %s bytes\n' \
             "$((SECONDS-started))" "$(stat -c %s "$archive")" >> "$GITHUB_STEP_SUMMARY"
 
@@ -794,7 +795,8 @@ jobs:
     name: Assemble verified platform candidate
     needs: [plan, build-main, build-fpga, build-kernel]
     if: >-
-      always() && needs.plan.outputs.update-needed == 'true' &&
+      always() && needs.plan.result == 'success' &&
+      needs.plan.outputs.update-needed == 'true' &&
       needs.plan.outputs.candidate-hit != 'true' &&
       (needs.build-main.result == 'success' || needs.build-main.result == 'skipped') &&
       (needs.build-fpga.result == 'success' || needs.build-fpga.result == 'skipped') &&
