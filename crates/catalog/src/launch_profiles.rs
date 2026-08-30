@@ -576,6 +576,21 @@ impl CatalogScanPlan {
         &self.all_game_dir_headers
     }
 
+    /// Return a header from the checked `/games` enumeration only when its
+    /// exact requested path was proved to be an ordinary directory. A case
+    /// variant or uncertain entry deliberately falls through to the old
+    /// path-based check in the generic scanner.
+    pub(crate) fn header_for_known_game_dir(
+        &self,
+        storage_root: &Path,
+        game_dir: &str,
+    ) -> Option<&catalog_discovery::GameDirHeader> {
+        let expected = storage_root.join("games").join(game_dir);
+        self.all_game_dir_headers
+            .iter()
+            .find(|header| header.confirmed_directory && header.path == expected)
+    }
+
     pub(crate) fn base_profiles(&self) -> &[LaunchProfile] {
         &self.base_profiles
     }
@@ -1378,6 +1393,7 @@ fn runtime_profile_for_match(
             name: game_dir.name.clone(),
             path: game_dir.path.clone(),
             signature: game_dir.signature,
+            confirmed_directory: false,
         },
         core,
         extensions,
@@ -2837,6 +2853,7 @@ mod tests {
                 name: "SupportCore".to_string(),
                 path: PathBuf::from("/media/fat/games/SupportCore"),
                 signature: catalog_discovery::GameDirSignature::Unavailable,
+                confirmed_directory: false,
             },
             &catalog_discovery::InstalledCore {
                 core_id: "SupportCore".to_string(),
@@ -2882,6 +2899,7 @@ mod tests {
                     name: name.to_string(),
                     path: PathBuf::from(format!("/media/fat/games/{name}")),
                     signature: catalog_discovery::GameDirSignature::Unavailable,
+                    confirmed_directory: false,
                 },
                 &catalog_discovery::InstalledCore {
                     core_id: name.to_string(),

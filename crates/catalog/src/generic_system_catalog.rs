@@ -64,6 +64,7 @@ struct GenericNamespaceInventory {
     namespace: NamespaceWalkStats,
     watch: GenericSourceWatchObservations,
     continuation_roots: Vec<PathBuf>,
+    canonicalized: bool,
     elapsed_us: u64,
 }
 
@@ -502,6 +503,9 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
     let mut runtime_resolved = 0_usize;
     let mut runtime_unresolved = 0_usize;
     let mut continuation_root_count = 0_usize;
+    let mut reused_headers = 0_usize;
+    let mut fallback_metadata_calls = 0_usize;
+    let mut canonicalizations = 0_usize;
     let mut profiles = plan.base_profiles().to_vec();
     let mut accumulators = BTreeMap::<String, GenericSystemAccumulator>::new();
     let mut visited_roots = BTreeSet::new();
@@ -514,24 +518,58 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
             known_roots_considered = known_roots_considered.saturating_add(1);
             let known_started = Instant::now();
             let candidate = storage_root.join("games").join(game_dir);
-            if !candidate.is_dir() {
-                known_profile_us =
-                    known_profile_us.saturating_add(known_started.elapsed().as_micros() as u64);
-                continue;
-            }
+            let header =
+                if let Some(header) = plan.header_for_known_game_dir(storage_root, game_dir) {
+                    reused_headers = reused_headers.saturating_add(1);
+                    header.clone()
+                } else {
+                    fallback_metadata_calls = fallback_metadata_calls.saturating_add(1);
+                    if !candidate.is_dir() {
+                        known_profile_us = known_profile_us
+                            .saturating_add(known_started.elapsed().as_micros() as u64);
+                        continue;
+                    }
+                    GameDirHeader {
+                        name: game_dir.clone(),
+                        signature: GameDirSignature::from_path(&candidate),
+                        path: candidate,
+                        confirmed_directory: false,
+                    }
+                };
             known_roots_found = known_roots_found.saturating_add(1);
-            let root_key = candidate.to_string_lossy().to_ascii_lowercase();
+            let root_key = header.path.to_string_lossy().to_ascii_lowercase();
             if !visited_roots.insert(root_key) {
                 known_profile_us =
                     known_profile_us.saturating_add(known_started.elapsed().as_micros() as u64);
                 continue;
             }
-            let header = GameDirHeader {
-                name: game_dir.clone(),
-                signature: GameDirSignature::from_path(&candidate),
-                path: candidate,
+            let inventory = match collect_generic_namespace_inventory(&header, None) {
+                Ok(inventory) => inventory,
+                Err(error) if header.confirmed_directory => {
+                    // The plan and traversal are intentionally separate. If
+                    // a user replaces a checked directory in between them,
+                    // recover with the old exact path/canonicalization check
+                    // instead of turning a transient mutation into a build
+                    // failure.
+                    fallback_metadata_calls = fallback_metadata_calls.saturating_add(1);
+                    if !header.path.is_dir() {
+                        known_profile_us = known_profile_us
+                            .saturating_add(known_started.elapsed().as_micros() as u64);
+                        continue;
+                    }
+                    let fallback_header = GameDirHeader {
+                        name: header.name.clone(),
+                        signature: GameDirSignature::from_path(&header.path),
+                        path: header.path.clone(),
+                        confirmed_directory: false,
+                    };
+                    collect_generic_namespace_inventory(&fallback_header, None)
+                        .map_err(|fallback_error| format!("{error}; fallback: {fallback_error}"))?
+                }
+                Err(error) => return Err(error),
             };
-            let inventory = collect_generic_namespace_inventory(&header, None)?;
+            canonicalizations =
+                canonicalizations.saturating_add(usize::from(inventory.canonicalized));
             let accumulator = accumulator_for_profile(&mut accumulators, profile);
             accumulator.stats.roots = accumulator.stats.roots.saturating_add(1);
             apply_generic_namespace_inventory(
@@ -550,7 +588,25 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
     for header in plan.game_dir_headers() {
         runtime_headers = runtime_headers.saturating_add(1);
         let inventory_started = Instant::now();
-        let mut inventory = collect_generic_namespace_inventory(header, Some(2))?;
+        let mut inventory = match collect_generic_namespace_inventory(header, Some(2)) {
+            Ok(inventory) => inventory,
+            Err(error) if header.confirmed_directory => {
+                fallback_metadata_calls = fallback_metadata_calls.saturating_add(1);
+                if !header.path.is_dir() {
+                    continue;
+                }
+                let fallback_header = GameDirHeader {
+                    name: header.name.clone(),
+                    signature: GameDirSignature::from_path(&header.path),
+                    path: header.path.clone(),
+                    confirmed_directory: false,
+                };
+                collect_generic_namespace_inventory(&fallback_header, Some(2))
+                    .map_err(|fallback_error| format!("{error}; fallback: {fallback_error}"))?
+            }
+            Err(error) => return Err(error),
+        };
+        canonicalizations = canonicalizations.saturating_add(usize::from(inventory.canonicalized));
         runtime_inventory_us =
             runtime_inventory_us.saturating_add(inventory_started.elapsed().as_micros() as u64);
         let resolution_started = Instant::now();
@@ -589,8 +645,11 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
                 name: header.name.clone(),
                 signature: GameDirSignature::from_path(&continuation_root),
                 path: continuation_root,
+                confirmed_directory: false,
             };
             let mut continuation = collect_generic_namespace_inventory(&continuation_header, None)?;
+            canonicalizations =
+                canonicalizations.saturating_add(usize::from(continuation.canonicalized));
             continuation.watch.roots.clear();
             apply_generic_namespace_inventory(
                 continuation,
@@ -668,7 +727,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
         .saturating_add(continuation_us)
         .saturating_add(finalization_us);
     crate::catalog_logln!(
-        "fast_catalog_generic_phase_tsv\telapsed_us={}\tknown_profile_us={}\truntime_inventory_us={}\truntime_resolution_us={}\tcontinuation_us={}\tfinalization_us={}\tresidual_us={}\tknown_roots_considered={}\tknown_roots_found={}\truntime_headers={}\truntime_resolved={}\truntime_unresolved={}\tcontinuation_roots={}",
+        "fast_catalog_generic_phase_tsv\telapsed_us={}\tknown_profile_us={}\truntime_inventory_us={}\truntime_resolution_us={}\tcontinuation_us={}\tfinalization_us={}\tresidual_us={}\tknown_roots_considered={}\tknown_roots_found={}\truntime_headers={}\truntime_resolved={}\truntime_unresolved={}\tcontinuation_roots={}\treused_headers={}\tfallback_metadata_calls={}\tcanonicalizations={}",
         elapsed_us,
         known_profile_us,
         runtime_inventory_us,
@@ -682,6 +741,9 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
         runtime_resolved,
         runtime_unresolved,
         continuation_root_count,
+        reused_headers,
+        fallback_metadata_calls,
+        canonicalizations,
     );
     Ok((
         systems,
@@ -746,14 +808,20 @@ fn collect_generic_namespace_inventory(
     max_depth: Option<usize>,
 ) -> Result<GenericNamespaceInventory, String> {
     let started = Instant::now();
-    let canonical_path = header
-        .path
-        .canonicalize()
-        .unwrap_or_else(|_| header.path.clone());
+    let canonicalized = !header.confirmed_directory;
+    let canonical_path = if canonicalized {
+        header
+            .path
+            .canonicalize()
+            .unwrap_or_else(|_| header.path.clone())
+    } else {
+        header.path.clone()
+    };
     let header = GameDirHeader {
         name: header.name.clone(),
         signature: header.signature,
         path: canonical_path,
+        confirmed_directory: header.confirmed_directory,
     };
     let mut entries = Vec::new();
     let mut has_payload_files = false;
@@ -928,6 +996,7 @@ fn collect_generic_namespace_inventory(
             complete: watch_complete,
         },
         continuation_roots,
+        canonicalized,
         elapsed_us: total_us,
     })
 }

@@ -48,6 +48,10 @@ pub(crate) struct GameDirHeader {
     pub(crate) name: String,
     pub(crate) path: PathBuf,
     pub(crate) signature: GameDirSignature,
+    /// True only when the checked scan plan proved this exact path is an
+    /// ordinary directory.  Unchecked and uncertain entries retain the old
+    /// canonicalization/type-check fallback in the generic scanner.
+    pub(crate) confirmed_directory: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -80,6 +84,14 @@ impl GameDirSignature {
             len,
             mtime_nanos,
         })
+    }
+
+    #[cfg(feature = "builder")]
+    pub(crate) fn from_known_path_metadata(len: u64, modified_ns: i128) -> Self {
+        Self::Present {
+            len,
+            mtime_nanos: modified_ns.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64,
+        }
     }
 }
 
@@ -438,6 +450,7 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding(
                     name: name.to_string(),
                     signature: GameDirSignature::Unavailable,
                     path,
+                    confirmed_directory: false,
                 });
             }
         }
@@ -458,7 +471,7 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
         let Some(read_dir) = read_dir_entries_checked(&game_root)? else {
             continue;
         };
-        let mut entries = Vec::new();
+        let mut candidates = Vec::new();
         for entry in read_dir {
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
@@ -467,11 +480,10 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
             if should_ignore_game_dir(name) {
                 continue;
             }
-            if entry
+            let file_type = entry
                 .file_type()
-                .map_err(|error| format!("inspect {}: {error}", path.display()))?
-                .is_symlink()
-            {
+                .map_err(|error| format!("inspect {}: {error}", path.display()))?;
+            if file_type.is_symlink() {
                 continue;
             }
             if excluded_names.contains(&name.to_ascii_lowercase()) {
@@ -479,12 +491,42 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
             }
             let key = path.display().to_string().to_ascii_lowercase();
             if seen.insert(key) {
+                candidates.push((name.to_string(), path, file_type.is_dir()));
+            }
+        }
+        // Keep the exact type check serial while avoiding a separate parent
+        // pathname lookup for every entry.  `fstatat` follows the same symlink
+        // semantics as the old metadata fallback; entries whose directory
+        // type was not known by `readdir` remain unconfirmed and therefore
+        // take that fallback later.
+        let child_paths = candidates
+            .iter()
+            .map(|(_, path, _)| path.clone())
+            .collect::<Vec<_>>();
+        let metadata = namespace_walk::probe_known_path_metadata(&game_root, &child_paths);
+        let mut entries = Vec::new();
+        for ((name, path, readdir_is_dir), metadata) in candidates.into_iter().zip(metadata) {
+            let Some(metadata) = metadata else {
                 entries.push(GameDirHeader {
-                    name: name.to_string(),
+                    name,
                     signature: GameDirSignature::Unavailable,
                     path,
+                    confirmed_directory: false,
                 });
+                continue;
+            };
+            if !metadata.is_dir {
+                continue;
             }
+            entries.push(GameDirHeader {
+                name,
+                signature: GameDirSignature::from_known_path_metadata(
+                    metadata.size,
+                    metadata.modified_ns,
+                ),
+                path,
+                confirmed_directory: readdir_is_dir,
+            });
         }
         entries.sort_by_key(|entry| entry.name.to_ascii_lowercase());
         out.extend(entries);
@@ -947,6 +989,44 @@ mod tests {
             probe[0].signature,
             GameDirSignature::Present { .. }
         ));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn checked_game_dir_headers_reuse_only_exact_confirmed_directories() {
+        let root = unique_temp_dir("discovery-checked-game-dir-headers");
+        let games = root.join("games");
+        std::fs::create_dir_all(games.join("NES")).expect("create NES dir");
+        std::fs::write(games.join("not-a-directory"), b"file").expect("write file");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(games.join("NES"), games.join("NES-link"))
+            .expect("create symlink");
+
+        let roots = vec![root.display().to_string()];
+        let headers =
+            top_level_game_dir_headers_for_roots_excluding_checked(&roots, &BTreeSet::new())
+                .expect("checked headers");
+
+        let nes = headers
+            .iter()
+            .find(|header| header.name == "NES")
+            .expect("NES header");
+        assert!(nes.confirmed_directory);
+        assert!(matches!(nes.signature, GameDirSignature::Present { .. }));
+        assert!(
+            !headers
+                .iter()
+                .any(|header| header.name == "not-a-directory")
+        );
+        #[cfg(unix)]
+        assert!(!headers.iter().any(|header| header.name == "NES-link"));
+
+        let plan =
+            crate::launch_profiles::CatalogScanPlan::try_for_roots(&roots).expect("checked plan");
+        assert!(plan.header_for_known_game_dir(&root, "NES").is_some());
+        assert!(plan.header_for_known_game_dir(&root, "nes").is_none());
+
         let _ = std::fs::remove_dir_all(root);
     }
 
