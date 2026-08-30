@@ -7,7 +7,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 const TRACEFS_MOUNT: &str = "/sys/kernel/tracing";
 const TRACE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const FUNCTION_GRAPH_BUFFER_KB: u64 = 16_384;
-const FUNCTION_GRAPH_MAX_DEPTH: u8 = 4;
+// Keep the graph useful for leaf timing while limiting observer overhead on
+// the MiSTer kernel; deeper graphs can starve the catalog worker watchdog.
+const FUNCTION_GRAPH_MAX_DEPTH: u8 = 2;
 const FUNCTION_GRAPH_GLOBAL_LOCK: &str = "/tmp/mister-magik/tracefs-function-graph.lock";
 
 pub(super) const SCHEDULER_TRACE_SPEC: TracefsCaptureSpec = TracefsCaptureSpec {
