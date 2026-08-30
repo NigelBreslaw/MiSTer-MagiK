@@ -6413,6 +6413,12 @@ const PREPARED_BUNDLE_HELPER_REMOTE_DIR: &str =
 const CATALOG_BUILD_REBUILD_ARCADE_ROOT: &str = "/media/fat/_Arcade";
 const CATALOG_BUILD_REBUILD_SNES_ROOT: &str = "/media/fat/games/SNES";
 const CATALOG_BUILD_REBUILD_C64_ROOT: &str = "/media/fat/games/C64";
+const CATALOG_CHANGED_REFRESH_FIXTURE_DIR: &str =
+    "/media/fat/games/SNES/MISTER-MAGIK-CATALOG-BENCH";
+const CATALOG_CHANGED_REFRESH_FIXTURE_ONE: &str =
+    "/media/fat/games/SNES/MISTER-MAGIK-CATALOG-BENCH/Synthetic SNES 00000001.sfc";
+const CATALOG_CHANGED_REFRESH_FIXTURE_TWO: &str =
+    "/media/fat/games/SNES/MISTER-MAGIK-CATALOG-BENCH/Synthetic SNES 00000002.sfc";
 const CATALOG_BUILD_REBUILD_SAMPLES: usize = 3;
 const CATALOG_BUILD_REBUILD_INTERACTION_SECS: u64 = 40;
 const SYSTEM_ENTRY_TRACE_REMOTE: &str = "/tmp/mister-magik/system-entry.tsv";
@@ -18956,14 +18962,14 @@ fn profile_installed_catalog_changed_refresh(
         exec_checked(
             &session,
             "prepare changed-system catalog sample",
-            &catalog_build_rebuild_prepare_command(),
+            &catalog_changed_refresh_prepare_command(),
         )?;
         let sample_dir = output_dir.join("sample-1");
         fs::create_dir_all(&sample_dir)?;
         let fixture_inventory = exec_checked_output(
             &session,
             "inspect changed-system catalog fixture",
-            &catalog_build_rebuild_runtime_command("catalog-corpus-inventory"),
+            &catalog_changed_refresh_runtime_command("catalog-corpus-inventory"),
         )?;
         fs::write(
             sample_dir.join("prepared-inventory.tsv"),
@@ -18979,8 +18985,8 @@ fn profile_installed_catalog_changed_refresh(
             CatalogBuildRebuildLegOptions {
                 exercise_arcade_ui: false,
                 require_updater_index: false,
-                launcher_env: catalog_build_rebuild_launcher_env(),
-                runtime_command: catalog_build_rebuild_runtime_command,
+                launcher_env: catalog_changed_refresh_launcher_env(),
+                runtime_command: catalog_changed_refresh_runtime_command,
             },
         )?;
         let fresh_generation = fresh
@@ -18996,7 +19002,7 @@ fn profile_installed_catalog_changed_refresh(
         exec_checked(
             &session,
             "mutate isolated SNES catalog sample",
-            &catalog_build_rebuild_mutation_command(),
+            &catalog_changed_refresh_mutation_command(),
         )?;
         let changed_refresh = run_catalog_build_rebuild_leg(
             config,
@@ -19008,8 +19014,8 @@ fn profile_installed_catalog_changed_refresh(
             CatalogBuildRebuildLegOptions {
                 exercise_arcade_ui: false,
                 require_updater_index: false,
-                launcher_env: catalog_build_rebuild_launcher_env(),
-                runtime_command: catalog_build_rebuild_runtime_command,
+                launcher_env: catalog_changed_refresh_launcher_env(),
+                runtime_command: catalog_changed_refresh_runtime_command,
             },
         )?;
         let changed_snes = catalog_system_games(&changed_refresh["catalog"], "snes")?;
@@ -19041,7 +19047,7 @@ fn profile_installed_catalog_changed_refresh(
                 "arcade_root": CATALOG_BUILD_REBUILD_ARCADE_ROOT,
                 "snes_root": CATALOG_BUILD_REBUILD_SNES_ROOT,
                 "c64_root": CATALOG_BUILD_REBUILD_C64_ROOT,
-                "delta_root": format!("{CATALOG_BUILD_REBUILD_SOURCE_DIR}/fixture"),
+                "delta_root": CATALOG_CHANGED_REFRESH_FIXTURE_DIR,
                 "catalog_root": CATALOG_BUILD_REBUILD_REMOTE_DIR,
                 "publication_filesystem": "exfat",
             },
@@ -19072,7 +19078,7 @@ fn profile_installed_catalog_changed_refresh(
     let cleanup_result = exec_checked(
         &session,
         "clean changed-system catalog state",
-        &catalog_build_rebuild_cleanup_command(),
+        &catalog_changed_refresh_cleanup_command(),
     );
     let mut summary = finish_catalog_benchmark_profile(run_result, cleanup_result, restart_result)?;
 
@@ -24564,12 +24570,32 @@ fn catalog_build_rebuild_prepare_command() -> String {
     )
 }
 
+fn catalog_changed_refresh_prepare_command() -> String {
+    let safety = platform_safety_script();
+    format!(
+        "set -eu; root={root}; source={source}; fixture={fixture}; path={path}; test -d {snes}; test -r {snes}; rm -rf \"$root\" \"$source\" \"$fixture\"; mkdir -p \"$root\" \"$source/sqlite-build\" \"$source/diagnostics\" \"$fixture\"; printf '%s\\n' 'MISTER-MAGIK-CATALOG-BENCH-SNES-00000001' > \"$path\"; sync; {safety}",
+        root = sh(CATALOG_BUILD_REBUILD_REMOTE_DIR),
+        source = sh(CATALOG_BUILD_REBUILD_SOURCE_DIR),
+        fixture = sh(CATALOG_CHANGED_REFRESH_FIXTURE_DIR),
+        path = sh(CATALOG_CHANGED_REFRESH_FIXTURE_ONE),
+        snes = sh(CATALOG_BUILD_REBUILD_SNES_ROOT),
+        safety = safety,
+    )
+}
+
 fn catalog_build_rebuild_mutation_command() -> String {
     format!(
         "set -eu; path={path}; test ! -e \"$path\"; printf '%s\\n' 'MISTER-MAGIK-CATALOG-BENCH-SNES-00000002' > \"$path\"; test -s \"$path\"",
         path = sh(&format!(
             "{CATALOG_BUILD_REBUILD_SOURCE_DIR}/fixture/games/SNES/Synthetic SNES 00000002.sfc"
         )),
+    )
+}
+
+fn catalog_changed_refresh_mutation_command() -> String {
+    format!(
+        "set -eu; path={path}; test ! -e \"$path\"; printf '%s\\n' 'MISTER-MAGIK-CATALOG-BENCH-SNES-00000002' > \"$path\"; sync; test -s \"$path\"",
+        path = sh(CATALOG_CHANGED_REFRESH_FIXTURE_TWO),
     )
 }
 
@@ -24601,6 +24627,29 @@ fn catalog_full_build_rebuild_runtime_command(subcommand: &str) -> String {
     let source = CATALOG_BUILD_REBUILD_SOURCE_DIR;
     format!(
         "env MISTER_SHARDED_CATALOG_DIR={catalog} MISTER_LIBRARY_SQLITE={library} MISTER_LIBRARY_SQLITE_BUILD_DIR={sqlite_build} MISTER_ARCADE_BOOTSTRAP_INDEX={bootstrap} MISTER_LIBRARY_REFRESH_LOCK={refresh_lock} MISTER_CATALOG_BUILDER_LOCK={builder_lock} MISTER_CATALOG_READY_SNAPSHOT={ready_snapshot} MISTER_CATALOG_DIAGNOSTICS_DIR={diagnostics} MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1 {gui} {subcommand}",
+        catalog = sh(&format!("{root}/catalog-v3")),
+        library = sh(&format!("{root}/library.sqlite3")),
+        sqlite_build = sh(&format!("{source}/sqlite-build")),
+        bootstrap = sh(&format!("{root}/arcade-bootstrap.nav.lz4b")),
+        refresh_lock = sh(&format!("{source}/library-refresh.lock")),
+        builder_lock = sh(&format!("{source}/catalog-builder.lock")),
+        ready_snapshot = sh(&format!("{source}/catalog-ready.snapshot")),
+        diagnostics = sh(&format!("{source}/diagnostics")),
+        gui = sh(DEVELOPMENT_GUI_REMOTE),
+    )
+}
+
+fn catalog_changed_refresh_runtime_command(subcommand: &str) -> String {
+    let root = CATALOG_BUILD_REBUILD_REMOTE_DIR;
+    let source = CATALOG_BUILD_REBUILD_SOURCE_DIR;
+    format!(
+        "env MISTER_LIBRARY_ROOTS={roots} MISTER_LIBRARY_TARGET_ALLOWLIST={allowlist} MISTER_SHARDED_CATALOG_DIR={catalog} MISTER_LIBRARY_SQLITE={library} MISTER_LIBRARY_SQLITE_BUILD_DIR={sqlite_build} MISTER_ARCADE_BOOTSTRAP_INDEX={bootstrap} MISTER_LIBRARY_REFRESH_LOCK={refresh_lock} MISTER_CATALOG_BUILDER_LOCK={builder_lock} MISTER_CATALOG_READY_SNAPSHOT={ready_snapshot} MISTER_CATALOG_DIAGNOSTICS_DIR={diagnostics} MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1 {gui} {subcommand}",
+        roots = sh(&format!(
+            "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}|/media/fat/games"
+        )),
+        allowlist = sh(&format!(
+            "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}:{CATALOG_BUILD_REBUILD_SNES_ROOT}:{CATALOG_BUILD_REBUILD_C64_ROOT}"
+        )),
         catalog = sh(&format!("{root}/catalog-v3")),
         library = sh(&format!("{root}/library.sqlite3")),
         sqlite_build = sh(&format!("{source}/sqlite-build")),
@@ -24664,6 +24713,25 @@ fn catalog_build_rebuild_launcher_env() -> Vec<(String, String)> {
         ("MISTER_HOME_SELECTED_INDEX".into(), "0".into()),
         ("MISTER_PREVIEW_ARCHIVE_WARM_SKIP".into(), "1".into()),
     ]
+}
+
+fn catalog_changed_refresh_launcher_env() -> Vec<(String, String)> {
+    catalog_build_rebuild_launcher_env()
+        .into_iter()
+        .map(|(key, value)| match key.as_str() {
+            "MISTER_LIBRARY_ROOTS" => (
+                key,
+                format!("{CATALOG_BUILD_REBUILD_ARCADE_ROOT}|/media/fat/games"),
+            ),
+            "MISTER_LIBRARY_TARGET_ALLOWLIST" => (
+                key,
+                format!(
+                    "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}:{CATALOG_BUILD_REBUILD_SNES_ROOT}:{CATALOG_BUILD_REBUILD_C64_ROOT}"
+                ),
+            ),
+            _ => (key, value),
+        })
+        .collect()
 }
 
 fn catalog_resume_validation_launcher_env() -> Vec<(String, String)> {
@@ -25455,6 +25523,16 @@ fn catalog_build_rebuild_cleanup_command() -> String {
         root = sh(CATALOG_BUILD_REBUILD_REMOTE_DIR),
         source = sh(CATALOG_BUILD_REBUILD_SOURCE_DIR),
         staging = sh(CATALOG_FAST_FIVE_STAGING_REMOTE),
+    )
+}
+
+fn catalog_changed_refresh_cleanup_command() -> String {
+    format!(
+        "set -eu; rm -rf {root} {source} {staging} {fixture}; test ! -e {root}; test ! -e {source}; test ! -e {staging}; test ! -e {fixture}",
+        root = sh(CATALOG_BUILD_REBUILD_REMOTE_DIR),
+        source = sh(CATALOG_BUILD_REBUILD_SOURCE_DIR),
+        staging = sh(CATALOG_FAST_FIVE_STAGING_REMOTE),
+        fixture = sh(CATALOG_CHANGED_REFRESH_FIXTURE_DIR),
     )
 }
 
