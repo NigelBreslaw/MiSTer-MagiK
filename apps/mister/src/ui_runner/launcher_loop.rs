@@ -5932,7 +5932,6 @@ pub(super) fn run_launcher_loop(
             &mut lifecycle_effects,
         );
     }
-    sync_startup_visibility(&app, &lifecycle);
     if launch_return_restored {
         emit_return_context_restored(
             &mut lifecycle,
@@ -6407,9 +6406,6 @@ pub(super) fn run_launcher_loop(
             request_launcher_redraw!();
         }
         apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-        if startup_intro.is_none() || startup_intro_needs_live_launcher {
-            sync_startup_visibility(&app, &lifecycle);
-        }
         scheduler.record_loading_frame(loop_start);
         if launcher_presenter.retry_latch_automatically(ui) {
             runtime_status::event(
@@ -8881,9 +8877,6 @@ pub(super) fn run_launcher_loop(
         drop(interaction_projection_pmu);
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("interaction-projection", scheduler_phase);
-        if !startup_intro_suppress_launcher_ui {
-            sync_startup_visibility(&app, &lifecycle);
-        }
 
         let media_gate_trace_start = prepare_trace_enabled.then(Instant::now);
         if background_work_allowed {
@@ -9128,9 +9121,6 @@ pub(super) fn run_launcher_loop(
             &mut launch_return_session,
         );
         apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-        if !startup_intro_suppress_launcher_ui {
-            sync_startup_visibility(&app, &lifecycle);
-        }
         let startup_reveal_ready =
             lifecycle.startup_status().state == StartupRevealState::RevealLauncher;
         effective_view = EffectiveLauncherView::resolve(&lifecycle, screensaver.active, nav.screen);
@@ -13127,19 +13117,6 @@ fn reapply_pending_launch_return_state(
     pending: &mut LaunchReturnSession,
 ) -> bool {
     pending.reapply(nav, catalog)
-}
-
-fn sync_startup_visibility(app: &slint_ui::launcher::Launcher, lifecycle: &LauncherLifecycle) {
-    let overlay = app.global::<slint_ui::launcher::OverlayView>();
-    let visible = lifecycle.startup_should_show_splash();
-    let state = if visible {
-        slint_ui::launcher::LoadingState::Active
-    } else {
-        slint_ui::launcher::LoadingState::Idle
-    };
-    if overlay.get_startup_state() != state {
-        overlay.set_startup_state(state);
-    }
 }
 
 fn emit_return_context_restored(

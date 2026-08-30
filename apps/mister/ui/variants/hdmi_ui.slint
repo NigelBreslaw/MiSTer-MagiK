@@ -19,7 +19,6 @@ import {
     ConfirmDialog,
     LoadingOverlay,
     MediaProgressPopup,
-    StartupSplash,
 } from "hdmi_overlays.slint";
 
 export component HdmiLauncherUi inherits Rectangle {
@@ -42,5 +41,4 @@ export component HdmiLauncherUi inherits Rectangle {
     if OverlayView.confirmation-kind != ConfirmationKind.none : ConfirmDialog { }
     if SettingsView.popup != SettingsPopup.none : ComboBoxOverlay { }
     if OverlayView.loading-state == LoadingState.active : LoadingOverlay { }
-    if OverlayView.startup-state == LoadingState.active : StartupSplash { }
 }

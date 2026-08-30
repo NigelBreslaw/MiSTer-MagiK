@@ -28,7 +28,7 @@ fn main() {
 
     let app = mister_magik_ui::launcher::Launcher::new().expect("create launcher");
     use mister_magik_ui::launcher::{
-        InformationView, LauncherScreen, LoadingState, NavigationView, OverlayView, SettingsView,
+        InformationView, LauncherScreen, NavigationView, SettingsView,
     };
     let navigation = app.global::<NavigationView>();
     navigation.set_screen(match state.as_str() {
@@ -48,8 +48,6 @@ fn main() {
     let settings = app.global::<SettingsView>();
     settings.set_selected_license_index(1);
     settings.set_license_expanded(expanded);
-    app.global::<OverlayView>()
-        .set_startup_state(LoadingState::Idle);
     if state == "catalog-tiles" {
         use mister_magik_ui::launcher::{
             MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus,

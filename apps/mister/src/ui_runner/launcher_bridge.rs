@@ -132,7 +132,6 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     overlay.set_confirmation_kind(slint_ui::launcher::ConfirmationKind::None);
     overlay.set_selected_choice(slint_ui::launcher::DialogChoice::Cancel);
     overlay.set_loading_state(slint_ui::launcher::LoadingState::Idle);
-    overlay.set_startup_state(slint_ui::launcher::LoadingState::Active);
     let development_build = mister_magik_catalog::device_layout::DeviceLayout::current()
         == mister_magik_catalog::device_layout::DeviceLayout::Dev;
     navigation.set_development_build(development_build);
@@ -823,8 +822,6 @@ pub(super) fn sync_bridge_launcher(
     let model_projection_us = model_started
         .map(|started| started.elapsed().as_micros())
         .unwrap_or(0);
-    app.global::<slint_ui::launcher::OverlayView>()
-        .set_startup_state(slint_ui::launcher::LoadingState::Idle);
     sync_bridge_pad_launcher(app, pad);
     let clock_text = SharedString::from(launcher_clock_text());
     app.global::<slint_ui::launcher::NavigationView>()

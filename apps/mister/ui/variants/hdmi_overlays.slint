@@ -132,26 +132,6 @@ export component MediaProgressPopup inherits Rectangle {
     }
 }
 
-export component StartupSplash inherits Rectangle {
-
-    accessible-role: progress-indicator;
-    accessible-label: "MiSTer MagiK starting";
-
-    background: #1a1424;
-
-    VerticalLayout {
-        alignment: center;
-        spacing: 12px;
-
-        Spleen6x12 {
-            text: "MiSTer MagiK";
-            color: #e8e0f0;
-            size: Spleen6x12Size.px24;
-            horizontal-alignment: center;
-        }
-    }
-}
-
 export component BackgroundScanBadge inherits Rectangle {
 
     width: t.width + 20px;

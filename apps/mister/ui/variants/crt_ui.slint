@@ -21,7 +21,6 @@ import {
     ConfirmDialog,
     LoadingOverlay,
     MediaProgressPopup,
-    StartupSplash,
 } from "crt_overlays.slint";
 
 export component CrtLauncherUi inherits Rectangle {
@@ -53,6 +52,5 @@ export component CrtLauncherUi inherits Rectangle {
         if OverlayView.confirmation-kind != ConfirmationKind.none : ConfirmDialog { }
         if SettingsView.popup != SettingsPopup.none : CrtComboBoxOverlay { }
         if OverlayView.loading-state == LoadingState.active : LoadingOverlay { }
-        if OverlayView.startup-state == LoadingState.active : StartupSplash { }
     }
 }

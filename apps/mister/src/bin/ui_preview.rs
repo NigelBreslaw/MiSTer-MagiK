@@ -2721,7 +2721,6 @@ mod macos {
         Licenses,
         Info,
         ScreensaverSettings,
-        Startup,
         Confirm,
         CatalogScan,
         BackgroundScan,
@@ -2779,7 +2778,6 @@ mod macos {
                 "licenses" => Some(Self::Licenses),
                 "info" => Some(Self::Info),
                 "screensaver-settings" => Some(Self::ScreensaverSettings),
-                "startup" => Some(Self::Startup),
                 "confirm" => Some(Self::Confirm),
                 "catalog-scan" => Some(Self::CatalogScan),
                 "background-scan" => Some(Self::BackgroundScan),
@@ -2808,7 +2806,6 @@ mod macos {
                 Self::Licenses => "Licenses",
                 Self::Info => "Info",
                 Self::ScreensaverSettings => "Screensaver Settings",
-                Self::Startup => "Startup",
                 Self::Confirm => "Confirmation",
                 Self::CatalogScan => "Catalog Scan",
                 Self::BackgroundScan => "Background Scan",
@@ -2834,7 +2831,6 @@ mod macos {
                 Self::Licenses => "licenses",
                 Self::Info => "info",
                 Self::ScreensaverSettings => "screensaver-settings",
-                Self::Startup => "startup",
                 Self::Confirm => "confirm",
                 Self::CatalogScan => "catalog-scan",
                 Self::BackgroundScan => "background-scan",
@@ -2864,7 +2860,6 @@ mod macos {
                 Self::Licenses => "5",
                 Self::Info => "6",
                 Self::ScreensaverSettings => "7",
-                Self::Startup => "8",
                 Self::Confirm => "9",
                 Self::CatalogScan => "0",
                 Self::Arcade => "A",
@@ -3248,6 +3243,7 @@ mod macos {
             let mut no_download = false;
             let mut cold_start_mode = ColdStartMode::Auto;
             let mut cold_start_explicit = false;
+            let mut startup_scenario_alias = false;
             let mut display_profile = DisplayProfile::Hdmi;
             let mut orientation = ScreenOrientation::Normal;
             let mut navigation_transition_demo = None;
@@ -3266,8 +3262,14 @@ mod macos {
                         let value = arguments
                             .next()
                             .ok_or("--scenario requires a scenario name")?;
-                        scenario = Scenario::parse(&value)
-                            .ok_or_else(|| format!("unknown preview scenario {value:?}"))?;
+                        let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
+                        if normalized == "startup" {
+                            startup_scenario_alias = true;
+                            scenario = Scenario::Home;
+                        } else {
+                            scenario = Scenario::parse(&normalized)
+                                .ok_or_else(|| format!("unknown preview scenario {value:?}"))?;
+                        }
                     }
                     "--frame" => {
                         let value = arguments.next().ok_or("--frame requires a frame number")?;
@@ -3440,13 +3442,12 @@ mod macos {
                         .into(),
                 );
             }
-            if scenario == Scenario::Startup {
+            if startup_scenario_alias {
                 if cold_start_explicit && cold_start_mode == ColdStartMode::Skip {
                     return Err(
                         "--scenario startup cannot be combined with --cold-start skip".into(),
                     );
                 }
-                scenario = Scenario::Home;
                 cold_start_mode = ColdStartMode::Force;
             }
             Ok(Self {
@@ -4133,8 +4134,6 @@ mod macos {
         launcher
             .global::<MediaView>()
             .set_rows(ModelRc::new(VecModel::from(Vec::<MediaPackRow>::new())));
-        let overlay = launcher.global::<OverlayView>();
-        overlay.set_startup_state(LoadingState::Active);
     }
 
     fn apply_scenario(launcher: &Launcher, scenario: Scenario) {
@@ -4200,7 +4199,6 @@ mod macos {
         navigation.set_system_hub_favourites_count(28);
 
         match scenario {
-            Scenario::Startup => overlay.set_startup_state(LoadingState::Active),
             Scenario::Confirm => {
                 overlay.set_confirmation_kind(ConfirmationKind::RebuildDatabase);
                 overlay.set_confirmation_title("Rebuild Database?".into());
@@ -4307,7 +4305,6 @@ mod macos {
         overlay.set_loading_state(LoadingState::Idle);
         overlay.set_loading_message("".into());
         overlay.set_loading_detail("".into());
-        overlay.set_startup_state(LoadingState::Idle);
     }
 
     fn home_menu_items() -> ModelRc<MenuItem> {
