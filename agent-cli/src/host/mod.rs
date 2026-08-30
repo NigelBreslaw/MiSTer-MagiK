@@ -19850,6 +19850,7 @@ const CATALOG_ATTRIBUTION_C64_ROOT: &str = CATALOG_BUILD_REBUILD_C64_ROOT;
 const CATALOG_FAST_FIVE_STAGING_REMOTE: &str = "/tmp/mister-magik/fast-five-catalog";
 const CATALOG_COMPLETION_MANIFEST_RETRY_LIMIT: usize = 20;
 const CATALOG_COMPLETION_MANIFEST_RETRY_DELAY: Duration = Duration::from_millis(50);
+const CATALOG_ATTRIBUTION_PROFILE_FINALIZE_TIMEOUT: Duration = Duration::from_secs(180);
 
 fn catalog_attribution_prepare_command() -> String {
     format!(
@@ -20627,7 +20628,7 @@ fn collect_catalog_attribution_profile(
         ),
         _ => return Ok(Value::Null),
     };
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + CATALOG_ATTRIBUTION_PROFILE_FINALIZE_TIMEOUT;
     let profile = loop {
         require_catalog_benchmark_active("catalog attribution profile finalization")?;
         if let Some(raw) = remote_read(session, &remote_json)
