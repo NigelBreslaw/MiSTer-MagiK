@@ -10,9 +10,13 @@ use sha2::{Digest, Sha256};
 use std::ffi::CString;
 use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
 use std::os::unix::io::FromRawFd;
+#[cfg(unix)]
+use std::os::unix::io::RawFd;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -1199,13 +1203,7 @@ fn prepare_catalog_worker_protocol_output() -> Result<Box<dyn Write + Send>, Str
     {
         // Preserve the piped stdout exclusively for protocol records, then
         // redirect ordinary stdout logging to the inherited diagnostic stream.
-        let protocol_fd = unsafe { libc::dup(libc::STDOUT_FILENO) };
-        if protocol_fd < 0 {
-            return Err(format!(
-                "duplicate catalog worker protocol stream: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
+        let protocol_fd = duplicate_protocol_fd(libc::STDOUT_FILENO)?;
         if unsafe { libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) } < 0 {
             unsafe { libc::close(protocol_fd) };
             return Err(format!(
@@ -1220,6 +1218,18 @@ fn prepare_catalog_worker_protocol_output() -> Result<Box<dyn Write + Send>, Str
     {
         Ok(Box::new(std::io::stdout()))
     }
+}
+
+#[cfg(unix)]
+fn duplicate_protocol_fd(fd: RawFd) -> Result<RawFd, String> {
+    let duplicated = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicated < 0 {
+        return Err(format!(
+            "duplicate catalog worker protocol stream: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(duplicated)
 }
 
 pub(super) fn start_library_catalog_worker(
@@ -3056,6 +3066,35 @@ mod tests {
         assert!(terminated);
         assert!(!status.success());
         assert!(control.reaped());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn duplicated_protocol_fd_is_close_on_exec() {
+        let source = std::fs::File::open("/dev/null").expect("open protocol source");
+        let duplicated = duplicate_protocol_fd(source.as_raw_fd());
+        let duplicated = duplicated.expect("duplicate protocol source");
+        let flags = unsafe { libc::fcntl(duplicated, libc::F_GETFD) };
+        assert!(flags >= 0 && flags & libc::FD_CLOEXEC != 0);
+        unsafe { libc::close(duplicated) };
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn duplicated_protocol_fd_does_not_cross_exec() {
+        let source = std::fs::File::open("/dev/null").expect("open protocol source");
+        let duplicated =
+            duplicate_protocol_fd(source.as_raw_fd()).expect("duplicate protocol source");
+        let fd = duplicated.to_string();
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg("eval 'printf x >&$1'")
+            .arg("catalog-fd-check")
+            .arg(&fd)
+            .status()
+            .expect("exec fd-check helper");
+        unsafe { libc::close(duplicated) };
+        assert!(!status.success());
     }
 
     #[test]
