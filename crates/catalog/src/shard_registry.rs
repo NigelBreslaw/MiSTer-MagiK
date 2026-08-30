@@ -1525,11 +1525,13 @@ mod tests {
         fs::write(&orphaned_navpack, b"orphaned NavPack").unwrap();
         let manifest = manifest(3, third, Some(second));
         let removed = garbage_collect_unreferenced(&root, &manifest).unwrap();
-        assert_eq!(removed.len(), 5);
+        assert_eq!(removed.len(), 7);
         assert!(!root.join(first.sqlite_path).exists());
         assert!(!root.join(first.navigation_path.unwrap()).exists());
+        assert!(!root.join(first.navpack.unwrap().path).exists());
         assert!(!root.join(obsolete.sqlite_path).exists());
         assert!(!root.join(obsolete.navigation_path.unwrap()).exists());
+        assert!(!root.join(obsolete.navpack.unwrap().path).exists());
         assert!(!orphaned_navpack.exists());
         fs::remove_dir_all(root).unwrap();
     }
@@ -1545,17 +1547,20 @@ mod tests {
         let retained = [
             unpublished.sqlite_path.clone(),
             unpublished.navigation_path.clone().unwrap(),
+            unpublished.navpack.as_ref().unwrap().path.clone(),
         ];
 
         let removed =
             garbage_collect_unreferenced_with_retained(&root, &manifest(1, active, None), retained)
                 .unwrap();
 
-        assert_eq!(removed.len(), 2);
+        assert_eq!(removed.len(), 3);
         assert!(root.join(unpublished.sqlite_path).exists());
         assert!(root.join(unpublished.navigation_path.unwrap()).exists());
+        assert!(root.join(unpublished.navpack.unwrap().path).exists());
         assert!(!root.join(obsolete.sqlite_path).exists());
         assert!(!root.join(obsolete.navigation_path.unwrap()).exists());
+        assert!(!root.join(obsolete.navpack.unwrap().path).exists());
         fs::remove_dir_all(root).unwrap();
     }
 

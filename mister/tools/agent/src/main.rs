@@ -4948,7 +4948,6 @@ mod linux {
         fn to_json(&self, context: VideoDiagnosticsJsonContext) -> Value {
             match self {
                 Self::ScalerFetchLiveness(readout) => {
-                    use mister_magik_video_diagnostics_contract as contract;
                     let samples = [
                         &readout.samples[0],
                         &readout.samples[1],

@@ -3308,7 +3308,8 @@ mod tests {
         let mut containers = Vec::new();
         let error = capture_tree(&root, "snes", &mut directories, &mut containers)
             .expect_err("pathological depth must fail closed");
-        assert!(error.contains("depth limit"));
+        assert!(error.contains("kind=directory-depth"));
+        assert!(error.contains(&format!("configured={MAX_WATCH_DEPTH}")));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -3323,7 +3324,8 @@ mod tests {
         let error = read_watch_directory_entries_with_limit(&root, 2)
             .expect_err("third entry must exceed bounded collection");
 
-        assert!(error.contains("exceeds 2 entries"));
+        assert!(error.contains("kind=directory-entries"));
+        assert!(error.contains("configured=2"));
         let _ = fs::remove_dir_all(root);
     }
 }

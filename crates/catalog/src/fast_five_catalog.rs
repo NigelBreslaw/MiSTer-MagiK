@@ -1136,7 +1136,7 @@ fn publish_snapshot_selection(
 
     let started = Instant::now();
     snapshot.validate()?;
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(test)))]
     cleanup_fast_five_staging_root(Path::new("/tmp/mister-magik/fast-five-catalog"))?;
     fs::create_dir_all(storage_root)
         .map_err(|error| format!("create fast-five root {}: {error}", storage_root.display()))?;
@@ -1250,8 +1250,8 @@ fn publish_snapshot_selection(
                 | FastFiveArtifactProfile::SearchColumn
                 | FastFiveArtifactProfile::SearchDetailNone
         );
-        let stage_in_tmpfs =
-            cfg!(target_os = "linux") && (stage_all_in_tmpfs || source.system_id == "c64");
+        let stage_in_tmpfs = cfg!(all(target_os = "linux", not(test)))
+            && (stage_all_in_tmpfs || source.system_id == "c64");
         let staging_parent = if stage_in_tmpfs {
             std::path::PathBuf::from("/tmp/mister-magik/fast-five-catalog")
         } else {
