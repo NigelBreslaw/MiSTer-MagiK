@@ -1057,11 +1057,8 @@ fn scan_amiga(
             } else {
                 "games"
             };
-            let contents = String::from_utf8(read_bounded_file(
-                path,
-                MAX_COLLECTION_LISTING_BYTES as u64,
-            )?)
-            .map_err(|error| format!("decode AmigaVision listing {}: {error}", path.display()))?;
+            let bytes = read_bounded_file(path, MAX_COLLECTION_LISTING_BYTES as u64)?;
+            let contents = String::from_utf8_lossy(&bytes);
             has_collection = true;
             for title in contents
                 .lines()
@@ -1743,6 +1740,28 @@ mod tests {
         assert!(error.contains(crate::catalog_progress::CATALOG_SAFETY_LIMIT_NONRETRYABLE));
         assert!(error.contains("observed="));
         assert!(error.contains("configured="));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn amigavision_scan_accepts_legacy_listing_bytes() {
+        let root = crate::test_support::unique_temp_dir("fast-source-amiga-legacy-text");
+        fs::create_dir_all(root.join("games/Amiga/listings")).unwrap();
+        fs::write(root.join("games/Amiga/AmigaVision.hdf"), b"hdf").unwrap();
+        fs::write(
+            root.join("games/Amiga/listings/demos.txt"),
+            b"State of the Art\nLegacy \xff title\n",
+        )
+        .unwrap();
+        let mut report = FastSourceSystemReport::default();
+
+        let games = scan_amiga(&root, &mut report).expect("lossy listing scan");
+
+        assert!(
+            games
+                .iter()
+                .any(|game| game.title == "Legacy \u{fffd} title")
+        );
         let _ = fs::remove_dir_all(root);
     }
 
