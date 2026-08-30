@@ -647,6 +647,7 @@ mod linux {
 
     const GETDENTS_INITIAL_BUFFER_BYTES: usize = 8 * 1024;
     const GETDENTS_MAX_BUFFER_BYTES: usize = 128 * 1024;
+    const GETDENTS_ENOENT_RETRY_LIMIT: u8 = 8;
     const DIRENT64_HEADER_BYTES: usize = 19;
     const MAX_CAPTURED_ENTRIES: usize = 65_536;
     const MAX_CAPTURED_PATH_BYTES: usize = 16 * 1024 * 1024;
@@ -902,6 +903,7 @@ mod linux {
             .map_err(|error| format!("capture allocation: getdents buffer: {error}"))?;
         buffer.resize(GETDENTS_INITIAL_BUFFER_BYTES, 0u8);
         stats.buffer_allocations = stats.buffer_allocations.saturating_add(1);
+        let mut enoent_retries = 0;
         loop {
             crate::cooperative_work::checkpoint();
             let read = unsafe {
@@ -914,19 +916,31 @@ mod linux {
             };
             stats.read_calls = stats.read_calls.saturating_add(1);
             if read < 0 {
-                if io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::EINTR) {
                     // Profilers such as pprof deliver SIGPROF asynchronously.
                     // Retry the directory read so an interrupted syscall does
                     // not force an otherwise healthy fd-relative walk onto the
                     // slower full-path fallback backend.
                     continue;
                 }
+                if error.raw_os_error() == Some(libc::ENOENT)
+                    && enoent_retries < GETDENTS_ENOENT_RETRY_LIMIT
+                {
+                    // exFAT can transiently report ENOENT for an open directory
+                    // while its metadata is being refreshed. A short bounded
+                    // retry avoids turning that filesystem blip into a full
+                    // WalkDir restart (and keeps profiled walks comparable).
+                    enoent_retries = enoent_retries.saturating_add(1);
+                    continue;
+                }
                 return Err(format!(
                     "getdents64 {}: {}",
                     directory_path.display(),
-                    io::Error::last_os_error()
+                    error
                 ));
             }
+            enoent_retries = 0;
             if read == 0 {
                 return Ok(());
             }
