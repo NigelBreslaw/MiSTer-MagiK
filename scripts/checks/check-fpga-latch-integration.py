@@ -741,8 +741,9 @@ def main() -> None:
             "avl_read_accepted<='1';": 1,
             "avl_return_drain<='1';": 1,
             "SIGNAL avl_return_release_pending : std_logic:='0';": 1,
-            "IF return_drain_ready(": 2,
-            "avl_return_credits,avl_return_phase) THEN": 2,
+            "return_drain_ready(avl_return_credits,avl_return_phase)) OR": 1,
+            "ELSIF return_drain_ready(": 1,
+            "avl_return_credits,avl_return_phase) THEN": 1,
             "IF avl_return_drain='0' THEN": 1,
             "IF avl_read_i='1' AND avl_read_accepted='0' AND": 1,
             "avl_read<=avl_read_i AND NOT avl_read_accepted": 1,
@@ -867,8 +868,8 @@ def main() -> None:
                 fail(
                     f"completion transport reset is missing or ambiguous: {reset_fragment}"
                 )
-        if patched_ascal.count("avl_wad<=2*BLEN-1;") != 2:
-            fail("Avalon write phase needs one VS and one pending-release alignment")
+        if patched_ascal.count("avl_wad<=2*BLEN-1;") != 1:
+            fail("Avalon write phase needs exactly one pipelined alignment cone")
         avalon_reset = re.search(
             r"IF avl_reset_na='0' THEN(?P<body>.*?)ELSIF rising_edge\(avl_clk\) THEN",
             patched_ascal,
@@ -910,14 +911,13 @@ def main() -> None:
             if scalaire_body.count(last_reset) != 2:
                 fail(f"copy-tail phase must also clear at line start: {last_reset}")
         drain_release = re.search(
-            r"IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN\s*"
-            r"IF return_drain_ready\(\s*"
-            r"avl_return_credits,avl_return_phase\) THEN\s*"
+            r"IF \(avl_o_vs_sync='0' AND avl_o_vs='1' AND\s*"
+            r"return_drain_ready\(avl_return_credits,avl_return_phase\)\) OR\s*"
+            r"\(avl_return_drain='1' AND avl_return_release_pending='1'\) THEN\s*"
             r"avl_wad<=2\*BLEN-1;\s*"
-            r"END IF;\s*END IF;\s*"
+            r"END IF;\s*"
             r"IF avl_return_drain='1' THEN\s*"
             r"IF avl_return_release_pending='1' THEN\s*"
-            r"avl_wad<=2\*BLEN-1;\s*"
             r"avl_return_drain<='0';\s*"
             r"avl_return_release_pending<='0';\s*"
             r"ELSIF return_drain_ready\(\s*"
@@ -926,7 +926,7 @@ def main() -> None:
             patched_ascal,
         )
         if drain_release is None:
-            fail("drain release is not isolated from accounting by one pending stage")
+            fail("drain release does not use one pipelined alignment cone")
         for topology_fragment, topology_source in (
             (".reset_core_req(reset_req)", patched),
             (".reset_na   (~reset_req)", patched),

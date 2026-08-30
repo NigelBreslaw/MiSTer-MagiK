@@ -437,17 +437,17 @@ index a735e6b..b1d403c 100644
  				END IF;
  			END IF;
  
- 			IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN
+-			IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN
 -				avl_wad<=2*BLEN-1;
-+				IF return_drain_ready(
-+					avl_return_credits,avl_return_phase) THEN
-+					avl_wad<=2*BLEN-1;
-+				END IF;
- 			END IF;
+-			END IF;
++			IF (avl_o_vs_sync='0' AND avl_o_vs='1' AND
++				return_drain_ready(avl_return_credits,avl_return_phase)) OR
++				(avl_return_drain='1' AND avl_return_release_pending='1') THEN
++				avl_wad<=2*BLEN-1;
++			END IF;
 +
 +			IF avl_return_drain='1' THEN
 +				IF avl_return_release_pending='1' THEN
-+					avl_wad<=2*BLEN-1;
 +					avl_return_drain<='0';
 +					avl_return_release_pending<='0';
 +				ELSIF return_drain_ready(

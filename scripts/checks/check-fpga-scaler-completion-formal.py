@@ -247,14 +247,13 @@ def main() -> None:
         if avalon_reset.group("body").count("avl_return_release_pending<='0';") != 1:
             fail("production reset does not clear the release pipeline")
         guarded_drain_release = re.search(
-            r"IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN\s*"
-            r"IF return_drain_ready\(\s*"
-            r"avl_return_credits,avl_return_phase\) THEN\s*"
+            r"IF \(avl_o_vs_sync='0' AND avl_o_vs='1' AND\s*"
+            r"return_drain_ready\(avl_return_credits,avl_return_phase\)\) OR\s*"
+            r"\(avl_return_drain='1' AND avl_return_release_pending='1'\) THEN\s*"
             r"avl_wad<=2\*BLEN-1;\s*"
-            r"END IF;\s*END IF;\s*"
+            r"END IF;\s*"
             r"IF avl_return_drain='1' THEN\s*"
             r"IF avl_return_release_pending='1' THEN\s*"
-            r"avl_wad<=2\*BLEN-1;\s*"
             r"avl_return_drain<='0';\s*"
             r"avl_return_release_pending<='0';\s*"
             r"ELSIF return_drain_ready\(\s*"
@@ -263,7 +262,7 @@ def main() -> None:
             patched_source,
         )
         if guarded_drain_release is None:
-            fail("production drain release is not isolated by one pending stage")
+            fail("production drain release does not use one pipelined alignment cone")
 
         ghdl_work = temporary / "ghdl-work"
         ghdl_work.mkdir()
