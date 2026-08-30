@@ -6,8 +6,11 @@ use crate::cpu_profile::CatalogBuildProfiler;
 use crate::preview_state::SystemEntryPreviewPrelude;
 use mister_magik_catalog::arcade_catalog::ArcadeCatalog;
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
+use sha2::{Digest, Sha256};
 use std::ffi::CString;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -18,6 +21,7 @@ use std::sync::{Arc, Mutex};
 const CATALOG_WORKER_CHILD_ENV: &str = "MISTER_CATALOG_WORKER_CHILD";
 const CATALOG_WORKER_PROTOCOL_PREFIX: &str = "MISTER_CATALOG_EVENT ";
 const CATALOG_WORKER_PROTOCOL_VERSION: u8 = 4;
+const CATALOG_WORKER_SNAPSHOT_DIRECTORY: &str = "/tmp/mister-magik/catalog-worker";
 
 fn filesystem_available_bytes(path: &str) -> Option<u64> {
     let path = CString::new(path).ok()?;
@@ -119,6 +123,28 @@ fn publish_strict_registry_seed_at(
     }
 }
 
+fn publish_registry_ready_at(
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+    root: &str,
+    storage: &Path,
+) -> Result<(), String> {
+    if std::env::var_os(CATALOG_WORKER_CHILD_ENV).is_none() {
+        return publish_strict_registry_seed_at(tx, root, storage);
+    }
+    let manifest = mister_magik_catalog::shard_registry::read_latest_manifest_lazy(
+        storage,
+        mister_magik_catalog::shard_registry::production_registry_limits(),
+    )
+    .map_err(|error| format!("read published catalog manifest: {error}"))?;
+    let fingerprint =
+        mister_magik_catalog::fast_five_catalog::registry_fingerprint_for_manifest(&manifest);
+    tx.send(CatalogWorkerMessage::PublishedRegistryReady {
+        generation: manifest.generation,
+        fingerprint,
+    })
+    .map_err(|_| "catalog worker receiver closed before registry publication".to_string())
+}
+
 pub(super) fn catalog_refresh_available() -> bool {
     true
 }
@@ -211,6 +237,10 @@ struct CatalogWorkerWireEvent {
     progress_epoch: u64,
     #[serde(default)]
     work_units: u64,
+    #[serde(default)]
+    snapshot_path: String,
+    #[serde(default)]
+    snapshot_sha256: String,
 }
 
 #[derive(Default)]
@@ -313,6 +343,131 @@ fn heartbeat_interval_elapsed(stop: &mpsc::Receiver<()>, interval: std::time::Du
     )
 }
 
+fn snapshot_sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn cleanup_catalog_worker_snapshots(root: &Path) -> Result<(), String> {
+    if !root.exists() {
+        return Ok(());
+    }
+    let metadata = std::fs::symlink_metadata(root)
+        .map_err(|error| format!("inspect catalog worker snapshot root: {error}"))?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        return Err("catalog worker snapshot root is not a directory".to_string());
+    }
+    for (index, entry) in std::fs::read_dir(root)
+        .map_err(|error| format!("read catalog worker snapshot root: {error}"))?
+        .enumerate()
+    {
+        if index >= 1024 {
+            return Err("too many stale catalog worker snapshots".to_string());
+        }
+        let entry = entry.map_err(|error| format!("read catalog worker snapshot: {error}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("inspect catalog worker snapshot: {error}"))?;
+        if file_type.is_file()
+            && entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".arcade-system.bin")
+        {
+            std::fs::remove_file(entry.path())
+                .map_err(|error| format!("remove stale catalog worker snapshot: {error}"))?;
+        }
+    }
+    Ok(())
+}
+
+fn write_arcade_system_snapshot(
+    run_id: &str,
+    system: &mister_magik_catalog::fast_five_catalog::FastFiveSystem,
+) -> Result<(String, String), String> {
+    write_arcade_system_snapshot_at(Path::new(CATALOG_WORKER_SNAPSHOT_DIRECTORY), run_id, system)
+}
+
+fn write_arcade_system_snapshot_at(
+    root: &Path,
+    run_id: &str,
+    system: &mister_magik_catalog::fast_five_catalog::FastFiveSystem,
+) -> Result<(String, String), String> {
+    cleanup_catalog_worker_snapshots(root)?;
+    let bytes = mister_magik_catalog::fast_five_catalog::encode_fast_system_transport(system)?;
+    std::fs::create_dir_all(root)
+        .map_err(|error| format!("create catalog worker snapshot root: {error}"))?;
+    let path = root.join(format!("{run_id}.arcade-system.bin"));
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
+        .open(&path)
+        .map_err(|error| format!("create catalog worker snapshot: {error}"))?;
+    file.write_all(&bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| format!("write catalog worker snapshot: {error}"))?;
+    std::fs::File::open(root)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| format!("sync catalog worker snapshot root: {error}"))?;
+    Ok((path.to_string_lossy().into_owned(), snapshot_sha256(&bytes)))
+}
+
+fn load_arcade_system_snapshot(
+    arcade_root: &str,
+    event: &CatalogWorkerWireEvent,
+) -> Result<ArcadeCatalog, String> {
+    load_arcade_system_snapshot_at(
+        Path::new(CATALOG_WORKER_SNAPSHOT_DIRECTORY),
+        arcade_root,
+        event,
+    )
+}
+
+fn load_arcade_system_snapshot_at(
+    snapshot_root: &Path,
+    arcade_root: &str,
+    event: &CatalogWorkerWireEvent,
+) -> Result<ArcadeCatalog, String> {
+    let expected = snapshot_root.join(format!("{}.arcade-system.bin", event.run_id));
+    if Path::new(&event.snapshot_path) != expected {
+        return Err("catalog worker snapshot path does not match its run".to_string());
+    }
+    let metadata = std::fs::symlink_metadata(&expected)
+        .map_err(|error| format!("inspect catalog worker snapshot: {error}"))?;
+    if !metadata.file_type().is_file()
+        || metadata.len()
+            > mister_magik_catalog::fast_five_catalog::MAX_FAST_SYSTEM_TRANSPORT_BYTES as u64
+    {
+        return Err("catalog worker snapshot is not a bounded regular file".to_string());
+    }
+    let mut bytes = Vec::with_capacity(metadata.len().try_into().unwrap_or(0));
+    std::fs::File::open(&expected)
+        .map_err(|error| format!("open catalog worker snapshot: {error}"))?
+        .take(mister_magik_catalog::fast_five_catalog::MAX_FAST_SYSTEM_TRANSPORT_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("read catalog worker snapshot: {error}"))?;
+    let _ = std::fs::remove_file(&expected);
+    if bytes.len() > mister_magik_catalog::fast_five_catalog::MAX_FAST_SYSTEM_TRANSPORT_BYTES
+        || snapshot_sha256(&bytes) != event.snapshot_sha256
+    {
+        return Err("catalog worker snapshot checksum or size differs".to_string());
+    }
+    let system = mister_magik_catalog::fast_five_catalog::decode_fast_system_transport(&bytes)?;
+    if system.system_id != "arcade" {
+        return Err("catalog worker snapshot is not Arcade".to_string());
+    }
+    Ok(
+        mister_magik_catalog::fast_catalog_sources::launcher_catalog_for_fast_system(
+            Path::new(arcade_root),
+            &system,
+        ),
+    )
+}
+
 fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
     let mut event = CatalogWorkerWireEvent {
         version: CATALOG_WORKER_PROTOCOL_VERSION,
@@ -335,6 +490,8 @@ fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
         sequence: 0,
         progress_epoch: 0,
         work_units: 0,
+        snapshot_path: String::new(),
+        snapshot_sha256: String::new(),
     };
     match message {
         CatalogWorkerMessage::Timing { name, detail } => {
@@ -404,6 +561,18 @@ fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
             event.durable_save_pending = *durable_save_pending;
             event.fingerprint = generation_fingerprint.clone().unwrap_or_default();
         }
+        CatalogWorkerMessage::PublishedRegistryReady {
+            generation,
+            fingerprint,
+        } => {
+            event.kind = "ready".to_string();
+            event.source = CatalogSource::ShardedRegistry.label().to_string();
+            event.generation = *generation;
+            event.fingerprint.clone_from(fingerprint);
+        }
+        CatalogWorkerMessage::ArcadeBootstrapReady { .. } => {
+            unreachable!("Arcade bootstrap must use the bounded snapshot transport")
+        }
         CatalogWorkerMessage::PersistenceFailed { error } => {
             event.kind = "persistence-failed".to_string();
             event.error = error.clone();
@@ -458,6 +627,8 @@ fn blank_worker_wire_event(kind: &str) -> CatalogWorkerWireEvent {
         sequence: 0,
         progress_epoch: 0,
         work_units: 0,
+        snapshot_path: String::new(),
+        snapshot_sha256: String::new(),
     }
 }
 
@@ -824,6 +995,15 @@ fn catalog_worker_message_from_wire(
             let started = Instant::now();
             let seed = load_sharded_registry_seed_at(root, catalog_root)
                 .map_err(|error| format!("load published catalog from child: {error}"))?;
+            if seed.generation != event.generation {
+                return Err(format!(
+                    "published catalog generation changed: expected {}, loaded {}",
+                    event.generation, seed.generation
+                ));
+            }
+            if seed.catalog_fingerprint != event.fingerprint {
+                return Err("published catalog fingerprint changed before loading".to_string());
+            }
             CatalogWorkerMessage::Ready {
                 catalog: seed.catalog,
                 load_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
@@ -834,7 +1014,24 @@ fn catalog_worker_message_from_wire(
                 publication_ack: None,
             }
         }
-        "ready" => return Ok(None),
+        "ready" if event.source == "navigation-projection" => {
+            let started = Instant::now();
+            let catalog = load_arcade_system_snapshot(root, &event)?;
+            CatalogWorkerMessage::Ready {
+                catalog,
+                load_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+                source: CatalogSource::NavigationProjection,
+                durable_save_pending: true,
+                generation_fingerprint: None,
+                publication_ack: None,
+            }
+        }
+        "ready" => {
+            return Err(format!(
+                "unknown catalog worker ready source {:?}",
+                event.source
+            ));
+        }
         _ => {
             return Err(format!(
                 "unknown catalog worker event kind {:?}",
@@ -933,6 +1130,8 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
                 sequence: 0,
                 progress_epoch: snapshot.progress_epoch,
                 work_units: snapshot.work_units,
+                snapshot_path: String::new(),
+                snapshot_sha256: String::new(),
             };
             let mut writer = heartbeat_writer
                 .lock()
@@ -951,7 +1150,28 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
                 .advance(phase, *work_units);
             continue;
         }
-        let mut event = worker_wire_event(&message);
+        let mut event = match &message {
+            CatalogWorkerMessage::ArcadeBootstrapReady { system, load_us } => {
+                match write_arcade_system_snapshot(&wire_run_id, system) {
+                    Ok((snapshot_path, snapshot_sha256)) => {
+                        let mut event = blank_worker_wire_event("ready");
+                        event.source = CatalogSource::NavigationProjection.label().to_string();
+                        event.durable_save_pending = true;
+                        event.elapsed_us = *load_us;
+                        event.snapshot_path = snapshot_path;
+                        event.snapshot_sha256 = snapshot_sha256;
+                        event
+                    }
+                    Err(error) => {
+                        let mut event = blank_worker_wire_event("persistence-failed");
+                        event.error = format!("write Arcade bootstrap snapshot: {error}");
+                        terminal = true;
+                        event
+                    }
+                }
+            }
+            _ => worker_wire_event(&message),
+        };
         let mut output = writer.lock().unwrap_or_else(|error| error.into_inner());
         event.run_id.clone_from(&wire_run_id);
         event.sequence = wire_sequence.fetch_add(1, Ordering::Relaxed);
@@ -962,12 +1182,13 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
         {
             break;
         }
-        terminal = matches!(
-            message,
-            CatalogWorkerMessage::Done
-                | CatalogWorkerMessage::LoadFailed { .. }
-                | CatalogWorkerMessage::PersistenceFailed { .. }
-        );
+        terminal = terminal
+            || matches!(
+                message,
+                CatalogWorkerMessage::Done
+                    | CatalogWorkerMessage::LoadFailed { .. }
+                    | CatalogWorkerMessage::PersistenceFailed { .. }
+            );
         if terminal {
             break;
         }
@@ -997,6 +1218,8 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
             sequence: wire_sequence.fetch_add(1, Ordering::Relaxed),
             progress_epoch: 0,
             work_units: 0,
+            snapshot_path: String::new(),
+            snapshot_sha256: String::new(),
         };
         let _ = output.write_all(CATALOG_WORKER_PROTOCOL_PREFIX.as_bytes());
         let _ = write_worker_wire_event(&mut *output, &event);
@@ -1166,7 +1389,7 @@ fn run_fast_catalog_refresh_in_process(
             rebuilt,
             removed,
         });
-        if let Err(error) = publish_strict_registry_seed_at(tx, root, catalog_root) {
+        if let Err(error) = publish_registry_ready_at(tx, root, catalog_root) {
             catalog_profile.fail("registry-reload-failed");
             let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
                 error: format!("fast catalog registry reload failed: {error}"),
@@ -1249,27 +1472,31 @@ fn run_fast_catalog_fresh_build(
                 });
             }
             if system.system_id == "arcade" && !system.games.is_empty() {
-                let started = Instant::now();
-                let catalog =
-                    mister_magik_catalog::fast_catalog_sources::launcher_catalog_for_fast_system(
+                let load_us = 0;
+                let _ = tx.send(CatalogWorkerMessage::Timing {
+                    name: "catalog_arcade_bootstrap_ready".to_string(),
+                    detail: format!("games={} load_us={load_us}", system.games.len()),
+                });
+                if std::env::var_os(CATALOG_WORKER_CHILD_ENV).is_some() {
+                    let _ = tx.send(CatalogWorkerMessage::ArcadeBootstrapReady {
+                        system: Box::new(system.clone()),
+                        load_us,
+                    });
+                } else {
+                    let started = Instant::now();
+                    let catalog = mister_magik_catalog::fast_catalog_sources::launcher_catalog_for_fast_system(
                         Path::new(root),
                         system,
                     );
-                let games = catalog
-                    .system_game_count(mister_magik_catalog::arcade_catalog::MENU_ARCADE_SYSTEM_ID);
-                let load_us = started.elapsed().as_micros() as u64;
-                let _ = tx.send(CatalogWorkerMessage::Timing {
-                    name: "catalog_arcade_bootstrap_ready".to_string(),
-                    detail: format!("games={games} load_us={load_us}"),
-                });
-                send_ready_catalog(
-                    tx,
-                    catalog,
-                    load_us,
-                    CatalogSource::NavigationProjection,
-                    true,
-                    None,
-                );
+                    send_ready_catalog(
+                        tx,
+                        catalog,
+                        started.elapsed().as_micros() as u64,
+                        CatalogSource::NavigationProjection,
+                        true,
+                        None,
+                    );
+                }
             }
         },
     ) {
@@ -1334,7 +1561,7 @@ fn run_fast_catalog_fresh_build(
     let _ = tx.send(CatalogWorkerMessage::BuildCompleted {
         elapsed_us: report.elapsed_us,
     });
-    if let Err(error) = publish_strict_registry_seed_at(tx, root, catalog_root) {
+    if let Err(error) = publish_registry_ready_at(tx, root, catalog_root) {
         catalog_profile.fail("registry-reload-failed");
         let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
             error: format!("catalog registry load failed: {error}"),
@@ -1567,6 +1794,14 @@ pub(super) enum CatalogWorkerMessage {
         generation_fingerprint: Option<String>,
         publication_ack: Option<mpsc::Sender<()>>,
     },
+    ArcadeBootstrapReady {
+        system: Box<mister_magik_catalog::fast_five_catalog::FastFiveSystem>,
+        load_us: u64,
+    },
+    PublishedRegistryReady {
+        generation: u64,
+        fingerprint: String,
+    },
     PersistenceFailed {
         error: String,
     },
@@ -1664,6 +1899,8 @@ mod tests {
             sequence: 4,
             progress_epoch: 2,
             work_units: 99,
+            snapshot_path: String::new(),
+            snapshot_sha256: String::new(),
         };
         let encoded = serde_json::to_string(&event).unwrap();
         let decoded: CatalogWorkerWireEvent = serde_json::from_str(&encoded).unwrap();
@@ -1675,6 +1912,43 @@ mod tests {
         .unwrap()
         .expect("heartbeat event");
         assert!(matches!(message, CatalogWorkerMessage::Heartbeat { .. }));
+    }
+
+    #[test]
+    fn arcade_bootstrap_snapshot_is_bounded_verified_and_consumed() {
+        let snapshot_root = std::env::temp_dir().join(format!(
+            "mister-magik-catalog-worker-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let run_id = "run-test";
+        let system = mister_magik_catalog::fast_five_catalog::FastFiveSystem {
+            system_id: "arcade".to_string(),
+            display_title: "Arcade".to_string(),
+            games: vec![mister_magik_catalog::system_shard::SystemGame {
+                stable_key: "arcade\u{1f}game".to_string(),
+                title: "Game".to_string(),
+                launch_ref: "/media/fat/_Arcade/Game.mra".to_string(),
+                ..Default::default()
+            }],
+            variants: Vec::new(),
+        };
+        let (path, checksum) =
+            write_arcade_system_snapshot_at(&snapshot_root, run_id, &system).unwrap();
+        let mut event = blank_worker_wire_event("ready");
+        event.run_id = run_id.to_string();
+        event.snapshot_path = path.clone();
+        event.snapshot_sha256 = checksum;
+
+        let catalog =
+            load_arcade_system_snapshot_at(&snapshot_root, "/media/fat/_Arcade", &event).unwrap();
+
+        assert_eq!(catalog.len(), 1);
+        assert!(!Path::new(&path).exists());
+        std::fs::remove_dir_all(snapshot_root).unwrap();
     }
 
     #[test]

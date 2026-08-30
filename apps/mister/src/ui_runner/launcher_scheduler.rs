@@ -1276,6 +1276,10 @@ impl LauncherScheduler {
                     now,
                 );
             }
+            CatalogWorkerMessage::ArcadeBootstrapReady { .. }
+            | CatalogWorkerMessage::PublishedRegistryReady { .. } => {
+                unreachable!("internal catalog publication crossed the child protocol")
+            }
             CatalogWorkerMessage::HydrationDoneNeedsValidation { root } => {
                 self.note_catalog_progress("hydration-ready", "validation-deferred", root, -1, now);
             }

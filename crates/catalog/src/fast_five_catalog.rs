@@ -22,6 +22,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 pub const FAST_FIVE_SNAPSHOT_SCHEMA: &str = "mister-magik-fast-five-snapshot-v2";
+pub const MAX_FAST_SYSTEM_TRANSPORT_BYTES: usize = 64 * 1024 * 1024;
 const FAST_FIVE_REGISTRY_FINGERPRINT_SCHEMA: &str = "mister-magik-fast-five-snapshot-v1";
 pub const FAST_FIVE_SYSTEM_IDS: [&str; 5] = ["amiga", "arcade", "c64", "dos", "x68000"];
 pub const GENERIC_EXAMPLE_SYSTEM_IDS: [&str; 4] = ["neogeo", "saturn", "snes", "zx-spectrum"];
@@ -134,6 +135,26 @@ pub struct FastFiveSystem {
     pub games: Vec<SystemGame>,
     #[serde(default)]
     pub variants: Vec<FastFiveGameVariant>,
+}
+
+pub fn encode_fast_system_transport(system: &FastFiveSystem) -> Result<Vec<u8>, String> {
+    let bytes = postcard::to_allocvec(system)
+        .map_err(|error| format!("encode fast system transport: {error}"))?;
+    if bytes.len() > MAX_FAST_SYSTEM_TRANSPORT_BYTES {
+        return Err("fast system transport exceeds size limit".to_string());
+    }
+    Ok(bytes)
+}
+
+pub fn decode_fast_system_transport(bytes: &[u8]) -> Result<FastFiveSystem, String> {
+    if bytes.len() > MAX_FAST_SYSTEM_TRANSPORT_BYTES {
+        return Err("fast system transport exceeds size limit".to_string());
+    }
+    let system: FastFiveSystem = postcard::from_bytes(bytes)
+        .map_err(|error| format!("decode fast system transport: {error}"))?;
+    SystemId::parse(&system.system_id)
+        .map_err(|error| format!("invalid transported system id: {error}"))?;
+    Ok(system)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1746,6 +1767,26 @@ mod tests {
             systems: Vec::new(),
         };
         assert!(snapshot.validate().is_err());
+    }
+
+    #[test]
+    fn fast_system_transport_is_bounded_and_round_trips() {
+        let system = FastFiveSystem {
+            system_id: "arcade".to_string(),
+            display_title: "Arcade".to_string(),
+            games: vec![SystemGame {
+                stable_key: "arcade\u{1f}game".to_string(),
+                title: "Game".to_string(),
+                launch_ref: "/media/fat/_Arcade/Game.mra".to_string(),
+                ..SystemGame::default()
+            }],
+            variants: Vec::new(),
+        };
+        let encoded = encode_fast_system_transport(&system).unwrap();
+        assert_eq!(decode_fast_system_transport(&encoded).unwrap(), system);
+        assert!(
+            decode_fast_system_transport(&vec![0; MAX_FAST_SYSTEM_TRANSPORT_BYTES + 1]).is_err()
+        );
     }
 }
 

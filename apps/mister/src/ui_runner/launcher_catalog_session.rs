@@ -400,6 +400,10 @@ impl LauncherCatalogSession {
                     &mut effects,
                 );
             }
+            CatalogWorkerMessage::ArcadeBootstrapReady { .. }
+            | CatalogWorkerMessage::PublishedRegistryReady { .. } => {
+                unreachable!("internal catalog publication crossed the child protocol")
+            }
             CatalogWorkerMessage::PersistenceFailed { error } => {
                 let transient = catalog_failure_is_transient(&error);
                 self.refresh_done = true;
