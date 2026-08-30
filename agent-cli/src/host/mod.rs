@@ -32231,6 +32231,7 @@ fn ui_test_runtime_environment() -> Vec<(String, String)> {
         "MISTER_UI_TEST_DISPLAY",
         "MISTER_UI_TEST_ORIENTATION",
         "MISTER_UI_TEST_FEATURE",
+        "MISTER_UI_TEST_STARTUP_MODE",
         "MISTER_MAGIK_RUNTIME_SETTINGS_V1",
         "MISTER_MAGIK_RUNTIME_DISPLAY_V1",
     ]
