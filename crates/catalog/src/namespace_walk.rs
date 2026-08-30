@@ -698,12 +698,12 @@ mod linux {
         let Ok(target_name) = c_string(target.as_os_str().as_bytes(), "target path") else {
             return unavailable_probe(child_paths.len());
         };
-        let raw_fd = unsafe {
-            libc::open(
-                target_name.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-            )
-        };
+        let raw_fd = open_retry(
+            target_name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+        .ok()
+        .unwrap_or(-1);
         if raw_fd < 0 {
             return unavailable_probe(child_paths.len());
         }
@@ -742,12 +742,12 @@ mod linux {
         let Ok(parent_name) = c_string(parent.as_os_str().as_bytes(), "parent path") else {
             return vec![None; child_paths.len()];
         };
-        let raw_fd = unsafe {
-            libc::open(
-                parent_name.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
-            )
-        };
+        let raw_fd = open_retry(
+            parent_name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+        .ok()
+        .unwrap_or(-1);
         if raw_fd < 0 {
             return vec![None; child_paths.len()];
         }
@@ -819,11 +819,14 @@ mod linux {
         } else {
             0
         };
-        let raw_fd = unsafe {
-            libc::open(
-                target_name.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | no_follow,
-            )
+        let raw_fd = match open_retry(
+            target_name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | no_follow,
+        ) {
+            Ok(fd) => fd,
+            Err(error) => {
+                return Err(format!("open target {}: {error}", target.display()));
+            }
         };
         if raw_fd < 0 {
             return Err(format!(
@@ -1037,12 +1040,18 @@ mod linux {
                             child_path.display()
                         ));
                     }
-                    let raw_child = unsafe {
-                        libc::openat(
-                            directory.as_raw_fd(),
-                            child_name.as_ptr(),
-                            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-                        )
+                    let raw_child = match openat_retry(
+                        directory.as_raw_fd(),
+                        child_name.as_ptr(),
+                        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                    ) {
+                        Ok(fd) => fd,
+                        Err(error) => {
+                            return Err(format!(
+                                "openat directory {}: {error}",
+                                child_path.display()
+                            ));
+                        }
                     };
                     if raw_child < 0 {
                         return Err(format!(
@@ -1128,23 +1137,25 @@ mod linux {
     }
 
     fn stat_entry(directory: RawFd, name: &CString, path: &Path) -> Result<libc::stat, String> {
-        let mut value = std::mem::MaybeUninit::<libc::stat>::uninit();
-        let result = unsafe {
-            libc::fstatat(
-                directory,
-                name.as_ptr(),
-                value.as_mut_ptr(),
-                libc::AT_SYMLINK_NOFOLLOW,
-            )
-        };
-        if result != 0 {
-            return Err(format!(
-                "fstatat {}: {}",
-                path.display(),
-                io::Error::last_os_error()
-            ));
+        loop {
+            let mut value = std::mem::MaybeUninit::<libc::stat>::uninit();
+            let result = unsafe {
+                libc::fstatat(
+                    directory,
+                    name.as_ptr(),
+                    value.as_mut_ptr(),
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            };
+            if result == 0 {
+                return Ok(unsafe { value.assume_init() });
+            }
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(format!("fstatat {}: {error}", path.display()));
         }
-        Ok(unsafe { value.assume_init() })
     }
 
     #[cfg(feature = "builder")]
@@ -1152,12 +1163,50 @@ mod linux {
         directory: RawFd,
         name: &CString,
     ) -> Result<libc::stat, io::Error> {
-        let mut value = std::mem::MaybeUninit::<libc::stat>::uninit();
-        let result = unsafe { libc::fstatat(directory, name.as_ptr(), value.as_mut_ptr(), 0) };
-        if result != 0 {
-            return Err(io::Error::last_os_error());
+        loop {
+            let mut value = std::mem::MaybeUninit::<libc::stat>::uninit();
+            let result = unsafe { libc::fstatat(directory, name.as_ptr(), value.as_mut_ptr(), 0) };
+            if result == 0 {
+                return Ok(unsafe { value.assume_init() });
+            }
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(error);
         }
-        Ok(unsafe { value.assume_init() })
+    }
+
+    fn open_retry(path: *const libc::c_char, flags: libc::c_int) -> io::Result<RawFd> {
+        loop {
+            let fd = unsafe { libc::open(path, flags) };
+            if fd >= 0 {
+                return Ok(fd);
+            }
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(error);
+        }
+    }
+
+    fn openat_retry(
+        directory: RawFd,
+        path: *const libc::c_char,
+        flags: libc::c_int,
+    ) -> io::Result<RawFd> {
+        loop {
+            let fd = unsafe { libc::openat(directory, path, flags) };
+            if fd >= 0 {
+                return Ok(fd);
+            }
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(error);
+        }
     }
 
     #[cfg(feature = "builder")]
