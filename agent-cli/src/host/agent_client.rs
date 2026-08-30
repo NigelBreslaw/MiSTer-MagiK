@@ -73,6 +73,8 @@ enum VersionAction {
     RejectNewer,
 }
 
+type InstalledIdentity = (u64, u64, bool, bool, bool, bool, bool);
+
 pub(crate) fn agent_token() -> Result<String> {
     let device_id = env::var("MISTER_DEVICE_ID")?;
     agent_token_for_device(&device_id, env::var("MISTER_AGENT_TOKEN").ok().as_deref())
@@ -224,9 +226,7 @@ fn version_action(
     }
 }
 
-fn installed_identity(
-    endpoint: &AgentEndpoint,
-) -> std::result::Result<(u64, u64, bool, bool, bool, bool, bool), String> {
+fn installed_identity(endpoint: &AgentEndpoint) -> std::result::Result<InstalledIdentity, String> {
     let reply = agent_request_at(endpoint, "ping", json!({}), Duration::from_millis(500))
         .map_err(|error| error.to_string())?;
     let result = reply.response.get("result").unwrap_or(&Value::Null);
