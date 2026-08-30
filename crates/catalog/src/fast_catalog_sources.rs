@@ -167,10 +167,12 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         )?;
     }
     generic_watch_observations.extend(prepared_watch_observations);
-    for system in &generic_systems {
-        timed_system_complete(system);
-    }
     let phase_started = Instant::now();
+    for system in &mut generic_systems {
+        if system.system_id == "neogeo" {
+            project_neogeo_system(system, &mut family_resolver);
+        }
+    }
     enrich_fast_preview_identities(storage_root, &mut generic_systems);
     let preview_identity_us = elapsed_us(phase_started);
     let phase_started = Instant::now();
@@ -193,6 +195,16 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
             },
         )
     }));
+    for (system_id, system) in &systems {
+        if let Some(report) = reports.get_mut(system_id) {
+            report.games = system.games.len();
+        }
+    }
+    for system in systems.values() {
+        if !PREPARED_SYSTEM_IDS.contains(&system.system_id.as_str()) {
+            timed_system_complete(system);
+        }
+    }
     let merge_us = elapsed_us(phase_started);
     let prepared_systems_us: u64 = reports
         .values()
@@ -277,6 +289,9 @@ fn build_and_record_prepared_system(
         build_prepared_system(storage_root, system_id, true, family_resolver)?;
     if system_id == "c64" {
         collapse_c64_cross_source_variants(&mut system);
+    }
+    if system_id == "neogeo" {
+        project_neogeo_system(&mut system, &mut family_resolver);
     }
     enrich_fast_preview_identities(storage_root, std::slice::from_mut(&mut system));
     report.elapsed_us = elapsed_us(system_started);
@@ -1514,8 +1529,71 @@ fn arcade_requirement_preview_asset_key(requirement: &PrimaryRomRequirement) -> 
     }
 }
 
+fn project_neogeo_system(system: &mut FastFiveSystem, resolver: &mut MachineFamilyResolver) {
+    if system.system_id != "neogeo" || system.games.is_empty() {
+        return;
+    }
+    let mut candidates = system
+        .games
+        .drain(..)
+        .map(|game| {
+            let identity = neogeo_identity(&game.launch_ref);
+            MachineFamilyCandidate {
+                game,
+                identity_id: identity,
+                family_id: String::new(),
+                relation: FastFiveVariantRelation::NeoGeoVariant,
+            }
+        })
+        .collect::<Vec<_>>();
+    let requests = candidates
+        .iter()
+        .filter(|candidate| !candidate.identity_id.is_empty())
+        .map(|candidate| (candidate.identity_id.clone(), None))
+        .collect::<Vec<_>>();
+    let resolved = resolver.resolve_many(requests);
+    for candidate in &mut candidates {
+        if let Some(Some(machine)) = resolved.get(&candidate.identity_id) {
+            candidate.family_id = machine.family.clone();
+            candidate.game.preview_asset_key = machine.family.clone();
+        }
+    }
+    let projection = project_machine_families(candidates);
+    system.games = projection.games;
+    system.variants = projection.variants;
+    resolver.finish_log("neogeo");
+}
+
+fn neogeo_identity(launch_ref: &str) -> String {
+    let path = match crate::archive_member::decode_archive_member_ref(launch_ref) {
+        Ok(Some(member)) => member.member_path,
+        _ => launch_ref.to_string(),
+    };
+    let path = Path::new(&path);
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default();
+    if !extension.eq_ignore_ascii_case("zip") && !extension.eq_ignore_ascii_case("neo") {
+        return String::new();
+    }
+    if let Some(identity) =
+        crate::media_metadata::parenthesized_setname(path.to_string_lossy().as_ref())
+    {
+        return identity;
+    }
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(normalize_machine_id)
+        .unwrap_or_default()
+}
+
 fn enrich_fast_preview_identities(storage_root: &Path, systems: &mut [FastFiveSystem]) {
-    let title_index = load_fast_console_preview_title_index(storage_root);
+    let title_index = systems
+        .iter()
+        .any(|system| matches!(system.system_id.as_str(), "snes" | "saturn"))
+        .then(|| load_fast_console_preview_title_index(storage_root))
+        .unwrap_or_default();
     let mut visited = 0usize;
     for system in systems {
         for game in &mut system.games {
@@ -1523,11 +1601,13 @@ fn enrich_fast_preview_identities(storage_root: &Path, systems: &mut [FastFiveSy
             crate::catalog_progress::report_inner_progress_at(visited);
             match system.system_id.as_str() {
                 "neogeo" => {
-                    game.preview_asset_key = Path::new(&game.launch_ref)
-                        .file_stem()
-                        .and_then(|stem| stem.to_str())
-                        .map(str::to_ascii_lowercase)
-                        .unwrap_or_default();
+                    if game.preview_asset_key.is_empty() {
+                        game.preview_asset_key = Path::new(&game.launch_ref)
+                            .file_stem()
+                            .and_then(|stem| stem.to_str())
+                            .map(str::to_ascii_lowercase)
+                            .unwrap_or_default();
+                    }
                 }
                 "snes" | "saturn" => {
                     game.preview_asset_key = title_index

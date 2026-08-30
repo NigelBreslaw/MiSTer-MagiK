@@ -135,6 +135,16 @@ impl MachineFamilyResolver {
         if let Some(database) = self.mame.as_ref() {
             rows.extend(query_database(database, &mame_ids));
         }
+        // Unnamespaced identities prefer MAME, then fall back to HBMAME when
+        // the set is absent from the main database.
+        let hbmame_fallback = mame_ids
+            .iter()
+            .filter(|identity| !rows.contains_key(*identity))
+            .cloned()
+            .collect::<Vec<_>>();
+        if let Some(database) = self.hbmame.as_ref() {
+            rows.extend(query_database(database, &hbmame_fallback));
+        }
         // Explicit HBMAME requests may still be absent there.  Falling back
         // to MAME preserves useful family projection for shared set names.
         let mame_fallback = hbmame_ids
