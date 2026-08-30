@@ -994,6 +994,15 @@ impl NativeDevice {
         self.benchmark_profile(|config| profile_installed_catalog_build_rebuild(config, output_dir))
     }
 
+    pub(crate) fn profile_catalog_changed_refresh(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_catalog_changed_refresh(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_catalog_resume_validation(
         &mut self,
         output_dir: &Path,
@@ -18919,6 +18928,178 @@ fn profile_installed_catalog_build_rebuild(
     serde_json::to_string(&summary).map_err(Into::into)
 }
 
+fn profile_installed_catalog_changed_refresh(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    let session = connect_with(&config.connection, 10)?;
+    let endpoint = config.agent()?.clone();
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development platform manifest is missing")?;
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    fs::create_dir_all(output_dir)?;
+
+    drop(session);
+    let reboot = reboot_for_catalog_attribution(config)?;
+    let boot_id = reboot
+        .get("boot_id_after")
+        .and_then(Value::as_str)
+        .ok_or("changed-system catalog reboot has no post-reboot boot id")?
+        .to_string();
+    let session = connect_with(&config.connection, 10)?;
+
+    let run_result = (|| -> Result<Value> {
+        require_catalog_benchmark_active("changed-system catalog sample")?;
+        // Prepare only after the one supervised reboot so an interrupted reboot
+        // cannot leave an isolated fixture or staging tree behind.
+        exec_checked(
+            &session,
+            "prepare changed-system catalog sample",
+            &catalog_build_rebuild_prepare_command(),
+        )?;
+        let sample_dir = output_dir.join("sample-1");
+        fs::create_dir_all(&sample_dir)?;
+        let fresh = run_catalog_build_rebuild_leg(
+            config,
+            &session,
+            &endpoint,
+            &sample_dir,
+            "fresh",
+            None,
+            CatalogBuildRebuildLegOptions {
+                exercise_arcade_ui: false,
+                require_updater_index: false,
+                launcher_env: catalog_build_rebuild_launcher_env(),
+                runtime_command: catalog_build_rebuild_runtime_command,
+            },
+        )?;
+        let fresh_generation = fresh
+            .pointer("/catalog/generation")
+            .and_then(Value::as_u64)
+            .ok_or("changed-system fresh leg has no generation")?;
+        let fresh_snes = catalog_system_games(&fresh["catalog"], "snes")?;
+        let fresh_system_ids = catalog_system_ids(&fresh["catalog"])?;
+        let fresh_non_snes_artifacts = catalog_artifact_identity_except(&fresh["catalog"], "snes")?;
+        let fresh_non_snes_games = catalog_system_game_counts_except(&fresh["catalog"], "snes")?;
+
+        require_catalog_benchmark_active("changed-system catalog mutation")?;
+        exec_checked(
+            &session,
+            "mutate isolated SNES catalog sample",
+            &catalog_build_rebuild_mutation_command(),
+        )?;
+        let changed_refresh = run_catalog_build_rebuild_leg(
+            config,
+            &session,
+            &endpoint,
+            &sample_dir,
+            "changed-refresh",
+            Some(fresh_generation),
+            CatalogBuildRebuildLegOptions {
+                exercise_arcade_ui: false,
+                require_updater_index: false,
+                launcher_env: catalog_build_rebuild_launcher_env(),
+                runtime_command: catalog_build_rebuild_runtime_command,
+            },
+        )?;
+        let changed_snes = catalog_system_games(&changed_refresh["catalog"], "snes")?;
+        let changed_system_ids = catalog_system_ids(&changed_refresh["catalog"])?;
+        let changed_non_snes_artifacts =
+            catalog_artifact_identity_except(&changed_refresh["catalog"], "snes")?;
+        let changed_non_snes_games =
+            catalog_system_game_counts_except(&changed_refresh["catalog"], "snes")?;
+        let snes_game_delta = i64::try_from(changed_snes)? - i64::try_from(fresh_snes)?;
+        let systems_unchanged = fresh_system_ids == changed_system_ids;
+        let non_snes_artifacts_unchanged = fresh_non_snes_artifacts == changed_non_snes_artifacts;
+        let non_snes_games_unchanged = fresh_non_snes_games == changed_non_snes_games;
+        let status = if snes_game_delta == 1
+            && systems_unchanged
+            && non_snes_artifacts_unchanged
+            && non_snes_games_unchanged
+        {
+            "passed"
+        } else {
+            "failed"
+        };
+        Ok(json!({
+            "schema": "mister-magik-catalog-changed-refresh-v1",
+            "scenario": "catalog-changed-refresh",
+            "status": status,
+            "configuration": {
+                "samples": 1,
+                "reboot_before_pair": reboot,
+                "arcade_root": CATALOG_BUILD_REBUILD_ARCADE_ROOT,
+                "snes_root": CATALOG_BUILD_REBUILD_SNES_ROOT,
+                "c64_root": CATALOG_BUILD_REBUILD_C64_ROOT,
+                "delta_root": format!("{CATALOG_BUILD_REBUILD_SOURCE_DIR}/fixture"),
+                "catalog_root": CATALOG_BUILD_REBUILD_REMOTE_DIR,
+                "publication_filesystem": "exfat",
+            },
+            "sample": {
+                "fresh": fresh,
+                "changed_refresh": changed_refresh,
+                "validation": {
+                    "fresh_snes_games": fresh_snes,
+                    "changed_snes_games": changed_snes,
+                    "snes_game_delta": snes_game_delta,
+                    "systems_unchanged": systems_unchanged,
+                    "non_snes_artifacts_unchanged": non_snes_artifacts_unchanged,
+                    "non_snes_games_unchanged": non_snes_games_unchanged,
+                },
+            },
+        }))
+    })();
+
+    let restart_result = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let cleanup_result = exec_checked(
+        &session,
+        "clean changed-system catalog state",
+        &catalog_build_rebuild_cleanup_command(),
+    );
+    let mut summary = finish_catalog_benchmark_profile(run_result, cleanup_result, restart_result)?;
+
+    drop(session);
+    let session = connect_with(&config.connection, 10)?;
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after changed-system catalog benchmark")?;
+    if final_boot_id.trim() != boot_id {
+        return Err("device rebooted during changed-system catalog benchmark".into());
+    }
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development platform manifest is missing after changed-system catalog benchmark")?;
+    if final_manifest != manifest {
+        return Err(
+            "installed platform manifest changed during changed-system catalog benchmark".into(),
+        );
+    }
+    let production_registry_after = catalog_production_registry_identity(&session)?;
+    let production_registry_unchanged = production_registry_after == production_registry_before;
+    if !production_registry_unchanged {
+        return Err(
+            "production catalog registry changed during changed-system catalog benchmark".into(),
+        );
+    }
+    summary["production_registry"] = json!({
+        "before": production_registry_before,
+        "after": production_registry_after,
+        "unchanged": production_registry_unchanged,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
 fn profile_installed_catalog_resume_validation(
     config: &NativeDeviceConfig,
     output_dir: &Path,
@@ -25186,6 +25367,77 @@ fn catalog_system_games(catalog: &Value, system_id: &str) -> Result<u64> {
         .and_then(|system| system.get("games"))
         .and_then(Value::as_u64)
         .ok_or_else(|| format!("catalog has no {system_id} game count").into())
+}
+
+fn catalog_system_ids(catalog: &Value) -> Result<BTreeSet<String>> {
+    catalog
+        .get("systems")
+        .and_then(Value::as_array)
+        .map(|systems| {
+            systems
+                .iter()
+                .filter_map(|system| {
+                    system
+                        .get("system")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .ok_or_else(|| "catalog has no system list".into())
+}
+
+fn catalog_system_game_counts_except(
+    catalog: &Value,
+    excluded_system: &str,
+) -> Result<BTreeMap<String, u64>> {
+    catalog
+        .get("systems")
+        .and_then(Value::as_array)
+        .map(|systems| {
+            systems
+                .iter()
+                .filter_map(|system| {
+                    let id = system.get("system").and_then(Value::as_str)?;
+                    if id == excluded_system {
+                        return None;
+                    }
+                    Some((
+                        id.to_string(),
+                        system.get("games").and_then(Value::as_u64).unwrap_or(0),
+                    ))
+                })
+                .collect()
+        })
+        .ok_or_else(|| "catalog has no system list".into())
+}
+
+fn catalog_artifact_identity_except(
+    catalog: &Value,
+    excluded_system: &str,
+) -> Result<BTreeMap<String, (String, u64, String)>> {
+    catalog
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .map(|artifacts| {
+            artifacts
+                .iter()
+                .filter_map(|artifact| {
+                    if artifact.get("system").and_then(Value::as_str) == Some(excluded_system) {
+                        return None;
+                    }
+                    let path = artifact.get("path").and_then(Value::as_str)?;
+                    let kind = artifact.get("kind").and_then(Value::as_str)?;
+                    let bytes = artifact.get("bytes").and_then(Value::as_u64)?;
+                    let sha256 = artifact.get("sha256").and_then(Value::as_str)?;
+                    Some((
+                        path.to_string(),
+                        (kind.to_string(), bytes, sha256.to_string()),
+                    ))
+                })
+                .collect()
+        })
+        .ok_or_else(|| "catalog has no artifact list".into())
 }
 
 fn catalog_build_rebuild_cleanup_command() -> String {

@@ -61,6 +61,7 @@ enum BenchmarkProfile {
     SearchUi,
     CatalogLifecycle,
     CatalogBuildRebuild,
+    CatalogChangedRefresh,
     CatalogResumeValidation,
     CatalogFullBuildRebuild,
     CatalogCorpusInventory,
@@ -150,6 +151,9 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::CatalogLifecycle => device.profile_catalog_lifecycle(&output_dir),
             BenchmarkProfile::CatalogBuildRebuild => {
                 device.profile_catalog_build_rebuild(&output_dir)
+            }
+            BenchmarkProfile::CatalogChangedRefresh => {
+                device.profile_catalog_changed_refresh(&output_dir)
             }
             BenchmarkProfile::CatalogResumeValidation => {
                 device.profile_catalog_resume_validation(&output_dir)
@@ -397,6 +401,9 @@ fn require_clean_installed_commit(
         }
         BenchmarkScenario::CatalogBuildRebuild => {
             execute_catalog_build_rebuild(&mut device, manifest, output_dir, reporter)
+        }
+        BenchmarkScenario::CatalogChangedRefresh => {
+            execute_catalog_changed_refresh(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::CatalogResumeValidation => {
             execute_catalog_resume_validation(&mut device, manifest, output_dir, reporter)
@@ -1099,6 +1106,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::ColdBootPprof
         | BenchmarkScenario::CatalogLifecycle
         | BenchmarkScenario::CatalogBuildRebuild
+        | BenchmarkScenario::CatalogChangedRefresh
         | BenchmarkScenario::CatalogResumeValidation
         | BenchmarkScenario::CatalogFullBuildRebuild
         | BenchmarkScenario::CatalogCorpusInventory
@@ -2415,6 +2423,36 @@ fn execute_catalog_build_rebuild(
     Ok(Outcome::Passed)
 }
 
+fn execute_catalog_changed_refresh(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "benchmarking one reboot-cold changed-system catalog refresh",
+        Some(35),
+    )?;
+    let detail = device.profile(BenchmarkProfile::CatalogChangedRefresh, output_dir.clone())?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    device.verify_health()?;
+    evaluate_catalog_changed_refresh_summary(&summary)?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
 fn execute_catalog_resume_validation(
     device: &mut impl BenchmarkDevice,
     manifest: String,
@@ -2542,6 +2580,53 @@ fn evaluate_catalog_build_rebuild_summary(summary: &Value) -> AgentResult<()> {
                 != Some(1)
     }) {
         return Err("catalog build/rebuild benchmark contains a failed sample".into());
+    }
+    Ok(())
+}
+
+fn evaluate_catalog_changed_refresh_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-catalog-changed-refresh-v1")
+        || summary.get("scenario").and_then(Value::as_str) != Some("catalog-changed-refresh")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+    {
+        return Err("catalog changed-refresh summary is not a passing v1 report".into());
+    }
+    let sample = summary
+        .get("sample")
+        .ok_or("catalog changed-refresh summary has no sample")?;
+    if sample
+        .pointer("/fresh/catalog/valid")
+        .and_then(Value::as_bool)
+        != Some(true)
+        || sample
+            .pointer("/changed_refresh/catalog/valid")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || !catalog_identity_complete(&sample["fresh"]["catalog"])
+        || !catalog_identity_complete(&sample["changed_refresh"]["catalog"])
+        || sample
+            .pointer("/validation/snes_game_delta")
+            .and_then(Value::as_i64)
+            != Some(1)
+        || sample
+            .pointer("/validation/systems_unchanged")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || sample
+            .pointer("/validation/non_snes_artifacts_unchanged")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || sample
+            .pointer("/validation/non_snes_games_unchanged")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || summary
+            .pointer("/production_registry/unchanged")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return Err("catalog changed-refresh sample failed correctness checks".into());
     }
     Ok(())
 }
@@ -3692,6 +3777,39 @@ mod tests {
         let mut failed = passing;
         failed["samples"][1]["validation"]["snes_game_delta"] = json!(0);
         assert!(evaluate_catalog_build_rebuild_summary(&failed).is_err());
+    }
+
+    #[test]
+    fn catalog_changed_refresh_requires_exact_isolated_delta() {
+        let catalog = || {
+            json!({
+                "valid": true,
+                "identity_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+                "ordering_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+                "launch_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+                "search_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            })
+        };
+        let passing = json!({
+            "schema": "mister-magik-catalog-changed-refresh-v1",
+            "scenario": "catalog-changed-refresh",
+            "status": "passed",
+            "sample": {
+                "fresh": {"catalog": catalog()},
+                "changed_refresh": {"catalog": catalog()},
+                "validation": {
+                    "snes_game_delta": 1,
+                    "systems_unchanged": true,
+                    "non_snes_artifacts_unchanged": true,
+                    "non_snes_games_unchanged": true,
+                },
+            },
+            "production_registry": {"unchanged": true},
+        });
+        assert!(evaluate_catalog_changed_refresh_summary(&passing).is_ok());
+        let mut failed = passing;
+        failed["sample"]["validation"]["snes_game_delta"] = json!(0);
+        assert!(evaluate_catalog_changed_refresh_summary(&failed).is_err());
     }
 
     #[test]
