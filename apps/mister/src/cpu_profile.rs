@@ -305,6 +305,39 @@ mod imp {
     };
     use std::time::{Duration, Instant};
 
+    #[cfg(unix)]
+    struct SigprofBlock {
+        previous: libc::sigset_t,
+    }
+
+    #[cfg(unix)]
+    impl Drop for SigprofBlock {
+        fn drop(&mut self) {
+            unsafe {
+                libc::pthread_sigmask(libc::SIG_SETMASK, &self.previous, std::ptr::null_mut());
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn block_sigprof() -> Option<SigprofBlock> {
+        let mut mask = std::mem::MaybeUninit::<libc::sigset_t>::zeroed();
+        let mut previous = std::mem::MaybeUninit::<libc::sigset_t>::zeroed();
+        let mask_ptr = mask.as_mut_ptr();
+        let previous_ptr = previous.as_mut_ptr();
+        let blocked = unsafe {
+            libc::sigemptyset(mask_ptr) == 0
+                && libc::sigaddset(mask_ptr, libc::SIGPROF) == 0
+                && libc::pthread_sigmask(libc::SIG_BLOCK, mask_ptr, previous_ptr) == 0
+        };
+        blocked.then(|| SigprofBlock {
+            previous: unsafe { previous.assume_init() },
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn block_sigprof() {}
+
     pub struct CpuProfiler {
         guard: pprof::ProfilerGuard<'static>,
         hz: i32,
@@ -394,6 +427,8 @@ mod imp {
     pub fn finish(profiler: Option<CpuProfiler>) -> Result<Option<CpuProfileSummary>, String> {
         let Some(p) = profiler else { return Ok(None) };
         crate::ui_logln!("cpu_profile: finalization begin");
+        #[cfg(unix)]
+        let _sigprof_block = block_sigprof();
         // Stop delivery of SIGPROF before taking the pprof collector read lock. The
         // guard still owns the collected samples and its Drop implementation will
         // perform the normal handler/timer cleanup after report extraction.
