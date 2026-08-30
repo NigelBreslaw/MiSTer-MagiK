@@ -81,6 +81,13 @@ def verify(
         if not isinstance(updater_manifest, dict):
             raise ValueError("invalid_database_manifest: Arcade updater source")
         updater_index = _decode_updater_index_bytes(files[INDEX])
+        if set(updater_manifest) == {"builder_sha", "sha256"}:
+            # v3 bundles created before updater identity fields were added only
+            # recorded the index digest. Keep those immutable releases usable
+            # so the next promotion can publish a fully populated manifest.
+            if updater_manifest.get("sha256") != sha256_bytes(files[INDEX]):
+                raise ValueError("invalid_database_manifest: Arcade updater checksum")
+            return payload
         if updater_manifest.get("format") != updater_index["format"]:
             raise ValueError("invalid_database_manifest: Arcade updater format")
         if updater_manifest.get("sources") != updater_index["sources"]:

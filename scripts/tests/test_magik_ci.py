@@ -717,6 +717,35 @@ import scripts.magik_ci.cli
             )
             self.assertEqual(updater["catalog_metadata_rows"], 0)
 
+            with zipfile.ZipFile(archive) as stream:
+                legacy_files = {name: stream.read(name) for name in stream.namelist()}
+            legacy_manifest = json.loads(legacy_files[databases.MANIFEST])
+            legacy_manifest["sources"]["arcade_updater"] = {
+                "builder_sha": updater["builder_sha"],
+                "sha256": updater["sha256"],
+            }
+            legacy_files[databases.MANIFEST] = (
+                json.dumps(legacy_manifest, indent=2, sort_keys=True) + "\n"
+            ).encode()
+            legacy_files[databases.CHECKSUMS] = (
+                "".join(
+                    f"{databases.sha256_bytes(data)}  {name}\n"
+                    for name, data in legacy_files.items()
+                    if name not in {databases.MANIFEST, databases.CHECKSUMS}
+                ).encode()
+                + (
+                    f"{databases.sha256_bytes(legacy_files[databases.MANIFEST])}  "
+                    f"{databases.MANIFEST}\n"
+                ).encode()
+            )
+            legacy_archive = root / "legacy-v3.zip"
+            with zipfile.ZipFile(
+                legacy_archive, "w", compression=zipfile.ZIP_DEFLATED
+            ) as stream:
+                for name, data in legacy_files.items():
+                    stream.writestr(name, data)
+            self.assertEqual(verify(legacy_archive)["release_version"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
