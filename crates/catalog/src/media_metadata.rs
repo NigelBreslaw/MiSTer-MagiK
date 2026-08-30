@@ -196,7 +196,7 @@ pub(crate) fn collection_listing_text_with_tool_result(
     std::thread::spawn(move || {
         let mut output = Vec::new();
         let mut limited = stdout.take((MAX_COLLECTION_LISTING_BYTES + 1) as u64);
-        let result = limited.read_to_end(&mut output).map(|()| {
+        let result = limited.read_to_end(&mut output).map(|_| {
             let within_limit = result_is_within_limit(output.len());
             (output, within_limit)
         });
