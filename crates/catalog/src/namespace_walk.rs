@@ -1163,7 +1163,7 @@ mod linux {
                 + i128::from(value.st_mtime_nsec),
             changed_ns: i128::from(value.st_ctime) * 1_000_000_000
                 + i128::from(value.st_ctime_nsec),
-            inode: value.st_ino,
+            inode: u64::from(value.st_ino),
         }
     }
 
