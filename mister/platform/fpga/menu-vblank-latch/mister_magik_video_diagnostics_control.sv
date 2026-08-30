@@ -27,6 +27,7 @@ module mister_magik_scaler_scheduler_snapshot (
 	reg request_meta = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg request_sync = 1'b0;
+	reg capture_active = 1'b0;
 	reg [1:0] previous_output_state = 2'd0;
 	reg previous_vertical_pixel_enable = 1'b0;
 	reg previous_vertical_carry = 1'b0;
@@ -55,8 +56,7 @@ module mister_magik_scaler_scheduler_snapshot (
 	wire [15:0] next_evidence = evidence_hold | event_evidence;
 
 `ifdef FORMAL
-	assign formal_capture_active = request_sync != response_toggle &&
-		!evidence_hold[0];
+	assign formal_capture_active = capture_active;
 	assign formal_accumulated_evidence = evidence_hold;
 	assign formal_event_evidence = event_evidence;
 `endif
@@ -69,18 +69,21 @@ module mister_magik_scaler_scheduler_snapshot (
 		previous_vertical_carry <= live_state[6];
 
 		if(request_sync == response_toggle) begin
+			capture_active <= 1'b0;
 		end
-		else if(evidence_hold[0]) begin
-			// Bit zero doubles as the idle/completed marker, avoiding a second
-			// accumulator bank or capture-state registers.
-			evidence_hold <= event_evidence;
+		else if(!capture_active) begin
+			// Bit zero is a constant completed-window marker and therefore is not
+			// a physical CDC payload register. Accumulate only bits 15:1.
+			capture_active <= 1'b1;
+			evidence_hold[15:1] <= event_evidence[15:1];
 		end
 		else if(hsync_entry && evidence_hold[4]) begin
-			evidence_hold <= next_evidence | 16'h0001;
+			evidence_hold[15:1] <= next_evidence[15:1];
 			response_toggle <= request_sync;
+			capture_active <= 1'b0;
 		end
 		else begin
-			evidence_hold <= next_evidence;
+			evidence_hold[15:1] <= next_evidence[15:1];
 		end
 	end
 endmodule
