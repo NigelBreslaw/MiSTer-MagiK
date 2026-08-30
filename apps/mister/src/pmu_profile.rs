@@ -103,7 +103,7 @@ fn profile_search() -> Result<Value, String> {
     }))
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct CatalogOperationReport {
     operation: &'static str,
     status: &'static str,
@@ -119,7 +119,7 @@ struct CatalogOperationReport {
     aggregate: CatalogPmuAggregate,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 struct CatalogPmuAggregate {
     cycles: u64,
     instructions: u64,
@@ -385,9 +385,13 @@ fn validate_rebuild_all_catalog_profile(
     rebuild: &CatalogOperationReport,
     rebuild_all: &CatalogOperationReport,
 ) -> Result<(), String> {
-    if rebuild_all.rebuilt_systems != rebuild.manifest_systems {
+    if rebuild_all
+        .rebuilt_systems
+        .iter()
+        .any(|system| !rebuild.manifest_systems.contains(system))
+    {
         return Err(format!(
-            "catalog PMU rebuild-all rebuilt {:?}, expected {:?}",
+            "catalog PMU rebuild-all reported unknown systems {:?}; published systems are {:?}",
             rebuild_all.rebuilt_systems, rebuild.manifest_systems
         ));
     }
@@ -624,6 +628,31 @@ mod tests {
         assert_eq!(value["operation"], "fresh-build");
         assert_eq!(value["manifest_games"], 2);
         assert!(value["profile"]["profiles"].is_array());
+    }
+
+    #[test]
+    fn rebuild_all_validation_accepts_unchanged_rows() {
+        let rebuild = CatalogOperationReport {
+            operation: "update",
+            status: "ok",
+            elapsed_us: 1,
+            peak_rss_kib: Some(2),
+            timings: Vec::new(),
+            rebuilt_systems: vec!["snes".into()],
+            removed_systems: Vec::new(),
+            manifest_generation: 3,
+            manifest_systems: vec!["snes".into()],
+            manifest_games: 2,
+            profile: mister_magik_perf_events::ProcessProfileBatch::default(),
+            aggregate: CatalogPmuAggregate::default(),
+        };
+        let mut rebuild_all = rebuild.clone();
+        rebuild_all.operation = "rebuild-all";
+        rebuild_all.rebuilt_systems.clear();
+        assert!(validate_rebuild_all_catalog_profile(&rebuild, &rebuild_all).is_ok());
+
+        rebuild_all.rebuilt_systems.push("unknown".into());
+        assert!(validate_rebuild_all_catalog_profile(&rebuild, &rebuild_all).is_err());
     }
 
     #[test]
