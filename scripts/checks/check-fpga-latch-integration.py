@@ -348,7 +348,7 @@ def main() -> None:
         "module mister_magik_scaler_scheduler_snapshot (",
         "request_meta <= request_toggle;",
         "request_sync <= request_meta;",
-        "output reg  [15:0] evidence_hold = 16'h0001",
+        "(* preserve, dont_replicate *) output reg [15:0] evidence_hold = 16'h0001",
         "evidence_hold[15:1] <= next_evidence[15:1];",
         "response_toggle <= request_sync;",
         "snapshot_response_meta <= snapshot_response_toggle;",

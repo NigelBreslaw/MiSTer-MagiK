@@ -16,7 +16,7 @@ module mister_magik_scaler_scheduler_snapshot (
 	input  wire [15:0] live_state,
 	input  wire        request_toggle,
 	output reg         response_toggle = 1'b0,
-	output reg  [15:0] evidence_hold = 16'h0001
+	(* preserve, dont_replicate *) output reg [15:0] evidence_hold = 16'h0001
 `ifdef FORMAL
 	,output wire        formal_capture_active
 	,output wire [15:0] formal_accumulated_evidence
