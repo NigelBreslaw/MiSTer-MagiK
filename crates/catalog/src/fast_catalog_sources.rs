@@ -89,6 +89,7 @@ pub fn build_independent_fast_snapshot_with_progress(
     let build = build_independent_fast_snapshot_for_refresh_with_progress(
         storage_root,
         |_| {},
+        |_| {},
         |system| system_complete(&system.system_id),
     )?;
     Ok((build.snapshot, build.report))
@@ -105,6 +106,7 @@ pub(crate) struct FastSourceRefreshBuild {
 pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
     storage_root: &Path,
     mut plan_ready: impl FnMut(&[String]),
+    mut system_discovering: impl FnMut(&str),
     mut system_complete: impl FnMut(&FastFiveSystem),
 ) -> Result<FastSourceRefreshBuild, String> {
     let started = Instant::now();
@@ -117,6 +119,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         system_complete(system);
         system_complete_us = system_complete_us.saturating_add(elapsed_us(callback_started));
     };
+    system_discovering("Arcade");
     build_and_record_prepared_system(
         storage_root,
         "arcade",
@@ -134,6 +137,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
             storage_root,
             &plan,
             &PREPARED_SYSTEM_IDS,
+            &mut system_discovering,
             |_| {},
         )?;
     let generic_systems_us = generic.elapsed_us;

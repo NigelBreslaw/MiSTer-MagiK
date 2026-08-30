@@ -1071,7 +1071,33 @@ pub(crate) fn publish_snapshot_with_profile_held(
     artifact_profile: FastFiveArtifactProfile,
     _lease: &crate::catalog_lease::CatalogMutationLease,
 ) -> Result<FastFivePublishReport, String> {
-    publish_snapshot_selection(storage_root, snapshot, limits, artifact_profile, None)
+    publish_snapshot_selection(
+        storage_root,
+        snapshot,
+        limits,
+        artifact_profile,
+        None,
+        |_, _| {},
+    )
+}
+
+#[cfg(feature = "builder")]
+pub(crate) fn publish_snapshot_with_profile_held_and_progress(
+    storage_root: &Path,
+    snapshot: &FastFiveSnapshot,
+    limits: RegistryLimits,
+    artifact_profile: FastFiveArtifactProfile,
+    _lease: &crate::catalog_lease::CatalogMutationLease,
+    progress: impl FnMut(usize, usize),
+) -> Result<FastFivePublishReport, String> {
+    publish_snapshot_selection(
+        storage_root,
+        snapshot,
+        limits,
+        artifact_profile,
+        None,
+        progress,
+    )
 }
 
 #[cfg(feature = "builder")]
@@ -1109,6 +1135,7 @@ pub(crate) fn publish_changed_snapshot_with_profile_held(
         limits,
         artifact_profile,
         Some(changed_system_ids),
+        |_, _| {},
     )
 }
 
@@ -1119,6 +1146,7 @@ fn publish_snapshot_selection(
     limits: RegistryLimits,
     artifact_profile: FastFiveArtifactProfile,
     changed_system_ids: Option<&BTreeSet<String>>,
+    mut progress: impl FnMut(usize, usize),
 ) -> Result<FastFivePublishReport, String> {
     use crate::catalog_domain::ScanUnitId;
     use crate::catalog_format::CatalogFormatDescriptor;
@@ -1212,7 +1240,9 @@ fn publish_snapshot_selection(
     let mut system_builds = Vec::with_capacity(snapshot.systems.len());
     let mut copied_bytes = 0u64;
     let mut copy_hash_us = 0u64;
-    for source in &snapshot.systems {
+    let total_systems = snapshot.systems.len();
+    for (index, source) in snapshot.systems.iter().enumerate() {
+        progress(index.saturating_add(1), total_systems);
         let system_started = Instant::now();
         let system_id = SystemId::parse(&source.system_id)
             .map_err(|error| format!("invalid system {}: {error}", source.system_id))?;

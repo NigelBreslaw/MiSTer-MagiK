@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::launcher_worker_intents::{
-    LauncherWorkerUiIntent, cached_catalog_validation_intent, catalog_rebuild_started_intent,
+    LauncherWorkerUiIntent, cached_catalog_validation_intent, catalog_build_status_intent,
+    catalog_rebuild_started_intent, catalog_system_discovering_intent,
     catalog_system_update_preparing_intent, catalog_system_update_progress_intent,
 };
 use super::*;
@@ -286,6 +287,12 @@ impl LauncherCatalogSession {
                     system_ids,
                     all_published_systems,
                 });
+            }
+            CatalogWorkerMessage::SystemDiscovering { title } => {
+                effects.ui(catalog_system_discovering_intent(&title));
+            }
+            CatalogWorkerMessage::BuildStatus { title } => {
+                effects.ui(catalog_build_status_intent(title));
             }
             CatalogWorkerMessage::SystemScanning { system_id } => {
                 effects.push(CatalogSessionEffect::CatalogSystemScanning { system_id });
@@ -912,6 +919,51 @@ mod tests {
     }
 
     #[test]
+    fn system_discovery_updates_the_background_status() {
+        let mut session = LauncherCatalogSession::new(false);
+        let statuses = catalog_scan_statuses(session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: true,
+                catalog_partial: false,
+            },
+            CatalogWorkerMessage::SystemDiscovering {
+                title: "Super Nintendo".to_string(),
+            },
+            Instant::now(),
+        ));
+
+        assert_eq!(statuses[0].title(), "Discovering Super Nintendo");
+        assert!(statuses[0].background_visible());
+    }
+
+    #[test]
+    fn catalog_build_status_updates_the_background_status() {
+        let mut session = LauncherCatalogSession::new(false);
+        let context = || CatalogWorkerMessageContext {
+            catalog_ready: true,
+            catalog_partial: false,
+        };
+
+        for title in [
+            "Saving system 1/90",
+            "Saving system 90/90",
+            "Saving catalog metadata…",
+            "Finishing catalog…",
+        ] {
+            let statuses = catalog_scan_statuses(session.handle_worker_message(
+                context(),
+                CatalogWorkerMessage::BuildStatus {
+                    title: title.to_string(),
+                },
+                Instant::now(),
+            ));
+
+            assert_eq!(statuses[0].title(), title);
+            assert!(statuses[0].background_visible());
+        }
+    }
+
+    #[test]
     fn update_and_hydration_failures_emit_distinct_state_effects() {
         let now = Instant::now();
         let context = || CatalogWorkerMessageContext {
@@ -1185,6 +1237,11 @@ mod tests {
             worker.execution_mode,
             CatalogExecutionMode::BackgroundInteractive
         );
+        assert!(effects.effects.iter().any(|effect| matches!(
+            effect,
+            CatalogSessionEffect::Ui(LauncherWorkerUiIntent::CatalogScan(status))
+                if status.title() == "Discovering systems"
+        )));
         assert_eq!(effect_names(effects), vec!["event", "start-worker", "ui"]);
     }
 
@@ -1219,6 +1276,11 @@ mod tests {
             worker.execution_mode,
             CatalogExecutionMode::BackgroundInteractive
         );
+        assert!(effects.effects.iter().any(|effect| matches!(
+            effect,
+            CatalogSessionEffect::Ui(LauncherWorkerUiIntent::CatalogScan(status))
+                if status.title() == "Discovering systems"
+        )));
         assert_eq!(effect_names(effects), vec!["event", "ui", "start-worker"]);
     }
 

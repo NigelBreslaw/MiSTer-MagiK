@@ -920,6 +920,14 @@ fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
         CatalogWorkerMessage::ReconciliationPlanReady { .. } => {
             unreachable!("reconciliation plans must use bounded collection chunks")
         }
+        CatalogWorkerMessage::SystemDiscovering { title } => {
+            event.kind = "system-discovering".to_string();
+            event.detail = title.clone();
+        }
+        CatalogWorkerMessage::BuildStatus { title } => {
+            event.kind = "build-status".to_string();
+            event.detail = title.clone();
+        }
         CatalogWorkerMessage::SystemScanning { system_id } => {
             event.kind = "system-scanning".to_string();
             event.system_id = system_id.clone();
@@ -1640,6 +1648,12 @@ fn catalog_worker_message_from_wire_at(
             system_ids: event.system_ids,
             all_published_systems: event.all_published_systems,
         },
+        "system-discovering" => CatalogWorkerMessage::SystemDiscovering {
+            title: event.detail,
+        },
+        "build-status" => CatalogWorkerMessage::BuildStatus {
+            title: event.detail,
+        },
         "system-scanning" => CatalogWorkerMessage::SystemScanning {
             system_id: event.system_id,
         },
@@ -2169,12 +2183,16 @@ fn run_fast_catalog_fresh_build(
     mutation_lease: &mister_magik_catalog::catalog_lease::CatalogMutationLease,
     bootstrap_run_id: Option<&str>,
 ) {
+    use mister_magik_catalog::fast_catalog_refresh::{
+        FastCatalogBuildProgress, build_fresh_catalog_with_presentation_progress,
+    };
+
     let storage_root = PathBuf::from("/media/fat");
     report_catalog_filesystem_headroom(tx, "fresh-begin");
     let mut planned_system_ids = Vec::new();
     let mut completed_system_ids = std::collections::BTreeSet::new();
     let progress_units = std::cell::Cell::new(0u64);
-    let report = match mister_magik_catalog::fast_catalog_refresh::build_fresh_catalog_with_lease(
+    let report = match build_fresh_catalog_with_presentation_progress(
         &storage_root,
         catalog_root,
         mutation_lease,
@@ -2203,6 +2221,11 @@ fn run_fast_catalog_fresh_build(
                     generation: 0,
                 });
             }
+        },
+        |title| {
+            let _ = tx.send(CatalogWorkerMessage::SystemDiscovering {
+                title: title.to_string(),
+            });
         },
         |system| {
             if completed_system_ids.insert(system.system_id.clone()) {
@@ -2254,6 +2277,18 @@ fn run_fast_catalog_fresh_build(
                     );
                 }
             }
+        },
+        |progress| {
+            let title = match progress {
+                FastCatalogBuildProgress::SavingSystem { current, total } => {
+                    format!("Saving system {current}/{total}")
+                }
+                FastCatalogBuildProgress::SavingCatalogMetadata => {
+                    "Saving catalog metadata…".to_string()
+                }
+                FastCatalogBuildProgress::FinishingCatalog => "Finishing catalog…".to_string(),
+            };
+            let _ = tx.send(CatalogWorkerMessage::BuildStatus { title });
         },
     ) {
         Ok(report) => report,
@@ -2497,6 +2532,12 @@ pub(super) enum CatalogWorkerMessage {
         system_ids: Vec<String>,
         all_published_systems: bool,
     },
+    SystemDiscovering {
+        title: String,
+    },
+    BuildStatus {
+        title: String,
+    },
     SystemScanning {
         system_id: String,
     },
@@ -2691,6 +2732,46 @@ mod tests {
         .unwrap()
         .expect("heartbeat event");
         assert!(matches!(message, CatalogWorkerMessage::Heartbeat { .. }));
+    }
+
+    #[test]
+    fn discovering_system_round_trips_through_worker_protocol() {
+        let event = worker_wire_event(&CatalogWorkerMessage::SystemDiscovering {
+            title: "Super Nintendo".to_string(),
+        });
+        let message = catalog_worker_message_from_wire(
+            event,
+            "/media/fat/_Arcade",
+            Path::new("/tmp/catalog-fast-v1"),
+        )
+        .unwrap()
+        .expect("system discovery event");
+
+        assert!(matches!(
+            message,
+            CatalogWorkerMessage::SystemDiscovering { title }
+                if title == "Super Nintendo"
+        ));
+    }
+
+    #[test]
+    fn build_status_round_trips_through_worker_protocol() {
+        let event = worker_wire_event(&CatalogWorkerMessage::BuildStatus {
+            title: "Saving catalog metadata…".to_string(),
+        });
+        let message = catalog_worker_message_from_wire(
+            event,
+            "/media/fat/_Arcade",
+            Path::new("/tmp/catalog-fast-v1"),
+        )
+        .unwrap()
+        .expect("catalog build status event");
+
+        assert!(matches!(
+            message,
+            CatalogWorkerMessage::BuildStatus { title }
+                if title == "Saving catalog metadata…"
+        ));
     }
 
     #[test]

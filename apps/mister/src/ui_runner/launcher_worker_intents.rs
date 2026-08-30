@@ -206,7 +206,29 @@ pub(super) fn catalog_system_update_preparing_intent() -> LauncherWorkerUiIntent
         false,
         true,
         UPDATING_LIBRARY_SCAN_MESSAGE,
-        "Preparing system update",
+        "Discovering systems",
+        "",
+        -1,
+    ))
+}
+
+pub(super) fn catalog_system_discovering_intent(title: &str) -> LauncherWorkerUiIntent {
+    LauncherWorkerUiIntent::CatalogScan(CatalogScanBridgeStatus::new(
+        false,
+        true,
+        UPDATING_LIBRARY_SCAN_MESSAGE,
+        format!("Discovering {title}"),
+        "",
+        -1,
+    ))
+}
+
+pub(super) fn catalog_build_status_intent(title: String) -> LauncherWorkerUiIntent {
+    LauncherWorkerUiIntent::CatalogScan(CatalogScanBridgeStatus::new(
+        false,
+        true,
+        UPDATING_LIBRARY_SCAN_MESSAGE,
+        title,
         "",
         -1,
     ))

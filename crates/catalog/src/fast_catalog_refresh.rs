@@ -251,6 +251,13 @@ pub struct FastCatalogFreshBuildReport {
     pub build_info_persisted: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FastCatalogBuildProgress {
+    SavingSystem { current: usize, total: usize },
+    SavingCatalogMetadata,
+    FinishingCatalog,
+}
+
 pub fn build_fresh_catalog(
     storage_root: &Path,
     catalog_root: &Path,
@@ -280,14 +287,53 @@ pub fn build_fresh_catalog_with_lease(
     storage_root: &Path,
     catalog_root: &Path,
     _lease: &crate::catalog_lease::CatalogMutationLease,
+    plan_ready: impl FnMut(&[String]),
+    system_complete: impl FnMut(&FastFiveSystem),
+) -> Result<FastCatalogFreshBuildReport, String> {
+    build_fresh_catalog_with_discovery_progress(
+        storage_root,
+        catalog_root,
+        _lease,
+        plan_ready,
+        |_| {},
+        system_complete,
+    )
+}
+
+pub fn build_fresh_catalog_with_discovery_progress(
+    storage_root: &Path,
+    catalog_root: &Path,
+    _lease: &crate::catalog_lease::CatalogMutationLease,
     mut plan_ready: impl FnMut(&[String]),
+    mut system_discovering: impl FnMut(&str),
     mut system_complete: impl FnMut(&FastFiveSystem),
+) -> Result<FastCatalogFreshBuildReport, String> {
+    build_fresh_catalog_with_presentation_progress(
+        storage_root,
+        catalog_root,
+        _lease,
+        &mut plan_ready,
+        &mut system_discovering,
+        &mut system_complete,
+        |_| {},
+    )
+}
+
+pub fn build_fresh_catalog_with_presentation_progress(
+    storage_root: &Path,
+    catalog_root: &Path,
+    _lease: &crate::catalog_lease::CatalogMutationLease,
+    mut plan_ready: impl FnMut(&[String]),
+    mut system_discovering: impl FnMut(&str),
+    mut system_complete: impl FnMut(&FastFiveSystem),
+    mut progress: impl FnMut(FastCatalogBuildProgress),
 ) -> Result<FastCatalogFreshBuildReport, String> {
     let started = std::time::Instant::now();
     let source_build =
         crate::fast_catalog_sources::build_independent_fast_snapshot_for_refresh_with_progress(
             storage_root,
             &mut plan_ready,
+            &mut system_discovering,
             &mut system_complete,
         )?;
     let crate::fast_catalog_sources::FastSourceRefreshBuild {
@@ -302,13 +348,17 @@ pub fn build_fresh_catalog_with_lease(
         .iter()
         .map(|system| system.system_id.clone())
         .collect::<Vec<_>>();
-    let publication = crate::fast_five_catalog::publish_snapshot_with_profile_held(
+    let publication = crate::fast_five_catalog::publish_snapshot_with_profile_held_and_progress(
         catalog_root,
         &snapshot,
         crate::shard_registry::production_registry_limits(),
         fast_catalog_artifact_profile(),
         _lease,
+        |current, total| {
+            progress(FastCatalogBuildProgress::SavingSystem { current, total });
+        },
     )?;
+    progress(FastCatalogBuildProgress::SavingCatalogMetadata);
     let (states, capture) = capture_refresh_state_with_profiles(
         storage_root,
         &snapshot,
@@ -348,6 +398,7 @@ pub fn build_fresh_catalog_with_lease(
             false
         }
     };
+    progress(FastCatalogBuildProgress::FinishingCatalog);
     Ok(FastCatalogFreshBuildReport {
         elapsed_us: build_elapsed_us,
         source,

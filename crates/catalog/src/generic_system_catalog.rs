@@ -490,6 +490,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
     storage_root: &Path,
     plan: &CatalogScanPlan,
     excluded_system_ids: &[&str],
+    mut system_discovering: impl FnMut(&str),
     mut system_complete: impl FnMut(&FastFiveSystem),
 ) -> Result<GenericSystemPlanDiscovery, String> {
     let started = Instant::now();
@@ -509,6 +510,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
     let mut profiles = plan.base_profiles().to_vec();
     let mut accumulators = BTreeMap::<String, GenericSystemAccumulator>::new();
     let mut visited_roots = BTreeSet::new();
+    let mut current_system_id = None;
 
     for profile in plan.base_profiles() {
         if excluded_system_ids.contains(&profile.system_id.as_str()) {
@@ -542,6 +544,10 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
                 known_profile_us =
                     known_profile_us.saturating_add(known_started.elapsed().as_micros() as u64);
                 continue;
+            }
+            if current_system_id.as_deref() != Some(profile.system_id.as_str()) {
+                system_discovering(profile.title.as_str());
+                current_system_id = Some(profile.system_id.clone());
             }
             let inventory = match collect_generic_namespace_inventory(&header, None) {
                 Ok(inventory) => inventory,
@@ -626,6 +632,10 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
         let root_key = inventory.fact.path.to_string_lossy().to_ascii_lowercase();
         if !visited_roots.insert(root_key) {
             continue;
+        }
+        if current_system_id.as_deref() != Some(profile.system_id.as_str()) {
+            system_discovering(profile.title.as_str());
+            current_system_id = Some(profile.system_id.clone());
         }
         let continuation_roots = std::mem::take(&mut inventory.continuation_roots);
         let accumulator = accumulator_for_profile(&mut accumulators, &profile);
@@ -1835,8 +1845,14 @@ mod tests {
         .expect("two-pass scan");
         let plan = CatalogScanPlan::try_for_roots(&roots).expect("one-pass plan");
         let (one_pass, report, resolved, observations) =
-            discover_generic_systems_from_plan_excluding_with_progress(&root, &plan, &[], |_| {})
-                .expect("one-pass scan");
+            discover_generic_systems_from_plan_excluding_with_progress(
+                &root,
+                &plan,
+                &[],
+                |_| {},
+                |_| {},
+            )
+            .expect("one-pass scan");
 
         assert_eq!(one_pass, two_pass);
         assert_eq!(

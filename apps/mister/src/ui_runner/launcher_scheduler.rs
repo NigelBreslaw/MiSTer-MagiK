@@ -1188,6 +1188,18 @@ impl LauncherScheduler {
                     now,
                 );
             }
+            CatalogWorkerMessage::SystemDiscovering { title } => {
+                self.note_catalog_progress(
+                    "system-discovering",
+                    "discovering-systems",
+                    title,
+                    -1,
+                    now,
+                );
+            }
+            CatalogWorkerMessage::BuildStatus { title } => {
+                self.note_catalog_progress("build-status", "saving-catalog", title, -1, now);
+            }
             CatalogWorkerMessage::SystemScanning { system_id } => {
                 self.note_catalog_progress(
                     "system-scanning",
