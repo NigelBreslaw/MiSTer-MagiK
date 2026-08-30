@@ -79,8 +79,8 @@ instantaneous `sDISP` sample cannot show what happened across the preceding
 Schema 17, `scaler-pre-read-scheduler-evidence-v1`, therefore replaces only
 the same 16-bit tap with a sticky completed-line summary. The final synchronized
 Avalon acceptance acknowledgement for a scaler line starts the window;
-subsequent output-clock events set ten independent sticky facts.
-Combinational decoding retains the same 16 external evidence fields. At a no-request
+subsequent output-clock events set ten independent sticky facts. A registered
+projection retains the same 16 external evidence fields. At a no-request
 freeze the word reports output enable, horizontal-sync edge and start
 consumption, `sHSYNC` vertical iteration and decision, read/skip predicates,
 `sREAD` address readiness and request issue, `sWAITREAD`, and a zero vertical

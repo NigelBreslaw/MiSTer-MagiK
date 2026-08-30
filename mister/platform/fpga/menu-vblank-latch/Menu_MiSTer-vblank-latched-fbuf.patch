@@ -300,6 +300,7 @@ index a735e6b..b1d403c 100644
  	SIGNAL o_readack,o_readack_sync,o_readack_sync2 : std_logic;
  	SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;
 +	SIGNAL magik_pre_read_summary : std_logic_vector(9 DOWNTO 0):=(OTHERS =>'0');
++	SIGNAL magik_pre_read_evidence : std_logic_vector(15 DOWNTO 0):=(OTHERS =>'0');
 +	ATTRIBUTE altera_attribute OF o_readdataack_sync : SIGNAL IS
 +		"-name SYNCHRONIZER_IDENTIFICATION FORCED; -name PRESERVE_REGISTER ON";
 +	ATTRIBUTE altera_attribute OF o_readdataack_sync2 : SIGNAL IS
@@ -480,29 +481,9 @@ index a735e6b..b1d403c 100644
 -	avl_read<=avl_read_i;
 +	avl_read<=avl_read_i AND NOT avl_read_accepted
 +		WHEN avl_reset_na='0' OR avl_state=sREAD ELSE '0';
-+	-- Ten independent sticky facts retain every root-cause distinction. Six
-+	-- causally implied fields are reconstructed without milestone comparators.
-+	magik_fetch_state(0)<=magik_pre_read_summary(0);
-+	magik_fetch_state(1)<=magik_pre_read_summary(1);
-+	magik_fetch_state(2)<=magik_pre_read_summary(2);
-+	magik_fetch_state(6)<=magik_pre_read_summary(4) OR
-+		magik_pre_read_summary(5) OR magik_pre_read_summary(6);
-+	magik_fetch_state(4)<=magik_pre_read_summary(3) OR
-+		magik_pre_read_summary(4) OR magik_pre_read_summary(5) OR
-+		magik_pre_read_summary(6);
-+	magik_fetch_state(3)<=magik_pre_read_summary(3) OR
-+		magik_pre_read_summary(4) OR magik_pre_read_summary(5) OR
-+		magik_pre_read_summary(6);
-+	magik_fetch_state(5)<=magik_pre_read_summary(3);
-+	magik_fetch_state(7)<=magik_pre_read_summary(4);
-+	magik_fetch_state(8)<=magik_pre_read_summary(5) OR magik_pre_read_summary(6);
-+	magik_fetch_state(9)<=magik_pre_read_summary(5);
-+	magik_fetch_state(10)<=magik_pre_read_summary(6);
-+	magik_fetch_state(11)<=magik_pre_read_summary(4);
-+	magik_fetch_state(12)<=magik_pre_read_summary(7);
-+	magik_fetch_state(13)<=magik_pre_read_summary(8);
-+	magik_fetch_state(14)<=magik_pre_read_summary(8);
-+	magik_fetch_state(15)<=magik_pre_read_summary(9);
++	-- The registered projection prevents reconstructed observer fields from
++	-- creating combinational output-clock crossings.
++	magik_fetch_state<=magik_pre_read_evidence;
  	avl_write<=avl_write_i;
  	avl_writedata<=std_logic_vector(swap(avl_dr));
  	avl_burstcount<=std_logic_vector(to_unsigned(BLEN,8));
@@ -516,6 +497,7 @@ index a735e6b..b1d403c 100644
  		VARIABLE dif_v : natural RANGE 0 TO 8*OHRESH-1;
  		VARIABLE off_v : natural RANGE 0 TO 15;
 +		VARIABLE magik_summary_v : std_logic_vector(9 DOWNTO 0);
++		VARIABLE magik_evidence_v : std_logic_vector(15 DOWNTO 0);
  	BEGIN
  		IF o_reset_na='0' THEN
  			o_copy<=sWAIT;
@@ -531,6 +513,7 @@ index a735e6b..b1d403c 100644
 +			o_last1<='0';
 +			o_last2<='0';
 +			magik_pre_read_summary<=(OTHERS =>'0');
++			magik_pre_read_evidence<=(OTHERS =>'0');
 
  		ELSIF rising_edge(o_clk) THEN
  			------------------------------------------------------
@@ -621,6 +604,24 @@ index a735e6b..b1d403c 100644
 +				magik_summary_v(0):='1'; -- Final acknowledgement starts the window.
 +			END IF;
 +			magik_pre_read_summary<=magik_summary_v;
++			magik_evidence_v(0):=magik_summary_v(0);
++			magik_evidence_v(1):=magik_summary_v(1);
++			magik_evidence_v(2):=magik_summary_v(2);
++			magik_evidence_v(6):=magik_summary_v(4) OR
++				magik_summary_v(5) OR magik_summary_v(6);
++			magik_evidence_v(4):=magik_summary_v(3) OR magik_evidence_v(6);
++			magik_evidence_v(3):=magik_evidence_v(4);
++			magik_evidence_v(5):=magik_summary_v(3);
++			magik_evidence_v(7):=magik_summary_v(4);
++			magik_evidence_v(8):=magik_summary_v(5) OR magik_summary_v(6);
++			magik_evidence_v(9):=magik_summary_v(5);
++			magik_evidence_v(10):=magik_summary_v(6);
++			magik_evidence_v(11):=magik_summary_v(4);
++			magik_evidence_v(12):=magik_summary_v(7);
++			magik_evidence_v(13):=magik_summary_v(8);
++			magik_evidence_v(14):=magik_summary_v(8);
++			magik_evidence_v(15):=magik_summary_v(9);
++			magik_pre_read_evidence<=magik_evidence_v;
  
  			o_read<=o_read_pre AND o_run;
  			o_rline<=o_vacpt(0); -- Even/Odd line for interlaced video
