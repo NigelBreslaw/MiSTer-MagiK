@@ -14128,7 +14128,7 @@ fn validate_catalog_pmu_workload(summary: &Value) -> Result<()> {
     }
     for (operation, expected) in operations
         .iter()
-        .zip(["fresh-build", "rebuild", "rebuild-all"])
+        .zip(["fresh-build", "update", "rebuild-all"])
     {
         let no_op_rebuild_all = expected == "rebuild-all"
             && operation
