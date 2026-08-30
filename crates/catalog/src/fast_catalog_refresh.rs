@@ -1991,6 +1991,7 @@ fn capture_tree_at_depth(
     let mut digest = Sha256::new();
     for entry in entries {
         *visited = visited.saturating_add(1);
+        crate::catalog_progress::report_inner_progress_at(*visited);
         if *visited > MAX_WATCH_ENTRIES {
             return Err(format!(
                 "{} kind=entries observed={} configured={} path={}",
