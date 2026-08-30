@@ -19926,12 +19926,11 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
         CatalogAttributionArm::Pprof => env.extend([
             ("MISTER_PPROF".into(), "1".into()),
             ("MISTER_PPROF_TRIGGER".into(), "catalog-build-full".into()),
-            // Full-build sampling includes exFAT namespace traversal. At high
-            // rates, SIGPROF can wedge the ARM collector while it is extracting
-            // unresolved stacks. Keep this diagnostic arm sparse; the ordinary
-            // post-scan catalog trigger remains at its configured rate and is
-            // the preferred symbol-level timing source.
-            ("MISTER_PPROF_HZ".into(), "1".into()),
+            // Full-build sampling includes exFAT namespace traversal. The
+            // worker-thread finalizer now suppresses SIGPROF before extracting
+            // reports; use the established 19 Hz rate so the short rebuild
+            // pass reliably captures at least one sample.
+            ("MISTER_PPROF_HZ".into(), "19".into()),
             ("MISTER_PPROF_DURATION_SECS".into(), "600".into()),
             (
                 "MISTER_PPROF_OUT".into(),
