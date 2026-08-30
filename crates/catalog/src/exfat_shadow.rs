@@ -119,9 +119,7 @@ pub(crate) fn shadow_path(path: &Path) -> Result<Option<Arc<ShadowReport>>, Stri
         .components()
         .map(|component| component.as_os_str().to_string_lossy().into_owned())
         .collect::<Vec<_>>();
-    reader
-        .walk_to_target(reader.geometry.root_cluster, &mountpoint, &components, 0)
-        .map_err(|error| format!("{error} (device {})", device.display()))?;
+    reader.walk_to_target(reader.geometry.root_cluster, &mountpoint, &components, 0)?;
     let report = ShadowReport {
         mountpoint,
         device,
@@ -300,15 +298,7 @@ impl Reader {
                 return Ok(output);
             }
             if next == 0 || next == 0xffff_fff7 || next < 2 {
-                return Err(format!(
-                    "invalid exFAT FAT link {next:#x} after cluster {cluster} (fat_offset={} heap_offset={} sector_size={} sectors_per_cluster={} root_cluster={} cluster_count={})",
-                    self.geometry.fat_offset,
-                    self.geometry.heap_offset,
-                    self.geometry.sector_size,
-                    self.geometry.sectors_per_cluster,
-                    self.geometry.root_cluster,
-                    self.geometry.cluster_count,
-                ));
+                return Err(format!("invalid exFAT FAT link {next:#x}"));
             }
             cluster = next;
         }
