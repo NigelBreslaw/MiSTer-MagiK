@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 14;
+pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 15;
 const PREPARED_SYSTEM_IDS: [&str; 5] = ["arcade", "amiga", "c64", "dos", "x68000"];
 const MAX_DISCOVERY_ENTRIES: usize = 4_000_000;
 const MAX_DISCOVERY_DEPTH: usize = 256;
@@ -797,16 +797,24 @@ fn scan_arcade_candidates(
             if game.preview_asset_key.is_empty() {
                 game.preview_asset_key = arcade_requirement_preview_asset_key(&row.primary_rom);
             }
-            let (identity_id, family_id) = row
+            let identity_id =
+                arcade_identity_id(row.catalog_metadata.as_ref(), &row.header, &row.primary_rom);
+            let family_id = row
                 .catalog_metadata
                 .as_ref()
-                .map(|metadata| (metadata.identity_id.clone(), metadata.family_id.clone()))
+                .map(|metadata| normalize_machine_id(&metadata.family_id))
+                .unwrap_or_default();
+            let parent_id = row
+                .header
+                .parent
+                .as_deref()
+                .map(normalize_machine_id)
                 .unwrap_or_default();
             games.push(ArcadeCandidate {
                 game,
                 identity_id,
                 family_id,
-                parent_id: String::new(),
+                parent_id,
                 namespace: primary_rom_namespace(&row.primary_rom),
             });
             continue;
@@ -845,19 +853,11 @@ fn scan_arcade_candidates(
             continue;
         }
         let namespace = primary_rom_namespace(&inspection.primary_rom);
-        let identity_id = inspection
-            .header
-            .setname
-            .as_deref()
-            .map(normalize_machine_id)
-            .filter(|identity| !identity.is_empty())
-            .or_else(|| match &inspection.primary_rom {
-                PrimaryRomRequirement::Archive { setname, .. } => {
-                    Some(normalize_machine_id(setname)).filter(|identity| !identity.is_empty())
-                }
-                PrimaryRomRequirement::None | PrimaryRomRequirement::Ambiguous => None,
-            })
-            .unwrap_or_default();
+        let identity_id = arcade_identity_id(
+            inspection.catalog_metadata.as_ref(),
+            &inspection.header,
+            &inspection.primary_rom,
+        );
         let title = inspection
             .catalog_metadata
             .as_ref()
@@ -2064,6 +2064,30 @@ fn normalize_machine_id(value: &str) -> String {
     }
 }
 
+fn arcade_identity_id(
+    catalog_metadata: Option<&crate::arcade_updater_index::ArcadeUpdaterCatalogMetadata>,
+    header: &crate::mra_header::MraHeader,
+    primary_rom: &PrimaryRomRequirement,
+) -> String {
+    catalog_metadata
+        .map(|metadata| normalize_machine_id(&metadata.identity_id))
+        .filter(|identity| !identity.is_empty())
+        .or_else(|| {
+            header
+                .setname
+                .as_deref()
+                .map(normalize_machine_id)
+                .filter(|identity| !identity.is_empty())
+        })
+        .or_else(|| match primary_rom {
+            PrimaryRomRequirement::Archive { setname, .. } => {
+                Some(normalize_machine_id(setname)).filter(|identity| !identity.is_empty())
+            }
+            PrimaryRomRequirement::None | PrimaryRomRequirement::Ambiguous => None,
+        })
+        .unwrap_or_default()
+}
+
 fn encode_component(value: &str) -> String {
     let mut output = String::new();
     for byte in value.as_bytes() {
@@ -2224,6 +2248,95 @@ mod tests {
     }
 
     #[test]
+    fn arcade_updater_hit_without_catalog_metadata_resolves_indexed_setnames() {
+        let root = crate::test_support::unique_temp_dir("fast-source-arcade-family-index-hit");
+        fs::create_dir_all(root.join("_Arcade/cores")).unwrap();
+        fs::create_dir_all(root.join("games/mame")).unwrap();
+        fs::write(
+            root.join("_Arcade/cores/ArkanoidCore_20260830.rbf"),
+            b"core",
+        )
+        .unwrap();
+        fs::write(root.join("games/mame/arkanoid.zip"), b"rom").unwrap();
+        let database = root.join("mister-magik/mame.sqlite3");
+        fs::create_dir_all(database.parent().unwrap()).unwrap();
+        crate::test_support::write_mame_fixture_db(
+            &database,
+            &[
+                ("arkanoid", None, "Arkanoid", None, None),
+                (
+                    "arkanoidj",
+                    Some("arkanoid"),
+                    "Arkanoid (Japan)",
+                    None,
+                    None,
+                ),
+                ("arkanoid2", Some("arkanoid"), "Arkanoid 2", None, None),
+                ("arkanoid3", Some("arkanoid"), "Arkanoid 3", None, None),
+            ],
+        );
+
+        let mut rows = Vec::new();
+        for (name, setname) in [
+            ("Arkanoid.mra", "arkanoid"),
+            ("Arkanoid Japan.mra", "arkanoidj"),
+            ("Arkanoid 2.mra", "arkanoid2"),
+            ("Arkanoid 3.mra", "arkanoid3"),
+        ] {
+            // An index hit must not need to parse the installed MRA again.
+            fs::write(root.join("_Arcade").join(name), b"not valid XML").unwrap();
+            rows.push(crate::arcade_updater_index::ArcadeUpdaterRow {
+                path: format!("_Arcade/{name}"),
+                source_id: "distribution".to_string(),
+                size: 13,
+                md5: "c".repeat(32),
+                header: crate::mra_header::MraHeader {
+                    name: Some(name.trim_end_matches(".mra").to_string()),
+                    rbf: Some("ArkanoidCore".to_string()),
+                    setname: Some(setname.to_string()),
+                    parent: (setname != "arkanoid").then(|| format!("mra-parent-{setname}")),
+                    ..crate::mra_header::MraHeader::default()
+                },
+                primary_rom: PrimaryRomRequirement::Archive {
+                    namespace: RomNamespace::Mame,
+                    setname: "arkanoid".to_string(),
+                },
+                catalog_metadata: None,
+            });
+        }
+        rows.sort_unstable_by(|left, right| left.path.cmp(&right.path));
+        crate::arcade_updater_index::ArcadeUpdaterIndex {
+            sources: [
+                "alternatives",
+                "arcade-offset",
+                "coinop",
+                "distribution",
+                "jtcores",
+            ]
+            .into_iter()
+            .map(|id| crate::arcade_updater_index::ArcadeUpdaterSource {
+                id: id.to_string(),
+                revision: "a".repeat(40),
+                database_sha256: "b".repeat(64),
+            })
+            .collect(),
+            rows,
+        }
+        .write(&root.join("mister-magik/arcade-updater-index-v1.lz4b"))
+        .unwrap();
+
+        let mut report = FastSourceSystemReport::default();
+        let scan = scan_arcade(&root, &mut report).unwrap();
+        assert_eq!(scan.games.len(), 1);
+        assert_eq!(scan.variants.len(), 3);
+        assert_eq!(report.family_raw, 4);
+        assert_eq!(report.family_resolved, 4);
+        assert_eq!(report.family_visible, 1);
+        assert_eq!(report.family_variants, 3);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn amigavision_rows_use_materialized_launch_contract() {
         let root = crate::test_support::unique_temp_dir("fast-source-amiga");
         fs::create_dir_all(root.join("games/Amiga/listings")).unwrap();
@@ -2371,7 +2484,7 @@ mod tests {
 
     #[test]
     fn independent_source_set_contains_no_legacy_input_kind() {
-        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 14);
+        assert_eq!(FAST_SOURCE_ADAPTER_VERSION, 15);
     }
 
     #[test]
