@@ -138,7 +138,7 @@ pub struct FastFiveSystem {
 }
 
 pub fn encode_fast_system_transport(system: &FastFiveSystem) -> Result<Vec<u8>, String> {
-    let encoded_size = postcard::serialized_size(system)
+    let encoded_size = postcard::experimental::serialized_size(system)
         .map_err(|error| format!("measure fast system transport: {error}"))?;
     if encoded_size > MAX_FAST_SYSTEM_TRANSPORT_BYTES {
         return Err("fast system transport exceeds size limit".to_string());
