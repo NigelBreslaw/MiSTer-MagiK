@@ -299,6 +299,10 @@ mod imp {
     };
     use serde_json::json;
     use std::fs;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
     use std::time::{Duration, Instant};
 
     pub struct CpuProfiler {
@@ -692,9 +696,18 @@ mod imp {
         scope: &'static str,
     }
 
+    struct CatalogProfileCompletion(Arc<AtomicBool>);
+
+    impl Drop for CatalogProfileCompletion {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
     pub struct CatalogBuildProfiler {
         config: CpuProfileConfig,
         session: std::sync::Arc<std::sync::Mutex<CatalogBuildSession>>,
+        completed: Arc<AtomicBool>,
     }
 
     impl CatalogBuildProfiler {
@@ -715,6 +728,7 @@ mod imp {
                     finished: false,
                     scope,
                 })),
+                completed: Arc::new(AtomicBool::new(false)),
             }
         }
 
@@ -774,6 +788,7 @@ mod imp {
                     self.config.complete_path.clone(),
                     "failed",
                     "profiler-start-failed",
+                    self.completed.clone(),
                 );
                 return;
             }
@@ -781,11 +796,12 @@ mod imp {
             let session = self.session.clone();
             let complete_path = self.config.complete_path.clone();
             let timeout = self.config.duration;
+            let completed = self.completed.clone();
             if let Err(error) = std::thread::Builder::new()
                 .name("catalog-build-timeout".into())
                 .spawn(move || {
                     std::thread::sleep(timeout);
-                    finalize_catalog_build(session, complete_path, "failed", "timeout");
+                    finalize_catalog_build(session, complete_path, "failed", "timeout", completed);
                 })
             {
                 crate::ui_errln!("catalog-build cpu profile watchdog spawn failed: {error}");
@@ -815,7 +831,30 @@ mod imp {
                 self.config.complete_path.clone(),
                 state,
                 outcome,
+                self.completed.clone(),
             );
+        }
+
+        pub fn wait_for_finalization(&self) {
+            if !self.config.catalog_build_requested()
+                || self
+                    .session
+                    .lock()
+                    .ok()
+                    .is_none_or(|session| session.operation.is_none())
+            {
+                return;
+            }
+            let deadline = std::time::Instant::now() + Duration::from_secs(180);
+            while !self.completed.load(Ordering::Acquire) {
+                if std::time::Instant::now() >= deadline {
+                    crate::ui_errln!(
+                        "catalog-build cpu profile finalizer wait timed out after 180s"
+                    );
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
         }
     }
 
@@ -824,11 +863,16 @@ mod imp {
         complete_path: Option<String>,
         state: &'static str,
         outcome: &'static str,
+        completed: Arc<AtomicBool>,
     ) {
+        let completed_for_thread = completed.clone();
         if let Err(error) = std::thread::Builder::new()
             .name("catalog-build-profile".into())
-            .spawn(move || finalize_catalog_build(session, complete_path, state, outcome))
+            .spawn(move || {
+                finalize_catalog_build(session, complete_path, state, outcome, completed_for_thread)
+            })
         {
+            completed.store(true, Ordering::Release);
             crate::ui_errln!("catalog-build cpu profile finalizer spawn failed: {error}");
         }
     }
@@ -838,7 +882,9 @@ mod imp {
         complete_path: Option<String>,
         state: &str,
         outcome: &str,
+        completed: Arc<AtomicBool>,
     ) {
+        let _completion = CatalogProfileCompletion(completed);
         let (profiler, operation, scope) = {
             let Ok(mut session) = session.lock() else {
                 crate::ui_errln!("catalog-build cpu profile session lock poisoned");

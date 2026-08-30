@@ -2158,6 +2158,7 @@ fn run_fast_catalog_refresh_in_process(
         ),
     });
     let _ = tx.send(CatalogWorkerMessage::Done);
+    catalog_profile.wait_for_finalization();
 }
 
 fn run_fast_catalog_fresh_build(
@@ -2325,6 +2326,7 @@ fn run_fast_catalog_fresh_build(
     }
     catalog_profile.persisted();
     let _ = tx.send(CatalogWorkerMessage::Done);
+    catalog_profile.wait_for_finalization();
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CatalogReconcileScope {
