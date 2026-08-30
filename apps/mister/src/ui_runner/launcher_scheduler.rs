@@ -2164,4 +2164,41 @@ mod tests {
         ));
         control.mark_reaped_for_test();
     }
+
+    #[test]
+    fn advancing_heartbeats_keep_watchdog_live_past_stall_threshold() {
+        let start = Instant::now();
+        let (_tx, rx) = mpsc::channel();
+        let control = Arc::new(CatalogChildControl::test_unreaped());
+        let mut scheduler = LauncherScheduler::new(false);
+        scheduler.catalog = CatalogJobState::Running(rx.into());
+        scheduler.catalog_child_control = Some(Arc::clone(&control));
+        let _ = scheduler.catalog_progress.start(
+            "/tmp/catalog-test".to_string(),
+            "fresh_build",
+            "background_interactive",
+            start,
+        );
+
+        for (sequence, elapsed_secs) in [(1, 90), (2, 180), (3, 270)] {
+            let now = start + Duration::from_secs(elapsed_secs);
+            scheduler.record_catalog_progress_message(
+                &CatalogWorkerMessage::Heartbeat {
+                    run_id: "watchdog-test".to_string(),
+                    phase: "artifacts".to_string(),
+                    sequence,
+                    progress_epoch: 1,
+                    work_units: sequence,
+                },
+                now,
+            );
+            scheduler.tick_catalog_progress(true, now);
+            assert!(!scheduler.catalog_stop_requested);
+        }
+
+        scheduler.tick_catalog_progress(true, start + Duration::from_secs(359));
+        assert!(!scheduler.catalog_stop_requested);
+        assert_eq!(scheduler.catalog_progress_work_units, 3);
+        control.mark_reaped_for_test();
+    }
 }
