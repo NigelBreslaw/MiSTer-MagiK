@@ -578,7 +578,7 @@ def main() -> None:
         "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_meta} 1",
         "-from $magik_scheduler_snapshot_response",
         "-to $magik_scheduler_snapshot_response_meta",
-        "{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold*} 16",
+        "{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold*} 15",
         "-from $magik_scheduler_snapshot_data",
         "-to $magik_scheduler_snapshot_destination",
         "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_liveness_publication_request_ack scheduler_snapshot_request_response_data reset_observed",

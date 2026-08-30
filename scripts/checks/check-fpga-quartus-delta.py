@@ -590,7 +590,7 @@ def validate_diagnostic_reports(
                     EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH
                 )
             expected_identity_counts = {
-                label: 16 if label == "scheduler_snapshot_data" else 1
+                label: 15 if label == "scheduler_snapshot_data" else 1
                 for label in expected_net_delay_paths
             }
             if len(detailed_rows) != sum(expected_identity_counts.values()):

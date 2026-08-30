@@ -70,11 +70,14 @@ set_net_delay -max 10.0 \
 	-from $magik_scheduler_snapshot_response \
 	-to $magik_scheduler_snapshot_response_meta
 
-# evidence_hold is a closed-loop multi-cycle path: it is written before the
-# response toggle and remains immutable until a later request. The two-stage
-# response synchronizer supplies more than one destination period of settling.
+# evidence_hold[15:1] is a closed-loop multi-cycle path: it is written before
+# the response toggle and remains immutable until a later request. Bit zero is
+# the completed-window marker and is deliberately forced high in every held
+# response, so Quartus folds it to VCC rather than retaining a CDC register.
+# The two-stage response synchronizer supplies more than one destination period
+# of settling for every physical payload bit.
 set magik_scheduler_snapshot_data [magik_require_registers scheduler_snapshot_data \
-	{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold*} 16]
+	{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold*} 15]
 set magik_scheduler_snapshot_destination [get_registers -nowarn -no_duplicates \
 	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|frozen_*}]
 if {[get_collection_size $magik_scheduler_snapshot_destination] != 16} {

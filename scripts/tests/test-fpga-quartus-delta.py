@@ -226,7 +226,7 @@ SCALER_FETCH_DIAGNOSTIC_REPORTS = {
                 f"mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold[{bit}]",
                 f"mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|frozen_state[{bit}]",
             )
-            for bit in range(16)
+            for bit in range(1, 16)
         )
     ),
     "menu.magik-diagnostic-metastability.rpt": (
@@ -871,6 +871,39 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertIn(
             "diagnostic_metastability_chain_missing", payload["invalid_reason"]
         )
+
+    def test_missing_scheduler_snapshot_payload_path_fails(self) -> None:
+        reports = dict(SCALER_FETCH_DIAGNOSTIC_REPORTS)
+        missing = net_delay_detail(
+            "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold[15]",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|frozen_state[15]",
+        )
+        reports["menu.magik-diagnostic-cdc-net-delay.rpt"] = reports[
+            "menu.magik-diagnostic-cdc-net-delay.rpt"
+        ].replace(missing, "", 1)
+        result, payload = self.run_check(
+            BASE,
+            BASE + SCALER_FETCH_CUSTOM_SYNC,
+            diagnostic_reports=reports,
+            experimental_scaler_fetch=True,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("diagnostic_cdc_analysis_count", payload["invalid_reason"])
+
+    def test_constant_scheduler_snapshot_marker_is_not_a_cdc_path(self) -> None:
+        reports = dict(SCALER_FETCH_DIAGNOSTIC_REPORTS)
+        reports["menu.magik-diagnostic-cdc-net-delay.rpt"] += net_delay_detail(
+            "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold[0]",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|frozen_state[0]",
+        )
+        result, payload = self.run_check(
+            BASE,
+            BASE + SCALER_FETCH_CUSTOM_SYNC,
+            diagnostic_reports=reports,
+            experimental_scaler_fetch=True,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("diagnostic_cdc_analysis_count", payload["invalid_reason"])
 
     def test_pll_count_drift_fails(self) -> None:
         patched = (BASE + CUSTOM_SYNC).replace("Total PLLs: 3 / 6", "Total PLLs: 4 / 6")
