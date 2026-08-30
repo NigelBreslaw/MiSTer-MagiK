@@ -20,7 +20,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const REFRESH_SCHEMA: u32 = 2;
+const REFRESH_SCHEMA: u32 = 3;
 const ENVELOPE_VERSION: u32 = 1;
 const ENVELOPE_BYTES: usize = 64;
 const MANIFEST_MAGIC: &[u8; 8] = b"MGKRFSMF";
@@ -30,7 +30,7 @@ const BUILD_INFO_MAGIC: &[u8; 8] = b"MGKRFBIN";
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_WATCH_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BUILD_INFO_BYTES: usize = 4096;
-const STATE_DIRECTORY: &str = "fast-refresh-v2";
+const STATE_DIRECTORY: &str = "fast-refresh-v3";
 const MANIFEST_A: &str = "manifest-a.bin";
 const MANIFEST_B: &str = "manifest-b.bin";
 const BUILD_INFO_FILE: &str = "build-info.bin";
@@ -1201,13 +1201,8 @@ fn capture_system_watch_from_specification(
         u8::from(reused_generic_observations),
     );
     if system_id == "arcade" {
-        for path in [
-            storage_root.join("mister-magik-dev/arcade-updater-index-v1.lz4b"),
-            storage_root.join("mister-magik/arcade-updater-index-v1.lz4b"),
-        ] {
-            if path.is_file() {
-                containers.push(capture_container(&path)?);
-            }
+        for path in updater_metadata_candidates(storage_root) {
+            containers.push(capture_optional_container(&path)?);
         }
     }
     if matches!(system_id, "snes" | "saturn") {
@@ -1219,6 +1214,13 @@ fn capture_system_watch_from_specification(
                 containers.push(capture_container(&path)?);
                 break;
             }
+        }
+    }
+    for path in &specification.metadata_files {
+        if matches!(system_id, "arcade" | "neogeo") {
+            containers.push(capture_optional_container(path)?);
+        } else if path.is_file() {
+            containers.push(capture_container(path)?);
         }
     }
     directories.sort_by(|left, right| left.path.cmp(&right.path));
@@ -1835,7 +1837,15 @@ fn check_watch_index(
     for container in &watch.containers {
         check.containers_checked = check.containers_checked.saturating_add(1);
         let path = Path::new(&container.path);
-        let Some(observed) = metadata_cache.get(path).and_then(|metadata| *metadata) else {
+        let observed = metadata_cache.get(path).and_then(|metadata| *metadata);
+        let Some(observed) = observed else {
+            if container.size == 0
+                && container.modified_ns == 0
+                && container.changed_ns == 0
+                && container.inode == 0
+            {
+                continue;
+            }
             check.status = FastSourceCheckStatus::Changed;
             check.reason = format!("container unavailable: {}", container.path);
             return;
@@ -1843,6 +1853,8 @@ fn check_watch_index(
         if !observed.is_file
             || observed.size != container.size
             || observed.modified_ns != container.modified_ns
+            || observed.changed_ns != container.changed_ns
+            || observed.inode != container.inode
         {
             check.status = FastSourceCheckStatus::Changed;
             check.reason = format!("container changed: {}", container.path);
@@ -1931,6 +1943,7 @@ fn discovery_anchors_unchanged<'a>(
 struct WatchSpecification {
     scan_roots: Vec<PathBuf>,
     anchors: Vec<PathBuf>,
+    metadata_files: Vec<PathBuf>,
 }
 
 fn watch_specification_from_profiles(
@@ -1998,10 +2011,53 @@ fn watch_specification_from_profiles(
     anchors.append(&mut core_parents);
     anchors.sort();
     anchors.dedup();
+    let metadata_files = if matches!(system_id, "arcade" | "neogeo") {
+        family_metadata_candidates(storage_root)
+    } else {
+        Vec::new()
+    };
     Ok(WatchSpecification {
         scan_roots,
         anchors,
+        metadata_files,
     })
+}
+
+fn family_metadata_candidates(storage_root: &Path) -> Vec<PathBuf> {
+    let dev_root = storage_root.join("mister-magik-dev");
+    let stable_root = storage_root.join("mister-magik");
+    let dev_mame = dev_root.join("mame.sqlite3");
+    let stable_mame = stable_root.join("mame.sqlite3");
+    let mut paths = Vec::new();
+    if dev_mame.is_file() {
+        paths.push(dev_mame);
+        paths.push(dev_root.join("hbmame.sqlite3"));
+    } else if stable_mame.is_file() {
+        paths.push(stable_mame);
+        paths.push(stable_root.join("hbmame.sqlite3"));
+        // A Dev MAME appearing later takes priority over the selected stable
+        // database, so its absent state must be watched as well.
+        paths.push(dev_root.join("mame.sqlite3"));
+    } else {
+        paths.push(dev_mame);
+        paths.push(stable_mame);
+    }
+    paths
+}
+
+fn updater_metadata_candidates(storage_root: &Path) -> Vec<PathBuf> {
+    let dev = storage_root.join("mister-magik-dev/arcade-updater-index-v1.lz4b");
+    let stable = storage_root.join("mister-magik/arcade-updater-index-v1.lz4b");
+    if dev.is_file() {
+        vec![dev]
+    } else if stable.is_file() {
+        vec![
+            stable,
+            storage_root.join("mister-magik-dev/arcade-updater-index-v1.lz4b"),
+        ]
+    } else {
+        vec![dev, stable]
+    }
 }
 
 fn capture_tree(
@@ -2196,6 +2252,38 @@ fn capture_container(path: &Path) -> Result<FastWatchedContainer, String> {
         inode: inode(&metadata),
         content_directory_fingerprint: sha256_digest_hex(digest.finalize()),
     })
+}
+
+fn capture_optional_container(path: &Path) -> Result<FastWatchedContainer, String> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(FastWatchedContainer {
+                path: path.to_string_lossy().into_owned(),
+                size: 0,
+                modified_ns: 0,
+                changed_ns: 0,
+                inode: 0,
+                content_directory_fingerprint: sha256_digest_hex(Sha256::digest(
+                    format!("{}\0absent", path.display()).as_bytes(),
+                )),
+            });
+        }
+        Err(error) => {
+            return Err(format!(
+                "stat watched container {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let mut container = capture_container(path)?;
+    if !metadata.is_file() {
+        container.size = 0;
+        container.modified_ns = 0;
+        container.changed_ns = 0;
+        container.inode = 0;
+    }
+    Ok(container)
 }
 
 fn core_profile_fingerprint(

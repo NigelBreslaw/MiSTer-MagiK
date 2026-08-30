@@ -9,7 +9,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-pub const SHARD_SCHEMA_VERSION: u32 = 5;
+pub const SHARD_SCHEMA_VERSION: u32 = 6;
 pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
 pub const NAVIGATION_SCHEMA_VERSION: u32 = 3;
 pub const PRODUCTION_PROJECTION_CONTRACT: &str = "rich-game-v2";

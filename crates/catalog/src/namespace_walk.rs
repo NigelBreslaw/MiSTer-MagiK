@@ -100,6 +100,8 @@ pub(crate) struct KnownPathMetadata {
     pub(crate) is_file: bool,
     pub(crate) size: u64,
     pub(crate) modified_ns: i128,
+    pub(crate) changed_ns: i128,
+    pub(crate) inode: u64,
 }
 
 /// Probe immediate children of one parent directory without repeating the
@@ -129,6 +131,8 @@ pub(crate) fn probe_known_path_metadata(
 #[cfg(not(target_os = "linux"))]
 #[cfg(feature = "builder")]
 fn known_path_metadata(metadata: std::fs::Metadata) -> KnownPathMetadata {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
     use std::time::UNIX_EPOCH;
 
     KnownPathMetadata {
@@ -142,6 +146,15 @@ fn known_path_metadata(metadata: std::fs::Metadata) -> KnownPathMetadata {
             .map_or(0, |value| {
                 i128::from(value.as_secs()) * 1_000_000_000 + i128::from(value.subsec_nanos())
             }),
+        #[cfg(unix)]
+        changed_ns: i128::from(metadata.ctime()) * 1_000_000_000
+            + i128::from(metadata.ctime_nsec()),
+        #[cfg(not(unix))]
+        changed_ns: 0,
+        #[cfg(unix)]
+        inode: metadata.ino(),
+        #[cfg(not(unix))]
+        inode: 0,
     }
 }
 
@@ -1148,6 +1161,9 @@ mod linux {
             size: u64::try_from(value.st_size).unwrap_or(0),
             modified_ns: i128::from(value.st_mtime) * 1_000_000_000
                 + i128::from(value.st_mtime_nsec),
+            changed_ns: i128::from(value.st_ctime) * 1_000_000_000
+                + i128::from(value.st_ctime_nsec),
+            inode: value.st_ino,
         }
     }
 
