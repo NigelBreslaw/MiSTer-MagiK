@@ -394,6 +394,22 @@ mod imp {
     pub fn finish(profiler: Option<CpuProfiler>) -> Result<Option<CpuProfileSummary>, String> {
         let Some(p) = profiler else { return Ok(None) };
         crate::ui_logln!("cpu_profile: finalization begin");
+        // Stop delivery of SIGPROF before taking the pprof collector read lock. The
+        // guard still owns the collected samples and its Drop implementation will
+        // perform the normal handler/timer cleanup after report extraction.
+        let mut timer = libc::itimerval {
+            it_interval: libc::timeval {
+                tv_sec: 0,
+                tv_usec: 0,
+            },
+            it_value: libc::timeval {
+                tv_sec: 0,
+                tv_usec: 0,
+            },
+        };
+        unsafe {
+            libc::setitimer(libc::ITIMER_PROF, &mut timer, std::ptr::null_mut());
+        }
         let report_builder = p.guard.report();
         crate::ui_logln!("cpu_profile: building unresolved report");
         let unresolved = match report_builder.build_unresolved() {
