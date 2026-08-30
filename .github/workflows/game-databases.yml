@@ -251,9 +251,17 @@ jobs:
 
       - name: Build and verify updater Arcade index
         run: |
+          set -euo pipefail
           scripts/magik-ci ci game-databases build-updater-arcade \
             --input-manifest build/updater/inputs.json \
             --out build/arcade-updater-index-v1.lz4b | tee build/updater-summary.json
+          test -s build/arcade-updater-index-v1.lz4b
+          test -s build/updater-summary.json
+          jq -e '
+            .format == "mister-magik-arcade-updater-index-v1" and
+            (.rows | type == "number") and
+            (.compressed_bytes | type == "number")
+          ' build/updater-summary.json >/dev/null
 
       - uses: actions/upload-artifact@v7
         with:

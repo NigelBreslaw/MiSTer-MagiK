@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import subprocess
 import sys
 import tempfile
@@ -10,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.magik_ci import build, metadata
+from scripts.magik_ci import build, databases, metadata
 from scripts.magik_ci.assurance import fast_checks
 from scripts.magik_ci.bundle import bundle_id, update_plan
 from scripts.magik_ci.cli import parser
@@ -289,6 +291,152 @@ import scripts.magik_ci.cli
         self.assertFalse(plan["main_changed"])
         self.assertFalse(plan["fpga_changed"])
         self.assertFalse(plan["kernel_changed"])
+
+    def test_updater_mra_inspection_tolerates_case_variant_rom_closing_tags(
+        self,
+    ) -> None:
+        mra = b"""
+            <misterromdescription>
+                <name>Space Demon</name>
+                <year>1980</year>
+                <manufacturer>Nintendo</manufacturer>
+                <setname>SpaceDemon</setname>
+                <rbf>SpaceFirebird</rbf>
+                <rom index="0" zip="spacedem.zip|spacefb.zip">
+                    <part name="main.bin" />
+                </ROM>
+            </misterromdescription>
+        """
+
+        header, primary_rom = databases._mra_inspection(mra, "Space Demon.mra")
+
+        self.assertEqual(header["name"], "Space Demon")
+        self.assertEqual(header["setname"], "SpaceDemon")
+        self.assertEqual(
+            primary_rom,
+            {"Archive": {"namespace": "Mame", "setname": "spacedem"}},
+        )
+
+    def test_updater_mra_inspection_handles_space_firebird_fixture(self) -> None:
+        mra = b"""
+            <misterromdescription>
+                <name>Space Firebird</name>
+                <setname>spacefb</setname>
+                <rbf>SpaceFirebird</rbf>
+                <rom index="0" zip="spacefb.zip">
+                    <part name="main.bin" />
+                </ROM>
+            </misterromdescription>
+        """
+
+        header, primary_rom = databases._mra_inspection(mra, "Space Firebird.mra")
+
+        self.assertEqual(header["name"], "Space Firebird")
+        self.assertEqual(
+            primary_rom,
+            {"Archive": {"namespace": "Mame", "setname": "spacefb"}},
+        )
+
+    def test_updater_build_validates_sources_integrity_and_precedence(self) -> None:
+        mra = b"""
+            <misterromdescription>
+                <name>Fixture Game</name>
+                <setname>fixture</setname>
+                <rom zip="fixture.zip"><part /></ROM>
+            </misterromdescription>
+        """
+        source_order = (
+            "distribution",
+            "alternatives",
+            "jtcores",
+            "coinop",
+            "arcade-offset",
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sources = []
+            for position, source_id in enumerate(source_order):
+                source_root = root / source_id
+                mra_path = source_root / "_Arcade" / "Fixture Game.mra"
+                mra_path.parent.mkdir(parents=True)
+                mra_path.write_bytes(mra)
+                database_path = root / f"{source_id}.json"
+                database_path.write_text(
+                    json.dumps(
+                        {
+                            "files": {
+                                "_Arcade/Fixture Game.mra": {
+                                    "hash": hashlib.md5(
+                                        mra, usedforsecurity=False
+                                    ).hexdigest(),
+                                    "size": len(mra),
+                                }
+                            }
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                sources.append(
+                    {
+                        "id": source_id,
+                        "revision": f"{position + 1:040x}",
+                        "database": str(database_path),
+                        "roots": [str(source_root)],
+                    }
+                )
+
+            inputs = root / "inputs.json"
+            inputs.write_text(
+                json.dumps(
+                    {
+                        "format": "mister-magik-arcade-updater-inputs-v1",
+                        "sources": sources,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output = root / "arcade-updater-index-v1.lz4b"
+
+            summary = databases.build_updater(inputs, output)
+
+            self.assertGreater(output.stat().st_size, 0)
+            self.assertEqual(summary["compressed_bytes"], output.stat().st_size)
+            self.assertEqual(summary["rows"], 1)
+            self.assertEqual(summary["source_rows"], dict.fromkeys(source_order, 1))
+
+            bad_database = root / "distribution.json"
+            bad_database.write_text(
+                json.dumps(
+                    {
+                        "files": {
+                            "_Arcade/Fixture Game.mra": {
+                                "hash": "0" * 32,
+                                "size": len(mra),
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "updater MD5 mismatch"):
+                databases.build_updater(inputs, root / "bad-index.lz4b")
+
+    def test_updater_build_rejects_noncanonical_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            inputs = Path(directory) / "inputs.json"
+            inputs.write_text(
+                json.dumps(
+                    {
+                        "format": "mister-magik-arcade-updater-inputs-v1",
+                        "sources": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "five canonical sources"):
+                databases.build_updater(inputs, Path(directory) / "index.lz4b")
 
     def test_manifest_candidate_is_ordered(self) -> None:
         values = {

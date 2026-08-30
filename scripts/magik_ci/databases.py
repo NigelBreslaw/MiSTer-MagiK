@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import html
 import json
+import re
 import sqlite3
 import zipfile
 from pathlib import Path
@@ -15,6 +17,22 @@ FORMAT = "mister-magik-game-databases-manifest-v3"
 MANIFEST = "game-databases-manifest.json"
 CHECKSUMS = "SHA256SUMS"
 INDEX = "arcade-updater-index-v1.lz4b"
+INPUT_FORMAT = "mister-magik-arcade-updater-inputs-v1"
+SOURCE_ORDER = ("distribution", "alternatives", "jtcores", "coinop", "arcade-offset")
+
+_MRA_TAG_RE = re.compile(
+    r"<\s*(?P<closing>/)?\s*(?P<name>[A-Za-z][A-Za-z0-9_.:-]*)\b(?P<attrs>[^>]*)>",
+    re.DOTALL,
+)
+_MRA_METADATA_FIELDS = (
+    "name",
+    "rbf",
+    "platform",
+    "manufacturer",
+    "year",
+    "setname",
+    "parent",
+)
 
 
 def _zip(path: Path, files: list[tuple[str, bytes]]) -> None:
@@ -238,37 +256,81 @@ def build_updater(input_manifest: Path, output: Path) -> dict[str, object]:
     import hashlib
 
     manifest = json.loads(input_manifest.read_text(encoding="utf-8"))
+    sources_manifest = manifest.get("sources")
+    source_ids = []
+    if isinstance(sources_manifest, list) and all(
+        isinstance(source, dict) for source in sources_manifest
+    ):
+        source_ids = [source.get("id") for source in sources_manifest]
+    if manifest.get("format") != INPUT_FORMAT or source_ids != list(SOURCE_ORDER):
+        raise ValueError(
+            "Arcade updater inputs must contain the five canonical sources "
+            "in precedence order"
+        )
+
     sources: list[dict[str, Any]] = []
     rows: dict[str, dict[str, object]] = {}
-    for source in manifest["sources"]:
-        database_bytes = (
-            source["database"].read_bytes()
-            if isinstance(source["database"], Path)
-            else Path(source["database"]).read_bytes()
-        )
-        database = cast(dict[str, Any], json.loads(database_bytes))
+    source_counts: dict[str, int] = {}
+    for source in sources_manifest:
+        source_id = source["id"]
+        revision = source["revision"]
+        _require_lower_hex(f"{source_id} revision", revision, 40)
+        database_path = Path(source["database"])
+        database_bytes = database_path.read_bytes()
+        database_value = json.loads(database_bytes)
+        if not isinstance(database_value, dict):
+            raise TypeError(f"updater database {database_path} is not an object")
+        database = cast(dict[str, Any], database_value)
         sources.append(
             {
-                "id": source["id"],
-                "revision": source["revision"],
+                "id": source_id,
+                "revision": revision,
                 "database_sha256": sha256_bytes(database_bytes),
             }
         )
-        for path, entry in database.get("files", {}).items():
+        files = database.get("files")
+        if not isinstance(files, dict):
+            raise TypeError(f"updater database {database_path} has no files map")
+        count = 0
+        for path, entry in files.items():
             normalized = path.lstrip("/").replace("\\", "/")
             if normalized.lower().endswith(".mra") and normalized.startswith(
                 "_Arcade/"
             ):
+                if not isinstance(entry, dict):
+                    raise ValueError(f"updater entry {normalized} is not an object")
+                entry_hash = entry["hash"]
+                _require_lower_hex("MRA MD5", entry_hash, 32)
+                entry_size = entry["size"]
+                if (
+                    not isinstance(entry_size, int)
+                    or isinstance(entry_size, bool)
+                    or entry_size < 0
+                ):
+                    raise ValueError(f"updater size for {normalized} is invalid")
+                source_path = _source_path(source, normalized, entry)
+                source_bytes = source_path.read_bytes()
+                if len(source_bytes) != entry_size:
+                    raise ValueError(
+                        f"updater size mismatch for {normalized}: "
+                        f"database={entry_size} source={len(source_bytes)}"
+                    )
+                source_hash = hashlib.md5(
+                    source_bytes, usedforsecurity=False
+                ).hexdigest()
+                if source_hash != entry_hash:
+                    raise ValueError(f"updater MD5 mismatch for {normalized}")
+                header, primary_rom = _mra_inspection(source_bytes, normalized)
                 rows[normalized] = {
                     "path": normalized,
-                    "source_id": source["id"],
-                    "size": entry["size"],
-                    "md5": entry["hash"],
-                    "header": _mra_header(_source_path(source, normalized, entry)),
-                    "primary_rom": _primary_rom(
-                        _source_path(source, normalized, entry)
-                    ),
+                    "source_id": source_id,
+                    "size": entry_size,
+                    "md5": source_hash,
+                    "header": header,
+                    "primary_rom": primary_rom,
                 }
+                count += 1
+        source_counts[source_id] = count
     sources.sort(key=lambda value: value["id"])
     ordered_rows = [rows[key] for key in sorted(rows)]
     payload = {"sources": sources, "rows": ordered_rows}
@@ -297,25 +359,19 @@ def build_updater(input_manifest: Path, output: Path) -> dict[str, object]:
     return {
         "format": "mister-magik-arcade-updater-index-v1",
         "rows": len(ordered_rows),
+        "source_rows": source_counts,
         "compressed_bytes": len(encoded),
         "output": str(output),
     }
 
 
-def _mra_header(path: Path) -> dict[str, str | None]:
-    import xml.etree.ElementTree as ET
-
-    root = ET.parse(path).getroot()
-    text = lambda name: root.findtext(name)
-    return {
-        "name": text("name"),
-        "rbf": text("rbf"),
-        "platform": text("platform"),
-        "manufacturer": text("manufacturer"),
-        "year": text("year"),
-        "setname": text("setname"),
-        "parent": text("parent"),
-    }
+def _require_lower_hex(label: str, value: object, length: int) -> None:
+    if (
+        not isinstance(value, str)
+        or len(value) != length
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{label} must be {length} lowercase hexadecimal characters")
 
 
 def _source_path(
@@ -333,15 +389,105 @@ def _source_path(
     raise FileNotFoundError(normalized)
 
 
-def _primary_rom(path: Path) -> str | dict[str, object]:
-    import xml.etree.ElementTree as ET
+def _mra_inspection(
+    data: bytes, path: str
+) -> tuple[dict[str, str | None], str | dict[str, object]]:
+    text = data.decode("utf-8", errors="replace")
+    lower = text.lower()
+    if not re.search(r"<\s*misterromdescription(?:\s|>)", lower):
+        raise ValueError(f"inspect {path}: missing misterromdescription root")
 
-    root = ET.parse(path).getroot()
-    rom = root.find("rom")
-    if rom is None:
-        return "None"
-    setname = rom.get("zip") or rom.get("setname")
+    tags = list(_MRA_TAG_RE.finditer(text))
+    first_rom = next(
+        (
+            tag
+            for tag in tags
+            if not tag.group("closing") and tag.group("name").lower() == "rom"
+        ),
+        None,
+    )
+    metadata_text = text[: first_rom.start()] if first_rom else text
+    header = {
+        field: _mra_metadata_value(metadata_text, field)
+        for field in _MRA_METADATA_FIELDS
+    }
+
+    archive_groups: list[list[tuple[str, str]]] = []
+    for tag in tags:
+        if tag.group("closing") or tag.group("name").lower() not in {"rom", "part"}:
+            continue
+        zip_value = _mra_attribute(tag.group("attrs"), "zip")
+        if zip_value is None:
+            continue
+        archives = [
+            normalized
+            for value in zip_value.split("|")
+            if (normalized := _normalize_rom_archive(value)) is not None
+        ]
+        if archives:
+            archive_groups.append(archives)
+
+    archives = sorted({archive for group in archive_groups for archive in group})
+    setname = _normalize_rom_setname(header["setname"] or "")
+    if not archives:
+        primary_rom: str | dict[str, object] = "None"
+    elif setname:
+        matches = [archive for archive in archives if archive[1] == setname]
+        if len(matches) == 1:
+            primary_rom = _archive_requirement(matches[0])
+        elif not matches and len(archive_groups) == 1:
+            primary_rom = _archive_requirement(archive_groups[0][0])
+        else:
+            primary_rom = "Ambiguous"
+    elif len(archives) == 1:
+        primary_rom = _archive_requirement(archives[0])
+    else:
+        primary_rom = "Ambiguous"
+    return header, primary_rom
+
+
+def _mra_metadata_value(text: str, field: str) -> str | None:
+    match = re.search(
+        rf"<\s*{field}\b[^>]*>(.*?)<\s*/\s*{field}\s*>",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    value = match.group(1)
+    value = re.sub(r"<!\[CDATA\[(.*?)\]\]>", r"\1", value, flags=re.DOTALL)
+    value = html.unescape(value).strip()
+    return value or None
+
+
+def _mra_attribute(attrs: str, name: str) -> str | None:
+    match = re.search(
+        rf"(?:^|\s){re.escape(name)}\s*=\s*(['\"])(.*?)\1",
+        attrs,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    value = html.unescape(match.group(2)).strip()
+    return value or None
+
+
+def _normalize_rom_archive(value: str) -> tuple[str, str] | None:
+    normalized = value.strip().lstrip("/").replace("\\", "/").lower()
+    filename = normalized.rsplit("/", 1)[-1]
+    if not filename.endswith(".zip"):
+        return None
+    setname = _normalize_rom_setname(filename)
     if not setname:
-        return "Ambiguous"
-    namespace = "Hbmame" if "hbmame" in setname.lower() else "Mame"
+        return None
+    namespace = "Hbmame" if normalized.startswith("hbmame/") else "Mame"
+    return namespace, setname
+
+
+def _normalize_rom_setname(value: str) -> str:
+    return value.strip().removesuffix(".zip").lower()
+
+
+def _archive_requirement(archive: tuple[str, str]) -> dict[str, object]:
+    namespace, setname = archive
     return {"Archive": {"namespace": namespace, "setname": setname}}
