@@ -146,6 +146,8 @@ const LEGACY_SCALER_FETCH_LIVENESS_SCHEMA: u16 = 14;
 const LEGACY_SCALER_FETCH_LIVENESS_ARCHITECTURE: &str = "scaler-fetch-liveness-first-stall-v1";
 const LEGACY_SCALER_FETCH_LIVENESS_FLAG_REQUEST_CANCELLED: u16 = 1 << 10;
 const LEGACY_SCALER_FETCH_LIVENESS_FLAG_COUNTER_AMBIGUOUS: u16 = 1 << 11;
+const NO_REQUEST_GATES_SCHEMA: u16 = 15;
+const NO_REQUEST_GATES_ARCHITECTURE: &str = "scaler-fetch-no-request-gates-v1";
 
 impl ScalerFetchLivenessState {
     fn field(&self, word: usize, bit: u32, mask: u16) -> u16 {
@@ -161,10 +163,10 @@ impl ScalerFetchLivenessState {
     }
 
     pub fn architecture(&self) -> &'static str {
-        if self.schema() == LEGACY_SCALER_FETCH_LIVENESS_SCHEMA {
-            LEGACY_SCALER_FETCH_LIVENESS_ARCHITECTURE
-        } else {
-            SCALER_FETCH_LIVENESS_STATE_ARCHITECTURE
+        match self.schema() {
+            LEGACY_SCALER_FETCH_LIVENESS_SCHEMA => LEGACY_SCALER_FETCH_LIVENESS_ARCHITECTURE,
+            NO_REQUEST_GATES_SCHEMA => NO_REQUEST_GATES_ARCHITECTURE,
+            _ => SCALER_FETCH_LIVENESS_STATE_ARCHITECTURE,
         }
     }
 
@@ -313,115 +315,159 @@ impl ScalerFetchLivenessState {
     }
 
     pub fn no_request_avl_state(&self) -> u16 {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_AVL_STATE_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_AVL_STATE_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_AVL_STATE_MASK,
-        )
+        (self.state() >> 0) & 0x0003
     }
 
     pub fn no_request_read_intent(&self) -> bool {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_INTENT_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_INTENT_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_INTENT_MASK,
-        ) != 0
+        self.state() & (1 << 2) != 0
     }
 
     pub fn no_request_read_accepted(&self) -> bool {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_ACCEPTED_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_ACCEPTED_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_ACCEPTED_MASK,
-        ) != 0
+        self.state() & (1 << 3) != 0
     }
 
     pub fn no_request_return_drain(&self) -> bool {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_RETURN_DRAIN_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_RETURN_DRAIN_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_RETURN_DRAIN_MASK,
-        ) != 0
+        self.state() & (1 << 4) != 0
     }
 
     pub fn no_request_return_credits(&self) -> u16 {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_RETURN_CREDITS_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_RETURN_CREDITS_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_RETURN_CREDITS_MASK,
-        )
+        (self.state() >> 5) & 0x0003
     }
 
     pub fn no_request_return_phase_nonzero(&self) -> bool {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_RETURN_PHASE_NONZERO_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_RETURN_PHASE_NONZERO_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_RETURN_PHASE_NONZERO_MASK,
-        ) != 0
+        self.state() & (1 << 7) != 0
     }
 
     pub fn no_request_read_pending(&self) -> bool {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_PENDING_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_PENDING_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_PENDING_MASK,
-        ) != 0
+        self.state() & (1 << 8) != 0
     }
 
     pub fn no_request_write_pending(&self) -> bool {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_WRITE_PENDING_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_WRITE_PENDING_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_WRITE_PENDING_MASK,
-        ) != 0
+        self.state() & (1 << 9) != 0
     }
 
     pub fn no_request_reset_released(&self) -> bool {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_RESET_RELEASED_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_RESET_RELEASED_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_RESET_RELEASED_MASK,
-        ) != 0
+        self.state() & (1 << 10) != 0
     }
 
     pub fn no_request_completion_pending(&self) -> bool {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_COMPLETION_PENDING_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_COMPLETION_PENDING_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_COMPLETION_PENDING_MASK,
-        ) != 0
+        self.state() & (1 << 11) != 0
     }
 
     pub fn no_request_read_pulse(&self) -> bool {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_PULSE_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_PULSE_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_READ_PULSE_MASK,
-        ) != 0
+        self.state() & (1 << 12) != 0
     }
 
     pub fn no_request_vsync_edge(&self) -> bool {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_VSYNC_EDGE_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_VSYNC_EDGE_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_VSYNC_EDGE_MASK,
-        ) != 0
+        self.state() & (1 << 13) != 0
     }
 
     pub fn no_request_drain_ready(&self) -> bool {
-        self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_DRAIN_READY_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_DRAIN_READY_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_DRAIN_READY_MASK,
-        ) != 0
+        self.state() & (1 << 14) != 0
     }
 
     pub fn no_request_external_read(&self) -> bool {
+        self.state() & (1 << 15) != 0
+    }
+
+    pub fn output_state(&self) -> u16 {
         self.field(
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_EXTERNAL_READ_WORD,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_EXTERNAL_READ_BIT,
-            SCALER_FETCH_LIVENESS_STATE_NO_REQUEST_EXTERNAL_READ_MASK,
-        ) != 0
+            SCALER_FETCH_LIVENESS_STATE_OUTPUT_STATE_WORD,
+            SCALER_FETCH_LIVENESS_STATE_OUTPUT_STATE_BIT,
+            SCALER_FETCH_LIVENESS_STATE_OUTPUT_STATE_MASK,
+        )
+    }
+
+    pub fn copy_state(&self) -> u16 {
+        self.field(
+            SCALER_FETCH_LIVENESS_STATE_COPY_STATE_WORD,
+            SCALER_FETCH_LIVENESS_STATE_COPY_STATE_BIT,
+            SCALER_FETCH_LIVENESS_STATE_COPY_STATE_MASK,
+        )
+    }
+
+    pub fn read_level(&self) -> u16 {
+        self.field(
+            SCALER_FETCH_LIVENESS_STATE_READ_LEVEL_WORD,
+            SCALER_FETCH_LIVENESS_STATE_READ_LEVEL_BIT,
+            SCALER_FETCH_LIVENESS_STATE_READ_LEVEL_MASK,
+        )
+    }
+
+    pub fn copy_level(&self) -> u16 {
+        self.field(
+            SCALER_FETCH_LIVENESS_STATE_COPY_LEVEL_WORD,
+            SCALER_FETCH_LIVENESS_STATE_COPY_LEVEL_BIT,
+            SCALER_FETCH_LIVENESS_STATE_COPY_LEVEL_MASK,
+        )
+    }
+
+    fn scheduler_flag(&self, word: usize, bit: u32, mask: u16) -> bool {
+        self.field(word, bit, mask) != 0
+    }
+
+    pub fn address_ready(&self) -> bool {
+        self.scheduler_flag(
+            SCALER_FETCH_LIVENESS_STATE_ADDRESS_READY_WORD,
+            SCALER_FETCH_LIVENESS_STATE_ADDRESS_READY_BIT,
+            SCALER_FETCH_LIVENESS_STATE_ADDRESS_READY_MASK,
+        )
+    }
+
+    pub fn read_pending(&self) -> bool {
+        self.scheduler_flag(
+            SCALER_FETCH_LIVENESS_STATE_READ_PENDING_WORD,
+            SCALER_FETCH_LIVENESS_STATE_READ_PENDING_BIT,
+            SCALER_FETCH_LIVENESS_STATE_READ_PENDING_MASK,
+        )
+    }
+
+    pub fn read_toggle(&self) -> bool {
+        self.scheduler_flag(
+            SCALER_FETCH_LIVENESS_STATE_READ_TOGGLE_WORD,
+            SCALER_FETCH_LIVENESS_STATE_READ_TOGGLE_BIT,
+            SCALER_FETCH_LIVENESS_STATE_READ_TOGGLE_MASK,
+        )
+    }
+
+    pub fn copy_write_active(&self) -> bool {
+        self.scheduler_flag(
+            SCALER_FETCH_LIVENESS_STATE_COPY_WRITE_ACTIVE_WORD,
+            SCALER_FETCH_LIVENESS_STATE_COPY_WRITE_ACTIVE_BIT,
+            SCALER_FETCH_LIVENESS_STATE_COPY_WRITE_ACTIVE_MASK,
+        )
+    }
+
+    pub fn copy_adturn(&self) -> bool {
+        self.scheduler_flag(
+            SCALER_FETCH_LIVENESS_STATE_COPY_ADTURN_WORD,
+            SCALER_FETCH_LIVENESS_STATE_COPY_ADTURN_BIT,
+            SCALER_FETCH_LIVENESS_STATE_COPY_ADTURN_MASK,
+        )
+    }
+
+    pub fn copy_shift_next(&self) -> bool {
+        self.scheduler_flag(
+            SCALER_FETCH_LIVENESS_STATE_COPY_SHIFT_NEXT_WORD,
+            SCALER_FETCH_LIVENESS_STATE_COPY_SHIFT_NEXT_BIT,
+            SCALER_FETCH_LIVENESS_STATE_COPY_SHIFT_NEXT_MASK,
+        )
+    }
+
+    pub fn copy_line_last(&self) -> bool {
+        self.scheduler_flag(
+            SCALER_FETCH_LIVENESS_STATE_COPY_LINE_LAST_WORD,
+            SCALER_FETCH_LIVENESS_STATE_COPY_LINE_LAST_BIT,
+            SCALER_FETCH_LIVENESS_STATE_COPY_LINE_LAST_MASK,
+        )
+    }
+
+    pub fn copy_terminal_ready(&self) -> bool {
+        self.scheduler_flag(
+            SCALER_FETCH_LIVENESS_STATE_COPY_TERMINAL_READY_WORD,
+            SCALER_FETCH_LIVENESS_STATE_COPY_TERMINAL_READY_BIT,
+            SCALER_FETCH_LIVENESS_STATE_COPY_TERMINAL_READY_MASK,
+        )
     }
 }
 
@@ -1057,7 +1103,9 @@ pub fn decode_scaler_fetch_liveness_state(
     let schema = words[SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD];
     if !matches!(
         schema,
-        LEGACY_SCALER_FETCH_LIVENESS_SCHEMA | SCALER_FETCH_LIVENESS_STATE_SCHEMA
+        LEGACY_SCALER_FETCH_LIVENESS_SCHEMA
+            | NO_REQUEST_GATES_SCHEMA
+            | SCALER_FETCH_LIVENESS_STATE_SCHEMA
     ) {
         return Err(format!(
             "unsupported scaler fetch liveness schema {}",
@@ -1103,11 +1151,17 @@ pub fn decode_scaler_fetch_liveness_state(
         if schema == LEGACY_SCALER_FETCH_LIVENESS_SCHEMA && decoded.frozen_fifo_depth() > 2 {
             return Err("scaler fetch liveness frozen FIFO depth is impossible".to_string());
         }
-        if schema != LEGACY_SCALER_FETCH_LIVENESS_SCHEMA
+        if schema == NO_REQUEST_GATES_SCHEMA
             && decoded.no_request_seen()
             && (decoded.no_request_avl_state() > 2 || decoded.no_request_return_credits() > 2)
         {
             return Err("scaler fetch no-request gate snapshot is impossible".to_string());
+        }
+        if schema == SCALER_FETCH_LIVENESS_STATE_SCHEMA
+            && decoded.no_request_seen()
+            && (decoded.copy_state() > 2 || decoded.read_level() > 2 || decoded.copy_level() > 2)
+        {
+            return Err("scaler output-scheduler gate snapshot is impossible".to_string());
         }
     } else {
         let live_state = words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD];
@@ -1328,7 +1382,7 @@ mod tests {
             | SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN
             | SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
             | SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN;
-        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = 0xfcb0;
+        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = 0x38aa;
         words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
             GET_SCALER_FETCH_LIVENESS_STATE,
             SCALER_FETCH_LIVENESS_STATE_SCHEMA,
@@ -1343,6 +1397,41 @@ mod tests {
             decoded.architecture(),
             SCALER_FETCH_LIVENESS_STATE_ARCHITECTURE
         );
+        assert_eq!(decoded.output_state(), 2);
+        assert_eq!(decoded.copy_state(), 2);
+        assert_eq!(decoded.read_level(), 2);
+        assert_eq!(decoded.copy_level(), 2);
+        assert!(!decoded.address_ready());
+        assert!(!decoded.read_pending());
+        assert!(!decoded.read_toggle());
+        assert!(decoded.copy_write_active());
+        assert!(decoded.copy_adturn());
+        assert!(decoded.copy_shift_next());
+        assert!(!decoded.copy_line_last());
+        assert!(!decoded.copy_terminal_ready());
+        assert_eq!(
+            decoded.frozen_cause(),
+            SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN
+        );
+    }
+
+    #[test]
+    fn scaler_fetch_liveness_retains_schema_15_decode_support() {
+        let mut words = [0; SCALER_FETCH_LIVENESS_STATE_WORDS];
+        words[SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD] = NO_REQUEST_GATES_SCHEMA;
+        words[SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] =
+            SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID
+                | SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN
+                | SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
+                | SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN;
+        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = 0xfcb0;
+        words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
+            GET_SCALER_FETCH_LIVENESS_STATE,
+            NO_REQUEST_GATES_SCHEMA,
+            &words[..SCALER_FETCH_LIVENESS_STATE_CRC_WORD],
+        );
+        let decoded = decode_scaler_fetch_liveness_state(&words).unwrap();
+        assert_eq!(decoded.architecture(), NO_REQUEST_GATES_ARCHITECTURE);
         assert_eq!(decoded.no_request_avl_state(), 0);
         assert!(decoded.no_request_return_drain());
         assert_eq!(decoded.no_request_return_credits(), 1);
@@ -1353,10 +1442,6 @@ mod tests {
         assert!(decoded.no_request_vsync_edge());
         assert!(decoded.no_request_drain_ready());
         assert!(decoded.no_request_external_read());
-        assert_eq!(
-            decoded.frozen_cause(),
-            SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN
-        );
     }
 
     #[test]

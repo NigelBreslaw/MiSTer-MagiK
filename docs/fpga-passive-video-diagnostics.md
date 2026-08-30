@@ -1,6 +1,6 @@
 # Passive FPGA HDMI evidence
 
-## Active moving-band campaign: schema 14
+## Active moving-band campaign: schema 16
 
 The preserved 2026-08-28 recurrence showed a byte-stable framebuffer and
 visible moving-band corruption while schema 11 returned CRC-valid but
@@ -11,14 +11,26 @@ accepted Avalon return obligations survive that production reset boundary, so
 the observer could erase its own queue, phase, heartbeat, and publication
 evidence.
 
-The replacement diagnostic is schema 14,
-`scaler-fetch-liveness-first-stall-v1`, as a four-word record on read-only
-command `0x68` with magic `0x4d58`. The fixed five-word schema-10/11 `0x67` ABI remains unchanged for
-rollback decoding; the device agent probes `0x68` first and falls back to
-`0x67` only when the new command is explicitly unsupported. A malformed
-schema-14 acknowledgement or record fails closed and never falls back.
+Schema 14 introduced `scaler-fetch-liveness-first-stall-v1` as a four-word
+record on read-only command `0x68` with magic `0x4d58`. Schema 15 then replaced
+its frozen state word with the external Avalon no-request gates. A preserved
+rolling-corruption recurrence produced three coherent schema-15 publications:
+normal fetch liveness had occurred, then no external Avalon request appeared;
+the Avalon controller was idle, reset was released, and the retained-return
+drain was open and empty. That rules out the framebuffer, latch transaction,
+Avalon wait/return path, retained reset drain, and completion queue for the
+captured failure. The remaining unobserved boundary is the output-clock
+`ascal` scheduler which generates a new request.
 
-Schema 14 observes only the existing top-level `vbuf_address`,
+Schema 16, `scaler-output-scheduler-gates-v1`, keeps the same four-word
+`{schema, flags, state, CRC}` command and all schema-15 watchdog, publication,
+CRC, and acknowledgement machinery. It replaces only the existing 16-bit
+state tap with output state, copy state, read/copy levels, request phase and
+acknowledgement state, address readiness, and the exact copy-terminal gates.
+The host retains schema-14 and schema-15 rollback decoding. A malformed
+acknowledgement or record fails closed and never falls back.
+
+The watchdog observes only the existing top-level `vbuf_address`,
 `vbuf_burstcount`, `vbuf_read`, `vbuf_waitrequest`, and
 `vbuf_readdatavalid` control wires in `clk_100m`. It has no return-data or
 `ascal` output tap. Its two-entry accepted-obligation scoreboard and 0–127
@@ -48,8 +60,11 @@ over timeout. The sticky classifications are deliberately observational:
 `return_incomplete`, and `request_cancelled`. Normal wrap-marked completion is
 rolling evidence and never prevents a much later first stall from freezing.
 Malformed burst shape, unexpected return, FIFO/phase error, reset ambiguity,
-or counter ambiguity invalidates attribution. Exact root cause still requires
-the following narrow recorder to expose the responsible production transition.
+or counter ambiguity invalidates attribution. For schema 16, a coherent
+`no_request_seen` freeze preserves the exact output-scheduler gates needed to
+separate address readiness, request acknowledgement, credit saturation,
+copy-start, copy-shift, and copy-terminal retirement stalls without adding a
+functional recovery path.
 
 The wide and staged FPGA video observers are retired from production. Their
 field evidence was decisive, but every expanded implementation made the dense

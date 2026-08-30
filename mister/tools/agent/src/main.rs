@@ -4338,6 +4338,56 @@ mod linux {
         "scaler_fetch_liveness_evidence_inconclusive"
     }
 
+    fn scaler_output_scheduler_gate_classification(
+        sample: &mister_magik_video_diagnostics_contract::ScalerFetchLivenessState,
+    ) -> &'static str {
+        const OUTPUT_READ: u16 = 2;
+        const OUTPUT_WAIT_READ: u16 = 3;
+        const COPY_WAIT: u16 = 0;
+        const COPY_SHIFT: u16 = 1;
+        const COPY_ACTIVE: u16 = 2;
+
+        let output_state = sample.output_state();
+        let copy_state = sample.copy_state();
+        let read_level = sample.read_level();
+        let copy_level = sample.copy_level();
+
+        if output_state == OUTPUT_WAIT_READ {
+            return if sample.read_pending() {
+                "scaler_output_read_acknowledgement_stuck"
+            } else {
+                "scaler_output_waitread_state_stuck"
+            };
+        }
+        if output_state == OUTPUT_READ && read_level < 2 {
+            return if !sample.address_ready() {
+                "scaler_output_address_ready_stuck"
+            } else {
+                "scaler_output_request_toggle_stuck"
+            };
+        }
+        if read_level == 2 && copy_level == 0 {
+            return "scaler_output_completion_credit_missing";
+        }
+        if copy_level != 0 && copy_state == COPY_WAIT {
+            return "scaler_output_copy_start_gate_stuck";
+        }
+        if copy_state == COPY_SHIFT {
+            return "scaler_output_copy_shift_stuck";
+        }
+        if copy_state == COPY_ACTIVE {
+            return if sample.copy_terminal_ready() {
+                "scaler_output_copy_decrement_stuck"
+            } else {
+                "scaler_output_copy_terminal_condition_stall"
+            };
+        }
+        if output_state == OUTPUT_READ && read_level == 2 {
+            return "scaler_output_read_level_saturated";
+        }
+        "scaler_output_scheduler_state_stuck"
+    }
+
     pub(super) fn scaler_fetch_liveness_classification(
         samples: [&mister_magik_video_diagnostics_contract::ScalerFetchLivenessState; 3],
     ) -> &'static str {
@@ -4368,7 +4418,9 @@ mod linux {
             }
             return match first.frozen_cause() {
                 contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN => {
-                    if first.schema() == contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA {
+                    if first.architecture() == "scaler-output-scheduler-gates-v1" {
+                        scaler_output_scheduler_gate_classification(first)
+                    } else if first.architecture() == "scaler-fetch-no-request-gates-v1" {
                         scaler_fetch_no_request_gate_classification(first)
                     } else {
                         "scaler_fetch_no_request_seen"
@@ -4903,9 +4955,12 @@ mod linux {
                         &readout.samples[2],
                     ];
                     let architecture = samples[0].architecture();
-                    let scheduler_state = samples.iter().all(|sample| {
-                        sample.schema() == contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA
-                    });
+                    let scheduler_state = matches!(
+                        architecture,
+                        "scaler-fetch-no-request-gates-v1" | "scaler-output-scheduler-gates-v1"
+                    );
+                    let output_scheduler_state = architecture == "scaler-output-scheduler-gates-v1";
+                    let avalon_gate_state = architecture == "scaler-fetch-no-request-gates-v1";
                     let classification = scaler_fetch_liveness_classification(samples);
                     let valid_samples = samples.iter().all(|sample| sample.record_valid());
                     let advancing = nibble_sequences_advance(
@@ -4926,30 +4981,42 @@ mod linux {
                         "observer_fault": samples.iter().map(|sample| sample.observer_fault()).collect::<Vec<_>>(),
                         "flags": samples.iter().map(|sample| sample.flags()).collect::<Vec<_>>(),
                         "publication_sequence": samples.iter().map(|sample| sample.publication_sequence()).collect::<Vec<_>>(),
-                        "frozen_address_fold": samples.iter().map(|sample| sample.frozen_address_fold()).collect::<Vec<_>>(),
+                        "frozen_address_fold": (!output_scheduler_state).then(|| samples.iter().map(|sample| sample.frozen_address_fold()).collect::<Vec<_>>()),
                         "return_phase": samples.iter().map(|sample| sample.return_phase()).collect::<Vec<_>>(),
                         "fifo_depth": samples.iter().map(|sample| sample.fifo_depth()).collect::<Vec<_>>(),
                         "monitor_state": samples.iter().map(|sample| sample.monitor_state()).collect::<Vec<_>>(),
                         "frozen_cause": samples.iter().map(|sample| sample.frozen_cause()).collect::<Vec<_>>(),
-                        "frozen_return_phase": samples.iter().map(|sample| sample.frozen_return_phase()).collect::<Vec<_>>(),
-                        "frozen_fifo_depth": samples.iter().map(|sample| sample.frozen_fifo_depth()).collect::<Vec<_>>(),
+                        "frozen_return_phase": (!output_scheduler_state).then(|| samples.iter().map(|sample| sample.frozen_return_phase()).collect::<Vec<_>>()),
+                        "frozen_fifo_depth": (!output_scheduler_state).then(|| samples.iter().map(|sample| sample.frozen_fifo_depth()).collect::<Vec<_>>()),
                         "reset_since_normal_liveness": samples.iter().map(|sample| sample.reset_since_normal_liveness()).collect::<Vec<_>>(),
                         "no_request_seen": samples.iter().map(|sample| sample.no_request_seen()).collect::<Vec<_>>(),
                         "state": samples.iter().map(|sample| sample.state()).collect::<Vec<_>>(),
-                        "no_request_avl_state": samples.iter().map(|sample| sample.no_request_avl_state()).collect::<Vec<_>>(),
-                        "no_request_read_intent": samples.iter().map(|sample| sample.no_request_read_intent()).collect::<Vec<_>>(),
-                        "no_request_read_accepted": samples.iter().map(|sample| sample.no_request_read_accepted()).collect::<Vec<_>>(),
-                        "no_request_return_drain": samples.iter().map(|sample| sample.no_request_return_drain()).collect::<Vec<_>>(),
-                        "no_request_return_credits": samples.iter().map(|sample| sample.no_request_return_credits()).collect::<Vec<_>>(),
-                        "no_request_return_phase_nonzero": samples.iter().map(|sample| sample.no_request_return_phase_nonzero()).collect::<Vec<_>>(),
-                        "no_request_read_pending": samples.iter().map(|sample| sample.no_request_read_pending()).collect::<Vec<_>>(),
-                        "no_request_write_pending": samples.iter().map(|sample| sample.no_request_write_pending()).collect::<Vec<_>>(),
-                        "no_request_reset_released": samples.iter().map(|sample| sample.no_request_reset_released()).collect::<Vec<_>>(),
-                        "no_request_completion_pending": samples.iter().map(|sample| sample.no_request_completion_pending()).collect::<Vec<_>>(),
-                        "no_request_read_pulse": samples.iter().map(|sample| sample.no_request_read_pulse()).collect::<Vec<_>>(),
-                        "no_request_vsync_edge": samples.iter().map(|sample| sample.no_request_vsync_edge()).collect::<Vec<_>>(),
-                        "no_request_drain_ready": samples.iter().map(|sample| sample.no_request_drain_ready()).collect::<Vec<_>>(),
-                        "no_request_external_read": samples.iter().map(|sample| sample.no_request_external_read()).collect::<Vec<_>>(),
+                        "no_request_avl_state": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_avl_state()).collect::<Vec<_>>()),
+                        "no_request_read_intent": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_read_intent()).collect::<Vec<_>>()),
+                        "no_request_read_accepted": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_read_accepted()).collect::<Vec<_>>()),
+                        "no_request_return_drain": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_return_drain()).collect::<Vec<_>>()),
+                        "no_request_return_credits": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_return_credits()).collect::<Vec<_>>()),
+                        "no_request_return_phase_nonzero": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_return_phase_nonzero()).collect::<Vec<_>>()),
+                        "no_request_read_pending": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_read_pending()).collect::<Vec<_>>()),
+                        "no_request_write_pending": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_write_pending()).collect::<Vec<_>>()),
+                        "no_request_reset_released": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_reset_released()).collect::<Vec<_>>()),
+                        "no_request_completion_pending": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_completion_pending()).collect::<Vec<_>>()),
+                        "no_request_read_pulse": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_read_pulse()).collect::<Vec<_>>()),
+                        "no_request_vsync_edge": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_vsync_edge()).collect::<Vec<_>>()),
+                        "no_request_drain_ready": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_drain_ready()).collect::<Vec<_>>()),
+                        "no_request_external_read": avalon_gate_state.then(|| samples.iter().map(|sample| sample.no_request_external_read()).collect::<Vec<_>>()),
+                        "output_state": output_scheduler_state.then(|| samples.iter().map(|sample| sample.output_state()).collect::<Vec<_>>()),
+                        "copy_state": output_scheduler_state.then(|| samples.iter().map(|sample| sample.copy_state()).collect::<Vec<_>>()),
+                        "read_level": output_scheduler_state.then(|| samples.iter().map(|sample| sample.read_level()).collect::<Vec<_>>()),
+                        "copy_level": output_scheduler_state.then(|| samples.iter().map(|sample| sample.copy_level()).collect::<Vec<_>>()),
+                        "address_ready": output_scheduler_state.then(|| samples.iter().map(|sample| sample.address_ready()).collect::<Vec<_>>()),
+                        "read_pending": output_scheduler_state.then(|| samples.iter().map(|sample| sample.read_pending()).collect::<Vec<_>>()),
+                        "read_toggle": output_scheduler_state.then(|| samples.iter().map(|sample| sample.read_toggle()).collect::<Vec<_>>()),
+                        "copy_write_active": output_scheduler_state.then(|| samples.iter().map(|sample| sample.copy_write_active()).collect::<Vec<_>>()),
+                        "copy_adturn": output_scheduler_state.then(|| samples.iter().map(|sample| sample.copy_adturn()).collect::<Vec<_>>()),
+                        "copy_shift_next": output_scheduler_state.then(|| samples.iter().map(|sample| sample.copy_shift_next()).collect::<Vec<_>>()),
+                        "copy_line_last": output_scheduler_state.then(|| samples.iter().map(|sample| sample.copy_line_last()).collect::<Vec<_>>()),
+                        "copy_terminal_ready": output_scheduler_state.then(|| samples.iter().map(|sample| sample.copy_terminal_ready()).collect::<Vec<_>>()),
                         "raw_samples": readout.samples.iter().map(|sample| sample.words).collect::<Vec<_>>(),
                     });
                     json!({
@@ -8891,8 +8958,7 @@ mod tests {
 
         let gate_sample = |sequence: u8, state: u16| {
             let mut words = [0; contract::SCALER_FETCH_LIVENESS_STATE_WORDS];
-            words[contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD] =
-                contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA;
+            words[contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD] = 15;
             words[contract::SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] = valid
                 | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
                 | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN
@@ -8922,6 +8988,45 @@ mod tests {
                 &reset_stuck[2],
             ]),
             "scaler_fetch_reset_stuck"
+        );
+
+        let scheduler_sample = |sequence: u8, state: u16| {
+            let mut words = [0; contract::SCALER_FETCH_LIVENESS_STATE_WORDS];
+            words[contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD] =
+                contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA;
+            words[contract::SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] = normal
+                | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
+                | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN
+                | (u16::from(sequence)
+                    << contract::SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_BIT);
+            words[contract::SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = state;
+            contract::ScalerFetchLivenessState { words }
+        };
+        let copy_terminal_stall = [
+            scheduler_sample(10, 0x38aa),
+            scheduler_sample(11, 0x38aa),
+            scheduler_sample(12, 0x38aa),
+        ];
+        assert_eq!(
+            linux::scaler_fetch_liveness_classification([
+                &copy_terminal_stall[0],
+                &copy_terminal_stall[1],
+                &copy_terminal_stall[2],
+            ]),
+            "scaler_output_copy_terminal_condition_stall"
+        );
+        let waiting_for_read_ack = [
+            scheduler_sample(10, 0x0203),
+            scheduler_sample(11, 0x0203),
+            scheduler_sample(12, 0x0203),
+        ];
+        assert_eq!(
+            linux::scaler_fetch_liveness_classification([
+                &waiting_for_read_ack[0],
+                &waiting_for_read_ack[1],
+                &waiting_for_read_ack[2],
+            ]),
+            "scaler_output_read_acknowledgement_stuck"
         );
 
         let changed_frozen_tuple = [

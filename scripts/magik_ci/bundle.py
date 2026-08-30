@@ -17,7 +17,7 @@ MANIFEST = "platform-bundle-v0.2.json"
 ORIGIN = "platform-component-origin-v1.json"
 CHECKSUMS = "platform-component-SHA256SUMS"
 ASSEMBLY_REVISION = 1
-PATCHED_DIAGNOSTIC_ARCHITECTURE = "scaler-fetch-no-request-gates-v1"
+PATCHED_DIAGNOSTIC_ARCHITECTURE = "scaler-output-scheduler-gates-v1"
 
 
 def bundle_id(

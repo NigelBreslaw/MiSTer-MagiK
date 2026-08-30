@@ -324,8 +324,8 @@ if hdmi_evidence.get("raw_scaler_rollback_states") != {
     raise SystemExit("raw scaler ordered-signature schema-10 rollback ABI changed")
 scaler_fetch_liveness = hdmi_evidence.get("scaler_fetch_liveness_state")
 if scaler_fetch_liveness != {
-    "schema": 15,
-    "architecture": "scaler-fetch-no-request-gates-v1",
+    "schema": 16,
+    "architecture": "scaler-output-scheduler-gates-v1",
     "command": 0x68,
     "magic": 0x4D58,
     "word_count": 4,
@@ -363,20 +363,18 @@ if scaler_fetch_liveness != {
         "frozen_return_phase": {"word": "state", "bit": 3, "width": 7},
         "frozen_fifo_depth": {"word": "state", "bit": 10, "width": 2},
         "frozen_address_fold": {"word": "state", "bit": 12, "width": 4},
-        "no_request_avl_state": {"word": "state", "bit": 0, "width": 2},
-        "no_request_read_intent": {"word": "state", "bit": 2, "width": 1},
-        "no_request_read_accepted": {"word": "state", "bit": 3, "width": 1},
-        "no_request_return_drain": {"word": "state", "bit": 4, "width": 1},
-        "no_request_return_credits": {"word": "state", "bit": 5, "width": 2},
-        "no_request_return_phase_nonzero": {"word": "state", "bit": 7, "width": 1},
-        "no_request_read_pending": {"word": "state", "bit": 8, "width": 1},
-        "no_request_write_pending": {"word": "state", "bit": 9, "width": 1},
-        "no_request_reset_released": {"word": "state", "bit": 10, "width": 1},
-        "no_request_completion_pending": {"word": "state", "bit": 11, "width": 1},
-        "no_request_read_pulse": {"word": "state", "bit": 12, "width": 1},
-        "no_request_vsync_edge": {"word": "state", "bit": 13, "width": 1},
-        "no_request_drain_ready": {"word": "state", "bit": 14, "width": 1},
-        "no_request_external_read": {"word": "state", "bit": 15, "width": 1},
+        "output_state": {"word": "state", "bit": 0, "width": 2},
+        "copy_state": {"word": "state", "bit": 2, "width": 2},
+        "read_level": {"word": "state", "bit": 4, "width": 2},
+        "copy_level": {"word": "state", "bit": 6, "width": 2},
+        "address_ready": {"word": "state", "bit": 8, "width": 1},
+        "read_pending": {"word": "state", "bit": 9, "width": 1},
+        "read_toggle": {"word": "state", "bit": 10, "width": 1},
+        "copy_write_active": {"word": "state", "bit": 11, "width": 1},
+        "copy_adturn": {"word": "state", "bit": 12, "width": 1},
+        "copy_shift_next": {"word": "state", "bit": 13, "width": 1},
+        "copy_line_last": {"word": "state", "bit": 14, "width": 1},
+        "copy_terminal_ready": {"word": "state", "bit": 15, "width": 1},
     },
     "causes": {
         "none": 0,
@@ -402,7 +400,7 @@ if scaler_fetch_liveness != {
     },
 }:
     raise SystemExit(
-        "scaler-fetch no-request gate schema 15 changed without an ABI update"
+        "scaler output-scheduler gate schema 16 changed without an ABI update"
     )
 expected_agent_capability = (
     f"pub const FPGA_VIDEO_DIAGNOSTICS_CAPABILITY: &str = "

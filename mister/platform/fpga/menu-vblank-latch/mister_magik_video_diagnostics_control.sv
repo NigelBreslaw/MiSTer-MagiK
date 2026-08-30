@@ -6,7 +6,9 @@
 
 // Replacement-only passive observer at the external scaler Avalon boundary.
 // reset_req is observed as data: it never clears accepted return obligations,
-// telemetry, or the publication handshake. No observer output drives production.
+// telemetry, or the publication handshake. A no-request timeout freezes the
+// packed output-scheduler gates supplied by ascal. No observer output drives
+// production.
 module mister_magik_scaler_fetch_liveness_state #(
 	parameter [23:0] WATCHDOG_LIMIT = 24'hffffff,
 	parameter [2:0] RESET_QUALIFY_LIMIT = 3'd4
@@ -378,6 +380,9 @@ module mister_magik_scaler_fetch_liveness_state #(
 				default: begin end
 			endcase
 			if(timeout_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN) begin
+				// Reuse the existing 16-bit frozen storage exactly: the legacy
+				// cause/phase/depth/fold slices reconstruct the complete packed
+				// output-scheduler snapshot without adding another bank.
 				frozen_cause <= scaler_diag_state[2:0];
 				frozen_return_phase <= scaler_diag_state[9:3];
 				frozen_fifo_depth <= scaler_diag_state[11:10];

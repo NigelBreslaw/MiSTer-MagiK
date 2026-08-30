@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Require every Verilator flow/branch point in the custom RTL to be hit."""
+"""Require every reachable Verilator flow/branch point in the custom RTL to be hit."""
 
 from __future__ import annotations
 
@@ -26,7 +26,20 @@ def main() -> None:
         )
         raise SystemExit(1)
     annotations = matches[0].read_text().splitlines()
-    incomplete = [line for line in annotations if line.startswith(("%", "~"))]
+    # Verilator 5.050 reports the false arm of this comparison as an uncovered
+    # branch. The enclosing `word_index < 4'd15` test is false and word_index is
+    # four bits wide, so `word_index == 4'd15` is then an identity: its false
+    # arm has no possible stimulus. Older Verilator releases do not annotate it.
+    unreachable_latch_branch = "else if(word_index == 4'd15)"
+    incomplete = [
+        line
+        for line in annotations
+        if line.startswith(("%", "~"))
+        and not (
+            args.source == "mister_magik_vblank_latch.sv"
+            and unreachable_latch_branch in line
+        )
+    ]
     covered = [line for line in annotations if re.match(r"^[ +]?\d+", line)]
     if not covered:
         print(f"no coverage points found for {args.source}", file=sys.stderr)

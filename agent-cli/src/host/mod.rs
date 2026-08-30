@@ -3458,7 +3458,7 @@ const EXPERIMENTAL_FPGA_RBF_REMOTE: &str =
     mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.latch_rbf;
 const EXPERIMENTAL_FPGA_METADATA_REMOTE: &str =
     mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.latch_metadata;
-const PATCHED_DIAGNOSTIC_ARCHITECTURE: &str = "scaler-fetch-no-request-gates-v1";
+const PATCHED_DIAGNOSTIC_ARCHITECTURE: &str = "scaler-output-scheduler-gates-v1";
 const PLATFORM_V0_34_SCHEMA14_RBF_SHA256: &str =
     "ef1920500c925d35b23808792f0930954446a6030b33d3e92c0f4feccd23106e";
 const FPGA_READINESS_TIMEOUT: Duration = Duration::from_secs(45);
@@ -4071,9 +4071,13 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
         }
         Some(
             architecture @ ("scaler-fetch-liveness-first-stall-v1"
-            | "scaler-fetch-no-request-gates-v1"),
+            | "scaler-fetch-no-request-gates-v1"
+            | "scaler-output-scheduler-gates-v1"),
         ) => {
-            let scheduler_state = architecture == "scaler-fetch-no-request-gates-v1";
+            let scheduler_state = matches!(
+                architecture,
+                "scaler-fetch-no-request-gates-v1" | "scaler-output-scheduler-gates-v1"
+            );
             matches!(
                 diagnostics.get("classification").and_then(Value::as_str),
                 Some(
@@ -4093,6 +4097,17 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                         | "scaler_fetch_output_request_stopped_after_activity"
                         | "scaler_fetch_output_request_never_started"
                         | "scaler_fetch_scheduler_pending_stuck"
+                        | "scaler_output_read_acknowledgement_stuck"
+                        | "scaler_output_waitread_state_stuck"
+                        | "scaler_output_address_ready_stuck"
+                        | "scaler_output_request_toggle_stuck"
+                        | "scaler_output_completion_credit_missing"
+                        | "scaler_output_copy_start_gate_stuck"
+                        | "scaler_output_copy_shift_stuck"
+                        | "scaler_output_copy_decrement_stuck"
+                        | "scaler_output_copy_terminal_condition_stall"
+                        | "scaler_output_read_level_saturated"
+                        | "scaler_output_scheduler_state_stuck"
                 )
             ) && diagnostics
                 .pointer("/capabilities/passive_video_observer")
@@ -4852,7 +4867,9 @@ fn scaler_fetch_liveness_preload_evidence_available(evidence: &Value) -> bool {
             .is_some_and(|architecture| {
                 matches!(
                     architecture,
-                    "scaler-fetch-liveness-first-stall-v1" | "scaler-fetch-no-request-gates-v1"
+                    "scaler-fetch-liveness-first-stall-v1"
+                        | "scaler-fetch-no-request-gates-v1"
+                        | "scaler-output-scheduler-gates-v1"
                 )
             })
         && evidence.get("available").and_then(Value::as_bool) == Some(true)
@@ -39109,7 +39126,7 @@ H: Handlers=event3 js0"#
     fn installed_fpga_metadata_identifies_the_expected_observer() {
         assert_eq!(
             expected_fpga_architecture(
-                "rbf_sha256=ignored\ndiagnostic_architecture=scaler-fetch-no-request-gates-v1\n"
+                "rbf_sha256=ignored\ndiagnostic_architecture=scaler-output-scheduler-gates-v1\n"
             )
             .unwrap(),
             PATCHED_DIAGNOSTIC_ARCHITECTURE
@@ -39629,10 +39646,10 @@ H: Handlers=event3 js0"#
         ));
         let scaler_fetch_liveness = json!({
             "schema": "mister-magik-fpga-video-diagnostics-v2",
-            "diagnostic_architecture": "scaler-fetch-no-request-gates-v1",
+            "diagnostic_architecture": "scaler-output-scheduler-gates-v1",
             "available": true,
             "coherent": true,
-            "classification": "scaler_fetch_return_drain_outstanding",
+            "classification": "scaler_output_copy_terminal_condition_stall",
             "sink_visibility": "unobserved",
             "owner_epoch_before": 13,
             "owner_epoch_after": 13,

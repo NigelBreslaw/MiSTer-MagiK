@@ -27,6 +27,7 @@ LEGACY_SCHEMA14_RBF_SHA256 = (
 DIAGNOSTIC_ARCHITECTURES = {
     "scaler-fetch-liveness-first-stall-v1",
     "scaler-fetch-no-request-gates-v1",
+    "scaler-output-scheduler-gates-v1",
     "stock-uninstrumented-v1",
 }
 CANONICAL_QUARTUS_SEED_SOURCE = (

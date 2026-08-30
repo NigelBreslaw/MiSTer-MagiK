@@ -228,10 +228,10 @@ module tb_mister_magik_video_diagnostics_control;
 		repeat(6) @(posedge clk_100m);
 		finish_return_with_accept(28'h0000000);
 		drive_return_beats(128);
-		// Freeze the exact no-request gate snapshot with return draining still
-		// asserted and one production credit outstanding.
+		// Freeze an output scheduler snapshot: sREAD/sCOPY, both levels full,
+		// copy active past adturn/next-word, but no terminal predicate.
 		@(negedge clk_100m);
-		scaler_diag_state = 16'hfcb0;
+		scaler_diag_state = 16'h38aa;
 
 		// Leave the qualified, empty boundary idle long enough to freeze the
 		// exact no-request observation. Consume a bounded pending publication:
@@ -254,8 +254,8 @@ module tb_mister_magik_video_diagnostics_control;
 			fail("reset-retained obligation produced observer fault");
 		if(!(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN))
 			fail("no-request classification flag was not frozen");
-		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD] != 16'hfcb0)
-			fail("wrong no-request gate snapshot");
+		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD] != 16'h38aa)
+			fail("wrong output-scheduler gate snapshot");
 		for(index = 0; index < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS;
 			index = index + 1)
 			prior_words[index] = words[index];

@@ -319,7 +319,7 @@ import scripts.magik_ci.cli
                 + "\nlatch_protocol_sha256="
                 + "3" * 64
                 + "\nlatch_protocol_version=5"
-                + "\ndiagnostic_architecture=scaler-fetch-no-request-gates-v1\n"
+                + "\ndiagnostic_architecture=scaler-output-scheduler-gates-v1\n"
             )
             archive = create(
                 main=root / "main",
@@ -348,7 +348,7 @@ import scripts.magik_ci.cli
             self.assertEqual(payload["latch_protocol_version"], 5)
             self.assertEqual(
                 payload["diagnostic_architecture"],
-                "scaler-fetch-no-request-gates-v1",
+                "scaler-output-scheduler-gates-v1",
             )
 
     def test_database_round_trip(self) -> None:

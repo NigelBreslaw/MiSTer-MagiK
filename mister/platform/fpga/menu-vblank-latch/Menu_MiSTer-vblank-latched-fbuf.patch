@@ -479,27 +479,33 @@ index a735e6b..b1d403c 100644
 -	avl_read<=avl_read_i;
 +	avl_read<=avl_read_i AND NOT avl_read_accepted
 +		WHEN avl_reset_na='0' OR avl_state=sREAD ELSE '0';
-+	WITH avl_state SELECT magik_fetch_state(1 DOWNTO 0) <=
-+		"00" WHEN sIDLE,
-+		"01" WHEN sWRITE,
-+		"10" WHEN sREAD;
-+	magik_fetch_state(2)<=avl_read_i;
-+	magik_fetch_state(3)<=avl_read_accepted;
-+	magik_fetch_state(4)<=avl_return_drain;
-+	magik_fetch_state(6 DOWNTO 5)<=
-+		std_logic_vector(to_unsigned(avl_return_credits,2));
-+	magik_fetch_state(7)<='1' WHEN avl_return_phase/=0 ELSE '0';
-+	magik_fetch_state(8)<=avl_read_sr;
-+	magik_fetch_state(9)<=avl_write_sr;
-+	magik_fetch_state(10)<=avl_reset_na;
-+	magik_fetch_state(11)<=avl_completion_pending;
-+	magik_fetch_state(12)<=avl_read_pulse;
-+	magik_fetch_state(13)<='1' WHEN
-+		avl_o_vs_sync='0' AND avl_o_vs='1' ELSE '0';
-+	magik_fetch_state(14)<='1' WHEN return_drain_ready(
-+		avl_return_credits,avl_return_phase) ELSE '0';
-+	magik_fetch_state(15)<=avl_read_i AND NOT avl_read_accepted
-+		WHEN avl_reset_na='0' OR avl_state=sREAD ELSE '0';
++	-- Passive output-scheduler snapshot for the external no-request watchdog.
++	-- These taps have no functional fanout and replace the retired Avalon-gate
++	-- packing without widening the ascal or sys_top interface.
++	WITH o_state SELECT magik_fetch_state(1 DOWNTO 0) <=
++		"00" WHEN sDISP,
++		"01" WHEN sHSYNC,
++		"10" WHEN sREAD,
++		"11" WHEN sWAITREAD;
++	WITH o_copy SELECT magik_fetch_state(3 DOWNTO 2) <=
++		"00" WHEN sWAIT,
++		"01" WHEN sSHIFT,
++		"10" WHEN sCOPY;
++	magik_fetch_state(5 DOWNTO 4)<=
++		std_logic_vector(to_unsigned(o_readlev,2));
++	magik_fetch_state(7 DOWNTO 6)<=
++		std_logic_vector(to_unsigned(o_copylev,2));
++	magik_fetch_state(8)<=o_adrsb;
++	magik_fetch_state(9)<=o_read_pre XOR o_readack_sync2;
++	magik_fetch_state(10)<=o_read;
++	magik_fetch_state(11)<=o_copyv(0);
++	magik_fetch_state(12)<=o_adturn;
++	magik_fetch_state(13)<=to_std_logic(
++		shift_onext((o_acpt+1) MOD 16,o_format));
++	magik_fetch_state(14)<=o_last2;
++	magik_fetch_state(15)<=to_std_logic(copy_terminal_ready(
++		o_adturn,shift_onext((o_acpt+1) MOD 16,o_format),
++		o_ad MOD BLEN=0,o_lastv(0),o_last2));
  	avl_write<=avl_write_i;
  	avl_writedata<=std_logic_vector(swap(avl_dr));
  	avl_burstcount<=std_logic_vector(to_unsigned(BLEN,8));

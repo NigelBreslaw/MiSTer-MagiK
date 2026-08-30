@@ -493,6 +493,8 @@ module tb_mister_magik_vblank_latch;
 		expect16(snapshot[8], 16'd0, "initial telemetry active sequence");
 		expect16(snapshot[9], 16'd0, "initial telemetry flags");
 		expect16(snapshot[10], crc, "initial telemetry CRC");
+		read_word(MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY, 4'd11, value);
+		expect16(value, 16'd0, "telemetry post-close word is zero");
 		start_command(
 			MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS,
 			MAGIK_FBUF_DIAGNOSTICS_MAGIC
@@ -513,6 +515,8 @@ module tb_mister_magik_vblank_latch;
 		expect16(snapshot[4], 16'd0, "initial diagnostics observed command");
 		expect16(snapshot[5], 16'd0, "initial diagnostics receiver flags");
 		expect16(snapshot[6], crc, "initial diagnostics CRC");
+		read_word(MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS, 4'd7, value);
+		expect16(value, 16'd0, "diagnostics post-close word is zero");
 		@(negedge clk_sys);
 		cmd_id = 8'h5d;
 		cmd_start = 1'b1;
@@ -556,6 +560,8 @@ module tb_mister_magik_vblank_latch;
 			"accepted receipt rejection reason"
 		);
 		expect16(snapshot[10], crc, "accepted receipt CRC");
+		read_word(MAGIK_UIO_GET_FBUF_LATCH_RECEIPT, 4'd11, value);
+		expect16(value, 16'd0, "receipt post-close word is zero");
 		if(!route_en || route_flt || (route_fmt != 6'h14) ||
 		   (route_base != 32'h227e9000) || (route_width != 12'd960) ||
 		   (route_height != 12'd540) || (route_stride != 14'd1920))
