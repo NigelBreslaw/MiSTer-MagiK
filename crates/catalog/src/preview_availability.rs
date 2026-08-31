@@ -17,6 +17,10 @@ pub enum PreviewIdentityResolverStatus {
     NotNeeded,
     /// The MAME software-list title index is available for lookups.
     Ready,
+    /// The compact v1 runtime metadata shard is available for lookups.
+    CompactV1,
+    /// The migration-era SQLite metadata fallback is available.
+    LegacySqlite,
     /// The database or required table could not be read.
     Unavailable,
 }
@@ -34,12 +38,18 @@ struct PreviewIdentityIndex {
 /// key for a system backed by a MAME software list.
 pub struct PreviewIdentityResolver {
     mame_sqlite: PathBuf,
+    runtime_metadata: PathBuf,
+    compact_store: Option<crate::runtime_metadata::MetadataStore>,
     state: PreviewIdentityResolverState,
 }
 
 enum PreviewIdentityResolverState {
     NotNeeded,
     Ready(PreviewIdentityIndex),
+    Compact {
+        system_id: String,
+        index: PreviewIdentityIndex,
+    },
     Unavailable,
 }
 
@@ -48,6 +58,7 @@ impl std::fmt::Debug for PreviewIdentityResolver {
         formatter
             .debug_struct("PreviewIdentityResolver")
             .field("mame_sqlite", &self.mame_sqlite)
+            .field("runtime_metadata", &self.runtime_metadata)
             .field("status", &self.status())
             .finish()
     }
@@ -56,8 +67,23 @@ impl std::fmt::Debug for PreviewIdentityResolver {
 impl PreviewIdentityResolver {
     /// Create a resolver without opening the database.
     pub fn new(mame_sqlite: impl Into<PathBuf>) -> Self {
+        Self::with_runtime_metadata(
+            mame_sqlite,
+            crate::catalog_config::default_runtime_metadata_path(),
+        )
+    }
+
+    /// Create a resolver with an explicit compact metadata path.  This is
+    /// useful for migration checks and keeps path selection outside the hot
+    /// lookup code.
+    pub fn with_runtime_metadata(
+        mame_sqlite: impl Into<PathBuf>,
+        runtime_metadata: impl Into<PathBuf>,
+    ) -> Self {
         Self {
             mame_sqlite: mame_sqlite.into(),
+            runtime_metadata: runtime_metadata.into(),
+            compact_store: None,
             state: PreviewIdentityResolverState::NotNeeded,
         }
     }
@@ -66,6 +92,9 @@ impl PreviewIdentityResolver {
         match self.state {
             PreviewIdentityResolverState::NotNeeded => PreviewIdentityResolverStatus::NotNeeded,
             PreviewIdentityResolverState::Ready(_) => PreviewIdentityResolverStatus::Ready,
+            PreviewIdentityResolverState::Compact { .. } => {
+                PreviewIdentityResolverStatus::CompactV1
+            }
             PreviewIdentityResolverState::Unavailable => PreviewIdentityResolverStatus::Unavailable,
         }
     }
@@ -77,9 +106,13 @@ impl PreviewIdentityResolver {
     /// with no matching title.
     pub fn candidates(&mut self, system_id: &SystemId, title: &str) -> Option<Vec<String>> {
         let list_name = crate::software_identity::software_list_for_platform(system_id.as_str())?;
-        self.ensure_loaded();
-        let PreviewIdentityResolverState::Ready(index) = &self.state else {
-            return None;
+        self.ensure_loaded(system_id.as_str(), list_name);
+        let index = match &self.state {
+            PreviewIdentityResolverState::Ready(index)
+            | PreviewIdentityResolverState::Compact { index, .. } => index,
+            PreviewIdentityResolverState::NotNeeded | PreviewIdentityResolverState::Unavailable => {
+                return None;
+            }
         };
         let title_key = crate::library_db::canonical_variant_title(title);
         Some(
@@ -91,7 +124,56 @@ impl PreviewIdentityResolver {
         )
     }
 
-    fn ensure_loaded(&mut self) {
+    fn ensure_loaded(&mut self, system_id: &str, list_name: &str) {
+        if let PreviewIdentityResolverState::Compact {
+            system_id: loaded, ..
+        } = &self.state
+        {
+            if loaded == system_id {
+                return;
+            }
+        } else if !matches!(self.state, PreviewIdentityResolverState::NotNeeded) {
+            return;
+        }
+        if self.compact_store.is_none() {
+            if let Ok(store) = crate::runtime_metadata::MetadataStore::open(&self.runtime_metadata)
+            {
+                self.compact_store = Some(store);
+            }
+        }
+        if let Some(store) = self.compact_store.as_ref() {
+            if let Ok(Some(shard)) = store.software_shard(system_id) {
+                let mut index = PreviewIdentityIndex::default();
+                for (title, names) in shard.title_candidates.iter() {
+                    for software_name in names {
+                        let Some(item) = shard.item(software_name) else {
+                            continue;
+                        };
+                        let family_name = item
+                            .parent_name
+                            .as_deref()
+                            .filter(|parent| !parent.trim().is_empty())
+                            .unwrap_or(software_name);
+                        let asset_key =
+                            crate::media_identity::ScreenshotAssetId::from_mame_software(
+                                list_name,
+                                family_name,
+                            )
+                            .into_string();
+                        index
+                            .titles
+                            .entry((list_name.to_string(), title.clone()))
+                            .or_default()
+                            .insert(asset_key);
+                    }
+                }
+                self.state = PreviewIdentityResolverState::Compact {
+                    system_id: system_id.to_string(),
+                    index,
+                };
+                return;
+            }
+        }
         if !matches!(self.state, PreviewIdentityResolverState::NotNeeded) {
             return;
         }
@@ -427,6 +509,46 @@ mod tests {
         let database = root.join("missing-mame.sqlite3");
         let resolver = PreviewIdentityResolver::new(&database);
         assert_eq!(resolver.status(), PreviewIdentityResolverStatus::NotNeeded);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolver_uses_one_compact_system_shard_and_reports_compact_status() {
+        let root = unique_temp_dir("preview-identity-compact");
+        let metadata_path = root.join(crate::runtime_metadata::FILE_NAME);
+        let shard = crate::runtime_metadata::SoftwareShard {
+            items: vec![crate::runtime_metadata::SoftwareItem {
+                name: "familygame".into(),
+                parent_name: None,
+                description: "Family Game".into(),
+                year: None,
+                publisher: None,
+                region: None,
+            }],
+            title_candidates: BTreeMap::from([("family-game".into(), vec!["familygame".into()])]),
+            ..crate::runtime_metadata::SoftwareShard::default()
+        };
+        let mut builder = crate::runtime_metadata::MetadataFileBuilder::new();
+        builder
+            .add_software("c64", &shard)
+            .expect("add compact shard");
+        builder
+            .write_to(&metadata_path)
+            .expect("write compact metadata");
+
+        let system = SystemId::parse("c64").expect("valid system");
+        let mut resolver = PreviewIdentityResolver::with_runtime_metadata(
+            root.join("missing-mame.sqlite3"),
+            &metadata_path,
+        );
+        let candidates = resolver
+            .candidates(&system, "Family Game")
+            .expect("candidates");
+        assert_eq!(
+            candidates,
+            vec!["mame-software__c64__familygame".to_string()]
+        );
+        assert_eq!(resolver.status(), PreviewIdentityResolverStatus::CompactV1);
         let _ = std::fs::remove_dir_all(root);
     }
 
