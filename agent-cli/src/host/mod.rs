@@ -35672,79 +35672,23 @@ fn run_catalog_neogeo_family_audit(sess: &Session, output: &Path) -> Result<()> 
 fn run_catalog_screenshot_export(system: &str, output: &Path) -> Result<()> {
     let system_id = mister_magik_catalog::catalog_classify::SystemId::parse(system)?;
     let session = connect(10)?;
-    let remote_root = active_catalog_root(&session)?;
-    let temporary = CatalogQueryTemporary::create()?;
-    let registry = temporary.path().join("registry");
-    fs::create_dir_all(&registry)?;
-    let mut slots = 0_u8;
-    for slot in ["manifest-a.json", "manifest-b.json"] {
-        if get(
-            &session,
-            &format!("{remote_root}/registry/{slot}"),
-            &registry.join(slot),
-        )
-        .is_ok()
-        {
-            slots += 1;
-        }
-    }
-    if slots == 0 {
-        return Err("device catalog has no readable registry manifest".into());
-    }
-    let limits = mister_magik_catalog::shard_registry::production_registry_limits();
-    let manifest =
-        mister_magik_catalog::shard_registry::read_latest_manifest_lazy(temporary.path(), limits)?;
-    let generation = &manifest
-        .systems
-        .iter()
-        .find(|candidate| candidate.system_id == system_id)
-        .ok_or_else(|| format!("catalog has no active system '{system}'"))?
-        .active;
-    let navpack = generation
-        .navpack
-        .as_ref()
-        .ok_or_else(|| format!("catalog has no active system NavPack for '{system}'"))?;
-    let navpack_path = navpack
-        .path
-        .to_str()
-        .filter(|path| !path.starts_with('/') && !path.contains(".."))
-        .ok_or("catalog manifest contains an invalid system NavPack path")?;
-    let local_navpack = temporary.path().join(navpack_path);
-    if let Some(parent) = local_navpack.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    get(
-        &session,
-        &format!("{remote_root}/{navpack_path}"),
-        &local_navpack,
-    )?;
-    let games = usize::try_from(generation.games)?;
-    let (mapped, _) = mister_magik_catalog::navpack::MappedNavPack::open(
-        &local_navpack,
-        navpack.bytes,
-        system_id.as_str(),
-        generation.generation,
-        games,
-    )?;
-    let mut report = String::from(
-        "ordinal\ttitle\tpreview_asset_key\tpreview_archive_path\thas_preview\tlaunch_ref\n",
+    let status_text = remote_read(&session, MAIN_STATUS_REMOTE)
+        .ok_or("active Main status is unavailable for screenshot audit")?;
+    let status: Value = serde_json::from_str(&status_text)?;
+    let binary = active_installed_gui_binary(&status)?;
+    let command = remote_subcommand(
+        binary,
+        "catalog-screenshot-audit",
+        &[system_id.as_str().to_string()],
     );
-    let mut screenshot_games = 0_usize;
-    for ordinal in 0..games {
-        let game = mapped.row(ordinal)?;
-        screenshot_games += usize::from(!game.preview_asset_key.is_empty());
-        use std::fmt::Write as _;
-        writeln!(
-            report,
-            "{}\t{}\t{}\t{}\t{}\t{}",
-            ordinal,
-            tsv_field(game.title),
-            tsv_field(game.preview_asset_key),
-            tsv_field(game.preview_archive_path),
-            u8::from(game.has_preview),
-            tsv_field(game.launch_ref),
-        )?;
+    let out = exec(&session, &command, true)?;
+    if !out.stderr.trim().is_empty() {
+        eprint!("[stderr] {}", out.stderr);
     }
+    if let Some(error) = exec_failure_message("catalog screenshot audit", &out) {
+        return Err(error.into());
+    }
+    let report = catalog_screenshot_tsv(&out.stdout)?;
     if let Some(parent) = output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -35753,23 +35697,32 @@ fn run_catalog_screenshot_export(system: &str, output: &Path) -> Result<()> {
     }
     fs::write(output, report)?;
     println!(
-        "catalog_screenshot_export_tsv\tsystem={}\tgames={}\tscreenshot_games={}\tout={}",
+        "catalog_screenshot_export_tsv\tsystem={}\tout={}",
         system_id.as_str(),
-        games,
-        screenshot_games,
         output.display(),
     );
     Ok(())
 }
 
-fn tsv_field(value: &str) -> String {
-    value
-        .chars()
-        .map(|character| match character {
-            '\t' | '\n' | '\r' => ' ',
-            other => other,
-        })
-        .collect()
+fn catalog_screenshot_tsv(stdout: &str) -> Result<String> {
+    const HEADER: &str =
+        "ordinal\ttitle\tpreview_asset_key\tpreview_archive_path\thas_preview\tlaunch_ref";
+    let mut rows = Vec::new();
+    for line in stdout.lines() {
+        if line == HEADER
+            || line
+                .split('\t')
+                .next()
+                .and_then(|value| value.parse::<usize>().ok())
+                .is_some()
+        {
+            rows.push(line);
+        }
+    }
+    if rows.first().copied() != Some(HEADER) {
+        return Err("device returned no screenshot audit TSV".into());
+    }
+    Ok(format!("{}\n", rows.join("\n")))
 }
 
 fn purge_development_library_data_and_reboot() -> Result<()> {
@@ -36869,6 +36822,27 @@ fn unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_screenshot_tsv_filters_process_logs_but_keeps_summary_free() {
+        let output = concat!(
+            "mister-magik-fb [catalog-screenshot-audit]\n",
+            "ordinal\ttitle\tpreview_asset_key\tpreview_archive_path\thas_preview\tlaunch_ref\n",
+            "0\tGame\tmame-software__nes__game\t/media/fat/assets/nes.mmlz4b\t1\t/game\n",
+        );
+        assert_eq!(
+            catalog_screenshot_tsv(output).unwrap(),
+            concat!(
+                "ordinal\ttitle\tpreview_asset_key\tpreview_archive_path\thas_preview\tlaunch_ref\n",
+                "0\tGame\tmame-software__nes__game\t/media/fat/assets/nes.mmlz4b\t1\t/game\n",
+            )
+        );
+    }
+
+    #[test]
+    fn catalog_screenshot_tsv_rejects_missing_runtime_report() {
+        assert!(catalog_screenshot_tsv("mister-magik-fb [catalog-screenshot-audit]\n").is_err());
+    }
 
     #[test]
     fn ui_test_loopback_endpoint_normalizes_localhost() {

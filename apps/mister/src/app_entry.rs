@@ -31,6 +31,8 @@
 //!     catalog-inspect    validate the registry, system artifacts, and source snapshot
 //!     catalog-corpus-inventory inventory production-planned scan targets only
 //!     catalog-registry-report list system counts without opening system artifacts
+//!     catalog-screenshot-audit
+//!                        reconcile installed screenshot identity coverage for one system
 //!     search-bench       benchmark persisted Arcade FTS5 search
 //!     rom-identity-bench benchmark production ROM identity hashing
 //!     hbmame-metadata-from-library
@@ -397,6 +399,10 @@ fn dispatch_pre_fpga(
         command_args::CATALOG_REGISTRY_REPORT_COMMAND => {
             run_catalog_registry_report(process_config.catalog_paths())
         }
+        command_args::CATALOG_SCREENSHOT_AUDIT_COMMAND => run_catalog_screenshot_audit(
+            process_config.catalog_paths(),
+            args.get(2..).unwrap_or_default(),
+        ),
         command_args::CATALOG_WORKER_COMMAND => ui_runner::run_catalog_worker_child(args),
         #[cfg(feature = "diagnostics")]
         "hbmame-metadata-from-library" => run_hbmame_metadata_from_library(),
@@ -535,6 +541,97 @@ fn run_catalog_registry_report(paths: &mister_magik_catalog::device_layout::Cata
             crate::ui_errln!("catalog_registry_summary_tsv\tvalid=0\terror={error}");
             std::process::exit(1);
         }
+    }
+}
+
+fn run_catalog_screenshot_audit(
+    paths: &mister_magik_catalog::device_layout::CatalogPaths,
+    args: &[String],
+) {
+    let Some(system) = args.first() else {
+        crate::ui_errln!(
+            "catalog_screenshot_summary_tsv\tvalid=0\terror=exactly one system is required"
+        );
+        std::process::exit(2);
+    };
+    if args.len() != 1 {
+        crate::ui_errln!(
+            "catalog_screenshot_summary_tsv\tvalid=0\terror=exactly one system is required"
+        );
+        std::process::exit(2);
+    }
+    let system_id = match mister_magik_catalog::catalog_classify::SystemId::parse(system) {
+        Ok(system_id) => system_id,
+        Err(error) => {
+            crate::ui_errln!(
+                "catalog_screenshot_summary_tsv\tvalid=0\terror={}",
+                tsv_field(&error.to_string())
+            );
+            std::process::exit(2);
+        }
+    };
+    let image_size =
+        mister_magik_catalog::media_identity::preferred_screenshot_image_size(system_id.as_str());
+    let pack_path = match mister_magik_catalog::media_identity::size_qualified_screenshot_pack_path(
+        &paths.media_asset_dir().display().to_string(),
+        system_id.as_str(),
+        image_size,
+    ) {
+        Ok(path) => PathBuf::from(path),
+        Err(error) => {
+            crate::ui_errln!(
+                "catalog_screenshot_summary_tsv\tvalid=0\terror={}",
+                tsv_field(&error)
+            );
+            std::process::exit(2);
+        }
+    };
+    let mut resolver = mister_magik_catalog::preview_availability::PreviewIdentityResolver::new(
+        paths.mame_sqlite(),
+    );
+    let outcome = match mister_magik_catalog::preview_availability::reconcile_preview_availability_with_resolver(
+        paths.sharded_catalog_dir(),
+        &system_id,
+        &pack_path,
+        mister_magik_catalog::shard_registry::production_registry_limits(),
+        &mut resolver,
+    ) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            crate::ui_errln!(
+                "catalog_screenshot_summary_tsv\tvalid=0\tsystem={}\tpack={}\terror={}",
+                system_id,
+                tsv_field(&pack_path.display().to_string()),
+                tsv_field(&error.to_string())
+            );
+            std::process::exit(1);
+        }
+    };
+    crate::ui_errln!(
+        "catalog_screenshot_summary_tsv\tvalid=1\tsystem={}\tgames={}\texisting_identity_rows={}\tderived_identity_rows={}\tambiguous_identity_rows={}\tcandidates={}\tavailable={}\tchanged={}\tresolver_status={:?}",
+        outcome.system_id,
+        outcome.games.len(),
+        outcome.existing_identity_rows,
+        outcome.derived_identity_rows,
+        outcome.ambiguous_identity_rows,
+        outcome.candidate_rows,
+        outcome.available_rows,
+        outcome.changed_rows,
+        outcome.resolver_status,
+    );
+    crate::ui_log!(
+        "ordinal\ttitle\tpreview_asset_key\tpreview_archive_path\thas_preview\tlaunch_ref\n"
+    );
+    for (ordinal, game) in outcome.games.iter().enumerate() {
+        crate::ui_logln!(
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            ordinal,
+            tsv_field(&game.title),
+            tsv_field(&game.preview_asset_key),
+            tsv_field(&game.preview_archive_path),
+            u8::from(game.has_preview),
+            tsv_field(&game.launch_ref),
+        );
     }
 }
 

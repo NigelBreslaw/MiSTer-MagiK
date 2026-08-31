@@ -25,6 +25,7 @@ pub const CATALOG_ROM_AUDIT_COMMAND: &str = "catalog-arcade-rom-audit";
 pub const CATALOG_NEOGEO_FAMILY_AUDIT_COMMAND: &str = "catalog-neogeo-family-audit";
 pub const CATALOG_CORPUS_INVENTORY_COMMAND: &str = "catalog-corpus-inventory";
 pub const CATALOG_REGISTRY_REPORT_COMMAND: &str = "catalog-registry-report";
+pub const CATALOG_SCREENSHOT_AUDIT_COMMAND: &str = "catalog-screenshot-audit";
 pub const CATALOG_WORKER_COMMAND: &str = "catalog-worker";
 
 pub const COMMANDS: &[CommandSpec] = &[
@@ -93,6 +94,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(CATALOG_ROM_AUDIT_COMMAND, CommandKind::PreFpga),
     CommandSpec::new(CATALOG_NEOGEO_FAMILY_AUDIT_COMMAND, CommandKind::PreFpga),
     CommandSpec::new(CATALOG_REGISTRY_REPORT_COMMAND, CommandKind::PreFpga),
+    CommandSpec::new(CATALOG_SCREENSHOT_AUDIT_COMMAND, CommandKind::PreFpga),
     // Internal supervised child. It deliberately does not take the UI process lock.
     CommandSpec::new(CATALOG_WORKER_COMMAND, CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
@@ -211,6 +213,7 @@ mod tests {
     fn recognizes_explicit_commands() {
         assert_command_kind("library-refresh", CommandKind::PreFpga);
         assert_command_kind(CATALOG_WORKER_COMMAND, CommandKind::PreFpga);
+        assert_command_kind(CATALOG_SCREENSHOT_AUDIT_COMMAND, CommandKind::PreFpga);
         assert_command_kind("purge-library-data", CommandKind::PreFpga);
         assert_command_kind("reset-delete-screenshot-packs", CommandKind::PreFpga);
         assert_command_kind("ui", CommandKind::Fpga);
