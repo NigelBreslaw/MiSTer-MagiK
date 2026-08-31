@@ -984,8 +984,7 @@ fn prepare_stage_databases(
         prepare_game_databases(repository, &databases)?;
     }
     for name in [
-        "mame.sqlite3",
-        "hbmame.sqlite3",
+        "magik-metadata-v1.bin",
         "arcade-updater-index-v1.lz4b",
         "game-databases-manifest.json",
     ] {
