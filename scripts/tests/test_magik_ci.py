@@ -229,6 +229,29 @@ import scripts.magik_ci.cli
         )
         self.assertIn(["python3", SLOW_TEST], commands("app"))
 
+    def test_tools_assurance_runs_the_local_installer_after_manager_build(self) -> None:
+        tools_commands = commands("tools")
+        installer = ["scripts/tests/test-mister-magik-installer.sh"]
+        manager_test = [
+            "cargo",
+            "test",
+            "--manifest-path",
+            "mister/tools/manager/Cargo.toml",
+        ]
+        manager_build = [
+            "cargo",
+            "build",
+            "--manifest-path",
+            "mister/tools/manager/Cargo.toml",
+        ]
+        self.assertEqual(tools_commands.count(installer), 1)
+        self.assertLess(
+            tools_commands.index(manager_test), tools_commands.index(installer)
+        )
+        self.assertLess(
+            tools_commands.index(manager_build), tools_commands.index(installer)
+        )
+
     def test_host_group_does_not_shadow_the_top_level_command(self) -> None:
         args = parser().parse_args(["ci", "host-assurance", "--group", "app"])
         self.assertEqual(args.group, "ci")

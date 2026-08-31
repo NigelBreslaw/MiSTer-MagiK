@@ -214,7 +214,7 @@ def commands(group: str) -> list[list[str]]:
             ["python3", "scripts/tests/test-slint-build-contract.py"],
         ]
     if group == "tools":
-        return [
+        result = [
             command
             for manifest in (
                 "mister/tools/agent/Cargo.toml",
@@ -222,6 +222,18 @@ def commands(group: str) -> list[list[str]]:
             )
             for command in _crate_commands(manifest)
         ]
+        result.extend(
+            [
+                [
+                    "cargo",
+                    "build",
+                    "--manifest-path",
+                    "mister/tools/manager/Cargo.toml",
+                ],
+                ["scripts/tests/test-mister-magik-installer.sh"],
+            ]
+        )
+        return result
     raise ValueError(f"unsupported host assurance group: {group}")
 
 
