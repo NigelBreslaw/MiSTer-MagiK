@@ -142,6 +142,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 	,output wire [3:0] formal_publication_sequence
 	,output wire formal_publish_crc_busy
 	,output wire [4:0] formal_publish_crc_phase
+	,output wire [15:0] formal_publish_crc_input
 	,output wire formal_enqueue
 	,output wire formal_dequeue
 	,output wire formal_return_has_entry
@@ -235,7 +236,10 @@ module mister_magik_scaler_fetch_liveness_state #(
 	reg publish_crc_busy = 1'b0;
 	reg [4:0] publish_crc_phase = 5'd0;
 	reg [15:0] publish_crc_work = 16'd0;
-	wire [3:0] publish_crc_index = 4'd14 - publish_crc_phase[3:0];
+	// Fold the immutable payload MSB-first without a phase-indexed selector.
+	// flags[15] is consumed on launch; this register supplies flags[14:0],
+	// then reloads once to supply state[15:0].
+	reg [15:0] publish_crc_input = 16'd0;
 
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg record_ready_meta = 1'b0;
@@ -343,6 +347,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 	assign formal_publication_sequence = 4'd0;
 	assign formal_publish_crc_busy = publish_crc_busy;
 	assign formal_publish_crc_phase = publish_crc_phase;
+	assign formal_publish_crc_input = publish_crc_input;
 	assign formal_published_bundle = {
 		publish_crc_work,
 		frozen_state,
@@ -518,24 +523,27 @@ module mister_magik_scaler_fetch_liveness_state #(
 			publish_crc_work <= crc16_update_bit(
 				MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA_CRC,
 				terminal_flags[15]);
+			publish_crc_input <= {terminal_flags[14:0], 1'b0};
 			publish_crc_busy <= 1'b1;
 			publish_crc_phase <= 5'd0;
 		end
 		else if(publish_crc_busy) begin : publish_crc_step
 			reg crc_data_bit;
 			reg [15:0] crc_next;
-			if(publish_crc_phase < 5'd15)
-				crc_data_bit = terminal_flags[publish_crc_index];
-			else
-				crc_data_bit = frozen_state[publish_crc_index];
+			crc_data_bit = publish_crc_input[15];
 			crc_next = crc16_update_bit(publish_crc_work, crc_data_bit);
 			publish_crc_work <= crc_next;
 			if(publish_crc_phase == 5'd30) begin
 				publish_crc_busy <= 1'b0;
 				record_ready <= 1'b1;
 			end
-			else
+			else begin
+				if(publish_crc_phase == 5'd14)
+					publish_crc_input <= frozen_state;
+				else
+					publish_crc_input <= {publish_crc_input[14:0], 1'b0};
 				publish_crc_phase <= publish_crc_phase + 1'd1;
+			end
 		end
 	end
 

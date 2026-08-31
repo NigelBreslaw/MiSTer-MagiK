@@ -371,6 +371,9 @@ def main() -> None:
         "publish_crc_work",
         "reg publish_crc_busy = 1'b0;",
         "reg [4:0] publish_crc_phase = 5'd0;",
+        "reg [15:0] publish_crc_input = 16'd0;",
+        "crc_data_bit = publish_crc_input[15];",
+        "publish_crc_input <= frozen_state;",
         "terminal_flags",
         "record_ready <= 1'b1;",
         "function automatic [15:0] crc16_update_bit;",
@@ -390,6 +393,8 @@ def main() -> None:
         )
     if "generation_launch" in control_source:
         fail("rejected placement-heavy generation launch stage remains present")
+    if "publish_crc_index" in control_source:
+        fail("phase-indexed scaler-fetch CRC selector remains present")
     for forbidden_scaler_storage in (
         "magik_pre_read_summary",
         "magik_summary_v",
