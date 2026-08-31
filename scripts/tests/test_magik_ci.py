@@ -971,6 +971,46 @@ import scripts.magik_ci.cli
             )
             self.assertEqual(updater["catalog_metadata_rows"], 0)
 
+            compact = bytearray(96)
+            compact[:8] = b"MMMETA1\0"
+            compact[8:12] = (1).to_bytes(4, "little")
+            compact[16:24] = (96).to_bytes(8, "little")
+            compact[28:36] = (96).to_bytes(8, "little")
+            compact[36:40] = (128).to_bytes(4, "little")
+            compact[44:76] = hashlib.sha256(b"").digest()
+            compact_path = root / "magik-metadata-v1.bin"
+            compact_path.write_bytes(compact)
+            compact_archive = create(
+                mame=mame,
+                hbmame=hbmame,
+                release_version=2,
+                mame_tag="mame0288",
+                mame_sha="a" * 40,
+                listxml_asset="listxml.zip",
+                listxml_sha256="b" * 64,
+                hbmame_tag="hbmame",
+                hbmame_sha="c" * 40,
+                mame_builder_sha="d" * 40,
+                hbmame_builder_sha="e" * 40,
+                arcade_database_csv=csv,
+                arcade_database_license=license_file,
+                arcade_database_sha="f" * 40,
+                arcade_database_builder_sha="1" * 40,
+                arcade_updater_builder_sha="2" * 40,
+                arcade_updater_index=index,
+                runtime_metadata=compact_path,
+                source_output=root / "source",
+                output=root / "compact-release",
+            )
+            compact_payload = cast(dict[str, Any], verify(compact_archive))
+            self.assertEqual(compact_payload["format"], databases.COMPACT_FORMAT)
+            self.assertTrue(
+                (root / "source/mister-magik-game-databases-source-v2.zip").is_file()
+            )
+            with zipfile.ZipFile(compact_archive) as stream:
+                self.assertNotIn("mame.sqlite3", stream.namelist())
+                self.assertNotIn("hbmame.sqlite3", stream.namelist())
+
             with zipfile.ZipFile(archive) as stream:
                 legacy_files = {name: stream.read(name) for name in stream.namelist()}
             legacy_manifest = json.loads(legacy_files[databases.MANIFEST])

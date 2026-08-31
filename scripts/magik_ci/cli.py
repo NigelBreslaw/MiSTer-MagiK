@@ -123,6 +123,8 @@ def parser() -> argparse.ArgumentParser:
             else str,
             required=True,
         )
+    create_db.add_argument("--runtime-metadata", type=Path)
+    create_db.add_argument("--source-output", type=Path)
     for option in (
         "release-version",
         "mame-tag",
@@ -337,6 +339,8 @@ def main() -> int:
                     arcade_updater_builder_sha=args.arcade_updater_builder_sha,
                     arcade_updater_index=args.arcade_updater_index,
                     output=args.output,
+                    runtime_metadata=args.runtime_metadata,
+                    source_output=args.source_output,
                 )
             else:
                 value = databases.build_updater(args.input_manifest, args.out)

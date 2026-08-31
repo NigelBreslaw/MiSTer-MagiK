@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import html
 import io
 import json
@@ -16,9 +17,11 @@ from typing import Any, cast
 from .common import atomic_write, sha256_bytes, sha256_file
 
 FORMAT = "mister-magik-game-databases-manifest-v3"
+COMPACT_FORMAT = "mister-magik-game-databases-manifest-v4"
 MANIFEST = "game-databases-manifest.json"
 CHECKSUMS = "SHA256SUMS"
 INDEX = "arcade-updater-index-v1.lz4b"
+RUNTIME_METADATA = "magik-metadata-v1.bin"
 INPUT_FORMAT = "mister-magik-arcade-updater-inputs-v1"
 SOURCE_ORDER = ("distribution", "alternatives", "jtcores", "coinop", "arcade-offset")
 
@@ -194,6 +197,7 @@ def verify(
     payload = json.loads(files[MANIFEST])
     if payload.get("format") not in {
         FORMAT,
+        COMPACT_FORMAT,
         "mister-magik-game-databases-manifest-v2",
         "mister-magik-game-databases-manifest-v1",
     }:
@@ -209,7 +213,16 @@ def verify(
         digest, name = line.split("  ", 1)
         if name not in files or sha256_bytes(files[name]) != digest:
             raise ValueError(f"database_checksum:{name}")
-    if payload["format"] == FORMAT:
+    if payload["format"] == COMPACT_FORMAT:
+        compact = files.get(RUNTIME_METADATA)
+        if compact is None:
+            raise ValueError("compact_metadata_missing")
+        if b"MMMETA1\0" != compact[:8] or len(compact) < 96:
+            raise ValueError("compact_metadata_invalid_header")
+        _verify_compact_metadata(compact)
+        if "mame.sqlite3" in files or "hbmame.sqlite3" in files:
+            raise ValueError("compact_release_contains_sqlite")
+    if payload["format"] in {FORMAT, COMPACT_FORMAT}:
         sources = payload.get("sources")
         updater_manifest = (
             sources.get("arcade_updater") if isinstance(sources, dict) else None
@@ -238,6 +251,50 @@ def verify(
                 "invalid_database_manifest: Arcade updater catalog metadata rows"
             )
     return payload
+
+
+def _verify_compact_metadata(data: bytes) -> None:
+    """Validate the bounded container geometry before it reaches a device."""
+    if int.from_bytes(data[8:12], "little") != 1:
+        raise ValueError("compact_metadata_version")
+    if any(data[12:16]) or any(data[76:96]):
+        raise ValueError("compact_metadata_reserved")
+    declared = int.from_bytes(data[16:24], "little")
+    if declared != len(data):
+        raise ValueError("compact_metadata_length")
+    shard_count = int.from_bytes(data[24:28], "little")
+    index_offset = int.from_bytes(data[28:36], "little")
+    entry_size = int.from_bytes(data[36:40], "little")
+    index_len = int.from_bytes(data[40:44], "little")
+    if index_offset != 96 or entry_size != 128 or index_len != shard_count * entry_size:
+        raise ValueError("compact_metadata_index_geometry")
+    index_end = index_offset + index_len
+    if index_end > len(data):
+        raise ValueError("compact_metadata_index_bounds")
+    if hashlib.sha256(data[index_offset:index_end]).digest() != data[44:76]:
+        raise ValueError("compact_metadata_index_checksum")
+    previous = None
+    ranges: list[tuple[int, int]] = []
+    for offset in range(index_offset, index_end, entry_size):
+        entry = data[offset : offset + entry_size]
+        shard_id = entry[:32].split(b"\0", 1)[0]
+        if not shard_id or previous is not None and shard_id <= previous:
+            raise ValueError("compact_metadata_index_order")
+        previous = shard_id
+        if any(entry[33:40]) or any(entry[100:128]):
+            raise ValueError("compact_metadata_index_reserved")
+        compressed_offset = int.from_bytes(entry[40:48], "little")
+        compressed_len = int.from_bytes(entry[48:52], "little")
+        decoded_len = int.from_bytes(entry[52:56], "little")
+        end = compressed_offset + compressed_len
+        if compressed_len == 0 or decoded_len == 0 or decoded_len > 16 * 1024 * 1024:
+            raise ValueError("compact_metadata_shard_length")
+        if compressed_offset < index_end or end > len(data):
+            raise ValueError("compact_metadata_shard_bounds")
+        ranges.append((compressed_offset, end))
+    ranges.sort()
+    if any(left[1] > right[0] for left, right in zip(ranges, ranges[1:])):
+        raise ValueError("compact_metadata_shard_overlap")
 
 
 def extract_release(release: Path, output: Path) -> dict[str, object]:
@@ -276,19 +333,25 @@ def create(
     arcade_updater_builder_sha: str,
     arcade_updater_index: Path,
     output: Path,
+    runtime_metadata: Path | None = None,
+    source_output: Path | None = None,
 ) -> Path:
     updater_index_payload = _decode_updater_index(arcade_updater_index)
     updater_sources = updater_index_payload["sources"]
     updater_rows = updater_index_payload["rows"]
-    files = [
-        ("mame.sqlite3", mame.read_bytes()),
-        ("hbmame.sqlite3", hbmame.read_bytes()),
+    runtime_files = [
         ("ArcadeDatabase.csv", arcade_database_csv.read_bytes()),
         ("ArcadeDatabase-LICENSE.txt", arcade_database_license.read_bytes()),
         (INDEX, arcade_updater_index.read_bytes()),
     ]
+    if runtime_metadata is None:
+        files = [("mame.sqlite3", mame.read_bytes()), ("hbmame.sqlite3", hbmame.read_bytes())] + runtime_files
+        format_name = FORMAT
+    else:
+        files = [(RUNTIME_METADATA, runtime_metadata.read_bytes())] + runtime_files
+        format_name = COMPACT_FORMAT
     payload = {
-        "format": FORMAT,
+        "format": format_name,
         "release_version": release_version,
         "sources": {
             "mame": {
@@ -338,6 +401,10 @@ def create(
     _zip(archive, files + [(MANIFEST, manifest), (CHECKSUMS, checksums.encode())])
     atomic_write(output / MANIFEST, manifest)
     atomic_write(output / CHECKSUMS, checksums.encode())
+    if source_output is not None:
+        source_output.mkdir(parents=True, exist_ok=True)
+        source_archive = source_output / f"mister-magik-game-databases-source-v{release_version}.zip"
+        _zip(source_archive, [("mame.sqlite3", mame.read_bytes()), ("hbmame.sqlite3", hbmame.read_bytes())])
     return archive
 
 
