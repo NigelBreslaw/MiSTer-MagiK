@@ -25504,7 +25504,7 @@ fn catalog_artifact_set_valid(catalog: &Value) -> bool {
 }
 
 fn catalog_phase_evidence(log: &str) -> Value {
-    const RECORDS: [&str; 25] = [
+    const RECORDS: [&str; 26] = [
         "startup_timing",
         "catalog_scan_attribution_tsv",
         "catalog_scan_handoff_tsv",
@@ -25530,6 +25530,7 @@ fn catalog_phase_evidence(log: &str) -> Value {
         "fast_catalog_generic_inventory_tsv",
         "catalog_game_header_probe_tsv",
         "namespace_walk_fallback_tsv",
+        "namespace_walk_subtree_recovery_tsv",
     ];
     let mut records = Vec::new();
     for line in log.lines() {
@@ -43062,11 +43063,26 @@ catalog_shard_staging_tsv\trequested=auto selected=tmpfs\n\
 catalog_v3_projection_phases_tsv\tplanning_us=1\treconciliation_us=2\ttotal_us=3\n\
 catalog_v3_reconciliation_tsv\tgeneration=2\trebuilt=3\n\
 catalog_v3_persist_phases_tsv\tprojection_us=4\tscanner_cache_us=5\n\
+namespace_walk_subtree_recovery_tsv\tscope=subtree\trecovered=1\tattempts=1\tsnapshot_us=17\tsnapshot_entries=23\tsnapshot_errors=0\n\
 fast_catalog_generic_phase_tsv\tphase=complete\n";
         let evidence = catalog_phase_evidence(log);
         assert_eq!(evidence["complete"], true);
         assert_eq!(evidence["required"]["scan_complete"], true);
         assert!(evidence["records"].as_array().unwrap().len() >= 6);
+        let recovery = evidence["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|record| {
+                record.get("record").and_then(Value::as_str)
+                    == Some("namespace_walk_subtree_recovery_tsv")
+            })
+            .expect("subtree recovery evidence should be retained");
+        assert_eq!(recovery["metrics"]["recovered"], json!(1));
+        assert_eq!(recovery["metrics"]["attempts"], json!(1));
+        assert_eq!(recovery["metrics"]["snapshot_us"], json!(17));
+        assert_eq!(recovery["metrics"]["snapshot_entries"], json!(23));
+        assert_eq!(recovery["metrics"]["snapshot_errors"], json!(0));
 
         let incomplete = catalog_phase_evidence(
             &log.replace("catalog_v3_persist_phases_tsv", "missing_persist_record"),

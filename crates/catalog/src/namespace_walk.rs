@@ -444,7 +444,7 @@ fn report_namespace_subtree_recovery(
     recovered: bool,
 ) {
     crate::catalog_logln!(
-        "namespace_walk_subtree_recovery_tsv\tscope=subtree\trecovered={}\toperation={}\tfailure_path={}\tdepth={}\terrno={}\tsnapshot_us={}\tsnapshot_entries={}\tsnapshot_errors={}",
+        "namespace_walk_subtree_recovery_tsv\tscope=subtree\trecovered={}\tattempts=1\toperation={}\tfailure_path={}\tdepth={}\terrno={}\tsnapshot_us={}\tsnapshot_entries={}\tsnapshot_errors={}",
         usize::from(recovered),
         failure.operation(),
         failure.path().display(),
@@ -1501,7 +1501,9 @@ mod linux {
                             }
                         }
                         Err(failure)
-                            if recover_nested_enoent && failure.is_recoverable_nested_enoent() =>
+                            if recover_nested_enoent
+                                && failure.is_recoverable_nested_enoent()
+                                && failure.path() == child_path.as_path() =>
                         {
                             let snapshot_started = std::time::Instant::now();
                             let remaining_depth =
@@ -2250,6 +2252,7 @@ mod tests {
             1,
         )
         .expect("nested ENOENT should recover through the subtree snapshot");
+        assert_eq!(capture.stats.captured_entries, capture.entries.len());
         let mut recovered = capture
             .entries
             .into_iter()
@@ -2267,6 +2270,71 @@ mod tests {
         assert_eq!(capture.stats.backend, "mixed");
         assert_eq!(capture.stats.fallback_count, 0);
         assert_eq!(capture.stats.restart_count, 0);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn incomplete_exact_subtree_recovery_does_not_escalate_to_an_ancestor() {
+        use std::cell::Cell;
+
+        let dir = unique_temp_dir("namespace-fd-incomplete-subtree-recovery");
+        let deep = dir.join("nested/deep");
+        fs::create_dir_all(deep.join("leaf")).unwrap();
+        fs::create_dir_all(dir.join("sibling")).unwrap();
+        fs::write(deep.join("game.rom"), b"game").unwrap();
+        fs::write(dir.join("sibling/other.rom"), b"other").unwrap();
+
+        let deep_ignore_calls = Cell::new(0);
+        let ignore = |path: &Path| {
+            if path == deep {
+                let call = deep_ignore_calls.get();
+                deep_ignore_calls.set(call.saturating_add(1));
+                call > 0
+            } else {
+                false
+            }
+        };
+        let error = linux::collect_with_fault_recovery_for_test(
+            &dir,
+            None,
+            NamespaceSignatureCapture::None,
+            &ignore,
+            "child-read",
+            2,
+        )
+        .expect_err("an incomplete exact snapshot must retain the typed failure");
+
+        assert_eq!(error.path(), deep.as_path());
+        assert_eq!(error.depth(), 2);
+        assert!(error.is_recoverable_nested_enoent());
+        assert!(deep_ignore_calls.get() >= 2);
+
+        let mut fallback_entries = Vec::new();
+        let fallback_stats = visit_walkdir(
+            &dir,
+            None,
+            NamespaceRootPolicy::NoFollow,
+            NamespaceSignatureCapture::None,
+            &ignore,
+            &mut |entry| {
+                fallback_entries.push((
+                    entry.path.strip_prefix(&dir).unwrap().to_path_buf(),
+                    entry.kind,
+                    entry.zip_signature,
+                ));
+                true
+            },
+            Some(error.to_string()),
+        );
+        fallback_entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+        assert_eq!(fallback_entries, walkdir_snapshot(&dir, None, &ignore).0);
+        assert_eq!(fallback_stats.backend, "walkdir-fallback");
+        assert_eq!(fallback_stats.fallback_count, 1);
+        assert_eq!(fallback_stats.restart_count, 1);
+        assert!(fallback_stats.fallback_reason.is_some());
 
         fs::remove_dir_all(dir).unwrap();
     }
