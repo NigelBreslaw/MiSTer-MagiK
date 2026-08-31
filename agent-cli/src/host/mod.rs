@@ -21282,6 +21282,31 @@ fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Ve
                     "catalog_game_header_probe_tsv",
                     "metadata_probe_us",
                 ),
+                "namespace_whole_root_restart_count": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "namespace_walk_fallback_tsv",
+                    "restart_count",
+                ),
+                "namespace_whole_root_fd_attempt_us": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "namespace_walk_fallback_tsv",
+                    "fd_attempt_us",
+                ),
+                "namespace_whole_root_fallback_us": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "namespace_walk_fallback_tsv",
+                    "fallback_us",
+                ),
+                "namespace_whole_root_fallback_entries": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "namespace_walk_fallback_tsv",
+                    "fallback_entries",
+                ),
+                "namespace_whole_root_fallback_errors": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "namespace_walk_fallback_tsv",
+                    "fallback_errors",
+                ),
                 "artifact_publish_ms": catalog_phase_metric_ms(
                     value.get("phase_evidence"),
                     "startup_timing",
@@ -25474,7 +25499,7 @@ fn catalog_artifact_set_valid(catalog: &Value) -> bool {
 }
 
 fn catalog_phase_evidence(log: &str) -> Value {
-    const RECORDS: [&str; 24] = [
+    const RECORDS: [&str; 25] = [
         "startup_timing",
         "catalog_scan_attribution_tsv",
         "catalog_scan_handoff_tsv",
@@ -25499,6 +25524,7 @@ fn catalog_phase_evidence(log: &str) -> Value {
         "fast_catalog_generic_phase_tsv",
         "fast_catalog_generic_inventory_tsv",
         "catalog_game_header_probe_tsv",
+        "namespace_walk_fallback_tsv",
     ];
     let mut records = Vec::new();
     for line in log.lines() {
@@ -42816,6 +42842,14 @@ H: Handlers=event3 js0"#
                     "metrics": {"optimize_us": 800, "integrity_us": 500}
                 },
                 {
+                    "record": "namespace_walk_fallback_tsv",
+                    "metrics": {
+                        "restart_count": 1, "fd_attempt_us": 1200,
+                        "fallback_us": 3400, "fallback_entries": 50,
+                        "fallback_errors": 2
+                    }
+                },
+                {
                     "record": "startup_timing",
                     "name": "catalog_filesystem_headroom",
                     "metrics": {"tmp_available_bytes": 900, "media_available_bytes": 8000}
@@ -42845,6 +42879,14 @@ H: Handlers=event3 js0"#
             Some(800)
         );
         assert_eq!(
+            catalog_phase_metric_sum(
+                Some(&evidence),
+                "namespace_walk_fallback_tsv",
+                "restart_count"
+            ),
+            Some(1)
+        );
+        assert_eq!(
             catalog_phase_metric_min(
                 Some(&evidence),
                 "startup_timing",
@@ -42872,6 +42914,11 @@ H: Handlers=event3 js0"#
                                 "rejected": 2, "file_type_count": 18, "file_type_us": 60,
                                 "metadata_probe_count": 18, "metadata_probe_us": 180,
                                 "elapsed_us": 300
+                            }},
+                            {"record": "namespace_walk_fallback_tsv", "metrics": {
+                                "restart_count": 1, "fd_attempt_us": 1200,
+                                "fallback_us": 3400, "fallback_entries": 50,
+                                "fallback_errors": 2
                             }}
                         ]}
                     }
@@ -42882,6 +42929,11 @@ H: Handlers=event3 js0"#
         assert_eq!(normalized[0]["game_header_entries"], 30);
         assert_eq!(normalized[0]["game_header_accepted"], 24);
         assert_eq!(normalized[0]["game_header_metadata_probe_us"], 300);
+        assert_eq!(normalized[0]["namespace_whole_root_restart_count"], 1);
+        assert_eq!(normalized[0]["namespace_whole_root_fd_attempt_us"], 1200);
+        assert_eq!(normalized[0]["namespace_whole_root_fallback_us"], 3400);
+        assert_eq!(normalized[0]["namespace_whole_root_fallback_entries"], 50);
+        assert_eq!(normalized[0]["namespace_whole_root_fallback_errors"], 2);
     }
 
     #[test]

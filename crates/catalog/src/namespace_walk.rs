@@ -281,7 +281,9 @@ pub(crate) fn visit_owned_with_signature_capture(
                 return capture.stats;
             }
             Err(reason) => {
-                return visit_walkdir_owned(
+                let fd_attempt_us = visit_started.elapsed().as_micros() as u64;
+                let fallback_started = Instant::now();
+                let stats = visit_walkdir_owned(
                     target,
                     max_depth,
                     NamespaceRootPolicy::NoFollow,
@@ -290,6 +292,8 @@ pub(crate) fn visit_owned_with_signature_capture(
                     &mut visitor,
                     Some(reason.to_string()),
                 );
+                report_namespace_fallback(target, &reason, fd_attempt_us, fallback_started, &stats);
+                return stats;
             }
         }
     }
@@ -351,7 +355,9 @@ pub(crate) fn visit_with_root_policy_and_signature_capture(
                 return capture.stats;
             }
             Err(reason) => {
-                return visit_walkdir(
+                let fd_attempt_us = visit_started.elapsed().as_micros() as u64;
+                let fallback_started = Instant::now();
+                let stats = visit_walkdir(
                     target,
                     max_depth,
                     root_policy,
@@ -360,6 +366,8 @@ pub(crate) fn visit_with_root_policy_and_signature_capture(
                     &mut visitor,
                     Some(reason.to_string()),
                 );
+                report_namespace_fallback(target, &reason, fd_attempt_us, fallback_started, &stats);
+                return stats;
             }
         }
     }
@@ -390,6 +398,31 @@ pub(crate) fn visit_with_root_policy_and_signature_capture(
         &mut visitor,
         reason,
     )
+}
+
+#[cfg(target_os = "linux")]
+fn report_namespace_fallback(
+    target: &Path,
+    failure: &linux::FdCaptureFailure,
+    fd_attempt_us: u64,
+    fallback_started: Instant,
+    stats: &NamespaceWalkStats,
+) {
+    let fallback_us = fallback_started.elapsed().as_micros() as u64;
+    crate::catalog_logln!(
+        "namespace_walk_fallback_tsv\ttarget={}\tscope=whole-root\trestart_count=1\toperation={}\tfailure_path={}\tdepth={}\terrno={}\tfd_attempt_us={}\tfallback_us={}\tfallback_entries={}\tfallback_errors={}",
+        target.display(),
+        failure.operation(),
+        failure.path().display(),
+        failure.depth(),
+        failure
+            .errno()
+            .map_or_else(|| "none".to_string(), |errno| errno.to_string()),
+        fd_attempt_us,
+        fallback_us,
+        stats.captured_entries,
+        stats.errors,
+    );
 }
 
 /// Probe a directory and a known set of its immediate child directories.
@@ -688,6 +721,7 @@ mod linux {
         }
     }
 
+    #[allow(dead_code)]
     #[derive(Debug)]
     pub(super) struct FdCaptureFailure {
         operation: FdCaptureFailureOperation,
@@ -697,6 +731,7 @@ mod linux {
         context: String,
     }
 
+    #[allow(dead_code)]
     impl FdCaptureFailure {
         fn new(
             operation: FdCaptureFailureOperation,
