@@ -486,6 +486,7 @@ pub(crate) fn discover_generic_systems_from_profiles_excluding_with_progress(
 /// Known profile roots are streamed directly. Runtime-derived roots are
 /// retained only for the duration of that root, resolved from the same entries,
 /// and then classified without reopening the directory tree.
+#[hotpath::measure]
 pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
     storage_root: &Path,
     plan: &CatalogScanPlan,

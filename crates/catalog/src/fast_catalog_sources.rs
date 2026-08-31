@@ -117,6 +117,7 @@ pub(crate) struct FastSourceRefreshBuild {
     pub row_fingerprints: BTreeMap<String, String>,
 }
 
+#[hotpath::measure]
 pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
     storage_root: &Path,
     mut plan_ready: impl FnMut(&[String]),
@@ -300,6 +301,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
     })
 }
 
+#[hotpath::measure]
 fn build_and_record_prepared_system(
     storage_root: &Path,
     system_id: &str,
@@ -551,6 +553,7 @@ fn merge_source_report(target: &mut FastSourceSystemReport, additional: &FastSou
         .saturating_add(additional.family_variants);
 }
 
+#[hotpath::measure]
 fn build_prepared_system(
     storage_root: &Path,
     system_id: &str,
@@ -675,6 +678,7 @@ fn scan_arcade(
     scan_arcade_with_resolver(storage_root, report, &mut resolver)
 }
 
+#[hotpath::measure]
 fn scan_arcade_with_resolver(
     storage_root: &Path,
     report: &mut FastSourceSystemReport,
@@ -1160,6 +1164,7 @@ fn primary_rom_namespace(requirement: &PrimaryRomRequirement) -> Option<RomNames
     }
 }
 
+#[hotpath::measure]
 fn scan_amiga(
     storage_root: &Path,
     report: &mut FastSourceSystemReport,
@@ -1316,6 +1321,7 @@ fn scan_amiga(
     Ok(games)
 }
 
+#[hotpath::measure]
 fn scan_prepared_mgl(
     roots: &[PathBuf],
     system_id: &str,
@@ -1360,6 +1366,7 @@ fn scan_prepared_mgl(
         .collect())
 }
 
+#[hotpath::measure]
 fn scan_oneload64_with_observations(
     storage_root: &Path,
     report: &mut FastSourceSystemReport,
@@ -1384,6 +1391,7 @@ fn scan_oneload64_with_observations(
     Ok((games, watch))
 }
 
+#[hotpath::measure]
 fn collect_matching_files(
     root: &Path,
     visited: &mut usize,

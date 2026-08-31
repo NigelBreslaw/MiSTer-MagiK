@@ -1143,6 +1143,7 @@ pub(crate) fn publish_changed_snapshot_with_profile_held(
 }
 
 #[cfg(feature = "builder")]
+#[hotpath::measure]
 fn publish_snapshot_selection(
     storage_root: &Path,
     snapshot: &FastFiveSnapshot,

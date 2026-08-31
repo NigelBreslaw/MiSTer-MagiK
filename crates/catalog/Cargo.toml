@@ -20,6 +20,11 @@ name = "five-system-catalog-prototype"
 path = "src/bin/five_system_catalog_prototype.rs"
 required-features = ["builder"]
 
+[[bin]]
+name = "catalog-hotpath-profile"
+path = "src/bin/catalog_hotpath_profile.rs"
+required-features = ["builder", "hotpath"]
+
 [lints.rust]
 warnings = "deny"
 
