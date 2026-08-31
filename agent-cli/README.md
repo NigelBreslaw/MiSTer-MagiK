@@ -9,6 +9,7 @@ The AI-facing commands are:
 ```text
 scripts/agent plan
 scripts/agent deliver
+scripts/agent deliver game-databases --game-databases-release-dir PATH
 scripts/agent restart-ui
 scripts/agent benchmark
 scripts/agent benchmark particles
@@ -46,6 +47,11 @@ creation belongs to Git; `agent-cli` never stages, commits, or pushes.
 the scanout kernel plugin, and the latch RBF come only from the latest
 published GitHub platform release. The tag-addressed cache is reused when it
 still verifies against the latest release.
+
+The `deliver game-databases` target accepts only an already-verified local
+release directory and invokes only the database transaction. It does not
+resolve platform releases or build, replace, or restart any platform/runtime
+artifact.
 
 `benchmark` profiles the already-installed development app in place. With no
 scenario it runs the screensaver benchmark. A positional scenario selects

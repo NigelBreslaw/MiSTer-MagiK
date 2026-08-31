@@ -609,3 +609,168 @@ pub(super) fn platform_safety_script() -> String {
         "for path in {paths}; do if test -e \"$path\"; then printf 'platform safety blocked: %s\\n' \"$path\" >&2; exit 1; fi; done",
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    struct ScriptedDatabaseRemote {
+        inventory: String,
+        events: RefCell<Vec<String>>,
+        fail_command_containing: Option<&'static str>,
+    }
+
+    impl DeployRemote for ScriptedDatabaseRemote {
+        fn exec(&self, command: &str) -> Result<ExecOutput> {
+            self.events.borrow_mut().push(format!("exec {command}"));
+            if self
+                .fail_command_containing
+                .is_some_and(|needle| command.contains(needle))
+            {
+                return Ok(ExecOutput {
+                    rc: 9,
+                    stdout: "scripted failure".into(),
+                    stderr: String::new(),
+                });
+            }
+            Ok(ExecOutput {
+                rc: 0,
+                stdout: if command.contains("sum=$(awk") {
+                    self.inventory.clone()
+                } else {
+                    String::new()
+                },
+                stderr: String::new(),
+            })
+        }
+
+        fn put(&self, local: &Path, remote: &str) -> Result<()> {
+            self.events
+                .borrow_mut()
+                .push(format!("put {} {remote}", local.display()));
+            Ok(())
+        }
+    }
+
+    fn database_stage(label: &str) -> (PathBuf, DatabaseDeployTransaction) {
+        let stage = std::env::temp_dir().join(format!(
+            "mister-magik-database-transaction-{label}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&stage);
+        fs::create_dir_all(&stage).unwrap();
+        for (relative, _) in database_deploy_files() {
+            let path = stage.join(relative);
+            fs::write(path, relative.as_bytes()).unwrap();
+        }
+        let transaction = DatabaseDeployTransaction::validate(&stage).unwrap();
+        (stage, transaction)
+    }
+
+    fn database_inventory(
+        transaction: &DatabaseDeployTransaction,
+        changed_or_missing: &[(&str, bool)],
+    ) -> String {
+        transaction
+            .0
+            .files
+            .iter()
+            .map(|file| {
+                match changed_or_missing
+                    .iter()
+                    .find(|(remote, _)| *remote == file.remote)
+                {
+                    Some((_, true)) => format!("missing  {}", file.remote),
+                    Some((_, false)) => format!("{}  {}", "0".repeat(64), file.remote),
+                    None => format!("{}  {}", file.sha256, file.remote),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn database_deploy_noop_skips_all_five_files() {
+        let (stage, transaction) = database_stage("noop");
+        let remote = ScriptedDatabaseRemote {
+            inventory: database_inventory(&transaction, &[]),
+            events: RefCell::new(Vec::new()),
+            fail_command_containing: None,
+        };
+        let mut metrics = DeliveryTransferMetrics::default();
+
+        let report = transaction.run_with(&remote, &mut metrics).unwrap();
+
+        assert_eq!(report.changed_files, 0);
+        assert_eq!(report.skipped_files, 5);
+        assert_eq!(report.transferred_bytes, 0);
+        assert_eq!(remote.events.borrow().len(), 1);
+        assert_eq!(metrics, DeliveryTransferMetrics::default());
+        fs::remove_dir_all(stage).unwrap();
+    }
+
+    #[test]
+    fn database_deploy_transfers_only_changed_files() {
+        let (stage, transaction) = database_stage("changed");
+        let changed = "/media/fat/mister-magik-dev/mame.sqlite3";
+        let remote = ScriptedDatabaseRemote {
+            inventory: database_inventory(&transaction, &[(changed, false)]),
+            events: RefCell::new(Vec::new()),
+            fail_command_containing: None,
+        };
+        let mut metrics = DeliveryTransferMetrics::default();
+
+        let report = transaction.run_with(&remote, &mut metrics).unwrap();
+        let events = remote.events.borrow();
+
+        assert_eq!(report.changed_files, 1);
+        assert_eq!(report.skipped_files, 4);
+        assert_eq!(metrics.files, 1);
+        assert!(
+            events
+                .iter()
+                .any(|event| { event.ends_with(&format!("{changed}.upload")) })
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.starts_with("put "))
+                .count(),
+            1
+        );
+        fs::remove_dir_all(stage).unwrap();
+    }
+
+    #[test]
+    fn database_deploy_activation_failure_keeps_rollback_trap() {
+        let (stage, transaction) = database_stage("rollback");
+        let remote = ScriptedDatabaseRemote {
+            inventory: database_inventory(
+                &transaction,
+                &[("/media/fat/mister-magik-dev/mame.sqlite3", false)],
+            ),
+            events: RefCell::new(Vec::new()),
+            fail_command_containing: Some("mame.sqlite3.upload"),
+        };
+
+        let error = transaction
+            .run_with(&remote, &mut DeliveryTransferMetrics::default())
+            .unwrap_err()
+            .to_string();
+        let events = remote.events.borrow();
+        let activation = events.last().unwrap();
+
+        assert!(error.contains("database activation"));
+        assert!(activation.contains("trap rollback EXIT INT TERM"));
+        assert!(activation.contains("mame.sqlite3.rollback"));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.starts_with("put "))
+                .count(),
+            1
+        );
+        fs::remove_dir_all(stage).unwrap();
+    }
+}

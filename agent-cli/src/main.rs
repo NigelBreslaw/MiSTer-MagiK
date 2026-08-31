@@ -10,7 +10,6 @@ use agent_cli::evidence::Evidence;
 use agent_cli::model::Outcome;
 use agent_cli::progress::{EventKind, Reporter};
 use agent_cli::request::RawRequest;
-use clap::Parser;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
@@ -137,15 +136,37 @@ fn dispatch(
 ) -> AgentResult<Outcome> {
     match command {
         CliCommand::Deliver {
-            target: None,
+            target: Some(DeliverTarget::GameDatabases),
             game_databases_release_dir,
         } => {
-            return deliver(
-                evidence,
-                repository,
-                game_databases_release_dir.as_deref(),
-                reporter,
+            let Some(release_dir) = game_databases_release_dir.as_deref() else {
+                return Err(
+                    "deliver game-databases requires --game-databases-release-dir PATH".into(),
+                );
+            };
+            return deliver_game_databases(repository, release_dir, reporter);
+        }
+        CliCommand::Deliver {
+            target: Some(DeliverTarget::LocalMain),
+            game_databases_release_dir: Some(_),
+        } => {
+            return Err(
+                "--game-databases-release-dir is valid only with deliver game-databases".into(),
             );
+        }
+        CliCommand::Deliver {
+            target: None,
+            game_databases_release_dir: Some(_),
+        } => {
+            return Err(
+                "use deliver game-databases --game-databases-release-dir PATH for database-only delivery".into(),
+            );
+        }
+        CliCommand::Deliver {
+            target: None,
+            game_databases_release_dir: None,
+        } => {
+            return deliver(evidence, repository, None, reporter);
         }
         CliCommand::Deliver {
             target: Some(DeliverTarget::LocalMain),
@@ -378,6 +399,40 @@ fn dispatch(
         }
     }
     Ok(Outcome::NoOp)
+}
+
+fn deliver_game_databases(
+    repository: &std::path::Path,
+    release_dir: &std::path::Path,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    let started = Instant::now();
+    reporter.emit(
+        EventKind::Progress,
+        "database-preflight",
+        "checking clean exact HEAD for database-only delivery",
+        Some(5),
+    )?;
+    let sha = agent_cli::git::value(repository, &["rev-parse", "HEAD"])?;
+    let dirty = agent_cli::git::value(repository, &["status", "--porcelain"])?;
+    if !dirty.is_empty() {
+        return Err("dirty_worktree: commit or discard changes before database delivery".into());
+    }
+    let result = agent_cli::database_delivery::execute(repository, &sha, release_dir, reporter);
+    reporter.emit(
+        if result.is_ok() {
+            EventKind::Completed
+        } else {
+            EventKind::Warning
+        },
+        "database-preflight",
+        &format!(
+            "database-only delivery finished in {:.3}s",
+            started.elapsed().as_secs_f64()
+        ),
+        None,
+    )?;
+    result
 }
 
 fn deliver(

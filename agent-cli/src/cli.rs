@@ -31,6 +31,46 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
+impl Cli {
+    /// Parse the command tree and reject database input on the generic
+    /// delivery lane before dispatch can reach platform resolution.
+    pub fn try_parse_from<I, T>(itr: I) -> Result<Self, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
+        let cli = <Self as Parser>::try_parse_from(itr)?;
+        if let Some(Command::Deliver {
+            target,
+            game_databases_release_dir,
+        }) = &cli.command
+        {
+            match (target, game_databases_release_dir) {
+                (Some(DeliverTarget::GameDatabases), None) => {
+                    return Err(clap::Error::raw(
+                        clap::error::ErrorKind::MissingRequiredArgument,
+                        "deliver game-databases requires --game-databases-release-dir PATH",
+                    ));
+                }
+                (Some(DeliverTarget::LocalMain), Some(_)) => {
+                    return Err(clap::Error::raw(
+                        clap::error::ErrorKind::ArgumentConflict,
+                        "--game-databases-release-dir is valid only with deliver game-databases",
+                    ));
+                }
+                (None, Some(_)) => {
+                    return Err(clap::Error::raw(
+                        clap::error::ErrorKind::ArgumentConflict,
+                        "use deliver game-databases --game-databases-release-dir PATH for database-only delivery",
+                    ));
+                }
+                _ => {}
+            }
+        }
+        Ok(cli)
+    }
+}
+
 #[derive(Debug, Subcommand)]
 #[allow(clippy::large_enum_variant)] // Parsed once; keeping Clap's command tree direct avoids dispatch indirection.
 pub enum Command {
@@ -59,8 +99,7 @@ pub enum Command {
         #[arg(
             long,
             value_name = "PATH",
-            conflicts_with = "target",
-            help = "Use a locally verified game-database release directory for Dev delivery"
+            help = "Use a locally verified game-database release directory"
         )]
         game_databases_release_dir: Option<PathBuf>,
     },
@@ -134,6 +173,7 @@ pub enum Command {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum DeliverTarget {
     LocalMain,
+    GameDatabases,
 }
 
 /* CI artifact commands are implemented by scripts/magik_ci. */
@@ -473,7 +513,6 @@ pub enum DbCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
 
     #[test]
     fn bare_invocation_displays_help_instead_of_creating_an_intent() {
@@ -805,11 +844,13 @@ mod tests {
             Cli::try_parse_from([
                 "agent-cli",
                 "deliver",
+                "game-databases",
                 "--game-databases-release-dir",
                 "build/game-databases"
             ])
             .is_ok()
         );
+        assert!(Cli::try_parse_from(["agent-cli", "deliver", "game-databases"]).is_err());
         assert!(
             Cli::try_parse_from([
                 "agent-cli",

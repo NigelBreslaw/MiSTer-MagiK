@@ -13,6 +13,7 @@ pub mod cli;
 pub mod commands;
 pub mod compile_time;
 pub mod components;
+pub mod database_delivery;
 pub mod delivery;
 pub mod dependencies;
 pub mod deploy;

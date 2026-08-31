@@ -69,6 +69,11 @@ Committed Main-fork experiments use `scripts/agent deliver local-main`, which
 is Dev-only and replaces only the verified Main/manifest pair from an exact
 clean sibling checkout. The first deployment of reload support may use one
 Linux reboot; later experiments activate by supervised Main replacement.
+Already-published game databases use the isolated
+`scripts/agent deliver game-databases --game-databases-release-dir PATH` target.
+It validates the local release and invokes only the rollback-capable database
+transaction; it never resolves or changes a platform, runtime, Main, kernel,
+or FPGA artifact.
 Performance work uses `scripts/agent benchmark`; diagnosis and one-shot reboot
 recovery use `scripts/agent diagnose`. The attended release gate is
 `scripts/agent release qualify`.
