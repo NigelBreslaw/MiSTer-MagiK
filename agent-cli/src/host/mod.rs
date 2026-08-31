@@ -21312,6 +21312,31 @@ fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Ve
                     "namespace_walk_fallback_tsv",
                     "fallback_errors",
                 ),
+                "namespace_subtree_recovery_attempts": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "namespace_walk_subtree_recovery_tsv",
+                    "attempts",
+                ),
+                "namespace_subtree_recovered_count": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "namespace_walk_subtree_recovery_tsv",
+                    "recovered",
+                ),
+                "namespace_subtree_snapshot_us": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "namespace_walk_subtree_recovery_tsv",
+                    "snapshot_us",
+                ),
+                "namespace_subtree_snapshot_entries": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "namespace_walk_subtree_recovery_tsv",
+                    "snapshot_entries",
+                ),
+                "namespace_subtree_snapshot_errors": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "namespace_walk_subtree_recovery_tsv",
+                    "snapshot_errors",
+                ),
                 "artifact_publish_ms": catalog_phase_metric_ms(
                     value.get("phase_evidence"),
                     "startup_timing",
@@ -42932,6 +42957,14 @@ H: Handlers=event3 js0"#
                                 "restart_count": 1, "fd_attempt_us": 1200,
                                 "fallback_us": 3400, "fallback_entries": 50,
                                 "fallback_errors": 2
+                            }},
+                            {"record": "namespace_walk_subtree_recovery_tsv", "metrics": {
+                                "attempts": 1, "recovered": 1, "snapshot_us": 17,
+                                "snapshot_entries": 23, "snapshot_errors": 0
+                            }},
+                            {"record": "namespace_walk_subtree_recovery_tsv", "metrics": {
+                                "attempts": 1, "recovered": 0, "snapshot_us": 19,
+                                "snapshot_entries": 29, "snapshot_errors": 1
                             }}
                         ]}
                     }
@@ -42948,6 +42981,11 @@ H: Handlers=event3 js0"#
         assert_eq!(normalized[0]["namespace_whole_root_fallback_us"], 3400);
         assert_eq!(normalized[0]["namespace_whole_root_fallback_entries"], 50);
         assert_eq!(normalized[0]["namespace_whole_root_fallback_errors"], 2);
+        assert_eq!(normalized[0]["namespace_subtree_recovery_attempts"], 2);
+        assert_eq!(normalized[0]["namespace_subtree_recovered_count"], 1);
+        assert_eq!(normalized[0]["namespace_subtree_snapshot_us"], 36);
+        assert_eq!(normalized[0]["namespace_subtree_snapshot_entries"], 52);
+        assert_eq!(normalized[0]["namespace_subtree_snapshot_errors"], 1);
     }
 
     #[test]
