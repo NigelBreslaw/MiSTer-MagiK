@@ -11,6 +11,8 @@ use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "builder")]
+use std::time::Instant;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct InstalledCore {
@@ -468,30 +470,51 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
     for game_root in game_roots(roots) {
+        let root_started = Instant::now();
+        let mut entries_examined = 0_u64;
+        let mut file_type_count = 0_u64;
+        let mut file_type_us = 0_u64;
+        let mut rejected_entries = 0_u64;
         let Some(read_dir) = read_dir_entries_checked(&game_root)? else {
+            crate::catalog_logln!(
+                "catalog_game_header_probe_tsv\troot={}\tentries=0\tcandidates=0\taccepted=0\trejected=0\tfile_type_count=0\tfile_type_us=0\tmetadata_probe_count=0\tmetadata_probe_us=0\telapsed_us={}",
+                game_root.display(),
+                root_started.elapsed().as_micros()
+            );
             continue;
         };
         let mut candidates = Vec::new();
         for entry in read_dir {
+            entries_examined = entries_examined.saturating_add(1);
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                rejected_entries = rejected_entries.saturating_add(1);
                 continue;
             };
             if should_ignore_game_dir(name) {
+                rejected_entries = rejected_entries.saturating_add(1);
                 continue;
             }
+            let file_type_started = Instant::now();
             let file_type = entry
                 .file_type()
                 .map_err(|error| format!("inspect {}: {error}", path.display()))?;
+            file_type_us =
+                file_type_us.saturating_add(file_type_started.elapsed().as_micros() as u64);
+            file_type_count = file_type_count.saturating_add(1);
             if file_type.is_symlink() {
+                rejected_entries = rejected_entries.saturating_add(1);
                 continue;
             }
             if excluded_names.contains(&name.to_ascii_lowercase()) {
+                rejected_entries = rejected_entries.saturating_add(1);
                 continue;
             }
             let key = path.display().to_string().to_ascii_lowercase();
             if seen.insert(key) {
                 candidates.push((name.to_string(), path, file_type.is_dir()));
+            } else {
+                rejected_entries = rejected_entries.saturating_add(1);
             }
         }
         // Keep the exact type check serial while avoiding a separate parent
@@ -503,7 +526,9 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
             .iter()
             .map(|(_, path, _)| path.clone())
             .collect::<Vec<_>>();
+        let metadata_started = Instant::now();
         let metadata = namespace_walk::probe_known_path_metadata(&game_root, &child_paths);
+        let metadata_probe_us = metadata_started.elapsed().as_micros() as u64;
         let mut entries = Vec::new();
         for ((name, path, readdir_is_dir), metadata) in candidates.into_iter().zip(metadata) {
             let Some(metadata) = metadata else {
@@ -529,6 +554,19 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
             });
         }
         entries.sort_by_key(|entry| entry.name.to_ascii_lowercase());
+        crate::catalog_logln!(
+            "catalog_game_header_probe_tsv\troot={}\tentries={}\tcandidates={}\taccepted={}\trejected={}\tfile_type_count={}\tfile_type_us={}\tmetadata_probe_count={}\tmetadata_probe_us={}\telapsed_us={}",
+            game_root.display(),
+            entries_examined,
+            child_paths.len(),
+            entries.len(),
+            rejected_entries,
+            file_type_count,
+            file_type_us,
+            child_paths.len(),
+            metadata_probe_us,
+            root_started.elapsed().as_micros()
+        );
         out.extend(entries);
     }
     Ok(out)

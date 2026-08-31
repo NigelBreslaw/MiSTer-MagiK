@@ -21237,6 +21237,51 @@ fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Ve
                     None,
                     "residual_us",
                 ),
+                "game_header_probe_us": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "catalog_game_header_probe_tsv",
+                    "elapsed_us",
+                ),
+                "game_header_entries": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "catalog_game_header_probe_tsv",
+                    "entries",
+                ),
+                "game_header_candidates": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "catalog_game_header_probe_tsv",
+                    "candidates",
+                ),
+                "game_header_accepted": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "catalog_game_header_probe_tsv",
+                    "accepted",
+                ),
+                "game_header_rejected": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "catalog_game_header_probe_tsv",
+                    "rejected",
+                ),
+                "game_header_file_type_count": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "catalog_game_header_probe_tsv",
+                    "file_type_count",
+                ),
+                "game_header_file_type_us": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "catalog_game_header_probe_tsv",
+                    "file_type_us",
+                ),
+                "game_header_metadata_probe_count": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "catalog_game_header_probe_tsv",
+                    "metadata_probe_count",
+                ),
+                "game_header_metadata_probe_us": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "catalog_game_header_probe_tsv",
+                    "metadata_probe_us",
+                ),
                 "artifact_publish_ms": catalog_phase_metric_ms(
                     value.get("phase_evidence"),
                     "startup_timing",
@@ -25429,7 +25474,7 @@ fn catalog_artifact_set_valid(catalog: &Value) -> bool {
 }
 
 fn catalog_phase_evidence(log: &str) -> Value {
-    const RECORDS: [&str; 23] = [
+    const RECORDS: [&str; 24] = [
         "startup_timing",
         "catalog_scan_attribution_tsv",
         "catalog_scan_handoff_tsv",
@@ -25453,6 +25498,7 @@ fn catalog_phase_evidence(log: &str) -> Value {
         "catalog_shard_allocator_trim_tsv",
         "fast_catalog_generic_phase_tsv",
         "fast_catalog_generic_inventory_tsv",
+        "catalog_game_header_probe_tsv",
     ];
     let mut records = Vec::new();
     for line in log.lines() {
@@ -42807,6 +42853,35 @@ H: Handlers=event3 js0"#
             ),
             Some(700)
         );
+
+        let normalized = normalized_catalog_attribution_measurements(
+            "control",
+            &json!({
+                "samples": [{
+                    "fresh": {
+                        "timing": {"complete_ms": 10},
+                        "phase_evidence": {"records": [
+                            {"record": "catalog_game_header_probe_tsv", "metrics": {
+                                "entries": 10, "candidates": 8, "accepted": 7,
+                                "rejected": 2, "file_type_count": 8, "file_type_us": 40,
+                                "metadata_probe_count": 8, "metadata_probe_us": 120,
+                                "elapsed_us": 200
+                            }},
+                            {"record": "catalog_game_header_probe_tsv", "metrics": {
+                                "entries": 20, "candidates": 18, "accepted": 17,
+                                "rejected": 2, "file_type_count": 18, "file_type_us": 60,
+                                "metadata_probe_count": 18, "metadata_probe_us": 180,
+                                "elapsed_us": 300
+                            }}
+                        ]}
+                    }
+                }]
+            }),
+        );
+        assert_eq!(normalized[0]["game_header_probe_us"], 500);
+        assert_eq!(normalized[0]["game_header_entries"], 30);
+        assert_eq!(normalized[0]["game_header_accepted"], 24);
+        assert_eq!(normalized[0]["game_header_metadata_probe_us"], 300);
     }
 
     #[test]
