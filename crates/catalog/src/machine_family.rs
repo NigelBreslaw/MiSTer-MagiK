@@ -81,7 +81,7 @@ impl MachineFamilyResolver {
         Ok(Self {
             runtime_metadata: MetadataStore::open(&root.join(crate::runtime_metadata::FILE_NAME))
                 .ok(),
-            mame_path: Some(mame_path),
+            mame_path: mame_path.is_file().then_some(mame_path),
             hbmame_path: hbmame_path.is_file().then_some(hbmame_path),
             ..Self::default()
         })
@@ -543,6 +543,25 @@ mod tests {
         let resolved = resolver.resolve("clone", None).unwrap().unwrap();
         assert_eq!(resolved.family, "compact-parent");
         assert_eq!(resolved.source, MachineSource::Mame);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn corrupt_compact_metadata_without_sqlite_is_nonfatal() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-family-compact-corrupt-{}-{}",
+            std::process::id(),
+            NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let app = root.join("mister-magik-dev");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(
+            app.join(crate::runtime_metadata::FILE_NAME),
+            b"corrupt compact metadata",
+        )
+        .unwrap();
+        let mut resolver = MachineFamilyResolver::for_storage_root(&root).unwrap();
+        assert!(resolver.resolve("missing", None).unwrap().is_none());
         std::fs::remove_dir_all(root).unwrap();
     }
 
