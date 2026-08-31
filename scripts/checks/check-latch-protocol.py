@@ -324,8 +324,8 @@ if hdmi_evidence.get("raw_scaler_rollback_states") != {
     raise SystemExit("raw scaler ordered-signature schema-10 rollback ABI changed")
 scaler_fetch_liveness = hdmi_evidence.get("scaler_fetch_liveness_state")
 if scaler_fetch_liveness != {
-    "schema": 22,
-    "architecture": "scaler-off-domain-scheduler-terminal-v5",
+    "schema": 23,
+    "architecture": "scaler-off-domain-scheduler-terminal-v6",
     "command": 0x68,
     "magic": 0x4D58,
     "word_count": 4,
@@ -344,12 +344,8 @@ if scaler_fetch_liveness != {
         "reset_level": 5,
         "reset_since_normal_liveness": 6,
         "no_request_seen": 7,
-        "accept_blocked": 8,
-        "first_return_missing": 9,
-        "return_incomplete": 10,
-        "request_cancelled": 11,
     },
-    "reserved_zero_masks": {},
+    "reserved_zero_masks": {"flags": 0x0F00},
     "fields": {
         "publication_sequence": {"word": "flags", "bit": 12, "width": 4},
         "return_phase": {"word": "state", "bit": 0, "width": 7},
@@ -359,10 +355,11 @@ if scaler_fetch_liveness != {
         "first_return_seen": {"word": "state", "bit": 12, "width": 1},
         "reset_qualified": {"word": "state", "bit": 13, "width": 1},
         "address_wrap_seen": {"word": "state", "bit": 14, "width": 1},
-        "frozen_cause": {"word": "state", "bit": 0, "width": 4},
-        "frozen_return_phase": {"word": "state", "bit": 4, "width": 7},
-        "frozen_fifo_depth": {"word": "state", "bit": 11, "width": 2},
-        "frozen_address_fold": {"word": "state", "bit": 13, "width": 3},
+        "frozen_cause": {"word": "state", "bit": 0, "width": 3},
+        "observer_subcause": {"word": "state", "bit": 0, "width": 3},
+        "frozen_return_phase": {"word": "state", "bit": 3, "width": 7},
+        "frozen_fifo_depth": {"word": "state", "bit": 10, "width": 2},
+        "frozen_address_fold": {"word": "state", "bit": 12, "width": 4},
         "window_valid": {"word": "state", "bit": 0, "width": 1},
         "output_enable_seen": {"word": "state", "bit": 1, "width": 1},
         "horizontal_sync_edge_seen": {"word": "state", "bit": 2, "width": 1},
@@ -407,6 +404,16 @@ if scaler_fetch_liveness != {
         "reserved_14": 14,
         "reserved_15": 15,
     },
+    "observer_subcauses": {
+        "bad_burst": 0,
+        "fifo_overflow": 1,
+        "orphan_return": 2,
+        "snapshot_timeout": 3,
+        "snapshot_reset_invalidated": 4,
+        "snapshot_progress_invalidated": 5,
+        "snapshot_invalid_outcome": 6,
+        "reserved_7": 7,
+    },
     "monitor_states": {
         "unqualified": 0,
         "no_request": 1,
@@ -422,7 +429,7 @@ if scaler_fetch_liveness != {
     },
 }:
     raise SystemExit(
-        "scaler off-domain scheduler terminal schema 22 changed without an ABI update"
+        "scaler off-domain scheduler terminal schema 23 changed without an ABI update"
     )
 expected_agent_capability = (
     f"pub const FPGA_VIDEO_DIAGNOSTICS_CAPABILITY: &str = "

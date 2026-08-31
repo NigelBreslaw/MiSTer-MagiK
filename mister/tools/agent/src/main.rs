@@ -4481,6 +4481,7 @@ mod linux {
                             | "scaler-off-domain-scheduler-terminal-v3"
                             | "scaler-off-domain-scheduler-terminal-v4"
                             | "scaler-off-domain-scheduler-terminal-v5"
+                            | "scaler-off-domain-scheduler-terminal-v6"
                     ) {
                         scaler_pre_read_scheduler_classification(first)
                     } else if first.architecture() == "scaler-output-scheduler-gates-v1" {
@@ -5029,6 +5030,7 @@ mod linux {
                             | "scaler-off-domain-scheduler-terminal-v3"
                             | "scaler-off-domain-scheduler-terminal-v4"
                             | "scaler-off-domain-scheduler-terminal-v5"
+                            | "scaler-off-domain-scheduler-terminal-v6"
                     );
                     let output_scheduler_state = architecture == "scaler-output-scheduler-gates-v1";
                     let avalon_gate_state = architecture == "scaler-fetch-no-request-gates-v1";
@@ -5040,6 +5042,7 @@ mod linux {
                             | "scaler-off-domain-scheduler-terminal-v3"
                             | "scaler-off-domain-scheduler-terminal-v4"
                             | "scaler-off-domain-scheduler-terminal-v5"
+                            | "scaler-off-domain-scheduler-terminal-v6"
                     );
                     let pre_read_scheduler_evidence = pre_read_scheduler_state
                         && samples.iter().all(|sample| sample.no_request_seen());

@@ -98,6 +98,10 @@ def render_scaler_fetch_liveness_constants(
         )
     for name, value in record.get("causes", {}).items():
         lines.append(f"pub const {prefix}_CAUSE_{name.upper()}: u16 = {value};")
+    for name, value in record.get("observer_subcauses", {}).items():
+        lines.append(
+            f"pub const {prefix}_OBSERVER_SUBCAUSE_{name.upper()}: u16 = {value};"
+        )
     for name, value in record.get("monitor_states", {}).items():
         lines.append(f"pub const {prefix}_MONITOR_{name.upper()}: u16 = {value};")
     for name, value in record.get("constants", {}).items():

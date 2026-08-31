@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 module mister_magik_scaler_fetch_liveness_formal;
+	`include "mister_magik_video_diagnostics_protocol.svh"
+
 	reg formal_clk = 1'b0;
 	reg past_valid = 1'b0;
 	reg drained_during_reset = 1'b0;
@@ -44,6 +46,8 @@ module mister_magik_scaler_fetch_liveness_formal;
 	wire watchdog_advance;
 	wire observer_fault_event;
 	wire request_cancel_event;
+	wire [3:0] terminal_cause;
+	wire [15:0] terminal_flags;
 
 	mister_magik_scaler_fetch_liveness_state #(
 		.WATCHDOG_LIMIT(24'd15),
@@ -85,7 +89,9 @@ module mister_magik_scaler_fetch_liveness_formal;
 		.formal_watchdog_clear(watchdog_clear),
 		.formal_watchdog_advance(watchdog_advance),
 		.formal_observer_fault_event(observer_fault_event),
-		.formal_request_cancel_event(request_cancel_event)
+		.formal_request_cancel_event(request_cancel_event),
+		.formal_terminal_cause(terminal_cause),
+		.formal_terminal_flags(terminal_flags)
 	);
 
 	mister_magik_scaler_scheduler_snapshot snapshot_proof (
@@ -117,6 +123,19 @@ module mister_magik_scaler_fetch_liveness_formal;
 		assert(!publish_crc_busy || !record_ready);
 		assert(!publish_crc_busy || publish_crc_phase <= 5'd30);
 		assert(!terminal_record_started || first_stall_valid || observer_fault);
+		assert(observer_fault == terminal_cause[3]);
+		assert(terminal_flags[15:8] == 8'd0);
+		assert(frozen_state[15:12] == 4'd0);
+		if(observer_fault)
+			assert(terminal_cause[2:0] <=
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_OBSERVER_SUBCAUSE_SNAPSHOT_INVALID_OUTCOME);
+		if(first_stall_valid && !no_request_seen) begin
+			assert(!terminal_cause[3]);
+			assert(terminal_cause[2:0] >=
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_ACCEPT_BLOCKED[2:0]);
+			assert(terminal_cause[2:0] <=
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED[2:0]);
+		end
 		assert(!watchdog_clear || !watchdog_advance);
 
 		if(past_valid) begin

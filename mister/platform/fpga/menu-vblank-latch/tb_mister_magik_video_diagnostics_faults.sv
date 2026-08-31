@@ -20,6 +20,24 @@ module tb_mister_magik_video_diagnostics_faults;
 	wire response_valid;
 	wire [15:0] response_data;
 	integer timeout;
+	reg [15:0] expected_crc;
+
+	function automatic [15:0] crc16_word;
+		input [15:0] crc_in;
+		input [15:0] word;
+		integer bit_index;
+		reg [15:0] value;
+		begin
+			value = crc_in;
+			for(bit_index = 15; bit_index >= 0; bit_index = bit_index - 1) begin
+				if(value[15] ^ word[bit_index])
+					value = {value[14:0], 1'b0} ^ 16'h1021;
+				else
+					value = {value[14:0], 1'b0};
+			end
+			crc16_word = value;
+		end
+	endfunction
 
 	mister_magik_scaler_fetch_liveness_state #(
 		.WATCHDOG_LIMIT(24'd12),
@@ -129,8 +147,26 @@ module tb_mister_magik_video_diagnostics_faults;
 			$fatal(1, "observer fault record did not publish for case %0d", FAULT_CASE);
 		if(!dut.observer_fault)
 			$fatal(1, "case %0d did not classify as observer fault", FAULT_CASE);
-		if(dut.frozen_cause != FAULT_CASE + 6)
+		if(dut.frozen_cause != {1'b1, FAULT_CASE[2:0]})
 			$fatal(1, "case %0d froze cause %0d", FAULT_CASE, dut.frozen_cause);
+		if(dut.frozen_state != {
+			4'd0,
+			dut.avalon_terminal_fifo_depth,
+			dut.avalon_terminal_return_phase,
+			FAULT_CASE[2:0]
+		})
+			$fatal(1, "case %0d published malformed compact state %04x",
+				FAULT_CASE, dut.frozen_state);
+		if(dut.terminal_flags[15:8] != 8'd0 || !dut.terminal_flags[3])
+			$fatal(1, "case %0d published malformed compact flags %04x",
+				FAULT_CASE, dut.terminal_flags);
+		expected_crc = crc16_word(
+			crc16_word(MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA_CRC,
+				dut.terminal_flags),
+			dut.frozen_state);
+		if(dut.publish_crc_work != expected_crc)
+			$fatal(1, "case %0d CRC mismatch expected=%04x actual=%04x",
+				FAULT_CASE, expected_crc, dut.publish_crc_work);
 		$display("PASS: observer fault case %0d cause %0d", FAULT_CASE, dut.frozen_cause);
 		$finish;
 	end
