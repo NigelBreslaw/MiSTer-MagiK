@@ -281,6 +281,8 @@ def _verify_compact_metadata(data: bytes) -> None:
         if not shard_id or previous is not None and shard_id <= previous:
             raise ValueError("compact_metadata_index_order")
         previous = shard_id
+        if entry[32] not in (0, 1):
+            raise ValueError("compact_metadata_index_kind")
         if any(entry[33:40]) or any(entry[100:128]):
             raise ValueError("compact_metadata_index_reserved")
         compressed_offset = int.from_bytes(entry[40:48], "little")
