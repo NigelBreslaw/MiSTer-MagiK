@@ -288,7 +288,7 @@ pub(crate) fn visit_owned_with_signature_capture(
                     signature_capture,
                     &ignore,
                     &mut visitor,
-                    Some(reason),
+                    Some(reason.to_string()),
                 );
             }
         }
@@ -358,7 +358,7 @@ pub(crate) fn visit_with_root_policy_and_signature_capture(
                     signature_capture,
                     &ignore,
                     &mut visitor,
-                    Some(reason),
+                    Some(reason.to_string()),
                 );
             }
         }
@@ -638,12 +638,11 @@ mod linux {
         NamespaceSignatureCapture, NamespaceWalkStats, is_zip_path, unix_timestamp_nanos,
     };
     use std::ffi::{CString, OsString};
+    use std::fmt;
     use std::io;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
-    use std::path::Path;
-    #[cfg(feature = "builder")]
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     const GETDENTS_INITIAL_BUFFER_BYTES: usize = 8 * 1024;
     const GETDENTS_MAX_BUFFER_BYTES: usize = 128 * 1024;
@@ -664,6 +663,133 @@ mod linux {
         max_open_fds: usize,
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum FdCaptureFailureOperation {
+        RootOpen,
+        RootRead,
+        ChildOpen,
+        ChildRead,
+        EntryStat,
+        MalformedDirent,
+        Budget,
+        Allocation,
+        NameEncoding,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct FaultInjection {
+        operation: FdCaptureFailureOperation,
+        depth: usize,
+    }
+
+    impl FdCaptureFailureOperation {
+        fn is_nested_read(self) -> bool {
+            self == Self::ChildRead
+        }
+    }
+
+    #[derive(Debug)]
+    pub(super) struct FdCaptureFailure {
+        operation: FdCaptureFailureOperation,
+        path: PathBuf,
+        depth: usize,
+        errno: Option<i32>,
+        context: String,
+    }
+
+    impl FdCaptureFailure {
+        fn new(
+            operation: FdCaptureFailureOperation,
+            path: &Path,
+            depth: usize,
+            errno: Option<i32>,
+            context: String,
+        ) -> Self {
+            Self {
+                operation,
+                path: path.to_path_buf(),
+                depth,
+                errno,
+                context,
+            }
+        }
+
+        fn io(
+            operation: FdCaptureFailureOperation,
+            path: &Path,
+            depth: usize,
+            error: &io::Error,
+            context: String,
+        ) -> Self {
+            Self::new(operation, path, depth, error.raw_os_error(), context)
+        }
+
+        pub(super) fn operation(&self) -> &'static str {
+            operation_name(self.operation)
+        }
+
+        pub(super) fn path(&self) -> &Path {
+            &self.path
+        }
+
+        pub(super) fn depth(&self) -> usize {
+            self.depth
+        }
+
+        pub(super) fn errno(&self) -> Option<i32> {
+            self.errno
+        }
+
+        pub(super) fn is_recoverable_nested_enoent(&self) -> bool {
+            self.operation.is_nested_read() && self.depth > 0 && self.errno == Some(libc::ENOENT)
+        }
+    }
+
+    impl fmt::Display for FdCaptureFailure {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str(&self.context)
+        }
+    }
+
+    fn operation_name(operation: FdCaptureFailureOperation) -> &'static str {
+        match operation {
+            FdCaptureFailureOperation::RootOpen => "root-open",
+            FdCaptureFailureOperation::RootRead => "root-read",
+            FdCaptureFailureOperation::ChildOpen => "child-open",
+            FdCaptureFailureOperation::ChildRead => "child-read",
+            FdCaptureFailureOperation::EntryStat => "entry-stat",
+            FdCaptureFailureOperation::MalformedDirent => "malformed-dirent",
+            FdCaptureFailureOperation::Budget => "budget",
+            FdCaptureFailureOperation::Allocation => "allocation",
+            FdCaptureFailureOperation::NameEncoding => "name-encoding",
+        }
+    }
+
+    fn injected_failure(
+        fault: Option<FaultInjection>,
+        operation: FdCaptureFailureOperation,
+        path: &Path,
+        depth: usize,
+    ) -> Option<FdCaptureFailure> {
+        let fault = fault.filter(|fault| fault.operation == operation && fault.depth == depth)?;
+        let errno = if fault.operation.is_nested_read() {
+            libc::ENOENT
+        } else {
+            libc::EIO
+        };
+        Some(FdCaptureFailure::new(
+            operation,
+            path,
+            depth,
+            Some(errno),
+            format!(
+                "injected {} failure at {}",
+                operation_name(operation),
+                path.display()
+            ),
+        ))
+    }
+
     impl Default for CaptureBudget {
         fn default() -> Self {
             Self {
@@ -680,7 +806,7 @@ mod linux {
         root_policy: NamespaceRootPolicy,
         signature_capture: NamespaceSignatureCapture,
         ignore: &dyn Fn(&Path) -> bool,
-    ) -> Result<NamespaceCapture, String> {
+    ) -> Result<NamespaceCapture, FdCaptureFailure> {
         collect_fd_relative_with_budget(
             target,
             max_depth,
@@ -688,6 +814,7 @@ mod linux {
             signature_capture,
             ignore,
             CaptureBudget::default(),
+            None,
         )
     }
 
@@ -786,7 +913,8 @@ mod linux {
         signature_capture: NamespaceSignatureCapture,
         ignore: &dyn Fn(&Path) -> bool,
         budget: CaptureBudget,
-    ) -> Result<NamespaceCapture, String> {
+        fault: Option<FaultInjection>,
+    ) -> Result<NamespaceCapture, FdCaptureFailure> {
         if max_depth == Some(0) || ignore(target) {
             return Ok(NamespaceCapture {
                 entries: Vec::new(),
@@ -811,9 +939,24 @@ mod linux {
             });
         }
         if budget.max_open_fds == 0 {
-            return Err("capture budget: zero open directory fds".to_string());
+            return Err(FdCaptureFailure::new(
+                FdCaptureFailureOperation::Budget,
+                target,
+                0,
+                None,
+                "capture budget: zero open directory fds".to_string(),
+            ));
         }
-        let target_name = c_string(target.as_os_str().as_bytes(), "target path")?;
+        let target_name =
+            c_string(target.as_os_str().as_bytes(), "target path").map_err(|context| {
+                FdCaptureFailure::new(
+                    FdCaptureFailureOperation::NameEncoding,
+                    target,
+                    0,
+                    None,
+                    context,
+                )
+            })?;
         let no_follow = if root_policy == NamespaceRootPolicy::NoFollow {
             libc::O_NOFOLLOW
         } else {
@@ -825,17 +968,21 @@ mod linux {
         ) {
             Ok(fd) => fd,
             Err(error) => {
-                return Err(format!("open target {}: {error}", target.display()));
+                return Err(FdCaptureFailure::io(
+                    FdCaptureFailureOperation::RootOpen,
+                    target,
+                    0,
+                    &error,
+                    format!("open target {}: {error}", target.display()),
+                ));
             }
         };
-        if raw_fd < 0 {
-            return Err(format!(
-                "open target {}: {}",
-                target.display(),
-                io::Error::last_os_error()
-            ));
-        }
         let root = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+        if let Some(failure) =
+            injected_failure(fault, FdCaptureFailureOperation::RootRead, target, 0)
+        {
+            return Err(failure);
+        }
         let target_signature_before = if signature_capture.target() {
             stat_fd(root.as_raw_fd()).ok().and_then(directory_signature)
         } else {
@@ -872,6 +1019,7 @@ mod linux {
             &mut captured_path_bytes,
             &mut stats,
             budget,
+            fault,
         )?;
         if signature_capture.target() {
             let target_signature_after =
@@ -895,13 +1043,30 @@ mod linux {
         captured_path_bytes: &mut usize,
         stats: &mut NamespaceWalkStats,
         budget: CaptureBudget,
-    ) -> Result<(), String> {
+        fault: Option<FaultInjection>,
+    ) -> Result<(), FdCaptureFailure> {
         let mut buffer = Vec::new();
         buffer
             .try_reserve_exact(GETDENTS_INITIAL_BUFFER_BYTES)
-            .map_err(|error| format!("capture allocation: getdents buffer: {error}"))?;
+            .map_err(|error| {
+                FdCaptureFailure::new(
+                    FdCaptureFailureOperation::Allocation,
+                    directory_path,
+                    depth,
+                    None,
+                    format!("capture allocation: getdents buffer: {error}"),
+                )
+            })?;
         buffer.resize(GETDENTS_INITIAL_BUFFER_BYTES, 0u8);
         stats.buffer_allocations = stats.buffer_allocations.saturating_add(1);
+        if let Some(failure) = injected_failure(
+            fault,
+            FdCaptureFailureOperation::ChildRead,
+            directory_path,
+            depth,
+        ) {
+            return Err(failure);
+        }
         loop {
             crate::cooperative_work::checkpoint();
             let read = unsafe {
@@ -921,16 +1086,32 @@ mod linux {
                     // slower full-path fallback backend.
                     continue;
                 }
-                return Err(format!(
-                    "getdents64 {}: {}",
-                    directory_path.display(),
-                    io::Error::last_os_error()
+                let error = io::Error::last_os_error();
+                let operation = if depth == 0 {
+                    FdCaptureFailureOperation::RootRead
+                } else {
+                    FdCaptureFailureOperation::ChildRead
+                };
+                return Err(FdCaptureFailure::io(
+                    operation,
+                    directory_path,
+                    depth,
+                    &error,
+                    format!("getdents64 {}: {error}", directory_path.display()),
                 ));
             }
             if read == 0 {
                 return Ok(());
             }
-            let read = usize::try_from(read).map_err(|_| "negative getdents64 size")?;
+            let read = usize::try_from(read).map_err(|_| {
+                FdCaptureFailure::new(
+                    FdCaptureFailureOperation::MalformedDirent,
+                    directory_path,
+                    depth,
+                    None,
+                    "negative getdents64 size".to_string(),
+                )
+            })?;
             stats.read_bytes = stats.read_bytes.saturating_add(read as u64);
             let mut offset = 0usize;
             while offset < read {
@@ -938,17 +1119,26 @@ mod linux {
                     crate::cooperative_work::checkpoint();
                 }
                 if read - offset < DIRENT64_HEADER_BYTES {
-                    return Err(format!(
-                        "truncated getdents64 record in {}",
-                        directory_path.display()
+                    return Err(FdCaptureFailure::new(
+                        FdCaptureFailureOperation::MalformedDirent,
+                        directory_path,
+                        depth,
+                        None,
+                        format!(
+                            "truncated getdents64 record in {}",
+                            directory_path.display()
+                        ),
                     ));
                 }
                 let record_len =
                     u16::from_ne_bytes([buffer[offset + 16], buffer[offset + 17]]) as usize;
                 if record_len <= DIRENT64_HEADER_BYTES || offset + record_len > read {
-                    return Err(format!(
-                        "invalid getdents64 record in {}",
-                        directory_path.display()
+                    return Err(FdCaptureFailure::new(
+                        FdCaptureFailureOperation::MalformedDirent,
+                        directory_path,
+                        depth,
+                        None,
+                        format!("invalid getdents64 record in {}", directory_path.display()),
                     ));
                 }
                 let record = &buffer[offset..offset + record_len];
@@ -958,9 +1148,15 @@ mod linux {
                     .iter()
                     .position(|byte| *byte == 0)
                     .ok_or_else(|| {
-                        format!(
-                            "unterminated getdents64 name in {}",
-                            directory_path.display()
+                        FdCaptureFailure::new(
+                            FdCaptureFailureOperation::MalformedDirent,
+                            directory_path,
+                            depth,
+                            None,
+                            format!(
+                                "unterminated getdents64 name in {}",
+                                directory_path.display()
+                            ),
                         )
                     })?;
                 let name = &name_region[..name_len];
@@ -972,10 +1168,16 @@ mod linux {
                     continue;
                 }
                 if entries.len() >= budget.max_entries {
-                    return Err(format!(
-                        "capture budget: more than {} entries under {}",
-                        budget.max_entries,
-                        directory_path.display()
+                    return Err(FdCaptureFailure::new(
+                        FdCaptureFailureOperation::Budget,
+                        directory_path,
+                        depth,
+                        None,
+                        format!(
+                            "capture budget: more than {} entries under {}",
+                            budget.max_entries,
+                            directory_path.display()
+                        ),
                     ));
                 }
                 let child_path_bytes = child_path.as_os_str().as_bytes().len();
@@ -983,28 +1185,53 @@ mod linux {
                     .checked_add(child_path_bytes)
                     .filter(|total| *total <= budget.max_path_bytes)
                     .ok_or_else(|| {
-                        format!(
-                            "capture budget: more than {} path bytes under {}",
-                            budget.max_path_bytes,
-                            directory_path.display()
+                        FdCaptureFailure::new(
+                            FdCaptureFailureOperation::Budget,
+                            directory_path,
+                            depth,
+                            None,
+                            format!(
+                                "capture budget: more than {} path bytes under {}",
+                                budget.max_path_bytes,
+                                directory_path.display()
+                            ),
                         )
                     })?;
                 let previous_capacity = entries.capacity();
-                entries
-                    .try_reserve(1)
-                    .map_err(|error| format!("capture allocation: namespace entry: {error}"))?;
+                entries.try_reserve(1).map_err(|error| {
+                    FdCaptureFailure::new(
+                        FdCaptureFailureOperation::Allocation,
+                        directory_path,
+                        depth,
+                        None,
+                        format!("capture allocation: namespace entry: {error}"),
+                    )
+                })?;
                 if entries.capacity() != previous_capacity {
                     stats.buffer_allocations = stats.buffer_allocations.saturating_add(1);
                 }
-                let child_name = c_string(name, "directory entry name")?;
                 let entry_depth = depth.saturating_add(1);
+                let child_name = c_string(name, "directory entry name").map_err(|context| {
+                    FdCaptureFailure::new(
+                        FdCaptureFailureOperation::NameEncoding,
+                        &child_path,
+                        entry_depth,
+                        None,
+                        context,
+                    )
+                })?;
                 let mut stat = None;
                 let kind = match record[18] {
                     libc::DT_DIR => NamespaceEntryKind::Directory,
                     libc::DT_REG => NamespaceEntryKind::File,
                     libc::DT_UNKNOWN => {
                         stats.type_stats = stats.type_stats.saturating_add(1);
-                        let value = stat_entry(directory.as_raw_fd(), &child_name, &child_path)?;
+                        let value = stat_entry_capture(
+                            directory.as_raw_fd(),
+                            &child_name,
+                            &child_path,
+                            entry_depth,
+                        )?;
                         let kind = kind_from_mode(value.st_mode);
                         stat = Some(value);
                         kind
@@ -1015,7 +1242,12 @@ mod linux {
                 {
                     let value = match stat {
                         Some(value) => value,
-                        None => stat_entry(directory.as_raw_fd(), &child_name, &child_path)?,
+                        None => stat_entry_capture(
+                            directory.as_raw_fd(),
+                            &child_name,
+                            &child_path,
+                            entry_depth,
+                        )?,
                     };
                     Some((
                         u64::try_from(value.st_size).unwrap_or(0),
@@ -1034,10 +1266,16 @@ mod linux {
                 let mut child_signature_before = None;
                 if should_descend {
                     if entry_depth >= budget.max_open_fds {
-                        return Err(format!(
-                            "capture budget: more than {} open directory fds under {}",
-                            budget.max_open_fds,
-                            child_path.display()
+                        return Err(FdCaptureFailure::new(
+                            FdCaptureFailureOperation::Budget,
+                            &child_path,
+                            entry_depth,
+                            None,
+                            format!(
+                                "capture budget: more than {} open directory fds under {}",
+                                budget.max_open_fds,
+                                child_path.display()
+                            ),
                         ));
                     }
                     let raw_child = match openat_retry(
@@ -1047,19 +1285,15 @@ mod linux {
                     ) {
                         Ok(fd) => fd,
                         Err(error) => {
-                            return Err(format!(
-                                "openat directory {}: {error}",
-                                child_path.display()
+                            return Err(FdCaptureFailure::io(
+                                FdCaptureFailureOperation::ChildOpen,
+                                &child_path,
+                                entry_depth,
+                                &error,
+                                format!("openat directory {}: {error}", child_path.display()),
                             ));
                         }
                     };
-                    if raw_child < 0 {
-                        return Err(format!(
-                            "openat directory {}: {}",
-                            child_path.display(),
-                            io::Error::last_os_error()
-                        ));
-                    }
                     stats.dir_opens = stats.dir_opens.saturating_add(1);
                     opened_child = Some(unsafe { OwnedFd::from_raw_fd(raw_child) });
                     if capture_directory_signature {
@@ -1073,7 +1307,13 @@ mod linux {
                 {
                     let value = match stat {
                         Some(value) => Some(value),
-                        None => stat_entry(directory.as_raw_fd(), &child_name, &child_path).ok(),
+                        None => stat_entry_capture(
+                            directory.as_raw_fd(),
+                            &child_name,
+                            &child_path,
+                            entry_depth,
+                        )
+                        .ok(),
                     };
                     value.and_then(directory_signature)
                 } else {
@@ -1107,6 +1347,7 @@ mod linux {
                         captured_path_bytes,
                         stats,
                         budget,
+                        fault,
                     )?;
                     if capture_directory_signature {
                         let child_signature_after = stat_fd(child.as_raw_fd())
@@ -1124,7 +1365,13 @@ mod linux {
             {
                 let additional = GETDENTS_MAX_BUFFER_BYTES.saturating_sub(buffer.len());
                 buffer.try_reserve_exact(additional).map_err(|error| {
-                    format!("capture allocation: grow getdents buffer: {error}")
+                    FdCaptureFailure::new(
+                        FdCaptureFailureOperation::Allocation,
+                        directory_path,
+                        depth,
+                        None,
+                        format!("capture allocation: grow getdents buffer: {error}"),
+                    )
                 })?;
                 buffer.resize(GETDENTS_MAX_BUFFER_BYTES, 0u8);
                 stats.buffer_allocations = stats.buffer_allocations.saturating_add(1);
@@ -1155,6 +1402,39 @@ mod linux {
                 continue;
             }
             return Err(format!("fstatat {}: {error}", path.display()));
+        }
+    }
+
+    fn stat_entry_capture(
+        directory: RawFd,
+        name: &CString,
+        path: &Path,
+        depth: usize,
+    ) -> Result<libc::stat, FdCaptureFailure> {
+        loop {
+            let mut value = std::mem::MaybeUninit::<libc::stat>::uninit();
+            let result = unsafe {
+                libc::fstatat(
+                    directory,
+                    name.as_ptr(),
+                    value.as_mut_ptr(),
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            };
+            if result == 0 {
+                return Ok(unsafe { value.assume_init() });
+            }
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(FdCaptureFailure::io(
+                FdCaptureFailureOperation::EntryStat,
+                path,
+                depth,
+                &error,
+                format!("fstatat {}: {error}", path.display()),
+            ));
         }
     }
 
@@ -1279,6 +1559,40 @@ mod linux {
                 max_path_bytes,
                 max_open_fds,
             },
+            None,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg(test)]
+    pub(super) fn collect_with_fault_for_test(
+        target: &Path,
+        max_depth: Option<usize>,
+        signature_capture: NamespaceSignatureCapture,
+        ignore: &dyn Fn(&Path) -> bool,
+        operation: &'static str,
+        depth: usize,
+    ) -> Result<NamespaceCapture, FdCaptureFailure> {
+        let operation = match operation {
+            "root-open" => FdCaptureFailureOperation::RootOpen,
+            "root-read" => FdCaptureFailureOperation::RootRead,
+            "child-open" => FdCaptureFailureOperation::ChildOpen,
+            "child-read" => FdCaptureFailureOperation::ChildRead,
+            "entry-stat" => FdCaptureFailureOperation::EntryStat,
+            "malformed-dirent" => FdCaptureFailureOperation::MalformedDirent,
+            "budget" => FdCaptureFailureOperation::Budget,
+            "allocation" => FdCaptureFailureOperation::Allocation,
+            "name-encoding" => FdCaptureFailureOperation::NameEncoding,
+            _ => panic!("unknown fd capture fault operation {operation}"),
+        };
+        collect_fd_relative_with_budget(
+            target,
+            max_depth,
+            NamespaceRootPolicy::NoFollow,
+            signature_capture,
+            ignore,
+            CaptureBudget::default(),
+            Some(FaultInjection { operation, depth }),
         )
     }
 }
@@ -1611,6 +1925,32 @@ mod tests {
         .err()
         .unwrap();
         assert!(error.starts_with("capture budget:"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fd_capture_failure_preserves_nested_read_context() {
+        let dir = unique_temp_dir("namespace-fd-failure-context");
+        fs::create_dir_all(dir.join("nested")).unwrap();
+
+        let error = linux::collect_with_fault_for_test(
+            &dir,
+            None,
+            NamespaceSignatureCapture::None,
+            &|_| false,
+            "child-read",
+            1,
+        )
+        .err()
+        .expect("the test-only fault injector must fail the nested read");
+
+        assert_eq!(error.operation(), "child-read");
+        assert_eq!(error.path(), dir.join("nested").as_path());
+        assert_eq!(error.depth(), 1);
+        assert_eq!(error.errno(), Some(libc::ENOENT));
+        assert!(error.is_recoverable_nested_enoent());
 
         fs::remove_dir_all(dir).unwrap();
     }
