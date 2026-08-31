@@ -2092,6 +2092,17 @@ fn run_fast_catalog_refresh_in_process(
         );
         return;
     }
+    if plan == CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS {
+        run_fast_catalog_fresh_build(
+            root,
+            catalog_root,
+            tx,
+            catalog_profile,
+            mutation_lease,
+            bootstrap_run_id,
+        );
+        return;
+    }
     let request = if plan == CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS {
         FastCatalogRefreshRequest::RebuildAll
     } else {
@@ -2107,10 +2118,21 @@ fn run_fast_catalog_refresh_in_process(
         Ok(planned) => planned,
         Err(error) => {
             report_catalog_filesystem_headroom(tx, "planning-error");
-            catalog_profile.fail("planning-failed");
-            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-                error: format!("fast catalog refresh planning failed: {error}"),
-            });
+            if error.contains("fresh build required") {
+                run_fast_catalog_fresh_build(
+                    root,
+                    catalog_root,
+                    tx,
+                    catalog_profile,
+                    mutation_lease,
+                    bootstrap_run_id,
+                );
+            } else {
+                catalog_profile.fail("planning-failed");
+                let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                    error: format!("fast catalog refresh planning failed: {error}"),
+                });
+            }
             return;
         }
     };

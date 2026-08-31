@@ -1355,6 +1355,12 @@ pub fn plan_fast_refresh(
                 "independent-fast-sources-v{}",
                 crate::fast_catalog_sources::FAST_SOURCE_ADAPTER_VERSION
             );
+    if request == FastCatalogRefreshRequest::Update && !binding_matches {
+        return Err(
+            "fast refresh state is incompatible with the active catalog; fresh build required"
+                .to_string(),
+        );
+    }
     let references = manifest
         .systems
         .iter()
@@ -1413,6 +1419,12 @@ pub fn plan_fast_refresh(
                 }
             }
         }
+    }
+    if !watch_errors.is_empty() {
+        return Err(format!(
+            "fast refresh watch state is unavailable for {} system(s); fresh build required",
+            watch_errors.len()
+        ));
     }
     let watch_read_us = watch_started
         .elapsed()
