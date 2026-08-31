@@ -209,6 +209,7 @@ pub struct FastRefreshPlanReport {
     pub metadata_parents: usize,
     pub metadata_paths: usize,
     pub metadata_slowest_parents: Vec<FastRefreshMetadataParentProbe>,
+    pub discovery_changed: bool,
     pub systems: usize,
     pub unchanged: usize,
     pub changed: usize,
@@ -1041,6 +1042,7 @@ pub fn publish_refresh_update(
         previous,
         catalog_generation,
         catalog_fingerprint,
+        &previous.discovery_watch,
         updated,
         removed_system_ids,
     )
@@ -1051,6 +1053,7 @@ fn publish_refresh_update_held(
     previous: &FastRefreshManifest,
     catalog_generation: u64,
     catalog_fingerprint: String,
+    discovery_watch: &FastRefreshDiscoveryWatch,
     updated: &[FastRefreshSystemState],
     removed_system_ids: &BTreeSet<String>,
 ) -> Result<FastRefreshManifest, String> {
@@ -1110,7 +1113,7 @@ fn publish_refresh_update_held(
         catalog_generation,
         catalog_fingerprint,
         previous.builder_identity.clone(),
-        previous.discovery_watch.clone(),
+        discovery_watch.clone(),
         references.into_values().collect(),
     )?;
     let bytes = encode_envelope(&manifest, MANIFEST_MAGIC)?;
@@ -1425,6 +1428,23 @@ pub fn plan_fast_refresh(
         .as_micros()
         .try_into()
         .unwrap_or(u64::MAX);
+    let discovery_changed = request == FastCatalogRefreshRequest::RebuildAll
+        || !binding_matches
+        || !discovery_watch_unchanged(&manifest.discovery_watch, &metadata_cache);
+    let phase_started = std::time::Instant::now();
+    let mut systems = active
+        .systems
+        .iter()
+        .map(|system| system.system_id.as_str().to_string())
+        .collect::<Vec<_>>();
+    let discovered_system_ids = if discovery_changed {
+        let discovered =
+            crate::fast_catalog_sources::discover_independent_system_ids(storage_root)?;
+        systems.extend(discovered.iter().cloned());
+        Some(discovered.into_iter().collect::<BTreeSet<_>>())
+    } else {
+        None
+    };
     let build_check = |system_id: &str| {
         let system_started = std::time::Instant::now();
         let mut check = FastSystemSourceCheck {
@@ -1439,6 +1459,10 @@ pub fn plan_fast_refresh(
             check.reason = "explicit rebuild-all".to_string();
         } else if !binding_matches {
             check.reason = "refresh state is not bound to the active catalog".to_string();
+        } else if let Some(discovered) = discovered_system_ids.as_ref()
+            && !discovered.contains(system_id)
+        {
+            check.reason = "system is no longer present in discovery".to_string();
         } else if let Some(watch) = watch_indices.get(system_id) {
             check_watch_index(watch, &metadata_cache, &mut check);
         } else if let Some(error) = watch_errors.get(system_id) {
@@ -1455,18 +1479,6 @@ pub fn plan_fast_refresh(
             .unwrap_or(u64::MAX);
         check
     };
-    let discovery_needed = request == FastCatalogRefreshRequest::RebuildAll
-        || !binding_matches
-        || !discovery_watch_unchanged(&manifest.discovery_watch, &metadata_cache);
-    let phase_started = std::time::Instant::now();
-    let mut systems = active
-        .systems
-        .iter()
-        .map(|system| system.system_id.as_str().to_string())
-        .collect::<Vec<_>>();
-    if discovery_needed {
-        systems.extend(crate::fast_catalog_sources::discover_independent_system_ids(storage_root)?);
-    }
     let system_discovery_us = phase_started
         .elapsed()
         .as_micros()
@@ -1519,6 +1531,7 @@ pub fn plan_fast_refresh(
         metadata_parents,
         metadata_paths,
         metadata_slowest_parents,
+        discovery_changed,
         systems: checks.len(),
         unchanged,
         changed,
@@ -1827,7 +1840,14 @@ fn execute_planned_fast_refresh_with(
         .try_into()
         .unwrap_or(u64::MAX);
     let snapshot_started = std::time::Instant::now();
-    let refresh_generation = if updated_states.is_empty() && removed_system_ids.is_empty() {
+    let refresh_state_changed =
+        !updated_states.is_empty() || !removed_system_ids.is_empty() || plan.discovery_changed;
+    let discovery_watch = if refresh_state_changed {
+        capture_discovery_watch(storage_root)?
+    } else {
+        previous.discovery_watch.clone()
+    };
+    let refresh_generation = if !refresh_state_changed {
         previous.generation
     } else {
         let active = crate::shard_registry::read_latest_manifest_lazy(
@@ -1840,6 +1860,7 @@ fn execute_planned_fast_refresh_with(
             &previous,
             active.generation,
             crate::fast_five_catalog::registry_fingerprint_for_manifest(&active),
+            &discovery_watch,
             &updated_states,
             &removed_system_ids,
         )?
@@ -2022,9 +2043,11 @@ fn build_watch_metadata_cache<'a>(
 fn discovery_anchor_paths(storage_root: &Path) -> Vec<PathBuf> {
     vec![
         storage_root.join("games"),
+        storage_root.join("_Console"),
         storage_root.join("_Arcade"),
         storage_root.join("_DOS Games"),
         storage_root.join("_Computer"),
+        storage_root.join("_LLAPI"),
     ]
 }
 
@@ -2084,36 +2107,21 @@ fn watch_specification_from_profiles(
     profiles: &[crate::launch_profiles::LaunchProfile],
 ) -> Result<WatchSpecification, String> {
     let games = storage_root.join("games");
-    let (mut scan_roots, mut core_parents) = match system_id {
-        "amiga" => (
-            vec![games.join("Amiga")],
-            vec![storage_root.join("_Computer")],
-        ),
-        "arcade" => (
-            vec![
-                storage_root.join("_Arcade"),
-                games.join("mame"),
-                games.join("hbmame"),
-            ],
-            vec![storage_root.join("_Arcade/cores")],
-        ),
-        "c64" => (
-            vec![games.join("C64")],
-            vec![storage_root.join("_Computer")],
-        ),
-        "dos" => (
-            vec![storage_root.join("_DOS Games"), games.join("AO486")],
-            vec![storage_root.join("_Computer")],
-        ),
-        "x68000" => (
-            vec![
-                storage_root.join("_Computer/_X68000 Games"),
-                storage_root.join("_Computer/X68000 Games"),
-                games.join("X68000"),
-            ],
-            vec![storage_root.join("_Computer")],
-        ),
-        _ => (Vec::new(), Vec::new()),
+    let mut scan_roots = match system_id {
+        "amiga" => vec![games.join("Amiga")],
+        "arcade" => vec![
+            storage_root.join("_Arcade"),
+            games.join("mame"),
+            games.join("hbmame"),
+        ],
+        "c64" => vec![games.join("C64")],
+        "dos" => vec![storage_root.join("_DOS Games"), games.join("AO486")],
+        "x68000" => vec![
+            storage_root.join("_Computer/_X68000 Games"),
+            storage_root.join("_Computer/X68000 Games"),
+            games.join("X68000"),
+        ],
+        _ => Vec::new(),
     };
     for profile in profiles
         .iter()
@@ -2125,23 +2133,13 @@ fn watch_specification_from_profiles(
                 .iter()
                 .map(|game_dir| games.join(game_dir)),
         );
-        if let Some(parent) = profile
-            .core_path
-            .as_deref()
-            .map(Path::new)
-            .and_then(Path::parent)
-        {
-            core_parents.push(storage_root.join(parent));
-        }
     }
     scan_roots.sort();
     scan_roots.dedup();
     if scan_roots.is_empty() {
         return Err(format!("no watch roots for catalog system {system_id}"));
     }
-    let mut anchors = core_parents;
-    anchors.sort();
-    anchors.dedup();
+    let anchors = Vec::new();
     let metadata_files = if matches!(system_id, "arcade" | "neogeo") {
         family_metadata_candidates(storage_root)
     } else {
@@ -3278,6 +3276,12 @@ mod tests {
             stale_plan,
         )
         .expect("replan and add NES incrementally");
+        assert!(added.plan.discovery_changed);
+        assert!(added.system_reports.iter().any(|system| {
+            system.system_id == "snes"
+                && system.source_status == FastSourceCheckStatus::Unchanged
+                && system.outcome == FastCatalogSystemOutcome::Unchanged
+        }));
         assert!(added.system_reports.iter().any(|system| {
             system.system_id == "nes" && system.outcome == FastCatalogSystemOutcome::Updated
         }));
@@ -3302,6 +3306,7 @@ mod tests {
         fs::remove_dir_all(storage.join("games/NES")).unwrap();
         let removed = execute_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::Update)
             .expect("remove NES incrementally");
+        assert!(removed.plan.discovery_changed);
         assert!(removed.system_reports.iter().any(|system| {
             system.system_id == "nes" && system.outcome == FastCatalogSystemOutcome::Removed
         }));
