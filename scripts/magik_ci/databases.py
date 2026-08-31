@@ -260,29 +260,232 @@ def build_mame(
     mame: Path | None = None,
     machine_sqlite: Path | None = None,
 ) -> None:
-    """Build a compact metadata database from MAME listxml.
+    """Build the runtime metadata database from MAME listxml and hash lists.
 
-    The schema is deliberately compatible with the existing host importer;
-    source-specific enrichment remains in the release pipeline.
+    ``listxml`` supplies machine metadata. The checked-out MAME ``hash``
+    directory supplies software-list identities and ROM/disk hashes. Keep the
+    original list names in the release database: the catalog and cloud stager
+    canonicalize media-specific aliases (for example ``c64_cart`` and
+    ``c64_cass``) when producing one platform asset namespace.
     """
     import xml.etree.ElementTree as ET
 
+    def integer(value: str | None) -> int | None:
+        if not value:
+            return None
+        try:
+            return int(value, 0)
+        except ValueError:
+            try:
+                return int(value)
+            except ValueError:
+                return None
+
+    def text(element: ET.Element | None, child: str) -> str | None:
+        value = element.findtext(child) if element is not None else None
+        return value.strip() if value and value.strip() else None
+
     root = ET.parse(listxml).getroot()
+    machine_source_version = (
+        root.get("build") or root.get("version") or "mame-listxml"
+    )
     out.parent.mkdir(parents=True, exist_ok=True)
+    if out.exists():
+        out.unlink()
     connection = sqlite3.connect(out)
     connection.executescript(
-        "CREATE TABLE IF NOT EXISTS machines (name TEXT PRIMARY KEY, description TEXT, year TEXT, manufacturer TEXT); CREATE TABLE IF NOT EXISTS software (shortname TEXT, description TEXT, year TEXT, publisher TEXT);"
+        """
+        CREATE TABLE machines (
+            name TEXT PRIMARY KEY,
+            description TEXT,
+            year TEXT,
+            manufacturer TEXT
+        );
+        CREATE TABLE software (
+            shortname TEXT,
+            description TEXT,
+            year TEXT,
+            publisher TEXT
+        );
+        CREATE TABLE mame_machines (
+            setname TEXT PRIMARY KEY,
+            parent_setname TEXT,
+            title TEXT NOT NULL,
+            year TEXT,
+            manufacturer TEXT,
+            sourcefile TEXT,
+            rotate INTEGER,
+            display_type TEXT,
+            display_width INTEGER,
+            display_height INTEGER,
+            refresh_hz REAL,
+            players INTEGER,
+            coins INTEGER,
+            control_type TEXT,
+            control_ways TEXT,
+            buttons INTEGER,
+            driver_status TEXT,
+            emulation_status TEXT,
+            savestate TEXT,
+            source_version TEXT NOT NULL
+        ) WITHOUT ROWID;
+        CREATE TABLE mame_software_items (
+            list_name TEXT NOT NULL,
+            software_name TEXT NOT NULL,
+            parent_name TEXT,
+            description TEXT NOT NULL,
+            year TEXT,
+            publisher TEXT,
+            region TEXT,
+            source_version TEXT NOT NULL,
+            PRIMARY KEY(list_name, software_name)
+        ) WITHOUT ROWID;
+        CREATE TABLE mame_software_hashes (
+            list_name TEXT NOT NULL,
+            software_name TEXT NOT NULL,
+            part_name TEXT,
+            rom_name TEXT,
+            size INTEGER,
+            crc32 TEXT,
+            sha1 TEXT,
+            data_area TEXT,
+            disk_sha1 TEXT
+        );
+        CREATE INDEX mame_software_hashes_crc_idx
+            ON mame_software_hashes(list_name, size, crc32);
+        CREATE INDEX mame_software_hashes_disk_idx
+            ON mame_software_hashes(list_name, disk_sha1);
+        """
     )
+    machine_rows: list[tuple[object, ...]] = []
     for machine in root.findall("machine"):
+        name = machine.get("name", "")
+        title = text(machine, "description") or name
+        year = text(machine, "year")
+        manufacturer = text(machine, "manufacturer")
         connection.execute(
             "INSERT OR REPLACE INTO machines VALUES (?, ?, ?, ?)",
             (
-                machine.get("name", ""),
-                machine.findtext("description", ""),
-                machine.findtext("year", ""),
-                machine.findtext("manufacturer", ""),
+                name,
+                title,
+                year or "",
+                manufacturer or "",
             ),
         )
+        display = machine.find("display")
+        input_node = machine.find("input")
+        control = input_node.find("control") if input_node is not None else None
+        driver = machine.find("driver")
+        machine_rows.append(
+            (
+                name,
+                machine.get("cloneof"),
+                title,
+                year,
+                manufacturer,
+                machine.get("sourcefile"),
+                integer(display.get("rotate")) if display is not None else None,
+                display.get("type") if display is not None else None,
+                integer(display.get("width")) if display is not None else None,
+                integer(display.get("height")) if display is not None else None,
+                float(display.get("refresh")) if display is not None and display.get("refresh") else None,
+                integer(input_node.get("players")) if input_node is not None else None,
+                integer(input_node.get("coins")) if input_node is not None else None,
+                input_node.get("control") if input_node is not None else None,
+                control.get("ways") if control is not None else None,
+                integer(control.get("buttons")) if control is not None else None,
+                driver.get("status") if driver is not None else None,
+                driver.get("emulation") if driver is not None else None,
+                driver.get("savestate") if driver is not None else None,
+                machine_source_version,
+            )
+        )
+    connection.executemany(
+        "INSERT INTO mame_machines VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        machine_rows,
+    )
+
+    software_rows: list[tuple[object, ...]] = []
+    hash_rows: list[tuple[object, ...]] = []
+    if software_dir is not None and software_dir.is_dir():
+        for software_path in sorted(software_dir.glob("*.xml")):
+            software_root = ET.parse(software_path).getroot()
+            list_name = software_root.get("name") or software_path.stem
+            software_source_version = (
+                software_root.get("build")
+                or software_root.get("version")
+                or "mame-hash"
+            )
+            for software in software_root.findall("software"):
+                software_name = software.get("name")
+                if not software_name:
+                    continue
+                description = text(software, "description") or software_name
+                info = {
+                    entry.get("name"): entry.get("value")
+                    for entry in software.findall("info")
+                    if entry.get("name")
+                }
+                software_rows.append(
+                    (
+                        list_name,
+                        software_name,
+                        software.get("cloneof"),
+                        description,
+                        text(software, "year"),
+                        text(software, "publisher"),
+                        info.get("region"),
+                        software_source_version,
+                    )
+                )
+                for part in software.findall("part"):
+                    part_name = part.get("name")
+                    for area in part.findall("dataarea"):
+                        data_area = area.get("name")
+                        for rom in area.findall("rom"):
+                            hash_rows.append(
+                                (
+                                    list_name,
+                                    software_name,
+                                    part_name,
+                                    rom.get("name"),
+                                    integer(rom.get("size")),
+                                    rom.get("crc", "").lower() or None,
+                                    rom.get("sha1", "").lower() or None,
+                                    data_area,
+                                    None,
+                                )
+                            )
+                    for disk_area in part.findall("diskarea"):
+                        for disk in disk_area.findall("disk"):
+                            hash_rows.append(
+                                (
+                                    list_name,
+                                    software_name,
+                                    part_name,
+                                    disk.get("name"),
+                                    None,
+                                    None,
+                                    None,
+                                    disk_area.get("name"),
+                                    disk.get("sha1", "").lower() or None,
+                                )
+                            )
+    connection.executemany(
+        "INSERT INTO software VALUES (?, ?, ?, ?)",
+        (
+            (row[1], row[3], row[4] or "", row[5] or "")
+            for row in software_rows
+        ),
+    )
+    connection.executemany(
+        "INSERT INTO mame_software_items VALUES (?,?,?,?,?,?,?,?)",
+        software_rows,
+    )
+    connection.executemany(
+        "INSERT INTO mame_software_hashes VALUES (?,?,?,?,?,?,?,?,?)",
+        hash_rows,
+    )
     connection.commit()
     connection.close()
 

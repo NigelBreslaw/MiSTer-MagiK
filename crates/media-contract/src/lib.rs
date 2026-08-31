@@ -278,7 +278,7 @@ pub fn validate_pack_object_path(object: &str) -> Result<(), String> {
             size,
             version,
             file,
-        ] if supported(system) && valid_image_size(size) && valid_component(version) => {
+        ] if supported(system) && fixed_image_size(system, size) && valid_component(version) => {
             validate_pack_filename(file)
         }
         _ => Err(format!("unexpected media object path: {object}")),
@@ -301,7 +301,7 @@ pub fn validate_index_object_path(object: &str) -> Result<(), String> {
             version,
             file,
         ] if supported(system)
-            && valid_image_size(size)
+            && fixed_image_size(system, size)
             && valid_component(version)
             && file.ends_with(".mmlz4b.idx") =>
         {
@@ -337,6 +337,11 @@ fn valid_image_size(value: &str) -> bool {
         .split_once('x')
         .and_then(|(width, height)| Some((width.parse::<u32>().ok()?, height.parse::<u32>().ok()?)))
         .is_some_and(|(width, height)| width > 0 && height > 0)
+}
+
+fn fixed_image_size(system: &str, size: &str) -> bool {
+    valid_image_size(size)
+        && mister_magik_catalog::media_identity::preferred_screenshot_image_size(system) == size
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -475,6 +480,10 @@ mod tests {
         assert!(object_url(OFFICIAL_ASSET_HTTPS_ORIGIN, &object).is_ok());
         assert!(object_url("https://evil.test", &object).is_err());
         assert!(validate_pack_object_path("../escape.mmlz4b").is_err());
+        assert!(validate_pack_object_path(&object.replace("320x320", "320x224")).is_err());
+        let c64 = format!("mister-magik/v1/packs/c64/screenshots/320x200/v1/{SHA}.mmlz4b");
+        assert!(validate_pack_object_path(&c64).is_ok());
+        assert!(validate_pack_object_path(&c64.replace("320x200", "256x192")).is_err());
     }
 
     #[test]

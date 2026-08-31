@@ -325,6 +325,15 @@ jobs:
           test "$lynx_rows" -gt 0
           echo "Atari Lynx software-list rows: $lynx_rows"
 
+      - name: Verify canonical multi-media software-list coverage
+        run: |
+          set -euo pipefail
+          for list_name in c64_cart c64_cass spectrum_cart spectrum_cass; do
+            rows="$(sqlite3 build/mame.sqlite3 "SELECT count(*) FROM mame_software_items WHERE list_name='$list_name';")"
+            test "$rows" -gt 0
+            echo "$list_name software-list rows: $rows"
+          done
+
       - uses: actions/upload-artifact@v7
         with:
           name: game-databases-mame

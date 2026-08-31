@@ -11,7 +11,7 @@ pub use mister_magik_catalog::media_identity::{
 };
 
 use mister_magik_catalog::media_identity::{
-    is_supported_screenshot_pack_id, screenshot_media_state_path,
+    is_supported_screenshot_pack_id, preferred_screenshot_image_size, screenshot_media_state_path,
     size_qualified_screenshot_pack_filename, size_qualified_screenshot_pack_path,
     valid_screenshot_image_size,
 };
@@ -132,7 +132,14 @@ fn parse_pack(origin: &str, value: &Value) -> Result<MediaPack, String> {
         return Err(format!("unsupported screenshot pack id: {id}"));
     }
     let version = required_string(value, "version")?.to_string();
-    let image_size = image_size_from_pack(value).unwrap_or_else(|| DEFAULT_IMAGE_SIZE.to_string());
+    let image_size = image_size_from_pack(value)
+        .unwrap_or_else(|| preferred_screenshot_image_size(id).to_string());
+    let expected_size = preferred_screenshot_image_size(id);
+    if image_size != expected_size {
+        return Err(format!(
+            "pack {id} must use fixed screenshot size {expected_size}, got {image_size}"
+        ));
+    }
     let raw = variant_with_url(
         MediaVariant {
             compression: "none".to_string(),
@@ -610,8 +617,8 @@ mod tests {
     {{
       "id": "neogeo",
       "version": "2026.06.22",
-      "image_size": "240x240",
-      "object": "mister-magik/v1/packs/neogeo/screenshots/240x240/2026.06.22/{SHA}.mmlz4b",
+      "image_size": "320x224",
+      "object": "mister-magik/v1/packs/neogeo/screenshots/320x224/2026.06.22/{SHA}.mmlz4b",
       "bytes": 123,
       "sha256": "{SHA}",
       "codec": "mmlz4b",
@@ -619,14 +626,14 @@ mod tests {
         {{
           "compression": "none",
           "codec": "mmlz4b",
-          "object": "mister-magik/v1/packs/neogeo/screenshots/240x240/2026.06.22/{SHA}.mmlz4b",
+          "object": "mister-magik/v1/packs/neogeo/screenshots/320x224/2026.06.22/{SHA}.mmlz4b",
           "bytes": 123,
           "sha256": "{SHA}"
         }},
         {{
           "compression": "gzip",
           "codec": "mmlz4b+gzip",
-          "object": "mister-magik/v1/packs/neogeo/screenshots/240x240/2026.06.22/{GZ_SHA}.mmlz4b.gz",
+          "object": "mister-magik/v1/packs/neogeo/screenshots/320x224/2026.06.22/{GZ_SHA}.mmlz4b.gz",
           "bytes": 90,
           "sha256": "{GZ_SHA}"
         }}
@@ -638,7 +645,7 @@ mod tests {
         let manifest = parse_manifest_json(DEFAULT_MANIFEST_URL, &text).unwrap();
         let pack = &manifest.packs[0];
 
-        assert_eq!(pack.image_size, "240x240");
+        assert_eq!(pack.image_size, "320x224");
         assert_eq!(
             pack.variant_for_compression("identity")
                 .unwrap()
@@ -648,18 +655,17 @@ mod tests {
         assert_eq!(
             pack.variant_for_compression("gzip").unwrap().url,
             format!(
-                "http://assets.mistermagik.com/mister-magik/v1/packs/neogeo/screenshots/240x240/2026.06.22/{GZ_SHA}.mmlz4b.gz"
+                "http://assets.mistermagik.com/mister-magik/v1/packs/neogeo/screenshots/320x224/2026.06.22/{GZ_SHA}.mmlz4b.gz"
             )
         );
     }
 
     #[test]
     fn parses_width_and_height_size_fields() {
-        let manifest = parse_manifest_json(
-            DEFAULT_MANIFEST_URL,
-            &raw_manifest(r#""width": 160, "height": 144,"#),
-        )
-        .unwrap();
+        let text = raw_manifest(r#""width": 160, "height": 144,"#)
+            .replace(r#""id": "arcade""#, r#""id": "megaduck""#)
+            .replace("arcade/screenshots/320x320", "megaduck/screenshots/160x144");
+        let manifest = parse_manifest_json(DEFAULT_MANIFEST_URL, &text).unwrap();
 
         assert_eq!(manifest.packs[0].image_size, "160x144");
     }

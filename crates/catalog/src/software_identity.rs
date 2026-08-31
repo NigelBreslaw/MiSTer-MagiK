@@ -5,7 +5,7 @@
 
 use crate::game_discovery::{DiscoverySourceKind, GameDiscovery};
 use crate::library_db;
-use crate::media_identity::ScreenshotAssetId;
+use crate::media_identity::{ScreenshotAssetId, screenshot_pack_id_from_filename};
 use crate::preview_worker;
 use rusqlite::{Connection, params, params_from_iter};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -266,7 +266,8 @@ pub(crate) fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
         })
     {
         for row in rows.flatten() {
-            let (list, name, item) = row;
+            let (raw_list, name, item) = row;
+            let list = canonical_software_list_name(&raw_list).to_string();
             let title_key = library_db::canonical_variant_title(&item.description);
             metadata
                 .title_index
@@ -299,7 +300,8 @@ pub(crate) fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
             row.get::<_, String>(3)?,
         ))
     }) {
-        for (list, name, size, crc_hex) in rows.flatten() {
+        for (raw_list, name, size, crc_hex) in rows.flatten() {
+            let list = canonical_software_list_name(&raw_list).to_string();
             let Ok(size) = u64::try_from(size) else {
                 continue;
             };
@@ -324,7 +326,8 @@ pub(crate) fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
             row.get::<_, String>(2)?,
         ))
     }) {
-        for (list, name, sha1) in rows.flatten() {
+        for (raw_list, name, sha1) in rows.flatten() {
+            let list = canonical_software_list_name(&raw_list).to_string();
             metadata
                 .disk_index
                 .entry((list, sha1.to_ascii_lowercase()))
@@ -719,13 +722,84 @@ pub(crate) fn mame_identity_for_discovery(discovery: &GameDiscovery) -> Option<S
 pub(crate) fn software_list_for_platform(platform_id: &str) -> Option<&'static str> {
     match platform_id {
         "nes" => Some("nes"),
+        "fds" => Some("fds"),
         "snes" => Some("snes"),
         "n64" => Some("n64"),
         "sms" => Some("sms"),
         "megadrive" => Some("megadriv"),
+        "s32x" => Some("32x"),
+        "megacd" => Some("megacd"),
         "saturn" => Some("saturn"),
         "atarilynx" => Some("lynx"),
+        "amigacd32" => Some("amigacd32"),
+        "acornatom" => Some("atom"),
+        "acornelectron" => Some("electron"),
+        "bbcmicro" => Some("bbc"),
+        "archie" => Some("archimedes"),
+        "apple-ii" => Some("apple2"),
+        "apple-iigs" => Some("apple2gs"),
+        "amstrad" => Some("amstrad"),
+        "atari2600" => Some("a2600"),
+        "atari5200" => Some("a5200"),
+        "atari7800" => Some("a7800"),
+        "atari800" => Some("a800"),
+        "atarist" => Some("atarist"),
+        "c64" => Some("c64"),
+        "c128" => Some("c128"),
+        "c16" => Some("c16"),
+        "pet2001" => Some("pet"),
+        "vic20" => Some("vic20"),
+        "colecovision" => Some("coleco"),
+        "megaduck" => Some("megaduck"),
+        "wonderswan" => Some("wonderswan"),
+        "wonderswancolor" => Some("wsc"),
+        "x68000" => Some("x68000"),
+        "zx-spectrum" => Some("spectrum"),
         _ => None,
+    }
+}
+
+/// Collapse the MAME media-specific list names into the stable list namespace
+/// used by catalog identities and screenshot asset keys. A platform can expose
+/// cartridges, tapes, disks, and ROMs through separate MAME lists; treating
+/// them as one namespace keeps family identity and the complete gameplay pack
+/// in sync.
+pub(crate) fn canonical_software_list_name(list_name: &str) -> &str {
+    match list_name {
+        "famicom_flop" => "fds",
+        "cd32" => "amigacd32",
+        "atom_cass" | "atom_flop" | "atom_rom" => "atom",
+        "electron_cass" | "electron_flop" | "electron_rom" => "electron",
+        "bbc_cass" | "bbc_flop_32016" | "bbc_flop_6502" | "bbc_flop_68000" | "bbc_flop_80186"
+        | "bbc_flop_arm" | "bbc_flop_hybrid" | "bbc_flop_torch" | "bbc_flop_z80" | "bbc_hdd"
+        | "bbc_rom" | "bbcb_flop" | "bbcb_flop_orig" | "bbcm_cart" | "bbcm_flop" => "bbc",
+        "archimedes" | "archimedes_hdd" | "archimedes_rom" => "archimedes",
+        "apple2_cass"
+        | "apple2_flop_clcracked"
+        | "apple2_flop_misc"
+        | "apple2_flop_orig"
+        | "apple2_rom" => "apple2",
+        "apple2gs_flop_clcracked" | "apple2gs_flop_misc" | "apple2gs_flop_orig" => "apple2gs",
+        "cpc_cass" | "cpc_flop" | "gx4000" => "amstrad",
+        "a2600" | "a2600_cass" => "a2600",
+        "a800" | "a800_cass" | "a800_flop" | "xegs" => "a800",
+        "st_cart" | "st_flop" | "st_flop_demos" => "atarist",
+        "c64_cart" | "c64_cass" | "c64_flop_misc" | "c64_flop_orig" | "c64_quik" => "c64",
+        "c128_cart" | "c128_flop" | "c128_rom" => "c128",
+        "plus4_cart" | "plus4_cass" | "plus4_flop" | "plus4_quik" => "c16",
+        "pet_cass" | "pet_flop" | "pet_hdd" | "pet_quik" => "pet",
+        "vic1001_cart" | "vic1001_cass" | "vic1001_flop" => "vic20",
+        "coleco" | "coleco_homebrew" => "coleco",
+        "wswan" => "wonderswan",
+        "wscolor" => "wsc",
+        "x68k_flop" => "x68000",
+        "spectrum_cart"
+        | "spectrum_cass"
+        | "spectrum_flop_opus"
+        | "spectrum_mgt_flop"
+        | "spectrum_microdrive"
+        | "spectrum_wafadrive" => "spectrum",
+        _ => list_name,
     }
 }
 
@@ -1449,6 +1523,13 @@ pub(crate) fn arcade_parent_override(identity_id: &str) -> Option<&'static str> 
 }
 
 pub(crate) fn preview_asset_pack_platform(path: &str) -> &'static str {
+    if let Some(id) = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(screenshot_pack_id_from_filename)
+    {
+        return id.as_str();
+    }
     let path = path.to_ascii_lowercase();
     if path.contains("neogeo") {
         "neogeo"
@@ -1565,7 +1646,6 @@ pub(crate) fn console_preview_asset(
     preview_paths: &PreviewArchivePaths,
 ) -> Option<ConsolePreviewAsset> {
     let platform = preview_platform_for_software_list(&identity.list_name);
-    let archive_path = preview_paths.archive_for_platform(platform)?;
     let software_name = identity
         .family_id
         .split_once(':')
@@ -1574,8 +1654,12 @@ pub(crate) fn console_preview_asset(
         .unwrap_or(identity.software_name.as_str());
     let asset_key = ScreenshotAssetId::from_mame_software(&identity.list_name, software_name);
     let has_preview = preview_paths.has_entry(platform, &asset_key.to_string());
+    let archive_path = preview_paths
+        .archive_for_platform(platform)
+        .map(str::to_owned)
+        .unwrap_or_else(|| preview_worker::preview_archive_path_for_system(platform));
     Some(ConsolePreviewAsset {
-        archive_path: archive_path.to_string(),
+        archive_path,
         asset_key,
         has_preview,
     })
@@ -1584,7 +1668,22 @@ pub(crate) fn console_preview_asset(
 pub(crate) fn preview_platform_for_software_list(list_name: &str) -> &str {
     match list_name {
         "megadriv" => "megadrive",
+        "32x" => "s32x",
         "lynx" => "atarilynx",
+        "atom" => "acornatom",
+        "electron" => "acornelectron",
+        "bbc" => "bbcmicro",
+        "archimedes" => "archie",
+        "apple2" => "apple-ii",
+        "apple2gs" => "apple-iigs",
+        "a2600" => "atari2600",
+        "a5200" => "atari5200",
+        "a7800" => "atari7800",
+        "a800" => "atari800",
+        "pet" => "pet2001",
+        "coleco" => "colecovision",
+        "wsc" => "wonderswancolor",
+        "spectrum" => "zx-spectrum",
         value => value,
     }
 }
@@ -2251,6 +2350,108 @@ mod tests {
         write_sqlite_scan_with_mame_and_preview_pack,
     };
     use crate::test_support::*;
+
+    #[test]
+    fn c64_and_zx_spectrum_use_catalog_software_list_identities() {
+        assert_eq!(software_list_for_platform("c64"), Some("c64"));
+        assert_eq!(software_list_for_platform("zx-spectrum"), Some("spectrum"));
+        assert_eq!(preview_platform_for_software_list("c64"), "c64");
+        assert_eq!(
+            preview_platform_for_software_list("spectrum"),
+            "zx-spectrum"
+        );
+
+        for (platform, list, title, software) in [
+            ("c64", "c64", "California Games", "calgames"),
+            ("zx-spectrum", "spectrum", "Manic Miner", "manicmin"),
+        ] {
+            let mut metadata = MameSoftwareMetadata::default();
+            metadata.items.insert(
+                (list.to_string(), software.to_string()),
+                MameSoftwareItemMetadata {
+                    description: title.to_string(),
+                    ..Default::default()
+                },
+            );
+            metadata.title_index.insert(
+                (list.to_string(), library_db::canonical_variant_title(title)),
+                vec![software.to_string()],
+            );
+            let mut discovery = payload(&format!("/media/fat/games/{platform}/{title}.rom"));
+            discovery.platform_id = platform.to_string();
+            discovery.title = title.to_string();
+            let identity = mame_software_identity_for_discovery_with_hash_matcher(
+                &discovery,
+                &metadata,
+                |_, _, _| None,
+            )
+            .expect("catalog software identity");
+            assert_eq!(identity.list_name, list);
+            assert_eq!(identity.software_name, software);
+            let preview = console_preview_asset(&identity, &PreviewArchivePaths::default())
+                .expect("identity-derived preview asset");
+            assert_eq!(
+                preview.asset_key.to_string(),
+                format!("mame-software__{list}__{software}")
+            );
+            assert!(
+                preview
+                    .archive_path
+                    .contains(&format!("{platform}-screenshots"))
+            );
+            assert!(!preview.has_preview);
+        }
+    }
+
+    #[test]
+    fn mame_metadata_collapses_media_lists_into_one_identity_namespace() {
+        let root = unique_temp_dir("software-list-canonicalization");
+        let db = root.join("mame.sqlite3");
+        write_mame_software_fixture_db(
+            &db,
+            &[
+                ("c64_cart", "cartgame", None, "Cart Game", None, None, None),
+                (
+                    "c64_cass",
+                    "cassgame",
+                    None,
+                    "Cassette Game",
+                    None,
+                    None,
+                    None,
+                ),
+                (
+                    "spectrum_microdrive",
+                    "microgame",
+                    None,
+                    "Microdrive Game",
+                    None,
+                    None,
+                    None,
+                ),
+            ],
+            &[],
+        );
+        let metadata = load_mame_software_metadata(&db);
+        assert!(
+            metadata
+                .items
+                .contains_key(&("c64".to_string(), "cartgame".to_string()))
+        );
+        assert!(
+            metadata
+                .items
+                .contains_key(&("c64".to_string(), "cassgame".to_string()))
+        );
+        assert!(
+            metadata
+                .items
+                .contains_key(&("spectrum".to_string(), "microgame".to_string()))
+        );
+        assert_eq!(canonical_software_list_name("electron_flop"), "electron");
+        assert_eq!(canonical_software_list_name("gx4000"), "amstrad");
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[cfg(feature = "builder")]
     #[test]

@@ -26,6 +26,79 @@ from scripts.magik_ci.quality import QUALITY_COMMANDS, execute
 
 
 class MagikCiTests(unittest.TestCase):
+    def test_build_mame_ingests_software_lists_and_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            listxml = root / "listxml.xml"
+            listxml.write_text(
+                """<mame build="0.289 (mame0289)"><machine name="fixture" sourcefile="src/fixture.cpp">
+                  <description>Fixture Machine</description><year>1985</year>
+                  <manufacturer>Example</manufacturer>
+                  <input players="1" control="joy" />
+                  <display type="raster" width="256" height="240" rotate="0" />
+                  <driver status="good" emulation="good" savestate="supported" />
+                </machine></mame>""",
+                encoding="utf-8",
+            )
+            hash_dir = root / "hash"
+            hash_dir.mkdir()
+            (hash_dir / "c64_cart.xml").write_text(
+                """<softwarelist name="c64_cart" build="0.289 (mame0289)" description="C64 carts">
+                  <software name="fixture" cloneof="parent">
+                    <description>Fixture Cart</description><year>1985</year>
+                    <publisher>Example</publisher>
+                    <part name="cart"><dataarea name="rom" size="4">
+                      <rom name="fixture.bin" size="4" crc="deadbeef"
+                           sha1="0123456789abcdef0123456789abcdef01234567" />
+                    </dataarea></part>
+                  </software>
+                </softwarelist>""",
+                encoding="utf-8",
+            )
+            output = root / "mame.sqlite3"
+            databases.build_mame(
+                listxml=listxml,
+                out=output,
+                software_dir=hash_dir,
+            )
+            connection = databases.sqlite3.connect(output)
+            self.assertEqual(
+                connection.execute(
+                    "SELECT title, parent_setname FROM mame_machines"
+                ).fetchone(),
+                ("Fixture Machine", None),
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT source_version FROM mame_machines"
+                ).fetchone(),
+                ("0.289 (mame0289)",),
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT list_name, software_name, parent_name FROM mame_software_items"
+                ).fetchone(),
+                ("c64_cart", "fixture", "parent"),
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT source_version FROM mame_software_items"
+                ).fetchone(),
+                ("0.289 (mame0289)",),
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT size, crc32, sha1, data_area FROM mame_software_hashes"
+                ).fetchone(),
+                (
+                    4,
+                    "deadbeef",
+                    "0123456789abcdef0123456789abcdef01234567",
+                    "rom",
+                ),
+            )
+            connection.close()
+
     def test_cli_import_does_not_require_platform_manifest_dependencies(self) -> None:
         command = """
 import builtins

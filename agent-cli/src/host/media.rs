@@ -1,7 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use mister_magik_catalog::media_identity::size_qualified_screenshot_pack_filename;
+use mister_magik_catalog::media_identity::{
+    preferred_screenshot_image_size, size_qualified_screenshot_pack_filename,
+};
 use mister_magik_media_contract::ManifestTrustMode;
 use serde_json::{Map, Value, json};
 use ssh2::{ExtendedData, Session};
@@ -27,7 +29,6 @@ static DEFAULT_ARCADE_ARCHIVE_PATH: LazyLock<String> = LazyLock::new(|| {
         DEFAULT_REMOTE_ASSET_DIR.as_str()
     )
 });
-const DEFAULT_IMAGE_SIZE: &str = "320x320";
 const DEFAULT_MANIFEST_URL: &str = mister_magik_media_contract::DEFAULT_MANIFEST_URL;
 const OFFICIAL_ASSET_HTTPS_ORIGIN: &str = mister_magik_media_contract::OFFICIAL_ASSET_HTTPS_ORIGIN;
 const OFFICIAL_ASSET_HTTP_ORIGIN: &str = mister_magik_media_contract::OFFICIAL_ASSET_HTTP_ORIGIN;
@@ -397,8 +398,15 @@ fn parse_manifest(value: &Value, manifest_url: &str) -> Result<MediaManifest> {
             .and_then(Value::as_str)
             .ok_or("manifest pack missing system/id")?
             .to_string();
-        let image_size =
-            image_size_from_pack(pack).unwrap_or_else(|| DEFAULT_IMAGE_SIZE.to_string());
+        let image_size = image_size_from_pack(pack)
+            .unwrap_or_else(|| preferred_screenshot_image_size(&system).to_string());
+        let expected_size = preferred_screenshot_image_size(&system);
+        if image_size != expected_size {
+            return Err(format!(
+                "pack {system} must use fixed screenshot size {expected_size}, got {image_size}"
+            )
+            .into());
+        }
         let local_path = layout_local_path(
             &pack
                 .get("local_path")
@@ -1325,7 +1333,7 @@ mod tests {
 
         assert_eq!(
             manifest.packs[0].local_path,
-            "/media/fat/mister-magik/assets/nes-screenshots-320x320.mmlz4b"
+            "/media/fat/mister-magik/assets/nes-screenshots-256x240.mmlz4b"
         );
         assert_eq!(
             manifest.packs[0].identity.decoded_sha256,

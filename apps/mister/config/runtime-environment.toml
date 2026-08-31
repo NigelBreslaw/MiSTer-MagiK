@@ -511,6 +511,20 @@ aliases = []
 documentation = { summary = "Controls catalog trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
+name = "MISTER_C64_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls c64 preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
 name = "MISTER_CRASH_BACKTRACE"
 owner = "apps/mister/src/crash_report.rs"
 classification = "diagnostic"
@@ -3859,6 +3873,20 @@ aliases = []
 documentation = { summary = "Controls user state sqlite behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
+name = "MISTER_ZX_SPECTRUM_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls zx-spectrum preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
 name = "MISTER_VIDEO_AUTO_TOGGLE_MS"
 owner = "apps/mister/src/ui_runner/video_loop.rs"
 classification = "production"
@@ -3983,3 +4011,367 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls vsync fresh hit max age us behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_FDS_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls fds preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_S32X_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls s32x preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_MEGACD_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls megacd preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_AMIGACD32_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls amigacd32 preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_ATARILYNX_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls atarilynx preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_ACORNATOM_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls acornatom preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_ACORNELECTRON_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls acornelectron preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_BBCMICRO_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls bbcmicro preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_ARCHIE_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls archie preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_APPLE_II_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls apple-ii preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_APPLE_IIGS_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls apple-iigs preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_AMSTRAD_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls amstrad preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_ATARI2600_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls atari2600 preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_ATARI5200_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls atari5200 preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_ATARI7800_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls atari7800 preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_ATARI800_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls atari800 preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_ATARIST_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls atarist preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_C128_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls c128 preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_C16_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls c16 preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_PET2001_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls pet2001 preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_VIC20_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls vic20 preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_COLECOVISION_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls colecovision preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_MEGADUCK_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls megaduck preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_WONDERSWAN_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls wonderswan preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_WONDERSWANCOLOR_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls wonderswancolor preview archive behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_X68000_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls x68000 preview archive behavior", accepted_values = [], value_policy = "document" }

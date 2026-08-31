@@ -18,8 +18,9 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use crate::media_identity::{
     DEFAULT_SCREENSHOT_IMAGE_SIZE, default_screenshot_asset_dir, legacy_screenshot_pack_path,
     preferred_screenshot_image_size, screenshot_media_state_path_in_root,
-    screenshot_pack_id_from_legacy_filename, size_qualified_screenshot_pack_path_in_root,
-    supported_screenshot_pack_ids, valid_screenshot_image_size,
+    screenshot_pack_id_from_filename, screenshot_resolution_profile,
+    size_qualified_screenshot_pack_path_in_root, supported_screenshot_pack_ids,
+    valid_screenshot_image_size,
 };
 #[cfg(test)]
 use crate::preview_archive::{MAX_PREVIEW_ARCHIVE_ENTRIES, MAX_PREVIEW_ARCHIVE_RAW_BYTES};
@@ -1408,15 +1409,7 @@ fn preview_archive_paths_from_values<'a>(
     } else if auto_enabled && let Some(path) = auto_archive_path_for_system(&root, "neogeo") {
         paths.push(path);
     }
-    for (system, name) in [
-        ("nes", "MISTER_NES_PREVIEW_ARCHIVE"),
-        ("snes", "MISTER_SNES_PREVIEW_ARCHIVE"),
-        ("n64", "MISTER_N64_PREVIEW_ARCHIVE"),
-        ("sms", "MISTER_SMS_PREVIEW_ARCHIVE"),
-        ("megadrive", "MISTER_MEGADRIVE_PREVIEW_ARCHIVE"),
-        ("saturn", "MISTER_SATURN_PREVIEW_ARCHIVE"),
-        ("amiga", "MISTER_AMIGA_PREVIEW_ARCHIVE"),
-    ] {
+    for (system, name) in console_preview_archive_env_names() {
         if let Some(path) = get(name).filter(|path| !path.is_empty()) {
             paths.push(path.to_owned());
         } else if auto_enabled && let Some(path) = auto_archive_path_for_system(&root, system) {
@@ -1426,6 +1419,46 @@ fn preview_archive_paths_from_values<'a>(
     let mut seen = HashSet::new();
     paths.retain(|path| seen.insert(path.clone()));
     paths
+}
+
+fn console_preview_archive_env_names() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("nes", "MISTER_NES_PREVIEW_ARCHIVE"),
+        ("fds", "MISTER_FDS_PREVIEW_ARCHIVE"),
+        ("snes", "MISTER_SNES_PREVIEW_ARCHIVE"),
+        ("n64", "MISTER_N64_PREVIEW_ARCHIVE"),
+        ("sms", "MISTER_SMS_PREVIEW_ARCHIVE"),
+        ("megadrive", "MISTER_MEGADRIVE_PREVIEW_ARCHIVE"),
+        ("s32x", "MISTER_S32X_PREVIEW_ARCHIVE"),
+        ("megacd", "MISTER_MEGACD_PREVIEW_ARCHIVE"),
+        ("saturn", "MISTER_SATURN_PREVIEW_ARCHIVE"),
+        ("amiga", "MISTER_AMIGA_PREVIEW_ARCHIVE"),
+        ("amigacd32", "MISTER_AMIGACD32_PREVIEW_ARCHIVE"),
+        ("c64", "MISTER_C64_PREVIEW_ARCHIVE"),
+        ("atarilynx", "MISTER_ATARILYNX_PREVIEW_ARCHIVE"),
+        ("acornatom", "MISTER_ACORNATOM_PREVIEW_ARCHIVE"),
+        ("acornelectron", "MISTER_ACORNELECTRON_PREVIEW_ARCHIVE"),
+        ("bbcmicro", "MISTER_BBCMICRO_PREVIEW_ARCHIVE"),
+        ("archie", "MISTER_ARCHIE_PREVIEW_ARCHIVE"),
+        ("apple-ii", "MISTER_APPLE_II_PREVIEW_ARCHIVE"),
+        ("apple-iigs", "MISTER_APPLE_IIGS_PREVIEW_ARCHIVE"),
+        ("amstrad", "MISTER_AMSTRAD_PREVIEW_ARCHIVE"),
+        ("atari2600", "MISTER_ATARI2600_PREVIEW_ARCHIVE"),
+        ("atari5200", "MISTER_ATARI5200_PREVIEW_ARCHIVE"),
+        ("atari7800", "MISTER_ATARI7800_PREVIEW_ARCHIVE"),
+        ("atari800", "MISTER_ATARI800_PREVIEW_ARCHIVE"),
+        ("atarist", "MISTER_ATARIST_PREVIEW_ARCHIVE"),
+        ("c128", "MISTER_C128_PREVIEW_ARCHIVE"),
+        ("c16", "MISTER_C16_PREVIEW_ARCHIVE"),
+        ("pet2001", "MISTER_PET2001_PREVIEW_ARCHIVE"),
+        ("vic20", "MISTER_VIC20_PREVIEW_ARCHIVE"),
+        ("colecovision", "MISTER_COLECOVISION_PREVIEW_ARCHIVE"),
+        ("megaduck", "MISTER_MEGADUCK_PREVIEW_ARCHIVE"),
+        ("wonderswan", "MISTER_WONDERSWAN_PREVIEW_ARCHIVE"),
+        ("wonderswancolor", "MISTER_WONDERSWANCOLOR_PREVIEW_ARCHIVE"),
+        ("x68000", "MISTER_X68000_PREVIEW_ARCHIVE"),
+        ("zx-spectrum", "MISTER_ZX_SPECTRUM_PREVIEW_ARCHIVE"),
+    ]
 }
 
 pub fn invalidate_preview_archive_metadata_cache(reason: &str) {
@@ -1918,12 +1951,40 @@ fn default_neogeo_archive_path() -> String {
 fn console_preview_archive_paths_from_env() -> Vec<String> {
     [
         "MISTER_NES_PREVIEW_ARCHIVE",
+        "MISTER_FDS_PREVIEW_ARCHIVE",
         "MISTER_SNES_PREVIEW_ARCHIVE",
         "MISTER_N64_PREVIEW_ARCHIVE",
         "MISTER_SMS_PREVIEW_ARCHIVE",
         "MISTER_MEGADRIVE_PREVIEW_ARCHIVE",
+        "MISTER_S32X_PREVIEW_ARCHIVE",
+        "MISTER_MEGACD_PREVIEW_ARCHIVE",
         "MISTER_SATURN_PREVIEW_ARCHIVE",
         "MISTER_AMIGA_PREVIEW_ARCHIVE",
+        "MISTER_AMIGACD32_PREVIEW_ARCHIVE",
+        "MISTER_C64_PREVIEW_ARCHIVE",
+        "MISTER_ATARILYNX_PREVIEW_ARCHIVE",
+        "MISTER_ACORNATOM_PREVIEW_ARCHIVE",
+        "MISTER_ACORNELECTRON_PREVIEW_ARCHIVE",
+        "MISTER_BBCMICRO_PREVIEW_ARCHIVE",
+        "MISTER_ARCHIE_PREVIEW_ARCHIVE",
+        "MISTER_APPLE_II_PREVIEW_ARCHIVE",
+        "MISTER_APPLE_IIGS_PREVIEW_ARCHIVE",
+        "MISTER_AMSTRAD_PREVIEW_ARCHIVE",
+        "MISTER_ATARI2600_PREVIEW_ARCHIVE",
+        "MISTER_ATARI5200_PREVIEW_ARCHIVE",
+        "MISTER_ATARI7800_PREVIEW_ARCHIVE",
+        "MISTER_ATARI800_PREVIEW_ARCHIVE",
+        "MISTER_ATARIST_PREVIEW_ARCHIVE",
+        "MISTER_C128_PREVIEW_ARCHIVE",
+        "MISTER_C16_PREVIEW_ARCHIVE",
+        "MISTER_PET2001_PREVIEW_ARCHIVE",
+        "MISTER_VIC20_PREVIEW_ARCHIVE",
+        "MISTER_COLECOVISION_PREVIEW_ARCHIVE",
+        "MISTER_MEGADUCK_PREVIEW_ARCHIVE",
+        "MISTER_WONDERSWAN_PREVIEW_ARCHIVE",
+        "MISTER_WONDERSWANCOLOR_PREVIEW_ARCHIVE",
+        "MISTER_X68000_PREVIEW_ARCHIVE",
+        "MISTER_ZX_SPECTRUM_PREVIEW_ARCHIVE",
     ]
     .into_iter()
     .filter_map(|name| match std::env::var(name) {
@@ -2041,7 +2102,7 @@ fn direct_state_local_path(value: &serde_json::Value) -> Option<String> {
 
 fn system_from_legacy_archive_path(path: &Path) -> Option<&'static str> {
     let name = path.file_name()?.to_str()?;
-    screenshot_pack_id_from_legacy_filename(name).map(|system| system.as_str())
+    screenshot_pack_id_from_filename(name).map(|system| system.as_str())
 }
 
 fn legacy_archive_path_for_system(root: &Path, system: &str) -> String {
@@ -2480,6 +2541,13 @@ fn read_preview_archive_sidecar_index(
             index_path.display()
         ));
     }
+    if let Some(archive_path) = index_path
+        .to_str()
+        .and_then(|path| path.strip_suffix(".idx"))
+        .map(PathBuf::from)
+    {
+        validate_fixed_screenshot_archive_geometry(&archive_path, &entries)?;
+    }
     Ok(PreviewArchiveSidecarIndex {
         archive_sha256: archive_sha.to_ascii_lowercase(),
         entries,
@@ -2546,6 +2614,7 @@ impl PreviewArchive {
         }
         let count = read_u32(&mut file)? as usize;
         let entries = read_v2_pixel_entries(&mut file, count, archive_bytes)?;
+        validate_fixed_screenshot_archive_geometry(path, &entries)?;
         // SAFETY: the immutable mapping owns its file-backed pages and this
         // process never writes or truncates preview packs while a reader is
         // alive. Deployment publishes packs atomically under a new inode.
@@ -2604,6 +2673,61 @@ impl PreviewArchive {
             image,
         }))
     }
+}
+
+fn validate_fixed_screenshot_archive_geometry(
+    path: &Path,
+    entries: &HashMap<String, PreviewArchiveEntry>,
+) -> Result<(), String> {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(());
+    };
+    let Some(pack_id) = screenshot_pack_id_from_filename(name) else {
+        return Ok(());
+    };
+    let Some(profile) = screenshot_resolution_profile(pack_id.as_str()) else {
+        return Ok(());
+    };
+    for (entry_name, entry) in entries {
+        let (width, height) = (entry.width, entry.height);
+        if !profile.allows(width, height) {
+            return Err(format!(
+                "preview archive {} entry {} has geometry {}x{}, expected {}x{}{}",
+                path.display(),
+                entry_name,
+                width,
+                height,
+                profile.width,
+                profile.height,
+                if profile.rotatable {
+                    format!(" or {}x{}", profile.height, profile.width)
+                } else {
+                    String::new()
+                }
+            ));
+        }
+        let expected_stride = width
+            .checked_mul(2)
+            .and_then(|bytes| bytes.checked_add(15))
+            .map(|bytes| bytes & !15)
+            .ok_or_else(|| {
+                format!(
+                    "preview archive {} entry {} stride overflow",
+                    path.display(),
+                    entry_name
+                )
+            })?;
+        if entry.stride_bytes != expected_stride {
+            return Err(format!(
+                "preview archive {} entry {} has stride {}, expected {}",
+                path.display(),
+                entry_name,
+                entry.stride_bytes,
+                expected_stride
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn read_v2_pixel_entries(
@@ -3366,7 +3490,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create archive root");
-        let path = root.join("arcade-screenshots-320x320.mmlz4b");
+        let path = root.join("arcade-fixture.mmlz4b");
         let name = "tiny.rgb565";
         let payload = raw565_fixture(2, 1, &[0xf800, 0x07e0]);
         write_lz4_block_archive_with_index(&path, name, &payload);
@@ -3417,7 +3541,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create archive root");
-        let path = root.join("arcade-screenshots-240x240.mmlz4b");
+        let path = root.join("arcade-fixture-nonpreferred.mmlz4b");
         let name = "tiny.rgb565";
         let payload = raw565_fixture(2, 1, &[0xf800, 0x07e0]);
         write_lz4_block_archive_with_index(&path, name, &payload);
@@ -3725,7 +3849,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).expect("create archive root");
         let archive = root.join("arcade-screenshots-320x320.mmlz4b");
-        let payload = raw565_fixture(2, 1, &[0xf800, 0x07e0]);
+        let payload = raw565_fixture(320, 320, &vec![0xf800; 320 * 320]);
         write_lz4_block_archive(&archive, "pacman.rgb565", &payload);
         let legacy = root.join("arcade-screenshots.mmlz4b");
         let request = PreviewRequest {
@@ -3774,6 +3898,15 @@ mod tests {
             paths
                 .iter()
                 .any(|path| path == "/media/fat/mister-magik/assets/saturn-screenshots.mmlz4b")
+        );
+        assert!(
+            paths
+                .iter()
+                .any(|path| path == "/media/fat/mister-magik/assets/c64-screenshots.mmlz4b")
+        );
+        assert!(
+            paths.iter().any(|path| path
+                == "/media/fat/mister-magik/assets/zx-spectrum-screenshots.mmlz4b")
         );
     }
 

@@ -10,15 +10,19 @@ scanner and launcher read the generated SQLite metadata, not those XML files.
 
 ## Target Systems
 
-The first console identity pass covers:
+The supported console identity registry covers the following canonical system
+IDs: `nes`, `fds`, `snes`, `n64`, `sms`, `megadrive`, `s32x`, `megacd`,
+`saturn`, `atarilynx`, `amigacd32`, `c64`, `zx-spectrum`, `acornatom`, `acornelectron`,
+`bbcmicro`, `archie`, `apple-ii`, `apple-iigs`, `amstrad`, `atari2600`,
+`atari5200`, `atari7800`, `atari800`, `atarist`, `c128`, `c16`, `pet2001`,
+`vic20`, `colecovision`, `megaduck`, `wonderswan`, `wonderswancolor`, and
+`x68000`. Amiga uses the dedicated AmigaVision provider; Amiga CD32 uses the
+`amigacd32`/`cd32` MAME software-list aliases.
 
-- NES: MAME list `nes`
-- SNES: MAME list `snes`
-- Nintendo 64: MAME list `n64`
-- Sega Master System: MAME list `sms`
-- Mega Drive: MAME list `megadriv`
-- Saturn: MAME list `saturn`
-- Atari Lynx: MAME list `lynx`
+Media-specific MAME lists are retained as release inputs and canonicalized into
+these namespaces. For example, `c64_cart`, `c64_cass`, and `c64_flop_*` all
+feed the `c64` identity namespace; the complete mapping is enforced by the
+catalog and cloud stager rather than by inventing a single source list.
 
 Library identities use:
 
@@ -60,8 +64,10 @@ mister mame-metadata-build \
 ```
 
 Distribution CI resolves the MAME `hash/` directory from the installed MAME
-package, passes `--software-dir`, and verifies all target lists have nonzero
-rows before packaging.
+package, passes `--software-dir`, and verifies representative multi-media
+lists before packaging. The builder ingests every XML in that directory; a
+numbered game-database release is required before staging a pack so the cloud
+stager can prove that the selected system's mapped source lists contain rows.
 
 ## Matching Rules
 
@@ -85,24 +91,20 @@ not a screenshot naming contract.
 
 ## Screenshot Packs
 
-Console screenshot packs live under:
+Console screenshot packs live under `/media/fat/mister-magik/assets/` with
+the fixed raster in the filename. Profiles include `arcade 320x320`, `neogeo
+320x224`, `nes/fds 256x240`, `snes 256x224`, `n64/saturn 320x240`,
+`sms/acornatom/colecovision 256x192`, `megadrive/s32x/megacd/atari7800
+320x224`, `amiga/amigacd32 320x200`, `atarilynx 160x102`,
+`acornelectron/bbcmicro/archie 320x256`, `apple-ii 280x192`,
+`apple-iigs/amstrad/atarist/c64/c128/c16/pet2001 320x200`, `atari2600
+160x192`, `atari5200/atari800 320x192`, `vic20 176x184`, `megaduck 160x144`,
+`wonderswan/wonderswancolor 224x144`, `x68000 256x256`, and `zx-spectrum
+256x192`.
 
-```text
-/media/fat/mister-magik/assets/arcade-screenshots-320x320.mmlz4b
-/media/fat/mister-magik/assets/neogeo-screenshots-320x320.mmlz4b
-/media/fat/mister-magik/assets/nes-screenshots-320x320.mmlz4b
-/media/fat/mister-magik/assets/snes-screenshots-256x224.mmlz4b
-/media/fat/mister-magik/assets/n64-screenshots-320x320.mmlz4b
-/media/fat/mister-magik/assets/sms-screenshots-320x320.mmlz4b
-/media/fat/mister-magik/assets/megadrive-screenshots-320x320.mmlz4b
-/media/fat/mister-magik/assets/saturn-screenshots-320x320.mmlz4b
-/media/fat/mister-magik/assets/amiga-screenshots-320x320.mmlz4b
-/media/fat/mister-magik/assets/atarilynx-screenshots-160x102.mmlz4b
-```
-
-The default public pack size is `320x320`; SNES uses its native `256x224`
-geometry, and Atari Lynx uses its native `160x102` landscape geometry, with
-portrait titles stored as `102x160`.
+All entries in a pack use its one fixed raster. Atari Lynx and WonderSwan
+profiles additionally allow a verified width/height swap for rotated
+screenshots; no other geometry is accepted.
 Legacy fixed-name packs such as
 `saturn-screenshots.mmlz4b` are still readable as fallback, but new runtime
 downloads preserve the image size in the filename. The preview worker resolves
@@ -152,10 +154,10 @@ the runtime still only sees canonical pack entries.
 
 ## Runtime Projection
 
-The launcher catalog stores a preview archive path and deterministic asset key
-when it has a software-list identity and an archive path for that system. The key
-uses the software family when MAME metadata names a parent, otherwise the exact
-software name:
+The launcher catalog stores a deterministic preview asset key whenever it has a
+software-list identity. Archive path and `has_preview` are availability fields;
+an absent pack must not suppress the key. The key uses the software family when
+MAME metadata names a parent, otherwise the exact software name:
 
 ```text
 mame-software__<list_name>__<family_or_software_name>

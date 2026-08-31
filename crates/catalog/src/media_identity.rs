@@ -18,6 +18,30 @@ pub const SNES_SCREENSHOT_IMAGE_SIZE: &str = "256x224";
 pub const ATARI_LYNX_SCREENSHOT_IMAGE_SIZE: &str = "160x102";
 pub const SCREENSHOT_MEDIA_STATE_FILENAME: &str = ".screenshot-media-state.json";
 
+/// One fixed logical raster used by every entry in a screenshot pack.
+///
+/// `rotatable` permits the archive to contain the width/height-swapped form
+/// for systems whose games can be held in portrait orientation.  The pack
+/// builder and archive reader must otherwise reject a different geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScreenshotResolutionProfile {
+    pub width: u32,
+    pub height: u32,
+    pub rotatable: bool,
+    pub resize_filter: &'static str,
+}
+
+impl ScreenshotResolutionProfile {
+    pub const fn image_size(self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    pub const fn allows(self, width: u32, height: u32) -> bool {
+        (width == self.width && height == self.height)
+            || (self.rotatable && width == self.height && height == self.width)
+    }
+}
+
 const SUPPORTED_SCREENSHOT_PACK_IDS: &[ScreenshotPackId] = &[
     ScreenshotPackId::Arcade,
     ScreenshotPackId::NeoGeo,
@@ -29,6 +53,33 @@ const SUPPORTED_SCREENSHOT_PACK_IDS: &[ScreenshotPackId] = &[
     ScreenshotPackId::Saturn,
     ScreenshotPackId::Amiga,
     ScreenshotPackId::AtariLynx,
+    ScreenshotPackId::Fds,
+    ScreenshotPackId::S32x,
+    ScreenshotPackId::MegaCd,
+    ScreenshotPackId::AmigaCd32,
+    ScreenshotPackId::C64,
+    ScreenshotPackId::ZxSpectrum,
+    ScreenshotPackId::AcornAtom,
+    ScreenshotPackId::AcornElectron,
+    ScreenshotPackId::BbcMicro,
+    ScreenshotPackId::Archie,
+    ScreenshotPackId::AppleIi,
+    ScreenshotPackId::AppleIigs,
+    ScreenshotPackId::Amstrad,
+    ScreenshotPackId::Atari2600,
+    ScreenshotPackId::Atari5200,
+    ScreenshotPackId::Atari7800,
+    ScreenshotPackId::Atari800,
+    ScreenshotPackId::AtariSt,
+    ScreenshotPackId::C128,
+    ScreenshotPackId::C16,
+    ScreenshotPackId::Pet2001,
+    ScreenshotPackId::Vic20,
+    ScreenshotPackId::ColecoVision,
+    ScreenshotPackId::MegaDuck,
+    ScreenshotPackId::WonderSwan,
+    ScreenshotPackId::WonderSwanColor,
+    ScreenshotPackId::X68000,
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -43,6 +94,33 @@ pub enum ScreenshotPackId {
     Saturn,
     Amiga,
     AtariLynx,
+    Fds,
+    S32x,
+    MegaCd,
+    AmigaCd32,
+    C64,
+    ZxSpectrum,
+    AcornAtom,
+    AcornElectron,
+    BbcMicro,
+    Archie,
+    AppleIi,
+    AppleIigs,
+    Amstrad,
+    Atari2600,
+    Atari5200,
+    Atari7800,
+    Atari800,
+    AtariSt,
+    C128,
+    C16,
+    Pet2001,
+    Vic20,
+    ColecoVision,
+    MegaDuck,
+    WonderSwan,
+    WonderSwanColor,
+    X68000,
 }
 
 impl ScreenshotPackId {
@@ -58,6 +136,33 @@ impl ScreenshotPackId {
             "saturn" => Some(Self::Saturn),
             "amiga" => Some(Self::Amiga),
             "atarilynx" => Some(Self::AtariLynx),
+            "fds" => Some(Self::Fds),
+            "s32x" => Some(Self::S32x),
+            "megacd" => Some(Self::MegaCd),
+            "amigacd32" => Some(Self::AmigaCd32),
+            "c64" => Some(Self::C64),
+            "zx-spectrum" => Some(Self::ZxSpectrum),
+            "acornatom" => Some(Self::AcornAtom),
+            "acornelectron" => Some(Self::AcornElectron),
+            "bbcmicro" => Some(Self::BbcMicro),
+            "archie" => Some(Self::Archie),
+            "apple-ii" => Some(Self::AppleIi),
+            "apple-iigs" => Some(Self::AppleIigs),
+            "amstrad" => Some(Self::Amstrad),
+            "atari2600" => Some(Self::Atari2600),
+            "atari5200" => Some(Self::Atari5200),
+            "atari7800" => Some(Self::Atari7800),
+            "atari800" => Some(Self::Atari800),
+            "atarist" => Some(Self::AtariSt),
+            "c128" => Some(Self::C128),
+            "c16" => Some(Self::C16),
+            "pet2001" => Some(Self::Pet2001),
+            "vic20" => Some(Self::Vic20),
+            "colecovision" => Some(Self::ColecoVision),
+            "megaduck" => Some(Self::MegaDuck),
+            "wonderswan" => Some(Self::WonderSwan),
+            "wonderswancolor" => Some(Self::WonderSwanColor),
+            "x68000" => Some(Self::X68000),
             _ => None,
         }
     }
@@ -74,6 +179,33 @@ impl ScreenshotPackId {
             Self::Saturn => "saturn",
             Self::Amiga => "amiga",
             Self::AtariLynx => "atarilynx",
+            Self::Fds => "fds",
+            Self::S32x => "s32x",
+            Self::MegaCd => "megacd",
+            Self::AmigaCd32 => "amigacd32",
+            Self::C64 => "c64",
+            Self::ZxSpectrum => "zx-spectrum",
+            Self::AcornAtom => "acornatom",
+            Self::AcornElectron => "acornelectron",
+            Self::BbcMicro => "bbcmicro",
+            Self::Archie => "archie",
+            Self::AppleIi => "apple-ii",
+            Self::AppleIigs => "apple-iigs",
+            Self::Amstrad => "amstrad",
+            Self::Atari2600 => "atari2600",
+            Self::Atari5200 => "atari5200",
+            Self::Atari7800 => "atari7800",
+            Self::Atari800 => "atari800",
+            Self::AtariSt => "atarist",
+            Self::C128 => "c128",
+            Self::C16 => "c16",
+            Self::Pet2001 => "pet2001",
+            Self::Vic20 => "vic20",
+            Self::ColecoVision => "colecovision",
+            Self::MegaDuck => "megaduck",
+            Self::WonderSwan => "wonderswan",
+            Self::WonderSwanColor => "wonderswancolor",
+            Self::X68000 => "x68000",
         }
     }
 
@@ -106,8 +238,64 @@ pub fn preferred_screenshot_image_size(system: &str) -> &'static str {
     match system {
         "snes" => SNES_SCREENSHOT_IMAGE_SIZE,
         "atarilynx" => ATARI_LYNX_SCREENSHOT_IMAGE_SIZE,
+        "nes" | "fds" => "256x240",
+        "neogeo" => "320x224",
+        "n64" | "saturn" => "320x240",
+        "sms" | "acornatom" | "colecovision" => "256x192",
+        "megadrive" | "s32x" | "megacd" | "atari7800" => "320x224",
+        "amiga" | "amiga500" | "amigacd32" => "320x200",
+        "acornelectron" | "bbcmicro" | "archie" => "320x256",
+        "apple-ii" => "280x192",
+        "apple-iigs" => "320x200",
+        "amstrad" => "320x200",
+        "atari5200" => "320x192",
+        "atari2600" => "160x192",
+        "atari800" => "320x192",
+        "atarist" | "c64" | "c128" | "c16" | "pet2001" => "320x200",
+        "zx-spectrum" => "256x192",
+        "vic20" => "176x184",
+        "megaduck" => "160x144",
+        "wonderswan" | "wonderswancolor" => "224x144",
+        "x68000" => "256x256",
         _ => DEFAULT_SCREENSHOT_IMAGE_SIZE,
     }
+}
+
+/// Return the fixed logical raster and filter for a screenshot pack.
+pub fn screenshot_resolution_profile(system: &str) -> Option<ScreenshotResolutionProfile> {
+    let (width, height, rotatable, resize_filter) = match system {
+        "arcade" => (320, 320, false, "hybrid"),
+        "neogeo" => (320, 224, false, "nearest"),
+        "nes" | "fds" => (256, 240, false, "nearest"),
+        "snes" => (256, 224, false, "nearest"),
+        "n64" | "saturn" => (320, 240, false, "hybrid"),
+        "sms" | "acornatom" | "colecovision" => (256, 192, false, "nearest"),
+        "megadrive" | "atari7800" => (320, 224, false, "nearest"),
+        "s32x" | "megacd" => (320, 224, false, "hybrid"),
+        "amiga" | "amiga500" => (320, 200, false, "nearest"),
+        "amigacd32" => (320, 200, false, "hybrid"),
+        "atarilynx" => (160, 102, true, "nearest"),
+        "acornelectron" | "bbcmicro" | "archie" => (320, 256, false, "nearest"),
+        "apple-ii" => (280, 192, false, "nearest"),
+        "apple-iigs" => (320, 200, false, "nearest"),
+        "amstrad" => (320, 200, false, "nearest"),
+        "atari2600" => (160, 192, false, "nearest"),
+        "atari5200" => (320, 192, false, "nearest"),
+        "atari800" => (320, 192, false, "nearest"),
+        "atarist" | "c64" | "c128" | "c16" | "pet2001" => (320, 200, false, "nearest"),
+        "zx-spectrum" => (256, 192, false, "nearest"),
+        "vic20" => (176, 184, false, "nearest"),
+        "megaduck" => (160, 144, false, "nearest"),
+        "wonderswan" | "wonderswancolor" => (224, 144, true, "nearest"),
+        "x68000" => (256, 256, false, "nearest"),
+        _ => return None,
+    };
+    Some(ScreenshotResolutionProfile {
+        width,
+        height,
+        rotatable,
+        resize_filter,
+    })
 }
 
 impl fmt::Display for ScreenshotPackId {
@@ -252,6 +440,21 @@ pub fn screenshot_pack_id_from_legacy_filename(name: &str) -> Option<ScreenshotP
         .find(|system| name == system.legacy_filename())
 }
 
+/// Extract a pack id from either a legacy or size-qualified archive filename.
+pub fn screenshot_pack_id_from_filename(name: &str) -> Option<ScreenshotPackId> {
+    if let Some(id) = screenshot_pack_id_from_legacy_filename(name) {
+        return Some(id);
+    }
+    let (system, rest) = name.split_once("-screenshots-")?;
+    if !rest.ends_with(".mmlz4b") {
+        return None;
+    }
+    let size = rest.strip_suffix(".mmlz4b")?;
+    valid_screenshot_image_size(size)
+        .then(|| ScreenshotPackId::parse(system))
+        .flatten()
+}
+
 pub fn screenshot_reset_deletes_filename(name: &str) -> bool {
     if name == SCREENSHOT_MEDIA_STATE_FILENAME
         || name.starts_with(&format!("{SCREENSHOT_MEDIA_STATE_FILENAME}.tmp-"))
@@ -309,11 +512,113 @@ mod tests {
     fn native_console_packs_use_their_own_screenshot_geometry() {
         assert_eq!(preferred_screenshot_image_size("snes"), "256x224");
         assert_eq!(preferred_screenshot_image_size("atarilynx"), "160x102");
-        assert_eq!(preferred_screenshot_image_size("saturn"), "320x320");
+        assert_eq!(preferred_screenshot_image_size("saturn"), "320x240");
+        assert_eq!(preferred_screenshot_image_size("neogeo"), "320x224");
+        assert_eq!(preferred_screenshot_image_size("megaduck"), "160x144");
+        assert_eq!(preferred_screenshot_image_size("c64"), "320x200");
+        assert_eq!(preferred_screenshot_image_size("zx-spectrum"), "256x192");
         assert_eq!(
             ScreenshotPackId::parse("atarilynx"),
             Some(ScreenshotPackId::AtariLynx)
         );
+    }
+
+    #[test]
+    fn fixed_profiles_allow_only_declared_rotated_sizes() {
+        let nes = screenshot_resolution_profile("nes").unwrap();
+        assert!(nes.allows(256, 240));
+        assert!(!nes.allows(240, 256));
+        let lynx = screenshot_resolution_profile("atarilynx").unwrap();
+        assert!(lynx.allows(160, 102));
+        assert!(lynx.allows(102, 160));
+        assert!(!lynx.allows(320, 204));
+        assert!(screenshot_pack_id_from_filename("saturn-screenshots-320x240.mmlz4b").is_some());
+        assert_eq!(ScreenshotPackId::parse("c64"), Some(ScreenshotPackId::C64));
+        assert_eq!(
+            ScreenshotPackId::parse("zx-spectrum"),
+            Some(ScreenshotPackId::ZxSpectrum)
+        );
+    }
+
+    #[test]
+    fn fixed_profile_registry_matches_cloud_manifest_contract() {
+        let expected = [
+            ("arcade", "320x320"),
+            ("neogeo", "320x224"),
+            ("nes", "256x240"),
+            ("fds", "256x240"),
+            ("snes", "256x224"),
+            ("n64", "320x240"),
+            ("sms", "256x192"),
+            ("megadrive", "320x224"),
+            ("s32x", "320x224"),
+            ("megacd", "320x224"),
+            ("saturn", "320x240"),
+            ("amiga", "320x200"),
+            ("amigacd32", "320x200"),
+            ("atarilynx", "160x102"),
+            ("acornatom", "256x192"),
+            ("acornelectron", "320x256"),
+            ("bbcmicro", "320x256"),
+            ("archie", "320x256"),
+            ("apple-ii", "280x192"),
+            ("apple-iigs", "320x200"),
+            ("amstrad", "320x200"),
+            ("atari2600", "160x192"),
+            ("atari5200", "320x192"),
+            ("atari7800", "320x224"),
+            ("atari800", "320x192"),
+            ("atarist", "320x200"),
+            ("c64", "320x200"),
+            ("c128", "320x200"),
+            ("c16", "320x200"),
+            ("pet2001", "320x200"),
+            ("vic20", "176x184"),
+            ("colecovision", "256x192"),
+            ("megaduck", "160x144"),
+            ("wonderswan", "224x144"),
+            ("wonderswancolor", "224x144"),
+            ("x68000", "256x256"),
+            ("zx-spectrum", "256x192"),
+        ];
+        let cloud_contract = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../private/magik-cloud/scripts/manifest_contract.py");
+        if let Ok(cloud_contract) = std::fs::read_to_string(cloud_contract) {
+            for &(system, size) in &expected {
+                assert!(
+                    screenshot_resolution_profile(system)
+                        .is_some_and(
+                            |profile| format!("{}x{}", profile.width, profile.height) == size
+                        ),
+                    "catalog profile missing or mismatched for {system}"
+                );
+                assert!(
+                    cloud_contract.contains(&format!("\"{system}\": \"{size}\"")),
+                    "cloud profile missing or mismatched for {system}"
+                );
+            }
+        }
+        let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../private/magik-cloud/manifest/v1.schema.json");
+        if let Ok(schema) = std::fs::read_to_string(schema_path) {
+            let schema: serde_json::Value =
+                serde_json::from_str(&schema).expect("manifest schema JSON");
+            let schema_ids = schema
+                .pointer("/properties/packs/items/properties/id/enum")
+                .and_then(serde_json::Value::as_array)
+                .expect("manifest pack id enum")
+                .iter()
+                .map(|id| id.as_str().expect("manifest pack id string"))
+                .collect::<Vec<_>>();
+            let expected_ids = expected
+                .iter()
+                .map(|(system, _)| *system)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                schema_ids, expected_ids,
+                "catalog/schema pack registry drift"
+            );
+        }
     }
 
     #[test]
