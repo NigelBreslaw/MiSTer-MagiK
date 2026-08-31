@@ -58,7 +58,7 @@ class ManifestTest(unittest.TestCase):
                         ()
                         if historical_v2
                         else (
-                            "diagnostic_architecture=scaler-off-domain-scheduler-terminal-v3",
+                            "diagnostic_architecture=scaler-off-domain-scheduler-terminal-v4",
                         )
                     ),
                     "quartus_seed=" + ("1" if historical_v2 else "2"),

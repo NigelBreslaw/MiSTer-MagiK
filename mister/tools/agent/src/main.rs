@@ -4446,7 +4446,7 @@ mod linux {
         let invalid = samples.iter().any(|sample| {
             sample.observer_fault() || sample.reset_ambiguity() || sample.counter_ambiguous()
         });
-        let one_shot_terminal = samples[0].schema() == contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA;
+        let one_shot_terminal = samples[0].one_shot_terminal_record();
         let publication_coherent = if one_shot_terminal {
             samples[1..]
                 .iter()
@@ -4479,6 +4479,7 @@ mod linux {
                             | "scaler-off-domain-scheduler-snapshot-v1"
                             | "scaler-off-domain-scheduler-snapshot-v2"
                             | "scaler-off-domain-scheduler-terminal-v3"
+                            | "scaler-off-domain-scheduler-terminal-v4"
                     ) {
                         scaler_pre_read_scheduler_classification(first)
                     } else if first.architecture() == "scaler-output-scheduler-gates-v1" {
@@ -5025,6 +5026,7 @@ mod linux {
                             | "scaler-off-domain-scheduler-snapshot-v1"
                             | "scaler-off-domain-scheduler-snapshot-v2"
                             | "scaler-off-domain-scheduler-terminal-v3"
+                            | "scaler-off-domain-scheduler-terminal-v4"
                     );
                     let output_scheduler_state = architecture == "scaler-output-scheduler-gates-v1";
                     let avalon_gate_state = architecture == "scaler-fetch-no-request-gates-v1";
@@ -5034,6 +5036,7 @@ mod linux {
                             | "scaler-off-domain-scheduler-snapshot-v1"
                             | "scaler-off-domain-scheduler-snapshot-v2"
                             | "scaler-off-domain-scheduler-terminal-v3"
+                            | "scaler-off-domain-scheduler-terminal-v4"
                     );
                     let classification = scaler_fetch_liveness_classification(samples);
                     let valid_samples = samples.iter().all(|sample| sample.record_valid());
@@ -5043,12 +5046,11 @@ mod linux {
                     let terminal_record_identical = samples[1..]
                         .iter()
                         .all(|sample| sample.words == samples[0].words);
-                    let publication_coherent =
-                        if architecture == "scaler-off-domain-scheduler-terminal-v3" {
-                            terminal_record_identical
-                        } else {
-                            advancing
-                        };
+                    let publication_coherent = if samples[0].one_shot_terminal_record() {
+                        terminal_record_identical
+                    } else {
+                        advancing
+                    };
                     let classification_stable =
                         classification != "scaler_fetch_liveness_evidence_inconclusive";
                     let coherent = context.owner_stable
@@ -9159,10 +9161,12 @@ mod tests {
             contract::ScalerFetchLivenessState { words }
         };
         for (state, expected) in [
-            (0x0007, "scaler_pre_read_horizontal_start_missing"),
-            (0x035f, "scaler_pre_read_vertical_pixel_gate_closed"),
-            (0x08df, "scaler_pre_read_address_ready_missing"),
-            (0x78df, "scaler_pre_read_request_boundary_stuck"),
+            (0x0041, "scaler_pre_read_vertical_pixel_gate_closed"),
+            (0x0042, "scaler_pre_read_vertical_carry_gate_closed"),
+            (0x0044, "scaler_pre_read_vertical_both_gates_closed"),
+            (0x0048, "scaler_pre_read_address_ready_missing"),
+            (0x0050, "scaler_pre_read_request_issue_missing"),
+            (0x0060, "scaler_pre_read_request_boundary_stuck"),
         ] {
             let samples = [
                 pre_read_sample(10, state),

@@ -216,10 +216,10 @@ SCALER_FETCH_DIAGNOSTIC_REPORTS = {
         + "; set_net_delay ; 1.005 ; 10.000 ; 8.995 ; sources ; destinations ; max ;\n"
         + "".join(
             net_delay_detail(
-                f"mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|compact_evidence[{bit}]",
+                f"mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|semantic_evidence[{bit}]",
                 f"mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_capture[{bit}]",
             )
-            for bit in range(6)
+            for bit in range(9)
         )
     ),
     "menu.magik-diagnostic-metastability.rpt": (
@@ -855,8 +855,8 @@ class QuartusDeltaTest(unittest.TestCase):
     def test_missing_scheduler_snapshot_payload_path_fails(self) -> None:
         reports = dict(SCALER_FETCH_DIAGNOSTIC_REPORTS)
         missing = net_delay_detail(
-            "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|compact_evidence[5]",
-            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_capture[5]",
+            "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|semantic_evidence[8]",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_capture[8]",
         )
         reports["menu.magik-diagnostic-cdc-net-delay.rpt"] = reports[
             "menu.magik-diagnostic-cdc-net-delay.rpt"

@@ -158,6 +158,9 @@ const OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_ARCHITECTURE: &str =
 const OFF_DOMAIN_SCHEDULER_SNAPSHOT_V2_SCHEMA: u16 = 19;
 const OFF_DOMAIN_SCHEDULER_SNAPSHOT_V2_ARCHITECTURE: &str =
     "scaler-off-domain-scheduler-snapshot-v2";
+const OFF_DOMAIN_SCHEDULER_TERMINAL_V3_SCHEMA: u16 = 20;
+const OFF_DOMAIN_SCHEDULER_TERMINAL_V3_ARCHITECTURE: &str =
+    "scaler-off-domain-scheduler-terminal-v3";
 
 impl ScalerFetchLivenessState {
     fn field(&self, word: usize, bit: u32, mask: u16) -> u16 {
@@ -184,8 +187,18 @@ impl ScalerFetchLivenessState {
             OFF_DOMAIN_SCHEDULER_SNAPSHOT_V2_SCHEMA => {
                 OFF_DOMAIN_SCHEDULER_SNAPSHOT_V2_ARCHITECTURE
             }
+            OFF_DOMAIN_SCHEDULER_TERMINAL_V3_SCHEMA => {
+                OFF_DOMAIN_SCHEDULER_TERMINAL_V3_ARCHITECTURE
+            }
             _ => SCALER_FETCH_LIVENESS_STATE_ARCHITECTURE,
         }
+    }
+
+    pub fn one_shot_terminal_record(&self) -> bool {
+        matches!(
+            self.schema(),
+            OFF_DOMAIN_SCHEDULER_TERMINAL_V3_SCHEMA | SCALER_FETCH_LIVENESS_STATE_SCHEMA
+        )
     }
 
     pub fn state(&self) -> u16 {
@@ -408,6 +421,16 @@ impl ScalerFetchLivenessState {
         self.state() & (1 << bit) != 0
     }
 
+    fn raw_scheduler_terminal_state(&self) -> Option<u16> {
+        (self.schema() == SCALER_FETCH_LIVENESS_STATE_SCHEMA && self.no_request_seen())
+            .then(|| self.state())
+    }
+
+    fn raw_scheduler_outcome(&self, mask: u16) -> Option<bool> {
+        self.raw_scheduler_terminal_state()
+            .map(|state| state & mask != 0)
+    }
+
     pub fn address_ready(&self) -> bool {
         self.state_flag(8)
     }
@@ -441,67 +464,83 @@ impl ScalerFetchLivenessState {
     }
 
     pub fn window_valid(&self) -> bool {
-        self.state_flag(0)
+        self.raw_scheduler_outcome(0x003f)
+            .unwrap_or_else(|| self.state_flag(0))
     }
 
     pub fn output_enable_seen(&self) -> bool {
-        self.state_flag(1)
+        self.raw_scheduler_outcome(1 << 6)
+            .unwrap_or_else(|| self.state_flag(1))
     }
 
     pub fn horizontal_sync_edge_seen(&self) -> bool {
-        self.state_flag(2)
+        self.raw_scheduler_outcome(0x003f)
+            .unwrap_or_else(|| self.state_flag(2))
     }
 
     pub fn horizontal_start_seen(&self) -> bool {
-        self.state_flag(3)
+        self.raw_scheduler_outcome(0x003f)
+            .unwrap_or_else(|| self.state_flag(3))
     }
 
     pub fn hsync_state_seen(&self) -> bool {
-        self.state_flag(4)
+        self.raw_scheduler_outcome(0x003f)
+            .unwrap_or_else(|| self.state_flag(4))
     }
 
     pub fn vertical_iteration_seen(&self) -> bool {
-        self.state_flag(5)
+        self.raw_scheduler_outcome(1 << 7)
+            .unwrap_or_else(|| self.state_flag(5))
     }
 
     pub fn vertical_decision_seen(&self) -> bool {
-        self.state_flag(6)
+        self.raw_scheduler_outcome(0x003f)
+            .unwrap_or_else(|| self.state_flag(6))
     }
 
     pub fn read_entry_seen(&self) -> bool {
-        self.state_flag(7)
+        self.raw_scheduler_outcome(0x0038)
+            .unwrap_or_else(|| self.state_flag(7))
     }
 
     pub fn no_read_exit_seen(&self) -> bool {
-        self.state_flag(8)
+        self.raw_scheduler_outcome(0x0007)
+            .unwrap_or_else(|| self.state_flag(8))
     }
 
     pub fn skip_vertical_pixel_seen(&self) -> bool {
-        self.state_flag(9)
+        self.raw_scheduler_outcome(0x0005)
+            .unwrap_or_else(|| self.state_flag(9))
     }
 
     pub fn skip_vertical_carry_seen(&self) -> bool {
-        self.state_flag(10)
+        self.raw_scheduler_outcome(0x0006)
+            .unwrap_or_else(|| self.state_flag(10))
     }
 
     pub fn read_state_seen(&self) -> bool {
-        self.state_flag(11)
+        self.raw_scheduler_outcome(0x0038)
+            .unwrap_or_else(|| self.state_flag(11))
     }
 
     pub fn address_ready_seen(&self) -> bool {
-        self.state_flag(12)
+        self.raw_scheduler_outcome(0x0030)
+            .unwrap_or_else(|| self.state_flag(12))
     }
 
     pub fn request_issue_seen(&self) -> bool {
-        self.state_flag(13)
+        self.raw_scheduler_outcome(0x0020)
+            .unwrap_or_else(|| self.state_flag(13))
     }
 
     pub fn wait_read_state_seen(&self) -> bool {
-        self.state_flag(14)
+        self.raw_scheduler_outcome(0x0020)
+            .unwrap_or_else(|| self.state_flag(14))
     }
 
     pub fn vertical_size_zero_seen(&self) -> bool {
-        self.state_flag(15)
+        self.raw_scheduler_outcome(1 << 8)
+            .unwrap_or_else(|| self.state_flag(15))
     }
 }
 
@@ -1143,6 +1182,7 @@ pub fn decode_scaler_fetch_liveness_state(
             | PRE_READ_SCHEDULER_EVIDENCE_SCHEMA
             | OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_SCHEMA
             | OFF_DOMAIN_SCHEDULER_SNAPSHOT_V2_SCHEMA
+            | OFF_DOMAIN_SCHEDULER_TERMINAL_V3_SCHEMA
             | SCALER_FETCH_LIVENESS_STATE_SCHEMA
     ) {
         return Err(format!(
@@ -1201,11 +1241,19 @@ pub fn decode_scaler_fetch_liveness_state(
         {
             return Err("scaler output-scheduler gate snapshot is impossible".to_string());
         }
+        if schema == SCALER_FETCH_LIVENESS_STATE_SCHEMA && decoded.no_request_seen() {
+            let state = decoded.state();
+            let outcomes = state & 0x003f;
+            if state & !0x01ff != 0 || outcomes.count_ones() != 1 {
+                return Err("scaler raw scheduler terminal state is impossible".to_string());
+            }
+        }
         if matches!(
             schema,
             PRE_READ_SCHEDULER_EVIDENCE_SCHEMA
                 | OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_SCHEMA
                 | OFF_DOMAIN_SCHEDULER_SNAPSHOT_V2_SCHEMA
+                | OFF_DOMAIN_SCHEDULER_TERMINAL_V3_SCHEMA
                 | SCALER_FETCH_LIVENESS_STATE_SCHEMA
         ) && decoded.no_request_seen()
         {
@@ -1238,7 +1286,11 @@ pub fn decode_scaler_fetch_liveness_state(
         }
     } else {
         let live_state = words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD];
-        if schema == SCALER_FETCH_LIVENESS_STATE_SCHEMA && live_state != 0 {
+        if matches!(
+            schema,
+            OFF_DOMAIN_SCHEDULER_TERMINAL_V3_SCHEMA | SCALER_FETCH_LIVENESS_STATE_SCHEMA
+        ) && live_state != 0
+        {
             return Err(format!(
                 "scaler fetch liveness compact live state is nonzero: 0x{live_state:04x}"
             ));
@@ -1460,7 +1512,10 @@ mod tests {
             | SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN
             | SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
             | SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN;
-        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = 0x78ff;
+        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = (1
+            << SCALER_FETCH_LIVENESS_STATE_SCHEDULER_REQUEST_ISSUED_BIT)
+            | (1 << SCALER_FETCH_LIVENESS_STATE_SCHEDULER_OUTPUT_ENABLE_BIT)
+            | (1 << SCALER_FETCH_LIVENESS_STATE_SCHEDULER_VERTICAL_ITERATION_BIT);
         words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
             GET_SCALER_FETCH_LIVENESS_STATE,
             SCALER_FETCH_LIVENESS_STATE_SCHEMA,
@@ -1647,7 +1702,26 @@ mod tests {
                 | SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
                 | SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN;
         words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] =
-            1 << SCALER_FETCH_LIVENESS_STATE_HORIZONTAL_START_SEEN_BIT;
+            1 << SCALER_FETCH_LIVENESS_STATE_SCHEDULER_OUTPUT_ENABLE_BIT;
+        words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
+            GET_SCALER_FETCH_LIVENESS_STATE,
+            SCALER_FETCH_LIVENESS_STATE_SCHEMA,
+            &words[..SCALER_FETCH_LIVENESS_STATE_CRC_WORD],
+        );
+        assert!(decode_scaler_fetch_liveness_state(&words).is_err());
+
+        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = (1
+            << SCALER_FETCH_LIVENESS_STATE_SCHEDULER_SKIP_VERTICAL_PIXEL_BIT)
+            | (1 << SCALER_FETCH_LIVENESS_STATE_SCHEDULER_SKIP_VERTICAL_CARRY_BIT);
+        words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
+            GET_SCALER_FETCH_LIVENESS_STATE,
+            SCALER_FETCH_LIVENESS_STATE_SCHEMA,
+            &words[..SCALER_FETCH_LIVENESS_STATE_CRC_WORD],
+        );
+        assert!(decode_scaler_fetch_liveness_state(&words).is_err());
+
+        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] =
+            (1 << SCALER_FETCH_LIVENESS_STATE_SCHEDULER_SKIP_VERTICAL_PIXEL_BIT) | (1 << 9);
         words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
             GET_SCALER_FETCH_LIVENESS_STATE,
             SCALER_FETCH_LIVENESS_STATE_SCHEMA,
@@ -1673,20 +1747,6 @@ mod tests {
             SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID;
         words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] =
             3 << SCALER_FETCH_LIVENESS_STATE_FIFO_DEPTH_BIT;
-        words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
-            GET_SCALER_FETCH_LIVENESS_STATE,
-            SCALER_FETCH_LIVENESS_STATE_SCHEMA,
-            &words[..SCALER_FETCH_LIVENESS_STATE_CRC_WORD],
-        );
-        assert!(decode_scaler_fetch_liveness_state(&words).is_err());
-
-        words[SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] =
-            SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID
-                | SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN
-                | SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
-                | SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN;
-        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] =
-            1 << SCALER_FETCH_LIVENESS_STATE_REQUEST_ISSUE_SEEN_BIT;
         words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
             GET_SCALER_FETCH_LIVENESS_STATE,
             SCALER_FETCH_LIVENESS_STATE_SCHEMA,

@@ -542,7 +542,7 @@ import scripts.magik_ci.cli
                 + "\nlatch_protocol_sha256="
                 + "3" * 64
                 + "\nlatch_protocol_version=5"
-                + "\ndiagnostic_architecture=scaler-off-domain-scheduler-terminal-v3\n"
+                + "\ndiagnostic_architecture=scaler-off-domain-scheduler-terminal-v4\n"
             )
             archive = create(
                 main=root / "main",
@@ -571,7 +571,7 @@ import scripts.magik_ci.cli
             self.assertEqual(payload["latch_protocol_version"], 5)
             self.assertEqual(
                 payload["diagnostic_architecture"],
-                "scaler-off-domain-scheduler-terminal-v3",
+                "scaler-off-domain-scheduler-terminal-v4",
             )
 
     def test_platform_bundle_historical_baseline_architectures_are_bounded(
@@ -591,6 +591,7 @@ import scripts.magik_ci.cli
                 "scaler-pre-read-scheduler-evidence-v1",
                 "scaler-off-domain-scheduler-snapshot-v1",
                 "scaler-off-domain-scheduler-snapshot-v2",
+                "scaler-off-domain-scheduler-terminal-v3",
                 PATCHED_DIAGNOSTIC_ARCHITECTURE,
             },
         )

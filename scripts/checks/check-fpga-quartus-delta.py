@@ -200,7 +200,7 @@ EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH = {
         r"response_handoff_bit\s*;[^\n]*snapshot_response_meta\s*;", re.IGNORECASE
     ),
     "scheduler_snapshot_data": re.compile(
-        r"compact_evidence(?:\[\d+\])?\s*;[^\n]*scheduler_snapshot_capture",
+        r"semantic_evidence(?:\[\d+\])?\s*;[^\n]*scheduler_snapshot_capture",
         re.IGNORECASE,
     ),
 }
@@ -579,7 +579,7 @@ def validate_diagnostic_reports(
                     EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH
                 )
             expected_identity_counts = {
-                label: 6 if label == "scheduler_snapshot_data" else 1
+                label: 9 if label == "scheduler_snapshot_data" else 1
                 for label in expected_net_delay_paths
             }
             if len(detailed_rows) != sum(expected_identity_counts.values()):

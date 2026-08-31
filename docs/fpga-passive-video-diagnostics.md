@@ -1,6 +1,6 @@
 # Passive FPGA HDMI evidence
 
-## Active moving-band campaign: schema 20
+## Active moving-band campaign: schema 21
 
 The preserved 2026-08-28 recurrence showed a byte-stable framebuffer and
 visible moving-band corruption while schema 11 returned CRC-valid but
@@ -132,6 +132,30 @@ is no acknowledgement loop, rotating publication bank, diagnostic recovery,
 or production-control fanout. Reset/progress interruption and a stopped HDMI
 clock still fail closed as observer faults. Schema 14 through schema 19 remain
 rollback-decodable.
+
+Schema 20 was logically and temporally sound but did not qualify physically.
+Its fixed-seed build closed timing (`0.602 ns` setup, `0.244 ns` hold, zero
+TNS) and retained 207 of the 224 permitted extra registers, but used 235 extra
+ALMs against the 208-ALM ceiling. Quartus also recoded two values out of the
+six-bit compact payload, so only four of the six required payload path
+identities remained visible to certification.
+
+Schema 21, `scaler-off-domain-scheduler-terminal-v4`, retains the one-shot
+terminal record and immutable CRC publication, but removes the destination-side
+compact-code expansion. The source now holds nine semantic registers directly:
+six one-hot scheduler outcomes (the three skip outcomes, read entry, address
+ready, and request issued) plus output-enable, vertical-iteration, and
+zero-vertical-size sidebands. The destination captures those same nine bits;
+the host reconstructs the familiar scheduler predicates. Certification can
+therefore require all nine exact source-to-destination register paths without
+depending on Quartus preserving a binary encoding.
+
+The schema-21 watchdog is also expressed as a single clear condition and a
+single saturating increment condition. This removes the priority/multi-write
+multiplexer from the 24-bit counter while preserving the terminal-cycle
+progress precedence. The host accepts three identical schema-20 or schema-21
+terminal records, while older schemas retain the advancing-publication rule.
+Schema 14 through schema 20 remain rollback-decodable.
 
 The wide and staged FPGA video observers are retired from production. Their
 field evidence was decisive, but every expanded implementation made the dense

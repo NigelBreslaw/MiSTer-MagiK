@@ -81,8 +81,8 @@
     }
   },
   "scaler_fetch_liveness_state": {
-    "schema": 20,
-    "architecture": "scaler-off-domain-scheduler-terminal-v3",
+    "schema": 21,
+    "architecture": "scaler-off-domain-scheduler-terminal-v4",
     "command": 104,
     "magic": 19800,
     "word_count": 4,
@@ -135,7 +135,16 @@
       "address_ready_seen": {"word": "state", "bit": 12, "width": 1},
       "request_issue_seen": {"word": "state", "bit": 13, "width": 1},
       "wait_read_state_seen": {"word": "state", "bit": 14, "width": 1},
-      "vertical_size_zero_seen": {"word": "state", "bit": 15, "width": 1}
+      "vertical_size_zero_seen": {"word": "state", "bit": 15, "width": 1},
+      "scheduler_skip_vertical_pixel": {"word": "state", "bit": 0, "width": 1},
+      "scheduler_skip_vertical_carry": {"word": "state", "bit": 1, "width": 1},
+      "scheduler_skip_vertical_both": {"word": "state", "bit": 2, "width": 1},
+      "scheduler_read_entry": {"word": "state", "bit": 3, "width": 1},
+      "scheduler_address_ready": {"word": "state", "bit": 4, "width": 1},
+      "scheduler_request_issued": {"word": "state", "bit": 5, "width": 1},
+      "scheduler_output_enable": {"word": "state", "bit": 6, "width": 1},
+      "scheduler_vertical_iteration": {"word": "state", "bit": 7, "width": 1},
+      "scheduler_vertical_size_zero": {"word": "state", "bit": 8, "width": 1}
     },
     "causes": {
       "none": 0,

@@ -328,6 +328,10 @@ def main() -> None:
         "reg [6:0] return_phase",
         "normal_liveness_seen <= 1'b1;",
         "reg [23:0] progress_watchdog",
+        "wire watchdog_clear = reset_sync || !reset_qualified || snapshot_complete ||",
+        "wire watchdog_advance = !watchdog_clear && !watchdog_terminal &&",
+        "if(watchdog_clear)",
+        "else if(watchdog_advance)",
         "wire reset_qualified = reset_low_count >= RESET_QUALIFY_LIMIT;",
         "wire first_stall_valid = no_request_seen ||",
         "wire observer_fault = !no_request_seen &&",
@@ -344,23 +348,23 @@ def main() -> None:
         "MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_ACCEPT_BLOCKED",
         "MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN",
         "module mister_magik_scaler_scheduler_snapshot (",
-        "output wire [15:0] evidence_hold",
+        "output wire [8:0]  evidence_hold",
         "request_meta <= request_toggle;",
         "request_sync <= request_meta;",
-        "(* preserve, dont_replicate *) reg [5:0] compact_evidence = 6'b000110;",
+        "(* preserve, dont_replicate *) reg [8:0] semantic_evidence = 9'd0;",
         "(* preserve, dont_replicate *) reg response_state = 1'b0;",
         "(* preserve, dont_replicate *) reg response_handoff_bit = 1'b0;",
-        "assign evidence_hold = expand_compact_evidence(compact_evidence);",
-        "compact_evidence <= next_compact_evidence;",
+        "assign evidence_hold = semantic_evidence;",
+        "semantic_evidence <= next_semantic_evidence;",
         "response_handoff_bit <= request_sync;",
         "snapshot_response_meta <= snapshot_response_toggle;",
         "snapshot_response_sync <= snapshot_response_meta;",
-        "(* preserve, dont_replicate *) reg [5:0] scheduler_snapshot_capture = 6'd0;",
+        "(* preserve, dont_replicate *) reg [8:0] scheduler_snapshot_capture = 9'd0;",
         "reg [1:0] avalon_terminal_fifo_depth = 2'd0;",
         "reg [6:0] avalon_terminal_return_phase = 7'd0;",
         "reg [2:0] avalon_terminal_cause = 3'd0;",
         "no_request_seen <= 1'b1;",
-        "scheduler_snapshot_capture <= snapshot_compact_hold;",
+        "scheduler_snapshot_capture <= snapshot_evidence_hold;",
         "(* preserve, dont_replicate *) reg record_ready = 1'b0;",
         "record_ready_meta <= record_ready;",
         "record_ready_sync <= record_ready_meta;",
@@ -379,6 +383,8 @@ def main() -> None:
                 "scaler-fetch liveness observer structure is missing: "
                 f"{required_observer_fragment}"
             )
+    if control_source.count("progress_watchdog <=") != 2:
+        fail("scaler-fetch watchdog must have one clear and one increment assignment")
     if re.search(r"\breg\s*\[127:0\]", control_source):
         fail(
             "scaler-fetch observer must not retain a 128-bit return-data isolation register"
@@ -579,8 +585,8 @@ def main() -> None:
         "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_meta} 1",
         "-from $magik_scheduler_snapshot_response",
         "-to $magik_scheduler_snapshot_response_meta",
-        "{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|compact_evidence*} 6",
-        "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_capture*} 6",
+        "{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|semantic_evidence*} 9",
+        "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_capture*} 9",
         "-from $magik_scheduler_snapshot_data",
         "-to $magik_scheduler_snapshot_destination",
         "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_terminal_record scheduler_snapshot_request_response_data reset_observed",

@@ -19,8 +19,7 @@ module mister_magik_scaler_fetch_liveness_formal;
 	(* anyseq *) wire [15:0] scaler_diag_state;
 	(* anyseq *) wire [15:0] snapshot_live_state;
 	wire snapshot_response;
-	wire [5:0] snapshot_compact;
-	wire [15:0] snapshot_evidence;
+	wire [8:0] snapshot_evidence;
 	wire snapshot_capture_active;
 
 	wire [1:0] fifo_count;
@@ -41,6 +40,8 @@ module mister_magik_scaler_fetch_liveness_formal;
 	wire return_has_entry;
 	wire expected_progress;
 	wire watchdog_terminal;
+	wire watchdog_clear;
+	wire watchdog_advance;
 	wire observer_fault_event;
 	wire request_cancel_event;
 
@@ -81,6 +82,8 @@ module mister_magik_scaler_fetch_liveness_formal;
 		.formal_return_has_entry(return_has_entry),
 		.formal_expected_progress(expected_progress),
 		.formal_watchdog_terminal(watchdog_terminal),
+		.formal_watchdog_clear(watchdog_clear),
+		.formal_watchdog_advance(watchdog_advance),
 		.formal_observer_fault_event(observer_fault_event),
 		.formal_request_cancel_event(request_cancel_event)
 	);
@@ -90,7 +93,6 @@ module mister_magik_scaler_fetch_liveness_formal;
 		.live_state(snapshot_live_state),
 		.request_toggle(snapshot_request),
 		.response_toggle(snapshot_response),
-		.compact_hold(snapshot_compact),
 		.evidence_hold(snapshot_evidence),
 		.formal_capture_active(snapshot_capture_active)
 	);
@@ -115,15 +117,16 @@ module mister_magik_scaler_fetch_liveness_formal;
 		assert(!publish_crc_busy || !record_ready);
 		assert(!publish_crc_busy || publish_crc_phase <= 5'd30);
 		assert(!terminal_record_started || first_stall_valid || observer_fault);
+		assert(!watchdog_clear || !watchdog_advance);
 
 		if(past_valid) begin
-			if(snapshot_response != $past(snapshot_response))
+			if(snapshot_response != $past(snapshot_response)) begin
 				assert($past(snapshot_capture_active));
+			end
 			if(snapshot_response == $past(snapshot_response) &&
 				!$past(snapshot_capture_active) &&
 				$past(snapshot_request == snapshot_response)) begin
 				assert(snapshot_evidence == $past(snapshot_evidence));
-				assert(snapshot_compact == $past(snapshot_compact));
 			end
 			case({$past(enqueue), $past(dequeue)})
 				2'b10: assert(fifo_count == $past(fifo_count) + 1'b1);

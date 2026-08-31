@@ -5,17 +5,16 @@
 `default_nettype none
 
 // Source-clock evidence collector and closed-loop multi-cycle-path snapshot.
-// Capture aligns to one complete HSYNC-to-HSYNC scheduler revolution. Six held
-// bits encode the read/skip outcome plus the three independent sidebands and
-// expand losslessly to the established 16-bit schema record. The held code is
-// immutable before the response handoff crosses to the destination.
+// Capture aligns to one complete HSYNC-to-HSYNC scheduler revolution. Six
+// one-hot outcomes plus three independent sidebands cross bit-for-bit to the
+// destination. The held semantic record is immutable before the response
+// handoff crosses to the destination.
 module mister_magik_scaler_scheduler_snapshot (
 	input  wire        scaler_clk,
 	input  wire [15:0] live_state,
 	input  wire        request_toggle,
 	output wire        response_toggle,
-	output wire [5:0]  compact_hold,
-	output wire [15:0] evidence_hold
+	output wire [8:0]  evidence_hold
 `ifdef FORMAL
 	,output wire        formal_capture_active
 `endif
@@ -31,57 +30,36 @@ module mister_magik_scaler_scheduler_snapshot (
 	reg previous_vertical_carry = 1'b0;
 	(* preserve, dont_replicate *) reg response_state = 1'b0;
 	(* preserve, dont_replicate *) reg response_handoff_bit = 1'b0;
-	(* preserve, dont_replicate *) reg [5:0] compact_evidence = 6'b000110;
+	(* preserve, dont_replicate *) reg [8:0] semantic_evidence = 9'd0;
 
 	wire [1:0] output_state = live_state[1:0];
 	wire hsync_entry = previous_output_state != 2'd1 && output_state == 2'd1;
 	wire left_hsync = previous_output_state == 2'd1 && output_state != 2'd1;
-	reg [5:0] next_compact_evidence;
+	reg [8:0] next_semantic_evidence;
 	always @(*) begin
-		next_compact_evidence = compact_evidence;
-		next_compact_evidence[3] = compact_evidence[3] || live_state[2];
-		next_compact_evidence[4] = compact_evidence[4] ||
+		next_semantic_evidence = semantic_evidence;
+		next_semantic_evidence[6] = semantic_evidence[6] || live_state[2];
+		next_semantic_evidence[7] = semantic_evidence[7] ||
 			(previous_output_state == 2'd1 && output_state == 2'd1);
-		next_compact_evidence[5] = compact_evidence[5] || live_state[12];
+		next_semantic_evidence[8] = semantic_evidence[8] || live_state[12];
 		if(previous_output_state == 2'd2 && output_state == 2'd3)
-			next_compact_evidence[2:0] = 3'd5;
+			next_semantic_evidence[5:0] = 6'b100000;
 		else if(output_state == 2'd2 && live_state[8])
-			next_compact_evidence[2:0] = 3'd4;
+			next_semantic_evidence[5:0] = 6'b010000;
 		else if(output_state == 2'd2)
-			next_compact_evidence[2:0] = 3'd3;
+			next_semantic_evidence[5:0] = 6'b001000;
 		else if(left_hsync && output_state == 2'd0) begin
 			case({!previous_vertical_carry, !previous_vertical_pixel_enable})
-				2'b01: next_compact_evidence[2:0] = 3'd0;
-				2'b10: next_compact_evidence[2:0] = 3'd1;
-				2'b11: next_compact_evidence[2:0] = 3'd2;
-				default: next_compact_evidence[2:0] = 3'd6;
+				2'b01: next_semantic_evidence[5:0] = 6'b000001;
+				2'b10: next_semantic_evidence[5:0] = 6'b000010;
+				2'b11: next_semantic_evidence[5:0] = 6'b000100;
+				default: next_semantic_evidence[5:0] = 6'd0;
 			endcase
 		end
 	end
 
-	function automatic [15:0] expand_compact_evidence;
-		input [5:0] compact;
-		reg [15:0] value;
-		begin
-			case(compact[2:0])
-				3'd0: value = 16'h035d;
-				3'd1: value = 16'h055d;
-				3'd2: value = 16'h075d;
-				3'd3: value = 16'h08dd;
-				3'd4: value = 16'h18dd;
-				3'd5: value = 16'h78dd;
-				default: value = 16'd0;
-			endcase
-			value[1] = value[1] || compact[3];
-			value[5] = value[5] || compact[4];
-			value[15] = value[15] || compact[5];
-			expand_compact_evidence = value;
-		end
-	endfunction
-
 	assign response_toggle = response_handoff_bit;
-	assign compact_hold = compact_evidence;
-	assign evidence_hold = expand_compact_evidence(compact_evidence);
+	assign evidence_hold = semantic_evidence;
 
 `ifdef FORMAL
 	assign formal_capture_active = capture_active;
@@ -105,23 +83,23 @@ module mister_magik_scaler_scheduler_snapshot (
 		else if(!window_started) begin
 			if(hsync_entry) begin
 				window_started <= 1'b1;
-				compact_evidence <= {
+				semantic_evidence <= {
 					live_state[12],
 					1'b0,
 					live_state[2],
-					3'd6
+					6'd0
 				};
 			end
 		end
 		else if(hsync_entry) begin
-			compact_evidence <= next_compact_evidence;
+			semantic_evidence <= next_semantic_evidence;
 			response_state <= request_sync;
 			response_handoff_bit <= request_sync;
 			capture_active <= 1'b0;
 			window_started <= 1'b0;
 		end
 		else begin
-			compact_evidence <= next_compact_evidence;
+			semantic_evidence <= next_semantic_evidence;
 		end
 	end
 endmodule
@@ -169,6 +147,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 	,output wire formal_return_has_entry
 	,output wire formal_expected_progress
 	,output wire formal_watchdog_terminal
+	,output wire formal_watchdog_clear
+	,output wire formal_watchdog_advance
 	,output wire formal_observer_fault_event
 	,output wire formal_request_cancel_event
 `endif
@@ -206,9 +186,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 	reg snapshot_pending = 1'b0;
 	reg snapshot_invalidated = 1'b0;
 	wire snapshot_response_toggle;
-	wire [5:0] snapshot_compact_hold;
-	wire [15:0] snapshot_evidence_hold;
-	(* preserve, dont_replicate *) reg [5:0] scheduler_snapshot_capture = 6'd0;
+	wire [8:0] snapshot_evidence_hold;
+	(* preserve, dont_replicate *) reg [8:0] scheduler_snapshot_capture = 9'd0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg snapshot_response_meta = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
@@ -295,38 +274,20 @@ module mister_magik_scaler_fetch_liveness_state #(
 	wire observer_fault_event =
 		bad_burst_event || fifo_overflow_event || unexpected_return_event ||
 		snapshot_timeout_event;
-
-	function automatic [15:0] expand_scheduler_snapshot;
-		input [5:0] compact;
-		reg [15:0] value;
-		begin
-			case(compact[2:0])
-				3'd0: value = 16'h035d;
-				3'd1: value = 16'h055d;
-				3'd2: value = 16'h075d;
-				3'd3: value = 16'h08dd;
-				3'd4: value = 16'h18dd;
-				3'd5: value = 16'h78dd;
-				default: value = 16'd0;
-			endcase
-			value[1] = value[1] || compact[3];
-			value[5] = value[5] || compact[4];
-			value[15] = value[15] || compact[5];
-			expand_scheduler_snapshot = value;
-		end
-	endfunction
+	wire [5:0] scheduler_snapshot_outcomes = scheduler_snapshot_capture[5:0];
+	wire scheduler_snapshot_outcome_valid =
+		scheduler_snapshot_outcomes != 6'd0 &&
+		(scheduler_snapshot_outcomes & (scheduler_snapshot_outcomes - 1'd1)) == 6'd0;
 
 	mister_magik_scaler_scheduler_snapshot scheduler_snapshot (
 		.scaler_clk(scaler_clk),
 		.live_state(scaler_diag_state),
 		.request_toggle(snapshot_request_toggle),
 		.response_toggle(snapshot_response_toggle),
-		.compact_hold(snapshot_compact_hold),
 		.evidence_hold(snapshot_evidence_hold)
 	);
 
-	wire [15:0] scheduler_terminal_state =
-		expand_scheduler_snapshot(scheduler_snapshot_capture);
+	wire [15:0] scheduler_terminal_state = {7'd0, scheduler_snapshot_capture};
 	wire [15:0] avalon_terminal_state = {
 		4'd0,
 		avalon_terminal_fifo_depth,
@@ -336,6 +297,14 @@ module mister_magik_scaler_fetch_liveness_state #(
 	wire [15:0] frozen_state = no_request_seen ?
 		scheduler_terminal_state : avalon_terminal_state;
 	wire terminal_valid = first_stall_valid || observer_fault;
+	wire watchdog_snapshot_start = !terminal_valid && !observer_fault_event &&
+		!request_cancel_event && reset_qualified && watchdog_terminal &&
+		!expected_progress && !snapshot_pending &&
+		monitor_state == MAGIK_SCALER_FETCH_LIVENESS_STATE_MONITOR_NO_REQUEST;
+	wire watchdog_clear = reset_sync || !reset_qualified || snapshot_complete ||
+		(!snapshot_pending && expected_progress) || watchdog_snapshot_start;
+	wire watchdog_advance = !watchdog_clear && !watchdog_terminal &&
+		(snapshot_pending || !expected_progress);
 	wire [15:0] terminal_flags = {
 		4'd0,
 		request_cancelled,
@@ -375,6 +344,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 	assign formal_return_has_entry = return_has_entry;
 	assign formal_expected_progress = expected_progress;
 	assign formal_watchdog_terminal = watchdog_terminal;
+	assign formal_watchdog_clear = watchdog_clear;
+	assign formal_watchdog_advance = watchdog_advance;
 	assign formal_observer_fault_event = observer_fault_event;
 	assign formal_request_cancel_event = request_cancel_event;
 `endif
@@ -410,8 +381,12 @@ module mister_magik_scaler_fetch_liveness_state #(
 		reset_sync_d <= reset_sync;
 		snapshot_response_meta <= snapshot_response_toggle;
 		snapshot_response_sync <= snapshot_response_meta;
+		if(watchdog_clear)
+			progress_watchdog <= 24'd0;
+		else if(watchdog_advance)
+			progress_watchdog <= progress_watchdog + 1'd1;
 		if(snapshot_pending)
-			scheduler_snapshot_capture <= snapshot_compact_hold;
+			scheduler_snapshot_capture <= snapshot_evidence_hold;
 		if(!terminal_valid)
 			terminal_reset_level <= reset_sync;
 
@@ -420,7 +395,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 
 		if(reset_sync) begin
 			reset_low_count <= 3'd0;
-			progress_watchdog <= 24'd0;
 			blocked_request_seen <= 1'b0;
 			if(snapshot_pending)
 				snapshot_invalidated <= 1'b1;
@@ -434,21 +408,10 @@ module mister_magik_scaler_fetch_liveness_state #(
 				else
 					reset_low_count <= reset_low_count + 1'd1;
 			end
-			progress_watchdog <= 24'd0;
 		end
 		else begin
-			if(snapshot_pending) begin
-				if(snapshot_complete)
-					progress_watchdog <= 24'd0;
-				else if(!watchdog_terminal)
-					progress_watchdog <= progress_watchdog + 1'd1;
-				if(expected_progress)
-					snapshot_invalidated <= 1'b1;
-			end
-			else if(expected_progress)
-				progress_watchdog <= 24'd0;
-			else if(!watchdog_terminal)
-				progress_watchdog <= progress_watchdog + 1'd1;
+			if(snapshot_pending && expected_progress)
+				snapshot_invalidated <= 1'b1;
 
 			if(fifo_count == 2'd0 && vbuf_read && vbuf_waitrequest)
 				blocked_request_seen <= 1'b1;
@@ -497,9 +460,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 		end
 		else if(!first_stall_valid && !observer_fault && snapshot_complete) begin
 			snapshot_pending <= 1'b0;
-			progress_watchdog <= 24'd0;
 			if(snapshot_invalidated || expected_progress || reset_sync ||
-				scheduler_snapshot_capture[2:0] >= 3'd6) begin
+				!scheduler_snapshot_outcome_valid) begin
 				avalon_terminal_fifo_depth <= fifo_count;
 				avalon_terminal_return_phase <= return_phase;
 				avalon_terminal_cause <=
@@ -523,7 +485,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 				snapshot_request_toggle <= ~snapshot_request_toggle;
 				snapshot_pending <= 1'b1;
 				snapshot_invalidated <= 1'b0;
-				progress_watchdog <= 24'd0;
 			end
 			else begin
 				avalon_terminal_fifo_depth <= fifo_count;

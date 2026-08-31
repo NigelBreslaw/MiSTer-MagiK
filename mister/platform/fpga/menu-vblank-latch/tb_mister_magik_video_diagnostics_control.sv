@@ -53,7 +53,8 @@ module tb_mister_magik_video_diagnostics_control;
 	always #3 scaler_clk = ~scaler_clk;
 
 	// Repeated live scheduler sequence. The external source-clock observer must
-	// reconstruct 16'h78df even though every transition is only one scaler cycle.
+	// freeze raw request-issued plus output-enable bits even though every
+	// transition is only one scaler cycle.
 	always @(negedge scaler_clk) begin
 		if(drive_scheduler_pattern) begin
 			case(scheduler_phase)
@@ -115,7 +116,7 @@ module tb_mister_magik_video_diagnostics_control;
 
 	task automatic command_start;
 		begin
-			// The compact publisher folds one CRC bit per clk_100m cycle.
+			// The serial publisher folds one CRC bit per clk_100m cycle.
 			repeat(96) @(posedge clk_sys);
 			@(negedge clk_sys);
 			io_uio = 1'b1;
@@ -255,7 +256,7 @@ module tb_mister_magik_video_diagnostics_control;
 			fail("reset-retained obligation produced observer fault");
 		if(!(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN))
 			fail("no-request classification flag was not frozen");
-		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD] != 16'h78df)
+		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD] != 16'h0060)
 			fail("wrong pre-read scheduler evidence summary");
 		for(index = 0; index < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS;
 			index = index + 1)
