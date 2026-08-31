@@ -19974,7 +19974,11 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
         CatalogAttributionArm::Hotpath => env.extend([
             ("MISTER_HOTPATH".into(), "1".into()),
             ("HOTPATH_REPORT".into(), "functions-timing".into()),
-            ("HOTPATH_OUTPUT_FORMAT".into(), "none".into()),
+            ("HOTPATH_OUTPUT_FORMAT".into(), "json-pretty".into()),
+            (
+                "HOTPATH_OUTPUT_PATH".into(),
+                format!("{diagnostics}/catalog-hotpath.json"),
+            ),
             ("HOTPATH_FUNCTIONS_LIMIT".into(), "0".into()),
             ("HOTPATH_METRICS_PORT".into(), "6770".into()),
             ("HOTPATH_MCP_PORT".into(), "6771".into()),
@@ -20672,15 +20676,31 @@ fn collect_catalog_attribution_profile(
 ) -> Result<Value> {
     let diagnostics = format!("{CATALOG_ATTRIBUTION_WORK_DIR}/diagnostics");
     if arm == CatalogAttributionArm::Hotpath {
-        let output = exec(
-            session,
-            "if command -v curl >/dev/null 2>&1; then curl -fsS http://127.0.0.1:6770/functions_timing; elif command -v wget >/dev/null 2>&1; then wget -qO- http://127.0.0.1:6770/functions_timing; else exit 127; fi",
-            true,
-        )?;
-        if let Some(error) = exec_failure_message("collect Hotpath metrics", &output) {
-            return Err(error.into());
-        }
-        let functions_timing: Value = serde_json::from_str(output.stdout.trim())?;
+        // Catalog construction runs in a short-lived child process. Its guard
+        // finalizes this report on clean exit; the launcher's live MCP endpoint
+        // remains available separately on loopback for interactive inspection.
+        let remote_json = format!("{diagnostics}/catalog-hotpath.json");
+        let deadline = Instant::now() + CATALOG_ATTRIBUTION_PROFILE_FINALIZE_TIMEOUT;
+        let report = loop {
+            require_catalog_benchmark_active("Hotpath child report finalization")?;
+            if let Some(raw) = remote_read(session, &remote_json)
+                && let Ok(value) = serde_json::from_str::<Value>(raw.trim())
+                && value
+                    .pointer("/functions_timing/data")
+                    .and_then(Value::as_array)
+                    .is_some_and(|functions| !functions.is_empty())
+            {
+                break value;
+            }
+            if Instant::now() >= deadline {
+                return Err(format!("{label} Hotpath child report did not finalize").into());
+            }
+            thread::sleep(Duration::from_millis(100));
+        };
+        let functions_timing = report
+            .get("functions_timing")
+            .cloned()
+            .ok_or("Hotpath child report has no function timing section")?;
         if functions_timing
             .get("profiling_mode")
             .and_then(Value::as_str)
@@ -20697,13 +20717,18 @@ fn collect_catalog_attribution_profile(
         let profile = json!({
             "schema": "mister-magik-catalog-build-hotpath-v1",
             "state": "complete",
-            "source": "hotpath-loopback-metrics",
+            "source": "hotpath-child-report",
             "mcp": "http://127.0.0.1:6771/mcp",
             "functions_timing": functions_timing,
         });
         fs::write(
             output_dir.join(format!("{label}-{}-profile.json", arm.label())),
             format!("{}\n", serde_json::to_string_pretty(&profile)?),
+        )?;
+        exec_checked(
+            session,
+            "clear collected Hotpath child report",
+            &format!("rm -f {}", sh(&remote_json)),
         )?;
         return Ok(profile);
     }
