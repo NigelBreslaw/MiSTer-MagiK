@@ -9,6 +9,7 @@ The AI-facing commands are:
 ```text
 scripts/agent plan
 scripts/agent deliver
+scripts/agent restart-ui
 scripts/agent benchmark
 scripts/agent benchmark particles
 scripts/agent benchmark catalog-lifecycle
@@ -16,6 +17,11 @@ scripts/agent benchmark launch-return
 scripts/agent diagnose
 scripts/agent clean
 ```
+
+`restart-ui` sends delivery's acknowledged `mister_magik_suspend` followed by
+`mister_magik_resume`. It does not build, stage, transfer, or replace files, and
+it does not reboot Linux. The resume acknowledgement waits for the fresh launcher
+child to become active.
 
 The normal AI loop is edit with bounded Rust analyzer diagnostics where
 applicable, stage intentional paths with ordinary Git, commit, and push.

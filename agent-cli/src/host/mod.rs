@@ -752,6 +752,16 @@ impl NativeDevice {
         .map(|_| ())
     }
 
+    pub(crate) fn restart_ui(&mut self) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
+        let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
+        restart_ui_with(&SshDeployRemote {
+            sess: &session,
+            agent: None,
+        })
+        .map_err(device_failure)
+    }
+
     pub(crate) fn deliver_databases(
         &mut self,
         stage: &Path,
@@ -31215,7 +31225,7 @@ impl MagikDeployTransaction {
         let mut cleaned = false;
         let result = (|| -> Result<MagikDeployReport> {
             let suspend_t = Instant::now();
-            deploy_fifo_command(remote, "mister_magik_suspend")?;
+            suspend_runtime_launcher(remote)?;
             let suspend_ms = suspend_t.elapsed().as_millis();
             suspended = true;
 
@@ -31248,7 +31258,7 @@ impl MagikDeployTransaction {
             cleaned = true;
 
             let resume_t = Instant::now();
-            deploy_fifo_command(remote, "mister_magik_resume")?;
+            resume_runtime_launcher(remote)?;
             let resume_ms = resume_t.elapsed().as_millis();
             suspended = false;
 
@@ -31281,7 +31291,7 @@ impl MagikDeployTransaction {
                 let _ = self.cleanup(remote);
             }
             if suspended {
-                let _ = deploy_fifo_command(remote, "mister_magik_resume");
+                let _ = resume_runtime_launcher(remote);
             }
         }
         result
@@ -31546,6 +31556,19 @@ fn deploy_fifo_command<R: DeployRemote>(remote: &R, command: &str) -> Result<()>
     } else {
         Err(format!("MiSTer command failed: {command}").into())
     }
+}
+
+fn suspend_runtime_launcher<R: DeployRemote>(remote: &R) -> Result<()> {
+    deploy_fifo_command(remote, "mister_magik_suspend")
+}
+
+fn resume_runtime_launcher<R: DeployRemote>(remote: &R) -> Result<()> {
+    deploy_fifo_command(remote, "mister_magik_resume")
+}
+
+fn restart_ui_with<R: DeployRemote>(remote: &R) -> Result<()> {
+    suspend_runtime_launcher(remote)?;
+    resume_runtime_launcher(remote)
 }
 
 impl MagikDeployReport {
@@ -40678,6 +40701,18 @@ H: Handlers=event3 js0"#
         }
         let _ = fs::remove_file(local);
         let _ = fs::remove_file(manifest);
+    }
+
+    #[test]
+    fn restart_ui_only_suspends_then_resumes_the_launcher() {
+        let remote = scripted_deploy_remote(0);
+
+        restart_ui_with(&remote).unwrap();
+
+        let events = remote.events();
+        assert_eq!(events.len(), 2);
+        assert!(events[0].contains("mister_magik_suspend"));
+        assert!(events[1].contains("mister_magik_resume"));
     }
 
     #[test]

@@ -112,6 +112,7 @@ fn command_label(command: &CliCommand) -> &'static str {
         CliCommand::Diagnose => "diagnose",
         CliCommand::Device { .. } => "device",
         CliCommand::Deliver { .. } => "deliver",
+        CliCommand::RestartUi => "restart-ui",
         CliCommand::Benchmark { .. } => "benchmark",
         CliCommand::Capture { .. } => "capture",
         CliCommand::Alpha { .. } => "alpha",
@@ -150,6 +151,7 @@ fn dispatch(
             target: Some(DeliverTarget::LocalMain),
             ..
         } => return deliver_local_main(repository, reporter),
+        CliCommand::RestartUi => return agent_cli::delivery::restart_ui(),
         CliCommand::Benchmark {
             scenario,
             arm,

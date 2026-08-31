@@ -64,6 +64,8 @@ pub enum Command {
         )]
         game_databases_release_dir: Option<PathBuf>,
     },
+    /// Restart the UI through delivery's suspend-and-resume lifecycle.
+    RestartUi,
     Benchmark {
         #[arg(value_enum, default_value_t)]
         scenario: BenchmarkScenario,
@@ -823,6 +825,12 @@ mod tests {
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "-m", "message"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deploy"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deploy-recipe", "launcher-device"]).is_err());
+    }
+
+    #[test]
+    fn restart_ui_is_a_flag_free_command() {
+        assert!(Cli::try_parse_from(["agent-cli", "restart-ui"]).is_ok());
+        assert!(Cli::try_parse_from(["agent-cli", "restart-ui", "--fast"]).is_err());
     }
 
     #[test]

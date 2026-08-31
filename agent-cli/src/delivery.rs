@@ -306,6 +306,13 @@ pub fn execute(
     )
 }
 
+/// Restart the UI using delivery's acknowledged suspend-and-resume lifecycle.
+pub fn restart_ui() -> AgentResult<Outcome> {
+    let mut device = DeviceClient::default();
+    device.mutate(crate::NativeDevice::restart_ui)?;
+    Ok(Outcome::Passed)
+}
+
 fn execute_with_device<D: DeliveryDevice>(
     repository: &Path,
     expected_commit: &str,
