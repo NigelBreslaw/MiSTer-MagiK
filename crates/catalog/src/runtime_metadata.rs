@@ -320,7 +320,14 @@ pub struct MetadataStore {
 /// making compact metadata unavailable.
 pub fn runtime_metadata_qualification_report() -> Result<String, String> {
     let compact_path = crate::catalog_config::default_runtime_metadata_path();
-    let compact = probe_compact_runtime(&compact_path)?;
+    let compact = match probe_compact_runtime(&compact_path) {
+        Ok(report) => report,
+        Err(error) => serde_json::json!({
+            "path": compact_path,
+            "valid": false,
+            "error": error,
+        }),
+    };
     let legacy = serde_json::json!({
         "mame": probe_legacy_sqlite(&crate::catalog_config::default_mame_sqlite_path()),
         "hbmame": probe_legacy_sqlite(&crate::catalog_config::default_hbmame_sqlite_path()),
@@ -505,12 +512,10 @@ impl MetadataStore {
         let expected_index_len = shard_count
             .checked_mul(INDEX_ENTRY_LEN)
             .ok_or_else(|| "metadata index length overflows".to_string())?;
-        if index_len != expected_index_len
-            || index_offset
-                .checked_add(index_len as u64)
-                .ok_or_else(|| "metadata index end overflows".to_string())?
-                > file_len
-        {
+        let index_end = index_offset
+            .checked_add(index_len as u64)
+            .ok_or_else(|| "metadata index end overflows".to_string())?;
+        if index_len != expected_index_len || index_end > file_len {
             return Err("metadata index bounds are invalid".into());
         }
         let mut index = vec![0u8; index_len];
@@ -552,7 +557,7 @@ impl MetadataStore {
             let end = offset
                 .checked_add(compressed_len as u64)
                 .ok_or_else(|| "metadata shard end overflows".to_string())?;
-            if offset < index_offset + index_len as u64 || end > file_len {
+            if offset < index_end || end > file_len {
                 return Err("metadata shard is outside file bounds".into());
             }
             let mut shard_digest = [0u8; 32];
