@@ -99,6 +99,48 @@ class MagikCiTests(unittest.TestCase):
             )
             connection.close()
 
+    def test_mame_runtime_coverage_requires_every_supported_system(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "mame.sqlite3"
+            connection = databases.sqlite3.connect(database)
+            connection.executescript(
+                """
+                CREATE TABLE mame_software_items (
+                    list_name TEXT NOT NULL,
+                    software_name TEXT NOT NULL
+                );
+                CREATE TABLE mame_software_hashes (list_name TEXT NOT NULL);
+                """
+            )
+            connection.executemany(
+                "INSERT INTO mame_software_items VALUES (?, ?)",
+                (
+                    (source_lists[0], f"fixture-{index}")
+                    for index, (_, _, source_lists) in enumerate(
+                        databases.MAME_RUNTIME_SOFTWARE_LISTS
+                    )
+                ),
+            )
+            connection.execute("INSERT INTO mame_software_hashes VALUES ('nes')")
+            connection.commit()
+            connection.close()
+
+            report = databases.mame_runtime_coverage(database)
+            self.assertEqual(report["required_system_count"], 34)
+            self.assertEqual(report["covered_system_count"], 34)
+            self.assertEqual(len(cast(list[object], report["systems"])), 34)
+
+            connection = databases.sqlite3.connect(database)
+            connection.execute(
+                "DELETE FROM mame_software_items WHERE list_name='spectrum_cart'"
+            )
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                ValueError, "mame_runtime_coverage_missing: zx-spectrum"
+            ):
+                databases.mame_runtime_coverage(database)
+
     def test_cli_import_does_not_require_platform_manifest_dependencies(self) -> None:
         command = """
 import builtins

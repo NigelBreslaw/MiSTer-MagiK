@@ -316,23 +316,31 @@ jobs:
           sparse-checkout: hash
 
       - name: Build MAME database
-        run: scripts/magik-ci ci game-databases build-mame --listxml build/mame-listxml.xml --software-dir "$GITHUB_WORKSPACE/mame-source/hash" --out build/mame.sqlite3
+        run: |
+          scripts/magik-ci ci game-databases build-mame \
+            --listxml build/mame-listxml.xml \
+            --software-dir "$GITHUB_WORKSPACE/mame-source/hash" \
+            --runtime-coverage-output build/mame-runtime-coverage.json \
+            --out build/mame.sqlite3
 
-      - name: Verify Atari Lynx software list
+      - name: Report runtime software-list coverage
         run: |
           set -euo pipefail
-          lynx_rows="$(sqlite3 build/mame.sqlite3 "SELECT count(*) FROM mame_software_items WHERE list_name='lynx';")"
-          test "$lynx_rows" -gt 0
-          echo "Atari Lynx software-list rows: $lynx_rows"
-
-      - name: Verify canonical multi-media software-list coverage
-        run: |
-          set -euo pipefail
-          for list_name in c64_cart c64_cass spectrum_cart spectrum_cass; do
-            rows="$(sqlite3 build/mame.sqlite3 "SELECT count(*) FROM mame_software_items WHERE list_name='$list_name';")"
-            test "$rows" -gt 0
-            echo "$list_name software-list rows: $rows"
-          done
+          jq -e '
+            .format == "mister-magik-mame-runtime-coverage-v1" and
+            .required_system_count == 34 and
+            .covered_system_count == .required_system_count and
+            .database_list_count >= .required_system_count and
+            .software_item_rows > 0 and
+            .software_hash_rows > 0
+          ' build/mame-runtime-coverage.json >/dev/null
+          jq -r '
+            "Runtime systems: \(.covered_system_count)/\(.required_system_count)",
+            "MAME lists: \(.database_list_count)",
+            "Software items: \(.software_item_rows)",
+            "Software hashes: \(.software_hash_rows)",
+            (.systems[] | "\(.platform_id): \(.rows)")
+          ' build/mame-runtime-coverage.json
 
       - uses: actions/upload-artifact@v7
         with:
@@ -340,6 +348,7 @@ jobs:
           path: |
             build/mame.sqlite3
             build/mame-listxml.sha256
+            build/mame-runtime-coverage.json
           if-no-files-found: error
           retention-days: 7
 

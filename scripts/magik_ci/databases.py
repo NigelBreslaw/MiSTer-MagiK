@@ -20,6 +20,107 @@ INDEX = "arcade-updater-index-v1.lz4b"
 INPUT_FORMAT = "mister-magik-arcade-updater-inputs-v1"
 SOURCE_ORDER = ("distribution", "alternatives", "jtcores", "coinop", "arcade-offset")
 
+# Every MiSTer platform whose catalog resolver consumes MAME software-list
+# identities. Keep the original MAME list names here: the runtime collapses
+# media-specific lists into the canonical namespace in the second tuple item.
+MAME_RUNTIME_SOFTWARE_LISTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("nes", "nes", ("nes",)),
+    ("fds", "fds", ("famicom_flop",)),
+    ("snes", "snes", ("snes",)),
+    ("n64", "n64", ("n64",)),
+    ("sms", "sms", ("sms",)),
+    ("megadrive", "megadriv", ("megadriv",)),
+    ("s32x", "32x", ("32x",)),
+    ("megacd", "megacd", ("megacd",)),
+    ("saturn", "saturn", ("saturn",)),
+    ("amigacd32", "amigacd32", ("cd32",)),
+    ("atarilynx", "lynx", ("lynx",)),
+    ("acornatom", "atom", ("atom_cass", "atom_flop", "atom_rom")),
+    (
+        "acornelectron",
+        "electron",
+        ("electron_cass", "electron_flop", "electron_rom"),
+    ),
+    (
+        "bbcmicro",
+        "bbc",
+        (
+            "bbc_cass",
+            "bbc_flop_32016",
+            "bbc_flop_6502",
+            "bbc_flop_68000",
+            "bbc_flop_80186",
+            "bbc_flop_arm",
+            "bbc_flop_hybrid",
+            "bbc_flop_torch",
+            "bbc_flop_z80",
+            "bbc_hdd",
+            "bbc_rom",
+            "bbcb_flop",
+            "bbcb_flop_orig",
+            "bbcm_cart",
+            "bbcm_flop",
+        ),
+    ),
+    (
+        "archie",
+        "archimedes",
+        ("archimedes", "archimedes_hdd", "archimedes_rom"),
+    ),
+    (
+        "apple-ii",
+        "apple2",
+        (
+            "apple2_cass",
+            "apple2_flop_clcracked",
+            "apple2_flop_misc",
+            "apple2_flop_orig",
+            "apple2_rom",
+        ),
+    ),
+    (
+        "apple-iigs",
+        "apple2gs",
+        (
+            "apple2gs_flop_clcracked",
+            "apple2gs_flop_misc",
+            "apple2gs_flop_orig",
+        ),
+    ),
+    ("amstrad", "amstrad", ("cpc_cass", "cpc_flop", "gx4000")),
+    ("atari2600", "a2600", ("a2600", "a2600_cass")),
+    ("atari5200", "a5200", ("a5200",)),
+    ("atari7800", "a7800", ("a7800",)),
+    ("atari800", "a800", ("a800", "a800_cass", "a800_flop", "xegs")),
+    ("atarist", "atarist", ("st_cart", "st_flop", "st_flop_demos")),
+    (
+        "c64",
+        "c64",
+        ("c64_cart", "c64_cass", "c64_flop_misc", "c64_flop_orig", "c64_quik"),
+    ),
+    ("c128", "c128", ("c128_cart", "c128_flop", "c128_rom")),
+    ("c16", "c16", ("plus4_cart", "plus4_cass", "plus4_flop", "plus4_quik")),
+    ("pet2001", "pet", ("pet_cass", "pet_flop", "pet_hdd", "pet_quik")),
+    ("vic20", "vic20", ("vic1001_cart", "vic1001_cass", "vic1001_flop")),
+    ("colecovision", "coleco", ("coleco", "coleco_homebrew")),
+    ("megaduck", "megaduck", ("megaduck",)),
+    ("wonderswan", "wonderswan", ("wswan",)),
+    ("wonderswancolor", "wsc", ("wscolor",)),
+    ("x68000", "x68000", ("x68k_flop",)),
+    (
+        "zx-spectrum",
+        "spectrum",
+        (
+            "spectrum_cart",
+            "spectrum_cass",
+            "spectrum_flop_opus",
+            "spectrum_mgt_flop",
+            "spectrum_microdrive",
+            "spectrum_wafadrive",
+        ),
+    ),
+)
+
 _MRA_TAG_RE = re.compile(
     r"<\s*(?P<closing>/)?\s*(?P<name>[A-Za-z][A-Za-z0-9_.:-]*)\b(?P<attrs>[^>]*)>",
     re.DOTALL,
@@ -491,6 +592,57 @@ def build_mame(
     )
     connection.commit()
     connection.close()
+
+
+def mame_runtime_coverage(database: Path) -> dict[str, object]:
+    """Report and validate software-list data required by the catalog runtime."""
+    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    try:
+        rows_by_list = {
+            str(list_name): int(rows)
+            for list_name, rows in connection.execute(
+                "SELECT list_name, count(*) FROM mame_software_items GROUP BY list_name"
+            )
+        }
+        total_items = int(
+            connection.execute("SELECT count(*) FROM mame_software_items").fetchone()[0]
+        )
+        total_hashes = int(
+            connection.execute("SELECT count(*) FROM mame_software_hashes").fetchone()[
+                0
+            ]
+        )
+    finally:
+        connection.close()
+
+    systems: list[dict[str, object]] = []
+    missing: list[str] = []
+    for platform_id, canonical_list, source_lists in MAME_RUNTIME_SOFTWARE_LISTS:
+        source_rows = {name: rows_by_list.get(name, 0) for name in source_lists}
+        system_rows = sum(source_rows.values())
+        if system_rows == 0:
+            missing.append(platform_id)
+        systems.append(
+            {
+                "platform_id": platform_id,
+                "canonical_list": canonical_list,
+                "rows": system_rows,
+                "source_lists": source_rows,
+            }
+        )
+
+    report: dict[str, object] = {
+        "format": "mister-magik-mame-runtime-coverage-v1",
+        "database_list_count": len(rows_by_list),
+        "software_item_rows": total_items,
+        "software_hash_rows": total_hashes,
+        "required_system_count": len(MAME_RUNTIME_SOFTWARE_LISTS),
+        "covered_system_count": len(MAME_RUNTIME_SOFTWARE_LISTS) - len(missing),
+        "systems": systems,
+    }
+    if missing:
+        raise ValueError("mame_runtime_coverage_missing: " + ", ".join(sorted(missing)))
+    return report
 
 
 def build_updater(input_manifest: Path, output: Path) -> dict[str, object]:

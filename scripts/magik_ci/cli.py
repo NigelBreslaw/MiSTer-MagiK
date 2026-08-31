@@ -92,6 +92,7 @@ def parser() -> argparse.ArgumentParser:
     mame.add_argument("--software-dir", type=Path)
     mame.add_argument("--mame", type=Path)
     mame.add_argument("--machine-sqlite", type=Path)
+    mame.add_argument("--runtime-coverage-output", type=Path)
     import_arcade = db_sub.add_parser("import-arcade")
     import_arcade.add_argument("--sqlite", type=Path, required=True)
     import_arcade.add_argument("--csv", type=Path, required=True)
@@ -299,6 +300,16 @@ def main() -> int:
                     mame=args.mame,
                     machine_sqlite=args.machine_sqlite,
                 )
+                if args.runtime_coverage_output:
+                    coverage = databases.mame_runtime_coverage(args.out)
+                    args.runtime_coverage_output.parent.mkdir(
+                        parents=True, exist_ok=True
+                    )
+                    args.runtime_coverage_output.write_text(
+                        json.dumps(coverage, indent=2, sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+                    print(json.dumps(coverage, sort_keys=True))
             elif args.action == "import-arcade":
                 import csv
                 import sqlite3
