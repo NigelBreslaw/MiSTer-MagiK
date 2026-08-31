@@ -436,6 +436,28 @@ fn report_namespace_fallback(
     );
 }
 
+#[cfg(target_os = "linux")]
+fn report_namespace_subtree_recovery(
+    failure: &linux::FdCaptureFailure,
+    snapshot: &NamespaceSubtreeSnapshot,
+    snapshot_us: u64,
+    recovered: bool,
+) {
+    crate::catalog_logln!(
+        "namespace_walk_subtree_recovery_tsv\tscope=subtree\trecovered={}\toperation={}\tfailure_path={}\tdepth={}\terrno={}\tsnapshot_us={}\tsnapshot_entries={}\tsnapshot_errors={}",
+        usize::from(recovered),
+        failure.operation(),
+        failure.path().display(),
+        failure.depth(),
+        failure
+            .errno()
+            .map_or_else(|| "none".to_string(), |errno| errno.to_string()),
+        snapshot_us,
+        snapshot.entries.len(),
+        snapshot.stats.errors,
+    );
+}
+
 /// Probe a directory and a known set of its immediate child directories.
 /// Linux resolves every child relative to one open parent fd, avoiding the
 /// repeated full-path lookups that are especially costly on exFAT/FUSE.
@@ -506,8 +528,12 @@ pub(crate) fn snapshot_walkdir_subtree(
     target: &Path,
     max_depth: Option<usize>,
     ignore: &dyn Fn(&Path) -> bool,
+    max_entries: usize,
+    max_path_bytes: usize,
 ) -> NamespaceSubtreeSnapshot {
     let mut entries = Vec::new();
+    let mut captured_path_bytes = 0usize;
+    let mut over_budget = false;
     let stats = visit_walkdir_owned(
         target,
         max_depth,
@@ -515,12 +541,22 @@ pub(crate) fn snapshot_walkdir_subtree(
         NamespaceSignatureCapture::Target,
         ignore,
         &mut |entry| {
+            let entry_path_bytes = entry.path.as_os_str().len();
+            let Some(next_path_bytes) = captured_path_bytes.checked_add(entry_path_bytes) else {
+                over_budget = true;
+                return false;
+            };
+            if entries.len() >= max_entries || next_path_bytes > max_path_bytes {
+                over_budget = true;
+                return false;
+            }
+            captured_path_bytes = next_path_bytes;
             entries.push(entry);
             true
         },
         None,
     );
-    let complete = stats.errors == 0 && stats.target_signature.is_some();
+    let complete = !over_budget && stats.errors == 0 && stats.target_signature.is_some();
     NamespaceSubtreeSnapshot {
         entries,
         stats,
@@ -991,6 +1027,28 @@ mod linux {
         budget: CaptureBudget,
         fault: Option<FaultInjection>,
     ) -> Result<NamespaceCapture, FdCaptureFailure> {
+        collect_fd_relative_with_budget_mode(
+            target,
+            max_depth,
+            root_policy,
+            signature_capture,
+            ignore,
+            budget,
+            fault,
+            true,
+        )
+    }
+
+    fn collect_fd_relative_with_budget_mode(
+        target: &Path,
+        max_depth: Option<usize>,
+        root_policy: NamespaceRootPolicy,
+        signature_capture: NamespaceSignatureCapture,
+        ignore: &dyn Fn(&Path) -> bool,
+        budget: CaptureBudget,
+        fault: Option<FaultInjection>,
+        recover_nested_enoent: bool,
+    ) -> Result<NamespaceCapture, FdCaptureFailure> {
         if max_depth == Some(0) || ignore(target) {
             return Ok(NamespaceCapture {
                 entries: Vec::new(),
@@ -1096,6 +1154,7 @@ mod linux {
             &mut stats,
             budget,
             fault,
+            recover_nested_enoent,
         )?;
         if signature_capture.target() {
             let target_signature_after =
@@ -1120,6 +1179,7 @@ mod linux {
         stats: &mut NamespaceWalkStats,
         budget: CaptureBudget,
         fault: Option<FaultInjection>,
+        recover_nested_enoent: bool,
     ) -> Result<(), FdCaptureFailure> {
         let mut buffer = Vec::new();
         buffer
@@ -1412,7 +1472,9 @@ mod linux {
                 );
                 if should_descend {
                     let child = opened_child.expect("descended directory must be open");
-                    collect_directory(
+                    let child_entries_start = entries.len();
+                    let child_path_bytes_before = *captured_path_bytes;
+                    match collect_directory(
                         &child,
                         &child_path,
                         entry_depth,
@@ -1424,16 +1486,80 @@ mod linux {
                         stats,
                         budget,
                         fault,
-                    )?;
-                    if capture_directory_signature {
-                        let child_signature_after = stat_fd(child.as_raw_fd())
-                            .ok()
-                            .and_then(directory_signature);
-                        entries[entry_index].directory_signature =
-                            super::stable_directory_signature(
-                                child_signature_before,
-                                child_signature_after,
+                        recover_nested_enoent,
+                    ) {
+                        Ok(()) => {
+                            if capture_directory_signature {
+                                let child_signature_after = stat_fd(child.as_raw_fd())
+                                    .ok()
+                                    .and_then(directory_signature);
+                                entries[entry_index].directory_signature =
+                                    super::stable_directory_signature(
+                                        child_signature_before,
+                                        child_signature_after,
+                                    );
+                            }
+                        }
+                        Err(failure)
+                            if recover_nested_enoent && failure.is_recoverable_nested_enoent() =>
+                        {
+                            let snapshot_started = std::time::Instant::now();
+                            let remaining_depth =
+                                max_depth.map(|limit| limit.saturating_sub(entry_depth));
+                            let snapshot = super::snapshot_walkdir_subtree(
+                                &child_path,
+                                remaining_depth,
+                                ignore,
+                                budget.max_entries.saturating_sub(child_entries_start),
+                                budget
+                                    .max_path_bytes
+                                    .saturating_sub(child_path_bytes_before),
                             );
+                            let snapshot_us = snapshot_started.elapsed().as_micros() as u64;
+                            let snapshot_path_bytes =
+                                snapshot.entries.iter().fold(0usize, |total, entry| {
+                                    total.saturating_add(entry.path.as_os_str().len())
+                                });
+                            let snapshot_fits_budget = snapshot.entries.len()
+                                <= budget.max_entries.saturating_sub(child_entries_start)
+                                && snapshot_path_bytes
+                                    <= budget
+                                        .max_path_bytes
+                                        .saturating_sub(child_path_bytes_before);
+                            let recovered = snapshot.complete && snapshot_fits_budget;
+                            super::report_namespace_subtree_recovery(
+                                &failure,
+                                &snapshot,
+                                snapshot_us,
+                                recovered,
+                            );
+                            if !recovered {
+                                return Err(failure);
+                            }
+                            let snapshot_target_signature = snapshot.stats.target_signature;
+                            entries.truncate(child_entries_start);
+                            *captured_path_bytes = child_path_bytes_before;
+                            stats.add(&snapshot.stats);
+                            *captured_path_bytes =
+                                (*captured_path_bytes).saturating_add(snapshot_path_bytes);
+                            entries.extend(snapshot.entries);
+                            stats.peak_buffered_entries =
+                                stats.peak_buffered_entries.max(entries.len());
+                            stats.peak_buffered_bytes = stats.peak_buffered_bytes.max(
+                                entries
+                                    .capacity()
+                                    .saturating_mul(std::mem::size_of::<NamespaceEntry>())
+                                    .saturating_add(*captured_path_bytes),
+                            );
+                            if capture_directory_signature {
+                                entries[entry_index].directory_signature =
+                                    super::stable_directory_signature(
+                                        child_signature_before,
+                                        snapshot_target_signature,
+                                    );
+                            }
+                        }
+                        Err(failure) => return Err(failure),
                     }
                 }
             }
@@ -1661,6 +1787,39 @@ mod linux {
             "name-encoding" => FdCaptureFailureOperation::NameEncoding,
             _ => panic!("unknown fd capture fault operation {operation}"),
         };
+        collect_fd_relative_with_budget_mode(
+            target,
+            max_depth,
+            NamespaceRootPolicy::NoFollow,
+            signature_capture,
+            ignore,
+            CaptureBudget::default(),
+            Some(FaultInjection { operation, depth }),
+            false,
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn collect_with_fault_recovery_for_test(
+        target: &Path,
+        max_depth: Option<usize>,
+        signature_capture: NamespaceSignatureCapture,
+        ignore: &dyn Fn(&Path) -> bool,
+        operation: &'static str,
+        depth: usize,
+    ) -> Result<NamespaceCapture, FdCaptureFailure> {
+        let operation = match operation {
+            "root-open" => FdCaptureFailureOperation::RootOpen,
+            "root-read" => FdCaptureFailureOperation::RootRead,
+            "child-open" => FdCaptureFailureOperation::ChildOpen,
+            "child-read" => FdCaptureFailureOperation::ChildRead,
+            "entry-stat" => FdCaptureFailureOperation::EntryStat,
+            "malformed-dirent" => FdCaptureFailureOperation::MalformedDirent,
+            "budget" => FdCaptureFailureOperation::Budget,
+            "allocation" => FdCaptureFailureOperation::Allocation,
+            "name-encoding" => FdCaptureFailureOperation::NameEncoding,
+            _ => panic!("unknown fd capture fault operation {operation}"),
+        };
         collect_fd_relative_with_budget(
             target,
             max_depth,
@@ -1826,7 +1985,7 @@ mod tests {
         fs::write(dir.join("one.rom"), b"one").unwrap();
         fs::write(dir.join("nested/two.rom"), b"two").unwrap();
 
-        let snapshot = snapshot_walkdir_subtree(&dir, None, &|_| false);
+        let snapshot = snapshot_walkdir_subtree(&dir, None, &|_| false, usize::MAX, usize::MAX);
         assert!(snapshot.complete);
         assert!(snapshot.stats.target_signature.is_some());
         assert!(
@@ -1836,15 +1995,25 @@ mod tests {
                 .any(|entry| entry.path == dir.join("nested/two.rom"))
         );
 
-        let missing = snapshot_walkdir_subtree(&dir.join("missing"), None, &|_| false);
+        let missing = snapshot_walkdir_subtree(
+            &dir.join("missing"),
+            None,
+            &|_| false,
+            usize::MAX,
+            usize::MAX,
+        );
         assert!(!missing.complete);
         assert!(missing.entries.is_empty());
         assert!(missing.stats.errors > 0);
 
         let file = dir.join("one.rom");
-        let file_snapshot = snapshot_walkdir_subtree(&file, None, &|_| false);
+        let file_snapshot =
+            snapshot_walkdir_subtree(&file, None, &|_| false, usize::MAX, usize::MAX);
         assert!(!file_snapshot.complete);
         assert!(file_snapshot.entries.is_empty());
+
+        let bounded = snapshot_walkdir_subtree(&dir, None, &|_| false, 1, usize::MAX);
+        assert!(!bounded.complete);
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -2057,6 +2226,47 @@ mod tests {
         assert_eq!(error.depth(), 1);
         assert_eq!(error.errno(), Some(libc::ENOENT));
         assert!(error.is_recoverable_nested_enoent());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn recoverable_nested_enoent_replaces_only_the_affected_subtree() {
+        let dir = unique_temp_dir("namespace-fd-subtree-recovery");
+        fs::create_dir_all(dir.join("nested/deep")).unwrap();
+        fs::create_dir_all(dir.join("sibling")).unwrap();
+        fs::write(dir.join("one.rom"), b"one").unwrap();
+        fs::write(dir.join("nested/two.rom"), b"two").unwrap();
+        fs::write(dir.join("nested/deep/three.rom"), b"three").unwrap();
+        fs::write(dir.join("sibling/four.rom"), b"four").unwrap();
+
+        let capture = linux::collect_with_fault_recovery_for_test(
+            &dir,
+            None,
+            NamespaceSignatureCapture::None,
+            &|_| false,
+            "child-read",
+            1,
+        )
+        .expect("nested ENOENT should recover through the subtree snapshot");
+        let mut recovered = capture
+            .entries
+            .into_iter()
+            .map(|entry| {
+                (
+                    entry.path.strip_prefix(&dir).unwrap().to_path_buf(),
+                    entry.kind,
+                    entry.zip_signature,
+                )
+            })
+            .collect::<Vec<_>>();
+        recovered.sort_by(|left, right| left.0.cmp(&right.0));
+
+        assert_eq!(recovered, walkdir_snapshot(&dir, None, &|_| false).0);
+        assert_eq!(capture.stats.backend, "mixed");
+        assert_eq!(capture.stats.fallback_count, 0);
+        assert_eq!(capture.stats.restart_count, 0);
 
         fs::remove_dir_all(dir).unwrap();
     }
