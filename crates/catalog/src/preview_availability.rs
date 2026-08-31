@@ -15,8 +15,6 @@ use std::path::{Path, PathBuf};
 pub enum PreviewIdentityResolverStatus {
     /// No software-list lookup has been needed for the current worker lifetime.
     NotNeeded,
-    /// The MAME software-list title index is available for lookups.
-    Ready,
     /// The compact v1 runtime metadata shard is available for lookups.
     CompactV1,
     /// The migration-era SQLite metadata fallback is available.
@@ -91,7 +89,7 @@ impl PreviewIdentityResolver {
     pub fn status(&self) -> PreviewIdentityResolverStatus {
         match self.state {
             PreviewIdentityResolverState::NotNeeded => PreviewIdentityResolverStatus::NotNeeded,
-            PreviewIdentityResolverState::Ready(_) => PreviewIdentityResolverStatus::Ready,
+            PreviewIdentityResolverState::Ready(_) => PreviewIdentityResolverStatus::LegacySqlite,
             PreviewIdentityResolverState::Compact { .. } => {
                 PreviewIdentityResolverStatus::CompactV1
             }
@@ -598,7 +596,10 @@ mod tests {
             resolver.candidates(&system, "Family Game"),
             Some(vec!["mame-software__c64__familygame".to_string()])
         );
-        assert_eq!(resolver.status(), PreviewIdentityResolverStatus::Ready);
+        assert_eq!(
+            resolver.status(),
+            PreviewIdentityResolverStatus::LegacySqlite
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
