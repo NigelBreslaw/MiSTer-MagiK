@@ -1913,6 +1913,20 @@ aliases = []
 documentation = { summary = "Controls magik main pid behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
+name = "MISTER_MAGIK_METADATA"
+owner = "crates/catalog/src/catalog_config.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls compact runtime metadata path", accepted_values = [], value_policy = "document" }
+
+[[control]]
 name = "MISTER_MAGIK_OWNER_EPOCH"
 owner = "apps/mister/src/process_config.rs"
 classification = "production"
