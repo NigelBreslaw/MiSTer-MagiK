@@ -362,7 +362,7 @@ def main() -> None:
         "(* preserve, dont_replicate *) reg [8:0] scheduler_snapshot_capture = 9'd0;",
         "reg [1:0] avalon_terminal_fifo_depth = 2'd0;",
         "reg [6:0] avalon_terminal_return_phase = 7'd0;",
-        "reg [2:0] avalon_terminal_cause = 3'd0;",
+        "reg [3:0] avalon_terminal_cause = 4'd0;",
         "no_request_seen <= 1'b1;",
         "scheduler_snapshot_capture <= snapshot_evidence_hold;",
         "(* preserve, dont_replicate *) reg record_ready = 1'b0;",

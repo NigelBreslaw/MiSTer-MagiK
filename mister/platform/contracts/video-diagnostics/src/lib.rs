@@ -161,6 +161,10 @@ const OFF_DOMAIN_SCHEDULER_SNAPSHOT_V2_ARCHITECTURE: &str =
 const OFF_DOMAIN_SCHEDULER_TERMINAL_V3_SCHEMA: u16 = 20;
 const OFF_DOMAIN_SCHEDULER_TERMINAL_V3_ARCHITECTURE: &str =
     "scaler-off-domain-scheduler-terminal-v3";
+const OFF_DOMAIN_SCHEDULER_TERMINAL_V4_SCHEMA: u16 = 21;
+const OFF_DOMAIN_SCHEDULER_TERMINAL_V4_ARCHITECTURE: &str =
+    "scaler-off-domain-scheduler-terminal-v4";
+const LEGACY_OBSERVER_FAULT_CAUSE: u16 = 6;
 
 impl ScalerFetchLivenessState {
     fn field(&self, word: usize, bit: u32, mask: u16) -> u16 {
@@ -190,6 +194,9 @@ impl ScalerFetchLivenessState {
             OFF_DOMAIN_SCHEDULER_TERMINAL_V3_SCHEMA => {
                 OFF_DOMAIN_SCHEDULER_TERMINAL_V3_ARCHITECTURE
             }
+            OFF_DOMAIN_SCHEDULER_TERMINAL_V4_SCHEMA => {
+                OFF_DOMAIN_SCHEDULER_TERMINAL_V4_ARCHITECTURE
+            }
             _ => SCALER_FETCH_LIVENESS_STATE_ARCHITECTURE,
         }
     }
@@ -197,7 +204,9 @@ impl ScalerFetchLivenessState {
     pub fn one_shot_terminal_record(&self) -> bool {
         matches!(
             self.schema(),
-            OFF_DOMAIN_SCHEDULER_TERMINAL_V3_SCHEMA | SCALER_FETCH_LIVENESS_STATE_SCHEMA
+            OFF_DOMAIN_SCHEDULER_TERMINAL_V3_SCHEMA
+                | OFF_DOMAIN_SCHEDULER_TERMINAL_V4_SCHEMA
+                | SCALER_FETCH_LIVENESS_STATE_SCHEMA
         )
     }
 
@@ -297,6 +306,16 @@ impl ScalerFetchLivenessState {
     }
 
     pub fn frozen_cause(&self) -> u16 {
+        if self.schema() == SCALER_FETCH_LIVENESS_STATE_SCHEMA {
+            if self.no_request_seen() {
+                return SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN;
+            }
+            return self.field(
+                SCALER_FETCH_LIVENESS_STATE_FROZEN_CAUSE_WORD,
+                SCALER_FETCH_LIVENESS_STATE_FROZEN_CAUSE_BIT,
+                SCALER_FETCH_LIVENESS_STATE_FROZEN_CAUSE_MASK,
+            );
+        }
         if self.schema() != LEGACY_SCALER_FETCH_LIVENESS_SCHEMA {
             return if self.no_request_seen() {
                 SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN
@@ -309,7 +328,7 @@ impl ScalerFetchLivenessState {
             } else if self.request_cancelled() {
                 SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED
             } else if self.observer_fault() {
-                SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT
+                LEGACY_OBSERVER_FAULT_CAUSE
             } else {
                 SCALER_FETCH_LIVENESS_STATE_CAUSE_NONE
             };
@@ -322,6 +341,9 @@ impl ScalerFetchLivenessState {
     }
 
     pub fn frozen_return_phase(&self) -> u8 {
+        if self.schema() != SCALER_FETCH_LIVENESS_STATE_SCHEMA {
+            return ((self.state() >> 3) & 0x007f) as u8;
+        }
         self.field(
             SCALER_FETCH_LIVENESS_STATE_FROZEN_RETURN_PHASE_WORD,
             SCALER_FETCH_LIVENESS_STATE_FROZEN_RETURN_PHASE_BIT,
@@ -330,6 +352,9 @@ impl ScalerFetchLivenessState {
     }
 
     pub fn frozen_fifo_depth(&self) -> u8 {
+        if self.schema() != SCALER_FETCH_LIVENESS_STATE_SCHEMA {
+            return ((self.state() >> 10) & 0x0003) as u8;
+        }
         self.field(
             SCALER_FETCH_LIVENESS_STATE_FROZEN_FIFO_DEPTH_WORD,
             SCALER_FETCH_LIVENESS_STATE_FROZEN_FIFO_DEPTH_BIT,
@@ -338,6 +363,9 @@ impl ScalerFetchLivenessState {
     }
 
     pub fn frozen_address_fold(&self) -> u8 {
+        if self.schema() != SCALER_FETCH_LIVENESS_STATE_SCHEMA {
+            return ((self.state() >> 12) & 0x000f) as u8;
+        }
         self.field(
             SCALER_FETCH_LIVENESS_STATE_FROZEN_ADDRESS_FOLD_WORD,
             SCALER_FETCH_LIVENESS_STATE_FROZEN_ADDRESS_FOLD_BIT,
@@ -422,8 +450,27 @@ impl ScalerFetchLivenessState {
     }
 
     fn raw_scheduler_terminal_state(&self) -> Option<u16> {
-        (self.schema() == SCALER_FETCH_LIVENESS_STATE_SCHEMA && self.no_request_seen())
-            .then(|| self.state())
+        (matches!(
+            self.schema(),
+            OFF_DOMAIN_SCHEDULER_TERMINAL_V4_SCHEMA | SCALER_FETCH_LIVENESS_STATE_SCHEMA
+        ) && self.no_request_seen())
+        .then(|| self.state())
+    }
+
+    pub fn observer_fault_name(&self) -> Option<&'static str> {
+        if !self.observer_fault() {
+            return None;
+        }
+        Some(match (self.schema(), self.frozen_cause()) {
+            (SCALER_FETCH_LIVENESS_STATE_SCHEMA, 6) => "bad_burst",
+            (SCALER_FETCH_LIVENESS_STATE_SCHEMA, 7) => "fifo_overflow",
+            (SCALER_FETCH_LIVENESS_STATE_SCHEMA, 8) => "orphan_return",
+            (SCALER_FETCH_LIVENESS_STATE_SCHEMA, 9) => "snapshot_timeout",
+            (SCALER_FETCH_LIVENESS_STATE_SCHEMA, 10) => "snapshot_reset_invalidated",
+            (SCALER_FETCH_LIVENESS_STATE_SCHEMA, 11) => "snapshot_progress_invalidated",
+            (SCALER_FETCH_LIVENESS_STATE_SCHEMA, 12) => "snapshot_invalid_outcome",
+            _ => "unattributed",
+        })
     }
 
     fn raw_scheduler_outcome(&self, mask: u16) -> Option<bool> {
@@ -1183,6 +1230,7 @@ pub fn decode_scaler_fetch_liveness_state(
             | OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_SCHEMA
             | OFF_DOMAIN_SCHEDULER_SNAPSHOT_V2_SCHEMA
             | OFF_DOMAIN_SCHEDULER_TERMINAL_V3_SCHEMA
+            | OFF_DOMAIN_SCHEDULER_TERMINAL_V4_SCHEMA
             | SCALER_FETCH_LIVENESS_STATE_SCHEMA
     ) {
         return Err(format!(
@@ -1222,7 +1270,21 @@ pub fn decode_scaler_fetch_liveness_state(
     {
         return Err("scaler fetch liveness stall has an illegal cause".to_string());
     }
-    if fault && cause != SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT {
+    let legal_observer_cause = if schema == SCALER_FETCH_LIVENESS_STATE_SCHEMA {
+        matches!(
+            cause,
+            SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_BAD_BURST
+                | SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FIFO_OVERFLOW
+                | SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_ORPHAN_RETURN
+                | SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_SNAPSHOT_TIMEOUT
+                | SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_SNAPSHOT_RESET_INVALIDATED
+                | SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_SNAPSHOT_PROGRESS_INVALIDATED
+                | SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_SNAPSHOT_INVALID_OUTCOME
+        )
+    } else {
+        cause == LEGACY_OBSERVER_FAULT_CAUSE
+    };
+    if fault && !legal_observer_cause {
         return Err("scaler fetch liveness observer fault has an illegal cause".to_string());
     }
     if stall || fault {
@@ -1241,7 +1303,11 @@ pub fn decode_scaler_fetch_liveness_state(
         {
             return Err("scaler output-scheduler gate snapshot is impossible".to_string());
         }
-        if schema == SCALER_FETCH_LIVENESS_STATE_SCHEMA && decoded.no_request_seen() {
+        if matches!(
+            schema,
+            OFF_DOMAIN_SCHEDULER_TERMINAL_V4_SCHEMA | SCALER_FETCH_LIVENESS_STATE_SCHEMA
+        ) && decoded.no_request_seen()
+        {
             let state = decoded.state();
             let outcomes = state & 0x003f;
             if state & !0x01ff != 0 || outcomes.count_ones() != 1 {
@@ -1254,6 +1320,7 @@ pub fn decode_scaler_fetch_liveness_state(
                 | OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_SCHEMA
                 | OFF_DOMAIN_SCHEDULER_SNAPSHOT_V2_SCHEMA
                 | OFF_DOMAIN_SCHEDULER_TERMINAL_V3_SCHEMA
+                | OFF_DOMAIN_SCHEDULER_TERMINAL_V4_SCHEMA
                 | SCALER_FETCH_LIVENESS_STATE_SCHEMA
         ) && decoded.no_request_seen()
         {
@@ -1288,7 +1355,9 @@ pub fn decode_scaler_fetch_liveness_state(
         let live_state = words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD];
         if matches!(
             schema,
-            OFF_DOMAIN_SCHEDULER_TERMINAL_V3_SCHEMA | SCALER_FETCH_LIVENESS_STATE_SCHEMA
+            OFF_DOMAIN_SCHEDULER_TERMINAL_V3_SCHEMA
+                | OFF_DOMAIN_SCHEDULER_TERMINAL_V4_SCHEMA
+                | SCALER_FETCH_LIVENESS_STATE_SCHEMA
         ) && live_state != 0
         {
             return Err(format!(
@@ -1553,6 +1622,70 @@ mod tests {
     }
 
     #[test]
+    fn scaler_fetch_liveness_names_each_schema_22_observer_fault() {
+        let cases = [
+            (
+                SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_BAD_BURST,
+                "bad_burst",
+            ),
+            (
+                SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FIFO_OVERFLOW,
+                "fifo_overflow",
+            ),
+            (
+                SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_ORPHAN_RETURN,
+                "orphan_return",
+            ),
+            (
+                SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_SNAPSHOT_TIMEOUT,
+                "snapshot_timeout",
+            ),
+            (
+                SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_SNAPSHOT_RESET_INVALIDATED,
+                "snapshot_reset_invalidated",
+            ),
+            (
+                SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_SNAPSHOT_PROGRESS_INVALIDATED,
+                "snapshot_progress_invalidated",
+            ),
+            (
+                SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_SNAPSHOT_INVALID_OUTCOME,
+                "snapshot_invalid_outcome",
+            ),
+        ];
+
+        for (cause, name) in cases {
+            let mut words = zero_hdmi_words::<SCALER_FETCH_LIVENESS_STATE_WORDS>(
+                GET_SCALER_FETCH_LIVENESS_STATE,
+                SCALER_FETCH_LIVENESS_STATE_SCHEMA,
+            );
+            words[SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] =
+                SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID
+                    | SCALER_FETCH_LIVENESS_STATE_FLAG_OBSERVER_FAULT;
+            words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = cause;
+            words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
+                GET_SCALER_FETCH_LIVENESS_STATE,
+                SCALER_FETCH_LIVENESS_STATE_SCHEMA,
+                &words[..SCALER_FETCH_LIVENESS_STATE_CRC_WORD],
+            );
+            let decoded = decode_scaler_fetch_liveness_state(&words).unwrap();
+            assert_eq!(decoded.frozen_cause(), cause);
+            assert_eq!(decoded.observer_fault_name(), Some(name));
+        }
+    }
+
+    #[test]
+    fn scaler_fetch_liveness_retains_captured_schema_21_observer_fault() {
+        let decoded = decode_scaler_fetch_liveness_state(&[21, 9, 6, 60722]).unwrap();
+        assert_eq!(
+            decoded.architecture(),
+            OFF_DOMAIN_SCHEDULER_TERMINAL_V4_ARCHITECTURE
+        );
+        assert_eq!(decoded.frozen_cause(), LEGACY_OBSERVER_FAULT_CAUSE);
+        assert_eq!(decoded.observer_fault_name(), Some("unattributed"));
+    }
+
+    #[test]
     fn scaler_fetch_liveness_retains_schema_17_decode_support() {
         let mut words = zero_hdmi_words::<SCALER_FETCH_LIVENESS_STATE_WORDS>(
             GET_SCALER_FETCH_LIVENESS_STATE,
@@ -1735,7 +1868,7 @@ mod tests {
                 | SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
                 | SCALER_FETCH_LIVENESS_STATE_FLAG_OBSERVER_FAULT;
         words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] =
-            SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT;
+            SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_BAD_BURST;
         words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
             GET_SCALER_FETCH_LIVENESS_STATE,
             SCALER_FETCH_LIVENESS_STATE_SCHEMA,

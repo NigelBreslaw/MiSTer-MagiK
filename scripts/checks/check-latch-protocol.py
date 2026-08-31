@@ -324,8 +324,8 @@ if hdmi_evidence.get("raw_scaler_rollback_states") != {
     raise SystemExit("raw scaler ordered-signature schema-10 rollback ABI changed")
 scaler_fetch_liveness = hdmi_evidence.get("scaler_fetch_liveness_state")
 if scaler_fetch_liveness != {
-    "schema": 21,
-    "architecture": "scaler-off-domain-scheduler-terminal-v4",
+    "schema": 22,
+    "architecture": "scaler-off-domain-scheduler-terminal-v5",
     "command": 0x68,
     "magic": 0x4D58,
     "word_count": 4,
@@ -359,10 +359,10 @@ if scaler_fetch_liveness != {
         "first_return_seen": {"word": "state", "bit": 12, "width": 1},
         "reset_qualified": {"word": "state", "bit": 13, "width": 1},
         "address_wrap_seen": {"word": "state", "bit": 14, "width": 1},
-        "frozen_cause": {"word": "state", "bit": 0, "width": 3},
-        "frozen_return_phase": {"word": "state", "bit": 3, "width": 7},
-        "frozen_fifo_depth": {"word": "state", "bit": 10, "width": 2},
-        "frozen_address_fold": {"word": "state", "bit": 12, "width": 4},
+        "frozen_cause": {"word": "state", "bit": 0, "width": 4},
+        "frozen_return_phase": {"word": "state", "bit": 4, "width": 7},
+        "frozen_fifo_depth": {"word": "state", "bit": 11, "width": 2},
+        "frozen_address_fold": {"word": "state", "bit": 13, "width": 3},
         "window_valid": {"word": "state", "bit": 0, "width": 1},
         "output_enable_seen": {"word": "state", "bit": 1, "width": 1},
         "horizontal_sync_edge_seen": {"word": "state", "bit": 2, "width": 1},
@@ -396,8 +396,16 @@ if scaler_fetch_liveness != {
         "first_return_missing": 3,
         "return_incomplete": 4,
         "request_cancelled": 5,
-        "observer_fault": 6,
-        "reserved": 7,
+        "observer_bad_burst": 6,
+        "observer_fifo_overflow": 7,
+        "observer_orphan_return": 8,
+        "observer_snapshot_timeout": 9,
+        "observer_snapshot_reset_invalidated": 10,
+        "observer_snapshot_progress_invalidated": 11,
+        "observer_snapshot_invalid_outcome": 12,
+        "reserved_13": 13,
+        "reserved_14": 14,
+        "reserved_15": 15,
     },
     "monitor_states": {
         "unqualified": 0,
@@ -414,7 +422,7 @@ if scaler_fetch_liveness != {
     },
 }:
     raise SystemExit(
-        "scaler off-domain scheduler terminal schema 21 changed without an ABI update"
+        "scaler off-domain scheduler terminal schema 22 changed without an ABI update"
     )
 expected_agent_capability = (
     f"pub const FPGA_VIDEO_DIAGNOSTICS_CAPABILITY: &str = "

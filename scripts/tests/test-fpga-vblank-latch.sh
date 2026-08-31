@@ -29,6 +29,16 @@ iverilog -g2012 -Wall -Wimplicit -I "$rtl_dir" \
 
 vvp "$build_dir/tb_mister_magik_video_diagnostics_control.vvp"
 
+for fault_case in 0 1 2 3 4 5 6; do
+	iverilog -g2012 -Wall -Wimplicit -I "$rtl_dir" \
+		-s tb_mister_magik_video_diagnostics_faults \
+		-P "tb_mister_magik_video_diagnostics_faults.FAULT_CASE=$fault_case" \
+		-o "$build_dir/tb_mister_magik_video_diagnostics_faults-$fault_case.vvp" \
+		"$rtl_dir/mister_magik_video_diagnostics_control.sv" \
+		"$rtl_dir/tb_mister_magik_video_diagnostics_faults.sv"
+	vvp "$build_dir/tb_mister_magik_video_diagnostics_faults-$fault_case.vvp"
+done
+
 iverilog -g2012 -Wall -Wimplicit -I "$rtl_dir" \
 	-s tb_mister_magik_scaler_completion_cdc \
 	-o "$build_dir/tb_mister_magik_scaler_completion_cdc.vvp" \

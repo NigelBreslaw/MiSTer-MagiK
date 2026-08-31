@@ -32,7 +32,7 @@ DIAGNOSTIC_ARCHITECTURES = {
     "scaler-off-domain-scheduler-snapshot-v1",
     "scaler-off-domain-scheduler-snapshot-v2",
     "scaler-off-domain-scheduler-terminal-v3",
-    "scaler-off-domain-scheduler-terminal-v4",
+    "scaler-off-domain-scheduler-terminal-v5",
     "stock-uninstrumented-v1",
 }
 CANONICAL_QUARTUS_SEED_SOURCE = (

@@ -1,6 +1,24 @@
 # Passive FPGA HDMI evidence
 
-## Active moving-band campaign: schema 21
+## Active moving-band campaign: schema 22
+
+Schema 21 proved that the one-shot terminal observer itself can fail, but its
+single `observer_fault` cause could not distinguish a malformed burst, FIFO
+overflow, orphan return, stopped snapshot mailbox, or a snapshot invalidated
+by reset, progress, or an impossible scheduler outcome. The preserved record
+`[21, 9, 6, 60722]` is therefore valid evidence of an observer failure, not a
+root-cause attribution.
+
+Schema 22, `scaler-off-domain-scheduler-terminal-v5`, keeps the same four-word
+record, nine-bit scheduler CDC payload, one-shot publication, and production
+isolation. It uses the previously spare fourth cause bit to assign a distinct
+immutable cause to each of those seven observer failures. The host reports the
+cause name and presents scheduler predicates only for a real
+`no_request_seen` scheduler snapshot, so an Avalon-side observer fault cannot
+be mistaken for scheduler evidence. This iteration intentionally adds no
+recovery or arming behavior: it changes attribution only.
+
+## Previous moving-band campaign: schema 21
 
 The preserved 2026-08-28 recurrence showed a byte-stable framebuffer and
 visible moving-band corruption while schema 11 returned CRC-valid but

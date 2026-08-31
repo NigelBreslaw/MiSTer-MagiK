@@ -323,8 +323,13 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
         lines.append(
             f"localparam [15:0] {prefix}_{upper(name)}_MASK = 16'h{((1 << field['width']) - 1):04X};"
         )
-    for name, value in liveness.get("causes", {}).items():
-        lines.append(f"localparam [2:0] {prefix}_CAUSE_{upper(name)} = 3'd{value};")
+    causes = liveness.get("causes", {})
+    cause_width = max(1, max(causes.values(), default=0).bit_length())
+    for name, value in causes.items():
+        lines.append(
+            f"localparam [{cause_width - 1}:0] {prefix}_CAUSE_{upper(name)} = "
+            f"{cause_width}'d{value};"
+        )
     for name, value in liveness.get("monitor_states", {}).items():
         lines.append(f"localparam [1:0] {prefix}_MONITOR_{upper(name)} = 2'd{value};")
     for name, value in liveness.get("constants", {}).items():

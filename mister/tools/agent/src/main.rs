@@ -4480,6 +4480,7 @@ mod linux {
                             | "scaler-off-domain-scheduler-snapshot-v2"
                             | "scaler-off-domain-scheduler-terminal-v3"
                             | "scaler-off-domain-scheduler-terminal-v4"
+                            | "scaler-off-domain-scheduler-terminal-v5"
                     ) {
                         scaler_pre_read_scheduler_classification(first)
                     } else if first.architecture() == "scaler-output-scheduler-gates-v1" {
@@ -5027,6 +5028,7 @@ mod linux {
                             | "scaler-off-domain-scheduler-snapshot-v2"
                             | "scaler-off-domain-scheduler-terminal-v3"
                             | "scaler-off-domain-scheduler-terminal-v4"
+                            | "scaler-off-domain-scheduler-terminal-v5"
                     );
                     let output_scheduler_state = architecture == "scaler-output-scheduler-gates-v1";
                     let avalon_gate_state = architecture == "scaler-fetch-no-request-gates-v1";
@@ -5037,7 +5039,10 @@ mod linux {
                             | "scaler-off-domain-scheduler-snapshot-v2"
                             | "scaler-off-domain-scheduler-terminal-v3"
                             | "scaler-off-domain-scheduler-terminal-v4"
+                            | "scaler-off-domain-scheduler-terminal-v5"
                     );
+                    let pre_read_scheduler_evidence = pre_read_scheduler_state
+                        && samples.iter().all(|sample| sample.no_request_seen());
                     let classification = scaler_fetch_liveness_classification(samples);
                     let valid_samples = samples.iter().all(|sample| sample.record_valid());
                     let advancing = nibble_sequences_advance(
@@ -5065,15 +5070,16 @@ mod linux {
                         "normal_liveness_seen": samples.iter().map(|sample| sample.normal_liveness_seen()).collect::<Vec<_>>(),
                         "first_stall_valid": samples.iter().map(|sample| sample.first_stall_valid()).collect::<Vec<_>>(),
                         "observer_fault": samples.iter().map(|sample| sample.observer_fault()).collect::<Vec<_>>(),
+                        "observer_fault_name": samples.iter().map(|sample| sample.observer_fault_name()).collect::<Vec<_>>(),
                         "flags": samples.iter().map(|sample| sample.flags()).collect::<Vec<_>>(),
                         "publication_sequence": samples.iter().map(|sample| sample.publication_sequence()).collect::<Vec<_>>(),
-                        "frozen_address_fold": (!output_scheduler_state && !pre_read_scheduler_state).then(|| samples.iter().map(|sample| sample.frozen_address_fold()).collect::<Vec<_>>()),
-                        "return_phase": (!pre_read_scheduler_state).then(|| samples.iter().map(|sample| sample.return_phase()).collect::<Vec<_>>()),
-                        "fifo_depth": (!pre_read_scheduler_state).then(|| samples.iter().map(|sample| sample.fifo_depth()).collect::<Vec<_>>()),
-                        "monitor_state": (!pre_read_scheduler_state).then(|| samples.iter().map(|sample| sample.monitor_state()).collect::<Vec<_>>()),
+                        "frozen_address_fold": (!output_scheduler_state && !pre_read_scheduler_evidence).then(|| samples.iter().map(|sample| sample.frozen_address_fold()).collect::<Vec<_>>()),
+                        "return_phase": (!pre_read_scheduler_evidence).then(|| samples.iter().map(|sample| sample.return_phase()).collect::<Vec<_>>()),
+                        "fifo_depth": (!pre_read_scheduler_evidence).then(|| samples.iter().map(|sample| sample.fifo_depth()).collect::<Vec<_>>()),
+                        "monitor_state": (!pre_read_scheduler_evidence).then(|| samples.iter().map(|sample| sample.monitor_state()).collect::<Vec<_>>()),
                         "frozen_cause": samples.iter().map(|sample| sample.frozen_cause()).collect::<Vec<_>>(),
-                        "frozen_return_phase": (!output_scheduler_state && !pre_read_scheduler_state).then(|| samples.iter().map(|sample| sample.frozen_return_phase()).collect::<Vec<_>>()),
-                        "frozen_fifo_depth": (!output_scheduler_state && !pre_read_scheduler_state).then(|| samples.iter().map(|sample| sample.frozen_fifo_depth()).collect::<Vec<_>>()),
+                        "frozen_return_phase": (!output_scheduler_state && !pre_read_scheduler_evidence).then(|| samples.iter().map(|sample| sample.frozen_return_phase()).collect::<Vec<_>>()),
+                        "frozen_fifo_depth": (!output_scheduler_state && !pre_read_scheduler_evidence).then(|| samples.iter().map(|sample| sample.frozen_fifo_depth()).collect::<Vec<_>>()),
                         "reset_since_normal_liveness": samples.iter().map(|sample| sample.reset_since_normal_liveness()).collect::<Vec<_>>(),
                         "no_request_seen": samples.iter().map(|sample| sample.no_request_seen()).collect::<Vec<_>>(),
                         "state": samples.iter().map(|sample| sample.state()).collect::<Vec<_>>(),
@@ -5110,22 +5116,22 @@ mod linux {
                         "copy_terminal_ready": output_scheduler_state.then(|| samples.iter().map(|sample| sample.copy_terminal_ready()).collect::<Vec<_>>()),
                         }),
                         json!({
-                        "window_valid": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.window_valid()).collect::<Vec<_>>()),
-                        "output_enable_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.output_enable_seen()).collect::<Vec<_>>()),
-                        "horizontal_sync_edge_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.horizontal_sync_edge_seen()).collect::<Vec<_>>()),
-                        "horizontal_start_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.horizontal_start_seen()).collect::<Vec<_>>()),
-                        "hsync_state_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.hsync_state_seen()).collect::<Vec<_>>()),
-                        "vertical_iteration_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.vertical_iteration_seen()).collect::<Vec<_>>()),
-                        "vertical_decision_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.vertical_decision_seen()).collect::<Vec<_>>()),
-                        "read_entry_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.read_entry_seen()).collect::<Vec<_>>()),
-                        "no_read_exit_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.no_read_exit_seen()).collect::<Vec<_>>()),
-                        "skip_vertical_pixel_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.skip_vertical_pixel_seen()).collect::<Vec<_>>()),
-                        "skip_vertical_carry_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.skip_vertical_carry_seen()).collect::<Vec<_>>()),
-                        "read_state_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.read_state_seen()).collect::<Vec<_>>()),
-                        "address_ready_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.address_ready_seen()).collect::<Vec<_>>()),
-                        "request_issue_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.request_issue_seen()).collect::<Vec<_>>()),
-                        "wait_read_state_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.wait_read_state_seen()).collect::<Vec<_>>()),
-                        "vertical_size_zero_seen": pre_read_scheduler_state.then(|| samples.iter().map(|sample| sample.vertical_size_zero_seen()).collect::<Vec<_>>()),
+                        "window_valid": pre_read_scheduler_evidence.then(|| samples.iter().map(|sample| sample.window_valid()).collect::<Vec<_>>()),
+                        "output_enable_seen": pre_read_scheduler_evidence.then(|| samples.iter().map(|sample| sample.output_enable_seen()).collect::<Vec<_>>()),
+                        "horizontal_sync_edge_seen": pre_read_scheduler_evidence.then(|| samples.iter().map(|sample| sample.horizontal_sync_edge_seen()).collect::<Vec<_>>()),
+                        "horizontal_start_seen": pre_read_scheduler_evidence.then(|| samples.iter().map(|sample| sample.horizontal_start_seen()).collect::<Vec<_>>()),
+                        "hsync_state_seen": pre_read_scheduler_evidence.then(|| samples.iter().map(|sample| sample.hsync_state_seen()).collect::<Vec<_>>()),
+                        "vertical_iteration_seen": pre_read_scheduler_evidence.then(|| samples.iter().map(|sample| sample.vertical_iteration_seen()).collect::<Vec<_>>()),
+                        "vertical_decision_seen": pre_read_scheduler_evidence.then(|| samples.iter().map(|sample| sample.vertical_decision_seen()).collect::<Vec<_>>()),
+                        "read_entry_seen": pre_read_scheduler_evidence.then(|| samples.iter().map(|sample| sample.read_entry_seen()).collect::<Vec<_>>()),
+                        "no_read_exit_seen": pre_read_scheduler_evidence.then(|| samples.iter().map(|sample| sample.no_read_exit_seen()).collect::<Vec<_>>()),
+                        "skip_vertical_pixel_seen": pre_read_scheduler_evidence.then(|| samples.iter().map(|sample| sample.skip_vertical_pixel_seen()).collect::<Vec<_>>()),
+                        "skip_vertical_carry_seen": pre_read_scheduler_evidence.then(|| samples.iter().map(|sample| sample.skip_vertical_carry_seen()).collect::<Vec<_>>()),
+                        "read_state_seen": pre_read_scheduler_evidence.then(|| samples.iter().map(|sample| sample.read_state_seen()).collect::<Vec<_>>()),
+                        "address_ready_seen": pre_read_scheduler_evidence.then(|| samples.iter().map(|sample| sample.address_ready_seen()).collect::<Vec<_>>()),
+                        "request_issue_seen": pre_read_scheduler_evidence.then(|| samples.iter().map(|sample| sample.request_issue_seen()).collect::<Vec<_>>()),
+                        "wait_read_state_seen": pre_read_scheduler_evidence.then(|| samples.iter().map(|sample| sample.wait_read_state_seen()).collect::<Vec<_>>()),
+                        "vertical_size_zero_seen": pre_read_scheduler_evidence.then(|| samples.iter().map(|sample| sample.vertical_size_zero_seen()).collect::<Vec<_>>()),
                         }),
                     ];
                     let mut scaler_fetch_liveness_fields = serde_json::Map::new();

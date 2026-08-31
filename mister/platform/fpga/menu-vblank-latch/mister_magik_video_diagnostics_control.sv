@@ -184,7 +184,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 	reg [23:0] progress_watchdog = 24'd0;
 	reg snapshot_request_toggle = 1'b0;
 	reg snapshot_pending = 1'b0;
-	reg snapshot_invalidated = 1'b0;
+	reg snapshot_reset_invalidated = 1'b0;
+	reg snapshot_progress_invalidated = 1'b0;
 	wire snapshot_response_toggle;
 	wire [8:0] snapshot_evidence_hold;
 	(* preserve, dont_replicate *) reg [8:0] scheduler_snapshot_capture = 9'd0;
@@ -203,10 +204,12 @@ module mister_magik_scaler_fetch_liveness_state #(
 	// leaves all terminal selection in the local clock domain.
 	reg [1:0] avalon_terminal_fifo_depth = 2'd0;
 	reg [6:0] avalon_terminal_return_phase = 7'd0;
-	reg [2:0] avalon_terminal_cause = 3'd0;
-	wire [2:0] frozen_cause = avalon_terminal_cause;
+	reg [3:0] avalon_terminal_cause = 4'd0;
+	wire [3:0] frozen_cause = avalon_terminal_cause;
 	wire observer_fault = !no_request_seen &&
-		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT;
+		frozen_cause >= MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_BAD_BURST &&
+		frozen_cause <=
+			MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_SNAPSHOT_INVALID_OUTCOME;
 	wire first_stall_valid = no_request_seen ||
 		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_ACCEPT_BLOCKED ||
 		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_FIRST_RETURN_MISSING ||
@@ -274,6 +277,13 @@ module mister_magik_scaler_fetch_liveness_state #(
 	wire observer_fault_event =
 		bad_burst_event || fifo_overflow_event || unexpected_return_event ||
 		snapshot_timeout_event;
+	wire [3:0] observer_fault_cause = bad_burst_event ?
+		MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_BAD_BURST :
+		(fifo_overflow_event ?
+			MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FIFO_OVERFLOW :
+			(unexpected_return_event ?
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_ORPHAN_RETURN :
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_SNAPSHOT_TIMEOUT));
 	wire [5:0] scheduler_snapshot_outcomes = scheduler_snapshot_capture[5:0];
 	wire scheduler_snapshot_outcome_valid =
 		scheduler_snapshot_outcomes != 6'd0 &&
@@ -289,7 +299,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 
 	wire [15:0] scheduler_terminal_state = {7'd0, scheduler_snapshot_capture};
 	wire [15:0] avalon_terminal_state = {
-		4'd0,
+		3'd0,
 		avalon_terminal_fifo_depth,
 		avalon_terminal_return_phase,
 		avalon_terminal_cause
@@ -375,7 +385,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 	endfunction
 
 	always @(posedge clk_100m) begin : observe_fetch
-		reg [2:0] timeout_cause;
+		reg [3:0] timeout_cause;
 		reset_meta <= reset_req;
 		reset_sync <= reset_meta;
 		reset_sync_d <= reset_sync;
@@ -397,7 +407,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 			reset_low_count <= 3'd0;
 			blocked_request_seen <= 1'b0;
 			if(snapshot_pending)
-				snapshot_invalidated <= 1'b1;
+				snapshot_reset_invalidated <= 1'b1;
 		end
 		else if(!reset_qualified) begin
 			if(!terminal_valid) begin
@@ -411,7 +421,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 		end
 		else begin
 			if(snapshot_pending && expected_progress)
-				snapshot_invalidated <= 1'b1;
+				snapshot_progress_invalidated <= 1'b1;
 
 			if(fifo_count == 2'd0 && vbuf_read && vbuf_waitrequest)
 				blocked_request_seen <= 1'b1;
@@ -445,8 +455,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 		if(!first_stall_valid && !observer_fault && observer_fault_event) begin
 			avalon_terminal_fifo_depth <= fifo_count;
 			avalon_terminal_return_phase <= return_phase;
-			avalon_terminal_cause <=
-				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT;
+			avalon_terminal_cause <= observer_fault_cause;
 			if(unexpected_return_event) begin
 				if(!ever_qualified)
 					reset_ambiguity <= 1'b1;
@@ -460,12 +469,20 @@ module mister_magik_scaler_fetch_liveness_state #(
 		end
 		else if(!first_stall_valid && !observer_fault && snapshot_complete) begin
 			snapshot_pending <= 1'b0;
-			if(snapshot_invalidated || expected_progress || reset_sync ||
+			if(snapshot_reset_invalidated || reset_sync ||
+				snapshot_progress_invalidated || expected_progress ||
 				!scheduler_snapshot_outcome_valid) begin
 				avalon_terminal_fifo_depth <= fifo_count;
 				avalon_terminal_return_phase <= return_phase;
-				avalon_terminal_cause <=
-					MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT;
+				if(snapshot_reset_invalidated || reset_sync)
+					avalon_terminal_cause <=
+						MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_SNAPSHOT_RESET_INVALIDATED;
+				else if(snapshot_progress_invalidated || expected_progress)
+					avalon_terminal_cause <=
+						MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_SNAPSHOT_PROGRESS_INVALIDATED;
+				else
+					avalon_terminal_cause <=
+						MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_SNAPSHOT_INVALID_OUTCOME;
 			end
 			else begin
 				no_request_seen <= 1'b1;
@@ -484,7 +501,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 			if(timeout_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN) begin
 				snapshot_request_toggle <= ~snapshot_request_toggle;
 				snapshot_pending <= 1'b1;
-				snapshot_invalidated <= 1'b0;
+				snapshot_reset_invalidated <= 1'b0;
+				snapshot_progress_invalidated <= 1'b0;
 			end
 			else begin
 				avalon_terminal_fifo_depth <= fifo_count;
