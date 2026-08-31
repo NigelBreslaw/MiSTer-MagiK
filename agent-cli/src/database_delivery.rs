@@ -14,9 +14,8 @@ use crate::progress::{EventKind, Reporter};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const STAGE_FILES: [&str; 5] = [
-    "mame.sqlite3",
-    "hbmame.sqlite3",
+const STAGE_FILES: [&str; 4] = [
+    "magik-metadata-v1.bin",
     "arcade-updater-index-v1.lz4b",
     "game-databases-SHA256SUMS",
     "game-databases-manifest.json",
@@ -75,7 +74,7 @@ pub fn execute(
         EventKind::Completed,
         "database-validation",
         &format!(
-            "validated game-databases-v{}; staged exactly five database files",
+            "validated game-databases-v{}; staged exactly four database files",
             prepared.release_version
         ),
         Some(45),
@@ -234,7 +233,7 @@ fn validate_stage_shape(stage: &Path) -> AgentResult<()> {
     expected.sort_unstable();
     if entries != expected {
         return Err(format!(
-            "database stage must contain exactly five files; found {}",
+            "database stage must contain exactly four files; found {}",
             entries.join(", ")
         )
         .into());
@@ -309,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn stage_shape_accepts_exactly_the_five_deploy_files() {
+    fn stage_shape_accepts_exactly_the_four_deploy_files() {
         let stage = std::env::temp_dir().join(format!(
             "mister-magik-database-stage-shape-{}",
             std::process::id()

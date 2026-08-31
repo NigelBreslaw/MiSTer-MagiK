@@ -117,8 +117,7 @@ pub(super) fn platform_deploy_files() -> Vec<(&'static str, String)> {
 
 pub(super) fn database_deploy_files() -> Vec<(&'static str, String)> {
     [
-        "mame.sqlite3",
-        "hbmame.sqlite3",
+        "magik-metadata-v1.bin",
         "arcade-updater-index-v1.lz4b",
         "game-databases-SHA256SUMS",
         "game-databases-manifest.json",
@@ -274,8 +273,7 @@ impl PlatformDeployTransaction {
                 .filter(|name| {
                     matches!(
                         *name,
-                        "mame.sqlite3"
-                            | "hbmame.sqlite3"
+                        "magik-metadata-v1.bin"
                             | "arcade-updater-index-v1.lz4b"
                             | "game-databases-manifest.json"
                     )
@@ -691,7 +689,7 @@ mod tests {
     }
 
     #[test]
-    fn database_deploy_noop_skips_all_five_files() {
+    fn database_deploy_noop_skips_all_four_files() {
         let (stage, transaction) = database_stage("noop");
         let remote = ScriptedDatabaseRemote {
             inventory: database_inventory(&transaction, &[]),
@@ -703,7 +701,7 @@ mod tests {
         let report = transaction.run_with(&remote, &mut metrics).unwrap();
 
         assert_eq!(report.changed_files, 0);
-        assert_eq!(report.skipped_files, 5);
+        assert_eq!(report.skipped_files, 4);
         assert_eq!(report.transferred_bytes, 0);
         assert_eq!(remote.events.borrow().len(), 1);
         assert_eq!(metrics, DeliveryTransferMetrics::default());
@@ -713,7 +711,7 @@ mod tests {
     #[test]
     fn database_deploy_transfers_only_changed_files() {
         let (stage, transaction) = database_stage("changed");
-        let changed = "/media/fat/mister-magik-dev/mame.sqlite3";
+        let changed = "/media/fat/mister-magik-dev/magik-metadata-v1.bin";
         let remote = ScriptedDatabaseRemote {
             inventory: database_inventory(&transaction, &[(changed, false)]),
             events: RefCell::new(Vec::new()),
@@ -725,7 +723,7 @@ mod tests {
         let events = remote.events.borrow();
 
         assert_eq!(report.changed_files, 1);
-        assert_eq!(report.skipped_files, 4);
+        assert_eq!(report.skipped_files, 3);
         assert_eq!(metrics.files, 1);
         assert!(
             events
@@ -748,10 +746,10 @@ mod tests {
         let remote = ScriptedDatabaseRemote {
             inventory: database_inventory(
                 &transaction,
-                &[("/media/fat/mister-magik-dev/mame.sqlite3", false)],
+                &[("/media/fat/mister-magik-dev/magik-metadata-v1.bin", false)],
             ),
             events: RefCell::new(Vec::new()),
-            fail_command_containing: Some("mame.sqlite3.upload"),
+            fail_command_containing: Some("magik-metadata-v1.bin.upload"),
         };
 
         let error = transaction
@@ -763,7 +761,7 @@ mod tests {
 
         assert!(error.contains("database activation"));
         assert!(activation.contains("trap rollback EXIT INT TERM"));
-        assert!(activation.contains("mame.sqlite3.rollback"));
+        assert!(activation.contains("magik-metadata-v1.bin.rollback"));
         assert_eq!(
             events
                 .iter()

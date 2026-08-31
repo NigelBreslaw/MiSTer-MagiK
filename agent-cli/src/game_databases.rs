@@ -14,11 +14,13 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 pub const FORMAT: &str = "mister-magik-game-databases-manifest-v3";
+pub const COMPACT_FORMAT: &str = "mister-magik-game-databases-manifest-v4";
 pub const PREVIOUS_FORMAT: &str = "mister-magik-game-databases-manifest-v2";
 pub const LEGACY_FORMAT: &str = "mister-magik-game-databases-manifest-v1";
 pub const MANIFEST: &str = "game-databases-manifest.json";
 pub const CHECKSUMS: &str = "SHA256SUMS";
 const DATABASES: [&str; 2] = ["mame.sqlite3", "hbmame.sqlite3"];
+const RUNTIME_METADATA: &str = "magik-metadata-v1.bin";
 const ARCADE_DATABASE_CSV: &str = "ArcadeDatabase.csv";
 const ARCADE_DATABASE_LICENSE: &str = "ArcadeDatabase-LICENSE.txt";
 const ARCADE_UPDATER_INDEX: &str = mister_magik_catalog::arcade_updater_index::FILE_NAME;
@@ -41,6 +43,7 @@ pub struct Create<'a> {
     pub arcade_database_builder_sha: &'a str,
     pub arcade_updater_builder_sha: &'a str,
     pub arcade_updater_index: &'a Path,
+    pub runtime_metadata: Option<&'a Path>,
     pub output: &'a Path,
 }
 
@@ -80,8 +83,14 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
     if request.listxml_asset.is_empty() || request.listxml_asset.contains('/') {
         return classified("invalid_listxml_asset", request.listxml_asset);
     }
-    validate_database(request.mame, DatabaseKind::Mame, Some(request.mame_tag))?;
-    validate_database(request.hbmame, DatabaseKind::Hbmame, None)?;
+    if let Some(runtime_metadata) = request.runtime_metadata {
+        let bytes = fs::read(runtime_metadata).map_err(|error| error.to_string())?;
+        mister_magik_catalog::runtime_metadata::MetadataStore::from_bytes(&bytes)
+            .map_err(|error| format!("invalid compact metadata: {error}"))?;
+    } else {
+        validate_database(request.mame, DatabaseKind::Mame, Some(request.mame_tag))?;
+        validate_database(request.hbmame, DatabaseKind::Hbmame, None)?;
+    }
     let arcade_csv_sha256 = digest(request.arcade_database_csv)?;
     let arcade_license_sha256 = digest(request.arcade_database_license)?;
     validate_arcade_database(
@@ -104,15 +113,25 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
         .join(".arcade-updater-index-v1.enriched.lz4b");
     updater_index.write(&enriched_updater_index)?;
     let updater_index_sha256 = digest(&enriched_updater_index)?;
-    let entries = vec![
-        file_entry(DATABASES[0], request.mame)?,
-        file_entry(DATABASES[1], request.hbmame)?,
+    let mut entries = Vec::new();
+    if let Some(runtime_metadata) = request.runtime_metadata {
+        entries.push(file_entry(RUNTIME_METADATA, runtime_metadata)?);
+    } else {
+        entries.push(file_entry(DATABASES[0], request.mame)?);
+        entries.push(file_entry(DATABASES[1], request.hbmame)?);
+    }
+    entries.extend([
         file_entry(ARCADE_DATABASE_CSV, request.arcade_database_csv)?,
         file_entry(ARCADE_DATABASE_LICENSE, request.arcade_database_license)?,
         file_entry(ARCADE_UPDATER_INDEX, &enriched_updater_index)?,
-    ];
+    ]);
+    let format = if request.runtime_metadata.is_some() {
+        COMPACT_FORMAT
+    } else {
+        FORMAT
+    };
     let payload = json!({
-        "format": FORMAT,
+        "format": format,
         "release_version": request.release_version,
         "sources": {
             "mame": {"tag": request.mame_tag, "sha": request.mame_sha, "listxml_asset": request.listxml_asset, "listxml_sha256": request.listxml_sha256, "builder_sha": request.mame_builder_sha},
@@ -138,13 +157,18 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
     let manifest =
         serde_json::to_string_pretty(&payload).map_err(|error| error.to_string())? + "\n";
     let mut checksums = String::new();
-    for (name, path) in [
-        (DATABASES[0], request.mame),
-        (DATABASES[1], request.hbmame),
+    let mut files = Vec::new();
+    if let Some(runtime_metadata) = request.runtime_metadata {
+        files.push((RUNTIME_METADATA, runtime_metadata));
+    } else {
+        files.extend([(DATABASES[0], request.mame), (DATABASES[1], request.hbmame)]);
+    }
+    files.extend([
         (ARCADE_DATABASE_CSV, request.arcade_database_csv),
         (ARCADE_DATABASE_LICENSE, request.arcade_database_license),
         (ARCADE_UPDATER_INDEX, enriched_updater_index.as_path()),
-    ] {
+    ]);
+    for (name, path) in &files {
         checksums.push_str(&format!("{}  {name}\n", digest(path)?));
     }
     checksums.push_str(&format!(
@@ -157,15 +181,9 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
     ));
     let mut writer = ZipWriter::new(File::create(&archive).map_err(|error| error.to_string())?);
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-    for (name, path) in [
-        (DATABASES[0], request.mame),
-        (DATABASES[1], request.hbmame),
-        (ARCADE_DATABASE_CSV, request.arcade_database_csv),
-        (ARCADE_DATABASE_LICENSE, request.arcade_database_license),
-        (ARCADE_UPDATER_INDEX, enriched_updater_index.as_path()),
-    ] {
+    for (name, path) in &files {
         writer
-            .start_file(name, options)
+            .start_file(*name, options)
             .map_err(|error| error.to_string())?;
         std::io::copy(
             &mut File::open(path).map_err(|error| error.to_string())?,
@@ -244,7 +262,10 @@ pub fn verify(
     if has_arcade_database(&payload) {
         verify_arcade_database_source_files(&payload, &files)?;
     }
-    if payload["format"] == FORMAT {
+    if matches!(
+        payload["format"].as_str(),
+        Some(FORMAT) | Some(COMPACT_FORMAT)
+    ) {
         let index = mister_magik_catalog::arcade_updater_index::ArcadeUpdaterIndex::decode(
             &files[ARCADE_UPDATER_INDEX],
         )?;
@@ -282,28 +303,43 @@ pub fn verify(
             );
         }
     }
-    with_extracted_databases(&files, |mame, hbmame| {
-        validate_database(
-            mame,
-            DatabaseKind::Mame,
-            payload.pointer("/sources/mame/tag").and_then(Value::as_str),
+    if payload["format"] == COMPACT_FORMAT {
+        let bytes = files
+            .get(RUNTIME_METADATA)
+            .ok_or_else(|| AgentError::Classified {
+                code: "database_archive_shape",
+                detail: "compact metadata is missing".to_owned(),
+            })?;
+        mister_magik_catalog::runtime_metadata::MetadataStore::from_bytes(bytes).map_err(
+            |error| AgentError::Classified {
+                code: "invalid_compact_metadata",
+                detail: error,
+            },
         )?;
-        validate_database(hbmame, DatabaseKind::Hbmame, None)?;
-        if has_arcade_database(&payload) {
-            validate_arcade_database(
+    } else {
+        with_extracted_databases(&files, |mame, hbmame| {
+            validate_database(
                 mame,
-                payload
-                    .pointer("/sources/arcade_database/sha")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-                payload
-                    .pointer("/sources/arcade_database/csv_sha256")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
+                DatabaseKind::Mame,
+                payload.pointer("/sources/mame/tag").and_then(Value::as_str),
             )?;
-        }
-        Ok(())
-    })?;
+            validate_database(hbmame, DatabaseKind::Hbmame, None)?;
+            if has_arcade_database(&payload) {
+                validate_arcade_database(
+                    mame,
+                    payload
+                        .pointer("/sources/arcade_database/sha")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    payload
+                        .pointer("/sources/arcade_database/csv_sha256")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                )?;
+            }
+            Ok(())
+        })?;
+    }
     Ok(payload)
 }
 
@@ -444,7 +480,7 @@ fn parse_updater_revisions(values: &[String]) -> AgentResult<BTreeMap<String, St
 fn validate_manifest(payload: &Value) -> AgentResult<()> {
     if !matches!(
         payload["format"].as_str(),
-        Some(FORMAT) | Some(PREVIOUS_FORMAT) | Some(LEGACY_FORMAT)
+        Some(FORMAT) | Some(COMPACT_FORMAT) | Some(PREVIOUS_FORMAT) | Some(LEGACY_FORMAT)
     ) || payload["release_version"]
         .as_u64()
         .is_none_or(|value| value == 0)
@@ -522,7 +558,10 @@ fn validate_manifest(payload: &Value) -> AgentResult<()> {
             )?;
         }
     }
-    if payload["format"] == FORMAT {
+    if matches!(
+        payload["format"].as_str(),
+        Some(FORMAT) | Some(COMPACT_FORMAT)
+    ) {
         if payload
             .pointer("/sources/arcade_updater/format")
             .and_then(Value::as_str)
@@ -561,16 +600,23 @@ fn validate_manifest(payload: &Value) -> AgentResult<()> {
 fn has_arcade_database(payload: &Value) -> bool {
     matches!(
         payload["format"].as_str(),
-        Some(FORMAT) | Some(PREVIOUS_FORMAT)
+        Some(FORMAT) | Some(COMPACT_FORMAT) | Some(PREVIOUS_FORMAT)
     )
 }
 
 fn expected_archive_members(payload: &Value) -> Vec<&'static str> {
-    let mut members = vec![DATABASES[0], DATABASES[1], MANIFEST, CHECKSUMS];
+    let mut members = if payload["format"] == COMPACT_FORMAT {
+        vec![RUNTIME_METADATA, MANIFEST, CHECKSUMS]
+    } else {
+        vec![DATABASES[0], DATABASES[1], MANIFEST, CHECKSUMS]
+    };
     if has_arcade_database(payload) {
         members.extend([ARCADE_DATABASE_CSV, ARCADE_DATABASE_LICENSE]);
     }
-    if payload["format"] == FORMAT {
+    if matches!(
+        payload["format"].as_str(),
+        Some(FORMAT) | Some(COMPACT_FORMAT)
+    ) {
         members.push(ARCADE_UPDATER_INDEX);
     }
     members
