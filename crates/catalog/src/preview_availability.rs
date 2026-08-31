@@ -155,6 +155,10 @@ pub struct PreviewAvailabilityReconciliationOutcome {
     pub candidate_rows: usize,
     pub available_rows: usize,
     pub changed_rows: usize,
+    pub existing_identity_rows: usize,
+    pub derived_identity_rows: usize,
+    pub ambiguous_identity_rows: usize,
+    pub resolver_status: PreviewIdentityResolverStatus,
     pub games: Vec<SystemGame>,
 }
 
@@ -188,6 +192,28 @@ pub fn reconcile_preview_availability(
     pack_path: &Path,
     limits: RegistryLimits,
 ) -> Result<PreviewAvailabilityReconciliationOutcome, PreviewAvailabilityError> {
+    let mut resolver =
+        PreviewIdentityResolver::new(crate::catalog_config::default_mame_sqlite_path());
+    reconcile_preview_availability_with_resolver(
+        storage_root,
+        system_id,
+        pack_path,
+        limits,
+        &mut resolver,
+    )
+}
+
+/// Apply an installed screenshot pack with a caller-owned identity resolver.
+///
+/// Keeping the resolver outside this function allows the media worker to load
+/// MAME metadata once and reuse it for every system and pack reconciliation.
+pub fn reconcile_preview_availability_with_resolver(
+    storage_root: &Path,
+    system_id: &SystemId,
+    pack_path: &Path,
+    limits: RegistryLimits,
+    resolver: &mut PreviewIdentityResolver,
+) -> Result<PreviewAvailabilityReconciliationOutcome, PreviewAvailabilityError> {
     let manifest = read_latest_manifest(storage_root, limits)
         .map_err(|error| PreviewAvailabilityError::new(error.to_string()))?;
     let published = manifest
@@ -196,16 +222,19 @@ pub fn reconcile_preview_availability(
         .find(|system| &system.system_id == system_id)
         .ok_or_else(|| PreviewAvailabilityError::new("system is absent"))?;
     let games = open_navpack_games(storage_root, published)?;
-    let (games, candidate_rows, available_rows, changed_rows) =
-        reconcile_preview_rows(system_id, pack_path, games)?;
+    let reconciliation = reconcile_preview_rows(system_id, pack_path, games, resolver)?;
     Ok(PreviewAvailabilityReconciliationOutcome {
         system_id: system_id.clone(),
         previous_generation: manifest.generation,
         generation: manifest.generation,
-        candidate_rows,
-        available_rows,
-        changed_rows,
-        games,
+        candidate_rows: reconciliation.candidate_rows,
+        available_rows: reconciliation.available_rows,
+        changed_rows: reconciliation.changed_rows,
+        existing_identity_rows: reconciliation.existing_identity_rows,
+        derived_identity_rows: reconciliation.derived_identity_rows,
+        ambiguous_identity_rows: reconciliation.ambiguous_identity_rows,
+        resolver_status: resolver.status(),
+        games: reconciliation.games,
     })
 }
 
@@ -276,11 +305,22 @@ fn open_navpack_games(
     Ok(games)
 }
 
+struct PreviewRowsReconciliation {
+    games: Vec<SystemGame>,
+    candidate_rows: usize,
+    available_rows: usize,
+    changed_rows: usize,
+    existing_identity_rows: usize,
+    derived_identity_rows: usize,
+    ambiguous_identity_rows: usize,
+}
+
 fn reconcile_preview_rows(
     system_id: &SystemId,
     pack_path: &Path,
     mut games: Vec<SystemGame>,
-) -> Result<(Vec<SystemGame>, usize, usize, usize), PreviewAvailabilityError> {
+    resolver: &mut PreviewIdentityResolver,
+) -> Result<PreviewRowsReconciliation, PreviewAvailabilityError> {
     let stems = crate::preview_worker::preview_archive_sidecar_entry_stems(pack_path)
         .map_err(PreviewAvailabilityError::new)?
         .ok_or_else(|| PreviewAvailabilityError::new("pack index is missing"))?;
@@ -290,9 +330,29 @@ fn reconcile_preview_rows(
     let mut candidate_rows = 0;
     let mut available_rows = 0;
     let mut changed_rows = 0;
+    let mut existing_identity_rows = 0;
+    let mut derived_identity_rows = 0;
+    let mut ambiguous_identity_rows = 0;
     for game in &mut games {
         if game.preview_asset_key.is_empty() {
-            continue;
+            let Some(candidates) = resolver.candidates(system_id, &game.title) else {
+                continue;
+            };
+            let candidates = candidates
+                .into_iter()
+                .filter(|candidate| entries.contains(&candidate.to_ascii_lowercase()))
+                .collect::<Vec<_>>();
+            if candidates.len() > 1 {
+                ambiguous_identity_rows += 1;
+                continue;
+            }
+            let Some(asset_key) = candidates.into_iter().next() else {
+                continue;
+            };
+            game.preview_asset_key = asset_key;
+            derived_identity_rows += 1;
+        } else {
+            existing_identity_rows += 1;
         }
         candidate_rows += 1;
         let available = entries.contains(&game.preview_asset_key.to_ascii_lowercase());
@@ -308,7 +368,15 @@ fn reconcile_preview_rows(
             changed_rows += 1;
         }
     }
-    Ok((games, candidate_rows, available_rows, changed_rows))
+    Ok(PreviewRowsReconciliation {
+        games,
+        candidate_rows,
+        available_rows,
+        changed_rows,
+        existing_identity_rows,
+        derived_identity_rows,
+        ambiguous_identity_rows,
+    })
 }
 
 #[cfg(test)]
