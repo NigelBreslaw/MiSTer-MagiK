@@ -2114,7 +2114,7 @@ fn run_fast_catalog_refresh_in_process(
         phase: "checking".to_string(),
         work_units: 1,
     });
-    let planned = match mister_magik_catalog::fast_catalog_refresh::plan_fast_refresh(
+    let planned = match mister_magik_catalog::fast_catalog_refresh::plan_fast_refresh_classified(
         &storage_root,
         catalog_root,
         request,
@@ -2122,20 +2122,23 @@ fn run_fast_catalog_refresh_in_process(
         Ok(planned) => planned,
         Err(error) => {
             report_catalog_filesystem_headroom(tx, "planning-error");
-            if error.contains("fresh build required") {
-                run_fast_catalog_fresh_build(
-                    root,
-                    catalog_root,
-                    tx,
-                    catalog_profile,
-                    mutation_lease,
-                    bootstrap_run_id,
-                );
-            } else {
-                catalog_profile.fail("planning-failed");
-                let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-                    error: format!("fast catalog refresh planning failed: {error}"),
-                });
+            match error {
+                mister_magik_catalog::fast_catalog_refresh::FastRefreshPlanningError::FreshBuildRequired(_) => {
+                    run_fast_catalog_fresh_build(
+                        root,
+                        catalog_root,
+                        tx,
+                        catalog_profile,
+                        mutation_lease,
+                        bootstrap_run_id,
+                    );
+                }
+                mister_magik_catalog::fast_catalog_refresh::FastRefreshPlanningError::Fatal(error) => {
+                    catalog_profile.fail("planning-failed");
+                    let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                        error: format!("fast catalog refresh planning failed: {error}"),
+                    });
+                }
             }
             return;
         }

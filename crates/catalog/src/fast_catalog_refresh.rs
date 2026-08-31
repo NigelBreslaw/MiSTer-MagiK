@@ -224,6 +224,36 @@ pub struct FastRefreshPlanReport {
     pub(crate) active_manifest: Option<crate::shard_registry::CatalogManifest>,
 }
 
+/// A refresh plan can fail because its disposable state needs regeneration,
+/// or because an unrelated persistence error made planning impossible.  Keep
+/// that distinction explicit so callers can fall back to a fresh build
+/// without parsing human-readable error strings.
+#[derive(Debug, Eq, PartialEq)]
+pub enum FastRefreshPlanningError {
+    FreshBuildRequired(String),
+    Fatal(String),
+}
+
+impl std::fmt::Display for FastRefreshPlanningError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FreshBuildRequired(message) | Self::Fatal(message) => message.fmt(formatter),
+        }
+    }
+}
+
+impl From<String> for FastRefreshPlanningError {
+    fn from(message: String) -> Self {
+        Self::Fatal(message)
+    }
+}
+
+fn refresh_manifest_requires_fresh_build(error: String) -> FastRefreshPlanningError {
+    FastRefreshPlanningError::FreshBuildRequired(format!(
+        "fast refresh manifest is unavailable or incompatible; fresh build required: {error}"
+    ))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FastCatalogSystemOutcome {
@@ -1323,14 +1353,16 @@ fn capture_system_watch_from_specification(
     )
 }
 
-pub fn plan_fast_refresh(
+/// Plan a refresh while preserving whether disposable state must be rebuilt.
+pub fn plan_fast_refresh_classified(
     storage_root: &Path,
     catalog_root: &Path,
     request: FastCatalogRefreshRequest,
-) -> Result<FastRefreshPlanReport, String> {
+) -> Result<FastRefreshPlanReport, FastRefreshPlanningError> {
     let started = std::time::Instant::now();
     let phase_started = std::time::Instant::now();
-    let manifest = read_latest_refresh_manifest(catalog_root)?;
+    let manifest = read_latest_refresh_manifest(catalog_root)
+        .map_err(refresh_manifest_requires_fresh_build)?;
     let manifest_read_us = phase_started
         .elapsed()
         .as_micros()
@@ -1356,10 +1388,10 @@ pub fn plan_fast_refresh(
                 crate::fast_catalog_sources::FAST_SOURCE_ADAPTER_VERSION
             );
     if request == FastCatalogRefreshRequest::Update && !binding_matches {
-        return Err(
+        return Err(FastRefreshPlanningError::FreshBuildRequired(
             "fast refresh state is incompatible with the active catalog; fresh build required"
                 .to_string(),
-        );
+        ));
     }
     let references = manifest
         .systems
@@ -1421,10 +1453,10 @@ pub fn plan_fast_refresh(
         }
     }
     if !watch_errors.is_empty() {
-        return Err(format!(
+        return Err(FastRefreshPlanningError::FreshBuildRequired(format!(
             "fast refresh watch state is unavailable for {} system(s); fresh build required",
             watch_errors.len()
-        ));
+        )));
     }
     let watch_read_us = watch_started
         .elapsed()
@@ -1557,6 +1589,16 @@ pub fn plan_fast_refresh(
         previous_manifest: Some(manifest),
         active_manifest: Some(active),
     })
+}
+
+/// Plan a refresh for callers that only need a conventional error string.
+pub fn plan_fast_refresh(
+    storage_root: &Path,
+    catalog_root: &Path,
+    request: FastCatalogRefreshRequest,
+) -> Result<FastRefreshPlanReport, String> {
+    plan_fast_refresh_classified(storage_root, catalog_root, request)
+        .map_err(|error| error.to_string())
 }
 
 pub fn execute_fast_refresh(
@@ -3045,6 +3087,42 @@ fn sha256_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::fast_five_catalog::FastFiveVariantRelation;
+
+    #[test]
+    fn missing_refresh_manifest_requires_fresh_build() {
+        let storage = crate::test_support::unique_temp_dir("fast-refresh-missing-state-storage");
+        let catalog = crate::test_support::unique_temp_dir("fast-refresh-missing-state-catalog");
+        let error =
+            plan_fast_refresh_classified(&storage, &catalog, FastCatalogRefreshRequest::Update)
+                .expect_err("missing state must request a fresh build");
+        assert!(matches!(
+            error,
+            FastRefreshPlanningError::FreshBuildRequired(message)
+                if message.contains("no valid fast refresh manifest")
+        ));
+        let _ = fs::remove_dir_all(storage);
+        let _ = fs::remove_dir_all(catalog);
+    }
+
+    #[test]
+    fn corrupt_refresh_manifests_require_fresh_build() {
+        let storage = crate::test_support::unique_temp_dir("fast-refresh-corrupt-state-storage");
+        let catalog = crate::test_support::unique_temp_dir("fast-refresh-corrupt-state-catalog");
+        let state_root = refresh_state_root(&catalog);
+        fs::create_dir_all(&state_root).unwrap();
+        fs::write(state_root.join(MANIFEST_A), b"corrupt").unwrap();
+        fs::write(state_root.join(MANIFEST_B), b"also-corrupt").unwrap();
+        let error =
+            plan_fast_refresh_classified(&storage, &catalog, FastCatalogRefreshRequest::Update)
+                .expect_err("corrupt state must request a fresh build");
+        assert!(matches!(
+            error,
+            FastRefreshPlanningError::FreshBuildRequired(message)
+                if message.contains("no valid fast refresh manifest")
+        ));
+        let _ = fs::remove_dir_all(storage);
+        let _ = fs::remove_dir_all(catalog);
+    }
 
     fn state(system_id: &str) -> FastRefreshSystemState {
         let game = SystemGame {
