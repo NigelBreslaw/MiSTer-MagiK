@@ -384,6 +384,43 @@ mod tests {
     use super::*;
     use crate::test_support::{unique_temp_dir, write_mame_software_fixture_db};
 
+    fn game(title: &str, preview_asset_key: &str) -> SystemGame {
+        SystemGame {
+            title: title.to_string(),
+            preview_asset_key: preview_asset_key.to_string(),
+            ..SystemGame::default()
+        }
+    }
+
+    fn write_pack_index(root: &Path, entry_stems: &[&str]) -> PathBuf {
+        let archive = root.join("fixture.mmlz4b");
+        std::fs::write(&archive, [0_u8; 2]).expect("write pack fixture");
+        let mut index = Vec::new();
+        index.extend_from_slice(b"MMIDX02\0");
+        index.extend_from_slice(&2_u64.to_le_bytes());
+        index
+            .extend_from_slice(b"0000000000000000000000000000000000000000000000000000000000000000");
+        index.extend_from_slice(&(entry_stems.len() as u32).to_le_bytes());
+        for stem in entry_stems {
+            let name = format!("{stem}.rgb565");
+            index.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            index.extend_from_slice(&1_u32.to_le_bytes());
+            index.extend_from_slice(&1_u32.to_le_bytes());
+            index.extend_from_slice(&2_u32.to_le_bytes());
+            index.extend_from_slice(&2_u32.to_le_bytes());
+            index.push(1);
+            index.extend_from_slice(&2_u32.to_le_bytes());
+            index.extend_from_slice(&0_u64.to_le_bytes());
+            index.extend_from_slice(name.as_bytes());
+        }
+        std::fs::write(
+            crate::preview_worker::preview_archive_sidecar_path_for_archive(&archive),
+            index,
+        )
+        .expect("write pack index fixture");
+        archive
+    }
+
     #[test]
     fn resolver_does_not_open_metadata_until_a_supported_lookup() {
         let root = unique_temp_dir("preview-identity-lazy");
@@ -482,6 +519,169 @@ mod tests {
                 "mame-software__c64__secondgame".to_string(),
             ])
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reconciliation_preserves_existing_identity_without_loading_metadata() {
+        let root = unique_temp_dir("preview-identity-existing");
+        let archive = write_pack_index(&root, &["existing-key"]);
+        let system = SystemId::parse("nes").expect("valid system");
+        let mut resolver = PreviewIdentityResolver::new(root.join("missing-mame.sqlite3"));
+
+        let outcome = reconcile_preview_rows(
+            &system,
+            &archive,
+            vec![game("Existing Game", "existing-key")],
+            &mut resolver,
+        )
+        .expect("reconcile existing identity");
+
+        assert_eq!(outcome.existing_identity_rows, 1);
+        assert_eq!(outcome.derived_identity_rows, 0);
+        assert_eq!(outcome.available_rows, 1);
+        assert_eq!(outcome.games[0].preview_asset_key, "existing-key");
+        assert!(outcome.games[0].has_preview);
+        assert_eq!(resolver.status(), PreviewIdentityResolverStatus::NotNeeded);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reconciliation_derives_unique_pack_member_from_normalized_title() {
+        let root = unique_temp_dir("preview-identity-derived");
+        let database = root.join("mame.sqlite3");
+        write_mame_software_fixture_db(
+            &database,
+            &[("nes", "metroid", None, "Metroid (USA)", None, None, None)],
+            &[],
+        );
+        let archive = write_pack_index(&root, &["mame-software__nes__metroid"]);
+        let system = SystemId::parse("nes").expect("valid system");
+        let mut resolver = PreviewIdentityResolver::new(&database);
+
+        let outcome = reconcile_preview_rows(
+            &system,
+            &archive,
+            vec![game("Metroid [!]", "")],
+            &mut resolver,
+        )
+        .expect("derive identity");
+
+        assert_eq!(outcome.existing_identity_rows, 0);
+        assert_eq!(outcome.derived_identity_rows, 1);
+        assert_eq!(outcome.ambiguous_identity_rows, 0);
+        assert_eq!(outcome.available_rows, 1);
+        assert_eq!(
+            outcome.games[0].preview_asset_key,
+            "mame-software__nes__metroid"
+        );
+        assert!(outcome.games[0].has_preview);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reconciliation_uses_pack_membership_to_narrow_title_ambiguity() {
+        let root = unique_temp_dir("preview-identity-pack-narrowing");
+        let database = root.join("mame.sqlite3");
+        write_mame_software_fixture_db(
+            &database,
+            &[
+                ("nes", "first", None, "Shared", None, None, None),
+                ("nes", "second", None, "Shared", None, None, None),
+            ],
+            &[],
+        );
+        let archive = write_pack_index(&root, &["mame-software__nes__second"]);
+        let system = SystemId::parse("nes").expect("valid system");
+        let mut resolver = PreviewIdentityResolver::new(&database);
+
+        let outcome =
+            reconcile_preview_rows(&system, &archive, vec![game("Shared", "")], &mut resolver)
+                .expect("narrow ambiguous title");
+
+        assert_eq!(outcome.derived_identity_rows, 1);
+        assert_eq!(outcome.ambiguous_identity_rows, 0);
+        assert_eq!(
+            outcome.games[0].preview_asset_key,
+            "mame-software__nes__second"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reconciliation_leaves_multiple_pack_members_unresolved() {
+        let root = unique_temp_dir("preview-identity-ambiguous-pack");
+        let database = root.join("mame.sqlite3");
+        write_mame_software_fixture_db(
+            &database,
+            &[
+                ("nes", "first", None, "Shared", None, None, None),
+                ("nes", "second", None, "Shared", None, None, None),
+            ],
+            &[],
+        );
+        let archive = write_pack_index(
+            &root,
+            &["mame-software__nes__first", "mame-software__nes__second"],
+        );
+        let system = SystemId::parse("nes").expect("valid system");
+        let mut resolver = PreviewIdentityResolver::new(&database);
+
+        let outcome =
+            reconcile_preview_rows(&system, &archive, vec![game("Shared", "")], &mut resolver)
+                .expect("reject ambiguous title");
+
+        assert_eq!(outcome.derived_identity_rows, 0);
+        assert_eq!(outcome.ambiguous_identity_rows, 1);
+        assert!(outcome.games[0].preview_asset_key.is_empty());
+        assert!(!outcome.games[0].has_preview);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reconciliation_keeps_exact_matches_when_metadata_is_unavailable() {
+        let root = unique_temp_dir("preview-identity-metadata-unavailable");
+        let archive = write_pack_index(&root, &["existing-key"]);
+        let system = SystemId::parse("nes").expect("valid system");
+        let mut resolver = PreviewIdentityResolver::new(root.join("missing-mame.sqlite3"));
+
+        let outcome = reconcile_preview_rows(
+            &system,
+            &archive,
+            vec![game("Existing", "existing-key"), game("Unknown", "")],
+            &mut resolver,
+        )
+        .expect("reconcile without metadata");
+
+        assert_eq!(outcome.existing_identity_rows, 1);
+        assert_eq!(outcome.derived_identity_rows, 0);
+        assert_eq!(outcome.available_rows, 1);
+        assert!(outcome.games[0].has_preview);
+        assert!(outcome.games[1].preview_asset_key.is_empty());
+        assert_eq!(
+            resolver.status(),
+            PreviewIdentityResolverStatus::Unavailable
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reconciliation_does_not_load_metadata_for_unsupported_systems() {
+        let root = unique_temp_dir("preview-identity-unsupported");
+        let archive = write_pack_index(&root, &[]);
+        let system = SystemId::parse("amiga").expect("valid system");
+        let mut resolver = PreviewIdentityResolver::new(root.join("missing-mame.sqlite3"));
+
+        let outcome = reconcile_preview_rows(
+            &system,
+            &archive,
+            vec![game("Unsupported", "")],
+            &mut resolver,
+        )
+        .expect("ignore unsupported system");
+
+        assert_eq!(outcome.candidate_rows, 0);
+        assert_eq!(resolver.status(), PreviewIdentityResolverStatus::NotNeeded);
         let _ = std::fs::remove_dir_all(root);
     }
 }
