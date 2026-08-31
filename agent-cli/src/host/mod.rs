@@ -3546,21 +3546,30 @@ impl FpgaActivationAssessment {
     fn reloadable_not_ready(&self) -> bool {
         // "unavailable" also describes normal boot before Main owns the FPGA.
         // Never turn missing evidence into a stale identity that permits reload.
-        match self {
-            Self::NotReady { observed, .. } if observed == "unverified-observer-fallback-v1" => {
-                true
-            }
+        self.reloadable_fallback() || self.reloadable_same_identity_coherence()
+    }
+
+    fn reloadable_same_identity_coherence(&self) -> bool {
+        matches!(
+            self,
             Self::NotReady {
                 expected,
                 observed,
                 failures,
-            } => {
-                expected == observed
-                    && !failures.is_empty()
-                    && failures.iter().all(|failure| failure.check == "coherence")
-            }
-            _ => false,
-        }
+            } if expected == observed
+                && !failures.is_empty()
+                && failures.iter().all(|failure| failure.check == "coherence")
+        )
+    }
+
+    fn reloadable_fallback(&self) -> bool {
+        matches!(
+            self,
+            Self::NotReady {
+                observed,
+                ..
+            } if observed == "unverified-observer-fallback-v1"
+        )
     }
 
     fn into_stale(self) -> Self {
@@ -3596,9 +3605,16 @@ fn fpga_readiness_action(
         FpgaActivationAssessment::Stale { .. } => FpgaReadinessAction::Reload,
         FpgaActivationAssessment::ArtifactInvalid { .. } => FpgaReadinessAction::Fail,
         FpgaActivationAssessment::NotReady { .. }
-            if assessment.reloadable_not_ready()
+            if assessment.reloadable_fallback()
                 && reloadable_streak >= FPGA_RELOADABLE_STREAK
                 && elapsed >= Duration::from_millis(500) =>
+        {
+            FpgaReadinessAction::Reload
+        }
+        FpgaActivationAssessment::NotReady { .. }
+            if assessment.reloadable_same_identity_coherence()
+                && reloadable_streak >= FPGA_RELOADABLE_STREAK
+                && elapsed >= FPGA_READINESS_TIMEOUT =>
         {
             FpgaReadinessAction::Reload
         }
@@ -39564,6 +39580,10 @@ H: Handlers=event3 js0"#
         );
         assert_eq!(
             fpga_readiness_action(&coherence_timeout, 3, Duration::from_millis(500)),
+            FpgaReadinessAction::Continue
+        );
+        assert_eq!(
+            fpga_readiness_action(&coherence_timeout, 3, FPGA_READINESS_TIMEOUT),
             FpgaReadinessAction::Reload
         );
         let ambiguous_same_identity = FpgaActivationAssessment::NotReady {
