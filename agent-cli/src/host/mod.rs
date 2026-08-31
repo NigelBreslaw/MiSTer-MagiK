@@ -35558,11 +35558,11 @@ fn run_catalog_screenshot_export(system: &str, output: &Path) -> Result<()> {
             report,
             "{}\t{}\t{}\t{}\t{}\t{}",
             ordinal,
-            tsv_field(&game.title),
-            tsv_field(&game.preview_asset_key),
-            tsv_field(&game.preview_archive_path),
+            tsv_field(game.title),
+            tsv_field(game.preview_asset_key),
+            tsv_field(game.preview_archive_path),
             u8::from(game.has_preview),
-            tsv_field(&game.launch_ref),
+            tsv_field(game.launch_ref),
         )?;
     }
     if let Some(parent) = output
