@@ -22,10 +22,24 @@ fn display_choice(
     })
 }
 
-pub fn active_display_choice(runtime_index: usize) -> view::ChoiceOption {
-    display_choice(
+pub fn active_display_choice(
+    runtime_index: usize,
+    fallback_output: Option<(u16, u16)>,
+) -> view::ChoiceOption {
+    let choice = display_choice(
         mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS.get(runtime_index),
-    )
+    );
+    if !choice.label.is_empty() {
+        return choice;
+    }
+    fallback_output
+        .filter(|(width, height)| *width > 0 && *height > 0)
+        .map_or_else(view::ChoiceOption::default, |(width, height)| {
+            view::ChoiceOption {
+                id: "".into(),
+                label: format!("{width}x{height}").into(),
+            }
+        })
 }
 
 pub fn selected_display_choice(runtime_index: usize) -> view::ChoiceOption {
@@ -266,7 +280,9 @@ mod tests {
             .expect("CRT 480p runtime mode");
 
         assert_eq!(
-            active_display_choice(runtime_index).id.as_str(),
+            active_display_choice(runtime_index, Some((1234, 567)))
+                .id
+                .as_str(),
             "crt-480p60"
         );
         assert!(selected_display_choice(runtime_index).id.is_empty());
@@ -274,5 +290,14 @@ mod tests {
             settings_display_choice(runtime_index).id.as_str(),
             "crt-480p60"
         );
+    }
+
+    #[test]
+    fn active_display_uses_output_geometry_when_the_mode_is_unknown() {
+        let choice = active_display_choice(usize::MAX, Some((1920, 1200)));
+
+        assert!(choice.id.is_empty());
+        assert_eq!(choice.label.as_str(), "1920x1200");
+        assert!(active_display_choice(usize::MAX, None).label.is_empty());
     }
 }

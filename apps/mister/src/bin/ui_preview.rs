@@ -1662,6 +1662,7 @@ mod macos {
                     .and_then(|generation| usize::try_from(generation).ok())
                     .or(Some(0)),
                 false,
+                None,
             );
             let (fixture_title, fixture_system_id) = self
                 .launcher_nav
@@ -4830,7 +4831,7 @@ mod macos {
 
                 let production = Launcher::new().expect("production launcher fixture");
                 let mut presenter = LauncherViewPresenters::default();
-                presenter.sync(&production, &nav, &fixtures.catalog, Some(1), false);
+                presenter.sync(&production, &nav, &fixtures.catalog, Some(1), false, None);
                 assert_navigation_projection(&production);
                 assert_settings_projection(&production);
                 assert_input_setup_projection(&production);

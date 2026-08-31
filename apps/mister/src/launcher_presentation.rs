@@ -430,6 +430,7 @@ impl LauncherViewPresenters {
         catalog: &ArcadeCatalog,
         catalog_version: Option<usize>,
         defer_arcade_overlay: bool,
+        active_display_fallback: Option<(u16, u16)>,
     ) {
         let navigation = app.global::<NavigationView>();
         set_if_changed!(
@@ -574,7 +575,7 @@ impl LauncherViewPresenters {
             set_selected_display,
             selected_display_choice(nav.display_selected)
         );
-        let active_display = active_display_choice(nav.display_selected);
+        let active_display = active_display_choice(nav.display_selected, active_display_fallback);
         set_if_changed!(
             settings,
             get_active_display,

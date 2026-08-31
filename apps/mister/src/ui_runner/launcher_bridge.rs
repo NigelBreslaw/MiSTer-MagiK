@@ -165,6 +165,7 @@ pub(super) fn sync_settings_bridge(
     app: &slint_ui::launcher::Launcher,
     nav: &LauncherNav,
     lifecycle: &LauncherLifecycle,
+    ui: &UiDisplay,
 ) {
     let navigation = app.global::<slint_ui::launcher::NavigationView>();
     let screen = crate::launcher_view_types::launcher_screen(nav.screen);
@@ -181,6 +182,7 @@ pub(super) fn sync_settings_bridge(
     ));
     settings.set_active_display(crate::launcher_view_types::active_display_choice(
         nav.display_selected,
+        Some((ui.output_w(), ui.output_h())),
     ));
     settings.set_selected_display(crate::launcher_view_types::selected_display_choice(
         nav.display_selected,
@@ -824,6 +826,7 @@ pub(super) fn sync_bridge_launcher(
         catalog,
         Some(catalog_version),
         defer_selected_preview,
+        Some((ui.output_w(), ui.output_h())),
     );
     let model_projection_us = model_started
         .map(|started| started.elapsed().as_micros())
@@ -878,7 +881,14 @@ pub(super) fn sync_bridge_launcher_light(
     ui: &UiDisplay,
 ) -> LauncherBridgeSyncTiming {
     let model_started = measure_model_projection.then(Instant::now);
-    models.sync(app, nav, catalog, None, defer_arcade_overlay_bridge);
+    models.sync(
+        app,
+        nav,
+        catalog,
+        None,
+        defer_arcade_overlay_bridge,
+        Some((ui.output_w(), ui.output_h())),
+    );
     let model_projection_us = model_started
         .map(|started| started.elapsed().as_micros())
         .unwrap_or(0);
@@ -1651,7 +1661,8 @@ mod tests {
             },
             Instant::now(),
         );
-        sync_settings_bridge(&app, &nav, &lifecycle);
+        let ui = UiDisplay::for_framebuffer(1280, 720);
+        sync_settings_bridge(&app, &nav, &lifecycle, &ui);
 
         let settings = app.global::<slint_ui::launcher::SettingsView>();
         assert_eq!(
@@ -1693,6 +1704,28 @@ mod tests {
         );
         assert!(settings.get_simple_joystick_handling());
         assert!(settings.get_reduce_motion());
+    }
+
+    #[test]
+    fn settings_sync_uses_output_geometry_when_the_active_mode_is_unknown() {
+        init_test_slint_platform();
+        let app = slint_ui::launcher::Launcher::new().expect("launcher component");
+        let nav = LauncherNav::new();
+        let lifecycle = LauncherLifecycle::new(
+            LauncherLifecycleConfig {
+                catalog_worker_enabled: false,
+            },
+            Instant::now(),
+        );
+        let ui = UiDisplay::for_framebuffer(1920, 1200);
+
+        sync_settings_bridge(&app, &nav, &lifecycle, &ui);
+
+        let active = app
+            .global::<slint_ui::launcher::SettingsView>()
+            .get_active_display();
+        assert!(active.id.is_empty());
+        assert_eq!(active.label.as_str(), "1920x1200");
     }
 
     #[test]
@@ -1851,7 +1884,7 @@ mod tests {
             models
                 .note_selection_feedback_change(feedback_before.as_ref(), feedback_after.as_ref(),)
         );
-        models.sync(&app, &nav, &catalog, Some(1), false);
+        models.sync(&app, &nav, &catalog, Some(1), false, None);
         let updated_rows = models.menu_items(&nav, 1);
         let updated_presentation = models.menu_item_presentation();
 
