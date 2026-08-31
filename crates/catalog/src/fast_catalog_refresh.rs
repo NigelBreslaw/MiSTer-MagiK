@@ -1317,10 +1317,13 @@ fn capture_system_watch_from_specification(
         }
     }
     if matches!(system_id, "snes" | "saturn") {
-        for path in [
-            storage_root.join("mister-magik-dev/mame.sqlite3"),
-            storage_root.join("mister-magik/mame.sqlite3"),
-        ] {
+        for path in runtime_metadata_candidates(storage_root)
+            .into_iter()
+            .chain([
+                storage_root.join("mister-magik-dev/mame.sqlite3"),
+                storage_root.join("mister-magik/mame.sqlite3"),
+            ])
+        {
             if path.is_file() {
                 containers.push(capture_container(&path)?);
                 break;
@@ -2209,6 +2212,23 @@ fn watch_specification_from_profiles(
 fn family_metadata_candidates(storage_root: &Path) -> Vec<PathBuf> {
     let dev_root = storage_root.join("mister-magik-dev");
     let stable_root = storage_root.join("mister-magik");
+    let dev_metadata = dev_root.join(crate::runtime_metadata::FILE_NAME);
+    let stable_metadata = stable_root.join(crate::runtime_metadata::FILE_NAME);
+    if dev_metadata.is_file() {
+        return vec![
+            dev_metadata,
+            dev_root.join("mame.sqlite3"),
+            dev_root.join("hbmame.sqlite3"),
+        ];
+    }
+    if stable_metadata.is_file() {
+        return vec![
+            stable_metadata,
+            stable_root.join("mame.sqlite3"),
+            stable_root.join("hbmame.sqlite3"),
+            dev_metadata,
+        ];
+    }
     let dev_mame = dev_root.join("mame.sqlite3");
     let stable_mame = stable_root.join("mame.sqlite3");
     let mut paths = Vec::new();
@@ -2238,6 +2258,22 @@ fn updater_metadata_candidates(storage_root: &Path) -> Vec<PathBuf> {
             stable,
             storage_root.join("mister-magik-dev/arcade-updater-index-v1.lz4b"),
         ]
+    } else {
+        vec![dev, stable]
+    }
+}
+
+fn runtime_metadata_candidates(storage_root: &Path) -> Vec<PathBuf> {
+    let dev = storage_root
+        .join("mister-magik-dev")
+        .join(crate::runtime_metadata::FILE_NAME);
+    let stable = storage_root
+        .join("mister-magik")
+        .join(crate::runtime_metadata::FILE_NAME);
+    if dev.is_file() {
+        vec![dev]
+    } else if stable.is_file() {
+        vec![stable]
     } else {
         vec![dev, stable]
     }

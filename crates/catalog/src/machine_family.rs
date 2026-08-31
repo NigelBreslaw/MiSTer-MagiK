@@ -10,6 +10,7 @@
 
 use crate::library_db;
 use crate::mra_header::RomNamespace;
+use crate::runtime_metadata::{ArcadeShard, MetadataStore};
 use rusqlite::{Connection, params_from_iter};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -40,6 +41,9 @@ struct MachineDatabase {
 
 #[derive(Default)]
 pub(crate) struct MachineFamilyResolver {
+    runtime_metadata: Option<MetadataStore>,
+    runtime_arcade: Option<ArcadeShard>,
+    runtime_unavailable: bool,
     mame_path: Option<PathBuf>,
     hbmame_path: Option<PathBuf>,
     mame: Option<MachineDatabase>,
@@ -64,7 +68,10 @@ impl MachineFamilyResolver {
         ];
         let selected = roots
             .iter()
-            .find(|root| root.join("mame.sqlite3").is_file())
+            .find(|root| {
+                root.join(crate::runtime_metadata::FILE_NAME).is_file()
+                    || root.join("mame.sqlite3").is_file()
+            })
             .cloned();
         let Some(root) = selected else {
             return Ok(Self::default());
@@ -72,6 +79,8 @@ impl MachineFamilyResolver {
         let mame_path = root.join("mame.sqlite3");
         let hbmame_path = root.join("hbmame.sqlite3");
         Ok(Self {
+            runtime_metadata: MetadataStore::open(&root.join(crate::runtime_metadata::FILE_NAME))
+                .ok(),
             mame_path: Some(mame_path),
             hbmame_path: hbmame_path.is_file().then_some(hbmame_path),
             ..Self::default()
@@ -128,6 +137,30 @@ impl MachineFamilyResolver {
             }
         }
         if unresolved.is_empty() {
+            return Ok(output);
+        }
+        if self.runtime_is_available() {
+            let Some(arcade) = self.runtime_arcade.as_ref() else {
+                return Ok(output);
+            };
+            for (identity, namespace) in unresolved {
+                let row = runtime_row(arcade, &identity, namespace.as_ref());
+                if let Some(row) = &row {
+                    match row.source {
+                        MachineSource::Mame => {
+                            self.mame_matches = self.mame_matches.saturating_add(1)
+                        }
+                        MachineSource::Hbmame => {
+                            self.hbmame_matches = self.hbmame_matches.saturating_add(1)
+                        }
+                    }
+                } else {
+                    self.unresolved = self.unresolved.saturating_add(1);
+                }
+                self.cache
+                    .insert((identity.clone(), namespace.clone()), row.clone());
+                output.insert((identity, namespace), row);
+            }
             return Ok(output);
         }
         let mut mame_rows = HashMap::new();
@@ -211,6 +244,26 @@ impl MachineFamilyResolver {
         Ok(())
     }
 
+    fn runtime_is_available(&mut self) -> bool {
+        if self.runtime_unavailable {
+            return false;
+        }
+        if self.runtime_arcade.is_none() {
+            let Some(store) = self.runtime_metadata.as_ref() else {
+                self.runtime_unavailable = true;
+                return false;
+            };
+            match store.arcade_shard() {
+                Ok(Some(shard)) => self.runtime_arcade = Some(shard),
+                Ok(None) | Err(_) => {
+                    self.runtime_unavailable = true;
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     pub(crate) fn finish_log(&self, system: &str) {
         crate::catalog_logln!(
             "fast_catalog_machine_family_tsv\tsystem={system}\trequested={}\tcache_hits={}\tmame_matches={}\thbmame_matches={}\tunresolved={}",
@@ -221,6 +274,53 @@ impl MachineFamilyResolver {
             self.unresolved,
         );
     }
+}
+
+fn runtime_row(
+    shard: &ArcadeShard,
+    identity: &str,
+    namespace: Option<&RomNamespace>,
+) -> Option<ResolvedMachine> {
+    let preferred_hbmame = namespace == Some(&RomNamespace::Hbmame);
+    let preferred_mame = if preferred_hbmame {
+        shard.machine(true, identity)
+    } else {
+        shard.machine(false, identity)
+    };
+    preferred_mame
+        .map(|machine| ResolvedMachine {
+            identity: normalize(&machine.setname),
+            family: machine
+                .parent_setname
+                .as_deref()
+                .map(normalize)
+                .filter(|parent| !parent.is_empty())
+                .unwrap_or_else(|| normalize(&machine.setname)),
+            source: if preferred_hbmame {
+                MachineSource::Hbmame
+            } else {
+                MachineSource::Mame
+            },
+        })
+        .or_else(|| {
+            let fallback_hbmame = !preferred_hbmame;
+            shard
+                .machine(fallback_hbmame, identity)
+                .map(|machine| ResolvedMachine {
+                    identity: normalize(&machine.setname),
+                    family: machine
+                        .parent_setname
+                        .as_deref()
+                        .map(normalize)
+                        .filter(|parent| !parent.is_empty())
+                        .unwrap_or_else(|| normalize(&machine.setname)),
+                    source: if fallback_hbmame {
+                        MachineSource::Hbmame
+                    } else {
+                        MachineSource::Mame
+                    },
+                })
+        })
 }
 
 fn open_database(path: &Path, source: MachineSource) -> Result<MachineDatabase, String> {
@@ -413,6 +513,36 @@ mod tests {
             .unwrap();
         assert!(rows[&(String::from("parent"), None)].is_some());
         assert!(resolver.mame.is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compact_arcade_shard_is_preferred_over_legacy_sqlite() {
+        let (root, _path) = fixture();
+        let metadata_path = root
+            .join("mister-magik-dev")
+            .join(crate::runtime_metadata::FILE_NAME);
+        let mut builder = crate::runtime_metadata::MetadataFileBuilder::new();
+        builder
+            .add_arcade(&crate::runtime_metadata::ArcadeShard {
+                mame: vec![crate::runtime_metadata::ArcadeMachine {
+                    setname: "clone".into(),
+                    parent_setname: Some("compact-parent".into()),
+                    title: "Clone".into(),
+                    year: None,
+                    manufacturer: None,
+                    players: None,
+                    control: None,
+                }],
+                ..crate::runtime_metadata::ArcadeShard::default()
+            })
+            .unwrap();
+        builder.write_to(&metadata_path).unwrap();
+
+        let mut resolver = MachineFamilyResolver::for_storage_root(&root).unwrap();
+        let resolved = resolver.resolve("clone", None).unwrap().unwrap();
+        assert_eq!(resolved.family, "compact-parent");
+        assert_eq!(resolved.source, MachineSource::Mame);
         std::fs::remove_dir_all(root).unwrap();
     }
 
