@@ -65,9 +65,10 @@ systems retain their immutable artifact references. Failed changed systems
 retain their previous published artifacts; a newly discovered system that
 cannot be built is omitted.
 
-`mame.sqlite3` and `hbmame.sqlite3` remain source metadata for Arcade
-classification and family knowledge. They are not launcher databases and are
-not the published catalog.
+`mame.sqlite3` and `hbmame.sqlite3` remain CI/private-build source metadata for
+Arcade classification and family knowledge. They are not runtime inputs,
+launcher databases, or published distribution files; the runtime consumes the
+compact `magik-metadata-v1.bin` container instead.
 
 ## Fresh build
 
@@ -188,11 +189,13 @@ rewritten merely because media availability changed.
 
 When a pack is installed or confirmed current, the media worker also performs
 an in-memory MAME software-list title/family reconciliation for catalog rows
-whose preview key is blank. It reads the numbered-release `mame.sqlite3`
-metadata lazily and intersects unique normalized title matches with the
-installed pack index. Existing keys remain authoritative; ambiguous or missing
-matches remain blank. This pass is non-fatal and never changes the catalog
-generation, manifest, pack, or index formats. Use
+whose preview key is blank. It opens the numbered-release
+`magik-metadata-v1.bin` header/index and reads only the selected system shard,
+then intersects unique normalized title matches with the installed pack index.
+Existing keys remain authoritative; ambiguous or missing matches remain blank.
+This pass is non-fatal and never changes the catalog generation, manifest,
+pack, or index formats. During migration only, a valid legacy SQLite database
+may be used as fallback. Use
 `scripts/agent device catalog screenshots --system <id> --out <path>` to audit
 the effective runtime rows without downloading or writing catalog state.
 

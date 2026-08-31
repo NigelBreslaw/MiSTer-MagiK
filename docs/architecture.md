@@ -1024,11 +1024,13 @@ Current rules:
   registry and per-system mini-navs.
 - MAME XML, MAME software-list XML, and the commit-pinned
   `MiSTer-devel/ArcadeDatabase_MiSTer` CSV are database-publisher inputs only. The
-  production conversion to `mame.sqlite3` runs exclusively in
+  production conversion to source SQLite and then
+  `magik-metadata-v1.bin` runs exclusively in
   `.github/workflows/game-databases.yml`; application distribution consumes a
-  verified immutable `game-databases-vN` release. ArcadeDatabase rows are
-  embedded in `mame.sqlite3`; the runtime scanner consumes
-  SQLite rows, never XML. Local synthetic conversion is test-only.
+  verified immutable `game-databases-vN` release containing the compact store.
+  ArcadeDatabase rows are embedded in its Arcade shard; the runtime scanner
+  consumes compact rows, never XML or source SQLite. Local synthetic conversion
+  is test-only.
 - Runtime preview loading is raw565-oriented. Build source screenshots, raw565
   caches, fixed LZ4-block `.mmlz4b` preview packs, and `.mmlz4b.idx` seek
   sidecars from the private `private/magik-cloud` submodule. The sidecar is a

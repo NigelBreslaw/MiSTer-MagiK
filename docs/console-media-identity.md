@@ -5,8 +5,10 @@ console media where practical. Runtime must not depend on scraper screenshot
 filenames, `gamelist.xml`, or scanning screenshot folders.
 
 The XML boundary is intentionally narrow: MAME `-listxml` and MAME `hash/*.xml`
-software lists are offline inputs to `mister mame-metadata-build`. The
-scanner and launcher read the generated SQLite metadata, not those XML files.
+software lists are offline inputs to `mister mame-metadata-build`. CI then
+converts the source SQLite databases into the compact
+`magik-metadata-v1.bin` runtime container. The scanner, launcher, and media
+worker read that container, not XML or source SQLite files.
 
 ## Target Systems
 
@@ -32,12 +34,12 @@ Library identities use:
 
 ## Metadata Build
 
-`mister mame-metadata-build` writes arcade machine metadata and console
-software-list metadata into the same `mame.sqlite3`. The command can read MAME
-machine XML from `mame -listxml` or `--listxml`; it reads console software-list
-XML only from explicit `--software-list` paths or the target files inside a
-`--software-dir` MAME hash directory. Arcade player counts and control types
-come directly from each machine's `input` and `control` elements in `-listxml`.
+`mister mame-metadata-build` writes the CI/private source database used to
+generate the runtime container. The command can read MAME machine XML from
+`mame -listxml` or `--listxml`; it reads console software-list XML only from
+explicit `--software-list` paths or the target files inside a `--software-dir`
+MAME hash directory. Arcade player counts and control types come directly from
+each machine's `input` and `control` elements in `-listxml`.
 
 Important tables:
 
@@ -177,19 +179,21 @@ installed screenshot-pack index.
 ### Post-download identity reconciliation
 
 The media worker performs a second, runtime-only identity pass after a pack is
-installed or confirmed current. It uses the numbered-release `mame.sqlite3`
-software-list metadata and the pack's `.mmlz4b.idx`; the user's local ROM
-collection is never treated as the global identity source. Existing catalog
-keys have priority, followed by a unique normalized MAME title/family match
-whose key is present in the installed pack. Zero candidates and ambiguous
-matches remain unresolved.
+installed or confirmed current. It uses one lazily loaded software shard from
+the numbered-release `magik-metadata-v1.bin` container and the pack's
+`.mmlz4b.idx`; the user's local ROM collection is never treated as the global
+identity source. Existing catalog keys have priority, followed by a unique
+normalized MAME title/family match whose key is present in the installed pack.
+Zero candidates and ambiguous matches remain unresolved.
 
-The resolver loads `mame_software_items` lazily on the media worker and reads
-only `list_name`, `software_name`, `parent_name`, and `description`. It
-canonicalizes media-specific lists (for example, C64 cartridge and cassette
-lists) before creating `mame-software__<list>__<family>` keys. Missing or
-unreadable metadata is non-fatal: exact catalog keys continue to reconcile and
-the structured update event reports `resolver_status=Unavailable`.
+The resolver opens only the compact header/index, then reads the requested
+system shard containing title/family rows. It canonicalizes media-specific
+lists (for example, C64 cartridge and cassette lists) before creating
+`mame-software__<list>__<family>` keys. Missing or unreadable compact metadata
+is non-fatal: exact catalog keys continue to reconcile and the structured
+update event reports `resolver_status=Unavailable`. During migration only, a
+valid legacy SQLite database may be used as the reported `LegacySqlite`
+fallback; full SQLite databases remain CI/private-build source artifacts.
 
 This first tranche intentionally does not perform fuzzy matching, ROM hashing,
 or external Libretro, No-Intro, Redump, TOSEC, ScreenScraper, or Skyscraper
