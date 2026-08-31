@@ -281,14 +281,20 @@ def build_mame(
             except ValueError:
                 return None
 
+    def decimal(value: str | None) -> float | None:
+        if not value:
+            return None
+        try:
+            return float(value)
+        except ValueError:
+            return None
+
     def text(element: ET.Element | None, child: str) -> str | None:
         value = element.findtext(child) if element is not None else None
         return value.strip() if value and value.strip() else None
 
     root = ET.parse(listxml).getroot()
-    machine_source_version = (
-        root.get("build") or root.get("version") or "mame-listxml"
-    )
+    machine_source_version = root.get("build") or root.get("version") or "mame-listxml"
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists():
         out.unlink()
@@ -388,7 +394,7 @@ def build_mame(
                 display.get("type") if display is not None else None,
                 integer(display.get("width")) if display is not None else None,
                 integer(display.get("height")) if display is not None else None,
-                float(display.get("refresh")) if display is not None and display.get("refresh") else None,
+                decimal(display.get("refresh") if display is not None else None),
                 integer(input_node.get("players")) if input_node is not None else None,
                 integer(input_node.get("coins")) if input_node is not None else None,
                 input_node.get("control") if input_node is not None else None,
@@ -473,10 +479,7 @@ def build_mame(
                             )
     connection.executemany(
         "INSERT INTO software VALUES (?, ?, ?, ?)",
-        (
-            (row[1], row[3], row[4] or "", row[5] or "")
-            for row in software_rows
-        ),
+        ((row[1], row[3], row[4] or "", row[5] or "") for row in software_rows),
     )
     connection.executemany(
         "INSERT INTO mame_software_items VALUES (?,?,?,?,?,?,?,?)",
