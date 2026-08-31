@@ -8210,8 +8210,10 @@ pub(super) fn run_launcher_loop(
                                             );
                                             continue 'launcher;
                                         }
-                                        let effects =
-                                            catalog_session.rebuild_database(arcade_root.clone());
+                                        let effects = catalog_session.rebuild_database(
+                                            arcade_root.clone(),
+                                            scheduler.catalog_worker_available(),
+                                        );
                                         apply_catalog_session_effects(
                                             effects,
                                             preview_route,

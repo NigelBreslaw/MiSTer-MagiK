@@ -465,6 +465,12 @@ impl CatalogWorkerProtocolState {
         {
             return Err("invalid catalog worker collection chunk".to_string());
         }
+        if event.kind == "progress" {
+            if event.phase.is_empty() {
+                return Err("catalog worker progress phase is empty".to_string());
+            }
+            return Ok(false);
+        }
         if event.kind != "heartbeat" {
             return Ok(false);
         }
@@ -675,6 +681,23 @@ fn write_worker_wire_event(writer: &mut impl Write, event: &CatalogWorkerWireEve
         .write_all(b"\n")
         .and_then(|()| writer.flush())
         .is_ok()
+}
+
+fn catalog_progress_wire_event(
+    kind: &str,
+    run_id: &str,
+    sequence: u64,
+    phase: &str,
+    progress_epoch: u64,
+    work_units: u64,
+) -> CatalogWorkerWireEvent {
+    let mut event = blank_worker_wire_event(kind);
+    event.run_id = run_id.to_string();
+    event.phase = phase.to_string();
+    event.sequence = sequence;
+    event.progress_epoch = progress_epoch;
+    event.work_units = work_units;
+    event
 }
 
 fn heartbeat_interval_elapsed(stop: &mpsc::Receiver<()>, interval: std::time::Duration) -> bool {
@@ -908,6 +931,11 @@ fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
         collection_checksum: String::new(),
     };
     match message {
+        CatalogWorkerMessage::Progress { phase, work_units } => {
+            event.kind = "progress".to_string();
+            event.phase = phase.clone();
+            event.work_units = *work_units;
+        }
         CatalogWorkerMessage::Timing { name, detail } => {
             event.kind = "timing".to_string();
             event.name = name.clone();
@@ -995,9 +1023,6 @@ fn worker_wire_event(message: &CatalogWorkerMessage) -> CatalogWorkerWireEvent {
             event.sequence = *sequence;
             event.progress_epoch = *progress_epoch;
             event.work_units = *work_units;
-        }
-        CatalogWorkerMessage::Progress { .. } => {
-            unreachable!("internal catalog progress must not cross the worker protocol")
         }
         CatalogWorkerMessage::SystemShardReady { .. }
         | CatalogWorkerMessage::SystemShardFailed { .. }
@@ -1661,6 +1686,10 @@ fn catalog_worker_message_from_wire_at(
         ));
     }
     let message = match event.kind.as_str() {
+        "progress" => CatalogWorkerMessage::Progress {
+            phase: event.phase,
+            work_units: event.work_units,
+        },
         "heartbeat" => CatalogWorkerMessage::Heartbeat {
             run_id: event.run_id,
             phase: event.phase,
@@ -1839,6 +1868,9 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
         while heartbeat_interval_elapsed(&heartbeat_stop_rx, std::time::Duration::from_secs(10)) {
             let inner_progress = mister_magik_catalog::catalog_progress::inner_progress_units()
                 .saturating_sub(inner_progress_baseline);
+            let mut writer = heartbeat_writer
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             let snapshot = {
                 let mut progress = heartbeat_progress
                     .lock()
@@ -1850,40 +1882,14 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
                 }
                 progress.clone()
             };
-            let mut event = CatalogWorkerWireEvent {
-                version: CATALOG_WORKER_PROTOCOL_VERSION,
-                kind: "heartbeat".to_string(),
-                name: String::new(),
-                detail: String::new(),
-                error: String::new(),
-                system_id: String::new(),
-                system_ids: Vec::new(),
-                all_published_systems: false,
-                generation: 0,
-                rebuilt: Vec::new(),
-                removed: Vec::new(),
-                elapsed_us: 0,
-                source: String::new(),
-                durable_save_pending: false,
-                fingerprint: String::new(),
-                run_id: heartbeat_wire_run_id.clone(),
-                phase: snapshot.phase,
-                sequence: 0,
-                progress_epoch: snapshot.progress_epoch,
-                work_units: snapshot.work_units,
-                snapshot_path: String::new(),
-                snapshot_sha256: String::new(),
-                collection: String::new(),
-                collection_index: 0,
-                collection_chunks: 0,
-                collection_items_total: 0,
-                collection_items: Vec::new(),
-                collection_checksum: String::new(),
-            };
-            let mut writer = heartbeat_writer
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            event.sequence = heartbeat_sequence.fetch_add(1, Ordering::Relaxed);
+            let event = catalog_progress_wire_event(
+                "heartbeat",
+                &heartbeat_wire_run_id,
+                heartbeat_sequence.fetch_add(1, Ordering::Relaxed),
+                &snapshot.phase,
+                snapshot.progress_epoch,
+                snapshot.work_units,
+            );
             let _ = writer.write_all(CATALOG_WORKER_PROTOCOL_PREFIX.as_bytes());
             let _ = write_worker_wire_event(&mut *writer, &event);
         }
@@ -1891,10 +1897,28 @@ pub(crate) fn run_catalog_worker_child(args: &[String]) {
     let mut terminal = false;
     while let Ok(message) = rx.recv() {
         if let CatalogWorkerMessage::Progress { phase, work_units } = &message {
-            progress
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .advance(phase, *work_units);
+            let mut output = writer.lock().unwrap_or_else(|error| error.into_inner());
+            let snapshot = {
+                let mut progress = progress.lock().unwrap_or_else(|error| error.into_inner());
+                progress.advance(phase, *work_units);
+                progress.clone()
+            };
+            let event = catalog_progress_wire_event(
+                "progress",
+                &wire_run_id,
+                wire_sequence.fetch_add(1, Ordering::Relaxed),
+                phase,
+                snapshot.progress_epoch,
+                *work_units,
+            );
+            if output
+                .write_all(CATALOG_WORKER_PROTOCOL_PREFIX.as_bytes())
+                .is_err()
+                || !write_worker_wire_event(&mut *output, &event)
+            {
+                terminal = true;
+                break;
+            }
             continue;
         }
         let events = match &message {
@@ -2761,6 +2785,99 @@ mod tests {
         .unwrap()
         .expect("heartbeat event");
         assert!(matches!(message, CatalogWorkerMessage::Heartbeat { .. }));
+    }
+
+    #[test]
+    fn child_progress_event_round_trips_before_terminal_system_events() {
+        let run_id = "run-progress";
+        let mut progress = CatalogHeartbeatProgress::new();
+        progress.advance("systems", 2);
+        let event = catalog_progress_wire_event(
+            "progress",
+            run_id,
+            1,
+            "systems",
+            progress.progress_epoch,
+            2,
+        );
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(CATALOG_WORKER_PROTOCOL_PREFIX.as_bytes());
+        assert!(write_worker_wire_event(&mut bytes, &event));
+        let line = String::from_utf8(bytes).expect("wire event utf-8");
+        let payload = line
+            .strip_prefix(CATALOG_WORKER_PROTOCOL_PREFIX)
+            .and_then(|line| line.strip_suffix('\n'))
+            .expect("wire event prefix and newline");
+        let decoded: CatalogWorkerWireEvent = serde_json::from_str(payload).expect("wire event");
+
+        let mut state = CatalogWorkerProtocolState::default();
+        let mut handshake = blank_worker_wire_event("handshake");
+        handshake.run_id = run_id.to_string();
+        assert_eq!(state.validate(&handshake), Ok(true));
+        assert_eq!(state.validate(&decoded), Ok(false));
+        let message = catalog_worker_message_from_wire(
+            decoded,
+            "/media/fat/_Arcade",
+            Path::new("/tmp/catalog-fast-v1"),
+        )
+        .unwrap()
+        .expect("progress event");
+        assert!(matches!(
+            message,
+            CatalogWorkerMessage::Progress { phase, work_units }
+                if phase == "systems" && work_units == 2
+        ));
+
+        let mut terminal = worker_wire_event(&CatalogWorkerMessage::SystemPrepared {
+            system_id: "snes".to_string(),
+            generation: 7,
+        });
+        terminal.run_id = run_id.to_string();
+        terminal.sequence = 2;
+        assert_eq!(state.validate(&terminal), Ok(false));
+        assert!(matches!(
+            catalog_worker_message_from_wire(
+                terminal,
+                "/media/fat/_Arcade",
+                Path::new("/tmp/catalog-fast-v1"),
+            )
+            .unwrap()
+            .expect("terminal event"),
+            CatalogWorkerMessage::SystemPrepared {
+                system_id,
+                generation: 7,
+            } if system_id == "snes"
+        ));
+    }
+
+    #[test]
+    fn progress_message_uses_the_dedicated_wire_event_kind() {
+        let event = worker_wire_event(&CatalogWorkerMessage::Progress {
+            phase: "systems".to_string(),
+            work_units: 2,
+        });
+
+        assert_eq!(event.kind, "progress");
+        assert_eq!(event.phase, "systems");
+        assert_eq!(event.work_units, 2);
+    }
+
+    #[test]
+    fn progress_wire_event_keeps_raw_work_units_when_heartbeat_snapshot_is_inflated() {
+        let mut heartbeat = CatalogHeartbeatProgress::new();
+        heartbeat.advance("systems", 2);
+        heartbeat.add_work_units(100);
+        let event = catalog_progress_wire_event(
+            "progress",
+            "run-progress",
+            1,
+            "systems",
+            heartbeat.progress_epoch,
+            2,
+        );
+
+        assert_eq!(event.phase, "systems");
+        assert_eq!(event.work_units, 2);
     }
 
     #[test]

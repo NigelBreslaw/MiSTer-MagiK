@@ -309,6 +309,7 @@ pub enum ArcadeUserListMode {
 pub enum ConfirmAction {
     ExitToMister,
     RebuildDatabase,
+    DatabaseRebuildUnavailable,
     Restart,
     LibraryChanged,
     LibraryUpdateFailed,
@@ -3245,7 +3246,9 @@ impl LauncherNav {
             let confirmed = match action {
                 Some(ConfirmAction::ExitToMister) => selected == 1,
                 Some(ConfirmAction::LibraryChanged) => true,
-                Some(ConfirmAction::LibraryUpdateFailed) => false,
+                Some(
+                    ConfirmAction::LibraryUpdateFailed | ConfirmAction::DatabaseRebuildUnavailable,
+                ) => false,
                 _ => selected == 1,
             };
             if action == Some(ConfirmAction::DisplayResolution)
@@ -3282,7 +3285,10 @@ impl LauncherNav {
                         path: None,
                         settings: None,
                     }),
-                    Some(ConfirmAction::LibraryUpdateFailed) => None,
+                    Some(
+                        ConfirmAction::LibraryUpdateFailed
+                        | ConfirmAction::DatabaseRebuildUnavailable,
+                    ) => None,
                     Some(ConfirmAction::DisplayResolution) => Some(LauncherEvent {
                         action: LauncherAction::ConfirmDisplayResolution,
                         path: None,
@@ -4814,7 +4820,11 @@ fn pad_action_held(state: &PadState, action: crate::input_event::LogicalAction) 
 
 fn confirm_max_selected(action: Option<ConfirmAction>) -> usize {
     match action {
-        Some(ConfirmAction::LibraryUpdateFailed | ConfirmAction::DisplayResolutionError) => 0,
+        Some(
+            ConfirmAction::LibraryUpdateFailed
+            | ConfirmAction::DatabaseRebuildUnavailable
+            | ConfirmAction::DisplayResolutionError,
+        ) => 0,
         Some(_) => 1,
         None => 0,
     }
@@ -8516,6 +8526,20 @@ mod tests {
             .expect("confirmed reset should emit event");
         assert_eq!(event.action, LauncherAction::RebuildDatabase);
         assert_eq!(event.path, None);
+        assert_eq!(nav.confirm_action, None);
+        assert_eq!(nav.confirm_selected, 0);
+    }
+
+    #[test]
+    fn unavailable_database_rebuild_confirmation_dismisses_without_action() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        nav.confirm_action = Some(ConfirmAction::DatabaseRebuildUnavailable);
+        nav.confirm_selected = 0;
+
+        let event = nav.handle_input(&pad_with(|pad| pad.btn_a = true), Instant::now(), &catalog);
+
+        assert!(event.is_none());
         assert_eq!(nav.confirm_action, None);
         assert_eq!(nav.confirm_selected, 0);
     }

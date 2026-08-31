@@ -733,6 +733,12 @@ fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridge
             left_label: "Cancel",
             right_label: "Rebuild",
         },
+        Some(launcher::ConfirmAction::DatabaseRebuildUnavailable) => ConfirmBridgeText {
+            title: "Database rebuild unavailable",
+            message: "A library update is already running. Wait for it to finish, then try rebuilding again.",
+            left_label: "OK",
+            right_label: "",
+        },
         Some(launcher::ConfirmAction::Restart) => ConfirmBridgeText {
             title: "Restart MiSTer?",
             message: "Reboot the MiSTer now?",
@@ -1746,6 +1752,19 @@ mod tests {
     fn library_update_failed_uses_single_ok_button() {
         let text = confirm_bridge_text(Some(launcher::ConfirmAction::LibraryUpdateFailed));
 
+        assert_eq!(text.left_label, "OK");
+        assert_eq!(text.right_label, "");
+    }
+
+    #[test]
+    fn unavailable_database_rebuild_uses_single_ok_button_and_exact_copy() {
+        let text = confirm_bridge_text(Some(launcher::ConfirmAction::DatabaseRebuildUnavailable));
+
+        assert_eq!(text.title, "Database rebuild unavailable");
+        assert_eq!(
+            text.message,
+            "A library update is already running. Wait for it to finish, then try rebuilding again."
+        );
         assert_eq!(text.left_label, "OK");
         assert_eq!(text.right_label, "");
     }

@@ -319,6 +319,7 @@ pub fn build_fresh_catalog_with_discovery_progress(
     )
 }
 
+#[hotpath::measure]
 pub fn build_fresh_catalog_with_presentation_progress(
     storage_root: &Path,
     catalog_root: &Path,
@@ -858,6 +859,7 @@ pub fn publish_refresh_state_with_report(
     )
 }
 
+#[hotpath::measure]
 fn publish_refresh_state_with_report_held(
     catalog_root: &Path,
     generation: u64,
@@ -1071,6 +1073,7 @@ pub fn capture_refresh_state(
     capture_refresh_state_with_profiles(storage_root, snapshot, &profiles, None, None)
 }
 
+#[hotpath::measure]
 fn capture_refresh_state_with_profiles(
     storage_root: &Path,
     snapshot: &FastFiveSnapshot,
@@ -3193,6 +3196,7 @@ mod tests {
 
         let plan = plan_fast_refresh(&storage, &catalog, FastCatalogRefreshRequest::RebuildAll)
             .expect("plan rebuild");
+        let planned_system_count = plan.checks.len();
         let lease = crate::catalog_lease::CatalogMutationLease::acquire_default().expect("lease");
         let mut checkpoints = Vec::new();
         let report = execute_planned_fast_refresh_with(
@@ -3217,7 +3221,25 @@ mod tests {
         )
         .expect("publish successful systems");
         assert!(checkpoints.windows(2).all(|pair| pair[0].1 < pair[1].1));
-        assert!(checkpoints.iter().any(|(phase, _)| *phase == "artifacts"));
+        let systems = checkpoints
+            .iter()
+            .filter(|(phase, _)| *phase == "systems")
+            .map(|(_, work_units)| *work_units)
+            .collect::<Vec<_>>();
+        assert_eq!(systems.len(), planned_system_count);
+        assert_eq!(
+            systems,
+            (1..=planned_system_count as u64).collect::<Vec<_>>()
+        );
+        let first_artifacts = checkpoints
+            .iter()
+            .position(|(phase, _)| *phase == "artifacts")
+            .expect("artifact checkpoint");
+        assert!(
+            checkpoints[..first_artifacts]
+                .iter()
+                .all(|(phase, _)| *phase == "systems")
+        );
         assert!(
             checkpoints
                 .iter()

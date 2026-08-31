@@ -137,6 +137,7 @@ pub(super) struct LauncherCatalogSession {
     deferred_worker: Option<DeferredCatalogWorker>,
     system_update_total: Option<usize>,
     completed_system_updates: BTreeSet<String>,
+    displayed_system_updates: usize,
     catalog_seed_partial: bool,
 }
 
@@ -150,6 +151,7 @@ impl LauncherCatalogSession {
             deferred_worker: None,
             system_update_total: None,
             completed_system_updates: BTreeSet::new(),
+            displayed_system_updates: 0,
             catalog_seed_partial: false,
         }
     }
@@ -238,7 +240,16 @@ impl LauncherCatalogSession {
     ) -> CatalogSessionEffects {
         let mut effects = CatalogSessionEffects::default();
         match message {
-            CatalogWorkerMessage::Progress { .. } | CatalogWorkerMessage::Heartbeat { .. } => {}
+            CatalogWorkerMessage::Progress { phase, work_units } => {
+                if phase == "systems" {
+                    let completed = work_units
+                        .saturating_sub(1)
+                        .try_into()
+                        .unwrap_or(usize::MAX);
+                    self.note_system_update_progress(completed, &mut effects);
+                }
+            }
+            CatalogWorkerMessage::Heartbeat { .. } => {}
             CatalogWorkerMessage::Timing { name, detail } => {
                 effects.event(name, detail);
             }
@@ -282,6 +293,7 @@ impl LauncherCatalogSession {
             } => {
                 self.system_update_total = Some(system_ids.len());
                 self.completed_system_updates.clear();
+                self.displayed_system_updates = 0;
                 effects.ui(catalog_system_update_progress_intent(0, system_ids.len()));
                 effects.push(CatalogSessionEffect::CatalogPlanReady {
                     system_ids,
@@ -459,6 +471,7 @@ impl LauncherCatalogSession {
         self.refresh_failed = false;
         self.system_update_total = None;
         self.completed_system_updates.clear();
+        self.displayed_system_updates = 0;
         effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
         effects
     }
@@ -472,6 +485,7 @@ impl LauncherCatalogSession {
         self.refresh_failed = false;
         self.system_update_total = None;
         self.completed_system_updates.clear();
+        self.displayed_system_updates = 0;
         effects.push(CatalogSessionEffect::StartCatalogWorker(
             CatalogWorkerStart {
                 root,
@@ -484,8 +498,22 @@ impl LauncherCatalogSession {
         effects
     }
 
-    pub(super) fn rebuild_database(&mut self, root: String) -> CatalogSessionEffects {
+    pub(super) fn rebuild_database(
+        &mut self,
+        root: String,
+        worker_available: bool,
+    ) -> CatalogSessionEffects {
         let mut effects = CatalogSessionEffects::default();
+        if !worker_available {
+            effects.event(
+                "database_rebuild_rejected",
+                "source=settings reason=catalog-worker-busy",
+            );
+            effects.push(CatalogSessionEffect::Confirm(
+                launcher::ConfirmAction::DatabaseRebuildUnavailable,
+            ));
+            return effects;
+        }
         effects.event(
             "database_rebuild_requested",
             "source=settings scope=all-systems",
@@ -496,6 +524,7 @@ impl LauncherCatalogSession {
         self.refresh_failed = false;
         self.system_update_total = None;
         self.completed_system_updates.clear();
+        self.displayed_system_updates = 0;
         effects.push(CatalogSessionEffect::CatalogPlanReady {
             system_ids: Vec::new(),
             all_published_systems: true,
@@ -522,6 +551,9 @@ impl LauncherCatalogSession {
         self.foreground_update = true;
         self.deferred_worker = None;
         self.refresh_failed = false;
+        self.system_update_total = None;
+        self.completed_system_updates.clear();
+        self.displayed_system_updates = 0;
         effects.push(CatalogSessionEffect::StartCatalogWorker(
             CatalogWorkerStart {
                 root,
@@ -539,14 +571,26 @@ impl LauncherCatalogSession {
         system_id: &str,
         effects: &mut CatalogSessionEffects,
     ) {
+        if self.system_update_total.is_none() {
+            return;
+        }
+        if self.completed_system_updates.insert(system_id.to_string()) {
+            self.note_system_update_progress(self.completed_system_updates.len(), effects);
+        }
+    }
+
+    fn note_system_update_progress(
+        &mut self,
+        completed: usize,
+        effects: &mut CatalogSessionEffects,
+    ) {
         let Some(total) = self.system_update_total else {
             return;
         };
-        if self.completed_system_updates.insert(system_id.to_string()) {
-            effects.ui(catalog_system_update_progress_intent(
-                self.completed_system_updates.len(),
-                total,
-            ));
+        let completed = completed.min(total);
+        if completed > self.displayed_system_updates {
+            self.displayed_system_updates = completed;
+            effects.ui(catalog_system_update_progress_intent(completed, total));
         }
     }
 
@@ -887,6 +931,36 @@ mod tests {
         ));
         assert_eq!(planned[0].title(), "Updating systems 0/3");
 
+        let live_first = catalog_scan_statuses(session.handle_worker_message(
+            context(),
+            CatalogWorkerMessage::Progress {
+                phase: "systems".into(),
+                work_units: 2,
+            },
+            now,
+        ));
+        assert_eq!(live_first[0].title(), "Updating systems 1/3");
+
+        let live_second = catalog_scan_statuses(session.handle_worker_message(
+            context(),
+            CatalogWorkerMessage::Progress {
+                phase: "systems".into(),
+                work_units: 3,
+            },
+            now,
+        ));
+        assert_eq!(live_second[0].title(), "Updating systems 2/3");
+
+        let live_complete = catalog_scan_statuses(session.handle_worker_message(
+            context(),
+            CatalogWorkerMessage::Progress {
+                phase: "systems".into(),
+                work_units: 4,
+            },
+            now,
+        ));
+        assert_eq!(live_complete[0].title(), "Updating systems 3/3");
+
         let prepared = catalog_scan_statuses(session.handle_worker_message(
             context(),
             CatalogWorkerMessage::SystemPrepared {
@@ -895,7 +969,7 @@ mod tests {
             },
             now,
         ));
-        assert_eq!(prepared[0].title(), "Updating systems 1/3");
+        assert!(prepared.is_empty());
 
         let duplicate = catalog_scan_statuses(session.handle_worker_message(
             context(),
@@ -915,7 +989,84 @@ mod tests {
             },
             now,
         ));
+        assert!(failed.is_empty());
+
+        let done = session.handle_worker_message(context(), CatalogWorkerMessage::Done, now);
+        assert!(done.into_effects().into_iter().any(|effect| matches!(
+            effect,
+            CatalogSessionEffect::Ui(LauncherWorkerUiIntent::ClearCatalogScan)
+        )));
+    }
+
+    #[test]
+    fn rebuild_progress_terminal_fallback_counts_removed_and_failed_systems_once() {
+        let now = Instant::now();
+        let context = || CatalogWorkerMessageContext {
+            catalog_ready: true,
+            catalog_partial: false,
+        };
+        let mut session = LauncherCatalogSession::new(false);
+
+        let planned = catalog_scan_statuses(session.handle_worker_message(
+            context(),
+            CatalogWorkerMessage::ReconciliationPlanReady {
+                system_ids: vec!["neogeo".into(), "snes".into(), "zx-spectrum".into()],
+                all_published_systems: false,
+            },
+            now,
+        ));
+        assert_eq!(planned[0].title(), "Updating systems 0/3");
+
+        let removed = catalog_scan_statuses(session.handle_worker_message(
+            context(),
+            CatalogWorkerMessage::SystemRemoved {
+                system_id: "neogeo".into(),
+            },
+            now,
+        ));
+        assert_eq!(removed[0].title(), "Updating systems 1/3");
+
+        let failed = catalog_scan_statuses(session.handle_worker_message(
+            context(),
+            CatalogWorkerMessage::SystemUpdateFailed {
+                system_id: "snes".into(),
+                error: "bad archive".into(),
+            },
+            now,
+        ));
         assert_eq!(failed[0].title(), "Updating systems 2/3");
+
+        let prepared = catalog_scan_statuses(session.handle_worker_message(
+            context(),
+            CatalogWorkerMessage::SystemPrepared {
+                system_id: "zx-spectrum".into(),
+                generation: 1,
+            },
+            now,
+        ));
+        assert_eq!(prepared[0].title(), "Updating systems 3/3");
+
+        assert!(
+            catalog_scan_statuses(session.handle_worker_message(
+                context(),
+                CatalogWorkerMessage::SystemRemoved {
+                    system_id: "neogeo".into(),
+                },
+                now,
+            ))
+            .is_empty()
+        );
+        assert!(
+            catalog_scan_statuses(session.handle_worker_message(
+                context(),
+                CatalogWorkerMessage::SystemUpdateFailed {
+                    system_id: "snes".into(),
+                    error: "bad archive".into(),
+                },
+                now,
+            ))
+            .is_empty()
+        );
     }
 
     #[test]
@@ -1248,7 +1399,7 @@ mod tests {
     #[test]
     fn settings_database_rebuild_marks_all_systems_and_stays_background() {
         let mut session = LauncherCatalogSession::new(false);
-        let effects = session.rebuild_database("/media/fat/_Arcade".to_string());
+        let effects = session.rebuild_database("/media/fat/_Arcade".to_string(), true);
 
         assert!(!session.refresh_done());
         assert!(!session.foreground_update());
@@ -1282,6 +1433,32 @@ mod tests {
                 if status.title() == "Discovering systems"
         )));
         assert_eq!(effect_names(effects), vec!["event", "ui", "start-worker"]);
+    }
+
+    #[test]
+    fn settings_database_rebuild_busy_only_shows_acknowledgement_dialog() {
+        let mut session = LauncherCatalogSession::new(false);
+        let effects = session.rebuild_database("/media/fat/_Arcade".to_string(), false);
+        let mut effects = effects.into_effects().into_iter();
+        assert!(matches!(
+            effects.next(),
+            Some(CatalogSessionEffect::StartupEvent(CatalogSessionEvent { name, detail }))
+                if name == "database_rebuild_rejected"
+                    && detail == "source=settings reason=catalog-worker-busy"
+        ));
+        assert!(matches!(
+            effects.next(),
+            Some(CatalogSessionEffect::Confirm(
+                launcher::ConfirmAction::DatabaseRebuildUnavailable
+            ))
+        ));
+        assert!(effects.next().is_none());
+        assert!(!session.refresh_done());
+        assert!(!session.foreground_update());
+        assert!(session.deferred_worker.is_none());
+        assert!(session.system_update_total.is_none());
+        assert!(session.completed_system_updates.is_empty());
+        assert_eq!(session.displayed_system_updates, 0);
     }
 
     #[test]

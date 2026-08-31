@@ -676,6 +676,14 @@ impl LauncherScheduler {
         matches!(self.catalog, CatalogJobState::Running(_))
     }
 
+    pub(super) fn catalog_worker_available(&self) -> bool {
+        !self.catalog_worker_running()
+            && self
+                .catalog_child_control
+                .as_ref()
+                .is_none_or(|control| control.reaped())
+    }
+
     pub(super) fn catalog_messages_running(&self) -> bool {
         self.catalog_worker_running()
             || matches!(self.search_query, SearchQueryJobState::Running(_))
@@ -1668,6 +1676,7 @@ mod tests {
         let scheduler = LauncherScheduler::new(false);
 
         assert!(!scheduler.catalog_worker_running());
+        assert!(scheduler.catalog_worker_available());
         assert!(scheduler.system_entry_prepare.is_some());
         assert!(!scheduler.media_worker_running());
         assert!(!scheduler.media_worker_unavailable());
@@ -1680,6 +1689,7 @@ mod tests {
         let mut scheduler = LauncherScheduler::new(false);
         scheduler.catalog = CatalogJobState::Running(rx.into());
 
+        assert!(!scheduler.catalog_worker_available());
         assert!(!scheduler.start_catalog_worker(
             "/tmp/catalog-test".to_string(),
             CatalogWorkerRequest::LoadOnly,
@@ -2181,6 +2191,7 @@ mod tests {
 
         assert!(!scheduler.catalog_worker_running());
         assert!(scheduler.catalog_child_control.is_some());
+        assert!(!scheduler.catalog_worker_available());
         assert!(!scheduler.start_catalog_worker(
             "/tmp/catalog-test".to_string(),
             CatalogWorkerRequest::LoadOnly,
@@ -2188,6 +2199,7 @@ mod tests {
             CatalogExecutionMode::BackgroundInteractive,
         ));
         control.mark_reaped_for_test();
+        assert!(scheduler.catalog_worker_available());
     }
 
     #[test]

@@ -203,6 +203,9 @@ pub const fn confirmation_kind(value: Option<ConfirmAction>) -> view::Confirmati
         None => view::ConfirmationKind::None,
         Some(ConfirmAction::ExitToMister) => view::ConfirmationKind::ExitToMister,
         Some(ConfirmAction::RebuildDatabase) => view::ConfirmationKind::RebuildDatabase,
+        Some(ConfirmAction::DatabaseRebuildUnavailable) => {
+            view::ConfirmationKind::DatabaseRebuildUnavailable
+        }
         Some(ConfirmAction::Restart) => view::ConfirmationKind::Restart,
         Some(ConfirmAction::LibraryChanged) => view::ConfirmationKind::LibraryChanged,
         Some(ConfirmAction::LibraryUpdateFailed) => view::ConfirmationKind::LibraryUpdateFailed,
@@ -248,6 +251,10 @@ mod tests {
         assert_eq!(
             confirmation_kind(Some(ConfirmAction::RemoveFavourite)),
             view::ConfirmationKind::RemoveFavourite
+        );
+        assert_eq!(
+            confirmation_kind(Some(ConfirmAction::DatabaseRebuildUnavailable)),
+            view::ConfirmationKind::DatabaseRebuildUnavailable
         );
     }
 
