@@ -577,7 +577,7 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
 
 #[cfg(feature = "builder")]
 fn checked_header_metadata_is_rejected(is_dir: Option<bool>) -> bool {
-    !matches!(is_dir, Some(true))
+    matches!(is_dir, Some(false))
 }
 
 /// Adds compact directory signatures to the name-only cold scan headers.
@@ -1078,10 +1078,10 @@ mod tests {
 
     #[cfg(feature = "builder")]
     #[test]
-    fn checked_game_dir_header_rejections_include_missing_and_non_directory_metadata() {
+    fn checked_game_dir_header_rejections_include_confirmed_non_directories_only() {
         assert!(!checked_header_metadata_is_rejected(Some(true)));
         assert!(checked_header_metadata_is_rejected(Some(false)));
-        assert!(checked_header_metadata_is_rejected(None));
+        assert!(!checked_header_metadata_is_rejected(None));
     }
 
     #[cfg(unix)]
