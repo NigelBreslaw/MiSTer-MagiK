@@ -526,7 +526,7 @@ mod tests {
     #[test]
     fn canonical_build_uses_the_dormant_production_profiler() {
         let build = BuildSpec::canonical(UiScope::Launcher);
-        assert_eq!(build.features(), ["ui", "profile"]);
+        assert_eq!(build.features(), ["ui", "profile", "hotpath"]);
         assert_eq!(build.ui_scope(), UiScope::Launcher);
     }
 

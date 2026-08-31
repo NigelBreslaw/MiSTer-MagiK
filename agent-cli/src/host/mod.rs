@@ -37381,7 +37381,7 @@ mod tests {
             "configuration": {"root": CATALOG_PMU_REMOTE_DIR},
             "operations": [
                 operation("fresh-build", json!(["arcade", "snes"])),
-                operation("rebuild", json!(["snes"])),
+                operation("update", json!(["snes"])),
                 operation("rebuild-all", json!(["arcade", "snes"])),
             ],
             "validation": {

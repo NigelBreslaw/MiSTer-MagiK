@@ -4536,6 +4536,10 @@ mod tests {
     }
 
     fn write_preview_sidecar_index(pack: &Path, names: &[&str]) {
+        let width = 256u32;
+        let height = 240u32;
+        let stride_bytes = width * 2;
+        let raw_len = stride_bytes * height;
         let index_len = 8
             + 4
             + names
@@ -4547,17 +4551,17 @@ mod tests {
         archive.extend_from_slice(&(names.len() as u32).to_le_bytes());
         for (idx, name) in names.iter().enumerate() {
             archive.extend_from_slice(&(name.len() as u16).to_le_bytes());
-            archive.extend_from_slice(&1u32.to_le_bytes());
-            archive.extend_from_slice(&1u32.to_le_bytes());
-            archive.extend_from_slice(&16u32.to_le_bytes());
-            archive.extend_from_slice(&16u32.to_le_bytes());
+            archive.extend_from_slice(&width.to_le_bytes());
+            archive.extend_from_slice(&height.to_le_bytes());
+            archive.extend_from_slice(&stride_bytes.to_le_bytes());
+            archive.extend_from_slice(&raw_len.to_le_bytes());
             archive.push(1);
-            archive.extend_from_slice(&16u32.to_le_bytes());
-            archive.extend_from_slice(&((index_len + idx * 16) as u64).to_le_bytes());
+            archive.extend_from_slice(&raw_len.to_le_bytes());
+            archive.extend_from_slice(&((index_len + idx * raw_len as usize) as u64).to_le_bytes());
             archive.extend_from_slice(name.as_bytes());
         }
         for _ in names {
-            archive.extend_from_slice(&[0; 16]);
+            archive.resize(archive.len() + raw_len as usize, 0);
         }
         std::fs::write(pack, archive).expect("write preview pack fixture");
         let archive_bytes = std::fs::metadata(pack).expect("stat preview pack").len();
@@ -4569,13 +4573,13 @@ mod tests {
         index.extend_from_slice(&(names.len() as u32).to_le_bytes());
         for (idx, name) in names.iter().enumerate() {
             index.extend_from_slice(&(name.len() as u16).to_le_bytes());
-            index.extend_from_slice(&1u32.to_le_bytes());
-            index.extend_from_slice(&1u32.to_le_bytes());
-            index.extend_from_slice(&16u32.to_le_bytes());
-            index.extend_from_slice(&16u32.to_le_bytes());
+            index.extend_from_slice(&width.to_le_bytes());
+            index.extend_from_slice(&height.to_le_bytes());
+            index.extend_from_slice(&stride_bytes.to_le_bytes());
+            index.extend_from_slice(&raw_len.to_le_bytes());
             index.push(1);
-            index.extend_from_slice(&16u32.to_le_bytes());
-            index.extend_from_slice(&((index_len + idx * 16) as u64).to_le_bytes());
+            index.extend_from_slice(&raw_len.to_le_bytes());
+            index.extend_from_slice(&((index_len + idx * raw_len as usize) as u64).to_le_bytes());
             index.extend_from_slice(name.as_bytes());
         }
         std::fs::write(
