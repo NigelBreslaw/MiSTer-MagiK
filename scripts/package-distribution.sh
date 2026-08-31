@@ -30,8 +30,6 @@ DEFAULT_MANAGER="$ROOT/mister/tools/manager/target/armv7-unknown-linux-gnueabihf
 
 BIN="$DEFAULT_BIN"
 GAME_DATABASES_RELEASE_DIR=""
-MAME_SQLITE=""
-HBMAME_SQLITE=""
 INSTALLER="$DEFAULT_INSTALLER"
 MANAGER="$DEFAULT_MANAGER"
 ASSET_PACK=""
@@ -98,8 +96,7 @@ The zip is laid out relative to the MiSTer SD-card root:
   Scripts/MiSTer-MagiK.sh
   $PUBLIC_GUI_RELATIVE
   $PUBLIC_MANAGER_RELATIVE
-  $PUBLIC_ROOT_RELATIVE/mame.sqlite3
-  $PUBLIC_ROOT_RELATIVE/hbmame.sqlite3
+  $PUBLIC_ROOT_RELATIVE/magik-metadata-v1.bin
   $PUBLIC_ROOT_RELATIVE/arcade-updater-index-v1.lz4b
   $PUBLIC_ROOT_RELATIVE/assets/...     when --asset-pack is provided
   $PUBLIC_MAIN_RELATIVE
@@ -219,8 +216,7 @@ DATABASE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/mister-magik-game-databases.XXXXXX")"
 trap 'rm -rf "$DATABASE_TMP"' EXIT
 "/scripts/magik-ci" ci game-databases extract-release \
   "$GAME_DATABASES_RELEASE_DIR" --output "$DATABASE_TMP" >/dev/null
-MAME_SQLITE="$DATABASE_TMP/mame.sqlite3"
-HBMAME_SQLITE="$DATABASE_TMP/hbmame.sqlite3"
+RUNTIME_METADATA="$DATABASE_TMP/magik-metadata-v1.bin"
 ARCADE_UPDATER_INDEX="$DATABASE_TMP/arcade-updater-index-v1.lz4b"
 GAME_DATABASES_MANIFEST="$DATABASE_TMP/game-databases-manifest.json"
 ARCADE_DATABASE_CSV="$DATABASE_TMP/ArcadeDatabase.csv"
@@ -264,24 +260,9 @@ if [[ -z "$MAIN_BIN" || -z "$MAIN_SOURCE_REVISION" ]]; then
   echo "ERROR: --main-bin and --main-source-revision are required." >&2
   exit 2
 fi
-if [[ -n "$HBMAME_SQLITE" ]]; then
-  hbmame_bytes="$(stat -f%z "$HBMAME_SQLITE" 2>/dev/null || stat -c%s "$HBMAME_SQLITE")"
-  if [[ "$hbmame_bytes" -lt 1048576 ]]; then
-    echo "ERROR: HBMame metadata DB is suspiciously small: $HBMAME_SQLITE ($hbmame_bytes bytes)" >&2
-    exit 1
-  fi
-  if command -v sqlite3 >/dev/null 2>&1; then
-    hbmame_rows="$(sqlite3 "$HBMAME_SQLITE" "SELECT count(*) FROM mame_machines;" 2>/dev/null || true)"
-    if [[ "${hbmame_rows:-0}" -lt 5000 ]]; then
-      echo "ERROR: HBMame metadata DB has too few machine rows: ${hbmame_rows:-unreadable}" >&2
-      exit 1
-    fi
-    marpy_parent="$(sqlite3 "$HBMAME_SQLITE" "SELECT COALESCE(parent_setname, '') FROM mame_machines WHERE setname = 'marpy';" 2>/dev/null || true)"
-    if [[ "$marpy_parent" != "mappy" ]]; then
-      echo "ERROR: HBMame metadata sentinel failed: expected marpy parent mappy, got '${marpy_parent:-missing}'" >&2
-      exit 1
-    fi
-  fi
+if [[ ! -f "$RUNTIME_METADATA" ]]; then
+  echo "ERROR: compact runtime metadata is missing: $RUNTIME_METADATA" >&2
+  exit 1
 fi
 for artifact in "$MAIN_BIN" "$SCANOUT_MODULE" "$SCANOUT_METADATA" "$LATCH_RBF" "$LATCH_METADATA" "$PLATFORM_MANIFEST" "$PLATFORM_BUNDLE_MANIFEST"; do
   if [[ -z "$artifact" || ! -f "$artifact" ]]; then
@@ -355,10 +336,7 @@ cp "$BIN" "$STAGE/$PUBLIC_GUI_RELATIVE"
 chmod 755 "$STAGE/$PUBLIC_GUI_RELATIVE"
 cp "$MANAGER" "$STAGE/$PUBLIC_MANAGER_RELATIVE"
 chmod 755 "$STAGE/$PUBLIC_MANAGER_RELATIVE"
-cp "$MAME_SQLITE" "$STAGE/$PUBLIC_ROOT_RELATIVE/mame.sqlite3"
-if [[ -n "$HBMAME_SQLITE" ]]; then
-  cp "$HBMAME_SQLITE" "$STAGE/$PUBLIC_ROOT_RELATIVE/hbmame.sqlite3"
-fi
+cp "$RUNTIME_METADATA" "$STAGE/$PUBLIC_ROOT_RELATIVE/magik-metadata-v1.bin"
 cp "$ARCADE_UPDATER_INDEX" "$STAGE/$PUBLIC_ROOT_RELATIVE/arcade-updater-index-v1.lz4b"
 
 ACTUAL_SNES_ARTWORK_SHA256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$SNES_ARTWORK")"
@@ -451,23 +429,23 @@ Yesterday 10, Xerxes 10, Nocive 15, and Bacteria 12 bitmap glyphs, and the Arcad
 by Lluc Guardiolaa under CC-BY-NC-4.0. Complete notices and attribution are in
 the mister-magik/licenses/ directory.
 
-mame.sqlite3 is generated metadata, not ROM, BIOS, firmware, or game media. It
-is derived from MAME listxml and software-list data from mamedev/mame at ref:
+magik-metadata-v1.bin is generated metadata, not ROM, BIOS, firmware, or game
+media. It is derived from MAME listxml and software-list data from mamedev/mame at ref:
   $MAME_SOURCE_REF
 MAME is distributed under the BSD 3-Clause License. Source and license:
   https://github.com/mamedev/mame/tree/$MAME_SOURCE_REF
 
-The arcade-specific rows embedded in mame.sqlite3 are derived from
+The arcade-specific records embedded in magik-metadata-v1.bin are derived from
 MiSTer-devel/ArcadeDatabase_MiSTer at revision:
   $ARCADE_DATABASE_SOURCE_REVISION
 The exact CSV and GPL-3.0 license are included under:
   mister-magik/licenses/ArcadeDatabase_MiSTer/
 EOF
-if [[ -n "$HBMAME_SQLITE" ]]; then
+if [[ -n "$HBMAME_SOURCE_REVISION" ]]; then
   cat >> "$STAGE/$PUBLIC_ROOT_RELATIVE/THIRD-PARTY-NOTICES.txt" <<EOF
 
-hbmame.sqlite3 is generated metadata, not ROM, BIOS, firmware, or game media.
-It is derived from HBMAME listxml at revision:
+The HBMAME arcade records in magik-metadata-v1.bin are generated metadata, not
+ROM, BIOS, firmware, or game media. They are derived from HBMAME listxml at revision:
   $HBMAME_SOURCE_REVISION
 HBMAME source and license:
   https://github.com/Robbbert/hbmame/tree/$HBMAME_SOURCE_REVISION
