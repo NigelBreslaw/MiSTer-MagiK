@@ -565,7 +565,7 @@ fn run_catalog_screenshot_audit(
         Err(error) => {
             crate::ui_errln!(
                 "catalog_screenshot_summary_tsv\tvalid=0\terror={}",
-                tsv_field(&error.to_string())
+                sanitize_tsv_field(&error.to_string())
             );
             std::process::exit(2);
         }
@@ -581,7 +581,7 @@ fn run_catalog_screenshot_audit(
         Err(error) => {
             crate::ui_errln!(
                 "catalog_screenshot_summary_tsv\tvalid=0\terror={}",
-                tsv_field(&error)
+                sanitize_tsv_field(&error)
             );
             std::process::exit(2);
         }
@@ -601,8 +601,8 @@ fn run_catalog_screenshot_audit(
             crate::ui_errln!(
                 "catalog_screenshot_summary_tsv\tvalid=0\tsystem={}\tpack={}\terror={}",
                 system_id,
-                tsv_field(&pack_path.display().to_string()),
-                tsv_field(&error.to_string())
+                sanitize_tsv_field(&pack_path.display().to_string()),
+                sanitize_tsv_field(&error.to_string())
             );
             std::process::exit(1);
         }
@@ -626,11 +626,11 @@ fn run_catalog_screenshot_audit(
         crate::ui_logln!(
             "{}\t{}\t{}\t{}\t{}\t{}",
             ordinal,
-            tsv_field(&game.title),
-            tsv_field(&game.preview_asset_key),
-            tsv_field(&game.preview_archive_path),
+            sanitize_tsv_field(&game.title),
+            sanitize_tsv_field(&game.preview_asset_key),
+            sanitize_tsv_field(&game.preview_archive_path),
             u8::from(game.has_preview),
-            tsv_field(&game.launch_ref),
+            sanitize_tsv_field(&game.launch_ref),
         );
     }
 }
@@ -1036,7 +1036,6 @@ fn catalog_filter_inspection_tsv(
     out
 }
 
-#[cfg(test)]
 fn sanitize_tsv_field(value: &str) -> String {
     value.replace(['\t', '\r', '\n'], " ")
 }
