@@ -70,16 +70,16 @@ set_net_delay -max 10.0 \
 	-from $magik_scheduler_snapshot_response \
 	-to $magik_scheduler_snapshot_response_meta
 
-# evidence_hold[15:1] is a closed-loop multi-cycle path: it is written before
-# the response toggle and remains immutable until a later request. Bit zero is
-# the completed-window marker and is deliberately forced high in every held
-# response, so Quartus folds it to VCC rather than retaining a CDC register.
+# evidence_bits[14:0] is a closed-loop multi-cycle path: it is written before
+# the response toggle and remains immutable until a later request. The wire
+# wrapper supplies the constant completed-window marker as destination bit zero.
 # The two-stage response synchronizer supplies more than one destination period
-# of settling for every physical payload bit.
+# of settling for every physical payload bit. The existing frozen-state bank is
+# the tagged destination for both scheduler evidence and Avalon fault context.
 set magik_scheduler_snapshot_data [magik_require_registers scheduler_snapshot_data \
-	{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold*} 15]
+	{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_bits*} 15]
 set magik_scheduler_snapshot_destination [get_registers -nowarn -no_duplicates \
-	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_state*}]
+	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|frozen_state_bits*}]
 if {[get_collection_size $magik_scheduler_snapshot_destination] != 16} {
 	post_message -type error "MagiK scheduler snapshot destination collection mismatch"
 	error "MagiK scheduler snapshot destination collection mismatch"

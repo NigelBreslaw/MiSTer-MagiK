@@ -223,8 +223,8 @@ SCALER_FETCH_DIAGNOSTIC_REPORTS = {
         + "; set_net_delay ; 1.005 ; 10.000 ; 8.995 ; sources ; destinations ; max ;\n"
         + "".join(
             net_delay_detail(
-                f"mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold[{bit}]",
-                f"mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_state[{bit}]",
+                f"mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_bits[{bit - 1}]",
+                f"mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|frozen_state_bits[{bit}]",
             )
             for bit in range(1, 16)
         )
@@ -875,8 +875,8 @@ class QuartusDeltaTest(unittest.TestCase):
     def test_missing_scheduler_snapshot_payload_path_fails(self) -> None:
         reports = dict(SCALER_FETCH_DIAGNOSTIC_REPORTS)
         missing = net_delay_detail(
-            "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold[15]",
-            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_state[15]",
+            "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_bits[14]",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|frozen_state_bits[15]",
         )
         reports["menu.magik-diagnostic-cdc-net-delay.rpt"] = reports[
             "menu.magik-diagnostic-cdc-net-delay.rpt"
@@ -894,7 +894,7 @@ class QuartusDeltaTest(unittest.TestCase):
         reports = dict(SCALER_FETCH_DIAGNOSTIC_REPORTS)
         reports["menu.magik-diagnostic-cdc-net-delay.rpt"] += net_delay_detail(
             "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold[0]",
-            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_state[0]",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|frozen_state_bits[0]",
         )
         result, payload = self.run_check(
             BASE,

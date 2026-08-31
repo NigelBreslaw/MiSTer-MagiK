@@ -16,7 +16,7 @@ module mister_magik_scaler_scheduler_snapshot (
 	input  wire [15:0] live_state,
 	input  wire        request_toggle,
 	output reg         response_toggle = 1'b0,
-	(* preserve, dont_replicate *) output reg [15:0] evidence_hold = 16'h0001
+	output wire [15:0] evidence_hold
 `ifdef FORMAL
 	,output wire        formal_capture_active
 	,output wire [15:0] formal_accumulated_evidence
@@ -31,6 +31,7 @@ module mister_magik_scaler_scheduler_snapshot (
 	reg [1:0] previous_output_state = 2'd0;
 	reg previous_vertical_pixel_enable = 1'b0;
 	reg previous_vertical_carry = 1'b0;
+	(* preserve, dont_replicate *) reg [14:0] evidence_bits = 15'd0;
 
 	wire [1:0] output_state = live_state[1:0];
 	wire hsync_entry = previous_output_state != 2'd1 && output_state == 2'd1;
@@ -53,7 +54,8 @@ module mister_magik_scaler_scheduler_snapshot (
 		live_state[2],
 		1'b0
 	};
-	wire [15:0] next_evidence = evidence_hold | event_evidence;
+	wire [14:0] next_evidence = evidence_bits | event_evidence[15:1];
+	assign evidence_hold = {evidence_bits, 1'b1};
 
 `ifdef FORMAL
 	assign formal_capture_active = capture_active;
@@ -75,15 +77,15 @@ module mister_magik_scaler_scheduler_snapshot (
 			// Bit zero is a constant completed-window marker and therefore is not
 			// a physical CDC payload register. Accumulate only bits 15:1.
 			capture_active <= 1'b1;
-			evidence_hold[15:1] <= event_evidence[15:1];
+			evidence_bits <= event_evidence[15:1];
 		end
-		else if(hsync_entry && evidence_hold[4]) begin
-			evidence_hold[15:1] <= next_evidence[15:1];
+		else if(hsync_entry && evidence_bits[3]) begin
+			evidence_bits <= next_evidence;
 			response_toggle <= request_sync;
 			capture_active <= 1'b0;
 		end
 		else begin
-			evidence_hold[15:1] <= next_evidence[15:1];
+			evidence_bits <= next_evidence;
 		end
 	end
 endmodule
@@ -123,7 +125,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 	,output wire [47:0] formal_published_bundle
 	,output wire [3:0] formal_publication_sequence
 	,output wire formal_publish_crc_busy
-	,output wire [1:0] formal_publish_crc_word
+	,output wire [4:0] formal_publish_crc_phase
 	,output wire formal_enqueue
 	,output wire formal_dequeue
 	,output wire formal_return_has_entry
@@ -182,8 +184,10 @@ module mister_magik_scaler_fetch_liveness_state #(
 	reg reset_ambiguity = 1'b0;
 	reg reset_since_normal_liveness = 1'b0;
 	reg no_request_seen = 1'b0;
-	reg [2:0] frozen_cause =
-		MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NONE;
+	// One tagged 16-bit bank stores either Avalon fault context or a completed
+	// scheduler snapshot. no_request_seen selects the interpretation.
+	(* preserve, dont_replicate *) reg [15:0] frozen_state_bits = 16'd0;
+	wire [2:0] frozen_cause = frozen_state_bits[2:0];
 	wire observer_fault = !no_request_seen &&
 		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT;
 	wire first_stall_valid = no_request_seen ||
@@ -199,22 +203,19 @@ module mister_magik_scaler_fetch_liveness_state #(
 		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_RETURN_INCOMPLETE;
 	wire request_cancelled = !no_request_seen &&
 		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED;
-	reg [6:0] frozen_return_phase = 7'd0;
-	reg [1:0] frozen_fifo_depth = 2'd0;
-	reg [3:0] frozen_address_fold = 4'd0;
-	// Dedicated destination bank for the closed-loop scaler snapshot. Keeping
-	// it separate from fault attribution prevents synthesis from proving away
-	// individual CDC payload paths through mutually exclusive fault branches.
-	(* preserve, dont_replicate *) reg [15:0] scheduler_snapshot_state = 16'd0;
 	// The destination acknowledges only after a complete command. The source
 	// publication bank remains immutable until that acknowledgement returns.
-	reg [3:0] publication_sequence = 4'd0;
 	reg [15:0] published_flags = 16'd0;
-	reg [15:0] published_state = 16'd0;
+	// The tagged frozen bank feeds this sole immutable publication-state bank.
+	(* preserve, dont_replicate *) reg [15:0] published_state = 16'd0;
 	(* preserve, dont_replicate *) reg publication_generation = 1'b0;
+	// The schema is constant-folded into the generated seed; capture folds
+	// flags[15], then phases 0..30 fold the remaining 31 bits. A separate busy
+	// ownership bit makes completed-bank immutability a local invariant.
 	reg publish_crc_busy = 1'b0;
-	reg [1:0] publish_crc_word = 2'd0;
+	reg [4:0] publish_crc_phase = 5'd0;
 	reg [15:0] publish_crc_work = 16'd0;
+	wire [3:0] publish_crc_index = 4'd14 - publish_crc_phase[3:0];
 
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg acknowledge_meta = 1'b0;
@@ -288,9 +289,9 @@ module mister_magik_scaler_fetch_liveness_state #(
 	assign formal_frozen_state = frozen_state;
 	assign formal_publication_generation = publication_generation;
 	assign formal_acknowledge_sync = acknowledge_sync;
-	assign formal_publication_sequence = publication_sequence;
+	assign formal_publication_sequence = published_flags[15:12];
 	assign formal_publish_crc_busy = publish_crc_busy;
-	assign formal_publish_crc_word = publish_crc_word;
+	assign formal_publish_crc_phase = publish_crc_phase;
 	assign formal_published_bundle = {
 		publish_crc_work,
 		published_state,
@@ -330,14 +331,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 		fifo_count,
 		return_phase
 	};
-	wire [15:0] fault_frozen_state = {
-		frozen_address_fold,
-		frozen_fifo_depth,
-		frozen_return_phase,
-		frozen_cause
-	};
-	wire [15:0] frozen_state = no_request_seen ?
-		scheduler_snapshot_state : fault_frozen_state;
+	wire [15:0] frozen_state = frozen_state_bits;
 
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
@@ -352,27 +346,22 @@ module mister_magik_scaler_fetch_liveness_state #(
 		(command_data && selected_command &&
 			word_count < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS);
 
-	function automatic [15:0] crc16_update_byte;
+	function automatic [15:0] crc16_update_bit;
 		input [15:0] crc_in;
-		input [7:0] byte_in;
-		integer bit_index;
+		input bit_in;
 		reg [15:0] value;
 		begin
-			value = crc_in ^ {byte_in, 8'h00};
-			for(bit_index = 0; bit_index < 8; bit_index = bit_index + 1)
-				value = value[15] ? ((value << 1) ^ 16'h1021) : (value << 1);
-			crc16_update_byte = value;
+			value = {crc_in[14:0], 1'b0};
+			if(crc_in[15] ^ bit_in)
+				value = value ^ 16'h1021;
+			crc16_update_bit = value;
 		end
 	endfunction
 
-	function automatic [15:0] crc16_update_word;
-		input [15:0] crc_in;
-		input [15:0] word_in;
-		begin
-			crc16_update_word = crc16_update_byte(
-				crc16_update_byte(crc_in, word_in[15:8]), word_in[7:0]);
-		end
-	endfunction
+	wire [15:0] next_published_flags = {
+		published_flags[15:12] + 1'd1,
+		live_flags[11:0]
+	};
 
 	always @(posedge clk_100m) begin : observe_fetch
 		reg [2:0] timeout_cause;
@@ -473,35 +462,39 @@ module mister_magik_scaler_fetch_liveness_state #(
 		// Faults outrank cancellation and watchdog attribution. Real progress on
 		// the terminal watchdog cycle wins over timeout.
 		if(!first_stall_valid && !observer_fault && observer_fault_event) begin
-			frozen_cause <= MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT;
-			frozen_return_phase <= return_phase;
-			frozen_fifo_depth <= fifo_count;
-			frozen_address_fold <= event_address_fold;
+			frozen_state_bits <= {
+				event_address_fold,
+				fifo_count,
+				return_phase,
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT
+			};
 			if(unexpected_return_event) begin
 				if(!ever_qualified)
 					reset_ambiguity <= 1'b1;
 			end
 		end
 		else if(!first_stall_valid && !observer_fault && request_cancel_event) begin
-			frozen_cause <= MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED;
-			frozen_return_phase <= return_phase;
-			frozen_fifo_depth <= fifo_count;
-			frozen_address_fold <= previous_address_fold;
+			frozen_state_bits <= {
+				previous_address_fold,
+				fifo_count,
+				return_phase,
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED
+			};
 		end
 		else if(!first_stall_valid && !observer_fault && snapshot_complete) begin
 			snapshot_pending <= 1'b0;
 			progress_watchdog <= 24'd0;
 			if(snapshot_invalidated || expected_progress || reset_sync) begin
-				frozen_cause <= MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT;
-				frozen_return_phase <= return_phase;
-				frozen_fifo_depth <= fifo_count;
-				frozen_address_fold <= previous_address_fold;
+				frozen_state_bits <= {
+					previous_address_fold,
+					fifo_count,
+					return_phase,
+					MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT
+				};
 			end
 			else begin
 				no_request_seen <= 1'b1;
-				// The source mailbox held this complete evidence word stable before
-				// its response toggle crossed into clk_100m.
-				scheduler_snapshot_state <= snapshot_evidence_hold;
+				frozen_state_bits <= snapshot_evidence_hold;
 			end
 		end
 		else if(!first_stall_valid && !observer_fault && reset_qualified &&
@@ -521,38 +514,40 @@ module mister_magik_scaler_fetch_liveness_state #(
 				progress_watchdog <= 24'd0;
 			end
 			else begin
-				frozen_cause <= timeout_cause;
-				frozen_return_phase <= return_phase;
-				frozen_fifo_depth <= fifo_count;
-				frozen_address_fold <= previous_address_fold;
+				frozen_state_bits <= {
+					previous_address_fold,
+					fifo_count,
+					return_phase,
+					timeout_cause
+				};
 			end
 		end
 
 		// Capture one immutable bank and serialize its CRC before advertising it.
 		if(!publish_crc_busy && publication_generation == acknowledge_sync) begin
-			publication_sequence <= publication_sequence + 1'd1;
-			published_flags <= {publication_sequence + 1'd1, live_flags[11:0]};
+			published_flags <= next_published_flags;
 			published_state <= frozen_valid ? frozen_state : live_state;
-			publish_crc_work <= MAGIK_SCALER_FETCH_LIVENESS_STATE_HEADER_CRC;
-			publish_crc_word <= 2'd0;
+			publish_crc_work <= crc16_update_bit(
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA_CRC,
+				next_published_flags[15]);
 			publish_crc_busy <= 1'b1;
+			publish_crc_phase <= 5'd0;
 		end
 		else if(publish_crc_busy) begin : publish_crc_step
-			reg [15:0] crc_word_value;
+			reg crc_data_bit;
 			reg [15:0] crc_next;
-			case(publish_crc_word)
-				2'd0: crc_word_value = MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA;
-				2'd1: crc_word_value = published_flags;
-				default: crc_word_value = published_state;
-			endcase
-			crc_next = crc16_update_word(publish_crc_work, crc_word_value);
+			if(publish_crc_phase < 5'd15)
+				crc_data_bit = published_flags[publish_crc_index];
+			else
+				crc_data_bit = published_state[publish_crc_index];
+			crc_next = crc16_update_bit(publish_crc_work, crc_data_bit);
 			publish_crc_work <= crc_next;
-			if(publish_crc_word == 2'd2) begin
+			if(publish_crc_phase == 5'd30) begin
 				publication_generation <= ~publication_generation;
 				publish_crc_busy <= 1'b0;
 			end
 			else
-				publish_crc_word <= publish_crc_word + 1'd1;
+				publish_crc_phase <= publish_crc_phase + 1'd1;
 		end
 	end
 

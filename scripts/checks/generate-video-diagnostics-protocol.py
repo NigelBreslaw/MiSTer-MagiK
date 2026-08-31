@@ -284,6 +284,10 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
         )
     liveness = hdmi_evidence["scaler_fetch_liveness_state"]
     prefix = "MAGIK_SCALER_FETCH_LIVENESS_STATE"
+    liveness_header_crc = hdmi_evidence_header_crc(liveness, hdmi_evidence["crc"])
+    liveness_schema_crc = crc_word(
+        liveness_header_crc, liveness["schema"], hdmi_evidence["crc"]["polynomial"]
+    )
     lines.extend(
         [
             "",
@@ -291,7 +295,8 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
             f"localparam [7:0] MAGIK_UIO_GET_SCALER_FETCH_LIVENESS_STATE = 8'h{liveness['command']:02X};",
             f"localparam [15:0] {prefix}_MAGIC = 16'h{liveness['magic']:04X};",
             f"localparam [3:0] {prefix}_WORDS = 4'd{liveness['word_count']};",
-            f"localparam [15:0] {prefix}_HEADER_CRC = 16'h{hdmi_evidence_header_crc(liveness, hdmi_evidence['crc']):04X};",
+            f"localparam [15:0] {prefix}_HEADER_CRC = 16'h{liveness_header_crc:04X};",
+            f"localparam [15:0] {prefix}_SCHEMA_CRC = 16'h{liveness_schema_crc:04X};",
         ]
     )
     for index, name in enumerate(liveness["words"]):

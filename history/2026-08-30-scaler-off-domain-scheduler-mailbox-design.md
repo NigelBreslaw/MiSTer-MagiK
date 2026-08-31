@@ -39,9 +39,26 @@ At the end of the revolution, the source sets `window_valid` in the already
 complete `evidence_hold` bank and only then mirrors the request into
 `response_toggle`. `evidence_hold` remains unchanged until a later request.
 The response crosses through two destination synchronizer stages before the
-100 MHz observer copies the held bus into its existing frozen storage. Explicit
-10 ns net-delay constraints bound request, response, and every synthesized
-held-data path. There is no false path or timing waiver.
+100 MHz observer captures the held bus in its existing 16-bit frozen-state
+bank. That bank is a tagged union: normal observer faults store Avalon cause,
+phase, depth, and address context; a qualified no-request result stores the
+scheduler evidence instead. The source stores only the 15 non-constant bits
+and wires the completed-window marker high, so no undriven marker register
+exists. Explicit 10 ns net-delay constraints bind request, response, and all
+15 synthesized held-data paths to that one destination bank. There is no false
+path or timing waiver.
+
+Publication folds one payload bit into the CRC per `clk_100m` cycle. The
+generated schema seed removes a constant-word pass, the flags bank itself owns
+the four-bit sequence, and one five-bit phase owns the remaining 31 payload
+bits. A single explicit busy bit separates CRC mutation from completed-bank
+ownership, making immutability locally provable. This replaces the
+word-at-a-time combinational CRC cone and its separate word, bit, and sequence
+registers. Reusing the existing
+frozen-state storage as the scheduler CDC destination removes the redundant
+16-bit scheduler-only bank without changing the four-word response or
+acknowledgement contract. One sticky tag selects the frozen bank's
+interpretation; no asynchronous payload remains on the publication path.
 
 The capture fails closed as `observer_fault` if its response times out, reset
 or Avalon progress occurs during the evidence window, burst/return accounting

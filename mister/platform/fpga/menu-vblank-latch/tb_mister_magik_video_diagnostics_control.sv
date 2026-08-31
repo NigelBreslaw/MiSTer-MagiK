@@ -115,7 +115,8 @@ module tb_mister_magik_video_diagnostics_control;
 
 	task automatic command_start;
 		begin
-			repeat(16) @(posedge clk_sys);
+			// The compact publisher folds one CRC bit per clk_100m cycle.
+			repeat(96) @(posedge clk_sys);
 			@(negedge clk_sys);
 			io_uio = 1'b1;
 			io_strobe = 1'b1;

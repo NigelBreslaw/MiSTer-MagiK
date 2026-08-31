@@ -212,7 +212,7 @@ EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH = {
         r"response_toggle\s*;[^\n]*snapshot_response_meta\s*;", re.IGNORECASE
     ),
     "scheduler_snapshot_data": re.compile(
-        r"evidence_hold(?:\[\d+\])?\s*;[^\n]*scheduler_snapshot_state",
+        r"evidence_bits(?:\[\d+\])?\s*;[^\n]*frozen_state_bits",
         re.IGNORECASE,
     ),
 }

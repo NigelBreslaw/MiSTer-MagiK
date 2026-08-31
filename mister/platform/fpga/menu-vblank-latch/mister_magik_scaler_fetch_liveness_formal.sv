@@ -34,7 +34,7 @@ module mister_magik_scaler_fetch_liveness_formal;
 	wire [47:0] published_bundle;
 	wire [3:0] publication_sequence;
 	wire publish_crc_busy;
-	wire [1:0] publish_crc_word;
+	wire [4:0] publish_crc_phase;
 	wire enqueue;
 	wire dequeue;
 	wire return_has_entry;
@@ -72,7 +72,7 @@ module mister_magik_scaler_fetch_liveness_formal;
 		.formal_published_bundle(published_bundle),
 		.formal_publication_sequence(publication_sequence),
 		.formal_publish_crc_busy(publish_crc_busy),
-		.formal_publish_crc_word(publish_crc_word),
+		.formal_publish_crc_phase(publish_crc_phase),
 		.formal_enqueue(enqueue),
 		.formal_dequeue(dequeue),
 		.formal_return_has_entry(return_has_entry),
@@ -106,6 +106,8 @@ module mister_magik_scaler_fetch_liveness_formal;
 			snapshot_completed_seen <= 1'b1;
 		assert(fifo_count <= 2);
 		assert(return_phase < 128);
+		if(publication_generation != acknowledge_sync)
+			assert(!publish_crc_busy);
 
 		if(past_valid) begin
 			if($past(snapshot_capture_active)) begin
@@ -158,7 +160,7 @@ module mister_magik_scaler_fetch_liveness_formal;
 			end
 			if(publication_generation != $past(publication_generation)) begin
 				assert($past(publish_crc_busy));
-				assert($past(publish_crc_word) == 2'd2);
+				assert($past(publish_crc_phase) == 5'd30);
 			end
 
 			// A real transition on the terminal watchdog cycle wins unless an
