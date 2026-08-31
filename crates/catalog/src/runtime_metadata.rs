@@ -278,12 +278,8 @@ impl ArcadeShard {
     pub fn mister_by_setname(&self, key: &str) -> Option<&MisterArcadeEntry> {
         let index = self
             .mister
-            .binary_search_by(|row| row.setname_key.as_str().cmp(key))
-            .ok()?;
-        self.mister[..=index]
-            .iter()
-            .rposition(|row| row.setname_key == key)
-            .map(|index| &self.mister[index])
+            .partition_point(|row| row.setname_key.as_str() < key);
+        self.mister.get(index).filter(|row| row.setname_key == key)
     }
 
     pub fn mister_by_mra_name(&self, key: &str) -> Option<&MisterArcadeEntry> {
@@ -1819,7 +1815,9 @@ mod tests {
             ..ArcadeShard::default()
         };
         let payload = encode_arcade(&shard).expect("encode Arcade");
-        assert_eq!(decode_arcade(&payload).expect("decode Arcade"), shard);
+        let decoded = decode_arcade(&payload).expect("decode Arcade");
+        assert_eq!(decoded, shard);
+        assert_eq!(decoded.mister_by_setname("shared").unwrap().title, "First");
     }
 
     #[test]
