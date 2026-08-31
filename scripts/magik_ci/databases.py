@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import csv
 import html
+import io
 import json
 import re
 import sqlite3
@@ -120,6 +122,39 @@ MAME_RUNTIME_SOFTWARE_LISTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         ),
     ),
 )
+
+ARCADE_DATABASE_REPOSITORY = "MiSTer-devel/ArcadeDatabase_MiSTer"
+ARCADE_DATABASE_PATH = "ArcadeDatabase.csv"
+ARCADE_DATABASE_SCHEMA = 1
+ARCADE_DATABASE_MAX_SOURCE_BYTES = 16 * 1024 * 1024
+ARCADE_DATABASE_MAX_ROWS = 10_000
+ARCADE_DATABASE_MAX_FIELD_BYTES = 4 * 1024
+ARCADE_DATABASE_REQUIRED_HEADERS = (
+    "setname",
+    "name",
+    "region",
+    "version",
+    "alternative",
+    "parent_title",
+    "platform",
+    "series",
+    "homebrew",
+    "bootleg",
+    "year",
+    "manufacturer",
+    "category",
+    "linebreak1",
+    "resolution",
+    "rotation",
+    "flip",
+    "linebreak2",
+    "players",
+    "move_inputs",
+    "special_controls",
+    "num_buttons",
+)
+
+_XML_ENTITY_RE = re.compile(r"&(amp|apos|gt|lt|quot|#[0-9]+|#x[0-9a-fA-F]+);")
 
 _MRA_TAG_RE = re.compile(
     r"<\s*(?P<closing>/)?\s*(?P<name>[A-Za-z][A-Za-z0-9_.:-]*)\b(?P<attrs>[^>]*)>",
@@ -350,6 +385,259 @@ def update_plan(
         "update_needed": any(
             (mame_changed, hbmame_changed, arcade_changed, updater_changed)
         ),
+    }
+
+
+def _arcade_decode_text(value: str) -> str:
+    if "&" not in value:
+        return value
+    escaped: list[str] = []
+    offset = 0
+    while True:
+        ampersand = value.find("&", offset)
+        if ampersand < 0:
+            break
+        escaped.append(value[offset:ampersand])
+        match = _XML_ENTITY_RE.match(value, ampersand)
+        if match is None:
+            escaped.append("&amp;")
+            offset = ampersand + 1
+        else:
+            escaped.append(match.group(0))
+            offset = match.end()
+    escaped.append(value[offset:])
+    return html.unescape("".join(escaped))
+
+
+def _arcade_normalize_key(value: str) -> str:
+    normalized: list[str] = []
+    last_dash = False
+    for character in value.strip().lower():
+        if character.isascii() and character.isalnum():
+            normalized.append(character)
+            last_dash = False
+        elif normalized and not last_dash:
+            normalized.append("-")
+            last_dash = True
+    while normalized and normalized[-1] == "-":
+        normalized.pop()
+    return "".join(normalized)
+
+
+def _arcade_yes_no(value: str, field: str) -> int:
+    normalized = value.strip().lower()
+    if normalized == "yes":
+        return 1
+    if normalized == "no":
+        return 0
+    raise ValueError(f"ArcadeDatabase {field} must be yes or no; got {value!r}")
+
+
+def _arcade_source_flag(value: str, field: str) -> int:
+    normalized = value.strip().lower()
+    if normalized in {"yes", "ys"}:
+        return 1
+    if normalized in {"", "no"}:
+        return 0
+    raise ValueError(
+        f"ArcadeDatabase {field} must be yes, no, ys, or blank; got {value!r}"
+    )
+
+
+def _arcade_optional_yes_no(value: str, field: str) -> int | None:
+    normalized = value.strip().lower()
+    if normalized in {"", "n-a"}:
+        return None
+    if normalized == "yes":
+        return 1
+    if normalized == "no":
+        return 0
+    raise ValueError(f"ArcadeDatabase {field} must be yes, no, n-a, or blank")
+
+
+def _arcade_optional_integer(value: str, field: str) -> int | None:
+    normalized = value.strip()
+    if not normalized:
+        return None
+    try:
+        return int(normalized)
+    except ValueError as error:
+        raise ValueError(
+            f"invalid ArcadeDatabase {field} {normalized!r}: {error}"
+        ) from error
+
+
+def import_arcade_database(
+    *, sqlite: Path, csv_path: Path, source_sha: str
+) -> dict[str, object]:
+    """Import the pinned ArcadeDatabase CSV into the runtime MAME database."""
+    if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+        raise ValueError("source SHA must be 40 lowercase hexadecimal characters")
+    source = csv_path.read_bytes()
+    if len(source) > ARCADE_DATABASE_MAX_SOURCE_BYTES:
+        raise ValueError(
+            f"ArcadeDatabase CSV is {len(source)} bytes; "
+            f"limit is {ARCADE_DATABASE_MAX_SOURCE_BYTES}"
+        )
+    records = list(
+        csv.reader(io.StringIO(source.decode("utf-8"), newline=""), strict=True)
+    )
+    if not records:
+        raise ValueError("ArcadeDatabase CSV is empty")
+    headers = records.pop(0)
+    if len(headers) != len(set(headers)):
+        raise ValueError("ArcadeDatabase CSV has duplicate headers")
+    for required in ARCADE_DATABASE_REQUIRED_HEADERS:
+        if required not in headers:
+            raise ValueError(f"ArcadeDatabase CSV is missing header {required!r}")
+    if len(records) > ARCADE_DATABASE_MAX_ROWS:
+        raise ValueError(f"ArcadeDatabase CSV exceeds {ARCADE_DATABASE_MAX_ROWS} rows")
+
+    entries: list[tuple[dict[str, str], dict[str, str]]] = []
+    for record in records:
+        if len(record) != len(headers):
+            raise ValueError(
+                f"ArcadeDatabase row has {len(record)} fields; expected {len(headers)}"
+            )
+        raw = dict(zip(headers, record, strict=True))
+        for header, value in raw.items():
+            field_bytes = len(value.encode("utf-8"))
+            if field_bytes > ARCADE_DATABASE_MAX_FIELD_BYTES:
+                raise ValueError(
+                    f"ArcadeDatabase field {header!r} is {field_bytes} bytes; "
+                    f"limit is {ARCADE_DATABASE_MAX_FIELD_BYTES}"
+                )
+        entries.append(
+            (raw, {name: _arcade_decode_text(value) for name, value in raw.items()})
+        )
+
+    categories = len(
+        {values["category"] for _, values in entries if values["category"]}
+    )
+    csv_sha256 = sha256_bytes(source)
+    connection = sqlite3.connect(sqlite)
+    try:
+        machine_table = connection.execute(
+            "SELECT count(*) FROM sqlite_master "
+            "WHERE type='table' AND name='mame_machines'"
+        ).fetchone()[0]
+        if machine_table != 1:
+            raise ValueError("target SQLite database has no mame_machines table")
+        connection.executescript(
+            """
+            BEGIN IMMEDIATE;
+            DROP TABLE IF EXISTS arcade_database;
+            DROP TABLE IF EXISTS mister_arcade_entries;
+            DROP TABLE IF EXISTS mister_arcade_source;
+            CREATE TABLE mister_arcade_source (
+                id INTEGER PRIMARY KEY CHECK(id=1),
+                schema_version INTEGER NOT NULL,
+                repository TEXT NOT NULL,
+                source_path TEXT NOT NULL,
+                source_sha TEXT NOT NULL,
+                csv_sha256 TEXT NOT NULL,
+                row_count INTEGER NOT NULL,
+                category_count INTEGER NOT NULL
+            ) WITHOUT ROWID;
+            CREATE TABLE mister_arcade_entries (
+                ordinal INTEGER PRIMARY KEY,
+                setname TEXT NOT NULL,
+                setname_key TEXT NOT NULL,
+                name TEXT NOT NULL,
+                mra_name_key TEXT NOT NULL,
+                region TEXT NOT NULL,
+                version TEXT NOT NULL,
+                alternative INTEGER NOT NULL,
+                parent_title TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                series TEXT NOT NULL,
+                homebrew INTEGER NOT NULL,
+                bootleg INTEGER NOT NULL,
+                year INTEGER,
+                manufacturer TEXT NOT NULL,
+                category TEXT NOT NULL,
+                resolution TEXT NOT NULL,
+                rotation TEXT NOT NULL,
+                flip INTEGER,
+                players TEXT NOT NULL,
+                move_inputs TEXT NOT NULL,
+                special_controls TEXT NOT NULL,
+                num_buttons INTEGER,
+                raw_json TEXT NOT NULL
+            );
+            CREATE INDEX mister_arcade_entries_setname_idx
+                ON mister_arcade_entries(setname_key);
+            CREATE INDEX mister_arcade_entries_mra_name_idx
+                ON mister_arcade_entries(mra_name_key);
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO mister_arcade_source(
+                id,schema_version,repository,source_path,source_sha,csv_sha256,
+                row_count,category_count
+            ) VALUES (1,?,?,?,?,?,?,?)
+            """,
+            (
+                ARCADE_DATABASE_SCHEMA,
+                ARCADE_DATABASE_REPOSITORY,
+                ARCADE_DATABASE_PATH,
+                source_sha,
+                csv_sha256,
+                len(entries),
+                categories,
+            ),
+        )
+        connection.executemany(
+            """
+            INSERT INTO mister_arcade_entries(
+                ordinal,setname,setname_key,name,mra_name_key,region,version,
+                alternative,parent_title,platform,series,homebrew,bootleg,year,
+                manufacturer,category,resolution,rotation,flip,players,move_inputs,
+                special_controls,num_buttons,raw_json
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                (
+                    ordinal,
+                    values["setname"],
+                    _arcade_normalize_key(values["setname"]),
+                    values["name"],
+                    f"{values['name'].strip()}.mra".lower(),
+                    values["region"],
+                    values["version"],
+                    _arcade_yes_no(values["alternative"], "alternative"),
+                    values["parent_title"],
+                    values["platform"],
+                    values["series"],
+                    _arcade_source_flag(values["homebrew"], "homebrew"),
+                    _arcade_source_flag(values["bootleg"], "bootleg"),
+                    _arcade_optional_integer(values["year"], "year"),
+                    values["manufacturer"],
+                    values["category"],
+                    values["resolution"],
+                    values["rotation"],
+                    _arcade_optional_yes_no(values["flip"], "flip"),
+                    values["players"],
+                    values["move_inputs"],
+                    values["special_controls"],
+                    _arcade_optional_integer(values["num_buttons"], "num_buttons"),
+                    json.dumps(raw, ensure_ascii=False, separators=(",", ":")),
+                )
+                for ordinal, (raw, values) in enumerate(entries)
+            ),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+    return {
+        "source_sha": source_sha,
+        "csv_sha256": csv_sha256,
+        "rows": len(entries),
+        "categories": categories,
     }
 
 

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import subprocess
@@ -140,6 +141,101 @@ class MagikCiTests(unittest.TestCase):
                 ValueError, "mame_runtime_coverage_missing: zx-spectrum"
             ):
                 databases.mame_runtime_coverage(database)
+
+    def test_import_arcade_database_builds_validated_runtime_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "mame.sqlite3"
+            connection = databases.sqlite3.connect(database)
+            connection.execute("CREATE TABLE mame_machines(setname TEXT PRIMARY KEY)")
+            connection.commit()
+            connection.close()
+
+            csv_path = root / "ArcadeDatabase.csv"
+            row = {name: "" for name in databases.ARCADE_DATABASE_REQUIRED_HEADERS}
+            row.update(
+                {
+                    "setname": " SF2_CE / Turbo ",
+                    "name": "Snow Bros. - Nick & Tom",
+                    "alternative": "no",
+                    "platform": "Board",
+                    "bootleg": "ys",
+                    "year": "1985",
+                    "manufacturer": "Maker",
+                    "category": "Platform - Run, Jump &amp; Scrolling",
+                    "resolution": "15kHz",
+                    "rotation": "horizontal",
+                    "flip": "n-a",
+                    "players": "2-4 (simultaneous)",
+                    "move_inputs": "8-way",
+                    "num_buttons": "2",
+                }
+            )
+            with csv_path.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(
+                    stream, fieldnames=databases.ARCADE_DATABASE_REQUIRED_HEADERS
+                )
+                writer.writeheader()
+                writer.writerow(row)
+
+            source_sha = "a" * 40
+            summary = databases.import_arcade_database(
+                sqlite=database, csv_path=csv_path, source_sha=source_sha
+            )
+            self.assertEqual(summary["rows"], 1)
+            self.assertEqual(summary["categories"], 1)
+            connection = databases.sqlite3.connect(database)
+            self.assertEqual(
+                connection.execute(
+                    "SELECT schema_version,repository,source_path,source_sha,row_count,category_count "
+                    "FROM mister_arcade_source WHERE id=1"
+                ).fetchone(),
+                (
+                    1,
+                    "MiSTer-devel/ArcadeDatabase_MiSTer",
+                    "ArcadeDatabase.csv",
+                    source_sha,
+                    1,
+                    1,
+                ),
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT setname_key,mra_name_key,category,year,homebrew,bootleg "
+                    "FROM mister_arcade_entries"
+                ).fetchone(),
+                (
+                    "sf2-ce-turbo",
+                    "snow bros. - nick & tom.mra",
+                    "Platform - Run, Jump & Scrolling",
+                    1985,
+                    0,
+                    1,
+                ),
+            )
+            connection.close()
+
+            bad_csv = root / "bad.csv"
+            bad_row = dict(row)
+            bad_row["alternative"] = "maybe"
+            with bad_csv.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(
+                    stream, fieldnames=databases.ARCADE_DATABASE_REQUIRED_HEADERS
+                )
+                writer.writeheader()
+                writer.writerow(bad_row)
+            with self.assertRaisesRegex(ValueError, "must be yes or no"):
+                databases.import_arcade_database(
+                    sqlite=database, csv_path=bad_csv, source_sha="b" * 40
+                )
+            connection = databases.sqlite3.connect(database)
+            self.assertEqual(
+                connection.execute(
+                    "SELECT count(*) FROM mister_arcade_entries"
+                ).fetchone(),
+                (1,),
+            )
+            connection.close()
 
     def test_cli_import_does_not_require_platform_manifest_dependencies(self) -> None:
         command = """

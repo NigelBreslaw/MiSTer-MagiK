@@ -311,22 +311,12 @@ def main() -> int:
                     )
                     print(json.dumps(coverage, sort_keys=True))
             elif args.action == "import-arcade":
-                import csv
-                import sqlite3
-
-                connection = sqlite3.connect(args.sqlite)
-                with args.csv.open(newline="", encoding="utf-8") as stream:
-                    rows = list(csv.reader(stream))
-                if rows:
-                    connection.execute(
-                        "CREATE TABLE IF NOT EXISTS arcade_database (source_sha TEXT NOT NULL, row_json TEXT NOT NULL)"
-                    )
-                    connection.executemany(
-                        "INSERT INTO arcade_database VALUES (?, ?)",
-                        ((args.source_sha, json.dumps(row)) for row in rows[1:]),
-                    )
-                    connection.commit()
-                connection.close()
+                summary = databases.import_arcade_database(
+                    sqlite=args.sqlite,
+                    csv_path=args.csv,
+                    source_sha=args.source_sha,
+                )
+                print(json.dumps(summary, sort_keys=True))
             elif args.action == "create":
                 databases.create(
                     mame=args.mame,
