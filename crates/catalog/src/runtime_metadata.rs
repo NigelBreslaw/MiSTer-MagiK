@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 #[cfg(feature = "builder")]
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 #[cfg(not(unix))]
 use std::io::Read;
@@ -1013,9 +1013,6 @@ fn candidate_names(bytes: &[u8], items: &[SoftwareItem]) -> Result<Vec<String>, 
                 .clone(),
         );
     }
-    if names.windows(2).any(|window| window[0] >= window[1]) {
-        return Err("metadata candidate range is not sorted".into());
-    }
     Ok(names)
 }
 
@@ -1595,6 +1592,7 @@ fn read_software_shard(
         .collect::<Vec<_>>()
         .join(",");
     let mut items_by_name = BTreeMap::<String, SoftwareItem>::new();
+    let mut ordered_items = Vec::<(String, SoftwareItem)>::new();
     let mut stmt = conn.prepare(&format!("SELECT list_name,software_name,parent_name,description,year,publisher,region,source_version FROM mame_software_items WHERE list_name IN ({placeholders}) ORDER BY list_name,software_name")) .map_err(|error| format!("prepare software items: {error}"))?;
     let rows = stmt
         .query_map(params_from_iter(source_lists.iter().copied()), |row| {
@@ -1612,20 +1610,29 @@ fn read_software_shard(
         })
         .map_err(|error| format!("read software items: {error}"))?;
     for row in rows.flatten() {
-        items_by_name.insert(row.0, row.1);
+        items_by_name.insert(row.0.clone(), row.1.clone());
+        ordered_items.push(row);
     }
     let items = items_by_name.into_values().collect::<Vec<_>>();
-    let mut title_candidates = BTreeMap::<String, BTreeSet<String>>::new();
-    for item in &items {
+    let item_names = items
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect::<HashSet<_>>();
+    let mut title_candidates = BTreeMap::<String, Vec<String>>::new();
+    let mut seen_title_candidates = BTreeMap::<String, HashSet<String>>::new();
+    for (name, item) in &ordered_items {
+        let title = crate::library_db::canonical_variant_title(&item.description);
+        let seen = seen_title_candidates.entry(title.clone()).or_default();
+        if !seen.insert(name.clone()) {
+            continue;
+        }
         title_candidates
-            .entry(crate::library_db::canonical_variant_title(
-                &item.description,
-            ))
+            .entry(title)
             .or_default()
-            .insert(item.name.clone());
+            .push(name.clone());
     }
-    let mut hashes = BTreeMap::<(u64, u32), BTreeSet<String>>::new();
-    let mut disks = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut hashes = BTreeMap::<(u64, u32), Vec<String>>::new();
+    let mut disks = BTreeMap::<String, Vec<String>>::new();
     let mut stmt = conn.prepare(&format!("SELECT software_name,size,crc32,disk_sha1 FROM mame_software_hashes WHERE list_name IN ({placeholders}) AND ((size IS NOT NULL AND crc32 IS NOT NULL) OR disk_sha1 IS NOT NULL) ORDER BY list_name,software_name")) .map_err(|error| format!("prepare software hashes: {error}"))?;
     let rows = stmt
         .query_map(params_from_iter(source_lists.iter().copied()), |row| {
@@ -1639,28 +1646,25 @@ fn read_software_shard(
         .map_err(|error| format!("read software hashes: {error}"))?;
     for row in rows.flatten() {
         let (name, size, crc, disk) = row;
-        if !items.iter().any(|item| item.name == name) {
+        if !item_names.contains(name.as_str()) {
             continue;
         }
         if let (Some(size), Some(crc)) = (
             size.and_then(|value| u64::try_from(value).ok()),
             crc.and_then(|value| u32::from_str_radix(value.trim(), 16).ok()),
         ) {
-            hashes.entry((size, crc)).or_default().insert(name.clone());
+            hashes.entry((size, crc)).or_default().push(name.clone());
         }
         if let Some(disk) = disk.filter(|value| value.len() == 40) {
             disks
                 .entry(disk.to_ascii_lowercase())
                 .or_default()
-                .insert(name);
+                .push(name);
         }
     }
     Ok(SoftwareShard {
         items,
-        title_candidates: title_candidates
-            .into_iter()
-            .map(|(key, values)| (key, values.into_iter().collect()))
-            .collect(),
+        title_candidates: title_candidates.into_iter().collect(),
         hash_candidates: hashes
             .into_iter()
             .map(|((size, crc), values)| SoftwareHashCandidate {
@@ -1777,7 +1781,7 @@ mod tests {
             items,
             title_candidates: BTreeMap::from([(
                 "example".into(),
-                vec!["clone".into(), "parent".into()],
+                vec!["parent".into(), "clone".into()],
             )]),
             hash_candidates: vec![SoftwareHashCandidate {
                 size: 4,
