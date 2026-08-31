@@ -702,7 +702,16 @@ fn verify_file_entries(payload: &Value, files: &BTreeMap<String, Vec<u8>>) -> Ag
     let entries = payload["files"]
         .as_array()
         .ok_or("manifest files are missing")?;
-    let expected_files: BTreeSet<_> = if payload["format"] == FORMAT {
+    let expected_files: BTreeSet<_> = if payload["format"] == COMPACT_FORMAT {
+        [
+            RUNTIME_METADATA,
+            ARCADE_DATABASE_CSV,
+            ARCADE_DATABASE_LICENSE,
+            ARCADE_UPDATER_INDEX,
+        ]
+        .into_iter()
+        .collect()
+    } else if payload["format"] == FORMAT {
         [
             DATABASES[0],
             DATABASES[1],
@@ -1093,6 +1102,10 @@ mod tests {
         assert_eq!(
             expected_archive_members(&json!({"format": FORMAT})).len(),
             7
+        );
+        assert_eq!(
+            expected_archive_members(&json!({"format": COMPACT_FORMAT})).len(),
+            6
         );
         assert_eq!(
             expected_archive_members(&json!({"format": PREVIOUS_FORMAT})).len(),
