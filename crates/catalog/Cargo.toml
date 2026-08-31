@@ -25,6 +25,11 @@ name = "catalog-hotpath-profile"
 path = "src/bin/catalog_hotpath_profile.rs"
 required-features = ["builder", "hotpath"]
 
+[[bin]]
+name = "runtime-metadata-builder"
+path = "src/bin/runtime_metadata_builder.rs"
+required-features = ["builder"]
+
 [lints.rust]
 warnings = "deny"
 
