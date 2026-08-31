@@ -87,14 +87,6 @@ impl GameDirSignature {
             mtime_nanos,
         })
     }
-
-    #[cfg(feature = "builder")]
-    pub(crate) fn from_known_path_metadata(len: u64, modified_ns: i128) -> Self {
-        Self::Present {
-            len,
-            mtime_nanos: modified_ns.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64,
-        }
-    }
 }
 
 pub(crate) fn installed_cores_for_roots(roots: &[String]) -> Vec<InstalledCore> {
@@ -512,48 +504,30 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
             }
             let key = path.display().to_string().to_ascii_lowercase();
             if seen.insert(key) {
-                candidates.push((name.to_string(), path, file_type.is_dir()));
+                let readdir_kind = if file_type.is_dir() {
+                    Some(true)
+                } else if file_type.is_file() {
+                    Some(false)
+                } else {
+                    None
+                };
+                candidates.push((name.to_string(), path, readdir_kind));
             } else {
                 rejected_entries = rejected_entries.saturating_add(1);
             }
         }
-        // Keep the exact type check serial while avoiding a separate parent
-        // pathname lookup for every entry.  `fstatat` follows the same symlink
-        // semantics as the old metadata fallback; entries whose directory
-        // type was not known by `readdir` remain unconfirmed and therefore
-        // take that fallback later.
-        let child_paths = candidates
-            .iter()
-            .map(|(_, path, _)| path.clone())
-            .collect::<Vec<_>>();
-        let metadata_started = Instant::now();
-        let metadata = namespace_walk::probe_known_path_metadata(&game_root, &child_paths);
-        let metadata_probe_us = metadata_started.elapsed().as_micros() as u64;
+        let candidate_count = candidates.len();
         let mut entries = Vec::new();
-        for ((name, path, readdir_is_dir), metadata) in candidates.into_iter().zip(metadata) {
-            if checked_header_metadata_is_rejected(metadata.as_ref().map(|entry| entry.is_dir)) {
+        for (name, path, readdir_kind) in candidates {
+            if checked_header_entry_is_rejected(readdir_kind) {
                 rejected_entries = rejected_entries.saturating_add(1);
-            }
-            let Some(metadata) = metadata else {
-                entries.push(GameDirHeader {
-                    name,
-                    signature: GameDirSignature::Unavailable,
-                    path,
-                    confirmed_directory: false,
-                });
-                continue;
-            };
-            if !metadata.is_dir {
                 continue;
             }
             entries.push(GameDirHeader {
                 name,
-                signature: GameDirSignature::from_known_path_metadata(
-                    metadata.size,
-                    metadata.modified_ns,
-                ),
+                signature: GameDirSignature::Unavailable,
                 path,
-                confirmed_directory: readdir_is_dir,
+                confirmed_directory: readdir_kind == Some(true),
             });
         }
         entries.sort_by_key(|entry| entry.name.to_ascii_lowercase());
@@ -561,13 +535,13 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
             "catalog_game_header_probe_tsv\troot={}\tentries={}\tcandidates={}\taccepted={}\trejected={}\tfile_type_count={}\tfile_type_us={}\tmetadata_probe_count={}\tmetadata_probe_us={}\telapsed_us={}",
             game_root.display(),
             entries_examined,
-            child_paths.len(),
+            candidate_count,
             entries.len(),
             rejected_entries,
             file_type_count,
             file_type_us,
-            child_paths.len(),
-            metadata_probe_us,
+            0,
+            0,
             root_started.elapsed().as_micros()
         );
         out.extend(entries);
@@ -576,7 +550,7 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
 }
 
 #[cfg(feature = "builder")]
-fn checked_header_metadata_is_rejected(is_dir: Option<bool>) -> bool {
+fn checked_header_entry_is_rejected(is_dir: Option<bool>) -> bool {
     matches!(is_dir, Some(false))
 }
 
@@ -1059,7 +1033,7 @@ mod tests {
             .find(|header| header.name == "NES")
             .expect("NES header");
         assert!(nes.confirmed_directory);
-        assert!(matches!(nes.signature, GameDirSignature::Present { .. }));
+        assert_eq!(nes.signature, GameDirSignature::Unavailable);
         assert!(
             !headers
                 .iter()
@@ -1079,9 +1053,9 @@ mod tests {
     #[cfg(feature = "builder")]
     #[test]
     fn checked_game_dir_header_rejections_include_confirmed_non_directories_only() {
-        assert!(!checked_header_metadata_is_rejected(Some(true)));
-        assert!(checked_header_metadata_is_rejected(Some(false)));
-        assert!(!checked_header_metadata_is_rejected(None));
+        assert!(!checked_header_entry_is_rejected(Some(true)));
+        assert!(checked_header_entry_is_rejected(Some(false)));
+        assert!(!checked_header_entry_is_rejected(None));
     }
 
     #[cfg(unix)]

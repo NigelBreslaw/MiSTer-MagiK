@@ -999,7 +999,10 @@ fn collect_generic_namespace_inventory(
         fact: GameDirFact {
             name: header.name.clone(),
             path: header.path.clone(),
-            signature: header.signature,
+            // The serial namespace walk already brackets the root with an fd
+            // signature. Use that observation instead of reopening the root
+            // during checked plan construction.
+            signature: GameDirSignature::from_namespace_signature(namespace.target_signature),
             has_payload_files,
             has_zip_files,
             direct_zip_paths,
@@ -1895,6 +1898,34 @@ mod tests {
         }
         #[cfg(not(target_os = "linux"))]
         assert!(!watch.complete);
+    }
+
+    #[test]
+    fn generic_inventory_uses_the_serial_namespace_root_signature() {
+        let root = fs::canonicalize(crate::test_support::unique_temp_dir(
+            "generic-inventory-root-signature",
+        ))
+        .expect("canonicalize inventory root");
+        let game_dir = root.join("games/Example");
+        fs::create_dir_all(&game_dir).expect("create game directory");
+        fs::write(game_dir.join("game.rom"), b"rom").expect("write game");
+
+        let header = GameDirHeader {
+            name: "Example".to_string(),
+            path: game_dir.clone(),
+            signature: GameDirSignature::Unavailable,
+            confirmed_directory: true,
+        };
+        let inventory =
+            collect_generic_namespace_inventory(&header, None).expect("collect generic inventory");
+
+        assert!(matches!(
+            inventory.fact.signature,
+            GameDirSignature::Present { .. }
+        ));
+        assert_eq!(inventory.fact.path, game_dir);
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
