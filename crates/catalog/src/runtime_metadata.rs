@@ -6,7 +6,11 @@
 //! reads a small header and index, while individual LZ4-compressed shards are
 //! fetched only when requested.
 
-use std::collections::{BTreeMap, BTreeSet};
+#![allow(clippy::chunks_exact_to_as_chunks)]
+
+use std::collections::BTreeMap;
+#[cfg(feature = "builder")]
+use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
 #[cfg(not(unix))]
 use std::io::Read;
@@ -353,6 +357,9 @@ impl MetadataStore {
         let version = u32_at(&header[8..12]);
         if version != VERSION {
             return Err(format!("metadata version {version} is unsupported"));
+        }
+        if header[12..16].iter().any(|byte| *byte != 0) {
+            return Err("metadata header flags are unsupported".into());
         }
         let declared_len = u64_at(&header[16..24]);
         if declared_len != file_len {
@@ -748,8 +755,16 @@ fn decode_software(payload: &[u8]) -> Result<SoftwareShard, String> {
     cursor = items_end;
     let mut title_candidates = BTreeMap::new();
     let mut range_cursor = 0usize;
+    let mut previous_title = None;
     for row in payload[cursor..titles_end].chunks_exact(SOFTWARE_TITLE_LEN) {
         let key = required_string(&strings, u32_at(&row[..4]), "title")?;
+        if previous_title
+            .as_ref()
+            .is_some_and(|previous| previous >= &key)
+        {
+            return Err("metadata title index is not sorted".into());
+        }
+        previous_title = Some(key.clone());
         let start = u32_at(&row[4..8]) as usize;
         let count = u32_at(&row[8..12]) as usize;
         if start != range_cursor
@@ -948,7 +963,7 @@ fn decode_arcade(payload: &[u8]) -> Result<ArcadeShard, String> {
     }
     if mister
         .windows(2)
-        .any(|window| window[0].setname_key > window[1].setname_key)
+        .any(|window| window[0].setname_key >= window[1].setname_key)
     {
         return Err("arcade MRA rows are not sorted".into());
     }
@@ -1223,8 +1238,7 @@ impl MetadataFileBuilder {
     }
 
     pub fn encode(mut self) -> Result<Vec<u8>, String> {
-        self.shards
-            .sort_by(|left, right| id_bytes(&left.0).unwrap().cmp(&id_bytes(&right.0).unwrap()));
+        self.shards.sort_by_key(|left| id_bytes(&left.0).unwrap());
         let index_len = self
             .shards
             .len()
