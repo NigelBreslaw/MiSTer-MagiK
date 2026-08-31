@@ -157,6 +157,13 @@ progress precedence. The host accepts three identical schema-20 or schema-21
 terminal records, while older schemas retain the advancing-publication rule.
 Schema 14 through schema 20 remain rollback-decodable.
 
+The fixed-seed schema-21 build closed timing (`0.691 ns` setup, `0.239 ns`
+hold, zero TNS), exposed all nine exact payload paths, and added 100 registers
+and 219 ALMs without RAM, DSP, or PLL growth. Because this observer is
+disposable and is removed after root-cause attribution, the experimental
+diagnostic ceiling is 224 ALMs. This keeps a measured five-ALM margin while
+retaining every non-resource certification gate and rejecting 225 ALMs.
+
 The wide and staged FPGA video observers are retired from production. Their
 field evidence was decisive, but every expanded implementation made the dense
 legacy scaler physically sensitive and failed at least one fixed qualification

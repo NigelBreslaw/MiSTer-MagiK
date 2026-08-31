@@ -459,7 +459,7 @@ class QuartusDeltaTest(unittest.TestCase):
                 "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n"
             ),
             (
-                "Logic utilization (in ALMs) : 8,008\nTotal registers : 20,724\n"
+                "Logic utilization (in ALMs) : 8,024\nTotal registers : 20,724\n"
                 "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n"
             ),
         )
@@ -477,6 +477,18 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("logic_alms_delta", payload["invalid_reason"])
         self.assertIn("registers_delta", payload["invalid_reason"])
+
+        over_resources = (*resources[:2], resources[2].replace("8,024", "8,025"))
+        result, payload = self.run_check(
+            BASE,
+            BASE + EXPERIMENTAL_CUSTOM_SYNC,
+            BASE,
+            over_resources,
+            diagnostic_reports=EXPERIMENTAL_DIAGNOSTIC_REPORTS,
+            experimental_diagnostic=True,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("logic_alms_delta", payload["invalid_reason"])
 
     def test_new_warning_fails_even_when_warning_code_is_inherited(self) -> None:
         result, payload = self.run_check(

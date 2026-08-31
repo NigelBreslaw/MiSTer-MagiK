@@ -146,6 +146,6 @@ registered-state term to the existing copy shift enable and a tail-only clear
 of the existing pixel-valid register. Fixed-seed Apple signoff must still prove
 commercial setup/hold, resource, warning, CDC, and hard-block gates before any
 installation. The disposable observer must remain within the checked-in
-experimental profile ceilings of 224 registers and 208 ALMs without RAM, DSP,
+experimental profile ceilings of 224 registers and 224 ALMs without RAM, DSP,
 or PLL changes; fixed-seed synthesis remains the authority. Device validation must begin by preserving
 the current incident; this document authorizes no recovery or device action.
