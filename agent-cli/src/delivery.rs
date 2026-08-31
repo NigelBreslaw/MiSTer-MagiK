@@ -1156,6 +1156,7 @@ mod tests {
         ) -> AgentResult<crate::host::FpgaActivationAssessment> {
             Ok(crate::host::FpgaActivationAssessment::Current {
                 architecture: "scaler-off-domain-scheduler-terminal-v4".into(),
+                warning: None,
             })
         }
 
@@ -1358,6 +1359,7 @@ mod tests {
         );
         let current = crate::host::FpgaActivationAssessment::Current {
             architecture: "patched".into(),
+            warning: None,
         };
         assert_eq!(
             reconcile_fpga_activation(DeliveryDecision::Runtime, &current),

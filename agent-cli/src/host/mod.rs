@@ -3506,6 +3506,7 @@ pub(crate) struct FpgaCheckFailure {
 pub(crate) enum FpgaActivationAssessment {
     Current {
         architecture: String,
+        warning: Option<String>,
     },
     Stale {
         expected: String,
@@ -3525,7 +3526,15 @@ pub(crate) enum FpgaActivationAssessment {
 impl FpgaActivationAssessment {
     pub(crate) fn reason(&self) -> String {
         match self {
-            Self::Current { architecture } => format!("current architecture={architecture}"),
+            Self::Current {
+                architecture,
+                warning,
+            } => match warning {
+                Some(warning) => {
+                    format!("current architecture={architecture} warning={warning}")
+                }
+                None => format!("current architecture={architecture}"),
+            },
             Self::Stale {
                 expected,
                 observed,
@@ -3719,7 +3728,11 @@ fn assess_fpga_evidence(expected: &str, evidence: &Value) -> FpgaActivationAsses
                 .into(),
         });
     }
-    let current = observed == expected && experimental_fpga_evidence_is_current(evidence);
+    let diagnostic_warning = (observed == expected
+        && experimental_fpga_observer_fault_is_operationally_current(evidence))
+    .then(|| "diagnostic_observer_self_faulted".to_owned());
+    let current = observed == expected
+        && (experimental_fpga_evidence_is_current(evidence) || diagnostic_warning.is_some());
     if !current {
         failures.push(FpgaCheckFailure {
             check: "coherence".into(),
@@ -3730,6 +3743,7 @@ fn assess_fpga_evidence(expected: &str, evidence: &Value) -> FpgaActivationAsses
     if current {
         return FpgaActivationAssessment::Current {
             architecture: expected.into(),
+            warning: diagnostic_warning,
         };
     }
     let passive_fallback = observed == "unavailable"
@@ -3864,7 +3878,15 @@ fn console_snapshot_for_config(config: &NativeDeviceConfig) -> String {
 fn platform_fpga_smoke(config: &NativeDeviceConfig) -> std::result::Result<String, DeviceFailure> {
     let initial = wait_for_fpga_activation(config)?;
     let architecture = match initial {
-        FpgaActivationAssessment::Current { architecture } => architecture,
+        FpgaActivationAssessment::Current {
+            architecture,
+            warning,
+        } => {
+            if let Some(warning) = warning {
+                println!("platform FPGA diagnostic warning: {warning}");
+            }
+            architecture
+        }
         FpgaActivationAssessment::ArtifactInvalid { detail } => {
             return Err(DeviceFailure::ArtifactMismatch(detail));
         }
@@ -3878,7 +3900,15 @@ fn platform_fpga_smoke(config: &NativeDeviceConfig) -> std::result::Result<Strin
                 )));
             }
             match wait_for_fpga_activation(config)? {
-                FpgaActivationAssessment::Current { architecture } => architecture,
+                FpgaActivationAssessment::Current {
+                    architecture,
+                    warning,
+                } => {
+                    if let Some(warning) = warning {
+                        println!("platform FPGA diagnostic warning after reload: {warning}");
+                    }
+                    architecture
+                }
                 FpgaActivationAssessment::ArtifactInvalid { detail } => {
                     return Err(DeviceFailure::ArtifactMismatch(format!(
                         "FPGA became artifact-invalid after reload: {detail}"
@@ -4431,11 +4461,15 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
 }
 
 fn experimental_fpga_evidence_is_current(diagnostics: &Value) -> bool {
+    experimental_fpga_transport_is_operational(diagnostics)
+        && experimental_fpga_architecture_is_current(diagnostics)
+        && diagnostics.get("coherent").and_then(Value::as_bool) == Some(true)
+}
+
+fn experimental_fpga_transport_is_operational(diagnostics: &Value) -> bool {
     diagnostics.get("schema").and_then(Value::as_str)
         == Some("mister-magik-fpga-video-diagnostics-v2")
-        && experimental_fpga_architecture_is_current(diagnostics)
         && diagnostics.get("available").and_then(Value::as_bool) == Some(true)
-        && diagnostics.get("coherent").and_then(Value::as_bool) == Some(true)
         && diagnostics.get("sink_visibility").and_then(Value::as_str) == Some("unobserved")
         && diagnostics
             .pointer("/coherence/latch_ownership_stable")
@@ -4482,6 +4516,54 @@ fn experimental_fpga_evidence_is_current(diagnostics: &Value) -> bool {
             .pointer("/latch_status/crc")
             .and_then(Value::as_u64)
             .is_some()
+}
+
+fn experimental_fpga_observer_fault_is_operationally_current(diagnostics: &Value) -> bool {
+    const RECORD_VALID: u64 = 1 << 0;
+    const FIRST_STALL_VALID: u64 = 1 << 2;
+    const OBSERVER_FAULT: u64 = 1 << 3;
+    const LOW_FLAG_MASK: u64 = 0x0fff;
+
+    experimental_fpga_transport_is_operational(diagnostics)
+        && diagnostics
+            .get("diagnostic_architecture")
+            .and_then(Value::as_str)
+            == Some(PATCHED_DIAGNOSTIC_ARCHITECTURE)
+        && diagnostics.get("coherent").and_then(Value::as_bool) == Some(false)
+        && diagnostics.get("classification").and_then(Value::as_str)
+            == Some("scaler_fetch_liveness_evidence_inconclusive")
+        && diagnostics
+            .pointer("/coherence/three_samples_valid")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && diagnostics
+            .pointer("/coherence/publication_coherent")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && diagnostics
+            .pointer("/coherence/terminal_record_identical")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && diagnostics
+            .pointer("/coherence/classification_stable")
+            .and_then(Value::as_bool)
+            == Some(false)
+        && diagnostics
+            .pointer("/scaler_fetch_liveness_state/raw_samples")
+            .and_then(Value::as_array)
+            .is_some_and(|samples| {
+                samples.len() == 3
+                    && samples[1..].iter().all(|sample| sample == &samples[0])
+                    && samples[0].as_array().is_some_and(|words| {
+                        words.len() == 4
+                            && words[0].as_u64() == Some(21)
+                            && words[1].as_u64().is_some_and(|flags| {
+                                flags & LOW_FLAG_MASK & RECORD_VALID != 0
+                                    && flags & LOW_FLAG_MASK & OBSERVER_FAULT != 0
+                                    && flags & LOW_FLAG_MASK & FIRST_STALL_VALID == 0
+                            })
+                    })
+            })
 }
 
 fn experimental_fpga_activation_status(session: &Session) -> Result<(u64, u64, i64, u64)> {
@@ -40060,6 +40142,43 @@ H: Handlers=event3 js0"#
         pre_read_liveness["classification"] = json!("scaler_pre_read_request_boundary_stuck");
         pre_read_liveness["capabilities"]["scaler_pre_read_scheduler_evidence"] = json!(true);
         assert!(experimental_fpga_evidence_is_current(&pre_read_liveness));
+        let mut observer_self_fault = pre_read_liveness.clone();
+        observer_self_fault["coherent"] = json!(false);
+        observer_self_fault["classification"] =
+            json!("scaler_fetch_liveness_evidence_inconclusive");
+        observer_self_fault["coherence"]["publication_sequence_advancing"] = json!(false);
+        observer_self_fault["coherence"]["publication_coherent"] = json!(true);
+        observer_self_fault["coherence"]["terminal_record_identical"] = json!(true);
+        observer_self_fault["coherence"]["classification_stable"] = json!(false);
+        observer_self_fault["scaler_fetch_liveness_state"]["raw_samples"] =
+            json!([[21, 9, 6, 60722], [21, 9, 6, 60722], [21, 9, 6, 60722]]);
+        assert!(experimental_fpga_observer_fault_is_operationally_current(
+            &observer_self_fault
+        ));
+        assert!(!experimental_fpga_evidence_is_current(&observer_self_fault));
+        assert!(matches!(
+            assess_fpga_evidence(PATCHED_DIAGNOSTIC_ARCHITECTURE, &observer_self_fault),
+            FpgaActivationAssessment::Current {
+                warning: Some(_),
+                ..
+            }
+        ));
+        let mut changing_fault = observer_self_fault.clone();
+        changing_fault["scaler_fetch_liveness_state"]["raw_samples"][2][2] = json!(7);
+        assert!(!experimental_fpga_observer_fault_is_operationally_current(
+            &changing_fault
+        ));
+        let mut unowned_fault = observer_self_fault.clone();
+        unowned_fault["coherence"]["latch_ownership_stable"] = json!(false);
+        assert!(!experimental_fpga_observer_fault_is_operationally_current(
+            &unowned_fault
+        ));
+        let mut invalid_fault = observer_self_fault.clone();
+        invalid_fault["scaler_fetch_liveness_state"]["raw_samples"] =
+            json!([[21, 8, 6, 60722], [21, 8, 6, 60722], [21, 8, 6, 60722]]);
+        assert!(!experimental_fpga_observer_fault_is_operationally_current(
+            &invalid_fault
+        ));
         let mut liveness_fault = scaler_fetch_liveness.clone();
         liveness_fault["scaler_fetch_liveness_state"]["observer_fault"] =
             json!([false, true, false]);
