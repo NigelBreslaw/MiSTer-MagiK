@@ -135,44 +135,42 @@ impl PreviewIdentityResolver {
         } else if !matches!(self.state, PreviewIdentityResolverState::NotNeeded) {
             return;
         }
-        if self.compact_store.is_none() {
-            if let Ok(store) = crate::runtime_metadata::MetadataStore::open(&self.runtime_metadata)
-            {
-                self.compact_store = Some(store);
-            }
+        if self.compact_store.is_none()
+            && let Ok(store) = crate::runtime_metadata::MetadataStore::open(&self.runtime_metadata)
+        {
+            self.compact_store = Some(store);
         }
-        if let Some(store) = self.compact_store.as_ref() {
-            if let Ok(Some(shard)) = store.software_shard(system_id) {
-                let mut index = PreviewIdentityIndex::default();
-                for (title, names) in shard.title_candidates.iter() {
-                    for software_name in names {
-                        let Some(item) = shard.item(software_name) else {
-                            continue;
-                        };
-                        let family_name = item
-                            .parent_name
-                            .as_deref()
-                            .filter(|parent| !parent.trim().is_empty())
-                            .unwrap_or(software_name);
-                        let asset_key =
-                            crate::media_identity::ScreenshotAssetId::from_mame_software(
-                                list_name,
-                                family_name,
-                            )
-                            .into_string();
-                        index
-                            .titles
-                            .entry((list_name.to_string(), title.clone()))
-                            .or_default()
-                            .insert(asset_key);
-                    }
+        if let Some(store) = self.compact_store.as_ref()
+            && let Ok(Some(shard)) = store.software_shard(system_id)
+        {
+            let mut index = PreviewIdentityIndex::default();
+            for (title, names) in shard.title_candidates.iter() {
+                for software_name in names {
+                    let Some(item) = shard.item(software_name) else {
+                        continue;
+                    };
+                    let family_name = item
+                        .parent_name
+                        .as_deref()
+                        .filter(|parent| !parent.trim().is_empty())
+                        .unwrap_or(software_name);
+                    let asset_key = crate::media_identity::ScreenshotAssetId::from_mame_software(
+                        list_name,
+                        family_name,
+                    )
+                    .into_string();
+                    index
+                        .titles
+                        .entry((list_name.to_string(), title.clone()))
+                        .or_default()
+                        .insert(asset_key);
                 }
-                self.state = PreviewIdentityResolverState::Compact {
-                    system_id: system_id.to_string(),
-                    index,
-                };
-                return;
             }
+            self.state = PreviewIdentityResolverState::Compact {
+                system_id: system_id.to_string(),
+                index,
+            };
+            return;
         }
         if !matches!(self.state, PreviewIdentityResolverState::NotNeeded) {
             return;
