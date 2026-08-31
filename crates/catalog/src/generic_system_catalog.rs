@@ -1821,7 +1821,14 @@ mod tests {
 
     #[test]
     fn one_pass_runtime_inventory_matches_two_pass_rows() {
-        let root = crate::test_support::unique_temp_dir("generic-one-pass-parity");
+        // Keep the fixture rooted at a canonical path. macOS exposes the
+        // temporary directory through both `/var` and `/private/var`; using
+        // one spelling ensures path-valued rows compare by content rather
+        // than by the host's symlink presentation.
+        let root = fs::canonicalize(crate::test_support::unique_temp_dir(
+            "generic-one-pass-parity",
+        ))
+        .expect("canonicalize parity root");
         let core = root.join("_Console/MyBeta_20260828.rbf");
         fs::create_dir_all(core.parent().expect("core parent")).expect("create core parent");
         fs::write(core, b"core").expect("write core");

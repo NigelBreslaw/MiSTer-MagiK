@@ -3811,8 +3811,12 @@ mod tests {
         let root = crate::test_support::unique_temp_dir("fast-watch-depth");
         let mut current = root.clone();
         fs::create_dir_all(&current).unwrap();
-        for index in 0..=MAX_WATCH_DEPTH {
-            current = current.join(format!("d{index}"));
+        // Keep each component short so the fixture remains creatable on
+        // macOS, whose total temporary-path limit is tighter than Linux's.
+        // Repeating a one-character component still exceeds the walker depth
+        // budget while staying comfortably below the host path limit.
+        for _ in 0..=MAX_WATCH_DEPTH {
+            current = current.join("d");
             fs::create_dir(&current).unwrap();
         }
         let mut directories = Vec::new();
