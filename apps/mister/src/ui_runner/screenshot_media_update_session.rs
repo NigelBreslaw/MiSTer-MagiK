@@ -340,13 +340,17 @@ impl ScreenshotMediaUpdateSession {
                 effects.event(
                     "screenshot_media_catalog_updated",
                     format!(
-                        "system={} previous_generation={} generation={} candidates={} available={} changed={}",
+                        "system={} previous_generation={} generation={} candidates={} available={} changed={} existing_identity_rows={} derived_identity_rows={} ambiguous_identity_rows={} resolver_status={:?}",
                         outcome.system_id,
                         outcome.previous_generation,
                         outcome.generation,
                         outcome.candidate_rows,
                         outcome.available_rows,
-                        outcome.changed_rows
+                        outcome.changed_rows,
+                        outcome.existing_identity_rows,
+                        outcome.derived_identity_rows,
+                        outcome.ambiguous_identity_rows,
+                        outcome.resolver_status
                     ),
                 );
                 effects.push(ScreenshotMediaUpdateEffect::ApplyPreviewAvailability {
@@ -645,6 +649,11 @@ mod tests {
                     candidate_rows: 2,
                     available_rows: 1,
                     changed_rows: 1,
+                    existing_identity_rows: 2,
+                    derived_identity_rows: 0,
+                    ambiguous_identity_rows: 0,
+                    resolver_status:
+                        mister_magik_catalog::preview_availability::PreviewIdentityResolverStatus::NotNeeded,
                     games: Vec::new(),
                 },
             },

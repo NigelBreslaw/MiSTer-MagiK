@@ -12,7 +12,8 @@ use crate::media_update::{
 };
 use mister_magik_catalog::media_identity::preferred_screenshot_image_size;
 use mister_magik_catalog::preview_availability::{
-    PreviewAvailabilityReconciliationOutcome, reconcile_preview_availability,
+    PreviewAvailabilityReconciliationOutcome, PreviewIdentityResolver,
+    reconcile_preview_availability_with_resolver,
 };
 use mister_magik_catalog::preview_worker::invalidate_preview_archive_metadata_cache;
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
@@ -173,6 +174,7 @@ fn run_screenshot_media_worker(
     let mut queue = MediaRequestQueue::default();
     let mut active = Vec::<ActiveDownload>::new();
     let mut pending_reconciliation = BTreeMap::<String, (MediaPack, PathBuf)>::new();
+    let mut preview_identity_resolver = PreviewIdentityResolver::new(config.mame_sqlite.clone());
     let mut finish_requested = false;
     let mut interaction_active = false;
     let mut interaction_reason = "idle".to_string();
@@ -210,7 +212,13 @@ fn run_screenshot_media_worker(
         for (_system, (pack, local_path)) in
             take_pending_reconciliations(!interaction_active, &mut pending_reconciliation)
         {
-            reconcile_pack_preview_availability(&config, &pack, &local_path, &tx);
+            reconcile_pack_preview_availability(
+                &config,
+                &pack,
+                &local_path,
+                &mut preview_identity_resolver,
+                &tx,
+            );
         }
         if request_received && active.is_empty() && queue.pending.is_empty() {
             let quiescent_since = benchmark_quiescent_since.get_or_insert_with(Instant::now);
@@ -237,7 +245,13 @@ fn run_screenshot_media_worker(
             for (_system, (pack, local_path)) in
                 take_pending_reconciliations(true, &mut pending_reconciliation)
             {
-                reconcile_pack_preview_availability(&config, &pack, &local_path, &tx);
+                reconcile_pack_preview_availability(
+                    &config,
+                    &pack,
+                    &local_path,
+                    &mut preview_identity_resolver,
+                    &tx,
+                );
             }
             break;
         }
@@ -1783,6 +1797,7 @@ pub struct MediaWorkerConfig {
     image_size: String,
     asset_dir: PathBuf,
     catalog_root: PathBuf,
+    mame_sqlite: PathBuf,
     max_concurrent_downloads: usize,
     benchmark_auto_finish: bool,
 }
@@ -1809,6 +1824,7 @@ impl MediaWorkerConfig {
             image_size,
             asset_dir: paths.media_asset_dir().to_path_buf(),
             catalog_root: paths.sharded_catalog_dir().to_path_buf(),
+            mame_sqlite: paths.mame_sqlite().to_path_buf(),
             max_concurrent_downloads: media_download_concurrency_from_value(get(
                 "MISTER_MEDIA_CONCURRENCY",
             )),
@@ -1834,6 +1850,7 @@ impl MediaWorkerConfig {
             image_size: DEFAULT_IMAGE_SIZE.to_string(),
             asset_dir,
             catalog_root,
+            mame_sqlite: mister_magik_catalog::catalog_config::default_mame_sqlite_path(),
             max_concurrent_downloads: DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS,
             benchmark_auto_finish: false,
         })
@@ -1906,6 +1923,7 @@ fn reconcile_pack_preview_availability(
     config: &MediaWorkerConfig,
     pack: &MediaPack,
     local_path: &Path,
+    resolver: &mut PreviewIdentityResolver,
     tx: &mpsc::Sender<MediaWorkerMessage>,
 ) {
     let system_id = match mister_magik_catalog::catalog_classify::SystemId::parse(&pack.id) {
@@ -1918,11 +1936,12 @@ fn reconcile_pack_preview_availability(
             return;
         }
     };
-    let result = reconcile_preview_availability(
+    let result = reconcile_preview_availability_with_resolver(
         &config.catalog_root,
         &system_id,
         local_path,
         production_registry_limits(),
+        resolver,
     );
     match result {
         Ok(outcome) => {
@@ -2135,6 +2154,7 @@ mod tests {
         assert_eq!(config.policy, MediaUpdatePolicy::Off);
         assert_eq!(config.image_size, "320x320");
         assert_eq!(config.asset_dir, paths.media_asset_dir());
+        assert_eq!(config.mame_sqlite, paths.mame_sqlite());
     }
 
     const SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
