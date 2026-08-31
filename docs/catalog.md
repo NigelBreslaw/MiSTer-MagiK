@@ -186,6 +186,16 @@ After a pack changes, preview availability is reconciled against the selected
 system's NavPack in memory. Catalog artifacts and source snapshots are not
 rewritten merely because media availability changed.
 
+When a pack is installed or confirmed current, the media worker also performs
+an in-memory MAME software-list title/family reconciliation for catalog rows
+whose preview key is blank. It reads the numbered-release `mame.sqlite3`
+metadata lazily and intersects unique normalized title matches with the
+installed pack index. Existing keys remain authoritative; ambiguous or missing
+matches remain blank. This pass is non-fatal and never changes the catalog
+generation, manifest, pack, or index formats. Use
+`scripts/agent device catalog screenshots --system <id> --out <path>` to audit
+the effective runtime rows without downloading or writing catalog state.
+
 ## Fault and performance rules
 
 - Filesystem I/O is serialized on the exFAT SD card. CPU-only preparation may

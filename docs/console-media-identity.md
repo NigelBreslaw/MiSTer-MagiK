@@ -174,6 +174,41 @@ For device acceptance, `scripts/agent device catalog inspect` reports `preview_k
 nonzero values for both after rebuilding with current MAME metadata and the
 installed screenshot-pack index.
 
+### Post-download identity reconciliation
+
+The media worker performs a second, runtime-only identity pass after a pack is
+installed or confirmed current. It uses the numbered-release `mame.sqlite3`
+software-list metadata and the pack's `.mmlz4b.idx`; the user's local ROM
+collection is never treated as the global identity source. Existing catalog
+keys have priority, followed by a unique normalized MAME title/family match
+whose key is present in the installed pack. Zero candidates and ambiguous
+matches remain unresolved.
+
+The resolver loads `mame_software_items` lazily on the media worker and reads
+only `list_name`, `software_name`, `parent_name`, and `description`. It
+canonicalizes media-specific lists (for example, C64 cartridge and cassette
+lists) before creating `mame-software__<list>__<family>` keys. Missing or
+unreadable metadata is non-fatal: exact catalog keys continue to reconcile and
+the structured update event reports `resolver_status=Unavailable`.
+
+This first tranche intentionally does not perform fuzzy matching, ROM hashing,
+or external Libretro, No-Intro, Redump, TOSEC, ScreenScraper, or Skyscraper
+lookups. Cartridge checksums, disc serials, specialist DAT imports, and a
+persistent generation/pack-keyed overlay remain future extensions.
+
+The read-only device audit runs the same reconciliation without writing the
+catalog or downloading media:
+
+```bash
+scripts/agent device catalog screenshots --system nes --out work/nes-screenshots.tsv
+```
+
+It prints a `catalog_screenshot_summary_tsv` record separately from the TSV,
+including total games, existing and derived identities, ambiguous rows,
+available rows, and resolver status. The TSV contains the effective runtime
+columns `ordinal`, `title`, `preview_asset_key`, `preview_archive_path`,
+`has_preview`, and `launch_ref`.
+
 ## Performance Notes
 
 SQLite does not load the full `library.sqlite3` into RAM at startup. The slow
