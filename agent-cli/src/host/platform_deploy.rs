@@ -72,7 +72,7 @@ check_hash "settings artwork" "$root/assets/ui/settings-v1.rgb565a" "{SETTINGS_A
 
 pub(super) fn platform_deploy_files() -> Vec<(&'static str, String)> {
     let installed = paths(Layout::Development);
-    let mut files = vec![
+    let files = vec![
         ("mister-magik-fb", installed.gui.to_owned()),
         (
             "mister-magik-agent",
@@ -111,7 +111,6 @@ pub(super) fn platform_deploy_files() -> Vec<(&'static str, String)> {
             app_path(Layout::Development, "platform-v3.manifest").expect("static installed path"),
         ),
     ];
-    files.splice(8..8, database_deploy_files());
     files
 }
 
@@ -266,28 +265,6 @@ impl PlatformDeployTransaction {
     fn inventory_command(&self) -> String {
         let mut command = String::from("set -eu; ");
         for file in &self.files {
-            if let Some(name) = file
-                .local
-                .file_name()
-                .and_then(|name| name.to_str())
-                .filter(|name| {
-                    matches!(
-                        *name,
-                        "magik-metadata-v1.bin"
-                            | "arcade-updater-index-v1.lz4b"
-                            | "game-databases-manifest.json"
-                    )
-                })
-            {
-                let sums = app_path(Layout::Development, "game-databases-SHA256SUMS")
-                    .expect("static installed path");
-                command.push_str(&format!(
-                    "sum=$(awk '$2 == \"{name}\" {{print $1}}' {sums} 2>/dev/null || true); if test -n \"$sum\"; then printf '%s  {path}\\n' \"$sum\"; else printf 'missing  {path}\\n'; fi; ",
-                    sums = sh(&sums),
-                    path = file.remote,
-                ));
-                continue;
-            }
             command.push_str(&format!(
                 "if test -f {path}; then sha256sum {path}; else printf 'missing  %s\\n' {path}; fi; ",
                 path = sh(&file.remote),
@@ -634,7 +611,9 @@ mod tests {
             }
             Ok(ExecOutput {
                 rc: 0,
-                stdout: if command.contains("sum=$(awk") {
+                stdout: if command.contains("sum=$(awk")
+                    || command.contains("/media/fat/mister-magik-dev/magik-metadata-v1.bin")
+                {
                     self.inventory.clone()
                 } else {
                     String::new()

@@ -855,7 +855,8 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
                         .artifact_sha256
                         .clone()
                         .ok_or("qualified runtime identity is missing")?;
-                    self.device.deliver_databases(self.stage.clone())?;
+                    self.device
+                        .deliver_databases(self.stage.join("databases"))?;
                     self.device.deliver_runtime(
                         RuntimeDelivery {
                             local: self.repository.join(self.deployment.build.artifact()),
@@ -882,13 +883,17 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
                         .artifact_sha256
                         .clone()
                         .ok_or("qualified runtime identity is missing")?;
+                    self.device
+                        .deliver_databases(self.stage.join("databases"))?;
                     self.device.deliver_platform(
                         self.stage.clone(),
                         expected_sha256,
                         &mut self.timing_samples,
                     )
                 }
-                DeliveryDecision::NoOp => self.device.deliver_databases(self.stage.clone()),
+                DeliveryDecision::NoOp => {
+                    self.device.deliver_databases(self.stage.join("databases"))
+                }
             },
             Phase::Activate | Phase::RebootIfNeeded | Phase::Smoke | Phase::Complete => Ok(()),
         }
@@ -983,16 +988,9 @@ fn prepare_stage_databases(
     } else {
         prepare_game_databases(repository, &databases)?;
     }
-    for name in [
-        "magik-metadata-v1.bin",
-        "arcade-updater-index-v1.lz4b",
-        "game-databases-manifest.json",
-    ] {
-        copy(databases.join(name), stage.join(name))?;
-    }
     copy(
         databases.join("SHA256SUMS"),
-        stage.join("game-databases-SHA256SUMS"),
+        databases.join("game-databases-SHA256SUMS"),
     )?;
     Ok(())
 }

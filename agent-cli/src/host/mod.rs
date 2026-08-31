@@ -41989,7 +41989,13 @@ H: Handlers=event3 js0"#
                 .iter()
                 .any(|event| event.starts_with("put ") && event.contains("mame.sqlite3"))
         );
+        assert!(
+            !events.iter().any(|event| {
+                event.starts_with("put ") && event.contains("magik-metadata-v1.bin")
+            })
+        );
         assert!(!activation.contains("cp -p '/media/fat/mister-magik-dev/mame.sqlite3'"));
+        assert!(!activation.contains("magik-metadata-v1.bin"));
         assert!(
             activation.find(&format!("{gui}.upload")).unwrap()
                 < activation.find(&format!("{manifest}.upload")).unwrap()
