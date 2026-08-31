@@ -60,7 +60,7 @@ fn run() -> Result<(), String> {
     );
     if options.mcp_hold_ms > 0 {
         eprintln!(
-            "catalog-hotpath-profile: MCP available for {} ms at http://localhost:6771/mcp",
+            "catalog-hotpath-profile: holding the Hotpath MCP server open for {} ms",
             options.mcp_hold_ms
         );
         std::thread::sleep(Duration::from_millis(options.mcp_hold_ms));
