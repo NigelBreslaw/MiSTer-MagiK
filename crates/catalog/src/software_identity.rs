@@ -2646,6 +2646,67 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn sqlite_identity_contract_preserves_fields_and_collision_order() {
+        let root = unique_temp_dir("sqlite-identity-contract");
+        let db = root.join("mame.sqlite3");
+        write_mame_software_fixture_db(
+            &db,
+            &[
+                (
+                    "c64_cart",
+                    "first",
+                    Some("family"),
+                    "Example Game (USA)",
+                    Some("1990"),
+                    Some("Publisher"),
+                    Some("usa"),
+                ),
+                (
+                    "c64_cass",
+                    "second",
+                    None,
+                    "Example Game (Europe)",
+                    Some("1991"),
+                    Some("Other Publisher"),
+                    Some("europe"),
+                ),
+            ],
+            &[
+                ("c64_cart", "first", 4, 0x1234),
+                ("c64_cass", "second", 4, 0x1234),
+            ],
+        );
+        let metadata = load_mame_software_metadata(&db);
+
+        let first = metadata
+            .items
+            .get(&("c64".to_string(), "first".to_string()))
+            .expect("first item");
+        assert_eq!(first.parent_name.as_deref(), Some("family"));
+        assert_eq!(first.description, "Example Game (USA)");
+        assert_eq!(first.year.as_deref(), Some("1990"));
+        assert_eq!(first.publisher.as_deref(), Some("Publisher"));
+        assert_eq!(first.region.as_deref(), Some("usa"));
+        assert_eq!(
+            metadata
+                .title_index
+                .get(&("c64".to_string(), "example-game".to_string())),
+            Some(&vec!["first".to_string(), "second".to_string()])
+        );
+        assert_eq!(
+            metadata.hash_index.get(&("c64".to_string(), 4, 0x1234)),
+            Some(&vec!["first".to_string(), "second".to_string()])
+        );
+        assert_eq!(
+            metadata
+                .family_members
+                .get(&("c64".to_string(), "family".to_string())),
+            Some(&vec!["first".to_string()])
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[cfg(feature = "builder")]
     #[test]
     fn rom_identity_benchmark_classifies_supported_production_files() {
