@@ -46,12 +46,13 @@ use crate::library_indexer::LibraryIndexer;
 use crate::prepared_collections::PreparedCollectionId;
 use crate::preview_worker;
 use crate::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
+#[cfg(test)]
+use crate::software_identity::software_list_for_platform;
 use crate::software_identity::{
-    ArcadeMachineMetadata, MachineMetadataRows, MameSoftwareMetadata, PreviewArchivePaths,
+    ArcadeMachineMetadata, MachineMetadataRows, MameSoftwareMetadataSession, PreviewArchivePaths,
     SoftwareHashCache, console_preview_asset, load_arcade_machine_metadata_for_fallbacks,
-    load_mame_machine_metadata_for_setnames, load_mame_software_metadata,
-    mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
-    mister_arcade_metadata_for_discovery, software_list_for_platform,
+    load_mame_machine_metadata_for_setnames, mame_identity_for_discovery, mame_identity_projection,
+    mame_software_identity_for_discovery, mister_arcade_metadata_for_discovery,
     write_simple_mame_metadata_db,
 };
 use crate::sqlite_catalog;
@@ -1919,6 +1920,7 @@ struct CatalogBuildSources<'a> {
     discovery_history: Option<sqlite_catalog::DiscoveryHistory>,
 }
 
+#[cfg(test)]
 fn requires_mame_software_metadata(
     scan: &LibraryScan,
     discoveries: &BTreeMap<String, usize>,
@@ -2031,15 +2033,7 @@ fn build_catalog_from_scan_with_sources_and_preferred_and_progress(
         arcade_metadata_setnames(discoveries.values().map(|index| &scan.discoveries[*index]));
     let arcade_mra_names =
         arcade_metadata_mra_names(discoveries.values().map(|index| &scan.discoveries[*index]));
-    let software_metadata = if requires_mame_software_metadata(scan, discoveries) {
-        with_catalog_progress_heartbeat(
-            progress,
-            "Preparing library — loading software metadata",
-            || load_mame_software_metadata(sources.mame_sqlite_path),
-        )
-    } else {
-        MameSoftwareMetadata::default()
-    };
+    let mut software_metadata = MameSoftwareMetadataSession::new(sources.mame_sqlite_path);
     let arcade_metadata = with_catalog_progress_heartbeat(
         progress,
         "Preparing library — loading arcade metadata",
@@ -2060,7 +2054,7 @@ fn build_catalog_from_scan_with_sources_and_preferred_and_progress(
     let mut launch_plans = Vec::<StructuredLaunchPlan>::new();
     let mut projection_context = CatalogProjectionBuildContext {
         scan,
-        software_metadata: &software_metadata,
+        software_metadata: &mut software_metadata,
         arcade_metadata: &arcade_metadata,
         preview_paths: sources.preview_paths,
         software_hash_cache: &mut software_hash_cache,
@@ -2234,7 +2228,7 @@ fn with_catalog_progress_heartbeat<T: Send>(
 
 struct CatalogProjectionBuildContext<'a> {
     scan: &'a LibraryScan,
-    software_metadata: &'a MameSoftwareMetadata,
+    software_metadata: &'a mut MameSoftwareMetadataSession,
     arcade_metadata: &'a ArcadeMachineMetadata,
     preview_paths: &'a PreviewArchivePaths,
     software_hash_cache: &'a mut SoftwareHashCache,
@@ -2267,7 +2261,7 @@ impl CatalogProjectionBuildContext<'_> {
             .and_then(|history| history.discovered_at_for(key, self.scan));
         let software_identity = mame_software_identity_for_discovery(
             discovery,
-            self.software_metadata,
+            self.software_metadata.for_platform(&discovery.platform_id),
             self.software_hash_cache,
         );
         let (preview, setname, parent, family_key, metadata) = if is_arcade {
