@@ -1241,7 +1241,7 @@ mod tests {
         );
         assert_eq!(
             worker.execution_mode,
-            CatalogExecutionMode::ForegroundExclusive
+            CatalogExecutionMode::BackgroundInteractive
         );
     }
 
