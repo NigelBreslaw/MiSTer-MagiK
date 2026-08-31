@@ -2013,7 +2013,18 @@ fn check_watch_index_lazy(
             return;
         }
     }
-    for directory in &watch.directories {
+    let mut directories = watch.directories.iter().collect::<Vec<_>>();
+    if std::env::var("MISTER_CATALOG_METADATA_ORDER")
+        .is_ok_and(|value| value.eq_ignore_ascii_case("parent-grouped"))
+    {
+        directories.sort_by(|left, right| {
+            Path::new(&left.path)
+                .parent()
+                .cmp(&Path::new(&right.path).parent())
+                .then_with(|| left.path.cmp(&right.path))
+        });
+    }
+    for directory in directories {
         check.directories_checked = check.directories_checked.saturating_add(1);
         let path = Path::new(&directory.path);
         let Some(observed) = metadata.observe(path) else {
