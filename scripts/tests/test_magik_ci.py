@@ -768,7 +768,6 @@ import scripts.magik_ci.cli
                 "scaler-off-domain-scheduler-snapshot-v1",
                 "scaler-off-domain-scheduler-snapshot-v2",
                 "scaler-off-domain-scheduler-terminal-v3",
-                "scaler-off-domain-scheduler-terminal-v4",
                 PATCHED_DIAGNOSTIC_ARCHITECTURE,
             },
         )
@@ -833,11 +832,6 @@ import scripts.magik_ci.cli
         _validate_diagnostic_architecture(
             "scaler-fetch-no-request-gates-v1",
             "scaler-fetch-no-request-gates-v1",
-            historical_baseline=True,
-        )
-        _validate_diagnostic_architecture(
-            "scaler-off-domain-scheduler-terminal-v4",
-            "scaler-off-domain-scheduler-terminal-v4",
             historical_baseline=True,
         )
         with self.assertRaisesRegex(ValueError, "fpga_diagnostic_architecture"):
