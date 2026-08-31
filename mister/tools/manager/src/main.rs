@@ -633,9 +633,9 @@ fn verify_platform(paths: &Paths) -> Result<()> {
         }
     }
     let module_metadata =
-        parse_key_values(&paths.app.join("mister_magik_scanout_slots.metadata.txt"))?;
+        parse_component_metadata(&paths.app.join("mister_magik_scanout_slots.metadata.txt"))?;
     let latch_metadata =
-        parse_key_values(&paths.app.join("fpga/menu-magik-vblank-latch.metadata.txt"))?;
+        parse_component_metadata(&paths.app.join("fpga/menu-magik-vblank-latch.metadata.txt"))?;
     if module_metadata.get("module_sha256") != Some(&fields["scanout_module_sha256"]) {
         return Err("scanout metadata module hash mismatch".into());
     }
@@ -698,15 +698,40 @@ fn manager_manifest_error(
     }
 }
 
-fn parse_key_values(path: &Path) -> Result<BTreeMap<String, String>> {
+fn parse_component_metadata(path: &Path) -> Result<BTreeMap<String, String>> {
     let mut fields = BTreeMap::new();
-    for line in fs::read_to_string(path)?
-        .lines()
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-    {
-        let (key, value) = line.split_once('=').ok_or("malformed platform manifest")?;
-        if key.is_empty() || value.is_empty() || fields.insert(key.into(), value.into()).is_some() {
-            return Err("invalid platform manifest".into());
+    for (line_index, line) in fs::read_to_string(path)?.lines().enumerate() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line_number = line_index + 1;
+        let (key, value) = line.split_once('=').ok_or_else(|| {
+            format!(
+                "malformed component metadata {}:{}: key '<unknown>' has no '='",
+                path.display(),
+                line_number
+            )
+        })?;
+        if key.is_empty() || value.is_empty() {
+            return Err(format!(
+                "invalid component metadata {}:{}: key '{}' has an empty value",
+                path.display(),
+                line_number,
+                key
+            )
+            .into());
+        }
+        if key == "source_status" {
+            continue;
+        }
+        if fields.insert(key.into(), value.into()).is_some() {
+            return Err(format!(
+                "invalid component metadata {}:{}: duplicate key '{}'",
+                path.display(),
+                line_number,
+                key
+            )
+            .into());
         }
     }
     Ok(fields)
@@ -1162,6 +1187,71 @@ mod tests {
         let manifest = root.join("platform-v3.manifest");
         fs::write(&manifest, b"format=one\nformat=two\n").unwrap();
         assert!(parse_manifest(&manifest).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn component_metadata_accepts_repeated_source_status_entries() {
+        let root = fixture_root("component-metadata-repeated-source-status");
+        let metadata = root.join("latch.metadata.txt");
+        fs::write(
+            &metadata,
+            b"format=fixture\nsource_status= M menu.qsf\nsource_status= M sys/sys_top.sdc\n",
+        )
+        .unwrap();
+
+        let fields = parse_component_metadata(&metadata).unwrap();
+        assert_eq!(fields.get("format"), Some(&"fixture".to_string()));
+        assert!(!fields.contains_key("source_status"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn component_metadata_accepts_single_source_status_entry() {
+        let root = fixture_root("component-metadata-single-source-status");
+        let metadata = root.join("latch.metadata.txt");
+        fs::write(&metadata, b"source_status= M sys/sys_top.sdc\n").unwrap();
+
+        assert!(parse_component_metadata(&metadata).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn component_metadata_rejects_empty_source_status_with_location() {
+        let root = fixture_root("component-metadata-empty-source-status");
+        let metadata = root.join("latch.metadata.txt");
+        fs::write(&metadata, b"source_status=\n").unwrap();
+
+        let error = parse_component_metadata(&metadata).unwrap_err().to_string();
+        assert!(error.contains(&metadata.display().to_string()));
+        assert!(error.contains(":1:"));
+        assert!(error.contains("key 'source_status'"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn component_metadata_rejects_duplicate_nonrepeatable_key_with_location() {
+        let root = fixture_root("component-metadata-duplicate-key");
+        let metadata = root.join("latch.metadata.txt");
+        fs::write(&metadata, b"format=one\nformat=two\n").unwrap();
+
+        let error = parse_component_metadata(&metadata).unwrap_err().to_string();
+        assert!(error.contains(&metadata.display().to_string()));
+        assert!(error.contains(":2:"));
+        assert!(error.contains("duplicate key 'format'"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn component_metadata_rejects_malformed_line_with_location() {
+        let root = fixture_root("component-metadata-malformed-line");
+        let metadata = root.join("latch.metadata.txt");
+        fs::write(&metadata, b"not-a-key-value-line\n").unwrap();
+
+        let error = parse_component_metadata(&metadata).unwrap_err().to_string();
+        assert!(error.contains(&metadata.display().to_string()));
+        assert!(error.contains(":1:"));
+        assert!(error.contains("key '<unknown>'"));
         fs::remove_dir_all(root).unwrap();
     }
 

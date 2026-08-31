@@ -41,7 +41,7 @@ seed_package() {
   rbf_hash="$(sha256sum "$APP/fpga/menu-magik-vblank-latch.rbf" | awk '{print $1}')"
   printf 'platform_contract_sha256=%s\nmodule_sha256=%s\nvermagic=5.15.1-MiSTer fixture\n' \
     "$contract" "$module_hash" >"$APP/mister_magik_scanout_slots.metadata.txt"
-  printf 'platform_contract_sha256=%s\nsource_commit=%040d\nlatch_protocol_version=5\nlatch_capability_mask=0x03ff\nrbf_sha256=%s\n' \
+  printf 'platform_contract_sha256=%s\nsource_commit=%040d\nlatch_protocol_version=5\nlatch_capability_mask=0x03ff\nsource_status= M menu.qsf\nsource_status= M sys/sys_top.sdc\nrbf_sha256=%s\n' \
     "$contract" 3 "$rbf_hash" >"$APP/fpga/menu-magik-vblank-latch.metadata.txt"
   printf '{"format":"mister-magik-platform-bundle-v0.2","release_version":16,"bundle_id":"%064d"}\n' 0 \
     >"$APP/platform-bundle-v0.2.json"
@@ -111,6 +111,8 @@ assert_owned_files_removed() {
     .MiSTer.ini.bak.before-magik.new.123 .MiSTer.ini.magik.new.123; do
     test ! -e "$FAT/$owned"
   done
+  test ! -e "$FAT/MiSTer_MagiK"
+  test ! -e "$FAT/MiSTer.ini.bak.before-magik"
   test ! -e "$APP"
   test ! -e "$FAT/Scripts/MiSTer-MagiK.sh"
   test ! -e "$FAT/Scripts/MiSTer-MagiK.platform-v3.constants.sh"

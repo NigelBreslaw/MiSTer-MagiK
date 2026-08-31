@@ -26,7 +26,9 @@ LATCH_CAPABILITY_MASK = str(_SCHEMA["latch_capability_mask"])
 LAYOUTS = {name: values for name, values in _SCHEMA["layouts"].items()}
 
 
-def parse_fields(text: str) -> dict[str, str]:
+def parse_fields(
+    text: str, *, repeatable_keys: frozenset[str] = frozenset()
+) -> dict[str, str]:
     values: dict[str, str] = {}
     for line_number, line in enumerate(text.splitlines(), 1):
         if not line or line.startswith("#"):
@@ -34,9 +36,10 @@ def parse_fields(text: str) -> dict[str, str]:
         if "=" not in line:
             raise ValueError(f"invalid_platform_manifest:{line_number}")
         key, value = line.split("=", 1)
-        if not key or not value or key in values:
+        if not key or not value or (key in values and key not in repeatable_keys):
             raise ValueError(f"invalid_platform_manifest:{line_number}")
-        values[key] = value
+        if key not in repeatable_keys:
+            values[key] = value
     return values
 
 
@@ -108,7 +111,9 @@ def verify(
 
 
 def _metadata(path: Path) -> dict[str, str]:
-    return parse_fields(path.read_text(encoding="utf-8"))
+    return parse_fields(
+        path.read_text(encoding="utf-8"), repeatable_keys=frozenset({"source_status"})
+    )
 
 
 def generate(
