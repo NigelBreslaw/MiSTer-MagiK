@@ -30,6 +30,17 @@ pub(crate) struct NamespaceEntry {
     pub(crate) directory_signature: Option<(u64, i64)>,
 }
 
+/// A complete, serial WalkDir capture of one subtree. Partial captures are
+/// retained only for diagnostics; callers must check `complete` before using
+/// the entries as a recovery result.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub(crate) struct NamespaceSubtreeSnapshot {
+    pub(crate) entries: Vec<NamespaceEntry>,
+    pub(crate) stats: NamespaceWalkStats,
+    pub(crate) complete: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NamespaceSignatureCapture {
     None,
@@ -485,6 +496,36 @@ fn stable_directory_signature(
     after: Option<(u64, i64)>,
 ) -> Option<(u64, i64)> {
     before.filter(|signature| Some(*signature) == after)
+}
+
+/// Capture one subtree with the established streaming backend. This helper is
+/// intentionally synchronous: it is used only as a bounded recovery step for
+/// the currently active namespace walk, never as a second SD-card worker.
+#[allow(dead_code)]
+pub(crate) fn snapshot_walkdir_subtree(
+    target: &Path,
+    max_depth: Option<usize>,
+    ignore: &dyn Fn(&Path) -> bool,
+) -> NamespaceSubtreeSnapshot {
+    let mut entries = Vec::new();
+    let stats = visit_walkdir_owned(
+        target,
+        max_depth,
+        NamespaceRootPolicy::NoFollow,
+        NamespaceSignatureCapture::Target,
+        ignore,
+        &mut |entry| {
+            entries.push(entry);
+            true
+        },
+        None,
+    );
+    let complete = stats.errors == 0 && stats.target_signature.is_some();
+    NamespaceSubtreeSnapshot {
+        entries,
+        stats,
+        complete,
+    }
 }
 
 fn visit_walkdir(
@@ -1774,6 +1815,36 @@ mod tests {
                 .any(|entry| entry.0 == Path::new("dir/deep/three.rom"))
         );
         assert!(!unbounded.iter().any(|entry| entry.0.starts_with("ignored")));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn walkdir_subtree_snapshot_publishes_only_a_complete_directory() {
+        let dir = unique_temp_dir("namespace-walkdir-snapshot");
+        fs::create_dir_all(dir.join("nested/deep")).unwrap();
+        fs::write(dir.join("one.rom"), b"one").unwrap();
+        fs::write(dir.join("nested/two.rom"), b"two").unwrap();
+
+        let snapshot = snapshot_walkdir_subtree(&dir, None, &|_| false);
+        assert!(snapshot.complete);
+        assert!(snapshot.stats.target_signature.is_some());
+        assert!(
+            snapshot
+                .entries
+                .iter()
+                .any(|entry| entry.path == dir.join("nested/two.rom"))
+        );
+
+        let missing = snapshot_walkdir_subtree(&dir.join("missing"), None, &|_| false);
+        assert!(!missing.complete);
+        assert!(missing.entries.is_empty());
+        assert!(missing.stats.errors > 0);
+
+        let file = dir.join("one.rom");
+        let file_snapshot = snapshot_walkdir_subtree(&file, None, &|_| false);
+        assert!(!file_snapshot.complete);
+        assert!(file_snapshot.entries.is_empty());
 
         fs::remove_dir_all(dir).unwrap();
     }
