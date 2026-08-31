@@ -20,7 +20,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const REFRESH_SCHEMA: u32 = 3;
+const REFRESH_SCHEMA: u32 = 4;
 const ENVELOPE_VERSION: u32 = 1;
 const ENVELOPE_BYTES: usize = 64;
 const MANIFEST_MAGIC: &[u8; 8] = b"MGKRFSMF";
@@ -30,7 +30,7 @@ const BUILD_INFO_MAGIC: &[u8; 8] = b"MGKRFBIN";
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_WATCH_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BUILD_INFO_BYTES: usize = 4096;
-const STATE_DIRECTORY: &str = "fast-refresh-v3";
+const STATE_DIRECTORY: &str = "fast-refresh-v4";
 const MANIFEST_A: &str = "manifest-a.bin";
 const MANIFEST_B: &str = "manifest-b.bin";
 const BUILD_INFO_FILE: &str = "build-info.bin";
@@ -55,7 +55,21 @@ pub struct FastRefreshManifest {
     pub catalog_generation: u64,
     pub catalog_fingerprint: String,
     pub builder_identity: String,
+    pub discovery_watch: FastRefreshDiscoveryWatch,
     pub systems: Vec<FastRefreshSystemRef>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FastRefreshDiscoveryWatch {
+    pub anchors: Vec<FastDiscoveryAnchor>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FastDiscoveryAnchor {
+    pub path: String,
+    pub present: bool,
+    pub modified_ns: i128,
+    pub entry_fingerprint: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -371,7 +385,7 @@ pub fn build_fresh_catalog_with_presentation_progress(
         },
     )?;
     progress(FastCatalogBuildProgress::SavingCatalogMetadata);
-    let (states, capture) = capture_refresh_state_with_profiles(
+    let (states, capture, discovery_watch) = capture_refresh_state_with_profiles(
         storage_root,
         &snapshot,
         &profiles,
@@ -392,6 +406,7 @@ pub fn build_fresh_catalog_with_presentation_progress(
             "independent-fast-sources-v{}",
             crate::fast_catalog_sources::FAST_SOURCE_ADAPTER_VERSION
         ),
+        &discovery_watch,
         &states,
     )?;
     let build_elapsed_us = started.elapsed().as_micros().try_into().unwrap_or(u64::MAX);
@@ -464,6 +479,7 @@ impl FastRefreshManifest {
         catalog_generation: u64,
         catalog_fingerprint: String,
         builder_identity: String,
+        discovery_watch: FastRefreshDiscoveryWatch,
         systems: Vec<FastRefreshSystemRef>,
     ) -> Result<Self, String> {
         let manifest = Self {
@@ -472,6 +488,7 @@ impl FastRefreshManifest {
             catalog_generation,
             catalog_fingerprint,
             builder_identity,
+            discovery_watch,
             systems,
         };
         manifest.validate()?;
@@ -486,6 +503,7 @@ impl FastRefreshManifest {
         if self.builder_identity.trim().is_empty() {
             return Err("fast refresh builder identity is empty".to_string());
         }
+        self.discovery_watch.validate()?;
         let mut systems = BTreeSet::new();
         for system in &self.systems {
             if !systems.insert(system.system_id.as_str()) {
@@ -495,6 +513,31 @@ impl FastRefreshManifest {
             validate_sha256(&system.watch_sha256, "watch checksum")?;
             validate_sha256(&system.source_fingerprint, "source fingerprint")?;
             validate_sha256(&system.row_fingerprint, "row fingerprint")?;
+        }
+        Ok(())
+    }
+}
+
+impl FastRefreshDiscoveryWatch {
+    fn new(anchors: Vec<FastDiscoveryAnchor>) -> Result<Self, String> {
+        let watch = Self { anchors };
+        watch.validate()?;
+        Ok(watch)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        let mut paths = BTreeSet::new();
+        for anchor in &self.anchors {
+            if anchor.path.trim().is_empty() || !paths.insert(anchor.path.as_str()) {
+                return Err("invalid fast refresh discovery anchor path".to_string());
+            }
+            if anchor.present && anchor.modified_ns == 0 {
+                return Err(format!(
+                    "present discovery anchor has no timestamp: {}",
+                    anchor.path
+                ));
+            }
+            validate_sha256(&anchor.entry_fingerprint, "discovery anchor fingerprint")?;
         }
         Ok(())
     }
@@ -828,7 +871,7 @@ pub fn capture_and_publish_refresh_state(
     let _lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
         .map_err(|error| error.to_string())?;
     cleanup_refresh_temporary_files_with_lease(catalog_root, &_lease)?;
-    let (states, capture) = capture_refresh_state(storage_root, snapshot)?;
+    let (states, capture, discovery_watch) = capture_refresh_state(storage_root, snapshot)?;
     let active = crate::shard_registry::read_latest_manifest_lazy(
         catalog_root,
         crate::shard_registry::production_registry_limits(),
@@ -844,6 +887,7 @@ pub fn capture_and_publish_refresh_state(
             "independent-fast-sources-v{}",
             crate::fast_catalog_sources::FAST_SOURCE_ADAPTER_VERSION
         ),
+        &discovery_watch,
         &states,
     )?;
     Ok((manifest, capture))
@@ -857,6 +901,7 @@ pub fn publish_refresh_state_with_report(
     builder_identity: String,
     systems: &[FastRefreshSystemState],
 ) -> Result<(FastRefreshManifest, FastRefreshStatePublishReport), String> {
+    let discovery_watch = FastRefreshDiscoveryWatch::new(Vec::new())?;
     let _lease = crate::catalog_lease::CatalogMutationLease::acquire_default()
         .map_err(|error| error.to_string())?;
     cleanup_refresh_temporary_files_with_lease(catalog_root, &_lease)?;
@@ -866,6 +911,7 @@ pub fn publish_refresh_state_with_report(
         catalog_generation,
         catalog_fingerprint,
         builder_identity,
+        &discovery_watch,
         systems,
     )
 }
@@ -877,6 +923,7 @@ fn publish_refresh_state_with_report_held(
     catalog_generation: u64,
     catalog_fingerprint: String,
     builder_identity: String,
+    discovery_watch: &FastRefreshDiscoveryWatch,
     systems: &[FastRefreshSystemState],
 ) -> Result<(FastRefreshManifest, FastRefreshStatePublishReport), String> {
     let started = std::time::Instant::now();
@@ -944,6 +991,7 @@ fn publish_refresh_state_with_report_held(
         catalog_generation,
         catalog_fingerprint,
         builder_identity,
+        discovery_watch.clone(),
         references,
     )?;
     let manifest_started = std::time::Instant::now();
@@ -1062,6 +1110,7 @@ fn publish_refresh_update_held(
         catalog_generation,
         catalog_fingerprint,
         previous.builder_identity.clone(),
+        previous.discovery_watch.clone(),
         references.into_values().collect(),
     )?;
     let bytes = encode_envelope(&manifest, MANIFEST_MAGIC)?;
@@ -1078,7 +1127,14 @@ fn publish_refresh_update_held(
 pub fn capture_refresh_state(
     storage_root: &Path,
     snapshot: &FastFiveSnapshot,
-) -> Result<(Vec<FastRefreshSystemState>, FastRefreshCaptureReport), String> {
+) -> Result<
+    (
+        Vec<FastRefreshSystemState>,
+        FastRefreshCaptureReport,
+        FastRefreshDiscoveryWatch,
+    ),
+    String,
+> {
     let roots = [storage_root.display().to_string()];
     let profiles = crate::launch_profiles::ProfileSet::try_for_roots(&roots)?.into_profiles();
     capture_refresh_state_with_profiles(storage_root, snapshot, &profiles, None, None)
@@ -1091,7 +1147,14 @@ fn capture_refresh_state_with_profiles(
     profiles: &[crate::launch_profiles::LaunchProfile],
     generic_watch_observations: Option<&BTreeMap<String, GenericSourceWatchObservations>>,
     precomputed_row_fingerprints: Option<&BTreeMap<String, String>>,
-) -> Result<(Vec<FastRefreshSystemState>, FastRefreshCaptureReport), String> {
+) -> Result<
+    (
+        Vec<FastRefreshSystemState>,
+        FastRefreshCaptureReport,
+        FastRefreshDiscoveryWatch,
+    ),
+    String,
+> {
     let started = std::time::Instant::now();
     snapshot.validate()?;
     let mut anchor_cache = BTreeMap::new();
@@ -1133,7 +1196,8 @@ fn capture_refresh_state_with_profiles(
     }
     report.systems = states.len();
     report.elapsed_us = started.elapsed().as_micros().try_into().unwrap_or(u64::MAX);
-    Ok((states, report))
+    let discovery_watch = capture_discovery_watch(storage_root)?;
+    Ok((states, report, discovery_watch))
 }
 
 pub fn capture_system_watch(
@@ -1393,11 +1457,7 @@ pub fn plan_fast_refresh(
     };
     let discovery_needed = request == FastCatalogRefreshRequest::RebuildAll
         || !binding_matches
-        || !discovery_anchors_unchanged(
-            &discovery_anchor_paths,
-            watch_indices.values(),
-            &metadata_cache,
-        );
+        || !discovery_watch_unchanged(&manifest.discovery_watch, &metadata_cache);
     let phase_started = std::time::Instant::now();
     let mut systems = active
         .systems
@@ -1968,22 +2028,45 @@ fn discovery_anchor_paths(storage_root: &Path) -> Vec<PathBuf> {
     ]
 }
 
-fn discovery_anchors_unchanged<'a>(
-    anchors: &[PathBuf],
-    watches: impl Iterator<Item = &'a FastSystemWatchIndex>,
+fn capture_discovery_watch(storage_root: &Path) -> Result<FastRefreshDiscoveryWatch, String> {
+    let anchors = discovery_anchor_paths(storage_root)
+        .into_iter()
+        .map(|path| {
+            let path_string = path.to_string_lossy().into_owned();
+            if path.is_dir() {
+                let directory = capture_directory(&path)?;
+                Ok(FastDiscoveryAnchor {
+                    path: path_string,
+                    present: true,
+                    modified_ns: directory.modified_ns,
+                    entry_fingerprint: directory.entry_fingerprint,
+                })
+            } else {
+                Ok(FastDiscoveryAnchor {
+                    path: path_string,
+                    present: false,
+                    modified_ns: 0,
+                    entry_fingerprint: "0".repeat(64),
+                })
+            }
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    FastRefreshDiscoveryWatch::new(anchors)
+}
+
+fn discovery_watch_unchanged(
+    watch: &FastRefreshDiscoveryWatch,
     metadata_cache: &HashMap<PathBuf, Option<crate::namespace_walk::KnownPathMetadata>>,
 ) -> bool {
-    let expected = watches
-        .flat_map(|watch| watch.directories.iter())
-        .map(|directory| (PathBuf::from(&directory.path), directory))
-        .collect::<BTreeMap<_, _>>();
-    anchors.iter().all(|path| {
+    watch.anchors.iter().all(|anchor| {
+        let path = Path::new(&anchor.path);
         let observed = metadata_cache.get(path).and_then(|metadata| *metadata);
-        match expected.get(path) {
-            Some(directory) => observed.is_some_and(|metadata| {
-                metadata.is_dir && metadata.modified_ns == directory.modified_ns
-            }),
-            None => observed.is_none(),
+        if anchor.present {
+            observed.is_some_and(|metadata| {
+                metadata.is_dir && metadata.modified_ns == anchor.modified_ns
+            })
+        } else {
+            observed.is_none_or(|metadata| !metadata.is_dir)
         }
     })
 }
@@ -2056,8 +2139,7 @@ fn watch_specification_from_profiles(
     if scan_roots.is_empty() {
         return Err(format!("no watch roots for catalog system {system_id}"));
     }
-    let mut anchors = vec![games];
-    anchors.append(&mut core_parents);
+    let mut anchors = core_parents;
     anchors.sort();
     anchors.dedup();
     let metadata_files = if matches!(system_id, "arcade" | "neogeo") {
@@ -2950,6 +3032,7 @@ mod tests {
             1,
             "a".repeat(64),
             "builder".to_string(),
+            FastRefreshDiscoveryWatch::new(Vec::new()).unwrap(),
             vec![FastRefreshSystemRef {
                 system_id: "snes".to_string(),
                 watch_path: "../watch".to_string(),
@@ -2994,6 +3077,33 @@ mod tests {
         assert_eq!(check.status, FastSourceCheckStatus::Unchanged);
         assert_eq!(check.directories_checked, watch.directories.len());
         assert_eq!(check.containers_checked, 0);
+    }
+
+    #[test]
+    fn shared_games_directory_is_only_in_global_discovery_watch() {
+        let root = crate::test_support::unique_temp_dir("fast-refresh-discovery-watch");
+        fs::create_dir_all(root.join("_Console")).unwrap();
+        fs::create_dir_all(root.join("games/SNES")).unwrap();
+        fs::write(root.join("_Console/SNES.rbf"), b"core").unwrap();
+        fs::write(root.join("games/SNES/Game.sfc"), b"rom").unwrap();
+
+        let system_watch = capture_system_watch(&root, "snes").unwrap();
+        let shared_games = root.join("games").to_string_lossy().into_owned();
+        assert!(!system_watch.roots.iter().any(|path| path == &shared_games));
+        assert!(
+            !system_watch
+                .directories
+                .iter()
+                .any(|directory| directory.path == shared_games)
+        );
+
+        let discovery = capture_discovery_watch(&root).unwrap();
+        let games_anchor = discovery
+            .anchors
+            .iter()
+            .find(|anchor| anchor.path == shared_games)
+            .expect("global games anchor");
+        assert!(games_anchor.present);
     }
 
     #[test]
@@ -3386,6 +3496,7 @@ mod tests {
             1,
             "a".repeat(64),
             "builder".to_string(),
+            FastRefreshDiscoveryWatch::new(Vec::new()).unwrap(),
             vec![FastRefreshSystemRef {
                 system_id: "snes".to_string(),
                 watch_path: "packs/1.watchpack".to_string(),
@@ -3465,6 +3576,7 @@ mod tests {
             10,
             "a".repeat(64),
             "builder-1".to_string(),
+            &FastRefreshDiscoveryWatch::new(Vec::new()).unwrap(),
             &[state("snes")],
         )
         .expect("subprocess publication should block at the configured barrier");
@@ -3531,6 +3643,7 @@ mod tests {
                 10,
                 "a".repeat(64),
                 "builder-1".to_string(),
+                &FastRefreshDiscoveryWatch::new(Vec::new()).unwrap(),
                 &[state("snes")],
             )
             .expect("retry publication with a fresh lease")
