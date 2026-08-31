@@ -1060,6 +1060,19 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_catalog_attribution_hotpath(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_catalog_attribution(
+                config,
+                output_dir,
+                CatalogAttributionArm::Hotpath,
+            )
+        })
+    }
+
     pub(crate) fn profile_catalog_attribution_pprof(
         &mut self,
         output_dir: &Path,
@@ -19802,6 +19815,7 @@ fn slowest_catalog_target_paths(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CatalogAttributionArm {
     Control,
+    Hotpath,
     Pprof,
     Pmu,
     Storage,
@@ -19813,6 +19827,7 @@ impl CatalogAttributionArm {
     const fn label(self) -> &'static str {
         match self {
             Self::Control => "control",
+            Self::Hotpath => "hotpath",
             Self::Pprof => "pprof",
             Self::Pmu => "pmu",
             Self::Storage => "storage",
@@ -19956,6 +19971,14 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
         ("MISTER_PREVIEW_ARCHIVE_WARM_SKIP".into(), "1".into()),
     ];
     match arm {
+        CatalogAttributionArm::Hotpath => env.extend([
+            ("MISTER_HOTPATH".into(), "1".into()),
+            ("HOTPATH_REPORT".into(), "functions-timing".into()),
+            ("HOTPATH_OUTPUT_FORMAT".into(), "none".into()),
+            ("HOTPATH_FUNCTIONS_LIMIT".into(), "0".into()),
+            ("HOTPATH_METRICS_PORT".into(), "6770".into()),
+            ("HOTPATH_MCP_PORT".into(), "6771".into()),
+        ]),
         CatalogAttributionArm::Pprof => env.extend([
             ("MISTER_PPROF".into(), "1".into()),
             ("MISTER_PPROF_TRIGGER".into(), "catalog-build-full".into()),
@@ -20169,6 +20192,7 @@ fn profile_installed_catalog_attribution(
             return profile_catalog_attribution_streamline(config, output_dir, reboot);
         }
         CatalogAttributionArm::Control
+        | CatalogAttributionArm::Hotpath
         | CatalogAttributionArm::Pprof
         | CatalogAttributionArm::Pmu => {}
     }
@@ -20647,6 +20671,42 @@ fn collect_catalog_attribution_profile(
     arm: CatalogAttributionArm,
 ) -> Result<Value> {
     let diagnostics = format!("{CATALOG_ATTRIBUTION_WORK_DIR}/diagnostics");
+    if arm == CatalogAttributionArm::Hotpath {
+        let output = exec(
+            session,
+            "if command -v curl >/dev/null 2>&1; then curl -fsS http://127.0.0.1:6770/functions_timing; elif command -v wget >/dev/null 2>&1; then wget -qO- http://127.0.0.1:6770/functions_timing; else exit 127; fi",
+            true,
+        )?;
+        if let Some(error) = exec_failure_message("collect Hotpath metrics", &output) {
+            return Err(error.into());
+        }
+        let functions_timing: Value = serde_json::from_str(output.stdout.trim())?;
+        if functions_timing
+            .get("profiling_mode")
+            .and_then(Value::as_str)
+            != Some("timing")
+            || !functions_timing
+                .get("data")
+                .and_then(Value::as_array)
+                .is_some_and(|functions| !functions.is_empty())
+        {
+            return Err(
+                format!("{label} Hotpath metrics are incomplete: {functions_timing}").into(),
+            );
+        }
+        let profile = json!({
+            "schema": "mister-magik-catalog-build-hotpath-v1",
+            "state": "complete",
+            "source": "hotpath-loopback-metrics",
+            "mcp": "http://127.0.0.1:6771/mcp",
+            "functions_timing": functions_timing,
+        });
+        fs::write(
+            output_dir.join(format!("{label}-{}-profile.json", arm.label())),
+            format!("{}\n", serde_json::to_string_pretty(&profile)?),
+        )?;
+        return Ok(profile);
+    }
     let (remote_json, expected_schema) = match arm {
         CatalogAttributionArm::Pprof => (
             format!("{diagnostics}/catalog-pprof.json"),
@@ -20741,8 +20801,9 @@ fn finish_catalog_attribution_profile(
 }
 
 fn profile_catalog_attribution_report(output_dir: &Path) -> Result<String> {
-    const ARMS: [(&str, &str); 6] = [
+    const ARMS: [(&str, &str); 7] = [
         ("control", "catalog-attribution-control"),
+        ("hotpath", "catalog-attribution-hotpath"),
         ("pprof", "catalog-attribution-pprof"),
         ("pmu", "catalog-attribution-pmu"),
         ("storage", "catalog-attribution-storage"),
@@ -42554,6 +42615,21 @@ H: Handlers=event3 js0"#
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["leg"], "fresh");
         assert_eq!(rows[1]["complete_ms"], 8);
+
+        let hotpath_env = catalog_attribution_launcher_env(CatalogAttributionArm::Hotpath);
+        for expected in [
+            ("MISTER_HOTPATH", "1"),
+            ("HOTPATH_METRICS_PORT", "6770"),
+            ("HOTPATH_MCP_PORT", "6771"),
+        ] {
+            assert!(
+                hotpath_env
+                    .iter()
+                    .any(|(key, value)| key == expected.0 && value == expected.1),
+                "Hotpath arm is missing {expected:?}"
+            );
+        }
+        assert!(env.iter().all(|(key, _)| key != "MISTER_HOTPATH"));
     }
 
     #[test]

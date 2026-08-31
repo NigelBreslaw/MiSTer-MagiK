@@ -66,6 +66,7 @@ enum BenchmarkProfile {
     CatalogFullBuildRebuild,
     CatalogCorpusInventory,
     CatalogAttributionControl,
+    CatalogAttributionHotpath,
     CatalogAttributionPprof,
     CatalogAttributionPmu,
     CatalogAttributionStorage,
@@ -166,6 +167,9 @@ impl BenchmarkDevice for DeviceClient {
             }
             BenchmarkProfile::CatalogAttributionControl => {
                 device.profile_catalog_attribution_control(&output_dir)
+            }
+            BenchmarkProfile::CatalogAttributionHotpath => {
+                device.profile_catalog_attribution_hotpath(&output_dir)
             }
             BenchmarkProfile::CatalogAttributionPprof => {
                 device.profile_catalog_attribution_pprof(&output_dir)
@@ -440,6 +444,14 @@ fn require_clean_installed_commit(
             reporter,
             BenchmarkProfile::CatalogAttributionControl,
             "control",
+        ),
+        BenchmarkScenario::CatalogAttributionHotpath => execute_catalog_attribution(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::CatalogAttributionHotpath,
+            "hotpath",
         ),
         BenchmarkScenario::CatalogAttributionPprof => execute_catalog_attribution(
             &mut device,
@@ -1112,6 +1124,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::CatalogCorpusInventory
         | BenchmarkScenario::ArcadeCatalogPrototypeCold
         | BenchmarkScenario::CatalogAttributionControl
+        | BenchmarkScenario::CatalogAttributionHotpath
         | BenchmarkScenario::CatalogAttributionPprof
         | BenchmarkScenario::CatalogAttributionPmu
         | BenchmarkScenario::CatalogAttributionStorage
