@@ -252,7 +252,7 @@ fn download_and_verify(
     ci.download(run_id, destination)?;
     let archive = find_named(destination, "mister-magik-platform-", ".zip")?;
     let manifest = find_exact(destination, "platform-bundle-v0.2.json")?;
-    let payload = verify_manifest(&archive, &manifest, "platform candidate")?;
+    let payload = verify_manifest(&archive, &manifest, "platform candidate", false)?;
     if payload.origin_sha().is_some_and(|sha| sha != head_sha) {
         return Err("platform candidate manifest does not match the requested commit".into());
     }
@@ -293,9 +293,14 @@ fn verify_manifest(
     archive: &Path,
     manifest: &Path,
     label: &str,
+    historical_baseline: bool,
 ) -> Result<PlatformManifest, String> {
-    crate::platform_bundle::verify(archive, Some(manifest), None)
-        .map_err(|error| format!("{label} failed verification: {error}"))?;
+    let verification = if historical_baseline {
+        crate::platform_bundle::verify_historical_baseline(archive, Some(manifest), None)
+    } else {
+        crate::platform_bundle::verify(archive, Some(manifest), None)
+    };
+    verification.map_err(|error| format!("{label} failed verification: {error}"))?;
     serde_json::from_slice(
         &std::fs::read(manifest)
             .map_err(|error| format!("cannot read {label} manifest: {error}"))?,
@@ -516,7 +521,7 @@ fn published_candidate(
 ) -> Result<Candidate, String> {
     let archive = find_named(destination, "mister-magik-platform-", ".zip")?;
     let manifest = find_exact(destination, "platform-bundle-v0.2.json")?;
-    let payload = verify_manifest(&archive, &manifest, "published platform")?;
+    let payload = verify_manifest(&archive, &manifest, "published platform", true)?;
     let run_id = payload
         .main_run_id()
         .ok_or("published platform manifest is missing Main run_id")?;

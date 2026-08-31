@@ -928,8 +928,11 @@ fn prepare_stage_files(
     manager: &Path,
     device_agent: &Path,
 ) -> AgentResult<String> {
-    let manifest: Value =
-        crate::platform_bundle::verify(&candidate.archive, Some(&candidate.manifest), None)?;
+    let manifest: Value = crate::platform_bundle::verify_historical_baseline(
+        &candidate.archive,
+        Some(&candidate.manifest),
+        None,
+    )?;
     let candidate_main_revision = manifest
         .pointer("/components/main/head_sha")
         .and_then(Value::as_str)

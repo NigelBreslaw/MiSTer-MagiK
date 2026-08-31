@@ -25,6 +25,16 @@ const LEGACY_SCHEMA14_RBF_SHA256: &str =
     "ef1920500c925d35b23808792f0930954446a6030b33d3e92c0f4feccd23106e";
 const PATCHED_DIAGNOSTIC_ARCHITECTURE: &str = "scaler-off-domain-scheduler-terminal-v5";
 const STOCK_DIAGNOSTIC_ARCHITECTURE: &str = "stock-uninstrumented-v1";
+const HISTORICAL_DIAGNOSTIC_ARCHITECTURES: &[&str] = &[
+    "scaler-fetch-no-request-gates-v1",
+    "scaler-output-scheduler-gates-v1",
+    "scaler-pre-read-scheduler-evidence-v1",
+    "scaler-off-domain-scheduler-snapshot-v1",
+    "scaler-off-domain-scheduler-snapshot-v2",
+    "scaler-off-domain-scheduler-terminal-v3",
+    "scaler-off-domain-scheduler-terminal-v4",
+    PATCHED_DIAGNOSTIC_ARCHITECTURE,
+];
 
 pub struct Create<'a> {
     pub main: &'a Path,
@@ -100,7 +110,7 @@ pub fn update_plan(
             json!({"current_version":0,"next_version":1,"current_bundle_id":"","bundle_id":identity,"update_needed":true,"main_changed":true,"fpga_changed":true,"kernel_changed":true,"release_tag":"platform-v0.1"}),
         );
     };
-    validate_manifest(current, Some(current_version))?;
+    validate_manifest(current, Some(current_version), false)?;
     let old_main = current["main_input_sha256"].as_str().unwrap_or_default();
     let old_fpga = current["fpga_input_sha256"].as_str().unwrap_or_default();
     let old_kernel = current["kernel_input_sha256"].as_str().unwrap_or_default();
@@ -305,7 +315,7 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
             .fpga
             .join("patched/menu-magik-vblank-latch.metadata.txt"),
     )?;
-    let fpga_architecture = diagnostic_architecture(&fpga_metadata, "patched")?;
+    let fpga_architecture = diagnostic_architecture(&fpga_metadata, "patched", false)?;
     let mut files = Vec::new();
     for (prefix, root) in [
         ("main", request.main),
@@ -337,7 +347,7 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
             "kernel":origin("kernel",request.kernel_run_id,request.kernel_head_sha,"main",request.kernel_source)},
         "files":file_entries
     });
-    validate_manifest(&payload, Some(request.release_version))?;
+    validate_manifest(&payload, Some(request.release_version), false)?;
     let manifest =
         serde_json::to_string_pretty(&payload).map_err(|error| error.to_string())? + "\n";
     let mut checksums = files
@@ -386,13 +396,32 @@ pub fn verify(
     release_manifest: Option<&Path>,
     release_version: Option<u64>,
 ) -> AgentResult<Value> {
+    verify_with_options(archive, release_manifest, release_version, false)
+}
+
+/// Verify a published platform bundle with the established historical-baseline
+/// diagnostic allowlist. Newly created and candidate bundles use `verify`.
+pub fn verify_historical_baseline(
+    archive: &Path,
+    release_manifest: Option<&Path>,
+    release_version: Option<u64>,
+) -> AgentResult<Value> {
+    verify_with_options(archive, release_manifest, release_version, true)
+}
+
+fn verify_with_options(
+    archive: &Path,
+    release_manifest: Option<&Path>,
+    release_version: Option<u64>,
+    historical_baseline: bool,
+) -> AgentResult<Value> {
     let files = read_zip(archive, MemberLayout::Nested)?;
     let manifest_bytes = files
         .get(MANIFEST)
         .ok_or("platform bundle manifest is missing")?;
     let payload: Value =
         serde_json::from_slice(manifest_bytes).map_err(|error| error.to_string())?;
-    validate_manifest(&payload, release_version)?;
+    validate_manifest(&payload, release_version, historical_baseline)?;
     if release_manifest.is_some_and(|path| fs::read(path).ok().as_deref() != Some(manifest_bytes)) {
         return classified(
             "platform_release_manifest_mismatch",
@@ -434,7 +463,7 @@ pub fn verify(
         }
     }
     verify_archive_checksums(&files)?;
-    verify_embedded_components(&payload, &files)?;
+    verify_embedded_components(&payload, &files, historical_baseline)?;
     Ok(payload)
 }
 
@@ -482,6 +511,7 @@ pub fn extract_component(
 fn verify_embedded_components(
     payload: &Value,
     files: &BTreeMap<String, Vec<u8>>,
+    historical_baseline: bool,
 ) -> AgentResult<()> {
     let fpga = payload["fpga_input_sha256"].as_str().unwrap_or_default();
     let kernel = payload["kernel_input_sha256"].as_str().unwrap_or_default();
@@ -492,7 +522,7 @@ fn verify_embedded_components(
     {
         return classified("embedded_component_identity", "metadata mismatch");
     }
-    let embedded_architecture = diagnostic_architecture(&patched, "patched")?;
+    let embedded_architecture = diagnostic_architecture(&patched, "patched", historical_baseline)?;
     if payload["latch_rbf_sha256"] != LEGACY_SCHEMA14_RBF_SHA256
         && payload
             .get("diagnostic_architecture")
@@ -512,7 +542,11 @@ fn verify_embedded_components(
     }
     Ok(())
 }
-fn validate_manifest(payload: &Value, version: Option<u64>) -> AgentResult<()> {
+fn validate_manifest(
+    payload: &Value,
+    version: Option<u64>,
+    historical_baseline: bool,
+) -> AgentResult<()> {
     if payload["format"] != FORMAT || payload["release_version"].as_u64().is_none_or(|v| v == 0) {
         return classified("invalid_platform_manifest", "format or version");
     }
@@ -542,7 +576,9 @@ fn validate_manifest(payload: &Value, version: Option<u64>) -> AgentResult<()> {
     {
         Some(architecture)
             if architecture == PATCHED_DIAGNOSTIC_ARCHITECTURE
-                || architecture == STOCK_DIAGNOSTIC_ARCHITECTURE => {}
+                || architecture == STOCK_DIAGNOSTIC_ARCHITECTURE
+                || (historical_baseline
+                    && HISTORICAL_DIAGNOSTIC_ARCHITECTURES.contains(&architecture)) => {}
         Some(architecture) => {
             return classified("fpga_diagnostic_architecture", architecture);
         }
@@ -571,6 +607,7 @@ fn verify_main(root: &Path, id: &str, revision: Option<&str>) -> AgentResult<()>
 fn diagnostic_architecture(
     metadata: &BTreeMap<String, String>,
     flavour: &str,
+    historical_baseline: bool,
 ) -> AgentResult<String> {
     let expected = match flavour {
         "patched" => PATCHED_DIAGNOSTIC_ARCHITECTURE,
@@ -578,7 +615,11 @@ fn diagnostic_architecture(
         _ => return classified("fpga_diagnostic_architecture", flavour),
     };
     if let Some(architecture) = metadata.get("diagnostic_architecture") {
-        if architecture == expected {
+        if architecture == expected
+            || (historical_baseline
+                && flavour == "patched"
+                && HISTORICAL_DIAGNOSTIC_ARCHITECTURES.contains(&architecture.as_str()))
+        {
             return Ok(architecture.clone());
         }
         return classified(
@@ -629,7 +670,7 @@ fn verify_fpga(root: &Path, id: &str) -> AgentResult<String> {
                 format!("{LATCH_CAPABILITY_MASK} required"),
             );
         }
-        let _ = diagnostic_architecture(&metadata, flavour)?;
+        let _ = diagnostic_architecture(&metadata, flavour, false)?;
         for field in ["latch_protocol_sha256", "latch_bridge_sha256"] {
             require_hex(
                 field,
@@ -1058,6 +1099,58 @@ mod tests {
             }
             fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn historical_platform_architecture_is_allowed_only_for_baselines() {
+        let architecture = "scaler-off-domain-scheduler-terminal-v4";
+        let mut metadata = BTreeMap::new();
+        metadata.insert("diagnostic_architecture".into(), architecture.into());
+        assert!(diagnostic_architecture(&metadata, "patched", false).is_err());
+        assert_eq!(
+            diagnostic_architecture(&metadata, "patched", true).unwrap(),
+            architecture
+        );
+
+        let payload = serde_json::json!({
+            "format": FORMAT,
+            "release_version": 39,
+            "assembly_revision": ASSEMBLY_REVISION,
+            "main_input_sha256": "a".repeat(64),
+            "fpga_input_sha256": "b".repeat(64),
+            "kernel_input_sha256": "c".repeat(64),
+            "latch_rbf_sha256": "d".repeat(64),
+            "diagnostic_architecture": architecture,
+            "platform_contract_sha256": "1".repeat(64),
+            "components": {
+                "main": {"head_sha": "e".repeat(40), "run_id": "1"},
+                "fpga": {"head_sha": "f".repeat(40), "run_id": "2"},
+                "kernel": {"head_sha": "0".repeat(40), "run_id": "3"}
+            }
+        });
+        assert!(validate_manifest(&payload, Some(39), false).is_err());
+        validate_manifest(&payload, Some(39), true).unwrap();
+
+        let contract = "1".repeat(64);
+        let mut files = BTreeMap::new();
+        files.insert(
+            "fpga/patched/menu-magik-vblank-latch.metadata.txt".into(),
+            format!(
+                "component_input_sha256={}\ndiagnostic_architecture={architecture}\nplatform_contract_sha256={contract}\n",
+                "b".repeat(64)
+            )
+            .into_bytes(),
+        );
+        files.insert(
+            "scanout/provenance.txt".into(),
+            format!(
+                "component_input_sha256={}\nplatform_contract_sha256={contract}\n",
+                "c".repeat(64)
+            )
+            .into_bytes(),
+        );
+        assert!(verify_embedded_components(&payload, &files, false).is_err());
+        verify_embedded_components(&payload, &files, true).unwrap();
     }
 
     #[test]
