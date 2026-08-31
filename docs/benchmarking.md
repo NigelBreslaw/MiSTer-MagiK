@@ -827,6 +827,43 @@ types `A`, and requires runtime status to report that exact query as `ready`
 with at least one result. The ordinary launcher is restored whether verification
 passes or fails. This scenario does not start the screensaver.
 
+## Catalog discovery architecture
+
+The catalog build uses one serial discovery plan for the configured storage
+root. The plan reads installed-core entries and top-level game-directory headers
+once, then the source adapters consume those facts while walking each namespace
+once. The checked header pass does not issue a metadata probe for every child:
+directory signatures and the final game-directory facts come from the serial
+namespace traversal that already has the directory open. If a directory type is
+uncertain, the existing exact-path fallback remains responsible for that entry.
+
+Prepared sources are also serialized. Arcade is built first because it owns the
+initial completion callback. The remaining prepared systems run once in
+`PREPARED_SYSTEM_IDS` order with completion callbacks suppressed; their exact,
+successful non-empty watch roots are then excluded from generic discovery.
+`plan_ready` is emitted before those prepared completions are replayed in the
+same order. Generic discovery excludes only those observed `PathBuf` roots and
+the existing prepared system IDs. It does not use a second hardcoded root table,
+case-folded path matching, or a parallel SD-card worker.
+
+On Linux the normal namespace walk is fd-relative and serial. A typed nested
+`ENOENT` can recover by taking a bounded WalkDir snapshot of only the affected
+subtree and then continuing the parent walk. A snapshot is usable only when
+WalkDir reports no errors, the subtree root is still a directory, and the
+existing capture budgets are respected. Partial, missing, oversized, root-level,
+non-`ENOENT`, and other nonrecoverable cases retain the whole-root WalkDir
+fallback. This keeps incomplete data out of catalog rows and watch fingerprints;
+the fallback and recovery records remain separately attributable in benchmark
+evidence.
+
+The invariant for every optimization is unchanged catalog rows, launch plans,
+logical fingerprints, system/game counts, and rebuild behavior. Filesystem
+enumeration, metadata, archive reads, catalog writes, SQLite work, rename,
+sync, delivery, and benchmark invocations remain serial because the SD card is
+the limiting shared resource. The control timing is the Rust benchmark entry
+implemented by `scripts/agent benchmark catalog-attribution-control`, not a
+standalone script.
+
 ## Catalog lifecycle
 
 ```text
