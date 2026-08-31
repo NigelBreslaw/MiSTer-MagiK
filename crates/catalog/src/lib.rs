@@ -92,6 +92,7 @@ mod prepared_release_manifest;
 mod preview_archive;
 pub mod preview_availability;
 pub mod preview_worker;
+pub mod runtime_metadata;
 pub mod runtime_thread;
 pub mod scanner_cache;
 pub mod shard_registry;
