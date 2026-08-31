@@ -491,7 +491,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
     storage_root: &Path,
     plan: &CatalogScanPlan,
     excluded_system_ids: &[&str],
-    excluded_root_paths: &[PathBuf],
+    prepared_root_paths: &BTreeSet<PathBuf>,
     mut system_discovering: impl FnMut(&str),
     mut system_complete: impl FnMut(&FastFiveSystem),
 ) -> Result<GenericSystemPlanDiscovery, String> {
@@ -509,7 +509,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
     let mut reused_headers = 0_usize;
     let mut fallback_metadata_calls = 0_usize;
     let mut canonicalizations = 0_usize;
-    let mut excluded_root_count = 0_usize;
+    let mut prepared_roots_skipped = 0_usize;
     let mut profiles = plan.base_profiles().to_vec();
     let mut accumulators = BTreeMap::<String, GenericSystemAccumulator>::new();
     let mut visited_roots = BTreeSet::new();
@@ -595,13 +595,8 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
     }
 
     for header in plan.game_dir_headers() {
-        if excluded_root_paths.iter().any(|excluded| {
-            header
-                .path
-                .to_string_lossy()
-                .eq_ignore_ascii_case(&excluded.to_string_lossy())
-        }) {
-            excluded_root_count = excluded_root_count.saturating_add(1);
+        if prepared_root_paths.contains(&header.path) {
+            prepared_roots_skipped = prepared_roots_skipped.saturating_add(1);
             continue;
         }
         runtime_headers = runtime_headers.saturating_add(1);
@@ -749,7 +744,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
         .saturating_add(continuation_us)
         .saturating_add(finalization_us);
     crate::catalog_logln!(
-        "fast_catalog_generic_phase_tsv\telapsed_us={}\tknown_profile_us={}\truntime_inventory_us={}\truntime_resolution_us={}\tcontinuation_us={}\tfinalization_us={}\tresidual_us={}\tknown_roots_considered={}\tknown_roots_found={}\truntime_headers={}\truntime_resolved={}\truntime_unresolved={}\tcontinuation_roots={}\treused_headers={}\tfallback_metadata_calls={}\tcanonicalizations={}\texcluded_root_count={}",
+        "fast_catalog_generic_phase_tsv\telapsed_us={}\tknown_profile_us={}\truntime_inventory_us={}\truntime_resolution_us={}\tcontinuation_us={}\tfinalization_us={}\tresidual_us={}\tknown_roots_considered={}\tknown_roots_found={}\truntime_headers={}\truntime_resolved={}\truntime_unresolved={}\tcontinuation_roots={}\treused_headers={}\tfallback_metadata_calls={}\tcanonicalizations={}\tprepared_roots_skipped={}",
         elapsed_us,
         known_profile_us,
         runtime_inventory_us,
@@ -766,7 +761,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
         reused_headers,
         fallback_metadata_calls,
         canonicalizations,
-        excluded_root_count,
+        prepared_roots_skipped,
     );
     Ok((
         systems,
@@ -1870,7 +1865,7 @@ mod tests {
                 &root,
                 &plan,
                 &[],
-                &[],
+                &BTreeSet::new(),
                 |_| {},
                 |_| {},
             )
@@ -1917,8 +1912,7 @@ mod tests {
 
         let roots = [root.display().to_string()];
         let plan = CatalogScanPlan::try_for_roots(&roots).expect("prepared root plan");
-        let excluded = vec![prepared.clone()];
-        let (systems, report, _, observations) =
+        let discover = |excluded: BTreeSet<PathBuf>| {
             discover_generic_systems_from_plan_excluding_with_progress(
                 &root,
                 &plan,
@@ -1927,11 +1921,32 @@ mod tests {
                 |_| {},
                 |_| {},
             )
-            .expect("prepared root exclusion");
+        };
+        let (systems, report, _, observations) =
+            discover(BTreeSet::from([prepared.clone()])).expect("prepared root exclusion");
 
         assert!(systems.is_empty());
         assert_eq!(report.systems.len(), 0);
         assert!(observations.is_empty());
+
+        let (_, unrelated_report, _, _) = discover(BTreeSet::from([root.join("games/Unrelated")]))
+            .expect("unrelated root discovery");
+        assert!(
+            unrelated_report
+                .systems
+                .iter()
+                .any(|system| system.system_id == "myprepared")
+        );
+
+        let (_, case_variant_report, _, _) =
+            discover(BTreeSet::from([root.join("games/myprepared")]))
+                .expect("case-variant root discovery");
+        assert!(
+            case_variant_report
+                .systems
+                .iter()
+                .any(|system| system.system_id == "myprepared")
+        );
 
         fs::remove_dir_all(root).unwrap();
     }

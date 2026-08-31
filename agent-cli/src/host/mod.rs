@@ -21237,10 +21237,10 @@ fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Ve
                     None,
                     "residual_us",
                 ),
-                "generic_prepared_root_excluded_count": catalog_phase_metric_sum(
+                "generic_prepared_roots_skipped": catalog_phase_metric_sum(
                     value.get("phase_evidence"),
                     "fast_catalog_generic_phase_tsv",
-                    "excluded_root_count",
+                    "prepared_roots_skipped",
                 ),
                 "game_header_probe_us": catalog_phase_metric_sum(
                     value.get("phase_evidence"),
@@ -42847,6 +42847,10 @@ H: Handlers=event3 js0"#
                     "metrics": {"optimize_us": 800, "integrity_us": 500}
                 },
                 {
+                    "record": "fast_catalog_generic_phase_tsv",
+                    "metrics": {"prepared_roots_skipped": 2}
+                },
+                {
                     "record": "namespace_walk_fallback_tsv",
                     "metrics": {
                         "restart_count": 1, "fd_attempt_us": 1200,
@@ -42920,6 +42924,9 @@ H: Handlers=event3 js0"#
                                 "metadata_probe_count": 18, "metadata_probe_us": 180,
                                 "elapsed_us": 300
                             }},
+                            {"record": "fast_catalog_generic_phase_tsv", "metrics": {
+                                "prepared_roots_skipped": 2
+                            }},
                             {"record": "namespace_walk_fallback_tsv", "metrics": {
                                 "restart_count": 1, "fd_attempt_us": 1200,
                                 "fallback_us": 3400, "fallback_entries": 50,
@@ -42931,6 +42938,7 @@ H: Handlers=event3 js0"#
             }),
         );
         assert_eq!(normalized[0]["game_header_probe_us"], 500);
+        assert_eq!(normalized[0]["generic_prepared_roots_skipped"], 2);
         assert_eq!(normalized[0]["game_header_entries"], 30);
         assert_eq!(normalized[0]["game_header_accepted"], 24);
         assert_eq!(normalized[0]["game_header_metadata_probe_us"], 300);

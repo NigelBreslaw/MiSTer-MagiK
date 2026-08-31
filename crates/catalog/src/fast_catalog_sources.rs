@@ -44,19 +44,6 @@ const MAX_DIRECTORY_ENTRIES: usize = 1_000_000;
 const MAX_MRA_BYTES: u64 = 1024 * 1024;
 const MAX_COLLECTION_LISTING_BYTES: usize = 8 * 1024 * 1024;
 
-fn prepared_source_roots(storage_root: &Path) -> Vec<PathBuf> {
-    [
-        storage_root.join("_Arcade"),
-        storage_root.join("games/Amiga"),
-        storage_root.join("_DOS Games"),
-        storage_root.join("_Computer/_X68000 Games"),
-        storage_root.join("_Computer/X68000 Games"),
-        storage_root.join("games/C64"),
-    ]
-    .into_iter()
-    .collect()
-}
-
 #[derive(Clone, Debug, Serialize)]
 pub struct FastSourceBuildReport {
     pub elapsed_us: u64,
@@ -159,26 +146,9 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         &mut timed_system_complete,
     )?;
     let roots = [storage_root.display().to_string()];
-    let prepared_source_roots = prepared_source_roots(storage_root);
     let phase_started = Instant::now();
     let plan = CatalogScanPlan::try_for_roots(&roots)?;
     let profile_discovery_us = elapsed_us(phase_started);
-    let (mut generic_systems, generic, profiles, mut generic_watch_observations) =
-        discover_generic_systems_from_plan_excluding_with_progress(
-            storage_root,
-            &plan,
-            &PREPARED_SYSTEM_IDS,
-            &prepared_source_roots,
-            &mut system_discovering,
-            |_| {},
-        )?;
-    let generic_systems_us = generic.elapsed_us;
-    let phase_started = Instant::now();
-    let planned_system_ids = discover_independent_system_ids_from_profiles(storage_root, &profiles);
-    let system_planning_us = elapsed_us(phase_started);
-    let plan_ready_started = Instant::now();
-    plan_ready(&planned_system_ids);
-    let plan_ready_us = elapsed_us(plan_ready_started);
     for system_id in PREPARED_SYSTEM_IDS
         .iter()
         .copied()
@@ -191,9 +161,27 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
             &mut reports,
             &mut prepared_watch_observations,
             &mut family_resolver,
-            &mut timed_system_complete,
+            &mut |_| {},
         )?;
     }
+    let prepared_watch_roots = prepared_watch_roots(&prepared_watch_observations);
+    let (mut generic_systems, generic, profiles, mut generic_watch_observations) =
+        discover_generic_systems_from_plan_excluding_with_progress(
+            storage_root,
+            &plan,
+            &PREPARED_SYSTEM_IDS,
+            &prepared_watch_roots,
+            &mut system_discovering,
+            |_| {},
+        )?;
+    let generic_systems_us = generic.elapsed_us;
+    let phase_started = Instant::now();
+    let planned_system_ids = discover_independent_system_ids_from_profiles(storage_root, &profiles);
+    let system_planning_us = elapsed_us(phase_started);
+    let plan_ready_started = Instant::now();
+    plan_ready(&planned_system_ids);
+    let plan_ready_us = elapsed_us(plan_ready_started);
+    emit_prepared_system_completions(&systems, &mut timed_system_complete);
     generic_watch_observations.extend(prepared_watch_observations);
     let phase_started = Instant::now();
     let mut generic_family_stats = BTreeMap::new();
@@ -314,6 +302,30 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         generic_watch_observations,
         row_fingerprints,
     })
+}
+
+fn prepared_watch_roots(
+    observations: &BTreeMap<String, GenericSourceWatchObservations>,
+) -> BTreeSet<PathBuf> {
+    observations
+        .values()
+        .flat_map(|watch| watch.roots.iter().map(PathBuf::from))
+        .collect()
+}
+
+fn emit_prepared_system_completions(
+    systems: &BTreeMap<String, FastFiveSystem>,
+    system_complete: &mut impl FnMut(&FastFiveSystem),
+) {
+    for system_id in PREPARED_SYSTEM_IDS
+        .iter()
+        .copied()
+        .filter(|id| *id != "arcade")
+    {
+        if let Some(system) = systems.get(system_id) {
+            system_complete(system);
+        }
+    }
 }
 
 #[hotpath::measure]
@@ -2452,6 +2464,113 @@ mod tests {
         );
         #[cfg(target_os = "linux")]
         assert!(watch.complete);
+
+        let direct_games = games.clone();
+        let direct_watch_roots = watch.roots.clone();
+        let mut systems = BTreeMap::new();
+        let mut reports = BTreeMap::new();
+        let mut observations = BTreeMap::new();
+        let mut resolver = MachineFamilyResolver::for_storage_root(&root).unwrap();
+        build_and_record_prepared_system(
+            &root,
+            "c64",
+            &mut systems,
+            &mut reports,
+            &mut observations,
+            &mut resolver,
+            &mut |_| {},
+        )
+        .expect("prepared C64 build");
+        assert_eq!(systems["c64"].games, direct_games);
+        assert_eq!(observations["c64"].roots, direct_watch_roots);
+    }
+
+    #[test]
+    fn prepared_watch_roots_claim_only_non_empty_prepared_observations() {
+        let root = crate::test_support::unique_temp_dir("fast-source-watch-roots");
+        let mut observations = BTreeMap::new();
+        assert!(prepared_watch_roots(&observations).is_empty());
+
+        observations.insert(
+            "empty".to_string(),
+            GenericSourceWatchObservations::default(),
+        );
+        assert!(prepared_watch_roots(&observations).is_empty());
+
+        observations.insert(
+            "c64".to_string(),
+            GenericSourceWatchObservations {
+                roots: BTreeSet::from([root.join("games/C64").display().to_string()]),
+                ..GenericSourceWatchObservations::default()
+            },
+        );
+        assert_eq!(
+            prepared_watch_roots(&observations),
+            BTreeSet::from([root.join("games/C64")])
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn empty_or_failed_prepared_adapters_claim_no_watch_roots() {
+        let root = crate::test_support::unique_temp_dir("fast-source-empty-watch-roots");
+        let mut systems = BTreeMap::new();
+        let mut reports = BTreeMap::new();
+        let mut observations = BTreeMap::new();
+        let mut resolver = MachineFamilyResolver::for_storage_root(&root).unwrap();
+
+        build_and_record_prepared_system(
+            &root,
+            "c64",
+            &mut systems,
+            &mut reports,
+            &mut observations,
+            &mut resolver,
+            &mut |_| {},
+        )
+        .expect("empty prepared adapter is a successful empty build");
+        assert!(prepared_watch_roots(&observations).is_empty());
+
+        assert!(
+            build_and_record_prepared_system(
+                &root,
+                "unknown",
+                &mut systems,
+                &mut reports,
+                &mut observations,
+                &mut resolver,
+                &mut |_| {},
+            )
+            .is_err()
+        );
+        assert!(prepared_watch_roots(&observations).is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn deferred_prepared_completion_order_matches_prepared_system_order() {
+        let systems = ["x68000", "dos", "c64", "amiga", "arcade"]
+            .into_iter()
+            .map(|system_id| {
+                (
+                    system_id.to_string(),
+                    FastFiveSystem {
+                        system_id: system_id.to_string(),
+                        display_title: system_id.to_string(),
+                        games: Vec::new(),
+                        variants: Vec::new(),
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut completed = Vec::new();
+        emit_prepared_system_completions(&systems, &mut |system| {
+            completed.push(system.system_id.clone());
+        });
+
+        assert_eq!(completed, ["amiga", "c64", "dos", "x68000"]);
     }
 
     #[test]
