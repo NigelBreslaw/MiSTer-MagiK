@@ -212,6 +212,17 @@ pub(super) fn catalog_system_update_preparing_intent() -> LauncherWorkerUiIntent
     ))
 }
 
+pub(super) fn catalog_system_update_checking_intent() -> LauncherWorkerUiIntent {
+    LauncherWorkerUiIntent::CatalogScan(CatalogScanBridgeStatus::new(
+        false,
+        true,
+        UPDATING_LIBRARY_SCAN_MESSAGE,
+        "Checking library changes",
+        "Comparing watched source identities...",
+        -1,
+    ))
+}
+
 pub(super) fn catalog_system_discovering_intent(title: &str) -> LauncherWorkerUiIntent {
     LauncherWorkerUiIntent::CatalogScan(CatalogScanBridgeStatus::new(
         false,

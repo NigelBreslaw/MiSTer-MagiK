@@ -4,7 +4,8 @@
 use super::launcher_worker_intents::{
     LauncherWorkerUiIntent, cached_catalog_validation_intent, catalog_build_status_intent,
     catalog_rebuild_started_intent, catalog_system_discovering_intent,
-    catalog_system_update_preparing_intent, catalog_system_update_progress_intent,
+    catalog_system_update_checking_intent, catalog_system_update_preparing_intent,
+    catalog_system_update_progress_intent,
 };
 use super::*;
 use crate::preview_state::SystemEntryPreviewPrelude;
@@ -241,7 +242,9 @@ impl LauncherCatalogSession {
         let mut effects = CatalogSessionEffects::default();
         match message {
             CatalogWorkerMessage::Progress { phase, work_units } => {
-                if phase == "systems" {
+                if phase == "checking" {
+                    effects.ui(catalog_system_update_checking_intent());
+                } else if phase == "systems" {
                     let completed = work_units
                         .saturating_sub(1)
                         .try_into()
@@ -249,7 +252,11 @@ impl LauncherCatalogSession {
                     self.note_system_update_progress(completed, &mut effects);
                 }
             }
-            CatalogWorkerMessage::Heartbeat { .. } => {}
+            CatalogWorkerMessage::Heartbeat { phase, .. } => {
+                if phase == "checking" {
+                    effects.ui(catalog_system_update_checking_intent());
+                }
+            }
             CatalogWorkerMessage::Timing { name, detail } => {
                 effects.event(name, detail);
             }
@@ -916,6 +923,16 @@ mod tests {
             catalog_partial: false,
         };
         let mut session = LauncherCatalogSession::new(false);
+
+        let checking = catalog_scan_statuses(session.handle_worker_message(
+            context(),
+            CatalogWorkerMessage::Progress {
+                phase: "checking".into(),
+                work_units: 1,
+            },
+            now,
+        ));
+        assert_eq!(checking[0].title(), "Checking library changes");
 
         let planned = catalog_scan_statuses(session.handle_worker_message(
             context(),

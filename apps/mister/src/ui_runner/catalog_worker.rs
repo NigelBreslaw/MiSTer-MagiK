@@ -2110,6 +2110,10 @@ fn run_fast_catalog_refresh_in_process(
     };
     let storage_root = PathBuf::from("/media/fat");
     report_catalog_filesystem_headroom(tx, "begin");
+    let _ = tx.send(CatalogWorkerMessage::Progress {
+        phase: "checking".to_string(),
+        work_units: 1,
+    });
     let planned = match mister_magik_catalog::fast_catalog_refresh::plan_fast_refresh(
         &storage_root,
         catalog_root,
