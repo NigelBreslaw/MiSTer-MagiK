@@ -1433,16 +1433,11 @@ pub fn plan_fast_refresh(
         .unwrap_or(u64::MAX);
     let discovery_anchor_paths = discovery_anchor_paths(storage_root);
     let metadata_started = std::time::Instant::now();
-    let (metadata_cache, metadata_parents, metadata_paths, metadata_slowest_parents) =
-        build_watch_metadata_cache(watch_indices.values(), &discovery_anchor_paths);
-    let metadata_probe_us = metadata_started
-        .elapsed()
-        .as_micros()
-        .try_into()
-        .unwrap_or(u64::MAX);
+    let mut metadata_probe =
+        LazyWatchMetadataProbe::new(watch_indices.values(), &discovery_anchor_paths);
     let discovery_changed = request == FastCatalogRefreshRequest::RebuildAll
         || !binding_matches
-        || !discovery_watch_unchanged(&manifest.discovery_watch, &metadata_cache);
+        || !discovery_watch_unchanged_lazy(&manifest.discovery_watch, &mut metadata_probe);
     let phase_started = std::time::Instant::now();
     let mut systems = active
         .systems
@@ -1457,7 +1452,7 @@ pub fn plan_fast_refresh(
     } else {
         None
     };
-    let build_check = |system_id: &str| {
+    let mut build_check = |system_id: &str| {
         let system_started = std::time::Instant::now();
         let mut check = FastSystemSourceCheck {
             system_id: system_id.to_string(),
@@ -1476,7 +1471,7 @@ pub fn plan_fast_refresh(
         {
             check.reason = "system is no longer present in discovery".to_string();
         } else if let Some(watch) = watch_indices.get(system_id) {
-            check_watch_index(watch, &metadata_cache, &mut check);
+            check_watch_index_lazy(watch, &mut metadata_probe, &mut check);
         } else if let Some(error) = watch_errors.get(system_id) {
             check.reason = format!("watch index unavailable: {error}");
         } else if references.contains_key(system_id) {
@@ -1503,7 +1498,14 @@ pub fn plan_fast_refresh(
         .iter()
         .map(|system_id| build_check(system_id))
         .collect::<Vec<_>>();
+    drop(build_check);
     let checks_us = phase_started
+        .elapsed()
+        .as_micros()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let (metadata_parents, metadata_paths, metadata_slowest_parents) = metadata_probe.finish();
+    let metadata_probe_us = metadata_started
         .elapsed()
         .as_micros()
         .try_into()
@@ -1924,6 +1926,7 @@ fn execute_planned_fast_refresh_with(
     })
 }
 
+#[cfg(test)]
 fn check_watch_index(
     watch: &FastSystemWatchIndex,
     metadata_cache: &HashMap<PathBuf, Option<crate::namespace_walk::KnownPathMetadata>>,
@@ -1990,6 +1993,72 @@ fn check_watch_index(
     check.reason = "source identities match".to_string();
 }
 
+fn check_watch_index_lazy(
+    watch: &FastSystemWatchIndex,
+    metadata: &mut LazyWatchMetadataProbe,
+    check: &mut FastSystemSourceCheck,
+) {
+    let known_directories = watch
+        .directories
+        .iter()
+        .map(|directory| directory.path.as_str())
+        .collect::<BTreeSet<_>>();
+    for root in &watch.roots {
+        let observed_is_dir = metadata
+            .observe(Path::new(root))
+            .is_some_and(|value| value.is_dir);
+        if observed_is_dir != known_directories.contains(root.as_str()) {
+            check.status = FastSourceCheckStatus::Changed;
+            check.reason = format!("root availability changed: {root}");
+            return;
+        }
+    }
+    for directory in &watch.directories {
+        check.directories_checked = check.directories_checked.saturating_add(1);
+        let path = Path::new(&directory.path);
+        let Some(observed) = metadata.observe(path) else {
+            check.status = FastSourceCheckStatus::Changed;
+            check.reason = format!("directory unavailable: {}", directory.path);
+            return;
+        };
+        if !observed.is_dir || observed.modified_ns != directory.modified_ns {
+            check.status = FastSourceCheckStatus::Changed;
+            check.reason = format!("directory entries changed: {}", directory.path);
+            return;
+        }
+    }
+    for container in &watch.containers {
+        check.containers_checked = check.containers_checked.saturating_add(1);
+        let path = Path::new(&container.path);
+        let observed = metadata.observe(path);
+        let Some(observed) = observed else {
+            if container.size == 0
+                && container.modified_ns == 0
+                && container.changed_ns == 0
+                && container.inode == 0
+            {
+                continue;
+            }
+            check.status = FastSourceCheckStatus::Changed;
+            check.reason = format!("container unavailable: {}", container.path);
+            return;
+        };
+        if !observed.is_file
+            || observed.size != container.size
+            || observed.modified_ns != container.modified_ns
+            || observed.changed_ns != container.changed_ns
+            || observed.inode != container.inode
+        {
+            check.status = FastSourceCheckStatus::Changed;
+            check.reason = format!("container changed: {}", container.path);
+            return;
+        }
+    }
+    check.status = FastSourceCheckStatus::Unchanged;
+    check.reason = "source identities match".to_string();
+}
+
+#[cfg(test)]
 fn build_watch_metadata_cache<'a>(
     watches: impl Iterator<Item = &'a FastSystemWatchIndex>,
     extra_paths: &[PathBuf],
@@ -2052,6 +2121,95 @@ fn build_watch_metadata_cache<'a>(
     (cache, metadata_parents, metadata_paths, parent_probes)
 }
 
+struct LazyWatchMetadataProbe {
+    grouped: BTreeMap<PathBuf, Vec<PathBuf>>,
+    cache: HashMap<PathBuf, Option<crate::namespace_walk::KnownPathMetadata>>,
+    parent_probes: Vec<FastRefreshMetadataParentProbe>,
+}
+
+impl LazyWatchMetadataProbe {
+    fn new<'a>(
+        watches: impl Iterator<Item = &'a FastSystemWatchIndex>,
+        extra_paths: &[PathBuf],
+    ) -> Self {
+        let mut grouped = BTreeMap::<PathBuf, BTreeSet<PathBuf>>::new();
+        let mut add_path = |path: PathBuf| {
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                grouped
+                    .entry(parent.to_path_buf())
+                    .or_default()
+                    .insert(path);
+            }
+        };
+        for watch in watches {
+            for path in watch
+                .roots
+                .iter()
+                .chain(watch.directories.iter().map(|entry| &entry.path))
+                .chain(watch.containers.iter().map(|entry| &entry.path))
+                .map(PathBuf::from)
+            {
+                add_path(path);
+            }
+        }
+        for path in extra_paths {
+            add_path(path.clone());
+        }
+        Self {
+            grouped: grouped
+                .into_iter()
+                .map(|(parent, paths)| (parent, paths.into_iter().collect()))
+                .collect(),
+            cache: HashMap::new(),
+            parent_probes: Vec::new(),
+        }
+    }
+
+    fn observe(&mut self, path: &Path) -> Option<crate::namespace_walk::KnownPathMetadata> {
+        if !self.cache.contains_key(path) {
+            let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            else {
+                self.cache.insert(path.to_path_buf(), None);
+                return None;
+            };
+            let paths = self
+                .grouped
+                .get(parent)
+                .cloned()
+                .unwrap_or_else(|| vec![path.to_path_buf()]);
+            let started = std::time::Instant::now();
+            let observations = crate::namespace_walk::probe_known_path_metadata(parent, &paths);
+            let failures = observations.iter().filter(|value| value.is_none()).count();
+            self.parent_probes.push(FastRefreshMetadataParentProbe {
+                parent: parent.to_string_lossy().into_owned(),
+                paths: paths.len(),
+                elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+                failures,
+            });
+            self.cache.extend(paths.into_iter().zip(observations));
+        }
+        self.cache.get(path).and_then(|metadata| *metadata)
+    }
+
+    fn finish(mut self) -> (usize, usize, Vec<FastRefreshMetadataParentProbe>) {
+        let metadata_parents = self.parent_probes.len();
+        let metadata_paths = self.cache.len();
+        self.parent_probes.sort_by(|left, right| {
+            right
+                .elapsed_us
+                .cmp(&left.elapsed_us)
+                .then_with(|| left.parent.cmp(&right.parent))
+        });
+        self.parent_probes.truncate(16);
+        (metadata_parents, metadata_paths, self.parent_probes)
+    }
+}
+
 fn discovery_anchor_paths(storage_root: &Path) -> Vec<PathBuf> {
     vec![
         storage_root.join("games"),
@@ -2089,19 +2247,16 @@ fn capture_discovery_watch(storage_root: &Path) -> Result<FastRefreshDiscoveryWa
     FastRefreshDiscoveryWatch::new(anchors)
 }
 
-fn discovery_watch_unchanged(
+fn discovery_watch_unchanged_lazy(
     watch: &FastRefreshDiscoveryWatch,
-    metadata_cache: &HashMap<PathBuf, Option<crate::namespace_walk::KnownPathMetadata>>,
+    metadata: &mut LazyWatchMetadataProbe,
 ) -> bool {
     watch.anchors.iter().all(|anchor| {
-        let path = Path::new(&anchor.path);
-        let observed = metadata_cache.get(path).and_then(|metadata| *metadata);
+        let observed = metadata.observe(Path::new(&anchor.path));
         if anchor.present {
-            observed.is_some_and(|metadata| {
-                metadata.is_dir && metadata.modified_ns == anchor.modified_ns
-            })
+            observed.is_some_and(|value| value.is_dir && value.modified_ns == anchor.modified_ns)
         } else {
-            observed.is_none_or(|metadata| !metadata.is_dir)
+            observed.is_none_or(|value| !value.is_dir)
         }
     })
 }
