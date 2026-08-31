@@ -471,6 +471,15 @@ impl MetadataStore {
         self.entries.iter().map(|entry| entry.id_name.as_str())
     }
 
+    /// Return the index's decoded-shard digests without reading any payload.
+    /// Catalog checkpoints use this to invalidate only changed metadata
+    /// shards while keeping the runtime reader bounded.
+    pub fn shard_digests(&self) -> impl Iterator<Item = (&str, [u8; 32])> {
+        self.entries
+            .iter()
+            .map(|entry| (entry.id_name.as_str(), entry.digest))
+    }
+
     pub fn shard_digest(&self, id: &str) -> Option<[u8; 32]> {
         self.entry(id).map(|entry| entry.digest)
     }

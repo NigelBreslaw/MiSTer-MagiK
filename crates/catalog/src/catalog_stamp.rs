@@ -8,6 +8,7 @@
 
 use crate::catalog_config::{
     CATALOG_BUILD_VERSION, SCHEMA_VERSION, default_hbmame_sqlite_path, default_mame_sqlite_path,
+    default_runtime_metadata_path,
 };
 use crate::core_audit::CatalogAuditRow;
 use crate::launch_profiles::{
@@ -133,7 +134,30 @@ pub(crate) fn compute_catalog_stamp_for_paths_with_audit(
     }
     append_named_file_signature(&mut lines, "mame-metadata", mame_sqlite_path);
     append_named_file_signature(&mut lines, "hbmame-metadata", hbmame_sqlite_path);
+    append_runtime_metadata_signature(&mut lines, &default_runtime_metadata_path());
     CatalogStamp { lines }
+}
+
+fn append_runtime_metadata_signature(lines: &mut Vec<String>, path: &Path) {
+    let Ok(store) = crate::runtime_metadata::MetadataStore::open(path) else {
+        append_named_file_signature(lines, "runtime-metadata", path);
+        return;
+    };
+    lines.push(format!(
+        "runtime-metadata\t{}\t{}\t{}",
+        path.display(),
+        store.status().file_len,
+        store.status().shard_count
+    ));
+    for (id, digest) in store.shard_digests() {
+        lines.push(format!(
+            "runtime-metadata-shard\t{id}\t{}",
+            digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        ));
+    }
 }
 
 fn append_prepared_collection_root_signatures(lines: &mut Vec<String>, roots: &[String]) {

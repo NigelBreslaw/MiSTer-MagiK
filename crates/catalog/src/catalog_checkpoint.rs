@@ -110,7 +110,10 @@ impl CatalogDriftSummary {
                 "installed-core" => summary.changed_cores += 1,
                 "game-dir" => summary.changed_game_dirs += 1,
                 "core-audit-row" | "core-audit-summary" => summary.changed_audit_rows += 1,
-                "mame-metadata" | "hbmame-metadata" => summary.changed_metadata += 1,
+                "mame-metadata"
+                | "hbmame-metadata"
+                | "runtime-metadata"
+                | "runtime-metadata-shard" => summary.changed_metadata += 1,
                 _ => {}
             }
         }
@@ -206,12 +209,36 @@ pub(crate) fn compute_catalog_discovery_checkpoint_from_facts(
 
     append_named_file_signature(&mut lines, "mame-metadata", mame_sqlite_path);
     append_named_file_signature(&mut lines, "hbmame-metadata", hbmame_sqlite_path);
+    append_runtime_metadata_signature(&mut lines);
     report_checkpoint_timing(
         "compute_total",
         started.elapsed().as_micros() as u64,
         format!("lines={}", lines.len()),
     );
     CatalogDiscoveryCheckpoint { lines }
+}
+
+fn append_runtime_metadata_signature(lines: &mut Vec<String>) {
+    let path = crate::catalog_config::default_runtime_metadata_path();
+    let Ok(store) = crate::runtime_metadata::MetadataStore::open(&path) else {
+        append_named_file_signature(lines, "runtime-metadata", &path);
+        return;
+    };
+    lines.push(format!(
+        "runtime-metadata\t{}\t{}\t{}",
+        path.display(),
+        store.status().file_len,
+        store.status().shard_count
+    ));
+    for (id, digest) in store.shard_digests() {
+        lines.push(format!(
+            "runtime-metadata-shard\t{id}\t{}",
+            digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        ));
+    }
 }
 
 /// Revalidate the retained cold-scan checkpoint without walking every payload.
