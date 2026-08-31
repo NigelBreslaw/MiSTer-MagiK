@@ -49,14 +49,15 @@ mkdir -p "$WORK"
 python3 - "$WORK/mame.sqlite3" "$WORK/hbmame.sqlite3" <<'PY'
 import sqlite3
 import sys
+from scripts.magik_ci.databases import MAME_RUNTIME_SOFTWARE_LISTS
 
 mame = sqlite3.connect(sys.argv[1])
 mame.executescript("""
-CREATE TABLE mame_machines(setname TEXT PRIMARY KEY,parent_setname TEXT,title TEXT NOT NULL,players INTEGER,control_type TEXT,source_version TEXT NOT NULL) WITHOUT ROWID;
+CREATE TABLE mame_machines(setname TEXT PRIMARY KEY,parent_setname TEXT,title TEXT NOT NULL,year TEXT,manufacturer TEXT,players INTEGER,control_type TEXT,source_version TEXT NOT NULL) WITHOUT ROWID;
 WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<50000)
-INSERT INTO mame_machines SELECT 'machine'||i,'','Machine '||i,1+(i%4),'joy','0.288 (mame0288)' FROM seq;
-CREATE TABLE mame_software_items(list_name TEXT NOT NULL,item_name TEXT NOT NULL);
-INSERT INTO mame_software_items VALUES('lynx','one'),('megadriv','one'),('n64','one'),('nes','one'),('saturn','one'),('sms','one'),('snes','one');
+INSERT INTO mame_machines SELECT 'machine'||i,'','Machine '||i,'1990','Fixture Maker',1+(i%4),'joy','0.288 (mame0288)' FROM seq;
+CREATE TABLE mame_software_items(list_name TEXT NOT NULL,software_name TEXT NOT NULL,parent_name TEXT,description TEXT NOT NULL,year TEXT,publisher TEXT,region TEXT,source_version TEXT NOT NULL,PRIMARY KEY(list_name,software_name)) WITHOUT ROWID;
+CREATE TABLE mame_software_hashes(list_name TEXT NOT NULL,software_name TEXT NOT NULL,part_name TEXT,rom_name TEXT,size INTEGER,crc32 TEXT,sha1 TEXT,data_area TEXT,disk_sha1 TEXT);
 CREATE TABLE mister_arcade_source(
   id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL,
   repository TEXT NOT NULL, source_path TEXT NOT NULL, source_sha TEXT NOT NULL,
@@ -64,17 +65,25 @@ CREATE TABLE mister_arcade_source(
   category_count INTEGER NOT NULL
 );
 CREATE TABLE mister_arcade_entries(
-  ordinal INTEGER PRIMARY KEY, raw_json TEXT NOT NULL
+  ordinal INTEGER PRIMARY KEY, setname_key TEXT NOT NULL, mra_name_key TEXT NOT NULL,
+  name TEXT NOT NULL, category TEXT NOT NULL, year INTEGER, manufacturer TEXT NOT NULL,
+  players TEXT NOT NULL, move_inputs TEXT NOT NULL, special_controls TEXT NOT NULL
 );
 """)
+for _, _, source_lists in MAME_RUNTIME_SOFTWARE_LISTS:
+    for list_name in source_lists:
+        mame.execute(
+            "INSERT INTO mame_software_items VALUES(?,?,?,?,?,?,?,?)",
+            (list_name, "fixture", None, "Fixture Game", "1990", "Fixture Maker", "USA", "mame0288"),
+        )
 mame.commit()
 mame.close()
 hbmame = sqlite3.connect(sys.argv[2])
 hbmame.executescript("""
-CREATE TABLE mame_machines(setname TEXT PRIMARY KEY,parent_setname TEXT,title TEXT NOT NULL,players INTEGER,control_type TEXT) WITHOUT ROWID;
+CREATE TABLE mame_machines(setname TEXT PRIMARY KEY,parent_setname TEXT,title TEXT NOT NULL,year TEXT,manufacturer TEXT,players INTEGER,control_type TEXT) WITHOUT ROWID;
 WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<5000)
-INSERT INTO mame_machines SELECT 'machine'||i,'','Machine '||i,1+(i%4),'joy' FROM seq;
-INSERT INTO mame_machines VALUES('marpy','mappy','Marpy',2,'joy');
+INSERT INTO mame_machines SELECT 'machine'||i,'','Machine '||i,'1990','Fixture Maker',1+(i%4),'joy' FROM seq;
+INSERT INTO mame_machines VALUES('marpy','mappy','Marpy','1990','Fixture Maker',2,'joy');
 CREATE TABLE package_padding(data BLOB NOT NULL);
 INSERT INTO package_padding VALUES(zeroblob(1048576));
 """)
@@ -100,8 +109,22 @@ with open(csv_path, "w", newline="", encoding="utf-8") as stream:
 digest = hashlib.sha256(open(csv_path, "rb").read()).hexdigest()
 database = sqlite3.connect(database_path)
 database.executemany(
-    "INSERT INTO mister_arcade_entries(ordinal,raw_json) VALUES(?,?)",
-    [(ordinal, json.dumps(row)) for ordinal, row in enumerate(rows)],
+    "INSERT INTO mister_arcade_entries(ordinal,setname_key,mra_name_key,name,category,year,manufacturer,players,move_inputs,special_controls) VALUES(?,?,?,?,?,?,?,?,?,?)",
+    [
+        (
+            ordinal,
+            f"machine{ordinal}",
+            f"fixture-{ordinal}.mra",
+            row["name"],
+            row["category"],
+            1990,
+            "Fixture Maker",
+            "1",
+            "joystick",
+            "",
+        )
+        for ordinal, row in enumerate(rows)
+    ],
 )
 database.execute(
     "INSERT INTO mister_arcade_source VALUES(1,?,?,?,?,?,?,?)",
@@ -117,6 +140,9 @@ database.execute(
 )
 database.commit()
 PY
+cargo run --manifest-path crates/catalog/Cargo.toml --features builder --bin runtime-metadata-builder -- \
+  --mame "$WORK/mame.sqlite3" --hbmame "$WORK/hbmame.sqlite3" \
+  --output "$WORK/magik-metadata-v1.bin" >/dev/null
 printf 'GPL-3.0-or-later fixture\n' >"$WORK/ArcadeDatabase-LICENSE.txt"
 mkdir -p "$WORK/updater-source/_Arcade"
 printf '<misterromdescription><name>Fixture</name><setname>fixture</setname><rom zip="fixture.zip"/></misterromdescription>\n' \
@@ -152,6 +178,7 @@ scripts/magik-ci ci game-databases build-updater-arcade \
 
 scripts/magik-ci ci game-databases create \
   --mame-sqlite "$WORK/mame.sqlite3" --hbmame-sqlite "$WORK/hbmame.sqlite3" \
+  --runtime-metadata "$WORK/magik-metadata-v1.bin" \
   --release-version 1 --mame-tag mame0288 \
   --mame-sha 1111111111111111111111111111111111111111 \
   --mame-listxml-asset mame0288lx.zip \
@@ -243,8 +270,7 @@ required = {
     main,
     gui,
     manager_path,
-    f"{root}/mame.sqlite3",
-    f"{root}/hbmame.sqlite3",
+    f"{root}/magik-metadata-v1.bin",
     f"{root}/arcade-updater-index-v1.lz4b",
     f"{root}/assets/snes/snes-small-v1.rgb565a",
     f"{root}/assets/ui/settings-v1.rgb565a",
@@ -292,6 +318,8 @@ forbidden = sorted(
     if "mister-magik-agent" in name
     or f"{os.environ['DEV_ROOT_RELATIVE']}/" in name
     or name == os.environ["DEV_MAIN_RELATIVE"]
+    or name.endswith("/mame.sqlite3")
+    or name.endswith("/hbmame.sqlite3")
 )
 if forbidden:
     print(f"package validation failed: development payload present: {', '.join(forbidden)}", file=sys.stderr)
