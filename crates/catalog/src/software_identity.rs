@@ -353,15 +353,20 @@ fn load_runtime_software_metadata() -> Option<MameSoftwareMetadata> {
     let store =
         MetadataStore::open(&crate::catalog_config::default_runtime_metadata_path()).ok()?;
     let mut metadata = MameSoftwareMetadata::default();
-    let mut loaded = false;
     for (platform_id, canonical_list, _) in crate::runtime_metadata::RUNTIME_SOFTWARE_SYSTEMS {
         let Ok(Some(shard)) = store.software_shard(platform_id) else {
-            continue;
+            // A compact file is usable only when every mapped system is
+            // present and decodes cleanly.  During migration this allows the
+            // complete legacy SQLite source to remain the safe fallback.
+            return None;
         };
         append_runtime_software_shard(&mut metadata, canonical_list, shard);
-        loaded = true;
     }
-    loaded.then_some(metadata)
+    for members in metadata.family_members.values_mut() {
+        members.sort();
+        members.dedup();
+    }
+    Some(metadata)
 }
 
 fn append_runtime_software_shard(
@@ -410,10 +415,6 @@ fn append_runtime_software_shard(
             (list_name.to_string(), candidate.sha1),
             candidate.software_names,
         );
-    }
-    for members in metadata.family_members.values_mut() {
-        members.sort();
-        members.dedup();
     }
 }
 
