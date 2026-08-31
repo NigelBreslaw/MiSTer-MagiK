@@ -45,6 +45,7 @@ required-features = ["ui-preview"]
 bytemuck = "1"
 crc32fast = "1"
 flate2 = "1"
+hotpath = { version = "0.24", optional = true }
 libc = "0.2"
 lz4_flex = "0.14.0"
 mister-magik-agent-protocol = { path = "../../crates/agent-protocol" }
@@ -97,6 +98,7 @@ swash = { version = "0.2.7", features = ["scale", "render"] }
 default = []
 asset-tools = ["dep:swash"]
 profile = ["dep:pprof"]
+hotpath = ["dep:hotpath", "hotpath/hotpath-mcp", "mister-magik-catalog/hotpath-mcp"]
 ui = ["dep:slint", "dep:i-slint-core", "dep:mister-magik-ui", "dep:ffmpeg-next", "mister-magik-mister-runtime/ui"]
 ui-device-tests = [
     "ui",

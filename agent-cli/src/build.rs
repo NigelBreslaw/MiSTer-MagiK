@@ -111,7 +111,7 @@ impl BuildSpec {
                 BuildTarget::Runtime,
                 BuildMode::Build,
                 "release-device",
-                vec!["ui", "profile"],
+                vec!["ui", "profile", "hotpath"],
                 UiScope::Production,
                 runtime_artifact("release-device"),
             ),
@@ -135,7 +135,7 @@ impl BuildSpec {
                 BuildTarget::Runtime,
                 BuildMode::Build,
                 "release-device-profile",
-                vec!["ui", "profile"],
+                vec!["ui", "profile", "hotpath"],
                 UiScope::Production,
                 runtime_artifact("release-device-profile"),
             ),
@@ -2010,7 +2010,7 @@ mod tests {
     fn runtime_and_validation_intents_infer_fixed_identity() {
         let runtime = BuildSpec::for_command(BuildCommand::RuntimeDevice).unwrap();
         assert_eq!(runtime.profile, "release-device");
-        assert_eq!(runtime.features, ["ui", "profile"]);
+        assert_eq!(runtime.features, ["ui", "profile", "hotpath"]);
         assert_eq!(runtime.ui_scope, UiScope::Production);
         let ui_tests = BuildSpec::for_command(BuildCommand::RuntimeUiTests).unwrap();
         assert_eq!(ui_tests.profile, "release-device-ui-tests");
@@ -2140,7 +2140,7 @@ mod tests {
     #[test]
     fn canonical_release_keeps_signed_media_manifests_disabled() {
         let runtime = BuildSpec::canonical(UiScope::All);
-        assert_eq!(runtime.features, ["ui", "profile"]);
+        assert_eq!(runtime.features, ["ui", "profile", "hotpath"]);
         assert!(
             !runtime.features.contains(&"signed-media-manifests"),
             "signed manifests require a separately authorized rollout release"
