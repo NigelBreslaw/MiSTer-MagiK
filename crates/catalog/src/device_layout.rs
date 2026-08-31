@@ -16,6 +16,7 @@ pub const DEV_MAIN: &str = DEVELOPMENT_PATHS.main;
 const LIBRARY_SQLITE_ENV: &str = "MISTER_LIBRARY_SQLITE";
 const MAME_SQLITE_ENV: &str = "MISTER_MAME_SQLITE";
 const HBMAME_SQLITE_ENV: &str = "MISTER_HBMAME_SQLITE";
+const RUNTIME_METADATA_ENV: &str = "MISTER_MAGIK_METADATA";
 const PREVIEW_CACHE_DIR_ENV: &str = "MISTER_PREVIEW_CACHE_DIR";
 const MEDIA_ASSET_DIR_ENV: &str = "MISTER_MEDIA_ASSET_DIR";
 const USER_STATE_SQLITE_ENV: &str = "MISTER_USER_STATE_SQLITE";
@@ -135,6 +136,7 @@ pub struct CatalogPathOverrides {
     library_sqlite: Option<PathBuf>,
     mame_sqlite: Option<PathBuf>,
     hbmame_sqlite: Option<PathBuf>,
+    runtime_metadata: Option<PathBuf>,
     preview_cache_dir: Option<PathBuf>,
     media_asset_dir: Option<PathBuf>,
     user_state_sqlite: Option<PathBuf>,
@@ -149,6 +151,7 @@ impl CatalogPathOverrides {
             library_sqlite: std::env::var_os(LIBRARY_SQLITE_ENV).map(PathBuf::from),
             mame_sqlite: std::env::var_os(MAME_SQLITE_ENV).map(PathBuf::from),
             hbmame_sqlite: std::env::var_os(HBMAME_SQLITE_ENV).map(PathBuf::from),
+            runtime_metadata: std::env::var_os(RUNTIME_METADATA_ENV).map(PathBuf::from),
             preview_cache_dir: std::env::var_os(PREVIEW_CACHE_DIR_ENV).map(PathBuf::from),
             media_asset_dir: std::env::var_os(MEDIA_ASSET_DIR_ENV).map(PathBuf::from),
             user_state_sqlite: std::env::var_os(USER_STATE_SQLITE_ENV).map(PathBuf::from),
@@ -164,6 +167,7 @@ impl CatalogPathOverrides {
             library_sqlite: get(LIBRARY_SQLITE_ENV).map(Path::to_path_buf),
             mame_sqlite: get(MAME_SQLITE_ENV).map(Path::to_path_buf),
             hbmame_sqlite: get(HBMAME_SQLITE_ENV).map(Path::to_path_buf),
+            runtime_metadata: get(RUNTIME_METADATA_ENV).map(Path::to_path_buf),
             preview_cache_dir: get(PREVIEW_CACHE_DIR_ENV).map(Path::to_path_buf),
             media_asset_dir: get(MEDIA_ASSET_DIR_ENV).map(Path::to_path_buf),
             user_state_sqlite: get(USER_STATE_SQLITE_ENV).map(Path::to_path_buf),
@@ -179,6 +183,7 @@ pub struct CatalogPaths {
     library_sqlite: PathBuf,
     mame_sqlite: PathBuf,
     hbmame_sqlite: PathBuf,
+    runtime_metadata: PathBuf,
     arcade_updater_index: PathBuf,
     preview_cache_dir: PathBuf,
     media_asset_dir: PathBuf,
@@ -208,6 +213,9 @@ impl CatalogPaths {
             hbmame_sqlite: overrides
                 .hbmame_sqlite
                 .unwrap_or_else(|| device.app_path("hbmame.sqlite3")),
+            runtime_metadata: overrides
+                .runtime_metadata
+                .unwrap_or_else(|| device.app_path(crate::runtime_metadata::FILE_NAME)),
             arcade_updater_index: device.app_path(crate::arcade_updater_index::FILE_NAME),
             preview_cache_dir: overrides
                 .preview_cache_dir
@@ -240,6 +248,10 @@ impl CatalogPaths {
 
     pub fn hbmame_sqlite(&self) -> &Path {
         &self.hbmame_sqlite
+    }
+
+    pub fn runtime_metadata(&self) -> &Path {
+        &self.runtime_metadata
     }
 
     pub fn arcade_updater_index(&self) -> &Path {

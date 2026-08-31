@@ -131,6 +131,7 @@ pub const DEFAULT_ROOTS: &[&str] = &[
 pub const DEFAULT_SQLITE_PATH: &str = "/media/fat/mister-magik/library.sqlite3";
 pub const DEFAULT_MAME_SQLITE_PATH: &str = "/media/fat/mister-magik/mame.sqlite3";
 pub const DEFAULT_HBMAME_SQLITE_PATH: &str = "/media/fat/mister-magik/hbmame.sqlite3";
+pub const DEFAULT_RUNTIME_METADATA_PATH: &str = "/media/fat/mister-magik/magik-metadata-v1.bin";
 pub const DEFAULT_SQLITE_BUILD_DIR: &str = "/tmp/mister-magik/sqlite-build";
 pub const DEFAULT_SHARDED_CATALOG_DIR: &str = "/media/fat/mister-magik/catalog-fast-v1";
 pub const DEFAULT_USER_STATE_PATH: &str = "/media/fat/mister-magik/user-state.sqlite3";
@@ -156,6 +157,15 @@ pub fn default_hbmame_sqlite_path() -> PathBuf {
     configured_path(
         std::env::var("MISTER_HBMAME_SQLITE").ok().as_deref(),
         "hbmame.sqlite3",
+    )
+}
+
+/// Location of the compact runtime metadata container.  The legacy SQLite
+/// paths remain available to builders and migration/parity checks.
+pub fn default_runtime_metadata_path() -> PathBuf {
+    configured_path(
+        std::env::var("MISTER_MAGIK_METADATA").ok().as_deref(),
+        crate::runtime_metadata::FILE_NAME,
     )
 }
 

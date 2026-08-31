@@ -7,6 +7,7 @@ use crate::game_discovery::{DiscoverySourceKind, GameDiscovery};
 use crate::library_db;
 use crate::media_identity::{ScreenshotAssetId, screenshot_pack_id_from_filename};
 use crate::preview_worker;
+use crate::runtime_metadata::{ArcadeShard, MetadataStore, SoftwareShard};
 use rusqlite::{Connection, params, params_from_iter};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
@@ -240,6 +241,9 @@ fn valid_player_count(value: i64) -> Option<u8> {
 }
 
 pub(crate) fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
+    if let Some(metadata) = load_runtime_software_metadata() {
+        return metadata;
+    }
     let Ok(conn) = library_db::open_sqlite_read_only(path) else {
         return MameSoftwareMetadata::default();
     };
@@ -342,11 +346,85 @@ pub(crate) fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
     metadata
 }
 
+/// Load the compact runtime shards and present them through the existing
+/// identity model.  This adapter deliberately keeps the resolver semantics in
+/// one place while replacing SQLite's storage and lookup path.
+fn load_runtime_software_metadata() -> Option<MameSoftwareMetadata> {
+    let store =
+        MetadataStore::open(&crate::catalog_config::default_runtime_metadata_path()).ok()?;
+    let mut metadata = MameSoftwareMetadata::default();
+    let mut loaded = false;
+    for (platform_id, canonical_list, _) in crate::runtime_metadata::RUNTIME_SOFTWARE_SYSTEMS {
+        let Ok(Some(shard)) = store.software_shard(platform_id) else {
+            continue;
+        };
+        append_runtime_software_shard(&mut metadata, canonical_list, shard);
+        loaded = true;
+    }
+    loaded.then_some(metadata)
+}
+
+fn append_runtime_software_shard(
+    metadata: &mut MameSoftwareMetadata,
+    list_name: &str,
+    shard: SoftwareShard,
+) {
+    for item in shard.items {
+        let name = item.name.clone();
+        let title_key = library_db::canonical_variant_title(&item.description);
+        metadata
+            .title_index
+            .entry((list_name.to_string(), title_key))
+            .or_default()
+            .push(name.clone());
+        let family = item
+            .parent_name
+            .as_deref()
+            .filter(|parent| !parent.trim().is_empty())
+            .unwrap_or(&name)
+            .to_string();
+        metadata
+            .family_members
+            .entry((list_name.to_string(), family))
+            .or_default()
+            .push(name.clone());
+        metadata.items.insert(
+            (list_name.to_string(), name),
+            MameSoftwareItemMetadata {
+                parent_name: item.parent_name,
+                description: item.description,
+                year: item.year,
+                publisher: item.publisher,
+                region: item.region,
+            },
+        );
+    }
+    for candidate in shard.hash_candidates {
+        metadata.hash_index.insert(
+            (list_name.to_string(), candidate.size, candidate.crc32),
+            candidate.software_names,
+        );
+    }
+    for candidate in shard.disk_candidates {
+        metadata.disk_index.insert(
+            (list_name.to_string(), candidate.sha1),
+            candidate.software_names,
+        );
+    }
+    for members in metadata.family_members.values_mut() {
+        members.sort();
+        members.dedup();
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn load_arcade_machine_metadata(
     mame_path: &Path,
     hbmame_path: &Path,
 ) -> ArcadeMachineMetadata {
+    if let Some(metadata) = load_runtime_arcade_metadata() {
+        return metadata;
+    }
     ArcadeMachineMetadata {
         mame: load_mame_machine_metadata(mame_path),
         hbmame: load_mame_machine_metadata(hbmame_path),
@@ -359,6 +437,9 @@ pub(crate) fn load_arcade_machine_metadata_for_setnames(
     hbmame_path: &Path,
     setnames: &HashSet<String>,
 ) -> ArcadeMachineMetadata {
+    if let Some(metadata) = load_runtime_arcade_metadata() {
+        return filter_runtime_arcade_metadata(metadata, setnames, &HashSet::new());
+    }
     let total_started = Instant::now();
     let mame_started = Instant::now();
     let mame = load_mame_machine_metadata_for_setnames(mame_path, setnames);
@@ -394,6 +475,9 @@ pub(crate) fn load_arcade_machine_metadata_for_fallbacks(
     setnames: &HashSet<String>,
     mra_names: &HashSet<String>,
 ) -> ArcadeMachineMetadata {
+    if let Some(metadata) = load_runtime_arcade_metadata() {
+        return filter_runtime_arcade_metadata(metadata, setnames, mra_names);
+    }
     let total_started = Instant::now();
     let mame_started = Instant::now();
     let mame = load_mame_machine_metadata_for_setnames(mame_path, setnames);
@@ -421,6 +505,115 @@ pub(crate) fn load_arcade_machine_metadata_for_fallbacks(
         mame,
         hbmame,
         ..mister
+    }
+}
+
+fn load_runtime_arcade_metadata() -> Option<ArcadeMachineMetadata> {
+    let store =
+        MetadataStore::open(&crate::catalog_config::default_runtime_metadata_path()).ok()?;
+    let shard = store.arcade_shard().ok()??;
+    Some(arcade_metadata_from_runtime_shard(shard))
+}
+
+fn arcade_metadata_from_runtime_shard(shard: ArcadeShard) -> ArcadeMachineMetadata {
+    ArcadeMachineMetadata {
+        mame: shard
+            .mame
+            .into_iter()
+            .map(|row| {
+                (
+                    row.setname,
+                    MameMachineMetadata {
+                        parent_setname: row.parent_setname,
+                        title: row.title,
+                        year: row.year,
+                        manufacturer: row.manufacturer,
+                        players: row.players,
+                        control: row.control,
+                    },
+                )
+            })
+            .collect(),
+        hbmame: shard
+            .hbmame
+            .into_iter()
+            .map(|row| {
+                (
+                    row.setname,
+                    MameMachineMetadata {
+                        parent_setname: row.parent_setname,
+                        title: row.title,
+                        year: row.year,
+                        manufacturer: row.manufacturer,
+                        players: row.players,
+                        control: row.control,
+                    },
+                )
+            })
+            .collect(),
+        mister_by_setname: shard
+            .mister
+            .iter()
+            .map(|row| {
+                (
+                    row.setname_key.clone(),
+                    MisterArcadeMetadata {
+                        title: row.title.clone(),
+                        category: row.category.clone(),
+                        year: row.year,
+                        manufacturer: row.manufacturer.clone(),
+                        players: row.players,
+                        control: row.control.clone(),
+                    },
+                )
+            })
+            .collect(),
+        mister_by_mra_name: shard
+            .mister
+            .into_iter()
+            .map(|row| {
+                (
+                    row.mra_name_key,
+                    MisterArcadeMetadata {
+                        title: row.title,
+                        category: row.category,
+                        year: row.year,
+                        manufacturer: row.manufacturer,
+                        players: row.players,
+                        control: row.control,
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
+fn filter_runtime_arcade_metadata(
+    metadata: ArcadeMachineMetadata,
+    setnames: &HashSet<String>,
+    mra_names: &HashSet<String>,
+) -> ArcadeMachineMetadata {
+    ArcadeMachineMetadata {
+        mame: metadata
+            .mame
+            .into_iter()
+            .filter(|(key, _)| setnames.contains(key))
+            .collect(),
+        hbmame: metadata
+            .hbmame
+            .into_iter()
+            .filter(|(key, _)| setnames.contains(key))
+            .collect(),
+        mister_by_setname: metadata
+            .mister_by_setname
+            .into_iter()
+            .filter(|(key, _)| setnames.contains(key))
+            .collect(),
+        mister_by_mra_name: metadata
+            .mister_by_mra_name
+            .into_iter()
+            .filter(|(key, _)| mra_names.contains(key))
+            .collect(),
     }
 }
 
