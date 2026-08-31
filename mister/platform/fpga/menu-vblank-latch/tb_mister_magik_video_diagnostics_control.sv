@@ -214,27 +214,19 @@ module tb_mister_magik_video_diagnostics_control;
 	endtask
 
 	initial begin
-		reg [3:0] first_sequence;
-		reg [3:0] second_sequence;
-		integer qualified_attempt;
-
-		// The observer publishes while reset is held and does not claim a
-		// qualified record before synchronized reset-low qualification.
+		// A one-shot terminal record is deliberately unavailable while reset is
+		// held and no stall or observer fault has been classified.
 		repeat(20) @(posedge clk_100m);
-		read_record();
-		if(!(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_RESET_LEVEL))
-			fail("reset level not reported");
-		if(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID)
-			fail("startup record incorrectly valid");
-		first_sequence = (words[MAGIK_SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_WORD] >>
-			MAGIK_SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_BIT) &
-			MAGIK_SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_MASK;
-		read_record();
-		second_sequence = (words[MAGIK_SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_WORD] >>
-			MAGIK_SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_BIT) &
-			MAGIK_SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_MASK;
-		if(second_sequence == first_sequence)
-			fail("publication heartbeat did not advance during reset");
+		@(negedge clk_sys);
+		io_uio = 1'b1;
+		io_strobe = 1'b1;
+		io_din = {8'd0, MAGIK_UIO_GET_SCALER_FETCH_LIVENESS_STATE};
+		#1;
+		if(response_valid)
+			fail("terminal record responded before a terminal event");
+		@(posedge clk_sys);
+		io_uio = 1'b0;
+		io_strobe = 1'b0;
 
 		// Accepted obligations and return phase survive reset. The final beat of
 		// the first burst simultaneously accepts a second burst.
@@ -249,17 +241,10 @@ module tb_mister_magik_video_diagnostics_control;
 		@(negedge scaler_clk);
 		drive_scheduler_pattern = 1'b1;
 
-		// Leave the qualified, empty boundary idle long enough to freeze the
-		// exact no-request observation. Consume a bounded pending publication:
-		// its acknowledgement lets the source publish the already-frozen tuple.
-		repeat(48) @(posedge clk_100m);
-		for(qualified_attempt = 0;
-			qualified_attempt < 4 &&
-			!(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID &&
-				words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN &&
-				words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID);
-			qualified_attempt = qualified_attempt + 1)
-			read_record();
+		// Leave the qualified, empty boundary idle long enough to freeze and CRC
+		// the exact no-request terminal observation.
+		repeat(80) @(posedge clk_100m);
+		read_record();
 		if(!(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID))
 			fail("qualified record not valid");
 		if(!(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN))
@@ -276,29 +261,24 @@ module tb_mister_magik_video_diagnostics_control;
 			index = index + 1)
 			prior_words[index] = words[index];
 
-		// A later good burst changes rolling progress but cannot overwrite the
-		// frozen cause, phase, FIFO depth, address fold, or temporal identity.
+		// A later good burst cannot overwrite any part of the terminal record.
 		drive_accept(28'h0000080);
 		drive_return_beats(128);
 		read_record();
-		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD] !=
-				prior_words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD])
-			fail("sticky first-stall evidence changed");
-		if((words[MAGIK_SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_WORD] & 16'hf000) ==
-				(prior_words[MAGIK_SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_WORD] & 16'hf000))
-			fail("publication sequence stopped after frozen event");
 		for(index = 0; index < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS;
 			index = index + 1)
-			prior_words[index] = words[index];
+			if(words[index] != prior_words[index])
+				fail("terminal record changed after later progress");
 
 		// Reset remains observable but cannot erase either part of the frozen
 		// identity/state snapshot now sharing the stopped watchdog bank.
 		reset_req = 1'b1;
 		repeat(6) @(posedge clk_100m);
 		read_record();
-		if(words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD] !=
-				prior_words[MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD])
-			fail("reset erased sticky first-stall evidence");
+		for(index = 0; index < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS;
+			index = index + 1)
+			if(words[index] != prior_words[index])
+				fail("reset changed the terminal record");
 		reset_req = 1'b0;
 		repeat(6) @(posedge clk_100m);
 

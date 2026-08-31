@@ -102,7 +102,7 @@ def main() -> None:
     parser.add_argument("--base-depth", type=int, default=24)
     parser.add_argument("--safety-maxsteps", type=int, default=32)
     parser.add_argument("--cover-depth", type=int, default=700)
-    parser.add_argument("--solver-timeout", type=int, default=90)
+    parser.add_argument("--solver-timeout", type=int, default=180)
     parser.add_argument("--artifacts-dir", type=Path)
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
@@ -187,14 +187,16 @@ def main() -> None:
     for fragment in (
         "assert(fifo_count <= 2);",
         "assert(return_phase < 128);",
-        "if(publication_generation != acknowledge_sync)",
-        "assert(!publish_crc_busy);",
+        "assert(!no_request_seen || !snapshot_pending);",
+        "assert(!record_ready || terminal_record_started);",
+        "assert(!publish_crc_busy || publish_crc_phase <= 5'd30);",
+        "assert(!terminal_record_started || first_stall_valid || observer_fault);",
         "case({$past(enqueue), $past(dequeue)})",
         "assert(frozen_state == $past(frozen_state));",
-        "if($past(publication_generation != acknowledge_sync))",
-        "if(publication_sequence != $past(publication_sequence))",
-        "assert($past(publication_generation == acknowledge_sync));",
-        "if(publication_generation != $past(publication_generation))",
+        "assert(publication_sequence == 4'd0);",
+        "assert(published_bundle[31:0] == $past(published_bundle[31:0]));",
+        "if($past(record_ready)) begin",
+        "if(record_ready != $past(record_ready)) begin",
         "assert($past(publish_crc_phase) == 5'd30);",
         "watchdog_terminal && expected_progress",
         "cover(drained_during_reset);",

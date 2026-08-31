@@ -5,22 +5,19 @@
 `default_nettype none
 
 // Source-clock evidence collector and closed-loop multi-cycle-path snapshot.
-// The live bus is consumed only on scaler_clk. Every source-clock event in one
-// complete scheduler revolution is ORed directly into evidence_hold before
-// response_toggle crosses to the destination. evidence_hold then remains
-// immutable until another request, so the destination never samples a changing
-// asynchronous multi-bit value. Failure to complete a revolution is detected
-// by the existing destination-domain watchdog and fails closed.
+// Capture aligns to one complete HSYNC-to-HSYNC scheduler revolution. Six held
+// bits encode the read/skip outcome plus the three independent sidebands and
+// expand losslessly to the established 16-bit schema record. The held code is
+// immutable before the response handoff crosses to the destination.
 module mister_magik_scaler_scheduler_snapshot (
 	input  wire        scaler_clk,
 	input  wire [15:0] live_state,
 	input  wire        request_toggle,
-	output reg         response_toggle = 1'b0,
-	(* keep *) output wire [15:0] evidence_hold
+	output wire        response_toggle,
+	output wire [5:0]  compact_hold,
+	output wire [15:0] evidence_hold
 `ifdef FORMAL
 	,output wire        formal_capture_active
-	,output wire [15:0] formal_accumulated_evidence
-	,output wire [15:0] formal_event_evidence
 `endif
 );
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
@@ -28,39 +25,66 @@ module mister_magik_scaler_scheduler_snapshot (
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg request_sync = 1'b0;
 	reg capture_active = 1'b0;
+	reg window_started = 1'b0;
 	reg [1:0] previous_output_state = 2'd0;
 	reg previous_vertical_pixel_enable = 1'b0;
 	reg previous_vertical_carry = 1'b0;
-	(* preserve, dont_replicate *) reg [14:0] evidence_bits = 15'd0;
+	(* preserve, dont_replicate *) reg response_state = 1'b0;
+	(* preserve, dont_replicate *) reg response_handoff_bit = 1'b0;
+	(* preserve, dont_replicate *) reg [5:0] compact_evidence = 6'b000110;
 
 	wire [1:0] output_state = live_state[1:0];
 	wire hsync_entry = previous_output_state != 2'd1 && output_state == 2'd1;
 	wire left_hsync = previous_output_state == 2'd1 && output_state != 2'd1;
-	wire [15:0] event_evidence = {
-		live_state[12],
-		(output_state == 2'd3),
-		(previous_output_state == 2'd2 && output_state == 2'd3),
-		(output_state == 2'd2 && live_state[8]),
-		(output_state == 2'd2),
-		(left_hsync && output_state == 2'd0 && !previous_vertical_carry),
-		(left_hsync && output_state == 2'd0 && !previous_vertical_pixel_enable),
-		(left_hsync && output_state == 2'd0),
-		(left_hsync && output_state == 2'd2),
-		left_hsync,
-		(previous_output_state == 2'd1 && output_state == 2'd1),
-		(output_state == 2'd1),
-		(output_state == 2'd0 && live_state[4]),
-		live_state[3],
-		live_state[2],
-		1'b0
-	};
-	wire [14:0] next_evidence = evidence_bits | event_evidence[15:1];
-	assign evidence_hold = {evidence_bits, 1'b1};
+	reg [5:0] next_compact_evidence;
+	always @(*) begin
+		next_compact_evidence = compact_evidence;
+		next_compact_evidence[3] = compact_evidence[3] || live_state[2];
+		next_compact_evidence[4] = compact_evidence[4] ||
+			(previous_output_state == 2'd1 && output_state == 2'd1);
+		next_compact_evidence[5] = compact_evidence[5] || live_state[12];
+		if(previous_output_state == 2'd2 && output_state == 2'd3)
+			next_compact_evidence[2:0] = 3'd5;
+		else if(output_state == 2'd2 && live_state[8])
+			next_compact_evidence[2:0] = 3'd4;
+		else if(output_state == 2'd2)
+			next_compact_evidence[2:0] = 3'd3;
+		else if(left_hsync && output_state == 2'd0) begin
+			case({!previous_vertical_carry, !previous_vertical_pixel_enable})
+				2'b01: next_compact_evidence[2:0] = 3'd0;
+				2'b10: next_compact_evidence[2:0] = 3'd1;
+				2'b11: next_compact_evidence[2:0] = 3'd2;
+				default: next_compact_evidence[2:0] = 3'd6;
+			endcase
+		end
+	end
+
+	function automatic [15:0] expand_compact_evidence;
+		input [5:0] compact;
+		reg [15:0] value;
+		begin
+			case(compact[2:0])
+				3'd0: value = 16'h035d;
+				3'd1: value = 16'h055d;
+				3'd2: value = 16'h075d;
+				3'd3: value = 16'h08dd;
+				3'd4: value = 16'h18dd;
+				3'd5: value = 16'h78dd;
+				default: value = 16'd0;
+			endcase
+			value[1] = value[1] || compact[3];
+			value[5] = value[5] || compact[4];
+			value[15] = value[15] || compact[5];
+			expand_compact_evidence = value;
+		end
+	endfunction
+
+	assign response_toggle = response_handoff_bit;
+	assign compact_hold = compact_evidence;
+	assign evidence_hold = expand_compact_evidence(compact_evidence);
 
 `ifdef FORMAL
 	assign formal_capture_active = capture_active;
-	assign formal_accumulated_evidence = evidence_hold;
-	assign formal_event_evidence = event_evidence;
 `endif
 
 	always @(posedge scaler_clk) begin
@@ -70,29 +94,41 @@ module mister_magik_scaler_scheduler_snapshot (
 		previous_vertical_pixel_enable <= live_state[5];
 		previous_vertical_carry <= live_state[6];
 
-		if(request_sync == response_toggle) begin
+		if(request_sync == response_state) begin
 			capture_active <= 1'b0;
+			window_started <= 1'b0;
 		end
 		else if(!capture_active) begin
-			// Bit zero is a constant completed-window marker and therefore is not
-			// a physical CDC payload register. Accumulate only bits 15:1.
 			capture_active <= 1'b1;
-			evidence_bits <= event_evidence[15:1];
+			window_started <= 1'b0;
 		end
-		else if(hsync_entry && evidence_bits[3]) begin
-			evidence_bits <= next_evidence;
-			response_toggle <= request_sync;
+		else if(!window_started) begin
+			if(hsync_entry) begin
+				window_started <= 1'b1;
+				compact_evidence <= {
+					live_state[12],
+					1'b0,
+					live_state[2],
+					3'd6
+				};
+			end
+		end
+		else if(hsync_entry) begin
+			compact_evidence <= next_compact_evidence;
+			response_state <= request_sync;
+			response_handoff_bit <= request_sync;
 			capture_active <= 1'b0;
+			window_started <= 1'b0;
 		end
 		else begin
-			evidence_bits <= next_evidence;
+			compact_evidence <= next_compact_evidence;
 		end
 	end
 endmodule
 
 // Replacement-only passive observer at the external scaler Avalon boundary.
 // reset_req is observed as data: it never clears accepted return obligations,
-// telemetry, or the publication handshake. A no-request timeout freezes the
+// telemetry, or the terminal record. A no-request timeout freezes the
 // packed output-scheduler gates supplied by ascal. No observer output drives
 // production.
 module mister_magik_scaler_fetch_liveness_state #(
@@ -119,9 +155,11 @@ module mister_magik_scaler_fetch_liveness_state #(
 	,output wire [6:0] formal_return_phase
 	,output wire formal_first_stall_valid
 	,output wire formal_observer_fault
+	,output wire formal_no_request_seen
+	,output wire formal_snapshot_pending
+	,output wire formal_terminal_record_started
 	,output wire [15:0] formal_frozen_state
-	,output wire formal_publication_generation
-	,output wire formal_acknowledge_sync
+	,output wire formal_record_ready
 	,output wire [47:0] formal_published_bundle
 	,output wire [3:0] formal_publication_sequence
 	,output wire formal_publish_crc_busy
@@ -168,21 +206,26 @@ module mister_magik_scaler_fetch_liveness_state #(
 	reg snapshot_pending = 1'b0;
 	reg snapshot_invalidated = 1'b0;
 	wire snapshot_response_toggle;
+	wire [5:0] snapshot_compact_hold;
 	wire [15:0] snapshot_evidence_hold;
+	(* preserve, dont_replicate *) reg [5:0] scheduler_snapshot_capture = 6'd0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg snapshot_response_meta = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg snapshot_response_sync = 1'b0;
 
-	// Sticky first-stall/fault evidence. Rolling live state and publication keep
-	// advancing after this bank freezes.
+	// Sticky first-stall/fault evidence. The first terminal record is immutable
+	// and becomes command-visible only after its CRC is complete.
 	reg reset_ambiguity = 1'b0;
 	reg reset_since_normal_liveness = 1'b0;
 	reg no_request_seen = 1'b0;
-	// One tagged 16-bit bank stores either Avalon fault context or a completed
-	// scheduler snapshot. no_request_seen selects the interpretation.
-	(* preserve, dont_replicate *) reg [15:0] frozen_state_bits = 16'd0;
-	wire [2:0] frozen_cause = frozen_state_bits[2:0];
+	// Scheduler evidence and Avalon terminal context use separate immutable
+	// banks. This keeps the asynchronous payload destination single-source and
+	// leaves all terminal selection in the local clock domain.
+	reg [1:0] avalon_terminal_fifo_depth = 2'd0;
+	reg [6:0] avalon_terminal_return_phase = 7'd0;
+	reg [2:0] avalon_terminal_cause = 3'd0;
+	wire [2:0] frozen_cause = avalon_terminal_cause;
 	wire observer_fault = !no_request_seen &&
 		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT;
 	wire first_stall_valid = no_request_seen ||
@@ -198,12 +241,9 @@ module mister_magik_scaler_fetch_liveness_state #(
 		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_RETURN_INCOMPLETE;
 	wire request_cancelled = !no_request_seen &&
 		frozen_cause == MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED;
-	// The destination acknowledges only after a complete command. The source
-	// publication bank remains immutable until that acknowledgement returns.
-	reg [15:0] published_flags = 16'd0;
-	// The tagged frozen bank feeds this sole immutable publication-state bank.
-	(* preserve, dont_replicate *) reg [15:0] published_state = 16'd0;
-	(* preserve, dont_replicate *) reg publication_generation = 1'b0;
+	reg terminal_reset_level = 1'b1;
+	reg terminal_record_started = 1'b0;
+	(* preserve, dont_replicate *) reg record_ready = 1'b0;
 	// The schema is constant-folded into the generated seed; capture folds
 	// flags[15], then phases 0..30 fold the remaining 31 bits. A separate busy
 	// ownership bit makes completed-bank immutability a local invariant.
@@ -213,14 +253,9 @@ module mister_magik_scaler_fetch_liveness_state #(
 	wire [3:0] publish_crc_index = 4'd14 - publish_crc_phase[3:0];
 
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
-	reg acknowledge_meta = 1'b0;
+	reg record_ready_meta = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
-	reg acknowledge_sync = 1'b0;
-	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
-	reg generation_meta = 1'b0;
-	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
-	reg generation_sync = 1'b0;
-	reg acknowledged_generation = 1'b0;
+	reg record_ready_sync = 1'b0;
 
 	reg has_command = 1'b0;
 	reg command_selected = 1'b0;
@@ -261,29 +296,79 @@ module mister_magik_scaler_fetch_liveness_state #(
 		bad_burst_event || fifo_overflow_event || unexpected_return_event ||
 		snapshot_timeout_event;
 
+	function automatic [15:0] expand_scheduler_snapshot;
+		input [5:0] compact;
+		reg [15:0] value;
+		begin
+			case(compact[2:0])
+				3'd0: value = 16'h035d;
+				3'd1: value = 16'h055d;
+				3'd2: value = 16'h075d;
+				3'd3: value = 16'h08dd;
+				3'd4: value = 16'h18dd;
+				3'd5: value = 16'h78dd;
+				default: value = 16'd0;
+			endcase
+			value[1] = value[1] || compact[3];
+			value[5] = value[5] || compact[4];
+			value[15] = value[15] || compact[5];
+			expand_scheduler_snapshot = value;
+		end
+	endfunction
+
 	mister_magik_scaler_scheduler_snapshot scheduler_snapshot (
 		.scaler_clk(scaler_clk),
 		.live_state(scaler_diag_state),
 		.request_toggle(snapshot_request_toggle),
 		.response_toggle(snapshot_response_toggle),
+		.compact_hold(snapshot_compact_hold),
 		.evidence_hold(snapshot_evidence_hold)
 	);
+
+	wire [15:0] scheduler_terminal_state =
+		expand_scheduler_snapshot(scheduler_snapshot_capture);
+	wire [15:0] avalon_terminal_state = {
+		4'd0,
+		avalon_terminal_fifo_depth,
+		avalon_terminal_return_phase,
+		avalon_terminal_cause
+	};
+	wire [15:0] frozen_state = no_request_seen ?
+		scheduler_terminal_state : avalon_terminal_state;
+	wire terminal_valid = first_stall_valid || observer_fault;
+	wire [15:0] terminal_flags = {
+		4'd0,
+		request_cancelled,
+		return_incomplete,
+		first_return_missing,
+		accept_blocked_seen,
+		no_request_seen,
+		reset_since_normal_liveness,
+		terminal_reset_level,
+		reset_ambiguity,
+		observer_fault,
+		first_stall_valid,
+		normal_liveness_seen,
+		ever_qualified
+	};
 
 `ifdef FORMAL
 	assign formal_fifo_count = fifo_count;
 	assign formal_return_phase = return_phase;
 	assign formal_first_stall_valid = first_stall_valid;
 	assign formal_observer_fault = observer_fault;
+	assign formal_no_request_seen = no_request_seen;
+	assign formal_snapshot_pending = snapshot_pending;
+	assign formal_terminal_record_started = terminal_record_started;
 	assign formal_frozen_state = frozen_state;
-	assign formal_publication_generation = publication_generation;
-	assign formal_acknowledge_sync = acknowledge_sync;
-	assign formal_publication_sequence = published_flags[15:12];
+	assign formal_record_ready = record_ready;
+	assign formal_publication_sequence = 4'd0;
 	assign formal_publish_crc_busy = publish_crc_busy;
 	assign formal_publish_crc_phase = publish_crc_phase;
 	assign formal_published_bundle = {
 		publish_crc_work,
-		published_state,
-		published_flags
+		frozen_state,
+		terminal_flags
 	};
 	assign formal_enqueue = enqueue;
 	assign formal_dequeue = dequeue;
@@ -294,29 +379,11 @@ module mister_magik_scaler_fetch_liveness_state #(
 	assign formal_request_cancel_event = request_cancel_event;
 `endif
 
-	wire [15:0] live_flags = {
-		4'd0,
-		request_cancelled,
-		return_incomplete,
-		first_return_missing,
-		accept_blocked_seen,
-		no_request_seen,
-		reset_since_normal_liveness,
-		reset_sync,
-		reset_ambiguity,
-		observer_fault,
-		first_stall_valid,
-		normal_liveness_seen,
-		ever_qualified
-	};
-	wire [15:0] frozen_state = frozen_state_bits;
-
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
-	wire publication_available = generation_sync != acknowledged_generation;
 	wire selected_start =
 		io_din[7:0] == MAGIK_UIO_GET_SCALER_FETCH_LIVENESS_STATE &&
-		publication_available;
+		record_ready_sync;
 	wire selected_command = command_selected;
 
 	assign response_valid =
@@ -336,11 +403,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 		end
 	endfunction
 
-	wire [15:0] next_published_flags = {
-		published_flags[15:12] + 1'd1,
-		live_flags[11:0]
-	};
-
 	always @(posedge clk_100m) begin : observe_fetch
 		reg [2:0] timeout_cause;
 		reset_meta <= reset_req;
@@ -348,10 +410,12 @@ module mister_magik_scaler_fetch_liveness_state #(
 		reset_sync_d <= reset_sync;
 		snapshot_response_meta <= snapshot_response_toggle;
 		snapshot_response_sync <= snapshot_response_meta;
-		acknowledge_meta <= acknowledged_generation;
-		acknowledge_sync <= acknowledge_meta;
+		if(snapshot_pending)
+			scheduler_snapshot_capture <= snapshot_compact_hold;
+		if(!terminal_valid)
+			terminal_reset_level <= reset_sync;
 
-		if(reset_sync && !reset_sync_d && normal_liveness_seen)
+		if(!terminal_valid && reset_sync && !reset_sync_d && normal_liveness_seen)
 			reset_since_normal_liveness <= 1'b1;
 
 		if(reset_sync) begin
@@ -362,12 +426,14 @@ module mister_magik_scaler_fetch_liveness_state #(
 				snapshot_invalidated <= 1'b1;
 		end
 		else if(!reset_qualified) begin
-			if(reset_low_count + 1'd1 >= RESET_QUALIFY_LIMIT) begin
-				reset_low_count <= RESET_QUALIFY_LIMIT;
-				ever_qualified <= 1'b1;
+			if(!terminal_valid) begin
+				if(reset_low_count + 1'd1 >= RESET_QUALIFY_LIMIT) begin
+					reset_low_count <= RESET_QUALIFY_LIMIT;
+					ever_qualified <= 1'b1;
+				end
+				else
+					reset_low_count <= reset_low_count + 1'd1;
 			end
-			else
-				reset_low_count <= reset_low_count + 1'd1;
 			progress_watchdog <= 24'd0;
 		end
 		else begin
@@ -404,7 +470,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 		if(return_has_entry) begin
 			if(return_phase == 7'd127) begin
 				return_phase <= 7'd0;
-				normal_liveness_seen <= 1'b1;
+				if(!terminal_valid)
+					normal_liveness_seen <= 1'b1;
 			end
 			else
 				return_phase <= return_phase + 1'd1;
@@ -413,39 +480,33 @@ module mister_magik_scaler_fetch_liveness_state #(
 		// Faults outrank cancellation and watchdog attribution. Real progress on
 		// the terminal watchdog cycle wins over timeout.
 		if(!first_stall_valid && !observer_fault && observer_fault_event) begin
-			frozen_state_bits <= {
-				4'd0,
-				fifo_count,
-				return_phase,
-				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT
-			};
+			avalon_terminal_fifo_depth <= fifo_count;
+			avalon_terminal_return_phase <= return_phase;
+			avalon_terminal_cause <=
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT;
 			if(unexpected_return_event) begin
 				if(!ever_qualified)
 					reset_ambiguity <= 1'b1;
 			end
 		end
 		else if(!first_stall_valid && !observer_fault && request_cancel_event) begin
-			frozen_state_bits <= {
-				4'd0,
-				fifo_count,
-				return_phase,
-				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED
-			};
+			avalon_terminal_fifo_depth <= fifo_count;
+			avalon_terminal_return_phase <= return_phase;
+			avalon_terminal_cause <=
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED;
 		end
 		else if(!first_stall_valid && !observer_fault && snapshot_complete) begin
 			snapshot_pending <= 1'b0;
 			progress_watchdog <= 24'd0;
-			if(snapshot_invalidated || expected_progress || reset_sync) begin
-				frozen_state_bits <= {
-					4'd0,
-					fifo_count,
-					return_phase,
-					MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT
-				};
+			if(snapshot_invalidated || expected_progress || reset_sync ||
+				scheduler_snapshot_capture[2:0] >= 3'd6) begin
+				avalon_terminal_fifo_depth <= fifo_count;
+				avalon_terminal_return_phase <= return_phase;
+				avalon_terminal_cause <=
+					MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT;
 			end
 			else begin
 				no_request_seen <= 1'b1;
-				frozen_state_bits <= snapshot_evidence_hold;
 			end
 		end
 		else if(!first_stall_valid && !observer_fault && reset_qualified &&
@@ -465,22 +526,18 @@ module mister_magik_scaler_fetch_liveness_state #(
 				progress_watchdog <= 24'd0;
 			end
 			else begin
-				frozen_state_bits <= {
-					4'd0,
-					fifo_count,
-					return_phase,
-					timeout_cause
-				};
+				avalon_terminal_fifo_depth <= fifo_count;
+				avalon_terminal_return_phase <= return_phase;
+				avalon_terminal_cause <= timeout_cause;
 			end
 		end
 
-		// Capture one immutable bank and serialize its CRC before advertising it.
-		if(!publish_crc_busy && publication_generation == acknowledge_sync) begin
-			published_flags <= next_published_flags;
-			published_state <= frozen_state;
+		// Serialize the first immutable terminal record once, then advertise it.
+		if(!terminal_record_started && terminal_valid) begin
+			terminal_record_started <= 1'b1;
 			publish_crc_work <= crc16_update_bit(
 				MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA_CRC,
-				next_published_flags[15]);
+				terminal_flags[15]);
 			publish_crc_busy <= 1'b1;
 			publish_crc_phase <= 5'd0;
 		end
@@ -488,14 +545,14 @@ module mister_magik_scaler_fetch_liveness_state #(
 			reg crc_data_bit;
 			reg [15:0] crc_next;
 			if(publish_crc_phase < 5'd15)
-				crc_data_bit = published_flags[publish_crc_index];
+				crc_data_bit = terminal_flags[publish_crc_index];
 			else
-				crc_data_bit = published_state[publish_crc_index];
+				crc_data_bit = frozen_state[publish_crc_index];
 			crc_next = crc16_update_bit(publish_crc_work, crc_data_bit);
 			publish_crc_work <= crc_next;
 			if(publish_crc_phase == 5'd30) begin
-				publication_generation <= ~publication_generation;
 				publish_crc_busy <= 1'b0;
+				record_ready <= 1'b1;
 			end
 			else
 				publish_crc_phase <= publish_crc_phase + 1'd1;
@@ -507,9 +564,9 @@ module mister_magik_scaler_fetch_liveness_state #(
 			MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD:
 				response_word = MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA;
 			MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD:
-				response_word = published_flags;
+				response_word = terminal_flags;
 			MAGIK_SCALER_FETCH_LIVENESS_STATE_STATE_WORD:
-				response_word = published_state;
+				response_word = frozen_state;
 			default: response_word = publish_crc_work;
 		endcase
 
@@ -522,8 +579,8 @@ module mister_magik_scaler_fetch_liveness_state #(
 	end
 
 	always @(posedge clk_sys) begin
-		generation_meta <= publication_generation;
-		generation_sync <= generation_meta;
+		record_ready_meta <= record_ready;
+		record_ready_sync <= record_ready_meta;
 
 		if(command_start) begin
 			has_command <= 1'b1;
@@ -535,8 +592,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 			word_count <= word_count + 1'd1;
 
 		if(!io_uio && has_command) begin
-			if(command_selected)
-				acknowledged_generation <= generation_sync;
 			has_command <= 1'b0;
 			command_selected <= 1'b0;
 			word_count <= 3'd0;

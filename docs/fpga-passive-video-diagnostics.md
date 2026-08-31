@@ -1,6 +1,6 @@
 # Passive FPGA HDMI evidence
 
-## Active moving-band campaign: schema 19
+## Active moving-band campaign: schema 20
 
 The preserved 2026-08-28 recurrence showed a byte-stable framebuffer and
 visible moving-band corruption while schema 11 returned CRC-valid but
@@ -106,6 +106,32 @@ destination synchronizer therefore qualifies a coherent multi-cycle data path.
 If the scaler clock stops, reset or progress interrupts capture, or the mailbox
 does not answer within the watchdog bound, attribution fails closed as an
 observer fault. Schema 14 through schema 18 remain rollback-decodable.
+
+Schema 19 did not qualify. Quartus preserved the combinational evidence bus as
+15 LCELL buffers and replicated the response toggle, so the intended source-to-
+destination CDC path was no longer the physical path that the constraints and
+checker described. Its rolling publication handshake also kept more CDC state
+and local selection logic than a first-failure diagnostic needs.
+
+Schema 20, `scaler-off-domain-scheduler-terminal-v3`, replaces that mailbox
+with a one-shot terminal record. The HDMI observer waits for one HSYNC entry,
+summarizes exactly the following HSYNC interval into six registered bits, and
+then changes a preserved, single-fanout response bit. The 100 MHz destination
+captures only those six source registers after the synchronized response; it
+expands the compact code locally into the unchanged 16-bit scheduler evidence
+format. This removes the combinational CDC payload and makes every constrained
+source and destination a real register.
+
+Avalon terminal context and scheduler evidence have separate immutable local
+banks. Once the first terminal event is classified, a serial CRC is computed
+over one `{schema, flags, state}` value and a one-way `record_ready` bit makes
+the completed record visible to the command clock. Command `0x68` remains
+unavailable until that bit arrives. The host accepts three CRC-valid identical
+schema-20 reads; older schemas retain their advancing-publication rule. There
+is no acknowledgement loop, rotating publication bank, diagnostic recovery,
+or production-control fanout. Reset/progress interruption and a stopped HDMI
+clock still fail closed as observer faults. Schema 14 through schema 19 remain
+rollback-decodable.
 
 The wide and staged FPGA video observers are retired from production. Their
 field evidence was decisive, but every expanded implementation made the dense

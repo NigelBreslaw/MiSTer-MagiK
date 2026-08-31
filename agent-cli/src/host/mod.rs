@@ -3478,7 +3478,7 @@ const EXPERIMENTAL_FPGA_RBF_REMOTE: &str =
     mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.latch_rbf;
 const EXPERIMENTAL_FPGA_METADATA_REMOTE: &str =
     mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.latch_metadata;
-const PATCHED_DIAGNOSTIC_ARCHITECTURE: &str = "scaler-off-domain-scheduler-snapshot-v2";
+const PATCHED_DIAGNOSTIC_ARCHITECTURE: &str = "scaler-off-domain-scheduler-terminal-v3";
 const PLATFORM_V0_34_SCHEMA14_RBF_SHA256: &str =
     "ef1920500c925d35b23808792f0930954446a6030b33d3e92c0f4feccd23106e";
 const FPGA_READINESS_TIMEOUT: Duration = Duration::from_secs(45);
@@ -4095,7 +4095,8 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
             | "scaler-output-scheduler-gates-v1"
             | "scaler-pre-read-scheduler-evidence-v1"
             | "scaler-off-domain-scheduler-snapshot-v1"
-            | "scaler-off-domain-scheduler-snapshot-v2"),
+            | "scaler-off-domain-scheduler-snapshot-v2"
+            | "scaler-off-domain-scheduler-terminal-v3"),
         ) => {
             let scheduler_state = matches!(
                 architecture,
@@ -4104,6 +4105,7 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                     | "scaler-pre-read-scheduler-evidence-v1"
                     | "scaler-off-domain-scheduler-snapshot-v1"
                     | "scaler-off-domain-scheduler-snapshot-v2"
+                    | "scaler-off-domain-scheduler-terminal-v3"
             );
             matches!(
                 diagnostics.get("classification").and_then(Value::as_str),
@@ -4182,10 +4184,14 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                     .pointer("/coherence/three_samples_valid")
                     .and_then(Value::as_bool)
                     == Some(true)
-                && diagnostics
-                    .pointer("/coherence/publication_sequence_advancing")
+                && (diagnostics
+                    .pointer("/coherence/publication_coherent")
                     .and_then(Value::as_bool)
                     == Some(true)
+                    || diagnostics
+                        .pointer("/coherence/publication_sequence_advancing")
+                        .and_then(Value::as_bool)
+                        == Some(true))
                 && diagnostics
                     .pointer("/coherence/classification_stable")
                     .and_then(Value::as_bool)
@@ -4914,6 +4920,7 @@ fn scaler_fetch_liveness_preload_evidence_available(evidence: &Value) -> bool {
                         | "scaler-pre-read-scheduler-evidence-v1"
                         | "scaler-off-domain-scheduler-snapshot-v1"
                         | "scaler-off-domain-scheduler-snapshot-v2"
+                        | "scaler-off-domain-scheduler-terminal-v3"
                 )
             })
         && evidence.get("available").and_then(Value::as_bool) == Some(true)
@@ -4926,10 +4933,14 @@ fn scaler_fetch_liveness_preload_evidence_available(evidence: &Value) -> bool {
             .pointer("/capabilities/scaler_fetch_liveness")
             .and_then(Value::as_bool)
             == Some(true)
-        && evidence
-            .pointer("/coherence/publication_sequence_advancing")
+        && (evidence
+            .pointer("/coherence/publication_coherent")
             .and_then(Value::as_bool)
             == Some(true)
+            || evidence
+                .pointer("/coherence/publication_sequence_advancing")
+                .and_then(Value::as_bool)
+                == Some(true))
         && evidence
             .pointer("/coherence/latch_ownership_stable")
             .and_then(Value::as_bool)
@@ -39386,7 +39397,7 @@ H: Handlers=event3 js0"#
     fn installed_fpga_metadata_identifies_the_expected_observer() {
         assert_eq!(
             expected_fpga_architecture(
-                "rbf_sha256=ignored\ndiagnostic_architecture=scaler-off-domain-scheduler-snapshot-v2\n"
+                "rbf_sha256=ignored\ndiagnostic_architecture=scaler-off-domain-scheduler-terminal-v3\n"
             )
             .unwrap(),
             PATCHED_DIAGNOSTIC_ARCHITECTURE
@@ -39958,7 +39969,7 @@ H: Handlers=event3 js0"#
         ));
         let mut pre_read_liveness = scaler_fetch_liveness.clone();
         pre_read_liveness["diagnostic_architecture"] =
-            json!("scaler-off-domain-scheduler-snapshot-v2");
+            json!("scaler-off-domain-scheduler-terminal-v3");
         pre_read_liveness["classification"] = json!("scaler_pre_read_request_boundary_stuck");
         pre_read_liveness["capabilities"]["scaler_pre_read_scheduler_evidence"] = json!(true);
         assert!(experimental_fpga_evidence_is_current(&pre_read_liveness));

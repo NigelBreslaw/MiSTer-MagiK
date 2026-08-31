@@ -19,18 +19,19 @@ module mister_magik_scaler_fetch_liveness_formal;
 	(* anyseq *) wire [15:0] scaler_diag_state;
 	(* anyseq *) wire [15:0] snapshot_live_state;
 	wire snapshot_response;
+	wire [5:0] snapshot_compact;
 	wire [15:0] snapshot_evidence;
 	wire snapshot_capture_active;
-	wire [15:0] snapshot_accumulated;
-	wire [15:0] snapshot_events;
 
 	wire [1:0] fifo_count;
 	wire [6:0] return_phase;
 	wire first_stall_valid;
 	wire observer_fault;
+	wire no_request_seen;
+	wire snapshot_pending;
+	wire terminal_record_started;
 	wire [15:0] frozen_state;
-	wire publication_generation;
-	wire acknowledge_sync;
+	wire record_ready;
 	wire [47:0] published_bundle;
 	wire [3:0] publication_sequence;
 	wire publish_crc_busy;
@@ -66,9 +67,11 @@ module mister_magik_scaler_fetch_liveness_formal;
 		.formal_return_phase(return_phase),
 		.formal_first_stall_valid(first_stall_valid),
 		.formal_observer_fault(observer_fault),
+		.formal_no_request_seen(no_request_seen),
+		.formal_snapshot_pending(snapshot_pending),
+		.formal_terminal_record_started(terminal_record_started),
 		.formal_frozen_state(frozen_state),
-		.formal_publication_generation(publication_generation),
-		.formal_acknowledge_sync(acknowledge_sync),
+		.formal_record_ready(record_ready),
 		.formal_published_bundle(published_bundle),
 		.formal_publication_sequence(publication_sequence),
 		.formal_publish_crc_busy(publish_crc_busy),
@@ -87,10 +90,9 @@ module mister_magik_scaler_fetch_liveness_formal;
 		.live_state(snapshot_live_state),
 		.request_toggle(snapshot_request),
 		.response_toggle(snapshot_response),
+		.compact_hold(snapshot_compact),
 		.evidence_hold(snapshot_evidence),
-		.formal_capture_active(snapshot_capture_active),
-		.formal_accumulated_evidence(snapshot_accumulated),
-		.formal_event_evidence(snapshot_events)
+		.formal_capture_active(snapshot_capture_active)
 	);
 
 	always @($global_clock)
@@ -106,28 +108,23 @@ module mister_magik_scaler_fetch_liveness_formal;
 			snapshot_completed_seen <= 1'b1;
 		assert(fifo_count <= 2);
 		assert(return_phase < 128);
-		if(publication_generation != acknowledge_sync)
-			assert(!publish_crc_busy);
+		assert(!no_request_seen || !snapshot_pending);
+		assert(!record_ready || terminal_record_started);
+		assert(!record_ready || !publish_crc_busy);
+		assert(!publish_crc_busy || terminal_record_started);
+		assert(!publish_crc_busy || !record_ready);
+		assert(!publish_crc_busy || publish_crc_phase <= 5'd30);
+		assert(!terminal_record_started || first_stall_valid || observer_fault);
 
 		if(past_valid) begin
-			if($past(snapshot_capture_active)) begin
-				if(snapshot_response != $past(snapshot_response)) begin
-					assert(snapshot_evidence[0]);
-					assert((snapshot_evidence & $past(snapshot_events)) ==
-						$past(snapshot_events));
-				end
-				else begin
-					assert((snapshot_accumulated & $past(snapshot_events)) ==
-						$past(snapshot_events));
-				end
-			end
-			if($past(snapshot_capture_active) && snapshot_capture_active)
-				assert((snapshot_accumulated & $past(snapshot_accumulated)) ==
-					$past(snapshot_accumulated));
+			if(snapshot_response != $past(snapshot_response))
+				assert($past(snapshot_capture_active));
 			if(snapshot_response == $past(snapshot_response) &&
 				!$past(snapshot_capture_active) &&
-				$past(snapshot_request == snapshot_response))
+				$past(snapshot_request == snapshot_response)) begin
 				assert(snapshot_evidence == $past(snapshot_evidence));
+				assert(snapshot_compact == $past(snapshot_compact));
+			end
 			case({$past(enqueue), $past(dequeue)})
 				2'b10: assert(fifo_count == $past(fifo_count) + 1'b1);
 				2'b01: assert(fifo_count + 1'b1 == $past(fifo_count));
@@ -151,24 +148,24 @@ module mister_magik_scaler_fetch_liveness_formal;
 				assert(observer_fault);
 				assert(frozen_state == $past(frozen_state));
 			end
-			if($past(publication_generation != acknowledge_sync))
+			assert(publication_sequence == 4'd0);
+			if($past(publish_crc_busy))
+				assert(published_bundle[31:0] == $past(published_bundle[31:0]));
+			if($past(record_ready)) begin
+				assert(record_ready);
 				assert(published_bundle == $past(published_bundle));
-			if(publication_sequence != $past(publication_sequence)) begin
-				assert($past(publication_generation == acknowledge_sync));
-				assert(!$past(publish_crc_busy));
-				assert(publication_sequence == $past(publication_sequence) + 1'b1);
 			end
-			if(publication_generation != $past(publication_generation)) begin
+			if(record_ready != $past(record_ready)) begin
 				assert($past(publish_crc_busy));
 				assert($past(publish_crc_phase) == 5'd30);
 			end
-
 			// A real transition on the terminal watchdog cycle wins unless an
 			// independently higher-priority observer event occurred.
 			if($past(watchdog_terminal && expected_progress &&
 				!first_stall_valid && !observer_fault &&
 				!observer_fault_event && !request_cancel_event))
 				assert(!first_stall_valid);
+
 		end
 
 		if(reset_req && fifo_count != 0 && return_has_entry)

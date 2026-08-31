@@ -324,8 +324,8 @@ if hdmi_evidence.get("raw_scaler_rollback_states") != {
     raise SystemExit("raw scaler ordered-signature schema-10 rollback ABI changed")
 scaler_fetch_liveness = hdmi_evidence.get("scaler_fetch_liveness_state")
 if scaler_fetch_liveness != {
-    "schema": 19,
-    "architecture": "scaler-off-domain-scheduler-snapshot-v2",
+    "schema": 20,
+    "architecture": "scaler-off-domain-scheduler-terminal-v3",
     "command": 0x68,
     "magic": 0x4D58,
     "word_count": 4,
@@ -405,7 +405,7 @@ if scaler_fetch_liveness != {
     },
 }:
     raise SystemExit(
-        "scaler off-domain scheduler mailbox schema 19 changed without an ABI update"
+        "scaler off-domain scheduler terminal schema 20 changed without an ABI update"
     )
 expected_agent_capability = (
     f"pub const FPGA_VIDEO_DIAGNOSTICS_CAPABILITY: &str = "

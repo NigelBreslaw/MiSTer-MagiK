@@ -4446,10 +4446,18 @@ mod linux {
         let invalid = samples.iter().any(|sample| {
             sample.observer_fault() || sample.reset_ambiguity() || sample.counter_ambiguous()
         });
+        let one_shot_terminal = samples[0].schema() == contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA;
+        let publication_coherent = if one_shot_terminal {
+            samples[1..]
+                .iter()
+                .all(|sample| sample.words == samples[0].words)
+        } else {
+            nibble_sequences_advance(samples.map(|sample| sample.publication_sequence()))
+        };
         if !samples.iter().all(|sample| sample.record_valid())
             || !same_schema
             || invalid
-            || !nibble_sequences_advance(samples.map(|sample| sample.publication_sequence()))
+            || !publication_coherent
         {
             return "scaler_fetch_liveness_evidence_inconclusive";
         }
@@ -4465,7 +4473,13 @@ mod linux {
             }
             return match first.frozen_cause() {
                 contract::SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN => {
-                    if first.architecture() == contract::SCALER_FETCH_LIVENESS_STATE_ARCHITECTURE {
+                    if matches!(
+                        first.architecture(),
+                        "scaler-pre-read-scheduler-evidence-v1"
+                            | "scaler-off-domain-scheduler-snapshot-v1"
+                            | "scaler-off-domain-scheduler-snapshot-v2"
+                            | "scaler-off-domain-scheduler-terminal-v3"
+                    ) {
                         scaler_pre_read_scheduler_classification(first)
                     } else if first.architecture() == "scaler-output-scheduler-gates-v1" {
                         scaler_output_scheduler_gate_classification(first)
@@ -5010,6 +5024,7 @@ mod linux {
                             | "scaler-pre-read-scheduler-evidence-v1"
                             | "scaler-off-domain-scheduler-snapshot-v1"
                             | "scaler-off-domain-scheduler-snapshot-v2"
+                            | "scaler-off-domain-scheduler-terminal-v3"
                     );
                     let output_scheduler_state = architecture == "scaler-output-scheduler-gates-v1";
                     let avalon_gate_state = architecture == "scaler-fetch-no-request-gates-v1";
@@ -5018,19 +5033,29 @@ mod linux {
                         "scaler-pre-read-scheduler-evidence-v1"
                             | "scaler-off-domain-scheduler-snapshot-v1"
                             | "scaler-off-domain-scheduler-snapshot-v2"
+                            | "scaler-off-domain-scheduler-terminal-v3"
                     );
                     let classification = scaler_fetch_liveness_classification(samples);
                     let valid_samples = samples.iter().all(|sample| sample.record_valid());
                     let advancing = nibble_sequences_advance(
                         samples.map(|sample| sample.publication_sequence()),
                     );
+                    let terminal_record_identical = samples[1..]
+                        .iter()
+                        .all(|sample| sample.words == samples[0].words);
+                    let publication_coherent =
+                        if architecture == "scaler-off-domain-scheduler-terminal-v3" {
+                            terminal_record_identical
+                        } else {
+                            advancing
+                        };
                     let classification_stable =
                         classification != "scaler_fetch_liveness_evidence_inconclusive";
                     let coherent = context.owner_stable
                         && context.latch_ownership_stable == Some(true)
                         && context.launcher_state_stable
                         && valid_samples
-                        && advancing
+                        && publication_coherent
                         && classification_stable;
                     let scaler_fetch_liveness_sections = [
                         json!({
@@ -5124,6 +5149,8 @@ mod linux {
                         "coherence": {
                             "three_samples_valid": valid_samples,
                             "publication_sequence_advancing": advancing,
+                            "terminal_record_identical": terminal_record_identical,
+                            "publication_coherent": publication_coherent,
                             "classification_stable": classification_stable,
                             "sample_interval_us": readout.sample_interval_us,
                             "latch_ownership_stable": context.latch_ownership_stable,
@@ -5795,9 +5822,9 @@ mod linux {
             &mut self,
         ) -> io::Result<mister_magik_video_diagnostics_contract::ScalerFetchLivenessState> {
             use mister_magik_video_diagnostics_contract as contract;
-            // Command 0x68 deliberately acknowledges only while a freshly
-            // published bank is available. The short acknowledge/re-publish
-            // handoff must not be mistaken for an unsupported architecture.
+            // Older schemas can briefly deassert the command while their next
+            // publication is prepared. Schema 20 instead remains unavailable
+            // until its first immutable terminal record and CRC are complete.
             let mut attempt = 0;
             let words = loop {
                 match self.read_diagnostic_words::<{ contract::SCALER_FETCH_LIVENESS_STATE_WORDS }>(

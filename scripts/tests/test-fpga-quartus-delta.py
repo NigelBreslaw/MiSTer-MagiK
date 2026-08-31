@@ -92,10 +92,8 @@ Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
 SCALER_FETCH_SYNC_ASSIGNMENTS = quartus_assignment_section(
     "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state",
     (
-        "generation_meta",
-        "generation_sync",
-        "acknowledge_meta",
-        "acknowledge_sync",
+        "record_ready_meta",
+        "record_ready_sync",
         "reset_meta",
         "reset_sync",
     ),
@@ -114,8 +112,8 @@ SCALER_FETCH_CUSTOM_SYNC = (
     + SCALER_SNAPSHOT_SOURCE_SYNC_ASSIGNMENTS
     + SCALER_SNAPSHOT_DESTINATION_SYNC_ASSIGNMENTS
     + """\
-Info (332114): Report Metastability: Found 12 synchronizer chains.
-Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.333333
+Info (332114): Report Metastability: Found 11 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.363636
 Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
 """
 )
@@ -202,13 +200,8 @@ SCALER_FETCH_DIAGNOSTIC_REPORTS = {
         VALID_DIAGNOSTIC_REPORTS["menu.magik-diagnostic-cdc-net-delay.rpt"]
         + "; set_net_delay ; 1.050 ; 10.000 ; 8.950 ; sources ; destinations ; max ;\n"
         + net_delay_detail(
-            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|publication_generation",
-            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|generation_meta",
-        )
-        + "; set_net_delay ; 1.025 ; 10.000 ; 8.975 ; sources ; destinations ; max ;\n"
-        + net_delay_detail(
-            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledged_generation",
-            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledge_meta",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|record_ready",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|record_ready_meta",
         )
         + "; set_net_delay ; 1.015 ; 10.000 ; 8.985 ; sources ; destinations ; max ;\n"
         + net_delay_detail(
@@ -217,40 +210,31 @@ SCALER_FETCH_DIAGNOSTIC_REPORTS = {
         )
         + "; set_net_delay ; 1.010 ; 10.000 ; 8.990 ; sources ; destinations ; max ;\n"
         + net_delay_detail(
-            "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|response_toggle",
+            "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|response_handoff_bit",
             "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_meta",
         )
         + "; set_net_delay ; 1.005 ; 10.000 ; 8.995 ; sources ; destinations ; max ;\n"
         + "".join(
             net_delay_detail(
-                f"mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_bits[{bit - 1}]",
-                f"mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|frozen_state_bits[{bit}]",
+                f"mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|compact_evidence[{bit}]",
+                f"mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_capture[{bit}]",
             )
-            for bit in range(1, 16)
+            for bit in range(6)
         )
     ),
     "menu.magik-diagnostic-metastability.rpt": (
         VALID_DIAGNOSTIC_REPORTS["menu.magik-diagnostic-metastability.rpt"]
         + metastability_chain(
             3,
-            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|publication_generation",
-            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|generation_meta",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|record_ready",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|record_ready_meta",
             (
-                "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|generation_meta",
-                "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|generation_sync",
+                "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|record_ready_meta",
+                "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|record_ready_sync",
             ),
         )
         + metastability_chain(
             4,
-            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledged_generation",
-            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledge_meta",
-            (
-                "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledge_meta",
-                "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|acknowledge_sync",
-            ),
-        )
-        + metastability_chain(
-            5,
             "reset_req",
             "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|reset_meta",
             (
@@ -259,7 +243,7 @@ SCALER_FETCH_DIAGNOSTIC_REPORTS = {
             ),
         )
         + metastability_chain(
-            6,
+            5,
             "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_request_toggle",
             "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_meta",
             (
@@ -268,8 +252,8 @@ SCALER_FETCH_DIAGNOSTIC_REPORTS = {
             ),
         )
         + metastability_chain(
-            7,
-            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|response_toggle",
+            6,
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|response_handoff_bit",
             "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_meta",
             (
                 "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_meta",
@@ -447,15 +431,11 @@ class QuartusDeltaTest(unittest.TestCase):
         baseline = BASE.replace("setup slack is 0.500", "setup slack is 0.660").replace(
             "0.500               0.000", "0.660               0.000"
         )
-        patched = baseline.replace(
-            "setup slack is 0.660", "setup slack is 0.389"
-        ).replace(
-            "0.660               0.000", "0.389               0.000"
-        ) + SCALER_FETCH_CUSTOM_SYNC.replace(
-            "Found 9 synchronizer chains", "Found 7 synchronizer chains"
-        ).replace(
-            "Could Not be Calculated: 0.444444",
-            "Could Not be Calculated: 0.285714",
+        patched = (
+            baseline.replace("setup slack is 0.660", "setup slack is 0.389").replace(
+                "0.660               0.000", "0.389               0.000"
+            )
+            + SCALER_FETCH_CUSTOM_SYNC
         )
         result, payload = self.run_check(
             BASE,
@@ -842,20 +822,20 @@ class QuartusDeltaTest(unittest.TestCase):
             "diagnostic_metastability_chain_missing", payload["invalid_reason"]
         )
 
-    def test_duplicated_scaler_fetch_generation_path_fails(self) -> None:
+    def test_duplicated_scaler_fetch_record_ready_path_fails(self) -> None:
         reports = dict(SCALER_FETCH_DIAGNOSTIC_REPORTS)
         reports["menu.magik-diagnostic-cdc-net-delay.rpt"] = reports[
             "menu.magik-diagnostic-cdc-net-delay.rpt"
         ].replace(
-            "|publication_generation ;",
-            "|publication_generation~DUPLICATE ;",
+            "|record_ready ;",
+            "|record_ready~DUPLICATE ;",
             1,
         )
         reports["menu.magik-diagnostic-metastability.rpt"] = reports[
             "menu.magik-diagnostic-metastability.rpt"
         ].replace(
-            "|publication_generation ;",
-            "|publication_generation~DUPLICATE ;",
+            "|record_ready ;",
+            "|record_ready~DUPLICATE ;",
             1,
         )
         result, payload = self.run_check(
@@ -875,8 +855,8 @@ class QuartusDeltaTest(unittest.TestCase):
     def test_missing_scheduler_snapshot_payload_path_fails(self) -> None:
         reports = dict(SCALER_FETCH_DIAGNOSTIC_REPORTS)
         missing = net_delay_detail(
-            "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_bits[14]",
-            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|frozen_state_bits[15]",
+            "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|compact_evidence[5]",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_capture[5]",
         )
         reports["menu.magik-diagnostic-cdc-net-delay.rpt"] = reports[
             "menu.magik-diagnostic-cdc-net-delay.rpt"
@@ -894,7 +874,7 @@ class QuartusDeltaTest(unittest.TestCase):
         reports = dict(SCALER_FETCH_DIAGNOSTIC_REPORTS)
         reports["menu.magik-diagnostic-cdc-net-delay.rpt"] += net_delay_detail(
             "mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|evidence_hold[0]",
-            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|frozen_state_bits[0]",
+            "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_capture[0]",
         )
         result, payload = self.run_check(
             BASE,
@@ -1013,7 +993,7 @@ class QuartusDeltaTest(unittest.TestCase):
             / "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics.sdc"
         ).read_text(encoding="utf-8")
         self.assertIn("get_registers -nowarn -no_duplicates", sdc)
-        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 7)
+        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 6)
         self.assertNotIn("set_max_skew", sdc)
         self.assertNotIn("set_false_path", sdc)
 

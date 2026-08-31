@@ -93,7 +93,10 @@ module mister_magik_sys_top_latch_path (
 		.active_route_epoch(magik_lfb_active_route_epoch)
 	);
 
-	mister_magik_scaler_fetch_liveness_state diagnostic (
+	mister_magik_scaler_fetch_liveness_state #(
+		.WATCHDOG_LIMIT(24'd8),
+		.RESET_QUALIFY_LIMIT(3'd1)
+	) diagnostic (
 		.clk_100m(clk_sys),
 		.clk_sys(clk_sys),
 		.scaler_clk(clk_sys),
@@ -351,7 +354,7 @@ module tb_mister_magik_sys_top_integration;
 			begin_command(index[7:0], 16'd0);
 			end_command();
 		end
-		repeat(20) @(posedge test_clk);
+		repeat(100) @(posedge test_clk);
 		begin_command(MAGIK_UIO_GET_SCALER_FETCH_LIVENESS_STATE,
 			MAGIK_SCALER_FETCH_LIVENESS_STATE_MAGIC);
 		for(index = 0; index < MAGIK_SCALER_FETCH_LIVENESS_STATE_WORDS;

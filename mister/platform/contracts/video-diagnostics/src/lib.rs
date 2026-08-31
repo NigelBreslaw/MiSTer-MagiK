@@ -155,6 +155,9 @@ const PRE_READ_SCHEDULER_EVIDENCE_ARCHITECTURE: &str = "scaler-pre-read-schedule
 const OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_SCHEMA: u16 = 18;
 const OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_ARCHITECTURE: &str =
     "scaler-off-domain-scheduler-snapshot-v1";
+const OFF_DOMAIN_SCHEDULER_SNAPSHOT_V2_SCHEMA: u16 = 19;
+const OFF_DOMAIN_SCHEDULER_SNAPSHOT_V2_ARCHITECTURE: &str =
+    "scaler-off-domain-scheduler-snapshot-v2";
 
 impl ScalerFetchLivenessState {
     fn field(&self, word: usize, bit: u32, mask: u16) -> u16 {
@@ -177,6 +180,9 @@ impl ScalerFetchLivenessState {
             PRE_READ_SCHEDULER_EVIDENCE_SCHEMA => PRE_READ_SCHEDULER_EVIDENCE_ARCHITECTURE,
             OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_SCHEMA => {
                 OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_ARCHITECTURE
+            }
+            OFF_DOMAIN_SCHEDULER_SNAPSHOT_V2_SCHEMA => {
+                OFF_DOMAIN_SCHEDULER_SNAPSHOT_V2_ARCHITECTURE
             }
             _ => SCALER_FETCH_LIVENESS_STATE_ARCHITECTURE,
         }
@@ -1136,6 +1142,7 @@ pub fn decode_scaler_fetch_liveness_state(
             | OUTPUT_SCHEDULER_GATES_SCHEMA
             | PRE_READ_SCHEDULER_EVIDENCE_SCHEMA
             | OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_SCHEMA
+            | OFF_DOMAIN_SCHEDULER_SNAPSHOT_V2_SCHEMA
             | SCALER_FETCH_LIVENESS_STATE_SCHEMA
     ) {
         return Err(format!(
@@ -1198,6 +1205,7 @@ pub fn decode_scaler_fetch_liveness_state(
             schema,
             PRE_READ_SCHEDULER_EVIDENCE_SCHEMA
                 | OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_SCHEMA
+                | OFF_DOMAIN_SCHEDULER_SNAPSHOT_V2_SCHEMA
                 | SCALER_FETCH_LIVENESS_STATE_SCHEMA
         ) && decoded.no_request_seen()
         {
