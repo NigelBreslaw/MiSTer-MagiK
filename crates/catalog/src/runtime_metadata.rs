@@ -248,7 +248,7 @@ pub struct ArcadeMachine {
     pub control: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MisterArcadeEntry {
     pub setname_key: String,
     pub mra_name_key: String,
@@ -276,9 +276,13 @@ impl ArcadeShard {
     }
 
     pub fn mister_by_setname(&self, key: &str) -> Option<&MisterArcadeEntry> {
-        self.mister
+        let index = self
+            .mister
             .binary_search_by(|row| row.setname_key.as_str().cmp(key))
-            .ok()
+            .ok()?;
+        self.mister[..=index]
+            .iter()
+            .rposition(|row| row.setname_key == key)
             .map(|index| &self.mister[index])
     }
 
@@ -1115,7 +1119,7 @@ fn decode_arcade(payload: &[u8]) -> Result<ArcadeShard, String> {
     }
     if mister
         .windows(2)
-        .any(|window| window[0].setname_key >= window[1].setname_key)
+        .any(|window| window[0].setname_key > window[1].setname_key)
     {
         return Err("arcade MRA rows are not sorted".into());
     }
@@ -1731,11 +1735,9 @@ fn read_arcade_shard(
             .map_err(|error| format!("read MiSTer Arcade metadata: {error}"))?;
         mister.extend(rows.flatten());
     }
-    mister.sort_by(|a, b| {
-        a.setname_key
-            .cmp(&b.setname_key)
-            .then(a.mra_name_key.cmp(&b.mra_name_key))
-    });
+    // `ordinal` is the legacy setname precedence. A stable sort groups the
+    // keys while retaining that precedence for duplicate setnames.
+    mister.sort_by(|a, b| a.setname_key.cmp(&b.setname_key));
     Ok(ArcadeShard {
         mame: mame_rows,
         hbmame: hbmame_rows,
@@ -1789,6 +1791,35 @@ mod tests {
         let shard = sample();
         let payload = encode_software(&shard).expect("encode");
         assert_eq!(decode_software(&payload).expect("decode"), shard);
+    }
+
+    #[test]
+    fn arcade_payload_preserves_mra_setname_collisions() {
+        let shard = ArcadeShard {
+            mister: vec![
+                MisterArcadeEntry {
+                    setname_key: "shared".into(),
+                    mra_name_key: "first.mra".into(),
+                    title: "First".into(),
+                    category: "Category".into(),
+                    manufacturer: "Maker".into(),
+                    control: "joystick".into(),
+                    ..MisterArcadeEntry::default()
+                },
+                MisterArcadeEntry {
+                    setname_key: "shared".into(),
+                    mra_name_key: "second.mra".into(),
+                    title: "Second".into(),
+                    category: "Category".into(),
+                    manufacturer: "Maker".into(),
+                    control: "joystick".into(),
+                    ..MisterArcadeEntry::default()
+                },
+            ],
+            ..ArcadeShard::default()
+        };
+        let payload = encode_arcade(&shard).expect("encode Arcade");
+        assert_eq!(decode_arcade(&payload).expect("decode Arcade"), shard);
     }
 
     #[test]

@@ -517,6 +517,22 @@ fn load_runtime_arcade_metadata() -> Option<ArcadeMachineMetadata> {
 }
 
 fn arcade_metadata_from_runtime_shard(shard: ArcadeShard) -> ArcadeMachineMetadata {
+    let mut mister_by_setname = HashMap::new();
+    let mut mister_by_mra_name = HashMap::new();
+    for row in shard.mister {
+        let entry = MisterArcadeMetadata {
+            title: row.title,
+            category: row.category,
+            year: row.year,
+            manufacturer: row.manufacturer,
+            players: row.players,
+            control: row.control,
+        };
+        mister_by_setname
+            .entry(row.setname_key)
+            .or_insert_with(|| entry.clone());
+        mister_by_mra_name.insert(row.mra_name_key, entry);
+    }
     ArcadeMachineMetadata {
         mame: shard
             .mame
@@ -552,40 +568,8 @@ fn arcade_metadata_from_runtime_shard(shard: ArcadeShard) -> ArcadeMachineMetada
                 )
             })
             .collect(),
-        mister_by_setname: shard
-            .mister
-            .iter()
-            .map(|row| {
-                (
-                    row.setname_key.clone(),
-                    MisterArcadeMetadata {
-                        title: row.title.clone(),
-                        category: row.category.clone(),
-                        year: row.year,
-                        manufacturer: row.manufacturer.clone(),
-                        players: row.players,
-                        control: row.control.clone(),
-                    },
-                )
-            })
-            .collect(),
-        mister_by_mra_name: shard
-            .mister
-            .into_iter()
-            .map(|row| {
-                (
-                    row.mra_name_key,
-                    MisterArcadeMetadata {
-                        title: row.title,
-                        category: row.category,
-                        year: row.year,
-                        manufacturer: row.manufacturer,
-                        players: row.players,
-                        control: row.control,
-                    },
-                )
-            })
-            .collect(),
+        mister_by_setname,
+        mister_by_mra_name,
     }
 }
 
