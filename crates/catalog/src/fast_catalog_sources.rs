@@ -1976,6 +1976,53 @@ fn enrich_fast_preview_identities(storage_root: &Path, systems: &mut [FastFiveSy
 fn load_fast_console_preview_title_index(
     storage_root: &Path,
 ) -> BTreeMap<(String, String), Option<String>> {
+    if let Some(metadata) = [
+        storage_root
+            .join("mister-magik-dev")
+            .join(crate::runtime_metadata::FILE_NAME),
+        storage_root
+            .join("mister-magik")
+            .join(crate::runtime_metadata::FILE_NAME),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+    .and_then(|path| crate::runtime_metadata::MetadataStore::open(&path).ok())
+    {
+        let mut index = BTreeMap::new();
+        let mut complete = true;
+        for list_name in ["snes", "saturn"] {
+            let Ok(Some(shard)) = metadata.software_shard(list_name) else {
+                complete = false;
+                break;
+            };
+            for item in shard.items {
+                let family = item
+                    .parent_name
+                    .as_deref()
+                    .filter(|parent| !parent.trim().is_empty())
+                    .unwrap_or(&item.name);
+                let asset_key =
+                    ScreenshotAssetId::from_mame_software(list_name, family).into_string();
+                let key = (
+                    list_name.to_owned(),
+                    crate::library_db::canonical_variant_title(&item.description),
+                );
+                match index.entry(key) {
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(Some(asset_key));
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut entry) => {
+                        if entry.get().as_deref() != Some(asset_key.as_str()) {
+                            entry.insert(None);
+                        }
+                    }
+                }
+            }
+        }
+        if complete {
+            return index;
+        }
+    }
     let database = [
         storage_root.join("mister-magik-dev/mame.sqlite3"),
         storage_root.join("mister-magik/mame.sqlite3"),
@@ -2707,6 +2754,84 @@ mod tests {
             "mame-software__saturn__vf2"
         );
         assert!(systems[2].games[1].preview_asset_key.is_empty());
+    }
+
+    #[test]
+    fn fast_preview_identity_enrichment_prefers_compact_metadata() {
+        let root = crate::test_support::unique_temp_dir("fast-preview-identities-compact");
+        let metadata_path = root
+            .join("mister-magik")
+            .join(crate::runtime_metadata::FILE_NAME);
+        let mut builder = crate::runtime_metadata::MetadataFileBuilder::new();
+        builder
+            .add_software(
+                "snes",
+                &crate::runtime_metadata::SoftwareShard {
+                    items: vec![crate::runtime_metadata::SoftwareItem {
+                        name: "smw".into(),
+                        parent_name: None,
+                        description: "Super Mario World (USA)".into(),
+                        year: None,
+                        publisher: None,
+                        region: None,
+                    }],
+                    ..crate::runtime_metadata::SoftwareShard::default()
+                },
+            )
+            .unwrap();
+        builder
+            .add_software(
+                "saturn",
+                &crate::runtime_metadata::SoftwareShard {
+                    items: vec![crate::runtime_metadata::SoftwareItem {
+                        name: "vf2u".into(),
+                        parent_name: Some("vf2".into()),
+                        description: "Virtua Fighter 2 [USA]".into(),
+                        year: None,
+                        publisher: None,
+                        region: None,
+                    }],
+                    ..crate::runtime_metadata::SoftwareShard::default()
+                },
+            )
+            .unwrap();
+        builder.write_to(&metadata_path).unwrap();
+
+        let mut systems = vec![
+            FastFiveSystem {
+                system_id: "snes".into(),
+                display_title: "SNES".into(),
+                games: vec![direct_row(
+                    "snes",
+                    "Console",
+                    Path::new("/media/fat/games/SNES/Super Mario World (USA).sfc"),
+                    "Super Mario World (USA)".into(),
+                )],
+                variants: Vec::new(),
+            },
+            FastFiveSystem {
+                system_id: "saturn".into(),
+                display_title: "Saturn".into(),
+                games: vec![direct_row(
+                    "saturn",
+                    "Console",
+                    Path::new("/media/fat/games/Saturn/Virtua Fighter 2.cue"),
+                    "Virtua Fighter 2".into(),
+                )],
+                variants: Vec::new(),
+            },
+        ];
+        enrich_fast_preview_identities(&root, &mut systems);
+
+        assert_eq!(
+            systems[0].games[0].preview_asset_key,
+            "mame-software__snes__smw"
+        );
+        assert_eq!(
+            systems[1].games[0].preview_asset_key,
+            "mame-software__saturn__vf2"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
