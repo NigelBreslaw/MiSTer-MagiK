@@ -3724,11 +3724,7 @@ fn assess_fpga_evidence(expected: &str, evidence: &Value) -> FpgaActivationAsses
         failures.push(FpgaCheckFailure {
             check: "coherence".into(),
             expected: "current".into(),
-            actual: evidence
-                .get("classification")
-                .and_then(Value::as_str)
-                .unwrap_or("inconclusive")
-                .into(),
+            actual: fpga_coherence_failure_detail(evidence),
         });
     }
     if current {
@@ -3755,6 +3751,22 @@ fn assess_fpga_evidence(expected: &str, evidence: &Value) -> FpgaActivationAsses
             failures,
         }
     }
+}
+
+fn fpga_coherence_failure_detail(evidence: &Value) -> String {
+    let classification = evidence
+        .get("classification")
+        .and_then(Value::as_str)
+        .unwrap_or("inconclusive");
+    let coherence = evidence
+        .get("coherence")
+        .map(Value::to_string)
+        .unwrap_or_else(|| "null".into());
+    let raw_samples = evidence
+        .pointer("/scaler_fetch_liveness_state/raw_samples")
+        .map(Value::to_string)
+        .unwrap_or_else(|| "null".into());
+    format!("{classification};coherence={coherence};raw_samples={raw_samples}")
 }
 
 fn probe_installed_fpga_activation(
@@ -39487,7 +39499,9 @@ H: Handlers=event3 js0"#
             &json!({
                 "schema": "mister-magik-fpga-video-diagnostics-v2",
                 "diagnostic_architecture": "unverified-observer-fallback-v1",
-                "passive_observer_probe_error": "unsupported"
+                "passive_observer_probe_error": "unsupported",
+                "coherence": {"three_samples_valid": false},
+                "scaler_fetch_liveness_state": {"raw_samples": [[1], [2], [3]]}
             }),
         );
         assert!(matches!(
@@ -39495,6 +39509,7 @@ H: Handlers=event3 js0"#
             FpgaActivationAssessment::NotReady { .. }
         ));
         assert!(not_ready.reason().contains("coherence"));
+        assert!(not_ready.reason().contains("raw_samples=[[1],[2],[3]]"));
 
         let unavailable = assess_fpga_evidence(
             PATCHED_DIAGNOSTIC_ARCHITECTURE,
