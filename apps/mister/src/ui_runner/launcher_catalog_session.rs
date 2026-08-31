@@ -531,7 +531,7 @@ impl LauncherCatalogSession {
                 root,
                 request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
                 initial_cache: CatalogWorkerInitialCache::AlreadyLoadedReady,
-                execution_mode: CatalogExecutionMode::BackgroundInteractive,
+                execution_mode: CatalogExecutionMode::ForegroundExclusive,
             },
         ));
         effects
@@ -1224,7 +1224,7 @@ mod tests {
         );
         assert_eq!(
             worker.execution_mode,
-            CatalogExecutionMode::BackgroundInteractive
+            CatalogExecutionMode::ForegroundExclusive
         );
     }
 
@@ -1393,7 +1393,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_database_refresh_reconciles_changed_systems_in_background() {
+    fn settings_database_refresh_reconciles_changed_systems_foreground() {
         let mut session = LauncherCatalogSession::new(false);
         let effects = session.refresh_database("/media/fat/_Arcade".to_string(), true);
 
@@ -1417,7 +1417,7 @@ mod tests {
         );
         assert_eq!(
             worker.execution_mode,
-            CatalogExecutionMode::BackgroundInteractive
+            CatalogExecutionMode::ForegroundExclusive
         );
         assert!(effects.effects.iter().any(|effect| matches!(
             effect,
