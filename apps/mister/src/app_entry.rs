@@ -33,6 +33,8 @@
 //!     catalog-registry-report list system counts without opening system artifacts
 //!     catalog-screenshot-audit
 //!                        reconcile installed screenshot identity coverage for one system
+//!     metadata-qualification-report
+//!                        report compact/legacy metadata probes and device acceptance steps
 //!     search-bench       benchmark persisted Arcade FTS5 search
 //!     rom-identity-bench benchmark production ROM identity hashing
 //!     hbmame-metadata-from-library
@@ -403,6 +405,10 @@ fn dispatch_pre_fpga(
             process_config.catalog_paths(),
             args.get(2..).unwrap_or_default(),
         ),
+        #[cfg(feature = "diagnostics")]
+        command_args::RUNTIME_METADATA_QUALIFICATION_COMMAND => {
+            run_runtime_metadata_qualification_report()
+        }
         command_args::CATALOG_WORKER_COMMAND => ui_runner::run_catalog_worker_child(args),
         #[cfg(feature = "diagnostics")]
         "hbmame-metadata-from-library" => run_hbmame_metadata_from_library(),
@@ -478,6 +484,7 @@ fn benchmark_capabilities() -> serde_json::Value {
         "media-pack-persistence-v1": true,
         "rom-identity-benchmark-v1": true,
         "rom-identity-benchmark-v3": true,
+        "runtime-metadata-qualification-v1": cfg!(feature = "diagnostics"),
         "input-integrity-driver-v1": true,
         "arcade-velocity-scroll-v1": true,
         "arcade-velocity-scroll-attribution-v1": true,
@@ -539,6 +546,24 @@ fn run_catalog_registry_report(paths: &mister_magik_catalog::device_layout::Cata
         Ok(report) => crate::ui_log!("{report}"),
         Err(error) => {
             crate::ui_errln!("catalog_registry_summary_tsv\tvalid=0\terror={error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn run_runtime_metadata_qualification_report() {
+    if std::env::args().nth(2).is_some() {
+        crate::ui_errln!("metadata-qualification-report accepts no arguments");
+        std::process::exit(2);
+    }
+    match mister_magik_catalog::runtime_metadata_qualification_report() {
+        Ok(report) => crate::ui_log!("{report}"),
+        Err(error) => {
+            crate::ui_errln!(
+                "metadata_qualification_report\tvalid=0\terror={}",
+                sanitize_tsv_field(&error)
+            );
             std::process::exit(1);
         }
     }

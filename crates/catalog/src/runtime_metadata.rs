@@ -19,6 +19,7 @@ use std::io::Write;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 use lz4_flex::{block, compress_prepend_size};
 use sha2::{Digest, Sha256};
@@ -310,6 +311,130 @@ pub struct MetadataStore {
     file: File,
     entries: Vec<IndexEntry>,
     status: MetadataStatus,
+}
+
+/// Run the read-only qualification probe used on a real MiSTer during the
+/// migration window. The compact side opens only the header/index first, then
+/// decodes each requested shard. The legacy side is deliberately a separate
+/// probe so a missing or unusable SQLite fallback is reported rather than
+/// making compact metadata unavailable.
+pub fn runtime_metadata_qualification_report() -> Result<String, String> {
+    let compact_path = crate::catalog_config::default_runtime_metadata_path();
+    let compact = probe_compact_runtime(&compact_path)?;
+    let legacy = serde_json::json!({
+        "mame": probe_legacy_sqlite(&crate::catalog_config::default_mame_sqlite_path()),
+        "hbmame": probe_legacy_sqlite(&crate::catalog_config::default_hbmame_sqlite_path()),
+    });
+    serde_json::to_string_pretty(&serde_json::json!({
+        "schema": "mister-magik-runtime-metadata-qualification-v1",
+        "compact": compact,
+        "legacy": legacy,
+        "device_acceptance": {
+            "complete": false,
+            "reason": "device qualification is intentionally host-controlled",
+            "required": [
+                "run this report on a compact-only MiSTer installation",
+                "compare compact and legacy catalog identity on a representative corpus",
+                "record cold/warm catalog time, peak RSS, and lookup latency",
+                "confirm no legacy SQLite fallback is selected before removing it"
+            ]
+        }
+    }))
+    .map(|report| format!("{report}\n"))
+    .map_err(|error| format!("serialize metadata qualification report: {error}"))
+}
+
+fn probe_compact_runtime(path: &Path) -> Result<serde_json::Value, String> {
+    let rss_before_kb = process_rss_kb();
+    let open_started = Instant::now();
+    let store = MetadataStore::open(path)?;
+    let open_us = open_started.elapsed().as_micros() as u64;
+    let decode_started = Instant::now();
+    let mut software_rows = 0usize;
+    let mut hash_rows = 0usize;
+    let mut disk_rows = 0usize;
+    for (system_id, _, _) in RUNTIME_SOFTWARE_SYSTEMS {
+        let shard = store
+            .software_shard(system_id)?
+            .ok_or_else(|| format!("compact metadata is missing shard {system_id}"))?;
+        software_rows = software_rows.saturating_add(shard.items.len());
+        hash_rows = hash_rows.saturating_add(shard.hash_candidates.len());
+        disk_rows = disk_rows.saturating_add(shard.disk_candidates.len());
+    }
+    let arcade = store
+        .arcade_shard()?
+        .ok_or_else(|| "compact metadata is missing the Arcade shard".to_string())?;
+    let decode_us = decode_started.elapsed().as_micros() as u64;
+    Ok(serde_json::json!({
+        "path": path,
+        "valid": true,
+        "format": store.status().format,
+        "file_bytes": store.status().file_len,
+        "shard_count": store.status().shard_count,
+        "software_rows": software_rows,
+        "hash_rows": hash_rows,
+        "disk_rows": disk_rows,
+        "arcade_mame_rows": arcade.mame.len(),
+        "arcade_hbmame_rows": arcade.hbmame.len(),
+        "arcade_mister_rows": arcade.mister.len(),
+        "open_us": open_us,
+        "decode_us": decode_us,
+        "rss_before_kb": rss_before_kb,
+        "rss_after_kb": process_rss_kb(),
+        "shard_digests": store.shard_digests().map(|(id, digest)| {
+            (id, digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>())
+        }).collect::<BTreeMap<_, _>>(),
+    }))
+}
+
+fn probe_legacy_sqlite(path: &Path) -> serde_json::Value {
+    let started = Instant::now();
+    let Ok(connection) =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    else {
+        return serde_json::json!({
+            "path": path,
+            "present": false,
+            "valid": false,
+            "open_us": started.elapsed().as_micros() as u64,
+        });
+    };
+    let open_us = started.elapsed().as_micros() as u64;
+    let query_started = Instant::now();
+    let tables = [
+        "mame_software_items",
+        "mame_software_hashes",
+        "mame_machines",
+        "mister_arcade_entries",
+    ];
+    let mut counts = BTreeMap::new();
+    let mut valid = true;
+    for table in tables {
+        let sql = format!("SELECT count(*) FROM {table}");
+        match connection.query_row(&sql, [], |row| row.get::<_, i64>(0)) {
+            Ok(count) => {
+                counts.insert(table, count.max(0) as u64);
+            }
+            Err(_) => valid = false,
+        }
+    }
+    serde_json::json!({
+        "path": path,
+        "present": true,
+        "valid": valid,
+        "open_us": open_us,
+        "probe_us": query_started.elapsed().as_micros() as u64,
+        "table_rows": counts,
+    })
+}
+
+fn process_rss_kb() -> Option<u64> {
+    let contents = std::fs::read_to_string("/proc/self/status").ok()?;
+    contents.lines().find_map(|line| {
+        line.strip_prefix("VmRSS:")
+            .and_then(|value| value.split_whitespace().next())
+            .and_then(|value| value.parse().ok())
+    })
 }
 
 impl MetadataStore {
@@ -1694,5 +1819,48 @@ mod tests {
     #[test]
     fn runtime_mapping_has_thirty_four_systems() {
         assert_eq!(RUNTIME_SOFTWARE_SYSTEMS.len(), 34);
+    }
+
+    #[test]
+    fn qualification_probe_reports_compact_and_legacy_measurements() {
+        let fixture = std::env::temp_dir().join(format!(
+            "mister-magik-metadata-qualification-{}",
+            std::process::id()
+        ));
+        let mut builder = MetadataFileBuilder::new();
+        for (system_id, _, _) in RUNTIME_SOFTWARE_SYSTEMS {
+            builder
+                .add_software(system_id, &sample())
+                .expect("add software");
+        }
+        builder
+            .add_arcade(&ArcadeShard::default())
+            .expect("add Arcade");
+        let status = builder.write_to(&fixture).expect("write compact fixture");
+        let compact = probe_compact_runtime(&fixture).expect("probe compact fixture");
+        assert_eq!(compact["valid"], true);
+        assert_eq!(compact["shard_count"], 35);
+        assert_eq!(compact["file_bytes"], status.file_len);
+        assert!(compact["open_us"].is_number());
+        assert!(compact["decode_us"].is_number());
+
+        let legacy_path = fixture.with_extension("sqlite3");
+        let connection = rusqlite::Connection::open(&legacy_path).expect("open SQLite fixture");
+        connection
+            .execute_batch(
+                "CREATE TABLE mame_software_items (name TEXT);\
+                 CREATE TABLE mame_software_hashes (name TEXT);\
+                 CREATE TABLE mame_machines (name TEXT);\
+                 CREATE TABLE mister_arcade_entries (name TEXT);",
+            )
+            .expect("create SQLite fixture");
+        drop(connection);
+        let legacy = probe_legacy_sqlite(&legacy_path);
+        assert_eq!(legacy["present"], true);
+        assert_eq!(legacy["valid"], true);
+        assert!(legacy["open_us"].is_number());
+        assert!(legacy["probe_us"].is_number());
+        let _ = std::fs::remove_file(fixture);
+        let _ = std::fs::remove_file(legacy_path);
     }
 }

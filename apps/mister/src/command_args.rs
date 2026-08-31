@@ -27,6 +27,7 @@ pub const CATALOG_CORPUS_INVENTORY_COMMAND: &str = "catalog-corpus-inventory";
 pub const CATALOG_REGISTRY_REPORT_COMMAND: &str = "catalog-registry-report";
 pub const CATALOG_SCREENSHOT_AUDIT_COMMAND: &str = "catalog-screenshot-audit";
 pub const CATALOG_WORKER_COMMAND: &str = "catalog-worker";
+pub const RUNTIME_METADATA_QUALIFICATION_COMMAND: &str = "metadata-qualification-report";
 
 pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("read", CommandKind::Fpga),
@@ -95,6 +96,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(CATALOG_NEOGEO_FAMILY_AUDIT_COMMAND, CommandKind::PreFpga),
     CommandSpec::new(CATALOG_REGISTRY_REPORT_COMMAND, CommandKind::PreFpga),
     CommandSpec::new(CATALOG_SCREENSHOT_AUDIT_COMMAND, CommandKind::PreFpga),
+    #[cfg(feature = "diagnostics")]
+    CommandSpec::new(RUNTIME_METADATA_QUALIFICATION_COMMAND, CommandKind::PreFpga),
     // Internal supervised child. It deliberately does not take the UI process lock.
     CommandSpec::new(CATALOG_WORKER_COMMAND, CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
@@ -314,6 +317,7 @@ mod tests {
             "library-scan-bench",
             "preview-pack-bench",
             "preview-index-refresh-bench",
+            RUNTIME_METADATA_QUALIFICATION_COMMAND,
         ] {
             assert!(is_known_command(command), "{command}");
         }
