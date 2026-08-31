@@ -27,6 +27,7 @@ warnings = "deny"
 all = "deny"
 
 [dependencies]
+hotpath = "0.24"
 libc = "0.2"
 lz4_flex = "0.14.0"
 memmap2 = "0.9.11"
@@ -44,6 +45,8 @@ walkdir = "2"
 [features]
 default = []
 builder = []
+hotpath = ["hotpath/hotpath"]
+hotpath-mcp = ["hotpath", "hotpath/hotpath-mcp"]
 profile = ["dep:pprof"]
 
 [profile.release]

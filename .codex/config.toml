@@ -42,3 +42,7 @@ enabled_tools = [
   "get_diagnostics",
   "rename_symbol_strict",
 ]
+
+[mcp_servers.hotpath]
+url = "http://localhost:6771/mcp"
+required = false
