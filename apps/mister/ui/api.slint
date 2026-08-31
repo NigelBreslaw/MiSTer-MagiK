@@ -14,7 +14,7 @@ export enum SystemHubSection { games, recent, favourites, information }
 export enum HomeFocus { menu, settings }
 export enum HomeScrollPhase { idle, held, repeating }
 export enum NavigationTransitionState { idle, active }
-export enum SettingsSection { display, orientation, screensaver, reduce-motion, exit, rebuild, about }
+export enum SettingsSection { display, orientation, screensaver, reduce-motion, exit, refresh, about }
 export enum SettingsPopup { none, display-resolution, screen-orientation }
 export enum DisplayTransactionState { idle, provisional, persisting, failed }
 export enum ScreenOrientation { normal, monitor-clockwise, monitor-counterclockwise }
@@ -34,8 +34,8 @@ export enum MediaPackState { queued, downloading, complete, failed }
 export enum ConfirmationKind {
     none,
     exit-to-mister,
-    rebuild-database,
-    database-rebuild-unavailable,
+    refresh-database,
+    database-refresh-unavailable,
     restart,
     library-changed,
     library-update-failed,

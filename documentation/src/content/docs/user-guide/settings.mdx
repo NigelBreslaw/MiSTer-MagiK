@@ -1,6 +1,6 @@
 ---
 title: Settings
-description: Exit, controller tools, joystick policy, database rebuild, and restart.
+description: Exit, controller tools, joystick policy, database refresh, and restart.
 sidebar:
   order: 5
 ---
@@ -14,7 +14,7 @@ Settings contains device-level actions:
 - `Exit to MiSTer` leaves MiSTer MagiK and returns to the stock MiSTer menu until reboot.
 - `Controller Test` opens the live controller tester.
 - `Simple joystick handling` toggles the simplified input policy.
-- `Rebuild Database` rebuilds every library system in the background. Published games remain available, screenshot packs are preserved, and the MiSTer does not reboot.
+- `Refresh Database` checks the filesystem watches and refreshes changed library systems in the background. Published games remain available, screenshot packs are preserved, and the MiSTer does not reboot.
 - `Restart` reboots the MiSTer.
 
 For attended destructive maintenance, run `mister-magik-fb purge-library-data --confirm`.

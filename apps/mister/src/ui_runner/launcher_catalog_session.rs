@@ -498,7 +498,7 @@ impl LauncherCatalogSession {
         effects
     }
 
-    pub(super) fn rebuild_database(
+    pub(super) fn refresh_database(
         &mut self,
         root: String,
         worker_available: bool,
@@ -506,17 +506,17 @@ impl LauncherCatalogSession {
         let mut effects = CatalogSessionEffects::default();
         if !worker_available {
             effects.event(
-                "database_rebuild_rejected",
+                "database_refresh_rejected",
                 "source=settings reason=catalog-worker-busy",
             );
             effects.push(CatalogSessionEffect::Confirm(
-                launcher::ConfirmAction::DatabaseRebuildUnavailable,
+                launcher::ConfirmAction::DatabaseRefreshUnavailable,
             ));
             return effects;
         }
         effects.event(
-            "database_rebuild_requested",
-            "source=settings scope=all-systems",
+            "database_refresh_requested",
+            "source=settings scope=changed-inputs",
         );
         self.refresh_done = false;
         self.foreground_update = false;
@@ -525,15 +525,11 @@ impl LauncherCatalogSession {
         self.system_update_total = None;
         self.completed_system_updates.clear();
         self.displayed_system_updates = 0;
-        effects.push(CatalogSessionEffect::CatalogPlanReady {
-            system_ids: Vec::new(),
-            all_published_systems: true,
-        });
         effects.ui(catalog_system_update_preparing_intent());
         effects.push(CatalogSessionEffect::StartCatalogWorker(
             CatalogWorkerStart {
                 root,
-                request: CatalogWorkerRequest::RECONCILE_ALL_SYSTEMS,
+                request: CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
                 initial_cache: CatalogWorkerInitialCache::AlreadyLoadedReady,
                 execution_mode: CatalogExecutionMode::BackgroundInteractive,
             },
@@ -1397,19 +1393,12 @@ mod tests {
     }
 
     #[test]
-    fn settings_database_rebuild_marks_all_systems_and_stays_background() {
+    fn settings_database_refresh_reconciles_changed_systems_in_background() {
         let mut session = LauncherCatalogSession::new(false);
-        let effects = session.rebuild_database("/media/fat/_Arcade".to_string(), true);
+        let effects = session.refresh_database("/media/fat/_Arcade".to_string(), true);
 
         assert!(!session.refresh_done());
         assert!(!session.foreground_update());
-        assert!(effects.effects.iter().any(|effect| matches!(
-            effect,
-            CatalogSessionEffect::CatalogPlanReady {
-                system_ids,
-                all_published_systems: true,
-            } if system_ids.is_empty()
-        )));
         let worker = effects
             .effects
             .iter()
@@ -1418,7 +1407,10 @@ mod tests {
                 _ => None,
             })
             .expect("catalog worker");
-        assert_eq!(worker.request, CatalogWorkerRequest::RECONCILE_ALL_SYSTEMS);
+        assert_eq!(
+            worker.request,
+            CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS
+        );
         assert_eq!(
             worker.initial_cache,
             CatalogWorkerInitialCache::AlreadyLoadedReady
@@ -1436,20 +1428,20 @@ mod tests {
     }
 
     #[test]
-    fn settings_database_rebuild_busy_only_shows_acknowledgement_dialog() {
+    fn settings_database_refresh_busy_only_shows_acknowledgement_dialog() {
         let mut session = LauncherCatalogSession::new(false);
-        let effects = session.rebuild_database("/media/fat/_Arcade".to_string(), false);
+        let effects = session.refresh_database("/media/fat/_Arcade".to_string(), false);
         let mut effects = effects.into_effects().into_iter();
         assert!(matches!(
             effects.next(),
             Some(CatalogSessionEffect::StartupEvent(CatalogSessionEvent { name, detail }))
-                if name == "database_rebuild_rejected"
+                if name == "database_refresh_rejected"
                     && detail == "source=settings reason=catalog-worker-busy"
         ));
         assert!(matches!(
             effects.next(),
             Some(CatalogSessionEffect::Confirm(
-                launcher::ConfirmAction::DatabaseRebuildUnavailable
+                launcher::ConfirmAction::DatabaseRefreshUnavailable
             ))
         ));
         assert!(effects.next().is_none());

@@ -169,7 +169,7 @@ pub fn apply_navigation_action(
                 slint_ui::launcher::SettingsSection::Screensaver => 2,
                 slint_ui::launcher::SettingsSection::ReduceMotion => 3,
                 slint_ui::launcher::SettingsSection::Exit => 4,
-                slint_ui::launcher::SettingsSection::Rebuild => 5,
+                slint_ui::launcher::SettingsSection::Refresh => 5,
                 slint_ui::launcher::SettingsSection::About => 6,
             };
             None

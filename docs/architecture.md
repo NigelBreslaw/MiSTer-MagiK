@@ -993,9 +993,10 @@ Current rules:
   per-system reconciler as explicit refresh, while `Continue` writes a one-shot
   next-boot marker. Use `startup_timing` logs to separate registry load, Arcade
   mini-nav hydration, bridge sync, stamp check, user choice, and build costs.
-- Settings → **Rebuild Database** requests `AllSystems` warm reconciliation.
-  It keeps Settings responsive, every published tile launchable, and screenshot
-  packs intact; it neither shuts down media work nor reboots.
+- Settings → **Refresh Database** requests changed-inputs warm reconciliation.
+  It keeps Settings responsive, updates only systems whose source watches
+  changed, and leaves screenshot packs intact; it neither shuts down media
+  work nor reboots.
 - `purge-library-data --confirm` is the explicit destructive maintenance
   boundary for catalog artifacts and supported screenshot packs. It is
   process-exclusive, runs before FPGA/display ownership, reports removal

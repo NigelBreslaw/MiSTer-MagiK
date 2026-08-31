@@ -102,7 +102,7 @@ pub const fn settings_section(index: usize) -> view::SettingsSection {
         2 => view::SettingsSection::Screensaver,
         3 => view::SettingsSection::ReduceMotion,
         4 => view::SettingsSection::Exit,
-        5 => view::SettingsSection::Rebuild,
+        5 => view::SettingsSection::Refresh,
         6 => view::SettingsSection::About,
         _ => panic!("settings selection is outside its finite domain"),
     }
@@ -202,9 +202,9 @@ pub const fn confirmation_kind(value: Option<ConfirmAction>) -> view::Confirmati
     match value {
         None => view::ConfirmationKind::None,
         Some(ConfirmAction::ExitToMister) => view::ConfirmationKind::ExitToMister,
-        Some(ConfirmAction::RebuildDatabase) => view::ConfirmationKind::RebuildDatabase,
-        Some(ConfirmAction::DatabaseRebuildUnavailable) => {
-            view::ConfirmationKind::DatabaseRebuildUnavailable
+        Some(ConfirmAction::RefreshDatabase) => view::ConfirmationKind::RefreshDatabase,
+        Some(ConfirmAction::DatabaseRefreshUnavailable) => {
+            view::ConfirmationKind::DatabaseRefreshUnavailable
         }
         Some(ConfirmAction::Restart) => view::ConfirmationKind::Restart,
         Some(ConfirmAction::LibraryChanged) => view::ConfirmationKind::LibraryChanged,
@@ -253,8 +253,8 @@ mod tests {
             view::ConfirmationKind::RemoveFavourite
         );
         assert_eq!(
-            confirmation_kind(Some(ConfirmAction::DatabaseRebuildUnavailable)),
-            view::ConfirmationKind::DatabaseRebuildUnavailable
+            confirmation_kind(Some(ConfirmAction::DatabaseRefreshUnavailable)),
+            view::ConfirmationKind::DatabaseRefreshUnavailable
         );
     }
 

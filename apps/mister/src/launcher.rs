@@ -77,7 +77,7 @@ const SETTINGS_ORIENTATION_SELECTED: usize = 1;
 const SETTINGS_SCREENSAVER_SELECTED: usize = 2;
 const SETTINGS_REDUCE_MOTION_SELECTED: usize = 3;
 const SETTINGS_EXIT_SELECTED: usize = 4;
-const SETTINGS_REBUILD_SELECTED: usize = 5;
+const SETTINGS_REFRESH_SELECTED: usize = 5;
 const SETTINGS_ABOUT_SELECTED: usize = 6;
 const SETTINGS_MAX_SELECTED: usize = SETTINGS_ABOUT_SELECTED;
 const ABOUT_MAX_SELECTED: usize = 1;
@@ -308,8 +308,8 @@ pub enum ArcadeUserListMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfirmAction {
     ExitToMister,
-    RebuildDatabase,
-    DatabaseRebuildUnavailable,
+    RefreshDatabase,
+    DatabaseRefreshUnavailable,
     Restart,
     LibraryChanged,
     LibraryUpdateFailed,
@@ -330,7 +330,7 @@ pub enum LauncherAction {
     AddFavourite,
     RemoveFavourite,
     ExitToMister,
-    RebuildDatabase,
+    RefreshDatabase,
     Restart,
     ContinueWithStaleLibrary,
     RebuildLibrary,
@@ -3032,7 +3032,7 @@ impl LauncherNav {
             self.confirm_selected = 0;
             self.confirm_action = Some(match self.settings_selected {
                 SETTINGS_EXIT_SELECTED => ConfirmAction::ExitToMister,
-                SETTINGS_REBUILD_SELECTED => ConfirmAction::RebuildDatabase,
+                SETTINGS_REFRESH_SELECTED => ConfirmAction::RefreshDatabase,
                 _ => return None,
             });
         }
@@ -3247,7 +3247,7 @@ impl LauncherNav {
                 Some(ConfirmAction::ExitToMister) => selected == 1,
                 Some(ConfirmAction::LibraryChanged) => true,
                 Some(
-                    ConfirmAction::LibraryUpdateFailed | ConfirmAction::DatabaseRebuildUnavailable,
+                    ConfirmAction::LibraryUpdateFailed | ConfirmAction::DatabaseRefreshUnavailable,
                 ) => false,
                 _ => selected == 1,
             };
@@ -3266,8 +3266,8 @@ impl LauncherNav {
                         path: None,
                         settings: None,
                     }),
-                    Some(ConfirmAction::RebuildDatabase) => Some(LauncherEvent {
-                        action: LauncherAction::RebuildDatabase,
+                    Some(ConfirmAction::RefreshDatabase) => Some(LauncherEvent {
+                        action: LauncherAction::RefreshDatabase,
                         path: None,
                         settings: None,
                     }),
@@ -3287,7 +3287,7 @@ impl LauncherNav {
                     }),
                     Some(
                         ConfirmAction::LibraryUpdateFailed
-                        | ConfirmAction::DatabaseRebuildUnavailable,
+                        | ConfirmAction::DatabaseRefreshUnavailable,
                     ) => None,
                     Some(ConfirmAction::DisplayResolution) => Some(LauncherEvent {
                         action: LauncherAction::ConfirmDisplayResolution,
@@ -4822,7 +4822,7 @@ fn confirm_max_selected(action: Option<ConfirmAction>) -> usize {
     match action {
         Some(
             ConfirmAction::LibraryUpdateFailed
-            | ConfirmAction::DatabaseRebuildUnavailable
+            | ConfirmAction::DatabaseRefreshUnavailable
             | ConfirmAction::DisplayResolutionError,
         ) => 0,
         Some(_) => 1,
@@ -8491,11 +8491,11 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::Settings;
-        nav.settings_selected = SETTINGS_REBUILD_SELECTED;
+        nav.settings_selected = SETTINGS_REFRESH_SELECTED;
 
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
-        assert_eq!(nav.confirm_action, Some(ConfirmAction::RebuildDatabase));
+        assert_eq!(nav.confirm_action, Some(ConfirmAction::RefreshDatabase));
         assert_eq!(nav.confirm_selected, 0);
         assert!(
             nav.handle_input(
@@ -8523,18 +8523,18 @@ mod tests {
 
         let event = nav
             .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
-            .expect("confirmed reset should emit event");
-        assert_eq!(event.action, LauncherAction::RebuildDatabase);
+            .expect("confirmed refresh should emit event");
+        assert_eq!(event.action, LauncherAction::RefreshDatabase);
         assert_eq!(event.path, None);
         assert_eq!(nav.confirm_action, None);
         assert_eq!(nav.confirm_selected, 0);
     }
 
     #[test]
-    fn unavailable_database_rebuild_confirmation_dismisses_without_action() {
+    fn unavailable_database_refresh_confirmation_dismisses_without_action() {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
-        nav.confirm_action = Some(ConfirmAction::DatabaseRebuildUnavailable);
+        nav.confirm_action = Some(ConfirmAction::DatabaseRefreshUnavailable);
         nav.confirm_selected = 0;
 
         let event = nav.handle_input(&pad_with(|pad| pad.btn_a = true), Instant::now(), &catalog);
@@ -8808,7 +8808,7 @@ mod tests {
         nav.sync_launcher_taxonomy(&catalog);
         assert!(nav.open_menu("menu:consoles:nintendo"));
         nav.screen = Screen::Settings;
-        nav.confirm_action = Some(ConfirmAction::RebuildDatabase);
+        nav.confirm_action = Some(ConfirmAction::RefreshDatabase);
 
         assert!(
             nav.handle_input(

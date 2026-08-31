@@ -27,7 +27,7 @@ export component SettingsScreen inherits Rectangle {
             CrtMenuRow { vertical-stretch: 1; label: "Screensaver"; detail: "Configure"; focused: SettingsView.section == SettingsSection.screensaver; acknowledged: FeedbackView.acknowledged("settings", "screensaver", FeedbackView.revision); }
             CrtMenuRow { vertical-stretch: 1; label: "Reduce motion"; detail: SettingsView.reduce-motion ? "On" : "Off"; focused: SettingsView.section == SettingsSection.reduce-motion; acknowledged: FeedbackView.acknowledged("settings", "reduce-motion", FeedbackView.revision); }
             CrtMenuRow { vertical-stretch: 1; label: "Exit to MiSTer"; detail: "Until reboot"; focused: SettingsView.section == SettingsSection.exit; acknowledged: FeedbackView.acknowledged("settings", "exit", FeedbackView.revision); }
-            CrtMenuRow { vertical-stretch: 1; label: "Rebuild DB"; detail: "Rebuild library only"; focused: SettingsView.section == SettingsSection.rebuild; acknowledged: FeedbackView.acknowledged("settings", "rebuild", FeedbackView.revision); }
+            CrtMenuRow { vertical-stretch: 1; label: "Refresh Database"; detail: "Refresh changed systems"; focused: SettingsView.section == SettingsSection.refresh; acknowledged: FeedbackView.acknowledged("settings", "refresh", FeedbackView.revision); }
             CrtMenuRow { vertical-stretch: 1; label: "About"; detail: "MiSTer MagiK"; focused: SettingsView.section == SettingsSection.about; acknowledged: FeedbackView.acknowledged("settings", "about", FeedbackView.revision); }
         }
 

@@ -97,10 +97,10 @@ export component SettingsScreen inherits Rectangle {
             }
 
             SettingsRow {
-                label: "Rebuild Database";
-                detail: "Rebuild all library systems";
-                focused: SettingsView.section == SettingsSection.rebuild;
-                acknowledged: FeedbackView.acknowledged("settings", "rebuild", FeedbackView.revision);
+                label: "Refresh Database";
+                detail: "Refresh changed library systems";
+                focused: SettingsView.section == SettingsSection.refresh;
+                acknowledged: FeedbackView.acknowledged("settings", "refresh", FeedbackView.revision);
             }
 
             SettingsRow {

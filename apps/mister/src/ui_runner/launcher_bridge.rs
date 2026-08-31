@@ -727,15 +727,15 @@ fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridge
             left_label: "Cancel",
             right_label: "Exit to MiSTer",
         },
-        Some(launcher::ConfirmAction::RebuildDatabase) => ConfirmBridgeText {
-            title: "Rebuild Database?",
-            message: "Rebuild all library systems in the background? Games and screenshots remain available.",
+        Some(launcher::ConfirmAction::RefreshDatabase) => ConfirmBridgeText {
+            title: "Refresh Database?",
+            message: "Refresh changed library systems in the background? Games and screenshots remain available.",
             left_label: "Cancel",
-            right_label: "Rebuild",
+            right_label: "Refresh",
         },
-        Some(launcher::ConfirmAction::DatabaseRebuildUnavailable) => ConfirmBridgeText {
-            title: "Database rebuild unavailable",
-            message: "A library update is already running. Wait for it to finish, then try rebuilding again.",
+        Some(launcher::ConfirmAction::DatabaseRefreshUnavailable) => ConfirmBridgeText {
+            title: "Database refresh unavailable",
+            message: "A library update is already running. Wait for it to finish, then try refreshing again.",
             left_label: "OK",
             right_label: "",
         },
@@ -1757,13 +1757,26 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_database_rebuild_uses_single_ok_button_and_exact_copy() {
-        let text = confirm_bridge_text(Some(launcher::ConfirmAction::DatabaseRebuildUnavailable));
+    fn database_refresh_uses_incremental_refresh_copy() {
+        let text = confirm_bridge_text(Some(launcher::ConfirmAction::RefreshDatabase));
 
-        assert_eq!(text.title, "Database rebuild unavailable");
+        assert_eq!(text.title, "Refresh Database?");
         assert_eq!(
             text.message,
-            "A library update is already running. Wait for it to finish, then try rebuilding again."
+            "Refresh changed library systems in the background? Games and screenshots remain available."
+        );
+        assert_eq!(text.left_label, "Cancel");
+        assert_eq!(text.right_label, "Refresh");
+    }
+
+    #[test]
+    fn unavailable_database_refresh_uses_single_ok_button_and_exact_copy() {
+        let text = confirm_bridge_text(Some(launcher::ConfirmAction::DatabaseRefreshUnavailable));
+
+        assert_eq!(text.title, "Database refresh unavailable");
+        assert_eq!(
+            text.message,
+            "A library update is already running. Wait for it to finish, then try refreshing again."
         );
         assert_eq!(text.left_label, "OK");
         assert_eq!(text.right_label, "");

@@ -307,7 +307,7 @@ Their overall result is authoritative only for the ordinary interactive state.
 
 Forced catalog reconciliation is exceptional-path evidence, not a release gate
 for ordinary interaction. A missing catalog may build on first boot, and a user
-may explicitly choose Settings → **Rebuild Database**; those paths retain their
+may explicitly choose Settings → **Refresh Database**; those paths retain their
 own correctness and responsiveness coverage. Forced catalog work may be used
 only by an explicitly named stress or attribution arm such as
 `input-latency-lab`. Its timing, cadence, and feedback results are reported

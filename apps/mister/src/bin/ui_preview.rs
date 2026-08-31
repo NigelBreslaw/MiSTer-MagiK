@@ -991,7 +991,7 @@ mod macos {
                         2 => SettingsSection::Screensaver,
                         3 => SettingsSection::ReduceMotion,
                         4 => SettingsSection::Exit,
-                        5 => SettingsSection::Rebuild,
+                        5 => SettingsSection::Refresh,
                         6 => SettingsSection::About,
                         _ => unreachable!("settings selection is bounded"),
                     });
@@ -4200,14 +4200,14 @@ mod macos {
 
         match scenario {
             Scenario::Confirm => {
-                overlay.set_confirmation_kind(ConfirmationKind::RebuildDatabase);
-                overlay.set_confirmation_title("Rebuild Database?".into());
+                overlay.set_confirmation_kind(ConfirmationKind::RefreshDatabase);
+                overlay.set_confirmation_title("Refresh Database?".into());
                 overlay.set_confirmation_message(
-                    "Rebuild all library systems in the background? Games and screenshots remain available."
+                    "Refresh changed library systems in the background? Games and screenshots remain available."
                         .into(),
                 );
                 overlay.set_cancel_label("Cancel".into());
-                overlay.set_confirm_label("Rebuild".into());
+                overlay.set_confirm_label("Refresh".into());
             }
             Scenario::CatalogScan => {
                 catalog.set_activity(CatalogActivity::Foreground);

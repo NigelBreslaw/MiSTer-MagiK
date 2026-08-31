@@ -8203,14 +8203,14 @@ pub(super) fn run_launcher_loop(
                                             }
                                         }
                                     }
-                                    LauncherAction::RebuildDatabase => {
+                                    LauncherAction::RefreshDatabase => {
                                         if ui_test_fixture {
                                             crate::ui_logln!(
-                                                "ui_test_effect_blocked effect=rebuild_database"
+                                                "ui_test_effect_blocked effect=refresh_database"
                                             );
                                             continue 'launcher;
                                         }
-                                        let effects = catalog_session.rebuild_database(
+                                        let effects = catalog_session.refresh_database(
                                             arcade_root.clone(),
                                             scheduler.catalog_worker_available(),
                                         );
