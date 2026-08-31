@@ -750,17 +750,27 @@ fn put_u64(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
-fn put_string(out: &mut Vec<String>, value: Option<&str>) -> u32 {
-    let Some(value) = value else { return 0 };
-    if value.is_empty() {
-        return 0;
+#[derive(Default)]
+struct StringTable {
+    values: Vec<String>,
+    indexes: BTreeMap<String, u32>,
+}
+
+impl StringTable {
+    fn intern(&mut self, value: Option<&str>) -> u32 {
+        let Some(value) = value else { return 0 };
+        if value.is_empty() {
+            return 0;
+        }
+        if let Some(index) = self.indexes.get(value) {
+            return *index;
+        }
+        let index = u32::try_from(self.values.len() + 1).unwrap_or(u32::MAX);
+        let value = value.to_string();
+        self.values.push(value.clone());
+        self.indexes.insert(value, index);
+        index
     }
-    let value = value.to_string();
-    if let Some(index) = out.iter().position(|existing| existing == &value) {
-        return (index + 1) as u32;
-    }
-    out.push(value);
-    out.len() as u32
 }
 
 fn string_value(strings: &[String], index: u32) -> Result<Option<String>, String> {
@@ -1128,17 +1138,16 @@ fn decode_arcade(payload: &[u8]) -> Result<ArcadeShard, String> {
 
 /// Encode software data into the deterministic shard payload format.
 pub fn encode_software(shard: &SoftwareShard) -> Result<Vec<u8>, String> {
-    let mut strings = Vec::new();
-    let mut string_index = |value: Option<&str>| put_string(&mut strings, value);
+    let mut strings = StringTable::default();
     let mut item_rows = Vec::with_capacity(shard.items.len());
     for item in &shard.items {
         item_rows.push([
-            string_index(Some(&item.name)),
-            string_index(item.parent_name.as_deref()),
-            string_index(Some(&item.description)),
-            string_index(item.year.as_deref()),
-            string_index(item.publisher.as_deref()),
-            string_index(item.region.as_deref()),
+            strings.intern(Some(&item.name)),
+            strings.intern(item.parent_name.as_deref()),
+            strings.intern(Some(&item.description)),
+            strings.intern(item.year.as_deref()),
+            strings.intern(item.publisher.as_deref()),
+            strings.intern(item.region.as_deref()),
             0,
             0,
         ]);
@@ -1156,7 +1165,7 @@ pub fn encode_software(shard: &SoftwareShard) -> Result<Vec<u8>, String> {
                     as u32,
             );
         }
-        title_rows.push((string_index(Some(title)), start, names.len() as u32));
+        title_rows.push((strings.intern(Some(title)), start, names.len() as u32));
     }
     let mut hash_rows = Vec::new();
     for candidate in &shard.hash_candidates {
@@ -1205,14 +1214,14 @@ pub fn encode_software(shard: &SoftwareShard) -> Result<Vec<u8>, String> {
     }
     let mut strings_bytes = Vec::new();
     let mut offsets = vec![0u32];
-    for value in &strings {
+    for value in &strings.values {
         strings_bytes.extend_from_slice(value.as_bytes());
         offsets.push(strings_bytes.len() as u32);
     }
     let mut payload = Vec::new();
     payload.extend_from_slice(SOFTWARE_MAGIC);
     put_u32(&mut payload, VERSION);
-    put_u32(&mut payload, strings.len() as u32);
+    put_u32(&mut payload, strings.values.len() as u32);
     put_u32(&mut payload, strings_bytes.len() as u32);
     put_u32(&mut payload, shard.items.len() as u32);
     put_u32(&mut payload, title_rows.len() as u32);
@@ -1256,16 +1265,16 @@ pub fn encode_software(shard: &SoftwareShard) -> Result<Vec<u8>, String> {
 
 /// Encode the Arcade/HBMAME/MiSTer metadata shard.
 pub fn encode_arcade(shard: &ArcadeShard) -> Result<Vec<u8>, String> {
-    let mut strings = Vec::new();
-    let encode_machine = |machine: &ArcadeMachine, strings: &mut Vec<String>| -> [u32; 8] {
+    let mut strings = StringTable::default();
+    let encode_machine = |machine: &ArcadeMachine, strings: &mut StringTable| -> [u32; 8] {
         [
-            put_string(strings, Some(&machine.setname)),
-            put_string(strings, machine.parent_setname.as_deref()),
-            put_string(strings, Some(&machine.title)),
-            put_string(strings, machine.year.as_deref()),
-            put_string(strings, machine.manufacturer.as_deref()),
+            strings.intern(Some(&machine.setname)),
+            strings.intern(machine.parent_setname.as_deref()),
+            strings.intern(Some(&machine.title)),
+            strings.intern(machine.year.as_deref()),
+            strings.intern(machine.manufacturer.as_deref()),
             machine.players.unwrap_or(0) as u32,
-            put_string(strings, machine.control.as_deref()),
+            strings.intern(machine.control.as_deref()),
             0,
         ]
     };
@@ -1282,26 +1291,26 @@ pub fn encode_arcade(shard: &ArcadeShard) -> Result<Vec<u8>, String> {
     let mut mister_rows = Vec::new();
     for row in &shard.mister {
         mister_rows.push([
-            put_string(&mut strings, Some(&row.setname_key)),
-            put_string(&mut strings, Some(&row.mra_name_key)),
-            put_string(&mut strings, Some(&row.title)),
-            put_string(&mut strings, Some(&row.category)),
+            strings.intern(Some(&row.setname_key)),
+            strings.intern(Some(&row.mra_name_key)),
+            strings.intern(Some(&row.title)),
+            strings.intern(Some(&row.category)),
             row.year.unwrap_or(0) as u32,
-            put_string(&mut strings, Some(&row.manufacturer)),
+            strings.intern(Some(&row.manufacturer)),
             row.players.unwrap_or(0) as u32,
-            put_string(&mut strings, Some(&row.control)),
+            strings.intern(Some(&row.control)),
         ]);
     }
     let mut strings_bytes = Vec::new();
     let mut offsets = vec![0u32];
-    for value in &strings {
+    for value in &strings.values {
         strings_bytes.extend_from_slice(value.as_bytes());
         offsets.push(strings_bytes.len() as u32);
     }
     let mut payload = Vec::new();
     payload.extend_from_slice(ARCADE_MAGIC);
     put_u32(&mut payload, VERSION);
-    put_u32(&mut payload, strings.len() as u32);
+    put_u32(&mut payload, strings.values.len() as u32);
     put_u32(&mut payload, strings_bytes.len() as u32);
     put_u32(&mut payload, mame_rows.len() as u32);
     put_u32(&mut payload, hbmame_rows.len() as u32);
