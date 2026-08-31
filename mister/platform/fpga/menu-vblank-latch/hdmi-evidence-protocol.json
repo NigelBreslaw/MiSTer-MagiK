@@ -81,8 +81,8 @@
     }
   },
   "scaler_fetch_liveness_state": {
-    "schema": 18,
-    "architecture": "scaler-off-domain-scheduler-snapshot-v1",
+    "schema": 19,
+    "architecture": "scaler-off-domain-scheduler-snapshot-v2",
     "command": 104,
     "magic": 19800,
     "word_count": 4,

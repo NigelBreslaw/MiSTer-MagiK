@@ -237,7 +237,7 @@ module tb_mister_magik_video_diagnostics_control;
 			fail("publication heartbeat did not advance during reset");
 
 		// Accepted obligations and return phase survive reset. The final beat of
-		// the first burst simultaneously accepts the wrap-marked second burst.
+		// the first burst simultaneously accepts a second burst.
 		drive_accept(28'h0800000);
 		drive_return_beats(8);
 		reset_req = 1'b0;
@@ -263,7 +263,7 @@ module tb_mister_magik_video_diagnostics_control;
 		if(!(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID))
 			fail("qualified record not valid");
 		if(!(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN))
-			fail("wrap-marked complete burst did not establish normal liveness");
+			fail("completed burst did not establish normal liveness");
 		if(!(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID))
 			fail("first stall was not frozen");
 		if(words[1] & MAGIK_SCALER_FETCH_LIVENESS_STATE_FLAG_OBSERVER_FAULT)

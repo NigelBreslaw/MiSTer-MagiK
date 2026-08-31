@@ -67,8 +67,12 @@ for root-cause attribution.
 
 ## Evidence layout
 
-The four-word command `0x68` and magic `0x4d58` remain unchanged; the schema is
-18 and the architecture is `scaler-off-domain-scheduler-snapshot-v1`. For a
+The four-word command `0x68` and magic `0x4d58` remain unchanged; the compact
+publication revision uses schema 19 and architecture
+`scaler-off-domain-scheduler-snapshot-v2`. A completed 128-beat request is
+sufficient to establish prior normal liveness; address history and live-state
+publication fields are intentionally retired to reduce observer placement
+pressure. For a
 qualified `no_request_seen` record, the state word retains the schema-17 event
 layout: window valid, output enable, horizontal edge/start, HSYNC state and
 iteration/decision, read versus skip, skip gates, READ/address/request issue,

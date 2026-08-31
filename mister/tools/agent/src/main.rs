@@ -5009,6 +5009,7 @@ mod linux {
                             | "scaler-output-scheduler-gates-v1"
                             | "scaler-pre-read-scheduler-evidence-v1"
                             | "scaler-off-domain-scheduler-snapshot-v1"
+                            | "scaler-off-domain-scheduler-snapshot-v2"
                     );
                     let output_scheduler_state = architecture == "scaler-output-scheduler-gates-v1";
                     let avalon_gate_state = architecture == "scaler-fetch-no-request-gates-v1";
@@ -5016,6 +5017,7 @@ mod linux {
                         architecture,
                         "scaler-pre-read-scheduler-evidence-v1"
                             | "scaler-off-domain-scheduler-snapshot-v1"
+                            | "scaler-off-domain-scheduler-snapshot-v2"
                     );
                     let classification = scaler_fetch_liveness_classification(samples);
                     let valid_samples = samples.iter().all(|sample| sample.record_valid());

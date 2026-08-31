@@ -152,6 +152,9 @@ const OUTPUT_SCHEDULER_GATES_SCHEMA: u16 = 16;
 const OUTPUT_SCHEDULER_GATES_ARCHITECTURE: &str = "scaler-output-scheduler-gates-v1";
 const PRE_READ_SCHEDULER_EVIDENCE_SCHEMA: u16 = 17;
 const PRE_READ_SCHEDULER_EVIDENCE_ARCHITECTURE: &str = "scaler-pre-read-scheduler-evidence-v1";
+const OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_SCHEMA: u16 = 18;
+const OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_ARCHITECTURE: &str =
+    "scaler-off-domain-scheduler-snapshot-v1";
 
 impl ScalerFetchLivenessState {
     fn field(&self, word: usize, bit: u32, mask: u16) -> u16 {
@@ -172,6 +175,9 @@ impl ScalerFetchLivenessState {
             NO_REQUEST_GATES_SCHEMA => NO_REQUEST_GATES_ARCHITECTURE,
             OUTPUT_SCHEDULER_GATES_SCHEMA => OUTPUT_SCHEDULER_GATES_ARCHITECTURE,
             PRE_READ_SCHEDULER_EVIDENCE_SCHEMA => PRE_READ_SCHEDULER_EVIDENCE_ARCHITECTURE,
+            OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_SCHEMA => {
+                OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_ARCHITECTURE
+            }
             _ => SCALER_FETCH_LIVENESS_STATE_ARCHITECTURE,
         }
     }
@@ -1129,6 +1135,7 @@ pub fn decode_scaler_fetch_liveness_state(
             | NO_REQUEST_GATES_SCHEMA
             | OUTPUT_SCHEDULER_GATES_SCHEMA
             | PRE_READ_SCHEDULER_EVIDENCE_SCHEMA
+            | OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_SCHEMA
             | SCALER_FETCH_LIVENESS_STATE_SCHEMA
     ) {
         return Err(format!(
@@ -1189,7 +1196,9 @@ pub fn decode_scaler_fetch_liveness_state(
         }
         if matches!(
             schema,
-            PRE_READ_SCHEDULER_EVIDENCE_SCHEMA | SCALER_FETCH_LIVENESS_STATE_SCHEMA
+            PRE_READ_SCHEDULER_EVIDENCE_SCHEMA
+                | OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_SCHEMA
+                | SCALER_FETCH_LIVENESS_STATE_SCHEMA
         ) && decoded.no_request_seen()
         {
             let read_decisions =
@@ -1219,8 +1228,13 @@ pub fn decode_scaler_fetch_liveness_state(
                 return Err("scaler pre-read scheduler evidence ordering is impossible".to_string());
             }
         }
-    } else if schema != SCALER_FETCH_LIVENESS_STATE_SCHEMA {
+    } else {
         let live_state = words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD];
+        if schema == SCALER_FETCH_LIVENESS_STATE_SCHEMA && live_state != 0 {
+            return Err(format!(
+                "scaler fetch liveness compact live state is nonzero: 0x{live_state:04x}"
+            ));
+        }
         if live_state & 0x8000 != 0 {
             return Err(format!(
                 "scaler fetch liveness live state contains reserved bits: 0x{live_state:04x}"
@@ -1496,6 +1510,32 @@ mod tests {
         assert_eq!(
             decoded.architecture(),
             PRE_READ_SCHEDULER_EVIDENCE_ARCHITECTURE
+        );
+        assert!(decoded.request_issue_seen());
+        assert!(decoded.wait_read_state_seen());
+    }
+
+    #[test]
+    fn scaler_fetch_liveness_retains_schema_18_decode_support() {
+        let mut words = zero_hdmi_words::<SCALER_FETCH_LIVENESS_STATE_WORDS>(
+            GET_SCALER_FETCH_LIVENESS_STATE,
+            OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_SCHEMA,
+        );
+        words[SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] =
+            SCALER_FETCH_LIVENESS_STATE_FLAG_RECORD_VALID
+                | SCALER_FETCH_LIVENESS_STATE_FLAG_NORMAL_LIVENESS_SEEN
+                | SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
+                | SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN;
+        words[SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = 0x78df;
+        words[SCALER_FETCH_LIVENESS_STATE_CRC_WORD] = message_crc_with_schema(
+            GET_SCALER_FETCH_LIVENESS_STATE,
+            OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_SCHEMA,
+            &words[..SCALER_FETCH_LIVENESS_STATE_CRC_WORD],
+        );
+        let decoded = decode_scaler_fetch_liveness_state(&words).unwrap();
+        assert_eq!(
+            decoded.architecture(),
+            OFF_DOMAIN_SCHEDULER_SNAPSHOT_V1_ARCHITECTURE
         );
         assert!(decoded.request_issue_seen());
         assert!(decoded.wait_read_state_seen());

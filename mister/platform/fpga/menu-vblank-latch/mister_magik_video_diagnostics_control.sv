@@ -16,7 +16,7 @@ module mister_magik_scaler_scheduler_snapshot (
 	input  wire [15:0] live_state,
 	input  wire        request_toggle,
 	output reg         response_toggle = 1'b0,
-	output wire [15:0] evidence_hold
+	(* keep *) output wire [15:0] evidence_hold
 `ifdef FORMAL
 	,output wire        formal_capture_active
 	,output wire [15:0] formal_accumulated_evidence
@@ -158,15 +158,10 @@ module mister_magik_scaler_fetch_liveness_state #(
 
 	// Independent two-entry accepted-obligation scoreboard. Production caps the
 	// external scaler reads at two; obligations remain live across reset_req.
-	reg fifo_wrap0 = 1'b0;
-	reg fifo_wrap1 = 1'b0;
 	reg [1:0] fifo_count = 2'd0;
 	reg [6:0] return_phase = 7'd0;
-	reg [15:0] previous_address = 16'd0;
-	reg previous_address_valid = 1'b0;
 
 	reg normal_liveness_seen = 1'b0;
-	reg address_wrap_seen = 1'b0;
 	reg blocked_request_seen = 1'b0;
 	reg [23:0] progress_watchdog = 24'd0;
 	reg snapshot_request_toggle = 1'b0;
@@ -240,13 +235,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 	wire enqueue = accepted && request_shape_valid &&
 		(fifo_count != 2'd2 || return_last);
 	wire dequeue = return_last;
-	wire accepted_wrap = previous_address_valid &&
-		vbuf_address[27:12] < previous_address;
-	wire [3:0] previous_address_fold = previous_address[3:0];
-	wire [3:0] event_address_fold = accepted ?
-		vbuf_address[15:12] : previous_address_fold;
-	wire frozen_valid = first_stall_valid || observer_fault;
-
 	wire [1:0] monitor_state = !reset_qualified ?
 		MAGIK_SCALER_FETCH_LIVENESS_STATE_MONITOR_UNQUALIFIED :
 		(fifo_count != 2'd0 ?
@@ -320,16 +308,6 @@ module mister_magik_scaler_fetch_liveness_state #(
 		first_stall_valid,
 		normal_liveness_seen,
 		ever_qualified
-	};
-	wire [15:0] live_state = {
-		1'b0,
-		address_wrap_seen,
-		reset_qualified,
-		(return_phase != 7'd0),
-		(fifo_count != 2'd0),
-		monitor_state,
-		fifo_count,
-		return_phase
 	};
 	wire [15:0] frozen_state = frozen_state_bits;
 
@@ -412,48 +390,21 @@ module mister_magik_scaler_fetch_liveness_state #(
 				blocked_request_seen <= 1'b0;
 		end
 
-		if(accepted) begin
-			if(request_shape_valid) begin
-				previous_address <= vbuf_address[27:12];
-				previous_address_valid <= 1'b1;
-				if(accepted_wrap)
-					address_wrap_seen <= 1'b1;
-			end
-		end
-
 		case({enqueue, dequeue})
 			2'b10: begin
-				if(fifo_count == 2'd0) begin
-					fifo_wrap0 <= accepted_wrap;
-				end
-				else begin
-					fifo_wrap1 <= accepted_wrap;
-				end
 				fifo_count <= fifo_count + 1'd1;
 			end
 			2'b01: begin
-				if(fifo_count == 2'd2) begin
-					fifo_wrap0 <= fifo_wrap1;
-				end
 				fifo_count <= fifo_count - 1'd1;
 			end
-			2'b11: begin
-				if(fifo_count == 2'd1) begin
-					fifo_wrap0 <= accepted_wrap;
-				end
-				else begin
-					fifo_wrap0 <= fifo_wrap1;
-					fifo_wrap1 <= accepted_wrap;
-				end
-			end
+			2'b11: begin end
 			default: begin end
 		endcase
 
 		if(return_has_entry) begin
 			if(return_phase == 7'd127) begin
 				return_phase <= 7'd0;
-				if(fifo_wrap0)
-					normal_liveness_seen <= 1'b1;
+				normal_liveness_seen <= 1'b1;
 			end
 			else
 				return_phase <= return_phase + 1'd1;
@@ -463,7 +414,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 		// the terminal watchdog cycle wins over timeout.
 		if(!first_stall_valid && !observer_fault && observer_fault_event) begin
 			frozen_state_bits <= {
-				event_address_fold,
+				4'd0,
 				fifo_count,
 				return_phase,
 				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT
@@ -475,7 +426,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 		end
 		else if(!first_stall_valid && !observer_fault && request_cancel_event) begin
 			frozen_state_bits <= {
-				previous_address_fold,
+				4'd0,
 				fifo_count,
 				return_phase,
 				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED
@@ -486,7 +437,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 			progress_watchdog <= 24'd0;
 			if(snapshot_invalidated || expected_progress || reset_sync) begin
 				frozen_state_bits <= {
-					previous_address_fold,
+					4'd0,
 					fifo_count,
 					return_phase,
 					MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_OBSERVER_FAULT
@@ -515,7 +466,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 			end
 			else begin
 				frozen_state_bits <= {
-					previous_address_fold,
+					4'd0,
 					fifo_count,
 					return_phase,
 					timeout_cause
@@ -526,7 +477,7 @@ module mister_magik_scaler_fetch_liveness_state #(
 		// Capture one immutable bank and serialize its CRC before advertising it.
 		if(!publish_crc_busy && publication_generation == acknowledge_sync) begin
 			published_flags <= next_published_flags;
-			published_state <= frozen_valid ? frozen_state : live_state;
+			published_state <= frozen_state;
 			publish_crc_work <= crc16_update_bit(
 				MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA_CRC,
 				next_published_flags[15]);

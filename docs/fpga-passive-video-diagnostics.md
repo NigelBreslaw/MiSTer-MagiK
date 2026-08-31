@@ -1,6 +1,6 @@
 # Passive FPGA HDMI evidence
 
-## Active moving-band campaign: schema 18
+## Active moving-band campaign: schema 19
 
 The preserved 2026-08-28 recurrence showed a byte-stable framebuffer and
 visible moving-band corruption while schema 11 returned CRC-valid but
@@ -39,25 +39,23 @@ as data, and returned beats continue draining accepted obligations while reset
 is asserted. A stable publication bank remains immutable until a complete host
 read is acknowledged across the two-stage CDC handshake.
 
-Address wraps are detected from the accepted address's 4 KiB prefix, and a
-four-bit fold of the last accepted address is retained with the immutable
-cause/phase/FIFO snapshot. The compact record is `{schema, flags, state, CRC}`.
-The high nibble of `flags` is a modulo-16 publication sequence. Before a stall
-or observer fault, `state` is the live phase/FIFO/monitor tuple; afterward the
-same word is the frozen `{address fold, FIFO depth, return phase, cause}` tuple,
-as selected by the sticky flags. Host decoding fails closed on an impossible
-tuple and requires three exact modulo-16 advancing publications. The noncausal
-frozen publication identity is deliberately absent. The publication bank and
-completed CRC work register remain stable under the generation/acknowledgement
-hold interval. CRC advances once per payload word using the established
-word-wide update and the same polynomial and record value.
+A completed 128-beat request establishes prior normal liveness without keeping
+address history on the observed interface. The compact record is
+`{schema, flags, state, CRC}`. The high nibble of `flags` is a modulo-16
+publication sequence. Before a stall or observer fault, `state` is zero;
+afterward it is the frozen `{reserved zero, FIFO depth, return phase, cause}`
+tuple, or the scheduler evidence word for a qualified no-request result. Host
+decoding fails closed on an impossible tuple and requires three exact modulo-16
+advancing publications. The publication bank and completed CRC work register
+remain stable under the generation/acknowledgement hold interval. CRC advances
+one payload bit per cycle using the same polynomial and record value.
 
 The single progress watchdog prioritizes the oldest accepted return obligation,
 then a wait-blocked request, then absence of a request. Its default bound is
 `2^24-1` `clk_100m` cycles (about 167.8 ms). Progress on the terminal cycle wins
 over timeout. The sticky classifications are deliberately observational:
 `no_request_seen`, `accept_blocked`, `first_return_missing`,
-`return_incomplete`, and `request_cancelled`. Normal wrap-marked completion is
+`return_incomplete`, and `request_cancelled`. Normal completed-request evidence is
 rolling evidence and never prevents a much later first stall from freezing.
 Malformed burst shape, unexpected return, FIFO/phase error, reset ambiguity,
 or counter ambiguity invalidates attribution. For schema 16, a coherent
@@ -95,7 +93,7 @@ state inside the physically sensitive `Scalaire` process. That made placement
 depend on which diagnostic bits were registered even though they had no
 functional fanout.
 
-Schema 18, `scaler-off-domain-scheduler-snapshot-v1`, removes every diagnostic
+Schema 19, `scaler-off-domain-scheduler-snapshot-v2`, removes every diagnostic
 register and sticky update from `Scalaire`. The existing 16-bit port now
 exports only live registered scheduler gates. After the 100 MHz watchdog proves
 there has been no external request, it toggles a closed-loop mailbox request.
@@ -107,7 +105,7 @@ It holds the completed 16-bit word before toggling its response; the two-stage
 destination synchronizer therefore qualifies a coherent multi-cycle data path.
 If the scaler clock stops, reset or progress interrupts capture, or the mailbox
 does not answer within the watchdog bound, attribution fails closed as an
-observer fault. Schema 14 through schema 17 remain rollback-decodable.
+observer fault. Schema 14 through schema 18 remain rollback-decodable.
 
 The wide and staged FPGA video observers are retired from production. Their
 field evidence was decisive, but every expanded implementation made the dense

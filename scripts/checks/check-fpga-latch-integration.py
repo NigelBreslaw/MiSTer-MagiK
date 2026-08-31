@@ -324,11 +324,9 @@ def main() -> None:
         "wire return_has_entry = returned && fifo_count != 2'd0;",
         "wire return_last = return_has_entry && return_phase == 7'd127;",
         "vbuf_burstcount == REQUIRED_BURSTCOUNT",
-        "vbuf_address[27:12] < previous_address",
-        "reg fifo_wrap0",
-        "reg fifo_wrap1",
         "reg [1:0] fifo_count",
         "reg [6:0] return_phase",
+        "normal_liveness_seen <= 1'b1;",
         "reg [23:0] progress_watchdog",
         "wire reset_qualified = reset_low_count >= RESET_QUALIFY_LIMIT;",
         "wire first_stall_valid = no_request_seen ||",
@@ -346,6 +344,7 @@ def main() -> None:
         "MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_ACCEPT_BLOCKED",
         "MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_NO_REQUEST_SEEN",
         "module mister_magik_scaler_scheduler_snapshot (",
+        "(* keep *) output wire [15:0] evidence_hold",
         "request_meta <= request_toggle;",
         "request_sync <= request_meta;",
         "(* preserve, dont_replicate *) reg [14:0] evidence_bits = 15'd0;",
@@ -369,7 +368,7 @@ def main() -> None:
         "reg [4:0] publish_crc_phase = 5'd0;",
         "published_state",
         "published_flags <= next_published_flags;",
-        "published_state <= frozen_valid ? frozen_state : live_state;",
+        "published_state <= frozen_state;",
         "publication_generation <= ~publication_generation;",
         "if(command_selected)",
         "acknowledged_generation <= generation_sync;",
@@ -394,7 +393,7 @@ def main() -> None:
     ):
         if forbidden_scaler_storage in patch.read_text():
             fail(
-                "schema-18 diagnostics retained state inside Scalaire: "
+                "off-domain diagnostics retained state inside Scalaire: "
                 f"{forbidden_scaler_storage}"
             )
     for redundant_publication_register in (
