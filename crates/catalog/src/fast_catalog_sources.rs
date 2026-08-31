@@ -44,6 +44,19 @@ const MAX_DIRECTORY_ENTRIES: usize = 1_000_000;
 const MAX_MRA_BYTES: u64 = 1024 * 1024;
 const MAX_COLLECTION_LISTING_BYTES: usize = 8 * 1024 * 1024;
 
+fn prepared_source_roots(storage_root: &Path) -> Vec<PathBuf> {
+    [
+        storage_root.join("_Arcade"),
+        storage_root.join("games/Amiga"),
+        storage_root.join("_DOS Games"),
+        storage_root.join("_Computer/_X68000 Games"),
+        storage_root.join("_Computer/X68000 Games"),
+        storage_root.join("games/C64"),
+    ]
+    .into_iter()
+    .collect()
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct FastSourceBuildReport {
     pub elapsed_us: u64,
@@ -146,6 +159,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
         &mut timed_system_complete,
     )?;
     let roots = [storage_root.display().to_string()];
+    let prepared_source_roots = prepared_source_roots(storage_root);
     let phase_started = Instant::now();
     let plan = CatalogScanPlan::try_for_roots(&roots)?;
     let profile_discovery_us = elapsed_us(phase_started);
@@ -154,6 +168,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
             storage_root,
             &plan,
             &PREPARED_SYSTEM_IDS,
+            &prepared_source_roots,
             &mut system_discovering,
             |_| {},
         )?;

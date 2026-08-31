@@ -21237,6 +21237,11 @@ fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Ve
                     None,
                     "residual_us",
                 ),
+                "generic_prepared_root_excluded_count": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "fast_catalog_generic_phase_tsv",
+                    "excluded_root_count",
+                ),
                 "game_header_probe_us": catalog_phase_metric_sum(
                     value.get("phase_evidence"),
                     "catalog_game_header_probe_tsv",

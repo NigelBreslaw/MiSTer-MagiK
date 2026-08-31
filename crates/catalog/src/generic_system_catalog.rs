@@ -491,6 +491,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
     storage_root: &Path,
     plan: &CatalogScanPlan,
     excluded_system_ids: &[&str],
+    excluded_root_paths: &[PathBuf],
     mut system_discovering: impl FnMut(&str),
     mut system_complete: impl FnMut(&FastFiveSystem),
 ) -> Result<GenericSystemPlanDiscovery, String> {
@@ -508,6 +509,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
     let mut reused_headers = 0_usize;
     let mut fallback_metadata_calls = 0_usize;
     let mut canonicalizations = 0_usize;
+    let mut excluded_root_count = 0_usize;
     let mut profiles = plan.base_profiles().to_vec();
     let mut accumulators = BTreeMap::<String, GenericSystemAccumulator>::new();
     let mut visited_roots = BTreeSet::new();
@@ -593,6 +595,15 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
     }
 
     for header in plan.game_dir_headers() {
+        if excluded_root_paths.iter().any(|excluded| {
+            header
+                .path
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&excluded.to_string_lossy())
+        }) {
+            excluded_root_count = excluded_root_count.saturating_add(1);
+            continue;
+        }
         runtime_headers = runtime_headers.saturating_add(1);
         let inventory_started = Instant::now();
         let mut inventory = match collect_generic_namespace_inventory(header, Some(2)) {
@@ -738,7 +749,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
         .saturating_add(continuation_us)
         .saturating_add(finalization_us);
     crate::catalog_logln!(
-        "fast_catalog_generic_phase_tsv\telapsed_us={}\tknown_profile_us={}\truntime_inventory_us={}\truntime_resolution_us={}\tcontinuation_us={}\tfinalization_us={}\tresidual_us={}\tknown_roots_considered={}\tknown_roots_found={}\truntime_headers={}\truntime_resolved={}\truntime_unresolved={}\tcontinuation_roots={}\treused_headers={}\tfallback_metadata_calls={}\tcanonicalizations={}",
+        "fast_catalog_generic_phase_tsv\telapsed_us={}\tknown_profile_us={}\truntime_inventory_us={}\truntime_resolution_us={}\tcontinuation_us={}\tfinalization_us={}\tresidual_us={}\tknown_roots_considered={}\tknown_roots_found={}\truntime_headers={}\truntime_resolved={}\truntime_unresolved={}\tcontinuation_roots={}\treused_headers={}\tfallback_metadata_calls={}\tcanonicalizations={}\texcluded_root_count={}",
         elapsed_us,
         known_profile_us,
         runtime_inventory_us,
@@ -755,6 +766,7 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
         reused_headers,
         fallback_metadata_calls,
         canonicalizations,
+        excluded_root_count,
     );
     Ok((
         systems,
@@ -1858,6 +1870,7 @@ mod tests {
                 &root,
                 &plan,
                 &[],
+                &[],
                 |_| {},
                 |_| {},
             )
@@ -1887,6 +1900,40 @@ mod tests {
         }
         #[cfg(not(target_os = "linux"))]
         assert!(!watch.complete);
+    }
+
+    #[test]
+    fn one_pass_skips_prepared_source_roots_before_inventory() {
+        let root = fs::canonicalize(crate::test_support::unique_temp_dir(
+            "generic-prepared-root-exclusion",
+        ))
+        .expect("canonicalize prepared root");
+        let core = root.join("_Console/MyPrepared_20260828.rbf");
+        fs::create_dir_all(core.parent().expect("core parent")).expect("create core parent");
+        fs::write(core, b"core").expect("write core");
+        let prepared = root.join("games/MyPrepared");
+        fs::create_dir_all(&prepared).expect("create prepared game root");
+        fs::write(prepared.join("game.rom"), b"rom").expect("write prepared game");
+
+        let roots = [root.display().to_string()];
+        let plan = CatalogScanPlan::try_for_roots(&roots).expect("prepared root plan");
+        let excluded = vec![prepared.clone()];
+        let (systems, report, _, observations) =
+            discover_generic_systems_from_plan_excluding_with_progress(
+                &root,
+                &plan,
+                &[],
+                &excluded,
+                |_| {},
+                |_| {},
+            )
+            .expect("prepared root exclusion");
+
+        assert!(systems.is_empty());
+        assert_eq!(report.systems.len(), 0);
+        assert!(observations.is_empty());
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
