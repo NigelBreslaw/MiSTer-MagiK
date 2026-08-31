@@ -497,7 +497,14 @@ impl MetadataStore {
             return Err(format!("metadata shard {system_id} is not software"));
         }
         let payload = self.read_shard(entry)?;
-        decode_software(&payload).map(Some)
+        let shard = decode_software(&payload)?;
+        if shard.items.len() != entry.item_rows as usize
+            || shard.hash_candidates.len() != entry.hash_rows as usize
+            || shard.disk_candidates.len() != entry.aux_rows as usize
+        {
+            return Err(format!("metadata shard {system_id} row counts mismatch"));
+        }
+        Ok(Some(shard))
     }
 
     pub fn arcade_shard(&self) -> Result<Option<ArcadeShard>, String> {
@@ -505,7 +512,13 @@ impl MetadataStore {
             return Ok(None);
         };
         let payload = self.read_shard(entry)?;
-        decode_arcade(&payload).map(Some)
+        let shard = decode_arcade(&payload)?;
+        if shard.mame.len() + shard.hbmame.len() != entry.item_rows as usize
+            || shard.mister.len() != entry.aux_rows as usize
+        {
+            return Err("Arcade metadata row counts mismatch".into());
+        }
+        Ok(Some(shard))
     }
 
     fn entry(&self, id: &str) -> Option<&IndexEntry> {
