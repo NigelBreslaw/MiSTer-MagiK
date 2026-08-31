@@ -609,11 +609,19 @@ fn filter_runtime_arcade_metadata(
             .into_iter()
             .filter(|(key, _)| setnames.contains(key))
             .collect(),
-        mister_by_mra_name: metadata
-            .mister_by_mra_name
-            .into_iter()
-            .filter(|(key, _)| mra_names.contains(key))
-            .collect(),
+        // The setname-only catalog path historically loaded every MRA row so
+        // filename precedence remained available during identity projection.
+        // Keep that behavior for compact metadata; the fallback path supplies
+        // a non-empty key set when it can bound the lookup.
+        mister_by_mra_name: if mra_names.is_empty() {
+            metadata.mister_by_mra_name
+        } else {
+            metadata
+                .mister_by_mra_name
+                .into_iter()
+                .filter(|(key, _)| mra_names.contains(key))
+                .collect()
+        },
     }
 }
 
