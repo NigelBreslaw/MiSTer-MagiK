@@ -531,6 +531,9 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
         let metadata_probe_us = metadata_started.elapsed().as_micros() as u64;
         let mut entries = Vec::new();
         for ((name, path, readdir_is_dir), metadata) in candidates.into_iter().zip(metadata) {
+            if checked_header_metadata_is_rejected(metadata.as_ref().map(|entry| entry.is_dir)) {
+                rejected_entries = rejected_entries.saturating_add(1);
+            }
             let Some(metadata) = metadata else {
                 entries.push(GameDirHeader {
                     name,
@@ -570,6 +573,11 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
         out.extend(entries);
     }
     Ok(out)
+}
+
+#[cfg(feature = "builder")]
+fn checked_header_metadata_is_rejected(is_dir: Option<bool>) -> bool {
+    !matches!(is_dir, Some(true))
 }
 
 /// Adds compact directory signatures to the name-only cold scan headers.
@@ -1066,6 +1074,14 @@ mod tests {
         assert!(plan.header_for_known_game_dir(&root, "nes").is_none());
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn checked_game_dir_header_rejections_include_missing_and_non_directory_metadata() {
+        assert!(!checked_header_metadata_is_rejected(Some(true)));
+        assert!(checked_header_metadata_is_rejected(Some(false)));
+        assert!(checked_header_metadata_is_rejected(None));
     }
 
     #[cfg(unix)]
