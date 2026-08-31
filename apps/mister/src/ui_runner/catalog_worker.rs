@@ -2103,20 +2103,6 @@ fn run_fast_catalog_refresh_in_process(
         );
         return;
     }
-    if plan == CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS
-        && std::env::var("MISTER_CATALOG_SINGLE_PASS_REFRESH")
-            .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-    {
-        run_fast_catalog_fresh_build(
-            root,
-            catalog_root,
-            tx,
-            catalog_profile,
-            mutation_lease,
-            bootstrap_run_id,
-        );
-        return;
-    }
     let request = if plan == CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS {
         FastCatalogRefreshRequest::RebuildAll
     } else {
