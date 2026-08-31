@@ -184,7 +184,10 @@ impl MameSoftwareMetadataSession {
                 self.current_platform = Some(platform_id.to_string());
             }
         }
-        if self.runtime.is_some() && !self.runtime_failed && runtime_system.is_some() {
+        if runtime_system.is_none() {
+            return &self.current;
+        }
+        if self.runtime.is_some() && !self.runtime_failed {
             return &self.current;
         }
         if self.legacy.is_none() {
