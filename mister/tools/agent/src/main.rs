@@ -9148,30 +9148,32 @@ mod tests {
             "scaler_output_read_acknowledgement_stuck"
         );
 
-        let pre_read_sample = |sequence: u8, state: u16| {
+        let pre_read_sample = |state: u16| {
             let mut words = [0; contract::SCALER_FETCH_LIVENESS_STATE_WORDS];
             words[contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA_WORD] =
                 contract::SCALER_FETCH_LIVENESS_STATE_SCHEMA;
             words[contract::SCALER_FETCH_LIVENESS_STATE_FLAGS_WORD] = normal
                 | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_FIRST_STALL_VALID
                 | contract::SCALER_FETCH_LIVENESS_STATE_FLAG_NO_REQUEST_SEEN
-                | (u16::from(sequence)
-                    << contract::SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_BIT);
+                | (10 << contract::SCALER_FETCH_LIVENESS_STATE_PUBLICATION_SEQUENCE_BIT);
             words[contract::SCALER_FETCH_LIVENESS_STATE_STATE_WORD] = state;
             contract::ScalerFetchLivenessState { words }
         };
         for (state, expected) in [
             (0x0041, "scaler_pre_read_vertical_pixel_gate_closed"),
             (0x0042, "scaler_pre_read_vertical_carry_gate_closed"),
-            (0x0044, "scaler_pre_read_vertical_both_gates_closed"),
+            (
+                0x0044,
+                "scaler_pre_read_vertical_pixel_and_carry_gates_closed",
+            ),
             (0x0048, "scaler_pre_read_address_ready_missing"),
             (0x0050, "scaler_pre_read_request_issue_missing"),
             (0x0060, "scaler_pre_read_request_boundary_stuck"),
         ] {
             let samples = [
-                pre_read_sample(10, state),
-                pre_read_sample(11, state),
-                pre_read_sample(12, state),
+                pre_read_sample(state),
+                pre_read_sample(state),
+                pre_read_sample(state),
             ];
             assert_eq!(
                 linux::scaler_fetch_liveness_classification([
