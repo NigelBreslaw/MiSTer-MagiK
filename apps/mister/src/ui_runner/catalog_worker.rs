@@ -2231,7 +2231,7 @@ fn run_fast_catalog_refresh_in_process(
     let _ = tx.send(CatalogWorkerMessage::Timing {
         name: "fast_catalog_refresh".to_string(),
         detail: format!(
-            "elapsed_us={} planning_us={} manifest_read_us={} active_read_us={} system_discovery_us={} checks_us={} watch_read_us={} metadata_probe_us={} metadata_parents={} metadata_paths={} metadata_slowest_parents={} source_check_status_counts={} source_check_reason_counts={} source_rebuild_us={} artifact_publish_us={} snapshot_publish_us={} systems={} unchanged={} updated={} failed_retained={} artifact_systems_written={}",
+            "elapsed_us={} planning_us={} manifest_read_us={} active_read_us={} system_discovery_us={} checks_us={} watch_read_us={} metadata_probe_us={} metadata_parents={} metadata_paths={} metadata_slowest_parents={} discovery_changed={} source_check_status_counts={} source_check_reason_counts={} source_rebuild_us={} artifact_publish_us={} snapshot_publish_us={} systems={} unchanged={} updated={} failed_retained={} artifact_systems_written={}",
             report.elapsed_us,
             report.planning_us,
             report.plan.manifest_read_us,
@@ -2244,6 +2244,7 @@ fn run_fast_catalog_refresh_in_process(
             report.plan.metadata_paths,
             serde_json::to_string(&report.plan.metadata_slowest_parents)
                 .unwrap_or_else(|_| "[]".to_string()),
+            report.plan.discovery_changed,
             serde_json::to_string(&report.plan.source_check_status_counts)
                 .unwrap_or_else(|_| "{}".to_string()),
             serde_json::to_string(&report.plan.source_check_reason_counts)
