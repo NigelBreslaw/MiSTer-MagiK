@@ -12,9 +12,7 @@ use rusqlite::{Connection, params, params_from_iter};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
-#[cfg(feature = "builder")]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub(crate) type MachineMetadataRow = (
@@ -136,6 +134,66 @@ pub(crate) struct MameSoftwareMetadata {
     pub(crate) family_members: HashMap<(String, String), Vec<String>>,
 }
 
+/// Runtime software metadata is decoded one platform shard at a time.  The
+/// current shard is discarded when the catalog projection advances to another
+/// platform, keeping the compact path bounded even when the complete catalog
+/// contains many software-list rows.
+pub(crate) struct MameSoftwareMetadataSession {
+    runtime: Option<MetadataStore>,
+    runtime_failed: bool,
+    current_platform: Option<String>,
+    current: MameSoftwareMetadata,
+    legacy: Option<MameSoftwareMetadata>,
+    legacy_path: PathBuf,
+}
+
+impl MameSoftwareMetadataSession {
+    pub(crate) fn new(legacy_path: &Path) -> Self {
+        Self {
+            runtime: MetadataStore::open(&crate::catalog_config::default_runtime_metadata_path())
+                .ok(),
+            runtime_failed: false,
+            current_platform: None,
+            current: MameSoftwareMetadata::default(),
+            legacy: None,
+            legacy_path: legacy_path.to_path_buf(),
+        }
+    }
+
+    pub(crate) fn for_platform(&mut self, platform_id: &str) -> &MameSoftwareMetadata {
+        let runtime_system = crate::runtime_metadata::RUNTIME_SOFTWARE_SYSTEMS
+            .iter()
+            .find(|(id, _, _)| *id == platform_id);
+        if !self.runtime_failed {
+            if let Some((system_id, list_name, _)) = runtime_system {
+                if self.current_platform.as_deref() != Some(*system_id) {
+                    let loaded = self
+                        .runtime
+                        .as_ref()
+                        .and_then(|store| store.software_shard(system_id).ok().flatten());
+                    if let Some(shard) = loaded {
+                        self.current = MameSoftwareMetadata::from_runtime_shard(list_name, shard);
+                        self.current_platform = Some((*system_id).to_string());
+                    } else {
+                        self.runtime_failed = true;
+                        self.current_platform = None;
+                    }
+                }
+            } else {
+                self.current = MameSoftwareMetadata::default();
+                self.current_platform = Some(platform_id.to_string());
+            }
+        }
+        if self.runtime.is_some() && !self.runtime_failed && runtime_system.is_some() {
+            return &self.current;
+        }
+        if self.legacy.is_none() {
+            self.legacy = Some(load_legacy_mame_software_metadata(&self.legacy_path));
+        }
+        self.legacy.as_ref().expect("legacy metadata initialized")
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SoftwareIdentity {
     pub(crate) list_name: String,
@@ -240,10 +298,19 @@ fn valid_player_count(value: i64) -> Option<u8> {
     u8::try_from(value).ok()
 }
 
-pub(crate) fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
-    if let Some(metadata) = load_runtime_software_metadata() {
-        return metadata;
+impl MameSoftwareMetadata {
+    fn from_runtime_shard(list_name: &str, shard: SoftwareShard) -> Self {
+        let mut metadata = Self::default();
+        append_runtime_software_shard(&mut metadata, list_name, shard);
+        metadata
     }
+}
+
+pub(crate) fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
+    load_runtime_software_metadata().unwrap_or_else(|| load_legacy_mame_software_metadata(path))
+}
+
+fn load_legacy_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
     let Ok(conn) = library_db::open_sqlite_read_only(path) else {
         return MameSoftwareMetadata::default();
     };

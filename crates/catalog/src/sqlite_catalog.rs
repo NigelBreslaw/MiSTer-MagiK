@@ -41,9 +41,9 @@ use crate::media_identity;
 use crate::media_metadata;
 use crate::preview_worker;
 use crate::software_identity::{
-    PreviewArchivePaths, SoftwareHashCache, console_preview_asset,
-    load_arcade_machine_metadata_for_setnames, load_mame_software_metadata,
-    mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
+    MameSoftwareMetadataSession, PreviewArchivePaths, SoftwareHashCache, console_preview_asset,
+    load_arcade_machine_metadata_for_setnames, mame_identity_for_discovery,
+    mame_identity_projection, mame_software_identity_for_discovery,
     mister_arcade_metadata_for_discovery,
 };
 use rusqlite::functions::FunctionFlags;
@@ -2926,7 +2926,7 @@ fn write_sqlite_scan_with_sources_inner(
     let discoveries = preferred_playable_discoveries_by_key(&scan.discoveries, &covered_payloads);
     let discovery_total = discoveries.len();
     let arcade_setnames = arcade_metadata_setnames(discoveries.values().copied());
-    let software_metadata = load_mame_software_metadata(sources.mame_sqlite_path);
+    let mut software_metadata = MameSoftwareMetadataSession::new(sources.mame_sqlite_path);
     let arcade_metadata = load_arcade_machine_metadata_for_setnames(
         sources.mame_sqlite_path,
         sources.hbmame_sqlite_path,
@@ -2940,7 +2940,7 @@ fn write_sqlite_scan_with_sources_inner(
             arcade_metadata.mame.len(),
             arcade_metadata.hbmame.len(),
             arcade_setnames.len(),
-            software_metadata.items.len(),
+            "lazy",
             sources.preview_paths.len()
         ),
     );
@@ -3198,7 +3198,7 @@ fn write_sqlite_scan_with_sources_inner(
                 .and_then(|history| history.discovered_at_for(&key, scan));
             let software_identity = mame_software_identity_for_discovery(
                 discovery,
-                &software_metadata,
+                software_metadata.for_platform(&discovery.platform_id),
                 &mut sources.software_hash_cache,
             );
             let arcade_identity_id = mame_identity_for_discovery(discovery);
