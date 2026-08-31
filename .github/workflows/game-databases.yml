@@ -527,8 +527,10 @@ jobs:
           cargo run --manifest-path crates/catalog/Cargo.toml --features builder --bin runtime-metadata-builder -- \
             --mame build/mame.sqlite3 \
             --hbmame build/hbmame.sqlite3 \
-            --output build/magik-metadata-v1.bin
+            --output build/magik-metadata-v1.bin \
+            --report build/runtime-metadata-parity.json
           test "$(wc -c < build/magik-metadata-v1.bin)" -le $((8 * 1024 * 1024))
+          jq -e '.format == "mister-magik-runtime-metadata-parity-v1" and .equivalent == true and .system_count == 34 and .arcade.mame > 0 and .arcade.hbmame > 0 and .arcade.mister > 0' build/runtime-metadata-parity.json >/dev/null
 
       - name: Create and verify numbered bundle
         run: |

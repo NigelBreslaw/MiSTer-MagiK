@@ -1354,6 +1354,85 @@ pub fn build_from_sqlite(
     Ok(status)
 }
 
+/// Compare every retained compact row and candidate with its SQLite source.
+/// This is deliberately a CI/private-build operation; runtime code never
+/// opens the source databases.
+#[cfg(feature = "builder")]
+pub fn parity_report(
+    metadata_path: &Path,
+    mame_path: &Path,
+    hbmame_path: &Path,
+) -> Result<String, String> {
+    use rusqlite::Connection;
+    use serde_json::json;
+
+    let store = MetadataStore::open(metadata_path)?;
+    let mame = Connection::open_with_flags(mame_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| format!("open MAME metadata for parity: {error}"))?;
+    let hbmame =
+        Connection::open_with_flags(hbmame_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|error| format!("open HBMAME metadata for parity: {error}"))?;
+    let mut systems = Vec::with_capacity(RUNTIME_SOFTWARE_SYSTEMS.len());
+    for (platform_id, _, source_lists) in RUNTIME_SOFTWARE_SYSTEMS {
+        let expected = read_software_shard(&mame, source_lists)?;
+        let actual = store
+            .software_shard(platform_id)?
+            .ok_or_else(|| format!("parity missing software shard {platform_id}"))?;
+        if actual != expected {
+            return Err(format!("parity mismatch in software shard {platform_id}"));
+        }
+        let digest = store
+            .shard_digest(platform_id)
+            .ok_or_else(|| format!("parity missing digest for {platform_id}"))?;
+        systems.push(json!({
+            "id": platform_id,
+            "items": actual.items.len(),
+            "title_candidates": actual.title_candidates.len(),
+            "hash_candidates": actual.hash_candidates.len(),
+            "disk_candidates": actual.disk_candidates.len(),
+            "decoded_sha256": digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        }));
+    }
+    let expected_arcade = read_arcade_shard(&mame, &hbmame)?;
+    let actual_arcade = store
+        .arcade_shard()?
+        .ok_or_else(|| "parity missing Arcade shard".to_string())?;
+    if actual_arcade != expected_arcade {
+        return Err("parity mismatch in Arcade shard".into());
+    }
+    let arcade_digest = store
+        .shard_digest("arcade")
+        .ok_or_else(|| "parity missing Arcade digest".to_string())?;
+    let expected_ids = RUNTIME_SOFTWARE_SYSTEMS
+        .iter()
+        .map(|(id, _, _)| *id)
+        .chain(std::iter::once("arcade"));
+    let actual_ids = store.shard_ids().collect::<Vec<_>>();
+    let mut expected_ids = expected_ids.collect::<Vec<_>>();
+    expected_ids.sort_unstable();
+    if actual_ids != expected_ids {
+        return Err(format!(
+            "parity shard index mismatch expected={expected_ids:?} actual={actual_ids:?}"
+        ));
+    }
+    let report = json!({
+        "format": "mister-magik-runtime-metadata-parity-v1",
+        "equivalent": true,
+        "system_count": systems.len(),
+        "systems": systems,
+        "arcade": {
+            "mame": actual_arcade.mame.len(),
+            "hbmame": actual_arcade.hbmame.len(),
+            "mister": actual_arcade.mister.len(),
+            "decoded_sha256": arcade_digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        },
+        "file_bytes": store.status().file_len,
+    });
+    serde_json::to_string_pretty(&report)
+        .map(|value| format!("{value}\n"))
+        .map_err(|error| format!("serialize parity report: {error}"))
+}
+
 #[cfg(feature = "builder")]
 fn read_software_shard(
     conn: &rusqlite::Connection,

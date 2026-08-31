@@ -4,11 +4,13 @@
 //! Build the compact runtime metadata artifact from the CI's full SQLite
 //! source databases.
 
-use mister_magik_catalog::runtime_metadata::build_from_sqlite;
+use mister_magik_catalog::runtime_metadata::{build_from_sqlite, parity_report};
 use std::path::PathBuf;
 
 fn usage() -> ! {
-    eprintln!("usage: runtime-metadata-builder --mame PATH --hbmame PATH --output PATH");
+    eprintln!(
+        "usage: runtime-metadata-builder --mame PATH --hbmame PATH --output PATH [--report PATH]"
+    );
     std::process::exit(2);
 }
 
@@ -28,11 +30,13 @@ fn main() {
     let mut mame = None;
     let mut hbmame = None;
     let mut output = None;
+    let mut report = None;
     while let Some(option) = args.next() {
         match option.as_str() {
             "--mame" => mame = Some(value(&mut args, "--mame")),
             "--hbmame" => hbmame = Some(value(&mut args, "--hbmame")),
             "--output" => output = Some(value(&mut args, "--output")),
+            "--report" => report = Some(value(&mut args, "--report")),
             "-h" | "--help" => usage(),
             _ => {
                 eprintln!("unknown option {option}");
@@ -51,6 +55,17 @@ fn main() {
         Err(error) => {
             eprintln!("runtime metadata build failed: {error}");
             std::process::exit(1);
+        }
+    }
+    if let Some(report) = report {
+        match parity_report(&output, &mame, &hbmame).and_then(|contents| {
+            std::fs::write(&report, contents).map_err(|error| error.to_string())
+        }) {
+            Ok(()) => {}
+            Err(error) => {
+                eprintln!("runtime metadata parity failed: {error}");
+                std::process::exit(1);
+            }
         }
     }
 }
