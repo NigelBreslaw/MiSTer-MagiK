@@ -24841,7 +24841,7 @@ fn catalog_build_rebuild_launcher_env() -> Vec<(String, String)> {
 }
 
 fn catalog_changed_refresh_launcher_env() -> Vec<(String, String)> {
-    let mut env = catalog_build_rebuild_launcher_env()
+    catalog_build_rebuild_launcher_env()
         .into_iter()
         .map(|(key, value)| match key.as_str() {
             "MISTER_LIBRARY_ROOTS" => (
@@ -24856,16 +24856,7 @@ fn catalog_changed_refresh_launcher_env() -> Vec<(String, String)> {
             ),
             _ => (key, value),
         })
-        .collect::<Vec<_>>();
-    for key in [
-        "MISTER_CATALOG_SINGLE_PASS_REFRESH",
-        "MISTER_CATALOG_METADATA_ORDER",
-    ] {
-        if let Some(value) = std::env::var_os(key) {
-            env.push((key.into(), value.to_string_lossy().into_owned()));
-        }
-    }
-    env
+        .collect()
 }
 
 fn catalog_resume_validation_launcher_env() -> Vec<(String, String)> {
