@@ -3493,7 +3493,7 @@ const PLATFORM_V0_34_SCHEMA14_RBF_SHA256: &str =
     "ef1920500c925d35b23808792f0930954446a6030b33d3e92c0f4feccd23106e";
 const FPGA_READINESS_TIMEOUT: Duration = Duration::from_secs(45);
 const FPGA_READINESS_POLL: Duration = Duration::from_millis(100);
-const FPGA_FALLBACK_STREAK: usize = 3;
+const FPGA_RELOADABLE_STREAK: usize = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FpgaCheckFailure {
@@ -3543,16 +3543,24 @@ impl FpgaActivationAssessment {
         }
     }
 
-    fn reloadable_fallback(&self) -> bool {
+    fn reloadable_not_ready(&self) -> bool {
         // "unavailable" also describes normal boot before Main owns the FPGA.
         // Never turn missing evidence into a stale identity that permits reload.
-        matches!(
-            self,
+        match self {
+            Self::NotReady { observed, .. } if observed == "unverified-observer-fallback-v1" => {
+                true
+            }
             Self::NotReady {
+                expected,
                 observed,
-                ..
-            } if observed == "unverified-observer-fallback-v1"
-        )
+                failures,
+            } => {
+                expected == observed
+                    && !failures.is_empty()
+                    && failures.iter().all(|failure| failure.check == "coherence")
+            }
+            _ => false,
+        }
     }
 
     fn into_stale(self) -> Self {
@@ -3580,7 +3588,7 @@ enum FpgaReadinessAction {
 
 fn fpga_readiness_action(
     assessment: &FpgaActivationAssessment,
-    fallback_streak: usize,
+    reloadable_streak: usize,
     elapsed: Duration,
 ) -> FpgaReadinessAction {
     match assessment {
@@ -3588,8 +3596,8 @@ fn fpga_readiness_action(
         FpgaActivationAssessment::Stale { .. } => FpgaReadinessAction::Reload,
         FpgaActivationAssessment::ArtifactInvalid { .. } => FpgaReadinessAction::Fail,
         FpgaActivationAssessment::NotReady { .. }
-            if assessment.reloadable_fallback()
-                && fallback_streak >= FPGA_FALLBACK_STREAK
+            if assessment.reloadable_not_ready()
+                && reloadable_streak >= FPGA_RELOADABLE_STREAK
                 && elapsed >= Duration::from_millis(500) =>
         {
             FpgaReadinessAction::Reload
@@ -3783,7 +3791,7 @@ fn wait_for_fpga_activation(
 ) -> std::result::Result<FpgaActivationAssessment, DeviceFailure> {
     let started = Instant::now();
     let mut previous_reason = None;
-    let mut fallback_streak = 0;
+    let mut reloadable_streak = 0;
     loop {
         let assessment = probe_installed_fpga_activation(config, Layout::Development)?;
         match &assessment {
@@ -3793,14 +3801,15 @@ fn wait_for_fpga_activation(
             FpgaActivationAssessment::NotReady { .. } => {
                 let reason = assessment.reason();
                 if previous_reason.as_deref() == Some(reason.as_str())
-                    && assessment.reloadable_fallback()
+                    && assessment.reloadable_not_ready()
                 {
-                    fallback_streak += 1;
+                    reloadable_streak += 1;
                 } else {
-                    fallback_streak = 1;
+                    reloadable_streak = 1;
                 }
                 previous_reason = Some(reason);
-                let action = fpga_readiness_action(&assessment, fallback_streak, started.elapsed());
+                let action =
+                    fpga_readiness_action(&assessment, reloadable_streak, started.elapsed());
                 match action {
                     FpgaReadinessAction::Reload | FpgaReadinessAction::Fail => {
                         return Ok(if action == FpgaReadinessAction::Reload {
@@ -39485,7 +39494,7 @@ H: Handlers=event3 js0"#
             &unavailable,
             FpgaActivationAssessment::NotReady { .. }
         ));
-        assert!(!unavailable.reloadable_fallback());
+        assert!(!unavailable.reloadable_not_ready());
         assert!(
             unavailable
                 .reason()
@@ -39500,7 +39509,7 @@ H: Handlers=event3 js0"#
             observed: "unverified-observer-fallback-v1".into(),
             failures: Vec::new(),
         };
-        assert!(fallback.reloadable_fallback());
+        assert!(fallback.reloadable_not_ready());
         assert!(matches!(
             fallback.into_stale(),
             FpgaActivationAssessment::Stale { .. }
@@ -39508,7 +39517,7 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn fpga_readiness_policy_reloads_only_definite_or_stable_fallback_stale() {
+    fn fpga_readiness_policy_reloads_only_definite_or_stable_safe_not_ready() {
         let stale = FpgaActivationAssessment::Stale {
             expected: "patched".into(),
             observed: "stock".into(),
@@ -39543,10 +39552,27 @@ H: Handlers=event3 js0"#
         let coherence_timeout = FpgaActivationAssessment::NotReady {
             expected: "patched".into(),
             observed: "patched".into(),
+            failures: vec![FpgaCheckFailure {
+                check: "coherence".into(),
+                expected: "current".into(),
+                actual: "scaler_fetch_liveness_evidence_inconclusive".into(),
+            }],
+        };
+        assert_eq!(
+            fpga_readiness_action(&coherence_timeout, 2, Duration::from_millis(500)),
+            FpgaReadinessAction::Continue
+        );
+        assert_eq!(
+            fpga_readiness_action(&coherence_timeout, 3, Duration::from_millis(500)),
+            FpgaReadinessAction::Reload
+        );
+        let ambiguous_same_identity = FpgaActivationAssessment::NotReady {
+            expected: "patched".into(),
+            observed: "patched".into(),
             failures: Vec::new(),
         };
         assert_eq!(
-            fpga_readiness_action(&coherence_timeout, 10, FPGA_READINESS_TIMEOUT),
+            fpga_readiness_action(&ambiguous_same_identity, 100, FPGA_READINESS_TIMEOUT),
             FpgaReadinessAction::Fail
         );
         let artifact = FpgaActivationAssessment::ArtifactInvalid {

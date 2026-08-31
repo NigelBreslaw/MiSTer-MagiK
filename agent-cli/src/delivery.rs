@@ -345,6 +345,7 @@ fn execute_with_device<D: DeliveryDevice>(
         decision: DeliveryDecision::Platform,
         reconciliation_reason: None,
         manager_artifact: None,
+        device_agent_artifact: None,
         main_revision: None,
         installed_manifest: None,
         phase_timings: Vec::new(),
@@ -602,6 +603,7 @@ struct ProcessActions<'a, D = DeviceClient> {
     decision: DeliveryDecision,
     reconciliation_reason: Option<String>,
     manager_artifact: Option<PathBuf>,
+    device_agent_artifact: Option<PathBuf>,
     main_revision: Option<String>,
     installed_manifest: Option<String>,
     phase_timings: Vec<DeliveryPhaseTiming>,
@@ -648,6 +650,10 @@ impl<D> ProcessActions<'_, D> {
             .manager_artifact
             .clone()
             .ok_or("manager qualification did not produce an artifact")?;
+        let device_agent = self
+            .device_agent_artifact
+            .clone()
+            .ok_or("device-agent qualification did not produce an artifact")?;
         let candidate = self
             .deployment
             .platform_candidate
@@ -663,6 +669,7 @@ impl<D> ProcessActions<'_, D> {
             &self.stage,
             self.deployment.build.artifact(),
             &manager,
+            &device_agent,
         )?);
         Ok(())
     }
@@ -680,7 +687,29 @@ impl<D> ProcessActions<'_, D> {
 
     fn qualify_manager(&mut self) -> AgentResult<()> {
         self.manager_artifact = Some(self.prepare_manager()?);
+        self.device_agent_artifact = Some(self.prepare_device_agent()?);
         Ok(())
+    }
+
+    fn prepare_device_agent(&mut self) -> AgentResult<PathBuf> {
+        let spec = crate::build::BuildSpec::for_command(crate::build::BuildCommand::DeviceAgent)
+            .expect("device-agent builds have a specification");
+        crate::build::execute_quiet(self.repository, &spec)?;
+        let receipt = spec.verify(self.repository)?;
+        if receipt.source_commit != self.expected_commit || receipt.source_dirty {
+            return Err("device-agent artifact was not built from the exact clean commit".into());
+        }
+        let artifact = self.repository.join(spec.artifact());
+        let cache = self
+            .repository
+            .join("build/agent-cache/device-agent")
+            .join(&receipt.binary_sha256)
+            .join("mister-magik-agent");
+        if let Some(parent) = cache.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        copy(artifact, cache.clone())?;
+        Ok(cache)
     }
 
     fn prepare_manager(&mut self) -> AgentResult<PathBuf> {
@@ -897,6 +926,7 @@ fn prepare_stage_files(
     stage: &Path,
     gui_artifact: &Path,
     manager: &Path,
+    device_agent: &Path,
 ) -> AgentResult<String> {
     let manifest: Value =
         crate::platform_bundle::verify(&candidate.archive, Some(&candidate.manifest), None)?;
@@ -918,6 +948,7 @@ fn prepare_stage_files(
     stage_published_platform_components(&extracted, stage)?;
     copy(repository.join(gui_artifact), stage.join("mister-magik-fb"))?;
     copy(manager.to_path_buf(), stage.join("mister-magik-manager"))?;
+    copy(device_agent.to_path_buf(), stage.join("mister-magik-agent"))?;
     fs::create_dir_all(stage.join("assets/snes"))
         .map_err(|error| format!("cannot create SNES artwork stage: {error}"))?;
     copy(
@@ -1581,6 +1612,7 @@ mod tests {
             decision,
             reconciliation_reason: None,
             manager_artifact: None,
+            device_agent_artifact: None,
             main_revision: None,
             installed_manifest: None,
             phase_timings: Vec::new(),

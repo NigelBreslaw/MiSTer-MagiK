@@ -74,6 +74,10 @@ pub(super) fn platform_deploy_files() -> Vec<(&'static str, String)> {
     let installed = paths(Layout::Development);
     let mut files = vec![
         ("mister-magik-fb", installed.gui.to_owned()),
+        (
+            "mister-magik-agent",
+            app_path(Layout::Development, "mister-magik-agent").expect("static installed path"),
+        ),
         ("mister-magik-manager", installed.manager.to_owned()),
         ("MiSTer_MagiKDev", installed.main.to_owned()),
         (
@@ -107,7 +111,7 @@ pub(super) fn platform_deploy_files() -> Vec<(&'static str, String)> {
             app_path(Layout::Development, "platform-v3.manifest").expect("static installed path"),
         ),
     ];
-    files.splice(7..7, database_deploy_files());
+    files.splice(8..8, database_deploy_files());
     files
 }
 
