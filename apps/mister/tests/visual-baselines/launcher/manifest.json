@@ -77,7 +77,7 @@
     },
     {
       "id": "crt-240p-settings",
-      "rgb565_hash": "26c78dfbf91acbc5",
+      "rgb565_hash": "8f71c0211c28c085",
       "provenance_sha256": "5358af5c6541298032afc3c3e7e929fb939f004b10a96b6b7654f3ae37233931",
       "scenario": "settings",
       "frame": 0,
@@ -143,7 +143,7 @@
     },
     {
       "id": "crt-settings",
-      "rgb565_hash": "6e8df58b8948f2b6",
+      "rgb565_hash": "1f4144275355cf8a",
       "provenance_sha256": "304a105a6caaaaaada38e39215930b23bb94de24f796df98a86644dc47ab7124",
       "scenario": "settings",
       "frame": 0,
@@ -209,7 +209,7 @@
     },
     {
       "id": "hdmi-settings",
-      "rgb565_hash": "83bc918045f764d9",
+      "rgb565_hash": "5c144dcd97f9d6fb",
       "provenance_sha256": "823bfea675ca919f6c8e0b2ba0709838a580aef8613c8fe03920d282ff84cb36",
       "scenario": "settings",
       "frame": 0,
