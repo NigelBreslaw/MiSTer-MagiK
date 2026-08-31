@@ -176,6 +176,14 @@ pub struct FastSystemSourceCheck {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct FastRefreshMetadataParentProbe {
+    pub parent: String,
+    pub paths: usize,
+    pub elapsed_us: u64,
+    pub failures: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct FastRefreshPlanReport {
     pub elapsed_us: u64,
     pub manifest_read_us: u64,
@@ -186,10 +194,13 @@ pub struct FastRefreshPlanReport {
     pub metadata_probe_us: u64,
     pub metadata_parents: usize,
     pub metadata_paths: usize,
+    pub metadata_slowest_parents: Vec<FastRefreshMetadataParentProbe>,
     pub systems: usize,
     pub unchanged: usize,
     pub changed: usize,
     pub rescans: usize,
+    pub source_check_status_counts: BTreeMap<String, usize>,
+    pub source_check_reason_counts: BTreeMap<String, usize>,
     pub artifact_writes: usize,
     pub checks: Vec<FastSystemSourceCheck>,
     #[serde(skip)]
@@ -1343,7 +1354,7 @@ pub fn plan_fast_refresh(
         .unwrap_or(u64::MAX);
     let discovery_anchor_paths = discovery_anchor_paths(storage_root);
     let metadata_started = std::time::Instant::now();
-    let (metadata_cache, metadata_parents, metadata_paths) =
+    let (metadata_cache, metadata_parents, metadata_paths, metadata_slowest_parents) =
         build_watch_metadata_cache(watch_indices.values(), &discovery_anchor_paths);
     let metadata_probe_us = metadata_started
         .elapsed()
@@ -1422,6 +1433,21 @@ pub fn plan_fast_refresh(
         .filter(|check| check.status == FastSourceCheckStatus::Changed)
         .count();
     let rescans = checks.len().saturating_sub(unchanged + changed);
+    let mut source_check_status_counts = BTreeMap::new();
+    let mut source_check_reason_counts = BTreeMap::new();
+    for check in &checks {
+        let status = match check.status {
+            FastSourceCheckStatus::Unchanged => "unchanged",
+            FastSourceCheckStatus::Changed => "changed",
+            FastSourceCheckStatus::Rescan => "rescan",
+        };
+        *source_check_status_counts
+            .entry(status.to_string())
+            .or_insert(0) += 1;
+        *source_check_reason_counts
+            .entry(check.reason.clone())
+            .or_insert(0) += 1;
+    }
     Ok(FastRefreshPlanReport {
         elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
         manifest_read_us,
@@ -1432,10 +1458,13 @@ pub fn plan_fast_refresh(
         metadata_probe_us,
         metadata_parents,
         metadata_paths,
+        metadata_slowest_parents,
         systems: checks.len(),
         unchanged,
         changed,
         rescans,
+        source_check_status_counts,
+        source_check_reason_counts,
         artifact_writes: 0,
         checks,
         previous_manifest: Some(manifest),
@@ -1875,6 +1904,7 @@ fn build_watch_metadata_cache<'a>(
     HashMap<PathBuf, Option<crate::namespace_walk::KnownPathMetadata>>,
     usize,
     usize,
+    Vec<FastRefreshMetadataParentProbe>,
 ) {
     let mut grouped = BTreeMap::<PathBuf, BTreeSet<PathBuf>>::new();
     let mut add_path = |path: PathBuf| {
@@ -1904,13 +1934,29 @@ fn build_watch_metadata_cache<'a>(
     }
     let metadata_parents = grouped.len();
     let mut cache = HashMap::new();
+    let mut parent_probes = Vec::with_capacity(metadata_parents);
     for (parent, paths) in grouped {
         let paths = paths.into_iter().collect::<Vec<_>>();
+        let started = std::time::Instant::now();
         let observations = crate::namespace_walk::probe_known_path_metadata(&parent, &paths);
+        let failures = observations.iter().filter(|value| value.is_none()).count();
+        parent_probes.push(FastRefreshMetadataParentProbe {
+            parent: parent.to_string_lossy().into_owned(),
+            paths: paths.len(),
+            elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+            failures,
+        });
         cache.extend(paths.into_iter().zip(observations));
     }
     let metadata_paths = cache.len();
-    (cache, metadata_parents, metadata_paths)
+    parent_probes.sort_by(|left, right| {
+        right
+            .elapsed_us
+            .cmp(&left.elapsed_us)
+            .then_with(|| left.parent.cmp(&right.parent))
+    });
+    parent_probes.truncate(16);
+    (cache, metadata_parents, metadata_paths, parent_probes)
 }
 
 fn discovery_anchor_paths(storage_root: &Path) -> Vec<PathBuf> {
@@ -2943,7 +2989,7 @@ mod tests {
             elapsed_us: 0,
             reason: String::new(),
         };
-        let (metadata_cache, _, _) = build_watch_metadata_cache(std::iter::once(&watch), &[]);
+        let (metadata_cache, _, _, _) = build_watch_metadata_cache(std::iter::once(&watch), &[]);
         check_watch_index(&watch, &metadata_cache, &mut check);
         assert_eq!(check.status, FastSourceCheckStatus::Unchanged);
         assert_eq!(check.directories_checked, watch.directories.len());
@@ -2969,7 +3015,7 @@ mod tests {
             elapsed_us: 0,
             reason: String::new(),
         };
-        let (metadata_cache, _, _) = build_watch_metadata_cache(std::iter::once(&watch), &[]);
+        let (metadata_cache, _, _, _) = build_watch_metadata_cache(std::iter::once(&watch), &[]);
         check_watch_index(&watch, &metadata_cache, &mut check);
         assert_eq!(check.status, FastSourceCheckStatus::Changed);
     }

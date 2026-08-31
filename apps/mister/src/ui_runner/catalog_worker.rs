@@ -1328,7 +1328,26 @@ fn start_library_catalog_worker_in_process(
     std::thread::Builder::new()
         .name("catalog-refresh".to_string())
         .spawn(move || {
-            apply_runtime_thread_policy(execution_mode.thread_role());
+            let policy = apply_runtime_thread_policy(execution_mode.thread_role());
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_worker_policy".to_string(),
+                detail: format!(
+                    "role={} intended_affinity={} allowed_cpus={} processor={} intended_nice={} actual_nice={} affinity_status={}",
+                    policy.role,
+                    policy.intended_affinity,
+                    policy.allowed_cpus,
+                    policy
+                        .processor
+                        .map_or_else(|| "unknown".to_string(), |value| value.to_string()),
+                    policy
+                        .intended_nice
+                        .map_or_else(|| "unknown".to_string(), |value| value.to_string()),
+                    policy
+                        .actual_nice
+                        .map_or_else(|| "unknown".to_string(), |value| value.to_string()),
+                    policy.affinity_status,
+                ),
+            });
             if request == CatalogWorkerRequest::StrictLoad {
                 match publish_strict_registry_seed_at(
                     &tx,
@@ -2172,7 +2191,7 @@ fn run_fast_catalog_refresh_in_process(
     let _ = tx.send(CatalogWorkerMessage::Timing {
         name: "fast_catalog_refresh".to_string(),
         detail: format!(
-            "elapsed_us={} planning_us={} manifest_read_us={} active_read_us={} system_discovery_us={} checks_us={} watch_read_us={} metadata_probe_us={} metadata_parents={} metadata_paths={} source_rebuild_us={} artifact_publish_us={} snapshot_publish_us={} systems={} unchanged={} updated={} failed_retained={} artifact_systems_written={}",
+            "elapsed_us={} planning_us={} manifest_read_us={} active_read_us={} system_discovery_us={} checks_us={} watch_read_us={} metadata_probe_us={} metadata_parents={} metadata_paths={} metadata_slowest_parents={} source_check_status_counts={} source_check_reason_counts={} source_rebuild_us={} artifact_publish_us={} snapshot_publish_us={} systems={} unchanged={} updated={} failed_retained={} artifact_systems_written={}",
             report.elapsed_us,
             report.planning_us,
             report.plan.manifest_read_us,
@@ -2183,6 +2202,12 @@ fn run_fast_catalog_refresh_in_process(
             report.plan.metadata_probe_us,
             report.plan.metadata_parents,
             report.plan.metadata_paths,
+            serde_json::to_string(&report.plan.metadata_slowest_parents)
+                .unwrap_or_else(|_| "[]".to_string()),
+            serde_json::to_string(&report.plan.source_check_status_counts)
+                .unwrap_or_else(|_| "{}".to_string()),
+            serde_json::to_string(&report.plan.source_check_reason_counts)
+                .unwrap_or_else(|_| "{}".to_string()),
             report.source_rebuild_us,
             report.artifact_publish_us,
             report.snapshot_publish_us,
