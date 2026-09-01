@@ -35738,7 +35738,7 @@ fn run_runtime_metadata_qualification(
     if let Some(error) = exec_failure_message("runtime metadata qualification", &out) {
         return Err(error.into());
     }
-    let report: Value = serde_json::from_str(out.stdout.trim())?;
+    let report = parse_last_json_line("runtime metadata qualification", &out.stdout)?;
     validate_runtime_metadata_qualification(&report, require_compact_only)?;
     if let Some(parent) = output
         .parent()

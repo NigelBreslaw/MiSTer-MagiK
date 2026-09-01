@@ -332,7 +332,7 @@ pub fn runtime_metadata_qualification_report() -> Result<String, String> {
         "mame": probe_legacy_sqlite(&crate::catalog_config::default_mame_sqlite_path()),
         "hbmame": probe_legacy_sqlite(&crate::catalog_config::default_hbmame_sqlite_path()),
     });
-    serde_json::to_string_pretty(&serde_json::json!({
+    serde_json::to_string(&serde_json::json!({
         "schema": "mister-magik-runtime-metadata-qualification-v1",
         "compact": compact,
         "legacy": legacy,
