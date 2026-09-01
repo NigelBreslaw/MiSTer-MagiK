@@ -58,12 +58,6 @@ impl Cli {
                         "--game-databases-release-dir is not valid with deliver local-main",
                     ));
                 }
-                (None, Some(_)) => {
-                    return Err(clap::Error::raw(
-                        clap::error::ErrorKind::ArgumentConflict,
-                        "use deliver runtime --game-databases-release-dir PATH for runtime-scoped delivery",
-                    ));
-                }
                 _ => {}
             }
         }
@@ -869,7 +863,7 @@ mod tests {
                 "--game-databases-release-dir",
                 "build/game-databases"
             ])
-            .is_err()
+            .is_ok()
         );
         assert!(
             Cli::try_parse_from([
