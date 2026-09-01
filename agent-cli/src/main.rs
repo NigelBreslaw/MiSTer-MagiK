@@ -166,11 +166,14 @@ fn dispatch(
         }
         CliCommand::Deliver {
             target: None,
-            game_databases_release_dir: Some(_),
+            game_databases_release_dir: Some(release_dir),
         } => {
-            return Err(
-                "use deliver runtime --game-databases-release-dir PATH for runtime-scoped delivery"
-                    .into(),
+            return deliver(
+                evidence,
+                repository,
+                Some(release_dir.as_path()),
+                false,
+                reporter,
             );
         }
         CliCommand::Deliver {
