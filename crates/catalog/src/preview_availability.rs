@@ -143,38 +143,37 @@ impl PreviewIdentityResolver {
         {
             self.compact_store = Some(store);
         }
-        if let Some(store) = self.compact_store.as_ref() {
-            if let Ok(Some(shard)) = store.software_shard(system_id) {
-                let mut index = PreviewIdentityIndex::default();
-                for (title, names) in shard.title_candidates.iter() {
-                    for software_name in names {
-                        let Some(item) = shard.item(software_name) else {
-                            continue;
-                        };
-                        let family_name = item
-                            .parent_name
-                            .as_deref()
-                            .filter(|parent| !parent.trim().is_empty())
-                            .unwrap_or(software_name);
-                        let asset_key =
-                            crate::media_identity::ScreenshotAssetId::from_mame_software(
-                                list_name,
-                                family_name,
-                            )
-                            .into_string();
-                        index
-                            .titles
-                            .entry((list_name.to_string(), title.clone()))
-                            .or_default()
-                            .insert(asset_key);
-                    }
+        if let Some(store) = self.compact_store.as_ref()
+            && let Ok(Some(shard)) = store.software_shard(system_id)
+        {
+            let mut index = PreviewIdentityIndex::default();
+            for (title, names) in shard.title_candidates.iter() {
+                for software_name in names {
+                    let Some(item) = shard.item(software_name) else {
+                        continue;
+                    };
+                    let family_name = item
+                        .parent_name
+                        .as_deref()
+                        .filter(|parent| !parent.trim().is_empty())
+                        .unwrap_or(software_name);
+                    let asset_key = crate::media_identity::ScreenshotAssetId::from_mame_software(
+                        list_name,
+                        family_name,
+                    )
+                    .into_string();
+                    index
+                        .titles
+                        .entry((list_name.to_string(), title.clone()))
+                        .or_default()
+                        .insert(asset_key);
                 }
-                self.state = PreviewIdentityResolverState::Compact {
-                    system_id: system_id.to_string(),
-                    index,
-                };
-                return;
             }
+            self.state = PreviewIdentityResolverState::Compact {
+                system_id: system_id.to_string(),
+                index,
+            };
+            return;
         }
         // The compact store is migration-era optional data. If this system's
         // shard is absent or fails validation, use the legacy source for this
