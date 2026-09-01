@@ -6653,6 +6653,7 @@ const CATALOG_BUILD_REBUILD_SOURCE_DIR: &str = "/tmp/mister-magik/catalog-build-
 const PREPARED_BUNDLE_HELPER_REMOTE_DIR: &str =
     "/media/fat/mister-magik-dev/prepared-bundle-helpers";
 const CATALOG_BUILD_REBUILD_ARCADE_ROOT: &str = "/media/fat/_Arcade";
+const CATALOG_PRODUCTION_GAMES_ROOT: &str = "/media/fat/games";
 const CATALOG_BUILD_REBUILD_SNES_ROOT: &str = "/media/fat/games/SNES";
 const CATALOG_BUILD_REBUILD_C64_ROOT: &str = "/media/fat/games/C64";
 const CATALOG_CHANGED_REFRESH_FIXTURE_DIR: &str =
@@ -20295,6 +20296,8 @@ fn prepare_and_reboot_for_catalog_attribution(
     config: &NativeDeviceConfig,
     arm: CatalogAttributionArm,
 ) -> Result<Value> {
+    let reset_started = Instant::now();
+    let preparation_started = Instant::now();
     let session = connect_with(&config.connection, 10)?;
     require_catalog_benchmark_active("catalog attribution preparation")?;
     exec_checked(
@@ -20319,13 +20322,18 @@ fn prepare_and_reboot_for_catalog_attribution(
         .ok_or("device boot id is unavailable before catalog attribution purge")?
         .trim()
         .to_string();
+    let preparation_elapsed_ms = preparation_started.elapsed().as_millis();
+    let purge_started = Instant::now();
     let purge_result = purge_development_library_data(&session);
     if let Err(error) = purge_result {
         let _ = clear_one_shot_launcher_env(&session, DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str());
         return Err(error);
     }
+    let purge_elapsed_ms = purge_started.elapsed().as_millis();
     drop(session);
+    let reboot_started = Instant::now();
     agent_reboot_wait_with_config(&[], &config.connection, config.agent()?)?;
+    let reboot_elapsed_ms = reboot_started.elapsed().as_millis();
     let session = connect_with(&config.connection, 10)?;
     let after_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable after catalog attribution purge")?
@@ -20354,6 +20362,16 @@ fn prepare_and_reboot_for_catalog_attribution(
     });
     if let Some(object) = reboot.as_object_mut() {
         object.insert("arm".into(), json!(arm.label()));
+        object.insert(
+            "preparation_elapsed_ms".into(),
+            json!(preparation_elapsed_ms),
+        );
+        object.insert("purge_elapsed_ms".into(), json!(purge_elapsed_ms));
+        object.insert("reboot_elapsed_ms".into(), json!(reboot_elapsed_ms));
+        object.insert(
+            "reset_elapsed_ms".into(),
+            json!(reset_started.elapsed().as_millis()),
+        );
     }
     Ok(reboot)
 }
@@ -21134,7 +21152,8 @@ fn profile_catalog_attribution_report(output_dir: &Path) -> Result<String> {
             "control_is_timing_authority": true,
             "profiled_arms_are_attribution_only": true,
             "real_arcade_required": true,
-            "bounded_roots": [CATALOG_BUILD_REBUILD_ARCADE_ROOT, CATALOG_BUILD_REBUILD_SNES_ROOT, CATALOG_ATTRIBUTION_C64_ROOT],
+            "production_roots": [CATALOG_BUILD_REBUILD_ARCADE_ROOT, CATALOG_PRODUCTION_GAMES_ROOT],
+            "root_selection": "all production catalog roots; per-arm sample roots are recorded in each configuration",
         },
         "invariants": {
             "one_magik_revision": consistent_revision,
