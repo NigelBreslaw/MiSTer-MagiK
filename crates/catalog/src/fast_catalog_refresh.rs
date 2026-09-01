@@ -1317,13 +1317,7 @@ fn capture_system_watch_from_specification(
         }
     }
     if matches!(system_id, "snes" | "saturn") {
-        for path in runtime_metadata_candidates(storage_root)
-            .into_iter()
-            .chain([
-                storage_root.join("mister-magik-dev/mame.sqlite3"),
-                storage_root.join("mister-magik/mame.sqlite3"),
-            ])
-        {
+        for path in runtime_metadata_candidates(storage_root) {
             if path.is_file() {
                 containers.push(capture_container(&path)?);
                 break;
@@ -2210,42 +2204,7 @@ fn watch_specification_from_profiles(
 }
 
 fn family_metadata_candidates(storage_root: &Path) -> Vec<PathBuf> {
-    let dev_root = storage_root.join("mister-magik-dev");
-    let stable_root = storage_root.join("mister-magik");
-    let dev_metadata = dev_root.join(crate::runtime_metadata::FILE_NAME);
-    let stable_metadata = stable_root.join(crate::runtime_metadata::FILE_NAME);
-    if dev_metadata.is_file() {
-        return vec![
-            dev_metadata,
-            dev_root.join("mame.sqlite3"),
-            dev_root.join("hbmame.sqlite3"),
-        ];
-    }
-    if stable_metadata.is_file() {
-        return vec![
-            stable_metadata,
-            stable_root.join("mame.sqlite3"),
-            stable_root.join("hbmame.sqlite3"),
-            dev_metadata,
-        ];
-    }
-    let dev_mame = dev_root.join("mame.sqlite3");
-    let stable_mame = stable_root.join("mame.sqlite3");
-    let mut paths = Vec::new();
-    if dev_mame.is_file() {
-        paths.push(dev_mame);
-        paths.push(dev_root.join("hbmame.sqlite3"));
-    } else if stable_mame.is_file() {
-        paths.push(stable_mame);
-        paths.push(stable_root.join("hbmame.sqlite3"));
-        // A Dev MAME appearing later takes priority over the selected stable
-        // database, so its absent state must be watched as well.
-        paths.push(dev_root.join("mame.sqlite3"));
-    } else {
-        paths.push(dev_mame);
-        paths.push(stable_mame);
-    }
-    paths
+    runtime_metadata_candidates(storage_root)
 }
 
 fn updater_metadata_candidates(storage_root: &Path) -> Vec<PathBuf> {
@@ -2273,7 +2232,7 @@ fn runtime_metadata_candidates(storage_root: &Path) -> Vec<PathBuf> {
     if dev.is_file() {
         vec![dev]
     } else if stable.is_file() {
-        vec![stable]
+        vec![stable, dev]
     } else {
         vec![dev, stable]
     }
@@ -3259,7 +3218,9 @@ mod tests {
         let root = crate::test_support::unique_temp_dir("fast-refresh-family-watch");
         fs::create_dir_all(root.join("games/NEOGEO")).unwrap();
         let initial = capture_system_watch(&root, "neogeo").unwrap();
-        let stable = root.join("mister-magik/mame.sqlite3");
+        let stable = root
+            .join("mister-magik")
+            .join(crate::runtime_metadata::FILE_NAME);
         fs::create_dir_all(stable.parent().unwrap()).unwrap();
         fs::write(&stable, b"stable").unwrap();
         let cache = build_watch_metadata_cache(std::iter::once(&initial), &[]).0;
@@ -3275,7 +3236,9 @@ mod tests {
         assert_eq!(check.status, FastSourceCheckStatus::Changed);
 
         let selected = capture_system_watch(&root, "neogeo").unwrap();
-        let dev = root.join("mister-magik-dev/mame.sqlite3");
+        let dev = root
+            .join("mister-magik-dev")
+            .join(crate::runtime_metadata::FILE_NAME);
         fs::create_dir_all(dev.parent().unwrap()).unwrap();
         fs::write(&dev, b"dev").unwrap();
         let cache = build_watch_metadata_cache(std::iter::once(&selected), &[]).0;
@@ -3296,13 +3259,15 @@ mod tests {
     fn family_watch_uses_ctime_and_inode_for_same_size_replacement() {
         let root = crate::test_support::unique_temp_dir("fast-refresh-family-replacement");
         fs::create_dir_all(root.join("games/NEOGEO")).unwrap();
-        let mame = root.join("mister-magik/mame.sqlite3");
-        fs::create_dir_all(mame.parent().unwrap()).unwrap();
-        fs::write(&mame, b"first").unwrap();
+        let metadata = root
+            .join("mister-magik")
+            .join(crate::runtime_metadata::FILE_NAME);
+        fs::create_dir_all(metadata.parent().unwrap()).unwrap();
+        fs::write(&metadata, b"first").unwrap();
         let watch = capture_system_watch(&root, "neogeo").unwrap();
-        let replacement = mame.with_extension("sqlite3.tmp");
+        let replacement = metadata.with_extension("bin.tmp");
         fs::write(&replacement, b"other").unwrap();
-        fs::rename(&replacement, &mame).unwrap();
+        fs::rename(&replacement, &metadata).unwrap();
         let cache = build_watch_metadata_cache(std::iter::once(&watch), &[]).0;
         let mut check = FastSystemSourceCheck {
             system_id: "neogeo".to_string(),
@@ -3321,8 +3286,12 @@ mod tests {
     fn family_watch_ignores_lower_priority_stable_database_during_dev_takeover() {
         let root = crate::test_support::unique_temp_dir("fast-refresh-family-priority");
         fs::create_dir_all(root.join("games/NEOGEO")).unwrap();
-        let stable = root.join("mister-magik/mame.sqlite3");
-        let dev = root.join("mister-magik-dev/mame.sqlite3");
+        let stable = root
+            .join("mister-magik")
+            .join(crate::runtime_metadata::FILE_NAME);
+        let dev = root
+            .join("mister-magik-dev")
+            .join(crate::runtime_metadata::FILE_NAME);
         fs::create_dir_all(stable.parent().unwrap()).unwrap();
         fs::create_dir_all(dev.parent().unwrap()).unwrap();
         fs::write(&stable, b"stable").unwrap();

@@ -17,9 +17,7 @@ pub enum PreviewIdentityResolverStatus {
     NotNeeded,
     /// The compact v1 runtime metadata shard is available for lookups.
     CompactV1,
-    /// The migration-era SQLite metadata fallback is available.
-    LegacySqlite,
-    /// The database or required table could not be read.
+    /// The compact metadata file or required shard could not be read.
     Unavailable,
 }
 
@@ -32,10 +30,9 @@ struct PreviewIdentityIndex {
 ///
 /// The resolver deliberately owns no catalog or pack state. It is safe to keep
 /// one instance with the media worker and reuse it for every installed pack.
-/// Database I/O occurs only when a reconciliation sees an empty catalog preview
+/// Metadata I/O occurs only when a reconciliation sees an empty catalog preview
 /// key for a system backed by a MAME software list.
 pub struct PreviewIdentityResolver {
-    mame_sqlite: PathBuf,
     runtime_metadata: PathBuf,
     compact_store: Option<crate::runtime_metadata::MetadataStore>,
     state: PreviewIdentityResolverState,
@@ -43,7 +40,6 @@ pub struct PreviewIdentityResolver {
 
 enum PreviewIdentityResolverState {
     NotNeeded,
-    Ready(PreviewIdentityIndex),
     Compact {
         system_id: String,
         index: PreviewIdentityIndex,
@@ -55,31 +51,29 @@ impl std::fmt::Debug for PreviewIdentityResolver {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PreviewIdentityResolver")
-            .field("mame_sqlite", &self.mame_sqlite)
             .field("runtime_metadata", &self.runtime_metadata)
             .field("status", &self.status())
             .finish()
     }
 }
 
+impl Default for PreviewIdentityResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PreviewIdentityResolver {
-    /// Create a resolver without opening the database.
-    pub fn new(mame_sqlite: impl Into<PathBuf>) -> Self {
-        Self::with_runtime_metadata(
-            mame_sqlite,
-            crate::catalog_config::default_runtime_metadata_path(),
-        )
+    /// Create a resolver without opening the compact metadata file.
+    pub fn new() -> Self {
+        Self::with_runtime_metadata(crate::catalog_config::default_runtime_metadata_path())
     }
 
     /// Create a resolver with an explicit compact metadata path.  This is
-    /// useful for migration checks and keeps path selection outside the hot
-    /// lookup code.
-    pub fn with_runtime_metadata(
-        mame_sqlite: impl Into<PathBuf>,
-        runtime_metadata: impl Into<PathBuf>,
-    ) -> Self {
+    /// useful for focused checks and keeps path selection outside the hot lookup
+    /// code.
+    pub fn with_runtime_metadata(runtime_metadata: impl Into<PathBuf>) -> Self {
         Self {
-            mame_sqlite: mame_sqlite.into(),
             runtime_metadata: runtime_metadata.into(),
             compact_store: None,
             state: PreviewIdentityResolverState::NotNeeded,
@@ -89,7 +83,6 @@ impl PreviewIdentityResolver {
     pub fn status(&self) -> PreviewIdentityResolverStatus {
         match self.state {
             PreviewIdentityResolverState::NotNeeded => PreviewIdentityResolverStatus::NotNeeded,
-            PreviewIdentityResolverState::Ready(_) => PreviewIdentityResolverStatus::LegacySqlite,
             PreviewIdentityResolverState::Compact { .. } => {
                 PreviewIdentityResolverStatus::CompactV1
             }
@@ -106,8 +99,7 @@ impl PreviewIdentityResolver {
         let list_name = crate::software_identity::software_list_for_platform(system_id.as_str())?;
         self.ensure_loaded(system_id.as_str(), list_name);
         let index = match &self.state {
-            PreviewIdentityResolverState::Ready(index)
-            | PreviewIdentityResolverState::Compact { index, .. } => index,
+            PreviewIdentityResolverState::Compact { index, .. } => index,
             PreviewIdentityResolverState::NotNeeded | PreviewIdentityResolverState::Unavailable => {
                 return None;
             }
@@ -127,9 +119,7 @@ impl PreviewIdentityResolver {
             PreviewIdentityResolverState::Compact {
                 system_id: loaded, ..
             } if loaded == system_id => return,
-            PreviewIdentityResolverState::Ready(_) | PreviewIdentityResolverState::Unavailable => {
-                return;
-            }
+            PreviewIdentityResolverState::Unavailable => return,
             PreviewIdentityResolverState::NotNeeded
             | PreviewIdentityResolverState::Compact { .. } => {
                 // A compact shard is cached for only one system. Clear it
@@ -175,58 +165,7 @@ impl PreviewIdentityResolver {
             };
             return;
         }
-        // The compact store is migration-era optional data. If this system's
-        // shard is absent or fails validation, use the legacy source for this
-        // lookup instead of retaining the previous compact system's index.
-        let Ok(connection) = crate::library_db::open_sqlite_read_only(&self.mame_sqlite) else {
-            self.state = PreviewIdentityResolverState::Unavailable;
-            return;
-        };
-        let Ok(true) = crate::library_db::sqlite_table_exists(&connection, "mame_software_items")
-        else {
-            self.state = PreviewIdentityResolverState::Unavailable;
-            return;
-        };
-        let mut index = PreviewIdentityIndex::default();
-        let Ok(mut statement) = connection.prepare(
-            "SELECT list_name,software_name,parent_name,description FROM mame_software_items",
-        ) else {
-            self.state = PreviewIdentityResolverState::Unavailable;
-            return;
-        };
-        let Ok(rows) = statement.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        }) else {
-            self.state = PreviewIdentityResolverState::Unavailable;
-            return;
-        };
-        for row in rows.flatten() {
-            let (raw_list, software_name, parent_name, description) = row;
-            let list_name = crate::software_identity::canonical_software_list_name(&raw_list);
-            let family_name = parent_name
-                .as_deref()
-                .filter(|parent| !parent.trim().is_empty())
-                .unwrap_or(software_name.as_str());
-            let asset_key = crate::media_identity::ScreenshotAssetId::from_mame_software(
-                list_name,
-                family_name,
-            )
-            .into_string();
-            index
-                .titles
-                .entry((
-                    list_name.to_string(),
-                    crate::library_db::canonical_variant_title(&description),
-                ))
-                .or_default()
-                .insert(asset_key);
-        }
-        self.state = PreviewIdentityResolverState::Ready(index);
+        self.state = PreviewIdentityResolverState::Unavailable;
     }
 }
 
@@ -275,8 +214,7 @@ pub fn reconcile_preview_availability(
     pack_path: &Path,
     limits: RegistryLimits,
 ) -> Result<PreviewAvailabilityReconciliationOutcome, PreviewAvailabilityError> {
-    let mut resolver =
-        PreviewIdentityResolver::new(crate::catalog_config::default_mame_sqlite_path());
+    let mut resolver = PreviewIdentityResolver::new();
     reconcile_preview_availability_with_resolver(
         storage_root,
         system_id,
@@ -465,7 +403,7 @@ fn reconcile_preview_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{unique_temp_dir, write_mame_software_fixture_db};
+    use crate::test_support::unique_temp_dir;
 
     fn game(title: &str, preview_asset_key: &str) -> SystemGame {
         SystemGame {
@@ -473,6 +411,47 @@ mod tests {
             preview_asset_key: preview_asset_key.to_string(),
             ..SystemGame::default()
         }
+    }
+
+    fn write_runtime_metadata(
+        root: &Path,
+        system_id: &str,
+        rows: &[(&str, Option<&str>, &str)],
+    ) -> PathBuf {
+        let mut title_candidates = BTreeMap::<String, Vec<String>>::new();
+        let items = rows
+            .iter()
+            .map(|(name, parent, description)| {
+                title_candidates
+                    .entry(crate::library_db::canonical_variant_title(description))
+                    .or_default()
+                    .push((*name).to_string());
+                crate::runtime_metadata::SoftwareItem {
+                    name: (*name).to_string(),
+                    parent_name: parent.map(str::to_string),
+                    description: (*description).to_string(),
+                    year: None,
+                    publisher: None,
+                    region: None,
+                }
+            })
+            .collect();
+        let metadata_path = root.join(crate::runtime_metadata::FILE_NAME);
+        let mut builder = crate::runtime_metadata::MetadataFileBuilder::new();
+        builder
+            .add_software(
+                system_id,
+                &crate::runtime_metadata::SoftwareShard {
+                    items,
+                    title_candidates,
+                    ..crate::runtime_metadata::SoftwareShard::default()
+                },
+            )
+            .expect("add runtime metadata fixture");
+        builder
+            .write_to(&metadata_path)
+            .expect("write runtime metadata fixture");
+        metadata_path
     }
 
     fn write_pack_index(root: &Path, entry_stems: &[&str]) -> PathBuf {
@@ -507,8 +486,7 @@ mod tests {
     #[test]
     fn resolver_does_not_open_metadata_until_a_supported_lookup() {
         let root = unique_temp_dir("preview-identity-lazy");
-        let database = root.join("missing-mame.sqlite3");
-        let resolver = PreviewIdentityResolver::new(&database);
+        let resolver = PreviewIdentityResolver::new();
         assert_eq!(resolver.status(), PreviewIdentityResolverStatus::NotNeeded);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -538,10 +516,7 @@ mod tests {
             .expect("write compact metadata");
 
         let system = SystemId::parse("c64").expect("valid system");
-        let mut resolver = PreviewIdentityResolver::with_runtime_metadata(
-            root.join("missing-mame.sqlite3"),
-            &metadata_path,
-        );
+        let mut resolver = PreviewIdentityResolver::with_runtime_metadata(&metadata_path);
         let candidates = resolver
             .candidates(&system, "Family Game")
             .expect("candidates");
@@ -554,14 +529,10 @@ mod tests {
     }
 
     #[test]
-    fn resolver_falls_back_when_the_next_compact_system_shard_is_missing() {
-        let root = unique_temp_dir("preview-identity-compact-fallback");
+    fn resolver_rejects_a_missing_compact_system_shard_without_sqlite_fallback() {
+        let root = unique_temp_dir("preview-identity-compact-missing");
         let database = root.join("mame.sqlite3");
-        write_mame_software_fixture_db(
-            &database,
-            &[("nes", "legacygame", None, "Legacy Game", None, None, None)],
-            &[],
-        );
+        std::fs::write(&database, b"legacy metadata must not be opened").unwrap();
         let metadata_path = root.join(crate::runtime_metadata::FILE_NAME);
         let shard = crate::runtime_metadata::SoftwareShard {
             items: vec![crate::runtime_metadata::SoftwareItem {
@@ -583,7 +554,7 @@ mod tests {
             .write_to(&metadata_path)
             .expect("write compact metadata");
 
-        let mut resolver = PreviewIdentityResolver::with_runtime_metadata(database, &metadata_path);
+        let mut resolver = PreviewIdentityResolver::with_runtime_metadata(&metadata_path);
         let c64 = SystemId::parse("c64").expect("valid C64 system");
         assert_eq!(
             resolver.candidates(&c64, "Compact Game"),
@@ -592,13 +563,10 @@ mod tests {
         assert_eq!(resolver.status(), PreviewIdentityResolverStatus::CompactV1);
 
         let nes = SystemId::parse("nes").expect("valid NES system");
-        assert_eq!(
-            resolver.candidates(&nes, "Legacy Game"),
-            Some(vec!["mame-software__nes__legacygame".to_string()])
-        );
+        assert_eq!(resolver.candidates(&nes, "Legacy Game"), None);
         assert_eq!(
             resolver.status(),
-            PreviewIdentityResolverStatus::LegacySqlite
+            PreviewIdentityResolverStatus::Unavailable
         );
         let _ = std::fs::remove_dir_all(root);
     }
@@ -606,9 +574,8 @@ mod tests {
     #[test]
     fn resolver_reports_unavailable_database_without_failing_the_lookup() {
         let root = unique_temp_dir("preview-identity-unavailable");
-        let database = root.join("missing-mame.sqlite3");
         let system = SystemId::parse("nes").expect("valid system");
-        let mut resolver = PreviewIdentityResolver::new(&database);
+        let mut resolver = PreviewIdentityResolver::new();
         assert_eq!(resolver.candidates(&system, "Missing Game"), None);
         assert_eq!(
             resolver.status(),
@@ -620,74 +587,37 @@ mod tests {
     #[test]
     fn resolver_collapses_media_lists_and_parent_variants() {
         let root = unique_temp_dir("preview-identity-canonical");
-        let database = root.join("mame.sqlite3");
-        write_mame_software_fixture_db(
-            &database,
+        let metadata = write_runtime_metadata(
+            &root,
+            "c64",
             &[
-                (
-                    "c64_cart",
-                    "cartgame",
-                    Some("familygame"),
-                    "Family Game (USA)",
-                    None,
-                    None,
-                    None,
-                ),
-                (
-                    "c64_cass",
-                    "cassgame",
-                    Some("familygame"),
-                    "Family Game (Europe)",
-                    None,
-                    None,
-                    None,
-                ),
+                ("cartgame", Some("familygame"), "Family Game (USA)"),
+                ("cassgame", Some("familygame"), "Family Game (Europe)"),
             ],
-            &[],
         );
         let system = SystemId::parse("c64").expect("valid system");
-        let mut resolver = PreviewIdentityResolver::new(&database);
+        let mut resolver = PreviewIdentityResolver::with_runtime_metadata(metadata);
         assert_eq!(
             resolver.candidates(&system, "Family Game"),
             Some(vec!["mame-software__c64__familygame".to_string()])
         );
-        assert_eq!(
-            resolver.status(),
-            PreviewIdentityResolverStatus::LegacySqlite
-        );
+        assert_eq!(resolver.status(), PreviewIdentityResolverStatus::CompactV1);
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn resolver_preserves_distinct_families_as_ambiguous_candidates() {
         let root = unique_temp_dir("preview-identity-ambiguous");
-        let database = root.join("mame.sqlite3");
-        write_mame_software_fixture_db(
-            &database,
+        let metadata = write_runtime_metadata(
+            &root,
+            "c64",
             &[
-                (
-                    "c64_cart",
-                    "firstgame",
-                    None,
-                    "Shared Game",
-                    None,
-                    None,
-                    None,
-                ),
-                (
-                    "c64_cass",
-                    "secondgame",
-                    None,
-                    "Shared Game",
-                    None,
-                    None,
-                    None,
-                ),
+                ("firstgame", None, "Shared Game"),
+                ("secondgame", None, "Shared Game"),
             ],
-            &[],
         );
         let system = SystemId::parse("c64").expect("valid system");
-        let mut resolver = PreviewIdentityResolver::new(&database);
+        let mut resolver = PreviewIdentityResolver::with_runtime_metadata(metadata);
         assert_eq!(
             resolver.candidates(&system, "Shared Game"),
             Some(vec![
@@ -703,7 +633,7 @@ mod tests {
         let root = unique_temp_dir("preview-identity-existing");
         let archive = write_pack_index(&root, &["existing-key"]);
         let system = SystemId::parse("nes").expect("valid system");
-        let mut resolver = PreviewIdentityResolver::new(root.join("missing-mame.sqlite3"));
+        let mut resolver = PreviewIdentityResolver::new();
 
         let outcome = reconcile_preview_rows(
             &system,
@@ -725,15 +655,10 @@ mod tests {
     #[test]
     fn reconciliation_derives_unique_pack_member_from_normalized_title() {
         let root = unique_temp_dir("preview-identity-derived");
-        let database = root.join("mame.sqlite3");
-        write_mame_software_fixture_db(
-            &database,
-            &[("nes", "metroid", None, "Metroid (USA)", None, None, None)],
-            &[],
-        );
+        let metadata = write_runtime_metadata(&root, "nes", &[("metroid", None, "Metroid (USA)")]);
         let archive = write_pack_index(&root, &["mame-software__nes__metroid"]);
         let system = SystemId::parse("nes").expect("valid system");
-        let mut resolver = PreviewIdentityResolver::new(&database);
+        let mut resolver = PreviewIdentityResolver::with_runtime_metadata(metadata);
 
         let outcome = reconcile_preview_rows(
             &system,
@@ -758,18 +683,14 @@ mod tests {
     #[test]
     fn reconciliation_uses_pack_membership_to_narrow_title_ambiguity() {
         let root = unique_temp_dir("preview-identity-pack-narrowing");
-        let database = root.join("mame.sqlite3");
-        write_mame_software_fixture_db(
-            &database,
-            &[
-                ("nes", "first", None, "Shared", None, None, None),
-                ("nes", "second", None, "Shared", None, None, None),
-            ],
-            &[],
+        let metadata = write_runtime_metadata(
+            &root,
+            "nes",
+            &[("first", None, "Shared"), ("second", None, "Shared")],
         );
         let archive = write_pack_index(&root, &["mame-software__nes__second"]);
         let system = SystemId::parse("nes").expect("valid system");
-        let mut resolver = PreviewIdentityResolver::new(&database);
+        let mut resolver = PreviewIdentityResolver::with_runtime_metadata(metadata);
 
         let outcome =
             reconcile_preview_rows(&system, &archive, vec![game("Shared", "")], &mut resolver)
@@ -787,21 +708,17 @@ mod tests {
     #[test]
     fn reconciliation_leaves_multiple_pack_members_unresolved() {
         let root = unique_temp_dir("preview-identity-ambiguous-pack");
-        let database = root.join("mame.sqlite3");
-        write_mame_software_fixture_db(
-            &database,
-            &[
-                ("nes", "first", None, "Shared", None, None, None),
-                ("nes", "second", None, "Shared", None, None, None),
-            ],
-            &[],
+        let metadata = write_runtime_metadata(
+            &root,
+            "nes",
+            &[("first", None, "Shared"), ("second", None, "Shared")],
         );
         let archive = write_pack_index(
             &root,
             &["mame-software__nes__first", "mame-software__nes__second"],
         );
         let system = SystemId::parse("nes").expect("valid system");
-        let mut resolver = PreviewIdentityResolver::new(&database);
+        let mut resolver = PreviewIdentityResolver::with_runtime_metadata(metadata);
 
         let outcome =
             reconcile_preview_rows(&system, &archive, vec![game("Shared", "")], &mut resolver)
@@ -819,7 +736,7 @@ mod tests {
         let root = unique_temp_dir("preview-identity-metadata-unavailable");
         let archive = write_pack_index(&root, &["existing-key"]);
         let system = SystemId::parse("nes").expect("valid system");
-        let mut resolver = PreviewIdentityResolver::new(root.join("missing-mame.sqlite3"));
+        let mut resolver = PreviewIdentityResolver::new();
 
         let outcome = reconcile_preview_rows(
             &system,
@@ -846,7 +763,7 @@ mod tests {
         let root = unique_temp_dir("preview-identity-unsupported");
         let archive = write_pack_index(&root, &[]);
         let system = SystemId::parse("amiga").expect("valid system");
-        let mut resolver = PreviewIdentityResolver::new(root.join("missing-mame.sqlite3"));
+        let mut resolver = PreviewIdentityResolver::new();
 
         let outcome = reconcile_preview_rows(
             &system,

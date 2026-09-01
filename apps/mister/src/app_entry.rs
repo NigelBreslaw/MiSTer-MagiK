@@ -609,9 +609,7 @@ fn run_catalog_screenshot_audit(
             std::process::exit(2);
         }
     };
-    let mut resolver = mister_magik_catalog::preview_availability::PreviewIdentityResolver::new(
-        paths.mame_sqlite(),
-    );
+    let mut resolver = mister_magik_catalog::preview_availability::PreviewIdentityResolver::new();
     let outcome = match mister_magik_catalog::preview_availability::reconcile_preview_availability_with_resolver(
         paths.sharded_catalog_dir(),
         &system_id,

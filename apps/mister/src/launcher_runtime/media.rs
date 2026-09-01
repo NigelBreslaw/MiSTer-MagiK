@@ -174,7 +174,7 @@ fn run_screenshot_media_worker(
     let mut queue = MediaRequestQueue::default();
     let mut active = Vec::<ActiveDownload>::new();
     let mut pending_reconciliation = BTreeMap::<String, (MediaPack, PathBuf)>::new();
-    let mut preview_identity_resolver = PreviewIdentityResolver::new(config.mame_sqlite.clone());
+    let mut preview_identity_resolver = PreviewIdentityResolver::new();
     let mut finish_requested = false;
     let mut interaction_active = false;
     let mut interaction_reason = "idle".to_string();

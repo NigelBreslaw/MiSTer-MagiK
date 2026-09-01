@@ -46,14 +46,17 @@ use crate::library_indexer::LibraryIndexer;
 use crate::prepared_collections::PreparedCollectionId;
 use crate::preview_worker;
 use crate::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
-#[cfg(test)]
-use crate::software_identity::software_list_for_platform;
+#[cfg(not(test))]
+use crate::software_identity::load_arcade_machine_metadata_for_fallbacks;
 use crate::software_identity::{
     ArcadeMachineMetadata, MachineMetadataRows, MameSoftwareMetadataSession, PreviewArchivePaths,
-    SoftwareHashCache, console_preview_asset, load_arcade_machine_metadata_for_fallbacks,
-    load_mame_machine_metadata_for_setnames, mame_identity_for_discovery, mame_identity_projection,
-    mame_software_identity_for_discovery, mister_arcade_metadata_for_discovery,
-    write_simple_mame_metadata_db,
+    SoftwareHashCache, console_preview_asset, load_mame_machine_metadata_for_setnames,
+    mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
+    mister_arcade_metadata_for_discovery, write_simple_mame_metadata_db,
+};
+#[cfg(test)]
+use crate::software_identity::{
+    load_arcade_machine_metadata_for_setnames, software_list_for_platform,
 };
 use crate::sqlite_catalog;
 use rusqlite::Connection;
@@ -1891,17 +1894,21 @@ fn build_catalog_from_scan_with_preferred_and_progress(
     CatalogProjectionTiming,
     crate::scanner_cache::ScannerCacheState,
 ) {
-    let mame_sqlite_path = default_mame_sqlite_path();
-    let hbmame_sqlite_path = default_hbmame_sqlite_path();
     let preview_paths = PreviewArchivePaths::from_paths_with_sidecar_entries(
         preview_worker::preview_archive_paths_for_catalog_projection(),
     );
     let scanner_cache = crate::scanner_cache::load_default();
+    #[cfg(test)]
+    let mame_sqlite_path = default_mame_sqlite_path();
+    #[cfg(test)]
+    let hbmame_sqlite_path = default_hbmame_sqlite_path();
     build_catalog_from_scan_with_sources_and_preferred_and_progress(
         root,
         scan,
         CatalogBuildSources {
+            #[cfg(test)]
             mame_sqlite_path: &mame_sqlite_path,
+            #[cfg(test)]
             hbmame_sqlite_path: &hbmame_sqlite_path,
             preview_paths: &preview_paths,
             software_hash_cache: scanner_cache.software_hash_cache,
@@ -1913,7 +1920,9 @@ fn build_catalog_from_scan_with_preferred_and_progress(
 }
 
 struct CatalogBuildSources<'a> {
+    #[cfg(test)]
     mame_sqlite_path: &'a Path,
+    #[cfg(test)]
     hbmame_sqlite_path: &'a Path,
     preview_paths: &'a PreviewArchivePaths,
     software_hash_cache: SoftwareHashCache,
@@ -2031,18 +2040,29 @@ fn build_catalog_from_scan_with_sources_and_preferred_and_progress(
         .collect::<HashSet<_>>();
     let arcade_setnames =
         arcade_metadata_setnames(discoveries.values().map(|index| &scan.discoveries[*index]));
+    #[cfg(not(test))]
     let arcade_mra_names =
         arcade_metadata_mra_names(discoveries.values().map(|index| &scan.discoveries[*index]));
-    let mut software_metadata = MameSoftwareMetadataSession::new(sources.mame_sqlite_path);
+    #[cfg(not(test))]
+    let mut software_metadata = MameSoftwareMetadataSession::new();
+    #[cfg(test)]
+    let mut software_metadata =
+        MameSoftwareMetadataSession::new_with_sqlite_fixture(sources.mame_sqlite_path);
+    #[cfg(not(test))]
+    let arcade_metadata = with_catalog_progress_heartbeat(
+        progress,
+        "Preparing library — loading arcade metadata",
+        || load_arcade_machine_metadata_for_fallbacks(&arcade_setnames, &arcade_mra_names),
+    );
+    #[cfg(test)]
     let arcade_metadata = with_catalog_progress_heartbeat(
         progress,
         "Preparing library — loading arcade metadata",
         || {
-            load_arcade_machine_metadata_for_fallbacks(
+            load_arcade_machine_metadata_for_setnames(
                 sources.mame_sqlite_path,
                 sources.hbmame_sqlite_path,
                 &arcade_setnames,
-                &arcade_mra_names,
             )
         },
     );

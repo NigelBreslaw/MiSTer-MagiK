@@ -2023,63 +2023,7 @@ fn load_fast_console_preview_title_index(
             return index;
         }
     }
-    let database = [
-        storage_root.join("mister-magik-dev/mame.sqlite3"),
-        storage_root.join("mister-magik/mame.sqlite3"),
-    ]
-    .into_iter()
-    .find(|path| path.is_file());
-    let Some(database) = database else {
-        return BTreeMap::new();
-    };
-    let Ok(connection) = crate::library_db::open_sqlite_read_only(&database) else {
-        return BTreeMap::new();
-    };
-    if !crate::library_db::sqlite_table_exists(&connection, "mame_software_items").unwrap_or(false)
-    {
-        return BTreeMap::new();
-    }
-    let Ok(mut statement) = connection.prepare(
-        "SELECT list_name,software_name,parent_name,description
-         FROM mame_software_items
-         WHERE list_name IN ('snes','saturn')",
-    ) else {
-        return BTreeMap::new();
-    };
-    let Ok(rows) = statement.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, Option<String>>(2)?,
-            row.get::<_, String>(3)?,
-        ))
-    }) else {
-        return BTreeMap::new();
-    };
-    let mut index = BTreeMap::new();
-    for row in rows.flatten() {
-        let (list_name, software_name, parent_name, description) = row;
-        let family = parent_name
-            .as_deref()
-            .filter(|parent| !parent.trim().is_empty())
-            .unwrap_or(&software_name);
-        let asset_key = ScreenshotAssetId::from_mame_software(&list_name, family).into_string();
-        let key = (
-            list_name,
-            crate::library_db::canonical_variant_title(&description),
-        );
-        match index.entry(key) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(Some(asset_key));
-            }
-            std::collections::btree_map::Entry::Occupied(mut entry) => {
-                if entry.get().as_deref() != Some(asset_key.as_str()) {
-                    entry.insert(None);
-                }
-            }
-        }
-    }
-    index
+    BTreeMap::new()
 }
 
 fn fingerprint_systems<'a>(
@@ -2679,25 +2623,64 @@ mod tests {
     #[test]
     fn fast_preview_identity_enrichment_uses_pack_contracts_without_rom_hashing() {
         let root = crate::test_support::unique_temp_dir("fast-preview-identities");
-        let database = root.join("mister-magik/mame.sqlite3");
-        fs::create_dir_all(database.parent().unwrap()).unwrap();
-        let connection = rusqlite::Connection::open(&database).unwrap();
-        connection
-            .execute_batch(
-                "CREATE TABLE mame_software_items(
-                    list_name TEXT NOT NULL,
-                    software_name TEXT NOT NULL,
-                    parent_name TEXT,
-                    description TEXT NOT NULL
-                 );
-                 INSERT INTO mame_software_items VALUES
-                    ('snes','smw',NULL,'Super Mario World (USA)'),
-                    ('saturn','vf2u','vf2','Virtua Fighter 2 [USA]'),
-                    ('saturn','dupe1',NULL,'Ambiguous Game'),
-                    ('saturn','dupe2',NULL,'Ambiguous Game');",
+        let metadata = root
+            .join("mister-magik")
+            .join(crate::runtime_metadata::FILE_NAME);
+        let mut builder = crate::runtime_metadata::MetadataFileBuilder::new();
+        builder
+            .add_software(
+                "snes",
+                &crate::runtime_metadata::SoftwareShard {
+                    items: vec![crate::runtime_metadata::SoftwareItem {
+                        name: "smw".into(),
+                        parent_name: None,
+                        description: "Super Mario World (USA)".into(),
+                        year: None,
+                        publisher: None,
+                        region: None,
+                    }],
+                    ..crate::runtime_metadata::SoftwareShard::default()
+                },
             )
             .unwrap();
-        drop(connection);
+        builder
+            .add_software(
+                "saturn",
+                &crate::runtime_metadata::SoftwareShard {
+                    items: vec![
+                        crate::runtime_metadata::SoftwareItem {
+                            name: "dupe1".into(),
+                            parent_name: None,
+                            description: "Ambiguous Game".into(),
+                            year: None,
+                            publisher: None,
+                            region: None,
+                        },
+                        crate::runtime_metadata::SoftwareItem {
+                            name: "dupe2".into(),
+                            parent_name: None,
+                            description: "Ambiguous Game".into(),
+                            year: None,
+                            publisher: None,
+                            region: None,
+                        },
+                        crate::runtime_metadata::SoftwareItem {
+                            name: "vf2u".into(),
+                            parent_name: Some("vf2".into()),
+                            description: "Virtua Fighter 2 [USA]".into(),
+                            year: None,
+                            publisher: None,
+                            region: None,
+                        },
+                    ],
+                    ..crate::runtime_metadata::SoftwareShard::default()
+                },
+            )
+            .unwrap();
+        builder.write_to(&metadata).unwrap();
+        let store = crate::runtime_metadata::MetadataStore::open(&metadata).unwrap();
+        assert!(store.software_shard("snes").unwrap().is_some());
+        assert!(store.software_shard("saturn").unwrap().is_some());
 
         let mut systems = vec![
             FastFiveSystem {

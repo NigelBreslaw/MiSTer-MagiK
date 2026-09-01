@@ -143,20 +143,28 @@ pub(crate) struct MameSoftwareMetadataSession {
     runtime_failed: bool,
     current_platform: Option<String>,
     current: MameSoftwareMetadata,
-    legacy: Option<MameSoftwareMetadata>,
-    legacy_path: PathBuf,
+    #[cfg(test)]
+    legacy_path: Option<PathBuf>,
 }
 
 impl MameSoftwareMetadataSession {
-    pub(crate) fn new(legacy_path: &Path) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             runtime: MetadataStore::open(&crate::catalog_config::default_runtime_metadata_path())
                 .ok(),
             runtime_failed: false,
             current_platform: None,
             current: MameSoftwareMetadata::default(),
-            legacy: None,
-            legacy_path: legacy_path.to_path_buf(),
+            #[cfg(test)]
+            legacy_path: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_sqlite_fixture(path: &Path) -> Self {
+        Self {
+            legacy_path: Some(path.to_path_buf()),
+            ..Self::new()
         }
     }
 
@@ -164,36 +172,32 @@ impl MameSoftwareMetadataSession {
         let runtime_system = crate::runtime_metadata::RUNTIME_SOFTWARE_SYSTEMS
             .iter()
             .find(|(id, _, _)| *id == platform_id);
+        if self.current_platform.as_deref() == Some(platform_id) {
+            return &self.current;
+        }
+        self.current = MameSoftwareMetadata::default();
+        self.current_platform = Some(platform_id.to_string());
+        let Some((system_id, list_name, _)) = runtime_system else {
+            return &self.current;
+        };
         if !self.runtime_failed {
-            if let Some((system_id, list_name, _)) = runtime_system {
-                if self.current_platform.as_deref() != Some(*system_id) {
-                    let loaded = self
-                        .runtime
-                        .as_ref()
-                        .and_then(|store| store.software_shard(system_id).ok().flatten());
-                    if let Some(shard) = loaded {
-                        self.current = MameSoftwareMetadata::from_runtime_shard(list_name, shard);
-                        self.current_platform = Some((*system_id).to_string());
-                    } else {
-                        self.runtime_failed = true;
-                        self.current_platform = None;
-                    }
-                }
+            let loaded = self
+                .runtime
+                .as_ref()
+                .and_then(|store| store.software_shard(system_id).ok().flatten());
+            if let Some(shard) = loaded {
+                self.current = MameSoftwareMetadata::from_runtime_shard(list_name, shard);
             } else {
-                self.current = MameSoftwareMetadata::default();
-                self.current_platform = Some(platform_id.to_string());
+                self.runtime_failed = true;
             }
         }
-        if runtime_system.is_none() {
-            return &self.current;
+        #[cfg(test)]
+        if self.runtime_failed
+            && let Some(path) = self.legacy_path.as_ref()
+        {
+            self.current = load_legacy_mame_software_metadata(path);
         }
-        if self.runtime.is_some() && !self.runtime_failed {
-            return &self.current;
-        }
-        if self.legacy.is_none() {
-            self.legacy = Some(load_legacy_mame_software_metadata(&self.legacy_path));
-        }
-        self.legacy.as_ref().expect("legacy metadata initialized")
+        &self.current
     }
 
     #[cfg(feature = "builder")]
@@ -323,6 +327,7 @@ pub(crate) fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
     load_runtime_software_metadata().unwrap_or_else(|| load_legacy_mame_software_metadata(path))
 }
 
+#[cfg(test)]
 fn load_legacy_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
     let Ok(conn) = library_db::open_sqlite_read_only(path) else {
         return MameSoftwareMetadata::default();
@@ -436,9 +441,8 @@ fn load_runtime_software_metadata() -> Option<MameSoftwareMetadata> {
     let mut metadata = MameSoftwareMetadata::default();
     for (platform_id, canonical_list, _) in crate::runtime_metadata::RUNTIME_SOFTWARE_SYSTEMS {
         let Ok(Some(shard)) = store.software_shard(platform_id) else {
-            // A compact file is usable only when every mapped system is
-            // present and decodes cleanly.  During migration this allows the
-            // complete legacy SQLite source to remain the safe fallback.
+            // This test helper accepts a compact file only when every mapped
+            // system is present and decodes cleanly.
             return None;
         };
         append_runtime_software_shard(&mut metadata, canonical_list, shard);
@@ -551,43 +555,23 @@ pub(crate) fn load_arcade_machine_metadata_for_setnames(
     }
 }
 
+#[cfg(not(test))]
+pub(crate) fn load_runtime_arcade_machine_metadata_for_setnames(
+    setnames: &HashSet<String>,
+) -> ArcadeMachineMetadata {
+    load_runtime_arcade_metadata()
+        .map(|metadata| filter_runtime_arcade_metadata(metadata, setnames, &HashSet::new()))
+        .unwrap_or_default()
+}
+
+#[cfg(not(test))]
 pub(crate) fn load_arcade_machine_metadata_for_fallbacks(
-    mame_path: &Path,
-    hbmame_path: &Path,
     setnames: &HashSet<String>,
     mra_names: &HashSet<String>,
 ) -> ArcadeMachineMetadata {
-    if let Some(metadata) = load_runtime_arcade_metadata() {
-        return filter_runtime_arcade_metadata(metadata, setnames, mra_names);
-    }
-    let total_started = Instant::now();
-    let mame_started = Instant::now();
-    let mame = load_mame_machine_metadata_for_setnames(mame_path, setnames);
-    let mame_us = mame_started.elapsed().as_micros() as u64;
-    let hbmame_started = Instant::now();
-    let hbmame = load_mame_machine_metadata_for_setnames(hbmame_path, setnames);
-    let hbmame_us = hbmame_started.elapsed().as_micros() as u64;
-    let mister_started = Instant::now();
-    let mister = load_mister_arcade_metadata_for_keys(mame_path, setnames, mra_names);
-    let mister_us = mister_started.elapsed().as_micros() as u64;
-    eprintln!(
-        "library_scan_timing\tarcade_metadata_sources\t{}\trequested={} mra_names={} mame_rows={} hbmame_rows={} mister_setnames={} mister_mra_names={} mame_us={} hbmame_us={} mister_us={}",
-        total_started.elapsed().as_micros(),
-        setnames.len(),
-        mra_names.len(),
-        mame.len(),
-        hbmame.len(),
-        mister.mister_by_setname.len(),
-        mister.mister_by_mra_name.len(),
-        mame_us,
-        hbmame_us,
-        mister_us,
-    );
-    ArcadeMachineMetadata {
-        mame,
-        hbmame,
-        ..mister
-    }
+    load_runtime_arcade_metadata()
+        .map(|metadata| filter_runtime_arcade_metadata(metadata, setnames, mra_names))
+        .unwrap_or_default()
 }
 
 fn load_runtime_arcade_metadata() -> Option<ArcadeMachineMetadata> {
@@ -740,84 +724,6 @@ fn load_mister_arcade_metadata(path: &Path) -> ArcadeMachineMetadata {
         metadata.mister_by_mra_name.insert(mra_name, entry);
     }
     metadata
-}
-
-fn load_mister_arcade_metadata_for_keys(
-    path: &Path,
-    setnames: &HashSet<String>,
-    mra_names: &HashSet<String>,
-) -> ArcadeMachineMetadata {
-    if setnames.is_empty() && mra_names.is_empty() {
-        return ArcadeMachineMetadata::default();
-    }
-    let Ok(conn) = library_db::open_sqlite_read_only(path) else {
-        return ArcadeMachineMetadata::default();
-    };
-    if !library_db::sqlite_table_exists(&conn, "mister_arcade_entries").unwrap_or(false) {
-        return ArcadeMachineMetadata::default();
-    }
-    let mut metadata = ArcadeMachineMetadata::default();
-    for (column, values) in [("setname_key", setnames), ("mra_name_key", mra_names)] {
-        let mut values = values.iter().map(String::as_str).collect::<Vec<_>>();
-        values.sort_unstable();
-        for chunk in values.chunks(400) {
-            let placeholders = std::iter::repeat_n("?", chunk.len())
-                .collect::<Vec<_>>()
-                .join(",");
-            let sql = format!(
-                "SELECT setname_key,mra_name_key,name,category,year,manufacturer,players,
-                        move_inputs,special_controls
-                 FROM mister_arcade_entries
-                 WHERE {column} IN ({placeholders})
-                 ORDER BY ordinal"
-            );
-            append_mister_arcade_metadata(&conn, &sql, chunk, &mut metadata);
-        }
-    }
-    metadata
-}
-
-fn append_mister_arcade_metadata(
-    conn: &Connection,
-    sql: &str,
-    parameters: &[&str],
-    metadata: &mut ArcadeMachineMetadata,
-) {
-    let Ok(mut statement) = conn.prepare(sql) else {
-        return;
-    };
-    let Ok(rows) = statement.query_map(params_from_iter(parameters.iter().copied()), |row| {
-        let players = row.get::<_, String>(6)?;
-        let move_inputs = row.get::<_, String>(7)?;
-        let special_controls = row.get::<_, String>(8)?;
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            MisterArcadeMetadata {
-                title: row.get(2)?,
-                category: row.get(3)?,
-                year: row
-                    .get::<_, Option<i64>>(4)?
-                    .and_then(|value| u16::try_from(value).ok()),
-                manufacturer: row.get(5)?,
-                players: leading_player_count(&players),
-                control: if special_controls.trim().is_empty() {
-                    move_inputs
-                } else {
-                    special_controls
-                },
-            },
-        ))
-    }) else {
-        return;
-    };
-    for (setname, mra_name, entry) in rows.flatten() {
-        metadata
-            .mister_by_setname
-            .entry(setname)
-            .or_insert_with(|| entry.clone());
-        metadata.mister_by_mra_name.insert(mra_name, entry);
-    }
 }
 
 fn leading_player_count(value: &str) -> Option<u8> {
@@ -1031,6 +937,7 @@ pub(crate) fn software_list_for_platform(platform_id: &str) -> Option<&'static s
 /// cartridges, tapes, disks, and ROMs through separate MAME lists; treating
 /// them as one namespace keeps family identity and the complete gameplay pack
 /// in sync.
+#[cfg(test)]
 pub(crate) fn canonical_software_list_name(list_name: &str) -> &str {
     match list_name {
         "famicom_flop" => "fds",
@@ -1659,6 +1566,7 @@ fn update_n64_transform_octets(
     ]);
 }
 
+#[cfg(test)]
 pub(crate) fn parse_hex_u32(value: &str) -> Option<u32> {
     u32::from_str_radix(value.trim(), 16).ok()
 }
@@ -2071,8 +1979,7 @@ pub fn rom_identity_benchmark_report() -> Result<serde_json::Value, String> {
     }
 
     let metadata_started = Instant::now();
-    let mut metadata =
-        MameSoftwareMetadataSession::new(&crate::catalog_config::default_mame_sqlite_path());
+    let mut metadata = MameSoftwareMetadataSession::new();
     let metadata_load_us = metadata_started.elapsed().as_micros() as u64;
     let rss_before_kb = proc_status_kb("VmRSS");
     let hwm_before_kb = proc_status_kb("VmHWM");

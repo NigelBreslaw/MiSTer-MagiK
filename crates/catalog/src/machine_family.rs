@@ -11,10 +11,16 @@
 use crate::library_db;
 use crate::mra_header::RomNamespace;
 use crate::runtime_metadata::{ArcadeShard, MetadataStore};
+#[cfg(test)]
 use rusqlite::{Connection, params_from_iter};
-use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::HashMap;
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
+#[cfg(test)]
 const QUERY_CHUNK: usize = 400;
 
 type MachineLookupKey = (String, Option<RomNamespace>);
@@ -33,6 +39,7 @@ pub(crate) enum MachineSource {
     Hbmame,
 }
 
+#[cfg(test)]
 struct MachineDatabase {
     source: MachineSource,
     path: PathBuf,
@@ -44,9 +51,13 @@ pub(crate) struct MachineFamilyResolver {
     runtime_metadata: Option<MetadataStore>,
     runtime_arcade: Option<ArcadeShard>,
     runtime_unavailable: bool,
+    #[cfg(test)]
     mame_path: Option<PathBuf>,
+    #[cfg(test)]
     hbmame_path: Option<PathBuf>,
+    #[cfg(test)]
     mame: Option<MachineDatabase>,
+    #[cfg(test)]
     hbmame: Option<MachineDatabase>,
     cache: MachineLookupResults,
     pub(crate) requested: usize,
@@ -70,19 +81,25 @@ impl MachineFamilyResolver {
             .iter()
             .find(|root| {
                 root.join(crate::runtime_metadata::FILE_NAME).is_file()
-                    || root.join("mame.sqlite3").is_file()
+                    || cfg!(test) && root.join("mame.sqlite3").is_file()
             })
             .cloned();
         let Some(root) = selected else {
             return Ok(Self::default());
         };
-        let mame_path = root.join("mame.sqlite3");
-        let hbmame_path = root.join("hbmame.sqlite3");
         Ok(Self {
             runtime_metadata: MetadataStore::open(&root.join(crate::runtime_metadata::FILE_NAME))
                 .ok(),
-            mame_path: mame_path.is_file().then_some(mame_path),
-            hbmame_path: hbmame_path.is_file().then_some(hbmame_path),
+            #[cfg(test)]
+            mame_path: root
+                .join("mame.sqlite3")
+                .is_file()
+                .then(|| root.join("mame.sqlite3")),
+            #[cfg(test)]
+            hbmame_path: root
+                .join("hbmame.sqlite3")
+                .is_file()
+                .then(|| root.join("hbmame.sqlite3")),
             ..Self::default()
         })
     }
@@ -127,15 +144,6 @@ impl MachineFamilyResolver {
                 unresolved.push((identity, namespace));
             }
         }
-        let mut mame_ids = Vec::new();
-        let mut hbmame_ids = Vec::new();
-        for (identity, namespace) in &unresolved {
-            if *namespace == Some(RomNamespace::Hbmame) {
-                hbmame_ids.push(identity.clone());
-            } else {
-                mame_ids.push(identity.clone());
-            }
-        }
         if unresolved.is_empty() {
             return Ok(output);
         }
@@ -163,73 +171,101 @@ impl MachineFamilyResolver {
             }
             return Ok(output);
         }
-        let mut mame_rows = HashMap::new();
-        let mut hbmame_rows = HashMap::new();
-        if !hbmame_ids.is_empty() {
-            self.ensure_hbmame()?;
-            if let Some(database) = self.hbmame.as_ref() {
-                hbmame_rows.extend(query_database(database, &hbmame_ids)?);
-            }
-        }
-        if !mame_ids.is_empty() {
-            self.ensure_mame()?;
-            if let Some(database) = self.mame.as_ref() {
-                mame_rows.extend(query_database(database, &mame_ids)?);
-            }
-        }
-        // Unnamespaced identities prefer MAME, then fall back to HBMAME when
-        // the set is absent from the main database.
-        let hbmame_fallback = mame_ids
-            .iter()
-            .filter(|identity| !mame_rows.contains_key(*identity))
-            .cloned()
-            .collect::<Vec<_>>();
-        if !hbmame_fallback.is_empty() {
-            self.ensure_hbmame()?;
-            if let Some(database) = self.hbmame.as_ref() {
-                hbmame_rows.extend(query_database(database, &hbmame_fallback)?);
-            }
-        }
-        // Explicit HBMAME requests may still be absent there.  Falling back
-        // to MAME preserves useful family projection for shared set names.
-        let mame_fallback = hbmame_ids
-            .iter()
-            .filter(|identity| !hbmame_rows.contains_key(*identity))
-            .cloned()
-            .collect::<Vec<_>>();
-        if !mame_fallback.is_empty() {
-            self.ensure_mame()?;
-            if let Some(database) = self.mame.as_ref() {
-                mame_rows.extend(query_database(database, &mame_fallback)?);
-            }
-        }
-        for (identity, namespace) in unresolved {
-            let row = match namespace {
-                Some(RomNamespace::Hbmame) => hbmame_rows
-                    .get(&identity)
-                    .or_else(|| mame_rows.get(&identity)),
-                Some(RomNamespace::Mame) | None => mame_rows
-                    .get(&identity)
-                    .or_else(|| hbmame_rows.get(&identity)),
-            }
-            .cloned();
-            if let Some(row) = &row {
-                match row.source {
-                    MachineSource::Mame => self.mame_matches = self.mame_matches.saturating_add(1),
-                    MachineSource::Hbmame => {
-                        self.hbmame_matches = self.hbmame_matches.saturating_add(1)
-                    }
-                }
-            } else {
+        #[cfg(not(test))]
+        {
+            for (identity, namespace) in unresolved {
                 self.unresolved = self.unresolved.saturating_add(1);
+                self.cache
+                    .insert((identity.clone(), namespace.clone()), None);
+                output.insert((identity, namespace), None);
             }
-            self.cache
-                .insert((identity.clone(), namespace.clone()), row.clone());
-            output.insert((identity, namespace), row);
+            Ok(output)
         }
-        Ok(output)
+        #[cfg(test)]
+        let mut mame_ids = Vec::new();
+        #[cfg(test)]
+        let mut hbmame_ids = Vec::new();
+        #[cfg(test)]
+        for (identity, namespace) in &unresolved {
+            if *namespace == Some(RomNamespace::Hbmame) {
+                hbmame_ids.push(identity.clone());
+            } else {
+                mame_ids.push(identity.clone());
+            }
+        }
+        #[cfg(test)]
+        {
+            let mut mame_rows = HashMap::new();
+            let mut hbmame_rows = HashMap::new();
+            if !hbmame_ids.is_empty() {
+                self.ensure_hbmame()?;
+                if let Some(database) = self.hbmame.as_ref() {
+                    hbmame_rows.extend(query_database(database, &hbmame_ids)?);
+                }
+            }
+            if !mame_ids.is_empty() {
+                self.ensure_mame()?;
+                if let Some(database) = self.mame.as_ref() {
+                    mame_rows.extend(query_database(database, &mame_ids)?);
+                }
+            }
+            // Unnamespaced identities prefer MAME, then fall back to HBMAME when
+            // the set is absent from the main database.
+            let hbmame_fallback = mame_ids
+                .iter()
+                .filter(|identity| !mame_rows.contains_key(*identity))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !hbmame_fallback.is_empty() {
+                self.ensure_hbmame()?;
+                if let Some(database) = self.hbmame.as_ref() {
+                    hbmame_rows.extend(query_database(database, &hbmame_fallback)?);
+                }
+            }
+            // Explicit HBMAME requests may still be absent there.  Falling back
+            // to MAME preserves useful family projection for shared set names.
+            let mame_fallback = hbmame_ids
+                .iter()
+                .filter(|identity| !hbmame_rows.contains_key(*identity))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !mame_fallback.is_empty() {
+                self.ensure_mame()?;
+                if let Some(database) = self.mame.as_ref() {
+                    mame_rows.extend(query_database(database, &mame_fallback)?);
+                }
+            }
+            for (identity, namespace) in unresolved {
+                let row = match namespace {
+                    Some(RomNamespace::Hbmame) => hbmame_rows
+                        .get(&identity)
+                        .or_else(|| mame_rows.get(&identity)),
+                    Some(RomNamespace::Mame) | None => mame_rows
+                        .get(&identity)
+                        .or_else(|| hbmame_rows.get(&identity)),
+                }
+                .cloned();
+                if let Some(row) = &row {
+                    match row.source {
+                        MachineSource::Mame => {
+                            self.mame_matches = self.mame_matches.saturating_add(1)
+                        }
+                        MachineSource::Hbmame => {
+                            self.hbmame_matches = self.hbmame_matches.saturating_add(1)
+                        }
+                    }
+                } else {
+                    self.unresolved = self.unresolved.saturating_add(1);
+                }
+                self.cache
+                    .insert((identity.clone(), namespace.clone()), row.clone());
+                output.insert((identity, namespace), row);
+            }
+            Ok(output)
+        }
     }
 
+    #[cfg(test)]
     fn ensure_mame(&mut self) -> Result<(), String> {
         if let Some(path) = self.mame_path.take() {
             self.mame = Some(open_database(&path, MachineSource::Mame)?);
@@ -237,6 +273,7 @@ impl MachineFamilyResolver {
         Ok(())
     }
 
+    #[cfg(test)]
     fn ensure_hbmame(&mut self) -> Result<(), String> {
         if let Some(path) = self.hbmame_path.take() {
             self.hbmame = Some(open_database(&path, MachineSource::Hbmame)?);
@@ -323,6 +360,7 @@ fn runtime_row(
         })
 }
 
+#[cfg(test)]
 fn open_database(path: &Path, source: MachineSource) -> Result<MachineDatabase, String> {
     let connection = library_db::open_sqlite_read_only(path).map_err(|error| {
         format!(
@@ -346,6 +384,7 @@ fn open_database(path: &Path, source: MachineSource) -> Result<MachineDatabase, 
     })
 }
 
+#[cfg(test)]
 fn query_database(
     database: &MachineDatabase,
     identities: &[String],

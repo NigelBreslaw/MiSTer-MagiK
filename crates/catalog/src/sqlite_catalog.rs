@@ -42,8 +42,7 @@ use crate::media_metadata;
 use crate::preview_worker;
 use crate::software_identity::{
     MameSoftwareMetadataSession, PreviewArchivePaths, SoftwareHashCache, console_preview_asset,
-    load_arcade_machine_metadata_for_setnames, mame_identity_for_discovery,
-    mame_identity_projection, mame_software_identity_for_discovery,
+    mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
     mister_arcade_metadata_for_discovery,
 };
 use rusqlite::functions::FunctionFlags;
@@ -2926,8 +2925,18 @@ fn write_sqlite_scan_with_sources_inner(
     let discoveries = preferred_playable_discoveries_by_key(&scan.discoveries, &covered_payloads);
     let discovery_total = discoveries.len();
     let arcade_setnames = arcade_metadata_setnames(discoveries.values().copied());
-    let mut software_metadata = MameSoftwareMetadataSession::new(sources.mame_sqlite_path);
-    let arcade_metadata = load_arcade_machine_metadata_for_setnames(
+    #[cfg(not(test))]
+    let mut software_metadata = MameSoftwareMetadataSession::new();
+    #[cfg(test)]
+    let mut software_metadata =
+        MameSoftwareMetadataSession::new_with_sqlite_fixture(sources.mame_sqlite_path);
+    #[cfg(not(test))]
+    let arcade_metadata =
+        crate::software_identity::load_runtime_arcade_machine_metadata_for_setnames(
+            &arcade_setnames,
+        );
+    #[cfg(test)]
+    let arcade_metadata = crate::software_identity::load_arcade_machine_metadata_for_setnames(
         sources.mame_sqlite_path,
         sources.hbmame_sqlite_path,
         &arcade_setnames,
