@@ -722,12 +722,16 @@ fn run_preview_render_probe(
         } => {
             if !profile.allows(*width, *height) {
                 fail(&format!(
-                    "unexpected preview geometry: {}x{} expected {}x{}{}",
+                    "unexpected preview geometry: {}x{} expected a maximized aspect fit within {}x{}{}",
                     width,
                     height,
                     profile.width,
                     profile.height,
-                    if profile.rotatable { " or rotated" } else { "" }
+                    if profile.rotatable {
+                        " or rotated bounds"
+                    } else {
+                        ""
+                    }
                 ));
             }
             if *stride_bytes % 2 != 0 {

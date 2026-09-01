@@ -2590,7 +2590,7 @@ fn read_preview_archive_sidecar_index(
         .and_then(|path| path.strip_suffix(".idx"))
         .map(PathBuf::from)
     {
-        validate_fixed_screenshot_archive_geometry(&archive_path, &entries)?;
+        validate_screenshot_archive_geometry(&archive_path, &entries)?;
     }
     Ok(PreviewArchiveSidecarIndex {
         archive_sha256: archive_sha.to_ascii_lowercase(),
@@ -2658,7 +2658,7 @@ impl PreviewArchive {
         }
         let count = read_u32(&mut file)? as usize;
         let entries = read_v2_pixel_entries(&mut file, count, archive_bytes)?;
-        validate_fixed_screenshot_archive_geometry(path, &entries)?;
+        validate_screenshot_archive_geometry(path, &entries)?;
         // SAFETY: the immutable mapping owns its file-backed pages and this
         // process never writes or truncates preview packs while a reader is
         // alive. Deployment publishes packs atomically under a new inode.
@@ -2719,7 +2719,7 @@ impl PreviewArchive {
     }
 }
 
-fn validate_fixed_screenshot_archive_geometry(
+fn validate_screenshot_archive_geometry(
     path: &Path,
     entries: &HashMap<String, PreviewArchiveEntry>,
 ) -> Result<(), String> {
@@ -2736,7 +2736,7 @@ fn validate_fixed_screenshot_archive_geometry(
         let (width, height) = (entry.width, entry.height);
         if !profile.allows(width, height) {
             return Err(format!(
-                "preview archive {} entry {} has geometry {}x{}, expected {}x{}{}",
+                "preview archive {} entry {} has geometry {}x{}, expected a maximized aspect fit within {}x{}{}",
                 path.display(),
                 entry_name,
                 width,
@@ -2744,7 +2744,7 @@ fn validate_fixed_screenshot_archive_geometry(
                 profile.width,
                 profile.height,
                 if profile.rotatable {
-                    format!(" or {}x{}", profile.height, profile.width)
+                    format!(" or rotated bounds {}x{}", profile.height, profile.width)
                 } else {
                     String::new()
                 }

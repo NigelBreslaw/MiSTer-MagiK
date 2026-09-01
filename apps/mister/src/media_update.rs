@@ -137,7 +137,7 @@ fn parse_pack(origin: &str, value: &Value) -> Result<MediaPack, String> {
     let expected_size = preferred_screenshot_image_size(id);
     if image_size != expected_size {
         return Err(format!(
-            "pack {id} must use fixed screenshot size {expected_size}, got {image_size}"
+            "pack {id} must declare screenshot bounds {expected_size}, got {image_size}"
         ));
     }
     let raw = variant_with_url(

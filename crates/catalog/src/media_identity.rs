@@ -18,11 +18,11 @@ pub const SNES_SCREENSHOT_IMAGE_SIZE: &str = "256x224";
 pub const ATARI_LYNX_SCREENSHOT_IMAGE_SIZE: &str = "160x102";
 pub const SCREENSHOT_MEDIA_STATE_FILENAME: &str = ".screenshot-media-state.json";
 
-/// One fixed logical raster used by every entry in a screenshot pack.
+/// Maximum logical bounds used by every entry in a screenshot pack.
 ///
-/// `rotatable` permits the archive to contain the width/height-swapped form
-/// for systems whose games can be held in portrait orientation.  The pack
-/// builder and archive reader must otherwise reject a different geometry.
+/// Each entry is a maximized aspect-preserving fit within these bounds.
+/// `rotatable` also permits the width/height-swapped bounds for systems whose
+/// games can be held in portrait orientation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScreenshotResolutionProfile {
     pub width: u32,
@@ -37,8 +37,16 @@ impl ScreenshotResolutionProfile {
     }
 
     pub const fn allows(self, width: u32, height: u32) -> bool {
-        (width == self.width && height == self.height)
-            || (self.rotatable && width == self.height && height == self.width)
+        Self::allows_within(width, height, self.width, self.height)
+            || (self.rotatable && Self::allows_within(width, height, self.height, self.width))
+    }
+
+    const fn allows_within(width: u32, height: u32, max_width: u32, max_height: u32) -> bool {
+        width > 0
+            && height > 0
+            && width <= max_width
+            && height <= max_height
+            && (width == max_width || height == max_height)
     }
 }
 
@@ -524,14 +532,30 @@ mod tests {
     }
 
     #[test]
-    fn fixed_profiles_allow_only_declared_rotated_sizes() {
+    fn profiles_accept_maximized_aspect_fits_within_declared_bounds() {
         let nes = screenshot_resolution_profile("nes").unwrap();
         assert!(nes.allows(256, 240));
+        assert!(nes.allows(256, 192));
+        assert!(nes.allows(240, 240));
         assert!(!nes.allows(240, 256));
+        assert!(!nes.allows(200, 200));
+
+        let arcade = screenshot_resolution_profile("arcade").unwrap();
+        assert!(arcade.allows(320, 83));
+        assert!(arcade.allows(83, 320));
+
         let lynx = screenshot_resolution_profile("atarilynx").unwrap();
         assert!(lynx.allows(160, 102));
+        assert!(lynx.allows(160, 80));
         assert!(lynx.allows(102, 160));
+        assert!(lynx.allows(80, 160));
+        assert!(!lynx.allows(160, 160));
         assert!(!lynx.allows(320, 204));
+
+        let c64 = screenshot_resolution_profile("c64").unwrap();
+        assert!(c64.allows(267, 200));
+        assert!(!c64.allows(320, 240));
+
         assert!(screenshot_pack_id_from_filename("saturn-screenshots-320x240.mmlz4b").is_some());
         assert_eq!(ScreenshotPackId::parse("c64"), Some(ScreenshotPackId::C64));
         assert_eq!(
