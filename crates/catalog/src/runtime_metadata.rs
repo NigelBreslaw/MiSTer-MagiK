@@ -1023,6 +1023,28 @@ fn hex_lower(bytes: &[u8]) -> String {
     out
 }
 
+fn decode_optional_u8(value: u32, what: &str) -> Result<Option<u8>, String> {
+    value
+        .checked_sub(1)
+        .map(|value| u8::try_from(value).map_err(|_| format!("metadata {what} is invalid")))
+        .transpose()
+}
+
+fn decode_optional_u16(value: u32, what: &str) -> Result<Option<u16>, String> {
+    value
+        .checked_sub(1)
+        .map(|value| u16::try_from(value).map_err(|_| format!("metadata {what} is invalid")))
+        .transpose()
+}
+
+fn encode_optional_u8(value: Option<u8>) -> u32 {
+    value.map_or(0, |value| u32::from(value) + 1)
+}
+
+fn encode_optional_u16(value: Option<u16>) -> u32 {
+    value.map_or(0, |value| u32::from(value) + 1)
+}
+
 fn decode_arcade(payload: &[u8]) -> Result<ArcadeShard, String> {
     if payload.len() < ARCADE_HEADER_LEN
         || &payload[..4] != ARCADE_MAGIC
@@ -1085,7 +1107,7 @@ fn decode_arcade(payload: &[u8]) -> Result<ArcadeShard, String> {
                 title: required_string(&strings, u32_at(&row[8..12]), "Arcade title")?,
                 year: string_value(&strings, u32_at(&row[12..16]))?,
                 manufacturer: string_value(&strings, u32_at(&row[16..20]))?,
-                players: (row[20] != 0).then_some(row[20]),
+                players: decode_optional_u8(u32_at(&row[20..24]), "Arcade players")?,
                 control: string_value(&strings, u32_at(&row[24..28]))?,
             });
         }
@@ -1107,13 +1129,13 @@ fn decode_arcade(payload: &[u8]) -> Result<ArcadeShard, String> {
             mra_name_key: required_string(&strings, u32_at(&row[4..8]), "Arcade MRA filename")?,
             title: required_string(&strings, u32_at(&row[8..12]), "Arcade MRA title")?,
             category: required_string(&strings, u32_at(&row[12..16]), "Arcade MRA category")?,
-            year: (u32_at(&row[16..20]) != 0).then_some(u32_at(&row[16..20]) as u16),
+            year: decode_optional_u16(u32_at(&row[16..20]), "Arcade MRA year")?,
             manufacturer: required_string(
                 &strings,
                 u32_at(&row[20..24]),
                 "Arcade MRA manufacturer",
             )?,
-            players: (row[24] != 0).then_some(row[24]),
+            players: decode_optional_u8(u32_at(&row[24..28]), "Arcade MRA players")?,
             control: required_string(&strings, u32_at(&row[28..32]), "Arcade MRA control")?,
         });
     }
@@ -1267,7 +1289,7 @@ pub fn encode_arcade(shard: &ArcadeShard) -> Result<Vec<u8>, String> {
             strings.intern(Some(&machine.title)),
             strings.intern(machine.year.as_deref()),
             strings.intern(machine.manufacturer.as_deref()),
-            machine.players.unwrap_or(0) as u32,
+            encode_optional_u8(machine.players),
             strings.intern(machine.control.as_deref()),
             0,
         ]
@@ -1289,9 +1311,9 @@ pub fn encode_arcade(shard: &ArcadeShard) -> Result<Vec<u8>, String> {
             strings.intern(Some(&row.mra_name_key)),
             strings.intern(Some(&row.title)),
             strings.intern(Some(&row.category)),
-            row.year.unwrap_or(0) as u32,
+            encode_optional_u16(row.year),
             strings.intern(Some(&row.manufacturer)),
-            row.players.unwrap_or(0) as u32,
+            encode_optional_u8(row.players),
             strings.intern(Some(&row.control)),
         ]);
     }
@@ -1945,7 +1967,8 @@ mod tests {
                     category: "Category".into(),
                     manufacturer: "Maker".into(),
                     control: "joystick".into(),
-                    ..MisterArcadeEntry::default()
+                    year: Some(0),
+                    players: Some(0),
                 },
                 MisterArcadeEntry {
                     setname_key: "shared".into(),
