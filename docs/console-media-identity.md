@@ -191,9 +191,9 @@ system shard containing title/family rows. It canonicalizes media-specific
 lists (for example, C64 cartridge and cassette lists) before creating
 `mame-software__<list>__<family>` keys. Missing or unreadable compact metadata
 is non-fatal: exact catalog keys continue to reconcile and the structured
-update event reports `resolver_status=Unavailable`. During migration only, a
-valid legacy SQLite database may be used as the reported `LegacySqlite`
-fallback; full SQLite databases remain CI/private-build source artifacts.
+update event reports `resolver_status=Unavailable`. Runtime never opens a
+legacy SQLite metadata database; the source databases remain CI/private-build
+inputs only.
 
 This first tranche intentionally does not perform fuzzy matching, ROM hashing,
 or external Libretro, No-Intro, Redump, TOSEC, ScreenScraper, or Skyscraper

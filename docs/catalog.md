@@ -194,8 +194,8 @@ whose preview key is blank. It opens the numbered-release
 then intersects unique normalized title matches with the installed pack index.
 Existing keys remain authoritative; ambiguous or missing matches remain blank.
 This pass is non-fatal and never changes the catalog generation, manifest,
-pack, or index formats. During migration only, a valid legacy SQLite database
-may be used as fallback. Use
+pack, or index formats. Runtime never opens the legacy SQLite metadata
+databases; those files are CI/private-build inputs only. Use
 `scripts/agent device catalog screenshots --system <id> --out <path>` to audit
 the effective runtime rows without downloading or writing catalog state.
 

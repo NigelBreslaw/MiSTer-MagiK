@@ -160,8 +160,8 @@ pub fn default_hbmame_sqlite_path() -> PathBuf {
     )
 }
 
-/// Location of the compact runtime metadata container.  The legacy SQLite
-/// paths remain available to builders and migration/parity checks.
+/// Location of the compact runtime metadata container. Legacy SQLite paths
+/// remain available only to builders and migration/parity checks.
 pub fn default_runtime_metadata_path() -> PathBuf {
     configured_path(
         std::env::var("MISTER_MAGIK_METADATA").ok().as_deref(),
