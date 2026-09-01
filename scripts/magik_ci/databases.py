@@ -324,9 +324,9 @@ def extract_release(release: Path, output: Path) -> dict[str, object]:
     output.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(archive) as stream:
         for name in stream.namelist():
-            if name not in {MANIFEST, CHECKSUMS}:
-                destination = output / name
-                destination.write_bytes(stream.read(name))
+            destination = output / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(stream.read(name))
     return payload
 
 

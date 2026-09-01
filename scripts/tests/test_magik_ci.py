@@ -935,7 +935,7 @@ import scripts.magik_ci.cli
         )
 
     def test_database_round_trip(self) -> None:
-        from scripts.magik_ci.databases import create, verify
+        from scripts.magik_ci.databases import create, extract_release, verify
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1072,6 +1072,14 @@ import scripts.magik_ci.cli
             with zipfile.ZipFile(compact_archive) as stream:
                 self.assertNotIn("mame.sqlite3", stream.namelist())
                 self.assertNotIn("hbmame.sqlite3", stream.namelist())
+
+            extracted = root / "extracted"
+            self.assertEqual(
+                extract_release(root / "compact-release", extracted), compact_payload
+            )
+            self.assertTrue((extracted / databases.MANIFEST).is_file())
+            self.assertTrue((extracted / databases.CHECKSUMS).is_file())
+            self.assertTrue((extracted / databases.RUNTIME_METADATA).is_file())
 
             with zipfile.ZipFile(archive) as stream:
                 legacy_files = {name: stream.read(name) for name in stream.namelist()}
