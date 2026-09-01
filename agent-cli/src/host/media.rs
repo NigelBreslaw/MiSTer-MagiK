@@ -1090,19 +1090,44 @@ fn print_manifest_summary(manifest: &MediaManifest) {
 }
 
 fn remote_pack_status(sess: &Session, pack: &MediaPack) -> Result<String> {
+    let state_path = Path::new(&pack.local_path)
+        .parent()
+        .map(|parent| parent.join(".screenshot-media-state.json"))
+        .unwrap_or_else(|| Path::new(&remote_state_path(&remote_asset_dir())).to_path_buf());
+    let state_patterns = [
+        format!("\"{}\": {{", pack.system),
+        format!("\"local_path\": \"{}\"", pack.local_path),
+        format!("\"version\": \"{}\"", pack.version),
+        format!("\"image_size\": \"{}\"", pack.image_size),
+        format!("\"sha256\": \"{}\"", pack.identity.decoded_sha256),
+        format!("\"bytes\": {}", pack.identity.decoded_bytes),
+    ];
+    let state_range = shell_quote(&format!("/^    {}$/,/^    }},/p", state_patterns[0]));
+    let state_check = format!(
+        "if [ ! -f {state} ]; then echo state-missing; exit 0; fi; block=$(sed -n {range} {state}); if [ -z \"$block\" ]; then echo state-missing; exit 0; fi; if ! printf '%s\\n' \"$block\" | grep -Fq {path} || ! printf '%s\\n' \"$block\" | grep -Fq {version} || ! printf '%s\\n' \"$block\" | grep -Fq {size} || ! printf '%s\\n' \"$block\" | grep -Fq {sha} || ! printf '%s\\n' \"$block\" | grep -Fq {bytes}; then echo state-stale; exit 0; fi; echo current",
+        state = shell_quote(&state_path.display().to_string()),
+        range = state_range,
+        path = shell_quote(&state_patterns[1]),
+        version = shell_quote(&state_patterns[2]),
+        size = shell_quote(&state_patterns[3]),
+        sha = shell_quote(&state_patterns[4]),
+        bytes = shell_quote(&state_patterns[5]),
+    );
     let cmd = if let Some(index) = &pack.index {
         format!(
-            "if [ ! -f {path} ]; then echo missing; exit 0; fi; got=$(sha256sum {path} 2>/dev/null | awk '{{print $1}}'); if [ \"$got\" != {sha} ]; then echo stale:$got; exit 0; fi; if [ ! -f {index_path} ]; then echo index-missing; exit 0; fi; idxgot=$(sha256sum {index_path} 2>/dev/null | awk '{{print $1}}'); if [ \"$idxgot\" != {index_sha} ]; then echo index-stale:$idxgot; exit 0; fi; echo current",
+            "if [ ! -f {path} ]; then echo missing; exit 0; fi; got=$(sha256sum {path} 2>/dev/null | awk '{{print $1}}'); if [ \"$got\" != {sha} ]; then echo stale:$got; exit 0; fi; if [ ! -f {index_path} ]; then echo index-missing; exit 0; fi; idxgot=$(sha256sum {index_path} 2>/dev/null | awk '{{print $1}}'); if [ \"$idxgot\" != {index_sha} ]; then echo index-stale:$idxgot; exit 0; fi; {state_check}",
             path = shell_quote(&pack.local_path),
             sha = shell_quote(&pack.identity.decoded_sha256),
             index_path = shell_quote(&local_index_path_for_pack(pack)),
             index_sha = shell_quote(&index.sha256),
+            state_check = state_check,
         )
     } else {
         format!(
-            "if [ -f {path} ]; then got=$(sha256sum {path} 2>/dev/null | awk '{{print $1}}'); if [ \"$got\" = {sha} ]; then echo current; else echo stale:$got; fi; else echo missing; fi",
+            "if [ -f {path} ]; then got=$(sha256sum {path} 2>/dev/null | awk '{{print $1}}'); if [ \"$got\" = {sha} ]; then {state_check}; else echo stale:$got; fi; else echo missing; fi",
             path = shell_quote(&pack.local_path),
             sha = shell_quote(&pack.identity.decoded_sha256),
+            state_check = state_check,
         )
     };
     Ok(exec_stdout(sess, &cmd)?.trim().to_string())
