@@ -236,20 +236,14 @@ pub(crate) fn screenshot_qualification(
             match run_catalog_screenshot_audit(sess, gui_binary, &pack.system) {
                 Ok(value) => {
                     let mut reason = qualification_reason(&value);
-                    let probe_key = if reason == "ok" {
-                        value.selected_key.as_deref()
-                    } else if value.available == 0 {
-                        value.representative_key.as_deref()
-                    } else {
-                        None
-                    };
-                    if let Some(asset_key) = probe_key {
+                    if reason == "ok" {
+                        let asset_key = value
+                            .selected_key
+                            .as_deref()
+                            .expect("ok screenshot audit has a selected asset key");
                         match run_preview_render_probe(sess, gui_binary, &pack.system, asset_key) {
                             Ok(probe) => {
                                 render = Some(probe);
-                                if reason == "zero-available" {
-                                    reason = "pack-only-probe".to_string();
-                                }
                             }
                             Err(error) => {
                                 reason = format!("render-error:{}", tsv(&error.to_string()))
@@ -287,11 +281,7 @@ pub(crate) fn screenshot_qualification(
                         audit.candidates,
                         audit.available,
                         audit.resolver_status.clone(),
-                        audit
-                            .selected_key
-                            .clone()
-                            .or_else(|| audit.representative_key.clone())
-                            .unwrap_or_default(),
+                        audit.selected_key.clone().unwrap_or_default(),
                     )
                 });
         rows.push(QualificationRow {
@@ -351,7 +341,7 @@ pub(crate) fn screenshot_qualification(
                 .map(|probe| probe.pixel_sha256.clone())
                 .unwrap_or_default(),
             render_total_us: render.as_ref().map(|probe| probe.total_us).unwrap_or(0),
-            pass: matches!(reason.as_str(), "ok" | "pack-only-probe"),
+            pass: screenshot_qualification_passes(&reason),
             reason,
         });
     }
@@ -395,7 +385,6 @@ struct CatalogScreenshotAudit {
     available: usize,
     resolver_status: String,
     selected_key: Option<String>,
-    representative_key: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -623,10 +612,6 @@ fn parse_catalog_screenshot_audit_output(combined: &str) -> Result<CatalogScreen
                 .then(|| fields[2].to_string())
         })
         .next();
-    let representative_key = fields
-        .get("probe_asset_key")
-        .filter(|value| !value.is_empty())
-        .cloned();
     Ok(CatalogScreenshotAudit {
         tsv,
         games: parse_count("games")?,
@@ -637,8 +622,11 @@ fn parse_catalog_screenshot_audit_output(combined: &str) -> Result<CatalogScreen
         available: parse_count("available")?,
         resolver_status: fields.get("resolver_status").cloned().unwrap_or_default(),
         selected_key,
-        representative_key,
     })
+}
+
+fn screenshot_qualification_passes(reason: &str) -> bool {
+    reason == "ok"
 }
 
 fn parse_key_value_fields(line: &str) -> HashMap<String, String> {
@@ -2365,6 +2353,20 @@ mod tests {
         );
         let audit = parse_catalog_screenshot_audit_output(output).unwrap();
         assert_eq!(qualification_reason(&audit), "zero-available");
+    }
+
+    #[test]
+    fn screenshot_audit_gate_never_accepts_an_arbitrary_pack_entry() {
+        let output = concat!(
+            "catalog_screenshot_summary_tsv\tvalid=1\tsystem=nes\tgames=1\texisting_identity_rows=1\tderived_identity_rows=0\tambiguous_identity_rows=0\tcandidates=1\tavailable=0\tchanged=0\tpack_entry=pack-entry\tresolver_status=NotNeeded\n",
+            "ordinal\ttitle\tpreview_asset_key\tpreview_archive_path\thas_preview\tlaunch_ref\n",
+            "0\tOne\tcatalog-entry\t\t0\t/ref0\n",
+        );
+        let audit = parse_catalog_screenshot_audit_output(output).unwrap();
+        assert_eq!(audit.selected_key, None);
+        assert_eq!(qualification_reason(&audit), "zero-available");
+        assert!(!screenshot_qualification_passes("diagnostic"));
+        assert!(!screenshot_qualification_passes("zero-available"));
     }
 
     #[test]

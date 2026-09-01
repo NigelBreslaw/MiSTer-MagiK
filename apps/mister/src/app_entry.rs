@@ -489,7 +489,7 @@ fn benchmark_capabilities() -> serde_json::Value {
         "media-pack-persistence-v1": true,
         "rom-identity-benchmark-v1": true,
         "rom-identity-benchmark-v3": true,
-        "runtime-metadata-qualification-v1": true,
+        "runtime-metadata-qualification-v2": true,
         "input-integrity-driver-v1": true,
         "arcade-velocity-scroll-v1": true,
         "arcade-velocity-scroll-attribution-v1": true,
@@ -634,14 +634,8 @@ fn run_catalog_screenshot_audit(
             std::process::exit(1);
         }
     };
-    let representative_asset_key =
-        mister_magik_catalog::preview_worker::preview_archive_sidecar_entry_stems(&pack_path)
-            .ok()
-            .flatten()
-            .and_then(|stems| stems.entries.into_iter().next())
-            .unwrap_or_default();
     crate::ui_errln!(
-        "catalog_screenshot_summary_tsv\tvalid=1\tsystem={}\tgames={}\texisting_identity_rows={}\tderived_identity_rows={}\tambiguous_identity_rows={}\tcandidates={}\tavailable={}\tchanged={}\tprobe_asset_key={}\tresolver_status={:?}",
+        "catalog_screenshot_summary_tsv\tvalid=1\tsystem={}\tgames={}\texisting_identity_rows={}\tderived_identity_rows={}\tambiguous_identity_rows={}\tcandidates={}\tavailable={}\tchanged={}\tresolver_status={:?}",
         outcome.system_id,
         outcome.games.len(),
         outcome.existing_identity_rows,
@@ -650,7 +644,6 @@ fn run_catalog_screenshot_audit(
         outcome.candidate_rows,
         outcome.available_rows,
         outcome.changed_rows,
-        sanitize_tsv_field(&representative_asset_key),
         outcome.resolver_status,
     );
     crate::ui_log!(
