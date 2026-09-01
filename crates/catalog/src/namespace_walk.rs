@@ -761,6 +761,7 @@ mod linux {
     const MAX_CAPTURED_PATH_BYTES: usize = 16 * 1024 * 1024;
     const MAX_OPEN_DIRECTORY_FDS: usize = 64;
 
+    #[derive(Debug)]
     pub(super) struct NamespaceCapture {
         pub(super) entries: Vec<NamespaceEntry>,
         pub(super) stats: NamespaceWalkStats,
@@ -2286,7 +2287,7 @@ mod tests {
         fs::write(deep.join("game.rom"), b"game").unwrap();
         fs::write(dir.join("sibling/other.rom"), b"other").unwrap();
 
-        let deep_ignore_calls = Cell::new(0);
+        let deep_ignore_calls = Cell::new(0usize);
         let ignore = |path: &Path| {
             if path == deep {
                 let call = deep_ignore_calls.get();
