@@ -20093,8 +20093,6 @@ const CATALOG_DURABILITY_FUNCTION_GRAPH_SPEC: tracefs::TracefsCaptureSpec =
         CATALOG_DURABILITY_FUNCTION_GROUPS,
     );
 
-const CATALOG_ATTRIBUTION_REMOTE_DIR: &str =
-    "/media/fat/mister-magik-dev/catalog-attribution-benchmark";
 const CATALOG_ATTRIBUTION_WORK_DIR: &str = "/tmp/mister-magik/catalog-attribution";
 const CATALOG_ATTRIBUTION_C64_ROOT: &str = CATALOG_BUILD_REBUILD_C64_ROOT;
 const CATALOG_FAST_FIVE_STAGING_REMOTE: &str = "/tmp/mister-magik/fast-five-catalog";
@@ -20107,8 +20105,7 @@ const CATALOG_ATTRIBUTION_PROFILE_FINALIZE_TIMEOUT: Duration = Duration::from_se
 
 fn catalog_attribution_prepare_command() -> String {
     format!(
-        "set -eu; rm -rf {root} {work} {staging}; test -d {arcade}; test -d {snes}; test -d {c64}; mkdir -p {root} {work}/diagnostics {work}/sqlite-build; test -d {root}; test -d {work}; test ! -e {staging}",
-        root = sh(CATALOG_ATTRIBUTION_REMOTE_DIR),
+        "set -eu; rm -rf {work} {staging}; test -d {arcade}; test -d {snes}; test -d {c64}; mkdir -p {work}/diagnostics; test -d {work}; test ! -e {staging}",
         work = sh(CATALOG_ATTRIBUTION_WORK_DIR),
         staging = sh(CATALOG_FAST_FIVE_STAGING_REMOTE),
         arcade = sh(CATALOG_BUILD_REBUILD_ARCADE_ROOT),
@@ -20119,61 +20116,18 @@ fn catalog_attribution_prepare_command() -> String {
 
 fn catalog_attribution_cleanup_command() -> String {
     format!(
-        "set -eu; rm -rf {root} {work} {staging}; test ! -e {root}; test ! -e {work}; test ! -e {staging}",
-        root = sh(CATALOG_ATTRIBUTION_REMOTE_DIR),
+        "set -eu; rm -rf {work} {staging}; test ! -e {work}; test ! -e {staging}",
         work = sh(CATALOG_ATTRIBUTION_WORK_DIR),
         staging = sh(CATALOG_FAST_FIVE_STAGING_REMOTE),
     )
 }
 
 fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, String)> {
-    let root = CATALOG_ATTRIBUTION_REMOTE_DIR;
     let work = CATALOG_ATTRIBUTION_WORK_DIR;
     let diagnostics = format!("{work}/diagnostics");
     let mut env = vec![
         ("MISTER_CATALOG_REFRESH".into(), "force".into()),
-        (
-            "MISTER_LIBRARY_ROOTS".into(),
-            format!("{CATALOG_BUILD_REBUILD_ARCADE_ROOT}|/media/fat/games"),
-        ),
-        (
-            "MISTER_LIBRARY_TARGET_ALLOWLIST".into(),
-            format!(
-                "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}:{CATALOG_BUILD_REBUILD_SNES_ROOT}:{CATALOG_ATTRIBUTION_C64_ROOT}"
-            ),
-        ),
-        (
-            "MISTER_SHARDED_CATALOG_DIR".into(),
-            format!("{root}/catalog-v3"),
-        ),
-        (
-            "MISTER_LIBRARY_SQLITE".into(),
-            format!("{root}/library.sqlite3"),
-        ),
-        (
-            "MISTER_LIBRARY_SQLITE_BUILD_DIR".into(),
-            format!("{work}/sqlite-build"),
-        ),
-        (
-            "MISTER_ARCADE_BOOTSTRAP_INDEX".into(),
-            format!("{root}/arcade-bootstrap.nav.lz4b"),
-        ),
-        (
-            "MISTER_LIBRARY_REFRESH_LOCK".into(),
-            format!("{work}/library-refresh.lock"),
-        ),
-        (
-            "MISTER_CATALOG_BUILDER_LOCK".into(),
-            format!("{work}/catalog-builder.lock"),
-        ),
-        (
-            "MISTER_CATALOG_READY_SNAPSHOT".into(),
-            format!("{work}/catalog-ready.snapshot"),
-        ),
         ("MISTER_CATALOG_DIAGNOSTICS_DIR".into(), diagnostics.clone()),
-        ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
-        ("MISTER_HOME_SELECTED_INDEX".into(), "0".into()),
-        ("MISTER_PREVIEW_ARCHIVE_WARM_SKIP".into(), "1".into()),
     ];
     match arm {
         CatalogAttributionArm::Hotpath => env.extend([
@@ -20268,24 +20222,9 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
 }
 
 fn catalog_attribution_runtime_command(subcommand: &str) -> String {
-    let root = CATALOG_ATTRIBUTION_REMOTE_DIR;
-    let work = CATALOG_ATTRIBUTION_WORK_DIR;
     format!(
-        "env MISTER_LIBRARY_ROOTS={roots} MISTER_LIBRARY_TARGET_ALLOWLIST={allowlist} MISTER_SHARDED_CATALOG_DIR={catalog} MISTER_LIBRARY_SQLITE={library} MISTER_LIBRARY_SQLITE_BUILD_DIR={sqlite_build} MISTER_ARCADE_BOOTSTRAP_INDEX={bootstrap} MISTER_LIBRARY_REFRESH_LOCK={refresh_lock} MISTER_CATALOG_BUILDER_LOCK={builder_lock} MISTER_CATALOG_READY_SNAPSHOT={ready_snapshot} MISTER_CATALOG_DIAGNOSTICS_DIR={diagnostics} MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1 {gui} {subcommand}",
-        roots = sh(&format!(
-            "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}|/media/fat/games"
-        )),
-        allowlist = sh(&format!(
-            "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}:{CATALOG_BUILD_REBUILD_SNES_ROOT}:{CATALOG_ATTRIBUTION_C64_ROOT}"
-        )),
-        catalog = sh(&format!("{root}/catalog-v3")),
-        library = sh(&format!("{root}/library.sqlite3")),
-        sqlite_build = sh(&format!("{work}/sqlite-build")),
-        bootstrap = sh(&format!("{root}/arcade-bootstrap.nav.lz4b")),
-        refresh_lock = sh(&format!("{work}/library-refresh.lock")),
-        builder_lock = sh(&format!("{work}/catalog-builder.lock")),
-        ready_snapshot = sh(&format!("{work}/catalog-ready.snapshot")),
-        diagnostics = sh(&format!("{work}/diagnostics")),
+        "env MISTER_CATALOG_DIAGNOSTICS_DIR={diagnostics} {gui} {subcommand}",
+        diagnostics = sh(&format!("{CATALOG_ATTRIBUTION_WORK_DIR}/diagnostics")),
         gui = sh(DEVELOPMENT_GUI_REMOTE),
     )
 }
@@ -20352,18 +20291,69 @@ fn reboot_for_catalog_attribution(config: &NativeDeviceConfig) -> Result<Value> 
     }))
 }
 
-fn prepare_and_reboot_for_catalog_attribution(config: &NativeDeviceConfig) -> Result<Value> {
+fn prepare_and_reboot_for_catalog_attribution(
+    config: &NativeDeviceConfig,
+    arm: CatalogAttributionArm,
+) -> Result<Value> {
     let session = connect_with(&config.connection, 10)?;
     require_catalog_benchmark_active("catalog attribution preparation")?;
     exec_checked(
         &session,
-        "delete catalog attribution state before reboot",
+        "prepare catalog attribution diagnostics",
         &catalog_attribution_prepare_command(),
     )?;
+    // The attribution arm must be present when the ordinary launcher starts
+    // after the supervised reboot.  Keep this staging one-shot: the launcher
+    // consumes and removes it during its natural boot, just like the regular
+    // attended device workflow.
+    let launcher_env = catalog_attribution_launcher_env(arm);
+    stage_one_shot_launcher_env(
+        &session,
+        &LauncherRestartOptions {
+            env_vars: launcher_env,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    let before_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable before catalog attribution purge")?
+        .trim()
+        .to_string();
+    let purge_result = purge_development_library_data(&session);
+    if let Err(error) = purge_result {
+        let _ = clear_one_shot_launcher_env(&session, DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str());
+        return Err(error);
+    }
     drop(session);
-    let mut reboot = reboot_for_catalog_attribution(config)?;
+    agent_reboot_wait_with_config(&[], &config.connection, config.agent()?)?;
+    let session = connect_with(&config.connection, 10)?;
+    let after_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after catalog attribution purge")?
+        .trim()
+        .to_string();
+    if before_boot_id == after_boot_id {
+        let _ = clear_one_shot_launcher_env(&session, DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str());
+        return Err("catalog attribution purge reboot did not change the device boot id".into());
+    }
+    // This is deliberately a readiness observation only.  In particular, do
+    // not restart the launcher here: the measured fresh leg is the launcher
+    // instance that Main started as part of boot recovery.
+    wait_launcher_ready(
+        &session,
+        Instant::now(),
+        Duration::from_secs(CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS),
+    )?;
+    drop(session);
+    let mut reboot = json!({
+        "mode": "supervised",
+        "verified": true,
+        "preparation": "completed-production-purge-before-reboot",
+        "boot_id_before": before_boot_id,
+        "boot_id_after": after_boot_id,
+        "reset": "device-catalog-purge-attended-reboot",
+    });
     if let Some(object) = reboot.as_object_mut() {
-        object.insert("preparation".into(), json!("completed-before-reboot"));
+        object.insert("arm".into(), json!(arm.label()));
     }
     Ok(reboot)
 }
@@ -20374,7 +20364,7 @@ fn profile_installed_catalog_attribution(
     arm: CatalogAttributionArm,
 ) -> Result<String> {
     let _signal_guard = AttendedOperationSignalGuard::install();
-    let reboot = prepare_and_reboot_for_catalog_attribution(config)?;
+    let reboot = prepare_and_reboot_for_catalog_attribution(config, arm)?;
     match arm {
         CatalogAttributionArm::Storage => {
             return profile_catalog_attribution_trace(
@@ -20623,7 +20613,9 @@ fn run_catalog_attribution_trace_leg(
             // unchanged rebuild intentionally does not prefetch it. Keep the
             // trace harness aligned with the ordinary attribution pair.
             require_updater_index: minimum_generation.is_none(),
-            launcher_env: catalog_attribution_launcher_env(arm),
+            launcher_env: (label == "fresh")
+                .then(Vec::new)
+                .unwrap_or_else(|| catalog_attribution_launcher_env(arm)),
             runtime_command: catalog_attribution_runtime_command,
         },
     );
@@ -20783,7 +20775,9 @@ fn run_catalog_attribution_streamline_leg(
                 // Only the fresh leg is expected to prefetch the updater
                 // index; unchanged rebuilds intentionally skip that work.
                 require_updater_index: minimum_generation.is_none(),
-                launcher_env: catalog_attribution_launcher_env(CatalogAttributionArm::Streamline),
+                launcher_env: (label == "fresh").then(Vec::new).unwrap_or_else(|| {
+                    catalog_attribution_launcher_env(CatalogAttributionArm::Streamline)
+                }),
                 runtime_command: catalog_attribution_runtime_command,
             },
         )?;
@@ -20844,7 +20838,7 @@ fn run_catalog_attribution_pair(
         CatalogBuildRebuildLegOptions {
             exercise_arcade_ui: false,
             require_updater_index: true,
-            launcher_env: catalog_attribution_launcher_env(arm),
+            launcher_env: Vec::new(),
             runtime_command: catalog_attribution_runtime_command,
         },
     )?;
@@ -20998,15 +20992,12 @@ fn finish_catalog_attribution_profile(
     manifest: &str,
     boot_id: &str,
 ) -> Result<String> {
-    let launcher_restore = launcher_restart(
-        session,
-        &LauncherRestartOptions {
-            clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
-            timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
-            ..LauncherRestartOptions::default()
-        },
-    );
+    // The one-shot environment is consumed by the natural launcher boot. A
+    // failed or interrupted run may leave it behind, so clear it as cleanup;
+    // do not restart the measured launcher merely to restore the benchmark
+    // host state.
+    let launcher_restore =
+        clear_one_shot_launcher_env(session, DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str());
     let cleanup = exec_checked(
         session,
         "clean matched catalog attribution state",
@@ -25222,15 +25213,26 @@ fn run_catalog_build_rebuild_leg(
         );
     }
     let started = Instant::now();
-    restart_launcher_with_one_shot_env(
-        session,
-        LauncherRestartOptions {
-            env_vars: launcher_env,
-            timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
-            ..LauncherRestartOptions::default()
-        },
-    )?;
+    if launcher_env.is_empty() {
+        // An empty environment is the explicit cold-leg marker used by the
+        // production attribution benchmark.  Its launcher was started by
+        // Main during the guarded reboot, so only observe readiness here.
+        wait_launcher_ready(
+            session,
+            started,
+            Duration::from_secs(CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS),
+        )?;
+    } else {
+        restart_launcher_with_one_shot_env(
+            session,
+            LauncherRestartOptions {
+                env_vars: launcher_env,
+                timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+                ..LauncherRestartOptions::default()
+            },
+        )?;
+    }
     let mut first_visible_ms = None;
     let mut statuses = Vec::new();
     let mut telemetry = Vec::new();
@@ -43244,23 +43246,26 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn catalog_attribution_uses_real_bounded_roots_and_normalizes_legs() {
+    fn catalog_attribution_uses_production_roots_and_normalizes_legs() {
         let env = catalog_attribution_launcher_env(CatalogAttributionArm::Control);
-        assert!(env.contains(&("MISTER_LAUNCHER_START_SCREEN".into(), "home".into())));
-        assert!(env.contains(&("MISTER_HOME_SELECTED_INDEX".into(), "0".into())));
         assert!(
             env.iter()
                 .all(|(key, _)| key != "MISTER_LAUNCHER_START_SYSTEM")
         );
-        let allowlist = env
-            .iter()
-            .find(|(key, _)| key == "MISTER_LIBRARY_TARGET_ALLOWLIST")
-            .map(|(_, value)| value.as_str())
-            .unwrap();
-        assert!(allowlist.contains(CATALOG_BUILD_REBUILD_ARCADE_ROOT));
-        assert!(allowlist.contains(CATALOG_BUILD_REBUILD_SNES_ROOT));
-        assert!(allowlist.contains(CATALOG_ATTRIBUTION_C64_ROOT));
-        assert!(!allowlist.contains("fixture"));
+        assert!(env.contains(&("MISTER_CATALOG_REFRESH".into(), "force".into())));
+        assert!(env.iter().any(|(key, value)| {
+            key == "MISTER_CATALOG_DIAGNOSTICS_DIR"
+                && value.starts_with(CATALOG_ATTRIBUTION_WORK_DIR)
+        }));
+        assert!(env.iter().all(|(key, _)| {
+            key != "MISTER_LIBRARY_ROOTS"
+                && key != "MISTER_LIBRARY_TARGET_ALLOWLIST"
+                && key != "MISTER_SHARDED_CATALOG_DIR"
+                && key != "MISTER_LIBRARY_SQLITE"
+        }));
+        let inspect = catalog_attribution_runtime_command("catalog-inspect");
+        assert!(!inspect.contains("MISTER_LIBRARY_ROOTS="));
+        assert!(inspect.contains("MISTER_CATALOG_DIAGNOSTICS_DIR="));
         let rows = normalized_catalog_attribution_measurements(
             "control",
             &json!({
@@ -43299,6 +43304,7 @@ H: Handlers=event3 js0"#
         );
         let cleanup = catalog_attribution_cleanup_command();
         assert!(cleanup.contains(CATALOG_FAST_FIVE_STAGING_REMOTE));
+        assert!(!cleanup.contains("catalog-attribution-benchmark"));
     }
 
     #[test]
