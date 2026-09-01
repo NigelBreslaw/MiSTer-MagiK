@@ -1165,6 +1165,50 @@ pub fn load_preview_asset_pixels_timed(
     )
 }
 
+/// Load one preview through the indexed sidecar path without permitting an
+/// archive-memory fallback.  Qualification uses this entry point to prove the
+/// production v2 index and RGB565 decoder are usable on the device.
+pub fn load_preview_asset_pixels_indexed_timed(
+    preview_archive_path: &str,
+    preview_asset_key: &str,
+) -> Result<LoadedPreviewAsset, String> {
+    let mut scratch = PreviewArchiveScratch::default();
+    let config = PreviewWorkerConfig::capture_process();
+    let entry_name = format!("{}.rgb565", preview_asset_key.trim());
+    if preview_archive_path.trim().is_empty() || preview_asset_key.trim().is_empty() {
+        return Err("preview asset missing archive path or key".to_string());
+    }
+    let loaded = match load_raw565_preview_asset_from_index(
+        Path::new(preview_archive_path.trim()),
+        &entry_name,
+        &mut scratch,
+    )? {
+        PreviewIndexLoad::Loaded(loaded) => loaded,
+        PreviewIndexLoad::MissingEntry => {
+            return Err(format!(
+                "preview asset {entry_name} missing from index for archive {preview_archive_path}"
+            ));
+        }
+        PreviewIndexLoad::NoSidecar => {
+            return Err(format!(
+                "preview archive {preview_archive_path} has no sidecar index"
+            ));
+        }
+    };
+    Ok(LoadedPreviewAsset {
+        pixels: loaded.image,
+        read_us: loaded.timing.read_us,
+        decode_us: loaded.timing.decode_us,
+        raw565_parse_us: loaded.timing.raw565_parse_us,
+        resize_us: loaded.timing.resize_us,
+        total_us: loaded.timing.total_us,
+        encoded_bytes: loaded.timing.encoded_bytes,
+        load_source: loaded.timing.load_source,
+        storage_format: config.storage_format(),
+        resize_filter: config.resize().filter,
+    })
+}
+
 fn load_preview_asset_pixels_timed_with_scratch(
     preview_archive_path: &str,
     preview_asset_key: &str,

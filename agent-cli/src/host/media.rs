@@ -223,6 +223,7 @@ pub(crate) fn screenshot_qualification(
             Err(error) => format!("error:{}", tsv(&error.to_string())),
         };
         let mut audit = None;
+        let mut render = None;
         let mut reason = if media_status != "current" {
             format!("media-{media_status}")
         } else if pack
@@ -234,7 +235,22 @@ pub(crate) fn screenshot_qualification(
         } else {
             match run_catalog_screenshot_audit(sess, gui_binary, &pack.system) {
                 Ok(value) => {
-                    let reason = qualification_reason(&value);
+                    let mut reason = qualification_reason(&value);
+                    if reason == "ok" {
+                        if let Some(asset_key) = value.selected_key.as_deref() {
+                            match run_preview_render_probe(
+                                sess,
+                                gui_binary,
+                                &pack.system,
+                                asset_key,
+                            ) {
+                                Ok(probe) => render = Some(probe),
+                                Err(error) => {
+                                    reason = format!("render-error:{}", tsv(&error.to_string()))
+                                }
+                            }
+                        }
+                    }
                     audit = Some(value);
                     reason
                 }
@@ -295,6 +311,37 @@ pub(crate) fn screenshot_qualification(
             },
             resolver_status: resolver,
             selected_key,
+            render_archive_path: render
+                .as_ref()
+                .map(|probe| probe.archive_path.clone())
+                .unwrap_or_default(),
+            render_index_path: render
+                .as_ref()
+                .map(|probe| probe.index_path.clone())
+                .unwrap_or_default(),
+            render_source: render
+                .as_ref()
+                .map(|probe| probe.load_source.clone())
+                .unwrap_or_default(),
+            render_source_width: render.as_ref().map(|probe| probe.source_width).unwrap_or(0),
+            render_source_height: render
+                .as_ref()
+                .map(|probe| probe.source_height)
+                .unwrap_or(0),
+            render_width: render.as_ref().map(|probe| probe.render_width).unwrap_or(0),
+            render_height: render
+                .as_ref()
+                .map(|probe| probe.render_height)
+                .unwrap_or(0),
+            rendered_pixels: render
+                .as_ref()
+                .map(|probe| probe.rendered_pixels)
+                .unwrap_or(0),
+            render_pixel_sha256: render
+                .as_ref()
+                .map(|probe| probe.pixel_sha256.clone())
+                .unwrap_or_default(),
+            render_total_us: render.as_ref().map(|probe| probe.total_us).unwrap_or(0),
             pass: reason == "ok",
             reason,
         });
@@ -342,6 +389,20 @@ struct CatalogScreenshotAudit {
 }
 
 #[derive(Clone, Debug)]
+struct PreviewRenderProbe {
+    archive_path: String,
+    index_path: String,
+    load_source: String,
+    source_width: u32,
+    source_height: u32,
+    render_width: u32,
+    render_height: u32,
+    rendered_pixels: usize,
+    pixel_sha256: String,
+    total_us: u64,
+}
+
+#[derive(Clone, Debug)]
 struct QualificationRow {
     system: String,
     version: String,
@@ -360,6 +421,16 @@ struct QualificationRow {
     coverage_pct: f64,
     resolver_status: String,
     selected_key: String,
+    render_archive_path: String,
+    render_index_path: String,
+    render_source: String,
+    render_source_width: u32,
+    render_source_height: u32,
+    render_width: u32,
+    render_height: u32,
+    rendered_pixels: usize,
+    render_pixel_sha256: String,
+    render_total_us: u64,
     pass: bool,
     reason: String,
 }
@@ -419,6 +490,99 @@ fn run_catalog_screenshot_audit(
     parse_catalog_screenshot_audit_output(&combined)
 }
 
+fn run_preview_render_probe(
+    sess: &Session,
+    gui_binary: &str,
+    system: &str,
+    asset_key: &str,
+) -> Result<PreviewRenderProbe> {
+    let command = super::remote::remote_subcommand(
+        gui_binary,
+        "preview-render-probe",
+        &[system.to_string(), asset_key.to_string()],
+    );
+    let output = super::remote::exec(sess, &command, true)?;
+    if let Some(error) = super::remote::exec_failure_message("preview render probe", &output) {
+        return Err(error.into());
+    }
+    let combined = format!("{}\n{}", output.stdout, output.stderr);
+    parse_preview_render_probe_output(&combined)
+}
+
+fn parse_preview_render_probe_output(combined: &str) -> Result<PreviewRenderProbe> {
+    let line = combined
+        .lines()
+        .find(|line| line.starts_with("preview_render_probe_tsv\t"))
+        .ok_or("device returned no preview render probe")?;
+    let fields = parse_key_value_fields(line);
+    if fields.get("valid").map(String::as_str) != Some("1") {
+        return Err(format!("device returned invalid preview render probe: {line}").into());
+    }
+    let parse_u32 = |key: &str| -> Result<u32> {
+        let value = fields
+            .get(key)
+            .ok_or_else(|| format!("preview render probe missing {key}"))?;
+        value
+            .parse::<u32>()
+            .map_err(|error| -> Box<dyn std::error::Error> {
+                format!("preview render probe {key}: {error}").into()
+            })
+    };
+    let parse_u64 = |key: &str| -> Result<u64> {
+        let value = fields
+            .get(key)
+            .ok_or_else(|| format!("preview render probe missing {key}"))?;
+        value
+            .parse::<u64>()
+            .map_err(|error| -> Box<dyn std::error::Error> {
+                format!("preview render probe {key}: {error}").into()
+            })
+    };
+    let load_source = fields
+        .get("load_source")
+        .cloned()
+        .ok_or("preview render probe missing load_source")?;
+    if load_source != "index_pread" {
+        return Err(
+            format!("preview render probe used {load_source}, expected index_pread").into(),
+        );
+    }
+    let rendered_pixels = fields
+        .get("rendered_pixels")
+        .ok_or("preview render probe missing rendered_pixels")?
+        .parse::<usize>()
+        .map_err(|error| -> Box<dyn std::error::Error> {
+            format!("preview render probe rendered_pixels: {error}").into()
+        })?;
+    if rendered_pixels == 0 {
+        return Err("preview render probe produced no nonblank pixels".into());
+    }
+    let pixel_sha256 = fields
+        .get("pixel_sha256")
+        .cloned()
+        .ok_or("preview render probe missing pixel_sha256")?;
+    mister_magik_media_contract::Sha256::parse(&pixel_sha256)
+        .map_err(|error| format!("preview render probe pixel_sha256: {error}"))?;
+    Ok(PreviewRenderProbe {
+        archive_path: fields
+            .get("archive_path")
+            .cloned()
+            .ok_or("preview render probe missing archive_path")?,
+        index_path: fields
+            .get("index_path")
+            .cloned()
+            .ok_or("preview render probe missing index_path")?,
+        load_source,
+        source_width: parse_u32("source_width")?,
+        source_height: parse_u32("source_height")?,
+        render_width: parse_u32("render_width")?,
+        render_height: parse_u32("render_height")?,
+        rendered_pixels,
+        pixel_sha256,
+        total_us: parse_u64("total_us")?,
+    })
+}
+
 fn parse_catalog_screenshot_audit_output(combined: &str) -> Result<CatalogScreenshotAudit> {
     let tsv = super::catalog_screenshot_tsv(combined)?;
     let summary = combined
@@ -473,6 +637,8 @@ fn parse_key_value_fields(line: &str) -> HashMap<String, String> {
 fn qualification_reason(audit: &CatalogScreenshotAudit) -> String {
     if audit.games == 0 {
         "catalog-empty".to_string()
+    } else if audit.resolver_status == "Unavailable" && audit.games > audit.existing_identity_rows {
+        "compact-unavailable".to_string()
     } else if audit.available == 0 {
         "zero-available".to_string()
     } else if audit.selected_key.is_none() {
@@ -484,33 +650,44 @@ fn qualification_reason(audit: &CatalogScreenshotAudit) -> String {
 
 fn render_qualification_tsv(manifest: &MediaManifest, rows: &[QualificationRow]) -> String {
     let mut output = format!(
-        "system\tversion\timage_size\tmedia_status\tpack_bytes\tpack_sha256\tindex_bytes\tindex_sha256\tcatalog_games\texisting_identity_rows\tderived_identity_rows\tambiguous_identity_rows\tcandidates\tavailable\tcoverage_pct\tresolver_status\tselected_asset_key\tpass\treason\tmanifest_schema_version\tmanifest_published_at\n"
+        "system\tversion\timage_size\tmedia_status\tpack_bytes\tpack_sha256\tindex_bytes\tindex_sha256\tcatalog_games\texisting_identity_rows\tderived_identity_rows\tambiguous_identity_rows\tcandidates\tavailable\tcoverage_pct\tresolver_status\tselected_asset_key\trender_archive_path\trender_index_path\trender_load_source\trender_source_width\trender_source_height\trender_width\trender_height\trendered_pixels\trender_pixel_sha256\trender_total_us\tpass\treason\tmanifest_schema_version\tmanifest_published_at\n"
     );
     for row in rows {
-        output.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+        let columns = [
             tsv(&row.system),
             tsv(&row.version),
             tsv(&row.image_size),
             tsv(&row.media_status),
-            row.pack_bytes,
+            row.pack_bytes.to_string(),
             tsv(&row.pack_sha256),
-            row.index_bytes,
+            row.index_bytes.to_string(),
             tsv(&row.index_sha256),
-            row.games,
-            row.existing_identity_rows,
-            row.derived_identity_rows,
-            row.ambiguous_identity_rows,
-            row.candidates,
-            row.available,
-            row.coverage_pct,
+            row.games.to_string(),
+            row.existing_identity_rows.to_string(),
+            row.derived_identity_rows.to_string(),
+            row.ambiguous_identity_rows.to_string(),
+            row.candidates.to_string(),
+            row.available.to_string(),
+            format!("{:.2}", row.coverage_pct),
             tsv(&row.resolver_status),
             tsv(&row.selected_key),
-            u8::from(row.pass),
+            tsv(&row.render_archive_path),
+            tsv(&row.render_index_path),
+            tsv(&row.render_source),
+            row.render_source_width.to_string(),
+            row.render_source_height.to_string(),
+            row.render_width.to_string(),
+            row.render_height.to_string(),
+            row.rendered_pixels.to_string(),
+            tsv(&row.render_pixel_sha256),
+            row.render_total_us.to_string(),
+            u8::from(row.pass).to_string(),
             tsv(&row.reason),
-            manifest.schema_version,
+            manifest.schema_version.to_string(),
             tsv(&manifest.published_at),
-        ));
+        ];
+        output.push_str(&columns.join("\t"));
+        output.push('\n');
     }
     output
 }
@@ -541,6 +718,16 @@ fn render_qualification_json(
                 "coverage_pct": row.coverage_pct,
                 "resolver_status": row.resolver_status,
                 "selected_asset_key": row.selected_key,
+                "render_archive_path": row.render_archive_path,
+                "render_index_path": row.render_index_path,
+                "render_load_source": row.render_source,
+                "render_source_width": row.render_source_width,
+                "render_source_height": row.render_source_height,
+                "render_width": row.render_width,
+                "render_height": row.render_height,
+                "rendered_pixels": row.rendered_pixels,
+                "render_pixel_sha256": row.render_pixel_sha256,
+                "render_total_us": row.render_total_us,
                 "pass": row.pass,
                 "reason": row.reason,
             })
@@ -2139,6 +2326,41 @@ mod tests {
         );
         let audit = parse_catalog_screenshot_audit_output(output).unwrap();
         assert_eq!(qualification_reason(&audit), "zero-available");
+    }
+
+    #[test]
+    fn screenshot_audit_gate_rejects_missing_compact_metadata_for_empty_keys() {
+        let output = concat!(
+            "catalog_screenshot_summary_tsv\tvalid=1\tsystem=nes\tgames=2\texisting_identity_rows=1\tderived_identity_rows=0\tambiguous_identity_rows=0\tcandidates=1\tavailable=1\tchanged=0\tresolver_status=Unavailable\n",
+            "ordinal\ttitle\tpreview_asset_key\tpreview_archive_path\thas_preview\tlaunch_ref\n",
+            "0\tOne\tone\t/media/fat/assets/nes.mmlz4b\t1\t/ref0\n",
+            "1\tTwo\t\t\t0\t/ref1\n",
+        );
+        let audit = parse_catalog_screenshot_audit_output(output).unwrap();
+        assert_eq!(qualification_reason(&audit), "compact-unavailable");
+    }
+
+    #[test]
+    fn preview_render_probe_parser_requires_indexed_nonblank_output() {
+        let output = concat!(
+            "preview_render_probe_tsv\tvalid=1\tsystem=nes\tasset_key=game\tarchive_path=/media/fat/assets/nes-screenshots-256x240.mmlz4b\tindex_path=/media/fat/assets/nes-screenshots-256x240.mmlz4b.idx\tload_source=index_pread\tsource_width=256\tsource_height=240\trender_width=1280\trender_height=720\trendered_pixels=42\tpixel_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\tdecode_us=3\traw565_parse_us=2\ttotal_us=8\trect=256x240\n",
+        );
+        let probe = parse_preview_render_probe_output(output).unwrap();
+        assert_eq!(probe.load_source, "index_pread");
+        assert_eq!(probe.source_width, 256);
+        assert_eq!(probe.rendered_pixels, 42);
+        assert_eq!(
+            probe.archive_path,
+            "/media/fat/assets/nes-screenshots-256x240.mmlz4b"
+        );
+
+        let archive_output = output.replace("load_source=index_pread", "load_source=archive_mem");
+        assert!(
+            parse_preview_render_probe_output(&archive_output)
+                .unwrap_err()
+                .to_string()
+                .contains("expected index_pread")
+        );
     }
 
     #[test]

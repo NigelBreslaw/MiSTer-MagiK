@@ -33,6 +33,8 @@
 //!     catalog-registry-report list system counts without opening system artifacts
 //!     catalog-screenshot-audit
 //!                        reconcile installed screenshot identity coverage for one system
+//!     preview-render-probe
+//!                        decode one indexed screenshot and exercise production composition
 //!     metadata-qualification-report
 //!                        report compact/legacy metadata probes and device acceptance steps
 //!     search-bench       benchmark persisted Arcade FTS5 search
@@ -405,6 +407,10 @@ fn dispatch_pre_fpga(
             process_config.catalog_paths(),
             args.get(2..).unwrap_or_default(),
         ),
+        command_args::PREVIEW_RENDER_PROBE_COMMAND => run_preview_render_probe(
+            process_config.catalog_paths(),
+            args.get(2..).unwrap_or_default(),
+        ),
         command_args::RUNTIME_METADATA_QUALIFICATION_COMMAND => {
             run_runtime_metadata_qualification_report()
         }
@@ -654,6 +660,194 @@ fn run_catalog_screenshot_audit(
             sanitize_tsv_field(&game.launch_ref),
         );
     }
+}
+
+fn run_preview_render_probe(
+    paths: &mister_magik_catalog::device_layout::CatalogPaths,
+    args: &[String],
+) {
+    use sha2::Digest;
+    use slint::platform::software_renderer::Rgb565Pixel;
+
+    let fail = |error: &str| -> ! {
+        crate::ui_errln!(
+            "preview_render_probe_tsv\tvalid=0\terror={}",
+            sanitize_tsv_field(error)
+        );
+        std::process::exit(1);
+    };
+    if args.len() != 2 {
+        fail("exactly one system and one asset key are required");
+    }
+    let system = match mister_magik_catalog::catalog_classify::SystemId::parse(&args[0]) {
+        Ok(system) => system,
+        Err(error) => fail(&error.to_string()),
+    };
+    let asset_key = args[1].trim();
+    if asset_key.is_empty() || asset_key.contains(['\t', '\n', '\r']) {
+        fail("asset key must be a non-empty single-line value");
+    }
+    let profile =
+        mister_magik_catalog::media_identity::screenshot_resolution_profile(system.as_str())
+            .unwrap_or_else(|| fail("system has no screenshot resolution profile"));
+    let expected_size =
+        mister_magik_catalog::media_identity::preferred_screenshot_image_size(system.as_str());
+    let archive_path =
+        match installed_qualification_archive_path(paths, system.as_str(), expected_size) {
+            Ok(path) => path,
+            Err(error) => fail(&error),
+        };
+    let index_path = mister_magik_catalog::preview_worker::preview_archive_sidecar_path_for_archive(
+        &archive_path,
+    );
+    if !index_path.is_file() {
+        fail(&format!(
+            "sidecar index is missing: {}",
+            index_path.display()
+        ));
+    }
+    let loaded = match mister_magik_catalog::preview_worker::load_preview_asset_pixels_indexed_timed(
+        &archive_path.display().to_string(),
+        asset_key,
+    ) {
+        Ok(loaded) => loaded,
+        Err(error) => fail(&error),
+    };
+    let (width, height, stride_pixels, source) = match &loaded.pixels {
+        mister_magik_catalog::preview_worker::PreviewPixels::Rgb565 {
+            width,
+            height,
+            stride_bytes,
+            words,
+        } => {
+            if !profile.allows(*width, *height) {
+                fail(&format!(
+                    "unexpected preview geometry: {}x{} expected {}x{}{}",
+                    width,
+                    height,
+                    profile.width,
+                    profile.height,
+                    if profile.rotatable { " or rotated" } else { "" }
+                ));
+            }
+            if *stride_bytes % 2 != 0 {
+                fail("RGB565 stride is not word aligned");
+            }
+            let stride_pixels = (*stride_bytes / 2) as usize;
+            let pixels = words.iter().copied().map(Rgb565Pixel).collect::<Vec<_>>();
+            (*width as usize, *height as usize, stride_pixels, pixels)
+        }
+    };
+    let frame_width = 1280;
+    let frame_height = 720;
+    let screen = mister_magik_fb::visual_composition::hdmi_preview_rect(frame_width, frame_height);
+    let mut destination = vec![Rgb565Pixel(0); frame_width * frame_height];
+    let rect = mister_magik_fb::visual_composition::compose_preview_frame(
+        &mut destination,
+        frame_width,
+        frame_height,
+        screen,
+        mister_magik_fb::visual_composition::PreviewFrame {
+            pixels: mister_magik_fb::visual_composition::PreviewPixels::Rgb565 {
+                pixels: &source,
+                stride_pixels,
+            },
+            source_width: width,
+            source_height: height,
+            display_width: width,
+            display_height: height,
+        },
+        true,
+        mister_magik_fb::visual_composition::PreviewSurface::full(frame_width),
+    )
+    .unwrap_or_else(|| fail("production preview composition rejected the frame"));
+    let rendered = destination.iter().filter(|pixel| pixel.0 != 0).count();
+    if rendered == 0 {
+        fail("production preview composition produced a blank frame");
+    }
+    let mut hasher = sha2::Sha256::new();
+    for pixel in &destination {
+        hasher.update(pixel.0.to_le_bytes());
+    }
+    let checksum = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    crate::ui_logln!(
+        "preview_render_probe_tsv\tvalid=1\tsystem={}\tasset_key={}\tarchive_path={}\tindex_path={}\tload_source={}\tsource_width={}\tsource_height={}\trender_width={}\trender_height={}\trendered_pixels={}\tpixel_sha256={}\tdecode_us={}\traw565_parse_us={}\ttotal_us={}\trect={}x{}",
+        system,
+        sanitize_tsv_field(asset_key),
+        sanitize_tsv_field(&archive_path.display().to_string()),
+        sanitize_tsv_field(&index_path.display().to_string()),
+        loaded.load_source.label(),
+        width,
+        height,
+        frame_width,
+        frame_height,
+        rendered,
+        checksum,
+        loaded.decode_us,
+        loaded.raw565_parse_us,
+        loaded.total_us,
+        rect.width(),
+        rect.rows(),
+    );
+}
+
+fn installed_qualification_archive_path(
+    paths: &mister_magik_catalog::device_layout::CatalogPaths,
+    system: &str,
+    expected_size: &str,
+) -> Result<PathBuf, String> {
+    let expected = mister_magik_catalog::media_identity::size_qualified_screenshot_pack_path(
+        &paths.media_asset_dir().display().to_string(),
+        system,
+        expected_size,
+    )?;
+    let expected = PathBuf::from(expected);
+    let state_path = mister_magik_catalog::media_identity::screenshot_media_state_path_in_root(
+        paths.media_asset_dir(),
+    );
+    let state_text = fs::read_to_string(&state_path).map_err(|error| {
+        format!(
+            "read screenshot media state {}: {error}",
+            state_path.display()
+        )
+    })?;
+    let state: serde_json::Value = serde_json::from_str(&state_text).map_err(|error| {
+        format!(
+            "parse screenshot media state {}: {error}",
+            state_path.display()
+        )
+    })?;
+    let entry = state
+        .get("systems")
+        .and_then(|systems| systems.get(system))
+        .ok_or_else(|| format!("screenshot media state has no {system} entry"))?;
+    if entry.get("image_size").and_then(serde_json::Value::as_str) != Some(expected_size) {
+        return Err(format!(
+            "screenshot media state {system} image size is not {expected_size}"
+        ));
+    }
+    let state_path_value = entry
+        .get("local_path")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| format!("screenshot media state {system} has no local_path"))?;
+    if Path::new(state_path_value) != expected {
+        return Err(format!(
+            "screenshot media state {system} points to {}, expected {}",
+            state_path_value,
+            expected.display()
+        ));
+    }
+    if !expected.is_file() {
+        return Err(format!(
+            "screenshot archive is missing: {}",
+            expected.display()
+        ));
+    }
+    Ok(expected)
 }
 
 fn dispatch_fpga(
