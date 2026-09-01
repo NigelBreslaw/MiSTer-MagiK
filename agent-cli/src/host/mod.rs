@@ -20305,19 +20305,6 @@ fn prepare_and_reboot_for_catalog_attribution(
         "prepare catalog attribution diagnostics",
         &catalog_attribution_prepare_command(),
     )?;
-    // The attribution arm must be present when the ordinary launcher starts
-    // after the supervised reboot.  Keep this staging one-shot: the launcher
-    // consumes and removes it during its natural boot, just like the regular
-    // attended device workflow.
-    let launcher_env = catalog_attribution_launcher_env(arm);
-    stage_one_shot_launcher_env(
-        &session,
-        &LauncherRestartOptions {
-            env_vars: launcher_env,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
-            ..LauncherRestartOptions::default()
-        },
-    )?;
     let before_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable before catalog attribution purge")?
         .trim()
@@ -20330,15 +20317,102 @@ fn prepare_and_reboot_for_catalog_attribution(
         return Err(error);
     }
     let purge_elapsed_ms = purge_started.elapsed().as_millis();
+
+    // The production purge preflight deliberately rejects any launcher.env on
+    // the Dev path. Stage the profiler arm only after that shared guarded
+    // purge has resumed Main and observed it active, immediately before the
+    // supervised reboot. The launcher consumes and removes this one-shot file
+    // during its natural boot.
+    let launcher_env = catalog_attribution_launcher_env(arm);
+    let stage_result = stage_one_shot_launcher_env(
+        &session,
+        &LauncherRestartOptions {
+            env_vars: launcher_env,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            ..LauncherRestartOptions::default()
+        },
+    );
+    if let Err(error) = stage_result {
+        let cleanup =
+            clear_one_shot_launcher_env(&session, DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str());
+        return match cleanup {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(format!(
+                "catalog attribution profiler env staging failed ({error}); one-shot launcher env cleanup failed: {cleanup}"
+            )
+            .into()),
+        };
+    }
+    if let Err(error) = exec_checked(&session, "sync catalog attribution profiler env", "sync") {
+        let cleanup =
+            clear_one_shot_launcher_env(&session, DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str());
+        return match cleanup {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(format!(
+                "catalog attribution profiler env sync failed ({error}); one-shot launcher env cleanup failed: {cleanup}"
+            )
+            .into()),
+        };
+    }
+    let endpoint = match config.agent() {
+        Ok(endpoint) => endpoint.clone(),
+        Err(error) => {
+            let cleanup =
+                clear_one_shot_launcher_env(&session, DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str());
+            return match cleanup {
+                Ok(()) => Err(error),
+                Err(cleanup) => Err(format!(
+                    "catalog attribution reboot setup failed ({error}); one-shot launcher env cleanup failed: {cleanup}"
+                )
+                .into()),
+            };
+        }
+    };
     drop(session);
     let reboot_started = Instant::now();
-    agent_reboot_wait_with_config(&[], &config.connection, config.agent()?)?;
+    let reboot_result = agent_reboot_wait_with_config(&[], &config.connection, &endpoint);
     let reboot_elapsed_ms = reboot_started.elapsed().as_millis();
-    let session = connect_with(&config.connection, 10)?;
-    let after_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
-        .ok_or("device boot id is unavailable after catalog attribution purge")?
-        .trim()
-        .to_string();
+    if let Err(error) = reboot_result {
+        let cleanup = connect_with(&config.connection, 10).and_then(|session| {
+            clear_one_shot_launcher_env(&session, DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str())
+        });
+        return match cleanup {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(format!(
+                "catalog attribution reboot failed ({error}); one-shot launcher env cleanup failed: {cleanup}"
+            )
+            .into()),
+        };
+    }
+    let session = match connect_with(&config.connection, 10) {
+        Ok(session) => session,
+        Err(error) => {
+            let cleanup = connect_with(&config.connection, 10).and_then(|session| {
+                clear_one_shot_launcher_env(&session, DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str())
+            });
+            return match cleanup {
+                Ok(()) => Err(error),
+                Err(cleanup) => Err(format!(
+                    "catalog attribution post-reboot connection failed ({error}); one-shot launcher env cleanup failed: {cleanup}"
+                )
+                .into()),
+            };
+        }
+    };
+    let after_boot_id = match remote_read(&session, "/proc/sys/kernel/random/boot_id") {
+        Some(boot_id) => boot_id.trim().to_string(),
+        None => {
+            let cleanup =
+                clear_one_shot_launcher_env(&session, DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str());
+            return match cleanup {
+                Ok(()) => Err("device boot id is unavailable after catalog attribution purge".into()),
+                Err(cleanup) => Err(format!(
+                    "device boot id is unavailable after catalog attribution purge; one-shot launcher env cleanup failed: {cleanup}"
+                )
+                .into()),
+            };
+        }
+    };
     if before_boot_id == after_boot_id {
         let _ = clear_one_shot_launcher_env(&session, DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str());
         return Err("catalog attribution purge reboot did not change the device boot id".into());
@@ -20346,11 +20420,21 @@ fn prepare_and_reboot_for_catalog_attribution(
     // This is deliberately a readiness observation only.  In particular, do
     // not restart the launcher here: the measured fresh leg is the launcher
     // instance that Main started as part of boot recovery.
-    wait_launcher_ready(
+    if let Err(error) = wait_launcher_ready(
         &session,
         Instant::now(),
         Duration::from_secs(CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS),
-    )?;
+    ) {
+        let cleanup =
+            clear_one_shot_launcher_env(&session, DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str());
+        return match cleanup {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(format!(
+                "catalog attribution launcher readiness failed ({error}); one-shot launcher env cleanup failed: {cleanup}"
+            )
+            .into()),
+        };
+    }
     drop(session);
     let mut reboot = json!({
         "mode": "supervised",
@@ -43380,6 +43464,44 @@ H: Handlers=event3 js0"#
             );
         }
         assert!(env.iter().all(|(key, _)| key != "MISTER_HOTPATH"));
+    }
+
+    #[test]
+    fn catalog_attribution_purges_before_staging_profiler_env() {
+        let source = include_str!("mod.rs");
+        let function_start = source
+            .find("fn prepare_and_reboot_for_catalog_attribution(")
+            .expect("catalog attribution reset function is present");
+        let function = &source[function_start..];
+        let function_end = function
+            .find("\nfn profile_installed_catalog_attribution(")
+            .expect("catalog attribution reset function has a bounded body");
+        let function = &function[..function_end];
+        let purge = function
+            .find("purge_development_library_data(&session)")
+            .expect("production purge is part of attribution reset");
+        let stage = function
+            .find("stage_one_shot_launcher_env(")
+            .expect("attribution reset stages a profiler environment");
+        let sync = function
+            .find("sync catalog attribution profiler env")
+            .expect("attribution reset syncs the profiler environment");
+        let reboot = function
+            .find("let reboot_result = agent_reboot_wait_with_config")
+            .expect("attribution reset uses the supervised reboot path");
+
+        assert!(purge < stage && stage < sync && sync < reboot);
+        assert!(platform_safety_script().contains(DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str()));
+        assert!(
+            one_shot_launcher_env_text(
+                &[("MISTER_CATALOG_REFRESH".into(), "force".into())],
+                DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str(),
+            )
+            .contains(&format!(
+                "rm -f {}",
+                sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str())
+            ))
+        );
     }
 
     #[test]
