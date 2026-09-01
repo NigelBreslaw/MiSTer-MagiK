@@ -334,7 +334,6 @@ def main() -> None:
         "else if(watchdog_advance)",
         "wire reset_qualified = reset_low_count >= RESET_QUALIFY_LIMIT;",
         "wire first_stall_valid = no_request_seen ||",
-        "wire observer_fault = frozen_cause[3];",
         "wire [2:0] observer_fault_subcause = bad_burst_event ?",
         "8'd0,",
         "avalon_terminal_cause[2:0]",
@@ -361,7 +360,8 @@ def main() -> None:
         "(* preserve, dont_replicate *) reg [8:0] scheduler_snapshot_capture = 9'd0;",
         "reg [1:0] avalon_terminal_fifo_depth = 2'd0;",
         "reg [6:0] avalon_terminal_return_phase = 7'd0;",
-        "reg [3:0] avalon_terminal_cause = 4'd0;",
+        "reg [2:0] avalon_terminal_cause = 3'd0;",
+        "reg observer_fault = 1'b0;",
         "no_request_seen <= 1'b1;",
         "scheduler_snapshot_capture <= snapshot_evidence_hold;",
         "(* preserve, dont_replicate *) reg record_ready = 1'b0;",
@@ -371,6 +371,9 @@ def main() -> None:
         "publish_crc_work",
         "reg publish_crc_busy = 1'b0;",
         "reg [4:0] publish_crc_phase = 5'd0;",
+        "reg [15:0] publish_crc_input = 16'd0;",
+        "crc_data_bit = publish_crc_input[15];",
+        "publish_crc_input <= frozen_state;",
         "terminal_flags",
         "record_ready <= 1'b1;",
         "function automatic [15:0] crc16_update_bit;",
@@ -390,6 +393,8 @@ def main() -> None:
         )
     if "generation_launch" in control_source:
         fail("rejected placement-heavy generation launch stage remains present")
+    if "publish_crc_index" in control_source:
+        fail("phase-indexed scaler-fetch CRC selector remains present")
     for forbidden_scaler_storage in (
         "magik_pre_read_summary",
         "magik_summary_v",

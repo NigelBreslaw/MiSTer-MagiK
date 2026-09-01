@@ -147,7 +147,7 @@ module tb_mister_magik_video_diagnostics_faults;
 			$fatal(1, "observer fault record did not publish for case %0d", FAULT_CASE);
 		if(!dut.observer_fault)
 			$fatal(1, "case %0d did not classify as observer fault", FAULT_CASE);
-		if(dut.frozen_cause != {1'b1, FAULT_CASE[2:0]})
+		if(dut.frozen_cause != FAULT_CASE[2:0])
 			$fatal(1, "case %0d froze cause %0d", FAULT_CASE, dut.frozen_cause);
 		if(dut.frozen_state != {
 			4'd0,

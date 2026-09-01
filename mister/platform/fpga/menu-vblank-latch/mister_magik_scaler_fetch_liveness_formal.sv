@@ -37,6 +37,7 @@ module mister_magik_scaler_fetch_liveness_formal;
 	wire [3:0] publication_sequence;
 	wire publish_crc_busy;
 	wire [4:0] publish_crc_phase;
+	wire [15:0] publish_crc_input;
 	wire enqueue;
 	wire dequeue;
 	wire return_has_entry;
@@ -81,6 +82,7 @@ module mister_magik_scaler_fetch_liveness_formal;
 		.formal_publication_sequence(publication_sequence),
 		.formal_publish_crc_busy(publish_crc_busy),
 		.formal_publish_crc_phase(publish_crc_phase),
+		.formal_publish_crc_input(publish_crc_input),
 		.formal_enqueue(enqueue),
 		.formal_dequeue(dequeue),
 		.formal_return_has_entry(return_has_entry),
@@ -105,6 +107,18 @@ module mister_magik_scaler_fetch_liveness_formal;
 
 	always @($global_clock)
 		formal_clk <= !formal_clk;
+
+	function automatic [15:0] crc16_update_bit;
+		input [15:0] crc_in;
+		input bit_in;
+		reg [15:0] value;
+		begin
+			value = {crc_in[14:0], 1'b0};
+			if(crc_in[15] ^ bit_in)
+				value = value ^ 16'h1021;
+			crc16_update_bit = value;
+		end
+	endfunction
 
 	always @(posedge formal_clk) begin
 		past_valid <= 1'b1;
@@ -139,6 +153,25 @@ module mister_magik_scaler_fetch_liveness_formal;
 		assert(!watchdog_clear || !watchdog_advance);
 
 		if(past_valid) begin
+			if(!$past(terminal_record_started) &&
+				($past(first_stall_valid) || $past(observer_fault))) begin
+				assert(publish_crc_busy);
+				assert(publish_crc_phase == 5'd0);
+				assert(publish_crc_input == {$past(terminal_flags[14:0]), 1'b0});
+				assert(published_bundle[47:32] == crc16_update_bit(
+					MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA_CRC,
+					$past(terminal_flags[15])));
+			end
+			if($past(publish_crc_busy)) begin
+				assert(published_bundle[47:32] == crc16_update_bit(
+					$past(published_bundle[47:32]),
+					$past(publish_crc_input[15])));
+				if($past(publish_crc_phase) == 5'd14)
+					assert(publish_crc_input == $past(frozen_state));
+				else if($past(publish_crc_phase) != 5'd30)
+					assert(publish_crc_input ==
+						{$past(publish_crc_input[14:0]), 1'b0});
+			end
 			if(snapshot_response != $past(snapshot_response)) begin
 				assert($past(snapshot_capture_active));
 			end
