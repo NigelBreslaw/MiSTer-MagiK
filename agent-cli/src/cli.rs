@@ -32,8 +32,8 @@ pub struct Cli {
 }
 
 impl Cli {
-    /// Parse the command tree and reject database input on the generic
-    /// delivery lane before dispatch can reach platform resolution.
+    /// Parse the command tree and keep local database input on delivery lanes
+    /// that support the isolated database transaction.
     pub fn try_parse_from<I, T>(itr: I) -> Result<Self, clap::Error>
     where
         I: IntoIterator<Item = T>,
@@ -56,12 +56,6 @@ impl Cli {
                     return Err(clap::Error::raw(
                         clap::error::ErrorKind::ArgumentConflict,
                         "--game-databases-release-dir is valid only with deliver game-databases",
-                    ));
-                }
-                (None, Some(_)) => {
-                    return Err(clap::Error::raw(
-                        clap::error::ErrorKind::ArgumentConflict,
-                        "use deliver game-databases --game-databases-release-dir PATH for database-only delivery",
                     ));
                 }
                 _ => {}
@@ -851,6 +845,15 @@ mod tests {
             .is_ok()
         );
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "game-databases"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "deliver",
+                "--game-databases-release-dir",
+                "build/game-databases"
+            ])
+            .is_ok()
+        );
         assert!(
             Cli::try_parse_from([
                 "agent-cli",

@@ -156,17 +156,14 @@ fn dispatch(
         }
         CliCommand::Deliver {
             target: None,
-            game_databases_release_dir: Some(_),
+            game_databases_release_dir,
         } => {
-            return Err(
-                "use deliver game-databases --game-databases-release-dir PATH for database-only delivery".into(),
+            return deliver(
+                evidence,
+                repository,
+                game_databases_release_dir.as_deref(),
+                reporter,
             );
-        }
-        CliCommand::Deliver {
-            target: None,
-            game_databases_release_dir: None,
-        } => {
-            return deliver(evidence, repository, None, reporter);
         }
         CliCommand::Deliver {
             target: Some(DeliverTarget::LocalMain),
