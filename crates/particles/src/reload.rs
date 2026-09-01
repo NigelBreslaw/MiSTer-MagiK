@@ -567,7 +567,9 @@ mod tests {
         thread::sleep(RECIPE_POLL_INTERVAL.saturating_mul(2));
         assert!(watcher.take_latest().is_none());
 
-        fs::write(&path, b"7").unwrap();
+        let upload = path.with_extension("json.upload");
+        fs::write(&upload, b"7").unwrap();
+        fs::rename(&upload, &path).unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         let attempt = loop {
             if let Some(attempt) = watcher.take_latest() {
