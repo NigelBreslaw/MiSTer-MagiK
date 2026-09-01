@@ -372,6 +372,9 @@ pub struct CrtFontAbCaptureArgs {
 #[derive(Debug, Subcommand)]
 pub enum CatalogCommand {
     Inspect,
+    /// Validate every compact runtime metadata shard on the active installation.
+    #[command(name = "metadata-qualification")]
+    MetadataQualification(CatalogMetadataQualificationArgs),
     RomAudit(CatalogRomAuditArgs),
     #[command(name = "neogeo-family-audit")]
     NeoGeoFamilyAudit(CatalogNeoGeoFamilyAuditArgs),
@@ -399,6 +402,14 @@ pub enum CatalogCommand {
     FastFiveOldCold(CatalogFastFiveOldColdArgs),
     /// Delete the Dev catalog and screenshot packs, then perform one supervised reboot.
     Purge(CatalogPurgeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct CatalogMetadataQualificationArgs {
+    #[arg(long)]
+    pub(crate) out: PathBuf,
+    #[arg(long)]
+    pub(crate) require_compact_only: bool,
 }
 
 #[derive(Debug, Args)]

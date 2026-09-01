@@ -405,7 +405,6 @@ fn dispatch_pre_fpga(
             process_config.catalog_paths(),
             args.get(2..).unwrap_or_default(),
         ),
-        #[cfg(feature = "diagnostics")]
         command_args::RUNTIME_METADATA_QUALIFICATION_COMMAND => {
             run_runtime_metadata_qualification_report()
         }
@@ -484,7 +483,7 @@ fn benchmark_capabilities() -> serde_json::Value {
         "media-pack-persistence-v1": true,
         "rom-identity-benchmark-v1": true,
         "rom-identity-benchmark-v3": true,
-        "runtime-metadata-qualification-v1": cfg!(feature = "diagnostics"),
+        "runtime-metadata-qualification-v1": true,
         "input-integrity-driver-v1": true,
         "arcade-velocity-scroll-v1": true,
         "arcade-velocity-scroll-attribution-v1": true,
@@ -551,7 +550,6 @@ fn run_catalog_registry_report(paths: &mister_magik_catalog::device_layout::Cata
     }
 }
 
-#[cfg(feature = "diagnostics")]
 fn run_runtime_metadata_qualification_report() {
     if std::env::args().nth(2).is_some() {
         crate::ui_errln!("metadata-qualification-report accepts no arguments");

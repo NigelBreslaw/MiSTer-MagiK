@@ -96,7 +96,6 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(CATALOG_NEOGEO_FAMILY_AUDIT_COMMAND, CommandKind::PreFpga),
     CommandSpec::new(CATALOG_REGISTRY_REPORT_COMMAND, CommandKind::PreFpga),
     CommandSpec::new(CATALOG_SCREENSHOT_AUDIT_COMMAND, CommandKind::PreFpga),
-    #[cfg(feature = "diagnostics")]
     CommandSpec::new(RUNTIME_METADATA_QUALIFICATION_COMMAND, CommandKind::PreFpga),
     // Internal supervised child. It deliberately does not take the UI process lock.
     CommandSpec::new(CATALOG_WORKER_COMMAND, CommandKind::PreFpga),
