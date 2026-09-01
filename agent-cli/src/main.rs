@@ -150,20 +150,34 @@ fn dispatch(
             target: Some(DeliverTarget::LocalMain),
             game_databases_release_dir: Some(_),
         } => {
-            return Err(
-                "--game-databases-release-dir is valid only with deliver game-databases".into(),
-            );
+            return Err("--game-databases-release-dir is not valid with deliver local-main".into());
         }
         CliCommand::Deliver {
-            target: None,
+            target: Some(DeliverTarget::Runtime),
             game_databases_release_dir,
         } => {
             return deliver(
                 evidence,
                 repository,
                 game_databases_release_dir.as_deref(),
+                true,
                 reporter,
             );
+        }
+        CliCommand::Deliver {
+            target: None,
+            game_databases_release_dir: Some(_),
+        } => {
+            return Err(
+                "use deliver runtime --game-databases-release-dir PATH for runtime-scoped delivery"
+                    .into(),
+            );
+        }
+        CliCommand::Deliver {
+            target: None,
+            game_databases_release_dir: None,
+        } => {
+            return deliver(evidence, repository, None, false, reporter);
         }
         CliCommand::Deliver {
             target: Some(DeliverTarget::LocalMain),
@@ -436,10 +450,17 @@ fn deliver(
     evidence: &Evidence,
     repository: &std::path::Path,
     game_databases_release_dir: Option<&std::path::Path>,
+    runtime_only: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     let total_started = Instant::now();
-    let delivery = deliver_inner(evidence, repository, game_databases_release_dir, reporter);
+    let delivery = deliver_inner(
+        evidence,
+        repository,
+        game_databases_release_dir,
+        runtime_only,
+        reporter,
+    );
     reporter.emit(
         EventKind::Progress,
         "cleanup",
@@ -479,6 +500,7 @@ fn deliver_inner(
     _evidence: &Evidence,
     repository: &std::path::Path,
     game_databases_release_dir: Option<&std::path::Path>,
+    runtime_only: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<agent_cli::delivery::DeliveryExecution> {
     let preflight_started = Instant::now();
@@ -492,7 +514,16 @@ fn deliver_inner(
     })();
     emit_delivery_timing(reporter, "preflight", preflight.is_ok(), preflight_started)?;
     let sha = preflight?;
-    agent_cli::delivery::execute(repository, &sha, game_databases_release_dir, reporter)
+    if runtime_only {
+        agent_cli::delivery::execute_runtime_only(
+            repository,
+            &sha,
+            game_databases_release_dir,
+            reporter,
+        )
+    } else {
+        agent_cli::delivery::execute(repository, &sha, game_databases_release_dir, reporter)
+    }
 }
 
 fn emit_delivery_timing(

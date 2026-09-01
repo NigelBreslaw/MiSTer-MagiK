@@ -55,7 +55,13 @@ impl Cli {
                 (Some(DeliverTarget::LocalMain), Some(_)) => {
                     return Err(clap::Error::raw(
                         clap::error::ErrorKind::ArgumentConflict,
-                        "--game-databases-release-dir is valid only with deliver game-databases",
+                        "--game-databases-release-dir is not valid with deliver local-main",
+                    ));
+                }
+                (None, Some(_)) => {
+                    return Err(clap::Error::raw(
+                        clap::error::ErrorKind::ArgumentConflict,
+                        "use deliver runtime --game-databases-release-dir PATH for runtime-scoped delivery",
                     ));
                 }
                 _ => {}
@@ -166,6 +172,7 @@ pub enum Command {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum DeliverTarget {
+    Runtime,
     LocalMain,
     GameDatabases,
 }
@@ -849,10 +856,20 @@ mod tests {
             Cli::try_parse_from([
                 "agent-cli",
                 "deliver",
+                "runtime",
                 "--game-databases-release-dir",
                 "build/game-databases"
             ])
             .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "deliver",
+                "--game-databases-release-dir",
+                "build/game-databases"
+            ])
+            .is_err()
         );
         assert!(
             Cli::try_parse_from([

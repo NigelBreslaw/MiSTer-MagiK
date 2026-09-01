@@ -301,6 +301,27 @@ pub fn execute(
         expected_commit,
         None,
         game_databases_release_dir,
+        false,
+        reporter,
+        DeviceClient::default(),
+    )
+}
+
+/// Deliver only when reconciliation remains on the runtime/no-op path. This
+/// lane fails before builds, snapshots, or device mutations if current device
+/// state would otherwise promote the transaction to a platform delivery.
+pub fn execute_runtime_only(
+    repository: &Path,
+    expected_commit: &str,
+    game_databases_release_dir: Option<&Path>,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<DeliveryExecution> {
+    execute_with_device(
+        repository,
+        expected_commit,
+        None,
+        game_databases_release_dir,
+        true,
         reporter,
         DeviceClient::default(),
     )
@@ -318,6 +339,7 @@ fn execute_with_device<D: DeliveryDevice>(
     expected_commit: &str,
     platform_candidate: Option<crate::platform_ci::Candidate>,
     game_databases_release_dir: Option<&Path>,
+    runtime_only: bool,
     reporter: &mut Reporter<'_>,
     device: D,
 ) -> AgentResult<DeliveryExecution> {
@@ -353,6 +375,7 @@ fn execute_with_device<D: DeliveryDevice>(
         build_attribution: None,
         timing_samples: Vec::new(),
         game_databases_release_dir: game_databases_release_dir.map(Path::to_path_buf),
+        runtime_only,
         stage: repository
             .join("build/agent-deploy/stage")
             .join(expected_commit),
@@ -611,6 +634,7 @@ struct ProcessActions<'a, D = DeviceClient> {
     build_attribution: Option<crate::build::BuildArtifactAttribution>,
     timing_samples: Vec<crate::host::DeliveryTimingSample>,
     game_databases_release_dir: Option<PathBuf>,
+    runtime_only: bool,
     stage: PathBuf,
     device: D,
 }
@@ -796,6 +820,15 @@ fn reconcile_fpga_activation(
     (DeliveryDecision::Platform, Some(assessment.reason()))
 }
 
+fn enforce_delivery_scope(runtime_only: bool, decision: DeliveryDecision) -> AgentResult<()> {
+    if runtime_only && decision == DeliveryDecision::Platform {
+        return Err(
+            "runtime-only delivery refused platform reconciliation before device mutation".into(),
+        );
+    }
+    Ok(())
+}
+
 impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
     fn run(&mut self, phase: Phase) -> AgentResult<()> {
         match phase {
@@ -832,6 +865,7 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
                     self.decision = decision;
                     self.reconciliation_reason = reason;
                 }
+                enforce_delivery_scope(self.runtime_only, self.decision)?;
                 if self.decision == DeliveryDecision::Platform {
                     self.deployment.kind = DeploymentKind::Platform;
                     self.deployment.ui_scope = UiScope::Production;
@@ -1382,6 +1416,14 @@ mod tests {
     }
 
     #[test]
+    fn runtime_only_scope_rejects_platform_reconciliation() {
+        assert!(enforce_delivery_scope(true, DeliveryDecision::Platform).is_err());
+        assert!(enforce_delivery_scope(true, DeliveryDecision::Runtime).is_ok());
+        assert!(enforce_delivery_scope(true, DeliveryDecision::NoOp).is_ok());
+        assert!(enforce_delivery_scope(false, DeliveryDecision::Platform).is_ok());
+    }
+
+    #[test]
     fn delivery_contains_no_git_mutation_commands() {
         let source = include_str!("delivery.rs");
         for forbidden in ["\"add\"", "\"commit\"", "\"push\"", "\"reset\""] {
@@ -1622,6 +1664,7 @@ mod tests {
             build_attribution: None,
             timing_samples: Vec::new(),
             game_databases_release_dir: None,
+            runtime_only: false,
             stage: PathBuf::from("stage"),
             device,
         }
