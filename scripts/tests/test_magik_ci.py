@@ -6,6 +6,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -308,6 +309,40 @@ import scripts.magik_ci.cli
             build.CHECKS["runtime-library-ci"],
             ("apps/mister/Cargo.toml", "all", ""),
         )
+
+    def test_build_writes_artifact_identity_sidecars(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / build.ARTIFACTS["runtime-device"]
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"arm binary")
+            (root / "apps/mister/Cargo.lock").parent.mkdir(parents=True, exist_ok=True)
+            (root / "apps/mister/Cargo.lock").write_text("lock\n", encoding="utf-8")
+            (root / "apps/mister/rust-toolchain.toml").write_text(
+                'channel = "stable"\n', encoding="utf-8"
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "MISTER_MAGIK_BUILD_NUMBER": "42",
+                    "MISTER_MAGIK_VERSION": "0.2.42",
+                    "MISTER_MAGIK_SOURCE_REVISION": "0" * 40,
+                },
+            ):
+                build._write_build_identity(
+                    root, "runtime-device", "release-device", "ui,profile", "cross"
+                )
+
+            self.assertEqual(
+                artifact.with_name(f"{artifact.name}.features").read_text(),
+                "ui,profile",
+            )
+            receipt = artifact.with_name(f"{artifact.name}.build-receipt.tsv")
+            receipt_text = receipt.read_text()
+            self.assertIn("profile=release-device", receipt_text)
+            self.assertIn("features=ui,profile", receipt_text)
+            self.assertIn("build_number=42", receipt_text)
+            self.assertIn("version=0.2.42", receipt_text)
 
     def test_component_metadata_allows_repeatable_source_status_only_when_requested(
         self,
