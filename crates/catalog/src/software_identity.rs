@@ -12,7 +12,9 @@ use rusqlite::{Connection, params, params_from_iter};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(any(test, feature = "builder"))]
+use std::path::PathBuf;
 use std::time::Instant;
 
 pub(crate) type MachineMetadataRow = (
