@@ -72,7 +72,7 @@ compact `magik-metadata-v1.bin` container instead.
 
 ## Fresh build
 
-The typed host command scripts/agent device metadata-qualification --out
+The typed host command scripts/agent device catalog metadata-qualification --out
 <evidence.json> validates the compact container with the v2
 mister-magik-runtime-metadata-qualification-v2 report. Full device
 acceptance is recorded only after the compact integrity gates pass and all
