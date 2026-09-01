@@ -166,13 +166,10 @@ mod tests {
     }
 
     fn poll_until(session: &UserStateSession) -> UserStateSnapshot {
-        for _ in 0..100 {
-            match session.poll() {
-                Some(UserStateEvent::Snapshot(snapshot)) => return snapshot,
-                Some(UserStateEvent::Failed { error, .. }) => panic!("{error}"),
-                None => thread::sleep(Duration::from_millis(5)),
-            }
+        match session.events.recv_timeout(Duration::from_secs(5)) {
+            Ok(UserStateEvent::Snapshot(snapshot)) => snapshot,
+            Ok(UserStateEvent::Failed { error, .. }) => panic!("{error}"),
+            Err(error) => panic!("user-state worker did not reply: {error}"),
         }
-        panic!("user-state worker did not reply")
     }
 }
