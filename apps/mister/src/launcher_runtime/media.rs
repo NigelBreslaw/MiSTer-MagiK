@@ -1797,7 +1797,6 @@ pub struct MediaWorkerConfig {
     image_size: String,
     asset_dir: PathBuf,
     catalog_root: PathBuf,
-    mame_sqlite: PathBuf,
     max_concurrent_downloads: usize,
     benchmark_auto_finish: bool,
 }
@@ -1824,7 +1823,6 @@ impl MediaWorkerConfig {
             image_size,
             asset_dir: paths.media_asset_dir().to_path_buf(),
             catalog_root: paths.sharded_catalog_dir().to_path_buf(),
-            mame_sqlite: paths.mame_sqlite().to_path_buf(),
             max_concurrent_downloads: media_download_concurrency_from_value(get(
                 "MISTER_MEDIA_CONCURRENCY",
             )),
@@ -1850,7 +1848,6 @@ impl MediaWorkerConfig {
             image_size: DEFAULT_IMAGE_SIZE.to_string(),
             asset_dir,
             catalog_root,
-            mame_sqlite: mister_magik_catalog::catalog_config::default_mame_sqlite_path(),
             max_concurrent_downloads: DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS,
             benchmark_auto_finish: false,
         })
@@ -2154,7 +2151,6 @@ mod tests {
         assert_eq!(config.policy, MediaUpdatePolicy::Off);
         assert_eq!(config.image_size, "320x320");
         assert_eq!(config.asset_dir, paths.media_asset_dir());
-        assert_eq!(config.mame_sqlite, paths.mame_sqlite());
     }
 
     const SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
