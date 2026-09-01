@@ -287,6 +287,7 @@ jobs:
 
       - name: Package distribution zip
         env:
+          MISTER_ARM_BUILD_BACKEND: cross
           RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
           RELEASE_BUILD_NUMBER: ${{ needs.release-metadata.outputs.build-number }}
           RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}

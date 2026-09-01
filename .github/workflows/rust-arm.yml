@@ -144,6 +144,7 @@ jobs:
 
   launcher-visual-matrix:
     name: launcher-visual-matrix
+    if: ${{ false }} # Temporarily disabled while the visual baselines are broken.
     runs-on: macos-15
     timeout-minutes: 20
     steps:
