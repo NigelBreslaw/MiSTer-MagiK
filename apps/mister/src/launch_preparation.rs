@@ -1337,6 +1337,12 @@ mod tests {
         let mut permissions = std::fs::metadata(&ags_boot)
             .expect("stat ags_boot")
             .permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            permissions.set_mode(permissions.mode() | 0o200);
+        }
+        #[cfg(not(unix))]
         permissions.set_readonly(false);
         std::fs::set_permissions(&ags_boot, permissions).expect("restore ags_boot writable");
         let _ = std::fs::remove_dir_all(root);

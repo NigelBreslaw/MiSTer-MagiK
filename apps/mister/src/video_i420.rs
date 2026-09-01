@@ -1,6 +1,10 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// Plane conversion APIs carry a buffer and stride for each source/destination
+// surface; grouping them would obscure the call-site ABI without reducing it.
+#![allow(clippy::too_many_arguments)]
+
 pub fn convert_i420_to_rgb565(
     src_y: &[u8],
     src_stride_y: usize,

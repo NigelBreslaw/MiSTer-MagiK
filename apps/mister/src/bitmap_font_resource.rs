@@ -655,7 +655,7 @@ fn generate_resource(font_bytes: &[u8], spec: GeneratorSpec) -> Result<Vec<u8>, 
         if width > MAX_GLYPH_DIMENSION || height > MAX_GLYPH_DIMENSION {
             return Err("rasterized glyph exceeds resource bounds".to_string());
         }
-        let stride = (width + 7) / 8;
+        let stride = width.div_ceil(8);
         let mut packed = vec![0; stride * height];
         for y in 0..height {
             for x in 0..width {
@@ -1054,7 +1054,7 @@ mod tests {
     const SPLEEN_5X8_BDF: &str = include_str!("../assets/fonts/spleen/spleen-5x8.bdf");
     const SPLEEN_6X12_BDF: &str = include_str!("../assets/fonts/spleen/spleen-6x12.bdf");
 
-    fn glyph<'a>(font: &'a DecodedFont, code_point: char) -> &'a DecodedGlyph {
+    fn glyph(font: &DecodedFont, code_point: char) -> &DecodedGlyph {
         font.glyphs
             .iter()
             .find(|glyph| glyph.code_point == code_point)
