@@ -614,6 +614,22 @@ impl NativeDevice {
                     CatalogCommand::Screenshots(args) => {
                         run_catalog_screenshot_export(&args.system, &args.out)
                     }
+                    CatalogCommand::ScreenshotQualification(args) => {
+                        let session = connect(10)?;
+                        let asset_dir = active_media_asset_dir(&session)?;
+                        let status_text = remote_read(&session, MAIN_STATUS_REMOTE).ok_or(
+                            "active Main status is unavailable for screenshot qualification",
+                        )?;
+                        let status: Value = serde_json::from_str(&status_text)?;
+                        let binary = active_installed_gui_binary(&status)?;
+                        media::screenshot_qualification(
+                            &session,
+                            &args.out_dir,
+                            args.manifest_url.as_deref(),
+                            &asset_dir,
+                            binary,
+                        )
+                    }
                     CatalogCommand::Query(args) => catalog_query(&device_strings([
                         "--database",
                         &args.database,

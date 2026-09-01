@@ -380,6 +380,9 @@ pub enum CatalogCommand {
     NeoGeoFamilyAudit(CatalogNeoGeoFamilyAuditArgs),
     /// Export exact screenshot identities from one live Catalog V3 system shard.
     Screenshots(CatalogScreenshotsArgs),
+    /// Qualify every published screenshot pack against the live catalog.
+    #[command(name = "screenshot-qualification")]
+    ScreenshotQualification(CatalogScreenshotQualificationArgs),
     Query(CatalogQueryArgs),
     Cores,
     /// Publish and open the isolated five-system prototype in the Dev UI.
@@ -553,6 +556,16 @@ pub struct CatalogScreenshotsArgs {
     pub(crate) system: String,
     #[arg(long)]
     pub(crate) out: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct CatalogScreenshotQualificationArgs {
+    /// Directory for per-system TSV, summary TSV, and summary JSON evidence.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) out_dir: PathBuf,
+    /// HTTPS manifest to qualify; defaults to the official unsigned v1 manifest.
+    #[arg(long)]
+    pub(crate) manifest_url: Option<String>,
 }
 
 #[derive(Debug, Args)]

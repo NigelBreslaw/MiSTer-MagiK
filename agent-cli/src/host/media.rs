@@ -7,7 +7,9 @@ use mister_magik_catalog::media_identity::{
 use mister_magik_media_contract::ManifestTrustMode;
 use serde_json::{Map, Value, json};
 use ssh2::{ExtendedData, Session};
+use std::collections::{BTreeSet, HashMap};
 use std::env;
+use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -190,6 +192,367 @@ pub(crate) fn media_download(sess: &Session, args: &[String]) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+/// Qualify every published screenshot pack against the catalog installed on
+/// the active device.  The command intentionally only reads device state: it
+/// validates media hashes and invokes the catalog's in-memory reconciliation
+/// audit, but never downloads, deletes, or rewrites an artifact.
+pub(crate) fn screenshot_qualification(
+    sess: &Session,
+    out_dir: &Path,
+    manifest_url: Option<&str>,
+    asset_dir: &str,
+    gui_binary: &str,
+) -> Result<()> {
+    let manifest_url = manifest_url.unwrap_or(DEFAULT_MANIFEST_URL);
+    let mut manifest = load_manifest_with(
+        manifest_url,
+        ManifestTrustMode::UnsignedHttps,
+        fetch_https_bytes,
+        |_, _| Ok(()),
+    )?;
+    relayout_manifest(&mut manifest, asset_dir);
+    validate_qualification_manifest(&manifest)?;
+    fs::create_dir_all(out_dir)?;
+
+    let mut rows = Vec::with_capacity(manifest.packs.len());
+    for pack in &manifest.packs {
+        let media_status = match remote_pack_status(sess, pack) {
+            Ok(status) => status,
+            Err(error) => format!("error:{}", tsv(&error.to_string())),
+        };
+        let mut audit = None;
+        let mut reason = if media_status != "current" {
+            format!("media-{media_status}")
+        } else if pack
+            .index
+            .as_ref()
+            .is_none_or(|index| index.codec != "mmlz4b-index-v2")
+        {
+            "index-codec-not-v2".to_string()
+        } else {
+            match run_catalog_screenshot_audit(sess, gui_binary, &pack.system) {
+                Ok(value) => {
+                    let reason = qualification_reason(&value);
+                    audit = Some(value);
+                    reason
+                }
+                Err(error) => format!("audit-error:{}", tsv(&error.to_string())),
+            }
+        };
+        if reason.is_empty() {
+            reason = "unknown".to_string();
+        }
+
+        let report_path = out_dir.join(format!("{}.tsv", pack.system));
+        if let Some(audit) = &audit {
+            fs::write(&report_path, &audit.tsv)?;
+        } else {
+            fs::write(
+                &report_path,
+                "ordinal\ttitle\tpreview_asset_key\tpreview_archive_path\thas_preview\tlaunch_ref\n",
+            )?;
+        }
+        let (games, existing, derived, ambiguous, candidates, available, resolver, selected_key) =
+            audit
+                .as_ref()
+                .map_or((0, 0, 0, 0, 0, 0, String::new(), String::new()), |audit| {
+                    (
+                        audit.games,
+                        audit.existing_identity_rows,
+                        audit.derived_identity_rows,
+                        audit.ambiguous_identity_rows,
+                        audit.candidates,
+                        audit.available,
+                        audit.resolver_status.clone(),
+                        audit.selected_key.clone().unwrap_or_default(),
+                    )
+                });
+        rows.push(QualificationRow {
+            system: pack.system.clone(),
+            version: pack.version.clone(),
+            image_size: pack.image_size.clone(),
+            media_status,
+            pack_bytes: pack.identity.decoded_bytes,
+            pack_sha256: pack.identity.decoded_sha256.clone(),
+            index_bytes: pack.index.as_ref().map(|index| index.bytes).unwrap_or(0),
+            index_sha256: pack
+                .index
+                .as_ref()
+                .map(|index| index.sha256.clone())
+                .unwrap_or_default(),
+            games,
+            existing_identity_rows: existing,
+            derived_identity_rows: derived,
+            ambiguous_identity_rows: ambiguous,
+            candidates,
+            available,
+            coverage_pct: if games == 0 {
+                0.0
+            } else {
+                available as f64 * 100.0 / games as f64
+            },
+            resolver_status: resolver,
+            selected_key,
+            pass: reason == "ok",
+            reason,
+        });
+    }
+
+    let summary_tsv = render_qualification_tsv(&manifest, &rows);
+    let summary_json = render_qualification_json(manifest_url, &manifest, &rows)?;
+    fs::write(out_dir.join("summary.tsv"), summary_tsv)?;
+    fs::write(out_dir.join("summary.json"), summary_json)?;
+    for row in &rows {
+        println!(
+            "screenshot_qualification\t{}\tpass={}\tavailable={}\tgames={}\treason={}",
+            row.system,
+            u8::from(row.pass),
+            row.available,
+            row.games,
+            tsv(&row.reason)
+        );
+    }
+    let failures = rows.iter().filter(|row| !row.pass).count();
+    println!(
+        "screenshot_qualification_summary\tmanifest_packs={}\tpassed={}\tfailed={}\tout_dir={}",
+        rows.len(),
+        rows.len().saturating_sub(failures),
+        failures,
+        out_dir.display()
+    );
+    if failures != 0 {
+        return Err(format!("screenshot qualification failed for {failures} system(s)").into());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct CatalogScreenshotAudit {
+    tsv: String,
+    games: usize,
+    existing_identity_rows: usize,
+    derived_identity_rows: usize,
+    ambiguous_identity_rows: usize,
+    candidates: usize,
+    available: usize,
+    resolver_status: String,
+    selected_key: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct QualificationRow {
+    system: String,
+    version: String,
+    image_size: String,
+    media_status: String,
+    pack_bytes: u64,
+    pack_sha256: String,
+    index_bytes: u64,
+    index_sha256: String,
+    games: usize,
+    existing_identity_rows: usize,
+    derived_identity_rows: usize,
+    ambiguous_identity_rows: usize,
+    candidates: usize,
+    available: usize,
+    coverage_pct: f64,
+    resolver_status: String,
+    selected_key: String,
+    pass: bool,
+    reason: String,
+}
+
+fn validate_qualification_manifest(manifest: &MediaManifest) -> Result<()> {
+    let supported = mister_magik_catalog::media_identity::supported_screenshot_pack_ids()
+        .collect::<BTreeSet<_>>();
+    let mut actual = BTreeSet::new();
+    for pack in &manifest.packs {
+        if !mister_magik_catalog::media_identity::is_supported_screenshot_pack_id(&pack.system) {
+            return Err(format!(
+                "manifest contains unsupported screenshot pack {}",
+                pack.system
+            )
+            .into());
+        }
+        if !actual.insert(pack.system.as_str()) {
+            return Err(format!(
+                "manifest contains duplicate screenshot pack {}",
+                pack.system
+            )
+            .into());
+        }
+        let Some(index) = &pack.index else {
+            return Err(format!("pack {} is missing its sidecar index", pack.system).into());
+        };
+        if index.codec != "mmlz4b-index-v2" {
+            return Err(format!("pack {} uses index codec {}", pack.system, index.codec).into());
+        }
+    }
+    if actual != supported {
+        let missing = supported.difference(&actual).copied().collect::<Vec<_>>();
+        let extra = actual.difference(&supported).copied().collect::<Vec<_>>();
+        return Err(format!(
+            "manifest screenshot pack set does not match published set: missing={missing:?} extra={extra:?}"
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn run_catalog_screenshot_audit(
+    sess: &Session,
+    gui_binary: &str,
+    system: &str,
+) -> Result<CatalogScreenshotAudit> {
+    let command = super::remote::remote_subcommand(
+        gui_binary,
+        "catalog-screenshot-audit",
+        &[system.to_string()],
+    );
+    let output = super::remote::exec(sess, &command, true)?;
+    if let Some(error) = super::remote::exec_failure_message("catalog screenshot audit", &output) {
+        return Err(error.into());
+    }
+    let combined = format!("{}\n{}", output.stdout, output.stderr);
+    parse_catalog_screenshot_audit_output(&combined)
+}
+
+fn parse_catalog_screenshot_audit_output(combined: &str) -> Result<CatalogScreenshotAudit> {
+    let tsv = super::catalog_screenshot_tsv(combined)?;
+    let summary = combined
+        .lines()
+        .find(|line| line.starts_with("catalog_screenshot_summary_tsv\t"))
+        .ok_or("device returned no screenshot audit summary")?;
+    let fields = parse_key_value_fields(summary);
+    let valid = fields.get("valid").map(String::as_str) == Some("1");
+    if !valid {
+        return Err(format!("device returned invalid screenshot audit: {summary}").into());
+    }
+    let parse_count = |key: &str| -> Result<usize> {
+        let value = fields
+            .get(key)
+            .ok_or_else(|| format!("screenshot audit missing {key}"))?;
+        value
+            .parse::<usize>()
+            .map_err(|error| -> Box<dyn std::error::Error> {
+                format!("screenshot audit {key}: {error}").into()
+            })
+    };
+    let selected_key = tsv
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            (fields.len() >= 5 && fields[4] == "1" && !fields[2].is_empty())
+                .then(|| fields[2].to_string())
+        })
+        .next();
+    Ok(CatalogScreenshotAudit {
+        tsv,
+        games: parse_count("games")?,
+        existing_identity_rows: parse_count("existing_identity_rows")?,
+        derived_identity_rows: parse_count("derived_identity_rows")?,
+        ambiguous_identity_rows: parse_count("ambiguous_identity_rows")?,
+        candidates: parse_count("candidates")?,
+        available: parse_count("available")?,
+        resolver_status: fields.get("resolver_status").cloned().unwrap_or_default(),
+        selected_key,
+    })
+}
+
+fn parse_key_value_fields(line: &str) -> HashMap<String, String> {
+    line.split('\t')
+        .skip(1)
+        .filter_map(|field| field.split_once('='))
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect()
+}
+
+fn qualification_reason(audit: &CatalogScreenshotAudit) -> String {
+    if audit.games == 0 {
+        "catalog-empty".to_string()
+    } else if audit.available == 0 {
+        "zero-available".to_string()
+    } else if audit.selected_key.is_none() {
+        "no-selected-asset".to_string()
+    } else {
+        "ok".to_string()
+    }
+}
+
+fn render_qualification_tsv(manifest: &MediaManifest, rows: &[QualificationRow]) -> String {
+    let mut output = format!(
+        "system\tversion\timage_size\tmedia_status\tpack_bytes\tpack_sha256\tindex_bytes\tindex_sha256\tcatalog_games\texisting_identity_rows\tderived_identity_rows\tambiguous_identity_rows\tcandidates\tavailable\tcoverage_pct\tresolver_status\tselected_asset_key\tpass\treason\tmanifest_schema_version\tmanifest_published_at\n"
+    );
+    for row in rows {
+        output.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            tsv(&row.system),
+            tsv(&row.version),
+            tsv(&row.image_size),
+            tsv(&row.media_status),
+            row.pack_bytes,
+            tsv(&row.pack_sha256),
+            row.index_bytes,
+            tsv(&row.index_sha256),
+            row.games,
+            row.existing_identity_rows,
+            row.derived_identity_rows,
+            row.ambiguous_identity_rows,
+            row.candidates,
+            row.available,
+            row.coverage_pct,
+            tsv(&row.resolver_status),
+            tsv(&row.selected_key),
+            u8::from(row.pass),
+            tsv(&row.reason),
+            manifest.schema_version,
+            tsv(&manifest.published_at),
+        ));
+    }
+    output
+}
+
+fn render_qualification_json(
+    manifest_url: &str,
+    manifest: &MediaManifest,
+    rows: &[QualificationRow],
+) -> Result<Vec<u8>> {
+    let systems = rows
+        .iter()
+        .map(|row| {
+            json!({
+                "system": row.system,
+                "version": row.version,
+                "image_size": row.image_size,
+                "media_status": row.media_status,
+                "pack_bytes": row.pack_bytes,
+                "pack_sha256": row.pack_sha256,
+                "index_bytes": row.index_bytes,
+                "index_sha256": row.index_sha256,
+                "catalog_games": row.games,
+                "existing_identity_rows": row.existing_identity_rows,
+                "derived_identity_rows": row.derived_identity_rows,
+                "ambiguous_identity_rows": row.ambiguous_identity_rows,
+                "candidates": row.candidates,
+                "available": row.available,
+                "coverage_pct": row.coverage_pct,
+                "resolver_status": row.resolver_status,
+                "selected_asset_key": row.selected_key,
+                "pass": row.pass,
+                "reason": row.reason,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::to_vec_pretty(&json!({
+        "schema": 1,
+        "manifest_url": manifest_url,
+        "manifest_schema_version": manifest.schema_version,
+        "manifest_published_at": manifest.published_at,
+        "systems": systems,
+    }))?)
 }
 
 impl RemoteBenchRow {
@@ -1748,5 +2111,44 @@ mod tests {
         let err =
             parse_manifest(&index_mismatch, "https://example.test/manifest.json").unwrap_err();
         assert!(err.to_string().contains("index archive_bytes mismatch"));
+    }
+
+    #[test]
+    fn screenshot_audit_parser_selects_lowest_ordinal_available_asset() {
+        let output = concat!(
+            "catalog_screenshot_summary_tsv\tvalid=1\tsystem=c64\tgames=3\texisting_identity_rows=2\tderived_identity_rows=1\tambiguous_identity_rows=0\tcandidates=3\tavailable=2\tchanged=2\tresolver_status=CompactV1\n",
+            "ordinal\ttitle\tpreview_asset_key\tpreview_archive_path\thas_preview\tlaunch_ref\n",
+            "0\tUnavailable\tmissing\t\t0\t/ref0\n",
+            "1\tFirst\tfirst\t/media/fat/assets/c64.mmlz4b\t1\t/ref1\n",
+            "2\tSecond\tsecond\t/media/fat/assets/c64.mmlz4b\t1\t/ref2\n",
+        );
+        let audit = parse_catalog_screenshot_audit_output(output).unwrap();
+        assert_eq!(audit.games, 3);
+        assert_eq!(audit.available, 2);
+        assert_eq!(audit.selected_key.as_deref(), Some("first"));
+        assert_eq!(qualification_reason(&audit), "ok");
+    }
+
+    #[test]
+    fn screenshot_audit_gate_rejects_zero_available_rows() {
+        let output = concat!(
+            "catalog_screenshot_summary_tsv\tvalid=1\tsystem=nes\tgames=2\texisting_identity_rows=2\tderived_identity_rows=0\tambiguous_identity_rows=0\tcandidates=2\tavailable=0\tchanged=0\tresolver_status=NotNeeded\n",
+            "ordinal\ttitle\tpreview_asset_key\tpreview_archive_path\thas_preview\tlaunch_ref\n",
+            "0\tOne\tone\t\t0\t/ref0\n",
+            "1\tTwo\ttwo\t\t0\t/ref1\n",
+        );
+        let audit = parse_catalog_screenshot_audit_output(output).unwrap();
+        assert_eq!(qualification_reason(&audit), "zero-available");
+    }
+
+    #[test]
+    fn qualification_manifest_requires_complete_v2_pack_set() {
+        let manifest = parse_manifest(
+            &serde_json::from_slice::<Value>(&manifest_fetch_fixture()).unwrap(),
+            "https://assets.mistermagik.com/mister-magik/v1/manifest.json",
+        )
+        .unwrap();
+        let error = validate_qualification_manifest(&manifest).unwrap_err();
+        assert!(error.to_string().contains("missing its sidecar index"));
     }
 }
