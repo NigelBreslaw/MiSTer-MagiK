@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-#[cfg(any(test, feature = "builder"))]
+#[cfg(feature = "builder")]
 use std::path::PathBuf;
 use std::time::Instant;
 
