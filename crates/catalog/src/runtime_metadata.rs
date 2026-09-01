@@ -1842,6 +1842,10 @@ mod tests {
         builder.add_software("nes", &sample()).expect("add");
         let second = builder.encode().expect("encode");
         assert_eq!(first, second);
+        assert_eq!(
+            hex_lower(&Sha256::digest(&first)),
+            "06b4db7bc1371654cd058223635ac83a847df951e52291074028104b07e5e0b9"
+        );
         let store = MetadataStore::from_bytes(&first).expect("open");
         assert_eq!(store.status().shard_count, 1);
         assert_eq!(
