@@ -123,56 +123,62 @@ impl PreviewIdentityResolver {
     }
 
     fn ensure_loaded(&mut self, system_id: &str, list_name: &str) {
-        if let PreviewIdentityResolverState::Compact {
-            system_id: loaded, ..
-        } = &self.state
-        {
-            if loaded == system_id {
+        match &self.state {
+            PreviewIdentityResolverState::Compact {
+                system_id: loaded, ..
+            } if loaded == system_id => return,
+            PreviewIdentityResolverState::Ready(_) | PreviewIdentityResolverState::Unavailable => {
                 return;
             }
-        } else if !matches!(self.state, PreviewIdentityResolverState::NotNeeded) {
-            return;
+            PreviewIdentityResolverState::NotNeeded
+            | PreviewIdentityResolverState::Compact { .. } => {
+                // A compact shard is cached for only one system. Clear it
+                // before trying another system so a missing/corrupt shard
+                // cannot accidentally query the previous system's index.
+                self.state = PreviewIdentityResolverState::NotNeeded;
+            }
         }
         if self.compact_store.is_none()
             && let Ok(store) = crate::runtime_metadata::MetadataStore::open(&self.runtime_metadata)
         {
             self.compact_store = Some(store);
         }
-        if let Some(store) = self.compact_store.as_ref()
-            && let Ok(Some(shard)) = store.software_shard(system_id)
-        {
-            let mut index = PreviewIdentityIndex::default();
-            for (title, names) in shard.title_candidates.iter() {
-                for software_name in names {
-                    let Some(item) = shard.item(software_name) else {
-                        continue;
-                    };
-                    let family_name = item
-                        .parent_name
-                        .as_deref()
-                        .filter(|parent| !parent.trim().is_empty())
-                        .unwrap_or(software_name);
-                    let asset_key = crate::media_identity::ScreenshotAssetId::from_mame_software(
-                        list_name,
-                        family_name,
-                    )
-                    .into_string();
-                    index
-                        .titles
-                        .entry((list_name.to_string(), title.clone()))
-                        .or_default()
-                        .insert(asset_key);
+        if let Some(store) = self.compact_store.as_ref() {
+            if let Ok(Some(shard)) = store.software_shard(system_id) {
+                let mut index = PreviewIdentityIndex::default();
+                for (title, names) in shard.title_candidates.iter() {
+                    for software_name in names {
+                        let Some(item) = shard.item(software_name) else {
+                            continue;
+                        };
+                        let family_name = item
+                            .parent_name
+                            .as_deref()
+                            .filter(|parent| !parent.trim().is_empty())
+                            .unwrap_or(software_name);
+                        let asset_key =
+                            crate::media_identity::ScreenshotAssetId::from_mame_software(
+                                list_name,
+                                family_name,
+                            )
+                            .into_string();
+                        index
+                            .titles
+                            .entry((list_name.to_string(), title.clone()))
+                            .or_default()
+                            .insert(asset_key);
+                    }
                 }
+                self.state = PreviewIdentityResolverState::Compact {
+                    system_id: system_id.to_string(),
+                    index,
+                };
+                return;
             }
-            self.state = PreviewIdentityResolverState::Compact {
-                system_id: system_id.to_string(),
-                index,
-            };
-            return;
         }
-        if !matches!(self.state, PreviewIdentityResolverState::NotNeeded) {
-            return;
-        }
+        // The compact store is migration-era optional data. If this system's
+        // shard is absent or fails validation, use the legacy source for this
+        // lookup instead of retaining the previous compact system's index.
         let Ok(connection) = crate::library_db::open_sqlite_read_only(&self.mame_sqlite) else {
             self.state = PreviewIdentityResolverState::Unavailable;
             return;
@@ -545,6 +551,56 @@ mod tests {
             vec!["mame-software__c64__familygame".to_string()]
         );
         assert_eq!(resolver.status(), PreviewIdentityResolverStatus::CompactV1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolver_falls_back_when_the_next_compact_system_shard_is_missing() {
+        let root = unique_temp_dir("preview-identity-compact-fallback");
+        let database = root.join("mame.sqlite3");
+        write_mame_software_fixture_db(
+            &database,
+            &[("nes", "legacygame", None, "Legacy Game", None, None, None)],
+            &[],
+        );
+        let metadata_path = root.join(crate::runtime_metadata::FILE_NAME);
+        let shard = crate::runtime_metadata::SoftwareShard {
+            items: vec![crate::runtime_metadata::SoftwareItem {
+                name: "compactgame".into(),
+                parent_name: None,
+                description: "Compact Game".into(),
+                year: None,
+                publisher: None,
+                region: None,
+            }],
+            title_candidates: BTreeMap::from([("compact-game".into(), vec!["compactgame".into()])]),
+            ..crate::runtime_metadata::SoftwareShard::default()
+        };
+        let mut builder = crate::runtime_metadata::MetadataFileBuilder::new();
+        builder
+            .add_software("c64", &shard)
+            .expect("add compact shard");
+        builder
+            .write_to(&metadata_path)
+            .expect("write compact metadata");
+
+        let mut resolver = PreviewIdentityResolver::with_runtime_metadata(database, &metadata_path);
+        let c64 = SystemId::parse("c64").expect("valid C64 system");
+        assert_eq!(
+            resolver.candidates(&c64, "Compact Game"),
+            Some(vec!["mame-software__c64__compactgame".to_string()])
+        );
+        assert_eq!(resolver.status(), PreviewIdentityResolverStatus::CompactV1);
+
+        let nes = SystemId::parse("nes").expect("valid NES system");
+        assert_eq!(
+            resolver.candidates(&nes, "Legacy Game"),
+            Some(vec!["mame-software__nes__legacygame".to_string()])
+        );
+        assert_eq!(
+            resolver.status(),
+            PreviewIdentityResolverStatus::LegacySqlite
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
