@@ -236,11 +236,21 @@ pub(crate) fn screenshot_qualification(
             match run_catalog_screenshot_audit(sess, gui_binary, &pack.system) {
                 Ok(value) => {
                     let mut reason = qualification_reason(&value);
-                    if reason == "ok"
-                        && let Some(asset_key) = value.selected_key.as_deref()
-                    {
+                    let probe_key = if reason == "ok" {
+                        value.selected_key.as_deref()
+                    } else if value.available == 0 {
+                        value.representative_key.as_deref()
+                    } else {
+                        None
+                    };
+                    if let Some(asset_key) = probe_key {
                         match run_preview_render_probe(sess, gui_binary, &pack.system, asset_key) {
-                            Ok(probe) => render = Some(probe),
+                            Ok(probe) => {
+                                render = Some(probe);
+                                if reason == "zero-available" {
+                                    reason = "pack-only-probe".to_string();
+                                }
+                            }
                             Err(error) => {
                                 reason = format!("render-error:{}", tsv(&error.to_string()))
                             }
@@ -277,7 +287,11 @@ pub(crate) fn screenshot_qualification(
                         audit.candidates,
                         audit.available,
                         audit.resolver_status.clone(),
-                        audit.selected_key.clone().unwrap_or_default(),
+                        audit
+                            .selected_key
+                            .clone()
+                            .or_else(|| audit.representative_key.clone())
+                            .unwrap_or_default(),
                     )
                 });
         rows.push(QualificationRow {
@@ -337,7 +351,7 @@ pub(crate) fn screenshot_qualification(
                 .map(|probe| probe.pixel_sha256.clone())
                 .unwrap_or_default(),
             render_total_us: render.as_ref().map(|probe| probe.total_us).unwrap_or(0),
-            pass: reason == "ok",
+            pass: matches!(reason.as_str(), "ok" | "pack-only-probe"),
             reason,
         });
     }
@@ -381,6 +395,7 @@ struct CatalogScreenshotAudit {
     available: usize,
     resolver_status: String,
     selected_key: Option<String>,
+    representative_key: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -608,6 +623,10 @@ fn parse_catalog_screenshot_audit_output(combined: &str) -> Result<CatalogScreen
                 .then(|| fields[2].to_string())
         })
         .next();
+    let representative_key = fields
+        .get("probe_asset_key")
+        .filter(|value| !value.is_empty())
+        .cloned();
     Ok(CatalogScreenshotAudit {
         tsv,
         games: parse_count("games")?,
@@ -618,6 +637,7 @@ fn parse_catalog_screenshot_audit_output(combined: &str) -> Result<CatalogScreen
         available: parse_count("available")?,
         resolver_status: fields.get("resolver_status").cloned().unwrap_or_default(),
         selected_key,
+        representative_key,
     })
 }
 

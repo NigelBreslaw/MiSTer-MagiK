@@ -36,7 +36,7 @@
 //!     preview-render-probe
 //!                        decode one indexed screenshot and exercise production composition
 //!     metadata-qualification-report
-//!                        report compact/legacy metadata probes and device acceptance steps
+//!                        report compact-only metadata probes and device acceptance steps
 //!     search-bench       benchmark persisted Arcade FTS5 search
 //!     rom-identity-bench benchmark production ROM identity hashing
 //!     hbmame-metadata-from-library
@@ -634,8 +634,14 @@ fn run_catalog_screenshot_audit(
             std::process::exit(1);
         }
     };
+    let representative_asset_key =
+        mister_magik_catalog::preview_worker::preview_archive_sidecar_entry_stems(&pack_path)
+            .ok()
+            .flatten()
+            .and_then(|stems| stems.entries.into_iter().next())
+            .unwrap_or_default();
     crate::ui_errln!(
-        "catalog_screenshot_summary_tsv\tvalid=1\tsystem={}\tgames={}\texisting_identity_rows={}\tderived_identity_rows={}\tambiguous_identity_rows={}\tcandidates={}\tavailable={}\tchanged={}\tresolver_status={:?}",
+        "catalog_screenshot_summary_tsv\tvalid=1\tsystem={}\tgames={}\texisting_identity_rows={}\tderived_identity_rows={}\tambiguous_identity_rows={}\tcandidates={}\tavailable={}\tchanged={}\tprobe_asset_key={}\tresolver_status={:?}",
         outcome.system_id,
         outcome.games.len(),
         outcome.existing_identity_rows,
@@ -644,6 +650,7 @@ fn run_catalog_screenshot_audit(
         outcome.candidate_rows,
         outcome.available_rows,
         outcome.changed_rows,
+        sanitize_tsv_field(&representative_asset_key),
         outcome.resolver_status,
     );
     crate::ui_log!(
