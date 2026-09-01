@@ -11,8 +11,9 @@ use clap::Subcommand;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -40,6 +41,47 @@ struct CachePolicy<'a> {
     preparation_identity: &'a str,
 }
 
+#[derive(Debug)]
+struct FpgaCacheLock(File);
+
+impl FpgaCacheLock {
+    fn acquire(root: &Path) -> AgentResult<Self> {
+        fs::create_dir_all(root).map_err(|error| {
+            format!(
+                "cannot create shared FPGA cache root {}: {error}",
+                root.display()
+            )
+        })?;
+        let path = root.join("fpga-operation.lock");
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|error| format!("cannot open FPGA cache lock {}: {error}", path.display()))?;
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            return Err(format!(
+                "shared FPGA cache {} is busy; another setup or signoff holds {}: {error}",
+                root.display(),
+                path.display()
+            )
+            .into());
+        }
+        Ok(Self(file))
+    }
+}
+
+impl Drop for FpgaCacheLock {
+    fn drop(&mut self) {
+        unsafe {
+            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Subcommand)]
 pub enum FpgaCommand {
     /// Install or verify the pinned Quartus Apple Container runtime.
@@ -58,9 +100,17 @@ pub fn execute(
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<()> {
     require_apple_silicon()?;
+    let local_root = local_root(repository)?;
+    let _cache_lock = FpgaCacheLock::acquire(&local_root)?;
+    reporter.emit(
+        EventKind::Progress,
+        "fpga-cache",
+        &format!("Using shared FPGA cache {}", local_root.display()),
+        Some(1),
+    )?;
     match command {
-        FpgaCommand::Setup => setup(repository, &local_root(repository), reporter),
-        FpgaCommand::Signoff { rebuild } => signoff(repository, *rebuild, reporter),
+        FpgaCommand::Setup => setup(repository, &local_root, reporter),
+        FpgaCommand::Signoff { rebuild } => signoff(repository, *rebuild, &local_root, reporter),
     }
 }
 
@@ -90,7 +140,12 @@ fn setup(repository: &Path, local_root: &Path, reporter: &mut Reporter<'_>) -> A
     )
 }
 
-fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> AgentResult<()> {
+fn signoff(
+    repository: &Path,
+    rebuild: bool,
+    local_root: &Path,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<()> {
     let quartus_seed = canonical_quartus_seed()?;
     let main_revision = git::value(repository, &["rev-parse", "refs/heads/main^{commit}"])?;
     let menu_revision = git_show(
@@ -107,7 +162,6 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
     require_revision("Menu", &menu_revision)?;
     require_revision("pre-observer", &baseline_revision)?;
 
-    let local_root = local_root(repository);
     let signoff_root = local_root.join("signoff");
     let source_root = local_root.join("sources/main");
     prepare_local_checkout(repository, &source_root, &main_revision)?;
@@ -163,7 +217,7 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
             Some(70),
         )?;
     } else {
-        setup(repository, &local_root, reporter)?;
+        setup(repository, local_root, reporter)?;
         reporter.emit(
             EventKind::Progress,
             "fpga-synthesis",
@@ -171,11 +225,11 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
             Some(10),
         )?;
         let menu_root = prepare_menu(
-            &local_root,
+            local_root,
             &menu_revision,
             &source_root.join("scripts/prepare-fpga-menu-signoff.py"),
         )?;
-        let wrapper_root = write_quartus_wrappers(&local_root)?;
+        let wrapper_root = write_quartus_wrappers(local_root)?;
 
         build_cached_variant(
             &source_root,
@@ -316,12 +370,55 @@ fn synthesis_files_identity(
     Ok(blobs.join(":"))
 }
 
-fn local_root(repository: &Path) -> PathBuf {
-    match std::env::var_os("MISTER_FPGA_LOCAL_ROOT") {
-        Some(root) if Path::new(&root).is_absolute() => PathBuf::from(root),
-        Some(root) => repository.join(root),
-        None => repository.join("build/fpga-local-apple"),
+fn local_root(repository: &Path) -> AgentResult<PathBuf> {
+    let override_root = std::env::var_os("MISTER_FPGA_LOCAL_ROOT");
+    if let Some(root) = override_root.as_deref() {
+        return resolve_local_root(repository, Some(root), None);
     }
+    let common_git_dir = git::value(
+        repository,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .map_err(|error| format!("cannot resolve shared FPGA cache from Git metadata: {error}"))?;
+    resolve_local_root(repository, None, Some(Path::new(&common_git_dir)))
+}
+
+fn resolve_local_root(
+    repository: &Path,
+    override_root: Option<&OsStr>,
+    common_git_dir: Option<&Path>,
+) -> AgentResult<PathBuf> {
+    if let Some(root) = override_root {
+        return Ok(if Path::new(root).is_absolute() {
+            PathBuf::from(root)
+        } else {
+            repository.join(root)
+        });
+    }
+    let common_git_dir = common_git_dir.ok_or(
+        "cannot derive the primary checkout without a Git common directory; set MISTER_FPGA_LOCAL_ROOT to an absolute shared cache path",
+    )?;
+    if !common_git_dir.is_absolute() || common_git_dir.file_name() != Some(OsStr::new(".git")) {
+        return Err(format!(
+            "cannot derive the primary checkout from Git common directory {}; set MISTER_FPGA_LOCAL_ROOT to an absolute shared cache path",
+            common_git_dir.display()
+        )
+        .into());
+    }
+    let primary_checkout = common_git_dir.parent().ok_or_else(|| {
+        format!(
+            "Git common directory {} has no primary checkout parent; set MISTER_FPGA_LOCAL_ROOT to an absolute shared cache path",
+            common_git_dir.display()
+        )
+    })?;
+    if primary_checkout.parent().is_none() {
+        return Err(format!(
+            "refusing to place the shared FPGA cache at filesystem root derived from {}; set MISTER_FPGA_LOCAL_ROOT to an absolute shared cache path",
+            common_git_dir.display()
+        )
+        .into());
+    }
+    Ok(primary_checkout.join("build/fpga-local-apple"))
 }
 
 fn variant_complete(root: &Path) -> bool {
@@ -903,6 +1000,75 @@ fn remove_generated_dir(root: &Path, target: &Path) -> AgentResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn primary_and_linked_worktrees_share_the_primary_checkout_cache() {
+        let common_git_dir = Path::new("/workspace/mister-slint/.git");
+        let primary = resolve_local_root(
+            Path::new("/workspace/mister-slint"),
+            None,
+            Some(common_git_dir),
+        )
+        .unwrap();
+        let linked = resolve_local_root(
+            Path::new("/private/tmp/mister-slint-feature"),
+            None,
+            Some(common_git_dir),
+        )
+        .unwrap();
+        assert_eq!(
+            primary,
+            Path::new("/workspace/mister-slint/build/fpga-local-apple")
+        );
+        assert_eq!(linked, primary);
+    }
+
+    #[test]
+    fn local_root_overrides_preserve_absolute_and_relative_semantics() {
+        let repository = Path::new("/private/tmp/mister-slint-feature");
+        let absolute =
+            resolve_local_root(repository, Some(OsStr::new("/var/tmp/shared-fpga")), None).unwrap();
+        let relative =
+            resolve_local_root(repository, Some(OsStr::new("build/custom-fpga")), None).unwrap();
+        assert_eq!(absolute, Path::new("/var/tmp/shared-fpga"));
+        assert_eq!(relative, repository.join("build/custom-fpga"));
+    }
+
+    #[test]
+    fn unsafe_common_git_directories_fail_closed() {
+        for common_git_dir in [
+            Path::new("relative/.git"),
+            Path::new("/git-storage/mister-slint.git"),
+            Path::new("/.git"),
+        ] {
+            let error = resolve_local_root(
+                Path::new("/private/tmp/mister-slint-feature"),
+                None,
+                Some(common_git_dir),
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("MISTER_FPGA_LOCAL_ROOT"),
+                "unexpected error for {}: {error}",
+                common_git_dir.display()
+            );
+        }
+        assert!(resolve_local_root(Path::new("/workspace/mister-slint"), None, None).is_err());
+    }
+
+    #[test]
+    fn shared_cache_lock_fails_fast_and_releases() {
+        let root =
+            std::env::temp_dir().join(format!("agent-cli-fpga-cache-lock-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let first = FpgaCacheLock::acquire(&root).unwrap();
+        let error = FpgaCacheLock::acquire(&root).unwrap_err();
+        assert!(error.to_string().contains("is busy"));
+        drop(first);
+        let second = FpgaCacheLock::acquire(&root).unwrap();
+        drop(second);
+        fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn cache_manifest_binds_every_matched_build_input() {
