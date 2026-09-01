@@ -2381,7 +2381,12 @@ mod builder_tests {
                 .unwrap()
                 .as_nanos()
         ));
-        let staging_root = root.join("worker");
+        // Simulate the worker's tmpfs location as a sibling of the
+        // publication root. This keeps the test explicit about the single
+        // SD-card owner: workers may build artifacts here, but publication is
+        // the only operation rooted at `root`.
+        let staging_root = root.with_extension("tmpfs-worker");
+        assert!(!staging_root.starts_with(&root));
         let mut prebuilt = BTreeMap::new();
         for (index, system) in snapshot.systems.iter().enumerate() {
             let staging = staging_root.join(format!("system-{index}"));
@@ -2426,6 +2431,7 @@ mod builder_tests {
         assert!(fs::read_dir(&staging_root).unwrap().next().is_none());
         drop(lease);
         fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(staging_root).unwrap();
     }
 
     #[test]
