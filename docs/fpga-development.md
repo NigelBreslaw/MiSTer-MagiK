@@ -18,9 +18,10 @@ QUARTUS_ACCEPT_EULA=1 scripts/agent fpga setup
 scripts/agent fpga signoff
 ```
 
-The default reusable root is `build/fpga-local-apple/`. A stable absolute
-`MISTER_FPGA_LOCAL_ROOT` may be shared by worktrees. Completed stock,
-pre-observer, and patched variants are bound to their source inputs, pinned
+The default reusable root is the primary checkout's
+`build/fpga-local-apple/`, shared by all linked worktrees. An absolute
+`MISTER_FPGA_LOCAL_ROOT` overrides it. Completed stock, pre-observer, and
+patched variants are bound to their source inputs, pinned
 revisions, Quartus seed and date, preparation-script identity, reports,
 metadata, and RBF hashes. Hidden `.VARIANT.building` directories are incomplete
 staging and never cache hits. Do not edit cached reports, copy evidence between
