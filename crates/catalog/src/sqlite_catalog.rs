@@ -40,6 +40,8 @@ use crate::library_db::{
 use crate::media_identity;
 use crate::media_metadata;
 use crate::preview_worker;
+#[cfg(test)]
+use crate::software_identity::MameSoftwareMetadata;
 use crate::software_identity::{
     MameSoftwareMetadataSession, PreviewArchivePaths, SoftwareHashCache, console_preview_asset,
     mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
@@ -2221,6 +2223,8 @@ pub(crate) fn write_sqlite_scan_with_catalog(
             software_hash_cache,
             discovery_history,
             stamp,
+            #[cfg(test)]
+            software_metadata: None,
         },
         root.as_ref(),
         progress,
@@ -2254,6 +2258,8 @@ fn write_sqlite_scan_without_catalog_rebuild(
             software_hash_cache,
             discovery_history,
             stamp,
+            #[cfg(test)]
+            software_metadata: None,
         },
         None,
         progress,
@@ -2280,6 +2286,32 @@ pub(crate) fn write_sqlite_scan_with_mame(
             software_hash_cache: SoftwareHashCache::load(path),
             discovery_history: DiscoveryHistory::load(path),
             stamp: None,
+            software_metadata: None,
+        },
+        Path::new(arcade_catalog::DEFAULT_ARCADE_ROOT),
+        None,
+    )
+    .map(|_| ())
+}
+
+#[cfg(test)]
+pub(crate) fn write_sqlite_scan_with_mame_and_compact_metadata(
+    path: &Path,
+    scan: &LibraryScan,
+    mame_sqlite_path: &Path,
+    software_metadata: MameSoftwareMetadata,
+) -> Result<(), String> {
+    write_sqlite_scan_with_sources(
+        path,
+        scan,
+        SqliteScanSources {
+            mame_sqlite_path,
+            hbmame_sqlite_path: &PathBuf::new(),
+            preview_paths: &PreviewArchivePaths::default(),
+            software_hash_cache: SoftwareHashCache::load(path),
+            discovery_history: DiscoveryHistory::load(path),
+            stamp: None,
+            software_metadata: Some(software_metadata),
         },
         Path::new(arcade_catalog::DEFAULT_ARCADE_ROOT),
         None,
@@ -2304,6 +2336,7 @@ pub(crate) fn write_sqlite_scan_with_mame_and_hbmame(
             software_hash_cache: SoftwareHashCache::load(path),
             discovery_history: DiscoveryHistory::load(path),
             stamp: None,
+            software_metadata: None,
         },
         Path::new(arcade_catalog::DEFAULT_ARCADE_ROOT),
         None,
@@ -2330,6 +2363,35 @@ pub(crate) fn write_sqlite_scan_with_mame_and_preview_pack(
             software_hash_cache: SoftwareHashCache::load(path),
             discovery_history: DiscoveryHistory::load(path),
             stamp: None,
+            software_metadata: None,
+        },
+        Path::new(arcade_catalog::DEFAULT_ARCADE_ROOT),
+        None,
+    )
+    .map(|_| ())
+}
+
+#[cfg(test)]
+pub(crate) fn write_sqlite_scan_with_mame_and_preview_pack_and_compact_metadata(
+    path: &Path,
+    scan: &LibraryScan,
+    mame_sqlite_path: &Path,
+    preview_asset_pack: &preview_worker::PreviewArchiveIndex,
+    software_metadata: MameSoftwareMetadata,
+) -> Result<(), String> {
+    let preview_paths =
+        PreviewArchivePaths::from_preview_indexes(std::slice::from_ref(preview_asset_pack));
+    write_sqlite_scan_with_sources(
+        path,
+        scan,
+        SqliteScanSources {
+            mame_sqlite_path,
+            hbmame_sqlite_path: &PathBuf::new(),
+            preview_paths: &preview_paths,
+            software_hash_cache: SoftwareHashCache::load(path),
+            discovery_history: DiscoveryHistory::load(path),
+            stamp: None,
+            software_metadata: Some(software_metadata),
         },
         Path::new(arcade_catalog::DEFAULT_ARCADE_ROOT),
         None,
@@ -2344,6 +2406,8 @@ struct SqliteScanSources<'a> {
     software_hash_cache: SoftwareHashCache,
     discovery_history: Option<DiscoveryHistory>,
     stamp: Option<&'a catalog_stamp::CatalogStamp>,
+    #[cfg(test)]
+    software_metadata: Option<MameSoftwareMetadata>,
 }
 
 #[cfg(test)]
@@ -2928,8 +2992,11 @@ fn write_sqlite_scan_with_sources_inner(
     #[cfg(not(test))]
     let mut software_metadata = MameSoftwareMetadataSession::new();
     #[cfg(test)]
-    let mut software_metadata =
-        MameSoftwareMetadataSession::new_with_sqlite_fixture(sources.mame_sqlite_path);
+    let mut software_metadata = sources
+        .software_metadata
+        .take()
+        .map(MameSoftwareMetadataSession::with_compact_fixture)
+        .unwrap_or_else(MameSoftwareMetadataSession::new);
     #[cfg(not(test))]
     let arcade_metadata =
         crate::software_identity::load_runtime_arcade_machine_metadata_for_setnames(
@@ -6838,6 +6905,7 @@ mod tests {
                 software_hash_cache: SoftwareHashCache::load(&db),
                 discovery_history: DiscoveryHistory::load(&db),
                 stamp: Some(&stamp),
+                software_metadata: None,
             },
             Path::new(arcade_catalog::DEFAULT_ARCADE_ROOT),
             None,

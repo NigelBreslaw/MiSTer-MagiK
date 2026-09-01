@@ -597,11 +597,7 @@ impl NativeDevice {
                     }
                     CatalogCommand::MetadataQualification(args) => {
                         let session = connect(10)?;
-                        run_runtime_metadata_qualification(
-                            &session,
-                            &args.out,
-                            args.require_compact_only,
-                        )
+                        run_runtime_metadata_qualification(&session, &args.out)
                     }
                     CatalogCommand::RomAudit(args) => {
                         let session = connect(10)?;
@@ -35737,11 +35733,7 @@ fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn run_runtime_metadata_qualification(
-    sess: &Session,
-    output: &Path,
-    require_compact_only: bool,
-) -> Result<()> {
+fn run_runtime_metadata_qualification(sess: &Session, output: &Path) -> Result<()> {
     let status_text = remote_read(sess, MAIN_STATUS_REMOTE)
         .ok_or("active Main status is unavailable for metadata qualification")?;
     let status: Value = serde_json::from_str(&status_text)?;
@@ -35755,7 +35747,7 @@ fn run_runtime_metadata_qualification(
         return Err(error.into());
     }
     let report = parse_last_json_line("runtime metadata qualification", &out.stdout)?;
-    validate_runtime_metadata_qualification(&report, require_compact_only)?;
+    validate_runtime_metadata_qualification(&report)?;
     if let Some(parent) = output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -35767,8 +35759,7 @@ fn run_runtime_metadata_qualification(
         format!("{}\n", serde_json::to_string_pretty(&report)?),
     )?;
     println!(
-        "runtime_metadata_qualification=passed compact_only={} bytes={} shards={} evidence={}",
-        require_compact_only,
+        "runtime_metadata_qualification=passed compact_only=true bytes={} shards={} evidence={}",
         report
             .pointer("/compact/file_bytes")
             .and_then(Value::as_u64)
@@ -35782,10 +35773,7 @@ fn run_runtime_metadata_qualification(
     Ok(())
 }
 
-fn validate_runtime_metadata_qualification(
-    report: &Value,
-    require_compact_only: bool,
-) -> Result<()> {
+fn validate_runtime_metadata_qualification(report: &Value) -> Result<()> {
     if report.get("schema").and_then(Value::as_str)
         != Some("mister-magik-runtime-metadata-qualification-v1")
         || report.pointer("/compact/valid").and_then(Value::as_bool) != Some(true)
@@ -35815,16 +35803,6 @@ fn validate_runtime_metadata_qualification(
             .is_none_or(|rows| rows == 0)
     {
         return Err("runtime metadata qualification report failed compact integrity gates".into());
-    }
-    if require_compact_only
-        && ["mame", "hbmame"].into_iter().any(|name| {
-            report
-                .pointer(&format!("/legacy/{name}/present"))
-                .and_then(Value::as_bool)
-                == Some(true)
-        })
-    {
-        return Err("runtime metadata qualification still found a legacy SQLite source".into());
     }
     Ok(())
 }
@@ -44247,7 +44225,7 @@ fast_catalog_generic_phase_tsv\tphase=complete\n";
     }
 
     #[test]
-    fn runtime_metadata_qualification_requires_integrity_and_compact_only_absence() {
+    fn runtime_metadata_qualification_requires_compact_integrity() {
         let mut report = json!({
             "schema": "mister-magik-runtime-metadata-qualification-v1",
             "compact": {
@@ -44258,21 +44236,12 @@ fast_catalog_generic_phase_tsv\tphase=complete\n";
                 "arcade_mame_rows": 50_368,
                 "arcade_hbmame_rows": 9_503,
                 "arcade_mister_rows": 3_009
-            },
-            "legacy": {
-                "mame": {"present": true},
-                "hbmame": {"present": true}
             }
         });
-        assert!(validate_runtime_metadata_qualification(&report, false).is_ok());
-        assert!(validate_runtime_metadata_qualification(&report, true).is_err());
-
-        report["legacy"]["mame"]["present"] = json!(false);
-        report["legacy"]["hbmame"]["present"] = json!(false);
-        assert!(validate_runtime_metadata_qualification(&report, true).is_ok());
+        assert!(validate_runtime_metadata_qualification(&report).is_ok());
 
         report["compact"]["shard_count"] = json!(34);
-        assert!(validate_runtime_metadata_qualification(&report, false).is_err());
+        assert!(validate_runtime_metadata_qualification(&report).is_err());
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>

@@ -2043,11 +2043,7 @@ fn build_catalog_from_scan_with_sources_and_preferred_and_progress(
     #[cfg(not(test))]
     let arcade_mra_names =
         arcade_metadata_mra_names(discoveries.values().map(|index| &scan.discoveries[*index]));
-    #[cfg(not(test))]
     let mut software_metadata = MameSoftwareMetadataSession::new();
-    #[cfg(test)]
-    let mut software_metadata =
-        MameSoftwareMetadataSession::new_with_sqlite_fixture(sources.mame_sqlite_path);
     #[cfg(not(test))]
     let arcade_metadata = with_catalog_progress_heartbeat(
         progress,

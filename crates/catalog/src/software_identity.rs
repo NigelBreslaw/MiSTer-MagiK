@@ -8,6 +8,8 @@ use crate::library_db;
 use crate::media_identity::{ScreenshotAssetId, screenshot_pack_id_from_filename};
 use crate::preview_worker;
 use crate::runtime_metadata::{ArcadeShard, MetadataStore, SoftwareShard};
+#[cfg(test)]
+use crate::runtime_metadata::{SoftwareDiskCandidate, SoftwareHashCandidate, SoftwareItem};
 use rusqlite::{Connection, params, params_from_iter};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
@@ -146,7 +148,7 @@ pub(crate) struct MameSoftwareMetadataSession {
     current_platform: Option<String>,
     current: MameSoftwareMetadata,
     #[cfg(test)]
-    legacy_path: Option<PathBuf>,
+    test_metadata: Option<MameSoftwareMetadata>,
 }
 
 impl MameSoftwareMetadataSession {
@@ -158,16 +160,15 @@ impl MameSoftwareMetadataSession {
             current_platform: None,
             current: MameSoftwareMetadata::default(),
             #[cfg(test)]
-            legacy_path: None,
+            test_metadata: None,
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn new_with_sqlite_fixture(path: &Path) -> Self {
-        Self {
-            legacy_path: Some(path.to_path_buf()),
-            ..Self::new()
-        }
+    pub(crate) fn with_compact_fixture(metadata: MameSoftwareMetadata) -> Self {
+        let mut session = Self::new();
+        session.test_metadata = Some(metadata);
+        session
     }
 
     pub(crate) fn for_platform(&mut self, platform_id: &str) -> &MameSoftwareMetadata {
@@ -182,6 +183,11 @@ impl MameSoftwareMetadataSession {
         let Some((system_id, list_name, _)) = runtime_system else {
             return &self.current;
         };
+        #[cfg(test)]
+        if let Some(metadata) = self.test_metadata.as_ref() {
+            self.current = metadata.clone();
+            return &self.current;
+        }
         if !self.runtime_failed {
             let loaded = self
                 .runtime
@@ -192,12 +198,6 @@ impl MameSoftwareMetadataSession {
             } else {
                 self.runtime_failed = true;
             }
-        }
-        #[cfg(test)]
-        if self.runtime_failed
-            && let Some(path) = self.legacy_path.as_ref()
-        {
-            self.current = load_legacy_mame_software_metadata(path);
         }
         &self.current
     }
@@ -322,138 +322,6 @@ impl MameSoftwareMetadata {
         append_runtime_software_shard(&mut metadata, list_name, shard);
         metadata
     }
-}
-
-#[cfg(test)]
-pub(crate) fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
-    load_runtime_software_metadata().unwrap_or_else(|| load_legacy_mame_software_metadata(path))
-}
-
-#[cfg(test)]
-fn load_legacy_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
-    let Ok(conn) = library_db::open_sqlite_read_only(path) else {
-        return MameSoftwareMetadata::default();
-    };
-    if !library_db::sqlite_table_exists(&conn, "mame_software_items").unwrap_or(false) {
-        return MameSoftwareMetadata::default();
-    }
-    let mut metadata = MameSoftwareMetadata::default();
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT list_name,software_name,parent_name,description,year,publisher,region,source_version
-         FROM mame_software_items",
-    ) && let Ok(rows) = stmt.query_map([], |row| {
-            let _source_version = row.get::<_, String>(7)?;
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                MameSoftwareItemMetadata {
-                    parent_name: row.get(2)?,
-                    description: row.get(3)?,
-                    year: row.get(4)?,
-                    publisher: row.get(5)?,
-                    region: row.get(6)?,
-                },
-            ))
-        })
-    {
-        for row in rows.flatten() {
-            let (raw_list, name, item) = row;
-            let list = canonical_software_list_name(&raw_list).to_string();
-            let title_key = library_db::canonical_variant_title(&item.description);
-            metadata
-                .title_index
-                .entry((list.clone(), title_key))
-                .or_default()
-                .push(name.clone());
-            let family = item
-                .parent_name
-                .as_deref()
-                .filter(|parent| !parent.trim().is_empty())
-                .unwrap_or(&name)
-                .to_string();
-            metadata
-                .family_members
-                .entry((list.clone(), family))
-                .or_default()
-                .push(name.clone());
-            metadata.items.insert((list, name), item);
-        }
-    }
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT list_name,software_name,size,crc32
-         FROM mame_software_hashes
-         WHERE size IS NOT NULL AND crc32 IS NOT NULL",
-    ) && let Ok(rows) = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, i64>(2)?,
-            row.get::<_, String>(3)?,
-        ))
-    }) {
-        for (raw_list, name, size, crc_hex) in rows.flatten() {
-            let list = canonical_software_list_name(&raw_list).to_string();
-            let Ok(size) = u64::try_from(size) else {
-                continue;
-            };
-            let Some(crc) = parse_hex_u32(&crc_hex) else {
-                continue;
-            };
-            metadata
-                .hash_index
-                .entry((list, size, crc))
-                .or_default()
-                .push(name);
-        }
-    }
-    if let Ok(mut stmt) = conn.prepare(
-        "SELECT list_name,software_name,disk_sha1
-         FROM mame_software_hashes
-         WHERE disk_sha1 IS NOT NULL",
-    ) && let Ok(rows) = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-        ))
-    }) {
-        for (raw_list, name, sha1) in rows.flatten() {
-            let list = canonical_software_list_name(&raw_list).to_string();
-            metadata
-                .disk_index
-                .entry((list, sha1.to_ascii_lowercase()))
-                .or_default()
-                .push(name);
-        }
-    }
-    for members in metadata.family_members.values_mut() {
-        members.sort();
-        members.dedup();
-    }
-    metadata
-}
-
-/// Load the compact runtime shards and present them through the existing
-/// identity model.  This adapter deliberately keeps the resolver semantics in
-/// one place while replacing SQLite's storage and lookup path.
-#[cfg(test)]
-fn load_runtime_software_metadata() -> Option<MameSoftwareMetadata> {
-    let store =
-        MetadataStore::open(&crate::catalog_config::default_runtime_metadata_path()).ok()?;
-    let mut metadata = MameSoftwareMetadata::default();
-    for (platform_id, canonical_list, _) in crate::runtime_metadata::RUNTIME_SOFTWARE_SYSTEMS {
-        let Ok(Some(shard)) = store.software_shard(platform_id) else {
-            // This test helper accepts a compact file only when every mapped
-            // system is present and decodes cleanly.
-            return None;
-        };
-        append_runtime_software_shard(&mut metadata, canonical_list, shard);
-    }
-    for members in metadata.family_members.values_mut() {
-        members.sort();
-        members.dedup();
-    }
-    Some(metadata)
 }
 
 fn append_runtime_software_shard(
@@ -931,51 +799,6 @@ pub(crate) fn software_list_for_platform(platform_id: &str) -> Option<&'static s
         "x68000" => Some("x68000"),
         "zx-spectrum" => Some("spectrum"),
         _ => None,
-    }
-}
-
-/// Collapse the MAME media-specific list names into the stable list namespace
-/// used by catalog identities and screenshot asset keys. A platform can expose
-/// cartridges, tapes, disks, and ROMs through separate MAME lists; treating
-/// them as one namespace keeps family identity and the complete gameplay pack
-/// in sync.
-#[cfg(test)]
-pub(crate) fn canonical_software_list_name(list_name: &str) -> &str {
-    match list_name {
-        "famicom_flop" => "fds",
-        "cd32" => "amigacd32",
-        "atom_cass" | "atom_flop" | "atom_rom" => "atom",
-        "electron_cass" | "electron_flop" | "electron_rom" => "electron",
-        "bbc_cass" | "bbc_flop_32016" | "bbc_flop_6502" | "bbc_flop_68000" | "bbc_flop_80186"
-        | "bbc_flop_arm" | "bbc_flop_hybrid" | "bbc_flop_torch" | "bbc_flop_z80" | "bbc_hdd"
-        | "bbc_rom" | "bbcb_flop" | "bbcb_flop_orig" | "bbcm_cart" | "bbcm_flop" => "bbc",
-        "archimedes" | "archimedes_hdd" | "archimedes_rom" => "archimedes",
-        "apple2_cass"
-        | "apple2_flop_clcracked"
-        | "apple2_flop_misc"
-        | "apple2_flop_orig"
-        | "apple2_rom" => "apple2",
-        "apple2gs_flop_clcracked" | "apple2gs_flop_misc" | "apple2gs_flop_orig" => "apple2gs",
-        "cpc_cass" | "cpc_flop" | "gx4000" => "amstrad",
-        "a2600" | "a2600_cass" => "a2600",
-        "a800" | "a800_cass" | "a800_flop" | "xegs" => "a800",
-        "st_cart" | "st_flop" | "st_flop_demos" => "atarist",
-        "c64_cart" | "c64_cass" | "c64_flop_misc" | "c64_flop_orig" | "c64_quik" => "c64",
-        "c128_cart" | "c128_flop" | "c128_rom" => "c128",
-        "plus4_cart" | "plus4_cass" | "plus4_flop" | "plus4_quik" => "c16",
-        "pet_cass" | "pet_flop" | "pet_hdd" | "pet_quik" => "pet",
-        "vic1001_cart" | "vic1001_cass" | "vic1001_flop" => "vic20",
-        "coleco" | "coleco_homebrew" => "coleco",
-        "wswan" => "wonderswan",
-        "wscolor" => "wsc",
-        "x68k_flop" => "x68000",
-        "spectrum_cart"
-        | "spectrum_cass"
-        | "spectrum_flop_opus"
-        | "spectrum_mgt_flop"
-        | "spectrum_microdrive"
-        | "spectrum_wafadrive" => "spectrum",
-        _ => list_name,
     }
 }
 
@@ -1566,11 +1389,6 @@ fn update_n64_transform_octets(
     reversed.update(&[
         chunk[3], chunk[2], chunk[1], chunk[0], chunk[7], chunk[6], chunk[5], chunk[4],
     ]);
-}
-
-#[cfg(test)]
-pub(crate) fn parse_hex_u32(value: &str) -> Option<u32> {
-    u32::from_str_radix(value.trim(), 16).ok()
 }
 
 type MameIdentityProjection<'a> = (
@@ -2527,10 +2345,46 @@ mod tests {
     use crate::preview_worker;
     use crate::sqlite_catalog::{
         load_arcade_catalog_from_sqlite_at, save_sqlite_scan, sqlite_table_exists,
-        write_sqlite_scan_with_mame, write_sqlite_scan_with_mame_and_hbmame,
-        write_sqlite_scan_with_mame_and_preview_pack,
+        write_sqlite_scan_with_mame, write_sqlite_scan_with_mame_and_compact_metadata,
+        write_sqlite_scan_with_mame_and_hbmame, write_sqlite_scan_with_mame_and_preview_pack,
+        write_sqlite_scan_with_mame_and_preview_pack_and_compact_metadata,
     };
     use crate::test_support::*;
+
+    fn compact_software_item(
+        name: &str,
+        parent_name: Option<&str>,
+        description: &str,
+        year: Option<&str>,
+        publisher: Option<&str>,
+        region: Option<&str>,
+    ) -> SoftwareItem {
+        SoftwareItem {
+            name: name.to_string(),
+            parent_name: parent_name.map(str::to_string),
+            description: description.to_string(),
+            year: year.map(str::to_string),
+            publisher: publisher.map(str::to_string),
+            region: region.map(str::to_string),
+        }
+    }
+
+    fn compact_software_metadata(
+        list_name: &str,
+        items: Vec<SoftwareItem>,
+        hash_candidates: Vec<SoftwareHashCandidate>,
+        disk_candidates: Vec<SoftwareDiskCandidate>,
+    ) -> MameSoftwareMetadata {
+        MameSoftwareMetadata::from_runtime_shard(
+            list_name,
+            SoftwareShard {
+                items,
+                hash_candidates,
+                disk_candidates,
+                ..Default::default()
+            },
+        )
+    }
 
     #[test]
     fn c64_and_zx_spectrum_use_catalog_software_list_identities() {
@@ -2586,34 +2440,32 @@ mod tests {
 
     #[test]
     fn mame_metadata_collapses_media_lists_into_one_identity_namespace() {
-        let root = unique_temp_dir("software-list-canonicalization");
-        let db = root.join("mame.sqlite3");
-        write_mame_software_fixture_db(
-            &db,
-            &[
-                ("c64_cart", "cartgame", None, "Cart Game", None, None, None),
-                (
-                    "c64_cass",
-                    "cassgame",
-                    None,
-                    "Cassette Game",
-                    None,
-                    None,
-                    None,
-                ),
-                (
-                    "spectrum_microdrive",
-                    "microgame",
-                    None,
-                    "Microdrive Game",
-                    None,
-                    None,
-                    None,
-                ),
-            ],
-            &[],
+        let item = |name: &str, description: &str| SoftwareItem {
+            name: name.to_string(),
+            parent_name: None,
+            description: description.to_string(),
+            year: None,
+            publisher: None,
+            region: None,
+        };
+        let mut metadata = MameSoftwareMetadata::from_runtime_shard(
+            "c64",
+            SoftwareShard {
+                items: vec![
+                    item("cartgame", "Cart Game"),
+                    item("cassgame", "Cassette Game"),
+                ],
+                ..Default::default()
+            },
         );
-        let metadata = load_mame_software_metadata(&db);
+        append_runtime_software_shard(
+            &mut metadata,
+            "spectrum",
+            SoftwareShard {
+                items: vec![item("microgame", "Microdrive Game")],
+                ..Default::default()
+            },
+        );
         assert!(
             metadata
                 .items
@@ -2629,43 +2481,39 @@ mod tests {
                 .items
                 .contains_key(&("spectrum".to_string(), "microgame".to_string()))
         );
-        assert_eq!(canonical_software_list_name("electron_flop"), "electron");
-        assert_eq!(canonical_software_list_name("gx4000"), "amstrad");
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn sqlite_identity_contract_preserves_fields_and_collision_order() {
-        let root = unique_temp_dir("sqlite-identity-contract");
-        let db = root.join("mame.sqlite3");
-        write_mame_software_fixture_db(
-            &db,
-            &[
-                (
-                    "c64_cart",
-                    "first",
-                    Some("family"),
-                    "Example Game (USA)",
-                    Some("1990"),
-                    Some("Publisher"),
-                    Some("usa"),
-                ),
-                (
-                    "c64_cass",
-                    "second",
-                    None,
-                    "Example Game (Europe)",
-                    Some("1991"),
-                    Some("Other Publisher"),
-                    Some("europe"),
-                ),
-            ],
-            &[
-                ("c64_cart", "first", 4, 0x1234),
-                ("c64_cass", "second", 4, 0x1234),
-            ],
+        let metadata = MameSoftwareMetadata::from_runtime_shard(
+            "c64",
+            SoftwareShard {
+                items: vec![
+                    SoftwareItem {
+                        name: "first".to_string(),
+                        parent_name: Some("family".to_string()),
+                        description: "Example Game (USA)".to_string(),
+                        year: Some("1990".to_string()),
+                        publisher: Some("Publisher".to_string()),
+                        region: Some("usa".to_string()),
+                    },
+                    SoftwareItem {
+                        name: "second".to_string(),
+                        parent_name: None,
+                        description: "Example Game (Europe)".to_string(),
+                        year: Some("1991".to_string()),
+                        publisher: Some("Other Publisher".to_string()),
+                        region: Some("europe".to_string()),
+                    },
+                ],
+                hash_candidates: vec![SoftwareHashCandidate {
+                    size: 4,
+                    crc32: 0x1234,
+                    software_names: vec!["first".to_string(), "second".to_string()],
+                }],
+                ..Default::default()
+            },
         );
-        let metadata = load_mame_software_metadata(&db);
 
         let first = metadata
             .items
@@ -2692,7 +2540,6 @@ mod tests {
                 .get(&("c64".to_string(), "family".to_string())),
             Some(&vec!["first".to_string()])
         );
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[cfg(feature = "builder")]
@@ -2935,10 +2782,10 @@ mod tests {
         std::fs::write(&rom_path, &rom).expect("write rom");
         let stripped = &rom[16..];
         let mame_db = root.join("mame.sqlite3");
-        write_mame_software_fixture_db(
-            &mame_db,
-            &[(
-                "nes",
+        write_mame_software_fixture_db(&mame_db, &[], &[]);
+        let metadata = compact_software_metadata(
+            "nes",
+            vec![compact_software_item(
                 "smb",
                 None,
                 "Super Mario Bros. (USA)",
@@ -2946,7 +2793,12 @@ mod tests {
                 Some("Nintendo"),
                 Some("usa"),
             )],
-            &[("nes", "smb", stripped.len() as i64, crc32(stripped))],
+            vec![SoftwareHashCandidate {
+                size: stripped.len() as u64,
+                crc32: crc32(stripped),
+                software_names: vec!["smb".to_string()],
+            }],
+            Vec::new(),
         );
         let db = root.join("library.sqlite3");
         let mut discovery = payload(&rom_path.display().to_string());
@@ -2961,11 +2813,12 @@ mod tests {
             entries: vec![software_asset_key("nes", "smb")],
         };
 
-        write_sqlite_scan_with_mame_and_preview_pack(
+        write_sqlite_scan_with_mame_and_preview_pack_and_compact_metadata(
             &db,
             &sqlite_scan_with_discoveries(vec![discovery]),
             &mame_db,
             &pack,
+            metadata,
         )
         .expect("save sqlite");
 
@@ -3169,11 +3022,11 @@ mod tests {
         let rom_path = root.join("Collection Name.lyx");
         std::fs::write(&rom_path, b"raw-lynx-rom").expect("write Lynx ROM");
         let mame_db = root.join("mame.sqlite3");
-        write_mame_software_fixture_db(
-            &mame_db,
-            &[
-                (
-                    "lynx",
+        write_mame_software_fixture_db(&mame_db, &[], &[]);
+        let metadata = compact_software_metadata(
+            "lynx",
+            vec![
+                compact_software_item(
                     "parent",
                     None,
                     "Example Lynx Game (USA)",
@@ -3181,8 +3034,7 @@ mod tests {
                     Some("Example"),
                     Some("usa"),
                 ),
-                (
-                    "lynx",
+                compact_software_item(
                     "child",
                     Some("parent"),
                     "Example Lynx Game (Europe)",
@@ -3191,7 +3043,12 @@ mod tests {
                     Some("europe"),
                 ),
             ],
-            &[("lynx", "child", 12, crc32(b"raw-lynx-rom"))],
+            vec![SoftwareHashCandidate {
+                size: 12,
+                crc32: crc32(b"raw-lynx-rom"),
+                software_names: vec!["child".to_string()],
+            }],
+            Vec::new(),
         );
         let db = root.join("library.sqlite3");
         let mut discovery = payload(&rom_path.display().to_string());
@@ -3206,11 +3063,12 @@ mod tests {
             entries: vec![software_asset_key("lynx", "parent")],
         };
 
-        write_sqlite_scan_with_mame_and_preview_pack(
+        write_sqlite_scan_with_mame_and_preview_pack_and_compact_metadata(
             &db,
             &sqlite_scan_with_discoveries(vec![discovery]),
             &mame_db,
             &pack,
+            metadata,
         )
         .expect("save Lynx catalog");
 
@@ -3385,11 +3243,11 @@ mod tests {
         let rom_path = root.join("Variant.sfc");
         std::fs::write(&rom_path, b"variant-rom").expect("write rom");
         let mame_db = root.join("mame.sqlite3");
-        write_mame_software_fixture_db(
-            &mame_db,
-            &[
-                (
-                    "snes",
+        write_mame_software_fixture_db(&mame_db, &[], &[]);
+        let metadata = compact_software_metadata(
+            "snes",
+            vec![
+                compact_software_item(
                     "parent",
                     None,
                     "Example Game (USA)",
@@ -3397,8 +3255,7 @@ mod tests {
                     Some("Example"),
                     Some("usa"),
                 ),
-                (
-                    "snes",
+                compact_software_item(
                     "child",
                     Some("parent"),
                     "Example Game (Rev 1) (USA)",
@@ -3407,7 +3264,12 @@ mod tests {
                     Some("usa"),
                 ),
             ],
-            &[("snes", "child", 11, crc32(b"variant-rom"))],
+            vec![SoftwareHashCandidate {
+                size: 11,
+                crc32: crc32(b"variant-rom"),
+                software_names: vec!["child".to_string()],
+            }],
+            Vec::new(),
         );
         let db = root.join("library.sqlite3");
         let mut discovery = payload(&rom_path.display().to_string());
@@ -3422,11 +3284,12 @@ mod tests {
             entries: vec![software_asset_key("snes", "parent")],
         };
 
-        write_sqlite_scan_with_mame_and_preview_pack(
+        write_sqlite_scan_with_mame_and_preview_pack_and_compact_metadata(
             &db,
             &sqlite_scan_with_discoveries(vec![discovery]),
             &mame_db,
             &pack,
+            metadata,
         )
         .expect("save sqlite");
 
@@ -3462,10 +3325,10 @@ mod tests {
         let root = unique_temp_dir("derived-console-preview");
         let db = root.join("library.sqlite3");
         let mame_db = root.join("mame.sqlite3");
-        write_mame_software_fixture_db(
-            &mame_db,
-            &[(
-                "saturn",
+        write_mame_software_fixture_db(&mame_db, &[], &[]);
+        let metadata = compact_software_metadata(
+            "saturn",
+            vec![compact_software_item(
                 "albert",
                 None,
                 "Albert Odyssey: Legend of Eldean (USA)",
@@ -3473,7 +3336,8 @@ mod tests {
                 Some("Working Designs"),
                 Some("usa"),
             )],
-            &[],
+            Vec::new(),
+            Vec::new(),
         );
         let mut discovery = saturn_payload("/media/fat/games/Saturn/Albert Odyssey.chd");
         discovery.title = "Albert Odyssey: Legend of Eldean (USA)".to_string();
@@ -3483,11 +3347,12 @@ mod tests {
             entries: vec!["albert-odyssey-legend-of-eldean-us".to_string()],
         };
 
-        write_sqlite_scan_with_mame_and_preview_pack(
+        write_sqlite_scan_with_mame_and_preview_pack_and_compact_metadata(
             &db,
             &sqlite_scan_with_discoveries(vec![discovery]),
             &mame_db,
             &pack,
+            metadata,
         )
         .expect("save sqlite");
 
@@ -3573,10 +3438,10 @@ mod tests {
         header[64..84].copy_from_slice(&sha1);
         std::fs::write(&chd_path, header).expect("write chd header");
         let mame_db = root.join("mame.sqlite3");
-        write_mame_software_fixture_db(
-            &mame_db,
-            &[(
-                "saturn",
+        write_mame_software_fixture_db(&mame_db, &[], &[]);
+        let metadata = compact_software_metadata(
+            "saturn",
+            vec![compact_software_item(
                 "nights",
                 None,
                 "Nights into Dreams (USA)",
@@ -3584,24 +3449,21 @@ mod tests {
                 Some("Sega"),
                 Some("usa"),
             )],
-            &[],
+            Vec::new(),
+            vec![SoftwareDiskCandidate {
+                sha1: hex_lower(&sha1),
+                software_names: vec!["nights".to_string()],
+            }],
         );
-        let conn = Connection::open(&mame_db).expect("open mame fixture");
-        conn.execute(
-            "INSERT INTO mame_software_hashes(list_name,software_name,disk_sha1)
-             VALUES ('saturn','nights',?1)",
-            [hex_lower(&sha1)],
-        )
-        .expect("insert disk hash");
-        drop(conn);
         let db = root.join("library.sqlite3");
         let mut discovery = saturn_payload(&chd_path.display().to_string());
         discovery.title = "Untrusted Scraper Name".to_string();
 
-        write_sqlite_scan_with_mame(
+        write_sqlite_scan_with_mame_and_compact_metadata(
             &db,
             &sqlite_scan_with_discoveries(vec![discovery]),
             &mame_db,
+            metadata,
         )
         .expect("save sqlite");
 
@@ -3628,10 +3490,16 @@ mod tests {
         std::fs::write(&disc2_path, chd_v5_header(sha1_disc2)).expect("write disc 2 chd");
 
         let mame_db = root.join("mame.sqlite3");
-        write_mame_software_fixture_db(
-            &mame_db,
-            &[(
-                "saturn",
+        write_mame_software_fixture_db(&mame_db, &[], &[]);
+
+        let mut disc1 = saturn_payload(&disc1_path.display().to_string());
+        disc1.title = "Fixture RPG Disc 1".to_string();
+        let mut disc2 = saturn_payload(&disc2_path.display().to_string());
+        disc2.title = "Fixture RPG Disc 2".to_string();
+        let db = root.join("library.sqlite3");
+        let metadata = compact_software_metadata(
+            "saturn",
+            vec![compact_software_item(
                 "fixturerpg",
                 None,
                 "Fixture RPG (USA)",
@@ -3639,33 +3507,24 @@ mod tests {
                 Some("Example"),
                 Some("usa"),
             )],
-            &[],
+            Vec::new(),
+            vec![
+                SoftwareDiskCandidate {
+                    sha1: hex_lower(&sha1_disc1),
+                    software_names: vec!["fixturerpg".to_string()],
+                },
+                SoftwareDiskCandidate {
+                    sha1: hex_lower(&sha1_disc2),
+                    software_names: vec!["fixturerpg".to_string()],
+                },
+            ],
         );
-        let conn = Connection::open(&mame_db).expect("open mame fixture");
-        conn.execute(
-            "INSERT INTO mame_software_hashes(list_name,software_name,disk_sha1)
-             VALUES ('saturn','fixturerpg',?1)",
-            [hex_lower(&sha1_disc1)],
-        )
-        .expect("insert disc 1 hash");
-        conn.execute(
-            "INSERT INTO mame_software_hashes(list_name,software_name,disk_sha1)
-             VALUES ('saturn','fixturerpg',?1)",
-            [hex_lower(&sha1_disc2)],
-        )
-        .expect("insert disc 2 hash");
-        drop(conn);
 
-        let mut disc1 = saturn_payload(&disc1_path.display().to_string());
-        disc1.title = "Fixture RPG Disc 1".to_string();
-        let mut disc2 = saturn_payload(&disc2_path.display().to_string());
-        disc2.title = "Fixture RPG Disc 2".to_string();
-        let db = root.join("library.sqlite3");
-
-        write_sqlite_scan_with_mame(
+        write_sqlite_scan_with_mame_and_compact_metadata(
             &db,
             &sqlite_scan_with_discoveries(vec![disc2, disc1]),
             &mame_db,
+            metadata,
         )
         .expect("save sqlite");
 

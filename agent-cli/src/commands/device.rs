@@ -411,8 +411,6 @@ pub enum CatalogCommand {
 pub struct CatalogMetadataQualificationArgs {
     #[arg(long)]
     pub(crate) out: PathBuf,
-    #[arg(long)]
-    pub(crate) require_compact_only: bool,
 }
 
 #[derive(Debug, Args)]

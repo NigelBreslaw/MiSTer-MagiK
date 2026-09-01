@@ -2145,6 +2145,41 @@ fn elapsed_us(started: Instant) -> u64 {
 mod tests {
     use super::*;
 
+    fn write_compact_arcade_metadata(
+        root: &Path,
+        mame: &[(&str, Option<&str>)],
+        hbmame: &[(&str, Option<&str>)],
+    ) {
+        let metadata_path = root
+            .join("mister-magik")
+            .join(crate::runtime_metadata::FILE_NAME);
+        fs::create_dir_all(metadata_path.parent().unwrap()).unwrap();
+        let machine = |(setname, parent_setname): &(&str, Option<&str>)| {
+            crate::runtime_metadata::ArcadeMachine {
+                setname: (*setname).to_string(),
+                parent_setname: parent_setname.map(str::to_string),
+                title: (*setname).to_string(),
+                year: None,
+                manufacturer: None,
+                players: None,
+                control: None,
+            }
+        };
+        let mut mame = mame.iter().map(machine).collect::<Vec<_>>();
+        let mut hbmame = hbmame.iter().map(machine).collect::<Vec<_>>();
+        mame.sort_by(|left, right| left.setname.cmp(&right.setname));
+        hbmame.sort_by(|left, right| left.setname.cmp(&right.setname));
+        let mut builder = crate::runtime_metadata::MetadataFileBuilder::new();
+        builder
+            .add_arcade(&crate::runtime_metadata::ArcadeShard {
+                mame,
+                hbmame,
+                ..crate::runtime_metadata::ArcadeShard::default()
+            })
+            .unwrap();
+        builder.write_to(&metadata_path).unwrap();
+    }
+
     #[test]
     fn arcade_requires_external_rom_and_core() {
         let root = crate::test_support::unique_temp_dir("fast-source-arcade");
@@ -2234,22 +2269,15 @@ mod tests {
         )
         .unwrap();
         fs::write(root.join("games/mame/arkanoid.zip"), b"rom").unwrap();
-        let database = root.join("mister-magik/mame.sqlite3");
-        fs::create_dir_all(database.parent().unwrap()).unwrap();
-        crate::test_support::write_mame_fixture_db(
-            &database,
+        write_compact_arcade_metadata(
+            &root,
             &[
-                ("arkanoid", None, "Arkanoid", None, None),
-                (
-                    "arkanoidj",
-                    Some("arkanoid"),
-                    "Arkanoid (Japan)",
-                    None,
-                    None,
-                ),
-                ("arkanoid2", Some("arkanoid"), "Arkanoid 2", None, None),
-                ("arkanoid3", Some("arkanoid"), "Arkanoid 3", None, None),
+                ("arkanoid", None),
+                ("arkanoidj", Some("arkanoid")),
+                ("arkanoid2", Some("arkanoid")),
+                ("arkanoid3", Some("arkanoid")),
             ],
+            &[],
         );
         for (name, setname) in [
             ("Arkanoid.mra", "arkanoid"),
@@ -2284,22 +2312,15 @@ mod tests {
         )
         .unwrap();
         fs::write(root.join("games/mame/arkanoid.zip"), b"rom").unwrap();
-        let database = root.join("mister-magik/mame.sqlite3");
-        fs::create_dir_all(database.parent().unwrap()).unwrap();
-        crate::test_support::write_mame_fixture_db(
-            &database,
+        write_compact_arcade_metadata(
+            &root,
             &[
-                ("arkanoid", None, "Arkanoid", None, None),
-                (
-                    "arkanoidj",
-                    Some("arkanoid"),
-                    "Arkanoid (Japan)",
-                    None,
-                    None,
-                ),
-                ("arkanoid2", Some("arkanoid"), "Arkanoid 2", None, None),
-                ("arkanoid3", Some("arkanoid"), "Arkanoid 3", None, None),
+                ("arkanoid", None),
+                ("arkanoidj", Some("arkanoid")),
+                ("arkanoid2", Some("arkanoid")),
+                ("arkanoid3", Some("arkanoid")),
             ],
+            &[],
         );
 
         let mut rows = Vec::new();
@@ -2820,21 +2841,7 @@ mod tests {
     #[test]
     fn neogeo_family_audit_reports_installed_projection() {
         let root = crate::test_support::unique_temp_dir("fast-neogeo-family-audit");
-        let database = root.join("mister-magik/mame.sqlite3");
-        fs::create_dir_all(database.parent().unwrap()).unwrap();
-        crate::test_support::write_mame_fixture_db(
-            &database,
-            &[
-                ("mslug3", None, "Metal Slug 3", None, None),
-                (
-                    "mslug3j",
-                    Some("mslug3"),
-                    "Metal Slug 3 (Japan)",
-                    None,
-                    None,
-                ),
-            ],
-        );
+        write_compact_arcade_metadata(&root, &[("mslug3", None), ("mslug3j", Some("mslug3"))], &[]);
         fs::create_dir_all(root.join("games/NEOGEO")).unwrap();
         fs::write(root.join("games/NEOGEO/Metal Slug 3 (mslug3).neo"), b"rom").unwrap();
         fs::write(root.join("games/NEOGEO/Metal Slug 3 (mslug3j).neo"), b"rom").unwrap();
