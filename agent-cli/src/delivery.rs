@@ -1493,7 +1493,7 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_platform_uses_one_transaction_request() {
+    fn deterministic_platform_delivers_databases_before_platform() {
         let requests = Rc::new(RefCell::new(Vec::new()));
         let mut actions = scenario_actions(
             crate::deploy::DeploymentKind::Platform,
@@ -1502,7 +1502,7 @@ mod tests {
         actions.run(Phase::RemoteInventoryUpload).unwrap();
         assert!(matches!(
             requests.borrow().as_slice(),
-            [DeliveryCall::Platform]
+            [DeliveryCall::Databases, DeliveryCall::Platform]
         ));
         assert_eq!(
             actions.timing_samples,
