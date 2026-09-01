@@ -1040,6 +1040,7 @@ mod linux {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn collect_fd_relative_with_budget_mode(
         target: &Path,
         max_depth: Option<usize>,
@@ -2221,8 +2222,7 @@ mod tests {
             "child-read",
             1,
         )
-        .err()
-        .expect("the test-only fault injector must fail the nested read");
+        .expect_err("the test-only fault injector must fail the nested read");
 
         assert_eq!(error.operation(), "child-read");
         assert_eq!(error.path(), dir.join("nested").as_path());
@@ -2357,8 +2357,7 @@ mod tests {
             usize::MAX,
             usize::MAX,
         )
-        .err()
-        .expect("the deterministic entry budget must fail mid-target");
+        .expect_err("the deterministic entry budget must fail mid-target");
         let expected = walkdir_snapshot(&dir, None, &|_| false).0;
         let mut restarted = Vec::new();
         let stats = visit_walkdir(
