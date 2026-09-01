@@ -24,6 +24,7 @@ pub enum PreviewIdentityResolverStatus {
 #[derive(Clone, Debug, Default)]
 struct PreviewIdentityIndex {
     titles: BTreeMap<(String, String), BTreeSet<String>>,
+    software_names: BTreeMap<String, String>,
 }
 
 /// Lazily loaded, read-only MAME software-list title index.
@@ -114,6 +115,56 @@ impl PreviewIdentityResolver {
         )
     }
 
+    /// Return keys for metadata titles whose canonical form has the catalog
+    /// title as a complete prefix.  This handles catalog filenames that omit
+    /// a MAME subtitle while preserving the unique-family requirement.
+    pub fn unique_title_prefix_candidates(
+        &mut self,
+        system_id: &SystemId,
+        title: &str,
+    ) -> Option<Vec<String>> {
+        let list_name = crate::software_identity::software_list_for_platform(system_id.as_str())?;
+        self.ensure_loaded(system_id.as_str(), list_name);
+        let index = match &self.state {
+            PreviewIdentityResolverState::Compact { index, .. } => index,
+            PreviewIdentityResolverState::NotNeeded | PreviewIdentityResolverState::Unavailable => {
+                return None;
+            }
+        };
+        let title_key = crate::library_db::canonical_variant_title(title);
+        let mut candidates = BTreeSet::new();
+        for ((candidate_list, candidate_title), keys) in &index.titles {
+            if candidate_list == list_name && candidate_title.starts_with(&format!("{title_key}-"))
+            {
+                candidates.extend(keys.iter().cloned());
+            }
+        }
+        Some(candidates.into_iter().collect())
+    }
+
+    /// Resolve a ZIP archive member whose archive filename is an exact MAME
+    /// software-set name.  The compact shard validates that the set exists;
+    /// the caller still validates that its screenshot key is in the pack.
+    pub fn archive_member_candidate(
+        &mut self,
+        system_id: &SystemId,
+        archive_path: &str,
+    ) -> Option<String> {
+        let list_name = crate::software_identity::software_list_for_platform(system_id.as_str())?;
+        self.ensure_loaded(system_id.as_str(), list_name);
+        let index = match &self.state {
+            PreviewIdentityResolverState::Compact { index, .. } => index,
+            PreviewIdentityResolverState::NotNeeded | PreviewIdentityResolverState::Unavailable => {
+                return None;
+            }
+        };
+        let set_name = Path::new(archive_path)
+            .file_stem()
+            .and_then(|value| value.to_str())?
+            .to_ascii_lowercase();
+        index.software_names.get(&set_name).cloned()
+    }
+
     fn ensure_loaded(&mut self, system_id: &str, list_name: &str) {
         match &self.state {
             PreviewIdentityResolverState::Compact {
@@ -137,6 +188,21 @@ impl PreviewIdentityResolver {
             && let Ok(Some(shard)) = store.software_shard(system_id)
         {
             let mut index = PreviewIdentityIndex::default();
+            for item in &shard.items {
+                let family_name = item
+                    .parent_name
+                    .as_deref()
+                    .filter(|parent| !parent.trim().is_empty())
+                    .unwrap_or(&item.name);
+                let asset_key = crate::media_identity::ScreenshotAssetId::from_mame_software(
+                    list_name,
+                    family_name,
+                )
+                .into_string();
+                index
+                    .software_names
+                    .insert(item.name.to_ascii_lowercase(), asset_key);
+            }
             for (title, names) in shard.title_candidates.iter() {
                 for software_name in names {
                     let Some(item) = shard.item(software_name) else {
@@ -356,9 +422,22 @@ fn reconcile_preview_rows(
     let mut ambiguous_identity_rows = 0;
     for game in &mut games {
         if game.preview_asset_key.is_empty() {
-            let Some(candidates) = resolver.candidates(system_id, &game.title) else {
-                continue;
-            };
+            let mut candidates = resolver
+                .candidates(system_id, &game.title)
+                .unwrap_or_default();
+            if candidates.is_empty()
+                && let Ok(Some(member)) =
+                    crate::archive_member::decode_archive_member_ref(&game.launch_ref)
+                && let Some(candidate) =
+                    resolver.archive_member_candidate(system_id, &member.archive_path)
+            {
+                candidates.push(candidate);
+            }
+            if candidates.is_empty() {
+                candidates = resolver
+                    .unique_title_prefix_candidates(system_id, &game.title)
+                    .unwrap_or_default();
+            }
             let candidates = candidates
                 .into_iter()
                 .filter(|candidate| entries.contains(&candidate.to_ascii_lowercase()))
@@ -677,6 +756,74 @@ mod tests {
             "mame-software__nes__metroid"
         );
         assert!(outcome.games[0].has_preview);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reconciliation_derives_unique_title_prefix_without_fuzzy_family_guessing() {
+        let root = unique_temp_dir("preview-identity-title-prefix");
+        let metadata = write_runtime_metadata(
+            &root,
+            "c128",
+            &[
+                ("byondzrk", None, "Beyond Zork: The Coconut of Quendor"),
+                ("other", None, "Other Game"),
+            ],
+        );
+        let archive = write_pack_index(&root, &["mame-software__c128__byondzrk"]);
+        let system = SystemId::parse("c128").expect("valid system");
+        let mut resolver = PreviewIdentityResolver::with_runtime_metadata(metadata);
+
+        let outcome = reconcile_preview_rows(
+            &system,
+            &archive,
+            vec![game("Beyond Zork", "")],
+            &mut resolver,
+        )
+        .expect("derive title-prefix identity");
+
+        assert_eq!(outcome.derived_identity_rows, 1);
+        assert_eq!(outcome.ambiguous_identity_rows, 0);
+        assert_eq!(outcome.available_rows, 1);
+        assert_eq!(
+            outcome.games[0].preview_asset_key,
+            "mame-software__c128__byondzrk"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reconciliation_derives_exact_archive_set_identity() {
+        let root = unique_temp_dir("preview-identity-archive-set");
+        let metadata =
+            write_runtime_metadata(&root, "megaduck", &[("brckwall", None, "The Brick Wall")]);
+        let archive = write_pack_index(&root, &["mame-software__megaduck__brckwall"]);
+        let system = SystemId::parse("megaduck").expect("valid system");
+        let launch_ref = crate::archive_member::encode_archive_member_ref(
+            &crate::archive_member::ArchiveMemberRef {
+                archive_path: "/media/fat/games/MegaDuck/brckwall.zip".to_string(),
+                member_path: "001.bin".to_string(),
+                local_header_offset: 0,
+                compression_method: 8,
+                compressed_size: 100,
+                uncompressed_size: 32_768,
+                crc32: 0x1234_5678,
+            },
+        )
+        .expect("encode archive launch ref");
+        let mut archive_game = game("001", "");
+        archive_game.launch_ref = launch_ref;
+        let mut resolver = PreviewIdentityResolver::with_runtime_metadata(metadata);
+
+        let outcome = reconcile_preview_rows(&system, &archive, vec![archive_game], &mut resolver)
+            .expect("derive archive-set identity");
+
+        assert_eq!(outcome.derived_identity_rows, 1);
+        assert_eq!(outcome.available_rows, 1);
+        assert_eq!(
+            outcome.games[0].preview_asset_key,
+            "mame-software__megaduck__brckwall"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
