@@ -4554,11 +4554,17 @@ fn experimental_fpga_observer_fault_is_operationally_current(diagnostics: &Value
     const OBSERVER_FAULT: u64 = 1 << 3;
     const LOW_FLAG_MASK: u64 = 0x0fff;
 
+    let expected_schema = match diagnostics
+        .get("diagnostic_architecture")
+        .and_then(Value::as_str)
+    {
+        Some("scaler-off-domain-scheduler-terminal-v4") => 21,
+        Some("scaler-off-domain-scheduler-terminal-v5") => 22,
+        Some("scaler-off-domain-scheduler-terminal-v6") => 23,
+        _ => return false,
+    };
+
     experimental_fpga_transport_is_operational(diagnostics)
-        && diagnostics
-            .get("diagnostic_architecture")
-            .and_then(Value::as_str)
-            == Some("scaler-off-domain-scheduler-terminal-v4")
         && diagnostics.get("coherent").and_then(Value::as_bool) == Some(false)
         && diagnostics.get("classification").and_then(Value::as_str)
             == Some("scaler_fetch_liveness_evidence_inconclusive")
@@ -4586,7 +4592,7 @@ fn experimental_fpga_observer_fault_is_operationally_current(diagnostics: &Value
                     && samples[1..].iter().all(|sample| sample == &samples[0])
                     && samples[0].as_array().is_some_and(|words| {
                         words.len() == 4
-                            && words[0].as_u64() == Some(21)
+                            && words[0].as_u64() == Some(expected_schema)
                             && words[1].as_u64().is_some_and(|flags| {
                                 flags & LOW_FLAG_MASK & RECORD_VALID != 0
                                     && flags & LOW_FLAG_MASK & OBSERVER_FAULT != 0
@@ -40425,6 +40431,24 @@ H: Handlers=event3 js0"#
             assess_fpga_evidence(
                 "scaler-off-domain-scheduler-terminal-v4",
                 &observer_self_fault
+            ),
+            FpgaActivationAssessment::Current {
+                warning: Some(_),
+                ..
+            }
+        ));
+        let mut attributed_observer_fault = observer_self_fault.clone();
+        attributed_observer_fault["diagnostic_architecture"] =
+            json!("scaler-off-domain-scheduler-terminal-v6");
+        attributed_observer_fault["scaler_fetch_liveness_state"]["raw_samples"] =
+            json!([[23, 9, 3, 16243], [23, 9, 3, 16243], [23, 9, 3, 16243]]);
+        assert!(experimental_fpga_observer_fault_is_operationally_current(
+            &attributed_observer_fault
+        ));
+        assert!(matches!(
+            assess_fpga_evidence(
+                "scaler-off-domain-scheduler-terminal-v6",
+                &attributed_observer_fault
             ),
             FpgaActivationAssessment::Current {
                 warning: Some(_),
