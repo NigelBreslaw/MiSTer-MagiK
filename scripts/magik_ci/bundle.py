@@ -26,6 +26,7 @@ HISTORICAL_DIAGNOSTIC_ARCHITECTURES = frozenset(
         "scaler-off-domain-scheduler-snapshot-v1",
         "scaler-off-domain-scheduler-snapshot-v2",
         "scaler-off-domain-scheduler-terminal-v3",
+        "scaler-off-domain-scheduler-terminal-v4",
         PATCHED_DIAGNOSTIC_ARCHITECTURE,
     }
 )
