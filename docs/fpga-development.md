@@ -69,6 +69,15 @@ RBF, metadata, and delta-report SHA-256 values as one identity.
 
 ## Quartus interpretation
 
+Structural synthesis is a rejection-only QoR proxy. Compare mapped cells,
+register bits, mux widths, and fanout with the prior candidate. A neutral or
+worse result does not proceed to Quartus; an improvement does not predict a
+Quartus pass.
+
+Timing changes in unchanged hierarchies indicate global fitting movement.
+Compare endpoints, data delay, clock skew, clock fanout, hierarchy resources,
+and router duplication before changing RTL.
+
 Declare gates before the first build. The scaler-repair baseline used seed 2,
 setup slack at least 0.428 ns, hold slack at least 0.200 ns, zero TNS, no more
 than 0.150 ns matched-baseline setup degradation, all 158 constrained
