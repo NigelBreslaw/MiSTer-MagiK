@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Host-neutral RGB565 composition for low-resolution CRT screenshot backdrops.
+//! Host-neutral RGB565 composition for CRT screenshot backdrops.
 
 use crate::arcade_list_renderer::CrtArcadeLayout;
 use crate::preview_transition::blend_rgb565_bucket;
@@ -88,17 +88,17 @@ pub struct CrtBackdropState {
 
 impl CrtBackdropState {
     pub fn for_display(display: &UiDisplay) -> Option<Self> {
-        match display.output_route() {
-            ResolvedOutputRoute::Crt240p60 | ResolvedOutputRoute::Crt288p50 => {
-                Some(Self::new_with_reference_height(
-                    display.render_w(),
-                    display.render_h(),
-                    display.output_h() as usize,
-                    CRT_COMPOSITION_H,
-                ))
-            }
-            _ => None,
-        }
+        let reference_height = match display.output_route() {
+            ResolvedOutputRoute::Crt240p60 | ResolvedOutputRoute::Crt288p50 => CRT_COMPOSITION_H,
+            ResolvedOutputRoute::Crt480p60 | ResolvedOutputRoute::Crt576p50 => display.render_h(),
+            ResolvedOutputRoute::Hdmi => return None,
+        };
+        Some(Self::new_with_reference_height(
+            display.render_w(),
+            display.render_h(),
+            display.output_h() as usize,
+            reference_height,
+        ))
     }
 
     pub fn new(width: usize, height: usize) -> Self {
@@ -789,8 +789,12 @@ fn scale_dimmed_center_crop_mapped_with_logical_size(
             };
         }
     } else {
-        let (crop_x, crop_y, crop_width, crop_height) =
-            center_crop_4_3(frame.source_width, frame.source_height);
+        let (crop_x, crop_y, crop_width, crop_height) = center_crop_to_aspect(
+            frame.source_width,
+            frame.source_height,
+            reference_destination_width,
+            reference_destination_height,
+        );
         for (destination_x, source_x) in x_map[..destination_width].iter_mut().enumerate() {
             *source_x = crop_x
                 + (destination_x.saturating_mul(crop_width) / destination_width)
@@ -849,7 +853,7 @@ fn scale_dimmed_center_crop_mapped_with_logical_size(
     true
 }
 
-/// Prepare one RGB565 screenshot for the low-resolution CRT backdrop.  This
+/// Prepare one RGB565 screenshot for a CRT backdrop. This
 /// helper is deliberately allocation-owned by its caller so it can run on a
 /// worker lane and hand the resulting buffers to `CrtBackdropState` by `Arc`.
 /// Worker-friendly variant that reuses the nearest-neighbour maps between
@@ -947,16 +951,16 @@ pub(crate) fn prepare_dimmed_rgb565_target_for_output_with_maps(
     };
     x_map.resize(output.logical_width(), 0);
     y_map.resize(output.logical_height(), 0);
-    // A rotated native CRT buffer is the 640x480 visual reference transposed:
-    // 480 logical reference pixels across by 640 down. Map the native 240- or
-    // 288-pixel logical width through that reference so every source remains a
-    // strict 2x nearest-neighbour image. This deliberately bypasses the 4:3
-    // fill crop used by non-CRT-sized identity outputs.
+    // A rotated low-resolution CRT buffer maps its narrow logical width through
+    // the shared 640x480 visual reference for strict 2x nearest-neighbour
+    // pixels. Progressive and identity-sized outputs use their native logical
+    // aspect when choosing the undistorted centre crop.
+    let reference_destination_width = reference_destination_height.max(output.logical_width());
     if !scale_dimmed_center_crop_mapped_with_logical_size(
         &mut logical,
         output.logical_width(),
         output.logical_height(),
-        reference_destination_height,
+        reference_destination_width,
         output.logical_height(),
         frame,
         x_map,
@@ -992,12 +996,21 @@ pub(crate) fn prepare_dimmed_rgb565_target_for_output_with_maps(
     Some((physical, row_repeats))
 }
 
-fn center_crop_4_3(width: usize, height: usize) -> (usize, usize, usize, usize) {
-    if width.saturating_mul(3) > height.saturating_mul(4) {
-        let crop_width = (height.saturating_mul(4) / 3).max(1).min(width);
+fn center_crop_to_aspect(
+    width: usize,
+    height: usize,
+    target_width: usize,
+    target_height: usize,
+) -> (usize, usize, usize, usize) {
+    if width.saturating_mul(target_height) > height.saturating_mul(target_width) {
+        let crop_width = (height.saturating_mul(target_width) / target_height)
+            .max(1)
+            .min(width);
         ((width - crop_width) / 2, 0, crop_width, height)
     } else {
-        let crop_height = (width.saturating_mul(3) / 4).max(1).min(height);
+        let crop_height = (width.saturating_mul(target_height) / target_width)
+            .max(1)
+            .min(height);
         (0, (height - crop_height) / 2, width, crop_height)
     }
 }
@@ -1617,6 +1630,59 @@ mod tests {
 
     #[cfg(feature = "ui")]
     #[test]
+    fn rotated_progressive_crt_sources_crop_to_portrait_aspect_without_stretch() {
+        for logical_width in [480, 576] {
+            for rotation in [
+                OutputRotation::Clockwise90,
+                OutputRotation::CounterClockwise90,
+            ] {
+                let output = Rgb565OutputLayout::new(logical_width, 640, 640, rotation).unwrap();
+                let mut x_map = Vec::new();
+                let mut y_map = Vec::new();
+
+                let landscape = vec![Rgb565Pixel(0xffff); 320 * 224];
+                prepare_dimmed_rgb565_target_for_output_with_maps(
+                    &landscape,
+                    320,
+                    224,
+                    320,
+                    output,
+                    logical_width,
+                    &mut x_map,
+                    &mut y_map,
+                )
+                .unwrap();
+                let (crop_x, crop_y, crop_width, crop_height) =
+                    center_crop_to_aspect(320, 224, logical_width, 640);
+                assert_eq!(x_map[0], crop_x);
+                assert_eq!(x_map[logical_width - 1], crop_x + crop_width - 1);
+                assert_eq!(y_map[0], crop_y);
+                assert_eq!(y_map[639], crop_y + crop_height - 1);
+
+                let portrait = vec![Rgb565Pixel(0xffff); 187 * 320];
+                prepare_dimmed_rgb565_target_for_output_with_maps(
+                    &portrait,
+                    187,
+                    320,
+                    187,
+                    output,
+                    logical_width,
+                    &mut x_map,
+                    &mut y_map,
+                )
+                .unwrap();
+                let (crop_x, crop_y, crop_width, crop_height) =
+                    center_crop_to_aspect(187, 320, logical_width, 640);
+                assert_eq!(x_map[0], crop_x);
+                assert_eq!(x_map[logical_width - 1], crop_x + crop_width - 1);
+                assert_eq!(y_map[0], crop_y);
+                assert_eq!(y_map[639], crop_y + crop_height - 1);
+            }
+        }
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
     fn portrait_product_chrome_survives_active_and_settled_backdrops() {
         for (pal, expected_route) in [
             (0, ResolvedOutputRoute::Crt240p60),
@@ -1686,11 +1752,13 @@ mod tests {
     }
 
     #[test]
-    fn center_crop_maps_wide_and_tall_sources_to_four_three() {
-        assert_eq!(center_crop_4_3(1600, 900), (200, 0, 1200, 900));
-        assert_eq!(center_crop_4_3(600, 800), (0, 175, 600, 450));
-        assert_eq!(center_crop_4_3(640, 480), (0, 0, 640, 480));
-        assert_eq!(center_crop_4_3(320, 224), (11, 0, 298, 224));
+    fn center_crop_matches_landscape_and_portrait_targets_without_distortion() {
+        assert_eq!(center_crop_to_aspect(1600, 900, 4, 3), (200, 0, 1200, 900));
+        assert_eq!(center_crop_to_aspect(600, 800, 4, 3), (0, 175, 600, 450));
+        assert_eq!(center_crop_to_aspect(640, 480, 4, 3), (0, 0, 640, 480));
+        assert_eq!(center_crop_to_aspect(320, 224, 4, 3), (11, 0, 298, 224));
+        assert_eq!(center_crop_to_aspect(320, 224, 3, 4), (76, 0, 168, 224));
+        assert_eq!(center_crop_to_aspect(187, 320, 3, 4), (0, 35, 187, 249));
     }
 
     #[test]
@@ -1756,25 +1824,42 @@ mod tests {
     }
 
     #[test]
-    fn low_resolution_routes_share_backdrop_reference_height() {
-        for (route, geometry, composition, expected) in [
+    fn every_crt_route_constructs_a_backdrop_at_its_output_geometry() {
+        for (route, geometry, composition, expected, reference_height) in [
             (
                 ResolvedOutputRoute::Crt240p60,
                 DisplayGeometry::new(640, 240),
                 Crt240Composition::Native240,
                 (640, 240, 240),
+                CRT_COMPOSITION_H,
             ),
             (
                 ResolvedOutputRoute::Crt240p60,
                 DisplayGeometry::new(640, 240),
                 Crt240Composition::Legacy480,
                 (640, 480, 240),
+                CRT_COMPOSITION_H,
             ),
             (
                 ResolvedOutputRoute::Crt288p50,
                 DisplayGeometry::new(640, 288),
                 Crt240Composition::Native240,
                 (640, 288, 288),
+                CRT_COMPOSITION_H,
+            ),
+            (
+                ResolvedOutputRoute::Crt480p60,
+                DisplayGeometry::new(640, 480),
+                Crt240Composition::Native240,
+                (640, 480, 480),
+                480,
+            ),
+            (
+                ResolvedOutputRoute::Crt576p50,
+                DisplayGeometry::new(640, 576),
+                Crt240Composition::Native240,
+                (640, 576, 576),
+                576,
             ),
         ] {
             let plan = UiDisplayPlan::from_geometry_with_route_and_composition(
@@ -1794,7 +1879,7 @@ mod tests {
                 ),
                 expected
             );
-            assert_eq!(backdrop.reference_height(), CRT_COMPOSITION_H);
+            assert_eq!(backdrop.reference_height(), reference_height);
             assert_eq!(backdrop.pixels().len(), expected.0 * expected.1);
         }
     }

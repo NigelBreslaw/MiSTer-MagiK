@@ -431,13 +431,6 @@ mod tests {
 
     #[test]
     fn prepared_identity_separates_all_output_orientations() {
-        let display = UiDisplay::for_plan(
-            UiDisplayPlan::from_mister_ini_text(
-                "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
-            )
-            .expect("CRT240 display plan"),
-        );
-        let controller = CrtBackdropController::for_display(&display).expect("CRT backdrop");
         let source = BackdropSource {
             key: "four-corners".to_string(),
             epoch: 7,
@@ -446,15 +439,24 @@ mod tests {
             source_height: 2,
             stride_pixels: 2,
         };
-        let identities = ScreenOrientation::ALL.map(|orientation| {
-            controller.prepared_identity(
-                &source,
-                UiLayoutGeometry::for_display(&display, orientation),
-            )
-        });
-        assert_ne!(identities[0], identities[1]);
-        assert_ne!(identities[0], identities[2]);
-        assert_ne!(identities[1], identities[2]);
+        for (pal, scandoubler) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            let ini = format!(
+                "[MiSTer]\ndirect_video=1\nmenu_pal={pal}\nforced_scandoubler={scandoubler}\n"
+            );
+            let display = UiDisplay::for_plan(
+                UiDisplayPlan::from_mister_ini_text(&ini).expect("CRT display plan"),
+            );
+            let controller = CrtBackdropController::for_display(&display).expect("CRT backdrop");
+            let identities = ScreenOrientation::ALL.map(|orientation| {
+                controller.prepared_identity(
+                    &source,
+                    UiLayoutGeometry::for_display(&display, orientation),
+                )
+            });
+            assert_ne!(identities[0], identities[1]);
+            assert_ne!(identities[0], identities[2]);
+            assert_ne!(identities[1], identities[2]);
+        }
     }
 
     fn prepare_request(identity: PreparedIdentity, output: Rgb565OutputLayout) -> PrepareRequest {

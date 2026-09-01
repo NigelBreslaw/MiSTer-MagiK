@@ -8949,12 +8949,7 @@ pub(super) fn run_launcher_loop(
                 media_benchmark_contention,
                 loop_start,
             );
-            let media_gate = if nav.uses_crt_layout() {
-                MediaInteractionGate {
-                    active: true,
-                    reason: "crt-no-screenshots",
-                }
-            } else if memory_guard.active() {
+            let media_gate = if memory_guard.active() {
                 MediaInteractionGate {
                     active: true,
                     reason: "low-memory",
@@ -12625,8 +12620,7 @@ struct PreviewRoutePolicy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreviewRouteKind {
     Hdmi,
-    LowResolutionCrtBackdrop,
-    UnsupportedCrt,
+    CrtBackdrop,
 }
 
 fn crt_backdrop_frame_is_presented(
@@ -12650,18 +12644,19 @@ impl PreviewRoutePolicy {
         Self {
             kind: match route {
                 ResolvedOutputRoute::Hdmi => PreviewRouteKind::Hdmi,
-                ResolvedOutputRoute::Crt240p60 | ResolvedOutputRoute::Crt288p50 => {
-                    PreviewRouteKind::LowResolutionCrtBackdrop
-                }
-                ResolvedOutputRoute::Crt480p60 | ResolvedOutputRoute::Crt576p50 => {
-                    PreviewRouteKind::UnsupportedCrt
-                }
+                ResolvedOutputRoute::Crt240p60
+                | ResolvedOutputRoute::Crt288p50
+                | ResolvedOutputRoute::Crt480p60
+                | ResolvedOutputRoute::Crt576p50 => PreviewRouteKind::CrtBackdrop,
             },
         }
     }
 
     const fn allows_preview_work(self) -> bool {
-        !matches!(self.kind, PreviewRouteKind::UnsupportedCrt)
+        matches!(
+            self.kind,
+            PreviewRouteKind::Hdmi | PreviewRouteKind::CrtBackdrop
+        )
     }
 
     const fn allows_hdmi_preview(self) -> bool {
@@ -12669,7 +12664,7 @@ impl PreviewRoutePolicy {
     }
 
     const fn allows_crt_backdrop(self) -> bool {
-        matches!(self.kind, PreviewRouteKind::LowResolutionCrtBackdrop)
+        matches!(self.kind, PreviewRouteKind::CrtBackdrop)
     }
 }
 
@@ -15931,21 +15926,13 @@ mod tests {
         for route in [
             ResolvedOutputRoute::Crt240p60,
             ResolvedOutputRoute::Crt288p50,
+            ResolvedOutputRoute::Crt480p60,
+            ResolvedOutputRoute::Crt576p50,
         ] {
             let crt = PreviewRoutePolicy::for_output_route(route);
             assert!(crt.allows_preview_work());
             assert!(!crt.allows_hdmi_preview());
             assert!(crt.allows_crt_backdrop());
-        }
-
-        for route in [
-            ResolvedOutputRoute::Crt480p60,
-            ResolvedOutputRoute::Crt576p50,
-        ] {
-            let unsupported = PreviewRoutePolicy::for_output_route(route);
-            assert!(!unsupported.allows_preview_work());
-            assert!(!unsupported.allows_hdmi_preview());
-            assert!(!unsupported.allows_crt_backdrop());
         }
     }
 
