@@ -1,6 +1,18 @@
 # Passive FPGA HDMI evidence
 
-## Active moving-band campaign: schema 22
+## Active moving-band campaign: schema 23
+
+Schema 23, `scaler-off-domain-scheduler-terminal-v6`, retains every schema-22
+observer attribution while restoring the schema-21 state and CRC shape. The
+internal reason is `{observer_tag, subtype[2:0]}`; only the subtype is stored in
+the low state bits, and the existing `observer_fault` flag carries the tag.
+The host reconstructs the same seven public observer causes. Normal stall
+classifications are derived from the compact cause rather than duplicated as
+FPGA flags. The four-word record, full FIFO depth and return phase, nine-bit
+scheduler CDC payload, watchdog, fault priority, and one-shot publication are
+unchanged.
+
+## Previous moving-band campaign: schema 22
 
 Schema 21 proved that the one-shot terminal observer itself can fail, but its
 single `observer_fault` cause could not distinguish a malformed burst, FIFO

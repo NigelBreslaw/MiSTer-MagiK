@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 module mister_magik_scaler_fetch_liveness_formal;
+	`include "mister_magik_video_diagnostics_protocol.svh"
+
 	reg formal_clk = 1'b0;
 	reg past_valid = 1'b0;
 	reg drained_during_reset = 1'b0;
@@ -35,6 +37,7 @@ module mister_magik_scaler_fetch_liveness_formal;
 	wire [3:0] publication_sequence;
 	wire publish_crc_busy;
 	wire [4:0] publish_crc_phase;
+	wire [15:0] publish_crc_input;
 	wire enqueue;
 	wire dequeue;
 	wire return_has_entry;
@@ -44,6 +47,8 @@ module mister_magik_scaler_fetch_liveness_formal;
 	wire watchdog_advance;
 	wire observer_fault_event;
 	wire request_cancel_event;
+	wire [3:0] terminal_cause;
+	wire [15:0] terminal_flags;
 
 	mister_magik_scaler_fetch_liveness_state #(
 		.WATCHDOG_LIMIT(24'd15),
@@ -77,6 +82,7 @@ module mister_magik_scaler_fetch_liveness_formal;
 		.formal_publication_sequence(publication_sequence),
 		.formal_publish_crc_busy(publish_crc_busy),
 		.formal_publish_crc_phase(publish_crc_phase),
+		.formal_publish_crc_input(publish_crc_input),
 		.formal_enqueue(enqueue),
 		.formal_dequeue(dequeue),
 		.formal_return_has_entry(return_has_entry),
@@ -85,7 +91,9 @@ module mister_magik_scaler_fetch_liveness_formal;
 		.formal_watchdog_clear(watchdog_clear),
 		.formal_watchdog_advance(watchdog_advance),
 		.formal_observer_fault_event(observer_fault_event),
-		.formal_request_cancel_event(request_cancel_event)
+		.formal_request_cancel_event(request_cancel_event),
+		.formal_terminal_cause(terminal_cause),
+		.formal_terminal_flags(terminal_flags)
 	);
 
 	mister_magik_scaler_scheduler_snapshot snapshot_proof (
@@ -99,6 +107,18 @@ module mister_magik_scaler_fetch_liveness_formal;
 
 	always @($global_clock)
 		formal_clk <= !formal_clk;
+
+	function automatic [15:0] crc16_update_bit;
+		input [15:0] crc_in;
+		input bit_in;
+		reg [15:0] value;
+		begin
+			value = {crc_in[14:0], 1'b0};
+			if(crc_in[15] ^ bit_in)
+				value = value ^ 16'h1021;
+			crc16_update_bit = value;
+		end
+	endfunction
 
 	always @(posedge formal_clk) begin
 		past_valid <= 1'b1;
@@ -117,9 +137,41 @@ module mister_magik_scaler_fetch_liveness_formal;
 		assert(!publish_crc_busy || !record_ready);
 		assert(!publish_crc_busy || publish_crc_phase <= 5'd30);
 		assert(!terminal_record_started || first_stall_valid || observer_fault);
+		assert(observer_fault == terminal_cause[3]);
+		assert(terminal_flags[15:8] == 8'd0);
+		assert(frozen_state[15:12] == 4'd0);
+		if(observer_fault)
+			assert(terminal_cause[2:0] <=
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_OBSERVER_SUBCAUSE_SNAPSHOT_INVALID_OUTCOME);
+		if(first_stall_valid && !no_request_seen) begin
+			assert(!terminal_cause[3]);
+			assert(terminal_cause[2:0] >=
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_ACCEPT_BLOCKED[2:0]);
+			assert(terminal_cause[2:0] <=
+				MAGIK_SCALER_FETCH_LIVENESS_STATE_CAUSE_REQUEST_CANCELLED[2:0]);
+		end
 		assert(!watchdog_clear || !watchdog_advance);
 
 		if(past_valid) begin
+			if(!$past(terminal_record_started) &&
+				($past(first_stall_valid) || $past(observer_fault))) begin
+				assert(publish_crc_busy);
+				assert(publish_crc_phase == 5'd0);
+				assert(publish_crc_input == {$past(terminal_flags[14:0]), 1'b0});
+				assert(published_bundle[47:32] == crc16_update_bit(
+					MAGIK_SCALER_FETCH_LIVENESS_STATE_SCHEMA_CRC,
+					$past(terminal_flags[15])));
+			end
+			if($past(publish_crc_busy)) begin
+				assert(published_bundle[47:32] == crc16_update_bit(
+					$past(published_bundle[47:32]),
+					$past(publish_crc_input[15])));
+				if($past(publish_crc_phase) == 5'd14)
+					assert(publish_crc_input == $past(frozen_state));
+				else if($past(publish_crc_phase) != 5'd30)
+					assert(publish_crc_input ==
+						{$past(publish_crc_input[14:0]), 1'b0});
+			end
 			if(snapshot_response != $past(snapshot_response)) begin
 				assert($past(snapshot_capture_active));
 			end
