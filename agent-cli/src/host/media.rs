@@ -236,18 +236,13 @@ pub(crate) fn screenshot_qualification(
             match run_catalog_screenshot_audit(sess, gui_binary, &pack.system) {
                 Ok(value) => {
                     let mut reason = qualification_reason(&value);
-                    if reason == "ok" {
-                        if let Some(asset_key) = value.selected_key.as_deref() {
-                            match run_preview_render_probe(
-                                sess,
-                                gui_binary,
-                                &pack.system,
-                                asset_key,
-                            ) {
-                                Ok(probe) => render = Some(probe),
-                                Err(error) => {
-                                    reason = format!("render-error:{}", tsv(&error.to_string()))
-                                }
+                    if reason == "ok"
+                        && let Some(asset_key) = value.selected_key.as_deref()
+                    {
+                        match run_preview_render_probe(sess, gui_binary, &pack.system, asset_key) {
+                            Ok(probe) => render = Some(probe),
+                            Err(error) => {
+                                reason = format!("render-error:{}", tsv(&error.to_string()))
                             }
                         }
                     }
@@ -649,9 +644,8 @@ fn qualification_reason(audit: &CatalogScreenshotAudit) -> String {
 }
 
 fn render_qualification_tsv(manifest: &MediaManifest, rows: &[QualificationRow]) -> String {
-    let mut output = format!(
-        "system\tversion\timage_size\tmedia_status\tpack_bytes\tpack_sha256\tindex_bytes\tindex_sha256\tcatalog_games\texisting_identity_rows\tderived_identity_rows\tambiguous_identity_rows\tcandidates\tavailable\tcoverage_pct\tresolver_status\tselected_asset_key\trender_archive_path\trender_index_path\trender_load_source\trender_source_width\trender_source_height\trender_width\trender_height\trendered_pixels\trender_pixel_sha256\trender_total_us\tpass\treason\tmanifest_schema_version\tmanifest_published_at\n"
-    );
+    let mut output = "system\tversion\timage_size\tmedia_status\tpack_bytes\tpack_sha256\tindex_bytes\tindex_sha256\tcatalog_games\texisting_identity_rows\tderived_identity_rows\tambiguous_identity_rows\tcandidates\tavailable\tcoverage_pct\tresolver_status\tselected_asset_key\trender_archive_path\trender_index_path\trender_load_source\trender_source_width\trender_source_height\trender_width\trender_height\trendered_pixels\trender_pixel_sha256\trender_total_us\tpass\treason\tmanifest_schema_version\tmanifest_published_at\n"
+        .to_string();
     for row in rows {
         let columns = [
             tsv(&row.system),
@@ -2367,9 +2361,7 @@ mod tests {
 
     #[test]
     fn preview_render_probe_parser_requires_indexed_nonblank_output() {
-        let output = concat!(
-            "preview_render_probe_tsv\tvalid=1\tsystem=nes\tasset_key=game\tarchive_path=/media/fat/assets/nes-screenshots-256x240.mmlz4b\tindex_path=/media/fat/assets/nes-screenshots-256x240.mmlz4b.idx\tload_source=index_pread\tsource_width=256\tsource_height=240\trender_width=1280\trender_height=720\trendered_pixels=42\tpixel_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\tdecode_us=3\traw565_parse_us=2\ttotal_us=8\trect=256x240\n",
-        );
+        let output = "preview_render_probe_tsv\tvalid=1\tsystem=nes\tasset_key=game\tarchive_path=/media/fat/assets/nes-screenshots-256x240.mmlz4b\tindex_path=/media/fat/assets/nes-screenshots-256x240.mmlz4b.idx\tload_source=index_pread\tsource_width=256\tsource_height=240\trender_width=1280\trender_height=720\trendered_pixels=42\tpixel_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\tdecode_us=3\traw565_parse_us=2\ttotal_us=8\trect=256x240\n";
         let probe = parse_preview_render_probe_output(output).unwrap();
         assert_eq!(probe.load_source, "index_pread");
         assert_eq!(probe.source_width, 256);
