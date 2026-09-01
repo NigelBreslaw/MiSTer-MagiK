@@ -1,0 +1,58 @@
+#!/bin/bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/lib/shared-worktree-cache.sh"
+
+if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+  exec cargo "$@"
+fi
+
+manifest_path=""
+explicit_target=0
+arguments=("$@")
+for ((index = 0; index < ${#arguments[@]}; index += 1)); do
+  argument="${arguments[$index]}"
+  case "$argument" in
+    --manifest-path)
+      ((index + 1 < ${#arguments[@]})) || {
+        echo "--manifest-path requires a value" >&2
+        exit 2
+      }
+      manifest_path="${arguments[$((index + 1))]}"
+      ;;
+    --manifest-path=*) manifest_path="${argument#--manifest-path=}" ;;
+    --target-dir | --target-dir=*) explicit_target=1 ;;
+  esac
+done
+
+if ((explicit_target)); then
+  exec cargo "$@"
+fi
+
+locate_args=(locate-project --workspace --message-format plain)
+if [[ -n "$manifest_path" ]]; then
+  locate_args+=(--manifest-path "$manifest_path")
+fi
+workspace_manifest="$(cargo "${locate_args[@]}")"
+case "$workspace_manifest" in
+  "$ROOT"/*) workspace_relative="${workspace_manifest#"$ROOT"/}" ;;
+  *)
+    echo "Cargo workspace $workspace_manifest is outside repository $ROOT" >&2
+    exit 1
+    ;;
+esac
+
+primary_checkout="$(shared_primary_checkout "$ROOT")"
+workspace_relative_dir="$(dirname "$workspace_relative")"
+if [[ "$workspace_relative_dir" == . ]]; then
+  shared_target="$primary_checkout/target"
+else
+  shared_target="$primary_checkout/$workspace_relative_dir/target"
+fi
+mkdir -p "$shared_target"
+export CARGO_TARGET_DIR="$shared_target"
+exec cargo "$@"

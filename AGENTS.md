@@ -43,12 +43,12 @@ repositories.
 ## Workflow
 
 - Use `$magik-rust-lsp` for Rust/Cargo navigation and diagnostics. Use Slint MCP
-  for behavior. Agents may run focused local Cargo checks, tests, and lints for
-  affected packages and feature combinations. Do not run broad full-workspace,
-  host-assurance, ARM, or Apple-container validation unless its typed workflow
-  explicitly calls for it; CI owns that expensive assurance. Pre-push stays a
-  bootstrap-free Python fast gate with affected Python tests and must not run
-  Rust tests or lints.
+  for behavior. Agents run focused local Cargo checks, tests, and lints through
+  `scripts/cargo` so linked worktrees share primary-checkout targets. Do not run
+  broad full-workspace, host-assurance, ARM, or Apple-container validation
+  unless its typed workflow explicitly calls for it; CI owns that expensive
+  assurance. Pre-push stays a bootstrap-free Python fast gate with affected
+  Python tests and must not run Rust tests or lints.
 - `scripts/agent plan` previews the Python pre-push checks and CI ownership. Agents use the typed
   `scripts/agent deliver`, `benchmark`, and `diagnose` workflows. Human device
   operations use attended `scripts/agent device` commands. Never use raw
