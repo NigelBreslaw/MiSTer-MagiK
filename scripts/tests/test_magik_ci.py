@@ -874,8 +874,7 @@ import scripts.magik_ci.cli
 
     def test_game_database_assembly_recovers_prior_source_artifact(self) -> None:
         workflow = (
-            Path(__file__).resolve().parents[2]
-            / ".github/workflows/game-databases.yml"
+            Path(__file__).resolve().parents[2] / ".github/workflows/game-databases.yml"
         ).read_text(encoding="utf-8")
         inspect = workflow.split("  inspect:", 1)[1].split("  build-mame:", 1)[0]
         assemble = workflow.split("  assemble:", 1)[1].split("  publish:", 1)[0]

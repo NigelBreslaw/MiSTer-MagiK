@@ -11,6 +11,7 @@ import json
 import re
 import sqlite3
 import zipfile
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, cast
 
@@ -309,7 +310,7 @@ def _verify_compact_metadata(data: bytes) -> None:
             raise ValueError("compact_metadata_shard_bounds")
         ranges.append((compressed_offset, end))
     ranges.sort()
-    if any(left[1] > right[0] for left, right in zip(ranges, ranges[1:])):
+    if any(left[1] > right[0] for left, right in pairwise(ranges)):
         raise ValueError("compact_metadata_shard_overlap")
 
 
@@ -361,7 +362,10 @@ def create(
         (INDEX, arcade_updater_index.read_bytes()),
     ]
     if runtime_metadata is None:
-        files = [("mame.sqlite3", mame.read_bytes()), ("hbmame.sqlite3", hbmame.read_bytes())] + runtime_files
+        files = [
+            ("mame.sqlite3", mame.read_bytes()),
+            ("hbmame.sqlite3", hbmame.read_bytes()),
+        ] + runtime_files
         format_name = FORMAT
     else:
         files = [(RUNTIME_METADATA, runtime_metadata.read_bytes())] + runtime_files
@@ -419,8 +423,16 @@ def create(
     atomic_write(output / CHECKSUMS, checksums.encode())
     if source_output is not None:
         source_output.mkdir(parents=True, exist_ok=True)
-        source_archive = source_output / f"mister-magik-game-databases-source-v{release_version}.zip"
-        _zip(source_archive, [("mame.sqlite3", mame.read_bytes()), ("hbmame.sqlite3", hbmame.read_bytes())])
+        source_archive = (
+            source_output / f"mister-magik-game-databases-source-v{release_version}.zip"
+        )
+        _zip(
+            source_archive,
+            [
+                ("mame.sqlite3", mame.read_bytes()),
+                ("hbmame.sqlite3", hbmame.read_bytes()),
+            ],
+        )
     return archive
 
 
