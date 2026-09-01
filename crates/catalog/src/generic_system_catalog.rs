@@ -118,6 +118,19 @@ struct GenericDirectoryObservationBuilder {
     entries: Vec<(String, u8)>,
 }
 
+#[derive(Debug, Default)]
+struct SharedNamespaceBuilder {
+    entries: Vec<GenericInventoryEntry>,
+    has_payload_files: bool,
+    has_zip_files: bool,
+    direct_zip_paths: Vec<PathBuf>,
+    nested_probe_signatures: Vec<(PathBuf, GameDirSignature)>,
+    payload_extensions: BTreeSet<String>,
+    watch_builders: BTreeMap<PathBuf, GenericDirectoryObservationBuilder>,
+    watch_containers: Vec<PathBuf>,
+    watch_complete: bool,
+}
+
 /// Inventory a prepared collection whose owned payload lies below named
 /// first-level directories. This keeps prepared row discovery and refresh
 /// watch generation on the same serial filesystem traversal.
@@ -483,11 +496,34 @@ pub(crate) fn discover_generic_systems_from_profiles_excluding_with_progress(
 /// Discover generic systems while sharing each runtime directory traversal
 /// between profile resolution and row construction.
 ///
-/// Known profile roots are streamed directly. Runtime-derived roots are
-/// retained only for the duration of that root, resolved from the same entries,
-/// and then classified without reopening the directory tree.
+/// The production path owns one serial namespace session rooted at `/games`.
+/// Known and runtime-derived roots are partitioned from that capture, while
+/// prepared roots are excluded before descent. This keeps arbitrary user trees
+/// complete without reopening a top-level directory for profile resolution,
+/// row construction, or refresh-watch generation.
 #[hotpath::measure]
 pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
+    storage_root: &Path,
+    plan: &CatalogScanPlan,
+    excluded_system_ids: &[&str],
+    prepared_root_paths: &BTreeSet<PathBuf>,
+    system_discovering: impl FnMut(&str),
+    system_complete: impl FnMut(&FastFiveSystem),
+) -> Result<GenericSystemPlanDiscovery, String> {
+    discover_generic_systems_from_shared_namespace(
+        storage_root,
+        plan,
+        excluded_system_ids,
+        prepared_root_paths,
+        system_discovering,
+        system_complete,
+    )
+}
+
+/// Retained as a diagnostic fallback for older benchmark fixtures. The
+/// production scanner above deliberately does not call this per-root path.
+#[allow(dead_code)]
+fn discover_generic_systems_from_plan_excluding_per_root(
     storage_root: &Path,
     plan: &CatalogScanPlan,
     excluded_system_ids: &[&str],
@@ -773,6 +809,411 @@ pub(crate) fn discover_generic_systems_from_plan_excluding_with_progress(
         profiles,
         watch_observations,
     ))
+}
+
+/// Capture all generic roots below `/games` in one serial walk. The callback
+/// intentionally receives the filesystem order; deterministic catalog order
+/// is restored during system finalization.
+#[hotpath::measure]
+fn discover_generic_systems_from_shared_namespace(
+    storage_root: &Path,
+    plan: &CatalogScanPlan,
+    excluded_system_ids: &[&str],
+    prepared_root_paths: &BTreeSet<PathBuf>,
+    mut system_discovering: impl FnMut(&str),
+    mut system_complete: impl FnMut(&FastFiveSystem),
+) -> Result<GenericSystemPlanDiscovery, String> {
+    let started = Instant::now();
+    let games_root = storage_root.join("games");
+    let excluded_roots = plan
+        .base_profiles()
+        .iter()
+        .filter(|profile| excluded_system_ids.contains(&profile.system_id.as_str()))
+        .flat_map(|profile| profile.game_dirs.iter().map(|name| games_root.join(name)))
+        .chain(prepared_root_paths.iter().cloned())
+        .collect::<BTreeSet<_>>();
+
+    let mut builders = BTreeMap::<PathBuf, SharedNamespaceBuilder>::new();
+    let namespace_started = Instant::now();
+    let namespace = namespace_walk::visit_with_signature_capture(
+        &games_root,
+        None,
+        NamespaceSignatureCapture::AllDirectories,
+        |path| {
+            if path == games_root {
+                return should_ignore_path(path);
+            }
+            root_path_for_shared_namespace(path, &games_root)
+                .is_some_and(|root| should_ignore_path(path) || excluded_roots.contains(&root))
+        },
+        |entry| {
+            let Some(root) = root_path_for_shared_namespace(&entry.path, &games_root) else {
+                return true;
+            };
+            let builder = builders
+                .entry(root.clone())
+                .or_insert_with(|| SharedNamespaceBuilder {
+                    watch_complete: true,
+                    ..SharedNamespaceBuilder::default()
+                });
+            builder.entries.push(GenericInventoryEntry {
+                path: entry.path.clone(),
+                kind: entry.kind,
+                zip_signature: entry.zip_signature,
+            });
+            let depth = entry
+                .path
+                .strip_prefix(&root)
+                .map(|relative| relative.components().count())
+                .unwrap_or(usize::MAX);
+            if entry.kind == NamespaceEntryKind::Directory {
+                builder
+                    .watch_builders
+                    .entry(entry.path.clone())
+                    .or_default()
+                    .signature = entry.directory_signature;
+                if depth == 1 {
+                    builder.nested_probe_signatures.push((
+                        entry.path.clone(),
+                        GameDirSignature::from_namespace_signature(entry.directory_signature),
+                    ));
+                }
+            } else if entry.kind == NamespaceEntryKind::File {
+                let is_zip = entry
+                    .path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"));
+                if depth <= 2 {
+                    if is_zip {
+                        builder.has_zip_files = true;
+                        if depth == 1 {
+                            builder.direct_zip_paths.push(entry.path.clone());
+                        }
+                    } else {
+                        builder.has_payload_files = true;
+                        if let Some(extension) = entry
+                            .path
+                            .extension()
+                            .and_then(|extension| extension.to_str())
+                        {
+                            builder
+                                .payload_extensions
+                                .insert(extension.to_ascii_lowercase());
+                        }
+                    }
+                }
+                if is_zip {
+                    builder.watch_containers.push(entry.path.clone());
+                }
+            } else {
+                builder.watch_complete = false;
+            }
+            if let (Some(parent), Some(name)) = (entry.path.parent(), entry.path.file_name()) {
+                let kind = match entry.kind {
+                    NamespaceEntryKind::Directory => b'd',
+                    NamespaceEntryKind::File => b'f',
+                    NamespaceEntryKind::Other => b'o',
+                };
+                builder
+                    .watch_builders
+                    .entry(parent.to_path_buf())
+                    .or_default()
+                    .entries
+                    .push((name.to_string_lossy().into_owned(), kind));
+            }
+            crate::catalog_progress::report_inner_progress_at(builder.entries.len());
+            true
+        },
+    );
+    let namespace_us = namespace_started.elapsed().as_micros() as u64;
+    if namespace.errors > 0 {
+        return Err(format!(
+            "incomplete shared generic namespace {}: {} directory errors",
+            games_root.display(),
+            namespace.errors
+        ));
+    }
+
+    let mut inventories = Vec::with_capacity(builders.len());
+    for (root, mut builder) in builders {
+        let Some(name) = root.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if excluded_roots.contains(&root) {
+            continue;
+        }
+        let root_signature = builder
+            .watch_builders
+            .get(&root)
+            .and_then(|watch| watch.signature);
+        let mut directories = Vec::with_capacity(builder.watch_builders.len());
+        for (path, mut watch) in builder.watch_builders {
+            let Some((_, modified_ns)) = watch.signature else {
+                builder.watch_complete = false;
+                continue;
+            };
+            watch
+                .entries
+                .sort_by_cached_key(|(entry, _)| (entry.to_ascii_lowercase(), entry.clone()));
+            let mut digest = Sha256::new();
+            for (entry, kind) in watch.entries {
+                digest.update([kind]);
+                digest.update(entry.as_bytes());
+                digest.update([0]);
+            }
+            directories.push(GenericWatchedDirectoryObservation {
+                path,
+                modified_ns: i128::from(modified_ns),
+                entry_fingerprint: hex_lower(&digest.finalize()),
+            });
+        }
+        directories.sort_by(|left, right| left.path.cmp(&right.path));
+        builder
+            .watch_containers
+            .sort_by_cached_key(|path| path.to_string_lossy().to_ascii_lowercase());
+        builder.watch_containers.dedup();
+        builder
+            .direct_zip_paths
+            .sort_by_cached_key(|path| path.to_string_lossy().to_ascii_lowercase());
+        builder
+            .nested_probe_signatures
+            .sort_by_cached_key(|(path, _)| {
+                (path.to_string_lossy().to_ascii_lowercase(), path.clone())
+            });
+        builder
+            .entries
+            .sort_by_cached_key(|entry| entry.path.to_string_lossy().to_ascii_lowercase());
+        let inventory_namespace = NamespaceWalkStats {
+            backend: "fd-relative-shared",
+            fallback_reason: namespace.fallback_reason.clone(),
+            dir_opens: 0,
+            read_calls: 0,
+            read_bytes: 0,
+            type_stats: 0,
+            captured_entries: builder.entries.len(),
+            peak_buffered_entries: builder.entries.len(),
+            peak_buffered_bytes: builder
+                .entries
+                .len()
+                .saturating_mul(std::mem::size_of::<GenericInventoryEntry>()),
+            buffer_allocations: 0,
+            fallback_count: 0,
+            restart_count: 0,
+            errors: 0,
+            first_entry_us: namespace.first_entry_us,
+            final_entry_us: namespace.final_entry_us,
+            target_signature: root_signature,
+        };
+        inventories.push(GenericNamespaceInventory {
+            fact: GameDirFact {
+                name: name.to_string(),
+                path: root.clone(),
+                signature: GameDirSignature::from_namespace_signature(root_signature),
+                has_payload_files: builder.has_payload_files,
+                has_zip_files: builder.has_zip_files,
+                direct_zip_paths: builder.direct_zip_paths,
+                nested_probe_signatures: builder.nested_probe_signatures,
+                payload_extensions: builder.payload_extensions,
+            },
+            entries: builder.entries,
+            namespace: inventory_namespace,
+            watch: GenericSourceWatchObservations {
+                roots: BTreeSet::from([root.to_string_lossy().into_owned()]),
+                directories,
+                containers: builder.watch_containers,
+                complete: builder.watch_complete,
+            },
+            continuation_roots: Vec::new(),
+            canonicalized: false,
+            elapsed_us: namespace_us,
+        });
+    }
+
+    let known_profiles = plan
+        .base_profiles()
+        .iter()
+        .flat_map(|profile| {
+            profile
+                .game_dirs
+                .iter()
+                .map(move |game_dir| (game_dir.to_ascii_lowercase(), profile))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let runtime_names = plan
+        .game_dir_headers()
+        .iter()
+        .map(|header| header.name.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
+    let mut known_profile_us = 0_u64;
+    let mut runtime_resolution_us = 0_u64;
+    let mut known_roots_considered = 0_usize;
+    let mut known_roots_found = 0_usize;
+    let mut runtime_headers = 0_usize;
+    let mut runtime_resolved = 0_usize;
+    let mut runtime_unresolved = 0_usize;
+    let mut reused_headers = 0_usize;
+    let mut prepared_roots_skipped = 0_usize;
+    let mut profiles = plan.base_profiles().to_vec();
+    let mut accumulators = BTreeMap::<String, GenericSystemAccumulator>::new();
+    let mut current_system_id = None;
+    for inventory in inventories {
+        let inventory_started = Instant::now();
+        let root_name = inventory.fact.name.to_ascii_lowercase();
+        let is_known = known_profiles.contains_key(&root_name);
+        let profile = if let Some(profile) = known_profiles.get(&root_name) {
+            known_roots_considered = known_roots_considered.saturating_add(1);
+            known_roots_found = known_roots_found.saturating_add(1);
+            reused_headers = reused_headers.saturating_add(1);
+            (*profile).clone()
+        } else {
+            if runtime_names.contains(&root_name) {
+                runtime_headers = runtime_headers.saturating_add(1);
+            }
+            let resolution_started = Instant::now();
+            let Some(profile) = plan.profile_for_game_dir_facts(&inventory.fact) else {
+                runtime_unresolved = runtime_unresolved.saturating_add(1);
+                runtime_resolution_us = runtime_resolution_us
+                    .saturating_add(resolution_started.elapsed().as_micros() as u64);
+                continue;
+            };
+            runtime_resolved = runtime_resolved.saturating_add(1);
+            merge_resolved_profile(&mut profiles, profile.clone());
+            runtime_resolution_us = runtime_resolution_us
+                .saturating_add(resolution_started.elapsed().as_micros() as u64);
+            profile
+        };
+        if excluded_system_ids.contains(&profile.system_id.as_str()) {
+            prepared_roots_skipped = prepared_roots_skipped.saturating_add(1);
+            continue;
+        }
+        if current_system_id.as_deref() != Some(profile.system_id.as_str()) {
+            system_discovering(profile.title.as_str());
+            current_system_id = Some(profile.system_id.clone());
+        }
+        let accumulator = accumulator_for_profile(&mut accumulators, &profile);
+        accumulator.stats.roots = accumulator.stats.roots.saturating_add(1);
+        apply_generic_namespace_inventory(
+            inventory,
+            &profile,
+            &mut accumulator.stats,
+            &mut accumulator.games,
+            &mut accumulator.watch,
+            true,
+        );
+        if is_known {
+            known_profile_us =
+                known_profile_us.saturating_add(inventory_started.elapsed().as_micros() as u64);
+        }
+    }
+
+    let finalization_started = Instant::now();
+    let mut systems = Vec::new();
+    let mut reports = Vec::new();
+    let mut watch_observations = BTreeMap::new();
+    for (system_id, mut accumulator) in accumulators {
+        if accumulator.stats.roots == 0 {
+            continue;
+        }
+        accumulator.games.sort_by_cached_key(|row| {
+            (
+                row.game.title.to_ascii_lowercase(),
+                row.game.stable_key.clone(),
+            )
+        });
+        accumulator
+            .games
+            .dedup_by(|left, right| left.game.launch_ref == right.game.launch_ref);
+        accumulator.stats.games = accumulator.games.len();
+        if accumulator.stats.read_errors > 0 {
+            return Err(format!(
+                "incomplete {system_id} scan: {} directory errors",
+                accumulator.stats.read_errors
+            ));
+        }
+        crate::catalog_logln!(
+            "fast_catalog_source_tsv\tadapter=generic-shared-session\tsystem={}\telapsed_us={}\tfiles={}\tdirectories={}\tarchive_members={}\tgames={}\tread_errors={}\tarchive_errors={}",
+            system_id,
+            accumulator.stats.elapsed_us,
+            accumulator.stats.files,
+            accumulator.stats.directories,
+            accumulator.stats.archive_members,
+            accumulator.stats.games,
+            accumulator.stats.read_errors,
+            accumulator.stats.archive_errors,
+        );
+        let display_title = accumulator
+            .profiles
+            .iter()
+            .map(|profile| profile.title.trim())
+            .find(|title| !title.is_empty())
+            .unwrap_or_else(|| display_title(&system_id))
+            .to_string();
+        let system = FastFiveSystem {
+            system_id: system_id.clone(),
+            display_title,
+            games: accumulator.games.into_iter().map(|row| row.game).collect(),
+            variants: Vec::new(),
+        };
+        system_complete(&system);
+        systems.push(system);
+        reports.push(accumulator.stats);
+        watch_observations.insert(system_id, accumulator.watch);
+    }
+    let finalization_us = finalization_started.elapsed().as_micros() as u64;
+    let elapsed_us = started.elapsed().as_micros() as u64;
+    systems.sort_by(|left, right| left.system_id.cmp(&right.system_id));
+    reports.sort_by(|left, right| left.system_id.cmp(&right.system_id));
+    crate::catalog_logln!(
+        "fast_catalog_namespace_session_tsv\troot={}\tbackend={}\troot_open_us={}\tread_calls={}\tread_bytes={}\ttype_stats={}\tentries={}\tdir_opens={}\tcanonicalizations=0\tfallbacks={}\trestarts={}\telapsed_us={}",
+        games_root.display(),
+        namespace.backend,
+        namespace.first_entry_us.unwrap_or(0),
+        namespace.read_calls,
+        namespace.read_bytes,
+        namespace.type_stats,
+        namespace.captured_entries,
+        namespace.dir_opens,
+        namespace.fallback_count,
+        namespace.restart_count,
+        elapsed_us,
+    );
+    crate::catalog_logln!(
+        "fast_catalog_generic_phase_tsv\telapsed_us={}\tknown_profile_us={}\truntime_inventory_us={}\truntime_resolution_us={}\tcontinuation_us=0\tfinalization_us={}\tresidual_us={}\tknown_roots_considered={}\tknown_roots_found={}\truntime_headers={}\truntime_resolved={}\truntime_unresolved={}\tcontinuation_roots=0\treused_headers={}\tfallback_metadata_calls=0\tcanonicalizations=0\tprepared_roots_skipped={}",
+        elapsed_us,
+        known_profile_us,
+        namespace_us,
+        runtime_resolution_us,
+        finalization_us,
+        elapsed_us
+            .saturating_sub(known_profile_us)
+            .saturating_sub(namespace_us)
+            .saturating_sub(runtime_resolution_us)
+            .saturating_sub(finalization_us),
+        known_roots_considered,
+        known_roots_found,
+        runtime_headers,
+        runtime_resolved,
+        runtime_unresolved,
+        reused_headers,
+        prepared_roots_skipped,
+    );
+    Ok((
+        systems,
+        GenericSystemScanReport {
+            elapsed_us,
+            games: reports.iter().map(|system| system.games).sum(),
+            systems: reports,
+        },
+        profiles,
+        watch_observations,
+    ))
+}
+
+fn root_path_for_shared_namespace(path: &Path, games_root: &Path) -> Option<PathBuf> {
+    let relative = path.strip_prefix(games_root).ok()?;
+    let first = relative.components().next()?.as_os_str();
+    Some(games_root.join(first))
 }
 
 fn accumulator_for_profile<'a>(
