@@ -555,7 +555,7 @@ fn run_runtime_metadata_qualification_report() {
         crate::ui_errln!("metadata-qualification-report accepts no arguments");
         std::process::exit(2);
     }
-    match mister_magik_catalog::runtime_metadata_qualification_report() {
+    match mister_magik_catalog::runtime_metadata::runtime_metadata_qualification_report() {
         Ok(report) => crate::ui_log!("{report}"),
         Err(error) => {
             crate::ui_errln!(
