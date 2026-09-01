@@ -825,9 +825,11 @@ fn installed_qualification_archive_path(
         .get("systems")
         .and_then(|systems| systems.get(system))
         .ok_or_else(|| format!("screenshot media state has no {system} entry"))?;
-    if entry.get("image_size").and_then(serde_json::Value::as_str) != Some(expected_size) {
+    let state_image_size = entry.get("image_size").and_then(serde_json::Value::as_str);
+    if state_image_size != Some(expected_size) {
         return Err(format!(
-            "screenshot media state {system} image size is not {expected_size}"
+            "screenshot media state {system} image size is not {expected_size} (got {})",
+            state_image_size.unwrap_or("missing")
         ));
     }
     let state_path_value = entry
