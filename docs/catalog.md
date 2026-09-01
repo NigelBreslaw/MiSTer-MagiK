@@ -72,6 +72,20 @@ compact `magik-metadata-v1.bin` container instead.
 
 ## Fresh build
 
+The typed host command scripts/agent device metadata-qualification --out
+<evidence.json> validates the compact container with the v2
+mister-magik-runtime-metadata-qualification-v2 report. Full device
+acceptance is recorded only after the compact integrity gates pass and all
+four forbidden legacy paths are absent:
+
+    /media/fat/mister-magik/mame.sqlite3
+    /media/fat/mister-magik/hbmame.sqlite3
+    /media/fat/mister-magik-dev/mame.sqlite3
+    /media/fat/mister-magik-dev/hbmame.sqlite3
+
+The evidence records each path's presence state. A present path fails the
+qualification; the host never opens these SQLite files.
+
 A fresh build:
 
 1. discovers installed systems from current roots and profiles;

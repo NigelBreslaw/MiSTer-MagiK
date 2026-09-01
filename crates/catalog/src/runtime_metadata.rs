@@ -327,15 +327,15 @@ pub fn runtime_metadata_qualification_report() -> Result<String, String> {
         }),
     };
     serde_json::to_string(&serde_json::json!({
-        "schema": "mister-magik-runtime-metadata-qualification-v1",
+        "schema": "mister-magik-runtime-metadata-qualification-v2",
         "compact": compact,
         "device_acceptance": {
-            "complete": true,
             "mode": "compact-only",
             "required": [
                 "run this report on a compact-only MiSTer installation",
                 "record cold/warm catalog time, peak RSS, and lookup latency",
-                "confirm the compact metadata file remains byte-complete"
+                "confirm the compact metadata file remains byte-complete",
+                "host qualification must confirm all four legacy SQLite metadata paths are absent"
             ]
         }
     }))
@@ -2002,5 +2002,18 @@ mod tests {
         assert!(compact["decode_us"].is_number());
 
         let _ = std::fs::remove_file(fixture);
+    }
+
+    #[test]
+    fn qualification_report_is_v2_and_does_not_claim_device_acceptance() {
+        let report: serde_json::Value =
+            serde_json::from_str(&runtime_metadata_qualification_report().expect("report"))
+                .expect("JSON report");
+        assert_eq!(
+            report["schema"],
+            "mister-magik-runtime-metadata-qualification-v2"
+        );
+        assert_eq!(report["device_acceptance"]["mode"], "compact-only");
+        assert!(report["device_acceptance"].get("complete").is_none());
     }
 }

@@ -106,6 +106,12 @@ const PUBLIC_MANIFEST_REMOTE: &str = mister_magik_platform_manifest_contract::PU
 const PUBLIC_GUI_REMOTE: &str = mister_magik_platform_manifest_contract::PUBLIC_PATHS.gui;
 const PUBLIC_MAIN_REMOTE: &str = mister_magik_platform_manifest_contract::PUBLIC_PATHS.main;
 const DEVELOPMENT_GUI_REMOTE: &str = mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.gui;
+const LEGACY_RUNTIME_METADATA_PATHS: [&str; 4] = [
+    "/media/fat/mister-magik/mame.sqlite3",
+    "/media/fat/mister-magik/hbmame.sqlite3",
+    "/media/fat/mister-magik-dev/mame.sqlite3",
+    "/media/fat/mister-magik-dev/hbmame.sqlite3",
+];
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -35747,7 +35753,17 @@ fn run_runtime_metadata_qualification(sess: &Session, output: &Path) -> Result<(
         return Err(error.into());
     }
     let report = parse_last_json_line("runtime metadata qualification", &out.stdout)?;
-    validate_runtime_metadata_qualification(&report)?;
+    let mut evidence = report;
+    evidence["legacy_sqlite_absence"] = runtime_metadata_legacy_sqlite_evidence(sess)?;
+    let validation = validate_runtime_metadata_qualification(&evidence);
+    if validation.is_ok() {
+        evidence["device_acceptance"] = json!({
+            "complete": true,
+            "mode": "compact-only",
+            "compact_integrity": true,
+            "legacy_sqlite_absence": true,
+        });
+    }
     if let Some(parent) = output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -35756,15 +35772,16 @@ fn run_runtime_metadata_qualification(sess: &Session, output: &Path) -> Result<(
     }
     fs::write(
         output,
-        format!("{}\n", serde_json::to_string_pretty(&report)?),
+        format!("{}\n", serde_json::to_string_pretty(&evidence)?),
     )?;
+    validation?;
     println!(
-        "runtime_metadata_qualification=passed compact_only=true bytes={} shards={} evidence={}",
-        report
+        "runtime_metadata_qualification=passed compact_only=true complete=true legacy_sqlite_absent=true bytes={} shards={} evidence={}",
+        evidence
             .pointer("/compact/file_bytes")
             .and_then(Value::as_u64)
             .unwrap_or(0),
-        report
+        evidence
             .pointer("/compact/shard_count")
             .and_then(Value::as_u64)
             .unwrap_or(0),
@@ -35773,9 +35790,34 @@ fn run_runtime_metadata_qualification(sess: &Session, output: &Path) -> Result<(
     Ok(())
 }
 
+fn runtime_metadata_legacy_sqlite_evidence(sess: &Session) -> Result<Value> {
+    let sftp = sess.sftp()?;
+    let mut paths = Vec::with_capacity(LEGACY_RUNTIME_METADATA_PATHS.len());
+    for path in LEGACY_RUNTIME_METADATA_PATHS {
+        let present = match sftp.stat(Path::new(path)) {
+            Ok(_) => true,
+            Err(error) => {
+                let io_error: io::Error = error.into();
+                if io_error.kind() == io::ErrorKind::NotFound {
+                    false
+                } else {
+                    return Err(format!("stat {path}: {io_error}").into());
+                }
+            }
+        };
+        paths.push(json!({"path": path, "present": present}));
+    }
+    let all_absent = paths.iter().all(|path| path["present"] == false);
+    Ok(json!({
+        "schema": "mister-magik-runtime-metadata-legacy-sqlite-absence-v1",
+        "paths": paths,
+        "all_absent": all_absent,
+    }))
+}
+
 fn validate_runtime_metadata_qualification(report: &Value) -> Result<()> {
     if report.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-runtime-metadata-qualification-v1")
+        != Some("mister-magik-runtime-metadata-qualification-v2")
         || report.pointer("/compact/valid").and_then(Value::as_bool) != Some(true)
         || report
             .pointer("/compact/shard_count")
@@ -35803,6 +35845,50 @@ fn validate_runtime_metadata_qualification(report: &Value) -> Result<()> {
             .is_none_or(|rows| rows == 0)
     {
         return Err("runtime metadata qualification report failed compact integrity gates".into());
+    }
+    validate_runtime_metadata_legacy_sqlite_absence(
+        report
+            .get("legacy_sqlite_absence")
+            .ok_or("runtime metadata qualification report is missing legacy SQLite evidence")?,
+    )?;
+    Ok(())
+}
+
+fn validate_runtime_metadata_legacy_sqlite_absence(evidence: &Value) -> Result<()> {
+    if evidence.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-runtime-metadata-legacy-sqlite-absence-v1")
+        || evidence.get("all_absent").and_then(Value::as_bool) != Some(true)
+    {
+        return Err(
+            "runtime metadata qualification report failed legacy SQLite absence gate".into(),
+        );
+    }
+    let paths = evidence
+        .get("paths")
+        .and_then(Value::as_array)
+        .ok_or("runtime metadata qualification report is missing legacy SQLite paths")?;
+    if paths.len() != LEGACY_RUNTIME_METADATA_PATHS.len() {
+        return Err(
+            "runtime metadata qualification report has the wrong legacy SQLite path count".into(),
+        );
+    }
+    let mut seen = BTreeSet::new();
+    for entry in paths {
+        let path = entry
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or("runtime metadata qualification legacy SQLite path is missing")?;
+        if !LEGACY_RUNTIME_METADATA_PATHS.contains(&path) || !seen.insert(path) {
+            return Err(
+                "runtime metadata qualification report has an unexpected legacy SQLite path".into(),
+            );
+        }
+        if entry.get("present").and_then(Value::as_bool) != Some(false) {
+            return Err(format!("forbidden legacy SQLite metadata path is present: {path}").into());
+        }
+    }
+    if seen.len() != LEGACY_RUNTIME_METADATA_PATHS.len() {
+        return Err("runtime metadata qualification report is missing a legacy SQLite path".into());
     }
     Ok(())
 }
@@ -44227,7 +44313,7 @@ fast_catalog_generic_phase_tsv\tphase=complete\n";
     #[test]
     fn runtime_metadata_qualification_requires_compact_integrity() {
         let mut report = json!({
-            "schema": "mister-magik-runtime-metadata-qualification-v1",
+            "schema": "mister-magik-runtime-metadata-qualification-v2",
             "compact": {
                 "valid": true,
                 "file_bytes": 7_827_977,
@@ -44236,12 +44322,56 @@ fast_catalog_generic_phase_tsv\tphase=complete\n";
                 "arcade_mame_rows": 50_368,
                 "arcade_hbmame_rows": 9_503,
                 "arcade_mister_rows": 3_009
-            }
+            },
+            "legacy_sqlite_absence": runtime_metadata_legacy_sqlite_test_evidence(None),
         });
         assert!(validate_runtime_metadata_qualification(&report).is_ok());
 
         report["compact"]["shard_count"] = json!(34);
         assert!(validate_runtime_metadata_qualification(&report).is_err());
+    }
+
+    #[test]
+    fn runtime_metadata_qualification_requires_all_four_legacy_sqlite_paths_absent() {
+        let mut report = json!({
+            "schema": "mister-magik-runtime-metadata-qualification-v2",
+            "compact": {
+                "valid": true,
+                "file_bytes": 7_827_977,
+                "shard_count": 35,
+                "software_rows": 73_853,
+                "arcade_mame_rows": 50_368,
+                "arcade_hbmame_rows": 9_503,
+                "arcade_mister_rows": 3_009
+            },
+            "legacy_sqlite_absence": runtime_metadata_legacy_sqlite_test_evidence(None),
+        });
+        assert!(validate_runtime_metadata_qualification(&report).is_ok());
+
+        report["legacy_sqlite_absence"] = runtime_metadata_legacy_sqlite_test_evidence(Some(2));
+        let error = validate_runtime_metadata_qualification(&report).unwrap_err();
+        assert!(error.to_string().contains("legacy SQLite"));
+
+        report["legacy_sqlite_absence"]["paths"][2]["present"] = json!(false);
+        report["legacy_sqlite_absence"]["all_absent"] = json!(true);
+        assert!(validate_runtime_metadata_qualification(&report).is_ok());
+
+        report["legacy_sqlite_absence"]["paths"][0]["path"] =
+            json!("/media/fat/mister-magik/other.sqlite3");
+        assert!(validate_runtime_metadata_qualification(&report).is_err());
+    }
+
+    fn runtime_metadata_legacy_sqlite_test_evidence(present: Option<usize>) -> Value {
+        let paths = LEGACY_RUNTIME_METADATA_PATHS
+            .iter()
+            .enumerate()
+            .map(|(index, path)| json!({"path": path, "present": Some(index) == present}))
+            .collect::<Vec<_>>();
+        json!({
+            "schema": "mister-magik-runtime-metadata-legacy-sqlite-absence-v1",
+            "paths": paths,
+            "all_absent": present.is_none(),
+        })
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>
