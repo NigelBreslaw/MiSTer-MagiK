@@ -1357,9 +1357,12 @@ fn scan_prepared_mgl(
 ) -> Result<Vec<SystemGame>, String> {
     let mut files = Vec::new();
     for root in roots {
-        collect_matching_files(root, &mut report.files_visited, &mut files, |path| {
-            extension_is(path, "mgl")
-        })?;
+        // MGL collections share the same serial namespace walker as generic
+        // roots. It captures every depth and does not retain a release
+        // inventory, so arbitrary user additions remain discoverable.
+        let inventory = inventory_prepared_extension_under_named_roots(root, "", "mgl")?;
+        report.files_visited = report.files_visited.saturating_add(inventory.files_visited);
+        files.extend(inventory.files);
     }
     let prepared_index = (system_id == "dos").then(|| {
         PreparedPayloadIndex::from_library_roots(
