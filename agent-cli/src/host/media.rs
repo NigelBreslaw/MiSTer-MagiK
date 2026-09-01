@@ -144,6 +144,14 @@ pub(crate) fn media_download(sess: &Session, args: &[String]) -> Result<()> {
     for pack in packs {
         let status = remote_pack_status(sess, pack)?;
         if status == "current" {
+            update_remote_state_after_download(
+                sess,
+                pack,
+                "identity",
+                None,
+                None,
+                &parsed.asset_dir,
+            )?;
             println!(
                 "media_download\t{}\tskipped-current\tlocal_path={}",
                 pack.system, pack.local_path
