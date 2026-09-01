@@ -21332,6 +21332,66 @@ fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Ve
                     "catalog_game_header_probe_tsv",
                     "metadata_probe_us",
                 ),
+                "namespace_session_root_open_us": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "fast_catalog_namespace_session_tsv",
+                    "root_open_us",
+                ),
+                "namespace_session_getdents_calls": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "fast_catalog_namespace_session_tsv",
+                    "getdents_calls",
+                ),
+                "namespace_session_getdents_bytes": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "fast_catalog_namespace_session_tsv",
+                    "getdents_bytes",
+                ),
+                "namespace_session_dt_unknown_count": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "fast_catalog_namespace_session_tsv",
+                    "dt_unknown_count",
+                ),
+                "namespace_session_stat_calls": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "fast_catalog_namespace_session_tsv",
+                    "stat_calls",
+                ),
+                "namespace_session_stat_us": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "fast_catalog_namespace_session_tsv",
+                    "stat_us",
+                ),
+                "namespace_session_signature_stat_calls": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "fast_catalog_namespace_session_tsv",
+                    "signature_stat_calls",
+                ),
+                "namespace_session_signature_stat_us": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "fast_catalog_namespace_session_tsv",
+                    "signature_stat_us",
+                ),
+                "namespace_session_canonicalization_count": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "fast_catalog_namespace_session_tsv",
+                    "canonicalizations",
+                ),
+                "namespace_session_canonicalization_us": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "fast_catalog_namespace_session_tsv",
+                    "canonicalization_us",
+                ),
+                "namespace_session_fallback_count": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "fast_catalog_namespace_session_tsv",
+                    "fallbacks",
+                ),
+                "namespace_session_restart_count": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "fast_catalog_namespace_session_tsv",
+                    "restarts",
+                ),
                 "namespace_whole_root_restart_count": catalog_phase_metric_sum(
                     value.get("phase_evidence"),
                     "namespace_walk_fallback_tsv",
