@@ -132,9 +132,13 @@ pub(super) fn database_deploy_files() -> Vec<(&'static str, String)> {
 }
 
 fn legacy_database_paths() -> Vec<String> {
-    ["mame.sqlite3", "hbmame.sqlite3"]
+    [Layout::Public, Layout::Development]
         .into_iter()
-        .map(|name| app_path(Layout::Development, name).expect("static installed path"))
+        .flat_map(|layout| {
+            ["mame.sqlite3", "hbmame.sqlite3"]
+                .into_iter()
+                .map(move |name| app_path(layout, name).expect("static installed path"))
+        })
         .collect()
 }
 
@@ -813,13 +817,20 @@ mod tests {
     }
 
     #[test]
-    fn database_deploy_prunes_legacy_files_even_when_compact_files_are_unchanged() {
+    fn database_deploy_prunes_both_layouts_even_when_compact_files_are_unchanged() {
         let (stage, transaction) = database_stage("prune-legacy");
-        let legacy_mame = "/media/fat/mister-magik-dev/mame.sqlite3";
-        let legacy_hbmame = "/media/fat/mister-magik-dev/hbmame.sqlite3";
+        let public_mame = "/media/fat/mister-magik/mame.sqlite3";
+        let public_hbmame = "/media/fat/mister-magik/hbmame.sqlite3";
+        let development_mame = "/media/fat/mister-magik-dev/mame.sqlite3";
+        let development_hbmame = "/media/fat/mister-magik-dev/hbmame.sqlite3";
         let remote = ScriptedDatabaseRemote {
             inventory: database_inventory(&transaction, &[]),
-            legacy_inventory: database_legacy_inventory(&[legacy_mame, legacy_hbmame]),
+            legacy_inventory: database_legacy_inventory(&[
+                public_mame,
+                public_hbmame,
+                development_mame,
+                development_hbmame,
+            ]),
             events: RefCell::new(Vec::new()),
             fail_command_containing: None,
         };
@@ -837,6 +848,14 @@ mod tests {
         assert!(activation.contains("trap rollback EXIT INT TERM"));
         assert!(activation.contains("mame.sqlite3.rollback"));
         assert!(activation.contains("hbmame.sqlite3.rollback"));
+        for path in [
+            public_mame,
+            public_hbmame,
+            development_mame,
+            development_hbmame,
+        ] {
+            assert!(activation.contains(&format!("rm -f '{path}'")));
+        }
         assert!(
             activation.contains("sha256sum '/media/fat/mister-magik-dev/magik-metadata-v1.bin'")
         );
@@ -846,7 +865,7 @@ mod tests {
         assert!(
             compact_verification
                 < activation
-                    .rfind("rm -f '/media/fat/mister-magik-dev/mame.sqlite3'")
+                    .rfind("rm -f '/media/fat/mister-magik-dev/hbmame.sqlite3'")
                     .unwrap()
         );
         fs::remove_dir_all(stage).unwrap();
