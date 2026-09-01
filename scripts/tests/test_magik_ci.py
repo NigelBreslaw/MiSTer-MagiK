@@ -872,6 +872,28 @@ import scripts.magik_ci.cli
             all("--historical-baseline" in line for line in extraction_lines)
         )
 
+    def test_game_database_assembly_recovers_prior_source_artifact(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[2]
+            / ".github/workflows/game-databases.yml"
+        ).read_text(encoding="utf-8")
+        inspect = workflow.split("  inspect:", 1)[1].split("  build-mame:", 1)[0]
+        assemble = workflow.split("  assemble:", 1)[1].split("  publish:", 1)[0]
+
+        self.assertNotIn("current-source", inspect)
+        self.assertEqual(assemble.count("gh run download"), 1)
+        self.assertIn(
+            'source_name="game-databases-source-v${CURRENT_VERSION}"', assemble
+        )
+        self.assertIn(
+            'gh run list --repo "$GITHUB_REPOSITORY" --workflow game-databases.yml',
+            assemble,
+        )
+        self.assertIn(
+            'source_archive="$source_dir/mister-magik-game-databases-source-v${CURRENT_VERSION}.zip"',
+            assemble,
+        )
+
     def test_database_round_trip(self) -> None:
         from scripts.magik_ci.databases import create, verify
 

@@ -126,20 +126,6 @@ jobs:
             archive="build/game-databases/current/mister-magik-game-databases-v${version}.zip"
             scripts/magik-ci ci game-databases verify "$archive" \
               --manifest build/game-databases/current/game-databases-manifest.json >/dev/null
-            source_name="game-databases-source-v${version}"
-            source_found=false
-            mkdir -p build/game-databases/current-source
-            while read -r run_id; do
-              if gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
-                --name "$source_name" --dir build/game-databases/current-source >/dev/null 2>&1; then
-                source_found=true
-                break
-              fi
-            done < <(gh run list --repo "$GITHUB_REPOSITORY" --workflow game-databases.yml \
-              --branch main --status success --limit 100 --json databaseId --jq '.[].databaseId')
-            if [[ "$source_found" != true ]]; then
-              echo "No retained CI source artifact found for $source_name; legacy v1-v3 releases may still provide SQLite." >&2
-            fi
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
             echo "manifest=build/game-databases/current/game-databases-manifest.json" >> "$GITHUB_OUTPUT"
           else
@@ -437,7 +423,17 @@ jobs:
           archive="build/current/mister-magik-game-databases-v${CURRENT_VERSION}.zip"
           scripts/magik-ci ci game-databases verify "$archive" \
             --manifest build/current/game-databases-manifest.json >/dev/null
-          source_archive="build/game-databases/current-source/mister-magik-game-databases-source-v${CURRENT_VERSION}.zip"
+          source_name="game-databases-source-v${CURRENT_VERSION}"
+          source_dir="build/current-source"
+          mkdir -p "$source_dir"
+          while read -r run_id; do
+            if gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
+              --name "$source_name" --dir "$source_dir" >/dev/null 2>&1; then
+              break
+            fi
+          done < <(gh run list --repo "$GITHUB_REPOSITORY" --workflow game-databases.yml \
+            --branch main --status success --limit 100 --json databaseId --jq '.[].databaseId')
+          source_archive="$source_dir/mister-magik-game-databases-source-v${CURRENT_VERSION}.zip"
           if [[ -f "$source_archive" ]]; then
             mkdir -p build/current/source
             unzip -q "$source_archive" -d build/current/source
