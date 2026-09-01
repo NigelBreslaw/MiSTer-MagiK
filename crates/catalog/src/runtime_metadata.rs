@@ -759,9 +759,6 @@ struct StringTable {
 impl StringTable {
     fn intern(&mut self, value: Option<&str>) -> u32 {
         let Some(value) = value else { return 0 };
-        if value.is_empty() {
-            return 0;
-        }
         if let Some(index) = self.indexes.get(value) {
             return *index;
         }
@@ -1609,7 +1606,8 @@ fn read_software_shard(
             ))
         })
         .map_err(|error| format!("read software items: {error}"))?;
-    for row in rows.flatten() {
+    for row in rows {
+        let row = row.map_err(|error| format!("decode software item row: {error}"))?;
         items_by_name.insert(row.0.clone(), row.1.clone());
         ordered_items.push(row);
     }
@@ -1644,7 +1642,8 @@ fn read_software_shard(
             ))
         })
         .map_err(|error| format!("read software hashes: {error}"))?;
-    for row in rows.flatten() {
+    for row in rows {
+        let row = row.map_err(|error| format!("decode software hash row: {error}"))?;
         let (name, size, crc, disk) = row;
         if !item_names.contains(name.as_str()) {
             continue;
@@ -1708,7 +1707,8 @@ fn read_arcade_shard(
                 })
             })
             .map_err(|error| format!("read arcade machines: {error}"))?;
-        Ok(rows.flatten().collect())
+        rows.map(|row| row.map_err(|error| format!("decode Arcade machine row: {error}")))
+            .collect()
     };
     let mut mame_rows = read(mame)?;
     let mut hbmame_rows = read(hbmame)?;
@@ -1742,7 +1742,9 @@ fn read_arcade_shard(
                 })
             })
             .map_err(|error| format!("read MiSTer Arcade metadata: {error}"))?;
-        mister.extend(rows.flatten());
+        for row in rows {
+            mister.push(row.map_err(|error| format!("decode MiSTer Arcade row: {error}"))?);
+        }
     }
     // `ordinal` is the legacy setname precedence. A stable sort groups the
     // keys while retaining that precedence for duplicate setnames.
@@ -1773,8 +1775,8 @@ mod tests {
                 parent_name: None,
                 description: "Example".into(),
                 year: None,
-                publisher: None,
-                region: None,
+                publisher: Some(String::new()),
+                region: Some(String::new()),
             },
         ];
         SoftwareShard {
@@ -1800,6 +1802,136 @@ mod tests {
         let shard = sample();
         let payload = encode_software(&shard).expect("encode");
         assert_eq!(decode_software(&payload).expect("decode"), shard);
+    }
+
+    #[test]
+    fn string_table_preserves_empty_and_missing_values() {
+        let shard = SoftwareShard {
+            items: vec![SoftwareItem {
+                name: "empty-fields".into(),
+                parent_name: Some(String::new()),
+                description: String::new(),
+                year: Some(String::new()),
+                publisher: None,
+                region: Some(String::new()),
+            }],
+            title_candidates: BTreeMap::from([(String::new(), vec!["empty-fields".into()])]),
+            ..SoftwareShard::default()
+        };
+        let payload = encode_software(&shard).expect("encode empty strings");
+        assert_eq!(
+            decode_software(&payload).expect("decode empty strings"),
+            shard
+        );
+
+        let arcade = ArcadeShard {
+            mister: vec![MisterArcadeEntry {
+                setname_key: String::new(),
+                mra_name_key: String::new(),
+                title: String::new(),
+                category: String::new(),
+                manufacturer: String::new(),
+                control: String::new(),
+                ..MisterArcadeEntry::default()
+            }],
+            ..ArcadeShard::default()
+        };
+        let payload = encode_arcade(&arcade).expect("encode empty Arcade strings");
+        assert_eq!(
+            decode_arcade(&payload).expect("decode empty Arcade strings"),
+            arcade
+        );
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn sqlite_source_row_decode_errors_fail_closed() {
+        let connection = rusqlite::Connection::open_in_memory().expect("open item fixture");
+        connection
+            .execute_batch(
+                "CREATE TABLE mame_software_items (
+                    list_name TEXT, software_name TEXT, parent_name TEXT,
+                    description TEXT, year TEXT, publisher TEXT, region TEXT,
+                    source_version TEXT
+                 );
+                 INSERT INTO mame_software_items VALUES
+                    ('nes', X'00', NULL, 'Broken', NULL, NULL, NULL, 'fixture');",
+            )
+            .expect("create malformed item fixture");
+        let error = read_software_shard(&connection, &["nes"]).expect_err("item row error");
+        assert!(error.contains("decode software item row"), "{error}");
+
+        let connection = rusqlite::Connection::open_in_memory().expect("open hash fixture");
+        connection
+            .execute_batch(
+                "CREATE TABLE mame_software_items (
+                    list_name TEXT, software_name TEXT, parent_name TEXT,
+                    description TEXT, year TEXT, publisher TEXT, region TEXT,
+                    source_version TEXT
+                 );
+                 CREATE TABLE mame_software_hashes (
+                    list_name TEXT, software_name TEXT, size INTEGER,
+                    crc32 TEXT, disk_sha1 TEXT
+                 );
+                 INSERT INTO mame_software_items VALUES
+                    ('nes', 'valid', NULL, 'Valid', NULL, NULL, NULL, 'fixture');
+                 INSERT INTO mame_software_hashes VALUES
+                    ('nes', X'00', 4, 'deadbeef', NULL);",
+            )
+            .expect("create malformed hash fixture");
+        let error = read_software_shard(&connection, &["nes"]).expect_err("hash row error");
+        assert!(error.contains("decode software hash row"), "{error}");
+
+        let mame = rusqlite::Connection::open_in_memory().expect("open machine fixture");
+        mame.execute_batch(
+            "CREATE TABLE mame_machines (
+                setname TEXT, parent_setname TEXT, title TEXT, year TEXT,
+                manufacturer TEXT, players INTEGER, control_type TEXT
+             );
+             INSERT INTO mame_machines VALUES
+                (X'00', NULL, 'Broken', NULL, NULL, NULL, NULL);",
+        )
+        .expect("create malformed machine fixture");
+        let hbmame = rusqlite::Connection::open_in_memory().expect("open empty hbmame fixture");
+        hbmame
+            .execute_batch(
+                "CREATE TABLE mame_machines (
+                    setname TEXT, parent_setname TEXT, title TEXT, year TEXT,
+                    manufacturer TEXT, players INTEGER, control_type TEXT
+                 );",
+            )
+            .expect("create empty hbmame fixture");
+        let error = read_arcade_shard(&mame, &hbmame).expect_err("machine row error");
+        assert!(error.contains("decode Arcade machine row"), "{error}");
+
+        let mame = rusqlite::Connection::open_in_memory().expect("open Arcade row fixture");
+        mame.execute_batch(
+            "CREATE TABLE mame_machines (
+                setname TEXT, parent_setname TEXT, title TEXT, year TEXT,
+                manufacturer TEXT, players INTEGER, control_type TEXT
+             );
+             INSERT INTO mame_machines VALUES
+                ('valid', NULL, 'Valid', NULL, NULL, NULL, NULL);
+             CREATE TABLE mister_arcade_entries (
+                setname_key TEXT, mra_name_key TEXT, name TEXT, category TEXT,
+                year INTEGER, manufacturer TEXT, players TEXT,
+                move_inputs TEXT, special_controls TEXT, ordinal INTEGER
+             );
+             INSERT INTO mister_arcade_entries VALUES
+                (X'00', 'valid.mra', 'Broken', '', NULL, '', '', '', '', 1);",
+        )
+        .expect("create malformed MiSTer Arcade fixture");
+        let hbmame = rusqlite::Connection::open_in_memory().expect("open second hbmame fixture");
+        hbmame
+            .execute_batch(
+                "CREATE TABLE mame_machines (
+                    setname TEXT, parent_setname TEXT, title TEXT, year TEXT,
+                    manufacturer TEXT, players INTEGER, control_type TEXT
+                 );",
+            )
+            .expect("create second empty hbmame fixture");
+        let error = read_arcade_shard(&mame, &hbmame).expect_err("MiSTer Arcade row error");
+        assert!(error.contains("decode MiSTer Arcade row"), "{error}");
     }
 
     #[test]
@@ -1844,7 +1976,7 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(
             hex_lower(&Sha256::digest(&first)),
-            "06b4db7bc1371654cd058223635ac83a847df951e52291074028104b07e5e0b9"
+            "37a338a664eddee23f0075c66b4a635a7354943419ab480b7c07550514183c35"
         );
         let store = MetadataStore::from_bytes(&first).expect("open");
         assert_eq!(store.status().shard_count, 1);
