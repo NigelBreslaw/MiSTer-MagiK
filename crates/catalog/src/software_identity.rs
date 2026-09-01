@@ -195,6 +195,15 @@ impl MameSoftwareMetadataSession {
         }
         self.legacy.as_ref().expect("legacy metadata initialized")
     }
+
+    #[cfg(feature = "builder")]
+    pub(crate) fn for_list(&mut self, list_name: &str) -> &MameSoftwareMetadata {
+        let platform_id = crate::runtime_metadata::RUNTIME_SOFTWARE_SYSTEMS
+            .iter()
+            .find(|(_, canonical, _)| *canonical == list_name)
+            .map(|(id, _, _)| *id);
+        self.for_platform(platform_id.unwrap_or_default())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -309,6 +318,7 @@ impl MameSoftwareMetadata {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
     load_runtime_software_metadata().unwrap_or_else(|| load_legacy_mame_software_metadata(path))
 }
@@ -419,6 +429,7 @@ fn load_legacy_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
 /// Load the compact runtime shards and present them through the existing
 /// identity model.  This adapter deliberately keeps the resolver semantics in
 /// one place while replacing SQLite's storage and lookup path.
+#[cfg(test)]
 fn load_runtime_software_metadata() -> Option<MameSoftwareMetadata> {
     let store =
         MetadataStore::open(&crate::catalog_config::default_runtime_metadata_path()).ok()?;
@@ -2060,7 +2071,8 @@ pub fn rom_identity_benchmark_report() -> Result<serde_json::Value, String> {
     }
 
     let metadata_started = Instant::now();
-    let metadata = load_mame_software_metadata(&crate::catalog_config::default_mame_sqlite_path());
+    let mut metadata =
+        MameSoftwareMetadataSession::new(&crate::catalog_config::default_mame_sqlite_path());
     let metadata_load_us = metadata_started.elapsed().as_micros() as u64;
     let rss_before_kb = proc_status_kb("VmRSS");
     let hwm_before_kb = proc_status_kb("VmHWM");
@@ -2072,7 +2084,11 @@ pub fn rom_identity_benchmark_report() -> Result<serde_json::Value, String> {
         if input.list_name == "lynx" {
             production_default_selected = production_default_selected.saturating_add(1);
         }
-        let case = benchmark_streaming_rom_identity(&input, &metadata, &software_hash_cache)?;
+        let case = benchmark_streaming_rom_identity(
+            &input,
+            metadata.for_list(input.list_name),
+            &software_hash_cache,
+        )?;
         result_digest.update(input.list_name.as_bytes());
         result_digest.update(input.path.as_os_str().as_encoded_bytes());
         result_digest.update(input.size.to_le_bytes());
