@@ -20096,6 +20096,10 @@ const CATALOG_DURABILITY_FUNCTION_GRAPH_SPEC: tracefs::TracefsCaptureSpec =
 
 const CATALOG_ATTRIBUTION_WORK_DIR: &str = "/tmp/mister-magik/catalog-attribution";
 const CATALOG_ATTRIBUTION_C64_ROOT: &str = CATALOG_BUILD_REBUILD_C64_ROOT;
+const CATALOG_ATTRIBUTION_PRODUCTION_ROOTS: [&str; 2] = [
+    CATALOG_BUILD_REBUILD_ARCADE_ROOT,
+    CATALOG_PRODUCTION_GAMES_ROOT,
+];
 const CATALOG_FAST_FIVE_STAGING_REMOTE: &str = "/tmp/mister-magik/fast-five-catalog";
 // Function-graph tracing can delay the final manifest publication after the
 // launcher has reported refresh completion. Keep inspection bounded, but allow
@@ -20555,7 +20559,7 @@ fn profile_installed_catalog_attribution(
             "configuration": {
                 "samples": sample_count,
                 "reboot_before_pair": reboot,
-                "roots": [CATALOG_BUILD_REBUILD_ARCADE_ROOT, CATALOG_BUILD_REBUILD_SNES_ROOT, CATALOG_ATTRIBUTION_C64_ROOT],
+                "roots": CATALOG_ATTRIBUTION_PRODUCTION_ROOTS,
                 "real_content_only": true,
                 "publication_filesystem": "exfat",
                 "timing_authority": arm == CatalogAttributionArm::Control,
@@ -20637,7 +20641,7 @@ fn profile_catalog_attribution_trace(
             "configuration": {
                 "samples": captures.len(),
                 "reboot_before_pair": reboot,
-                "roots": [CATALOG_BUILD_REBUILD_ARCADE_ROOT, CATALOG_BUILD_REBUILD_SNES_ROOT, CATALOG_ATTRIBUTION_C64_ROOT],
+                "roots": CATALOG_ATTRIBUTION_PRODUCTION_ROOTS,
                 "real_content_only": true,
                 "publication_filesystem": "exfat",
                 "timing_authority": false,
@@ -20824,7 +20828,7 @@ fn profile_catalog_attribution_streamline(
             "configuration": {
                 "samples": 1,
                 "reboot_before_pair": reboot,
-                "roots": [CATALOG_BUILD_REBUILD_ARCADE_ROOT, CATALOG_BUILD_REBUILD_SNES_ROOT, CATALOG_ATTRIBUTION_C64_ROOT],
+                "roots": CATALOG_ATTRIBUTION_PRODUCTION_ROOTS,
                 "real_content_only": true,
                 "publication_filesystem": "exfat",
                 "timing_authority": false,
@@ -43418,6 +43422,15 @@ H: Handlers=event3 js0"#
 
     #[test]
     fn catalog_attribution_uses_production_roots_and_normalizes_legs() {
+        assert_eq!(
+            CATALOG_ATTRIBUTION_PRODUCTION_ROOTS,
+            [
+                CATALOG_BUILD_REBUILD_ARCADE_ROOT,
+                CATALOG_PRODUCTION_GAMES_ROOT
+            ]
+        );
+        assert!(!CATALOG_ATTRIBUTION_PRODUCTION_ROOTS.contains(&CATALOG_BUILD_REBUILD_SNES_ROOT));
+        assert!(!CATALOG_ATTRIBUTION_PRODUCTION_ROOTS.contains(&CATALOG_ATTRIBUTION_C64_ROOT));
         let env = catalog_attribution_launcher_env(CatalogAttributionArm::Control);
         assert!(
             env.iter()
