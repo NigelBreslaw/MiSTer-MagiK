@@ -255,6 +255,8 @@ def verify(
 
 def _verify_compact_metadata(data: bytes) -> None:
     """Validate the bounded container geometry before it reaches a device."""
+    if len(data) > 8 * 1024 * 1024:
+        raise ValueError("compact_metadata_size")
     if int.from_bytes(data[8:12], "little") != 1:
         raise ValueError("compact_metadata_version")
     if any(data[12:16]) or any(data[76:96]):
@@ -277,7 +279,14 @@ def _verify_compact_metadata(data: bytes) -> None:
     ranges: list[tuple[int, int]] = []
     for offset in range(index_offset, index_end, entry_size):
         entry = data[offset : offset + entry_size]
-        shard_id = entry[:32].split(b"\0", 1)[0]
+        raw_id = entry[:32]
+        shard_id, separator, padding = raw_id.partition(b"\0")
+        if separator and any(padding):
+            raise ValueError("compact_metadata_index_id_padding")
+        try:
+            shard_id.decode("ascii")
+        except UnicodeDecodeError as error:
+            raise ValueError("compact_metadata_index_id") from error
         if not shard_id or previous is not None and shard_id <= previous:
             raise ValueError("compact_metadata_index_order")
         previous = shard_id
@@ -289,7 +298,12 @@ def _verify_compact_metadata(data: bytes) -> None:
         compressed_len = int.from_bytes(entry[48:52], "little")
         decoded_len = int.from_bytes(entry[52:56], "little")
         end = compressed_offset + compressed_len
-        if compressed_len == 0 or decoded_len == 0 or decoded_len > 16 * 1024 * 1024:
+        if (
+            compressed_len == 0
+            or compressed_len > 16 * 1024 * 1024
+            or decoded_len == 0
+            or decoded_len > 16 * 1024 * 1024
+        ):
             raise ValueError("compact_metadata_shard_length")
         if compressed_offset < index_end or end > len(data):
             raise ValueError("compact_metadata_shard_bounds")
