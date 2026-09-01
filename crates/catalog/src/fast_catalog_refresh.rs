@@ -300,11 +300,181 @@ pub struct FastCatalogFreshBuildReport {
     pub elapsed_us: u64,
     pub source: crate::fast_catalog_sources::FastSourceBuildReport,
     pub publication: crate::fast_five_catalog::FastFivePublishReport,
+    pub artifact_overlap: FastCatalogArtifactOverlapReport,
     pub capture: FastRefreshCaptureReport,
     pub refresh_state_publish: FastRefreshStatePublishReport,
     pub refresh_generation: u64,
     pub system_ids: Vec<String>,
     pub build_info_persisted: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct FastCatalogArtifactOverlapReport {
+    pub enabled: bool,
+    pub mode: &'static str,
+    pub systems: usize,
+    pub elapsed_us: u64,
+}
+
+#[cfg(feature = "builder")]
+struct ArtifactBuildWorker {
+    sender: Option<std::sync::mpsc::SyncSender<Option<FastFiveSystem>>>,
+    handle: Option<
+        std::thread::JoinHandle<
+            Result<
+                std::collections::BTreeMap<
+                    String,
+                    crate::fast_five_catalog::PrebuiltSystemArtifacts,
+                >,
+                String,
+            >,
+        >,
+    >,
+    staging_root: PathBuf,
+    keep_staging: bool,
+    submit_error: Option<String>,
+    started: std::time::Instant,
+}
+
+#[cfg(feature = "builder")]
+impl ArtifactBuildWorker {
+    fn start(
+        generation: u64,
+        limits: crate::shard_registry::RegistryLimits,
+        artifact_profile: crate::fast_five_catalog::FastFiveArtifactProfile,
+    ) -> Result<Option<Self>, String> {
+        if !cfg!(all(target_os = "linux", not(test))) {
+            return Ok(None);
+        }
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| "clock predates Unix epoch for artifact worker".to_string())?
+            .as_nanos();
+        let worker_root = PathBuf::from(format!(
+            "/tmp/mister-magik/fast-five-catalog-overlap/worker-{}-{}",
+            std::process::id(),
+            nonce
+        ));
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<Option<FastFiveSystem>>(1);
+        let thread_root = worker_root.clone();
+        let handle = std::thread::Builder::new()
+            .name("catalog-artifacts".to_string())
+            .spawn(move || {
+                let mut artifacts = BTreeMap::new();
+                let mut sequence = 0usize;
+                while let Ok(message) = receiver.recv() {
+                    let Some(system) = message else {
+                        return Ok(artifacts);
+                    };
+                    let system_id = crate::catalog_classify::SystemId::parse(&system.system_id)
+                        .map_err(|error| {
+                            format!("parse {} for artifact worker: {error}", system.system_id)
+                        })?;
+                    let staging = thread_root.join(format!("system-{sequence}"));
+                    sequence = sequence.saturating_add(1);
+                    let (sqlite, navigation) =
+                        crate::fast_five_catalog::build_staged_system_artifacts(
+                            &staging,
+                            &system,
+                            &system_id,
+                            generation,
+                            limits,
+                            artifact_profile,
+                            true,
+                        )?;
+                    artifacts.insert(
+                        system.system_id,
+                        crate::fast_five_catalog::PrebuiltSystemArtifacts {
+                            sqlite,
+                            navigation,
+                            staging,
+                        },
+                    );
+                }
+                Err("artifact worker input channel closed before completion".to_string())
+            })
+            .map_err(|error| format!("spawn catalog artifact worker: {error}"))?;
+        Ok(Some(Self {
+            sender: Some(sender),
+            handle: Some(handle),
+            staging_root: worker_root,
+            keep_staging: false,
+            submit_error: None,
+            started: std::time::Instant::now(),
+        }))
+    }
+
+    fn submit(&mut self, system: &FastFiveSystem) {
+        if self.submit_error.is_some() {
+            return;
+        }
+        if let Some(sender) = &self.sender
+            && sender.send(Some(system.clone())).is_err()
+        {
+            self.submit_error =
+                Some("artifact worker stopped before source completion".to_string());
+        }
+    }
+
+    fn finish(
+        &mut self,
+    ) -> Result<
+        (
+            BTreeMap<String, crate::fast_five_catalog::PrebuiltSystemArtifacts>,
+            FastCatalogArtifactOverlapReport,
+        ),
+        String,
+    > {
+        if let Some(sender) = self.sender.take() {
+            sender
+                .send(None)
+                .map_err(|_| "artifact worker stopped before completion".to_string())?;
+        }
+        let result = self
+            .handle
+            .take()
+            .ok_or_else(|| "artifact worker handle is missing".to_string())?
+            .join()
+            .map_err(|_| "artifact worker panicked".to_string())?;
+        let artifacts = result?;
+        if let Some(error) = self.submit_error.take() {
+            return Err(error);
+        }
+        let systems = artifacts.len();
+        self.keep_staging = true;
+        Ok((
+            artifacts,
+            FastCatalogArtifactOverlapReport {
+                enabled: true,
+                mode: "one-worker-tmpfs",
+                systems,
+                elapsed_us: self
+                    .started
+                    .elapsed()
+                    .as_micros()
+                    .try_into()
+                    .unwrap_or(u64::MAX),
+            },
+        ))
+    }
+
+    fn cleanup(&mut self) {
+        self.keep_staging = false;
+        let _ = fs::remove_dir_all(&self.staging_root);
+    }
+}
+
+#[cfg(feature = "builder")]
+impl Drop for ArtifactBuildWorker {
+    fn drop(&mut self) {
+        self.sender.take();
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+        if !self.keep_staging {
+            let _ = fs::remove_dir_all(&self.staging_root);
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -386,13 +556,53 @@ pub fn build_fresh_catalog_with_presentation_progress(
     mut progress: impl FnMut(FastCatalogBuildProgress),
 ) -> Result<FastCatalogFreshBuildReport, String> {
     let started = std::time::Instant::now();
-    let source_build =
+    let limits = crate::shard_registry::production_registry_limits();
+    let artifact_profile = fast_catalog_artifact_profile();
+    let artifact_generation =
+        crate::shard_registry::read_latest_manifest_lazy(catalog_root, limits)
+            .ok()
+            .map_or(1, |manifest| manifest.generation.saturating_add(1));
+    let mut artifact_worker =
+        ArtifactBuildWorker::start(artifact_generation, limits, artifact_profile)?;
+    let source_build_result =
         crate::fast_catalog_sources::build_independent_fast_snapshot_for_refresh_with_progress(
             storage_root,
             &mut plan_ready,
             &mut system_discovering,
-            &mut system_complete,
-        )?;
+            |system| {
+                if let Some(worker) = artifact_worker.as_mut() {
+                    worker.submit(system);
+                }
+                system_complete(system);
+            },
+        );
+    let source_build = match source_build_result {
+        Ok(source_build) => source_build,
+        Err(error) => {
+            drop(artifact_worker);
+            return Err(error);
+        }
+    };
+    let (prebuilt, artifact_overlap) = if let Some(worker) = artifact_worker.as_mut() {
+        worker.finish()?
+    } else {
+        (
+            BTreeMap::new(),
+            FastCatalogArtifactOverlapReport {
+                enabled: false,
+                mode: "disabled",
+                systems: 0,
+                elapsed_us: 0,
+            },
+        )
+    };
+    crate::catalog_logln!(
+        "fast_catalog_artifact_overlap_tsv\tenabled={}\tmode={}\tsystems={}\telapsed_us={}",
+        artifact_overlap.enabled,
+        artifact_overlap.mode,
+        artifact_overlap.systems,
+        artifact_overlap.elapsed_us,
+    );
     let crate::fast_catalog_sources::FastSourceRefreshBuild {
         snapshot,
         report: source,
@@ -405,16 +615,22 @@ pub fn build_fresh_catalog_with_presentation_progress(
         .iter()
         .map(|system| system.system_id.clone())
         .collect::<Vec<_>>();
-    let publication = crate::fast_five_catalog::publish_snapshot_with_profile_held_and_progress(
-        catalog_root,
-        &snapshot,
-        crate::shard_registry::production_registry_limits(),
-        fast_catalog_artifact_profile(),
-        _lease,
-        |current, total| {
-            progress(FastCatalogBuildProgress::SavingSystem { current, total });
-        },
-    )?;
+    let publication_result =
+        crate::fast_five_catalog::publish_snapshot_with_profile_held_and_progress_and_prebuilt(
+            catalog_root,
+            &snapshot,
+            limits,
+            artifact_profile,
+            _lease,
+            &prebuilt,
+            |current, total| {
+                progress(FastCatalogBuildProgress::SavingSystem { current, total });
+            },
+        );
+    if let Some(worker) = artifact_worker.as_mut() {
+        worker.cleanup();
+    }
+    let publication = publication_result?;
     progress(FastCatalogBuildProgress::SavingCatalogMetadata);
     let (states, capture, discovery_watch) = capture_refresh_state_with_profiles(
         storage_root,
@@ -461,6 +677,7 @@ pub fn build_fresh_catalog_with_presentation_progress(
         elapsed_us: build_elapsed_us,
         source,
         publication,
+        artifact_overlap,
         capture,
         refresh_state_publish,
         refresh_generation,
