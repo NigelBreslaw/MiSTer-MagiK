@@ -12,13 +12,23 @@ for argument in "$@"; do
 done
 WRAPPER_STARTED=$SECONDS
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/lib/shared-worktree-cache.sh"
 if [[ "${1:-}" == "plan" ]]; then
   shift
   exec python3 "$ROOT/scripts/checks/pre-push.py" --repository "$ROOT" --plan "$@"
 fi
 MANIFEST="${MISTER_AGENT_CLI_MANIFEST:-$ROOT/agent-cli/Cargo.toml}"
 SOURCE_ROOT="$(dirname "$MANIFEST")"
-TARGET_ROOT="${CARGO_TARGET_DIR:-$SOURCE_ROOT/target}"
+CONTENT_BINARY=0
+if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+  TARGET_ROOT="$CARGO_TARGET_DIR"
+elif [[ "$MANIFEST" == "$ROOT/agent-cli/Cargo.toml" ]]; then
+  PRIMARY_CHECKOUT="$(shared_primary_checkout "$ROOT")"
+  TARGET_ROOT="$PRIMARY_CHECKOUT/agent-cli/target"
+  [[ -n "${MISTER_AGENT_CLI_BINARY:-}" ]] || CONTENT_BINARY=1
+else
+  TARGET_ROOT="$SOURCE_ROOT/target"
+fi
 PROFILE="${MISTER_AGENT_CLI_PROFILE:-debug}"
 case "$PROFILE" in
   debug)
@@ -34,7 +44,7 @@ case "$PROFILE" in
     exit 2
     ;;
 esac
-BINARY="${MISTER_AGENT_CLI_BINARY:-$TARGET_ROOT/$PROFILE_DIR/agent-cli}"
+BUILD_BINARY="$TARGET_ROOT/$PROFILE_DIR/agent-cli"
 LOCK="$TARGET_ROOT/.agent-cli-build-lock"
 BUILD_LOCK_SECONDS=0
 BUILD_SECONDS=0
@@ -56,10 +66,25 @@ DEPENDENCY_INPUTS=(
   "$SOURCE_ROOT/../crates/agent-protocol/src"
 )
 
+input_identity() {
+  {
+    git -C "$ROOT" rev-parse HEAD
+    git -C "$ROOT" diff --binary --no-ext-diff HEAD --
+  } | shasum -a 256 | awk '{print $1}'
+}
+
+if ((CONTENT_BINARY)); then
+  INPUT_IDENTITY="$(input_identity)"
+  BINARY="$TARGET_ROOT/agent-cli-bootstrap/$PROFILE_DIR/$INPUT_IDENTITY/agent-cli"
+else
+  BINARY="${MISTER_AGENT_CLI_BINARY:-$BUILD_BINARY}"
+fi
+
 inputs_are_stale() {
   local input newer
   local directories=()
   [[ -x "$BINARY" ]] || return 0
+  ((CONTENT_BINARY)) && return 1
   for input in "${REQUIRED_INPUTS[@]}"; do
     [[ -e "$input" ]] || return 0
     if [[ -f "$input" && "$input" -nt "$BINARY" ]]; then
@@ -110,7 +135,16 @@ if (( INPUTS_STALE )); then
   # Another launcher may have completed the build while this process waited.
   if inputs_are_stale; then
     build_started=$SECONDS
-    MISTER_AGENT_CLI_BINARY="$BINARY" cargo "${BUILD_ARGS[@]}" --manifest-path "$MANIFEST"
+    CARGO_TARGET_DIR="$TARGET_ROOT" MISTER_AGENT_CLI_BINARY="$BINARY" \
+      cargo "${BUILD_ARGS[@]}" --manifest-path "$MANIFEST"
+    if ((CONTENT_BINARY)); then
+      destination="$(dirname "$BINARY")"
+      mkdir -p "$destination"
+      temporary="$destination/.agent-cli.$$"
+      cp "$BUILD_BINARY" "$temporary"
+      chmod +x "$temporary"
+      mv "$temporary" "$BINARY"
+    fi
     BUILD_SECONDS=$((SECONDS - build_started))
     BUILD_STATUS=passed
   fi
