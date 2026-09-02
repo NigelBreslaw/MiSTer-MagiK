@@ -448,6 +448,41 @@ import scripts.magik_ci.cli
     def test_python_tests_skip_unrelated_paths(self) -> None:
         self.assertEqual(python_test_commands(["agent-cli/src/main.rs"]), [])
 
+    def test_database_workflow_changes_select_fast_python_tests_once(self) -> None:
+        workflow = ".github/workflows/game-databases.yml"
+        for paths in ([workflow], [workflow, "scripts/magik_ci/databases.py"]):
+            with self.subTest(paths=paths):
+                self.assertEqual(
+                    python_test_commands(paths),
+                    [
+                        [
+                            "uv",
+                            "run",
+                            "pytest",
+                            "scripts/tests",
+                            "-q",
+                            "--ignore",
+                            SLOW_TEST,
+                        ]
+                    ],
+                )
+
+    def test_database_workflow_and_ui_changes_select_full_suite_once(self) -> None:
+        self.assertEqual(
+            python_test_commands(
+                [
+                    ".github/workflows/game-databases.yml",
+                    "apps/mister/ui/components/combo_box.slint",
+                ]
+            ),
+            [["uv", "run", "pytest", "scripts/tests", "-q"]],
+        )
+
+    def test_unrelated_workflow_does_not_select_python_tests(self) -> None:
+        self.assertEqual(
+            python_test_commands([".github/workflows/cross-image.yml"]), []
+        )
+
     def test_python_changes_run_fast_tests_only(self) -> None:
         self.assertEqual(
             python_test_commands(["scripts/magik_ci/assurance.py"]),
