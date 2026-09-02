@@ -434,20 +434,8 @@ jobs:
           done < <(gh run list --repo "$GITHUB_REPOSITORY" --workflow game-databases.yml \
             --branch main --status success --limit 100 --json databaseId --jq '.[].databaseId')
           source_archive="$source_dir/mister-magik-game-databases-source-v${CURRENT_VERSION}.zip"
-          if [[ -f "$source_archive" ]]; then
-            mkdir -p build/current/source
-            unzip -q "$source_archive" -d build/current/source
-            cp build/current/source/mame.sqlite3 build/mame.sqlite3
-            cp build/current/source/hbmame.sqlite3 build/hbmame.sqlite3
-          else
-            unzip -q "$archive" mame.sqlite3 hbmame.sqlite3 -d build/current || true
-            test -f build/current/mame.sqlite3 && test -f build/current/hbmame.sqlite3 || {
-              echo "No CI source archive or legacy SQLite in $tag; cannot rebuild compact metadata." >&2
-              exit 1
-            }
-            cp build/current/mame.sqlite3 build/mame.sqlite3
-            cp build/current/hbmame.sqlite3 build/hbmame.sqlite3
-          fi
+          scripts/magik-ci ci game-databases restore-sources "$archive" \
+            --source-archive "$source_archive" --output build/current
           if unzip -Z1 "$archive" | grep -qx magik-metadata-v1.bin; then
             unzip -q "$archive" magik-metadata-v1.bin -d build/current
           fi
