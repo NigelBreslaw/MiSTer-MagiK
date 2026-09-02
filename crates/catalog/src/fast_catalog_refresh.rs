@@ -300,11 +300,109 @@ pub struct FastCatalogFreshBuildReport {
     pub elapsed_us: u64,
     pub source: crate::fast_catalog_sources::FastSourceBuildReport,
     pub publication: crate::fast_five_catalog::FastFivePublishReport,
+    pub tmpfs_artifact_build: FastCatalogTmpfsArtifactBuildReport,
     pub capture: FastRefreshCaptureReport,
     pub refresh_state_publish: FastRefreshStatePublishReport,
     pub refresh_generation: u64,
     pub system_ids: Vec<String>,
     pub build_info_persisted: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct FastCatalogTmpfsArtifactBuildReport {
+    pub enabled: bool,
+    pub systems: usize,
+    pub artifactless_systems: usize,
+    pub elapsed_us: u64,
+    pub copied_bytes: u64,
+    pub copy_hash_us: u64,
+    pub cleanup_status: &'static str,
+    pub fallback_status: &'static str,
+}
+
+struct SerialTmpfsArtifactStaging {
+    root: PathBuf,
+}
+
+impl SerialTmpfsArtifactStaging {
+    fn create() -> Result<Self, String> {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| "clock predates Unix epoch for catalog staging".to_string())?
+            .as_nanos();
+        let root = PathBuf::from("/tmp/mister-magik/fast-five-catalog-serial")
+            .join(format!("serial-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(root.parent().expect("serial staging has parent"))
+            .map_err(|error| format!("create serial artifact staging parent: {error}"))?;
+        fs::create_dir(&root).map_err(|error| {
+            format!("create serial artifact staging {}: {error}", root.display())
+        })?;
+        Ok(Self { root })
+    }
+}
+
+impl Drop for SerialTmpfsArtifactStaging {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn build_serial_tmpfs_artifacts(
+    snapshot: &FastFiveSnapshot,
+    generation: u64,
+    limits: crate::shard_registry::RegistryLimits,
+    artifact_profile: crate::fast_five_catalog::FastFiveArtifactProfile,
+) -> Result<
+    (
+        BTreeMap<String, crate::fast_five_catalog::PrebuiltSystemArtifacts>,
+        FastCatalogTmpfsArtifactBuildReport,
+        SerialTmpfsArtifactStaging,
+    ),
+    String,
+> {
+    let started = std::time::Instant::now();
+    let staging = SerialTmpfsArtifactStaging::create()?;
+    let mut prebuilt = BTreeMap::new();
+    let mut artifactless_systems = 0usize;
+    for (index, source) in snapshot.systems.iter().enumerate() {
+        if source.games.is_empty() && source.variants.is_empty() {
+            artifactless_systems = artifactless_systems.saturating_add(1);
+            continue;
+        }
+        let system_id = crate::catalog_classify::SystemId::parse(&source.system_id)
+            .map_err(|error| format!("invalid system {}: {error}", source.system_id))?;
+        let system_staging = staging.root.join(format!("system-{index}"));
+        let (sqlite, navigation) = crate::fast_five_catalog::build_staged_system_artifacts(
+            &system_staging,
+            source,
+            &system_id,
+            generation,
+            limits,
+            artifact_profile,
+        )?;
+        prebuilt.insert(
+            source.system_id.clone(),
+            crate::fast_five_catalog::PrebuiltSystemArtifacts {
+                sqlite,
+                navigation,
+                staging: system_staging,
+            },
+        );
+    }
+    Ok((
+        prebuilt,
+        FastCatalogTmpfsArtifactBuildReport {
+            enabled: true,
+            systems: snapshot.systems.len().saturating_sub(artifactless_systems),
+            artifactless_systems,
+            elapsed_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+            copied_bytes: 0,
+            copy_hash_us: 0,
+            cleanup_status: "pending",
+            fallback_status: "none",
+        },
+        staging,
+    ))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -386,6 +484,8 @@ pub fn build_fresh_catalog_with_presentation_progress(
     mut progress: impl FnMut(FastCatalogBuildProgress),
 ) -> Result<FastCatalogFreshBuildReport, String> {
     let started = std::time::Instant::now();
+    let limits = crate::shard_registry::production_registry_limits();
+    let artifact_profile = fast_catalog_artifact_profile();
     let source_build =
         crate::fast_catalog_sources::build_independent_fast_snapshot_for_refresh_with_progress(
             storage_root,
@@ -393,6 +493,10 @@ pub fn build_fresh_catalog_with_presentation_progress(
             &mut system_discovering,
             &mut system_complete,
         )?;
+    let artifact_generation =
+        crate::shard_registry::read_latest_manifest_lazy(catalog_root, limits)
+            .ok()
+            .map_or(1, |manifest| manifest.generation.saturating_add(1));
     let crate::fast_catalog_sources::FastSourceRefreshBuild {
         snapshot,
         report: source,
@@ -405,16 +509,36 @@ pub fn build_fresh_catalog_with_presentation_progress(
         .iter()
         .map(|system| system.system_id.clone())
         .collect::<Vec<_>>();
-    let publication = crate::fast_five_catalog::publish_snapshot_with_profile_held_and_progress(
-        catalog_root,
-        &snapshot,
-        crate::shard_registry::production_registry_limits(),
-        fast_catalog_artifact_profile(),
-        _lease,
-        |current, total| {
-            progress(FastCatalogBuildProgress::SavingSystem { current, total });
-        },
-    )?;
+    let (prebuilt, mut tmpfs_artifact_build, staging) =
+        build_serial_tmpfs_artifacts(&snapshot, artifact_generation, limits, artifact_profile)?;
+    let publication =
+        crate::fast_five_catalog::publish_snapshot_with_profile_held_and_progress_and_prebuilt(
+            catalog_root,
+            &snapshot,
+            limits,
+            artifact_profile,
+            _lease,
+            &prebuilt,
+            |current, total| {
+                progress(FastCatalogBuildProgress::SavingSystem { current, total });
+            },
+        )?;
+    tmpfs_artifact_build.copied_bytes = publication.copied_bytes;
+    tmpfs_artifact_build.copy_hash_us = publication.copy_hash_us;
+    drop(prebuilt);
+    drop(staging);
+    tmpfs_artifact_build.cleanup_status = "complete";
+    crate::catalog_logln!(
+        "fast_catalog_tmpfs_artifact_build_tsv\tenabled={}\tsystems={}\tartifactless_systems={}\telapsed_us={}\tcopied_bytes={}\tcopy_hash_us={}\tcleanup_status={}\tfallback_status={}",
+        tmpfs_artifact_build.enabled,
+        tmpfs_artifact_build.systems,
+        tmpfs_artifact_build.artifactless_systems,
+        tmpfs_artifact_build.elapsed_us,
+        tmpfs_artifact_build.copied_bytes,
+        tmpfs_artifact_build.copy_hash_us,
+        tmpfs_artifact_build.cleanup_status,
+        tmpfs_artifact_build.fallback_status,
+    );
     progress(FastCatalogBuildProgress::SavingCatalogMetadata);
     let (states, capture, discovery_watch) = capture_refresh_state_with_profiles(
         storage_root,
@@ -461,6 +585,7 @@ pub fn build_fresh_catalog_with_presentation_progress(
         elapsed_us: build_elapsed_us,
         source,
         publication,
+        tmpfs_artifact_build,
         capture,
         refresh_state_publish,
         refresh_generation,
@@ -3847,5 +3972,32 @@ mod tests {
         assert!(error.contains("kind=directory-entries"));
         assert!(error.contains("configured=2"));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn serial_tmpfs_staging_is_outside_media_and_raii_cleaned() {
+        let staging = SerialTmpfsArtifactStaging::create().unwrap();
+        let root = staging.root.clone();
+        assert!(root.starts_with("/tmp/mister-magik"));
+        assert!(!root.starts_with("/media/fat"));
+        assert!(root.exists());
+        drop(staging);
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn serial_artifact_phase_has_no_concurrent_worker_implementation() {
+        let source = include_str!("fast_catalog_refresh.rs");
+        let phase_start = source.find("fn build_serial_tmpfs_artifacts").unwrap();
+        let phase_end = source
+            .find("pub fn remove_default_catalog_artifacts")
+            .unwrap();
+        let phase = &source[phase_start..phase_end];
+        let forbidden_thread = ["std::", "thread::"].concat();
+        let forbidden_channel = ["sync_", "channel"].concat();
+        let forbidden_worker = ["Artifact", "BuildWorker"].concat();
+        assert!(!phase.contains(&forbidden_thread));
+        assert!(!phase.contains(&forbidden_channel));
+        assert!(!phase.contains(&forbidden_worker));
     }
 }

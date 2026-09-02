@@ -2436,15 +2436,19 @@ fn run_fast_catalog_fresh_build(
     let _ = tx.send(CatalogWorkerMessage::Timing {
         name: "catalog_fresh_build".to_string(),
         detail: format!(
-            "elapsed_us={} source_us={} publish_us={} capture_us={} refresh_state_publish_us={} systems={} games={} copied_bytes={}",
+            "elapsed_us={} source_us={} tmpfs_artifact_build_us={} publish_us={} capture_us={} refresh_state_publish_us={} systems={} games={} copied_bytes={} copy_hash_us={} tmpfs_artifact_systems={} artifactless_systems={}",
             report.elapsed_us,
             report.source.elapsed_us,
+            report.tmpfs_artifact_build.elapsed_us,
             report.publication.elapsed_us,
             report.capture.elapsed_us,
             report.refresh_state_publish.elapsed_us,
             report.publication.systems,
             report.publication.games,
             report.publication.copied_bytes,
+            report.publication.copy_hash_us,
+            report.tmpfs_artifact_build.systems,
+            report.tmpfs_artifact_build.artifactless_systems,
         ),
     });
     let _ = tx.send(CatalogWorkerMessage::Timing {
