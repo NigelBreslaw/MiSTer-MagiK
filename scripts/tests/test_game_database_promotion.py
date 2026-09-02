@@ -376,6 +376,27 @@ class DatabasePromotionTests(unittest.TestCase):
         before_assemble = self.workflow.split("\n  assemble:\n", 1)[0]
         self.assertNotIn("gh run download", before_assemble)
 
+    def test_large_archive_listing_does_not_skip_ancillary_files(self) -> None:
+        create_prior_release(self.fixture, compact=True)
+        archive = self.fixture / "release/mister-magik-game-databases-v18.zip"
+        # Exceed pipe buffering so an early-exiting grep reliably breaks unzip.
+        # Extra members do not alter the manifest's checksummed payload files.
+        with zipfile.ZipFile(archive, "a") as stream:
+            for position in range(4096):
+                stream.writestr(f"padding/{position:04d}-{'x' * 80}", b"")
+        self.assert_step_succeeds(RESTORE)
+        for name in (
+            databases.RUNTIME_METADATA,
+            "ArcadeDatabase.csv",
+            "ArcadeDatabase-LICENSE.txt",
+            databases.INDEX,
+        ):
+            with self.subTest(member=name):
+                self.assertEqual(
+                    (self.workspace / "build/current" / name).read_bytes(),
+                    (self.fixture / name).read_bytes(),
+                )
+
     def test_reuse_commands_reject_stale_paths_for_both_databases(self) -> None:
         create_prior_release(self.fixture, compact=True)
         self.assert_step_succeeds(RESTORE)

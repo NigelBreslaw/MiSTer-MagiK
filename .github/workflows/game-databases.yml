@@ -436,13 +436,14 @@ jobs:
           source_archive="$source_dir/mister-magik-game-databases-source-v${CURRENT_VERSION}.zip"
           scripts/magik-ci ci game-databases restore-sources "$archive" \
             --source-archive "$source_archive" --output build/current
-          if unzip -Z1 "$archive" | grep -qx magik-metadata-v1.bin; then
+          # Consume each listing fully: grep -q can SIGPIPE unzip under pipefail.
+          if unzip -Z1 "$archive" | grep -Fx magik-metadata-v1.bin >/dev/null; then
             unzip -q "$archive" magik-metadata-v1.bin -d build/current
           fi
-          if unzip -Z1 "$archive" | grep -qx ArcadeDatabase.csv; then
+          if unzip -Z1 "$archive" | grep -Fx ArcadeDatabase.csv >/dev/null; then
             unzip -q "$archive" ArcadeDatabase.csv ArcadeDatabase-LICENSE.txt -d build/current
           fi
-          if unzip -Z1 "$archive" | grep -qx arcade-updater-index-v1.lz4b; then
+          if unzip -Z1 "$archive" | grep -Fx arcade-updater-index-v1.lz4b >/dev/null; then
             unzip -q "$archive" arcade-updater-index-v1.lz4b -d build/current
           fi
 
