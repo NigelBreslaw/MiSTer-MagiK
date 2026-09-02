@@ -402,6 +402,27 @@ jobs:
               assert not alpha_installer.exists()
           PY
 
+      - name: Checkout pinned Downloader integration dependency
+        uses: actions/checkout@v7
+        with:
+          repository: MiSTer-devel/Downloader_MiSTer
+          ref: 5d0771359ae396aaea64453e6791ac87781d78f4
+          path: build/release-downloader
+
+      - name: Validate actual ZIP, Downloader delivery and shipped ARM installer
+        env:
+          RELEASE_CHANNEL: ${{ github.event.inputs.release_channel }}
+          QEMU_LD_PREFIX: /usr/arm-linux-gnueabihf
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support libc6-armhf-cross libgcc-s1-armhf-cross
+          sudo update-binfmts --enable qemu-arm
+          scripts/cargo build --locked --manifest-path mister/tools/manager/Cargo.toml
+          scripts/cargo test --locked --manifest-path mister/platform/contracts/manifest/Cargo.toml
+          scripts/tests/test-mister-magik-installer.sh
+          scripts/magik-ci ci distribution verify dist/published-assets --channel "$RELEASE_CHANNEL" --write-receipt
+          scripts/magik-ci ci distribution test-delivery dist/published-assets --channel "$RELEASE_CHANNEL" --downloader-source build/release-downloader
+
       - name: Upload distribution candidate
         uses: actions/upload-artifact@v7
         with:
@@ -426,6 +447,15 @@ jobs:
       actions: read
       contents: write
     steps:
+      - name: Checkout candidate validation tools
+        uses: actions/checkout@v7
+
+      - name: Build native release validators
+        run: |
+          rustup default "$(sed -n 's/^channel = "\([^"]*\)"/\1/p' apps/mister/rust-toolchain.toml)"
+          scripts/cargo build --locked --manifest-path mister/platform/contracts/manifest/Cargo.toml --bin platform-manifest-check
+          scripts/cargo build --locked --manifest-path mister/tools/manager/Cargo.toml
+
       - name: Download reviewed candidate
         uses: actions/download-artifact@v8
         with:
@@ -441,6 +471,8 @@ jobs:
         run: |
           set -euo pipefail
           (cd candidate && sha256sum --check SHA256SUMS)
+          scripts/magik-ci ci distribution verify candidate --channel "$RELEASE_CHANNEL"
+          python3 -c 'from pathlib import Path; from scripts.magik_ci import distribution as d, delivery_tests as t; t.require_evidence(Path("candidate"), d.read_json(Path("candidate") / d.RECEIPT))'
           if [ "$RELEASE_CHANNEL" = beta ]; then
             alpha_sha="$(gh api "repos/$GH_REPO/commits/alpha" --jq .sha 2>/dev/null || true)"
             if [ -z "$alpha_sha" ]; then

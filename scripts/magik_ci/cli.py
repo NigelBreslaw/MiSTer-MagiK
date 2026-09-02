@@ -38,6 +38,12 @@ def parser() -> argparse.ArgumentParser:
         "--channel", required=True, choices=("alpha", "beta", "release")
     )
     distribution_verify.add_argument("--write-receipt", action="store_true")
+    delivery_test = distribution_sub.add_parser("test-delivery")
+    delivery_test.add_argument("candidate", type=Path)
+    delivery_test.add_argument(
+        "--channel", required=True, choices=("alpha", "beta", "release")
+    )
+    delivery_test.add_argument("--downloader-source", type=Path, required=True)
     assurance = ci_sub.add_parser("host-assurance")
     assurance_scope = assurance.add_mutually_exclusive_group(required=True)
     assurance_scope.add_argument("--paths", nargs="+")
@@ -248,11 +254,18 @@ def main() -> int:
                 args.channel, args.alpha_sha, args.candidate_sha
             )
         elif args.command == "distribution":
-            from . import distribution
+            from . import delivery_tests, distribution
 
-            result = distribution.verify(
-                args.candidate, channel=args.channel, write_receipt=args.write_receipt
-            )
+            if args.action == "test-delivery":
+                result = delivery_tests.run(
+                    args.candidate, channel=args.channel, source=args.downloader_source
+                )
+            else:
+                result = distribution.verify(
+                    args.candidate,
+                    channel=args.channel,
+                    write_receipt=args.write_receipt,
+                )
             print(json.dumps(result, sort_keys=True))
         elif args.command == "platform-manifest":
             from . import manifest
