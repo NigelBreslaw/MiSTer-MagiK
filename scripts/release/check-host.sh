@@ -267,7 +267,6 @@ manager_path = os.environ["PUBLIC_MANAGER_RELATIVE"]
 manifest_path = f"{root}/{os.environ['PLATFORM_V3_FILE_NAME']}"
 required = {
     "Scripts/MiSTer-MagiK.sh",
-    "Scripts/MiSTer-MagiK.platform-v3.constants.sh",
     main,
     gui,
     manager_path,
@@ -296,6 +295,8 @@ with zipfile.ZipFile(os.environ["ZIP"]) as archive:
         if line and not line.startswith("#")
     )
 missing = sorted(required - names)
+if {name for name in names if name.startswith("Scripts/MiSTer-MagiK")} != {"Scripts/MiSTer-MagiK.sh"}:
+    raise SystemExit("package must expose exactly one MagiK Scripts entry")
 if missing:
     print(f"package validation failed: missing {', '.join(missing)}", file=sys.stderr)
     raise SystemExit(1)

@@ -55,8 +55,6 @@ seed_package() {
     --latch-metadata "$APP/fpga/menu-magik-vblank-latch.metadata.txt" \
     --platform-bundle-manifest "$APP/platform-bundle-v0.2.json" \
     --main-revision "$(printf %040d 2)" --magik-revision "$(printf %040d 1)" >/dev/null
-  cp "$ROOT/mister/platform/contracts/generated/platform-v3.constants.sh" \
-    "$FAT/Scripts/MiSTer-MagiK.platform-v3.constants.sh"
   cp "$ROOT/scripts/MiSTer-MagiK.sh" "$FAT/Scripts/MiSTer-MagiK.sh"
   chmod 755 "$FAT/Scripts/MiSTer-MagiK.sh"
 }
@@ -176,6 +174,11 @@ done
 cp "$FIXTURE/manifest.good" "$APP/platform-v3.manifest"
 
 # A missing manager and a corrupt manager are refused before boot files change.
+printf 'exit 99\n' >"$FAT/Scripts/MiSTer-MagiK.platform-v3.constants.sh"
+run_manager verify-platform >"$FIXTURE/stale-helper.log"
+grep -q 'verified platform' "$FIXTURE/stale-helper.log"
+assert_boot_unchanged
+
 mv "$APP/mister-magik-manager" "$FIXTURE/manager.missing"
 if MISTER_MAGIK_TEST_KEYS=down run_manager >"$FIXTURE/missing-manager.log" 2>&1; then
   echo "missing manager unexpectedly ran" >&2
@@ -277,6 +280,7 @@ test -d "$APP"
 assert_magik_selected
 
 # Full uninstall restores stock, removes only owned files, and can skip reboot.
+printf 'exit 99\n' >"$FAT/Scripts/MiSTer-MagiK.platform-v3.constants.sh"
 MISTER_MAGIK_TEST_KEYS=down,enter,down,other run_manager >"$FIXTURE/uninstall.log"
 grep -q 'fully uninstalled' "$FIXTURE/uninstall.log"
 grep -q 'reboot skipped' "$FIXTURE/uninstall.log"

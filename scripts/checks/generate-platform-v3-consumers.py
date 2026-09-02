@@ -85,6 +85,11 @@ def generated_files() -> dict[Path, str]:
     if schema.get("format") != "mister-magik-platform-v3-schema-v1":
         raise SystemExit("unsupported platform-v3 schema")
     return {
+        ROOT / "scripts/MiSTer-MagiK.sh": (
+            ROOT / "scripts/templates/MiSTer-MagiK.sh.in"
+        )
+        .read_text()
+        .replace("@PLATFORM_CONSTANTS@", constants(schema).rstrip()),
         OUTPUT / "platform-v3.constants.sh": constants(schema),
         OUTPUT / "platform-v3.public.fixture": fixture(schema, "public"),
         OUTPUT / "platform-v3.development.fixture": fixture(schema, "dev"),

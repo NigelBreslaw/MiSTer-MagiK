@@ -329,8 +329,6 @@ trap 'rm -rf "$STAGE" "$DATABASE_TMP"' EXIT
 mkdir -p "$STAGE/Scripts" "$(dirname "$STAGE/$PUBLIC_LATCH_RBF_RELATIVE")" \
   "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses"
 cp "$INSTALLER" "$STAGE/Scripts/MiSTer-MagiK.sh"
-cp "$PLATFORM_CONSTANTS" \
-  "$STAGE/Scripts/MiSTer-MagiK.platform-v3.constants.sh"
 chmod 755 "$STAGE/Scripts/MiSTer-MagiK.sh"
 cp "$BIN" "$STAGE/$PUBLIC_GUI_RELATIVE"
 chmod 755 "$STAGE/$PUBLIC_GUI_RELATIVE"
