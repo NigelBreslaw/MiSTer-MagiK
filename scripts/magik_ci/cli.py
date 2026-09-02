@@ -30,6 +30,14 @@ def parser() -> argparse.ArgumentParser:
     )
     ci = sub.add_parser("ci")
     ci_sub = ci.add_subparsers(dest="command", required=True)
+    distribution = ci_sub.add_parser("distribution")
+    distribution_sub = distribution.add_subparsers(dest="action", required=True)
+    distribution_verify = distribution_sub.add_parser("verify")
+    distribution_verify.add_argument("candidate", type=Path)
+    distribution_verify.add_argument(
+        "--channel", required=True, choices=("alpha", "beta", "release")
+    )
+    distribution_verify.add_argument("--write-receipt", action="store_true")
     assurance = ci_sub.add_parser("host-assurance")
     assurance_scope = assurance.add_mutually_exclusive_group(required=True)
     assurance_scope.add_argument("--paths", nargs="+")
@@ -239,6 +247,13 @@ def main() -> int:
             metadata.require_alpha_promotion(
                 args.channel, args.alpha_sha, args.candidate_sha
             )
+        elif args.command == "distribution":
+            from . import distribution
+
+            result = distribution.verify(
+                args.candidate, channel=args.channel, write_receipt=args.write_receipt
+            )
+            print(json.dumps(result, sort_keys=True))
         elif args.command == "platform-manifest":
             from . import manifest
 

@@ -232,7 +232,7 @@ ZIP="$(scripts/package-distribution.sh \
   --binary "$BIN" \
   --manager "$MANAGER" \
   --game-databases-release-dir "$WORK/game-databases" \
-  --name release-check --out-dir "$WORK" \
+  --name "mister-magik-$VERSION" --out-dir "$WORK" \
   --version "$VERSION" --build-number "$BUILD_NUMBER" \
   --release-assets-dir "$WORK/release-assets" \
   --main-bin "$MAIN_BIN" --main-source-revision "$MAIN_SOURCE_REVISION" \
@@ -243,90 +243,10 @@ ZIP="$(scripts/package-distribution.sh \
   --platform-manifest "$WORK/platform-v3.manifest" \
   --platform-bundle-manifest "$WORK/platform-bundle-v0.2.json")"
 
-ZIP="$ZIP" \
-PUBLIC_ROOT_RELATIVE="$PUBLIC_ROOT_RELATIVE" \
-PUBLIC_MAIN_RELATIVE="$PUBLIC_MAIN_RELATIVE" \
-PUBLIC_GUI_RELATIVE="$PUBLIC_GUI_RELATIVE" \
-PUBLIC_MANAGER_RELATIVE="$PUBLIC_MANAGER_RELATIVE" \
-PUBLIC_SCANOUT_MODULE_RELATIVE="$PUBLIC_SCANOUT_MODULE_RELATIVE" \
-PUBLIC_LATCH_RBF_RELATIVE="$PUBLIC_LATCH_RBF_RELATIVE" \
-PUBLIC_MANAGER_PATH="$PLATFORM_V3_PUBLIC_MANAGER" \
-PLATFORM_V3_FILE_NAME="$PLATFORM_V3_FILE_NAME" \
-DEV_ROOT_RELATIVE="$DEV_ROOT_RELATIVE" \
-DEV_MAIN_RELATIVE="${PLATFORM_V3_DEV_MAIN#/media/fat/}" \
-python3 - <<'PY'
-import hashlib
-import os
-import sys
-import zipfile
-
-root = os.environ["PUBLIC_ROOT_RELATIVE"]
-main = os.environ["PUBLIC_MAIN_RELATIVE"]
-gui = os.environ["PUBLIC_GUI_RELATIVE"]
-manager_path = os.environ["PUBLIC_MANAGER_RELATIVE"]
-manifest_path = f"{root}/{os.environ['PLATFORM_V3_FILE_NAME']}"
-required = {
-    "Scripts/MiSTer-MagiK.sh",
-    main,
-    gui,
-    manager_path,
-    f"{root}/magik-metadata-v1.bin",
-    f"{root}/arcade-updater-index-v1.lz4b",
-    f"{root}/assets/snes/snes-small-v1.rgb565a",
-    f"{root}/assets/ui/settings-v1.rgb565a",
-    manifest_path,
-    f"{root}/platform-bundle-v0.2.json",
-    f"{root}/game-databases-manifest.json",
-    os.environ["PUBLIC_SCANOUT_MODULE_RELATIVE"],
-    os.environ["PUBLIC_LATCH_RBF_RELATIVE"],
-    f"{root}/THIRD-PARTY-NOTICES.txt",
-    f"{root}/licenses/COMMERCIAL-FONTS.txt",
-    f"{root}/SOURCE-OFFER.txt",
-}
-with zipfile.ZipFile(os.environ["ZIP"]) as archive:
-    names = set(archive.namelist())
-    manager = archive.read(manager_path)
-    snes_artwork = archive.read(f"{root}/assets/snes/snes-small-v1.rgb565a")
-    settings_artwork = archive.read(f"{root}/assets/ui/settings-v1.rgb565a")
-    manager_mode = archive.getinfo(manager_path).external_attr >> 16
-    manifest = dict(
-        line.split("=", 1)
-        for line in archive.read(manifest_path).decode().splitlines()
-        if line and not line.startswith("#")
-    )
-missing = sorted(required - names)
-if {name for name in names if name.startswith("Scripts/MiSTer-MagiK")} != {"Scripts/MiSTer-MagiK.sh"}:
-    raise SystemExit("package must expose exactly one MagiK Scripts entry")
-if missing:
-    print(f"package validation failed: missing {', '.join(missing)}", file=sys.stderr)
-    raise SystemExit(1)
-if manager_mode & 0o111 == 0:
-    print("package validation failed: manager is not executable", file=sys.stderr)
-    raise SystemExit(1)
-if manifest.get("manager_path") != os.environ["PUBLIC_MANAGER_PATH"]:
-    print("package validation failed: manager path is not canonical", file=sys.stderr)
-    raise SystemExit(1)
-if hashlib.sha256(manager).hexdigest() != manifest.get("manager_sha256"):
-    print("package validation failed: manager hash does not match manifest", file=sys.stderr)
-    raise SystemExit(1)
-if hashlib.sha256(snes_artwork).hexdigest() != "7a76993e7e1b0063832b94e9d2ad588549587cf09a14ac2ced72d349ed12f766":
-    print("package validation failed: SNES artwork checksum mismatch", file=sys.stderr)
-    raise SystemExit(1)
-if hashlib.sha256(settings_artwork).hexdigest() != "44d657ff706a49fd8c8999b7c02ea4cdb7e4a8488a54dc68e0b79235dc40e8ec":
-    print("package validation failed: settings artwork checksum mismatch", file=sys.stderr)
-    raise SystemExit(1)
-forbidden = sorted(
-    name for name in names
-    if "mister-magik-agent" in name
-    or f"{os.environ['DEV_ROOT_RELATIVE']}/" in name
-    or name == os.environ["DEV_MAIN_RELATIVE"]
-    or name.endswith("/mame.sqlite3")
-    or name.endswith("/hbmame.sqlite3")
-)
-if forbidden:
-    print(f"package validation failed: development payload present: {', '.join(forbidden)}", file=sys.stderr)
-    raise SystemExit(1)
-print(f"package validation ok: {os.environ['ZIP']}")
-PY
-
+python3 scripts/release/databases/generate-downloader-db.py \
+  --receipt "$WORK/release-assets/release-assets.json" --output "$WORK/release-assets" \
+  --channel beta --tag "v$VERSION" --timestamp 1700000000
+python3 scripts/release/packaging/prepare-published-assets.py \
+  --candidate "$WORK/release-assets" --output "$WORK/published-assets"
+scripts/magik-ci ci distribution verify "$WORK/published-assets" --channel beta --write-receipt
 echo "host release gate: ok"
