@@ -97,14 +97,7 @@ class PublicationTests(unittest.TestCase):
         self.validated = dist.verify(
             self.candidate, channel="alpha", write_receipt=True
         )
-        evidence = {
-            "format": "mister-magik-delivery-evidence-v1",
-            "candidate_id": self.validated["candidate_id"],
-            "downloader_revision": delivery.DOWNLOADER_REVISION,
-            "installer": "shipped-arm-verify-platform",
-            "cases": list(delivery.CASES),
-            "validation": "passed",
-        }
+        evidence = delivery.evidence_for_candidate(self.validated)
         (self.candidate / dist.EVIDENCE).write_bytes(dist.canonical_json(evidence))
         dist.write_checksums(self.candidate)
         self.github = FakeGitHub()

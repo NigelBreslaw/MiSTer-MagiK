@@ -42,6 +42,18 @@ class DistributionWorkflowTests(unittest.TestCase):
         self.assertIn("scripts/tests/test-mister-magik-installer.sh", action)
         self.assertIn("update-binfmts --enable qemu-arm", action)
 
+    def test_branch_qualification_builds_but_never_publishes(self):
+        workflow = (ROOT / ".github/workflows/distribution.yml").read_text()
+        self.assertIn("qualification_only", workflow)
+        self.assertIn("inputs.qualification_only != true", workflow)
+        publish = workflow.split("\n  publish:\n", 1)[1]
+        self.assertIn("inputs.qualification_only != true", publish)
+        self.assertIn("test \"$GITHUB_REF\" = refs/heads/main", publish)
+        self.assertIn(
+            "if: inputs.release_channel == 'alpha' || inputs.qualification_only == true",
+            workflow,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

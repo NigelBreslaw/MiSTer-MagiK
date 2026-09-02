@@ -62,3 +62,10 @@ runs:
         scripts/tests/test-mister-magik-installer.sh
         scripts/magik-ci ci distribution verify "$CANDIDATE" --channel "$CHANNEL" --write-receipt
         scripts/magik-ci ci distribution test-delivery "$CANDIDATE" --channel "$CHANNEL" --downloader-source build/release-downloader --device-downloader-source "${{ inputs.device-downloader-source }}" --update-all-source "${{ inputs.update-all-source }}"
+    - name: Upload delivery failure evidence
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: mister-magik-delivery-failure-${{ github.run_id }}
+        path: ${{ runner.temp }}/mister-magik-delivery-*
+        if-no-files-found: ignore

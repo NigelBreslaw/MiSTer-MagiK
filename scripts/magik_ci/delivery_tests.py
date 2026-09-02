@@ -73,7 +73,7 @@ def evidence_for_candidate(validated: dict[str, Any]) -> dict[str, Any]:
         "format": EVIDENCE_FORMAT,
         "candidate_id": validated["candidate_id"],
         "suite_revision": EVIDENCE_FORMAT,
-        "dependency_pins": DEPENDENCY_PINS,
+        "dependency_pins": dict(DEPENDENCY_PINS),
         "entrypoints": list(ENTRYPOINTS),
         "settings": {
             "file_checking": list(DOWNLOADER_MODES),
@@ -1027,7 +1027,36 @@ def downloader_test(
             worker.join(timeout=5)
 
 
+def _write_failure_artifact(error: Exception) -> None:
+    runner_temp = os.getenv("RUNNER_TEMP")
+    if not runner_temp:
+        return
+    artifact = Path(runner_temp) / "mister-magik-delivery-failure.log"
+    atomic_write(artifact, (str(error) + "\n").encode())
+
+
 def run(
+    candidate: Path,
+    *,
+    channel: str,
+    source: Path,
+    device_source: Path,
+    update_all_source: Path | None = None,
+) -> dict[str, Any]:
+    try:
+        return _run_delivery(
+            candidate,
+            channel=channel,
+            source=source,
+            device_source=device_source,
+            update_all_source=update_all_source,
+        )
+    except Exception as error:
+        _write_failure_artifact(error)
+        raise
+
+
+def _run_delivery(
     candidate: Path,
     *,
     channel: str,

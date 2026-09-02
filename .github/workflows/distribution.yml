@@ -19,6 +19,11 @@ on:
         description: "Exact existing alpha version to promote (required for beta/release; empty for alpha)"
         required: false
         type: string
+      qualification_only:
+        description: "Build and run the full delivery gate without publishing (branch-safe)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -45,8 +50,8 @@ jobs:
       artifact-name: ${{ steps.release.outputs.artifact_name }}
       timestamp: ${{ steps.release.outputs.timestamp }}
     steps:
-      - name: Refuse non-main publication
-        if: github.ref != 'refs/heads/main'
+      - name: Refuse non-main publication (unless qualification-only)
+        if: github.ref != 'refs/heads/main' && inputs.qualification_only != true
         run: |
           echo "Releases must be dispatched from the main branch; got $GITHUB_REF" >&2
           exit 1
@@ -62,12 +67,16 @@ jobs:
         env:
           RELEASE_CHANNEL: ${{ inputs.release_channel }}
           CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+          QUALIFICATION_ONLY: ${{ inputs.qualification_only }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           build_number="$(git rev-list --count "$GITHUB_SHA")"
           version="0.2.$build_number"
-          if [ "$RELEASE_CHANNEL" = alpha ]; then
+          if [ "$QUALIFICATION_ONLY" = true ]; then
+            test "$RELEASE_CHANNEL" = alpha
+            test -z "$CANDIDATE_VERSION"
+          elif [ "$RELEASE_CHANNEL" = alpha ]; then
             test -z "$CANDIDATE_VERSION"
           else
             test "$CANDIDATE_VERSION" = "$version" || { echo "Promotion requires the exact validated version for this source: $version" >&2; exit 1; }
@@ -81,7 +90,7 @@ jobs:
 
   distribution:
     name: Build distribution ZIP
-    if: inputs.release_channel == 'alpha'
+    if: inputs.release_channel == 'alpha' || inputs.qualification_only == true
     runs-on: ubuntu-24.04
     needs: release-metadata
     timeout-minutes: 120
@@ -360,6 +369,8 @@ jobs:
         with:
           candidate: dist/published-assets
           channel: alpha
+          device-downloader-source: build/release-downloader-device
+          update-all-source: build/release-update-all/update_all.pyz
 
       - name: Upload distribution candidate
         uses: actions/upload-artifact@v7
@@ -371,7 +382,7 @@ jobs:
 
   promotion:
     name: Verify existing immutable candidate
-    if: inputs.release_channel != 'alpha'
+    if: inputs.release_channel != 'alpha' && inputs.qualification_only != true
     runs-on: ubuntu-24.04
     needs: release-metadata
     timeout-minutes: 30
@@ -397,6 +408,8 @@ jobs:
         with:
           candidate: dist/published-assets
           channel: ${{ inputs.release_channel }}
+          device-downloader-source: build/release-downloader-device
+          update-all-source: build/release-update-all/update_all.pyz
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ needs.release-metadata.outputs.artifact-name }}
@@ -410,6 +423,7 @@ jobs:
     needs: [release-metadata, distribution, promotion]
     if: >-
       always() && needs.release-metadata.result == 'success' &&
+      inputs.qualification_only != true &&
       ((inputs.release_channel == 'alpha' && needs.distribution.result == 'success') ||
        (inputs.release_channel != 'alpha' && needs.promotion.result == 'success'))
     concurrency:
