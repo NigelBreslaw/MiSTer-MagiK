@@ -21334,6 +21334,43 @@ fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Ve
                     None,
                     "total_us",
                 ),
+                "tmpfs_artifact_build_ms": catalog_phase_metric_ms(
+                    value.get("phase_evidence"),
+                    "fast_catalog_tmpfs_artifact_build_tsv",
+                    None,
+                    "elapsed_us",
+                ),
+                "tmpfs_artifact_systems": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "fast_catalog_tmpfs_artifact_build_tsv",
+                    "systems",
+                ),
+                "tmpfs_artifactless_systems": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "fast_catalog_tmpfs_artifact_build_tsv",
+                    "artifactless_systems",
+                ),
+                "tmpfs_artifact_copied_bytes": catalog_phase_metric_sum(
+                    value.get("phase_evidence"),
+                    "fast_catalog_tmpfs_artifact_build_tsv",
+                    "copied_bytes",
+                ),
+                "tmpfs_artifact_copy_hash_ms": catalog_phase_metric_ms(
+                    value.get("phase_evidence"),
+                    "fast_catalog_tmpfs_artifact_build_tsv",
+                    None,
+                    "copy_hash_us",
+                ),
+                "tmpfs_artifact_cleanup_status": catalog_phase_metric_text(
+                    value.get("phase_evidence"),
+                    "fast_catalog_tmpfs_artifact_build_tsv",
+                    "cleanup_status",
+                ),
+                "tmpfs_artifact_fallback_status": catalog_phase_metric_text(
+                    value.get("phase_evidence"),
+                    "fast_catalog_tmpfs_artifact_build_tsv",
+                    "fallback_status",
+                ),
                 "generic_known_profile_ms": catalog_phase_metric_ms(
                     value.get("phase_evidence"),
                     "fast_catalog_generic_phase_tsv",
@@ -21715,6 +21752,21 @@ fn catalog_phase_metric_sum(
         .filter_map(Value::as_u64)
         .collect::<Vec<_>>();
     (!values.is_empty()).then(|| values.into_iter().fold(0, u64::saturating_add))
+}
+
+fn catalog_phase_metric_text(
+    phase_evidence: Option<&Value>,
+    record: &str,
+    metric: &str,
+) -> Option<String> {
+    phase_evidence?
+        .get("records")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|value| value.get("record").and_then(Value::as_str) == Some(record))
+        .and_then(|value| value.pointer(&format!("/metrics/{metric}")))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
 }
 
 fn catalog_phase_metric_min(
@@ -25733,7 +25785,7 @@ fn catalog_artifact_set_valid(catalog: &Value) -> bool {
 }
 
 fn catalog_phase_evidence(log: &str) -> Value {
-    const RECORDS: [&str; 26] = [
+    const RECORDS: [&str; 27] = [
         "startup_timing",
         "catalog_scan_attribution_tsv",
         "catalog_scan_handoff_tsv",
@@ -25757,6 +25809,7 @@ fn catalog_phase_evidence(log: &str) -> Value {
         "catalog_shard_allocator_trim_tsv",
         "fast_catalog_generic_phase_tsv",
         "fast_catalog_generic_inventory_tsv",
+        "fast_catalog_tmpfs_artifact_build_tsv",
         "catalog_game_header_probe_tsv",
         "namespace_walk_fallback_tsv",
         "namespace_walk_subtree_recovery_tsv",
@@ -43335,6 +43388,12 @@ H: Handlers=event3 js0"#
                             {"record": "fast_catalog_generic_phase_tsv", "metrics": {
                                 "prepared_roots_skipped": 2
                             }},
+                            {"record": "fast_catalog_tmpfs_artifact_build_tsv", "metrics": {
+                                "elapsed_us": 5800, "systems": 8,
+                                "artifactless_systems": 1, "copied_bytes": 4096,
+                                "copy_hash_us": 700, "cleanup_status": "complete",
+                                "fallback_status": "none"
+                            }},
                             {"record": "namespace_walk_fallback_tsv", "metrics": {
                                 "restart_count": 1, "fd_attempt_us": 1200,
                                 "fallback_us": 3400, "fallback_entries": 50,
@@ -43355,6 +43414,13 @@ H: Handlers=event3 js0"#
         );
         assert_eq!(normalized[0]["game_header_probe_us"], 500);
         assert_eq!(normalized[0]["generic_prepared_roots_skipped"], 2);
+        assert_eq!(normalized[0]["tmpfs_artifact_build_ms"], 6);
+        assert_eq!(normalized[0]["tmpfs_artifact_systems"], 8);
+        assert_eq!(normalized[0]["tmpfs_artifactless_systems"], 1);
+        assert_eq!(normalized[0]["tmpfs_artifact_copied_bytes"], 4096);
+        assert_eq!(normalized[0]["tmpfs_artifact_copy_hash_ms"], 1);
+        assert_eq!(normalized[0]["tmpfs_artifact_cleanup_status"], "complete");
+        assert_eq!(normalized[0]["tmpfs_artifact_fallback_status"], "none");
         assert_eq!(normalized[0]["game_header_entries"], 30);
         assert_eq!(normalized[0]["game_header_accepted"], 24);
         assert_eq!(normalized[0]["game_header_metadata_probe_us"], 300);
@@ -43535,7 +43601,8 @@ catalog_v3_projection_phases_tsv\tplanning_us=1\treconciliation_us=2\ttotal_us=3
 catalog_v3_reconciliation_tsv\tgeneration=2\trebuilt=3\n\
 catalog_v3_persist_phases_tsv\tprojection_us=4\tscanner_cache_us=5\n\
 namespace_walk_subtree_recovery_tsv\tscope=subtree\trecovered=1\tattempts=1\tsnapshot_us=17\tsnapshot_entries=23\tsnapshot_errors=0\n\
-fast_catalog_generic_phase_tsv\tphase=complete\n";
+fast_catalog_generic_phase_tsv\tphase=complete\n\
+fast_catalog_tmpfs_artifact_build_tsv\tenabled=true\tsystems=8\tartifactless_systems=1\telapsed_us=5800\tcopied_bytes=4096\tcopy_hash_us=700\tcleanup_status=complete\tfallback_status=none\n";
         let evidence = catalog_phase_evidence(log);
         assert_eq!(evidence["complete"], true);
         assert_eq!(evidence["required"]["scan_complete"], true);
@@ -43554,6 +43621,17 @@ fast_catalog_generic_phase_tsv\tphase=complete\n";
         assert_eq!(recovery["metrics"]["snapshot_us"], json!(17));
         assert_eq!(recovery["metrics"]["snapshot_entries"], json!(23));
         assert_eq!(recovery["metrics"]["snapshot_errors"], json!(0));
+        let tmpfs = evidence["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|record| {
+                record.get("record").and_then(Value::as_str)
+                    == Some("fast_catalog_tmpfs_artifact_build_tsv")
+            })
+            .expect("serial tmpfs artifact evidence should be retained");
+        assert_eq!(tmpfs["metrics"]["systems"], json!(8));
+        assert_eq!(tmpfs["metrics"]["cleanup_status"], json!("complete"));
 
         let incomplete = catalog_phase_evidence(
             &log.replace("catalog_v3_persist_phases_tsv", "missing_persist_record"),
