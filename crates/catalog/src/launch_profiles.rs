@@ -454,10 +454,10 @@ pub fn builtin_profiles() -> Vec<LaunchProfile> {
 
 /// Filesystem facts and profile state shared by one cold catalog scan.
 ///
-/// Building the normal plan reads the installed cores and enumerates only the
-/// unclaimed top-level game directory headers. Callers that already collect
-/// payload facts while walking those directories can defer that header capture
-/// and finalize the active profile set from the same serial namespace walk.
+/// Building the plan reads the installed cores and enumerates only the
+/// unclaimed top-level game directory headers.  Callers that already collect
+/// payload facts while walking those directories can then finalize the active
+/// profile set without repeating either discovery step.
 #[derive(Clone, Debug)]
 pub(crate) struct CatalogScanPlan {
     installed_cores: Vec<catalog_discovery::InstalledCore>,
@@ -560,40 +560,6 @@ impl CatalogScanPlan {
             installed_cores,
             all_game_dir_headers,
             game_dir_headers,
-            base_profiles,
-        })
-    }
-
-    /// Build the production cold-scan plan without opening `/games` for a
-    /// preliminary header pass. The shared namespace capture supplies every
-    /// top-level fact, including roots that are not present in the checked-in
-    /// profile manifest.
-    #[cfg(feature = "builder")]
-    pub(crate) fn try_for_roots_deferred_game_headers(roots: &[String]) -> Result<Self, String> {
-        crate::cooperative_work::checkpoint();
-        let core_started = Instant::now();
-        let installed_cores = catalog_discovery::installed_cores_for_roots_checked(roots)?;
-        let core_us = core_started.elapsed().as_micros() as u64;
-        crate::cooperative_work::checkpoint();
-        crate::library_db::report_library_scan_timing(
-            "scan_plan_cores",
-            core_us,
-            format!("cores={}", installed_cores.len()),
-        );
-        let profiles_started = Instant::now();
-        let base_profiles = base_profiles_for_installed_cores(&installed_cores);
-        crate::library_db::report_library_scan_timing(
-            "scan_plan_profiles",
-            profiles_started.elapsed().as_micros() as u64,
-            format!(
-                "base_profiles={} runtime_headers=deferred",
-                base_profiles.len()
-            ),
-        );
-        Ok(Self {
-            installed_cores,
-            all_game_dir_headers: Vec::new(),
-            game_dir_headers: Vec::new(),
             base_profiles,
         })
     }

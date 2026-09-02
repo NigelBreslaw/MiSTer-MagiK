@@ -147,7 +147,7 @@ pub(crate) fn build_independent_fast_snapshot_for_refresh_with_progress(
     )?;
     let roots = [storage_root.display().to_string()];
     let phase_started = Instant::now();
-    let plan = CatalogScanPlan::try_for_roots_deferred_game_headers(&roots)?;
+    let plan = CatalogScanPlan::try_for_roots(&roots)?;
     let profile_discovery_us = elapsed_us(phase_started);
     for system_id in PREPARED_SYSTEM_IDS
         .iter()
