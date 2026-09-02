@@ -65,6 +65,57 @@ claim physical HDMI, FPGA or device qualification. Downloader testing uses a
 pinned upstream revision and a loopback proxy; only transport URLs are remapped,
 never installed bytes, manifest fields, sizes or hashes.
 
+The gate also runs the real `update_all.pyz` entrypoint against the same local
+feed. It qualifies the baseline Downloader revision, the device-compatible
+revision used by cached fallback, and Update All as one pinned dependency set.
+The Linux job creates an isolated `/media/fat` mount and runs the shipped ARM
+manager under QEMU; macOS checks do not claim this matrix has run.
+
+## Downloader lifecycle guarantee
+
+An unchanged feed has two different meanings depending on the lifecycle stage:
+
+* A second run with the registration and files intact is a cached fast path. It
+  must make no payload requests and must not change boot files.
+* `restore` returns stock boot selection while retaining the MagiK package and
+  its Downloader registration. Running the same feed after that restore remains
+  a cached path.
+* Full `uninstall` first unregisters `mister_magik` through Downloader, then
+  removes the package, generated data, and known legacy files. It retains other
+  databases, sections, files, and Downloader caches. The next unchanged run is
+  therefore a real download of the identical release, with every receipt hash
+  checked again.
+
+A changed feed is not repaired by forcing integrity mode: its new database
+revision downloads normally under the selected checking mode. The required
+matrix covers `balanced`, `fastest`, `exhaustive`, and named
+`verify_integrity`, with each of `allow_delete=0`, `1`, and `2`, through both
+direct Downloader and real Update All entrypoints.
+
+If Downloader state is unreadable, externally unverified, unsupported, or the
+updater is unavailable, the manager stops before package removal and reports
+that Downloader must be updated. A nonzero, timeout, or state/configuration
+failure during delegation leaves a verified recovery manager staged and offers
+no reboot. Restore connectivity/state and retry the normal entrypoint; do not
+delete fingerprint files, edit Downloader JSON, clear caches, or use
+`--force`. A ZIP-only package with no Downloader registration follows the local
+uninstall path.
+
+For users who received the historical broken package, restore the correct
+channel's Downloader INI/database entry first. As a temporary recovery setting
+in the main Downloader configuration (normally `/media/fat/downloader.ini`),
+use the named value `file_checking=verify_integrity`, not numeric `3`, then let
+the corrected beta complete. Restore the normal checking preference afterward.
+The corrected database changes the feed identity and downloads normally. The
+new alpha is verified against its actual public payload before approval, and
+beta promotion reuses those exact bytes; the immutable `0.2.6229` artifacts are
+never modified.
+
+To exercise this gate from a feature branch without publishing, dispatch the
+workflow with `qualification_only=true` and `release_channel=alpha`. It builds
+and uploads only a short-lived candidate artifact; publication remains limited
+to an explicit main-branch dispatch and approval.
+
 ## Corrected-release checklist
 
 - [ ] The broken Dev-as-public manifest is rejected by the mandatory gate.
