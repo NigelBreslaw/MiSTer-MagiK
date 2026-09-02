@@ -46,6 +46,18 @@ def parser() -> argparse.ArgumentParser:
         "--channel", required=True, choices=("alpha", "beta", "release")
     )
     delivery_test.add_argument("--downloader-source", type=Path, required=True)
+    delivery_test.add_argument(
+        "--device-downloader-source",
+        type=Path,
+        required=True,
+        help="device-compatible pinned Downloader source used by cached fallback tests",
+    )
+    delivery_test.add_argument(
+        "--update-all-source",
+        type=Path,
+        required=True,
+        help="real pinned Update All pyz used for the second delivery entrypoint",
+    )
     for action in ("prepare-promotion", "publish"):
         command = distribution_sub.add_parser(action)
         command.add_argument("candidate", type=Path)
@@ -262,7 +274,11 @@ def main() -> int:
 
             if args.action == "test-delivery":
                 result = delivery_tests.run(
-                    args.candidate, channel=args.channel, source=args.downloader_source
+                    args.candidate,
+                    channel=args.channel,
+                    source=args.downloader_source,
+                    device_source=args.device_downloader_source,
+                    update_all_source=args.update_all_source,
                 )
             elif args.action == "publish":
                 result = publication.publish(

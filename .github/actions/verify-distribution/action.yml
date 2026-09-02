@@ -10,6 +10,12 @@ inputs:
   channel:
     required: true
     description: Explicit alpha, beta, or release channel
+  update-all-source:
+    required: true
+    description: Path to the pinned real Update All pyz archive
+  device-downloader-source:
+    required: true
+    description: Path to the pinned device-compatible Downloader source
 runs:
   using: composite
   steps:
@@ -19,6 +25,19 @@ runs:
         repository: MiSTer-devel/Downloader_MiSTer
         ref: 5d0771359ae396aaea64453e6791ac87781d78f4
         path: build/release-downloader
+    - name: Checkout pinned Update All integration dependency
+      uses: actions/checkout@v7
+      with:
+        repository: theypsilon/Update_All_MiSTer
+        ref: 28b710baab9ab69a62c155eee3397cd58a4f3dbf
+        path: build/release-update-all
+        sparse-checkout: update_all.pyz
+    - name: Checkout device-compatible Downloader integration dependency
+      uses: actions/checkout@v7
+      with:
+        repository: MiSTer-devel/Downloader_MiSTer
+        ref: 6158e7b9029e77707ac7b151501b7a326c811e39f
+        path: build/release-downloader-device
     - name: Verify actual delivered bytes
       shell: bash
       env:
@@ -30,10 +49,16 @@ runs:
         sudo apt-get update
         sudo apt-get install -y qemu-user-static binfmt-support libc6-armhf-cross libgcc-s1-armhf-cross
         sudo update-binfmts --enable qemu-arm
+        test ! -e /proc/mounts || ! grep -E '[[:space:]]/media/fat[[:space:]]' /proc/mounts
+        sudo mkdir -p /media/fat
+        delivery_root="$(mktemp -d -p "$RUNNER_TEMP" magik-fat.XXXXXX)"
+        sudo mount --bind "$delivery_root" /media/fat
+        trap 'sudo umount /media/fat; rm -rf "$delivery_root"' EXIT
+        export MISTER_MAGIK_DELIVERY_ROOT=/media/fat
         rustup default "$(sed -n 's/^channel = "\([^"]*\)"/\1/p' apps/mister/rust-toolchain.toml)"
         scripts/cargo build --locked --manifest-path mister/platform/contracts/manifest/Cargo.toml --bin platform-manifest-check
         scripts/cargo build --locked --manifest-path mister/tools/manager/Cargo.toml
         scripts/cargo test --locked --manifest-path mister/platform/contracts/manifest/Cargo.toml
         scripts/tests/test-mister-magik-installer.sh
         scripts/magik-ci ci distribution verify "$CANDIDATE" --channel "$CHANNEL" --write-receipt
-        scripts/magik-ci ci distribution test-delivery "$CANDIDATE" --channel "$CHANNEL" --downloader-source build/release-downloader
+        scripts/magik-ci ci distribution test-delivery "$CANDIDATE" --channel "$CHANNEL" --downloader-source build/release-downloader --device-downloader-source "${{ inputs.device-downloader-source }}" --update-all-source "${{ inputs.update-all-source }}"

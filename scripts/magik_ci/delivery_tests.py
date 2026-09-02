@@ -9,10 +9,12 @@ import copy
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,69 @@ from . import distribution as dist
 from .common import atomic_write, sha256_file
 
 DOWNLOADER_REVISION = "5d0771359ae396aaea64453e6791ac87781d78f4"
+DEVICE_DOWNLOADER_REVISION = "6158e7b9029e77707ac7b151501b7a326c811e39"
+UPDATE_ALL_REVISION = "28b710baab9ab69a62c155eee3397cd58a4f3dbf"
+DEPENDENCY_PINS = {
+    "downloader_source": DOWNLOADER_REVISION,
+    "device_downloader": DEVICE_DOWNLOADER_REVISION,
+    "update_all": UPDATE_ALL_REVISION,
+}
+EVIDENCE_FORMAT = "mister-magik-delivery-evidence-v2"
+ENTRYPOINTS = ("downloader", "update_all", "shipped-manager")
+
+
+def expected_manager_matrix() -> list[dict[str, Any]]:
+    return [
+        {
+            "entrypoint": "shipped-manager",
+            "mode": mode,
+            "allow_delete": deletion,
+            "result": "passed",
+        }
+        for mode in DOWNLOADER_MODES
+        for deletion in DELETION_POLICIES
+    ]
+
+
+def expected_update_all_matrix() -> list[dict[str, Any]]:
+    return [
+        {
+            "entrypoint": "update_all",
+            "mode": mode,
+            "allow_delete": deletion,
+            "result": "passed",
+            "downloader_cache": "executable" if index % 2 == 0 else "python-archive",
+        }
+        for index, (mode, deletion) in enumerate(
+            (
+                setting
+                for mode in DOWNLOADER_MODES
+                for setting in ((mode, deletion) for deletion in DELETION_POLICIES)
+            )
+        )
+    ]
+
+
+def evidence_for_candidate(validated: dict[str, Any]) -> dict[str, Any]:
+    """Return the complete v2 evidence shape used by tests and promotion."""
+    return {
+        "format": EVIDENCE_FORMAT,
+        "candidate_id": validated["candidate_id"],
+        "suite_revision": EVIDENCE_FORMAT,
+        "dependency_pins": DEPENDENCY_PINS,
+        "entrypoints": list(ENTRYPOINTS),
+        "settings": {
+            "file_checking": list(DOWNLOADER_MODES),
+            "allow_delete": list(DELETION_POLICIES),
+        },
+        "cases": list(CASES),
+        "results": {
+            "downloader": {"result": "passed", "cases": list(CASES)},
+            "update_all": expected_update_all_matrix(),
+            "shipped-manager": expected_manager_matrix(),
+        },
+        "validation": "passed",
+    }
 # Keep the source and the settings exercised by this gate explicit.  In
 # particular, PC_LAUNCHER is deliberately absent from the direct test below:
 # Downloader changes a requested balanced/fastest run to exhaustive in that
@@ -238,6 +303,115 @@ def direct_cached_reinstall_regression(source: Path) -> None:
                 worker.join(timeout=5)
 
 
+def downloader_failure_regression(source: Path) -> None:
+    """Exercise invalid, truncated, HTTP-failure, and timeout-safe installs."""
+    payload = b"failure fixture payload\n"
+    database = _fixture_database(
+        "mister_magik", {"mister-magik/failure.txt": (payload, "/mister-magik/failure.txt")}
+    )
+    with tempfile.TemporaryDirectory(prefix="magik-downloader-failures-") as temporary:
+        root = Path(temporary)
+        (root / "Scripts").mkdir()
+        (root / "MiSTer.ini").write_bytes(b"[MiSTer]\nmain=MiSTer\n")
+        original_ini = (root / "MiSTer.ini").read_bytes()
+        state = {"status": 200, "db": json.dumps(database).encode(), "payload": payload, "delay": 0.0}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                path = urlsplit(self.path).path
+                if state["delay"]:
+                    import time
+
+                    time.sleep(state["delay"])
+                if state["status"] != 200:
+                    self.send_response(state["status"])
+                    self.end_headers()
+                    return
+                data = state["db"] if path == "/database.json" else state["payload"]
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, format, *args):
+                pass
+
+        with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+            worker = threading.Thread(target=server.serve_forever, daemon=True)
+            worker.start()
+            try:
+                base = f"http://release.example.test:{server.server_port}"
+                database["files"]["mister-magik/failure.txt"]["url"] = base + "/mister-magik/failure.txt"
+                state["db"] = json.dumps(database).encode()
+                env = {
+                    "PATH": os.environ["PATH"],
+                    "DOWNLOADER_INI_PATH": str(root / "downloader.ini"),
+                    "FORCED_BASE_PATH": str(root),
+                    "ALLOW_REBOOT": "0",
+                    "UPDATE_LINUX": "false",
+                    "FAIL_ON_FILE_ERROR": "true",
+                    "DEFAULT_DB_ID": "mister_magik",
+                    "DEFAULT_DB_URL": base + "/database.json",
+                    "HTTP_PROXY": f"http://127.0.0.1:{server.server_port}",
+                    "HTTPS_PROXY": f"http://127.0.0.1:{server.server_port}",
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                }
+
+                def run() -> subprocess.CompletedProcess[str]:
+                    (root / "downloader.ini").write_text(
+                        "[MiSTer]\nallow_delete = 1\nallow_reboot = 0\nupdate_linux = false\n"
+                        "file_checking = exhaustive\n[mister_magik]\n"
+                        f"db_url = {base}/database.json\n"
+                    )
+                    return subprocess.run(
+                        [sys.executable, str(source / "src"), "--run-only", "mister_magik"],
+                        cwd=root,
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                        check=False,
+                    )
+
+                state["status"] = 503
+                result = run()
+                if result.returncode == 0 or (root / "mister-magik/failure.txt").exists():
+                    raise ValueError("HTTP failure was reported as a successful install")
+                if (root / "MiSTer.ini").read_bytes() != original_ini:
+                    raise ValueError("HTTP failure changed boot configuration")
+                state["status"] = 200
+                state["payload"] = payload[:3]
+                result = run()
+                if result.returncode == 0 or (root / "mister-magik/failure.txt").exists():
+                    raise ValueError("truncated payload was reported as a successful install")
+                state["payload"] = payload
+                state["db"] = b"not-json"
+                result = run()
+                if result.returncode == 0 or (root / "mister-magik/failure.txt").exists():
+                    raise ValueError("corrupt database was reported as a successful install")
+                state["db"] = json.dumps(database).encode()
+                state["delay"] = 2.0
+                (root / "downloader.ini").write_text(
+                    "[MiSTer]\nallow_delete = 1\nallow_reboot = 0\nupdate_linux = false\n"
+                    "downloader_timeout = 1\nfile_checking = exhaustive\n[mister_magik]\n"
+                    f"db_url = {base}/database.json\n"
+                )
+                result = subprocess.run(
+                    [sys.executable, str(source / "src"), "--run-only", "mister_magik"],
+                    cwd=root,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                if result.returncode == 0 or (root / "mister-magik/failure.txt").exists():
+                    raise ValueError("timed out payload was reported as a successful install")
+            finally:
+                server.shutdown()
+                worker.join(timeout=5)
+
+
 def smoke(root: Path) -> None:
     manager = root / dist.PUBLIC["manager"].removeprefix("/media/fat/")
     header = manager.read_bytes()[:20]
@@ -265,6 +439,429 @@ def smoke(root: Path) -> None:
         raise ValueError("installer verification changed package bytes")
 
 
+def _validate_downloader_source(source: Path, revision: str, label: str) -> Path:
+    source = source.resolve()
+    actual = subprocess.check_output(
+        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
+    ).strip()
+    dirty = subprocess.check_output(
+        ["git", "-C", str(source), "status", "--porcelain", "--untracked-files=no"],
+        text=True,
+    ).strip()
+    if actual != revision or dirty:
+        raise ValueError(f"{label} must match the clean pinned revision")
+    return source
+
+
+def _make_downloader_archive(source: Path, destination: Path) -> None:
+    """Build the same executable pyz layout as the upstream source tree."""
+    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted((source / "src").rglob("*")):
+            if path.is_file():
+                archive.write(path, path.relative_to(source / "src").as_posix())
+
+
+def _empty_delivery_root(root: Path) -> None:
+    for child in root.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
+def update_all_test(
+    candidate: Path,
+    *,
+    channel: str,
+    source: Path,
+    device_source: Path,
+    update_all_source: Path,
+) -> list[dict[str, Any]]:
+    """Run the real Update All pyz against the candidate's local feed.
+
+    Update All is intentionally a separate entrypoint from the direct
+    Downloader matrix.  The real pyz is selected by the CI action and must be
+    supplied explicitly; no downloaded or regenerated launcher is accepted.
+    The Linux job provides the isolated /media/fat environment and loopback
+    feed transport.  Local macOS runs keep this helper importable but do not
+    claim ARM execution.
+    """
+    update_all_source = update_all_source.resolve()
+    if not update_all_source.is_file():
+        raise ValueError(f"Update All source is missing: {update_all_source}")
+    if update_all_source.stat().st_size < 100:
+        raise ValueError("Update All source is not a real pyz archive")
+    source = _validate_downloader_source(source, DOWNLOADER_REVISION, "baseline Downloader")
+    device_source = _validate_downloader_source(
+        device_source, DEVICE_DOWNLOADER_REVISION, "device-compatible Downloader"
+    )
+    receipt = dist.read_json(candidate / "release-assets.json")
+    root = Path("/media/fat")
+    if os.getenv("MISTER_MAGIK_DELIVERY_ROOT") != str(root) or not root.is_mount():
+        raise ValueError("Update All gate requires an isolated /media/fat mount")
+    database = dist.read_json(candidate / f"mister-magik-{channel}-db.json")
+    payloads = {
+        "/" + entry["asset"]: (candidate / entry["asset"]).read_bytes()
+        for entry in receipt["files"]
+    }
+    results: list[dict[str, Any]] = []
+    with tempfile.TemporaryDirectory(prefix="magik-update-all-runtime-") as temporary:
+        runtime = Path(temporary)
+        device_archive = runtime / "downloader-device.zip"
+        _make_downloader_archive(device_source, device_archive)
+        with ThreadingHTTPServer(("127.0.0.1", 0), _DeliveryHandler) as server:
+            server.content = payloads  # type: ignore[attr-defined]
+            server.requests = []  # type: ignore[attr-defined]
+            worker = threading.Thread(target=server.serve_forever, daemon=True)
+            worker.start()
+            try:
+                base = f"http://release.example.test:{server.server_port}"
+                database = copy.deepcopy(database)
+                for path, item in database["files"].items():
+                    asset = dist.asset_name(path)
+                    item["url"] = base + "/" + asset
+                    payloads.setdefault("/" + asset, b"")
+                payloads["/database.json"] = json.dumps(database).encode()
+
+                def run_update_all(
+                    mode: str,
+                    deletion: int,
+                    downloader_path: Path,
+                    python_path: Path,
+                    *,
+                    reset: bool = True,
+                ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+                    if reset:
+                        _empty_delivery_root(root)
+                        dist.extract_package(candidate / receipt["archive"], root)
+                        (root / "MiSTer.ini").write_text("[MiSTer]\nmain=MiSTer\n")
+                    (root / "Scripts/.config/downloader").mkdir(parents=True, exist_ok=True)
+                    config = (
+                        "[MiSTer]\n"
+                        f"allow_delete = {deletion}\nallow_reboot = 0\nupdate_linux = false\n"
+                        f"file_checking = {mode}\n[mister_magik]\n"
+                        f"db_url = {base}/database.json\n"
+                    )
+                    # Update All reads the canonical device path while the
+                    # shipped manager's bounded adapter reads the legacy root
+                    # override.  Keep both views identical for this isolated
+                    # lifecycle only.
+                    (root / "Scripts/.config/downloader/downloader.ini").write_text(config)
+                    (root / "downloader.ini").write_text(config)
+                    cached_zip = root / "Scripts/.config/downloader/downloader_latest.zip"
+                    cached_bin = root / "Scripts/.config/downloader/downloader_bin"
+                    if downloader_path == cached_zip:
+                        shutil.copy2(device_archive, cached_zip)
+                        cached_bin.unlink(missing_ok=True)
+                        effective_downloader_path = cached_zip
+                    else:
+                        shutil.copy2(downloader_path, cached_bin)
+                        cached_bin.chmod(0o755)
+                        cached_zip.unlink(missing_ok=True)
+                        effective_downloader_path = cached_bin
+                    start = len(server.requests)  # type: ignore[attr-defined]
+                    env = {
+                        "PATH": os.environ["PATH"],
+                        "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+                        "LOCATION_STR": "mister",
+                        "UPDATE_ALL_NON_INTERACTIVE": "true",
+                        "SKIP_DOWNLOADER": "false",
+                        "UPDATE_ALL_DOWNLOADER_PATH": str(effective_downloader_path),
+                        "UPDATE_ALL_DOWNLOADER_PYTHON_COMPATIBLE_PATH": str(python_path),
+                        "HTTP_PROXY": f"http://127.0.0.1:{server.server_port}",
+                        "HTTPS_PROXY": f"http://127.0.0.1:{server.server_port}",
+                        "RETROACCOUNT_DOMAIN": base + "/retroaccount",
+                        "PYTHONDONTWRITEBYTECODE": "1",
+                    }
+                    result = subprocess.run(
+                        [sys.executable, str(update_all_source), "--no-continue"],
+                        cwd=root,
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                        check=False,
+                    )
+                    requests = list(server.requests[start:])  # type: ignore[attr-defined]
+                    if result.returncode:
+                        raise ValueError(
+                            f"real Update All {channel} lifecycle failed ({mode}/{deletion}): "
+                            f"{result.stdout[-2500:]} {result.stderr[-1500:]}"
+                        )
+                    unexpected = [
+                        path
+                        for path in requests
+                        if urlsplit(path).path not in payloads
+                    ]
+                    if unexpected:
+                        raise ValueError(
+                            "Update All made an unexpected external request: "
+                            + ",".join(unexpected[:8])
+                        )
+                    expected = {entry["path"]: entry["sha256"] for entry in receipt["files"]}
+                    for path, digest in expected.items():
+                        installed = root / path
+                        if not installed.is_file() or sha256_file(installed) != digest:
+                            raise ValueError(f"Update All changed/missed payload: {path}")
+                    return result, requests
+
+                lifecycle_settings = (
+                    (mode, deletion)
+                    for mode in DOWNLOADER_MODES
+                    for deletion in DELETION_POLICIES
+                )
+                for index, (mode, deletion) in enumerate(lifecycle_settings):
+                    cached_bin = source / "src/__main__.py"
+                    cached_zip = root / "Scripts/.config/downloader/downloader_latest.zip"
+                    downloader_path = cached_bin if index % 2 == 0 else cached_zip
+                    python_path = Path(sys.executable)
+                    _, _first_requests = run_update_all(
+                        mode, deletion, downloader_path, python_path
+                    )
+                    _, second_requests = run_update_all(
+                        mode, deletion, downloader_path, python_path, reset=False
+                    )
+                    asset_requests = [
+                        path for path in second_requests if urlsplit(path).path in payloads
+                    ]
+                    if asset_requests:
+                        raise ValueError(
+                            f"Update All unchanged run fetched payload ({mode}/{deletion})"
+                        )
+                    original_ini = (root / "MiSTer.ini").read_bytes()
+                    manager_env = {
+                        **os.environ,
+                        "PATH": os.environ["PATH"],
+                        "MISTER_MAGIK_FAT": str(root),
+                        "MISTER_MAGIK_INITTAB": str(root / "test-inittab"),
+                        "MISTER_MAGIK_TEST_MODE": "1",
+                        "MISTER_MAGIK_DOWNLOADER": str(source / "src/__main__.py"),
+                        "DOWNLOADER_INI_PATH": str(
+                            root / "Scripts/.config/downloader/downloader.ini"
+                        ),
+                        "FORCED_BASE_PATH": str(root),
+                        "ALLOW_REBOOT": "0",
+                        "UPDATE_LINUX": "false",
+                        "HTTP_PROXY": f"http://127.0.0.1:{server.server_port}",
+                        "HTTPS_PROXY": f"http://127.0.0.1:{server.server_port}",
+                        "DEFAULT_DB_ID": "mister_magik",
+                        "DEFAULT_DB_URL": base + "/database.json",
+                        "FAIL_ON_FILE_ERROR": "true",
+                        "PYTHONDONTWRITEBYTECODE": "1",
+                    }
+                    (root / "test-inittab").write_text("::sysinit:/media/fat/MiSTer &\n")
+                    # Do not force the manager's override path.  The test must
+                    # prove that the adapter selects the cached executable on
+                    # alternating rows and the cached Python archive on the
+                    # remaining rows.
+                    manager_env.pop("MISTER_MAGIK_DOWNLOADER", None)
+                    commands = (
+                        ("install", "down"),
+                        ("restore", "other"),
+                        ("uninstall", "down,other"),
+                    )
+                    for command, keys in commands:
+                        manager = subprocess.run(
+                            ["/bin/sh", str(root / dist.LAUNCHER), command],
+                            cwd=root,
+                            env={**manager_env, "MISTER_MAGIK_TEST_KEYS": keys},
+                            capture_output=True,
+                            text=True,
+                            timeout=180,
+                            check=False,
+                        )
+                        if manager.returncode:
+                            raise ValueError(
+                                f"shipped manager {command} failed ({mode}/{deletion}): "
+                                f"{manager.stdout[-1500:]} {manager.stderr[-1500:]}"
+                            )
+                    if (root / "MiSTer.ini").read_bytes() != original_ini:
+                        raise ValueError("Update All lifecycle did not restore original INI")
+                    if (root / "mister-magik").exists():
+                        raise ValueError("Update All lifecycle left package files after uninstall")
+                    # Recreate only the Downloader configuration section; the
+                    # payload and registration must come from the final real
+                    # Update All run, never from a manual reseed.
+                    (root / "Scripts/.config/downloader").mkdir(parents=True, exist_ok=True)
+                    (root / "Scripts/.config/downloader/downloader.ini").write_text(
+                        "[MiSTer]\n"
+                        f"allow_delete = {deletion}\nallow_reboot = 0\nupdate_linux = false\n"
+                        f"file_checking = {mode}\n[mister_magik]\n"
+                        f"db_url = {base}/database.json\n"
+                    )
+                    final_bin = source / "src/__main__.py"
+                    final_requests_before = len(server.requests)  # type: ignore[attr-defined]
+                    run_update_all(mode, deletion, final_bin, python_path, reset=False)
+                    final_requests = list(server.requests[final_requests_before:])  # type: ignore[attr-defined]
+                    if not any(urlsplit(path).path in payloads for path in final_requests):
+                        raise ValueError("fixed uninstaller did not force a real same-feed reinstall")
+                    results.append(
+                        {
+                            "entrypoint": "update_all",
+                            "mode": mode,
+                            "allow_delete": deletion,
+                            "result": "passed",
+                            "downloader_cache": "executable" if index % 2 == 0 else "python-archive",
+                        }
+                    )
+            finally:
+                server.shutdown()
+                worker.join(timeout=5)
+    return results
+
+
+def shipped_manager_lifecycle_test(
+    candidate: Path, *, channel: str, source: Path
+) -> list[dict[str, Any]]:
+    """Run the shipped ARM manager through install/restore/uninstall/reinstall.
+
+    The matrix deliberately uses the same byte-identical release feed for the
+    final download.  A manual reseed is not used: the initial download creates
+    the real Downloader registration, the manager delegates its removal, and
+    the final Downloader run must discover and fetch the now-unregistered
+    files.  QEMU/binfmt and the ARM manager are supplied by the Linux action.
+    """
+    source = source.resolve()
+    receipt = dist.read_json(candidate / "release-assets.json")
+    database = dist.read_json(candidate / f"mister-magik-{channel}-db.json")
+    payloads = {
+        "/" + entry["asset"]: (candidate / entry["asset"]).read_bytes()
+        for entry in receipt["files"]
+    }
+    results: list[dict[str, Any]] = []
+    with ThreadingHTTPServer(("127.0.0.1", 0), _DeliveryHandler) as server:
+        server.content = payloads  # type: ignore[attr-defined]
+        server.requests = []  # type: ignore[attr-defined]
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            base = f"http://release.example.test:{server.server_port}"
+            database = copy.deepcopy(database)
+            for path, item in database["files"].items():
+                item["url"] = base + "/" + dist.asset_name(path)
+                payloads["/" + dist.asset_name(path)] = payloads.pop("/" + dist.asset_name(path), b"")
+            payloads["/database.json"] = json.dumps(database).encode()
+            for mode in DOWNLOADER_MODES:
+                for deletion in DELETION_POLICIES:
+                    with tempfile.TemporaryDirectory(prefix="magik-manager-lifecycle-") as temporary:
+                        root = Path(temporary)
+                        dist.extract_package(candidate / receipt["archive"], root)
+                        (root / "MiSTer.ini").write_text("[MiSTer]\nmain=MiSTer\n")
+                        (root / "test-inittab").write_text("::sysinit:/media/fat/MiSTer &\n")
+                        (root / "downloader.ini").write_text(
+                            "[MiSTer]\n"
+                            f"allow_delete = {deletion}\nallow_reboot = 0\nupdate_linux = false\n"
+                            f"file_checking = {mode}\n[mister_magik]\n"
+                            f"db_url = {base}/database.json\n"
+                        )
+                        env = {
+                            **os.environ,
+                            "PATH": os.environ["PATH"],
+                            "MISTER_MAGIK_FAT": str(root),
+                            "MISTER_MAGIK_INITTAB": str(root / "test-inittab"),
+                            "MISTER_MAGIK_TEST_MODE": "1",
+                            "MISTER_MAGIK_DOWNLOADER": str(source / "src/__main__.py"),
+                            "DOWNLOADER_INI_PATH": str(root / "downloader.ini"),
+                            "FORCED_BASE_PATH": str(root),
+                            "ALLOW_REBOOT": "0",
+                            "UPDATE_LINUX": "false",
+                            "HTTP_PROXY": f"http://127.0.0.1:{server.server_port}",
+                            "HTTPS_PROXY": f"http://127.0.0.1:{server.server_port}",
+                            "DEFAULT_DB_ID": "mister_magik",
+                            "DEFAULT_DB_URL": base + "/database.json",
+                            "FAIL_ON_FILE_ERROR": "true",
+                            "PYTHONDONTWRITEBYTECODE": "1",
+                        }
+
+                        def run_manager(command: str, keys: str) -> subprocess.CompletedProcess[str]:
+                            result = subprocess.run(
+                                ["/bin/sh", str(root / dist.LAUNCHER), command],
+                                cwd=root,
+                                env={**env, "MISTER_MAGIK_TEST_KEYS": keys},
+                                capture_output=True,
+                                text=True,
+                                timeout=180,
+                                check=False,
+                            )
+                            if result.returncode:
+                                raise ValueError(
+                                    f"shipped manager {command} failed ({mode}/{deletion}): "
+                                    f"{result.stdout[-1500:]} {result.stderr[-1500:]}"
+                                )
+                            return result
+
+                        server.requests.clear()  # type: ignore[attr-defined]
+                        initial = _run_delivery_downloader(source, root, env, mode, base)
+                        if initial.returncode:
+                            raise ValueError("initial real Downloader install failed")
+                        original_ini = (root / "MiSTer.ini").read_bytes()
+                        run_manager("install", "down")
+                        run_manager("restore", "other")
+                        if (root / "MiSTer.ini").read_bytes() != original_ini:
+                            raise ValueError("restore did not preserve the original INI")
+                        reinstall_start = len(server.requests)  # type: ignore[attr-defined]
+                        run_manager("uninstall", "down,other")
+                        if (root / "mister-magik").exists():
+                            raise ValueError("shipped manager left package files after uninstall")
+                        if (root / "MiSTer.ini").read_bytes() != original_ini:
+                            raise ValueError("uninstall did not preserve restored INI")
+                        reinstall = _run_delivery_downloader(source, root, env, mode, base)
+                        if reinstall.returncode:
+                            raise ValueError("same-version Downloader reinstall failed")
+                        if not any(
+                            urlsplit(path).path in payloads
+                            for path in server.requests[reinstall_start:]  # type: ignore[attr-defined]
+                        ):
+                            raise ValueError(
+                                "fixed uninstaller did not force a real same-feed reinstall"
+                            )
+                        results.append(
+                            {
+                                "entrypoint": "shipped-manager",
+                                "mode": mode,
+                                "allow_delete": deletion,
+                                "result": "passed",
+                            }
+                        )
+        finally:
+            server.shutdown()
+            worker.join(timeout=5)
+    return results
+
+
+class _DeliveryHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        path = urlsplit(self.path).path
+        self.server.requests.append(path)  # type: ignore[attr-defined]
+        data = self.server.content.get(path, b"")  # type: ignore[attr-defined]
+        self.send_response(200 if path in self.server.content else 404)  # type: ignore[attr-defined]
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        if path in self.server.content:
+            self.wfile.write(data)
+
+    def log_message(self, format, *args):
+        pass
+
+
+def _run_delivery_downloader(
+    source: Path, root: Path, env: dict[str, str], mode: str, base: str
+) -> subprocess.CompletedProcess[str]:
+    (root / "downloader.ini").write_text(
+        "[MiSTer]\nallow_delete = 1\nallow_reboot = 0\nupdate_linux = false\n"
+        f"file_checking = {mode}\n[mister_magik]\ndb_url = {base}/database.json\n"
+    )
+    return subprocess.run(
+        [sys.executable, str(source / "src"), "--run-only", "mister_magik"],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+
+
 def downloader_test(
     candidate: Path, *, channel: str, source: Path, run_smoke: bool = True
 ) -> None:
@@ -279,6 +876,7 @@ def downloader_test(
     if revision != DOWNLOADER_REVISION or dirty:
         raise ValueError("Downloader source must match the clean pinned revision")
     direct_cached_reinstall_regression(source)
+    downloader_failure_regression(source)
     original = dist.read_json(candidate / f"mister-magik-{channel}-db.json")
     receipt = dist.read_json(candidate / "release-assets.json")
     expected = {entry["path"]: entry["sha256"] for entry in receipt["files"]}
@@ -429,8 +1027,17 @@ def downloader_test(
             worker.join(timeout=5)
 
 
-def run(candidate: Path, *, channel: str, source: Path) -> dict[str, Any]:
+def run(
+    candidate: Path,
+    *,
+    channel: str,
+    source: Path,
+    device_source: Path,
+    update_all_source: Path | None = None,
+) -> dict[str, Any]:
     candidate = candidate.resolve()
+    if update_all_source is None:
+        raise ValueError("complete delivery evidence requires --update-all-source")
     validated = dist.verify(candidate, channel=channel)
     receipt = dist.read_json(candidate / "release-assets.json")
     with tempfile.TemporaryDirectory(prefix="magik-shipped-installer-") as temporary:
@@ -440,29 +1047,33 @@ def run(candidate: Path, *, channel: str, source: Path) -> dict[str, Any]:
         smoke(root / "zip")
         smoke(root / "downloaded")
     downloader_test(candidate, channel=channel, source=source)
-    evidence = {
-        "format": "mister-magik-delivery-evidence-v1",
-        "candidate_id": validated["candidate_id"],
-        "downloader_revision": DOWNLOADER_REVISION,
-        "installer": "shipped-arm-verify-platform",
-        "cases": list(CASES),
-        "validation": "passed",
-    }
+    manager_matrix = shipped_manager_lifecycle_test(
+        candidate, channel=channel, source=source
+    )
+    update_all_result = update_all_test(
+        candidate,
+        channel=channel,
+        source=source,
+        device_source=device_source,
+        update_all_source=update_all_source,
+    )
+    evidence = evidence_for_candidate(validated)
+    evidence["results"]["shipped-manager"] = manager_matrix
+    evidence["results"]["update_all"] = update_all_result
     atomic_write(candidate / dist.EVIDENCE, dist.canonical_json(evidence))
     dist.write_checksums(candidate)
     return evidence
 
 
 def require_evidence(candidate: Path, validated: dict[str, Any]) -> None:
-    expected = {
-        "format": "mister-magik-delivery-evidence-v1",
-        "candidate_id": validated["candidate_id"],
-        "downloader_revision": DOWNLOADER_REVISION,
-        "installer": "shipped-arm-verify-platform",
-        "cases": list(CASES),
-        "validation": "passed",
-    }
-    if dist.read_json(candidate / dist.EVIDENCE) != expected:
+    try:
+        actual = dist.read_json(candidate / dist.EVIDENCE)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+        raise ValueError("complete delivery evidence is missing or unreadable") from error
+    expected = evidence_for_candidate(validated)
+    if actual.get("format") != EVIDENCE_FORMAT:
+        raise ValueError("v1 or unknown delivery evidence is not accepted")
+    if actual != expected:
         raise ValueError(
-            "passing delivery evidence for this exact candidate is required"
+            "complete passing delivery evidence for this exact candidate is required"
         )
