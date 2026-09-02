@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -63,35 +65,28 @@ def _hex(value: str, length: int, label: str) -> None:
 
 
 def verify(
-    path: Path, artifact_root: Path | None = None, layout: str = "dev"
+    path: Path, artifact_root: Path | None = None, *, layout: str
 ) -> dict[str, str]:
-    values = parse_fields(path.read_text(encoding="utf-8"))
-    if values.get("format") != FORMAT or set(values) != set(FIELDS):
-        raise ValueError("unsupported_platform_manifest")
-    release_number = int(values["platform_release_number"])
-    if (
-        release_number <= 0
-        or values["platform_release"] != f"platform-v0.{release_number}"
-    ):
-        raise ValueError("invalid_platform_release")
-    if (
-        values["latch_protocol_version"] != LATCH_PROTOCOL_VERSION
-        or values["latch_capability_mask"] != LATCH_CAPABILITY_MASK
-    ):
-        raise ValueError("unsupported_latch_protocol")
-    for field in (
-        "platform_bundle_id",
-        "qualification_candidate_id",
-        "platform_contract_sha256",
-    ):
-        _hex(values[field], 64, field)
-    for field in ("main_revision", "magik_revision", "menu_revision"):
-        _hex(values[field], 40, field)
-    for field in FIELDS:
-        if field.endswith("_sha256"):
-            _hex(values[field], 64, field)
-    if values["qualification_candidate_id"] != candidate_id(values):
-        raise ValueError("qualification_candidate_id")
+    if layout not in LAYOUTS:
+        raise ValueError(f"invalid_platform_layout:{layout}")
+    default = SCHEMA_PATH.parent / "manifest/target/debug/platform-manifest-check"
+    verifier = Path(os.environ.get("MISTER_MAGIK_MANIFEST_CHECK", str(default)))
+    if not verifier.is_file():
+        raise FileNotFoundError(
+            f"manifest verifier missing: {verifier}; build platform-manifest-check first"
+        )
+    result = subprocess.run(
+        [str(verifier), "--layout", layout, "--manifest", str(path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if result.returncode:
+        raise ValueError(
+            result.stderr.strip() or "platform manifest verification failed"
+        )
+    values = parse_fields(result.stdout)
     if artifact_root is not None:
         paths = LAYOUTS[layout]
         for name in (
@@ -124,8 +119,10 @@ def generate(
     bundle_id: str,
     main_revision: str,
     magik_revision: str,
-    layout: str = "dev",
+    layout: str,
 ) -> None:
+    if layout not in LAYOUTS:
+        raise ValueError(f"invalid_platform_layout:{layout}")
     _hex(main_revision, 40, "main_revision")
     _hex(magik_revision, 40, "magik_revision")
     _hex(bundle_id, 64, "platform_bundle_id")

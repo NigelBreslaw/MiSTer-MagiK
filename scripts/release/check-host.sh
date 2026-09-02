@@ -39,6 +39,7 @@ scripts/magik-ci ci host-assurance --paths \
   apps/mister/src/lib.rs
 
 scripts/magik-ci build release-binaries
+scripts/cargo build --locked --manifest-path mister/platform/contracts/manifest/Cargo.toml --bin platform-manifest-check
 apps/mister/scripts/check-arm-shared-libs.sh \
   "$BIN"
 apps/mister/scripts/check-arm-shared-libs.sh \

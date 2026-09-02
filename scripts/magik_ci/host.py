@@ -230,6 +230,22 @@ def commands(group: str) -> list[list[str]]:
                     "--manifest-path",
                     "mister/tools/manager/Cargo.toml",
                 ],
+                [
+                    "scripts/cargo",
+                    "test",
+                    "--locked",
+                    "--manifest-path",
+                    "mister/platform/contracts/manifest/Cargo.toml",
+                ],
+                [
+                    "scripts/cargo",
+                    "build",
+                    "--locked",
+                    "--manifest-path",
+                    "mister/platform/contracts/manifest/Cargo.toml",
+                    "--bin",
+                    "platform-manifest-check",
+                ],
                 ["scripts/tests/test-mister-magik-installer.sh"],
             ]
         )

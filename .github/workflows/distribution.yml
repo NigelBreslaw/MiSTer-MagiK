@@ -308,7 +308,9 @@ jobs:
           test -f "$main_bin" && [[ "$main_revision" =~ ^[0-9a-f]{40}$ ]]
           python3 scripts/checks/generate-platform-v3-consumers.py --check
           scripts/magik-ci build manager-device
+          scripts/cargo build --locked --manifest-path mister/platform/contracts/manifest/Cargo.toml --bin platform-manifest-check
           scripts/magik-ci ci platform-manifest generate \
+            --layout public \
             --output build/platform-v3.manifest \
             --main "$main_bin" \
             --gui apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb \

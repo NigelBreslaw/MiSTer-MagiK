@@ -61,11 +61,11 @@ def parser() -> argparse.ArgumentParser:
     pm_gen.add_argument("--platform-bundle-manifest", type=Path)
     pm_gen.add_argument("--main-revision", required=True)
     pm_gen.add_argument("--magik-revision", required=True)
-    pm_gen.add_argument("--layout", default="dev")
+    pm_gen.add_argument("--layout", required=True, choices=("public", "dev"))
     pm_verify = pm_sub.add_parser("verify")
     pm_verify.add_argument("manifest", type=Path)
     pm_verify.add_argument("--root", type=Path)
-    pm_verify.add_argument("--layout", default="dev")
+    pm_verify.add_argument("--layout", required=True, choices=("public", "dev"))
     db = ci_sub.add_parser("game-databases")
     db_sub = db.add_subparsers(dest="action", required=True)
     db_verify = db_sub.add_parser("verify")
@@ -270,7 +270,7 @@ def main() -> int:
                     layout=args.layout,
                 )
             else:
-                manifest.verify(args.manifest, args.root, args.layout)
+                manifest.verify(args.manifest, args.root, layout=args.layout)
         elif args.command == "game-databases":
             if args.action == "verify":
                 databases.verify(
