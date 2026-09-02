@@ -1,7 +1,7 @@
 # Local Alpha Device Tests
 
 Physical MiSTer testing is an attended local operation. GitHub builds and
-publishes the rolling `alpha` release, but it does not own or schedule access to
+publishes immutable versioned payloads selected by the `alpha` feed, but it does not own or schedule access to
 the developer's MiSTer.
 
 The local journey uses the published alpha assets, the official MiSTer
@@ -10,13 +10,18 @@ checkpoints, and the fixed `USB Video` capture input.
 
 ## Run the journey
 
-Create fresh local directories, download the current rolling alpha assets, and
+Create fresh local directories, resolve the current alpha version, download its immutable assets, and
 run the typed workflow:
 
 ```bash
 candidate_dir="$(mktemp -d)"
+channel_dir="$(mktemp -d)"
 evidence_dir="$(mktemp -d)/alpha-evidence"
 gh release download alpha \
+  --repo NigelBreslaw/MiSTer-MagiK \
+  --pattern mister-magik-alpha-db.json --dir "$channel_dir"
+version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["release"]["version"])' "$channel_dir/mister-magik-alpha-db.json")"
+gh release download "v$version" \
   --repo NigelBreslaw/MiSTer-MagiK \
   --dir "$candidate_dir"
 scripts/agent alpha accept \
@@ -25,7 +30,7 @@ scripts/agent alpha accept \
 ```
 
 The command verifies every downloaded checksum and packaged component, installs
-the rolling `alpha` through Downloader, verifies the installed runtime against
+the current `alpha` feed through Downloader, verifies the installed runtime against
 the downloaded assets, and then exercises the physical device. By default the
 MiSTer remains on the tested alpha.
 

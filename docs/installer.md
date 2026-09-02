@@ -6,6 +6,12 @@ update_all entrypoint. It verifies the fixed path and SHA-256 of
 that Rust process. A missing, malformed, or mismatched manager fails before any
 boot configuration is changed.
 
+The launcher is self-contained and generated from the shared platform schema.
+It is the only MagiK-owned entry under `Scripts`. The internal
+`MiSTer-MagiK.platform-v3.constants.sh` helper is no longer shipped or loaded.
+Do not edit the generated launcher; its maintained template and the schema are
+checked by `scripts/checks/generate-platform-v3-consumers.py --check`.
+
 The Rust manager owns installation, stock restoration, and uninstall. It
 verifies the complete platform before mutation, snapshots the current boot
 files, preserves the first pre-MagiK `MiSTer.ini` backup, and replaces edited
@@ -31,3 +37,28 @@ If the Scripts entrypoint reports a missing or corrupt manager, do not edit
 MiSTer MagiK package so `mister-magik-manager` and `platform-v3.manifest` come
 from the same release, then run the entrypoint again. The bootstrap refuses to
 run a partial or mismatched package and leaves boot configuration unchanged.
+
+## Obsolete helper and upgrades
+
+Normal `update_all` runs use Downloader's managed-file deletion to remove the
+old helper after it disappears from our database. There is no MagiK startup
+cleanup service. Users with `allow_delete=0` or `allow_delete=2` may retain the
+helper; the new launcher ignores it. Full uninstall still removes the legacy
+helper explicitly. Unrelated Scripts entries are not owned by MagiK.
+
+Manually extracting a ZIP does not delete obsolete files. After installing and
+verifying the complete new package, the obsolete
+`/media/fat/Scripts/MiSTer-MagiK.platform-v3.constants.sh` file can be removed
+manually. Do not remove it from an older package that still requires it.
+
+## Support response for the incorrect beta manifest
+
+After the corrected beta is published:
+
+> The `manifest manager_path is not canonical` error was a release packaging
+> bug: the public package contained development paths. The installer stopped
+> before changing boot settings. Run `update_all` to completion, then run
+> `Scripts` → `MiSTer-MagiK` again. Do not edit the manifest or boot files.
+
+Before that corrected release is available, rerunning the same feed cannot
+repair the bad manifest. See [the release gate and rollout](releases.md).
