@@ -63,6 +63,7 @@ run_manager() {
   MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$INITTAB" \
     MISTER_MAGIK_TEST_MODE=1 \
     MISTER_MAGIK_TEST_KEYS="${MISTER_MAGIK_TEST_KEYS:-}" \
+    MISTER_MAGIK_DOWNLOADER="${MISTER_MAGIK_DOWNLOADER:-}" \
     "$FAT/Scripts/MiSTer-MagiK.sh" "$@"
 }
 
@@ -304,5 +305,39 @@ grep -q 'fully uninstalled' "$FIXTURE/uninstall-reboot.log"
 grep -q 'TEST: normal reboot requested' "$FIXTURE/uninstall-reboot.log"
 assert_owned_files_removed
 assert_stock
+
+# A registered MagiK database is removed through Downloader before the
+# package-owned files are deleted. The fixture updater models the stable
+# machine output contract and keeps unrelated Downloader state intact.
+new_fixture downloader-registration
+seed_package
+MISTER_MAGIK_TEST_KEYS=down run_manager >/dev/null
+mkdir -p "$FAT/Scripts/.config/downloader"
+printf '{"unrelated":true}\n' >"$FAT/Scripts/.config/downloader/downloader.json"
+printf 'registered\n' >"$FAT/Scripts/.config/downloader/registered"
+printf '[MiSTer]\nallow_delete = 0\nallow_reboot = 0\nupdate_linux = false\n[mister_magik]\ndb_url = http://fixture/magik.json\n' >"$FAT/downloader.ini"
+printf '[mister_magik]\ndb_url = http://fixture/magik.json\n' >"$FAT/downloader_mister_magik.ini"
+printf 'managed payload\n' >"$FAT/mister-magik/managed.txt"
+DOWNLOADER_FIXTURE="$FIXTURE/downloader-fixture.sh"
+printf '%s\n' \
+  '#!/bin/sh' \
+  'set -eu' \
+  'STATE="${MISTER_MAGIK_FAT}/Scripts/.config/downloader/registered"' \
+  'case "${1:-}" in' \
+  '  --version) printf "2.4.0\\n" ;;' \
+  '  --list-dbs) if [ -f "$STATE" ]; then printf "DLP1\\tevent:installed_db\\tdb:mister_magik\\n"; fi ;;' \
+  '  --uninstall) [ "${2:-}" = mister_magik ] || exit 2; rm -f "$STATE" ;;' \
+  '  *) exit 2 ;;' \
+  'esac' >"$DOWNLOADER_FIXTURE"
+chmod 755 "$DOWNLOADER_FIXTURE"
+MISTER_MAGIK_DOWNLOADER="$DOWNLOADER_FIXTURE" \
+  MISTER_MAGIK_TEST_KEYS=down,enter,down,other run_manager >"$FIXTURE/downloader-registration.log"
+if ! grep -q 'fully uninstalled' "$FIXTURE/downloader-registration.log"; then
+  sed -n '1,160p' "$FIXTURE/downloader-registration.log" >&2
+  exit 1
+fi
+test ! -e "$FAT/Scripts/.config/downloader/registered"
+test -e "$FAT/Scripts/.config/downloader/downloader.json"
+test ! -e "$FAT/mister-magik"
 
 echo "installer lifecycle matrix: PASS"

@@ -14,8 +14,8 @@ use std::mem::MaybeUninit;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{self, Command};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::process::{self, Command, Output, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -225,6 +225,34 @@ impl Paths {
     fn test_mode(&self) -> bool {
         self.test_mode
     }
+
+    fn downloader_candidates(&self) -> Vec<PathBuf> {
+        let configured = env::var_os("MISTER_MAGIK_DOWNLOADER")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
+        configured
+            .into_iter()
+            .chain([
+                self.fat.join("Scripts/.config/downloader/downloader_bin"),
+                self.fat
+                    .join("Scripts/.config/downloader/downloader_latest.zip"),
+            ])
+            .collect()
+    }
+
+    fn downloader_state_paths(&self) -> [PathBuf; 5] {
+        [
+            self.fat.join("Scripts/.config/downloader/downloader.json"),
+            self.fat
+                .join("Scripts/.config/downloader/downloader.json.zip"),
+            self.fat
+                .join("Scripts/.config/downloader/downloader_fingerprints.json"),
+            self.fat
+                .join("Scripts/.config/downloader/downloader_sigs.json"),
+            self.fat
+                .join("Scripts/.config/downloader/previous_free_space.json"),
+        ]
+    }
 }
 
 fn input_event_from_key(key: &str) -> InputEvent {
@@ -312,9 +340,49 @@ fn uninstall(paths: &Paths) -> Result<()> {
         "This permanently removes MiSTer MagiK, its settings, catalog, downloaded media, installer scripts, update_all entry, and saved backup. Stock MiSTer boot will be restored first.",
         "uninstall",
     )?;
+
+    // Preflight while all Downloader state is still intact.  A missing or
+    // incompatible updater is safe only for the manual ZIP layout, which has
+    // no registration to unregister.  Never delete the package first and hope
+    // that a later updater invocation can be recovered.
+    let downloader_preflight = downloader_preflight(paths)?;
+    let downloader_registration = downloader_preflight
+        .as_ref()
+        .is_some_and(|preflight| preflight.registered);
     restore_stock(paths)?;
     stop_children(paths)?;
+
+    let recovery = if downloader_registration {
+        Some(stage_recovery_manager(paths)?)
+    } else {
+        None
+    };
+    if downloader_registration {
+        let tool = &downloader_preflight
+            .as_ref()
+            .expect("registered Downloader has a preflight tool")
+            .tool;
+        if let Err(error) = downloader_uninstall(tool, paths) {
+            eprintln!(
+                "MiSTer MagiK: Downloader registration remains; recovery manager staged at {}. Restore Downloader connectivity/state and retry uninstall: {}",
+                recovery.as_ref().expect("recovery path exists").display(),
+                error
+            );
+            return Err("uninstall incomplete; recovery manager was preserved".into());
+        }
+        if let Err(error) = downloader_verify_unregistered(tool, paths) {
+            eprintln!(
+                "MiSTer MagiK: Downloader unregister could not be verified; recovery manager staged at {}: {}",
+                recovery.as_ref().expect("recovery path exists").display(),
+                error
+            );
+            return Err("uninstall incomplete; recovery manager was preserved".into());
+        }
+    }
     remove_owned(paths)?;
+    if let Some(recovery) = recovery {
+        let _ = fs::remove_file(recovery);
+    }
     println!("MiSTer MagiK: fully uninstalled.");
     offer_reboot(paths)
 }
@@ -809,6 +877,199 @@ fn stop_children(paths: &Paths) -> Result<()> {
         .any(|byte| !byte.is_ascii_whitespace())
     {
         Err("mister-magik-fb did not stop within the bounded timeout".into())
+    } else {
+        Ok(())
+    }
+}
+
+const DOWNLOADER_COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
+
+#[derive(Clone)]
+struct DownloaderTool {
+    program: PathBuf,
+    executable: bool,
+}
+
+struct DownloaderPreflight {
+    tool: DownloaderTool,
+    registered: bool,
+}
+
+fn downloader_commands(paths: &Paths) -> Vec<DownloaderTool> {
+    paths
+        .downloader_candidates()
+        .into_iter()
+        .filter(|candidate| candidate.is_file())
+        .map(|candidate| {
+            let executable = candidate
+                .metadata()
+                .map(|meta| meta.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false);
+            DownloaderTool {
+                program: candidate,
+                executable,
+            }
+        })
+        .collect()
+}
+
+fn invoke_downloader(tool: &DownloaderTool, paths: &Paths, args: &[&str]) -> Result<Output> {
+    let mut command = if tool.executable {
+        let mut command = Command::new(&tool.program);
+        command.args(args);
+        command
+    } else {
+        let mut command = Command::new("python3");
+        command.arg(&tool.program).args(args);
+        command
+    };
+    command
+        .current_dir(&paths.fat)
+        .env("DOWNLOADER_INI_PATH", paths.fat.join("downloader.ini"))
+        .env("FORCED_BASE_PATH", &paths.fat)
+        .env("ALLOW_REBOOT", "0")
+        .env("UPDATE_LINUX", "false")
+        .env("DOWNLOADER_OUTPUT", "dlp1-ltsv")
+        .env("PYTHONUNBUFFERED", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|error| {
+        format!(
+            "cannot start cached Downloader {}: {error}",
+            tool.program.display()
+        )
+    })?;
+    let started = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return child
+                .wait_with_output()
+                .map_err(|error| format!("cannot collect Downloader output: {error}").into());
+        }
+        if started.elapsed() >= DOWNLOADER_COMMAND_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!(
+                "Downloader command timed out after {} seconds",
+                DOWNLOADER_COMMAND_TIMEOUT.as_secs()
+            )
+            .into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn downloader_output(output: &Output) -> String {
+    format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+fn downloader_state_exists(paths: &Paths) -> bool {
+    paths
+        .downloader_state_paths()
+        .iter()
+        .any(|path| path.exists())
+}
+
+fn output_has_event(output: &str, event: &str, db_id: &str) -> bool {
+    output.lines().any(|line| {
+        line.split('\t')
+            .any(|field| field == &format!("event:{event}"))
+            && line
+                .split('\t')
+                .any(|field| field == &format!("db:{db_id}"))
+    })
+}
+
+fn downloader_preflight(paths: &Paths) -> Result<Option<DownloaderPreflight>> {
+    let run_signal = Path::new("/tmp/downloader_run_signal");
+    if run_signal.exists() {
+        return Err("Downloader is already running; retry uninstall after it finishes".into());
+    }
+    let tools = downloader_commands(paths);
+    if tools.is_empty() {
+        if downloader_state_exists(paths) {
+            return Err(
+                "Downloader state exists, but no cached compatible tool is available; update Downloader before uninstalling"
+                    .into(),
+            );
+        }
+        return Ok(None);
+    }
+    for tool in &tools {
+        let version = match invoke_downloader(tool, paths, &["--version"]) {
+            Ok(version) => version,
+            Err(_) => continue,
+        };
+        let version_output = downloader_output(&version);
+        if !version.status.success()
+            || !version_output
+                .lines()
+                .any(|line| line.trim().starts_with("2.4"))
+        {
+            continue;
+        }
+        let listing = invoke_downloader(tool, paths, &["--list-dbs", "installed"])?;
+        let listing_output = downloader_output(&listing);
+        if !listing.status.success() || listing_output.to_ascii_lowercase().contains("warning") {
+            return Err(
+                "Downloader installed-database state is unreadable; no MagiK files were removed"
+                    .into(),
+            );
+        }
+        return Ok(Some(DownloaderPreflight {
+            tool: tool.clone(),
+            registered: output_has_event(&listing_output, "installed_db", "mister_magik"),
+        }));
+    }
+    Err("cached Downloader is unsupported; update Downloader before uninstalling".into())
+}
+
+fn stage_recovery_manager(paths: &Paths) -> Result<PathBuf> {
+    let staging = env::var_os("MISTER_MAGIK_RECOVERY_MANAGER")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp/mister-magik-manager-recovery"));
+    if staging.exists() {
+        fs::remove_file(&staging)?;
+    }
+    fs::copy(paths.app.join("mister-magik-manager"), &staging)?;
+    if fs::read(paths.app.join("mister-magik-manager"))? != fs::read(&staging)? {
+        return Err("recovery manager staging verification failed".into());
+    }
+    let mut permissions = fs::metadata(&staging)?.permissions();
+    permissions.set_mode(permissions.mode() | 0o755);
+    fs::set_permissions(&staging, permissions)?;
+    Ok(staging)
+}
+
+fn downloader_uninstall(tool: &DownloaderTool, paths: &Paths) -> Result<()> {
+    let output = invoke_downloader(tool, paths, &["--uninstall", "mister_magik"])?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Downloader refused MagiK removal: {}",
+            downloader_output(&output)
+        )
+        .into())
+    }
+}
+
+fn downloader_verify_unregistered(tool: &DownloaderTool, paths: &Paths) -> Result<()> {
+    let output = invoke_downloader(tool, paths, &["--list-dbs", "installed"])?;
+    let text = downloader_output(&output);
+    if !output.status.success() {
+        return Err("Downloader registration verification failed".into());
+    }
+    if text.to_ascii_lowercase().contains("warning") {
+        return Err("Downloader registration state became unreadable".into());
+    }
+    if output_has_event(&text, "installed_db", "mister_magik") {
+        Err("MagiK remains registered in Downloader".into())
     } else {
         Ok(())
     }
