@@ -20,8 +20,6 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
-#[cfg(feature = "builder")]
-use std::path::PathBuf;
 
 pub const FAST_FIVE_SNAPSHOT_SCHEMA: &str = "mister-magik-fast-five-snapshot-v2";
 pub const MAX_FAST_SYSTEM_TRANSPORT_BYTES: usize = 16 * 1024 * 1024;
@@ -669,16 +667,6 @@ pub enum FastFiveArtifactProfile {
     SearchDetailNone,
 }
 
-/// A fully built shard pair staged outside source storage. Publication owns
-/// the final SD-card copy; workers only create and validate these tmpfs files.
-#[cfg(feature = "builder")]
-#[derive(Clone, Debug)]
-pub(crate) struct PrebuiltSystemArtifacts {
-    pub(crate) sqlite: PathBuf,
-    pub(crate) navigation: PathBuf,
-    pub(crate) staging: PathBuf,
-}
-
 #[cfg(feature = "builder")]
 impl FastFiveArtifactProfile {
     pub fn parse(value: &str) -> Result<Self, String> {
@@ -832,86 +820,6 @@ fn encode_variant_payload(
         decoded_sha256,
         compressed_payload: lz4_flex::compress_prepend_size(&decoded),
     }))
-}
-
-/// Build one system's complete shard pair in a caller-owned staging
-/// directory. The caller may run this on a tmpfs worker; this helper performs
-/// no publication or source-storage access.
-#[cfg(feature = "builder")]
-pub(crate) fn build_staged_system_artifacts(
-    staging: &Path,
-    source: &FastFiveSystem,
-    system_id: &SystemId,
-    generation: u64,
-    limits: RegistryLimits,
-    artifact_profile: FastFiveArtifactProfile,
-    stage_in_tmpfs: bool,
-) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
-    use crate::system_shard::{
-        ShardArtifactProfile, ShardDurability, SystemShardData,
-        write_system_shard_with_artifact_profile_and_variant_payload,
-        write_system_shard_with_durability_and_variant_payload,
-        write_system_shard_with_variant_payload,
-    };
-
-    std::fs::create_dir_all(staging)
-        .map_err(|error| format!("create {} staging: {error}", source.system_id))?;
-    let sqlite = staging.join("system.sqlite3");
-    let navigation = staging.join("system.nav.lz4b");
-    let data = SystemShardData {
-        system_id: system_id.clone(),
-        generation,
-        projection_stats: (!source.variants.is_empty()).then_some(
-            crate::system_shard::SystemShardProjectionStats {
-                source_games: source.games.len() + source.variants.len(),
-                visible_families: source.games.len(),
-                collapsed_variants: source.variants.len(),
-            },
-        ),
-        games: source.games.clone(),
-    };
-    let shard_profile = match artifact_profile {
-        FastFiveArtifactProfile::Legacy | FastFiveArtifactProfile::SinglePass => {
-            ShardArtifactProfile::Legacy
-        }
-        FastFiveArtifactProfile::NoEmbeddedNavigation => ShardArtifactProfile::NoEmbeddedNavigation,
-        FastFiveArtifactProfile::NoAdjacentNavigation => ShardArtifactProfile::NoAdjacentNavigation,
-        FastFiveArtifactProfile::NavpackOnly => ShardArtifactProfile::NavpackOnly,
-        FastFiveArtifactProfile::SearchOnly => ShardArtifactProfile::SearchOnly,
-        FastFiveArtifactProfile::SearchColumn => ShardArtifactProfile::SearchColumn,
-        FastFiveArtifactProfile::SearchDetailNone => ShardArtifactProfile::SearchDetailNone,
-    };
-    let variant_payload = encode_variant_payload(source)?;
-    if artifact_profile == FastFiveArtifactProfile::Legacy && stage_in_tmpfs {
-        write_system_shard_with_durability_and_variant_payload(
-            &sqlite,
-            &navigation,
-            data,
-            limits.shard,
-            ShardDurability::Immediate,
-            variant_payload,
-        )
-    } else if artifact_profile == FastFiveArtifactProfile::Legacy {
-        write_system_shard_with_variant_payload(
-            &sqlite,
-            &navigation,
-            data,
-            limits.shard,
-            variant_payload,
-        )
-    } else {
-        write_system_shard_with_artifact_profile_and_variant_payload(
-            &sqlite,
-            &navigation,
-            data,
-            limits.shard,
-            ShardDurability::Immediate,
-            shard_profile,
-            variant_payload,
-        )
-    }
-    .map_err(|error| format!("write {} shard: {error}", source.system_id))?;
-    Ok((sqlite, navigation))
 }
 
 #[cfg(feature = "builder")]
@@ -1172,19 +1080,17 @@ pub(crate) fn publish_snapshot_with_profile_held(
         limits,
         artifact_profile,
         None,
-        None,
         |_, _| {},
     )
 }
 
 #[cfg(feature = "builder")]
-pub(crate) fn publish_snapshot_with_profile_held_and_progress_and_prebuilt(
+pub(crate) fn publish_snapshot_with_profile_held_and_progress(
     storage_root: &Path,
     snapshot: &FastFiveSnapshot,
     limits: RegistryLimits,
     artifact_profile: FastFiveArtifactProfile,
     _lease: &crate::catalog_lease::CatalogMutationLease,
-    prebuilt: &BTreeMap<String, PrebuiltSystemArtifacts>,
     progress: impl FnMut(usize, usize),
 ) -> Result<FastFivePublishReport, String> {
     publish_snapshot_selection(
@@ -1193,7 +1099,6 @@ pub(crate) fn publish_snapshot_with_profile_held_and_progress_and_prebuilt(
         limits,
         artifact_profile,
         None,
-        Some(prebuilt),
         progress,
     )
 }
@@ -1233,7 +1138,6 @@ pub(crate) fn publish_changed_snapshot_with_profile_held(
         limits,
         artifact_profile,
         Some(changed_system_ids),
-        None,
         |_, _| {},
     )
 }
@@ -1246,7 +1150,6 @@ fn publish_snapshot_selection(
     limits: RegistryLimits,
     artifact_profile: FastFiveArtifactProfile,
     changed_system_ids: Option<&BTreeSet<String>>,
-    prebuilt: Option<&BTreeMap<String, PrebuiltSystemArtifacts>>,
     mut progress: impl FnMut(usize, usize),
 ) -> Result<FastFivePublishReport, String> {
     use crate::catalog_domain::ScanUnitId;
@@ -1255,6 +1158,12 @@ fn publish_snapshot_selection(
         ManifestSystem, garbage_collect_unreferenced, manifest_slots_present,
         publish_manifest_with_trusted_artifacts, publish_prevalidated_system_artifacts_deferred,
         publish_system_artifacts, sync_artifact_batch,
+    };
+    use crate::system_shard::{
+        ShardArtifactProfile, ShardDurability, SystemShardData,
+        write_system_shard_with_artifact_profile_and_variant_payload,
+        write_system_shard_with_durability_and_variant_payload,
+        write_system_shard_with_variant_payload,
     };
     use std::fs;
     use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -1434,33 +1343,69 @@ fn publish_snapshot_selection(
             std::process::id(),
             source.system_id
         ));
-        let prebuilt_artifacts = prebuilt.and_then(|artifacts| artifacts.get(&source.system_id));
-        let (sqlite, navigation, staging_cleanup) = if let Some(prebuilt) = prebuilt_artifacts {
-            (
-                prebuilt.sqlite.clone(),
-                prebuilt.navigation.clone(),
-                Some(FastFiveStagingCleanup::new(prebuilt.staging.clone())),
+        fs::create_dir_all(&staging)
+            .map_err(|error| format!("create {} staging: {error}", source.system_id))?;
+        let mut staging_cleanup = FastFiveStagingCleanup::new(staging.clone());
+        let sqlite = staging.join("system.sqlite3");
+        let navigation = staging.join("system.nav.lz4b");
+        let data = SystemShardData {
+            system_id: system_id.clone(),
+            generation,
+            projection_stats: (!source.variants.is_empty()).then_some(
+                crate::system_shard::SystemShardProjectionStats {
+                    source_games: source.games.len() + source.variants.len(),
+                    visible_families: source.games.len(),
+                    collapsed_variants: source.variants.len(),
+                },
+            ),
+            games: source.games.clone(),
+        };
+        let variant_payload = encode_variant_payload(source)?;
+        let shard_profile = match artifact_profile {
+            FastFiveArtifactProfile::Legacy | FastFiveArtifactProfile::SinglePass => {
+                ShardArtifactProfile::Legacy
+            }
+            FastFiveArtifactProfile::NoEmbeddedNavigation => {
+                ShardArtifactProfile::NoEmbeddedNavigation
+            }
+            FastFiveArtifactProfile::NoAdjacentNavigation => {
+                ShardArtifactProfile::NoAdjacentNavigation
+            }
+            FastFiveArtifactProfile::NavpackOnly => ShardArtifactProfile::NavpackOnly,
+            FastFiveArtifactProfile::SearchOnly => ShardArtifactProfile::SearchOnly,
+            FastFiveArtifactProfile::SearchColumn => ShardArtifactProfile::SearchColumn,
+            FastFiveArtifactProfile::SearchDetailNone => ShardArtifactProfile::SearchDetailNone,
+        };
+        if artifact_profile == FastFiveArtifactProfile::Legacy && stage_in_tmpfs {
+            write_system_shard_with_durability_and_variant_payload(
+                &sqlite,
+                &navigation,
+                data,
+                limits.shard,
+                ShardDurability::Immediate,
+                variant_payload,
+            )
+        } else if artifact_profile == FastFiveArtifactProfile::Legacy {
+            write_system_shard_with_variant_payload(
+                &sqlite,
+                &navigation,
+                data,
+                limits.shard,
+                variant_payload,
             )
         } else {
-            let (sqlite, navigation) = build_staged_system_artifacts(
-                &staging,
-                source,
-                &system_id,
-                generation,
-                limits,
-                artifact_profile,
-                stage_in_tmpfs,
-            )?;
-            (
-                sqlite,
-                navigation,
-                Some(FastFiveStagingCleanup::new(staging)),
+            write_system_shard_with_artifact_profile_and_variant_payload(
+                &sqlite,
+                &navigation,
+                data,
+                limits.shard,
+                ShardDurability::Immediate,
+                shard_profile,
+                variant_payload,
             )
-        };
-        let active = if prebuilt_artifacts.is_some()
-            || stage_in_tmpfs
-            || artifact_profile != FastFiveArtifactProfile::Legacy
-        {
+        }
+        .map_err(|error| format!("write {} shard: {error}", source.system_id))?;
+        let active = if stage_in_tmpfs || artifact_profile != FastFiveArtifactProfile::Legacy {
             let publication = publish_prevalidated_system_artifacts_deferred(
                 storage_root,
                 &sqlite,
@@ -1492,9 +1437,7 @@ fn publish_snapshot_selection(
             )
             .map_err(|error| format!("publish {} shard: {error}", source.system_id))?
         };
-        if let Some(mut staging_cleanup) = staging_cleanup {
-            staging_cleanup.remove()?;
-        }
+        staging_cleanup.remove()?;
         let previous = current.as_ref().and_then(|manifest| {
             manifest
                 .systems
@@ -2434,7 +2377,6 @@ mod builder_tests {
         fs::remove_dir_all(staging_root).unwrap();
     }
 
-    #[test]
     fn publishes_only_the_five_expected_systems() {
         let root = std::env::temp_dir().join(format!(
             "mister-magik-fast-five-{}-{}",

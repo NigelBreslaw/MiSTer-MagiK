@@ -21536,12 +21536,6 @@ fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Ve
                     Some("catalog_fresh_build"),
                     "publish_us",
                 ),
-                "artifact_overlap_ms": catalog_phase_metric_ms(
-                    value.get("phase_evidence"),
-                    "fast_catalog_artifact_overlap_tsv",
-                    None,
-                    "elapsed_us",
-                ),
                 "capture_ms": catalog_phase_metric_ms(
                     value.get("phase_evidence"),
                     "startup_timing",
@@ -25739,7 +25733,7 @@ fn catalog_artifact_set_valid(catalog: &Value) -> bool {
 }
 
 fn catalog_phase_evidence(log: &str) -> Value {
-    const RECORDS: [&str; 28] = [
+    const RECORDS: [&str; 27] = [
         "startup_timing",
         "catalog_scan_attribution_tsv",
         "catalog_scan_handoff_tsv",
@@ -25764,7 +25758,6 @@ fn catalog_phase_evidence(log: &str) -> Value {
         "fast_catalog_generic_phase_tsv",
         "fast_catalog_namespace_session_tsv",
         "fast_catalog_generic_inventory_tsv",
-        "fast_catalog_artifact_overlap_tsv",
         "catalog_game_header_probe_tsv",
         "namespace_walk_fallback_tsv",
         "namespace_walk_subtree_recovery_tsv",
