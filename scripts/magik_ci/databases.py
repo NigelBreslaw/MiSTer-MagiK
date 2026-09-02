@@ -185,6 +185,42 @@ def _zip(path: Path, files: list[tuple[str, bytes]]) -> None:
             archive.writestr(info, data)
 
 
+def restore_sources(
+    archive: Path, output: Path, source_archive: Path | None = None
+) -> None:
+    """Restore both SQLite inputs to one layout, independent of release format.
+
+    Release verification belongs to the caller. A present source archive is
+    authoritative: corruption must not silently select a different input.
+    """
+    selected = (
+        source_archive
+        if source_archive is not None and source_archive.exists()
+        else archive
+    )
+    files: list[tuple[str, bytes]] = []
+    try:
+        with zipfile.ZipFile(selected) as stream:
+            for name in ("mame.sqlite3", "hbmame.sqlite3"):
+                if stream.namelist().count(name) != 1:
+                    raise ValueError(f"expected exactly one {name}")
+                try:
+                    data = stream.read(name)
+                except (OSError, RuntimeError, zipfile.BadZipFile) as error:
+                    raise ValueError(f"cannot read {name}: {error}") from error
+                if not data:
+                    raise ValueError(f"empty {name}")
+                files.append((name, data))
+    except (OSError, ValueError, zipfile.BadZipFile) as error:
+        raise ValueError(
+            f"restore database sources from {selected}: {error}"
+        ) from error
+
+    # Validate both members before exposing either input to later build steps.
+    for name, data in files:
+        atomic_write(output / name, data)
+
+
 def verify(
     archive: Path,
     manifest: Path | None = None,
