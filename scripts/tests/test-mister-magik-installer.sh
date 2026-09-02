@@ -8,7 +8,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-MANAGER_BINARY="$ROOT/mister/tools/manager/target/debug/mister-magik-manager"
+source "$ROOT/scripts/lib/shared-worktree-cache.sh"
+MANAGER_TARGET="${CARGO_TARGET_DIR:-$(shared_primary_checkout "$ROOT")/mister/tools/manager/target}"
+MANAGER_BINARY="$MANAGER_TARGET/debug/mister-magik-manager"
 [ -x "$MANAGER_BINARY" ] || {
   echo "missing manager binary: $MANAGER_BINARY (run cargo build first)" >&2
   exit 1
@@ -304,5 +306,72 @@ grep -q 'fully uninstalled' "$FIXTURE/uninstall-reboot.log"
 grep -q 'TEST: normal reboot requested' "$FIXTURE/uninstall-reboot.log"
 assert_owned_files_removed
 assert_stock
+
+# Downloader owns its shared state. Cover success and failures after either
+# payload deletion or state removal, then retry the preserved recovery manager.
+for fault in none payload config; do
+  new_fixture "downloader-$fault"
+  seed_package
+  MISTER_MAGIK_TEST_KEYS=down run_manager >/dev/null
+  cache="$FAT/Scripts/.config/downloader"
+  mkdir -p "$cache"
+  printf 'unrelated state\n' >"$cache/downloader.json"
+  touch "$cache/registered"
+  printf '%s\n' "$fault" >"$cache/fault"
+  printf '[unrelated]\ndb_url=http://fixture/other\n[mister_magik]\ndb_url=http://fixture/magik\n' >"$FAT/downloader.ini"
+  cat >"$cache/downloader_bin" <<'EOF'
+#!/bin/sh
+set -eu
+cache="$MISTER_MAGIK_FAT/Scripts/.config/downloader"
+case "$1" in
+  --version) echo 2.4.0 ;;
+  --list-dbs)
+    if [ -e "$cache/registered" ]; then
+      printf 'DLP1\tevent:installed_db\tdb:mister_magik\n'
+    fi
+    if [ "$2" = all ] && grep -q '^\[mister_magik\]' "$MISTER_MAGIK_FAT/downloader.ini"; then
+      printf 'DLP1\tevent:configured_db\tdb:mister_magik\n'
+    fi
+    ;;
+  --uninstall)
+    [ "$2" = mister_magik ]
+    rm -f "$MISTER_MAGIK_FAT/mister-magik/mister-magik-manager"
+    if [ "$(cat "$cache/fault")" = payload ] && [ ! -e "$cache/failed" ]; then
+      touch "$cache/failed"; exit 7
+    fi
+    rm -f "$cache/registered"
+    if [ "$(cat "$cache/fault")" = config ] && [ ! -e "$cache/failed" ]; then
+      touch "$cache/failed"; exit 7
+    fi
+    sed '/^\[mister_magik\]/,$d' "$MISTER_MAGIK_FAT/downloader.ini" >"$cache/clean.ini"
+    mv "$cache/clean.ini" "$MISTER_MAGIK_FAT/downloader.ini"
+    rm -f "$MISTER_MAGIK_FAT/downloader_mister_magik.ini"
+    ;;
+  *) exit 2 ;;
+esac
+EOF
+  chmod 755 "$cache/downloader_bin"
+  recovery="$FIXTURE/recovery-manager"
+  if MISTER_MAGIK_RECOVERY_MANAGER="$recovery" MISTER_MAGIK_TEST_KEYS=down,other \
+    run_manager uninstall >"$FIXTURE/uninstall.log" 2>&1; then
+    test "$fault" = none
+  else
+    test "$fault" != none
+    test ! -e "$APP/mister-magik-manager"
+    test -x "$recovery"
+    assert_stock
+    MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$INITTAB" \
+      MISTER_MAGIK_TEST_MODE=1 MISTER_MAGIK_TEST_KEYS=down,other \
+      MISTER_MAGIK_RECOVERY_MANAGER="$recovery" \
+      "$recovery" uninstall >"$FIXTURE/retry.log" 2>&1 || { cat "$FIXTURE/retry.log"; exit 1; }
+  fi
+  test ! -e "$cache/registered"
+  test "$(cat "$cache/downloader.json")" = 'unrelated state'
+  ! grep -q '^\[mister_magik\]' "$FAT/downloader.ini"
+  grep -q '^\[unrelated\]' "$FAT/downloader.ini"
+  test ! -e "$APP"
+  test ! -e "$recovery"
+  assert_stock
+done
 
 echo "installer lifecycle matrix: PASS"

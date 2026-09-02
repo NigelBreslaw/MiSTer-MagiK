@@ -38,6 +38,13 @@ MiSTer MagiK package so `mister-magik-manager` and `platform-v3.manifest` come
 from the same release, then run the entrypoint again. The bootstrap refuses to
 run a partial or mismatched package and leaves boot configuration unchanged.
 
+Full uninstall uses cached Downloader 2.4 to remove MagiK's registration and
+configuration, so an unchanged `update_all` feed can reinstall it. Other
+Downloader state is preserved. A failed removal leaves stock boot selected
+and a recovery executable at `/tmp/mister-magik-manager-recovery`; resolve the
+reported Downloader error and run that executable with `uninstall` before
+rebooting. ZIP-only installations without Downloader state use local removal.
+
 ## Obsolete helper and upgrades
 
 Normal `update_all` runs use Downloader's managed-file deletion to remove the
