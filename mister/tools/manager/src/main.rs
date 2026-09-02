@@ -985,10 +985,8 @@ fn downloader_state_exists(paths: &Paths) -> bool {
 fn output_has_event(output: &str, event: &str, db_id: &str) -> bool {
     output.lines().any(|line| {
         line.split('\t')
-            .any(|field| field == &format!("event:{event}"))
-            && line
-                .split('\t')
-                .any(|field| field == &format!("db:{db_id}"))
+            .any(|field| field == format!("event:{event}"))
+            && line.split('\t').any(|field| field == format!("db:{db_id}"))
     })
 }
 
