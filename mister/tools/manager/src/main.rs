@@ -341,6 +341,14 @@ fn uninstall(paths: &Paths) -> Result<()> {
         "uninstall",
     )?;
 
+    // Without the boot configuration there is no safe way to restore stock
+    // startup before removing the package.  Refuse even the manual ZIP path;
+    // this keeps a damaged card recoverable and avoids reporting a false
+    // successful uninstall.
+    if !paths.ini.is_file() {
+        return Err("MiSTer.ini is missing; uninstall refused and no files were removed".into());
+    }
+
     // Preflight while all Downloader state is still intact.  A missing or
     // incompatible updater is safe only for the manual ZIP layout, which has
     // no registration to unregister.  Never delete the package first and hope

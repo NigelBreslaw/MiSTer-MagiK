@@ -41,6 +41,17 @@ class DistributionWorkflowTests(unittest.TestCase):
         self.assertIn("ci distribution test-delivery", action)
         self.assertIn("scripts/tests/test-mister-magik-installer.sh", action)
         self.assertIn("update-binfmts --enable qemu-arm", action)
+        self.assertIn("docker buildx build --platform linux/arm/v7", action)
+        self.assertIn("unshare --mount --net --pid --fork --mount-proc", action)
+        self.assertIn("MISTER_REQUIRE_MEDIA_FAT_MOUNT=1", action)
+        self.assertIn("dependency_pins.json", action)
+        self.assertLess(
+            action.index("scripts/cargo build"),
+            action.index("unshare --mount"),
+        )
+        self.assertNotIn("cat release_patch", action)
+        self.assertIn('docker cp "$runtime_container:/usr/local/lib"', action)
+        self.assertIn('export QEMU_LD_PREFIX="$runtime_root"', action)
 
     def test_branch_qualification_builds_but_never_publishes(self):
         workflow = (ROOT / ".github/workflows/distribution.yml").read_text()
@@ -48,7 +59,7 @@ class DistributionWorkflowTests(unittest.TestCase):
         self.assertIn("inputs.qualification_only != true", workflow)
         publish = workflow.split("\n  publish:\n", 1)[1]
         self.assertIn("inputs.qualification_only != true", publish)
-        self.assertIn("test \"$GITHUB_REF\" = refs/heads/main", publish)
+        self.assertIn('test "$GITHUB_REF" = refs/heads/main', publish)
         self.assertIn(
             "if: inputs.release_channel == 'alpha' || inputs.qualification_only == true",
             workflow,

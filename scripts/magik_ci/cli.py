@@ -53,6 +53,12 @@ def parser() -> argparse.ArgumentParser:
         help="device-compatible pinned Downloader source used by cached fallback tests",
     )
     delivery_test.add_argument(
+        "--native-downloader",
+        type=Path,
+        required=True,
+        help="hash-checked ARMv7 native Downloader runtime",
+    )
+    delivery_test.add_argument(
         "--update-all-source",
         type=Path,
         required=True,
@@ -278,6 +284,7 @@ def main() -> int:
                     channel=args.channel,
                     source=args.downloader_source,
                     device_source=args.device_downloader_source,
+                    native_downloader=args.native_downloader,
                     update_all_source=args.update_all_source,
                 )
             elif args.action == "publish":

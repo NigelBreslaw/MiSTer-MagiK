@@ -98,6 +98,11 @@ class PublicationTests(unittest.TestCase):
             self.candidate, channel="alpha", write_receipt=True
         )
         evidence = delivery.evidence_for_candidate(self.validated)
+        evidence["execution"] = {
+            "status": "passed",
+            "candidate_id": self.validated["candidate_id"],
+            "result_digest": delivery._results_digest(evidence["results"]),
+        }
         (self.candidate / dist.EVIDENCE).write_bytes(dist.canonical_json(evidence))
         dist.write_checksums(self.candidate)
         self.github = FakeGitHub()
