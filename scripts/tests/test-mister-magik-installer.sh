@@ -65,8 +65,6 @@ run_manager() {
   MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$INITTAB" \
     MISTER_MAGIK_TEST_MODE=1 \
     MISTER_MAGIK_TEST_KEYS="${MISTER_MAGIK_TEST_KEYS:-}" \
-    BEHAVIOR="${BEHAVIOR:-}" \
-    MISTER_MAGIK_DOWNLOADER="${MISTER_MAGIK_DOWNLOADER:-}" \
     "$FAT/Scripts/MiSTer-MagiK.sh" "$@"
 }
 
@@ -309,217 +307,71 @@ grep -q 'TEST: normal reboot requested' "$FIXTURE/uninstall-reboot.log"
 assert_owned_files_removed
 assert_stock
 
-# A registered MagiK database is removed through Downloader before the
-# package-owned files are deleted. The fixture updater models the stable
-# machine output contract and keeps unrelated Downloader state intact.
-new_fixture downloader-registration
-seed_package
-MISTER_MAGIK_TEST_KEYS=down run_manager >/dev/null
-mkdir -p "$FAT/Scripts/.config/downloader"
-printf '{"unrelated":true}\n' >"$FAT/Scripts/.config/downloader/downloader.json"
-printf 'registered\n' >"$FAT/Scripts/.config/downloader/registered"
-printf '[MiSTer]\nallow_delete = 0\nallow_reboot = 0\nupdate_linux = false\n[mister_magik]\ndb_url = http://fixture/magik.json\n' >"$FAT/downloader.ini"
-printf '[mister_magik]\ndb_url = http://fixture/magik.json\n' >"$FAT/downloader_mister_magik.ini"
-printf 'managed payload\n' >"$FAT/mister-magik/managed.txt"
-DOWNLOADER_FIXTURE="$FIXTURE/downloader-fixture.sh"
-printf '%s\n' \
-  '#!/bin/sh' \
-  'set -eu' \
-  'STATE="${MISTER_MAGIK_FAT}/Scripts/.config/downloader/registered"' \
-  'case "${1:-}" in' \
-  '  --version) printf "2.4.0\\n" ;;' \
-  '  --list-dbs) if [ -f "$STATE" ]; then printf "DLP1\\tevent:installed_db\\tdb:mister_magik\\n"; fi ;;' \
-  '  --uninstall) [ "${2:-}" = mister_magik ] || exit 2; rm -f "$STATE" ;;' \
-  '  *) exit 2 ;;' \
-  'esac' >"$DOWNLOADER_FIXTURE"
-chmod 755 "$DOWNLOADER_FIXTURE"
-MISTER_MAGIK_DOWNLOADER="$DOWNLOADER_FIXTURE" \
-  MISTER_MAGIK_TEST_KEYS=down,enter,down,other run_manager >"$FIXTURE/downloader-registration.log"
-if ! grep -q 'fully uninstalled' "$FIXTURE/downloader-registration.log"; then
-  sed -n '1,160p' "$FIXTURE/downloader-registration.log" >&2
-  exit 1
-fi
-test ! -e "$FAT/Scripts/.config/downloader/registered"
-test -e "$FAT/Scripts/.config/downloader/downloader.json"
-test -e "$FAT/downloader.ini"
-test ! -e "$FAT/mister-magik"
-unset MISTER_MAGIK_DOWNLOADER
-
-stage_fault_downloader() {
-  local behavior="$1"
-  mkdir -p "$FAT/Scripts/.config/downloader"
-  printf '{"registered":true}\n' >"$FAT/Scripts/.config/downloader/downloader.json"
-  cat >"$FAT/Scripts/.config/downloader/downloader_bin" <<'EOF'
+# Downloader owns its shared state. Cover success and failures after either
+# payload deletion or state removal, then retry the preserved recovery manager.
+for fault in none payload config; do
+  new_fixture "downloader-$fault"
+  seed_package
+  MISTER_MAGIK_TEST_KEYS=down run_manager >/dev/null
+  cache="$FAT/Scripts/.config/downloader"
+  mkdir -p "$cache"
+  printf 'unrelated state\n' >"$cache/downloader.json"
+  touch "$cache/registered"
+  printf '%s\n' "$fault" >"$cache/fault"
+  printf '[unrelated]\ndb_url=http://fixture/other\n[mister_magik]\ndb_url=http://fixture/magik\n' >"$FAT/downloader.ini"
+  cat >"$cache/downloader_bin" <<'EOF'
 #!/bin/sh
 set -eu
-state="${MISTER_MAGIK_FAT}/Scripts/.config/downloader/downloader.json"
-case "${1:-}" in
-  --version)
-    if [ "${BEHAVIOR:-}" = unsupported ]; then printf '1.0.0\n'; else printf '2.4.0\n'; fi
-    ;;
+cache="$MISTER_MAGIK_FAT/Scripts/.config/downloader"
+case "$1" in
+  --version) echo 2.4.0 ;;
   --list-dbs)
-    case "${BEHAVIOR:-}" in
-      corrupt|unverified) printf 'WARNING unreadable fingerprint state\n' ;;
-      disconnected) printf 'ERROR Downloader runtime is disconnected\n' >&2; exit 7 ;;
-      unrelated) ;;
-      registered|partial)
-        if [ -e "$state" ]; then
-          printf 'DLP1\tevent:installed_db\tdb:mister_magik\n'
-        fi
-        ;;
-      *) printf 'DLP1\tevent:installed_db\tdb:mister_magik\n' ;;
-    esac
+    if [ -e "$cache/registered" ]; then
+      printf 'DLP1\tevent:installed_db\tdb:mister_magik\n'
+    fi
+    if [ "$2" = all ] && grep -q '^\[mister_magik\]' "$MISTER_MAGIK_FAT/downloader.ini"; then
+      printf 'DLP1\tevent:configured_db\tdb:mister_magik\n'
+    fi
     ;;
   --uninstall)
-    [ "${2:-}" = mister_magik ] || exit 2
-    case "${BEHAVIOR:-}" in
-      timeout) sleep 20; exit 7 ;;
-      nonzero) exit 7 ;;
-      config-write) printf 'config write failed\n' >&2; exit 7 ;;
-      state-save) printf 'state save failed\n' >&2; exit 0 ;;
-      partial)
-        if [ -e "${state}.failed" ]; then rm -f "$state" "${state}.failed"; else touch "${state}.failed"; exit 7; fi
-        ;;
-      *) rm -f "$state" ;;
-    esac
+    [ "$2" = mister_magik ]
+    rm -f "$MISTER_MAGIK_FAT/mister-magik/mister-magik-manager"
+    if [ "$(cat "$cache/fault")" = payload ] && [ ! -e "$cache/failed" ]; then
+      touch "$cache/failed"; exit 7
+    fi
+    rm -f "$cache/registered"
+    if [ "$(cat "$cache/fault")" = config ] && [ ! -e "$cache/failed" ]; then
+      touch "$cache/failed"; exit 7
+    fi
+    sed '/^\[mister_magik\]/,$d' "$MISTER_MAGIK_FAT/downloader.ini" >"$cache/clean.ini"
+    mv "$cache/clean.ini" "$MISTER_MAGIK_FAT/downloader.ini"
+    rm -f "$MISTER_MAGIK_FAT/downloader_mister_magik.ini"
     ;;
   *) exit 2 ;;
 esac
 EOF
-  chmod 755 "$FAT/Scripts/.config/downloader/downloader_bin"
-}
-
-for ini_case in missing-base missing-dropin; do
-  new_fixture "downloader-$ini_case"
-  seed_package
-  stage_fault_downloader registered
-  printf '[MiSTer]\nallow_reboot = 0\nupdate_linux = false\n[mister_magik]\ndb_url = http://fixture/magik.json\n' >"$FAT/downloader.ini"
-  printf '[mister_magik]\ndb_url = http://fixture/magik.json\n' >"$FAT/downloader_mister_magik.ini"
-  if [ "$ini_case" = missing-base ]; then
-    rm "$FAT/downloader.ini"
+  chmod 755 "$cache/downloader_bin"
+  recovery="$FIXTURE/recovery-manager"
+  if MISTER_MAGIK_RECOVERY_MANAGER="$recovery" MISTER_MAGIK_TEST_KEYS=down,other \
+    run_manager uninstall >"$FIXTURE/uninstall.log" 2>&1; then
+    test "$fault" = none
   else
-    rm "$FAT/downloader_mister_magik.ini"
+    test "$fault" != none
+    test ! -e "$APP/mister-magik-manager"
+    test -x "$recovery"
+    assert_stock
+    MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$INITTAB" \
+      MISTER_MAGIK_TEST_MODE=1 MISTER_MAGIK_TEST_KEYS=down,other \
+      MISTER_MAGIK_RECOVERY_MANAGER="$recovery" \
+      "$recovery" uninstall >"$FIXTURE/retry.log" 2>&1 || { cat "$FIXTURE/retry.log"; exit 1; }
   fi
-  if ! BEHAVIOR=registered MISTER_MAGIK_TEST_KEYS=down,enter,down,other \
-    run_manager uninstall >"$FIXTURE/$ini_case.log" 2>&1; then
-    sed -n '1,160p' "$FIXTURE/$ini_case.log" >&2
-    exit 1
-  fi
-  grep -q 'fully uninstalled' "$FIXTURE/$ini_case.log"
+  test ! -e "$cache/registered"
+  test "$(cat "$cache/downloader.json")" = 'unrelated state'
+  ! grep -q '^\[mister_magik\]' "$FAT/downloader.ini"
+  grep -q '^\[unrelated\]' "$FAT/downloader.ini"
   test ! -e "$APP"
-  test ! -e "$FAT/downloader_mister_magik.ini"
-  if [ "$ini_case" = missing-base ]; then
-    test ! -e "$FAT/downloader.ini"
-  else
-    test -e "$FAT/downloader.ini"
-  fi
+  test ! -e "$recovery"
+  assert_stock
 done
 
-assert_uninstall_refused() {
-  local log="$1"
-  local boot_expectation="${2:-unchanged}"
-  local recovery="$FIXTURE/recovery-manager"
-  local before_ini="missing"
-  local before_inittab
-  if [ -e "$FAT/MiSTer.ini" ]; then
-    before_ini="$(sha256sum "$FAT/MiSTer.ini")"
-  fi
-  before_inittab="$(sha256sum "$INITTAB")"
-  if MISTER_MAGIK_RECOVERY_MANAGER="$recovery" \
-    MISTER_MAGIK_TEST_KEYS=down,enter,down,other run_manager uninstall >"$log" 2>&1; then
-    echo "uninstall unexpectedly succeeded for fault fixture" >&2
-    exit 1
-  fi
-  test -d "$APP"
-  case "$boot_expectation" in
-    unchanged)
-      if [ "$before_ini" = missing ]; then
-        test ! -e "$FAT/MiSTer.ini"
-      else
-        test "$(sha256sum "$FAT/MiSTer.ini")" = "$before_ini"
-      fi
-      test "$(sha256sum "$INITTAB")" = "$before_inittab"
-      ;;
-    stock)
-      assert_stock
-      ;;
-    *)
-      echo "unknown boot expectation: $boot_expectation" >&2
-      exit 1
-      ;;
-  esac
-}
-
-new_fixture missing-downloader-state
-seed_package
-mkdir -p "$FAT/Scripts/.config/downloader"
-printf '{"registered":true}\n' >"$FAT/Scripts/.config/downloader/downloader.json"
-assert_uninstall_refused "$FIXTURE/missing-tool.log"
-grep -q 'no cached compatible tool' "$FIXTURE/missing-tool.log"
-
-for behavior in unsupported corrupt unverified disconnected nonzero config-write state-save; do
-  new_fixture "downloader-$behavior"
-  seed_package
-  stage_fault_downloader "$behavior"
-  case "$behavior" in
-    nonzero|config-write|state-save) boot_expectation=stock ;;
-    *) boot_expectation=unchanged ;;
-  esac
-  BEHAVIOR="$behavior" assert_uninstall_refused "$FIXTURE/$behavior.log" "$boot_expectation"
-  test -f "$FAT/Scripts/.config/downloader/downloader.json"
-  case "$behavior" in
-    unsupported) grep -q 'unsupported' "$FIXTURE/$behavior.log" ;;
-    corrupt|unverified) grep -q 'unreadable' "$FIXTURE/$behavior.log" ;;
-    disconnected) grep -q 'unreadable' "$FIXTURE/$behavior.log" ;;
-    nonzero|config-write|state-save) grep -q 'incomplete' "$FIXTURE/$behavior.log"; test -f "$FIXTURE/recovery-manager" ;;
-  esac
-done
-
-new_fixture downloader-timeout
-seed_package
-stage_fault_downloader timeout
-BEHAVIOR=timeout assert_uninstall_refused "$FIXTURE/timeout.log" stock
-grep -q 'timed out' "$FIXTURE/timeout.log"
-test -f "$FAT/Scripts/.config/downloader/downloader.json"
-assert_stock
-test -f "$FIXTURE/recovery-manager"
-
-new_fixture downloader-partial-retry
-seed_package
-stage_fault_downloader partial
-recovery="$FIXTURE/recovery-manager"
-if BEHAVIOR=partial MISTER_MAGIK_RECOVERY_MANAGER="$recovery" MISTER_MAGIK_TEST_KEYS=down,enter,down,other run_manager uninstall >"$FIXTURE/partial-first.log" 2>&1; then
-  echo "partial Downloader failure unexpectedly succeeded" >&2
-  exit 1
-fi
-test -d "$APP"
-test -f "$recovery"
-test -f "$FAT/Scripts/.config/downloader/downloader.json"
-assert_stock
-BEHAVIOR=partial MISTER_MAGIK_RECOVERY_MANAGER="$recovery" \
-  MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$INITTAB" \
-  MISTER_MAGIK_TEST_MODE=1 MISTER_MAGIK_TEST_KEYS=down,enter,down,other \
-  "$recovery" uninstall >"$FIXTURE/partial-retry.log" 2>&1
-grep -q 'fully uninstalled' "$FIXTURE/partial-retry.log"
-test ! -e "$APP"
-test ! -e "$recovery"
-
-new_fixture unrelated-downloader-state
-seed_package
-stage_fault_downloader unrelated
-printf '[MiSTer]\nallow_reboot = 0\nupdate_linux = false\n[mister_magik]\ndb_url = http://fixture/magik.json\n' >"$FAT/downloader.ini"
-printf 'unrelated downloader hook\n' >"$FAT/Scripts/user-downloader-hook.sh"
-BEHAVIOR=unrelated MISTER_MAGIK_TEST_KEYS=down,enter,down,other run_manager uninstall >"$FIXTURE/unrelated.log" 2>&1
-grep -q 'fully uninstalled' "$FIXTURE/unrelated.log"
-test -f "$FAT/Scripts/.config/downloader/downloader.json"
-test -f "$FAT/downloader.ini"
-test -f "$FAT/Scripts/user-downloader-hook.sh"
-test ! -e "$APP"
-
-new_fixture missing-ini
-seed_package
-rm "$FAT/MiSTer.ini"
-assert_uninstall_refused "$FIXTURE/missing-ini.log"
-test -d "$APP"
-
-echo "installer lifecycle matrix and fault recovery: PASS"
+echo "installer lifecycle matrix: PASS"

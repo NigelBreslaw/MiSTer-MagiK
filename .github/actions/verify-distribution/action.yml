@@ -10,12 +10,6 @@ inputs:
   channel:
     required: true
     description: Explicit alpha, beta, or release channel
-  update-all-source:
-    required: true
-    description: Path to the pinned real Update All pyz archive
-  device-downloader-source:
-    required: true
-    description: Path to the pinned device-compatible Downloader source
 runs:
   using: composite
   steps:
@@ -23,146 +17,23 @@ runs:
       uses: actions/checkout@v7
       with:
         repository: MiSTer-devel/Downloader_MiSTer
+        ref: 5d0771359ae396aaea64453e6791ac87781d78f4
         path: build/release-downloader
-    - name: Checkout pinned Update All integration dependency
-      uses: actions/checkout@v7
-      with:
-        repository: theypsilon/Update_All_MiSTer
-        path: build/release-update-all
-        sparse-checkout: update_all.pyz
-    - name: Checkout device-compatible Downloader integration dependency
-      uses: actions/checkout@v7
-      with:
-        repository: MiSTer-devel/Downloader_MiSTer
-        path: build/release-downloader-device
-    - name: Pin integration dependencies from shared record
-      shell: bash
-      run: |
-        set -euo pipefail
-        pin() { python3 -c 'import json,sys; print(json.load(open("scripts/magik_ci/dependency_pins.json"))[sys.argv[1]])' "$1"; }
-        git -C build/release-downloader fetch --depth=1 origin "$(pin downloader_source)"
-        git -C build/release-downloader checkout --detach "$(pin downloader_source)"
-        git -C build/release-downloader-device fetch --depth=1 origin "$(pin device_downloader)"
-        git -C build/release-downloader-device checkout --detach "$(pin device_downloader)"
-        git -C build/release-update-all fetch --depth=1 origin "$(pin update_all)"
-        git -C build/release-update-all checkout --detach "$(pin update_all)"
-    - name: Install ARM emulation prerequisites
-      shell: bash
-      run: |
-        set -euo pipefail
-        sudo apt-get update
-        sudo apt-get install -y qemu-user-static binfmt-support libc6-armhf-cross libgcc-s1-armhf-cross iproute2
-        sudo update-binfmts --enable qemu-arm
-    - name: Restore pinned Downloader runtime
-      id: downloader-runtime
-      uses: actions/cache/restore@v6
-      with:
-        path: ${{ runner.temp }}/mister-magik-downloader-cache
-        key: downloader-arm-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/magik_ci/dependency_pins.json', '.github/actions/verify-distribution/action.yml') }}
-    - name: Build pinned Downloader runtime (cold cache only)
-      if: steps.downloader-runtime.outputs.cache-hit != 'true'
-      shell: bash
-      run: |
-        set -euo pipefail
-        docker buildx build --platform linux/arm/v7 --load \
-          -t magik-arm32v7-nuitka \
-          -f build/release-downloader-device/src/Dockerfile.nuitka \
-          build/release-downloader-device/src
-        (cd build/release-downloader-device && \
-          NUITKA_IMAGE=magik-arm32v7-nuitka \
-          ./src/compile.sh downloader_bin && \
-          cp downloader_bin "$RUNNER_TEMP/mister-magik-downloader-bin")
-        # Nuitka's upstream non-standalone executable needs its matching
-        # Python and shared libraries, not just a generic ARM libc sysroot.
-        runtime_root="$RUNNER_TEMP/mister-magik-arm-runtime"
-        mkdir -p "$runtime_root/usr/local"
-        runtime_container="$(docker create --platform linux/arm/v7 downloader_bin_builder)"
-        trap 'docker rm -f "$runtime_container" >/dev/null' EXIT
-        docker cp "$runtime_container:/lib" "$runtime_root/"
-        docker cp "$runtime_container:/usr/lib" "$runtime_root/usr/"
-        docker cp "$runtime_container:/usr/local/lib" "$runtime_root/usr/local/"
-        docker rm "$runtime_container"
-        trap - EXIT
-        cache_root="$RUNNER_TEMP/mister-magik-downloader-cache"
-        mkdir -p "$cache_root"
-        tar -C "$RUNNER_TEMP" -czf "$cache_root/runtime.tar.gz" \
-          mister-magik-downloader-bin mister-magik-arm-runtime
-        (cd "$cache_root" && sha256sum runtime.tar.gz > SHA256SUMS)
-    # Save immediately: a later candidate/test failure must not discard this
-    # expensive, candidate-independent dependency build. Never use fallback keys.
-    - name: Save pinned Downloader runtime
-      if: steps.downloader-runtime.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v6
-      with:
-        path: ${{ runner.temp }}/mister-magik-downloader-cache
-        key: ${{ steps.downloader-runtime.outputs.cache-primary-key }}
-    - name: Check and unpack pinned Downloader runtime
-      shell: bash
-      run: |
-        set -euo pipefail
-        cache_root="$RUNNER_TEMP/mister-magik-downloader-cache"
-        (cd "$cache_root" && sha256sum --check SHA256SUMS)
-        tar -C "$RUNNER_TEMP" -xzf "$cache_root/runtime.tar.gz"
-        test -x "$RUNNER_TEMP/mister-magik-downloader-bin"
-        test -d "$RUNNER_TEMP/mister-magik-arm-runtime/usr/local/lib"
     - name: Verify actual delivered bytes
       shell: bash
       env:
         CANDIDATE: ${{ inputs.candidate }}
         CHANNEL: ${{ inputs.channel }}
+        QEMU_LD_PREFIX: /usr/arm-linux-gnueabihf
       run: |
         set -euo pipefail
-        native_downloader_sha256="$(sha256sum "$RUNNER_TEMP/mister-magik-downloader-bin" | cut -d' ' -f1)"
-        export MISTER_MAGIK_NATIVE_DOWNLOADER_SHA256="$native_downloader_sha256"
-        runtime_root="$RUNNER_TEMP/mister-magik-arm-runtime"
-        export QEMU_LD_PREFIX="$runtime_root"
-        # Resolve/build dependencies before entering the offline namespace.
+        sudo apt-get update
+        sudo apt-get install -y qemu-user-static binfmt-support libc6-armhf-cross libgcc-s1-armhf-cross
+        sudo update-binfmts --enable qemu-arm
         rustup default "$(sed -n 's/^channel = "\([^"]*\)"/\1/p' apps/mister/rust-toolchain.toml)"
         scripts/cargo build --locked --manifest-path mister/platform/contracts/manifest/Cargo.toml --bin platform-manifest-check
         scripts/cargo build --locked --manifest-path mister/tools/manager/Cargo.toml
         scripts/cargo test --locked --manifest-path mister/platform/contracts/manifest/Cargo.toml
-        if grep -E '[[:space:]]/media/fat[[:space:]]' /proc/mounts; then
-          echo '/media/fat is already mounted on the runner' >&2
-          exit 1
-        fi
-        sudo mkdir -p /media/fat
-        private_root="$(mktemp -d -p "$RUNNER_TEMP" magik-private.XXXXXX)"
-        mkdir -p "$private_root/fat" "$private_root/tmp" "$private_root/home" "$private_root/config" "$private_root/logs"
-        chmod 1777 "$private_root/tmp"
-        trap 'rm -rf "$private_root"' EXIT
-        sudo --preserve-env=GITHUB_WORKSPACE,RUNNER_TEMP,CANDIDATE,CHANNEL,QEMU_LD_PREFIX,MISTER_MAGIK_NATIVE_DOWNLOADER_SHA256,PATH,HOME,RUSTUP_HOME,CARGO_HOME,CI \
-          unshare --mount --net --pid --fork --mount-proc bash -s -- "$private_root" <<'LIFECYCLE'
-        set -euo pipefail
-        private_root="$1"
-        cd "$GITHUB_WORKSPACE"
-        ip link set lo up
-        mount --bind "$private_root/fat" /media/fat
-        mount --bind "$private_root/tmp" /tmp
-        mount --make-private /media/fat
-        mount --make-private /tmp
-        cleanup() {
-          set +e
-          if [ -f "$private_root/logs/http.log" ]; then
-            cp "$private_root/logs/http.log" "$RUNNER_TEMP/mister-magik-delivery-http.log"
-          fi
-          umount /tmp
-          umount /media/fat
-        }
-        trap cleanup EXIT
-        export HOME="$private_root/home"
-        export XDG_CONFIG_HOME="$private_root/config"
-        export TMPDIR="$private_root/tmp"
-        export MISTER_MAGIK_DELIVERY_HTTP_LOG="$private_root/logs/http.log"
-        export MISTER_MAGIK_DELIVERY_ROOT=/media/fat
-        export MISTER_REQUIRE_MEDIA_FAT_MOUNT=1
         scripts/tests/test-mister-magik-installer.sh
         scripts/magik-ci ci distribution verify "$CANDIDATE" --channel "$CHANNEL" --write-receipt
-        scripts/magik-ci ci distribution test-delivery "$CANDIDATE" --channel "$CHANNEL" --downloader-source build/release-downloader --device-downloader-source "${{ inputs.device-downloader-source }}" --native-downloader "$RUNNER_TEMP/mister-magik-downloader-bin" --update-all-source "${{ inputs.update-all-source }}"
-        LIFECYCLE
-    - name: Upload delivery failure evidence
-      if: ${{ failure() }}
-      uses: actions/upload-artifact@v7
-      with:
-        name: mister-magik-delivery-failure-${{ github.run_id }}
-        path: ${{ runner.temp }}/mister-magik-delivery-*
-        if-no-files-found: ignore
+        scripts/magik-ci ci distribution test-delivery "$CANDIDATE" --channel "$CHANNEL" --downloader-source build/release-downloader

@@ -38,6 +38,13 @@ MiSTer MagiK package so `mister-magik-manager` and `platform-v3.manifest` come
 from the same release, then run the entrypoint again. The bootstrap refuses to
 run a partial or mismatched package and leaves boot configuration unchanged.
 
+Full uninstall uses cached Downloader 2.4 to remove MagiK's registration and
+configuration, so an unchanged `update_all` feed can reinstall it. Other
+Downloader state is preserved. A failed removal leaves stock boot selected
+and a recovery executable at `/tmp/mister-magik-manager-recovery`; resolve the
+reported Downloader error and run that executable with `uninstall` before
+rebooting. ZIP-only installations without Downloader state use local removal.
+
 ## Obsolete helper and upgrades
 
 Normal `update_all` runs use Downloader's managed-file deletion to remove the
@@ -50,32 +57,6 @@ Manually extracting a ZIP does not delete obsolete files. After installing and
 verifying the complete new package, the obsolete
 `/media/fat/Scripts/MiSTer-MagiK.platform-v3.constants.sh` file can be removed
 manually. Do not remove it from an older package that still requires it.
-
-## Downloader registration and recovery
-
-The MagiK database is registered in Downloader during a normal update. Restore
-does not unregister it and does not remove any MagiK package file, so the next
-unchanged update can use Downloader's retained store. Full uninstall is the
-explicit exception: it delegates `--uninstall mister_magik` to a compatible
-cached Downloader, verifies that the registration is gone, and then removes
-MagiK-owned generated data. `allow_delete=0` and `allow_delete=2` affect normal
-updates, but never weaken this explicit full-uninstall request. Unrelated
-database registrations and user files are preserved.
-
-Before that delegation, the manager checks the cached executable or Python
-archive, its version, installed-database listing, and updater-running signal.
-Warnings or unreadable fingerprint state are errors, not an empty installation.
-If the check fails, package files remain in place and the message directs the
-user to update Downloader. If delegation is interrupted or cannot save state,
-the verified manager is staged outside the removable package, the operation is
-reported incomplete, and no reboot is offered. Fix the updater and retry; do
-not edit private Downloader state, remove caches, or invoke `--force`.
-
-The staging path is temporary recovery support, not a second Scripts entry. A
-successful uninstall removes it after registration and package removal have
-both been verified. A cancelled install/uninstall, missing tool, disconnected
-feed, corrupt database, or failed asset leaves boot configuration and the
-usable recovery path intact.
 
 ## Support response for the incorrect beta manifest
 
