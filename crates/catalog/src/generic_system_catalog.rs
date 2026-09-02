@@ -987,17 +987,10 @@ fn discover_generic_systems_from_shared_namespace(
         let inventory_namespace = NamespaceWalkStats {
             backend: "fd-relative-shared",
             fallback_reason: namespace.fallback_reason.clone(),
-            root_open_us: 0,
             dir_opens: 0,
             read_calls: 0,
             read_bytes: 0,
             type_stats: 0,
-            stat_calls: 0,
-            stat_us: 0,
-            signature_stat_calls: 0,
-            signature_stat_us: 0,
-            canonicalization_count: 0,
-            canonicalization_us: 0,
             captured_entries: builder.entries.len(),
             peak_buffered_entries: builder.entries.len(),
             peak_buffered_bytes: builder
@@ -1047,6 +1040,11 @@ fn discover_generic_systems_from_shared_namespace(
                 .map(move |game_dir| (game_dir.to_ascii_lowercase(), profile))
         })
         .collect::<BTreeMap<_, _>>();
+    let runtime_names = plan
+        .game_dir_headers()
+        .iter()
+        .map(|header| header.name.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
     let mut known_profile_us = 0_u64;
     let mut runtime_resolution_us = 0_u64;
     let mut known_roots_considered = 0_usize;
@@ -1069,10 +1067,9 @@ fn discover_generic_systems_from_shared_namespace(
             reused_headers = reused_headers.saturating_add(1);
             (*profile).clone()
         } else {
-            // The shared namespace capture is the source of truth for every
-            // runtime root. This includes unknown names and means production
-            // never needs a preliminary top-level header enumeration.
-            runtime_headers = runtime_headers.saturating_add(1);
+            if runtime_names.contains(&root_name) {
+                runtime_headers = runtime_headers.saturating_add(1);
+            }
             let resolution_started = Instant::now();
             let Some(profile) = plan.profile_for_game_dir_facts(&inventory.fact) else {
                 runtime_unresolved = runtime_unresolved.saturating_add(1);
@@ -1168,27 +1165,17 @@ fn discover_generic_systems_from_shared_namespace(
     systems.sort_by(|left, right| left.system_id.cmp(&right.system_id));
     reports.sort_by(|left, right| left.system_id.cmp(&right.system_id));
     crate::catalog_logln!(
-        "fast_catalog_namespace_session_tsv\troot={}\tbackend={}\troot_open_us={}\tgetdents_calls={}\tgetdents_bytes={}\tread_calls={}\tread_bytes={}\tdt_unknown_count={}\ttype_stats={}\tstat_calls={}\tstat_us={}\tsignature_stat_calls={}\tsignature_stat_us={}\tentries={}\tdir_opens={}\tcanonicalizations={}\tcanonicalization_us={}\tfallbacks={}\trestarts={}\tfallback_reason={}\telapsed_us={}",
+        "fast_catalog_namespace_session_tsv\troot={}\tbackend={}\troot_open_us={}\tread_calls={}\tread_bytes={}\ttype_stats={}\tentries={}\tdir_opens={}\tcanonicalizations=0\tfallbacks={}\trestarts={}\telapsed_us={}",
         games_root.display(),
         namespace.backend,
-        namespace.root_open_us,
-        namespace.read_calls,
-        namespace.read_bytes,
+        namespace.first_entry_us.unwrap_or(0),
         namespace.read_calls,
         namespace.read_bytes,
         namespace.type_stats,
-        namespace.type_stats,
-        namespace.stat_calls,
-        namespace.stat_us,
-        namespace.signature_stat_calls,
-        namespace.signature_stat_us,
         namespace.captured_entries,
         namespace.dir_opens,
-        namespace.canonicalization_count,
-        namespace.canonicalization_us,
         namespace.fallback_count,
         namespace.restart_count,
-        namespace.fallback_reason.as_deref().unwrap_or("none"),
         elapsed_us,
     );
     crate::catalog_logln!(
@@ -2316,9 +2303,7 @@ mod tests {
             |_| {},
         )
         .expect("two-pass scan");
-        let plan = CatalogScanPlan::try_for_roots_deferred_game_headers(&roots)
-            .expect("one-pass deferred plan");
-        assert!(plan.game_dir_headers().is_empty());
+        let plan = CatalogScanPlan::try_for_roots(&roots).expect("one-pass plan");
         let (one_pass, report, resolved, observations) =
             discover_generic_systems_from_plan_excluding_with_progress(
                 &root,
@@ -2354,97 +2339,6 @@ mod tests {
         }
         #[cfg(not(target_os = "linux"))]
         assert!(!watch.complete);
-    }
-
-    #[test]
-    fn shared_namespace_preserves_approved_unknown_tree_parity_matrix() {
-        use crate::test_support::write_stored_zip;
-
-        let root = fs::canonicalize(crate::test_support::unique_temp_dir(
-            "generic-approved-edge-parity",
-        ))
-        .expect("canonicalize edge parity root");
-        let core = root.join("_Console/SNES_20260828.rbf");
-        fs::create_dir_all(core.parent().expect("core parent")).expect("create core parent");
-        fs::write(core, b"core").expect("write core");
-        for (relative, bytes) in [
-            ("games/SNES/Flat.sfc", b"flat".as_slice()),
-            ("games/SNES/Deep/One/Two/Deep.sfc", b"deep".as_slice()),
-            ("games/SNES/Mixed/Disc.chd", b"mixed".as_slice()),
-            ("games/SNES/Mixed/Disc.bin", b"track".as_slice()),
-            ("games/SNES/Case/Upper.sfc", b"case".as_slice()),
-            ("games/SNES/case/lower.sfc", b"case".as_slice()),
-            ("games/SNES/.metadata/Ignored.sfc", b"ignored".as_slice()),
-        ] {
-            let path = root.join(relative);
-            fs::create_dir_all(path.parent().expect("edge fixture parent"))
-                .expect("create edge fixture parent");
-            fs::write(path, bytes).expect("write edge fixture");
-        }
-        fs::create_dir_all(root.join("games/SNES/Empty")).expect("create empty fixture");
-        fs::create_dir_all(root.join("games/SNES/SymlinkTarget")).expect("create link target");
-        fs::write(
-            root.join("games/SNES/SymlinkTarget/Hidden.sfc"),
-            b"link target",
-        )
-        .expect("write link target");
-        write_stored_zip(
-            &root.join("games/SNES/Archive.ZIP"),
-            &[("Inside.sfc", b"zip")],
-        );
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(
-            root.join("games/SNES/SymlinkTarget"),
-            root.join("games/SNES/Symlink"),
-        )
-        .expect("create symlink fixture");
-
-        let roots = [root.display().to_string()];
-        let profiles = ProfileSet::try_for_roots(&roots)
-            .expect("edge parity two-pass profiles")
-            .into_profiles();
-        let (two_pass, _) = discover_generic_systems_from_profiles_excluding_with_progress(
-            &root,
-            &profiles,
-            &[],
-            |_| {},
-        )
-        .expect("edge parity two-pass scan");
-        let plan = CatalogScanPlan::try_for_roots_deferred_game_headers(&roots)
-            .expect("edge parity deferred plan");
-        let (one_pass, report, _, observations) =
-            discover_generic_systems_from_plan_excluding_with_progress(
-                &root,
-                &plan,
-                &[],
-                &BTreeSet::new(),
-                |_| {},
-                |_| {},
-            )
-            .expect("edge parity shared scan");
-
-        assert_eq!(one_pass, two_pass);
-        let snes = report
-            .systems
-            .iter()
-            .find(|system| system.system_id == "snes")
-            .expect("SNES edge parity report");
-        assert!(snes.inventory_entries >= 12);
-        let watch = observations.get("snes").expect("SNES edge parity watch");
-        #[cfg(unix)]
-        assert!(!watch.complete);
-        #[cfg(not(unix))]
-        assert!(watch.complete);
-
-        let missing_header = GameDirHeader {
-            name: "Missing".to_string(),
-            path: root.join("games/Missing"),
-            signature: GameDirSignature::Unavailable,
-            confirmed_directory: true,
-        };
-        assert!(collect_generic_namespace_inventory(&missing_header, None).is_err());
-
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

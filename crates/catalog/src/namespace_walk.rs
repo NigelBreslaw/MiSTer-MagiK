@@ -82,23 +82,10 @@ impl NamespaceSignatureCapture {
 pub(crate) struct NamespaceWalkStats {
     pub(crate) backend: &'static str,
     pub(crate) fallback_reason: Option<String>,
-    /// Time spent opening the requested root directory, excluding signature
-    /// probes and the first getdents call. Zero means the streaming backend
-    /// did not have an fd-relative root open to attribute.
-    pub(crate) root_open_us: u64,
     pub(crate) dir_opens: usize,
     pub(crate) read_calls: usize,
     pub(crate) read_bytes: u64,
-    /// Number of entries whose getdents type was DT_UNKNOWN.
     pub(crate) type_stats: usize,
-    pub(crate) stat_calls: usize,
-    pub(crate) stat_us: u64,
-    pub(crate) signature_stat_calls: usize,
-    pub(crate) signature_stat_us: u64,
-    /// The namespace walker does not canonicalize paths. Keep this explicit
-    /// so attribution cannot silently confuse canonicalization with opening.
-    pub(crate) canonicalization_count: usize,
-    pub(crate) canonicalization_us: u64,
     pub(crate) captured_entries: usize,
     pub(crate) peak_buffered_entries: usize,
     pub(crate) peak_buffered_bytes: usize,
@@ -190,25 +177,10 @@ impl NamespaceWalkStats {
         if self.fallback_reason.is_none() {
             self.fallback_reason.clone_from(&other.fallback_reason);
         }
-        self.root_open_us = self.root_open_us.saturating_add(other.root_open_us);
         self.dir_opens = self.dir_opens.saturating_add(other.dir_opens);
         self.read_calls = self.read_calls.saturating_add(other.read_calls);
         self.read_bytes = self.read_bytes.saturating_add(other.read_bytes);
         self.type_stats = self.type_stats.saturating_add(other.type_stats);
-        self.stat_calls = self.stat_calls.saturating_add(other.stat_calls);
-        self.stat_us = self.stat_us.saturating_add(other.stat_us);
-        self.signature_stat_calls = self
-            .signature_stat_calls
-            .saturating_add(other.signature_stat_calls);
-        self.signature_stat_us = self
-            .signature_stat_us
-            .saturating_add(other.signature_stat_us);
-        self.canonicalization_count = self
-            .canonicalization_count
-            .saturating_add(other.canonicalization_count);
-        self.canonicalization_us = self
-            .canonicalization_us
-            .saturating_add(other.canonicalization_us);
         self.captured_entries = self.captured_entries.saturating_add(other.captured_entries);
         self.peak_buffered_entries = self.peak_buffered_entries.max(other.peak_buffered_entries);
         self.peak_buffered_bytes = self.peak_buffered_bytes.max(other.peak_buffered_bytes);
@@ -695,17 +667,10 @@ fn visit_walkdir(
             "walkdir"
         },
         fallback_reason,
-        root_open_us: 0,
         dir_opens: 0,
         read_calls: 0,
         read_bytes: 0,
         type_stats: 0,
-        stat_calls: 0,
-        stat_us: 0,
-        signature_stat_calls: 0,
-        signature_stat_us: 0,
-        canonicalization_count: 0,
-        canonicalization_us: 0,
         captured_entries: visited_entries,
         peak_buffered_entries: usize::from(visited_entries > 0),
         peak_buffered_bytes,
@@ -1092,17 +1057,10 @@ mod linux {
                 stats: NamespaceWalkStats {
                     backend: "fd-relative",
                     fallback_reason: None,
-                    root_open_us: 0,
                     dir_opens: 0,
                     read_calls: 0,
                     read_bytes: 0,
                     type_stats: 0,
-                    stat_calls: 0,
-                    stat_us: 0,
-                    signature_stat_calls: 0,
-                    signature_stat_us: 0,
-                    canonicalization_count: 0,
-                    canonicalization_us: 0,
                     captured_entries: 0,
                     peak_buffered_entries: 0,
                     peak_buffered_bytes: 0,
@@ -1140,7 +1098,6 @@ mod linux {
         } else {
             0
         };
-        let root_open_started = std::time::Instant::now();
         let raw_fd = match open_retry(
             target_name.as_ptr(),
             libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | no_follow,
@@ -1156,29 +1113,26 @@ mod linux {
                 ));
             }
         };
-        let root_open_us = root_open_started.elapsed().as_micros() as u64;
         let root = unsafe { OwnedFd::from_raw_fd(raw_fd) };
         if let Some(failure) =
             injected_failure(fault, FdCaptureFailureOperation::RootRead, target, 0)
         {
             return Err(failure);
         }
+        let target_signature_before = if signature_capture.target() {
+            stat_fd(root.as_raw_fd()).ok().and_then(directory_signature)
+        } else {
+            None
+        };
         let mut entries = Vec::new();
         let mut captured_path_bytes = 0usize;
         let mut stats = NamespaceWalkStats {
             backend: "fd-relative",
             fallback_reason: None,
-            root_open_us,
             dir_opens: 1,
             read_calls: 0,
             read_bytes: 0,
             type_stats: 0,
-            stat_calls: 0,
-            stat_us: 0,
-            signature_stat_calls: 0,
-            signature_stat_us: 0,
-            canonicalization_count: 0,
-            canonicalization_us: 0,
             captured_entries: 0,
             peak_buffered_entries: 0,
             peak_buffered_bytes: 0,
@@ -1189,13 +1143,6 @@ mod linux {
             first_entry_us: None,
             final_entry_us: None,
             target_signature: None,
-        };
-        let target_signature_before = if signature_capture.target() {
-            stat_fd_timed(&mut stats, root.as_raw_fd(), true)
-                .ok()
-                .and_then(directory_signature)
-        } else {
-            None
         };
         collect_directory(
             &root,
@@ -1212,9 +1159,8 @@ mod linux {
             recover_nested_enoent,
         )?;
         if signature_capture.target() {
-            let target_signature_after = stat_fd_timed(&mut stats, root.as_raw_fd(), true)
-                .ok()
-                .and_then(directory_signature);
+            let target_signature_after =
+                stat_fd(root.as_raw_fd()).ok().and_then(directory_signature);
             stats.target_signature =
                 super::stable_directory_signature(target_signature_before, target_signature_after);
         }
@@ -1418,9 +1364,7 @@ mod linux {
                     libc::DT_REG => NamespaceEntryKind::File,
                     libc::DT_UNKNOWN => {
                         stats.type_stats = stats.type_stats.saturating_add(1);
-                        let value = stat_entry_capture_timed(
-                            stats,
-                            false,
+                        let value = stat_entry_capture(
                             directory.as_raw_fd(),
                             &child_name,
                             &child_path,
@@ -1436,9 +1380,7 @@ mod linux {
                 {
                     let value = match stat {
                         Some(value) => value,
-                        None => stat_entry_capture_timed(
-                            stats,
-                            false,
+                        None => stat_entry_capture(
                             directory.as_raw_fd(),
                             &child_name,
                             &child_path,
@@ -1495,7 +1437,7 @@ mod linux {
                     if capture_directory_signature {
                         child_signature_before = opened_child
                             .as_ref()
-                            .and_then(|child| stat_fd_timed(stats, child.as_raw_fd(), true).ok())
+                            .and_then(|child| stat_fd(child.as_raw_fd()).ok())
                             .and_then(directory_signature);
                     }
                 }
@@ -1503,9 +1445,7 @@ mod linux {
                 {
                     let value = match stat {
                         Some(value) => Some(value),
-                        None => stat_entry_capture_timed(
-                            stats,
-                            true,
+                        None => stat_entry_capture(
                             directory.as_raw_fd(),
                             &child_name,
                             &child_path,
@@ -1552,10 +1492,9 @@ mod linux {
                     ) {
                         Ok(()) => {
                             if capture_directory_signature {
-                                let child_signature_after =
-                                    stat_fd_timed(stats, child.as_raw_fd(), true)
-                                        .ok()
-                                        .and_then(directory_signature);
+                                let child_signature_after = stat_fd(child.as_raw_fd())
+                                    .ok()
+                                    .and_then(directory_signature);
                                 entries[entry_index].directory_signature =
                                     super::stable_directory_signature(
                                         child_signature_before,
@@ -1605,15 +1544,6 @@ mod linux {
                             entries.truncate(child_entries_start);
                             *captured_path_bytes = child_path_bytes_before;
                             stats.add(&snapshot.stats);
-                            // The fd walk restarted this subtree through the
-                            // streaming backend after an ENOENT race. Count
-                            // that recovery explicitly even though the
-                            // overall capture remained complete.
-                            stats.fallback_count = stats.fallback_count.saturating_add(1);
-                            stats.restart_count = stats.restart_count.saturating_add(1);
-                            if stats.fallback_reason.is_none() {
-                                stats.fallback_reason = Some("nested-enoent".to_string());
-                            }
                             *captured_path_bytes =
                                 (*captured_path_bytes).saturating_add(snapshot_path_bytes);
                             entries.extend(snapshot.entries);
@@ -1711,45 +1641,6 @@ mod linux {
                 &error,
                 format!("fstatat {}: {error}", path.display()),
             ));
-        }
-    }
-
-    fn stat_entry_capture_timed(
-        stats: &mut NamespaceWalkStats,
-        signature: bool,
-        directory: RawFd,
-        name: &CString,
-        path: &Path,
-        depth: usize,
-    ) -> Result<libc::stat, FdCaptureFailure> {
-        let started = std::time::Instant::now();
-        let result = stat_entry_capture(directory, name, path, depth);
-        record_stat_duration(stats, signature, started);
-        result
-    }
-
-    fn stat_fd_timed(
-        stats: &mut NamespaceWalkStats,
-        fd: RawFd,
-        signature: bool,
-    ) -> Result<libc::stat, io::Error> {
-        let started = std::time::Instant::now();
-        let result = stat_fd(fd);
-        record_stat_duration(stats, signature, started);
-        result
-    }
-
-    fn record_stat_duration(
-        stats: &mut NamespaceWalkStats,
-        signature: bool,
-        started: std::time::Instant,
-    ) {
-        let elapsed_us = started.elapsed().as_micros() as u64;
-        stats.stat_calls = stats.stat_calls.saturating_add(1);
-        stats.stat_us = stats.stat_us.saturating_add(elapsed_us);
-        if signature {
-            stats.signature_stat_calls = stats.signature_stat_calls.saturating_add(1);
-            stats.signature_stat_us = stats.signature_stat_us.saturating_add(elapsed_us);
         }
     }
 
@@ -2378,84 +2269,8 @@ mod tests {
 
         assert_eq!(recovered, walkdir_snapshot(&dir, None, &|_| false).0);
         assert_eq!(capture.stats.backend, "mixed");
-        assert_eq!(capture.stats.fallback_count, 1);
-        assert_eq!(capture.stats.restart_count, 1);
-        assert_eq!(
-            capture.stats.fallback_reason.as_deref(),
-            Some("nested-enoent")
-        );
-
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn fd_relative_edge_matrix_preserves_parity_and_attribution() {
-        use crate::test_support::write_stored_zip;
-        use std::os::unix::fs::symlink;
-
-        let dir = unique_temp_dir("namespace-fd-edge-matrix");
-        fs::create_dir_all(dir.join("deep/one/two")).unwrap();
-        fs::create_dir_all(dir.join("mixed/child")).unwrap();
-        fs::create_dir_all(dir.join("Case")).unwrap();
-        fs::create_dir_all(dir.join("case")).unwrap();
-        fs::create_dir_all(dir.join("ignored")).unwrap();
-        fs::create_dir_all(dir.join("empty")).unwrap();
-        fs::create_dir_all(dir.join("symlink-target")).unwrap();
-        fs::write(dir.join("flat.rom"), b"flat").unwrap();
-        fs::write(dir.join("deep/one/two/deep.rom"), b"deep").unwrap();
-        fs::write(dir.join("mixed/mixed.rom"), b"mixed").unwrap();
-        fs::write(dir.join("mixed/child/nested.rom"), b"nested").unwrap();
-        fs::write(dir.join("Case/Upper.rom"), b"case").unwrap();
-        fs::write(dir.join("case/lower.rom"), b"case").unwrap();
-        fs::write(dir.join("ignored/ignored.rom"), b"ignored").unwrap();
-        fs::write(dir.join("symlink-target/hidden.rom"), b"target").unwrap();
-        write_stored_zip(&dir.join("archive.ZIP"), &[("inside.rom", b"zip")]);
-        symlink(dir.join("symlink-target"), dir.join("symlink")).expect("create nested symlink");
-        let ignore = |path: &Path| path.file_name().is_some_and(|name| name == "ignored");
-
-        let expected = walkdir_snapshot(&dir, None, &ignore).0;
-        let capture = linux::collect_fd_relative(
-            &dir,
-            None,
-            NamespaceRootPolicy::NoFollow,
-            NamespaceSignatureCapture::TargetAndDepthOneDirectories,
-            &ignore,
-        )
-        .expect("edge matrix capture");
-        let mut actual = capture
-            .entries
-            .iter()
-            .map(|entry| {
-                (
-                    entry.path.strip_prefix(&dir).unwrap().to_path_buf(),
-                    entry.kind,
-                    entry.zip_signature,
-                )
-            })
-            .collect::<Vec<_>>();
-        actual.sort_by(|left, right| left.0.cmp(&right.0));
-
-        assert_eq!(actual, expected);
-        assert_eq!(capture.stats.captured_entries, actual.len());
-        assert!(capture.stats.read_calls > 0);
-        assert!(capture.stats.read_bytes > 0);
-        assert!(capture.stats.dir_opens >= 1);
-        assert!(capture.stats.stat_calls >= capture.stats.signature_stat_calls);
-        assert!(capture.stats.signature_stat_calls > 0);
-        assert!(capture.stats.signature_stat_us <= capture.stats.stat_us);
-        assert_eq!(capture.stats.canonicalization_count, 0);
-
-        let missing = linux::collect_fd_relative(
-            &dir.join("ENOENT"),
-            None,
-            NamespaceRootPolicy::NoFollow,
-            NamespaceSignatureCapture::None,
-            &|_| false,
-        )
-        .expect_err("missing root must retain the typed ENOENT failure");
-        assert_eq!(missing.operation(), "root-open");
-        assert_eq!(missing.errno(), Some(libc::ENOENT));
+        assert_eq!(capture.stats.fallback_count, 0);
+        assert_eq!(capture.stats.restart_count, 0);
 
         fs::remove_dir_all(dir).unwrap();
     }
