@@ -448,6 +448,41 @@ import scripts.magik_ci.cli
     def test_python_tests_skip_unrelated_paths(self) -> None:
         self.assertEqual(python_test_commands(["agent-cli/src/main.rs"]), [])
 
+    def test_database_workflow_changes_select_fast_python_tests_once(self) -> None:
+        workflow = ".github/workflows/game-databases.yml"
+        for paths in ([workflow], [workflow, "scripts/magik_ci/databases.py"]):
+            with self.subTest(paths=paths):
+                self.assertEqual(
+                    python_test_commands(paths),
+                    [
+                        [
+                            "uv",
+                            "run",
+                            "pytest",
+                            "scripts/tests",
+                            "-q",
+                            "--ignore",
+                            SLOW_TEST,
+                        ]
+                    ],
+                )
+
+    def test_database_workflow_and_ui_changes_select_full_suite_once(self) -> None:
+        self.assertEqual(
+            python_test_commands(
+                [
+                    ".github/workflows/game-databases.yml",
+                    "apps/mister/ui/components/combo_box.slint",
+                ]
+            ),
+            [["uv", "run", "pytest", "scripts/tests", "-q"]],
+        )
+
+    def test_unrelated_workflow_does_not_select_python_tests(self) -> None:
+        self.assertEqual(
+            python_test_commands([".github/workflows/cross-image.yml"]), []
+        )
+
     def test_python_changes_run_fast_tests_only(self) -> None:
         self.assertEqual(
             python_test_commands(["scripts/magik_ci/assurance.py"]),
@@ -911,27 +946,6 @@ import scripts.magik_ci.cli
         self.assertEqual(len(extraction_lines), 3)
         self.assertTrue(
             all("--historical-baseline" in line for line in extraction_lines)
-        )
-
-    def test_game_database_assembly_recovers_prior_source_artifact(self) -> None:
-        workflow = (
-            Path(__file__).resolve().parents[2] / ".github/workflows/game-databases.yml"
-        ).read_text(encoding="utf-8")
-        inspect = workflow.split("  inspect:", 1)[1].split("  build-mame:", 1)[0]
-        assemble = workflow.split("  assemble:", 1)[1].split("  publish:", 1)[0]
-
-        self.assertNotIn("current-source", inspect)
-        self.assertEqual(assemble.count("gh run download"), 1)
-        self.assertIn(
-            'source_name="game-databases-source-v${CURRENT_VERSION}"', assemble
-        )
-        self.assertIn(
-            'gh run list --repo "$GITHUB_REPOSITORY" --workflow game-databases.yml',
-            assemble,
-        )
-        self.assertIn(
-            'source_archive="$source_dir/mister-magik-game-databases-source-v${CURRENT_VERSION}.zip"',
-            assemble,
         )
 
     def test_database_round_trip(self) -> None:

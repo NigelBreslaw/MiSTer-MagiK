@@ -98,6 +98,10 @@ def parser() -> argparse.ArgumentParser:
     extract = db_sub.add_parser("extract-release")
     extract.add_argument("release", type=Path)
     extract.add_argument("--output", type=Path, required=True)
+    restore = db_sub.add_parser("restore-sources")
+    restore.add_argument("archive", type=Path)
+    restore.add_argument("--output", type=Path, required=True)
+    restore.add_argument("--source-archive", type=Path)
     db_plan = db_sub.add_parser("plan-update")
     db_plan.add_argument("--manifest", type=Path)
     db_plan.add_argument("--mame-tag", required=True)
@@ -325,6 +329,10 @@ def main() -> int:
                 )
             elif args.action == "extract-release":
                 databases.extract_release(args.release, args.output)
+            elif args.action == "restore-sources":
+                databases.restore_sources(
+                    args.archive, args.output, args.source_archive
+                )
             elif args.action == "plan-update":
                 current = (
                     json.loads(args.manifest.read_text()) if args.manifest else None

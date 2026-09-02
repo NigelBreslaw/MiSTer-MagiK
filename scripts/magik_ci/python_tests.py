@@ -12,6 +12,7 @@ SLOW_TEST = "scripts/tests/test-slint-build-contract.py"
 PYTHON_CONFIG = {
     ".python-version",
     ".github/actions/setup-python-tools/action.yml",
+    ".github/workflows/game-databases.yml",
     ".github/workflows/rust-arm.yml",
     "pyproject.toml",
     "uv.lock",
