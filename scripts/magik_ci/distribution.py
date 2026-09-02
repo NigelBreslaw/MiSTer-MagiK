@@ -254,8 +254,7 @@ def reconstruct(
             or match[3] != entry["asset"]
         ):
             raise ValueError(f"invalid Downloader asset URL: {name}")
-        # The immutable-only restriction is tightened together with publication.
-        if match[2] not in (channel, "v" + receipt["version"]):
+        if match[2] != "v" + receipt["version"]:
             raise ValueError("Downloader tag mismatch")
         repositories.add(match[1])
         source = candidate / entry["asset"]
@@ -366,12 +365,17 @@ def verify(
             if not modes.get(name, 0) & 0o111:
                 raise ValueError(f"nonexecutable packaged program: {name}")
         fields = verify_root(zip_root)
+        repositories = set()
         for value in present_channels:
             downloaded = root / value
-            reconstruct(candidate, value, receipt, downloaded)
+            database_payload = reconstruct(candidate, value, receipt, downloaded)
+            url = next(iter(database_payload["files"].values()))["url"]
+            repositories.add("/".join(urlsplit(url).path.split("/")[1:3]))
             if _inventory(downloaded) != hashes:
                 raise ValueError("ZIP/Downloader payload mismatch")
             verify_root(downloaded)
+        if len(repositories) != 1:
+            raise ValueError("channel databases reference different repositories")
         release = manifest.parse_fields((zip_root / APP / "release-v1.txt").read_text())
         database = read_json(zip_root / APP / "game-databases-manifest.json")
         platform = read_json(zip_root / APP / "platform-bundle-v0.2.json")
@@ -395,6 +399,7 @@ def verify(
             raise ValueError("GUI embedded release version mismatch")
     validated = {
         "format": "mister-magik-validated-candidate-v1",
+        "repository": next(iter(repositories)),
         "version": version,
         "build_number": build,
         "source_revision": fields["magik_revision"],

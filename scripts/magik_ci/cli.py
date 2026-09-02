@@ -23,7 +23,9 @@ def parser() -> argparse.ArgumentParser:
     report.add_argument("--format", choices=("json", "markdown"), default="json")
     report.add_argument("--output", type=Path)
     build_parser = sub.add_parser("build")
-    build_parser.add_argument("intent", choices=(*build.COMMANDS, *build.CHECKS))
+    build_parser.add_argument(
+        "intent", choices=(*build.COMMANDS, *build.CHECKS, "release-binaries")
+    )
     quality_parser = sub.add_parser("quality")
     quality_parser.add_argument(
         "checks", nargs="+", choices=("format", "lint", "typecheck", "all")
@@ -44,6 +46,16 @@ def parser() -> argparse.ArgumentParser:
         "--channel", required=True, choices=("alpha", "beta", "release")
     )
     delivery_test.add_argument("--downloader-source", type=Path, required=True)
+    for action in ("prepare-promotion", "publish"):
+        command = distribution_sub.add_parser(action)
+        command.add_argument("candidate", type=Path)
+        command.add_argument(
+            "--channel", required=True, choices=("alpha", "beta", "release")
+        )
+        command.add_argument("--repository", required=True)
+        command.add_argument("--source-revision", required=True)
+        if action == "prepare-promotion":
+            command.add_argument("--timestamp", required=True, type=int)
     assurance = ci_sub.add_parser("host-assurance")
     assurance_scope = assurance.add_mutually_exclusive_group(required=True)
     assurance_scope.add_argument("--paths", nargs="+")
@@ -55,10 +67,6 @@ def parser() -> argparse.ArgumentParser:
     eligible.add_argument("run", type=Path)
     eligible.add_argument("head_sha")
     eligible.add_argument("--allow-failed", action="store_true")
-    alpha = ci_sub.add_parser("require-alpha-promotion")
-    alpha.add_argument("channel")
-    alpha.add_argument("alpha_sha")
-    alpha.add_argument("candidate_sha")
     pm = ci_sub.add_parser("platform-manifest")
     pm_sub = pm.add_subparsers(dest="action", required=True)
     pm_gen = pm_sub.add_parser("generate")
@@ -249,16 +257,27 @@ def main() -> int:
                 )
                 else 1
             )
-        elif args.command == "require-alpha-promotion":
-            metadata.require_alpha_promotion(
-                args.channel, args.alpha_sha, args.candidate_sha
-            )
         elif args.command == "distribution":
-            from . import delivery_tests, distribution
+            from . import delivery_tests, distribution, publication
 
             if args.action == "test-delivery":
                 result = delivery_tests.run(
                     args.candidate, channel=args.channel, source=args.downloader_source
+                )
+            elif args.action == "publish":
+                result = publication.publish(
+                    args.candidate,
+                    channel=args.channel,
+                    github=publication.GitHub(args.repository),
+                    source_revision=args.source_revision,
+                )
+            elif args.action == "prepare-promotion":
+                result = publication.prepare_promotion(
+                    args.candidate,
+                    channel=args.channel,
+                    repository=args.repository,
+                    source_revision=args.source_revision,
+                    timestamp=args.timestamp,
                 )
             else:
                 result = distribution.verify(

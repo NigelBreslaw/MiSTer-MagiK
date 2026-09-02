@@ -1,0 +1,39 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Verify delivered MiSTer MagiK distribution
+description: Qualify actual ZIP and Downloader payloads with the shipped ARM installer.
+inputs:
+  candidate:
+    required: true
+    description: Flat candidate directory
+  channel:
+    required: true
+    description: Explicit alpha, beta, or release channel
+runs:
+  using: composite
+  steps:
+    - name: Checkout pinned Downloader integration dependency
+      uses: actions/checkout@v7
+      with:
+        repository: MiSTer-devel/Downloader_MiSTer
+        ref: 5d0771359ae396aaea64453e6791ac87781d78f4
+        path: build/release-downloader
+    - name: Verify actual delivered bytes
+      shell: bash
+      env:
+        CANDIDATE: ${{ inputs.candidate }}
+        CHANNEL: ${{ inputs.channel }}
+        QEMU_LD_PREFIX: /usr/arm-linux-gnueabihf
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y qemu-user-static binfmt-support libc6-armhf-cross libgcc-s1-armhf-cross
+        sudo update-binfmts --enable qemu-arm
+        rustup default "$(sed -n 's/^channel = "\([^"]*\)"/\1/p' apps/mister/rust-toolchain.toml)"
+        scripts/cargo build --locked --manifest-path mister/platform/contracts/manifest/Cargo.toml --bin platform-manifest-check
+        scripts/cargo build --locked --manifest-path mister/tools/manager/Cargo.toml
+        scripts/cargo test --locked --manifest-path mister/platform/contracts/manifest/Cargo.toml
+        scripts/tests/test-mister-magik-installer.sh
+        scripts/magik-ci ci distribution verify "$CANDIDATE" --channel "$CHANNEL" --write-receipt
+        scripts/magik-ci ci distribution test-delivery "$CANDIDATE" --channel "$CHANNEL" --downloader-source build/release-downloader

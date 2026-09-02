@@ -47,8 +47,7 @@ class DownloaderDatabaseTests(unittest.TestCase):
             receipt_path.write_text(json.dumps(receipt))
 
             cases = (
-                ("rolling-alpha", "alpha", "alpha", False),
-                ("rolling-beta", "beta", "beta", True),
+                ("alpha", "alpha", "v0.2.42", False),
                 ("promoted-beta", "beta", "v0.2.42", True),
                 ("release", "release", "v0.2.42", True),
             )
@@ -102,7 +101,7 @@ class DownloaderDatabaseTests(unittest.TestCase):
             receipt.write_text(json.dumps(base))
             with self.assertRaisesRegex(ValueError, "forbidden"):
                 MODULE.generate(
-                    receipt, root / "out", "beta", "Owner/Repo", "beta", 1_700_000_000
+                    receipt, root / "out", "beta", "Owner/Repo", "v0.2.7", 1_700_000_000
                 )
             with self.assertRaisesRegex(ValueError, "disagree"):
                 MODULE.generate(
@@ -119,7 +118,7 @@ class DownloaderDatabaseTests(unittest.TestCase):
                     root / "out",
                     "alpha",
                     "Owner/Repo",
-                    "v0.2.7",
+                    "alpha",
                     1_700_000_000,
                 )
 

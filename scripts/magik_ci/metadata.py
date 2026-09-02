@@ -50,11 +50,6 @@ def platform_eligible_run(
     )
 
 
-def require_alpha_promotion(channel: str, alpha_sha: str, candidate_sha: str) -> None:
-    if channel == "alpha" and alpha_sha != candidate_sha:
-        raise ValueError("alpha promotion is required before stable publication")
-
-
 def host_assurance(paths: list[str]) -> None:
     """Run the bounded host checks selected by a CI path group."""
     root = Path.cwd()

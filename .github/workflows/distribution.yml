@@ -15,6 +15,10 @@ on:
           - alpha
           - beta
           - release
+      candidate_version:
+        description: "Exact existing alpha version to promote (required for beta/release; empty for alpha)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -55,25 +59,20 @@ jobs:
 
       - name: Derive build-based version
         id: release
+        env:
+          RELEASE_CHANNEL: ${{ inputs.release_channel }}
+          CANDIDATE_VERSION: ${{ inputs.candidate_version }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           build_number="$(git rev-list --count "$GITHUB_SHA")"
           version="0.2.$build_number"
-          channel='${{ github.event.inputs.release_channel }}'
-          case "$channel" in
-            alpha)
-              tag=alpha
-              ;;
-            beta)
-              alpha_sha="$(git rev-parse -q --verify 'refs/tags/alpha^{commit}' || true)"
-              scripts/magik-ci ci require-alpha-promotion "$channel" "$alpha_sha" "$GITHUB_SHA"
-              tag=beta
-              ;;
-            release)
-              tag="v$version"
-              ;;
-          esac
+          if [ "$RELEASE_CHANNEL" = alpha ]; then
+            test -z "$CANDIDATE_VERSION"
+          else
+            test "$CANDIDATE_VERSION" = "$version" || { echo "Promotion requires the exact validated version for this source: $version" >&2; exit 1; }
+          fi
+          tag="v$version"
           echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -82,6 +81,7 @@ jobs:
 
   distribution:
     name: Build distribution ZIP
+    if: inputs.release_channel == 'alpha'
     runs-on: ubuntu-24.04
     needs: release-metadata
     timeout-minutes: 120
@@ -355,73 +355,11 @@ jobs:
             --output dist/published-assets
           (cd dist/published-assets && sha256sum --check SHA256SUMS)
 
-      - name: Verify release identity is consistent
-        env:
-          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
-          RELEASE_BUILD_NUMBER: ${{ needs.release-metadata.outputs.build-number }}
-          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
-          RELEASE_CHANNEL: ${{ github.event.inputs.release_channel }}
-        run: |
-          source mister/platform/contracts/generated/platform-v3.constants.sh
-          export PUBLIC_ROOT_RELATIVE="${PLATFORM_V3_PUBLIC_ROOT#/media/fat/}"
-          export PUBLIC_GUI_RELATIVE="${PLATFORM_V3_PUBLIC_GUI#/media/fat/}"
-          python3 - <<'PY'
-          import json, os, zipfile
-          from pathlib import Path
-
-          root = Path("dist/release-assets")
-          receipt = json.loads((root / "release-assets.json").read_text())
-          version = os.environ["RELEASE_VERSION"]
-          build = int(os.environ["RELEASE_BUILD_NUMBER"])
-          tag = os.environ["RELEASE_TAG"]
-          channel = os.environ["RELEASE_CHANNEL"]
-          assert receipt["version"] == version == f"0.2.{build}"
-          expected_tag = channel if channel in {"alpha", "beta"} else f"v{version}"
-          installed_root = os.environ["PUBLIC_ROOT_RELATIVE"]
-          installed_gui = os.environ["PUBLIC_GUI_RELATIVE"]
-          assert tag == expected_tag
-          assert receipt["archive"] == f"mister-magik-{version}.zip"
-          with zipfile.ZipFile(root / receipt["archive"]) as package:
-              release = dict(
-                  line.split("=", 1)
-                  for line in package.read(f"{installed_root}/release-v1.txt").decode().splitlines()
-              )
-              assert version.encode() in package.read(installed_gui)
-              game_databases = json.loads(
-                  package.read(f"{installed_root}/game-databases-manifest.json")
-              )
-          assert release["version"] == version
-          assert int(release["build_number"]) == build
-          assert int(release["game_database_version"]) == game_databases["release_version"]
-          database = json.loads((root / f"mister-magik-{channel}-db.json").read_text())
-          assert database["db_id"] == "mister_magik"
-          assert database["release"] == {"version": version, "build_number": build}
-          assert tag in json.dumps(database)
-          alpha_installer = root / "mister-magik-alpha-installer.zip"
-          if channel == "alpha":
-              assert not alpha_installer.exists()
-          PY
-
-      - name: Checkout pinned Downloader integration dependency
-        uses: actions/checkout@v7
+      - name: Qualify exact distribution candidate
+        uses: ./.github/actions/verify-distribution
         with:
-          repository: MiSTer-devel/Downloader_MiSTer
-          ref: 5d0771359ae396aaea64453e6791ac87781d78f4
-          path: build/release-downloader
-
-      - name: Validate actual ZIP, Downloader delivery and shipped ARM installer
-        env:
-          RELEASE_CHANNEL: ${{ github.event.inputs.release_channel }}
-          QEMU_LD_PREFIX: /usr/arm-linux-gnueabihf
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-user-static binfmt-support libc6-armhf-cross libgcc-s1-armhf-cross
-          sudo update-binfmts --enable qemu-arm
-          scripts/cargo build --locked --manifest-path mister/tools/manager/Cargo.toml
-          scripts/cargo test --locked --manifest-path mister/platform/contracts/manifest/Cargo.toml
-          scripts/tests/test-mister-magik-installer.sh
-          scripts/magik-ci ci distribution verify dist/published-assets --channel "$RELEASE_CHANNEL" --write-receipt
-          scripts/magik-ci ci distribution test-delivery dist/published-assets --channel "$RELEASE_CHANNEL" --downloader-source build/release-downloader
+          candidate: dist/published-assets
+          channel: alpha
 
       - name: Upload distribution candidate
         uses: actions/upload-artifact@v7
@@ -431,190 +369,74 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  publish:
-    name: Publish ${{ github.event.inputs.release_channel }} release
+  promotion:
+    name: Verify existing immutable candidate
+    if: inputs.release_channel != 'alpha'
     runs-on: ubuntu-24.04
-    concurrency:
-      group: mister-magik-downloader-feed
-      cancel-in-progress: false
-    needs:
-      - release-metadata
-      - distribution
-    timeout-minutes: 20
-    environment:
-      name: publish-${{ github.event.inputs.release_channel }}
-    permissions:
-      actions: read
-      contents: write
+    needs: release-metadata
+    timeout-minutes: 30
     steps:
-      - name: Checkout candidate validation tools
-        uses: actions/checkout@v7
-
-      - name: Build native release validators
+      - uses: actions/checkout@v7
+      - name: Build native validators
         run: |
           rustup default "$(sed -n 's/^channel = "\([^"]*\)"/\1/p' apps/mister/rust-toolchain.toml)"
           scripts/cargo build --locked --manifest-path mister/platform/contracts/manifest/Cargo.toml --bin platform-manifest-check
           scripts/cargo build --locked --manifest-path mister/tools/manager/Cargo.toml
+      - name: Download and prepare exact promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.release-metadata.outputs.version }}
+          CHANNEL: ${{ inputs.release_channel }}
+          TIMESTAMP: ${{ needs.release-metadata.outputs.timestamp }}
+        run: |
+          mkdir -p dist/published-assets
+          gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --dir dist/published-assets
+          scripts/magik-ci ci distribution prepare-promotion dist/published-assets --channel "$CHANNEL" --repository "$GITHUB_REPOSITORY" --source-revision "$GITHUB_SHA" --timestamp "$TIMESTAMP"
+      - name: Requalify the same payload without rebuilding it
+        uses: ./.github/actions/verify-distribution
+        with:
+          candidate: dist/published-assets
+          channel: ${{ inputs.release_channel }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ needs.release-metadata.outputs.artifact-name }}
+          path: dist/published-assets
+          if-no-files-found: error
+          retention-days: 30
 
-      - name: Download reviewed candidate
+  publish:
+    name: Publish ${{ inputs.release_channel }} release
+    runs-on: ubuntu-24.04
+    needs: [release-metadata, distribution, promotion]
+    if: >-
+      always() && needs.release-metadata.result == 'success' &&
+      ((inputs.release_channel == 'alpha' && needs.distribution.result == 'success') ||
+       (inputs.release_channel != 'alpha' && needs.promotion.result == 'success'))
+    concurrency:
+      group: mister-magik-downloader-feed
+      cancel-in-progress: false
+    timeout-minutes: 30
+    environment:
+      name: publish-${{ inputs.release_channel }}
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build native validators
+        run: |
+          rustup default "$(sed -n 's/^channel = "\([^"]*\)"/\1/p' apps/mister/rust-toolchain.toml)"
+          scripts/cargo build --locked --manifest-path mister/platform/contracts/manifest/Cargo.toml --bin platform-manifest-check
+          scripts/cargo build --locked --manifest-path mister/tools/manager/Cargo.toml
+      - name: Download verified candidate
         uses: actions/download-artifact@v8
         with:
           name: ${{ needs.release-metadata.outputs.artifact-name }}
           path: candidate
-
-      - name: Verify publication target
+      - name: Publish immutable bytes, verify uploads, then switch feeds
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
-          RELEASE_CHANNEL: ${{ github.event.inputs.release_channel }}
+          CHANNEL: ${{ inputs.release_channel }}
         run: |
-          set -euo pipefail
-          (cd candidate && sha256sum --check SHA256SUMS)
-          scripts/magik-ci ci distribution verify candidate --channel "$RELEASE_CHANNEL"
-          python3 -c 'from pathlib import Path; from scripts.magik_ci import distribution as d, delivery_tests as t; t.require_evidence(Path("candidate"), d.read_json(Path("candidate") / d.RECEIPT))'
-          if [ "$RELEASE_CHANNEL" = beta ]; then
-            alpha_sha="$(gh api "repos/$GH_REPO/commits/alpha" --jq .sha 2>/dev/null || true)"
-            if [ -z "$alpha_sha" ]; then
-              echo "Beta publication requires an existing alpha tag." >&2
-              exit 1
-            fi
-            if [ "$alpha_sha" != "$GITHUB_SHA" ]; then
-              echo "Beta publication requires the tested alpha commit $alpha_sha; got $GITHUB_SHA." >&2
-              exit 1
-            fi
-          fi
-          if [ '${{ github.event.inputs.release_channel }}' = release ] && \
-             gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "Tag $RELEASE_TAG already exists; immutable releases are never overwritten." >&2
-            exit 1
-          fi
-          test "${{ github.ref }}" = refs/heads/main
-
-      - name: Publish GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
-          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
-          RELEASE_CHANNEL: ${{ github.event.inputs.release_channel }}
-        run: |
-          set -euo pipefail
-          title="MiSTer MagiK $RELEASE_VERSION"
-          if [ "$RELEASE_CHANNEL" = alpha ] || [ "$RELEASE_CHANNEL" = beta ]; then
-            channel_title="${RELEASE_CHANNEL^}"
-            title="$title $channel_title"
-          fi
-          mapfile -t assets < <(find candidate -type f -print | sort)
-          if [ "$RELEASE_CHANNEL" = alpha ] || [ "$RELEASE_CHANNEL" = beta ]; then
-            notes="Rolling $RELEASE_CHANNEL for build $RELEASE_VERSION. Assets and the $RELEASE_CHANNEL tag are replaced by each approved $RELEASE_CHANNEL publication."
-            if gh release view "$RELEASE_CHANNEL" --repo "$GH_REPO" >/dev/null 2>&1; then
-              gh release upload "$RELEASE_CHANNEL" "${assets[@]}" --repo "$GH_REPO" --clobber
-              gh release edit "$RELEASE_CHANNEL" --repo "$GH_REPO" --title "$title" --notes "$notes" --prerelease
-              gh api --method PATCH "repos/$GH_REPO/git/refs/tags/$RELEASE_CHANNEL" \
-                -f sha="$GITHUB_SHA" -F force=true >/dev/null
-              declare -A expected_assets=()
-              for asset_path in "${assets[@]}"; do
-                expected_assets["$(basename "$asset_path")"]=1
-              done
-              while IFS=$'\t' read -r asset_id asset_name; do
-                if [[ -z "${expected_assets[$asset_name]+present}" ]]; then
-                  gh api --method DELETE "repos/$GH_REPO/releases/assets/$asset_id"
-                fi
-              done < <(gh release view "$RELEASE_CHANNEL" --repo "$GH_REPO" --json assets \
-                --jq '.assets[] | [(.apiUrl | split("/")[-1]), .name] | @tsv')
-            else
-              gh release create "$RELEASE_CHANNEL" "${assets[@]}" \
-                --repo "$GH_REPO" --target "$GITHUB_SHA" --title "$title" \
-                --notes "$notes" --prerelease
-            fi
-          else
-            gh release create "$RELEASE_TAG" "${assets[@]}" \
-              --repo "$GH_REPO" \
-              --target "$GITHUB_SHA" \
-              --title "$title" \
-              --generate-notes
-          fi
-
-      - name: Update channel feed
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_CHANNEL: ${{ github.event.inputs.release_channel }}
-          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
-        run: |
-          set -euo pipefail
-          initialize_feed_branch() {
-            local source="$1" destination="$2" blob_sha tree_sha commit_sha
-            blob_sha="$(gh api --method POST "repos/$GH_REPO/git/blobs" \
-              -f content="$(base64 -w 0 "$source")" \
-              -f encoding=base64 \
-              --jq .sha)"
-            tree_sha="$(
-              jq -n \
-                --arg path "$destination" \
-                --arg sha "$blob_sha" \
-                '{tree: [{path: $path, mode: "100644", type: "blob", sha: $sha}]}' \
-                | gh api --method POST "repos/$GH_REPO/git/trees" --input - --jq .sha
-            )"
-            commit_sha="$(gh api --method POST "repos/$GH_REPO/git/commits" \
-              -f message="Initialize MiSTer MagiK Downloader feed with $RELEASE_VERSION $destination" \
-              -f tree="$tree_sha" \
-              --jq .sha)"
-            test "$(gh api "repos/$GH_REPO/git/commits/$commit_sha" --jq '.parents | length')" = 0
-            gh api --method POST "repos/$GH_REPO/git/refs" \
-              -f ref=refs/heads/downloader \
-              -f sha="$commit_sha" >/dev/null
-          }
-          if ! gh api "repos/$GH_REPO/git/ref/heads/downloader" >/dev/null 2>&1; then
-            initialize_feed_branch \
-              "candidate/mister-magik-$RELEASE_CHANNEL-db.json.zip" \
-              "mister-magik-$RELEASE_CHANNEL-db.json.zip"
-            feed_initialized=1
-          else
-            feed_initialized=0
-          fi
-          publish_file() {
-            local source="$1" destination="$2" existing_sha
-            existing_sha="$(gh api "repos/$GH_REPO/contents/$destination?ref=downloader" --jq .sha 2>/dev/null || true)"
-            args=(
-              --method PUT "repos/$GH_REPO/contents/$destination"
-              -f message="Publish MiSTer MagiK $RELEASE_VERSION $destination"
-              -f branch=downloader
-              -f content="$(base64 -w 0 "$source")"
-            )
-            if [ -n "$existing_sha" ]; then
-              args+=(-f sha="$existing_sha")
-            fi
-            gh api "${args[@]}" >/dev/null
-          }
-          if [ "$feed_initialized" = 0 ]; then
-            publish_file \
-              "candidate/mister-magik-$RELEASE_CHANNEL-db.json.zip" \
-              "mister-magik-$RELEASE_CHANNEL-db.json.zip"
-          fi
-          if [ "$RELEASE_CHANNEL" = release ]; then
-            publish_file \
-              candidate/mister-magik-beta-db.json.zip \
-              mister-magik-beta-db.json.zip
-          fi
-          feed_head="$(gh api "repos/$GH_REPO/git/ref/heads/downloader" --jq .object.sha)"
-          feed_tree="$(gh api "repos/$GH_REPO/git/commits/$feed_head" --jq .tree.sha)"
-          unexpected_paths="$(gh api "repos/$GH_REPO/git/trees/$feed_tree" --jq \
-            '.tree[].path | select(. != "mister-magik-alpha-db.json.zip" and . != "mister-magik-beta-db.json.zip" and . != "mister-magik-release-db.json.zip")')"
-          test -z "$unexpected_paths"
-          gh api "repos/$GH_REPO/contents/mister-magik-$RELEASE_CHANNEL-db.json.zip?ref=downloader" \
-            --jq .sha >/dev/null
-
-      - name: Remove superseded versioned beta releases
-        if: github.event.inputs.release_channel == 'beta'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          while IFS= read -r tag; do
-            gh release delete "$tag" --repo "$GH_REPO" --cleanup-tag --yes
-          done < <(gh release list --repo "$GH_REPO" --limit 1000 \
-            --json tagName,isPrerelease \
-            --jq '.[] | select(.isPrerelease and (.tagName | test("^v0\\.2\\.[0-9]+$"))) | .tagName')
+          test "$GITHUB_REF" = refs/heads/main
+          scripts/magik-ci ci distribution publish candidate --channel "$CHANNEL" --repository "$GITHUB_REPOSITORY" --source-revision "$GITHUB_SHA"

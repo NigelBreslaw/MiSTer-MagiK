@@ -76,7 +76,7 @@ class CandidateFixture:
             + "\n"
         )
 
-    def package(self):
+    def package(self, channel="beta"):
         archive = self.root / "mister-magik-0.2.42.zip"
         with zipfile.ZipFile(archive, "w") as output:
             for path in sorted(self.stage.rglob("*")):
@@ -90,7 +90,7 @@ class CandidateFixture:
         downloader.generate(
             self.root / "assets/release-assets.json",
             self.root / "assets",
-            "beta",
+            channel,
             "Owner/Repo",
             "v0.2.42",
             1_700_000_000,
