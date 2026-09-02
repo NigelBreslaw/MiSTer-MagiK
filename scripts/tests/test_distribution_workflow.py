@@ -65,6 +65,39 @@ class DistributionWorkflowTests(unittest.TestCase):
             workflow,
         )
 
+    def test_downloader_runtime_is_cached_independently_of_candidate_tests(self):
+        action = (ROOT / ".github/actions/verify-distribution/action.yml").read_text()
+        restore = action.index("uses: actions/cache/restore@v6")
+        build = action.index("- name: Build pinned Downloader runtime")
+        save = action.index("uses: actions/cache/save@v6")
+        unpack = action.index("- name: Check and unpack pinned Downloader runtime")
+        verify = action.index("- name: Verify actual delivered bytes")
+        self.assertLess(restore, build)
+        self.assertLess(build, save)
+        self.assertLess(save, unpack)
+        self.assertLess(unpack, verify)
+        self.assertIn(
+            "hashFiles('scripts/magik_ci/dependency_pins.json', "
+            "'.github/actions/verify-distribution/action.yml')",
+            action[restore:build],
+        )
+        self.assertNotIn("restore-keys:", action)
+        self.assertEqual(
+            action.count("if: steps.downloader-runtime.outputs.cache-hit != 'true'"),
+            2,
+        )
+        self.assertIn("steps.downloader-runtime.outputs.cache-primary-key", action)
+        self.assertIn(
+            "docker create --platform linux/arm/v7 downloader_bin_builder",
+            action[build:save],
+        )
+        self.assertIn("sha256sum --check SHA256SUMS", action[unpack:verify])
+        self.assertLess(
+            action.index("sha256sum --check SHA256SUMS"),
+            action.index('tar -C "$RUNNER_TEMP" -xzf'),
+        )
+        self.assertIn("ci distribution test-delivery", action[verify:])
+
 
 if __name__ == "__main__":
     unittest.main()

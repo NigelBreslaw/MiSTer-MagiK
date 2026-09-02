@@ -46,17 +46,24 @@ runs:
         git -C build/release-downloader-device checkout --detach "$(pin device_downloader)"
         git -C build/release-update-all fetch --depth=1 origin "$(pin update_all)"
         git -C build/release-update-all checkout --detach "$(pin update_all)"
-    - name: Verify actual delivered bytes
+    - name: Install ARM emulation prerequisites
       shell: bash
-      env:
-        CANDIDATE: ${{ inputs.candidate }}
-        CHANNEL: ${{ inputs.channel }}
-        QEMU_LD_PREFIX: /usr/arm-linux-gnueabihf
       run: |
         set -euo pipefail
         sudo apt-get update
         sudo apt-get install -y qemu-user-static binfmt-support libc6-armhf-cross libgcc-s1-armhf-cross iproute2
         sudo update-binfmts --enable qemu-arm
+    - name: Restore pinned Downloader runtime
+      id: downloader-runtime
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ runner.temp }}/mister-magik-downloader-cache
+        key: downloader-arm-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/magik_ci/dependency_pins.json', '.github/actions/verify-distribution/action.yml') }}
+    - name: Build pinned Downloader runtime (cold cache only)
+      if: steps.downloader-runtime.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
         docker buildx build --platform linux/arm/v7 --load \
           -t magik-arm32v7-nuitka \
           -f build/release-downloader-device/src/Dockerfile.nuitka \
@@ -65,19 +72,49 @@ runs:
           NUITKA_IMAGE=magik-arm32v7-nuitka \
           ./src/compile.sh downloader_bin && \
           cp downloader_bin "$RUNNER_TEMP/mister-magik-downloader-bin")
-        native_downloader_sha256="$(sha256sum "$RUNNER_TEMP/mister-magik-downloader-bin" | cut -d' ' -f1)"
-        export MISTER_MAGIK_NATIVE_DOWNLOADER_SHA256="$native_downloader_sha256"
         # Nuitka's upstream non-standalone executable needs its matching
         # Python and shared libraries, not just a generic ARM libc sysroot.
         runtime_root="$RUNNER_TEMP/mister-magik-arm-runtime"
         mkdir -p "$runtime_root/usr/local"
-        runtime_container="$(docker create downloader_bin_builder)"
+        runtime_container="$(docker create --platform linux/arm/v7 downloader_bin_builder)"
         trap 'docker rm -f "$runtime_container" >/dev/null' EXIT
         docker cp "$runtime_container:/lib" "$runtime_root/"
         docker cp "$runtime_container:/usr/lib" "$runtime_root/usr/"
         docker cp "$runtime_container:/usr/local/lib" "$runtime_root/usr/local/"
         docker rm "$runtime_container"
         trap - EXIT
+        cache_root="$RUNNER_TEMP/mister-magik-downloader-cache"
+        mkdir -p "$cache_root"
+        tar -C "$RUNNER_TEMP" -czf "$cache_root/runtime.tar.gz" \
+          mister-magik-downloader-bin mister-magik-arm-runtime
+        (cd "$cache_root" && sha256sum runtime.tar.gz > SHA256SUMS)
+    # Save immediately: a later candidate/test failure must not discard this
+    # expensive, candidate-independent dependency build. Never use fallback keys.
+    - name: Save pinned Downloader runtime
+      if: steps.downloader-runtime.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ runner.temp }}/mister-magik-downloader-cache
+        key: ${{ steps.downloader-runtime.outputs.cache-primary-key }}
+    - name: Check and unpack pinned Downloader runtime
+      shell: bash
+      run: |
+        set -euo pipefail
+        cache_root="$RUNNER_TEMP/mister-magik-downloader-cache"
+        (cd "$cache_root" && sha256sum --check SHA256SUMS)
+        tar -C "$RUNNER_TEMP" -xzf "$cache_root/runtime.tar.gz"
+        test -x "$RUNNER_TEMP/mister-magik-downloader-bin"
+        test -d "$RUNNER_TEMP/mister-magik-arm-runtime/usr/local/lib"
+    - name: Verify actual delivered bytes
+      shell: bash
+      env:
+        CANDIDATE: ${{ inputs.candidate }}
+        CHANNEL: ${{ inputs.channel }}
+      run: |
+        set -euo pipefail
+        native_downloader_sha256="$(sha256sum "$RUNNER_TEMP/mister-magik-downloader-bin" | cut -d' ' -f1)"
+        export MISTER_MAGIK_NATIVE_DOWNLOADER_SHA256="$native_downloader_sha256"
+        runtime_root="$RUNNER_TEMP/mister-magik-arm-runtime"
         export QEMU_LD_PREFIX="$runtime_root"
         # Resolve/build dependencies before entering the offline namespace.
         rustup default "$(sed -n 's/^channel = "\([^"]*\)"/\1/p' apps/mister/rust-toolchain.toml)"
