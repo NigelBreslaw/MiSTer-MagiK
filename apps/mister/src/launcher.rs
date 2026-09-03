@@ -1623,12 +1623,14 @@ impl LauncherNav {
         }
     }
 
+    #[cfg(any(feature = "ui", feature = "ui-preview"))]
     pub(crate) fn collection_declared_count(&self, id: &str) -> usize {
         self.taxonomy
             .collection(id)
             .map_or(0, |collection| collection.count)
     }
 
+    #[cfg(any(feature = "ui", feature = "ui-preview"))]
     pub(crate) fn collection_is_scanning(&self, id: &str) -> bool {
         let system = self
             .taxonomy
@@ -1646,6 +1648,7 @@ impl LauncherNav {
             )
     }
 
+    #[cfg(any(feature = "ui", feature = "ui-preview"))]
     pub(crate) fn collection_update_has_failed(&self, id: &str) -> bool {
         let system = self
             .taxonomy
