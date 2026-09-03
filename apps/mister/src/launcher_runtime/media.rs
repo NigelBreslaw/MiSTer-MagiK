@@ -169,6 +169,25 @@ fn run_screenshot_media_worker(
         }
     };
     let state = read_media_state(&config.asset_dir);
+    {
+        use sha2::Digest;
+        let digest = sha2::Sha256::digest(manifest_text.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        crate::media_diagnostics::record(
+            "manifest_identity",
+            format!(
+                "schema={} generated_at={} sha256={digest} packs={} requested_size={} asset_dir={}",
+                manifest.schema,
+                manifest.generated_at,
+                manifest.packs.len(),
+                config.image_size,
+                config.asset_dir.display()
+            ),
+            false,
+        );
+    }
     let packs_by_system = packs_by_system_for_size(&manifest.packs, &config.image_size);
     let mut counts = MediaCheckCounts::default();
     let mut queue = MediaRequestQueue::default();
@@ -1011,6 +1030,14 @@ fn stream_variant_to_stage_file(
     pack_count: usize,
     tx: &mpsc::Sender<MediaWorkerMessage>,
 ) -> Result<(StreamedPackDownload, HttpCacheMetadata), String> {
+    crate::media_diagnostics::record(
+        "pack_identity",
+        format!(
+            "system={} size={} version={} raw_sha256={} raw_bytes={}",
+            pack.id, pack.image_size, pack.version, pack.raw.sha256, pack.raw.bytes
+        ),
+        false,
+    );
     stream_media_object_to_path(
         &variant.url,
         variant.bytes,
@@ -1137,7 +1164,7 @@ fn stream_media_object_to_path(
     let started = Instant::now();
     let mut curl = Command::new("curl");
     add_curl_download_args(&mut curl, url, headers_path, expected_bytes);
-    let mut child = match curl.stdout(Stdio::piped()).stderr(Stdio::null()).spawn() {
+    let mut child = match curl.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(child) => child,
         Err(error) => {
             drop(sha.stdin.take());
@@ -1145,6 +1172,10 @@ fn stream_media_object_to_path(
             return Err(format!("spawn curl: {error}"));
         }
     };
+    let stderr = child
+        .stderr
+        .take()
+        .map(crate::media_http::drain_curl_stderr);
     let mut input = match child.stdout.take() {
         Some(input) => input,
         None => {
@@ -1213,12 +1244,22 @@ fn stream_media_object_to_path(
         let _ = child.kill();
     }
     let status = child.wait().map_err(|e| format!("wait curl: {e}"))?;
+    let stderr = stderr
+        .and_then(|thread| thread.join().ok())
+        .unwrap_or_default();
     let sha_output = sha
         .wait_with_output()
         .map_err(|e| format!("wait sha256 command: {e}"))?;
     transfer_result?;
     if !status.success() {
-        return Err(format!("curl exited with {status}"));
+        let headers = fs::read_to_string(headers_path).unwrap_or_default();
+        let http_status = headers
+            .lines()
+            .rfind(|line| line.starts_with("HTTP/"))
+            .unwrap_or("HTTP status unavailable");
+        return Err(format!(
+            "curl exited with {status}; {http_status}; {stderr}"
+        ));
     }
     if !sha_output.status.success() {
         return Err(format!("sha256 command exited with {}", sha_output.status));
@@ -1268,12 +1309,22 @@ fn verify_streamed_download(
     expected_sha: &str,
 ) -> Result<(), String> {
     if streamed.bytes != expected_bytes {
+        crate::media_diagnostics::record(
+            "pack_size_failed",
+            format!("expected={expected_bytes} actual={}", streamed.bytes),
+            true,
+        );
         return Err(format!(
             "size mismatch expected={expected_bytes} actual={}",
             streamed.bytes
         ));
     }
     if streamed.sha256 != expected_sha {
+        crate::media_diagnostics::record(
+            "pack_sha256_failed",
+            format!("expected={expected_sha} actual={}", streamed.sha256),
+            true,
+        );
         return Err(format!(
             "sha256 mismatch expected={expected_sha} actual={}",
             streamed.sha256

@@ -165,7 +165,7 @@ export component ArcadeListScreen inherits Rectangle {
         }
     }
 
-    if ArcadeView.load-state == ArcadeLoadState.loading : Rectangle {
+    if ArcadeView.load-state != ArcadeLoadState.ready : Rectangle {
         x: (LauncherLayout.arcade-list.x - MisterUi.crt-content-x) * 1px;
         y: (LauncherLayout.arcade-list.y - MisterUi.crt-content-y) * 1px;
         width: LauncherLayout.arcade-list.width * 1px;
@@ -176,7 +176,7 @@ export component ArcadeListScreen inherits Rectangle {
         accessible-description: "Loading arcade list";
 
         Spleen6x12 {
-            text: "Loading list...";
+            text: ArcadeView.load-state == ArcadeLoadState.loading ? "Loading Arcade games…" : ArcadeView.load-state == ArcadeLoadState.failed ? "Arcade library unavailable.\nLibrary Refresh in Settings." : "No Arcade games found.\nLibrary Refresh in Settings.";
             color: CrtTheme.muted;
             size: MisterUi.crt-body-font;
             horizontal-alignment: center;
@@ -191,7 +191,7 @@ export component ArcadeListScreen inherits Rectangle {
         background: transparent;
         border-width: 0px;
         border-color: transparent;
-        left-hint: "A Launch   X Options   Y Search";
+        left-hint: ArcadeView.load-state == ArcadeLoadState.ready ? "A Launch   X Options   Y Search" : "";
         right-hint: "B Back   HOME Launcher";
     }
 }

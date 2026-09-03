@@ -33784,6 +33784,8 @@ fn ssh_diagnostics_bundle(agent_error: String) -> Result<Value> {
         },
         "crashes": ssh_crash_reports_json(&sess),
         "catalog_failures": ssh_catalog_failure_reports_json(&sess),
+        "media_diagnostics": ssh_latest_diagnostic_report(&sess, "diagnostics/media/latest.json", "updated_unix_ms"),
+        "media_live": remote_read(&sess, "/tmp/mister-magik/media-diagnostics.json"),
         "catalog_progress": ssh_latest_diagnostic_report(
             &sess,
             "diagnostics/catalog/progress-latest.json",
@@ -33842,6 +33844,16 @@ fn write_diagnostics_bundle(out_dir: &Path, bundle: &Value) -> Result<()> {
         bundle.get("fpga_video_diagnostics"),
     )?;
 
+    write_json_member(
+        out_dir,
+        "media-diagnostics-latest.json",
+        bundle.pointer("/media_diagnostics/report"),
+    )?;
+    write_string_pointer(
+        out_dir,
+        "media-diagnostics-live.json",
+        bundle.get("media_live"),
+    )?;
     write_string_pointer(out_dir, "ps.txt", bundle.pointer("/processes/ps"))?;
     write_string_pointer(
         out_dir,
@@ -43961,6 +43973,8 @@ fast_catalog_tmpfs_artifact_build_tsv\tenabled=true\tsystems=8\tartifactless_sys
         let _ = fs::remove_dir_all(&out);
         fs::create_dir_all(&out).unwrap();
         let bundle = json!({
+            "media_diagnostics": {"report": {"schema": "mister-magik-media-diagnostics-v1"}},
+            "media_live": "{\"schema\":\"mister-magik-media-diagnostics-v1\"}",
             "catalog_failures": {
                 "latest": {
                     "path": "/media/fat/mister-magik/diagnostics/catalog/latest.json",
@@ -43996,6 +44010,10 @@ fast_catalog_tmpfs_artifact_build_tsv\tenabled=true\tsystems=8\tartifactless_sys
         write_diagnostics_bundle(&out, &bundle).unwrap();
 
         assert!(out.join("catalog-failures.json").exists());
+        assert!(out.join("media-diagnostics-latest.json").exists());
+        assert!(out.join("media-diagnostics-live.json").exists());
+        // A pre-diagnostics device is still a valid bundle source.
+        write_diagnostics_bundle(&out, &json!({})).unwrap();
         let latest: Value =
             serde_json::from_slice(&fs::read(out.join("catalog-failure-latest.json")).unwrap())
                 .unwrap();

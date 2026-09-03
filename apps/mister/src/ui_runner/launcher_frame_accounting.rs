@@ -60,6 +60,7 @@ pub(super) struct LauncherFrameAccounting {
     runtime_status_publisher: runtime_status::RuntimeStatusPublisher,
     last_status_write: Instant,
     status_sequence: u64,
+    last_media_receipt: String,
     profile_completion_submitted: bool,
     first_copy_logged: bool,
     first_frame_logged: bool,
@@ -1190,6 +1191,7 @@ impl LauncherFrameAccounting {
             runtime_status_publisher: runtime_status::RuntimeStatusPublisher::new(),
             last_status_write: Instant::now() - Duration::from_secs(2),
             status_sequence: 0,
+            last_media_receipt: String::new(),
             profile_completion_submitted: false,
             first_copy_logged: false,
             first_frame_logged: false,
@@ -2561,6 +2563,26 @@ impl LauncherFrameAccounting {
             self.take_frame_budget_status()
         };
         self.status_sequence = self.status_sequence.saturating_add(1);
+        let receipt_system = nav.active_collection_scope_id(catalog);
+        let receipt_key = nav
+            .active_arcade_game_at(catalog, receipt_system, nav.arcade.selected)
+            .map_or("", |game| game.preview_asset_key.as_ref());
+        let media_receipt = format!(
+            "key={receipt_key} cache={preview_cache_state} catalog_generation={} view={} present_backend={} present_status={} frozen={} output={}x{} state_revision={} presented_state_revision={}",
+            self.catalog_generation,
+            self.effective_view,
+            self.last_present_backend,
+            self.last_present_status,
+            self.display_frozen,
+            self.framebuffer_width,
+            self.framebuffer_height,
+            self.automation_state_revision,
+            self.automation_presented_state_revision
+        );
+        if self.last_media_receipt != media_receipt {
+            crate::media_diagnostics::record("preview_presentation_receipt", &media_receipt, false);
+            self.last_media_receipt = media_receipt;
+        }
         let screensaver_profile_state = cpu_profile::screensaver_profile_state();
         let build_identity = crate::build_identity::BuildIdentity::current();
         let selected_system_id = nav.active_collection_scope_id(catalog);

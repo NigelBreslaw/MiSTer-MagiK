@@ -1002,9 +1002,10 @@ fn sync_launcher_layout_if_changed(
     }
 }
 
-pub(super) fn active_system_games_loading(catalog: &ArcadeCatalog, nav: &LauncherNav) -> bool {
-    active_system(catalog, nav).is_some_and(|system| {
-        system.count > 0 && catalog.system_game_count(&system.id) < system.count
+pub(super) fn active_system_games_loading(_catalog: &ArcadeCatalog, nav: &LauncherNav) -> bool {
+    nav.active_collection().is_some_and(|collection| {
+        nav.catalog_system_hydration_is_loading(&collection.id)
+            || nav.collection_is_scanning(&collection.id)
     })
 }
 
@@ -1589,12 +1590,12 @@ mod tests {
         );
         let mut nav = LauncherNav::new();
         assert!(nav.open_system(&catalog, "pet2001"));
-
+        nav.catalog_system_hydration_started("pet2001");
         assert!(active_system_games_loading(&catalog, &nav));
     }
 
     #[test]
-    fn arcade_collection_reports_missing_registry_rows_as_loading() {
+    fn arcade_collection_reports_explicit_hydration_as_loading() {
         let catalog = ArcadeCatalog::new(
             PathBuf::from(DEFAULT_ARCADE_ROOT),
             vec![arcade_game("Arcade One").system_id("arcade").build()],
@@ -1619,6 +1620,8 @@ mod tests {
             1
         );
         assert_eq!(active_system_game_view(&catalog, &nav).len(), 1);
+        assert!(!active_system_games_loading(&catalog, &nav));
+        nav.catalog_system_hydration_started("arcade");
         assert!(active_system_games_loading(&catalog, &nav));
     }
 

@@ -1155,7 +1155,11 @@ fn system_entry_collection_id(system_id: &str) -> &str {
 fn empty_collection_invariant_violated(catalog: &ArcadeCatalog, nav: &LauncherNav) -> bool {
     nav.screen == Screen::Arcade
         && active_system(catalog, nav).is_some_and(|system| {
-            system.count > 0 && !collection_has_resident_rows(catalog, &system.id)
+            system.count > 0
+                && !collection_has_resident_rows(catalog, &system.id)
+                && !nav.catalog_system_hydration_is_loading(&system.id)
+                && !nav.catalog_system_hydration_has_failed(&system.id)
+                && !nav.collection_is_scanning(&system.id)
         })
 }
 
@@ -4392,6 +4396,16 @@ fn begin_cold_collection_entry(
     lifecycle: &LauncherLifecycle,
     start: Instant,
 ) -> ColdCollectionEntryStart {
+    // The Arcade shell exists independently of installed games. Do not ask
+    // the shard scheduler to read a file for an unregistered/zero-row library.
+    if collection_id == arcade_catalog::MENU_ARCADE_SYSTEM_ID
+        && nav.collection_declared_count(collection_id) == 0
+    {
+        return ColdCollectionEntryStart {
+            pending: None,
+            bridge_dirty: true,
+        };
+    }
     let hydration_failed = nav.catalog_system_hydration_has_failed(collection_id);
     let already_loading = nav.catalog_system_hydration_is_loading(collection_id);
     let preview_dispatch = (!already_loading).then(|| {
@@ -4427,6 +4441,17 @@ fn begin_cold_collection_entry(
     }
     if hydration_requested {
         nav.catalog_system_hydration_started(collection_id);
+    }
+    if collection_id == arcade_catalog::MENU_ARCADE_SYSTEM_ID {
+        if !hydration_requested && !already_loading && !nav.collection_is_scanning(collection_id) {
+            nav.catalog_system_hydration_failed(collection_id);
+        }
+        // Navigation commits now; hydration only updates the open screen.
+        // In particular a late result must never reopen Arcade after Back.
+        return ColdCollectionEntryStart {
+            pending: None,
+            bridge_dirty: true,
+        };
     }
     let pending = (hydration_requested || nav.catalog_system_hydration_is_loading(collection_id))
         .then(|| {
@@ -8134,10 +8159,12 @@ pub(super) fn run_launcher_loop(
                                         } else if collection_id.is_none()
                                             || collection_id.as_deref().is_some_and(
                                                 |collection_id| {
-                                                    collection_has_resident_rows(
-                                                        &catalog,
-                                                        collection_id,
-                                                    )
+                                                    collection_id
+                                                        == arcade_catalog::MENU_ARCADE_SYSTEM_ID
+                                                        || collection_has_resident_rows(
+                                                            &catalog,
+                                                            collection_id,
+                                                        )
                                                 },
                                             )
                                         {
@@ -8788,7 +8815,10 @@ pub(super) fn run_launcher_loop(
                     format!("system={} registered_rows={}", system.id, system.count),
                 );
             }
-            nav.recover_empty_collection_to_home();
+            if let Some(system) = active_system(&catalog, &nav) {
+                let id = system.id.clone();
+                nav.catalog_system_hydration_failed(&id);
+            }
             full_bridge_dirty = true;
             request_launcher_redraw!();
         }
@@ -9034,6 +9064,9 @@ pub(super) fn run_launcher_loop(
             ArcadeGameView::empty()
         };
         let active_arcade_games_available = !active_arcade_games.is_empty();
+        let arcade_status_only =
+            crate::launcher_presentation::active_games_load_state(&catalog, &nav)
+                != slint_ui::launcher::ArcadeLoadState::Ready;
         let arcade_search_active = nav.arcade_search.is_active(&nav.arcade_filter.active);
         if !launching && nav.screen == Screen::Arcade {
             if let Some(system) = active_system(&catalog, &nav) {
@@ -9179,6 +9212,7 @@ pub(super) fn run_launcher_loop(
             || display_session.should_present_full_frame(launching, route_action)
             || startup_reveal_ready;
         let wants_arcade_list = !screensaver.active
+            && !arcade_status_only
             && should_draw_arcade_overlay(&nav, launching, active_arcade_games_available);
         let presentation_route = if preserve_navigation_source_preview {
             PreviewRoute::Occluded
@@ -9257,7 +9291,9 @@ pub(super) fn run_launcher_loop(
         // The list is the navigation destination. Preview media is asynchronous and
         // must never hold the full-screen transition closed after the list is ready.
         let navigation_destination_layers_ready = navigation_destination_committed
-            && (nav.screen != Screen::Arcade || active_arcade_games_available);
+            && (nav.screen != Screen::Arcade
+                || active_arcade_games_available
+                || nav.active_collection_id() == Some(arcade_catalog::MENU_ARCADE_SYSTEM_ID));
         let composition_decision = composition.tick(UiCompositionInput {
             screensaver_active: effective_view == EffectiveLauncherView::Screensaver,
             navigation_transition_active: navigation_transition.is_active(),
@@ -9267,7 +9303,8 @@ pub(super) fn run_launcher_loop(
             return_screen: effective_view.return_screen(),
             confirm_visible,
             fullscreen_overlay_visible: catalog_scan_visible,
-            arcade_ready: active_arcade_games_available,
+            arcade_ready: active_arcade_games_available
+                || nav.active_collection_id() == Some(arcade_catalog::MENU_ARCADE_SYSTEM_ID),
             route_ok: display_session.route_ok(),
             wants_arcade_list,
             wants_preview: wants_preview_layer,
@@ -10564,7 +10601,13 @@ pub(super) fn run_launcher_loop(
                         }
                         true
                     };
-                    if preview_surface_ready {
+                    if preview_surface_ready && arcade_status_only {
+                        // The Slint status panel is the complete destination for
+                        // loading, empty and failed Arcade. Do not paint the old
+                        // custom "NO GAMES" layer over it.
+                        destination_layers_ready = true;
+                    }
+                    if preview_surface_ready && !arcade_status_only {
                         configure_arcade_list_renderer_geometry(
                             &mut arcade_list_renderer,
                             &nav,
@@ -16638,7 +16681,7 @@ mod tests {
         restored_nav.catalog_system_hydration_started("arcade");
         let registry = summary_catalog_for_media_systems(&["arcade"]);
 
-        assert!(empty_collection_invariant_violated(
+        assert!(!empty_collection_invariant_violated(
             &registry,
             &restored_nav,
         ));

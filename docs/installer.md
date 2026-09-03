@@ -1,5 +1,13 @@
 # MiSTer MagiK installer and boot-configuration safety
 
+Interactive confirmation accepts Down (`ESC [ B` or `ESC O B`) only. Escape
+sequences may arrive in separate terminal reads; all remaining bytes must arrive
+within a single 100 ms deadline after Escape. Interrupted reads do not extend
+that deadline. Incomplete and unsupported sequences cancel, terminal settings
+are restored, and confirmation still precedes installation writes. Rejected
+escape sequences print a bounded hexadecimal diagnostic, never arbitrary typed
+text. This addresses fragmented input, not every possible controller mapping.
+
 `Scripts/MiSTer-MagiK.sh` is only the stable MiSTer Scripts, Downloader, and
 update_all entrypoint. It verifies the fixed path and SHA-256 of
 `mister-magik-manager` from `platform-v3.manifest`, then replaces itself with

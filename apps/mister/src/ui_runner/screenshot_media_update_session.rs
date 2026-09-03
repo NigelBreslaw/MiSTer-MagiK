@@ -53,11 +53,11 @@ impl ScreenshotMediaUpdateEffects {
     }
 
     fn event(&mut self, name: impl Into<String>, detail: impl Into<String>) {
+        let name = name.into();
+        let detail = detail.into();
+        crate::media_diagnostics::record(&name, &detail, name.ends_with("failed"));
         self.push(ScreenshotMediaUpdateEffect::StartupEvent(
-            ScreenshotMediaUpdateEvent {
-                name: name.into(),
-                detail: detail.into(),
-            },
+            ScreenshotMediaUpdateEvent { name, detail },
         ));
     }
 
@@ -321,6 +321,13 @@ impl ScreenshotMediaUpdateSession {
                 status,
                 detail,
             } => {
+                if matches!(status.as_str(), "failed" | "unavailable") {
+                    crate::media_diagnostics::record(
+                        "pack_unavailable",
+                        format!("system={system} size={image_size} status={status} {detail}"),
+                        true,
+                    );
+                }
                 effects.event(
                     "screenshot_media_pack_status",
                     format!("system={system} image_size={image_size} status={status} {detail}"),
@@ -337,6 +344,23 @@ impl ScreenshotMediaUpdateSession {
                 }
             }
             MediaWorkerMessage::PreviewAvailabilityUpdated { outcome } => {
+                if outcome.candidate_rows > outcome.available_rows {
+                    crate::media_diagnostics::record(
+                        "preview_identity_unavailable",
+                        format!(
+                            "system={} generation={} candidates={} available={} existing={} derived={} ambiguous={} resolver={:?}",
+                            outcome.system_id,
+                            outcome.generation,
+                            outcome.candidate_rows,
+                            outcome.available_rows,
+                            outcome.existing_identity_rows,
+                            outcome.derived_identity_rows,
+                            outcome.ambiguous_identity_rows,
+                            outcome.resolver_status
+                        ),
+                        true,
+                    );
+                }
                 effects.event(
                     "screenshot_media_catalog_updated",
                     format!(

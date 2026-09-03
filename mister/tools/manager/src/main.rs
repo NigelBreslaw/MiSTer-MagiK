@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::env;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, IsTerminal, Write};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
@@ -47,6 +47,7 @@ impl InputDecoder {
         }
     }
 
+    #[cfg(test)]
     fn finish(&self) -> Option<InputEvent> {
         match self.bytes.as_slice() {
             [] => None,
@@ -79,6 +80,7 @@ impl TerminalMode {
         })
     }
 
+    #[cfg(test)]
     fn set_tail_timeout(&mut self) -> io::Result<()> {
         let mut timed = self.original;
         timed.c_lflag &= !(libc::ECHO | libc::ICANON);
@@ -409,7 +411,7 @@ fn read_event(paths: &Paths) -> Result<Option<InputEvent>> {
     }
     let stdin = io::stdin();
     let mut terminal = TerminalMode::enter(stdin.as_raw_fd())?;
-    let result = read_event_bytes(&mut stdin.lock(), &mut terminal);
+    let result = read_event_fd(stdin.as_raw_fd());
     let restore = terminal.restore();
     println!();
     match (result, restore) {
@@ -423,20 +425,83 @@ fn read_event(paths: &Paths) -> Result<Option<InputEvent>> {
     }
 }
 
-fn read_event_bytes(input: &mut impl Read, terminal: &mut TerminalMode) -> Result<InputEvent> {
-    let mut first = [0_u8; 1];
-    input.read_exact(&mut first)?;
+fn read_event_fd(fd: RawFd) -> Result<InputEvent> {
     let mut decoder = InputDecoder::default();
-    if let Some(event) = decoder.push(&first) {
-        return Ok(event);
+    let mut escape_started: Option<Instant> = None;
+    loop {
+        let timeout = if let Some(started) = escape_started {
+            let remaining = Duration::from_millis(100).saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                log_rejected_escape(&decoder, started, "timeout");
+                return Ok(InputEvent::Cancel);
+            }
+            remaining.as_millis().max(1) as i32
+        } else {
+            -1
+        };
+        let mut descriptor = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: descriptor is valid writable storage for one pollfd.
+        let ready = unsafe { libc::poll(&mut descriptor, 1, timeout) };
+        if ready < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error.into());
+        }
+        if ready == 0 {
+            continue;
+        }
+        if let Some(started) = escape_started
+            && started.elapsed() >= Duration::from_millis(100)
+        {
+            log_rejected_escape(&decoder, started, "timeout");
+            return Ok(InputEvent::Cancel);
+        }
+        let mut byte = [0_u8; 1];
+        // Unbuffered reads are essential: poll cannot see bytes held by StdinLock.
+        // SAFETY: byte is writable storage and fd is borrowed for this call.
+        let count = unsafe { libc::read(fd, byte.as_mut_ptr().cast(), 1) };
+        if count < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error.into());
+        }
+        if count == 0 {
+            return Ok(InputEvent::Cancel);
+        }
+        if byte[0] == 0x1b && escape_started.is_none() {
+            escape_started = Some(Instant::now());
+        }
+        if let Some(event) = decoder.push(&byte) {
+            if event == InputEvent::Cancel
+                && let Some(started) = escape_started
+            {
+                log_rejected_escape(&decoder, started, "unsupported");
+            }
+            return Ok(event);
+        }
     }
-    let mut tail = [0_u8; 2];
-    terminal.set_tail_timeout()?;
-    let count = input.read(&mut tail)?;
-    decoder
-        .push(&tail[..count])
-        .or_else(|| decoder.finish())
-        .ok_or_else(|| "interactive input ended before a complete event".into())
+}
+
+fn log_rejected_escape(decoder: &InputDecoder, started: Instant, reason: &str) {
+    let bytes = decoder
+        .bytes
+        .iter()
+        .take(3)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    eprintln!(
+        "terminal_input rejected={reason} elapsed_ms={} escape_hex={bytes}",
+        started.elapsed().as_millis()
+    );
 }
 
 fn effective(path: &Path, section: &str, key: &str) -> Result<Option<String>> {
@@ -1299,6 +1364,58 @@ mod tests {
             }
             assert_eq!(event, Some(InputEvent::Down));
         }
+    }
+
+    #[test]
+    fn terminal_accepts_fragmented_arrows_and_restores_settings() {
+        for sequence in [b"\x1b[B", b"\x1bOB", b"\x1b[A", b"\x1bOA"] {
+            for split in 1..sequence.len() {
+                let (master, slave) = pseudo_terminal();
+                let original = terminal_settings(slave.as_raw_fd()).unwrap();
+                let mode = TerminalMode::enter(slave.as_raw_fd()).unwrap();
+                let bytes = *sequence;
+                let writer = std::thread::spawn(move || {
+                    let mut master = File::from(master);
+                    master.write_all(&bytes[..split]).unwrap();
+                    std::thread::sleep(Duration::from_millis(10));
+                    master.write_all(&bytes[split..]).unwrap();
+                    master
+                });
+                let expected = if sequence[2] == b'B' {
+                    InputEvent::Down
+                } else {
+                    InputEvent::Up
+                };
+                assert_eq!(read_event_fd(slave.as_raw_fd()).unwrap(), expected);
+                let _master = writer.join().unwrap();
+                drop(mode);
+                assert_terminal_settings_eq(
+                    &original,
+                    &terminal_settings(slave.as_raw_fd()).unwrap(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_escape_timeout_is_one_deadline() {
+        let (master, slave) = pseudo_terminal();
+        let _mode = TerminalMode::enter(slave.as_raw_fd()).unwrap();
+        let writer = std::thread::spawn(move || {
+            let mut master = File::from(master);
+            master.write_all(b"\x1b").unwrap();
+            std::thread::sleep(Duration::from_millis(70));
+            master.write_all(b"[").unwrap();
+            master
+        });
+        let started = Instant::now();
+        assert_eq!(
+            read_event_fd(slave.as_raw_fd()).unwrap(),
+            InputEvent::Cancel
+        );
+        let _master = writer.join().unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(95));
+        assert!(started.elapsed() < Duration::from_millis(160));
     }
 
     #[test]

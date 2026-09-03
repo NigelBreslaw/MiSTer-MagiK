@@ -71,6 +71,7 @@ pub mod diagnostic_identity;
 pub mod display_config;
 #[doc(hidden)]
 pub mod fallible_log;
+pub(crate) mod media_diagnostics;
 pub use mister_magik_core::{input_event, input_info, input_repeat, input_state};
 #[cfg(feature = "ui")]
 pub use mister_magik_mister_runtime::fpga;

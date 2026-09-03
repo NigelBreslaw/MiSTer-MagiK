@@ -1,5 +1,40 @@
 # Device operations and recovery
 
+## Screenshot support reports
+
+Screenshot diagnostics are local only. Collect them before uninstalling with
+`scripts/agent device diagnostics --out /absolute/path/to/support-bundle`.
+The bundle includes `media-diagnostics-live.json` when available and
+`media-diagnostics-latest.json` for the most recent saved failure. Old devices
+without these fields remain compatible. Review a bundle before sharing it;
+the broader device bundle has information beyond the media reports.
+
+The live report is `/tmp/mister-magik/media-diagnostics.json`. Persistent
+reports live under the active installation's `diagnostics/media/` directory
+and use schema `mister-magik-media-diagnostics-v1`. There are at most five
+historical reports plus `latest.json`, each at most 64 KiB. Changed live state
+is published at most once every two seconds; persistent failure snapshots are
+limited to one per minute and sixteen attempts per boot, including failed
+writes. A tmpfs ledger preserves that budget across launcher restarts. Repeated
+failures and dropped queue events are counted. Healthy operation writes no
+persistent media reports, and producers never wait for report IO.
+
+Reports include bounded media events, build/session identity, pack/manifest
+identity, requested/resolved preview paths, decoding stages, index fallback,
+failed-cache suppression and presentation receipts. A decoded or applied image
+does **not** prove it appeared on the physical display. If it remains black,
+include the game/system, approximate time, output route, and a display photo
+or a capture through the supported device capture command below. Do not use
+raw framebuffer reads. No ROM/image contents, credentials, URL query strings,
+automatic screenshots or uploads are included in media reports. Uninstalling
+removes the installation's persistent reports.
+
+Arcade is always reachable, even with zero installed games. Its status panel
+distinguishes loading, an empty library and an unavailable library; Back/Home
+remain usable. Recovery is through Library Refresh in Settings. Entering an
+empty Arcade never creates or rebuilds a catalog, and a late shard result must
+not reopen a screen the user has left.
+
 `scripts/agent device` is the operator interface for MiSTer access. The
 MiSTer-side `mister-magik-agent` remains a separate service. Raw SSH/SCP and
 generic remote-shell orchestration are not accepted interfaces.

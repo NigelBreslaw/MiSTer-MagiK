@@ -156,6 +156,7 @@ component SearchKeyboard inherits Rectangle {
 export component ArcadeListScreen inherits Rectangle {
     property <int> count: ArcadeView.active-count;
     property <bool> games-loading: ArcadeView.load-state == ArcadeLoadState.loading;
+    property <string> library-status: root.games-loading ? "Loading Arcade games…" : ArcadeView.load-state == ArcadeLoadState.failed ? "Arcade library unavailable." : "No Arcade games found.";
     background: #1a1424;
 
     if ArcadeView.drawer-open : Rectangle {
@@ -328,6 +329,23 @@ export component ArcadeListScreen inherits Rectangle {
             y: LauncherLayout.arcade-list.y * 1px + LauncherLayout.arcade-list.height * 1px + 8px;
             width: parent.width;
             height: parent.height - self.y;
+        }
+    }
+
+    if ArcadeView.search-mode == ArcadeSearchMode.inactive && ArcadeView.load-state != ArcadeLoadState.ready : Rectangle {
+        x: LauncherLayout.arcade-list.x * 1px;
+        y: LauncherLayout.arcade-list.y * 1px;
+        width: LauncherLayout.arcade-list.width * 1px;
+        height: LauncherLayout.arcade-list.height * 1px;
+        background: #120d1a;
+        accessible-role: text;
+        accessible-label: root.library-status;
+        VerticalLayout {
+            alignment: center;
+            spacing: 10px;
+            Spleen6x12 { text: root.library-status; color: #c4b4d4; horizontal-alignment: center; wrap: word-wrap; }
+            Spleen6x12 { text: root.games-loading ? "" : "Use Library Refresh in Settings."; color: #a090b0; horizontal-alignment: center; wrap: word-wrap; }
+            Spleen6x12 { text: "B Back   HOME Launcher"; color: #a090b0; horizontal-alignment: center; }
         }
     }
 
