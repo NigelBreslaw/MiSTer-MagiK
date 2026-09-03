@@ -1711,7 +1711,8 @@ mod macos {
             if matches!(
                 self.scenario,
                 Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade
-            ) {
+            ) && self.launcher.global::<ArcadeView>().get_load_state() == ArcadeLoadState::Ready
+            {
                 let low_resolution_backdrop = self.crt_backdrop.is_some()
                     && matches!(self.scenario, Scenario::Arcade | Scenario::ArcadeCrossfade);
                 if low_resolution_backdrop {

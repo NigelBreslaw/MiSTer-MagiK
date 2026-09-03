@@ -1568,6 +1568,7 @@ impl LauncherNav {
 
     pub fn catalog_system_update_ready(&mut self, system_id: &str) {
         self.catalog_update_states.remove(system_id);
+        self.catalog_system_hydration_finished(system_id);
     }
 
     pub fn catalog_system_update_failed(&mut self, system_id: &str) {
@@ -1576,17 +1577,22 @@ impl LauncherNav {
     }
 
     pub fn catalog_system_hydration_started(&mut self, system_id: &str) {
-        self.catalog_hydration_states
-            .insert(system_id.to_string(), CatalogSystemHydrationState::Loading);
+        self.catalog_hydration_states.insert(
+            Self::hydration_system_id(system_id).to_string(),
+            CatalogSystemHydrationState::Loading,
+        );
     }
 
     pub fn catalog_system_hydration_failed(&mut self, system_id: &str) {
-        self.catalog_hydration_states
-            .insert(system_id.to_string(), CatalogSystemHydrationState::Failed);
+        self.catalog_hydration_states.insert(
+            Self::hydration_system_id(system_id).to_string(),
+            CatalogSystemHydrationState::Failed,
+        );
     }
 
     pub fn catalog_system_hydration_finished(&mut self, system_id: &str) {
-        self.catalog_hydration_states.remove(system_id);
+        self.catalog_hydration_states
+            .remove(Self::hydration_system_id(system_id));
     }
 
     pub fn catalog_hydration_reset(&mut self) {
@@ -1598,15 +1604,66 @@ impl LauncherNav {
     }
 
     pub fn catalog_system_hydration_has_failed(&self, system_id: &str) -> bool {
-        self.catalog_hydration_states.get(system_id) == Some(&CatalogSystemHydrationState::Failed)
+        self.catalog_hydration_states
+            .get(Self::hydration_system_id(system_id))
+            == Some(&CatalogSystemHydrationState::Failed)
     }
 
     pub fn catalog_system_hydration_is_loading(&self, system_id: &str) -> bool {
-        self.catalog_hydration_states.get(system_id) == Some(&CatalogSystemHydrationState::Loading)
+        self.catalog_hydration_states
+            .get(Self::hydration_system_id(system_id))
+            == Some(&CatalogSystemHydrationState::Loading)
+    }
+
+    fn hydration_system_id(system_id: &str) -> &str {
+        if system_id == crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID {
+            "arcade"
+        } else {
+            system_id
+        }
+    }
+
+    #[cfg(any(feature = "ui", feature = "ui-preview"))]
+    pub(crate) fn collection_declared_count(&self, id: &str) -> usize {
+        self.taxonomy
+            .collection(id)
+            .map_or(0, |collection| collection.count)
+    }
+
+    #[cfg(any(feature = "ui", feature = "ui-preview"))]
+    pub(crate) fn collection_is_scanning(&self, id: &str) -> bool {
+        let system = self
+            .taxonomy
+            .collection(id)
+            .map(|collection| collection.legacy_system_id.as_str())
+            .unwrap_or(id);
+        self.catalog_build_active
+            && matches!(
+                self.catalog_update_states.get(system),
+                Some(
+                    CatalogSystemUpdateState::Queued
+                        | CatalogSystemUpdateState::Scanning
+                        | CatalogSystemUpdateState::Prepared
+                )
+            )
+    }
+
+    #[cfg(any(feature = "ui", feature = "ui-preview"))]
+    pub(crate) fn collection_update_has_failed(&self, id: &str) -> bool {
+        let system = self
+            .taxonomy
+            .collection(id)
+            .map(|collection| collection.legacy_system_id.as_str())
+            .unwrap_or(id);
+        self.catalog_system_update_has_failed(system)
     }
 
     pub fn catalog_build_finished(&mut self, catalog: &ArcadeCatalog) {
         self.catalog_build_active = false;
+        let arcade_id = crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID;
+        if catalog.system_game_count(arcade_id) > 0 {
+            self.catalog_system_hydration_finished(arcade_id);
+        }
         let authoritative_systems = catalog
             .systems
             .iter()
@@ -1677,7 +1734,8 @@ impl LauncherNav {
                     } else {
                         CatalogMenuItemStatus::Ready
                     },
-                    available: item.count > 0 && !load_failed,
+                    available: item.id == crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID
+                        || (item.count > 0 && !load_failed),
                     retryable: load_failed,
                 }
             }
@@ -2709,6 +2767,11 @@ impl LauncherNav {
                 return None;
             }
             self.leave_arcade(false, &collection_id);
+            return None;
+        }
+        // A genuinely empty library has no game actions. Back and Home above
+        // remain available, including while its shard is loading or failed.
+        if catalog.system_game_count(&collection_id) == 0 {
             return None;
         }
         if pressed.btn_y {
@@ -6229,7 +6292,7 @@ mod tests {
     }
 
     #[test]
-    fn launcher_keeps_the_empty_arcade_shell_unavailable() {
+    fn launcher_keeps_the_empty_arcade_shell_available_and_back_works() {
         let catalog = arcade_catalog(vec![], vec![]);
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
@@ -6242,15 +6305,59 @@ mod tests {
             crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID
         );
         assert!(
-            !nav.menu_item_catalog_presentation(&nav.current_menu_items()[0])
+            nav.menu_item_catalog_presentation(&nav.current_menu_items()[0])
                 .available
         );
 
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
 
+        assert_eq!(nav.screen, Screen::Arcade);
+        release(&mut nav, &catalog, t0, 16);
+        let actions = pad_with(|pad| {
+            pad.btn_a = true;
+            pad.btn_x = true;
+            pad.btn_y = true;
+            pad.dpad_left = true;
+        });
+        assert!(
+            nav.handle_input(&actions, t0 + Duration::from_millis(32), &catalog)
+                .is_none()
+        );
+        assert!(!nav.arcade_filter.drawer_open);
+        assert!(!nav.arcade_search.is_active(&nav.arcade_filter.active));
+        release(&mut nav, &catalog, t0, 48);
+        let back = pad_with(|pad| pad.btn_b = true);
+        nav.handle_input(&back, t0 + Duration::from_millis(64), &catalog);
         assert_eq!(nav.screen, Screen::Home);
-        assert_eq!(nav.selected, 0);
-        assert_eq!(nav.scroll_x, 0);
+    }
+
+    #[test]
+    fn arcade_shell_stays_available_with_nonarcade_games_and_failed_hydration() {
+        for catalog in [
+            arcade_catalog(vec![], vec![arcade_system("arcade", 0)]),
+            arcade_catalog(
+                vec![arcade_game("Console game").system_id("snes").build()],
+                vec![arcade_system("snes", 1)],
+            ),
+            arcade_catalog(vec![], vec![arcade_system("arcade", 17)]),
+        ] {
+            let mut nav = LauncherNav::new();
+            nav.sync_launcher_taxonomy(&catalog);
+            nav.catalog_system_hydration_failed("arcade");
+            let item = nav
+                .current_menu_items()
+                .iter()
+                .find(|item| item.id == crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID)
+                .unwrap();
+            assert!(nav.menu_item_catalog_presentation(item).available);
+            assert!(nav.open_default_arcade(&catalog));
+            assert_eq!(nav.screen, Screen::Arcade);
+            assert!(
+                nav.catalog_system_hydration_has_failed(
+                    crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID
+                )
+            );
+        }
     }
 
     #[test]

@@ -3388,6 +3388,11 @@ mod linux {
             },
             "crashes": crash_reports_json(),
             "catalog_failures": catalog_failure_reports_json(),
+            "media_diagnostics": latest_diagnostic_report(
+                &["/media/fat/mister-magik/diagnostics/media/latest.json", "/media/fat/mister-magik-dev/diagnostics/media/latest.json"],
+                "updated_unix_ms",
+            ),
+            "media_live": read_text_value("/tmp/mister-magik/media-diagnostics.json"),
             "catalog_progress": latest_diagnostic_report(
                 &CATALOG_PROGRESS_PATHS,
                 "updated_unix_ms",

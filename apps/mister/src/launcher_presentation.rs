@@ -723,11 +723,7 @@ impl LauncherViewPresenters {
             arcade,
             get_load_state,
             set_load_state,
-            if active_games_loading(catalog, nav) {
-                ArcadeLoadState::Loading
-            } else {
-                ArcadeLoadState::Ready
-            }
+            active_games_load_state(catalog, nav)
         );
         set_view_string_if_changed!(arcade, get_active_title, set_active_title, &title);
         set_if_changed!(arcade, get_active_count, set_active_count, count as i32);
@@ -1081,10 +1077,29 @@ fn active_header(
     (title, count)
 }
 
-fn active_games_loading(catalog: &ArcadeCatalog, nav: &LauncherNav) -> bool {
-    nav.active_collection().is_some_and(|collection| {
-        collection.count > 0 && catalog.system_game_count(&collection.id) < collection.count
-    })
+pub(crate) fn active_games_load_state(
+    catalog: &ArcadeCatalog,
+    nav: &LauncherNav,
+) -> ArcadeLoadState {
+    let Some(collection) = nav.active_collection() else {
+        return ArcadeLoadState::Empty;
+    };
+    if nav.catalog_system_hydration_has_failed(&collection.id)
+        || (catalog.system_game_count(&collection.id) == 0
+            && nav.collection_update_has_failed(&collection.id))
+    {
+        ArcadeLoadState::Failed
+    } else if nav.catalog_system_hydration_is_loading(&collection.id)
+        || nav.collection_is_scanning(&collection.id)
+    {
+        ArcadeLoadState::Loading
+    } else if catalog.system_game_count(&collection.id) > 0 {
+        ArcadeLoadState::Ready
+    } else if nav.collection_declared_count(&collection.id) > 0 {
+        ArcadeLoadState::Failed
+    } else {
+        ArcadeLoadState::Empty
+    }
 }
 
 fn sync_arcade_search(arcade: &ArcadeView, nav: &LauncherNav) {
@@ -1133,6 +1148,70 @@ fn sync_arcade_search(arcade: &ArcadeView, nav: &LauncherNav) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arcade_status_tracks_explicit_hydration_and_empty_library() {
+        let empty = ArcadeCatalog::new(std::path::PathBuf::new(), vec![], vec![]);
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_default_arcade(&empty));
+        assert_eq!(
+            active_games_load_state(&empty, &nav),
+            ArcadeLoadState::Empty
+        );
+        let registered = ArcadeCatalog::new(
+            std::path::PathBuf::new(),
+            vec![],
+            vec![crate::test_support::arcade_system("arcade", 7)],
+        );
+        nav.sync_launcher_taxonomy(&registered);
+        let id = crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID;
+        nav.catalog_system_hydration_started(id);
+        assert_eq!(
+            active_games_load_state(&registered, &nav),
+            ArcadeLoadState::Loading
+        );
+        nav.catalog_system_hydration_failed(id);
+        assert_eq!(
+            active_games_load_state(&registered, &nav),
+            ArcadeLoadState::Failed
+        );
+        assert_eq!(nav.screen, Screen::Arcade);
+        nav.catalog_system_hydration_finished(id);
+        // Declared rows with no usable shard is failure, not endless loading.
+        assert_eq!(
+            active_games_load_state(&registered, &nav),
+            ArcadeLoadState::Failed
+        );
+        nav.sync_launcher_taxonomy(&empty);
+        assert_eq!(
+            active_games_load_state(&empty, &nav),
+            ArcadeLoadState::Empty
+        );
+        assert_eq!(nav.screen, Screen::Arcade);
+    }
+
+    #[test]
+    fn arcade_publication_clears_failure_and_scanning_is_explicit() {
+        let catalog = ArcadeCatalog::new(std::path::PathBuf::new(), vec![], vec![]);
+        let mut nav = LauncherNav::new();
+        nav.open_default_arcade(&catalog);
+        nav.catalog_system_scanning("arcade");
+        assert_eq!(
+            active_games_load_state(&catalog, &nav),
+            ArcadeLoadState::Loading
+        );
+        nav.catalog_system_hydration_failed("arcade");
+        assert_eq!(
+            active_games_load_state(&catalog, &nav),
+            ArcadeLoadState::Failed
+        );
+        nav.catalog_system_update_ready("arcade");
+        assert_eq!(
+            active_games_load_state(&catalog, &nav),
+            ArcadeLoadState::Empty
+        );
+        assert_eq!(nav.screen, Screen::Arcade);
+    }
 
     fn target(item: &str) -> SelectionFeedbackTarget {
         SelectionFeedbackTarget {

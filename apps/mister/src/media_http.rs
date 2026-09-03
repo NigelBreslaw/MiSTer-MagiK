@@ -15,6 +15,29 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const MANIFEST_CONNECT_TIMEOUT_SECS: u64 = 10;
 const MANIFEST_FETCH_TIMEOUT_SECS: u64 = 15;
 
+/// Drain the entire pipe concurrently, but retain at most 2 KiB. Retaining
+/// only a prefix without draining the remainder can deadlock curl on stderr.
+pub(crate) fn drain_curl_stderr(
+    mut pipe: impl Read + Send + 'static,
+) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut retained = Vec::new();
+        let mut buffer = [0u8; 4096];
+        loop {
+            match pipe.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => {
+                    let keep = count.min(2048usize.saturating_sub(retained.len()));
+                    retained.extend_from_slice(&buffer[..keep]);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+        crate::media_diagnostics::sanitize(&String::from_utf8_lossy(&retained))
+    })
+}
+
 #[derive(Debug)]
 pub struct ManifestFetch {
     pub bytes: Vec<u8>,
@@ -22,12 +45,25 @@ pub struct ManifestFetch {
 }
 
 pub fn fetch_manifest(url: &str) -> Result<ManifestFetch, String> {
-    fetch_manifest_with(
+    let result = fetch_manifest_with(
         url,
         configured_manifest_trust_mode(),
         fetch_https_bytes,
         verify_manifest_signature,
-    )
+    );
+    match &result {
+        Ok(manifest) => crate::media_diagnostics::record(
+            "manifest_fetched",
+            format!("url={url} bytes={}", manifest.bytes.len()),
+            false,
+        ),
+        Err(error) => crate::media_diagnostics::record(
+            "manifest_failed",
+            format!("url={url} stage=fetch_or_trust detail={error}"),
+            true,
+        ),
+    }
+    result
 }
 
 fn fetch_manifest_with<F, V>(
@@ -96,6 +132,7 @@ fn fetch_https_bytes(url: &str, max_bytes: u64, label: &str) -> Result<HttpsFetc
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("spawn curl for {label}: {error}"))?;
+    let stderr = child.stderr.take().map(drain_curl_stderr);
     let mut stdout = match child.stdout.take() {
         Some(stdout) => stdout,
         None => {
@@ -123,7 +160,9 @@ fn fetch_https_bytes(url: &str, max_bytes: u64, label: &str) -> Result<HttpsFetc
         return Err(format!("{label} exceeds {max_bytes} bytes"));
     }
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stderr = stderr
+            .and_then(|thread| thread.join().ok())
+            .unwrap_or_default();
         if stderr.is_empty() {
             return Err(format!("{label} curl exited with {}", output.status));
         }
@@ -182,6 +221,14 @@ fn temporary_headers_path(label: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn curl_stderr_is_fully_drained_but_retained_output_is_bounded() {
+        let bytes = std::io::Cursor::new(vec![b'x'; 256 * 1024]);
+        let result = drain_curl_stderr(bytes).join().unwrap();
+        assert_eq!(result.len(), 768);
+        assert!(result.bytes().all(|byte| byte == b'x'));
+    }
     use std::ffi::OsString;
 
     #[test]

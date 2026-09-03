@@ -296,6 +296,17 @@ fn apply_preview_image_bridge(
     bridge: &slint_ui::launcher::ArcadeView,
     preview_image: &PreviewImage,
 ) {
+    crate::media_diagnostics::record(
+        "preview_applied",
+        format!(
+            "source={}x{} display={}x{} state=ready",
+            preview_image.source_w,
+            preview_image.source_h,
+            preview_image.display_w,
+            preview_image.display_h
+        ),
+        false,
+    );
     bridge.set_preview_state(ViewPreviewState::Ready);
     bridge.set_preview_source_width(preview_image.source_w as i32);
     bridge.set_preview_source_height(preview_image.source_h as i32);
@@ -687,6 +698,14 @@ impl PreviewState {
     }
 
     pub fn new_with_config(trace_start: Instant, config: PreviewStateConfig) -> Self {
+        crate::media_diagnostics::record(
+            "preview_configuration",
+            format!(
+                "loading_enabled={} turbo_runway_enabled={}",
+                config.loading_enabled, config.turbo_runway_enabled
+            ),
+            false,
+        );
         Self {
             worker: PreviewWorker::new_with_config(trace_start, config.worker.clone()),
             config,
@@ -1631,6 +1650,11 @@ pub fn request_arcade_preview_window(
                     return true;
                 }
                 if preview.cache.contains_failed(&path) {
+                    crate::media_diagnostics::record(
+                        "preview_failed_cache_suppressed",
+                        format!("generation={} key={path}", preview.current_generation),
+                        false,
+                    );
                     preview.select_empty_preview(preview_transition_mode(turbo_active));
                     bridge.set_preview_state(ViewPreviewState::Empty);
                     request_preview_prefetches_if_allowed(
@@ -1678,6 +1702,16 @@ pub fn request_arcade_preview_window(
 
     let selected_has_preview = game_preview_key(selected_game).is_some();
     let Some(candidate) = candidate else {
+        crate::media_diagnostics::record(
+            "preview_candidate_unavailable",
+            format!(
+                "system={} key={} requested_pack={} selected_has_preview={selected_has_preview}",
+                selected_game.system_id,
+                selected_game.preview_asset_key,
+                selected_game.preview_archive_path
+            ),
+            true,
+        );
         if preview_startup_trace_enabled() {
             crate::ui_errln!(
                 "startup_timing\tpreview_selected_candidate\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=0\tasset_key=\tcandidate_index=\tselected_has_preview={}",
@@ -1719,6 +1753,14 @@ pub fn request_arcade_preview_window(
     let preview_key = candidate.preview_key.clone();
     preview.selected_preview_key = Some(preview_key.clone());
     if preview.cache.contains_failed(&preview_key) {
+        crate::media_diagnostics::record(
+            "preview_failed_cache_suppressed",
+            format!(
+                "generation={} key={preview_key}",
+                preview.current_generation
+            ),
+            false,
+        );
         preview.select_empty_preview(preview_transition_mode(turbo_active));
         bridge.set_preview_state(ViewPreviewState::Empty);
         request_preview_prefetches_if_allowed(
@@ -2303,6 +2345,62 @@ pub fn apply_ready_preview(
             preview.current_generation,
             preview.selected_preview_key.as_deref(),
         );
+        crate::media_diagnostics::record(
+            if result.image.is_none() {
+                "preview_failed"
+            } else if is_selected_result {
+                "preview_selected_decoded"
+            } else {
+                "preview_nonselected_decoded"
+            },
+            format!(
+                "generation={} current_generation={} selected={} requested_pack={} resolved_pack={} key={} dimensions={}x{} bytes={} age_us={} source={:?}",
+                result.generation,
+                preview.current_generation,
+                is_selected_result,
+                result.preview_archive_path,
+                result.diagnostics.resolved_archive_path,
+                result.preview_asset_key,
+                result.source_width,
+                result.source_height,
+                result.decoded_bytes,
+                result.request_age_us,
+                result.load_source
+            ),
+            false,
+        );
+        if let Some(failure) = &result.diagnostics.failure {
+            crate::media_diagnostics::record(
+                "preview_load_failed",
+                format!(
+                    "generation={} selected={} stage={} code={} expected_bytes={:?} actual_bytes={:?} detail={}",
+                    result.generation,
+                    is_selected_result,
+                    failure.stage,
+                    failure.code,
+                    failure.expected_bytes,
+                    failure.actual_bytes,
+                    failure.detail
+                ),
+                true,
+            );
+        }
+        if let Some(fallback) = &result.diagnostics.index_fallback {
+            crate::media_diagnostics::record(
+                "preview_index_fallback",
+                format!(
+                    "generation={} recovered={} stage={} code={} expected_bytes={:?} actual_bytes={:?} detail={}",
+                    result.generation,
+                    result.image.is_some(),
+                    fallback.stage,
+                    fallback.code,
+                    fallback.expected_bytes,
+                    fallback.actual_bytes,
+                    fallback.detail
+                ),
+                false,
+            );
+        }
         if is_selected_result {
             selected_processed = true;
             preview.last_apply_trace.selected_processed += 1;
@@ -2413,6 +2511,19 @@ pub fn apply_ready_preview(
                 preview.visible_preview_key = result_preview_key;
                 preview.raw_dirty = true;
                 apply_preview_image_bridge(&bridge, &image);
+                crate::media_diagnostics::record(
+                    "preview_selected_applied",
+                    format!(
+                        "generation={} key={} source={}x{} display={}x{}",
+                        result.generation,
+                        preview.visible_preview_key,
+                        image.source_w,
+                        image.source_h,
+                        image.display_w,
+                        image.display_h
+                    ),
+                    false,
+                );
                 if preview_startup_trace_enabled() {
                     crate::ui_errln!(
                         "startup_timing\tpreview_selected_applied\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration={}\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\tage_us={}",
@@ -3739,6 +3850,7 @@ mod tests {
         priority: PreviewPriority,
     ) -> PreviewResult {
         PreviewResult {
+            diagnostics: Default::default(),
             generation,
             title: preview_asset_key.to_string(),
             preview_archive_path: String::new(),

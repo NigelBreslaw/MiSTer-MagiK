@@ -80,7 +80,26 @@ impl PreviewPriority {
 }
 
 #[derive(Clone, Debug)]
+pub struct PreviewDiagnostic {
+    pub stage: &'static str,
+    pub code: &'static str,
+    pub detail: String,
+    pub expected_bytes: Option<u64>,
+    pub actual_bytes: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PreviewDiagnostics {
+    pub resolved_archive_path: String,
+    pub failure: Option<PreviewDiagnostic>,
+    /// The index failure which caused fallback, whether fallback then succeeds or fails.
+    pub index_fallback: Option<PreviewDiagnostic>,
+}
+
+#[derive(Clone, Debug)]
 pub struct PreviewResult {
+    // Keep mailbox and scheduler messages small as diagnostic context grows.
+    pub diagnostics: Box<PreviewDiagnostics>,
     pub generation: u64,
     pub title: String,
     pub preview_archive_path: String,
@@ -935,6 +954,10 @@ fn load_preview(
     let resize = config.resize();
     let storage = config.storage_format();
     let resolved_archive_path = resolve_preview_archive_path(&req.preview_archive_path);
+    scratch.diagnostic_stage = "resolve";
+    scratch.index_failure = None;
+    scratch.expected_bytes = None;
+    scratch.actual_bytes = None;
     let cache_key = preview_cache_key(&resolved_archive_path, &req.preview_asset_key, resize);
     let mut cache_hit = false;
     let queue_age_us = req.requested_at.elapsed().as_micros() as u64;
@@ -1012,6 +1035,11 @@ fn load_preview(
             }
             let decoded_bytes = loaded.image.decoded_bytes();
             PreviewResult {
+                diagnostics: Box::new(PreviewDiagnostics {
+                    resolved_archive_path,
+                    failure: None,
+                    index_fallback: scratch.index_failure.take(),
+                }),
                 generation: req.generation,
                 title: req.title,
                 preview_archive_path: req.preview_archive_path,
@@ -1054,6 +1082,17 @@ fn load_preview(
                 );
             }
             PreviewResult {
+                diagnostics: Box::new(PreviewDiagnostics {
+                    resolved_archive_path,
+                    failure: Some(PreviewDiagnostic {
+                        stage: scratch.diagnostic_stage,
+                        code: "preview_load_failed",
+                        detail: e.chars().take(384).collect(),
+                        expected_bytes: scratch.expected_bytes,
+                        actual_bytes: scratch.actual_bytes,
+                    }),
+                    index_fallback: scratch.index_failure.take(),
+                }),
                 generation: req.generation,
                 title: req.title,
                 preview_archive_path: req.preview_archive_path,
@@ -1242,10 +1281,12 @@ fn load_raw565_preview_asset_timed(
 ) -> Result<LoadedPreviewPixels, String> {
     let archive_path = preview_archive_path.trim();
     let asset_key = preview_asset_key.trim();
+    scratch.diagnostic_stage = "identity";
     if archive_path.is_empty() || asset_key.is_empty() {
         return Err("preview asset missing archive path or key".to_string());
     }
     let entry_name = format!("{asset_key}.rgb565");
+    scratch.diagnostic_stage = "archive";
     if archive_mem_primary
         && let Some(loaded) =
             load_raw565_preview_asset_from_archive_mem(archive_path, &entry_name, scratch)?
@@ -1263,13 +1304,23 @@ fn load_raw565_preview_asset_timed(
                 return Ok(loaded);
             }
             PreviewIndexLoad::MissingEntry => {
+                scratch.diagnostic_stage = "index_entry";
                 return Err(format!(
                     "preview asset {entry_name} missing from index for archive {archive_path}"
                 ));
             }
-            PreviewIndexLoad::NoSidecar => {}
+            PreviewIndexLoad::NoSidecar => {
+                scratch.index_failure = Some(PreviewDiagnostic {
+                    stage: "index_lookup",
+                    code: "index_missing",
+                    detail: "No sidecar; attempting archive fallback".into(),
+                    expected_bytes: None,
+                    actual_bytes: None,
+                });
+            }
         }
     }
+    scratch.diagnostic_stage = "archive_fallback";
     if let Some(loaded) =
         load_raw565_preview_asset_from_archive_mem(archive_path, &entry_name, scratch)?
     {
@@ -1332,6 +1383,10 @@ struct PreviewArchive {
 #[derive(Default)]
 struct PreviewArchiveScratch {
     index_pread_file: Option<CachedIndexPreadFile>,
+    diagnostic_stage: &'static str,
+    index_failure: Option<PreviewDiagnostic>,
+    expected_bytes: Option<u64>,
+    actual_bytes: Option<u64>,
 }
 
 struct CachedIndexPreadFile {
@@ -2180,6 +2235,13 @@ fn try_load_raw565_preview_asset_from_index(
     match load_raw565_preview_asset_from_index(archive_path, entry_name, scratch) {
         Ok(loaded) => Some(loaded),
         Err(error) => {
+            scratch.index_failure = Some(PreviewDiagnostic {
+                stage: scratch.diagnostic_stage,
+                code: "index_fallback",
+                detail: error.chars().take(384).collect(),
+                expected_bytes: scratch.expected_bytes,
+                actual_bytes: scratch.actual_bytes,
+            });
             if preview_trace_enabled() {
                 crate::catalog_errln!(
                     "preview_trace index_pread_failed archive_path={} asset_key={} error={}",
@@ -2198,6 +2260,7 @@ fn load_raw565_preview_asset_from_index(
     entry_name: &str,
     scratch: &mut PreviewArchiveScratch,
 ) -> Result<PreviewIndexLoad, String> {
+    scratch.diagnostic_stage = "index_lookup";
     let Some(sidecar) = preview_archive_sidecar_lookup(archive_path)? else {
         return Ok(PreviewIndexLoad::NoSidecar);
     };
@@ -2208,6 +2271,9 @@ fn load_raw565_preview_asset_from_index(
     let total_t = Instant::now();
     let read_t = Instant::now();
     let mut payload = vec![0u8; entry.compressed_len];
+    scratch.diagnostic_stage = "index_read";
+    scratch.expected_bytes = Some(entry.compressed_len as u64);
+    scratch.actual_bytes = None;
     let file = scratch.index_pread_file(archive_path, &sidecar.archive_fingerprint)?;
     read_exact_at(file, &mut payload, entry.offset)
         .map_err(|e| format!("pread preview archive {}: {e}", archive_path.display()))?;
@@ -2215,12 +2281,15 @@ fn load_raw565_preview_asset_from_index(
 
     let decode_t = Instant::now();
     let decode_cpu_t = thread_cpu_us();
+    scratch.diagnostic_stage = "decode";
+    scratch.actual_bytes = Some(payload.len() as u64);
     let words = decode_preview_archive_entry_words(&payload, entry)
         .map_err(|e| format!("preview archive index decode {entry_name}: {e}"))?;
     let decode_us = decode_t.elapsed().as_micros() as u64;
     let decode_cpu_us = elapsed_thread_cpu_us(decode_cpu_t);
     let parse_t = Instant::now();
     let parse_cpu_t = thread_cpu_us();
+    scratch.diagnostic_stage = "geometry";
     let image = decode_pixel_preview_words(entry, words)?;
     let raw565_parse_us = parse_t.elapsed().as_micros() as u64;
     let raw565_parse_cpu_us = elapsed_thread_cpu_us(parse_cpu_t);
@@ -2670,8 +2739,9 @@ impl PreviewArchive {
     fn load_timed(
         &self,
         name: &str,
-        _scratch: &mut PreviewArchiveScratch,
+        scratch: &mut PreviewArchiveScratch,
     ) -> Result<Option<LoadedPreviewPixels>, String> {
+        scratch.diagnostic_stage = "archive_entry";
         let key = name.to_ascii_lowercase();
         let Some(entry) = self.entries.get(&key).copied() else {
             return Ok(None);
@@ -2679,6 +2749,9 @@ impl PreviewArchive {
         let total_t = Instant::now();
         let read_t = Instant::now();
         let start = entry.offset as usize;
+        scratch.diagnostic_stage = "archive_read";
+        scratch.expected_bytes = Some(entry.compressed_len as u64);
+        scratch.actual_bytes = None;
         let end = start
             .checked_add(entry.compressed_len)
             .ok_or_else(|| format!("preview archive offset overflow {name}"))?;
@@ -2690,12 +2763,15 @@ impl PreviewArchive {
 
         let decode_t = Instant::now();
         let decode_cpu_t = thread_cpu_us();
+        scratch.diagnostic_stage = "decode";
+        scratch.actual_bytes = Some(compressed_slice.len() as u64);
         let words = decode_preview_archive_entry_words(compressed_slice, entry)
             .map_err(|e| format!("preview archive lz4 decode {name}: {e}"))?;
         let decode_us = decode_t.elapsed().as_micros() as u64;
         let decode_cpu_us = elapsed_thread_cpu_us(decode_cpu_t);
         let parse_t = Instant::now();
         let parse_cpu_t = thread_cpu_us();
+        scratch.diagnostic_stage = "geometry";
         let image = decode_pixel_preview_words(entry, words)?;
         let raw565_parse_us = parse_t.elapsed().as_micros() as u64;
         let raw565_parse_cpu_us = elapsed_thread_cpu_us(parse_cpu_t);
@@ -3331,6 +3407,15 @@ mod tests {
         );
         assert_eq!(result.preview_asset_key, "missing");
         assert!(result.image.is_none());
+        let failure = result
+            .diagnostics
+            .failure
+            .as_ref()
+            .expect("structured failure");
+        assert_eq!(failure.code, "preview_load_failed");
+        assert!(!failure.stage.is_empty());
+        assert!(!failure.detail.is_empty());
+        assert!(failure.detail.chars().count() <= 384);
         assert_eq!(result.decoded_bytes, 0);
         assert_eq!(result.source_width, 0);
         assert_eq!(result.source_height, 0);
@@ -3777,6 +3862,12 @@ mod tests {
         .expect("fall back to full archive");
 
         assert_eq!(loaded.timing.load_source, PreviewLoadSource::ArchiveMem);
+        let diagnostic = scratch
+            .index_failure
+            .as_ref()
+            .expect("fallback retains original failure");
+        assert_eq!(diagnostic.stage, "index_lookup");
+        assert_eq!(diagnostic.code, "index_fallback");
         let _ = std::fs::remove_file(preview_archive_sidecar_path(&path));
         let _ = std::fs::remove_file(path);
     }
