@@ -11,11 +11,11 @@
     "preview": "astro preview"
   },
   "dependencies": {
-    "@astrojs/mdx": "^7.0.8",
-    "@astrojs/starlight": "^0.41.8",
-    "astro": "^7.2.6",
+    "@astrojs/mdx": "^8.0.0",
+    "@astrojs/starlight": "^0.41.10",
+    "astro": "^7.2.10",
     "astro-mermaid": "^2.0.4",
-    "mermaid": "^11.17.1"
+    "mermaid": "^11.17.2"
   },
   "devDependencies": {
     "typescript": "^7.0.2"
