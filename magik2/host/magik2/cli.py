@@ -76,7 +76,10 @@ def main() -> int:
     subcommands.add_parser("watch")
     subcommands.add_parser("status")
     subcommands.add_parser("stop")
-    for command in subcommands.choices.values():
+    for name, command in subcommands.choices.items():
+        command.set_defaults(app="mini-magik")
+        if name not in {"build", "deploy", "check", "watch"}:
+            continue
         command.add_argument("--app", choices=tuple(APPLICATIONS), default="mini-magik")
     arguments = parser.parse_args()
 

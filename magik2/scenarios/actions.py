@@ -42,7 +42,8 @@ def motion(
     sleep: Callable[[float], None] = time.sleep,
 ) -> Mapping[str, object]:
     state = one_element(application, "motion-state")
-    _expect_value(state, "idle")
+    if state.accessible_value not in {"idle", "complete"}:
+        raise AssertionError("motion workload is already running")
     one_element(application, "start-motion").invoke_accessible_default_action()
     _wait(lambda: _value_is(state, "running"), "motion workload did not start")
     # The app chooses both measurement boundaries using its monotonic clock.
@@ -145,6 +146,15 @@ def launcher_smoke(application, screenshot_path, expected_sha256):
         or window.root_element.accessible_label != "MiSTer MagiK Launcher"
     ):
         raise AssertionError("real launcher window is unavailable")
+    errors = [
+        element.accessible_description
+        for element in window.root_element.query_descendants()
+        .match_inherits("Rectangle")
+        .find_all()
+        if element.accessible_label == "Input error"
+    ]
+    if errors:
+        raise AssertionError("launcher input unavailable: " + "; ".join(errors))
     screenshot(application, screenshot_path)
     return {"sha256": expected_sha256, "screenshot": screenshot_path.name}
 

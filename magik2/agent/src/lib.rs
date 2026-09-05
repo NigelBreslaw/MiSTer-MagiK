@@ -68,6 +68,7 @@ struct ReplayedMutation {
 struct ObservationState {
     latest_frame: Option<Vec<u8>>,
     latest_frame_sequence: u64,
+    application_generation: u64,
     logs: VecDeque<(u64, String)>,
     next_log_sequence: u64,
 }
@@ -90,8 +91,24 @@ impl Observation {
         }
     }
 
-    fn record_frame(&self, _sequence: u64, bytes: Vec<u8>) {
+    fn clear_frame(&self) {
         let mut state = self.state.lock().expect("observation state poisoned");
+        state.application_generation += 1;
+        state.latest_frame = None;
+    }
+
+    fn generation(&self) -> u64 {
+        self.state
+            .lock()
+            .expect("observation state poisoned")
+            .application_generation
+    }
+
+    fn record_frame(&self, generation: u64, bytes: Vec<u8>) {
+        let mut state = self.state.lock().expect("observation state poisoned");
+        if state.application_generation != generation {
+            return;
+        }
         state.latest_frame_sequence += 1;
         state.latest_frame = Some(bytes);
     }
@@ -549,6 +566,7 @@ impl Agent {
                 serde_json::json!({"code":"stop-failed","detail":error}),
             );
         }
+        self.observation.clear_frame();
         if let Err(error) = main_handoff("mister_magik_suspend\n") {
             return response(
                 &request.id,
@@ -560,6 +578,11 @@ impl Agent {
         let mut command = Command::new(executable);
         if artifact == "magik" {
             command.args(["ui", "launcher", "0"]);
+            let main_status = fs::read("/tmp/mister-magik/main-status.json")
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                .unwrap_or_default();
+            main_control::configure_input_proxy(&mut command, &main_status);
         }
         command
             .env("MISTER_MAGIK2_STATE_ROOT", &self.state_root)
@@ -1184,6 +1207,7 @@ fn log_tail(path: &Path) -> String {
 }
 
 fn receive_preview_frames(mut stream: UnixStream, observation: Arc<Observation>) {
+    let generation = observation.generation();
     loop {
         let mut encoded = Vec::new();
         match read_preview_frame(&mut stream) {
@@ -1195,7 +1219,7 @@ fn receive_preview_frames(mut stream: UnixStream, observation: Arc<Observation>)
                 }
                 encoded.extend_from_slice(&header.encode());
                 encoded.extend_from_slice(&payload);
-                observation.record_frame(header.sequence, encoded);
+                observation.record_frame(generation, encoded);
             }
             Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return,
             Err(error) => {
@@ -1356,6 +1380,17 @@ fn publish_atomically(
 mod tests {
     use super::*;
 
+    #[test]
+    fn app_switch_discards_cached_and_inflight_old_previews() {
+        let observation = Observation::default();
+        observation.record_frame(0, vec![1]);
+        assert!(observation.snapshot(0, 0).1.is_some());
+        observation.clear_frame();
+        observation.record_frame(0, vec![2]);
+        assert!(observation.snapshot(0, 0).1.is_none());
+        observation.record_frame(observation.generation(), vec![3]);
+        assert_eq!(observation.snapshot(0, 0).1.unwrap().1, vec![3]);
+    }
     #[test]
     fn transfer_check_saves_and_cleans_without_replacing_probe() {
         let root = std::env::temp_dir().join(format!("magik2-transfer-{}", std::process::id()));
@@ -1763,7 +1798,7 @@ mod tests {
             directory.join("install"),
             directory.clone(),
         ));
-        agent.observation.record_frame(1, vec![0; 4 * 1024 * 1024]);
+        agent.observation.record_frame(0, vec![0; 4 * 1024 * 1024]);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
         let address = listener.local_addr().expect("listener address");
         let (finished_sender, finished_receiver) = std::sync::mpsc::channel();
