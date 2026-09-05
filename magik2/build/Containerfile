@@ -1,0 +1,11 @@
+FROM ubuntu:20.04
+# Old userspace keeps produced ARM binaries compatible with the installed MiSTer.
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl gcc g++ g++-arm-linux-gnueabihf libc6-dev libclang1-10 libclang-common-10-dev libssl-dev make pkg-config && rm -rf /var/lib/apt/lists/*
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh && sh /tmp/rustup.sh -y --profile minimal --default-toolchain 1.98.0 --target armv7-unknown-linux-gnueabihf && rm /tmp/rustup.sh
+ENV PATH="/root/.cargo/bin:${PATH}"
+ENV AR_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-ar
+ENV CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc
+ENV CXX_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++
+ENV CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
+ENV LIBCLANG_PATH=/usr/lib/llvm-10/lib
+ENV BINDGEN_EXTRA_CLANG_ARGS="--target=arm-linux-gnueabihf --sysroot=/usr/arm-linux-gnueabihf -I/usr/arm-linux-gnueabihf/include"

@@ -117,9 +117,11 @@ class NativeAgent:
     def _request(self, operation: str, fields: Mapping[str, object] | None = None, body: bytes = b"") -> tuple[Envelope, bytes]:
         request = Envelope(uuid.uuid4().hex, operation, self.token, fields or {})
         last_error: OSError | ProtocolError | None = None
-        for attempt in range(2):
+        attempts = 1 if operation == "agent-update" else 2
+        for attempt in range(attempts):
             try:
                 with socket.create_connection((self.host, self.port), timeout=5) as connection:
+                    connection.settimeout(15)
                     send_message(connection, request, body)
                     response, response_body = receive_message(connection)
                 if response.request_id != request.request_id:
@@ -127,7 +129,7 @@ class NativeAgent:
                 return response, response_body
             except (OSError, ProtocolError) as error:
                 last_error = error
-                if attempt:
+                if attempt == attempts - 1:
                     raise
         assert last_error is not None
         raise last_error

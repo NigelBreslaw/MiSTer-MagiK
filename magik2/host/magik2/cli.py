@@ -10,13 +10,13 @@ import webbrowser
 from pathlib import Path
 
 from .bootstrap import BootstrapError, SshBootstrap
-from .build import ensure_arm_probe
+from .build import ensure_arm_probe, ensure_arm_agent, ensure_arm_package
 from .client import AgentError, NativeAgent
 from .compatibility import AgentStatus
 from .results import append_event, create_run, source_context
 from .scenarios import motion, smoke
 from .testing import fresh_session
-from .token_store import TokenStore
+from .token_store import TokenStore, state_root
 from .viewer import serve
 
 
@@ -29,13 +29,15 @@ PROFILE_AGENT_CAPABILITIES = CHECK_AGENT_CAPABILITIES | {"artifacts-v1"}
 
 
 def agent_binary_path() -> Path:
-    return Path(__file__).resolve().parents[2] / "agent" / "target" / "armv7-unknown-linux-gnueabihf" / "release" / "mister-magik2-agent"
+    return ensure_arm_agent()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="scripts/magik2")
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("deploy")
+    build_command = subcommands.add_parser("build")
+    build_command.add_argument("target", choices=("agent", "probe"))
     check_command = subcommands.add_parser("check")
     check_command.add_argument("scenario", choices=("smoke", "motion"), nargs="?")
     check_command.add_argument("--profile", action="store_true")
@@ -47,6 +49,11 @@ def main() -> int:
     output_root = Path(os.environ.get("MISTER_MAGIK2_RESULTS", "build/magik2-results"))
     run = create_run(output_root, arguments.command, source_context(os.environ.get("MISTER_IP", "")))
     append_event(run, {"phase": "requested", "command": arguments.command})
+    if arguments.command == "build":
+        package = Path(__file__).resolve().parents[2] / arguments.target
+        built = ensure_arm_package(package, package / "target/magik2-build.json")
+        print(built.artifact)
+        return 0
     if not os.environ.get("MISTER_IP"):
         print("MISTER_IP is required; no legacy transport was attempted.", file=os.sys.stderr)
         return 2
@@ -225,45 +232,62 @@ def ensure_probe(agent: NativeAgent, status: AgentStatus, run: Path) -> bool:
     return False
 
 
-def connect_agent(
-    run: Path, required: set[str] = REQUIRED_AGENT_CAPABILITIES
-) -> tuple[NativeAgent, AgentStatus]:
-    """Use SSH only when native discovery or repair is genuinely unavailable."""
+def wait_for_agent(agent: NativeAgent, required: set[str], timeout: float = 15) -> AgentStatus:
+    deadline = time.monotonic() + timeout
+    last: object = "not ready"
+    while time.monotonic() < deadline:
+        try:
+            status = agent.status()
+            if status.supports(required):
+                return status
+            last = "missing capabilities: " + ", ".join(sorted(required - status.capabilities))
+        except AgentError:
+            raise  # Authentication never authorizes replacement of credentials.
+        except (OSError, RuntimeError) as error:
+            last = error
+        time.sleep(0.1)
+    raise AgentError(f"native agent did not become ready: {last}")
+
+
+def connect_agent(run: Path, required: set[str] = REQUIRED_AGENT_CAPABILITIES) -> tuple[NativeAgent, AgentStatus]:
     device = os.environ["MISTER_IP"]
-    store = TokenStore(Path(os.environ.get("MISTER_MAGIK2_STATE", "build/magik2-state")), device)
-    agent_binary = agent_binary_path()
+    store = TokenStore(state_root(), device)
     token = store.load()
-    if token:
-        agent = NativeAgent(device, token)
+    if not token:
+        token = SshBootstrap.from_environment().native_token()
+        if token:
+            store.save(token)
+    agent = NativeAgent(device, token) if token else None
+    status = None
+    if agent is not None:
         try:
             status = agent.status()
         except AgentError:
             raise
-        except OSError:
+        except (OSError, RuntimeError):
             pass
-        else:
-            repair_requested = os.environ.get("MISTER_MAGIK2_REPAIR") == "1"
-            if status.supports(required) and not repair_requested:
-                return agent, status
-            if not repair_requested and status.supports({"agent-update-v1"}):
-                if not agent_binary.is_file():
-                    raise AgentError("ARM native-agent artifact is unavailable")
-                append_event(run, {"phase": "native-agent-update", "outcome": "requested"})
-                agent.upgrade_agent(agent_binary.read_bytes())
-                time.sleep(1)
-                status = NativeAgent(device, token).status()
-                if status.supports(required):
-                    append_event(run, {"phase": "native-agent-update", "outcome": "passed"})
-                    return NativeAgent(device, token), status
-    bootstrap = SshBootstrap.from_environment()
-    token = bootstrap.install_and_start(agent_binary)
-    store.save(token)
-    time.sleep(1)
-    agent = NativeAgent(device, token)
-    status = agent.status()
-    if not status.supports(required):
-        raise AgentError("missing-required-capability-after-repair")
-    append_event(run, {"phase": "bootstrap", "outcome": "passed"})
+    repair = os.environ.get("MISTER_MAGIK2_REPAIR") == "1"
+    if status is not None and status.supports(required) and not repair:
+        append_event(run, {"phase": "agent", "identity": status.identity, "capabilities": sorted(status.capabilities)})
+        return agent, status
+    binary = agent_binary_path()  # Build only after proving installed support is insufficient.
+    if status is not None and status.supports({"agent-update-v1"}) and not repair:
+        append_event(run, {"phase": "native-agent-update", "outcome": "requested"})
+        payload = binary.read_bytes()
+        try:
+            agent.upgrade_agent(payload)
+        except (OSError, RuntimeError) as error:
+            if isinstance(error, AgentError):
+                raise
+            append_event(run, {"phase": "native-agent-update", "outcome": "reply-lost", "error": str(error)})
+        # Never blindly repeat an update after losing its acknowledgement.
+        status = wait_for_agent(agent, required)
+    else:
+        token = SshBootstrap.from_environment().install_and_start(binary)
+        store.save(token)
+        agent = NativeAgent(device, token)
+        status = wait_for_agent(agent, required)
+        append_event(run, {"phase": "bootstrap", "outcome": "passed"})
     return agent, status
 
 

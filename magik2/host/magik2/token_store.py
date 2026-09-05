@@ -29,3 +29,8 @@ class TokenStore:
         with os.fdopen(descriptor, "w", encoding="utf-8") as output:
             output.write(token + "\n")
         os.replace(temporary, self.path)
+
+
+def state_root() -> Path:
+    """Device credentials are shared by worktrees; an explicit override stays available."""
+    return Path(os.environ.get("MISTER_MAGIK2_STATE", str(Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "mister-magik2"))).expanduser()
