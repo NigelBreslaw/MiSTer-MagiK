@@ -149,3 +149,13 @@ MB/s for app-size comparisons; Mini-MagiK compile times are not full-app targets
 
 The completed implementation and hardware evidence are recorded in
 [the milestone evidence](docs/milestone-2.md).
+
+
+## Migration boundary
+
+`legacy-stop` is an explicit one-shot migration operation: it validates and
+signals only the old agent, waits at most three seconds, and leaves startup
+files unchanged. It is never invoked by deploy/check/watch. `status` uses the
+corrected Linux process-name check and reports whether the old agent is running.
+
+See [the everyday milestone](docs/milestone-3.md) and [legacy feature decisions](docs/legacy-disposition.md).
