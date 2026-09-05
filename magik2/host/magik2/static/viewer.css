@@ -1,0 +1,4 @@
+body { background:#101827; color:#dbeafe; font:14px system-ui; margin:20px; }
+canvas { image-rendering:pixelated; border:1px solid #334155; max-width:100%; }
+pre { background:#182235; padding:12px; max-height:240px; overflow:auto; white-space:pre-wrap; }
+.error { color:#fca5a5; }

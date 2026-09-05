@@ -1,24 +1,31 @@
 name: MiSTer MagiK Tooling 2.0
-
 on:
   pull_request:
-    paths: ["magik2/**", "scripts/magik2", ".github/workflows/magik2.yml"]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths: ["magik2/**", "scripts/magik2", ".github/workflows/magik2.yml", ".github/CODEOWNERS", ".github/PULL_REQUEST_TEMPLATE/magik2-tooling.md", "crates/framebuffer-stream/**", "mister/platform/runtime/**"]
   push:
     paths: ["magik2/**", "scripts/magik2", ".github/workflows/magik2.yml"]
-
 permissions:
   contents: read
-
 jobs:
   contract:
     runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: "1.98.0"
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v6
-        with: { python-version: "3.12" }
+        with:
+          python-version: "3.12"
       - run: python -m pip install pytest
       - run: python -m pytest magik2/host/tests -q
-      - run: cargo test --manifest-path magik2/agent/Cargo.toml
+      - run: python -m pytest magik2/scenarios --collect-only -q
+      - run: rustup toolchain install 1.98.0 --profile minimal
+      - run: cargo test --locked --manifest-path magik2/agent/Cargo.toml
+      - run: cargo test --locked
+        working-directory: magik2/probe
       - if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

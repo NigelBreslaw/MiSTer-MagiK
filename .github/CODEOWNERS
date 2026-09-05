@@ -1,0 +1,9 @@
+# Independent 2.0 tooling owner. Probe and scenarios remain consumer changes.
+/magik2/host/ @NigelBreslaw
+/magik2/agent/ @NigelBreslaw
+/magik2/build/ @NigelBreslaw
+/magik2/scripts/ @NigelBreslaw
+/magik2/docs/ @NigelBreslaw
+/scripts/magik2 @NigelBreslaw
+/.github/workflows/magik2.yml @NigelBreslaw
+/.github/CODEOWNERS @NigelBreslaw
