@@ -17,9 +17,12 @@ not device acceptance.
 - Native observation delivered metrics, probe logs, and a 1,036,872-byte
   keyframe (72-byte wire header plus a 960x540 RGB565 surface). No framebuffer
   device polling was introduced.
-- The agent advertises `artifacts-v1`, `lifecycle-v1`, `metrics-v1`, `status`,
-  `test-bridge-v1`, `upload-v1`, and `watch-v1`; the current probe remains
+- The agent advertises `agent-update-v1`, `artifacts-v1`, `lifecycle-v1`,
+  `metrics-v1`, `status`, `test-bridge-v1`, `upload-v1`, and `watch-v1`; the current probe remains
   running after deploy and after a failed profiled-check setup.
+- A native `agent-update-v1` replacement completed against the running service.
+  The replacement acknowledged its SHA-256, retained the complete capability
+  set, and adopted the already-running probe without a probe restart.
 
 ## Automated evidence
 
