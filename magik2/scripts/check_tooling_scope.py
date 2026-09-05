@@ -7,7 +7,21 @@ import os
 import subprocess
 import sys
 
-CORE_PREFIXES = ("magik2/agent/", "magik2/host/magik2/", "magik2/docs/")
+CONSUMERS = ("magik2/probe/", "magik2/scenarios/")
+CORE = ("magik2/", "scripts/magik2", ".github/workflows/magik2.yml", ".github/PULL_REQUEST_TEMPLATE/magik2-tooling.md", ".github/CODEOWNERS")
+COMPANIONS = ("AGENTS.md", "scripts/AGENTS.md")
+
+
+def scope_error(paths: list[str], tooling: bool) -> str | None:
+    core = [path for path in paths if path.startswith(CORE) and not path.startswith(CONSUMERS)]
+    if not core:
+        return None
+    if not tooling:
+        return "MagiK 2 core changes require the magik2-tooling PR label and tooling review."
+    unrelated = [path for path in paths if not path.startswith(CORE) and path not in COMPANIONS]
+    if unrelated:
+        return "Keep the tooling PR focused; unrelated changes: " + ", ".join(unrelated)
+    return None
 
 
 def changed_paths(base: str, head: str) -> list[str]:
@@ -21,9 +35,9 @@ def main() -> int:
     if not base:
         print("BASE_SHA is required for the tooling scope check", file=sys.stderr)
         return 2
-    core = [path for path in changed_paths(base, head) if path.startswith(CORE_PREFIXES)]
-    if core and os.environ.get("MAGIK2_TOOLING_PR") != "1":
-        print("MagiK 2.0 core changes require a dedicated tooling PR (set MAGIK2_TOOLING_PR=1).", file=sys.stderr)
+    error = scope_error(changed_paths(base, head), os.environ.get("MAGIK2_TOOLING_PR") == "1")
+    if error:
+        print(error, file=sys.stderr)
         return 1
     return 0
 

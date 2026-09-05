@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from pathlib import Path
 from collections import deque
 from collections.abc import Mapping
 from http import HTTPStatus
@@ -13,10 +14,7 @@ from .client import AgentError, NativeAgent
 from .frames import FrameError, decode_preview
 
 
-PAGE = """<!doctype html><title>MiSTer MagiK 2 watch</title><style>body{background:#101827;color:#dbeafe;font:14px system-ui;margin:20px}canvas{image-rendering:pixelated;border:1px solid #334155;max-width:100%}pre{background:#182235;padding:12px;max-height:240px;overflow:auto}</style><h1>MiSTer MagiK 2</h1><p id=state>Connecting…</p><canvas id=frame></canvas><pre id=logs></pre><script>
-const c=document.querySelector('#frame'),x=c.getContext('2d'),s=document.querySelector('#state'),l=document.querySelector('#logs');
-async function tick(){try{let q=await fetch('/state').then(r=>r.json());s.textContent=JSON.stringify(q.metrics||q.error||{},null,2);l.textContent=(q.logs||[]).join('\\n');if(q.frame){let b=await fetch('/frame').then(r=>r.arrayBuffer()),d=new DataView(b),w=d.getUint32(32,true),h=d.getUint32(36,true),p=new Uint8Array(b,72);c.width=w;c.height=h;let im=x.createImageData(w,h);for(let i=0,j=0;i<p.length;i+=2,j+=4){let v=p[i]|p[i+1]<<8;im.data[j]=(v>>11)*255/31;im.data[j+1]=((v>>5)&63)*255/63;im.data[j+2]=(v&31)*255/31;im.data[j+3]=255}x.putImageData(im,0,0)}}catch(e){s.textContent=e}setTimeout(tick,300)}tick();
-</script>"""
+STATIC = Path(__file__).with_name("static")
 
 
 class WatchState:
@@ -60,7 +58,11 @@ def serve(agent: NativeAgent) -> tuple[ThreadingHTTPServer, str]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
             if self.path == "/":
-                self._send(HTTPStatus.OK, "text/html; charset=utf-8", PAGE.encode())
+                self._send(HTTPStatus.OK, "text/html; charset=utf-8", (STATIC / "index.html").read_bytes())
+            elif self.path in {"/viewer.js", "/viewer.css"}:
+                name = self.path[1:]
+                content_type = "text/javascript" if name.endswith(".js") else "text/css"
+                self._send(HTTPStatus.OK, content_type, (STATIC / name).read_bytes())
             elif self.path == "/state":
                 self._send(HTTPStatus.OK, "application/json", json.dumps(state.snapshot()).encode())
             elif self.path == "/frame":
