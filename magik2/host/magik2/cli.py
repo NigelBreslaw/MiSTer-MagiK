@@ -14,7 +14,6 @@ from .build import ensure_arm_probe, ensure_arm_agent, ensure_arm_package
 from .client import AgentError, NativeAgent
 from .compatibility import AgentStatus
 from .results import append_event, create_run, source_context
-from .scenarios import motion, smoke
 from .testing import fresh_session
 from .token_store import TokenStore, state_root
 from .viewer import serve
@@ -102,59 +101,19 @@ def deploy(_arguments: argparse.Namespace, run: Path) -> int:
 
 
 def check(arguments: argparse.Namespace, run: Path) -> int:
-    scenarios = (arguments.scenario,) if arguments.scenario else ("smoke", "motion")
-    if arguments.profile and scenarios != ("motion",):
-        append_event(run, {"phase": "profile", "outcome": "invalid-selection"})
-        print(f"magik2 check: --profile requires the motion scenario (result: {run})", file=os.sys.stderr)
-        return 2
-    profile_id = "profile" if arguments.profile else None
-    session_started = False
-    primary_error: Exception | None = None
-    cleanup_errors: list[str] = []
-    try:
-        agent, status = connect_agent(run, PROFILE_AGENT_CAPABILITIES if profile_id is not None else CHECK_AGENT_CAPABILITIES)
-        ensure_probe(agent, status, run)
-        session_started = True
-        with fresh_session(agent, profile_id=profile_id) as application:
-            if "smoke" in scenarios:
-                append_event(run, {"phase": "smoke", "outcome": "started"})
-                append_event(run, {"phase": "smoke", "outcome": "passed", **smoke(application, run / "smoke.png")})
-            if "motion" in scenarios:
-                append_event(run, {"phase": "motion", "outcome": "started"})
-                measurement = motion(application, agent)
-                append_event(run, {"phase": "motion", "outcome": "measured", **measurement})
-                if not measurement["physical_evidence_valid"]:
-                    raise AssertionError("motion has no validated physical-presentation evidence")
-    except Exception as error:
-        primary_error = error
-        append_event(run, {"phase": "check", "outcome": "failed", "error": str(error)})
-    finally:
-        if profile_id is not None and "agent" in locals():
-            for name in ("profile.folded", "flamegraph.svg"):
-                try:
-                    (run / name).write_bytes(agent.read_profile_artifact(profile_id, name))
-                    append_event(run, {"phase": "profile-artifact", "outcome": "retained", "name": name, "instrumented": True})
-                except (AgentError, OSError) as error:
-                    append_event(run, {"phase": "profile-artifact", "outcome": "unavailable", "name": name, "error": str(error)})
-                    cleanup_errors.append(f"profile artifact {name}: {error}")
-        if session_started:
-            try:
-                agent.start(restart=False, expected_sha256=getattr(agent, "expected_sha256", None))
-                append_event(run, {"phase": "persistent-restart", "outcome": "passed"})
-            except (BootstrapError, AgentError, OSError, UnboundLocalError) as error:
-                append_event(run, {"phase": "persistent-restart", "outcome": "failed", "error": type(error).__name__})
-                cleanup_errors.append(f"persistent restart: {type(error).__name__}")
-    if cleanup_errors:
-        append_event(run, {"phase": "cleanup", "outcome": "failed", "errors": cleanup_errors})
-    else:
-        append_event(run, {"phase": "cleanup", "outcome": "passed"})
-    if primary_error is not None or cleanup_errors:
-        message = str(primary_error) if primary_error is not None else "; ".join(cleanup_errors)
-        print(f"magik2 check: {message} (result: {run})", file=os.sys.stderr)
-        return 2
-    append_event(run, {"phase": "check", "outcome": "passed"})
-    print(f"magik2 check: passed ({','.join(scenarios)}) (result: {run})")
-    return 0
+    import pytest
+    scenarios = Path(__file__).resolve().parents[2] / "scenarios"
+    options = [str(scenarios), "-q", "-p", "no:cacheprovider", "--magik2-device", "--magik2-run", str(run.resolve())]
+    if arguments.scenario:
+        options += ["-k", arguments.scenario]
+    if arguments.profile:
+        if arguments.scenario != "motion":
+            append_event(run, {"phase":"check", "outcome":"failed", "error":"--profile requires motion"})
+            return 2
+        options += ["--magik2-profile"]
+    result = int(pytest.main(options))
+    append_event(run, {"phase":"check", "outcome":"passed" if result == 0 else "failed", "pytest_exit_code":result})
+    return result
 
 
 def stop(run: Path) -> int:

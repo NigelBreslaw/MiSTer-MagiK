@@ -21,6 +21,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+mod measurement;
+mod profile;
+use measurement::PresentationMetrics;
+use profile::CpuProfile;
+
 slint::include_modules!();
 
 type EventLoopCallback = Box<dyn FnOnce() + Send + 'static>;
@@ -141,86 +146,10 @@ struct ProbePlatform {
     start: Instant,
 }
 
-#[derive(Default)]
-struct PresentationMetrics {
-    presentations: u64,
-    render_us_total: u64,
-    last_render_us: u64,
-    vsync_hits: u64,
-    vsync_misses: u64,
-    physical_latch_posts: u64,
-    physical_latch_flips: u64,
-    physical_drops: u64,
-    last_physical_drop_count: Option<u16>,
-    motion_started_ms: Option<u64>,
-    motion_completed_ms: Option<u64>,
-}
-
 struct PreviewProducer {
     state_root: std::path::PathBuf,
     last_preview: Instant,
     sequence: u64,
-}
-
-struct CpuProfile {
-    guard: pprof::ProfilerGuard<'static>,
-    root: std::path::PathBuf,
-}
-
-impl CpuProfile {
-    fn start() -> Result<Option<Self>, String> {
-        let Some(root) = std::env::var_os("MISTER_MAGIK2_PROFILE_DIR") else {
-            return Ok(None);
-        };
-        std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
-        let guard = pprof::ProfilerGuardBuilder::default()
-            .frequency(99)
-            .build()
-            .map_err(|error| error.to_string())?;
-        Ok(Some(Self {
-            guard,
-            root: root.into(),
-        }))
-    }
-
-    fn finish(self) -> Result<(), String> {
-        let report = self
-            .guard
-            .report()
-            .build()
-            .map_err(|error| error.to_string())?;
-        let samples = folded_samples(&format!("{report:?}"));
-        if samples.trim().is_empty() {
-            return Err("CPU sampler collected no stacks".to_owned());
-        }
-        std::fs::write(self.root.join("profile.folded"), samples)
-            .map_err(|error| error.to_string())?;
-        let output = std::fs::File::create(self.root.join("flamegraph.svg"))
-            .map_err(|error| error.to_string())?;
-        report.flamegraph(output).map_err(|error| error.to_string())
-    }
-}
-
-fn folded_samples(debug_report: &str) -> String {
-    debug_report
-        .lines()
-        .filter_map(|line| {
-            let (frames, thread_and_count) = line.rsplit_once(" THREAD: ")?;
-            let frames = frames.trim_end_matches(" ->");
-            let (thread, count) = thread_and_count.rsplit_once(' ')?;
-            let mut stack = vec![thread.trim().to_owned()];
-            stack.extend(
-                frames
-                    .split(" -> ")
-                    .filter_map(|frame| frame.strip_prefix("FRAME: "))
-                    .map(str::trim)
-                    .filter(|frame| !frame.is_empty())
-                    .map(ToOwned::to_owned),
-            );
-            (stack.len() > 1).then(|| format!("{} {}", stack.join(";"), count.trim()))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 impl PreviewProducer {
@@ -328,6 +257,11 @@ fn main() -> Result<(), String> {
     .map_err(|error| error.to_string())?;
 
     let probe = Probe::new().map_err(|error| error.to_string())?;
+    probe.set_build_label(
+        std::env::var("MISTER_MAGIK2_ARTIFACT_SHA256")
+            .unwrap_or_else(|_| "host-preview".into())
+            .into(),
+    );
     probe.show().map_err(|error| error.to_string())?;
     window.set_size(PhysicalSize::new(
         width
@@ -356,13 +290,12 @@ fn main() -> Result<(), String> {
         }
     });
     let motion_timer = Rc::new(slint::Timer::default());
-    let profile_timer = Rc::new(slint::Timer::default());
     let metrics = Rc::new(RefCell::new(PresentationMetrics::default()));
-    let profile = Rc::new(RefCell::new(None::<CpuProfile>));
+    let mut profile: Option<CpuProfile> = None;
+    let instrumented = std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some();
+    let measured_ms = if instrumented { 10_000 } else { 5_000 };
     let metrics_start = Instant::now();
     let timer = motion_timer.clone();
-    let profile_timer_for_motion = profile_timer.clone();
-    let profile_for_motion = profile.clone();
     let weak = probe.as_weak();
     let metrics_for_motion = metrics.clone();
     probe.on_start_motion(move || {
@@ -375,93 +308,103 @@ fn main() -> Result<(), String> {
         probe.set_motion_step(0);
         probe.set_motion_complete(false);
         probe.set_motion_running(true);
-        metrics_for_motion.borrow_mut().motion_started_ms =
-            Some(metrics_start.elapsed().as_millis() as u64);
-        match CpuProfile::start() {
-            Ok(Some(session)) => {
-                *profile_for_motion.borrow_mut() = Some(session);
-                let profile_for_finish = profile_for_motion.clone();
-                profile_timer_for_motion.start(
-                    slint::TimerMode::SingleShot,
-                    Duration::from_secs(10),
-                    move || {
-                        if let Some(session) = profile_for_finish.borrow_mut().take()
-                            && let Err(error) = session.finish()
-                        {
-                            eprintln!("magik2-probe profile-failed: {error}");
-                        }
-                    },
-                );
-            }
-            Ok(None) => {}
-            Err(error) => eprintln!("magik2-probe profile-start-failed: {error}"),
-        }
+        let mut metrics = metrics_for_motion.borrow_mut();
+        metrics.motion_started_ms = Some(metrics_start.elapsed().as_millis() as u64);
+        metrics.window_start = None;
+        metrics.window = None;
         let weak = probe.as_weak();
-        let callback_timer = timer.clone();
-        let metrics_for_completion = metrics_for_motion.clone();
         timer.start(
             slint::TimerMode::Repeated,
             Duration::from_millis(16),
             move || {
-                let Some(probe) = weak.upgrade() else {
-                    callback_timer.stop();
-                    return;
-                };
-                let next = probe.get_motion_step() + 1;
-                probe.set_motion_step(next);
-                if next >= 1_800 {
-                    probe.set_motion_running(false);
-                    probe.set_motion_complete(true);
-                    metrics_for_completion.borrow_mut().motion_completed_ms =
-                        Some(metrics_start.elapsed().as_millis() as u64);
-                    callback_timer.stop();
-                    eprintln!("magik2-probe motion-complete frames={next}");
+                if let Some(probe) = weak.upgrade() {
+                    probe.set_motion_step(probe.get_motion_step() + 1);
                 }
             },
         );
-        eprintln!("magik2-probe motion-start");
     });
 
     let mut cached = vec![Rgb565Pixel(0); width * height];
     let mut previews = PreviewProducer::new();
     loop {
         slint::platform::update_timers_and_animations();
+        let now = metrics_start.elapsed().as_millis() as u64;
+        if probe.get_motion_running() {
+            let mut counters = metrics.borrow_mut();
+            if counters.window_start.is_none()
+                && counters
+                    .motion_started_ms
+                    .is_some_and(|start| now - start >= 2000)
+            {
+                counters.window_start = Some((now, counters.counters.clone()));
+                match CpuProfile::start() {
+                    Ok(session) => profile = session,
+                    Err(error) => counters.error = Some(error),
+                }
+            }
+            if counters
+                .window_start
+                .as_ref()
+                .is_some_and(|(start, _)| now - start >= measured_ms)
+            {
+                counters.finish_window(now, width, height, instrumented);
+                motion_timer.stop();
+                probe.set_motion_running(false);
+                probe.set_motion_complete(true);
+                if let Some(session) = profile.take() {
+                    if let Err(error) = session.finish() {
+                        counters.error = Some(error);
+                    }
+                }
+            }
+        }
         let metrics_for_frame = metrics.clone();
         let rendered = window.draw_if_needed(|renderer| {
             let render_start = Instant::now();
             renderer.render(&mut cached, width);
+            let render_us = render_start.elapsed().as_micros() as u64;
             for (destination, source) in framebuffer.pixels_mut().iter_mut().zip(&cached) {
                 *destination = Rgb565(source.0);
             }
-            let posted = framebuffer.post().expect("post physical latch frame");
-            let presented = framebuffer
-                .settle_pending()
-                .expect("confirm physical latch frame")
-                .expect("physical latch frame must settle");
             let mut metrics = metrics_for_frame.borrow_mut();
-            metrics.presentations += 1;
-            metrics.last_render_us = render_start.elapsed().as_micros() as u64;
-            metrics.render_us_total += metrics.last_render_us;
-            metrics.vsync_hits += 1;
-            metrics.physical_latch_posts += 1;
-            metrics.physical_latch_flips += 1;
-            metrics.physical_drops += metrics.last_physical_drop_count.map_or(0, |previous| {
-                u64::from(presented.drop_count.wrapping_sub(previous))
-            });
-            metrics.last_physical_drop_count = Some(presented.drop_count);
-            debug_assert_eq!(posted.slot_index, presented.slot_index);
+            match framebuffer.post() {
+                Ok(_) => metrics.counters.posts += 1,
+                Err(error) => {
+                    metrics.counters.rejections += 1;
+                    metrics.error = Some(error.to_string());
+                    return;
+                }
+            }
+            match framebuffer.settle_pending() {
+                Ok(Some(presented)) => {
+                    metrics.counters.flips += 1;
+                    metrics.counters.drops +=
+                        metrics.last_physical_drop_count.map_or(0, |previous| {
+                            u64::from(presented.drop_count.wrapping_sub(previous))
+                        });
+                    metrics.last_physical_drop_count = Some(presented.drop_count);
+                }
+                _ => {
+                    metrics.error = Some("physical latch did not settle".into());
+                    return;
+                }
+            }
+            metrics.counters.presentations += 1;
+            metrics.last_render_us = render_us;
+            metrics.counters.render_us += render_us;
+            metrics.counters.render_to_present_us += render_start.elapsed().as_micros() as u64;
         });
         let metrics = metrics.borrow();
-        if rendered && metrics.presentations == 1 {
-            write_readiness(width, height, metrics.presentations)?;
+        if rendered && metrics.counters.presentations == 1 {
+            write_readiness(width, height, metrics.counters.presentations)?;
             eprintln!(
                 "magik2-probe ready width={width} height={height} presentations={}",
-                metrics.presentations
+                metrics.counters.presentations
             );
         }
         if rendered
-            && (metrics.presentations == 1
-                || metrics.presentations % 5 == 0
+            && (metrics.counters.presentations == 1
+                || metrics.counters.presentations % 5 == 0
                 || probe.get_motion_complete())
         {
             write_metrics(width, height, metrics_start.elapsed(), &metrics)?;
@@ -495,51 +438,17 @@ fn write_metrics(
     elapsed: Duration,
     metrics: &PresentationMetrics,
 ) -> Result<(), String> {
-    let state_root = std::env::var("MISTER_MAGIK2_STATE_ROOT")
-        .unwrap_or_else(|_| "/tmp/mister-magik2".to_owned());
-    let root = std::path::PathBuf::from(state_root);
-    std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
-    let destination = root.join("probe-metrics.json");
+    let root = std::path::PathBuf::from(
+        std::env::var("MISTER_MAGIK2_STATE_ROOT").unwrap_or_else(|_| "/tmp/mister-magik2".into()),
+    );
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let temporary = root.join("probe-metrics.json.next");
     std::fs::write(
         &temporary,
-        format!(
-            "{{\"width\":{},\"height\":{},\"elapsed_ms\":{},\"presentations\":{},\"render_us_total\":{},\"last_render_us\":{},\"vsync_hits\":{},\"vsync_misses\":{},\"physical_latch_posts\":{},\"physical_latch_flips\":{},\"physical_drops\":{},\"motion_started_ms\":{},\"motion_completed_ms\":{}}}\n",
-            width,
-            height,
-            elapsed.as_millis(),
-            metrics.presentations,
-            metrics.render_us_total,
-            metrics.last_render_us,
-            metrics.vsync_hits,
-            metrics.vsync_misses,
-            metrics.physical_latch_posts,
-            metrics.physical_latch_flips,
-            metrics.physical_drops,
-            option_json(metrics.motion_started_ms),
-            option_json(metrics.motion_completed_ms),
-        ),
+        metrics
+            .json(width, height, elapsed.as_millis() as u64)
+            .to_string(),
     )
-    .map_err(|error| error.to_string())?;
-    std::fs::rename(temporary, destination).map_err(|error| error.to_string())
-}
-
-fn option_json(value: Option<u64>) -> String {
-    value.map_or_else(|| "null".to_owned(), |value| value.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::folded_samples;
-
-    #[test]
-    fn converts_pprof_debug_stacks_to_folded_stacks() {
-        let debug = "FRAME: app::render -> FRAME: core::loop -> THREAD: probe 12\n";
-        assert_eq!(folded_samples(debug), "probe;app::render;core::loop 12");
-    }
-
-    #[test]
-    fn ignores_unrecognised_pprof_debug_lines() {
-        assert!(folded_samples("no profile samples\n").is_empty());
-    }
+    .map_err(|e| e.to_string())?;
+    std::fs::rename(temporary, root.join("probe-metrics.json")).map_err(|e| e.to_string())
 }
