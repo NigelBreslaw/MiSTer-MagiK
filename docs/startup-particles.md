@@ -332,3 +332,20 @@ typed scene inputs into a portable scene. Archive traversal, catalog state,
 Slint state, route selection, and presentation do not move into the shared
 crate. No generic scene registry, scene graph, or cross-scene JSON schema is
 introduced.
+
+
+## Intro asset regeneration
+
+The production intro generator remains a standalone binary. It no longer needs
+an agent command, device connection or lab preview:
+
+```sh
+scripts/cargo run --locked \
+  --manifest-path apps/framebuffer-scene-lab/Cargo.toml \
+  --profile release-live --features asset-tools \
+  --bin generate-intro-assets -- OUTPUT_DIRECTORY
+```
+
+Use a temporary output directory to verify generation. Updating production
+assets is a separate intentional change; do not regenerate them during tooling
+cleanup. The generator writes four particle files and `PROVENANCE.txt`.

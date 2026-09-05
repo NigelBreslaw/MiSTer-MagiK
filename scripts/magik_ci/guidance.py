@@ -86,7 +86,7 @@ def authority(path: str) -> tuple[str, str]:
     if path.startswith("crates/particles/assets/intro/"):
         return (
             "checked-in generated intro asset",
-            "scripts/agent scene-lab generate-intro-assets --output crates/particles/assets/intro",
+            "scripts/cargo run --locked --manifest-path apps/framebuffer-scene-lab/Cargo.toml --profile release-live --features asset-tools --bin generate-intro-assets -- crates/particles/assets/intro",
         )
     if path.startswith("apps/desktop/vendor/"):
         return (
