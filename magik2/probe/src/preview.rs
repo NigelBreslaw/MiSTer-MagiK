@@ -20,12 +20,19 @@ impl PreviewProducer {
         let state_root = std::env::var("MISTER_MAGIK2_STATE_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|_| "/tmp/mister-magik2".into());
+        Self::with_root(state_root)
+    }
+    fn with_root(state_root: PathBuf) -> Self {
         let pending = Arc::new(Mutex::new(None::<Packet>));
-        let worker_slot = pending.clone();
+        let worker_slot = Arc::downgrade(&pending);
         let socket_path = state_root.join("probe-frames.sock");
         std::thread::spawn(move || {
             loop {
-                let packet = worker_slot.lock().expect("preview slot").take();
+                let Some(slot) = worker_slot.upgrade() else {
+                    break;
+                };
+                let packet = slot.lock().expect("preview slot").take();
+                drop(slot);
                 if let Some((header, bytes)) = packet
                     && let Ok(mut socket) = UnixStream::connect(&socket_path)
                 {
@@ -100,6 +107,36 @@ impl PreviewProducer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stalled_unix_receiver_does_not_block_render_publication() {
+        let root =
+            std::env::temp_dir().join(format!("magik2-preview-socket-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("viewer-lease"), u128::MAX.to_string()).unwrap();
+        let listener =
+            std::os::unix::net::UnixListener::bind(root.join("probe-frames.sock")).unwrap();
+        let (accepted, ready) = std::sync::mpsc::channel();
+        let receiver = std::thread::spawn(move || {
+            let (_socket, _) = listener.accept().unwrap();
+            accepted.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(500)); // Deliberately never read.
+        });
+        let mut producer = PreviewProducer::with_root(root.clone());
+        let pixels = vec![Rgb565Pixel(0); 960 * 540];
+        producer.publish_if_watched(&pixels, 960, 540, Duration::ZERO);
+        ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        let started = Instant::now();
+        for _ in 0..10 {
+            producer.last_preview = Instant::now() - Duration::from_secs(1);
+            producer.publish_if_watched(&pixels, 960, 540, Duration::ZERO);
+        }
+        assert!(started.elapsed() < Duration::from_millis(200));
+        assert!(producer.sequence > 1);
+        drop(producer);
+        receiver.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn held_sender_slot_does_not_block_the_producer() {
         let root = std::env::temp_dir().join(format!("magik2-preview-slot-{}", std::process::id()));

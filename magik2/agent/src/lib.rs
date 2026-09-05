@@ -325,10 +325,12 @@ impl Agent {
                 "status",
                 serde_json::json!({
                     "identity": self.identity,
+                    "agent_pid": std::process::id(),
                     "agent_sha256": installed_hash(&PathBuf::from("/proc/self/exe")),
                     "capabilities": Self::capabilities(),
                     "running": self.running(),
                     "artifact": "probe",
+                    "pid": self.running_identity().map(|record| record.pid),
                     "artifact_sha256": installed_hash(&self.install_root.join("probe")),
                     "running_sha256": self.running_identity().map(|record| record.sha256),
                     "ready": self.running_identity().is_some_and(|record| self.ready_for(record.pid, &record.sha256)),
@@ -528,7 +530,7 @@ impl Agent {
             .env("MISTER_MAGIK2_STATE_ROOT", &self.state_root)
             .env(
                 "MISTER_MAGIK2_ARTIFACT_SHA256",
-                published_hash.unwrap_or_default(),
+                published_hash.as_deref().unwrap_or_default(),
             )
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(stderr));
@@ -547,7 +549,11 @@ impl Agent {
             );
         }
         match command.spawn() {
-            Ok(child) => self.wait_for_readiness(request, child),
+            Ok(child) => self.wait_for_readiness(
+                request,
+                child,
+                published_hash.as_deref().unwrap_or_default(),
+            ),
             Err(error) => {
                 let recovery = main_handoff("mister_magik_resume\n");
                 response(
@@ -789,13 +795,12 @@ impl Agent {
         self.state_root.join("owned-process.json")
     }
 
-    fn write_owned_process(&self, pid: u32) -> Result<(), String> {
+    fn write_owned_process(&self, pid: u32, verified_hash: &str) -> Result<(), String> {
         let record = OwnedProcess {
             pid,
             executable: self.install_root.join("probe").display().to_string(),
             start_ticks: process_start_ticks(pid).ok_or("cannot identify child birth")?,
-            sha256: installed_hash(&PathBuf::from(format!("/proc/{pid}/exe")))
-                .ok_or("cannot identify running artifact")?,
+            sha256: verified_hash.to_owned(),
         };
         let temporary = self.owned_process_path().with_extension("next");
         let bytes = serde_json::to_vec(&record).map_err(|error| error.to_string())?;
@@ -812,17 +817,23 @@ impl Agent {
     }
 
     fn running_identity(&self) -> Option<OwnedProcess> {
-        let record = self
-            .read_owned_process()
-            .or_else(|| self.discover_owned_process())?;
-        if record.start_ticks.is_empty()
-            || process_start_ticks(record.pid).as_deref() != Some(&record.start_ticks)
+        if let Some(record) = self.read_owned_process()
+            && !record.start_ticks.is_empty()
+            && !record.sha256.is_empty()
+            && process_start_ticks(record.pid).as_deref() == Some(&record.start_ticks)
+            && fs::read_link(format!("/proc/{}/exe", record.pid))
+                .ok()
+                .is_some_and(|path| {
+                    path.to_string_lossy().trim_end_matches(" (deleted)") == record.executable
+                })
         {
-            return None;
+            return Some(record);
         }
-        let executable = fs::read_link(format!("/proc/{}/exe", record.pid)).ok()?;
-        let actual = executable.to_string_lossy();
-        (actual.trim_end_matches(" (deleted)") == record.executable).then_some(record)
+        // Older agents recorded only PID/path. Rediscover the actual executable
+        // and persist its birth identity instead of treating it as a second app.
+        let record = self.discover_owned_process()?;
+        let _ = self.write_owned_process(record.pid, &record.sha256);
+        Some(record)
     }
 
     fn owned_process_is_running(&self) -> bool {
@@ -921,7 +932,25 @@ impl Agent {
         let endpoint = listener.local_addr().map_err(FrameError::from)?.to_string();
         let started = self.start_with_test_server(request, Some(endpoint));
         if started.op == "error" {
-            return write_frame(stream, &started, &[]);
+            // Startup may already have stopped the persistent probe. Attempt the
+            // same restoration even when no relay was established.
+            let mut restore = request.clone();
+            restore.op = "start".into();
+            restore.fields.remove("profile_id");
+            restore
+                .fields
+                .insert("restart".into(), serde_json::json!(false));
+            let restored = self.start(&restore);
+            self.observation.record_log(format!(
+                "test-session startup={:?} restore={:?}",
+                started.fields, restored.fields
+            ));
+            let mut failed = started;
+            failed.fields.insert(
+                "persistent_restore".into(),
+                serde_json::json!({"outcome":restored.op,"detail":restored.fields}),
+            );
+            return write_frame(stream, &failed, &[]);
         }
         let primary = (|| {
             write_frame(
@@ -1015,13 +1044,28 @@ impl Agent {
         primary
     }
 
-    fn wait_for_readiness(&self, request: &Envelope, mut child: Child) -> Envelope {
+    fn wait_for_readiness(
+        &self,
+        request: &Envelope,
+        mut child: Child,
+        expected_hash: &str,
+    ) -> Envelope {
         let deadline = Instant::now() + Duration::from_secs(8);
         loop {
-            if installed_hash(&PathBuf::from(format!("/proc/{}/exe", child.id())))
-                .is_some_and(|hash| self.ready_for(child.id(), &hash))
-            {
-                if let Err(error) = self.write_owned_process(child.id()) {
+            if self.ready_for(child.id(), expected_hash) {
+                // Hash the actual executable once after readiness, not on every
+                // poll while the probe is starting and rendering its first frame.
+                if installed_hash(&PathBuf::from(format!("/proc/{}/exe", child.id()))).as_deref()
+                    != Some(expected_hash)
+                {
+                    return self.failed_start(
+                        request,
+                        "running-artifact-mismatch",
+                        None,
+                        &mut child,
+                    );
+                }
+                if let Err(error) = self.write_owned_process(child.id(), expected_hash) {
                     return self.failed_start(request, &error, None, &mut child);
                 }
                 *self.process.lock().expect("agent process state poisoned") = Some(child);
@@ -1266,6 +1310,44 @@ fn publish_atomically(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_test_start_retains_primary_and_restoration_outcomes() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("magik2-missing-probe-{}", std::process::id()));
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            Agent::with_state_root(
+                "test".into(),
+                "token".into(),
+                root.clone(),
+                root.join("state"),
+            )
+            .handle(&mut stream)
+            .unwrap();
+        });
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let request = Envelope {
+            id: "failed-test".into(),
+            op: "test-start".into(),
+            token: "token".into(),
+            fields: serde_json::Map::new(),
+        };
+        write_frame(&mut client, &request, &[]).unwrap();
+        let (reply, _) = read_frame(&mut client).unwrap();
+        assert_eq!(reply.fields["code"], "missing-application");
+        assert_eq!(reply.fields["persistent_restore"]["outcome"], "error");
+        assert_eq!(
+            reply.fields["persistent_restore"]["detail"]["code"],
+            "missing-application"
+        );
+        server.join().unwrap();
+    }
 
     #[test]
     fn start_rejects_a_superseded_upload_before_touching_main() {
