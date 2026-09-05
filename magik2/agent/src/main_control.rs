@@ -13,7 +13,30 @@ pub fn handoff(command: &str) -> Result<(), String> {
         Path::new("/dev/MiSTer_cmd_reply"),
         Path::new("/tmp/mister-magik/command-operation.lock"),
         Duration::from_secs(5),
-    )
+    )?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let status = std::fs::read("/tmp/mister-magik/main-status.json")
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        if let Some(status) = status {
+            let settled = if command.trim() == "mister_magik_suspend" {
+                status["launcher_state"] == "LauncherSuspended"
+                    && status["launcher_active"] == false
+            } else {
+                status["launcher_active"] == true
+                    && status["launcher_pid"].as_u64().is_some_and(|pid| pid > 0)
+                    && status["launcher_ready_phase"] == "ready"
+            };
+            if settled {
+                return Ok(());
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err("Main acknowledged but launcher state did not settle".into());
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn exchange(

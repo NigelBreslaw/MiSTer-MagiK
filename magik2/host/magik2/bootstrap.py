@@ -49,11 +49,11 @@ class SshBootstrap:
             finally:
                 sftp.close()
             command = (
-                f"mkdir -p {self.install_root} {self.state_root} && "
-                f"mv {self.install_root}/mister-magik2-agent.next {self.install_root}/mister-magik2-agent && "
-                f"killall mister-magik2-agent 2>/dev/null || true; sleep 1; "
+                f"set -eu; mkdir -p {self.install_root} {self.state_root}; "
+                f"mv {self.install_root}/mister-magik2-agent.next {self.install_root}/mister-magik2-agent; "
+                f"if pidof mister-magik2-agent >/dev/null; then killall mister-magik2-agent; fi; "
                 f"MISTER_MAGIK2_TOKEN={shlex.quote(token)} MISTER_MAGIK2_INSTALL_ROOT={self.install_root} MISTER_MAGIK2_STATE_ROOT={self.state_root} "
-                f"nohup {self.install_root}/mister-magik2-agent >{self.state_root}/agent.log 2>&1 &"
+                f"nohup {self.install_root}/mister-magik2-agent </dev/null >{self.state_root}/agent.log 2>&1 &"
             )
             _, stdout, stderr = client.exec_command(command, timeout=15)
             if stdout.channel.recv_exit_status() != 0:

@@ -5,10 +5,11 @@ from contextlib import contextmanager
 import math
 import os
 import statistics
+import time
 import uuid
 from pathlib import Path
 import pytest
-from .results import append_event, create_run, source_context
+from .results import append_event, create_run, source_context, retain_diagnostics, finalize
 from .testing import fresh_session
 
 
@@ -20,6 +21,7 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
+    config._magik2_started = time.monotonic()
     config.addinivalue_line("markers", "magik2_profile: separate instrumented repetition")
 
 
@@ -54,6 +56,7 @@ def managed_session(agent, run, profile_id, scenario):
             yield application
     finally:
         errors = []
+        retain_diagnostics(run, agent)
         if profiled:
             try:
                 complete = json.loads(agent.read_profile_artifact(profile_id, "profile.json"))
@@ -92,6 +95,7 @@ def pytest_sessionfinish(session, exitstatus):
     run = getattr(session.config, "_magik2_run", None)
     if run is not None:
         summarize(run)
+        finalize(run, int(exitstatus), int((time.monotonic()-session.config._magik2_started)*1000))
 
 
 def summarize(run: Path) -> None:

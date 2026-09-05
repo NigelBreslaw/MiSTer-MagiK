@@ -11,7 +11,16 @@ from .protocol import Envelope, ProtocolError, receive_message, send_message, sh
 
 
 class AgentError(RuntimeError):
-    pass
+    @classmethod
+    def from_fields(cls, fields):
+        code = str(fields.get("code", "agent-error"))
+        detail = fields.get("detail")
+        recovery = fields.get("recovery", "not-attempted")
+        text = f"{code}: {detail}" if detail else code
+        if "recovery" in fields:
+            text += f"; launcher-recovery={'passed' if recovery is None else 'failed: ' + str(recovery)}"
+        return cls(text)
+
 
 
 class NativeAgent:
@@ -24,19 +33,19 @@ class NativeAgent:
     def status(self) -> AgentStatus:
         response, _ = self._request("status")
         if response.operation == "error":
-            raise AgentError(str(response.fields.get("code", "agent error")))
+            raise AgentError.from_fields(response.fields)
         return AgentStatus.from_response(response.fields)
 
     def upload(self, artifact: str, payload: bytes) -> Mapping[str, object]:
         response, _ = self._request("upload", {"artifact": artifact, "sha256": sha256_hex(payload)}, payload)
         if response.operation == "error":
-            raise AgentError(str(response.fields.get("code", "upload failed")))
+            raise AgentError.from_fields(response.fields)
         return response.fields
 
     def upgrade_agent(self, payload: bytes) -> Mapping[str, object]:
         response, _ = self._request("agent-update", {"sha256": sha256_hex(payload)}, payload)
         if response.operation == "error":
-            raise AgentError(str(response.fields.get("code", "agent upgrade failed")))
+            raise AgentError.from_fields(response.fields)
         if response.operation != "agent-updating":
             raise AgentError("agent did not acknowledge its replacement")
         return response.fields
@@ -50,13 +59,16 @@ class NativeAgent:
     def stop(self) -> Mapping[str, object]:
         return self._successful("stop")
 
+    def diagnostics(self) -> Mapping[str, object]:
+        return self._successful("diagnostics")
+
     def metrics(self) -> Mapping[str, object]:
         return self._successful("metrics")
 
     def read_profile_artifact(self, profile_id: str, name: str) -> bytes:
         response, body = self._request("read-artifact", {"profile_id": profile_id, "name": name})
         if response.operation == "error":
-            raise AgentError(str(response.fields.get("code", "artifact retrieval failed")))
+            raise AgentError.from_fields(response.fields)
         if response.operation != "artifact":
             raise AgentError("agent returned an unexpected artifact response")
         return body
@@ -73,7 +85,7 @@ class NativeAgent:
             if response.request_id != request.request_id:
                 raise ProtocolError("agent reply request identifier did not match")
             if body or response.operation == "error":
-                raise AgentError(str(response.fields.get("code", "test bridge failed")))
+                raise AgentError.from_fields(response.fields)
             if response.operation != "test-ready":
                 raise AgentError("agent did not establish a test bridge")
             return connection
@@ -90,7 +102,7 @@ class NativeAgent:
             if response.request_id != request.request_id:
                 raise ProtocolError("agent reply request identifier did not match")
             if body or response.operation == "error":
-                raise AgentError(str(response.fields.get("code", "watch failed")))
+                raise AgentError.from_fields(response.fields)
             if response.operation != "watch-ready":
                 raise AgentError("agent did not establish observation stream")
             connection.settimeout(None)
@@ -109,12 +121,7 @@ class NativeAgent:
     def _successful(self, operation: str, fields: Mapping[str, object] | None = None) -> Mapping[str, object]:
         response, _ = self._request(operation, fields)
         if response.operation == "error":
-            code = str(response.fields.get("code", f"{operation} failed"))
-            if "recovery" in response.fields:
-                recovery = response.fields["recovery"]
-                outcome = "passed" if recovery is None else f"failed:{recovery}"
-                raise AgentError(f"{code}; launcher-recovery={outcome}")
-            raise AgentError(code)
+            raise AgentError.from_fields(response.fields)
         return response.fields
 
     def _request(self, operation: str, fields: Mapping[str, object] | None = None, body: bytes = b"") -> tuple[Envelope, bytes]:
