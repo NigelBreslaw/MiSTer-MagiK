@@ -1,7 +1,5 @@
 # Legacy tooling: deletion decisions
 
-Later implementation status is recorded in [Tooling retirement](../../docs/tooling-retirement.md).
-
 This is a source-backed consumer inventory for milestone 3, not a parity backlog.
 Do not migrate a command merely because it exists. Owners below identify code
 boundaries, not commitments to implement replacement features.

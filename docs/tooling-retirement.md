@@ -59,7 +59,8 @@ have not been uninstalled or replaced by this milestone.
 - Focused host CLI: 18 tests passed; delivery: 23 passed; input-integrity
   evaluator: one passed. All retained host tests compile with warnings denied.
 - Portable Arcade input regression: one passed. Old device-agent host test
-  compilation passed; its Linux-only service is not validated by that check.
+  compilation passed. CI follow-up also reproduced and corrected a Linux-only
+  unused import through the typed `device-agent-ci` ARM build, which now passes.
 - Scenario helper tests: 17 passed. Affected Python CI tests: 36 passed and two
   subtests. Focused Python lint/format and whitespace checks passed.
 - Dev hardware: smoke passed; settings twice passed with original value
@@ -82,6 +83,14 @@ have not been uninstalled or replaced by this milestone.
   target reached on the last allowed step. Focused boundary/failure tests pass.
   The accessibility update copies only the selected index, without allocating
   game-path strings on the direct-rendering loop.
+
+CI follow-up reproduced three missed failures locally: an orphan source-text
+attribution test, Linux-only unused process imports, and consumer tests/docs
+placed in protected core paths. The orphan test/imports are deleted. New
+journey regressions live in `scripts/tests/test_magik2_journeys.py`; their
+instructions live in `docs/benchmarking.md`. The tooling scope guard and label
+policy are unchanged. Validation passed: 124 affected host tests, agent Clippy,
+six relocated journey tests, and the typed ARM device-agent build.
 
 The completed change removes about 39,200 lines net. No new 2.0 core API,
 protocol/manifest version, or compatibility wrapper was added. Profile results
