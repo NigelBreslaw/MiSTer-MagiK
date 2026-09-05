@@ -28,7 +28,7 @@ export component Probe inherits Window {
     Rectangle {
         x: 16px; y: 16px; width: parent.width - 32px; height: 48px;
         background: #1f2937; border-radius: 6px;
-        build-label-text := Text { x: 14px; y: 13px; text: root.build-label; color: #dbeafe; font-size: 18px; accessible-role: text; accessible-label: "build-label"; }
+        Text { x: 14px; y: 13px; text: root.build-label; color: #dbeafe; font-size: 18px; accessible-role: text; accessible-label: "build-label"; }
     }
 
     Rectangle {
@@ -40,7 +40,7 @@ export component Probe inherits Window {
         details-button := Rectangle { x: 16px; y: 114px; width: 208px; height: 30px; background: #334155; border-radius: 5px; accessible-role: button; accessible-label: "details-toggle"; accessible-action-default => { root.toggle-details(); } Text { x: 12px; y: 6px; text: root.details-open ? "Close details" : "Open details"; color: white; } TouchArea { clicked => { root.toggle-details(); } } }
     }
 
-    if root.details-open : details-panel := Rectangle {
+    if root.details-open : Rectangle {
         x: 282px; y: 80px; width: 342px; height: 160px; background: #243047; border-radius: 6px;
         Text { x: 16px; y: 16px; text: "Details panel is open"; color: #cbd5e1; font-size: 18px; accessible-role: text; accessible-label: "details-panel"; }
     }
