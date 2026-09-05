@@ -76,6 +76,9 @@ def main() -> int:
     subcommands.add_parser("watch")
     subcommands.add_parser("status")
     subcommands.add_parser("stop")
+    subcommands.add_parser(
+        "legacy-stop", help="stop the old agent once; preserve its startup files"
+    )
     for name, command in subcommands.choices.items():
         command.set_defaults(app="magik")
         if name not in {"build", "deploy", "check", "watch"}:
@@ -117,6 +120,10 @@ def main() -> int:
     finally:
         finalize(run, code, int((time.monotonic() - started) * 1000))
         if code:
+            if (run / "pytest.log").exists():
+                print(
+                    f"Test failure: {run.resolve() / 'pytest.log'}", file=os.sys.stderr
+                )
             print(f"Failure details: {run.resolve() / 'run.json'}", file=os.sys.stderr)
             print(
                 f"Device logs (if available): {run.resolve() / 'logs.txt'}",
@@ -156,6 +163,21 @@ def dispatch(arguments, run) -> int:
         )
     if arguments.command == "deploy":
         return deploy(arguments, run)
+    if arguments.command == "legacy-stop":
+        agent, _ = connect_agent(
+            run, {"status", "legacy-stop", "legacy-process-status"}
+        )
+        try:
+            agent.stop_legacy()
+            if agent.status().fields.get("legacy_agent_running") is not False:
+                raise RuntimeError(
+                    "legacy agent is still running or status is unavailable"
+                )
+            append_event(run, {"phase": "legacy-stop", "outcome": "passed"})
+            print("Legacy agent stopped; startup files unchanged.")
+            return 0
+        finally:
+            retain_diagnostics(run, agent)
     if arguments.command == "stop":
         return stop(run)
     if arguments.command == "check":

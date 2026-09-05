@@ -62,6 +62,10 @@ class NativeAgent:
             fields["expected_sha256"] = expected_sha256
         return self._successful("start", fields)
 
+    def stop_legacy(self) -> Mapping[str, object]:
+        """Explicit migration check; no startup files or application processes change."""
+        return self._successful("legacy-stop")
+
     def stop(self) -> Mapping[str, object]:
         return self._successful("stop")
 

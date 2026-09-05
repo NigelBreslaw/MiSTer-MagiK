@@ -29,3 +29,24 @@ def test_explicit_mini_failure_points_to_retained_evidence(
     run = next(tmp_path.iterdir())
     assert str(run / "run.json") in output.err
     assert str(run / "logs.txt") in output.err
+
+
+def test_legacy_stop_checks_observed_status_even_after_acknowledgement(
+    monkeypatch, tmp_path
+):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    import pytest
+    from magik2.results import create_run
+
+    agent = Mock()
+    agent.status.return_value = SimpleNamespace(fields={"legacy_agent_running": True})
+    monkeypatch.setenv("MISTER_IP", "device")
+    monkeypatch.setattr(cli, "connect_agent", lambda *_: (agent, None))
+    monkeypatch.setattr(cli, "retain_diagnostics", Mock())
+    with pytest.raises(RuntimeError, match="still running"):
+        cli.dispatch(
+            SimpleNamespace(command="legacy-stop"), create_run(tmp_path, "stop", {})
+        )
+    agent.stop_legacy.assert_called_once_with()
+    cli.retain_diagnostics.assert_called_once()

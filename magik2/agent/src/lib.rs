@@ -183,6 +183,7 @@ impl Agent {
             "test-deadline-v2",
             "legacy-isolation-v1",
             "legacy-process-status",
+            "legacy-stop",
         ]
     }
 
@@ -350,7 +351,7 @@ impl Agent {
             let _mutation = self.mutations.lock().expect("mutation state poisoned");
             return self.start_test_session(stream, &request, &body);
         }
-        let replayable = matches!(request.op.as_str(), "start" | "stop");
+        let replayable = matches!(request.op.as_str(), "start" | "stop" | "legacy-stop");
         let _mutation = replayable.then(|| self.mutations.lock().expect("mutation state poisoned"));
         if replayable {
             match self.replayed_response(&request, &body) {
@@ -380,6 +381,18 @@ impl Agent {
             ),
             "start" => self.start(&request),
             "stop" => self.stop(&request),
+            "legacy-stop" => match stop_legacy_agent() {
+                Ok(()) => response(
+                    &request.id,
+                    "legacy-stopped",
+                    serde_json::json!({"legacy_agent_running": false}),
+                ),
+                Err(error) => response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"legacy-stop", "detail":error.to_string()}),
+                ),
+            },
             "metrics" => self.metrics(&request),
             "measure" => match fs::write(self.state_root.join("measure-request"), b"start") {
                 Ok(()) => response(&request.id, "measurement-requested", serde_json::json!({})),
@@ -1343,6 +1356,61 @@ fn legacy_agent_running() -> bool {
     })
 }
 
+fn stop_legacy_agent() -> io::Result<()> {
+    // Explicit migration operation, never part of ordinary deployment.
+    for entry in fs::read_dir("/proc")? {
+        let entry = entry?;
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if !fs::read_to_string(entry.path().join("comm"))
+            .ok()
+            .is_some_and(|name| is_legacy_agent_comm(name.trim()))
+        {
+            continue;
+        }
+        if pid <= 1 {
+            return Err(io::Error::other("refusing to signal a system process"));
+        }
+        let birth = process_start_ticks(pid)
+            .ok_or_else(|| io::Error::other("legacy process identity unavailable"))?;
+        let executable = fs::read_link(entry.path().join("exe"))?;
+        let name = executable
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if name.trim_end_matches(" (deleted)") != "mister-magik-agent" {
+            return Err(io::Error::other(
+                "legacy process executable does not match; not signalled",
+            ));
+        }
+        if process_start_ticks(pid).as_deref() != Some(&birth) {
+            continue;
+        }
+        // SAFETY: positive PID with checked executable and birth identity; one TERM only.
+        if unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) } != 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                return Err(error);
+            }
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while legacy_agent_running() {
+        if Instant::now() >= deadline {
+            return Err(io::Error::other(
+                "legacy agent did not stop or respawned; startup files were not changed",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
 fn is_legacy_agent_comm(name: &str) -> bool {
     // Linux /proc/PID/comm contains at most 15 bytes, even for a longer binary name.
     let legacy = "mister-magik-agent";
@@ -1395,7 +1463,6 @@ mod tests {
         assert!(!is_legacy_agent_comm(&"mister-magik2-agent"[..15]));
         assert!(!is_legacy_agent_comm("MiSTer_MagiKDev"));
     }
-
 
     #[test]
     fn app_switch_discards_cached_and_inflight_old_previews() {
