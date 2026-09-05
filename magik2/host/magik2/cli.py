@@ -26,6 +26,10 @@ WATCH_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {"metrics-v1", "watch-v
 PROFILE_AGENT_CAPABILITIES = CHECK_AGENT_CAPABILITIES | {"artifacts-v1"}
 
 
+def agent_binary_path() -> Path:
+    return Path(__file__).resolve().parents[2] / "agent" / "target" / "armv7-unknown-linux-gnueabihf" / "release" / "mister-magik2-agent"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="scripts/magik2")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -194,6 +198,7 @@ def connect_agent(
     """Use SSH only when native discovery or repair is genuinely unavailable."""
     device = os.environ["MISTER_IP"]
     store = TokenStore(Path(os.environ.get("MISTER_MAGIK2_STATE", "build/magik2-state")), device)
+    agent_binary = agent_binary_path()
     token = store.load()
     if token:
         agent = NativeAgent(device, token)
@@ -204,10 +209,20 @@ def connect_agent(
         except OSError:
             pass
         else:
-            if status.supports(required) and os.environ.get("MISTER_MAGIK2_REPAIR") != "1":
+            repair_requested = os.environ.get("MISTER_MAGIK2_REPAIR") == "1"
+            if status.supports(required) and not repair_requested:
                 return agent, status
+            if not repair_requested and status.supports({"agent-update-v1"}):
+                if not agent_binary.is_file():
+                    raise AgentError("ARM native-agent artifact is unavailable")
+                append_event(run, {"phase": "native-agent-update", "outcome": "requested"})
+                agent.upgrade_agent(agent_binary.read_bytes())
+                time.sleep(1)
+                status = NativeAgent(device, token).status()
+                if status.supports(required):
+                    append_event(run, {"phase": "native-agent-update", "outcome": "passed"})
+                    return NativeAgent(device, token), status
     bootstrap = SshBootstrap.from_environment()
-    agent_binary = Path(__file__).resolve().parents[2] / "agent" / "target" / "armv7-unknown-linux-gnueabihf" / "release" / "mister-magik2-agent"
     token = bootstrap.install_and_start(agent_binary)
     store.save(token)
     time.sleep(1)

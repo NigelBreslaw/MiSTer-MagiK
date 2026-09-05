@@ -32,6 +32,14 @@ class NativeAgent:
             raise AgentError(str(response.fields.get("code", "upload failed")))
         return response.fields
 
+    def upgrade_agent(self, payload: bytes) -> Mapping[str, object]:
+        response, _ = self._request("agent-update", {"sha256": sha256_hex(payload)}, payload)
+        if response.operation == "error":
+            raise AgentError(str(response.fields.get("code", "agent upgrade failed")))
+        if response.operation != "agent-updating":
+            raise AgentError("agent did not acknowledge its replacement")
+        return response.fields
+
     def start(self, *, restart: bool = False) -> Mapping[str, object]:
         return self._successful("start", {"restart": restart})
 
