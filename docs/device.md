@@ -99,7 +99,7 @@ automatically replays the reboot request.
 ## Agent workflows
 
 Agents use closed typed workflows rather than the operator CLI. Runtime and
-platform changes are committed first and then use `scripts/agent deliver`.
+platform changes are committed first and then use `scripts/agent deliver platform`.
 Committed Main-fork experiments use `scripts/agent deliver local-main`, which
 is Dev-only and replaces only the verified Main/manifest pair from an exact
 clean sibling checkout. The first deployment of reload support may use one

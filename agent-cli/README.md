@@ -1,28 +1,37 @@
 # agent-cli
 
-`agent-cli` is the repository workflow engine behind `scripts/agent`. It owns
-exact-SHA builds, transactional delivery, benchmarks, diagnosis, and attended
-release qualification. Python owns pre-push and CI host assurance.
+`agent-cli` retains platform delivery, specialized qualification, diagnosis,
+and attended device operations. Python owns pre-push and CI host assurance.
 
-The AI-facing commands are:
+Ordinary application development uses the shared [2.0 tooling](../magik2/README.md):
+
+```sh
+scripts/magik2 deploy
+scripts/magik2 check
+scripts/magik2 watch
+scripts/magik2 check idle
+scripts/magik2 check idle --profile
+```
+
+The real app is the default; use `--app mini-magik` for the fast experiment.
+`check` runs one smoke journey. Measurement and profiling are explicit scenarios.
+
+Retained legacy operations require an explicit purpose:
 
 ```text
 scripts/agent plan
-scripts/agent deliver
+scripts/agent deliver platform
+scripts/agent deliver local-main
 scripts/agent deliver game-databases --game-databases-release-dir PATH
-scripts/agent restart-ui
-scripts/agent benchmark
-scripts/agent benchmark particles
 scripts/agent benchmark catalog-lifecycle
-scripts/agent benchmark launch-return
+scripts/agent benchmark input-integrity
 scripts/agent diagnose
-scripts/agent clean
 ```
 
-`restart-ui` sends delivery's acknowledged `mister_magik_suspend` followed by
-`mister_magik_resume`. It does not build, stage, transfer, or replace files, and
-it does not reboot Linux. The resume acknowledgement waits for the fresh launcher
-child to become active.
+Bare `deliver`, `deliver runtime`, `restart-ui`, and bare `benchmark` are removed.
+There are no forwarding aliases. `deliver platform` names the existing platform
+transaction; reconciliation can still select a runtime-only update or no-op.
+It is not the everyday app-development path.
 
 Validation ownership is defined in root `AGENTS.md`. Use `scripts/agent plan`
 for the fast-check preview and `scripts/agent guidance PATH` for source ownership.
@@ -38,7 +47,7 @@ trees.
 build and host-assurance intents exist for CI and release tooling, not as a
 public flag matrix. Commit
 creation belongs to Git; `agent-cli` never stages, commits, or pushes.
-`deliver` uses the exact clean local app commit for the app and manager. Main,
+`deliver platform` uses the exact clean local app commit for the app and manager. Main,
 the scanout kernel plugin, and the latch RBF come only from the latest
 published GitHub platform release. The tag-addressed cache is reused when it
 still verifies against the latest release.
@@ -48,11 +57,9 @@ release directory and invokes only the database transaction. It does not
 resolve platform releases or build, replace, or restart any platform/runtime
 artifact.
 
-`benchmark` profiles the already-installed development app in place. With no
-scenario it runs the screensaver benchmark. A positional scenario selects
-another registered typed workflow. `particles` searches and confirms the
-60 FPS ceiling of both particle presets at 960x540, captures representative
-frames, and restores the original display configuration. `catalog-lifecycle`
+`benchmark SCENARIO` runs an explicitly selected legacy workload on the installed
+platform. These specialized input, catalog, renderer and hardware measurements
+are not interchangeable with the 2.0 smoke/idle scenarios. `catalog-lifecycle`
 performs an isolated full catalog build under `/tmp`, validates every generated
 shard, then removes the fixture and restores the ordinary launcher. Benchmarks
 run through a restricted typed client that rejects delivery requests. They

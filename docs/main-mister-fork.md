@@ -9,7 +9,7 @@ slint/
   Main_MiSTer/         # real GitHub fork of MiSTer-devel/Main_MiSTer
 ```
 
-`scripts/agent deliver` installs one coherent development platform. Main, the
+`scripts/agent deliver platform` installs one coherent development platform. Main, the
 scanout kernel module, and the FPGA latch come from the same latest qualified
 GitHub platform release; the tag-addressed verified archive is reused while
 that release remains latest. The platform manifest binds those components to
@@ -213,7 +213,7 @@ protocol details and device smoke results current in the fork's
 Deploy from this app repo:
 
 ```bash
-scripts/agent deliver
+scripts/agent deliver platform
 ```
 
 For committed Main-only development experiments, use the permanent positional
@@ -254,7 +254,7 @@ An installed Main that advertises supervised local reload is replaced without
 rebooting Linux. The initial commit that introduces that capability necessarily
 uses one bounded Linux reboot. A rollback uses supervised replacement where
 possible and at most one bounded recovery reboot when the failed Main can no
-longer reload itself. Ordinary `scripts/agent deliver` remains the canonical
+longer reload itself. Ordinary `scripts/agent deliver platform` remains the canonical
 way to restore the latest published platform.
 
 Development delivery first compares the installed manifest with the exact clean

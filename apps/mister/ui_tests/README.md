@@ -1,5 +1,9 @@
 # MiSTer MagiK UI tests
 
+Everyday development uses `scripts/magik2 check` and its shared Python scenarios.
+This retained suite is for explicitly requested legacy qualification; its build
+and qualification ladder are not prerequisites for ordinary development.
+
 This package contains the attended, device-only UI test harness. It is kept
 outside the repository's default pytest discovery path so CI can type-check and
 lint it without launching a MiSTer or requiring the private Slint test wheel.

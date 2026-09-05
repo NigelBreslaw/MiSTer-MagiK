@@ -1,4 +1,13 @@
-# Benchmarking policy
+# Legacy platform benchmarking
+
+For everyday application development, use `scripts/magik2 check` for smoke,
+`check idle` for two real-app measurement windows, and `check idle --profile`
+for one separate profile. Mini-MagiK uses `--app mini-magik` and the `motion`
+scenario. These all run through the same Python scenario framework; see
+[development commands](../magik2/README.md).
+
+The specialized legacy workflows below remain separate qualification tools.
+Select a scenario explicitly; bare `scripts/agent benchmark` is removed.
 
 The fixed attribution workloads and evidence gates for the cross-subsystem
 profiling campaign are defined in
@@ -14,7 +23,7 @@ The fixed gate compares a bounded launcher event trace against the exact injecte
 sequence in idle and catalog/CPU/stall scenarios. Intentional UI stalls are input
 correctness stress, not rendering-cadence qualification.
 
-`scripts/agent benchmark [SCENARIO]` is the only agent-facing performance
+`scripts/agent benchmark SCENARIO` selects a retained legacy qualification
 workflow. Scenarios are a closed typed registry rather than a flag matrix. It
 never builds, deploys, or replaces platform files. The fixed `cold-boot`
 scenario may issue one supervised Linux reboot. The isolated
@@ -28,7 +37,7 @@ revision, while pending runtime or platform changes remain a hard failure.
 
 Supported scenarios:
 
-- `screensaver` (the default)
+- `screensaver`
 - `cold-boot`
 - `cold-boot-pprof`
 - `input-integrity`
@@ -48,11 +57,6 @@ Supported scenarios:
 - `agent-observer-attribution`
 - `launcher-response-streamline`
 - `input-latency-lab`
-- `particles`
-- `particle-demo-40k`
-- `particle-capacity`
-- `particle-step`
-- `particle-profile`
 - `catalog-lifecycle`
 - `catalog-resume-validation`
 - `arcade-catalog-prototype-cold`

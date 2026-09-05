@@ -36,7 +36,7 @@ one smoke journey; request idle/motion measurements or profiling explicitly.
 Use the 2.0 exception below. Do not route ordinary app development through 1.0.
 
 For retained platform/release and legacy operations, use typed
-`scripts/agent deliver`, `benchmark`, `diagnose`, and `db report`;
+`scripts/agent deliver platform`, `benchmark`, `diagnose`, and `db report`;
 human device operations use attended `scripts/agent device`. Never use raw
 SSH/SCP, generic remote shells, or ad-hoc SQL. Device, Apple-container, and
 virtualization commands require first-attempt escalation. Retry read-only

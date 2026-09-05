@@ -19,7 +19,7 @@ def authority(path: str) -> tuple[str, str]:
     if path.startswith(("/media/fat/", "/tmp/mister-magik/")):
         return (
             "device-owned runtime state; never copy into Git",
-            "scripts/agent deliver or an attended typed scripts/agent device command",
+            "scripts/agent deliver platform or an attended typed scripts/agent device command",
         )
     if file_name.startswith(".env") or "/.wrangler/" in path:
         return "ignored secret; never stage or print", "none"
