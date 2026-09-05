@@ -25,7 +25,7 @@ def _application_factory() -> Any:
 
 
 @contextlib.contextmanager
-def fresh_session(agent: NativeAgent, timeout: float = 20) -> Iterator[Any]:
+def fresh_session(agent: NativeAgent, timeout: float = 20, profile_id: str | None = None) -> Iterator[Any]:
     """Attach a fresh Slint test session over the native agent only."""
     environment = {
         key: value
@@ -40,8 +40,11 @@ def fresh_session(agent: NativeAgent, timeout: float = 20) -> Iterator[Any]:
         }
     )
     factory = _application_factory()
+    bridge = [sys.executable, "-m", "magik2.test_bridge"]
+    if profile_id is not None:
+        bridge.extend(["--profile-id", profile_id])
     with factory(
-        [sys.executable, "-m", "magik2.test_bridge"],
+        bridge,
         env=environment,
         launch_timeout=timeout,
     ) as application:

@@ -157,6 +157,66 @@ struct PreviewProducer {
     sequence: u64,
 }
 
+struct CpuProfile {
+    guard: pprof::ProfilerGuard<'static>,
+    root: std::path::PathBuf,
+}
+
+impl CpuProfile {
+    fn start() -> Result<Option<Self>, String> {
+        let Some(root) = std::env::var_os("MISTER_MAGIK2_PROFILE_DIR") else {
+            return Ok(None);
+        };
+        std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+        let guard = pprof::ProfilerGuardBuilder::default()
+            .frequency(99)
+            .build()
+            .map_err(|error| error.to_string())?;
+        Ok(Some(Self {
+            guard,
+            root: root.into(),
+        }))
+    }
+
+    fn finish(self) -> Result<(), String> {
+        let report = self
+            .guard
+            .report()
+            .build()
+            .map_err(|error| error.to_string())?;
+        let samples = folded_samples(&format!("{report:?}"));
+        if samples.trim().is_empty() {
+            return Err("CPU sampler collected no stacks".to_owned());
+        }
+        std::fs::write(self.root.join("profile.folded"), samples)
+            .map_err(|error| error.to_string())?;
+        let output = std::fs::File::create(self.root.join("flamegraph.svg"))
+            .map_err(|error| error.to_string())?;
+        report.flamegraph(output).map_err(|error| error.to_string())
+    }
+}
+
+fn folded_samples(debug_report: &str) -> String {
+    debug_report
+        .lines()
+        .filter_map(|line| {
+            let (frames, thread_and_count) = line.rsplit_once(" THREAD: ")?;
+            let (thread, count) = thread_and_count.rsplit_once(' ')?;
+            let mut stack = vec![thread.trim().to_owned()];
+            stack.extend(
+                frames
+                    .split(" -> ")
+                    .filter_map(|frame| frame.strip_prefix("FRAME: "))
+                    .map(str::trim)
+                    .filter(|frame| !frame.is_empty())
+                    .map(ToOwned::to_owned),
+            );
+            (stack.len() > 1).then(|| format!("{} {}", stack.join(";"), count.trim()))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 impl PreviewProducer {
     fn new() -> Self {
         Self {
@@ -284,9 +344,13 @@ fn main() -> Result<(), String> {
         }
     });
     let motion_timer = Rc::new(slint::Timer::default());
+    let profile_timer = Rc::new(slint::Timer::default());
     let metrics = Rc::new(RefCell::new(PresentationMetrics::default()));
+    let profile = Rc::new(RefCell::new(None::<CpuProfile>));
     let metrics_start = Instant::now();
     let timer = motion_timer.clone();
+    let profile_timer_for_motion = profile_timer.clone();
+    let profile_for_motion = profile.clone();
     let weak = probe.as_weak();
     let metrics_for_motion = metrics.clone();
     probe.on_start_motion(move || {
@@ -301,6 +365,25 @@ fn main() -> Result<(), String> {
         probe.set_motion_running(true);
         metrics_for_motion.borrow_mut().motion_started_ms =
             Some(metrics_start.elapsed().as_millis() as u64);
+        match CpuProfile::start() {
+            Ok(Some(session)) => {
+                *profile_for_motion.borrow_mut() = Some(session);
+                let profile_for_finish = profile_for_motion.clone();
+                profile_timer_for_motion.start(
+                    slint::TimerMode::SingleShot,
+                    Duration::from_secs(10),
+                    move || {
+                        if let Some(session) = profile_for_finish.borrow_mut().take()
+                            && let Err(error) = session.finish()
+                        {
+                            eprintln!("magik2-probe profile-failed: {error}");
+                        }
+                    },
+                );
+            }
+            Ok(None) => {}
+            Err(error) => eprintln!("magik2-probe profile-start-failed: {error}"),
+        }
         let weak = probe.as_weak();
         let callback_timer = timer.clone();
         let metrics_for_completion = metrics_for_motion.clone();
