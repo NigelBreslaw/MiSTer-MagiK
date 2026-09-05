@@ -83,42 +83,9 @@ release channel. Conversely, ordinary CI must not pay for release optimization;
 its linked artifacts exist to prove the complete ARM application and agent
 still link and satisfy their shared-library contracts.
 
-## Compile-policy benchmark
-
-The controlled 2026-08-07 revision comparison measured the parent revision
-`7fac463ff3dfae69c124543f161b4cef8c0e24f7` against the completed compile-policy
-implementation at `b678bf0ed3bfda461d6aacee9379f66e0745520d`. Both revisions used
-the same Apple Silicon Mac, Rust 1.97.1, isolated target directories, and fresh
-assurance evidence state for every sample.
-
-For the catalog pre-push path, the five source-edit rebuilds changed from
-40.049, 43.588, 46.978, 44.956, and 43.725 seconds to 20.956, 20.958,
-21.231, 21.749, and 20.771 seconds. The median fell from 43.725 seconds to
-20.958 seconds, a 2.09x speedup. The fully cold measurement improved from
-71.836 seconds to 63.594 seconds, or 1.13x; dependency compilation and
-non-compiler assurance overhead dominate that slice, so it is reported
-separately rather than presented as a compiler-only result.
-
-The authoritative samples, source hashes, commands, profiles, machine details,
-and toolchain versions are in
-`history/toolchain-bench/compile-policy-pre-push-20260807.json`. Reproduce the
-comparison with clean absolute baseline and candidate repositories and new
-paths outside both repositories:
-
-```text
-scripts/agent compile-time compare-revisions \
-  --baseline-repository /absolute/clean/baseline \
-  --candidate-repository /absolute/clean/candidate \
-  --work-root /absolute/new/work-root \
-  --output /absolute/new/report.json \
-  --scenario pre-push-catalog
-```
-
-An ARM comparison can be selected with `--scenario arm-runtime-ci`; it builds
-the legacy PR release profile, legacy main `release-device`, and candidate
-`ci-fast` through typed Apple-container build specifications without contacting
-a MiSTer. The 2026-08-07 ARM sampling run was stopped before it completed, so
-no ARM speedup ratio is claimed in the recorded evidence.
+Historical compile-policy measurements and reproduction inputs are retained in
+`history/toolchain-bench/compile-policy-pre-push-20260807.json`; they do not
+describe the current pre-push validation boundary.
 
 The canonical `release-device` runtime uses the measured thin-LTO profile
 (`opt-level=3`, thirty-two codegen units), includes dormant on-device profiling

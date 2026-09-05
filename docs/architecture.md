@@ -71,7 +71,7 @@ CLI or a GUI process.
 
 ### Advisory architecture trends
 
-`scripts/agent architecture report --base COMMIT --head COMMIT` compares two
+`scripts/magik-ci architecture report --base COMMIT --head COMMIT` compares two
 explicit repository trees without contacting the MiSTer. Its stable JSON
 schema reports file and largest-function size, mutable bindings, direct
 environment reads, public modules, and changed-line concentration for named
@@ -84,10 +84,9 @@ line count without clearer ownership or dependency direction is not success.
 Stable owner IDs keep moved or temporarily absent hotspot paths visible rather
 than silently treating them as resolved.
 
-The enforced boundary inventory, remaining Type/Decompose ownership, and
-exclusive edit seams are recorded in
-`docs/agents/architecture-debt-ledger.md`. That ledger governs sequencing; the
-report remains evidence only.
+Remaining decomposition, typed runtime-configuration, and qualification work is
+recorded in `docs/agents/architecture-debt-ledger.md`. Validation ownership is
+defined in root `AGENTS.md`; the architecture report is advisory evidence.
 
 ### Enforced executable boundaries
 
