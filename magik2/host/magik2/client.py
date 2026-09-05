@@ -103,7 +103,12 @@ class NativeAgent:
     def _successful(self, operation: str, fields: Mapping[str, object] | None = None) -> Mapping[str, object]:
         response, _ = self._request(operation, fields)
         if response.operation == "error":
-            raise AgentError(str(response.fields.get("code", f"{operation} failed")))
+            code = str(response.fields.get("code", f"{operation} failed"))
+            if "recovery" in response.fields:
+                recovery = response.fields["recovery"]
+                outcome = "passed" if recovery is None else f"failed:{recovery}"
+                raise AgentError(f"{code}; launcher-recovery={outcome}")
+            raise AgentError(code)
         return response.fields
 
     def _request(self, operation: str, fields: Mapping[str, object] | None = None, body: bytes = b"") -> tuple[Envelope, bytes]:
