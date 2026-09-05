@@ -263,3 +263,135 @@ def validate_development_paths(context):
                 f"{name} is outside the development layout: {context.get(name)}"
             )
     return context
+
+
+def _selected_labels(application):
+    return [
+        element.accessible_label
+        for element in application.first_window.root_element.query_descendants()
+        .match_inherits("Rectangle")
+        .find_all()
+        if element.accessible_item_selected
+    ]
+
+
+def _focus_label(application, label, key, limit):
+    """Move through a bounded menu, observing each acknowledged focus change."""
+    for _ in range(limit):
+        before = _selected_labels(application)
+        if label in before:
+            return
+        _press_key(application, key)
+        _wait(
+            lambda: _selected_labels(application) != before, "menu focus did not move"
+        )
+    raise AssertionError(f"{label!r} was not selectable within {limit} steps")
+
+
+def launcher_catalog(application, screenshot_path):
+    """Use the installed Dev catalog; do not launch a core or mutate the catalog."""
+    _press_key(application, "\uf729")
+    _focus_label(application, "Arcade", "\uf703", 16)
+    started = time.monotonic()
+    try:
+        _press_key(application, "\n")
+        _wait(
+            lambda: _exists(application, "Arcade games"),
+            "Arcade catalog did not open",
+            timeout=10,
+        )
+        games = one_element(application, "Arcade games")
+        if not games.accessible_enabled:
+            raise AssertionError("Arcade catalog is disabled")
+        # Rust paints the rows; the list exposes the current game identity.
+        _wait(
+            lambda: bool(one_element(application, "Arcade games").accessible_value),
+            "Arcade catalog has no active game",
+            timeout=10,
+        )
+        count = games.accessible_description
+        if (
+            not count.removesuffix(" games").isdigit()
+            or int(count.removesuffix(" games")) < 2
+        ):
+            raise AssertionError(
+                f"journey requires at least two Dev Arcade games; found {count!r}"
+            )
+        before = one_element(application, "Arcade games").accessible_value
+        _press_key(application, "\uf701")
+        _wait(
+            lambda: one_element(application, "Arcade games").accessible_value != before,
+            f"catalog selection did not move from {before!r}",
+        )
+        screenshot(application, screenshot_path)
+        elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+    finally:
+        _press_key(application, "\uf729")
+    _wait(
+        lambda: not _exists(application, "Arcade games"),
+        "Home did not close the catalog",
+    )
+    return {
+        "workload": "arcade-select-home",
+        "response_ms": elapsed_ms,
+        "timing_source": "host RPC and accessibility polling; not frame latency",
+    }
+
+
+def launcher_setting(application, screenshot_path):
+    """Change one reversible Dev setting and verify restoration even on failure."""
+    _press_key(application, "\uf729")
+    _press_key(application, "\uf700")
+    _press_key(application, "\n")
+    original = None
+    try:
+        _wait(lambda: _settings_open(application), "Settings did not open")
+        _focus_label(application, "Reduce motion", "\uf701", 8)
+        setting = one_element(application, "Reduce motion")
+        original = setting.accessible_description
+        if original not in {"On", "Off"}:
+            raise AssertionError(f"unknown Reduce motion value: {original!r}")
+        started = time.monotonic()
+        _press_key(application, "\n")
+        expected = "Off" if original == "On" else "On"
+        _wait(
+            lambda: (
+                one_element(application, "Reduce motion").accessible_description
+                == expected
+            ),
+            "Reduce motion did not change",
+        )
+        screenshot(application, screenshot_path)
+        elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+    finally:
+        # Read back the current state: a failed acknowledgement may still have
+        # applied the change. Never blindly replay the toggle during cleanup.
+        try:
+            if original in {"On", "Off"}:
+                current = one_element(
+                    application, "Reduce motion"
+                ).accessible_description
+                if current != original:
+                    if current not in {"On", "Off"}:
+                        raise AssertionError(
+                            "cannot safely restore unknown Reduce motion state"
+                        )
+                    _focus_label(application, "Reduce motion", "\uf701", 8)
+                    _press_key(application, "\n")
+                _wait(
+                    lambda: (
+                        one_element(application, "Reduce motion").accessible_description
+                        == original
+                    ),
+                    "Reduce motion was not restored",
+                )
+        finally:
+            _press_key(application, "\uf729")
+    _wait(lambda: not _settings_open(application), "Home did not close Settings")
+    return {
+        "workload": "reduce-motion-toggle-restore",
+        "original": original,
+        "restored": True,
+        "response_ms": elapsed_ms,
+        "timing_source": "host RPC and accessibility polling; not frame latency",
+    }

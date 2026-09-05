@@ -137,3 +137,41 @@ def test_settings_button_is_not_mistaken_for_the_open_screen():
         )
     )
     assert actions._settings_open(app)
+
+
+@pytest.mark.parametrize("capture_fails", [False, True])
+def test_setting_restores_original_after_capture_failure(
+    monkeypatch, tmp_path, capture_fails
+):
+    from types import SimpleNamespace
+
+    state = {"open": False, "value": "On"}
+
+    def press(_, key):
+        if key == "\uf729":
+            state["open"] = False
+        elif key == "\n":
+            if state["open"]:
+                state["value"] = "Off" if state["value"] == "On" else "On"
+            else:
+                state["open"] = True
+
+    def capture(*_):
+        if capture_fails:
+            raise RuntimeError("capture failed")
+
+    monkeypatch.setattr(actions, "_press_key", press)
+    monkeypatch.setattr(actions, "_focus_label", lambda *_: None)
+    monkeypatch.setattr(actions, "_settings_open", lambda _: state["open"])
+    monkeypatch.setattr(
+        actions,
+        "one_element",
+        lambda *_: SimpleNamespace(accessible_description=state["value"]),
+    )
+    monkeypatch.setattr(actions, "screenshot", capture)
+    if capture_fails:
+        with pytest.raises(RuntimeError, match="capture failed"):
+            actions.launcher_setting(object(), tmp_path / "setting.png")
+    else:
+        assert actions.launcher_setting(object(), tmp_path / "setting.png")["restored"]
+    assert state == {"open": False, "value": "On"}
