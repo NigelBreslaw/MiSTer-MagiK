@@ -1,0 +1,35 @@
+#!/bin/bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+# Use this checkout's dependency, not a possibly stale primary-checkout copy.
+expected="$(git rev-parse HEAD:private/lspi)"
+if [[ "$(git rev-parse :private/lspi)" != "$expected" ]]; then
+  echo "Rust LSP: commit the staged private/lspi revision before starting the pinned runtime." >&2
+  exit 1
+fi
+if [[ -e private/lspi/.git ]]; then
+  actual="$(git -C private/lspi rev-parse HEAD)"
+  if [[ -n "$(git -C private/lspi status --porcelain)" ]]; then
+    echo "Rust LSP: private/lspi has local changes; preserve or commit them before starting the pinned runtime." >&2
+    exit 1
+  fi
+else
+  actual=""
+fi
+if [[ "$actual" != "$expected" ]]; then
+  git submodule update --init --checkout -- private/lspi >&2
+fi
+if [[ "$(git -C private/lspi rev-parse HEAD)" != "$expected" ]]; then
+  echo "Rust LSP: private/lspi does not match this checkout's committed revision." >&2
+  exit 1
+fi
+
+exec "$ROOT/scripts/cargo" run --quiet --locked \
+  --manifest-path "$ROOT/private/lspi/Cargo.toml" -p lspi -- \
+  mcp --workspace-root "$ROOT" --config "$ROOT/.codex/lspi.toml"
