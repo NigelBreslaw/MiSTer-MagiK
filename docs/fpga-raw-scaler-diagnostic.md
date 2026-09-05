@@ -15,21 +15,57 @@ then completed 75/75 valid physical returns across 15 bounded reboot epochs
 without reproducing a black screen or moving/full-raster corruption. Schema 10
 is the platform publication target so ordinary delivery retains the observer
 for the next genuine physical failure. No post-OSD probe was justified by the
-completed rerun. The rejected fits, final reduction, and corrected
-device records are in
-[the storage-reduction receipt](../history/2026-08-25-raw-scaler-signature-storage-reduction.md),
-[the schema-9 design](../history/2026-08-25-raw-scaler-signature-v2-design.md),
-the [schema-10 design](../history/2026-08-25-raw-scaler-signature-v3-design.md),
-and the [retracted incident](../history/2026-08-25-raw-scaler-signature-v3-corruption-incident-v1.json).
+completed rerun. The machine-readable [retracted incident](../history/2026-08-25-raw-scaler-signature-v3-corruption-incident-v1.json)
+retains the exact artifact identities. Rejected design narratives remain in Git
+history.
 
 The disposable schema-6 `scaler-copy-retirement-v1` diagnostic is retired.
 Its first genuine persistent-black result isolated a production copy-FSM
 deadlock. The new experiment adds only read-only command `0x67`, schema 10,
 `raw-scaler-ordered-signature-v3`; commands `0x60` through `0x66` remain
 unsupported, while latch protocol `5` and capabilities `0x03ff` remain
-unchanged. Its exact taps, byte encoding, ABI, interpretation boundary, and
-cost are frozen in
-[the dated ordered-signature design](../history/2026-08-24-raw-scaler-ordered-signature-design.md).
+unchanged.
+
+## Ordered-signature contract
+
+The schema-10 architecture identity is `raw-scaler-ordered-signature-v3`.
+Read-only command `0x67` uses magic `0x4d57` and five response words: schema,
+flags, wrapping capture sequence, 16-bit ordered signature, and
+CRC-16/CCITT-FALSE. The response remains immutable during a read.
+
+The sole production taps are scaler CE and direct `ascal` RGB, DE, HS and VS.
+An observer-only HDMI register stage isolates them; the retained implementation
+adds a CE-qualified observer pipeline stage and stores native RGB565 information.
+Observer signals must not feed scaler, completion, copy-tail, framebuffer,
+latch, route, reset, OSD, mux, PLL or output logic.
+
+Each qualified pixel or line-end contributes an ordered update. The token's
+32-bit RGB/boundary information is folded by XORing its halves before a single
+16-bit reflected Galois step with polynomial `0xa001`. Empty frames do not
+publish. A two-stage generation synchronizer and settle cycle coherently capture
+the published signature in the system domain. The wrapping response sequence
+advances there only for a newly captured publication; it is not an additional
+source-domain sequence bus. Exact CDC source identity must remain qualified.
+
+The host requires three valid records with strictly advancing sequences. Equal
+16-bit signatures are limited diagnostic evidence, not proof of pixel equality.
+A downstream interpretation requires all three to match a healthy static scene
+from the exact same candidate, plus independently detected moving physical
+corruption during capture. Changing signatures require independently byte-stable
+source proof before supporting an at-or-before-`ascal` origin. Ambiguous scene,
+source, sequence, transport or physical evidence remains inconclusive. The FPGA
+never proves sink visibility.
+
+Normalize video-range and full-range luma before temporal comparisons: an
+unnormalized range change previously produced a false corruption classification.
+That event established no new FPGA root cause and justified no post-OSD probe.
+
+Simulation must cover ordered pixels/lines, empty frames, reset, sequence wrap,
+immutable and partial reads, CRC and unsupported commands using an independent
+signature model. Existing completion/copy-tail proofs, exact observer isolation
+and the checked-in `experimental_raw_scaler-v1` signoff profile remain required.
+Use the current profile for timing, resources and CDC limits; historical fits
+are not permission to relax a gate.
 
 ## Decisive result
 

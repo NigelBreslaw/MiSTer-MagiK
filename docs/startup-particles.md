@@ -319,10 +319,9 @@ with last-good retention, and the two-poll deletion reset while frames
 continued. Final MagiK, cabinet, navigation-fixture, and Dev-launcher device
 qualification requires a clean coherent Dev delivery. It was not run during
 this migration because device delivery requires separate user authorization.
-Detailed prior scope, timing caveats, and device observations are recorded in
-`history/toolchain-bench/startup-particles-after-20260802.md`; the current
-qualification status is recorded in
-`history/2026-08-02-shared-framebuffer-scenes-qualification.md`.
+These are historical qualification gaps from the migration, not a fresh device
+assessment. Close them only with evidence for an exact current candidate; the
+earlier measurements above do not qualify a later revision.
 
 ## Next screensaver migration
 

@@ -6,9 +6,9 @@ qualified schema-10 raw-scaler observer is the platform publication target.
 No retired diagnostic RBF is release-qualified. The schema-10
 `raw-scaler-ordered-signature-v3` candidate is not retired: it passed the
 checked-in fixed-seed diagnostic signoff profile and is eligible for numbered
-platform publication so the observer survives ordinary delivery. The measured attempts and
-their disposition remain in
-[FPGA video diagnostics: two attempted designs and their retirement](../history/2026-08-14-fpga-video-diagnostics-design-attempts.md).
+platform publication so the observer survives ordinary delivery. The retained
+contract and evidence limits are in [Scaler copy-tail repair and ordered-signature
+diagnostics](fpga-raw-scaler-diagnostic.md).
 
 Later passive evidence found a second causal defect after the queued completion
 transport was already healthy: the final `sCOPY` horizontal carry can register

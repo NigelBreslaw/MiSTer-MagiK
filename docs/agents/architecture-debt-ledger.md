@@ -9,10 +9,26 @@ Root `AGENTS.md` owns validation boundaries.
 
 The previous P0 handoff did not establish final qualification. A fast-gate pass
 is insufficient: retain the full affected CI requirement until evidence is
-attached to the exact candidate revision. The two incomplete benchmark routes
-recorded in `history/2026-08-15-p1-enforce-acceptance.md` remain qualification
-debt; this cleanup neither resolves nor waives them. Physical visibility and
-cadence claims still require attended device evidence.
+attached to the exact candidate revision. Two benchmark routes remain recorded
+qualification debt from the baseline and P1 Enforce comparison:
+
+- `launch-return` timed out after 20 seconds waiting for the initial launcher
+  return-state capsule.
+- `launcher-response` timed out at feedback completion; the Enforce run confirmed
+  all 17 inputs at the latch but recorded only 10 feedback-hide completions.
+
+These are historical unresolved observations, not a new reproduction against
+current main. Closing them requires evidence for the exact current candidate.
+Physical visibility and cadence claims still require attended device evidence.
+
+## Test coverage to reassess
+
+The retired frontend audit left follow-up questions about loop-level launch
+failure recovery, startup/display ordering, controller-setup disconnection,
+production-shaped catalog fixtures, preview pack/index coherence and corrupt
+payloads, and rendering/frame-budget coverage. Reassess these against current
+code and tests before scheduling work; the old audit does not prove a current
+defect or a current coverage gap.
 
 ## Runtime configuration
 
@@ -28,10 +44,9 @@ second vocabulary. This is separate from behavior-preserving module extraction.
 
 ## Decomposition disposition
 
-The former all-six-boundary extraction sequence is not active work for this
-cleanup. Preserve the completed host characterization and extraction commits on
-`nigel/agent-effectiveness`, but do not treat them as integrated or complete on
-the focused tooling branch.
+The former all-six-boundary extraction sequence is superseded. The discarded
+host characterization and extraction work was not integrated; its parent branch
+and worktree were removed. It is not a prerequisite for future tooling work.
 
 | Owner | Revised disposition |
 | --- | --- |
