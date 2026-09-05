@@ -51,6 +51,18 @@ fn run() -> AgentResult<ExitCode> {
         Some(command) => command,
         None => unreachable!("clap requires a command"),
     };
+    if let CliCommand::Guidance { path, json } = &command {
+        let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+        let root = PathBuf::from(agent_cli::git::value(
+            &cwd,
+            &["rev-parse", "--show-toplevel"],
+        )?);
+        print!(
+            "{}",
+            agent_cli::guidance::report_with_format(&root, path, *json)?
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
     let raw = RawRequest::capture(std::env::args_os());
     let context = RepoContext::open()?;
     context.evidence.begin_request(&raw)?;
@@ -388,8 +400,11 @@ fn dispatch(
             agent_cli::build::execute_command(repository, *intent, reporter)?;
             return Ok(Outcome::Passed);
         }
-        CliCommand::Guidance { path } => {
-            print!("{}", agent_cli::guidance::report(repository, path)?);
+        CliCommand::Guidance { path, json } => {
+            print!(
+                "{}",
+                agent_cli::guidance::report_with_format(repository, path, *json)?
+            );
             return Ok(Outcome::Passed);
         }
         CliCommand::Db {

@@ -17,6 +17,10 @@ if [[ "${1:-}" == "plan" ]]; then
   shift
   exec python3 "$ROOT/scripts/checks/pre-push.py" --repository "$ROOT" --plan "$@"
 fi
+if [[ "${1:-}" == "guidance" ]]; then
+  shift
+  exec python3 "$ROOT/scripts/magik_ci/guidance.py" --repository "$ROOT" "$@"
+fi
 MANIFEST="${MISTER_AGENT_CLI_MANIFEST:-$ROOT/agent-cli/Cargo.toml}"
 SOURCE_ROOT="$(dirname "$MANIFEST")"
 CONTENT_BINARY=0
