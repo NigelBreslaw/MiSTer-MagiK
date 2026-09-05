@@ -62,7 +62,18 @@ def one_element(application: Any, label: str) -> Any:
         if element.accessible_label == label
     ]
     if len(matches) != 1:
-        raise AssertionError(f"expected one element for {label!r}, got {len(matches)}")
+        available = []
+        for candidate_type in ("Text", "Rectangle"):
+            for element in window.root_element.query_descendants().match_inherits(candidate_type).find_all():
+                available.append(f"{element.type_name}:{element.id}:{element.accessible_label}")
+                if len(available) == 20:
+                    break
+            if len(available) == 20:
+                break
+        raise AssertionError(
+            f"expected one element for {label!r}, got {len(matches)}; "
+            f"test tree={available}"
+        )
     return matches[0]
 
 
