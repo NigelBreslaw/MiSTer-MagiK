@@ -69,7 +69,8 @@ publication stays responsive with a bounded latest-frame slot.
 - Latest recovery and viewer-on checks used the final device implementation.
   The user ended further acceptance before another profile repetition.
 
-Run `scripts/magik2 check smoke` or `scripts/magik2 check motion --profile` to
+Run `scripts/magik2 check smoke --app mini-magik` or
+`scripts/magik2 check motion --profile --app mini-magik` to
 reproduce those scenarios. Both use the same consumer pytest tests; profiling
 is an additional labeled repetition, not part of the benchmark distribution.
 
