@@ -1,6 +1,51 @@
-# Milestone 4: obsolete experiment orchestration removed
+# Tooling retirement
 
-Completed from main after PR #91. This is the current deletion record following
+## Milestone 5: one everyday application workflow
+
+Based on merged PR #92 (`71ee7eb71`). Ordinary deployment, smoke, observation,
+measurement and profiles use the existing `scripts/magik2` commands for both
+real MagiK and Mini-MagiK. No 2.0 implementation or scenario changed.
+
+Removed `deliver runtime`, `restart-ui`, bare `deliver`, and bare `benchmark`.
+The app-only delivery switch, scope check, restart helpers and exclusive tests
+are deleted. Removed commands fail during parsing; no aliases forward them.
+The existing broader delivery transaction is now explicitly `deliver platform`.
+It still reconciles platform/runtime/no-op decisions, including database input;
+`deliver local-main` and `deliver game-databases` remain separate targets.
+
+Active build/test/profile instructions point to 2.0. Retained platform/recovery
+instructions and diagnostic messages name the explicit platform target. Direct
+caller searches found no automation requiring the removed app-only commands.
+Historical milestone records remain historical, not operational instructions.
+
+### Remaining consumers
+
+- Platform delivery still needs shared runtime building, manifests, transfer,
+  lifecycle and recovery. Removing its app-only entrypoint cannot delete those
+  shared implementations. Production packaging and Main/FPGA are unchanged.
+- Specialized input, catalog, renderer and hardware benchmarks remain explicit.
+  Smoke/idle scenarios do not establish their claims; none were ported or run.
+- Attended UI qualification and its input bridge remain release consumers.
+  Their ladder is explicitly outside ordinary application development.
+- Desktop Analytics, distribution/CI artifacts, catalog/media publication and
+  device startup still depend on legacy components. The installed old agent
+  cannot yet be uninstalled as a consequence of this milestone.
+
+### Verification
+
+Host-only CLI parser tests: 19 passed. Focused delivery tests: 23 passed,
+including retained database/local-Main coverage. Guidance tests: eight passed
+and six subtests. Affected Python lint/format and whitespace checks passed.
+Rust LSP was unavailable; source review and focused Cargo supplied validation.
+No device access, ARM build, reboot, benchmark or new performance claim.
+
+The implementation removes 114 source lines net (including tests and guidance).
+No manifest/protocol version changes, dependencies, compatibility shims or new
+features were introduced. Full assurance remains CI's responsibility.
+
+## Milestone 4: obsolete experiment orchestration removed
+
+Completed from main after PR #91. This is the earlier deletion record following
 [the milestone 3 consumer inventory](../magik2/docs/legacy-disposition.md).
 Nothing was ported into Mini-MagiK or the 2.0 host/service.
 
