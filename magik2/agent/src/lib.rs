@@ -994,6 +994,14 @@ mod tests {
     }
 
     #[test]
+    fn artifact_names_cannot_escape_the_profile_root() {
+        assert!(is_plain_name("flamegraph.svg"));
+        assert!(!is_plain_name(""));
+        assert!(!is_plain_name("../token"));
+        assert!(!is_plain_name("nested/profile.folded"));
+    }
+
+    #[test]
     fn native_service_authenticates_and_publishes_a_verified_payload() {
         let directory =
             std::env::temp_dir().join(format!("magik2-agent-loopback-{}", std::process::id()));
