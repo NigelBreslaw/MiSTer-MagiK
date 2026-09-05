@@ -4,10 +4,11 @@
 //! Deliberately small consumer application for Tooling 2.0.
 
 use mister_magik_mister_runtime::framebuffer::mapped::MappedRgb565Framebuffer;
+use mister_magik_mister_runtime::framebuffer::vsync::VsyncWaitStatus;
 use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel, SoftwareRenderer};
 use slint::platform::{EventLoopProxy, Platform, WindowAdapter};
 use slint::{EventLoopError, PhysicalSize, Window};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -134,6 +135,17 @@ struct ProbePlatform {
     start: Instant,
 }
 
+#[derive(Default)]
+struct PresentationMetrics {
+    presentations: u64,
+    render_us_total: u64,
+    last_render_us: u64,
+    vsync_hits: u64,
+    vsync_misses: u64,
+    motion_started_ms: Option<u64>,
+    motion_completed_ms: Option<u64>,
+}
+
 impl Platform for ProbePlatform {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
         Ok(self.window.clone())
@@ -159,6 +171,7 @@ fn main() -> Result<(), String> {
     .map_err(|error| error.to_string())?;
 
     let probe = Probe::new().map_err(|error| error.to_string())?;
+    probe.show().map_err(|error| error.to_string())?;
     window.set_size(PhysicalSize::new(
         framebuffer
             .width()
@@ -188,8 +201,11 @@ fn main() -> Result<(), String> {
         }
     });
     let motion_timer = Rc::new(slint::Timer::default());
+    let metrics = Rc::new(RefCell::new(PresentationMetrics::default()));
+    let metrics_start = Instant::now();
     let timer = motion_timer.clone();
     let weak = probe.as_weak();
+    let metrics_for_motion = metrics.clone();
     probe.on_start_motion(move || {
         let Some(probe) = weak.upgrade() else {
             return;
@@ -200,8 +216,11 @@ fn main() -> Result<(), String> {
         probe.set_motion_step(0);
         probe.set_motion_complete(false);
         probe.set_motion_running(true);
+        metrics_for_motion.borrow_mut().motion_started_ms =
+            Some(metrics_start.elapsed().as_millis() as u64);
         let weak = probe.as_weak();
         let callback_timer = timer.clone();
+        let metrics_for_completion = metrics_for_motion.clone();
         timer.start(
             slint::TimerMode::Repeated,
             Duration::from_millis(16),
@@ -212,9 +231,11 @@ fn main() -> Result<(), String> {
                 };
                 let next = probe.get_motion_step() + 1;
                 probe.set_motion_step(next);
-                if next >= 600 {
+                if next >= 1_800 {
                     probe.set_motion_running(false);
                     probe.set_motion_complete(true);
+                    metrics_for_completion.borrow_mut().motion_completed_ms =
+                        Some(metrics_start.elapsed().as_millis() as u64);
                     callback_timer.stop();
                     eprintln!("magik2-probe motion-complete frames={next}");
                 }
@@ -226,22 +247,43 @@ fn main() -> Result<(), String> {
     let width = framebuffer.width();
     let height = framebuffer.height();
     let mut cached = vec![Rgb565Pixel(0); width * height];
-    let mut presentations = 0u64;
     loop {
         slint::platform::update_timers_and_animations();
+        let metrics_for_frame = metrics.clone();
         let rendered = window.draw_if_needed(|renderer| {
+            let render_start = Instant::now();
             renderer.render(&mut cached, width);
+            let vsync = framebuffer.wait_vsync();
             framebuffer
                 .present_rows_565(&cached, 0, height)
                 .expect("present cached RGB565 frame");
-            presentations += 1;
+            let mut metrics = metrics_for_frame.borrow_mut();
+            metrics.presentations += 1;
+            metrics.last_render_us = render_start.elapsed().as_micros() as u64;
+            metrics.render_us_total += metrics.last_render_us;
+            match vsync {
+                VsyncWaitStatus::Hit { .. } => metrics.vsync_hits += 1,
+                VsyncWaitStatus::Timeout { .. } | VsyncWaitStatus::Error { .. } => {
+                    metrics.vsync_misses += 1
+                }
+            }
         });
-        if presentations == 1 {
-            write_readiness(width, height, presentations)?;
+        let metrics = metrics.borrow();
+        if metrics.presentations == 1 {
+            write_readiness(width, height, metrics.presentations)?;
             eprintln!(
-                "magik2-probe ready width={width} height={height} presentations={presentations}"
+                "magik2-probe ready width={width} height={height} presentations={}",
+                metrics.presentations
             );
         }
+        if rendered
+            && (metrics.presentations == 1
+                || metrics.presentations % 5 == 0
+                || probe.get_motion_complete())
+        {
+            write_metrics(width, height, metrics_start.elapsed(), &metrics)?;
+        }
+        drop(metrics);
         if !rendered {
             std::thread::sleep(Duration::from_millis(2));
         }
@@ -261,4 +303,40 @@ fn write_readiness(width: usize, height: usize, presentations: u64) -> Result<()
     )
     .map_err(|error| error.to_string())?;
     std::fs::rename(temporary, ready).map_err(|error| error.to_string())
+}
+
+fn write_metrics(
+    width: usize,
+    height: usize,
+    elapsed: Duration,
+    metrics: &PresentationMetrics,
+) -> Result<(), String> {
+    let state_root = std::env::var("MISTER_MAGIK2_STATE_ROOT")
+        .unwrap_or_else(|_| "/tmp/mister-magik2".to_owned());
+    let root = std::path::PathBuf::from(state_root);
+    std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let destination = root.join("probe-metrics.json");
+    let temporary = root.join("probe-metrics.json.next");
+    std::fs::write(
+        &temporary,
+        format!(
+            "{{\"width\":{},\"height\":{},\"elapsed_ms\":{},\"presentations\":{},\"render_us_total\":{},\"last_render_us\":{},\"vsync_hits\":{},\"vsync_misses\":{},\"motion_started_ms\":{},\"motion_completed_ms\":{}}}\n",
+            width,
+            height,
+            elapsed.as_millis(),
+            metrics.presentations,
+            metrics.render_us_total,
+            metrics.last_render_us,
+            metrics.vsync_hits,
+            metrics.vsync_misses,
+            option_json(metrics.motion_started_ms),
+            option_json(metrics.motion_completed_ms),
+        ),
+    )
+    .map_err(|error| error.to_string())?;
+    std::fs::rename(temporary, destination).map_err(|error| error.to_string())
+}
+
+fn option_json(value: Option<u64>) -> String {
+    value.map_or_else(|| "null".to_owned(), |value| value.to_string())
 }

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
@@ -118,11 +118,20 @@ impl Agent {
     }
 
     pub fn capabilities() -> &'static [&'static str] {
-        &["status", "upload-v1", "lifecycle-v1"]
+        &[
+            "status",
+            "upload-v1",
+            "lifecycle-v1",
+            "test-bridge-v1",
+            "metrics-v1",
+        ]
     }
 
     pub fn handle(&self, stream: &mut TcpStream) -> Result<(), FrameError> {
         let (request, body) = read_frame(stream)?;
+        if request.token == self.token && request.op == "test-start" {
+            return self.start_test_session(stream, &request, &body);
+        }
         let response = if request.token != self.token {
             response(
                 &request.id,
@@ -145,6 +154,7 @@ impl Agent {
                 "upload" => self.upload(&request, &body),
                 "start" => self.start(&request),
                 "stop" => self.stop(&request),
+                "metrics" => self.metrics(&request),
                 _ => response(
                     &request.id,
                     "error",
@@ -167,12 +177,17 @@ impl Agent {
     }
 
     fn start(&self, request: &Envelope) -> Envelope {
+        self.start_with_test_server(request, None)
+    }
+
+    fn start_with_test_server(&self, request: &Envelope, test_server: Option<String>) -> Envelope {
         let restart = request
             .fields
             .get("restart")
             .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        if self.running() && !restart {
+            .unwrap_or(false)
+            || test_server.is_some();
+        if self.running() && !restart && test_server.is_none() {
             return response(
                 &request.id,
                 "started",
@@ -218,7 +233,11 @@ impl Agent {
                 serde_json::json!({"code":"main-suspend-failed","detail":error}),
             );
         }
-        match Command::new(executable).spawn() {
+        let mut command = Command::new(executable);
+        if let Some(test_server) = test_server {
+            command.env("SLINT_TEST_SERVER", test_server);
+        }
+        match command.spawn() {
             Ok(child) => self.wait_for_readiness(request, child),
             Err(error) => {
                 let recovery = main_handoff("mister_magik_resume\n");
@@ -284,6 +303,28 @@ impl Agent {
         }
     }
 
+    fn metrics(&self, request: &Envelope) -> Envelope {
+        let path = self.state_root.join("probe-metrics.json");
+        match fs::read(&path)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| {
+                serde_json::from_slice::<serde_json::Value>(&bytes)
+                    .map_err(|error| error.to_string())
+            }) {
+            Ok(value) if value.is_object() => response(&request.id, "metrics", value),
+            Ok(_) => response(
+                &request.id,
+                "error",
+                serde_json::json!({"code":"invalid-metrics"}),
+            ),
+            Err(error) => response(
+                &request.id,
+                "error",
+                serde_json::json!({"code":"metrics-unavailable","detail":error}),
+            ),
+        }
+    }
+
     fn readiness_path(&self) -> PathBuf {
         self.state_root.join("probe-ready.json")
     }
@@ -294,6 +335,90 @@ impl Agent {
             let _ = child.kill();
             let _ = child.wait();
         }
+    }
+
+    fn start_test_session(
+        &self,
+        stream: &mut TcpStream,
+        request: &Envelope,
+        body: &[u8],
+    ) -> Result<(), FrameError> {
+        if !body.is_empty() {
+            return write_frame(
+                stream,
+                &response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"test-session-has-no-body"}),
+                ),
+                &[],
+            );
+        }
+        let listener = match TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(error) => {
+                return write_frame(
+                    stream,
+                    &response(
+                        &request.id,
+                        "error",
+                        serde_json::json!({"code":"test-bridge-bind-failed","detail":error.to_string()}),
+                    ),
+                    &[],
+                );
+            }
+        };
+        let endpoint = listener.local_addr().map_err(FrameError::from)?.to_string();
+        let started = self.start_with_test_server(request, Some(endpoint));
+        if started.op == "error" {
+            return write_frame(stream, &started, &[]);
+        }
+        write_frame(
+            stream,
+            &response(&request.id, "test-ready", serde_json::json!({"ready":true})),
+            &[],
+        )?;
+        self.forward_test_connection(listener, stream)
+    }
+
+    fn forward_test_connection(
+        &self,
+        listener: TcpListener,
+        stream: &mut TcpStream,
+    ) -> Result<(), FrameError> {
+        listener.set_nonblocking(true).map_err(FrameError::from)?;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut application = loop {
+            match listener.accept() {
+                Ok((connection, _)) => break connection,
+                Err(error)
+                    if error.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    self.stop_owned_process();
+                    return Err(FrameError::Io(
+                        "test application did not connect before deadline".to_owned(),
+                    ));
+                }
+                Err(error) => {
+                    self.stop_owned_process();
+                    return Err(FrameError::from(error));
+                }
+            }
+        };
+        let mut device_to_host = application.try_clone().map_err(FrameError::from)?;
+        let mut host_clone = stream.try_clone().map_err(FrameError::from)?;
+        let upstream = std::thread::spawn(move || {
+            let _ = io::copy(&mut device_to_host, &mut host_clone);
+            let _ = host_clone.shutdown(Shutdown::Write);
+        });
+        let _ = io::copy(stream, &mut application);
+        let _ = application.shutdown(Shutdown::Write);
+        let _ = upstream.join();
+        self.stop_owned_process();
+        Ok(())
     }
 
     fn wait_for_readiness(&self, request: &Envelope, mut child: Child) -> Envelope {

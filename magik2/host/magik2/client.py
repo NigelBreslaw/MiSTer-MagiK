@@ -38,6 +38,26 @@ class NativeAgent:
     def stop(self) -> Mapping[str, object]:
         return self._successful("stop")
 
+    def metrics(self) -> Mapping[str, object]:
+        return self._successful("metrics")
+
+    def open_test_tunnel(self) -> socket.socket:
+        request = Envelope(uuid.uuid4().hex, "test-start", self.token, {})
+        connection = socket.create_connection((self.host, self.port), timeout=20)
+        try:
+            send_message(connection, request)
+            response, body = receive_message(connection)
+            if response.request_id != request.request_id:
+                raise ProtocolError("agent reply request identifier did not match")
+            if body or response.operation == "error":
+                raise AgentError(str(response.fields.get("code", "test bridge failed")))
+            if response.operation != "test-ready":
+                raise AgentError("agent did not establish a test bridge")
+            return connection
+        except Exception:
+            connection.close()
+            raise
+
     def _successful(self, operation: str, fields: Mapping[str, object] | None = None) -> Mapping[str, object]:
         response, _ = self._request(operation, fields)
         if response.operation == "error":
