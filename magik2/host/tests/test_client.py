@@ -41,6 +41,13 @@ def test_authentication_error_is_not_retreated_as_bootstrap() -> None:
     thread.join()
 
 
+def test_start_error_retains_launcher_recovery_outcome() -> None:
+    port, thread = one_reply({"code": "start-failed", "recovery": None}, "error")
+    with pytest.raises(AgentError, match="start-failed; launcher-recovery=passed"):
+        NativeAgent("127.0.0.1", "token", port).start()
+    thread.join()
+
+
 def test_test_tunnel_keeps_the_connection_open_after_native_handshake() -> None:
     port, thread = one_reply({"ready": True}, "test-ready")
     tunnel = NativeAgent("127.0.0.1", "token", port).open_test_tunnel()
