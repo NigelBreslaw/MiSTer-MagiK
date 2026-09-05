@@ -30,7 +30,13 @@ manifest and adjacent lockfile.
 
 ## Operations
 
-Use typed `scripts/agent deliver`, `benchmark`, `diagnose`, and `db report`;
+For ordinary application development, use `scripts/magik2 deploy`, `check`, and
+`watch`; real MagiK is the default, Mini uses `--app mini-magik`. `check` runs
+one smoke journey; request idle/motion measurements or profiling explicitly.
+Use the 2.0 exception below. Do not route ordinary app development through 1.0.
+
+For retained platform/release and legacy operations, use typed
+`scripts/agent deliver`, `benchmark`, `diagnose`, and `db report`;
 human device operations use attended `scripts/agent device`. Never use raw
 SSH/SCP, generic remote shells, or ad-hoc SQL. Device, Apple-container, and
 virtualization commands require first-attempt escalation. Retry read-only
@@ -42,7 +48,7 @@ arming, bounded timeouts, interruption-safe cleanup, verified disarming, and
 non-network recovery are mandatory. Never leave persistent/unattended reboot
 loops or replay diagnosis's one-shot reboot; stop on reboot/SSH instability.
 
-“Build and deploy” means commit then deliver the exact clean app revision with
+“Build and deploy” for retained 1.0 platform/release work means commit then deliver the exact clean app revision with
 the latest qualified platform. Replace runtime and regenerated
 `platform-v3.manifest` transactionally. Local Main delivery requires committed
 Dev Main work. Release qualification requires an explicit attended request.

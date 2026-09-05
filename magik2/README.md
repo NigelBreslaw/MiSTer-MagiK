@@ -22,19 +22,20 @@ The existing `slint-testing==0.3` private-index authentication must be available
 to uv. Keep credentials in the environment/user credential store, never Git.
 
 ```sh
+# Real development application (default):
 scripts/magik2 deploy
-scripts/magik2 check smoke
-scripts/magik2 check motion
-scripts/magik2 check motion --profile
+scripts/magik2 check
 scripts/magik2 watch
+scripts/magik2 check idle
+scripts/magik2 check idle --profile
 scripts/magik2 status
 scripts/magik2 stop
 
-# Same workflow, real application development copy:
-scripts/magik2 deploy --app magik
-scripts/magik2 check smoke --app magik
-scripts/magik2 check idle --profile --app magik
-scripts/magik2 watch --app magik
+# Fast experiment, through exactly the same tooling:
+scripts/magik2 deploy --app mini-magik
+scripts/magik2 check --app mini-magik
+scripts/magik2 check motion --app mini-magik
+scripts/magik2 check motion --profile --app mini-magik
 ```
 
 `deploy` automatically prepares a checkout-specific Apple container and compiles
@@ -66,8 +67,14 @@ The consumer scenarios live in `scenarios/` and run through pytest:
 
 ```sh
 uv run --project magik2/host pytest magik2/scenarios --collect-only
-uv run --project magik2/host pytest magik2/scenarios --magik2-device -k motion
+uv run --project magik2/host pytest magik2/scenarios --magik2-device --magik2-app mini-magik -k motion
 ```
+
+The real app is the default. `scripts/magik2 check` selects only smoke, including
+Settings navigation; measurements require an explicit scenario. Direct pytest
+selects all ordinary scenarios for its chosen app. Use `--magik2-app mini-magik`
+when invoking Mini scenarios directly. Failures print the result and device-log
+paths; unavailable diagnostics remain recorded as unavailable.
 
 Without `--magik2-device` they skip hardware operations. Mini-MagiK motion has two separate
 unprofiled repetitions, each two seconds warm-up and five measured seconds on
