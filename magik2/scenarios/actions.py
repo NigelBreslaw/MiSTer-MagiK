@@ -136,3 +136,40 @@ def _wait(predicate: Callable[[], bool], failure: str, timeout: float = 3) -> No
         if time.monotonic() >= deadline:
             raise AssertionError(failure)
         time.sleep(0.02)
+
+
+def launcher_smoke(application, screenshot_path, expected_sha256):
+    window = application.first_window
+    if (
+        window is None
+        or window.root_element.accessible_label != "MiSTer MagiK Launcher"
+    ):
+        raise AssertionError("real launcher window is unavailable")
+    screenshot(application, screenshot_path)
+    return {"sha256": expected_sha256, "screenshot": screenshot_path.name}
+
+
+def launcher_idle(application, agent, *, instrumented=False):
+    """Measure the real launcher's ordinary idle loop; no synthetic FPS target."""
+    if application.first_window is None:
+        raise AssertionError("real launcher window is unavailable")
+    agent._successful("measure")
+    seconds = 10 if instrumented else 5
+    time.sleep(2 + seconds + 0.4)
+    metrics = agent.metrics()
+    if metrics.get("sha256") != agent.expected_sha256:
+        raise AssertionError("metrics belong to another application")
+    window = metrics.get("window")
+    if not isinstance(window, dict) or window.get("instrumented") is not instrumented:
+        raise AssertionError("real launcher returned no matching measurement window")
+    if not seconds * 1000 <= window.get("elapsed_ms", 0) <= (seconds + 1) * 1000:
+        raise AssertionError("real launcher measurement duration is invalid")
+    if window.get("evidence_error"):
+        raise AssertionError(window["evidence_error"])
+    return {
+        **window,
+        "workload": "launcher-idle",
+        "sha256": agent.expected_sha256,
+        "pid": metrics.get("pid"),
+        "warmup_seconds": 2,
+    }

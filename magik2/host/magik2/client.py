@@ -28,6 +28,7 @@ class NativeAgent:
         self.token = token
         self.port = port
         self.expected_sha256: str | None = None
+        self.artifact = "mini-magik"
 
     def status(self) -> AgentStatus:
         response, _ = self._request("status")
@@ -56,7 +57,7 @@ class NativeAgent:
     def start(
         self, *, restart: bool = False, expected_sha256: str | None = None
     ) -> Mapping[str, object]:
-        fields: dict[str, object] = {"restart": restart}
+        fields: dict[str, object] = {"restart": restart, "artifact": self.artifact}
         if expected_sha256 is not None:
             fields["expected_sha256"] = expected_sha256
         return self._successful("start", fields)
@@ -81,7 +82,9 @@ class NativeAgent:
         return body
 
     def open_test_tunnel(self, profile_id: str | None = None) -> socket.socket:
-        fields = {} if profile_id is None else {"profile_id": profile_id}
+        fields = {"artifact": self.artifact}
+        if profile_id is not None:
+            fields["profile_id"] = profile_id
         if self.expected_sha256 is not None:
             fields["expected_sha256"] = self.expected_sha256
         request = Envelope(uuid.uuid4().hex, "test-start", self.token, fields)

@@ -39,8 +39,10 @@ pub fn receive(
     length: usize,
     id: &str,
 ) -> Result<Staged, String> {
-    if !matches!(artifact, "probe" | "mister-magik2-agent" | "transfer-check")
-        || hash.len() != 64
+    if !matches!(
+        artifact,
+        "probe" | "mini-magik" | "magik" | "mister-magik2-agent" | "transfer-check"
+    ) || hash.len() != 64
         || !hash.bytes().all(|b| b.is_ascii_hexdigit())
     {
         return Err("invalid artifact or SHA-256".into());
@@ -84,6 +86,33 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn applications_publish_to_separate_fixed_slots() {
+        let root = std::env::temp_dir().join(format!("magik2-app-slots-{}", std::process::id()));
+        for (name, content) in [
+            ("mini-magik", b"mini".as_slice()),
+            ("magik", b"real".as_slice()),
+        ] {
+            let hash = hex(&Sha256::digest(content));
+            let staged =
+                receive(&mut &content[..], &root, name, &hash, content.len(), name).unwrap();
+            staged.publish(&root.join(name)).unwrap();
+        }
+        assert_eq!(fs::read(root.join("mini-magik")).unwrap(), b"mini");
+        assert_eq!(fs::read(root.join("magik")).unwrap(), b"real");
+        assert!(
+            receive(
+                &mut &b"bad"[..],
+                &root,
+                "../production",
+                &"0".repeat(64),
+                3,
+                "bad"
+            )
+            .is_err()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn partial_upload_is_removed_without_publication() {
         let root = std::env::temp_dir().join(format!("magik2-partial-{}", std::process::id()));

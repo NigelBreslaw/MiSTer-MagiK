@@ -82,10 +82,10 @@ def relevant_inputs(package: Path) -> list[Path]:
     pending = list(inputs)
     while pending:
         path = pending.pop()
-        if path.suffix != ".slint":
+        if path.suffix not in {".slint", ".rs"}:
             continue
         for imported in re.findall(
-            r'["\']([^"\']+\.(?:slint|ttf|otf|png|svg))["\']', path.read_text()
+            r'["\']([^"\']+\.(?:slint|ttf|otf|png|svg|mmbf))["\']', path.read_text()
         ):
             candidate = (path.parent / imported).resolve()
             if candidate.is_file() and candidate not in inputs:
@@ -103,6 +103,8 @@ def source_fingerprint(package: Path) -> str:
     recipe = Path(__file__).resolve().parents[2] / "build/Containerfile"
     digest.update(recipe.read_bytes())
     digest.update(Path(__file__).read_bytes())
+    for name in ("apps.py", "ffmpeg.py"):
+        digest.update(Path(__file__).with_name(name).read_bytes())
     digest.update(
         json.dumps(
             {
@@ -232,7 +234,38 @@ def ensure_arm_package(
     runner: Callable = subprocess.run,
     prepare: Callable | None = None,
 ) -> BuildResult:
-    artifact = package / "target" / TARGET / "release" / f"mister-magik2-{package.name}"
+    from .apps import APPLICATIONS
+
+    app = next(
+        (
+            value
+            for value in APPLICATIONS.values()
+            if value.package.endswith("/" + package.name)
+        ),
+        None,
+    )
+    profile = app.profile if app else "release"
+    binary = app.binary if app else "mister-magik2-agent"
+    artifact = package / "target" / TARGET / profile / binary
+    repository = package.resolve().parents[1]
+    if (
+        app
+        and app.name == "magik"
+        and not (repository / "private/magik-assets/.git").exists()
+    ):
+        runner(
+            [
+                "git",
+                "-C",
+                str(repository),
+                "submodule",
+                "update",
+                "--init",
+                "--",
+                "private/magik-assets",
+            ],
+            check=True,
+        )
     fingerprint = source_fingerprint(package)
     started = time.monotonic()
     if artifact.is_file() and not needs_build(cache_file, fingerprint):
@@ -245,6 +278,22 @@ def ensure_arm_package(
     repository = package.resolve().parents[1]
     name = (prepare or prepare_container)(repository, runner)
     environment = []
+    if app and app.name == "magik":
+        from .ffmpeg import prepare_ffmpeg
+
+        prepare_ffmpeg(repository, name, runner)
+        dist = "/workspace/apps/mister/target/ffmpeg-minimal/armv7/dist"
+        for key, value in {
+            "FFMPEG_DIR": dist,
+            "PKG_CONFIG_PATH": dist + "/lib/pkgconfig",
+            "PKG_CONFIG_ALLOW_CROSS": "1",
+            "CFLAGS": "-I" + dist + "/include",
+            "HOST_CFLAGS": "-I" + dist + "/include",
+            "RUST_FONTCONFIG_DLOPEN": "1",
+            "SLINT_EMIT_DEBUG_INFO": "1",
+            "RUSTFLAGS": "-C target-cpu=cortex-a9 -C force-frame-pointers=yes",
+        }.items():
+            environment += ["--env", f"{key}={value}"]
     for variable in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"):
         if variable in os.environ:
             environment += ["--env", f"{variable}={os.environ[variable]}"]
@@ -254,12 +303,16 @@ def ensure_arm_package(
             "exec",
             *environment,
             "--workdir",
-            f"/workspace/magik2/{package.name}",
+            f"/workspace/{package.resolve().relative_to(repository)}",
             name,
             "cargo",
             "build",
             "--locked",
-            "--release",
+            "--profile",
+            profile,
+            *(["--features", ",".join(app.features)] if app and app.features else []),
+            "--bin",
+            binary,
             "--target",
             TARGET,
         ],
@@ -276,7 +329,7 @@ def ensure_arm_package(
     )
 
 
-def ensure_arm_probe(
+def ensure_arm_application(
     probe_root: Path,
     cache_file: Path,
     *,
@@ -287,7 +340,7 @@ def ensure_arm_probe(
     if prebuilt:
         artifact = Path(prebuilt).expanduser().resolve()
         if not artifact.is_file():
-            raise RuntimeError("MagiK 2 prebuilt probe artifact is unavailable")
+            raise RuntimeError("MagiK 2 prebuilt application artifact is unavailable")
         return BuildResult(artifact, False, 0, prebuilt=True)
     return ensure_arm_package(probe_root, cache_file, runner=runner, prepare=prepare)
 
