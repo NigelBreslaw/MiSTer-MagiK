@@ -22,6 +22,8 @@ COMPANIONS = (
     "scripts/AGENTS.md",
     "scripts/magik_ci/host.py",
     "apps/mister/Cargo.toml",
+    "crates/catalog/Cargo.toml",
+    "crates/catalog/src/device_layout.rs",
     "apps/mister/Cargo.lock",
     "apps/mister/src/ui_runner/launcher_loop.rs",
     "apps/mister/src/visual_platform.rs",

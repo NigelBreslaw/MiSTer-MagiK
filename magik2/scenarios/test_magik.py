@@ -1,13 +1,14 @@
 """Small real-app checks; the scenario is also its benchmark workload."""
 
 import pytest
-from actions import launcher_smoke, launcher_idle
+from actions import launcher_smoke, launcher_idle, validate_development_paths
 from magik2.results import append_event
 
 
 def test_smoke(application_session):
     app, agent, run, _ = application_session
     result = launcher_smoke(app, run / "smoke.png", agent.expected_sha256)
+    result["paths"] = validate_development_paths(agent.metrics().get("context"))
     append_event(run, {"phase": "smoke", "outcome": "passed", **result})
 
 

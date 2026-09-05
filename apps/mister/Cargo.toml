@@ -101,7 +101,7 @@ asset-tools = ["dep:swash"]
 profile = ["dep:pprof"]
 hotpath = ["dep:hotpath", "hotpath/hotpath-mcp", "mister-magik-catalog/hotpath-mcp"]
 ui = ["dep:slint", "dep:i-slint-core", "dep:mister-magik-ui", "dep:ffmpeg-next", "mister-magik-mister-runtime/ui"]
-magik2 = ["ui-device-tests", "dep:mister-magik-tooling-support"]
+magik2 = ["ui-device-tests", "dep:mister-magik-tooling-support", "mister-magik-catalog/development-layout"]
 ui-device-tests = [
     "ui",
     "slint/system-testing",

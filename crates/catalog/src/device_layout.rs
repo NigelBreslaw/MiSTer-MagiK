@@ -53,6 +53,9 @@ impl DevicePaths {
     }
 
     pub fn current() -> Self {
+        if cfg!(feature = "development-layout") {
+            return Self::for_layout(InstalledLayout::Development);
+        }
         std::env::current_exe()
             .ok()
             .as_deref()
@@ -298,11 +301,10 @@ impl DeviceLayout {
     }
 
     pub fn current() -> Self {
-        std::env::current_exe()
-            .ok()
-            .as_deref()
-            .map(Self::for_executable)
-            .unwrap_or(Self::Public)
+        match DevicePaths::current().layout() {
+            InstalledLayout::Public => Self::Public,
+            InstalledLayout::Development => Self::Dev,
+        }
     }
 
     pub const fn app_dir(self) -> &'static str {
@@ -340,6 +342,33 @@ pub fn current_app_path(relative: &str) -> PathBuf {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    #[cfg(feature = "development-layout")]
+    fn development_consumer_uses_dev_paths_even_outside_the_dev_directory() {
+        let paths = DevicePaths::current();
+        assert_eq!(paths.layout(), InstalledLayout::Development);
+        assert_eq!(DeviceLayout::current(), DeviceLayout::Dev);
+        assert_eq!(paths.app_dir(), PathBuf::from(DEV_APP_DIR));
+        assert_eq!(paths.main_path(), PathBuf::from(DEV_MAIN));
+        let catalog = CatalogPaths::derive(&paths, CatalogPathOverrides::default());
+        for path in [
+            catalog.library_sqlite(),
+            catalog.media_asset_dir(),
+            catalog.user_state_sqlite(),
+            catalog.sharded_catalog_dir(),
+        ] {
+            assert!(path.starts_with(DEV_APP_DIR), "{}", path.display());
+        }
+        assert_eq!(
+            paths.app_path("settings.json"),
+            PathBuf::from(DEV_APP_DIR).join("settings.json")
+        );
+        assert_eq!(
+            paths.app_path("controllers.json"),
+            PathBuf::from(DEV_APP_DIR).join("controllers.json")
+        );
+    }
 
     #[test]
     fn resolves_fixed_layout_from_executable_parent() {

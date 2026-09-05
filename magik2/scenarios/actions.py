@@ -183,3 +183,29 @@ def launcher_idle(application, agent, *, instrumented=False):
         "pid": metrics.get("pid"),
         "warmup_seconds": 2,
     }
+
+
+def validate_development_paths(context):
+    if not isinstance(context, dict):
+        raise AssertionError("application did not report its runtime paths")
+    root = Path("/media/fat/mister-magik-dev")
+    if (
+        context.get("data_root") != str(root)
+        or context.get("main") != "/media/fat/MiSTer_MagiKDev"
+    ):
+        raise AssertionError(f"wrong development layout: {context}")
+    for name in (
+        "settings",
+        "controllers",
+        "catalog",
+        "library",
+        "user_state",
+        "assets",
+    ):
+        if not isinstance(context.get(name), str) or not Path(
+            context[name]
+        ).is_relative_to(root):
+            raise AssertionError(
+                f"{name} is outside the development layout: {context.get(name)}"
+            )
+    return context
