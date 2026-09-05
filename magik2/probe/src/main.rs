@@ -3,9 +3,6 @@
 
 //! Deliberately small consumer application for Tooling 2.0.
 
-use mister_magik_framebuffer_stream::{
-    FrameGeometry, FrameHeader, FrameKind, FrameRect, write_frame as write_preview_frame,
-};
 use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
 use mister_magik_mister_runtime::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_mister_runtime::framebuffer::rgb565::Rgb565;
@@ -14,16 +11,16 @@ use slint::platform::{EventLoopProxy, Platform, WindowAdapter};
 use slint::{EventLoopError, PhysicalSize, Window};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
-use std::io::Write;
-use std::os::unix::net::UnixStream;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 mod measurement;
+mod preview;
 mod profile;
 use measurement::PresentationMetrics;
+use preview::PreviewProducer;
 use profile::CpuProfile;
 
 slint::include_modules!();
@@ -144,84 +141,6 @@ impl std::ops::Deref for ProbeWindow {
 struct ProbePlatform {
     window: Rc<ProbeWindow>,
     start: Instant,
-}
-
-struct PreviewProducer {
-    state_root: std::path::PathBuf,
-    last_preview: Instant,
-    sequence: u64,
-}
-
-impl PreviewProducer {
-    fn new() -> Self {
-        Self {
-            state_root: std::env::var("MISTER_MAGIK2_STATE_ROOT")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| "/tmp/mister-magik2".into()),
-            last_preview: Instant::now() - Duration::from_secs(1),
-            sequence: 0,
-        }
-    }
-
-    fn publish_if_watched(
-        &mut self,
-        pixels: &[Rgb565Pixel],
-        width: usize,
-        height: usize,
-        elapsed: Duration,
-    ) {
-        if self.last_preview.elapsed() < Duration::from_millis(200) || !self.viewer_is_active() {
-            return;
-        }
-        let Ok(width) = u32::try_from(width) else {
-            return;
-        };
-        let Ok(height) = u32::try_from(height) else {
-            return;
-        };
-        let raw_bytes = pixels.len().saturating_mul(2);
-        let Ok(raw_bytes) = u32::try_from(raw_bytes) else {
-            return;
-        };
-        let mut bytes = Vec::with_capacity(raw_bytes as usize);
-        for pixel in pixels {
-            bytes.extend_from_slice(&pixel.0.to_ne_bytes());
-        }
-        self.sequence += 1;
-        let geometry = FrameGeometry {
-            width,
-            height,
-            stride_pixels: width,
-        };
-        let header = FrameHeader {
-            kind: FrameKind::Keyframe,
-            flags: 0,
-            sequence: self.sequence,
-            timestamp_us: elapsed.as_micros() as u64,
-            geometry,
-            rect: FrameRect::full(geometry),
-            raw_bytes,
-            payload_bytes: raw_bytes,
-        };
-        if let Ok(mut socket) = UnixStream::connect(self.state_root.join("probe-frames.sock"))
-            && write_preview_frame(&mut socket, header, &bytes).is_ok()
-            && socket.flush().is_ok()
-        {
-            self.last_preview = Instant::now();
-        }
-    }
-
-    fn viewer_is_active(&self) -> bool {
-        let Ok(deadline) = std::fs::read_to_string(self.state_root.join("viewer-lease")) else {
-            return false;
-        };
-        let Ok(deadline) = deadline.trim().parse::<u128>() else {
-            return false;
-        };
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .is_ok_and(|now| now.as_millis() < deadline)
-    }
 }
 
 impl Platform for ProbePlatform {

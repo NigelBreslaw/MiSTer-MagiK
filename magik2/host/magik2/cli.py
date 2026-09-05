@@ -231,7 +231,7 @@ def connect_agent(run: Path, required: set[str] = REQUIRED_AGENT_CAPABILITIES) -
         append_event(run, {"phase": "agent", "identity": status.identity, "capabilities": sorted(status.capabilities)})
         return agent, status
     binary = agent_binary_path()  # Build only after proving installed support is insufficient.
-    if status is not None and status.supports({"agent-update-v1"}) and not repair:
+    if status is not None and status.supports({"agent-update-v1"}):
         append_event(run, {"phase": "native-agent-update", "outcome": "requested"})
         payload = binary.read_bytes()
         try:

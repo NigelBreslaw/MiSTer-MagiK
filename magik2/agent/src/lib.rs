@@ -1,14 +1,19 @@
 //! Bounded native control framing for the independently owned MagiK 2.0 agent.
 
 mod main_control;
+mod upload;
+mod wire;
 
 use mister_magik_framebuffer_stream::read_frame as read_preview_frame;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
-use std::fs::{self, File};
+use std::fs;
+#[cfg(test)]
+use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
+#[cfg(test)]
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
@@ -17,18 +22,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-pub const MAX_HEADER_BYTES: usize = 64 * 1024;
-pub const MAX_BODY_BYTES: usize = 512 * 1024 * 1024;
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct Envelope {
-    pub id: String,
-    pub op: String,
-    pub token: String,
-    #[serde(flatten)]
-    pub fields: serde_json::Map<String, serde_json::Value>,
-}
-
+pub use wire::{Envelope, FrameError, MAX_BODY_BYTES, MAX_HEADER_BYTES, read_frame, write_frame};
 #[derive(Debug, Deserialize, Serialize)]
 struct OwnedProcess {
     pid: u32,
@@ -37,60 +31,6 @@ struct OwnedProcess {
     start_ticks: String,
     #[serde(default)]
     sha256: String,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum FrameError {
-    Io(String),
-    HeaderTooLarge,
-    BodyTooLarge,
-    Json(String),
-}
-
-impl From<io::Error> for FrameError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error.to_string())
-    }
-}
-
-pub fn write_frame(
-    writer: &mut impl Write,
-    header: &Envelope,
-    body: &[u8],
-) -> Result<(), FrameError> {
-    let encoded =
-        serde_json::to_vec(header).map_err(|error| FrameError::Json(error.to_string()))?;
-    if encoded.len() > MAX_HEADER_BYTES {
-        return Err(FrameError::HeaderTooLarge);
-    }
-    if body.len() > MAX_BODY_BYTES {
-        return Err(FrameError::BodyTooLarge);
-    }
-    writer.write_all(&(encoded.len() as u32).to_be_bytes())?;
-    writer.write_all(&(body.len() as u64).to_be_bytes())?;
-    writer.write_all(&encoded)?;
-    writer.write_all(body)?;
-    Ok(())
-}
-
-pub fn read_frame(reader: &mut impl Read) -> Result<(Envelope, Vec<u8>), FrameError> {
-    let mut lengths = [0_u8; 12];
-    reader.read_exact(&mut lengths)?;
-    let header_length = u32::from_be_bytes(lengths[..4].try_into().expect("four bytes")) as usize;
-    let body_length = u64::from_be_bytes(lengths[4..].try_into().expect("eight bytes")) as usize;
-    if header_length > MAX_HEADER_BYTES {
-        return Err(FrameError::HeaderTooLarge);
-    }
-    if body_length > MAX_BODY_BYTES {
-        return Err(FrameError::BodyTooLarge);
-    }
-    let mut header = vec![0; header_length];
-    let mut body = vec![0; body_length];
-    reader.read_exact(&mut header)?;
-    reader.read_exact(&mut body)?;
-    let envelope =
-        serde_json::from_slice(&header).map_err(|error| FrameError::Json(error.to_string()))?;
-    Ok((envelope, body))
 }
 
 #[derive(Debug, Serialize)]
@@ -150,12 +90,10 @@ impl Observation {
         }
     }
 
-    fn record_frame(&self, sequence: u64, bytes: Vec<u8>) {
+    fn record_frame(&self, _sequence: u64, bytes: Vec<u8>) {
         let mut state = self.state.lock().expect("observation state poisoned");
-        if sequence >= state.latest_frame_sequence {
-            state.latest_frame_sequence = sequence;
-            state.latest_frame = Some(bytes);
-        }
+        state.latest_frame_sequence += 1;
+        state.latest_frame = Some(bytes);
     }
 
     fn snapshot(
@@ -245,7 +183,8 @@ impl Agent {
                 match connection {
                     Ok(connection) => {
                         let observation = observation.clone();
-                        std::thread::spawn(move || receive_preview_frames(connection, observation));
+                        let _ = connection.set_read_timeout(Some(Duration::from_secs(1)));
+                        receive_preview_frames(connection, observation);
                     }
                     Err(error) => eprintln!("magik2 preview accept failed: {error}"),
                 }
@@ -255,7 +194,10 @@ impl Agent {
     }
 
     pub fn handle(&self, stream: &mut TcpStream) -> Result<(), FrameError> {
-        let (request, body) = read_frame(stream)?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+        let (request, body_length) =
+            wire::read_header(&mut wire::DeadlineReader { stream, deadline })?;
         if request.token != self.token {
             return write_frame(
                 stream,
@@ -268,6 +210,68 @@ impl Agent {
             );
         }
 
+        if matches!(request.op.as_str(), "upload" | "agent-update") {
+            let _mutation = self.mutations.lock().expect("mutation state poisoned");
+            let artifact = if request.op == "agent-update" {
+                "mister-magik2-agent"
+            } else {
+                request
+                    .fields
+                    .get("artifact")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+            };
+            let hash = request
+                .fields
+                .get("sha256")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let staged = match upload::receive(
+                &mut wire::DeadlineReader { stream, deadline },
+                &self.install_root,
+                artifact,
+                hash,
+                body_length,
+                &request.id,
+            ) {
+                Ok(staged) => staged,
+                Err(error) => {
+                    return write_frame(
+                        stream,
+                        &response(
+                            &request.id,
+                            "error",
+                            serde_json::json!({"code":"upload-failed","detail":error}),
+                        ),
+                        &[],
+                    );
+                }
+            };
+            if request.op == "agent-update" {
+                return self.upgrade_agent(stream, &request, staged);
+            }
+            match self.replayed_response(&request, &[]) {
+                Ok(Some(previous)) => return write_frame(stream, &previous, &[]),
+                Err(error) => return write_frame(stream, &error, &[]),
+                _ => {}
+            }
+            staged
+                .publish(&self.install_root.join(artifact))
+                .map_err(FrameError::Io)?;
+            let result = response(
+                &request.id,
+                "uploaded",
+                serde_json::json!({"artifact":artifact,"sha256":hash}),
+            );
+            self.remember_response(&request, &[], &result);
+            return write_frame(stream, &result, &[]);
+        }
+        if body_length > MAX_HEADER_BYTES {
+            return Err(FrameError::BodyTooLarge);
+        }
+        let mut body = vec![0; body_length];
+        wire::DeadlineReader { stream, deadline }.read_exact(&mut body)?;
+
         if request.op == "watch" {
             return self.watch(stream, &request, &body);
         }
@@ -278,12 +282,7 @@ impl Agent {
             let _mutation = self.mutations.lock().expect("mutation state poisoned");
             return self.start_test_session(stream, &request, &body);
         }
-        if request.op == "agent-update" {
-            let _mutation = self.mutations.lock().expect("mutation state poisoned");
-            return self.upgrade_agent(stream, &request, &body);
-        }
-
-        let replayable = matches!(request.op.as_str(), "upload" | "start" | "stop");
+        let replayable = matches!(request.op.as_str(), "start" | "stop");
         let _mutation = replayable.then(|| self.mutations.lock().expect("mutation state poisoned"));
         if replayable {
             match self.replayed_response(&request, &body) {
@@ -307,7 +306,6 @@ impl Agent {
                     "legacy_agent_running": legacy_agent_running(),
                 }),
             ),
-            "upload" => self.upload(&request, &body),
             "start" => self.start(&request),
             "stop" => self.stop(&request),
             "metrics" => self.metrics(&request),
@@ -527,80 +525,20 @@ impl Agent {
         }
     }
 
-    fn upload(&self, request: &Envelope, body: &[u8]) -> Envelope {
-        let artifact = request
-            .fields
-            .get("artifact")
-            .and_then(serde_json::Value::as_str);
-        let expected_hash = request
-            .fields
-            .get("sha256")
-            .and_then(serde_json::Value::as_str);
-        let Some(artifact) = artifact else {
-            return response(
-                &request.id,
-                "error",
-                serde_json::json!({"code":"missing-artifact"}),
-            );
-        };
-        let Some(expected_hash) = expected_hash else {
-            return response(
-                &request.id,
-                "error",
-                serde_json::json!({"code":"missing-sha256"}),
-            );
-        };
-        match publish_atomically(&self.install_root, artifact, expected_hash, body) {
-            Ok(()) => response(
-                &request.id,
-                "uploaded",
-                serde_json::json!({"artifact":artifact,"sha256":expected_hash}),
-            ),
-            Err(error) => response(
-                &request.id,
-                "error",
-                serde_json::json!({"code":"upload-failed","detail":error}),
-            ),
-        }
-    }
-
     fn upgrade_agent(
         &self,
         stream: &mut TcpStream,
         request: &Envelope,
-        body: &[u8],
+        staged: upload::Staged,
     ) -> Result<(), FrameError> {
         let expected_hash = request
             .fields
             .get("sha256")
-            .and_then(serde_json::Value::as_str);
-        let Some(expected_hash) = expected_hash else {
-            return write_frame(
-                stream,
-                &response(
-                    &request.id,
-                    "error",
-                    serde_json::json!({"code":"missing-sha256"}),
-                ),
-                &[],
-            );
-        };
-        if let Err(error) = publish_atomically(
-            &self.install_root,
-            "mister-magik2-agent",
-            expected_hash,
-            body,
-        ) {
-            return write_frame(
-                stream,
-                &response(
-                    &request.id,
-                    "error",
-                    serde_json::json!({"code":"agent-update-failed","detail":error}),
-                ),
-                &[],
-            );
-        }
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        staged
+            .publish(&self.install_root.join("mister-magik2-agent"))
+            .map_err(FrameError::Io)?;
         write_frame(
             stream,
             &response(
@@ -1222,6 +1160,7 @@ fn legacy_agent_running() -> bool {
     })
 }
 
+#[cfg(test)]
 fn publish_atomically(
     root: &Path,
     artifact: &str,
@@ -1323,9 +1262,48 @@ mod tests {
 
     #[test]
     fn rejects_truncated_payload() {
-        let error =
-            read_frame(&mut &b"\0\0\0\x02\0\0\0\0\0\0\0\x04{}x"[..]).expect_err("truncated body");
-        assert!(matches!(error, FrameError::Io(_)));
+        let request = Envelope {
+            id: "partial".into(),
+            op: "upload".into(),
+            token: "token".into(),
+            fields: serde_json::Map::new(),
+        };
+        let mut bytes = Vec::new();
+        write_frame(&mut bytes, &request, b"payload").unwrap();
+        bytes.pop();
+        assert!(matches!(
+            read_frame(&mut bytes.as_slice()),
+            Err(FrameError::Io(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_authentication_before_waiting_for_a_declared_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            Agent::new("test".into(), "correct".into(), std::env::temp_dir())
+                .handle(&mut stream)
+                .unwrap();
+        });
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let header = br#"{"id":"bad","op":"upload","token":"incorrect"}"#;
+        client
+            .write_all(&(header.len() as u32).to_be_bytes())
+            .unwrap();
+        client
+            .write_all(&(32_u64 * 1024 * 1024).to_be_bytes())
+            .unwrap();
+        client.write_all(header).unwrap(); // deliberately send no body
+        assert_eq!(
+            read_frame(&mut client).unwrap().0.fields["code"],
+            "authentication-failed"
+        );
+        server.join().unwrap();
     }
 
     #[test]
