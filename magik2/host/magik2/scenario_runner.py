@@ -32,7 +32,7 @@ def pytest_addoption(parser):
     group.addoption(
         "--magik2-profile",
         action="store_true",
-        help="Add the separate instrumented motion repetition",
+        help="Run only the separate instrumented profile case",
     )
     group.addoption(
         "--magik2-run", help="Existing result directory for this invocation"

@@ -133,5 +133,5 @@ The bounded old/new transfer comparison is recorded in
 [the transfer report](docs/milestone-2-transfer-check.md). Use sustained saved
 MB/s for app-size comparisons; Mini-MagiK compile times are not full-app targets.
 
-Current implementation and the remaining hardware checks are recorded in
+The completed implementation and hardware evidence are recorded in
 [the milestone evidence](docs/milestone-2.md).

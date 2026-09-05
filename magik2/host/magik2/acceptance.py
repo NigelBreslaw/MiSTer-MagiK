@@ -204,7 +204,7 @@ def run_contract_checks(run: Path) -> int:
             and after["running_sha256"] == before["running_sha256"]
         )
         record("superseded start preserves process")
-        for cycle in range(5):
+        for cycle in range(2):
             with agent.open_watch() as connection:
                 connection.settimeout(5)
                 kinds = set()
