@@ -37,6 +37,8 @@ def main() -> int:
         bootstrap = SshBootstrap.from_environment()
         token = bootstrap.native_token()
         status = NativeAgent(os.environ["MISTER_IP"], token).status()
+        if not status.supports({"status", "upload-v1", "lifecycle-v1"}):
+            raise AgentError("missing-required-capability")
     except (AgentError, OSError):
         try:
             agent_binary = Path(__file__).resolve().parents[2] / "agent" / "target" / "armv7-unknown-linux-gnueabihf" / "release" / "mister-magik2-agent"

@@ -6,6 +6,8 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
+use std::sync::Mutex;
 
 pub const MAX_HEADER_BYTES: usize = 64 * 1024;
 pub const MAX_BODY_BYTES: usize = 512 * 1024 * 1024;
@@ -68,15 +70,16 @@ pub struct Agent {
     identity: String,
     token: String,
     install_root: PathBuf,
+    process: Mutex<Option<Child>>,
 }
 
 impl Agent {
     pub fn new(identity: String, token: String, install_root: PathBuf) -> Self {
-        Self { identity, token, install_root }
+        Self { identity, token, install_root, process: Mutex::new(None) }
     }
 
     pub fn capabilities() -> &'static [&'static str] {
-        &["status", "upload-v1"]
+        &["status", "upload-v1", "lifecycle-v1"]
     }
 
     pub fn handle(&self, stream: &mut TcpStream) -> Result<(), FrameError> {
@@ -88,12 +91,54 @@ impl Agent {
                 "status" => response(&request.id, "status", serde_json::json!({
                     "identity": self.identity,
                     "capabilities": Self::capabilities(),
+                    "running": self.running(),
                 })),
                 "upload" => self.upload(&request, &body),
+                "start" => self.start(&request),
+                "stop" => self.stop(&request),
                 _ => response(&request.id, "error", serde_json::json!({"code":"unsupported-operation"})),
             }
         };
         write_frame(stream, &response, &[])
+    }
+
+    fn running(&self) -> bool {
+        let mut process = self.process.lock().expect("agent process state poisoned");
+        let active = process
+            .as_mut()
+            .is_some_and(|child| child.try_wait().ok().flatten().is_none());
+        if !active { *process = None; }
+        active
+    }
+
+    fn start(&self, request: &Envelope) -> Envelope {
+        if self.running() { return response(&request.id, "started", serde_json::json!({"already_running":true})); }
+        let artifact = request.fields.get("artifact").and_then(serde_json::Value::as_str).unwrap_or("probe");
+        if artifact != "probe" { return response(&request.id, "error", serde_json::json!({"code":"unsupported-application"})); }
+        let executable = self.install_root.join(artifact);
+        if !executable.is_file() { return response(&request.id, "error", serde_json::json!({"code":"missing-application"})); }
+        if let Err(error) = main_handoff("mister_magik_exit_to_menu\n") {
+            return response(&request.id, "error", serde_json::json!({"code":"main-suspend-failed","detail":error}));
+        }
+        match Command::new(executable).spawn() {
+            Ok(child) => {
+                *self.process.lock().expect("agent process state poisoned") = Some(child);
+                response(&request.id, "started", serde_json::json!({"already_running":false}))
+            }
+            Err(error) => {
+                let recovery = main_handoff("mister_magik_supervised_restart_launcher\n");
+                response(&request.id, "error", serde_json::json!({"code":"start-failed","detail":error.to_string(),"recovery":recovery.err()}))
+            }
+        }
+    }
+
+    fn stop(&self, request: &Envelope) -> Envelope {
+        let mut process = self.process.lock().expect("agent process state poisoned");
+        if let Some(mut child) = process.take() { let _ = child.kill(); let _ = child.wait(); }
+        match main_handoff("mister_magik_supervised_restart_launcher\n") {
+            Ok(()) => response(&request.id, "stopped", serde_json::json!({"launcher_resumed":true})),
+            Err(error) => response(&request.id, "error", serde_json::json!({"code":"launcher-resume-failed","detail":error})),
+        }
     }
 
     fn upload(&self, request: &Envelope, body: &[u8]) -> Envelope {
@@ -106,6 +151,11 @@ impl Agent {
             Err(error) => response(&request.id, "error", serde_json::json!({"code":"upload-failed","detail":error})),
         }
     }
+}
+
+fn main_handoff(command: &str) -> Result<(), String> {
+    let mut fifo = File::options().write(true).open("/dev/MiSTer_cmd").map_err(|error| error.to_string())?;
+    fifo.write_all(command.as_bytes()).map_err(|error| error.to_string())
 }
 
 fn response(id: &str, op: &str, value: serde_json::Value) -> Envelope {

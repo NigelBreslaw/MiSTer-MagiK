@@ -32,6 +32,18 @@ class NativeAgent:
             raise AgentError(str(response.fields.get("code", "upload failed")))
         return response.fields
 
+    def start(self) -> Mapping[str, object]:
+        return self._successful("start")
+
+    def stop(self) -> Mapping[str, object]:
+        return self._successful("stop")
+
+    def _successful(self, operation: str) -> Mapping[str, object]:
+        response, _ = self._request(operation)
+        if response.operation == "error":
+            raise AgentError(str(response.fields.get("code", f"{operation} failed")))
+        return response.fields
+
     def _request(self, operation: str, fields: Mapping[str, object] | None = None, body: bytes = b"") -> tuple[Envelope, bytes]:
         request = Envelope(uuid.uuid4().hex, operation, self.token, fields or {})
         with socket.create_connection((self.host, self.port), timeout=5) as connection:
