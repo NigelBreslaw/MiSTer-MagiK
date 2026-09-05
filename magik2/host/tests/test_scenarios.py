@@ -91,3 +91,49 @@ def test_idle_cannot_reuse_a_previous_completed_window(monkeypatch):
     monkeypatch.setattr(actions.time, "sleep", lambda _: None)
     with pytest.raises(AssertionError, match="previous window"):
         actions.launcher_idle(SimpleNamespace(first_window=object()), agent)
+
+
+def test_navigation_returns_from_settings_when_capture_fails(monkeypatch, tmp_path):
+    state = {"open": False}
+    keys = []
+
+    def press(_, key):
+        keys.append(key)
+        if key == "\n":
+            state["open"] = True
+        elif key in {"\x1b", "\uf729"}:
+            state["open"] = False
+
+    def capture(*_):
+        raise RuntimeError("capture failed")
+
+    monkeypatch.setattr(actions, "_press_key", press)
+    monkeypatch.setattr(actions, "_settings_open", lambda _: state["open"])
+    monkeypatch.setattr(actions, "screenshot", capture)
+    with pytest.raises(RuntimeError, match="capture failed"):
+        actions.launcher_navigation(object(), tmp_path / "settings.png")
+    assert not state["open"]
+    assert keys[-1] == "\x1b"
+
+
+def test_settings_button_is_not_mistaken_for_the_open_screen():
+    from types import SimpleNamespace
+
+    elements = [
+        SimpleNamespace(
+            accessible_label="Settings", accessible_role=SimpleNamespace(name="Button")
+        )
+    ]
+    query = SimpleNamespace(match_inherits=lambda _: query, find_all=lambda: elements)
+    app = SimpleNamespace(
+        first_window=SimpleNamespace(
+            root_element=SimpleNamespace(query_descendants=lambda: query)
+        )
+    )
+    assert not actions._settings_open(app)
+    elements.append(
+        SimpleNamespace(
+            accessible_label="Settings", accessible_role=SimpleNamespace(name="Main")
+        )
+    )
+    assert actions._settings_open(app)
