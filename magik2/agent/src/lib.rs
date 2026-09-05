@@ -8,10 +8,8 @@ use mister_magik_framebuffer_stream::read_frame as read_preview_frame;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
-use std::fs;
-#[cfg(test)]
-use std::fs::File;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 #[cfg(test)]
 use std::os::unix::fs::PermissionsExt;
@@ -151,6 +149,7 @@ impl Agent {
     pub fn capabilities() -> &'static [&'static str] {
         &[
             "status",
+            "diagnostics",
             "upload-v1",
             "lifecycle-v1",
             "start-artifact",
@@ -172,6 +171,37 @@ impl Agent {
     /// previews and the agent retains only the newest complete frame.
     pub fn start_observation_receiver(&self) -> Result<(), String> {
         fs::create_dir_all(&self.state_root).map_err(|error| error.to_string())?;
+        let root = self.state_root.clone();
+        let observation = self.observation.clone();
+        std::thread::spawn(move || {
+            let mut previous = String::new();
+            loop {
+                let current = log_tail(&root.join("probe.log"));
+                if current != previous {
+                    let added = current.strip_prefix(&previous).unwrap_or(&current);
+                    for line in added
+                        .lines()
+                        .rev()
+                        .take(MAX_RECENT_LOGS)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                    {
+                        observation.record_log(line.chars().take(2048).collect());
+                    }
+                    previous = current;
+                }
+                for name in ["probe.log", "agent.log"] {
+                    let path = root.join(name);
+                    if fs::metadata(&path).is_ok_and(|m| m.len() > 1024 * 1024) {
+                        if let Ok(file) = OpenOptions::new().write(true).open(path) {
+                            let _ = file.set_len(0);
+                        }
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        });
         let socket_path = self.state_root.join("probe-frames.sock");
         if socket_path.exists() {
             fs::remove_file(&socket_path).map_err(|error| error.to_string())?;
@@ -297,6 +327,7 @@ impl Agent {
                 "status",
                 serde_json::json!({
                     "identity": self.identity,
+                    "agent_sha256": installed_hash(&PathBuf::from("/proc/self/exe")),
                     "capabilities": Self::capabilities(),
                     "running": self.running(),
                     "artifact": "probe",
@@ -309,6 +340,11 @@ impl Agent {
             "start" => self.start(&request),
             "stop" => self.stop(&request),
             "metrics" => self.metrics(&request),
+            "diagnostics" => response(
+                &request.id,
+                "diagnostics",
+                serde_json::json!({"probe_log":log_tail(&self.state_root.join("probe.log")),"agent_log":log_tail(&self.state_root.join("agent.log")),"main_status":fs::read("/tmp/mister-magik/main-status.json").ok().and_then(|bytes|serde_json::from_slice::<serde_json::Value>(&bytes).ok()),"running":self.running(),"running_sha256":self.running_identity().map(|p|p.sha256)}),
+            ),
             _ => response(
                 &request.id,
                 "error",
@@ -434,6 +470,37 @@ impl Agent {
                 serde_json::json!({"already_running":true,"ready":true,"sha256":published_hash}),
             );
         }
+        if let Err(error) = fs::create_dir_all(&self.state_root) {
+            return response(
+                &request.id,
+                "error",
+                serde_json::json!({"code":"state-directory","detail":error.to_string()}),
+            );
+        }
+        let log = match OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.state_root.join("probe.log"))
+        {
+            Ok(log) => log,
+            Err(error) => {
+                return response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"probe-log","detail":error.to_string()}),
+                );
+            }
+        };
+        let stderr = match log.try_clone() {
+            Ok(file) => file,
+            Err(error) => {
+                return response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"probe-log","detail":error.to_string()}),
+                );
+            }
+        };
         if let Err(error) = fs::remove_file(self.readiness_path()) {
             if error.kind() != io::ErrorKind::NotFound {
                 return response(
@@ -456,7 +523,7 @@ impl Agent {
             return response(
                 &request.id,
                 "error",
-                serde_json::json!({"code":"main-suspend-failed","detail":error}),
+                serde_json::json!({"code":"main-suspend-failed","detail":error,"recovery":main_handoff("mister_magik_resume\n").err()}),
             );
         }
         let mut command = Command::new(executable);
@@ -466,8 +533,8 @@ impl Agent {
                 "MISTER_MAGIK2_ARTIFACT_SHA256",
                 published_hash.unwrap_or_default(),
             )
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(stderr));
         if let Some(test_server) = test_server {
             command.env("SLINT_TEST_SERVER", test_server);
         }
@@ -483,15 +550,7 @@ impl Agent {
             );
         }
         match command.spawn() {
-            Ok(mut child) => {
-                if let Some(stdout) = child.stdout.take() {
-                    forward_child_logs(stdout, self.observation.clone());
-                }
-                if let Some(stderr) = child.stderr.take() {
-                    forward_child_logs(stderr, self.observation.clone());
-                }
-                self.wait_for_readiness(request, child)
-            }
+            Ok(child) => self.wait_for_readiness(request, child),
             Err(error) => {
                 let recovery = main_handoff("mister_magik_resume\n");
                 response(
@@ -1012,18 +1071,15 @@ impl Agent {
     }
 }
 
-fn forward_child_logs(reader: impl Read + Send + 'static, observation: Arc<Observation>) {
-    std::thread::spawn(move || {
-        for line in BufReader::new(reader).lines() {
-            match line {
-                Ok(line) => observation.record_log(line),
-                Err(error) => {
-                    observation.record_log(format!("probe log read failed: {error}"));
-                    return;
-                }
-            }
-        }
-    });
+fn log_tail(path: &Path) -> String {
+    let Ok(mut file) = File::open(path) else {
+        return String::new();
+    };
+    let length = file.metadata().map_or(0, |m| m.len());
+    let _ = file.seek(SeekFrom::Start(length.saturating_sub(16 * 1024)));
+    let mut bytes = Vec::new();
+    let _ = file.take(16 * 1024).read_to_end(&mut bytes);
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 fn receive_preview_frames(mut stream: UnixStream, observation: Arc<Observation>) {

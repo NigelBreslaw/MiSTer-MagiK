@@ -13,8 +13,7 @@ from .bootstrap import BootstrapError, SshBootstrap
 from .build import ensure_arm_probe, ensure_arm_agent, ensure_arm_package
 from .client import AgentError, NativeAgent
 from .compatibility import AgentStatus
-from .results import append_event, create_run, source_context
-from .testing import fresh_session
+from .results import append_event, create_run, source_context, finalize, retain_diagnostics
 from .token_store import TokenStore, state_root
 from .viewer import serve
 
@@ -32,6 +31,7 @@ def agent_binary_path() -> Path:
 
 
 def main() -> int:
+    started = time.monotonic()
     parser = argparse.ArgumentParser(prog="scripts/magik2")
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("deploy")
@@ -48,6 +48,21 @@ def main() -> int:
     output_root = Path(os.environ.get("MISTER_MAGIK2_RESULTS", "build/magik2-results"))
     run = create_run(output_root, arguments.command, source_context(os.environ.get("MISTER_IP", "")))
     append_event(run, {"phase": "requested", "command": arguments.command})
+    code = 2
+    try:
+        code = dispatch(arguments, run)
+    except KeyboardInterrupt:
+        code = 130
+        append_event(run, {"phase":"command", "outcome":"failed", "error":"interrupted"})
+    except Exception as error:
+        append_event(run, {"phase":"command", "outcome":"failed", "error":str(error)})
+        print(f"magik2: {error} (result: {run})", file=os.sys.stderr)
+    finally:
+        finalize(run, code, int((time.monotonic()-started)*1000))
+    return code
+
+
+def dispatch(arguments, run) -> int:
     if arguments.command == "build":
         package = Path(__file__).resolve().parents[2] / arguments.target
         built = ensure_arm_package(package, package / "target/magik2-build.json")
@@ -70,7 +85,7 @@ def main() -> int:
     try:
         agent, status = connect_agent(run, STATUS_CAPABILITIES)
     except (BootstrapError, AgentError, OSError, RuntimeError) as error:
-        append_event(run, {"phase": "status", "outcome": "failed", "error": type(error).__name__})
+        append_event(run, {"phase": "status", "outcome": "failed", "error": str(error)})
         print(f"magik2 status: native agent unavailable ({type(error).__name__}) (result: {run})", file=os.sys.stderr)
         return 2
     append_event(run, {"phase": "status", "outcome": "passed", "identity": status.identity})
@@ -93,9 +108,12 @@ def deploy(_arguments: argparse.Namespace, run: Path) -> int:
             return 0
         append_event(run, {"phase": "complete", "outcome": "started", "elapsed_ms": int((time.monotonic() - started) * 1_000)})
     except (BootstrapError, AgentError, OSError, RuntimeError) as error:
-        append_event(run, {"phase": "failed", "error": type(error).__name__})
+        append_event(run, {"phase": "failed", "outcome":"failed", "error": str(error)})
         print(f"magik2 deploy: {error} (result: {run})", file=os.sys.stderr)
         return 2
+    finally:
+        if "agent" in locals():
+            retain_diagnostics(run, agent)
     print(f"magik2 deploy: probe started (result: {run})")
     return 0
 
@@ -121,7 +139,7 @@ def stop(run: Path) -> int:
         agent, _ = connect_agent(run, STOP_CAPABILITIES)
         agent.stop()
     except (BootstrapError, AgentError, OSError) as error:
-        append_event(run, {"phase": "stop", "outcome": "failed", "error": type(error).__name__})
+        append_event(run, {"phase": "stop", "outcome": "failed", "error": str(error)})
         print(f"magik2 stop: {type(error).__name__} (result: {run})", file=os.sys.stderr)
         return 2
     append_event(run, {"phase": "stop", "outcome": "passed"})
@@ -167,6 +185,7 @@ def ensure_probe(agent: NativeAgent, status: AgentStatus, run: Path) -> bool:
     payload = artifact.read_bytes()
     artifact_hash = hashlib.sha256(payload).hexdigest()
     agent.expected_sha256 = artifact_hash
+    append_event(run, {"phase":"artifact", "sha256":artifact_hash, "source_fingerprint":built.fingerprint, "bytes":len(payload), "prebuilt":built.prebuilt})
     healthy = status.fields.get("running") is True and status.fields.get("running_sha256") == artifact_hash and status.fields.get("ready") is True
     if healthy:
         append_event(run, {"phase": "deploy", "outcome": "no-op", "bytes": 0})
@@ -228,7 +247,7 @@ def connect_agent(run: Path, required: set[str] = REQUIRED_AGENT_CAPABILITIES) -
             pass
     repair = os.environ.get("MISTER_MAGIK2_REPAIR") == "1"
     if status is not None and status.supports(required) and not repair:
-        append_event(run, {"phase": "agent", "identity": status.identity, "capabilities": sorted(status.capabilities)})
+        append_event(run, {"phase": "agent", "identity": status.identity, "capabilities": sorted(status.capabilities), "sha256":status.fields.get("agent_sha256")})
         return agent, status
     binary = agent_binary_path()  # Build only after proving installed support is insufficient.
     if status is not None and status.supports({"agent-update-v1"}):
@@ -248,6 +267,7 @@ def connect_agent(run: Path, required: set[str] = REQUIRED_AGENT_CAPABILITIES) -
         agent = NativeAgent(device, token)
         status = wait_for_agent(agent, required)
         append_event(run, {"phase": "bootstrap", "outcome": "passed"})
+    append_event(run, {"phase":"agent", "identity":status.identity, "sha256":status.fields.get("agent_sha256"), "capabilities":sorted(status.capabilities)})
     return agent, status
 
 
