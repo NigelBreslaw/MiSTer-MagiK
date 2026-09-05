@@ -254,7 +254,5 @@ sample at the same direct `ascal` taps and one observer-only isolation stage.
 It publishes only the latest signature and advancing sequence through read-only
 `0x67`; `0x60`–`0x66`, latch-v5, and capabilities remain unchanged. It has no
 final-HDMI observer and continues to report sink visibility as unobserved. See
-[the retry design](../history/2026-08-24-raw-scaler-ordered-signature-design.md).
-
-The complete attempt history and retained measurements are in
-[FPGA video diagnostics: two attempted designs and their retirement](../history/2026-08-14-fpga-video-diagnostics-design-attempts.md).
+[the retained schema-10 contract](fpga-raw-scaler-diagnostic.md#ordered-signature-contract)
+for the successor to this retired schema. Dated attempts remain in Git history.

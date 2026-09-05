@@ -341,9 +341,7 @@ Do not stack branches.
 
 The embedded `main-mister/` directory in this app repo was the old experiment
 location. It is no longer the maintained source. Historical audits and device
-results remain under `history/`, especially:
-
-- `history/2026-6-14/main-mister-clean-reset-audit.md`
+results remain in Git history.
 
 Older notes may mention `main-mister/`; read those as history unless the current
 workflow above says otherwise.

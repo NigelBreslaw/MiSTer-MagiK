@@ -40,7 +40,9 @@ responsibilities remain in Rust, Main, and the small FPGA latch.
 Earlier investigations tried direct `/dev/mem`, cacheable aliases, DMA
 allocation, ownership and fence APIs, and an FPGA mailbox. They added states and
 failure modes without improving the production copy path, so none of those
-interfaces remain in the plugin.
+interfaces remain in the plugin. The cacheable zero-copy trial also initially
+omitted cache synchronization from its timing, overstating the improvement by
+roughly 2 ms. Comparisons must include that work and validate physical output.
 
 ## Failure and fallback
 
@@ -72,6 +74,5 @@ in QEMU on GitHub Actions or an optional local Linux runner—never on the MiSTe
 Those layers are described as release gates, not as completed certification.
 
 See the [assurance contract](https://github.com/NigelBreslaw/MiSTer-MagiK/blob/main/docs/kernel-scanout-plugin-assurance.md),
-[current architecture](https://github.com/NigelBreslaw/MiSTer-MagiK/blob/main/docs/architecture.md),
-and [zero-copy retirement evidence](https://github.com/NigelBreslaw/MiSTer-MagiK/blob/main/history/2026-07-11-zero-copy-retirement.md)
-for the detailed requirements and history.
+and [current architecture](https://github.com/NigelBreslaw/MiSTer-MagiK/blob/main/docs/architecture.md#rendering-decisions)
+for the detailed requirements and rendering rationale.

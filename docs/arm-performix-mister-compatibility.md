@@ -159,9 +159,8 @@ device capture used generated-build-only `-idirafter daemon` and
 `-Dlibgpuinfo=libarmgpuinfo` workarounds. The source checkout remained
 read-only; these boundaries must be re-audited before changing the pin.
 
-The completed evidence, including capture hashes and the profile-derived
-optimization, is recorded in
-[`history/2026-8-6-armv7-profiling.md`](../history/2026-8-6-armv7-profiling.md).
+The dated capture hashes and optimization measurements remain in Git history.
+They establish provenance for that run, not qualification of a current candidate.
 
 ## Resume gate
 

@@ -4,9 +4,9 @@ The production controller and keyboard navigation contract is documented in
 [Unified input](input.md). Main proxy protocol v2 is the sole application input
 source; raw device snapshots are setup and diagnostic data only.
 
-This document describes the current architecture. Dated experiments and older
-attempts live in `history/`; treat those as evidence, not policy, unless this
-document or `AGENTS.md` links to them as the reason for a current rule.
+This document describes the current architecture. Superseded plans and dated
+experiment narratives remain in Git history. Keep applicable decisions and
+constraints here; historical measurements do not establish current qualification.
 
 ## Product Shape
 
@@ -346,6 +346,19 @@ Important policy:
   `main_present_backend=fpga-vblank-latch-hidden` with status `ok` to prove the
   latch renderer is active.
 
+### Rendering decisions
+
+Render into cached RGB565 memory and copy completed regions into hidden scanout
+slots before the vblank latch posts them. Earlier direct live-framebuffer writes
+reduced measured CPU work but produced visible HDMI flicker; write-combined
+framebuffer access also made read-heavy rendering expensive. Physical output
+and complete frame work must qualify any replacement.
+
+The retired cacheable zero-copy experiment moved work into cache synchronization.
+Its initial timing omitted roughly 2 ms of cache cleaning between the copy and
+post timers, overstating the benefit. Include hidden composition and cache
+synchronization in end-to-end presentation work when comparing rendering paths.
+
 ## Framebuffer Stream
 
 `framebuffer_stream_v1` is the desktop inspection stream for the launcher. It is
@@ -409,14 +422,6 @@ Latch-stream policy:
   `show()` has created the native window, a redraw is requested, and notifier
   readiness is not asserted until Slint delivers `RenderingSetup`; completed
   display samples still require `AfterRendering` for an applied image serial.
-
-Historical evidence:
-
-- `history/2026-07-10-framebuffer-stream-cadence.md`
-- `history/2026-5-2/framebuffer-experiments.md`
-- `history/2026-6-8/direct-fb-trial.md`
-- `history/2026-6-9/direct-framebuffer-sidecar-retrospective.md`
-- `history/2026-6-14/launcher-framebuffer-route-reassertion.md`
 
 ## Launcher Composition
 
@@ -1015,7 +1020,7 @@ Current rules:
   menu-level computer/console launchers, and known support files are not normal
   launchables.
 - Arcade and Neo Geo identities are keyed through MAME set names when metadata
-  is available. See `history/2026-6-14/library-identity-model.md`.
+  is available.
 - Preview requests use derived archive paths and identity keys. The catalog does
   not index screenshot archives or walk PNG/JPG screenshot folders; missing
   preview entries fail at runtime and show the blank preview state.
@@ -1041,10 +1046,6 @@ Relevant docs:
 
 - `docs/console-media-identity.md`
 - `docs/media-download-security.md`
-- `history/2026-6-13/arcade-screenshot-cache-workflow.md`
-- `history/2026-6-13/preview-zstd-archive-bench.md`
-- `history/2026-6-14/library-scanner-preview-archive-pruning.md`
-- `history/2026-6-14/mame-metadata-db.md`
 
 ## Build And Module Boundaries
 
