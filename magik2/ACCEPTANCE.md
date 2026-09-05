@@ -91,8 +91,9 @@ not device acceptance.
   native replay cache returns the original mutation result without publishing
   the upload twice. Reusing that identifier for different request content is
   rejected.
-- Test sessions hold the mutation lane, use an absolute 20-second deadline from
-  session start, and stop the owned test process on application failure, client
+- Test sessions hold the mutation lane, use a 20-second application-connect
+  limit and a 60-second absolute deadline from session start, and stop the
+  owned test process on application failure, client
   disconnect, or deadline. The deadline test uses continuous traffic, so it
   cannot be extended by read activity.
 - Control mutations are serialized while native watch streams remain on their

@@ -25,7 +25,7 @@ REQUIRED_AGENT_CAPABILITIES = {
     "upload-v1",
     "lifecycle-v1",
     "request-replay-v1",
-    "test-deadline-v1",
+    "test-deadline-v2",
     "legacy-isolation-v1",
 }
 CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {"metrics-v1", "test-bridge-v1"}
@@ -123,7 +123,7 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
                 append_event(run, {"phase": "motion", "outcome": "measured", **measurement})
                 if not measurement["physical_evidence_valid"]:
                     raise AssertionError("motion has no validated physical-presentation evidence")
-    except (AssertionError, BootstrapError, AgentError, OSError, RuntimeError) as error:
+    except Exception as error:
         primary_error = error
         append_event(run, {"phase": "check", "outcome": "failed", "error": str(error)})
     finally:

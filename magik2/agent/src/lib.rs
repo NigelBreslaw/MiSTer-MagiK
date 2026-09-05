@@ -109,7 +109,8 @@ const MAX_RECENT_LOGS: usize = 100;
 const MAX_REPLAYED_MUTATIONS: usize = 64;
 const WATCH_INTERVAL: Duration = Duration::from_millis(200);
 const VIEWER_LEASE: Duration = Duration::from_secs(2);
-const TEST_SESSION_DEADLINE: Duration = Duration::from_secs(20);
+const TEST_APPLICATION_CONNECT_DEADLINE: Duration = Duration::from_secs(20);
+const TEST_SESSION_DEADLINE: Duration = Duration::from_secs(60);
 const SESSION_IO_TIMEOUT: Duration = Duration::from_millis(200);
 
 #[derive(Clone)]
@@ -215,6 +216,7 @@ impl Agent {
             "agent-update-v1",
             "request-replay-v1",
             "test-deadline-v1",
+            "test-deadline-v2",
             "legacy-isolation-v1",
         ]
     }
@@ -872,12 +874,13 @@ impl Agent {
         stream: &mut TcpStream,
     ) -> Result<(), FrameError> {
         listener.set_nonblocking(true).map_err(FrameError::from)?;
-        let deadline = Instant::now() + TEST_SESSION_DEADLINE;
+        let connect_deadline = Instant::now() + TEST_APPLICATION_CONNECT_DEADLINE;
         let mut application = loop {
             match listener.accept() {
                 Ok((connection, _)) => break connection,
                 Err(error)
-                    if error.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+                    if error.kind() == io::ErrorKind::WouldBlock
+                        && Instant::now() < connect_deadline =>
                 {
                     std::thread::sleep(Duration::from_millis(25));
                 }
@@ -905,6 +908,7 @@ impl Agent {
         stream
             .set_write_timeout(Some(SESSION_IO_TIMEOUT))
             .map_err(FrameError::from)?;
+        let deadline = Instant::now() + TEST_SESSION_DEADLINE;
         let mut device_to_host = application.try_clone().map_err(FrameError::from)?;
         let mut host_clone = stream.try_clone().map_err(FrameError::from)?;
         let upstream = std::thread::spawn(move || {
