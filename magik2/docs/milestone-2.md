@@ -1,5 +1,13 @@
 # Mini-MagiK and the shared application workflow
 
+> Review correction: the initial real-app deployment isolated the executable,
+> but its runtime data still defaulted to production. Those earlier real-app
+> measurements are historical tooling evidence, not a development-layout
+> baseline. The corrected build now reports all application data under
+> `/media/fat/mister-magik-dev` and selects `MiSTer_MagiKDev`. See the
+> [careful review](milestone-2-review.md) for findings and limitations.
+
+
 ## Implemented
 
 - Mini-MagiK remains the small consumer in `magik2/probe`, with binary name
@@ -46,6 +54,7 @@
 | Real-app idle benchmark | Two 5,004 ms windows in the same PID (15815); zero redraws |
 | Real-app profile | One 10,016 ms window; 13 samples, folded stacks and flamegraph retained |
 | Real-app stream | Two successive decoded 960 × 540 frames; no app restart |
+| Corrected real-app development layout | Deployed; running artifact hash and all reported data paths verified without another restart |
 | Reduced-restart fixture | Smoke and both ordinary measurements shared one process; cleanup passed |
 
 Focused local checks passed: 49 host tests, four shared-support tests, the
@@ -97,3 +106,14 @@ Raw artifacts remain outside Git in `build/magik2-results/`. Relevant bundles:
 - Real stream and final diagnostics: `20260905T154817Z-11c661ef1d53`
 
 [Saved transfer comparison](milestone-2-transfer-check.md).
+
+
+Development-layout correction bundles:
+
+- Deployment: `20260905T160815Z-e1d086d0c5ce`
+- Read-only running-artifact and path verification: `20260905T161135Z-c113eb76215f`
+
+Earlier runs may have modified production runtime data. There is no pre-run
+snapshot to enumerate those changes reliably; no speculative data rollback was
+attempted. The statement above about production files not being replaced applies
+to executable/platform delivery, not to runtime data isolation before this fix.

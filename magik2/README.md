@@ -5,7 +5,14 @@ One development workflow for **Mini-MagiK**, the fast Slint experiment in
 observation, device-clock measurement windows, CPU profiles and Python tests.
 The real application runs as a separate development copy under
 `/media/fat/mister-magik2/magik`; installed production app/platform files are
-not replaced.
+not replaced. Automatic real-app builds enable `magik2`, which selects the
+central `development-layout` feature: runtime settings, controllers, catalog,
+library, user state and assets live under `/media/fat/mister-magik-dev`, with
+`MiSTer_MagiKDev` as Main. A prebuilt real-app override must enable the same
+feature. Smoke checks verify the reported runtime paths.
+
+See the [milestone review](docs/milestone-2-review.md) for corrections, evidence
+and remaining limitations.
 
 ## Setup and commands
 
