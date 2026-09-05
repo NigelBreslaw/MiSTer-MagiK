@@ -2385,9 +2385,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "mister-magik-core"
+version = "0.1.0"
+
+[[package]]
+name = "mister-magik-latch-contract"
+version = "0.1.0"
+
+[[package]]
+name = "mister-magik-mister-runtime"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "mister-magik-core",
+ "mister-magik-latch-contract",
+ "mister-magik-scanout-contract",
+ "serde",
+ "serde_json",
+ "slint",
+]
+
+[[package]]
+name = "mister-magik-scanout-contract"
+version = "0.1.0"
+
+[[package]]
 name = "mister-magik2-probe"
 version = "0.1.0"
 dependencies = [
+ "mister-magik-mister-runtime",
  "slint",
  "slint-build",
 ]

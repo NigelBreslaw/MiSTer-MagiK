@@ -12,6 +12,8 @@ export component Probe inherits Window {
     in-out property <int> counter: 0;
     in-out property <bool> details-open: false;
     in-out property <int> motion-step: 0;
+    in-out property <bool> motion-running: false;
+    in-out property <bool> motion-complete: false;
     in property <string> build-label: "magik2 probe";
     callback increment();
     callback reset();
@@ -41,7 +43,7 @@ export component Probe inherits Window {
     Rectangle {
         x: 16px; y: 256px; width: parent.width - 32px; height: parent.height - 272px;
         background: #0b1220; border-radius: 6px;
-        Text { x: 14px; y: 12px; text: "Deterministic motion workload (64 rectangles)"; color: #94a3b8; }
+        Text { x: 14px; y: 12px; text: root.motion-running ? "Motion workload running" : root.motion-complete ? "Motion workload complete" : "Deterministic motion workload (64 rectangles)"; color: #94a3b8; accessible-role: text; accessible-label: "motion-state"; }
         for i in 64 : Rectangle {
             width: 9px; height: 9px;
             x: 12px + Math.mod(i * 47 + root.motion-step * (Math.mod(i, 5) + 2), 570) * 1px;

@@ -12,12 +12,12 @@
 //! /dev/fb0 also provides the FBIO_WAITFORVSYNC ioctl we pace on.
 
 use crate::boot_analytics;
+use crate::framebuffer::damage::DirtyRect;
 use crate::framebuffer::format::{
     RGB565_BITS_PER_PIXEL, fb_mode_format_from_bits_per_pixel, production_label, restore_mode_line,
     rgb565_mode_line, rgb565_stride_bytes,
 };
 use crate::framebuffer::sample::Rgb565SampleView;
-use crate::framebuffer::target::DirtyRect;
 use crate::framebuffer::vertical_scale::{
     Rgb565FrameView, VerticalCopyStats, VerticalRect, VerticalRgb565Transform,
 };
