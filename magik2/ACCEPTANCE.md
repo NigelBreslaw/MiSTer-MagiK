@@ -15,6 +15,14 @@ not device acceptance.
   were 727, 729, 733, 743, 745, 747, 748, 749, 755, 759, 760, 761, 764, 800,
   823, 829, 849, 849, 868, and 893 ms. Nearest-rank p95 is 849 ms, below the
   one-second requirement.
+- The internal prebuilt-artifact path was sampled 20 times with distinct
+  executable hashes and no compilation. Invocation-to-completion samples were
+  2147, 2176, 2192, 2200, 2206, 2236, 2300, 2301, 2331, 2344, 2360, 2365,
+  2399, 2399, 2475, 2481, 2502, 2594, 2606, and 2618 ms. The 11,957,000-byte
+  uploads completed in roughly 1.5–2.0 seconds; nearest-rank p95 completion
+  is 2606 ms, below the five-second requirement. One separate 11 MB upload
+  timed out before acknowledgment and remains retained as failure evidence;
+  it was excluded from the successful 20-sample set.
 - Native observation delivered metrics, 100 recent probe logs, and a
   1,036,872-byte keyframe (72-byte wire header plus a 960x540 RGB565 surface)
   to the localhost viewer with no stream error. No framebuffer device polling
@@ -48,8 +56,8 @@ not device acceptance.
 
 - Measure viewer observation overhead,
   including slow/disconnected viewers.
-- Measure 20 invocation-to-completion runs for changed-prebuilt, Rust-edit,
-  and Slint-edit cases. Retain all samples, bytes, throughput, and nearest-rank
-  p95; do not substitute phase timing for those targets.
+- Measure 20 invocation-to-completion runs for Rust-edit and Slint-edit cases.
+  Retain all samples, bytes, throughput, and nearest-rank p95; do not
+  substitute phase timing for those targets.
 - Exercise failure, lost-reply, deadline, concurrent-stream, and cleanup
   matrices; retain both primary and cleanup outcomes.
