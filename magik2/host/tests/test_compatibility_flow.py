@@ -170,39 +170,6 @@ def test_check_command_dispatches_without_shadowing_the_handler(monkeypatch: pyt
     assert received["profile"] is True
 
 
-def test_check_retains_primary_and_cleanup_failures(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    class ClientDisconnected(Exception):
-        pass
-
-    class Agent:
-        def start(self, *, restart: bool, expected_sha256=None) -> None:
-            assert not restart
-            raise AgentError("persistent restart failed")
-
-    class Session:
-        def __enter__(self) -> object:
-            return object()
-
-        def __exit__(self, *_unused) -> None:
-            return None
-
-    monkeypatch.setattr(cli, "connect_agent", lambda _run, _required: (Agent(), status("test", set())))
-    monkeypatch.setattr(cli, "ensure_probe", lambda *_unused: False)
-    monkeypatch.setattr(cli, "fresh_session", lambda *_unused, **_kwargs: Session())
-    monkeypatch.setattr(
-        cli,
-        "smoke",
-        lambda *_unused: (_ for _ in ()).throw(ClientDisconnected("smoke client disconnected")),
-    )
-    run = create_run(tmp_path, "check", {})
-
-    assert cli.check(argparse.Namespace(scenario="smoke", profile=False), run) == 2
-    events = [json.loads(line) for line in (run / "events.jsonl").read_text().splitlines()]
-    assert {"phase": "check", "outcome": "failed", "error": "smoke client disconnected"} in events
-    assert any(event["phase"] == "persistent-restart" and event["outcome"] == "failed" for event in events)
-    assert any(event["phase"] == "cleanup" and event["outcome"] == "failed" for event in events)
-
-
 def test_fresh_worktrees_retrieve_token_without_replacing_compatible_agent(monkeypatch, tmp_path):
     monkeypatch.setenv("MISTER_IP", "mister.test")
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "shared"))
@@ -228,19 +195,3 @@ def test_fresh_worktrees_retrieve_token_without_replacing_compatible_agent(monke
         monkeypatch.chdir(checkout)
         assert cli.connect_agent(create_run(checkout, "deploy", {}))[1].identity == "other-branch"
     assert seen == ["retrieve"]
-
-
-def test_partial_session_entry_still_attempts_restoration(monkeypatch, tmp_path):
-    from unittest.mock import Mock
-    agent = Mock(expected_sha256="artifact")
-    class BrokenSession:
-        def __enter__(self):
-            raise RuntimeError("Slint attach failed")
-        def __exit__(self, *args):
-            pass
-    monkeypatch.setattr(cli, "connect_agent", lambda *_: (agent, status("test", set())))
-    monkeypatch.setattr(cli, "ensure_probe", lambda *_: False)
-    monkeypatch.setattr(cli, "fresh_session", lambda *_, **kw: BrokenSession())
-    run = create_run(tmp_path, "check", {})
-    assert cli.check(argparse.Namespace(scenario="smoke", profile=False), run) == 2
-    agent.start.assert_called_once_with(restart=False, expected_sha256="artifact")

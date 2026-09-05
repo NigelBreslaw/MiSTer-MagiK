@@ -2670,6 +2670,7 @@ dependencies = [
  "mister-magik-framebuffer-stream",
  "mister-magik-mister-runtime",
  "pprof",
+ "serde_json",
  "slint",
  "slint-build",
 ]

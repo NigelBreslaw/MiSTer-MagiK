@@ -28,7 +28,7 @@ export component Probe inherits Window {
     Rectangle {
         x: 16px; y: 16px; width: parent.width - 32px; height: 48px;
         background: #1f2937; border-radius: 6px;
-        Text { x: 14px; y: 13px; text: root.build-label; color: #dbeafe; font-size: 18px; accessible-role: text; accessible-label: "build-label"; }
+        Text { x: 14px; y: 13px; text: root.build-label; color: #dbeafe; font-size: 18px; accessible-role: text; accessible-label: "build-label"; accessible-value: root.build-label; }
     }
 
     Rectangle {

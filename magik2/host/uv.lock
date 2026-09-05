@@ -236,6 +236,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "paramiko" },
+    { name = "pytest" },
     { name = "slint-testing" },
 ]
 
@@ -247,6 +248,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "paramiko", specifier = ">=4,<5" },
+    { name = "pytest", specifier = ">=8" },
     { name = "slint-testing", specifier = "==0.3", index = "https://testing.slint.dev/simple/" },
 ]
 
