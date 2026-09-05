@@ -23,7 +23,7 @@ from .viewer import serve
 STATUS_CAPABILITIES = {"status"}
 STOP_CAPABILITIES = {"status", "lifecycle-v1"}
 REQUIRED_AGENT_CAPABILITIES = {"status", "upload-v1", "start-artifact", "request-replay-v1"}
-CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {"metrics-v1", "test-bridge-v1", "test-deadline-v2"}
+CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {"metrics-v1", "test-bridge-v1", "test-session"}
 WATCH_AGENT_CAPABILITIES = {"status", "metrics-v1", "watch-v1"}
 PROFILE_AGENT_CAPABILITIES = CHECK_AGENT_CAPABILITIES | {"artifacts-v1"}
 
@@ -114,8 +114,8 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
     try:
         agent, status = connect_agent(run, PROFILE_AGENT_CAPABILITIES if profile_id is not None else CHECK_AGENT_CAPABILITIES)
         ensure_probe(agent, status, run)
+        session_started = True
         with fresh_session(agent, profile_id=profile_id) as application:
-            session_started = True
             if "smoke" in scenarios:
                 append_event(run, {"phase": "smoke", "outcome": "started"})
                 append_event(run, {"phase": "smoke", "outcome": "passed", **smoke(application, run / "smoke.png")})
@@ -139,7 +139,7 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
                     cleanup_errors.append(f"profile artifact {name}: {error}")
         if session_started:
             try:
-                agent.start(restart=True)
+                agent.start(restart=False, expected_sha256=getattr(agent, "expected_sha256", None))
                 append_event(run, {"phase": "persistent-restart", "outcome": "passed"})
             except (BootstrapError, AgentError, OSError, UnboundLocalError) as error:
                 append_event(run, {"phase": "persistent-restart", "outcome": "failed", "error": type(error).__name__})
@@ -207,6 +207,7 @@ def ensure_probe(agent: NativeAgent, status: AgentStatus, run: Path) -> bool:
     artifact = built.artifact
     payload = artifact.read_bytes()
     artifact_hash = hashlib.sha256(payload).hexdigest()
+    agent.expected_sha256 = artifact_hash
     healthy = status.fields.get("running") is True and status.fields.get("running_sha256") == artifact_hash and status.fields.get("ready") is True
     if healthy:
         append_event(run, {"phase": "deploy", "outcome": "no-op", "bytes": 0})

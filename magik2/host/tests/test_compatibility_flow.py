@@ -175,8 +175,8 @@ def test_check_retains_primary_and_cleanup_failures(monkeypatch: pytest.MonkeyPa
         pass
 
     class Agent:
-        def start(self, *, restart: bool) -> None:
-            assert restart
+        def start(self, *, restart: bool, expected_sha256=None) -> None:
+            assert not restart
             raise AgentError("persistent restart failed")
 
     class Session:
@@ -228,3 +228,19 @@ def test_fresh_worktrees_retrieve_token_without_replacing_compatible_agent(monke
         monkeypatch.chdir(checkout)
         assert cli.connect_agent(create_run(checkout, "deploy", {}))[1].identity == "other-branch"
     assert seen == ["retrieve"]
+
+
+def test_partial_session_entry_still_attempts_restoration(monkeypatch, tmp_path):
+    from unittest.mock import Mock
+    agent = Mock(expected_sha256="artifact")
+    class BrokenSession:
+        def __enter__(self):
+            raise RuntimeError("Slint attach failed")
+        def __exit__(self, *args):
+            pass
+    monkeypatch.setattr(cli, "connect_agent", lambda *_: (agent, status("test", set())))
+    monkeypatch.setattr(cli, "ensure_probe", lambda *_: False)
+    monkeypatch.setattr(cli, "fresh_session", lambda *_, **kw: BrokenSession())
+    run = create_run(tmp_path, "check", {})
+    assert cli.check(argparse.Namespace(scenario="smoke", profile=False), run) == 2
+    agent.start.assert_called_once_with(restart=False, expected_sha256="artifact")

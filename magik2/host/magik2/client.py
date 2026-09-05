@@ -19,6 +19,7 @@ class NativeAgent:
         self.host = host
         self.token = token
         self.port = port
+        self.expected_sha256: str | None = None
 
     def status(self) -> AgentStatus:
         response, _ = self._request("status")
@@ -62,6 +63,8 @@ class NativeAgent:
 
     def open_test_tunnel(self, profile_id: str | None = None) -> socket.socket:
         fields = {} if profile_id is None else {"profile_id": profile_id}
+        if self.expected_sha256 is not None:
+            fields["expected_sha256"] = self.expected_sha256
         request = Envelope(uuid.uuid4().hex, "test-start", self.token, fields)
         connection = socket.create_connection((self.host, self.port), timeout=20)
         try:
