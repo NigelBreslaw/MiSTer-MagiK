@@ -18,8 +18,8 @@ requires its own bounded task.
 | Instruction reductions and validation-policy corrections | Keep, preserving consequential safeguards and active legacy contracts. |
 | Bootstrap-free guidance and actual ancestor discovery | Keep the capability; its legacy command alias need not survive eventual retirement. |
 | Focused validation recommendations and privacy-safe context metrics | Keep; adapt ownership when a new project actually exists. |
-| LSP caps, compact responses, and branch/worktree routing | Keep and finish the identified error-path budget fix. |
-| Completed host characterization and extraction commits | Preserve on the original cleanup branch; exclude from the focused integration branch. |
+| LSP caps, compact responses, and branch/worktree routing | Keep, including the completed error-path budget fix. |
+| Completed host characterization and extraction commits | Discard from integration; the old parent branch and worktree have been deleted. |
 | Remaining host orchestration and old device-agent decomposition | Superseded by the replacement roadmap. Stop this work. |
 | Launcher/runtime and catalog decomposition | Defer as independent application maintenance, justified by concrete future needs. |
 | Desktop decomposition | Defer until the desktop's retained role alongside the new viewer is decided. |
@@ -34,15 +34,11 @@ not reported as eliminated when the work is deferred.
 The bounded LSP correction, focused integration branch, documentation
 reconciliation, and selected verification are complete. See
 [`agent-effectiveness-status.md`](agent-effectiveness-status.md) for the branch
-selection, preserved legacy branch, LSP activation boundary, and deferred work.
+selection, discarded refactor work, LSP activation boundary, and deferred work.
 
 Future work must be a separate bounded task for a retained system or a project
 with its own scoped instructions. Do not infer a broader migration, delivery
 policy change, or hardware qualification result from this completed tidy-up.
-
-The intended existing parent commit selection, before any new fixes, is:
-`5339b1a6f`, `b1bc7737d`, `4776fb7cc`, `78514d9b7`, `91b43f645`,
-`dc266d00f`, and `96405183f`. Cherry-picked commit identities will differ.
 
 ## Verification and completion
 
@@ -56,10 +52,11 @@ The intended existing parent commit selection, before any new fixes, is:
   desktop, or catalog implementation decomposition.
 - Instruction targets remain editorial targets, not grounds to remove safeguards.
 - Documentation separates retained changes, superseded work, deferred work, and
-  unavailable evidence. The legacy refactor branch remains recoverable.
+  unavailable evidence. The discarded refactors are not an integration dependency.
 
-Terra with high reasoning performs the remaining implementation and tidy-up.
-Each new implementation commit gets at most one review round; an identified fix
-gets focused validation without a repeated review cycle. No parent push, merge,
-deployment, destructive test, FPGA synthesis, dependency upgrade, or global
-plugin change is included.
+Terra with high reasoning completed the conservative implementation and tidy-up.
+Each new implementation commit received at most one review round; identified
+fixes received focused validation without repeated review cycles. The tooling-only
+branch is submitted for PR review after rebasing onto current `main`. Merging,
+deployment, destructive tests, FPGA synthesis, dependency upgrades, and global
+plugin changes remain outside this cleanup.

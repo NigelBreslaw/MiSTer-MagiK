@@ -2,9 +2,8 @@
 
 Implementation baseline: `367823f48fe55e75b952384d1b43357fe38a8533`.
 Focused integration branch: `nigel/agent-effectiveness-tooling`, created in a
-separate worktree from that baseline. The preserved
-`nigel/agent-effectiveness` branch contains earlier host extractions and is not
-part of this comparison.
+separate worktree from that baseline and subsequently rebased onto current
+`main`. The discarded host extractions are not part of this comparison.
 
 ## Instruction ancestry fixtures
 
@@ -12,7 +11,7 @@ These controlled scenarios count whitespace-delimited words and UTF-8 bytes in
 tracked repository `AGENTS.md` ancestor chains. They exclude global
 instructions, skills, model tokens, and the actual context injected into a
 session. The before revision is the implementation baseline; the after revision
-is the instruction-cleanup revision `2c0e277db039842205cf081e450dab920c3b4d8f`.
+is the instruction-cleanup revision `73d9b21f9bc38e2acd3f587103ff298123604c22`.
 
 | Scenario | Before words | After words | Change | Before bytes | After bytes |
 | --- | ---: | ---: | ---: | ---: | ---: |
