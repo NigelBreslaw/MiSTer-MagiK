@@ -1,6 +1,10 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// Keep the standalone probe self-contained: the MiSTer runtime has no usable
+// system font collection, so every text item must have an embedded fallback.
+import "../../../apps/mister/ui/fonts/Jersey25-Regular.ttf";
+
 export component Probe inherits Window {
     title: "MiSTer MagiK 2 Probe";
     width: 640px;
@@ -8,6 +12,7 @@ export component Probe inherits Window {
     background: #101827;
     accessible-role: main;
     accessible-label: "MiSTer MagiK 2 probe";
+    default-font-family: "Jersey 25";
 
     in-out property <int> counter: 0;
     in-out property <bool> details-open: false;
