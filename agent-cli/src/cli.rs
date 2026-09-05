@@ -6,7 +6,7 @@ use crate::commands::device::DeviceCommand;
 use crate::compile_time::CompileTimeCommand;
 use crate::dependencies::DependenciesCommand;
 use crate::fpga::FpgaCommand;
-use crate::model::{ArcadeVelocityScrollArm, ArcadeVelocityScrollRoute, BenchmarkScenario};
+use crate::model::BenchmarkScenario;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
@@ -102,30 +102,12 @@ pub enum Command {
     Benchmark {
         #[arg(value_enum)]
         scenario: BenchmarkScenario,
-        #[arg(value_enum)]
-        arm: Option<ArcadeVelocityScrollArm>,
-        #[arg(long, value_enum, default_value_t)]
-        route: ArcadeVelocityScrollRoute,
-        #[arg(
-            long,
-            default_value_t = 40,
-            value_parser = clap::value_parser!(u64).range(5..=120)
-        )]
-        duration_seconds: u64,
-        #[arg(
-            long,
-            help = "Purge the Dev catalog inside a cold-boot benchmark transaction"
-        )]
-        fresh_catalog: bool,
     },
     Capture {
         #[command(subcommand)]
         command: CaptureCommand,
     },
-    Alpha {
-        #[command(subcommand)]
-        command: AlphaCommand,
-    },
+
     Release {
         #[command(subcommand)]
         command: ReleaseCommand,
@@ -451,25 +433,6 @@ pub enum ReturnQualificationCommand {
         layout: String,
         #[arg(long, default_value = crate::return_qualification::DEFAULT_AGGREGATE_CERTIFICATE)]
         certificate: PathBuf,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-pub enum AlphaCommand {
-    Accept {
-        #[arg(long)]
-        candidate: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
-        /// Reuse the identity-verified public alpha without reinstalling or rebooting.
-        #[arg(long)]
-        reuse_installed: bool,
-        /// Restore the pre-test Main selection. By default the MiSTer stays on alpha.
-        #[arg(long)]
-        restore_host_mode: bool,
-        /// Skip physical USB Video captures and retain authoritative framebuffer evidence only.
-        #[arg(long)]
-        framebuffer_only: bool,
     },
 }
 
@@ -862,176 +825,6 @@ mod tests {
     }
 
     #[test]
-    fn benchmark_defaults_to_screensaver_and_accepts_typed_scenarios() {
-        let accepted = [
-            "screensaver",
-            "catalog-lifecycle",
-            "catalog-build-rebuild",
-            "catalog-resume-validation",
-            "catalog-full-build-rebuild",
-            "arcade-catalog-prototype-cold",
-            "system-entry",
-            "system-entry-critical",
-            "system-entry-critical-confirm",
-            "system-entry-critical-profile",
-            "system-entry-critical-streamline",
-            "system-entry-qualification",
-            "navigation-transitions",
-            "settings-navigation",
-            "settings-navigation-pprof",
-            "orientation-transition-fade",
-            "orientation-transition-zoom",
-            "orientation-transition-fade-pprof",
-            "orientation-transition-zoom-pprof",
-            "neon-attribution",
-            "pmu-profile",
-            "launch-return",
-            "launch-return-once",
-            "launch-return-fallback",
-            "launch-return-attribution",
-            "modal-input",
-            "input-integrity",
-            "launcher-response",
-            "launcher-response-retained",
-            "launcher-response-attribution",
-            "gui-frame-attribution",
-            "settled-composition",
-            "bridge-model-churn",
-            "bridge-model-churn-retained",
-            "scheduler-trace",
-            "storage-attribution",
-            "arcade-velocity-scroll",
-            "arcade-velocity-scroll-attribution",
-            "transition-streamline",
-            "agent-observer-attribution",
-            "agent-io-attribution",
-            "input-latency-lab",
-            "launcher-response-streamline",
-            "cold-boot",
-            "cold-boot-pprof",
-            "media-pack-persistence",
-            "rom-identity-hashing",
-            "preview-work-attribution",
-            "search",
-            "streamline",
-        ];
-        assert!(Cli::try_parse_from(["agent-cli", "benchmark"]).is_err());
-        for scenario in accepted {
-            assert!(Cli::try_parse_from(["agent-cli", "benchmark", scenario]).is_ok());
-        }
-        assert!(
-            Cli::try_parse_from(["agent-cli", "benchmark", "cold-boot", "--fresh-catalog"]).is_ok()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "agent-cli",
-                "benchmark",
-                "cold-boot-pprof",
-                "--fresh-catalog"
-            ])
-            .is_ok()
-        );
-        assert!(
-            Cli::try_parse_from(["agent-cli", "benchmark", "screensaver", "--fresh-catalog"])
-                .is_ok()
-        );
-        for arm in ["control", "turbo", "pprof", "pmu", "streamline"] {
-            assert!(
-                Cli::try_parse_from([
-                    "agent-cli",
-                    "benchmark",
-                    "arcade-velocity-scroll-attribution",
-                    arm,
-                ])
-                .is_ok()
-            );
-        }
-        for route in [
-            "active",
-            "hdmi-landscape",
-            "hdmi-portrait-left",
-            "hdmi-portrait-right",
-            "hdmi1080-landscape",
-            "hdmi1080-portrait-left",
-            "crt240-portrait-left",
-            "crt240-portrait-right",
-            "crt288-portrait-left",
-            "crt288-portrait-right",
-        ] {
-            assert!(
-                Cli::try_parse_from([
-                    "agent-cli",
-                    "benchmark",
-                    "arcade-velocity-scroll-attribution",
-                    "control",
-                    "--route",
-                    route,
-                ])
-                .is_ok()
-            );
-        }
-        assert!(
-            Cli::try_parse_from([
-                "agent-cli",
-                "benchmark",
-                "arcade-velocity-scroll-attribution",
-                "turbo",
-                "--route",
-                "hdmi-portrait-left",
-                "--duration-seconds",
-                "20",
-            ])
-            .is_ok()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "agent-cli",
-                "benchmark",
-                "arcade-velocity-scroll-attribution",
-                "turbo",
-                "--duration-seconds",
-                "4",
-            ])
-            .is_err()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "agent-cli",
-                "benchmark",
-                "arcade-velocity-scroll-attribution",
-                "control",
-                "--route",
-                "unknown",
-            ])
-            .is_err()
-        );
-        for removed in ["control-smoke", "pmu-smoke"] {
-            assert!(
-                Cli::try_parse_from([
-                    "agent-cli",
-                    "benchmark",
-                    "arcade-velocity-scroll-attribution",
-                    removed,
-                ])
-                .is_err()
-            );
-        }
-        assert!(
-            Cli::try_parse_from([
-                "agent-cli",
-                "benchmark",
-                "arcade-velocity-scroll-attribution",
-                "unknown",
-            ])
-            .is_err()
-        );
-        assert!(Cli::try_parse_from(["agent-cli", "benchmark", "particle-demo-01"]).is_err());
-        assert!(Cli::try_parse_from(["agent-cli", "benchmark", "firework-visual"]).is_err());
-        assert!(Cli::try_parse_from(["agent-cli", "benchmark", "--duration", "10"]).is_err());
-        assert!(Cli::try_parse_from(["agent-cli", "benchmark", "unknown"]).is_err());
-    }
-
-    #[test]
     fn removed_task_and_commit_surfaces_are_rejected() {
         assert!(Cli::try_parse_from(["agent-cli", "task", "begin"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "commit", "-m", "message"]).is_err());
@@ -1069,38 +862,6 @@ mod tests {
     }
 
     #[test]
-    fn alpha_accept_has_a_closed_candidate_and_output_interface() {
-        assert!(
-            Cli::try_parse_from([
-                "agent-cli",
-                "alpha",
-                "accept",
-                "--candidate",
-                "/tmp/candidate",
-                "--output",
-                "/tmp/evidence",
-            ])
-            .is_ok()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "agent-cli",
-                "alpha",
-                "accept",
-                "--candidate",
-                "/tmp/candidate",
-                "--output",
-                "/tmp/evidence",
-                "--reuse-installed",
-                "--restore-host-mode",
-                "--framebuffer-only",
-            ])
-            .is_ok()
-        );
-        assert!(Cli::try_parse_from(["agent-cli", "alpha", "accept"]).is_err());
-    }
-
-    #[test]
     fn diagnose_is_flag_free() {
         assert!(Cli::try_parse_from(["agent-cli", "diagnose"]).is_ok());
         assert!(Cli::try_parse_from(["agent-cli", "diagnose", "--repair-all"]).is_err());
@@ -1124,14 +885,14 @@ mod tests {
             "device-agent",
             "device-agent-ci",
             "manager-device",
-            "arcade-catalog-prototype-device",
-            "five-system-catalog-prototype-device",
-            "five-system-catalog-prototype-analysis",
             "release-binaries",
         ] {
             assert!(Cli::try_parse_from(["agent-cli", "build", intent]).is_ok());
         }
         for intent in [
+            "arcade-catalog-prototype-device",
+            "five-system-catalog-prototype-device",
+            "five-system-catalog-prototype-analysis",
             "runtime-profile",
             "host-tool",
             "runtime-benchmark",
@@ -1146,5 +907,25 @@ mod tests {
     #[test]
     fn display_mode_operator_surface_is_not_available() {
         assert!(Cli::try_parse_from(["agent-cli", "display-mode", "8"]).is_err());
+    }
+    #[test]
+    fn retired_application_qualification_is_unavailable() {
+        assert!(Cli::try_parse_from(["agent-cli", "benchmark", "input-integrity"]).is_ok());
+        for scenario in [
+            "screensaver",
+            "cold-boot",
+            "catalog-lifecycle",
+            "settings-navigation",
+            "scheduler-trace",
+            "arcade-catalog-prototype-cold",
+        ] {
+            assert!(Cli::try_parse_from(["agent-cli", "benchmark", scenario]).is_err());
+        }
+        assert!(Cli::try_parse_from(["agent-cli", "benchmark"]).is_err());
+        assert!(Cli::try_parse_from(["agent-cli", "alpha", "accept"]).is_err());
+        assert!(Cli::try_parse_from(["agent-cli", "device", "launcher", "ui-test"]).is_err());
+        assert!(
+            Cli::try_parse_from(["agent-cli", "device", "launcher", "ui-test-bridge"]).is_err()
+        );
     }
 }

@@ -566,12 +566,11 @@ import scripts.magik_ci.cli
                 "format",
                 "--check",
                 "scripts",
-                "apps/mister/ui_tests",
             ),
         )
         self.assertEqual(
             QUALITY_COMMANDS["lint"],
-            ("uv", "run", "ruff", "check", "scripts", "apps/mister/ui_tests"),
+            ("uv", "run", "ruff", "check", "scripts"),
         )
         self.assertEqual(QUALITY_COMMANDS["typecheck"], ("uv", "run", "ty", "check"))
 

@@ -8,10 +8,6 @@ use std::io::Read;
 use std::path::Path;
 use zip::ZipArchive;
 
-const MAX_DISTRIBUTION_MEMBERS: usize = 512;
-const MAX_DISTRIBUTION_MEMBER_BYTES: u64 = 128 * 1024 * 1024;
-const MAX_DISTRIBUTION_BYTES: u64 = 512 * 1024 * 1024;
-
 #[derive(Clone, Copy)]
 pub(crate) enum MemberLayout {
     Flat,
@@ -37,49 +33,6 @@ pub(crate) fn read_zip(
             files.contains_key(&name),
         )?;
         let mut bytes = Vec::new();
-        entry
-            .read_to_end(&mut bytes)
-            .map_err(|error| error.to_string())?;
-        files.insert(name, bytes);
-    }
-    Ok(files)
-}
-
-pub(crate) fn read_distribution_zip(path: &Path) -> AgentResult<BTreeMap<String, Vec<u8>>> {
-    let mut archive = ZipArchive::new(File::open(path).map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())?;
-    if archive.len() > MAX_DISTRIBUTION_MEMBERS {
-        return Err(unsafe_member("too many distribution members"));
-    }
-    let mut files = BTreeMap::new();
-    let mut total = 0_u64;
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
-        let name = entry.name().to_owned();
-        let enclosed = entry.enclosed_name().ok_or_else(|| unsafe_member(&name))?;
-        if entry.is_dir() {
-            if !name.ends_with('/') {
-                return Err(unsafe_member(&name));
-            }
-            continue;
-        }
-        validate_member(
-            &name,
-            &enclosed,
-            false,
-            MemberLayout::Nested,
-            files.contains_key(&name),
-        )?;
-        if entry.size() > MAX_DISTRIBUTION_MEMBER_BYTES {
-            return Err(unsafe_member(&name));
-        }
-        total = total
-            .checked_add(entry.size())
-            .ok_or_else(|| unsafe_member(&name))?;
-        if total > MAX_DISTRIBUTION_BYTES {
-            return Err(unsafe_member("distribution is too large"));
-        }
-        let mut bytes = Vec::with_capacity(usize::try_from(entry.size()).unwrap_or(0));
         entry
             .read_to_end(&mut bytes)
             .map_err(|error| error.to_string())?;
@@ -186,18 +139,5 @@ mod tests {
         assert!(
             validate_member("same", Path::new("same"), false, MemberLayout::Nested, true).is_err()
         );
-    }
-
-    #[test]
-    fn distribution_reader_accepts_safe_directory_entries() {
-        let path = archive(&[
-            Entry::Directory("mister-magik/"),
-            Entry::File("mister-magik/release-v1.txt", b"release"),
-        ]);
-        assert_eq!(
-            read_distribution_zip(&path).unwrap()["mister-magik/release-v1.txt"],
-            b"release"
-        );
-        fs::remove_file(path).unwrap();
     }
 }

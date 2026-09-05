@@ -316,88 +316,6 @@ fn automation_end_socket_missing(error: &str) -> bool {
     error.contains("send automation request: No such file or directory")
 }
 
-pub(super) fn ensure_installed_alpha_launcher(
-    config: &NativeDeviceConfig,
-    expected_build_version: &str,
-    expected_source_revision: &str,
-) -> Result<String> {
-    if expected_build_version.is_empty() || expected_source_revision.is_empty() {
-        return Err("installed alpha launcher identity is incomplete".into());
-    }
-    let status = magik_status(config)?;
-    let main = status
-        .pointer("/files/main_status")
-        .ok_or("installed alpha Main status is missing")?;
-    let main_pid = required_u64(main, "pid")?;
-    require_public_main_process(&status, main_pid)?;
-    let slint = status
-        .pointer("/files/slint_status")
-        .ok_or("installed alpha Slint status is missing")?;
-    validate_candidate_build(slint, expected_build_version, expected_source_revision)?;
-
-    if main.get("launcher_state").and_then(Value::as_str) == Some("LauncherActive") {
-        let launcher_pid = required_u64(main, "launcher_pid")?;
-        if !is_public_main_executable(main.get("executable_path").and_then(Value::as_str))
-            || status
-                .pointer("/files/slint_status_current")
-                .and_then(Value::as_bool)
-                != Some(true)
-            || slint.get("pid").and_then(Value::as_u64) != Some(launcher_pid)
-            || slint.get("input_enabled").and_then(Value::as_bool) != Some(true)
-        {
-            return Err("installed alpha launcher is not input-ready".into());
-        }
-        return Ok(serde_json::to_string(&json!({
-            "schema": "mister-magik-ensure-installed-alpha-launcher-v1",
-            "mode": "already-active",
-            "status": status,
-        }))?);
-    }
-
-    if main.get("launcher_state").and_then(Value::as_str) != Some("Unconfigured")
-        || main.get("launcher_pid").and_then(Value::as_u64) != Some(0)
-        || status
-            .pointer("/files/slint_status_current")
-            .and_then(Value::as_bool)
-            != Some(false)
-        || status
-            .pointer("/processes/mister-magik-fb")
-            .and_then(Value::as_array)
-            .is_none_or(|pids| !pids.is_empty())
-    {
-        return Err("installed alpha is neither an active launcher nor a loaded core".into());
-    }
-    let core = status
-        .pointer("/files/core_name")
-        .and_then(Value::as_str)
-        .or_else(|| status.pointer("/files/rbf_name").and_then(Value::as_str))
-        .ok_or("installed alpha has no loaded core identity")?;
-    if core.trim().is_empty() || core.to_ascii_lowercase().contains("menu") {
-        return Err("installed alpha is not running a returnable non-Menu core".into());
-    }
-
-    let identity = LaunchIdentity {
-        main_route: MainRoute::Public,
-        main_generation: 0,
-        main_pid: 0,
-        executable_path: required_text_at(main, "/executable_path")?.to_owned(),
-        launcher_pid: required_u64(slint, "pid")?,
-        build_version: expected_build_version.to_owned(),
-        source_revision: expected_source_revision.to_owned(),
-    };
-    let handoff_main = HandoffMainIdentity {
-        generation: required_u64(main, "main_generation")?,
-        pid: main_pid,
-    };
-    request_return_to_launcher(config, handoff_main.generation)?;
-    let (returned_status, _) = wait_for_returned_launcher(config, &identity, handoff_main)?;
-    Ok(serde_json::to_string(&json!({
-        "schema": "mister-magik-ensure-installed-alpha-launcher-v1",
-        "mode": "returned-from-core",
-        "status": returned_status,
-    }))?)
-}
-
 pub(super) fn exercise_launch_return(
     config: &NativeDeviceConfig,
     nonce: &str,
@@ -877,43 +795,6 @@ fn action_args(
 
 fn semantic<'a>(snapshot: &'a Value, field: &str) -> Option<&'a Value> {
     snapshot.get("semantic")?.get(field)
-}
-
-fn require_public_main_process(status: &Value, expected_pid: u64) -> Result<()> {
-    if status
-        .pointer("/processes/MiSTer_MagiK")
-        .and_then(Value::as_array)
-        .is_none_or(|pids| !pids.iter().any(|pid| pid.as_u64() == Some(expected_pid)))
-        || status
-            .pointer("/processes/MiSTer_MagiKDev")
-            .and_then(Value::as_array)
-            .is_some_and(|pids| !pids.is_empty())
-    {
-        Err("Main is not the public alpha process".into())
-    } else {
-        Ok(())
-    }
-}
-
-fn validate_candidate_build(
-    slint: &Value,
-    expected_build_version: &str,
-    expected_source_revision: &str,
-) -> Result<()> {
-    if slint.pointer("/build/version").and_then(Value::as_str) != Some(expected_build_version)
-        || slint
-            .pointer("/build/source_revision")
-            .and_then(Value::as_str)
-            != Some(expected_source_revision)
-    {
-        Err("Slint status does not match the installed alpha candidate".into())
-    } else {
-        Ok(())
-    }
-}
-
-fn is_public_main_executable(path: Option<&str>) -> bool {
-    is_main_executable(MainRoute::Public, path)
 }
 
 fn is_main_executable(route: MainRoute, path: Option<&str>) -> bool {

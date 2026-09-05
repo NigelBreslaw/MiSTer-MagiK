@@ -17,9 +17,8 @@ QUALITY_COMMANDS: Final[dict[str, tuple[str, ...]]] = {
         "format",
         "--check",
         "scripts",
-        "apps/mister/ui_tests",
     ),
-    "lint": ("uv", "run", "ruff", "check", "scripts", "apps/mister/ui_tests"),
+    "lint": ("uv", "run", "ruff", "check", "scripts"),
     "typecheck": ("uv", "run", "ty", "check"),
 }
 
