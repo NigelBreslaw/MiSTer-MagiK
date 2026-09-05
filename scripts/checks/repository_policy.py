@@ -20,6 +20,7 @@ CLASSIFIED_PREFIXES = (
     "docs",
     "documentation",
     "history",
+    "magik2",
     "mister/platform/contracts",
     "mister/platform/fpga",
     "mister/platform/kernel",
