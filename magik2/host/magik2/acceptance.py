@@ -52,7 +52,12 @@ def run_delivery_matrix(run: Path) -> int:
         with (folder / "command.log").open("w") as output:
             try:
                 result = subprocess.run(
-                    [str(repository / "scripts/magik2"), "deploy"],
+                    [
+                        str(repository / "scripts/magik2"),
+                        "deploy",
+                        "--app",
+                        "mini-magik",
+                    ],
                     cwd=repository,
                     env=env,
                     stdout=output,
@@ -234,7 +239,13 @@ def run_contract_checks(run: Path) -> int:
             env = {**os.environ, "MISTER_MAGIK2_RESULTS": str(folder.resolve())}
             with (folder / "command.log").open("w") as output:
                 result = subprocess.run(
-                    [str(repository / "scripts/magik2"), "check", "motion"],
+                    [
+                        str(repository / "scripts/magik2"),
+                        "check",
+                        "motion",
+                        "--app",
+                        "mini-magik",
+                    ],
                     cwd=repository,
                     env=env,
                     stdout=output,

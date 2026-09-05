@@ -59,4 +59,5 @@ def test_cancellation_retains_attempt_and_restores_sources(monkeypatch, tmp_path
     assert result["cases"]["no-op"]["attempts"][0]["exit_code"] == 130
     assert result["restoration"]["exit_code"] == 0
     assert len(calls) == 3
+    assert all(call[0][-2:] == ["--app", "mini-magik"] for call in calls)
     assert rust.read_text() == "original Rust"
