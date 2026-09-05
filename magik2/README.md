@@ -66,8 +66,8 @@ part of this development path.
 The consumer scenarios live in `scenarios/` and run through pytest:
 
 ```sh
-uv run --project magik2/host pytest magik2/scenarios --collect-only
-uv run --project magik2/host pytest magik2/scenarios --magik2-device --magik2-app mini-magik -k motion
+PYTHONPATH=magik2/host uv run --project magik2/host pytest magik2/scenarios --collect-only
+PYTHONPATH=magik2/host uv run --project magik2/host pytest magik2/scenarios --magik2-device --magik2-app mini-magik -k motion
 ```
 
 The real app is the default. `scripts/magik2 check` selects only smoke, including
@@ -92,6 +92,23 @@ sample and min/median/max; two runs are not a percentile estimate.
 The same binary contains testing/profiling support. Profiles have unique run IDs,
 completion and sample-count evidence, folded stacks and a flamegraph. Counters
 separate render time, render-to-present time, latch rejections and physical drops.
+
+## Application journeys
+
+The real-app consumer scenarios include Arcade selection and return, and a
+Reduce motion change with verified restoration, including on capture failure:
+
+```sh
+PYTHONPATH=magik2/host uv run --project magik2/host pytest magik2/scenarios --magik2-device -k journeys
+PYTHONPATH=magik2/host uv run --project magik2/host pytest magik2/scenarios --magik2-device -k journeys --magik2-profile
+```
+
+The ordinary selection has two repetitions in one app session; profiling selects
+one separate run. They require a populated Dev Arcade catalog with multiple games.
+They do not launch cores, refresh the catalog, or alter production settings.
+Response timings include host RPC/accessibility polling and are not frame latency.
+Default `scripts/magik2 check` still runs only smoke. No new tooling-core API is
+needed: these are consumers of the existing session, events and profile support.
 
 ## Observation and results
 

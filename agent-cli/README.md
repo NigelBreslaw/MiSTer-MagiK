@@ -23,7 +23,6 @@ scripts/agent plan
 scripts/agent deliver platform
 scripts/agent deliver local-main
 scripts/agent deliver game-databases --game-databases-release-dir PATH
-scripts/agent benchmark catalog-lifecycle
 scripts/agent benchmark input-integrity
 scripts/agent diagnose
 ```
@@ -57,16 +56,11 @@ release directory and invokes only the database transaction. It does not
 resolve platform releases or build, replace, or restart any platform/runtime
 artifact.
 
-`benchmark SCENARIO` runs an explicitly selected legacy workload on the installed
-platform. These specialized input, catalog, renderer and hardware measurements
-are not interchangeable with the 2.0 smoke/idle scenarios. `catalog-lifecycle`
-performs an isolated full catalog build under `/tmp`, validates every generated
-shard, then removes the fixture and restores the ordinary launcher. Benchmarks
-run through a restricted typed client that rejects delivery requests. They
-never build or deploy a temporary runtime, and require the installed revision
-to match the clean local commit wherever runtime or platform files changed.
-Host-only benchmark changes may reconcile as a no-op without replacing the
-installed runtime.
+`benchmark input-integrity` is the sole retained benchmark. It verifies Main's
+controller proxy and kernel input path; application scenarios use 2.0. The
+historical application benchmark registry and `alpha accept` UI acceptance
+command are removed. No replacement command claims their former release coverage.
+The separate release/Main-return and FPGA workflows remain.
 
 The launcher builds and runs `agent-cli` with a compile-first development
 profile: no optimization or debug information, incremental compilation, and
