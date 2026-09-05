@@ -31,6 +31,10 @@ pub struct Envelope {
 struct OwnedProcess {
     pid: u32,
     executable: String,
+    #[serde(default)]
+    start_ticks: String,
+    #[serde(default)]
+    sha256: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -209,6 +213,7 @@ impl Agent {
             "status",
             "upload-v1",
             "lifecycle-v1",
+            "start-artifact",
             "test-bridge-v1",
             "metrics-v1",
             "watch-v1",
@@ -294,6 +299,8 @@ impl Agent {
                     "running": self.running(),
                     "artifact": "probe",
                     "artifact_sha256": installed_hash(&self.install_root.join("probe")),
+                    "running_sha256": self.running_identity().map(|record| record.sha256),
+                    "ready": self.running_identity().is_some_and(|record| self.ready_for(record.pid, &record.sha256)),
                     "legacy_agent_running": legacy_agent_running(),
                 }),
             ),
@@ -379,13 +386,6 @@ impl Agent {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
             || test_server.is_some();
-        if self.running() && !restart && test_server.is_none() {
-            return response(
-                &request.id,
-                "started",
-                serde_json::json!({"already_running":true,"ready":true}),
-            );
-        }
         let artifact = request
             .fields
             .get("artifact")
@@ -406,6 +406,33 @@ impl Agent {
                 serde_json::json!({"code":"missing-application"}),
             );
         }
+        let published_hash = installed_hash(&executable);
+        if let Some(expected) = request
+            .fields
+            .get("expected_sha256")
+            .and_then(serde_json::Value::as_str)
+        {
+            if published_hash.as_deref() != Some(expected) {
+                return response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"artifact-superseded","expected_sha256":expected,"published_sha256":published_hash}),
+                );
+            }
+        }
+        if !restart
+            && test_server.is_none()
+            && self.running_identity().is_some_and(|record| {
+                Some(&record.sha256) == published_hash.as_ref()
+                    && self.ready_for(record.pid, &record.sha256)
+            })
+        {
+            return response(
+                &request.id,
+                "started",
+                serde_json::json!({"already_running":true,"ready":true,"sha256":published_hash}),
+            );
+        }
         if let Err(error) = fs::remove_file(self.readiness_path()) {
             if error.kind() != io::ErrorKind::NotFound {
                 return response(
@@ -415,7 +442,7 @@ impl Agent {
                 );
             }
         }
-        if restart {
+        if self.running() {
             self.stop_owned_process();
         }
         if let Err(error) = main_handoff("mister_magik_suspend\n") {
@@ -428,6 +455,10 @@ impl Agent {
         let mut command = Command::new(executable);
         command
             .env("MISTER_MAGIK2_STATE_ROOT", &self.state_root)
+            .env(
+                "MISTER_MAGIK2_ARTIFACT_SHA256",
+                published_hash.unwrap_or_default(),
+            )
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         if let Some(test_server) = test_server {
@@ -728,6 +759,19 @@ impl Agent {
         }
     }
 
+    fn ready_for(&self, pid: u32, hash: &str) -> bool {
+        fs::read(self.readiness_path())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .is_some_and(|value| {
+                value["pid"].as_u64() == Some(u64::from(pid))
+                    && value["sha256"].as_str() == Some(hash)
+                    && value["presentations"]
+                        .as_u64()
+                        .is_some_and(|count| count > 0)
+            })
+    }
+
     fn readiness_path(&self) -> PathBuf {
         self.state_root.join("probe-ready.json")
     }
@@ -740,6 +784,9 @@ impl Agent {
         let record = OwnedProcess {
             pid,
             executable: self.install_root.join("probe").display().to_string(),
+            start_ticks: process_start_ticks(pid).ok_or("cannot identify child birth")?,
+            sha256: installed_hash(&PathBuf::from(format!("/proc/{pid}/exe")))
+                .ok_or("cannot identify running artifact")?,
         };
         let temporary = self.owned_process_path().with_extension("next");
         let bytes = serde_json::to_vec(&record).map_err(|error| error.to_string())?;
@@ -755,47 +802,43 @@ impl Agent {
         let _ = fs::remove_file(self.owned_process_path());
     }
 
-    fn owned_process_is_running(&self) -> bool {
+    fn running_identity(&self) -> Option<OwnedProcess> {
         let record = self
             .read_owned_process()
-            .or_else(|| self.discover_owned_process());
-        let Some(record) = record else { return false };
-        let Ok(command) = fs::read(format!("/proc/{}/cmdline", record.pid)) else {
-            self.clear_owned_process();
-            return false;
-        };
-        let executable = command.split(|byte| *byte == 0).next().unwrap_or_default();
-        if executable == record.executable.as_bytes() {
-            true
-        } else {
-            self.clear_owned_process();
-            false
+            .or_else(|| self.discover_owned_process())?;
+        if record.start_ticks.is_empty()
+            || process_start_ticks(record.pid).as_deref() != Some(&record.start_ticks)
+        {
+            return None;
         }
+        let executable = fs::read_link(format!("/proc/{}/exe", record.pid)).ok()?;
+        let actual = executable.to_string_lossy();
+        (actual.trim_end_matches(" (deleted)") == record.executable).then_some(record)
+    }
+
+    fn owned_process_is_running(&self) -> bool {
+        self.running_identity().is_some()
     }
 
     fn discover_owned_process(&self) -> Option<OwnedProcess> {
         let executable = self.install_root.join("probe").display().to_string();
-        let mut matches = fs::read_dir("/proc")
-            .ok()?
-            .flatten()
-            .filter_map(|entry| entry.file_name().to_string_lossy().parse::<u32>().ok())
-            .filter(|pid| {
-                fs::read(format!("/proc/{pid}/cmdline"))
-                    .ok()
-                    .and_then(|command| {
-                        command
-                            .split(|byte| *byte == 0)
-                            .next()
-                            .map(ToOwned::to_owned)
-                    })
-                    .is_some_and(|command| command == executable.as_bytes())
-            });
-        let pid = matches.next()?;
+        let mut matches = fs::read_dir("/proc").ok()?.flatten().filter_map(|entry| {
+            let pid = entry.file_name().to_string_lossy().parse::<u32>().ok()?;
+            let path = fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+            if path.to_string_lossy().trim_end_matches(" (deleted)") != executable {
+                return None;
+            }
+            Some(OwnedProcess {
+                pid,
+                executable: executable.clone(),
+                start_ticks: process_start_ticks(pid)?,
+                sha256: installed_hash(&PathBuf::from(format!("/proc/{pid}/exe")))?,
+            })
+        });
+        let record = matches.next()?;
         if matches.next().is_some() {
             return None;
         }
-        let record = OwnedProcess { pid, executable };
-        let _ = self.write_owned_process(record.pid);
         Some(record)
     }
 
@@ -925,7 +968,9 @@ impl Agent {
     fn wait_for_readiness(&self, request: &Envelope, mut child: Child) -> Envelope {
         let deadline = Instant::now() + Duration::from_secs(8);
         loop {
-            if self.readiness_path().is_file() {
+            if installed_hash(&PathBuf::from(format!("/proc/{}/exe", child.id())))
+                .is_some_and(|hash| self.ready_for(child.id(), &hash))
+            {
                 if let Err(error) = self.write_owned_process(child.id()) {
                     return self.failed_start(request, &error, None, &mut child);
                 }
@@ -1008,6 +1053,17 @@ fn receive_preview_frames(mut stream: UnixStream, observation: Arc<Observation>)
             }
         }
     }
+}
+
+fn process_start_ticks(pid: u32) -> Option<String> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // The comm field can contain spaces and parentheses; fields after its final
+    // closing parenthesis start with state (field 3). Start time is field 22.
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(19)
+        .map(str::to_owned)
 }
 
 fn main_handoff(command: &str) -> Result<(), String> {
@@ -1152,6 +1208,51 @@ fn publish_atomically(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn start_rejects_a_superseded_upload_before_touching_main() {
+        let directory =
+            std::env::temp_dir().join(format!("magik2-superseded-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("probe"), b"branch B").unwrap();
+        let agent = Agent::with_state_root(
+            "test".into(),
+            "token".into(),
+            directory.clone(),
+            directory.join("state"),
+        );
+        let request = Envelope {
+            id: "A-start".into(),
+            op: "start".into(),
+            token: "token".into(),
+            fields: serde_json::from_value(serde_json::json!({"expected_sha256":"branch-A-hash"}))
+                .unwrap(),
+        };
+        assert_eq!(agent.start(&request).fields["code"], "artifact-superseded");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn readiness_is_bound_to_process_and_artifact() {
+        let directory =
+            std::env::temp_dir().join(format!("magik2-readiness-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let agent = Agent::with_state_root(
+            "test".into(),
+            "token".into(),
+            directory.clone(),
+            directory.clone(),
+        );
+        fs::write(
+            agent.readiness_path(),
+            br#"{"pid":123,"sha256":"A","presentations":1}"#,
+        )
+        .unwrap();
+        assert!(agent.ready_for(123, "A"));
+        assert!(!agent.ready_for(124, "A"));
+        assert!(!agent.ready_for(123, "B"));
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn round_trips_binary_payload() {

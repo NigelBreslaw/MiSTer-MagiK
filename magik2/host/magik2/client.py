@@ -40,8 +40,11 @@ class NativeAgent:
             raise AgentError("agent did not acknowledge its replacement")
         return response.fields
 
-    def start(self, *, restart: bool = False) -> Mapping[str, object]:
-        return self._successful("start", {"restart": restart})
+    def start(self, *, restart: bool = False, expected_sha256: str | None = None) -> Mapping[str, object]:
+        fields: dict[str, object] = {"restart": restart}
+        if expected_sha256 is not None:
+            fields["expected_sha256"] = expected_sha256
+        return self._successful("start", fields)
 
     def stop(self) -> Mapping[str, object]:
         return self._successful("stop")

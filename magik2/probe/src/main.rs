@@ -445,9 +445,9 @@ fn main() -> Result<(), String> {
             metrics.vsync_hits += 1;
             metrics.physical_latch_posts += 1;
             metrics.physical_latch_flips += 1;
-            metrics.physical_drops += metrics
-                .last_physical_drop_count
-                .map_or(0, |previous| u64::from(presented.drop_count.wrapping_sub(previous)));
+            metrics.physical_drops += metrics.last_physical_drop_count.map_or(0, |previous| {
+                u64::from(presented.drop_count.wrapping_sub(previous))
+            });
             metrics.last_physical_drop_count = Some(presented.drop_count);
             debug_assert_eq!(posted.slot_index, presented.slot_index);
         });
@@ -483,7 +483,7 @@ fn write_readiness(width: usize, height: usize, presentations: u64) -> Result<()
     let temporary = root.join("probe-ready.json.next");
     std::fs::write(
         &temporary,
-        format!("{{\"width\":{width},\"height\":{height},\"presentations\":{presentations}}}\n"),
+        format!("{{\"pid\":{},\"sha256\":\"{}\",\"width\":{width},\"height\":{height},\"presentations\":{presentations}}}\n", std::process::id(), std::env::var("MISTER_MAGIK2_ARTIFACT_SHA256").unwrap_or_default()),
     )
     .map_err(|error| error.to_string())?;
     std::fs::rename(temporary, ready).map_err(|error| error.to_string())
