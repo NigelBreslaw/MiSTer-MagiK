@@ -6179,6 +6179,14 @@ pub(super) fn run_launcher_loop(
         window.process_pending_callbacks();
         #[cfg(feature = "magik2")]
         if let Some(session) = tooling.as_mut() {
+            // Direct Arcade scrolling skips the full Slint presenter. Keep its
+            // accessibility selection current for the attached tooling session.
+            let arcade = app.global::<slint_ui::launcher::ArcadeView>();
+            if nav.screen == Screen::Arcade
+                && arcade.get_selected_game_index() != nav.arcade.selected as i32
+            {
+                arcade.set_selected_game_index(nav.arcade.selected as i32);
+            }
             if let Err(error) = session.tick(ui.render_w(), ui.render_h()) {
                 session.metrics.error = Some(error);
             }

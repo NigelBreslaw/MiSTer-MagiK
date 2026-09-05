@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use agent_cli::cli::{
-    AlphaCommand, CaptureCommand, Cli, Command as CliCommand, DbCommand, DeliverTarget,
-    FrameEvidenceCommand, OutputFormat, ReleaseCommand, ReturnQualificationCommand, RunCommand,
+    CaptureCommand, Cli, Command as CliCommand, DbCommand, DeliverTarget, FrameEvidenceCommand,
+    OutputFormat, ReleaseCommand, ReturnQualificationCommand, RunCommand,
 };
 use agent_cli::error::{AgentError, AgentResult};
 use agent_cli::evidence::Evidence;
@@ -125,7 +125,6 @@ fn command_label(command: &CliCommand) -> &'static str {
         CliCommand::Deliver { .. } => "deliver",
         CliCommand::Benchmark { .. } => "benchmark",
         CliCommand::Capture { .. } => "capture",
-        CliCommand::Alpha { .. } => "alpha",
         CliCommand::Release { .. } => "release",
         CliCommand::CompileTime { .. } => "compile-time",
         CliCommand::Clean => "clean",
@@ -175,23 +174,7 @@ fn dispatch(
             target: DeliverTarget::LocalMain,
             ..
         } => return deliver_local_main(repository, reporter),
-        CliCommand::Benchmark {
-            scenario,
-            arm,
-            route,
-            duration_seconds,
-            fresh_catalog,
-        } => {
-            return agent_cli::benchmark::execute(
-                repository,
-                *scenario,
-                *arm,
-                *route,
-                *duration_seconds,
-                *fresh_catalog,
-                reporter,
-            );
-        }
+        CliCommand::Benchmark { .. } => return agent_cli::benchmark::execute(repository, reporter),
         CliCommand::Capture {
             command:
                 CaptureCommand::UsbVideo {
@@ -300,27 +283,6 @@ fn dispatch(
                 verified.distinct_sink_chipsets,
                 verified.total_transitions
             );
-            return Ok(Outcome::Passed);
-        }
-        CliCommand::Alpha {
-            command:
-                AlphaCommand::Accept {
-                    candidate,
-                    output,
-                    reuse_installed,
-                    restore_host_mode,
-                    framebuffer_only,
-                },
-        } => {
-            let receipt = agent_cli::alpha::execute(
-                candidate,
-                output,
-                *reuse_installed,
-                *restore_host_mode,
-                *framebuffer_only,
-                reporter,
-            )?;
-            println!("{}", receipt.display());
             return Ok(Outcome::Passed);
         }
         CliCommand::Diagnose => {

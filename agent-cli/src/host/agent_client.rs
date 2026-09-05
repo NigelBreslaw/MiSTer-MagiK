@@ -34,13 +34,6 @@ pub(crate) struct AgentResponse {
     pub(crate) elapsed_ms: u128,
 }
 
-#[derive(Debug)]
-pub(crate) struct AgentBinaryResponse {
-    pub(crate) response: Value,
-    pub(crate) payload: Vec<u8>,
-    pub(crate) elapsed_ms: u128,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AgentRuntimeUploadResponse {
     pub(crate) receive_ms: u64,
@@ -579,88 +572,6 @@ pub(crate) fn agent_request_at(
     parse_agent_response_line(line, start)
 }
 
-pub(crate) fn agent_ui_test_session_at(
-    endpoint: &AgentEndpoint,
-    args: Value,
-    artifact: &Path,
-    payload_bytes: u64,
-    timeout: Duration,
-) -> Result<(TcpStream, String)> {
-    let addr = format!("{}:{AGENT_PORT}", endpoint.host)
-        .to_socket_addrs()?
-        .next()
-        .ok_or("could not resolve MiSTer agent host")?;
-    let request = agent_protocol::request(
-        &endpoint.token,
-        1,
-        agent_protocol::UI_TEST_SESSION_COMMAND,
-        args,
-    );
-    let start = Instant::now();
-    let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
-    writeln!(stream, "{request}")?;
-    stream.flush()?;
-    let line = read_unbuffered_agent_line(&mut stream)?;
-    let first = parse_agent_response_line(line, start)?;
-    let first_result = first.response.get("result").unwrap_or(&Value::Null);
-    let ready = if first_result.get("state").and_then(Value::as_str) == Some("upload_required") {
-        let mut payload = fs::File::open(artifact)?;
-        if payload.metadata()?.len() != payload_bytes {
-            return Err("UI-test runtime changed before transfer".into());
-        }
-        let mut remaining = payload_bytes;
-        let mut buffer = [0_u8; 64 * 1024];
-        while remaining != 0 {
-            let limit = usize::try_from(remaining.min(buffer.len() as u64))
-                .expect("UI-test upload buffer length fits usize");
-            let read = payload.read(&mut buffer[..limit])?;
-            if read == 0 {
-                return Err("UI-test runtime truncated during transfer".into());
-            }
-            stream.write_all(&buffer[..read])?;
-            remaining = remaining.saturating_sub(read as u64);
-        }
-        if payload.read(&mut [0_u8; 1])? != 0 {
-            return Err("UI-test runtime grew during transfer".into());
-        }
-        stream.flush()?;
-        let line = read_unbuffered_agent_line(&mut stream)?;
-        parse_agent_response_line(line, start)?
-    } else if first_result.get("state").and_then(Value::as_str) != Some("ready") {
-        return Err("MiSTer agent did not start the UI-test session".into());
-    } else {
-        first
-    };
-    let nonce = ready
-        .response
-        .pointer("/result/automation_nonce")
-        .and_then(Value::as_str)
-        .ok_or("UI-test ready response has no automation nonce")?
-        .to_string();
-    Ok((stream, nonce))
-}
-
-fn read_unbuffered_agent_line(stream: &mut TcpStream) -> Result<String> {
-    const MAX_LINE_BYTES: usize = 1024 * 1024;
-    let mut line = Vec::new();
-    loop {
-        let mut byte = [0_u8; 1];
-        let read = stream.read(&mut byte)?;
-        if read == 0 {
-            return Err("MiSTer agent closed the session envelope".into());
-        }
-        line.push(byte[0]);
-        if byte[0] == b'\n' {
-            return String::from_utf8(line).map_err(Into::into);
-        }
-        if line.len() >= MAX_LINE_BYTES {
-            return Err("MiSTer agent session envelope exceeds 1 MiB".into());
-        }
-    }
-}
-
 pub(crate) fn agent_runtime_upload_at(
     endpoint: &AgentEndpoint,
     path: &Path,
@@ -751,61 +662,6 @@ pub(crate) fn agent_runtime_upload_at(
     })
 }
 
-fn agent_binary_request_at(
-    endpoint: &AgentEndpoint,
-    cmd: &str,
-    args: Value,
-    payload_bytes_field: &str,
-    timeout: Duration,
-) -> Result<AgentBinaryResponse> {
-    let addr = format!("{}:{AGENT_PORT}", endpoint.host)
-        .to_socket_addrs()?
-        .next()
-        .ok_or("could not resolve MiSTer agent host")?;
-    let request = agent_protocol::request(&endpoint.token, 1, cmd, args);
-    let started = Instant::now();
-    let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
-    writeln!(stream, "{request}")?;
-    stream.flush()?;
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-    let header = parse_agent_response_line(line, started)?;
-    let payload_bytes = header
-        .response
-        .pointer(&format!("/result/{payload_bytes_field}"))
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("agent {cmd} response omitted {payload_bytes_field}"))?;
-    let payload_bytes = usize::try_from(payload_bytes)
-        .map_err(|_| format!("agent {cmd} payload exceeds host address space"))?;
-    let mut payload = vec![0_u8; payload_bytes];
-    reader.read_exact(&mut payload)?;
-    Ok(AgentBinaryResponse {
-        response: header.response,
-        payload,
-        elapsed_ms: started.elapsed().as_millis(),
-    })
-}
-
-pub(crate) fn agent_framebuffer_capture_stream(
-    endpoint: &AgentEndpoint,
-    lz4: bool,
-) -> Result<AgentBinaryResponse> {
-    agent_binary_request_at(
-        endpoint,
-        if lz4 {
-            "framebuffer_capture_lz4_stream"
-        } else {
-            "framebuffer_capture_raw_stream"
-        },
-        json!({}),
-        "payload_bytes",
-        Duration::from_secs(15),
-    )
-}
-
 pub(crate) fn agent_request_with_liveness(
     cmd: &str,
     args: Value,
@@ -842,95 +698,6 @@ pub(crate) fn agent_request_with_liveness(
             Err(error) => return Err(error.into()),
         }
     }
-}
-
-pub(crate) fn agent_telemetry_until_screensaver_profile_complete(
-    endpoint: &AgentEndpoint,
-    timeout: Duration,
-) -> Result<Vec<Value>> {
-    let addr = format!("{}:{AGENT_PORT}", endpoint.host)
-        .to_socket_addrs()?
-        .next()
-        .ok_or("could not resolve MiSTer agent host")?;
-    let request = agent_protocol::request(
-        &endpoint.token,
-        1,
-        "device_telemetry_stream_v2",
-        json!({"analytics_mode": "process", "cadence_ms": 250}),
-    );
-    let started = Instant::now();
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))?;
-    stream.set_read_timeout(Some(Duration::from_secs(3)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(3)))?;
-    writeln!(stream, "{request}")?;
-    stream.flush()?;
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-    parse_agent_response_line(line, started)?;
-
-    let mut samples = Vec::new();
-    let mut legacy_complete_status_sequence = None;
-    while started.elapsed() < timeout {
-        if super::attended_operation_interrupted() {
-            return Err("screensaver benchmark interrupted".into());
-        }
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => return Err("MiSTer telemetry stream closed before profile completion".into()),
-            Ok(_) => {
-                let sample = parse_device_telemetry_sample(&line)?;
-                let state = sample
-                    .pointer("/launcher/screensaver_profile_state")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                let status_sequence = sample
-                    .pointer("/launcher/status_sequence")
-                    .and_then(Value::as_u64);
-                let written_sequence = sample
-                    .pointer("/launcher/status_written_sequence")
-                    .and_then(Value::as_u64);
-                samples.push(sample);
-                match state.as_deref() {
-                    Some("complete") => {
-                        if status_sequence.is_some() && status_sequence == written_sequence {
-                            return Ok(samples);
-                        }
-                        if written_sequence.is_none() {
-                            if let Some(first_complete) = legacy_complete_status_sequence {
-                                if status_sequence.is_some_and(|sequence| sequence > first_complete)
-                                {
-                                    return Ok(samples);
-                                }
-                            } else if let Some(sequence) = status_sequence {
-                                legacy_complete_status_sequence = Some(sequence);
-                            }
-                        }
-                    }
-                    Some("failed") => {
-                        return Err(
-                            "installed launcher reported screensaver profile failure".into()
-                        );
-                    }
-                    _ => {}
-                }
-            }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Err("screensaver profile did not complete within the bounded timeout".into())
-}
-
-pub(crate) fn agent_telemetry_for_duration(
-    endpoint: &AgentEndpoint,
-    duration: Duration,
-) -> Result<Vec<Value>> {
-    agent_telemetry_for_duration_at_cadence(endpoint, duration, 250)
 }
 
 pub(crate) fn agent_telemetry_for_duration_at_cadence(
@@ -992,51 +759,6 @@ pub(crate) fn agent_telemetry_for_duration_with_mode(
         return Err("bounded device telemetry collection produced no samples".into());
     }
     Ok(samples)
-}
-
-pub(crate) fn agent_framebuffer_stream_for_duration(
-    endpoint: &AgentEndpoint,
-    duration: Duration,
-) -> Result<Value> {
-    let addr = format!("{}:{AGENT_PORT}", endpoint.host)
-        .to_socket_addrs()?
-        .next()
-        .ok_or("could not resolve MiSTer agent host")?;
-    let request = agent_protocol::request(&endpoint.token, 1, "framebuffer_stream_v1", json!({}));
-    let started = Instant::now();
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))?;
-    stream.set_read_timeout(Some(Duration::from_millis(500)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(3)))?;
-    writeln!(stream, "{request}")?;
-    stream.flush()?;
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-    let handshake = parse_agent_response_line(line, started)?;
-    let mut bytes = 0_u64;
-    let mut reads = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
-    while started.elapsed() < duration {
-        match reader.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(count) => {
-                bytes = bytes.saturating_add(count as u64);
-                reads = reads.saturating_add(1);
-            }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Ok(json!({
-        "handshake": handshake.response,
-        "elapsed_ms": started.elapsed().as_millis() as u64,
-        "bytes": bytes,
-        "reads": reads,
-    }))
 }
 
 fn parse_device_telemetry_sample(line: &str) -> Result<Value> {

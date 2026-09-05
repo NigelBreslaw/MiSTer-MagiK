@@ -37,16 +37,11 @@ const FFMPEG_APPLE_CONTAINER_ENV: [(&str, &str); 5] = [
         "-I/project/apps/mister/target/ffmpeg-minimal/armv7/dist/include",
     ),
 ];
-const UI_TEST_BUILD_ENV: [(&str, &str); 2] = [
-    ("RUST_FONTCONFIG_DLOPEN", "1"),
-    ("SLINT_EMIT_DEBUG_INFO", "1"),
-];
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum BuildCommand {
     RuntimeDevice,
-    RuntimeUiTests,
     RuntimeCi,
     RuntimeAnalysis,
     ValidateLauncher,
@@ -55,9 +50,6 @@ pub enum BuildCommand {
     DeviceAgent,
     DeviceAgentCi,
     ManagerDevice,
-    ArcadeCatalogPrototypeDevice,
-    FiveSystemCatalogPrototypeDevice,
-    FiveSystemCatalogPrototypeAnalysis,
     ReleaseBinaries,
 }
 
@@ -67,8 +59,6 @@ pub enum BuildTarget {
     Runtime,
     DeviceAgent,
     Manager,
-    ArcadeCatalogPrototype,
-    FiveSystemCatalogPrototype,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -109,14 +99,6 @@ impl BuildSpec {
                 vec!["ui", "profile", "hotpath"],
                 UiScope::Production,
                 runtime_artifact("release-device"),
-            ),
-            BuildCommand::RuntimeUiTests => (
-                BuildTarget::Runtime,
-                BuildMode::Build,
-                "release-device-ui-tests",
-                vec!["ui", "ui-device-tests"],
-                UiScope::Launcher,
-                runtime_artifact("release-device-ui-tests"),
             ),
             BuildCommand::RuntimeCi => (
                 BuildTarget::Runtime,
@@ -179,30 +161,6 @@ impl BuildSpec {
                 PathBuf::from(
                     "mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager",
                 ),
-            ),
-            BuildCommand::ArcadeCatalogPrototypeDevice => (
-                BuildTarget::ArcadeCatalogPrototype,
-                BuildMode::Build,
-                "release-device",
-                vec!["builder"],
-                UiScope::All,
-                arcade_catalog_prototype_artifact("release-device"),
-            ),
-            BuildCommand::FiveSystemCatalogPrototypeDevice => (
-                BuildTarget::FiveSystemCatalogPrototype,
-                BuildMode::Build,
-                "release-device",
-                vec!["builder"],
-                UiScope::All,
-                five_system_catalog_prototype_artifact("release-device"),
-            ),
-            BuildCommand::FiveSystemCatalogPrototypeAnalysis => (
-                BuildTarget::FiveSystemCatalogPrototype,
-                BuildMode::Build,
-                "release-device-profile",
-                vec!["builder", "profile"],
-                UiScope::All,
-                five_system_catalog_prototype_artifact("release-device-profile"),
             ),
             BuildCommand::ReleaseBinaries => return None,
         };
@@ -830,12 +788,6 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
             BuildTarget::Manager => {
                 PathBuf::from("/private/tmp/mister-magik-manager-apple-container-target")
             }
-            BuildTarget::ArcadeCatalogPrototype => PathBuf::from(
-                "/private/tmp/mister-magik-arcade-catalog-prototype-apple-container-target",
-            ),
-            BuildTarget::FiveSystemCatalogPrototype => PathBuf::from(
-                "/private/tmp/mister-magik-five-system-catalog-prototype-apple-container-target",
-            ),
             _ => PathBuf::from("/private/tmp/mister-magik-apple-container-target"),
         };
         Self {
@@ -944,13 +896,6 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
                 "CFLAGS_armv7_unknown_linux_gnueabihf",
                 "-fno-omit-frame-pointer",
             );
-        }
-        if self.spec.profile == "release-device-ui-tests" {
-            // Slint's system-testing backend enables shared font discovery. The
-            // MiSTer image does not provide a cross-compilable fontconfig
-            // development package, so use Slint's optional runtime loader. The
-            // test client also requires compiler-emitted element metadata.
-            command.envs(UI_TEST_BUILD_ENV);
         }
         configure_cross_environment(&mut command, self.session.repository)?;
         if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
@@ -1098,14 +1043,6 @@ fn apple_container_cargo_command(
         command
             .arg("--env")
             .arg("CFLAGS_armv7_unknown_linux_gnueabihf=-fno-omit-frame-pointer");
-    }
-    if spec.profile == "release-device-ui-tests" {
-        // See the cross build path above: system-testing must not add a
-        // compile-time fontconfig dependency to the device image and requires
-        // compiler-emitted element metadata for introspection.
-        for (name, value) in UI_TEST_BUILD_ENV {
-            command.arg("--env").arg(format!("{name}={value}"));
-        }
     }
     for value in metadata.environment() {
         command.arg("--env").arg(value);
@@ -1647,12 +1584,6 @@ fn cargo_args(spec: &BuildSpec, timings: bool) -> Vec<OsString> {
     }
     match spec.target {
         BuildTarget::Runtime | BuildTarget::DeviceAgent | BuildTarget::Manager => {}
-        BuildTarget::ArcadeCatalogPrototype => {
-            args.extend(["--bin".into(), "arcade-catalog-prototype".into()]);
-        }
-        BuildTarget::FiveSystemCatalogPrototype => {
-            args.extend(["--bin".into(), "five-system-catalog-prototype".into()]);
-        }
     }
     if spec.mode == BuildMode::CheckLibrary {
         args.extend(["--lib".into(), "--no-default-features".into()]);
@@ -1667,8 +1598,6 @@ fn host_workdir(target: BuildTarget) -> &'static str {
         BuildTarget::Runtime => "apps/mister",
         BuildTarget::DeviceAgent => "mister/tools/agent",
         BuildTarget::Manager => "mister/tools/manager",
-        BuildTarget::ArcadeCatalogPrototype => "crates/catalog",
-        BuildTarget::FiveSystemCatalogPrototype => "crates/catalog",
     }
 }
 
@@ -1677,8 +1606,6 @@ fn container_workdir(target: BuildTarget) -> &'static str {
         BuildTarget::Runtime => "/project/apps/mister",
         BuildTarget::DeviceAgent => "/project/mister/tools/agent",
         BuildTarget::Manager => "/project/mister/tools/manager",
-        BuildTarget::ArcadeCatalogPrototype => "/project/crates/catalog",
-        BuildTarget::FiveSystemCatalogPrototype => "/project/crates/catalog",
     }
 }
 
@@ -1687,26 +1614,12 @@ fn lockfile(target: BuildTarget) -> &'static str {
         BuildTarget::Runtime => "apps/mister/Cargo.lock",
         BuildTarget::DeviceAgent => "mister/tools/agent/Cargo.lock",
         BuildTarget::Manager => "mister/tools/manager/Cargo.lock",
-        BuildTarget::ArcadeCatalogPrototype => "crates/catalog/Cargo.lock",
-        BuildTarget::FiveSystemCatalogPrototype => "crates/catalog/Cargo.lock",
     }
 }
 
 fn runtime_artifact(profile: &str) -> PathBuf {
     PathBuf::from(format!(
         "apps/mister/target/{TARGET}/{profile}/mister-magik-fb"
-    ))
-}
-
-fn arcade_catalog_prototype_artifact(profile: &str) -> PathBuf {
-    PathBuf::from(format!(
-        "crates/catalog/target/{TARGET}/{profile}/arcade-catalog-prototype"
-    ))
-}
-
-fn five_system_catalog_prototype_artifact(profile: &str) -> PathBuf {
-    PathBuf::from(format!(
-        "crates/catalog/target/{TARGET}/{profile}/five-system-catalog-prototype"
     ))
 }
 
@@ -1937,10 +1850,6 @@ mod tests {
         assert_eq!(runtime.profile, "release-device");
         assert_eq!(runtime.features, ["ui", "profile", "hotpath"]);
         assert_eq!(runtime.ui_scope, UiScope::Production);
-        let ui_tests = BuildSpec::for_command(BuildCommand::RuntimeUiTests).unwrap();
-        assert_eq!(ui_tests.profile, "release-device-ui-tests");
-        assert_eq!(ui_tests.features, ["ui", "ui-device-tests"]);
-        assert_eq!(ui_tests.ui_scope, UiScope::Launcher);
         let analysis = BuildSpec::for_command(BuildCommand::RuntimeAnalysis).unwrap();
         assert_eq!(analysis.ui_scope, UiScope::Production);
         let ci = BuildSpec::for_command(BuildCommand::RuntimeCi).unwrap();
@@ -1954,31 +1863,6 @@ mod tests {
     }
 
     #[test]
-    fn ui_test_container_build_enables_system_testing_metadata() {
-        let spec = BuildSpec::for_command(BuildCommand::RuntimeUiTests).unwrap();
-        let command = apple_container_cargo_command(
-            Path::new("/checkout"),
-            &spec,
-            Path::new("/target-cache"),
-            &fixed_metadata(false),
-            false,
-        )
-        .unwrap();
-        let arguments: Vec<_> = command
-            .get_args()
-            .map(|argument| argument.to_string_lossy().into_owned())
-            .collect();
-        for (name, value) in UI_TEST_BUILD_ENV {
-            let expected = format!("{name}={value}");
-            assert!(
-                arguments
-                    .windows(2)
-                    .any(|pair| pair == ["--env", expected.as_str()])
-            );
-        }
-    }
-
-    #[test]
     fn magik_full_app_baseline_reproduces_the_iteration_build() {
         let spec = BuildSpec::magik_full_app_baseline();
         assert_eq!(spec.target, BuildTarget::Runtime);
@@ -1986,61 +1870,6 @@ mod tests {
         assert_eq!(spec.profile, "release-live");
         assert_eq!(spec.features, ["ui"]);
         assert_eq!(spec.ui_scope, UiScope::Launcher);
-    }
-
-    #[test]
-    fn arcade_catalog_prototype_build_is_a_focused_arm_binary() {
-        let spec = BuildSpec::for_command(BuildCommand::ArcadeCatalogPrototypeDevice).unwrap();
-        assert_eq!(spec.target, BuildTarget::ArcadeCatalogPrototype);
-        assert_eq!(spec.features, ["builder"]);
-        assert_eq!(spec.profile, "release-device");
-        assert_eq!(host_workdir(spec.target), "crates/catalog");
-        assert_eq!(
-            spec.artifact,
-            PathBuf::from(
-                "crates/catalog/target/armv7-unknown-linux-gnueabihf/release-device/arcade-catalog-prototype"
-            )
-        );
-        assert!(
-            cargo_args(&spec, false)
-                .windows(2)
-                .any(|pair| pair == ["--bin", "arcade-catalog-prototype"])
-        );
-    }
-
-    #[test]
-    fn five_system_catalog_prototype_build_is_a_focused_arm_binary() {
-        let spec = BuildSpec::for_command(BuildCommand::FiveSystemCatalogPrototypeDevice).unwrap();
-        assert_eq!(spec.target, BuildTarget::FiveSystemCatalogPrototype);
-        assert_eq!(spec.features, ["builder"]);
-        assert_eq!(spec.profile, "release-device");
-        assert_eq!(host_workdir(spec.target), "crates/catalog");
-        assert_eq!(
-            spec.artifact,
-            PathBuf::from(
-                "crates/catalog/target/armv7-unknown-linux-gnueabihf/release-device/five-system-catalog-prototype"
-            )
-        );
-        assert!(
-            cargo_args(&spec, false)
-                .windows(2)
-                .any(|pair| pair == ["--bin", "five-system-catalog-prototype"])
-        );
-    }
-
-    #[test]
-    fn five_system_catalog_prototype_analysis_keeps_symbols_and_pprof() {
-        let spec =
-            BuildSpec::for_command(BuildCommand::FiveSystemCatalogPrototypeAnalysis).unwrap();
-        assert_eq!(spec.target, BuildTarget::FiveSystemCatalogPrototype);
-        assert_eq!(spec.features, ["builder", "profile"]);
-        assert_eq!(spec.profile, "release-device-profile");
-        assert_eq!(
-            spec.artifact,
-            PathBuf::from(
-                "crates/catalog/target/armv7-unknown-linux-gnueabihf/release-device-profile/five-system-catalog-prototype"
-            )
-        );
     }
 
     #[test]
@@ -2163,9 +1992,7 @@ mod tests {
 
     #[test]
     fn runtime_ui_builds_require_initialized_private_assets() {
-        let ui_tests = BuildSpec::for_command(BuildCommand::RuntimeUiTests).unwrap();
         let library = BuildSpec::for_command(BuildCommand::ValidateLibrary).unwrap();
-        assert!(requires_private_ui_assets(&ui_tests));
         assert!(!requires_private_ui_assets(&library));
 
         let initialized = " 20e7a4d302e07a5327e3334c5b35fc8f51a599fc private/magik-assets\n";

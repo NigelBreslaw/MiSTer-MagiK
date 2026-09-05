@@ -2241,6 +2241,27 @@ impl LauncherNav {
             InputPhase::Pressed => pressed.set_logical_action(event.action, true),
             InputPhase::Released => released.set_logical_action(event.action, true),
         }
+        // UI navigation is a discrete action, with no held controller state.
+        // Arcade normally scrolls from held ticks, so apply one row per UI tap.
+        if event.source.kind == crate::input_event::InputSourceKind::Ui
+            && event.phase == InputPhase::Pressed
+            && self.screen == Screen::Arcade
+            && !self.arcade_filter.drawer_open
+            && !self.arcade_search.is_active(&self.arcade_filter.active)
+            && (pressed.dpad_up || pressed.dpad_down)
+        {
+            let collection_id = self.active_collection_scope_id(catalog);
+            let count = self.active_arcade_game_count(catalog, collection_id);
+            if count > 0 {
+                self.arcade.selected = if pressed.dpad_up {
+                    self.arcade.selected.saturating_sub(1)
+                } else {
+                    self.arcade.selected.saturating_add(1).min(count - 1)
+                };
+                self.arcade.snap_to_selected();
+            }
+            return None;
+        }
         let held = PadState::default();
         self.handle_input_internal(
             NavigationInput {
@@ -6213,6 +6234,36 @@ mod tests {
             action,
             phase,
         }
+    }
+
+    #[test]
+    fn arcade_ui_taps_move_once_and_controller_presses_wait_for_held_ticks() {
+        use crate::input_event::{InputSourceKind, LogicalAction};
+        let catalog = multi_game_catalog();
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_default_arcade(&catalog));
+        let now = Instant::now();
+        let mut event = ordered_event(1, 1, LogicalAction::Down, InputPhase::Pressed);
+        nav.handle_action_with_navigation_intents(&event, now, &catalog);
+        assert_eq!(nav.arcade.selected, 0);
+        event.source.kind = InputSourceKind::Ui;
+        nav.handle_action_with_navigation_intents(&event, now, &catalog);
+        assert_eq!(nav.arcade.selected, 1);
+        assert!(nav.arcade.is_settled_at_selected());
+        event.phase = InputPhase::Released;
+        nav.handle_action_with_navigation_intents(&event, now, &catalog);
+        assert_eq!(nav.arcade.selected, 1);
+        event.phase = InputPhase::Pressed;
+        event.action = LogicalAction::Up;
+        for _ in 0..2 {
+            nav.handle_action_with_navigation_intents(&event, now, &catalog);
+        }
+        assert_eq!(nav.arcade.selected, 0);
+        event.action = LogicalAction::Down;
+        for _ in 0..8 {
+            nav.handle_action_with_navigation_intents(&event, now, &catalog);
+        }
+        assert_eq!(nav.arcade.selected, 4);
     }
 
     #[test]

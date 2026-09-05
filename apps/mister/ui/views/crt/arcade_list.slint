@@ -147,6 +147,7 @@ export component ArcadeListScreen inherits Rectangle {
         clip: true;
         accessible-role: list;
         accessible-label: ArcadeView.search-mode == ArcadeSearchMode.active ? "Search results" : "Arcade games";
+        accessible-value: "" + (ArcadeView.selected-game-index + 1);
         accessible-description: root.count + (ArcadeView.search-mode == ArcadeSearchMode.active ? " matches" : " games");
         accessible-enabled: true;
 
