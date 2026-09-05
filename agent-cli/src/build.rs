@@ -55,9 +55,6 @@ pub enum BuildCommand {
     DeviceAgent,
     DeviceAgentCi,
     ManagerDevice,
-    FramebufferLabDevice,
-    FramebufferSceneLabDevice,
-    FramebufferSceneLabAnalysis,
     ArcadeCatalogPrototypeDevice,
     FiveSystemCatalogPrototypeDevice,
     FiveSystemCatalogPrototypeAnalysis,
@@ -70,8 +67,6 @@ pub enum BuildTarget {
     Runtime,
     DeviceAgent,
     Manager,
-    FramebufferLab,
-    FramebufferSceneLab,
     ArcadeCatalogPrototype,
     FiveSystemCatalogPrototype,
 }
@@ -185,30 +180,6 @@ impl BuildSpec {
                     "mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager",
                 ),
             ),
-            BuildCommand::FramebufferLabDevice => (
-                BuildTarget::FramebufferLab,
-                BuildMode::Build,
-                "release-live",
-                Vec::new(),
-                UiScope::All,
-                framebuffer_lab_artifact("release-live"),
-            ),
-            BuildCommand::FramebufferSceneLabDevice => (
-                BuildTarget::FramebufferSceneLab,
-                BuildMode::Build,
-                "release-device",
-                vec!["profile"],
-                UiScope::All,
-                framebuffer_scene_lab_artifact("release-device"),
-            ),
-            BuildCommand::FramebufferSceneLabAnalysis => (
-                BuildTarget::FramebufferSceneLab,
-                BuildMode::Build,
-                "release-device-profile",
-                vec!["profile"],
-                UiScope::All,
-                framebuffer_scene_lab_artifact("release-device-profile"),
-            ),
             BuildCommand::ArcadeCatalogPrototypeDevice => (
                 BuildTarget::ArcadeCatalogPrototype,
                 BuildMode::Build,
@@ -288,24 +259,6 @@ impl BuildSpec {
             ui_scope.label()
         );
         spec
-    }
-
-    #[must_use]
-    pub fn framebuffer_lab_device() -> Self {
-        Self::for_command(BuildCommand::FramebufferLabDevice)
-            .expect("framebuffer lab device builds have a specification")
-    }
-
-    #[must_use]
-    pub fn framebuffer_scene_lab_device() -> Self {
-        Self::for_command(BuildCommand::FramebufferSceneLabDevice)
-            .expect("startup particle lab device builds have a specification")
-    }
-
-    #[must_use]
-    pub fn framebuffer_scene_lab_analysis() -> Self {
-        Self::for_command(BuildCommand::FramebufferSceneLabAnalysis)
-            .expect("startup particle analysis builds have a specification")
     }
 
     /// Reproduces the current full Slint application build used to quantify
@@ -877,12 +830,6 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
             BuildTarget::Manager => {
                 PathBuf::from("/private/tmp/mister-magik-manager-apple-container-target")
             }
-            BuildTarget::FramebufferLab => {
-                PathBuf::from("/private/tmp/mister-magik-framebuffer-lab-apple-container-target")
-            }
-            BuildTarget::FramebufferSceneLab => PathBuf::from(
-                "/private/tmp/mister-magik-framebuffer-scene-lab-apple-container-target",
-            ),
             BuildTarget::ArcadeCatalogPrototype => PathBuf::from(
                 "/private/tmp/mister-magik-arcade-catalog-prototype-apple-container-target",
             ),
@@ -1699,11 +1646,7 @@ fn cargo_args(spec: &BuildSpec, timings: bool) -> Vec<OsString> {
         args.extend(["--profile".into(), spec.profile.into()]);
     }
     match spec.target {
-        BuildTarget::Runtime
-        | BuildTarget::DeviceAgent
-        | BuildTarget::Manager
-        | BuildTarget::FramebufferLab
-        | BuildTarget::FramebufferSceneLab => {}
+        BuildTarget::Runtime | BuildTarget::DeviceAgent | BuildTarget::Manager => {}
         BuildTarget::ArcadeCatalogPrototype => {
             args.extend(["--bin".into(), "arcade-catalog-prototype".into()]);
         }
@@ -1724,8 +1667,6 @@ fn host_workdir(target: BuildTarget) -> &'static str {
         BuildTarget::Runtime => "apps/mister",
         BuildTarget::DeviceAgent => "mister/tools/agent",
         BuildTarget::Manager => "mister/tools/manager",
-        BuildTarget::FramebufferLab => "apps/framebuffer-lab",
-        BuildTarget::FramebufferSceneLab => "apps/framebuffer-scene-lab",
         BuildTarget::ArcadeCatalogPrototype => "crates/catalog",
         BuildTarget::FiveSystemCatalogPrototype => "crates/catalog",
     }
@@ -1736,8 +1677,6 @@ fn container_workdir(target: BuildTarget) -> &'static str {
         BuildTarget::Runtime => "/project/apps/mister",
         BuildTarget::DeviceAgent => "/project/mister/tools/agent",
         BuildTarget::Manager => "/project/mister/tools/manager",
-        BuildTarget::FramebufferLab => "/project/apps/framebuffer-lab",
-        BuildTarget::FramebufferSceneLab => "/project/apps/framebuffer-scene-lab",
         BuildTarget::ArcadeCatalogPrototype => "/project/crates/catalog",
         BuildTarget::FiveSystemCatalogPrototype => "/project/crates/catalog",
     }
@@ -1748,8 +1687,6 @@ fn lockfile(target: BuildTarget) -> &'static str {
         BuildTarget::Runtime => "apps/mister/Cargo.lock",
         BuildTarget::DeviceAgent => "mister/tools/agent/Cargo.lock",
         BuildTarget::Manager => "mister/tools/manager/Cargo.lock",
-        BuildTarget::FramebufferLab => "apps/framebuffer-lab/Cargo.lock",
-        BuildTarget::FramebufferSceneLab => "apps/framebuffer-scene-lab/Cargo.lock",
         BuildTarget::ArcadeCatalogPrototype => "crates/catalog/Cargo.lock",
         BuildTarget::FiveSystemCatalogPrototype => "crates/catalog/Cargo.lock",
     }
@@ -1758,18 +1695,6 @@ fn lockfile(target: BuildTarget) -> &'static str {
 fn runtime_artifact(profile: &str) -> PathBuf {
     PathBuf::from(format!(
         "apps/mister/target/{TARGET}/{profile}/mister-magik-fb"
-    ))
-}
-
-fn framebuffer_lab_artifact(profile: &str) -> PathBuf {
-    PathBuf::from(format!(
-        "apps/framebuffer-lab/target/{TARGET}/{profile}/mister-magik-particle-lab"
-    ))
-}
-
-fn framebuffer_scene_lab_artifact(profile: &str) -> PathBuf {
-    PathBuf::from(format!(
-        "apps/framebuffer-scene-lab/target/{TARGET}/{profile}/mister-magik-framebuffer-scene-lab"
     ))
 }
 
@@ -2061,25 +1986,6 @@ mod tests {
         assert_eq!(spec.profile, "release-live");
         assert_eq!(spec.features, ["ui"]);
         assert_eq!(spec.ui_scope, UiScope::Launcher);
-    }
-
-    #[test]
-    fn framebuffer_scene_lab_build_is_slint_free_and_focused() {
-        let spec = BuildSpec::framebuffer_scene_lab_device();
-        assert_eq!(spec.target, BuildTarget::FramebufferSceneLab);
-        assert_eq!(spec.features, ["profile"]);
-        assert_eq!(spec.profile, "release-device");
-        assert_eq!(host_workdir(spec.target), "apps/framebuffer-scene-lab");
-        assert_eq!(
-            spec.artifact,
-            PathBuf::from(
-                "apps/framebuffer-scene-lab/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-framebuffer-scene-lab"
-            )
-        );
-        let analysis = BuildSpec::framebuffer_scene_lab_analysis();
-        assert_eq!(analysis.target, BuildTarget::FramebufferSceneLab);
-        assert_eq!(analysis.profile, "release-device-profile");
-        assert_eq!(analysis.features, ["profile"]);
     }
 
     #[test]

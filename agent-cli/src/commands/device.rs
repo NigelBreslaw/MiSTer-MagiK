@@ -3,7 +3,7 @@
 
 use crate::error::AgentResult;
 use clap::{Args, Subcommand, ValueEnum};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Debug, Subcommand)]
 pub enum DeviceCommand {
@@ -31,9 +31,6 @@ pub enum DeviceCommand {
     Logs,
     Events,
     Diagnostics(DiagnosticsArgs),
-    LiveParticles(LiveParticlesArgs),
-    StartupParticles(StartupParticlesArgs),
-    SceneLab(SceneLabArgs),
     Launcher {
         #[command(subcommand)]
         command: LauncherCommand,
@@ -198,90 +195,6 @@ pub struct AttendedArgs {
 pub struct DiagnosticsArgs {
     #[arg(long)]
     pub(crate) out: PathBuf,
-}
-
-#[derive(Debug, Args)]
-pub struct LiveParticlesArgs {
-    pub(crate) family: PathBuf,
-    #[arg(long)]
-    pub(crate) demo: String,
-    #[arg(long, required = true)]
-    attended: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct StartupParticlesArgs {
-    pub(crate) recipe: PathBuf,
-    #[arg(long, required = true)]
-    attended: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct SceneLabArgs {
-    #[arg(long, value_enum)]
-    pub(crate) scene: SceneLabScene,
-    #[arg(long)]
-    pub(crate) recipe: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) fixture: Option<String>,
-    #[arg(long)]
-    pub(crate) seed: Option<String>,
-    #[arg(long)]
-    pub(crate) case: Option<String>,
-    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=524_288))]
-    pub(crate) particle_count: Option<u32>,
-    #[arg(long, value_enum)]
-    pub(crate) particle_preset: Option<SceneLabParticlePreset>,
-    #[arg(long, value_parser = clap::value_parser!(u64).range(1..=600))]
-    pub(crate) seconds: Option<u64>,
-    #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u64).range(0..=600))]
-    pub(crate) warmup_seconds: u64,
-    #[arg(long)]
-    pub(crate) profile: bool,
-    #[arg(long)]
-    pub(crate) assess: bool,
-    #[arg(long)]
-    pub(crate) pmu: bool,
-    #[arg(long, required = true)]
-    attended: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub enum SceneLabScene {
-    Magik,
-    Cabinet,
-    Intro,
-    NavigationTransition,
-    CardFlip,
-    ScreenshotScreensaver,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub enum SceneLabParticlePreset {
-    Capacity,
-    Visual,
-}
-
-impl SceneLabParticlePreset {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Capacity => "capacity",
-            Self::Visual => "visual",
-        }
-    }
-}
-
-impl SceneLabScene {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Magik => "magik",
-            Self::Cabinet => "cabinet",
-            Self::Intro => "intro",
-            Self::NavigationTransition => "navigation-transition",
-            Self::CardFlip => "card-flip",
-            Self::ScreenshotScreensaver => "screenshot-screensaver",
-        }
-    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -644,9 +557,6 @@ pub struct ExperimentalAgentArgs {
 }
 
 pub fn run(command: DeviceCommand) -> AgentResult<()> {
-    if command.requires_repository() {
-        return Err("live particle sessions require the repository workflow".into());
-    }
     let mutation = command.is_mutation();
     let mut device = crate::device::DeviceClient::default();
     if mutation {
@@ -656,55 +566,7 @@ pub fn run(command: DeviceCommand) -> AgentResult<()> {
     }
 }
 
-pub fn run_live_particles(args: &LiveParticlesArgs, binary: &Path) -> AgentResult<()> {
-    let mut device = crate::device::DeviceClient::default();
-    device.mutate(|device| device.run_live_particles(binary, &args.family, &args.demo))
-}
-
-pub fn run_startup_particles(args: &StartupParticlesArgs, binary: &Path) -> AgentResult<()> {
-    let mut device = crate::device::DeviceClient::default();
-    device.mutate(|device| device.run_startup_particles(binary, &args.recipe))
-}
-
-pub fn run_scene_lab(
-    args: &SceneLabArgs,
-    binary: &Path,
-    output_dir: Option<&Path>,
-) -> AgentResult<()> {
-    let seed = args
-        .seed
-        .as_deref()
-        .map(crate::startup_particles::parse_screenshot_seed)
-        .transpose()?;
-    let mut device = crate::device::DeviceClient::default();
-    device.mutate(|device| {
-        device.run_scene_lab(crate::host::SceneLabRequest {
-            binary,
-            scene: args.scene.as_str(),
-            recipe: args.recipe.as_deref(),
-            fixture: args.fixture.as_deref(),
-            seed,
-            case: args.case.as_deref(),
-            particle_count: args.particle_count,
-            particle_preset: args.particle_preset.map(SceneLabParticlePreset::as_str),
-            seconds: args.seconds,
-            warmup_seconds: args.warmup_seconds,
-            profile: args.profile,
-            assess: args.assess,
-            pmu: args.pmu,
-            output_dir,
-        })
-    })
-}
-
 impl DeviceCommand {
-    pub fn requires_repository(&self) -> bool {
-        matches!(
-            self,
-            Self::LiveParticles(_) | Self::StartupParticles(_) | Self::SceneLab(_)
-        )
-    }
-
     pub(crate) fn is_mutation(&self) -> bool {
         match self {
             Self::Status(_)
@@ -714,12 +576,7 @@ impl DeviceCommand {
             | Self::Diagnostics(_)
             | Self::Capture { .. } => false,
             Self::Mode { command } => matches!(command, ModeCommand::Set(_)),
-            Self::TransferCheck(_)
-            | Self::Scene(_)
-            | Self::Reboot(_)
-            | Self::LiveParticles(_)
-            | Self::StartupParticles(_)
-            | Self::SceneLab(_) => true,
+            Self::TransferCheck(_) | Self::Scene(_) | Self::Reboot(_) => true,
             Self::Display { command } => !matches!(command, DisplayCommand::RouteStatus),
             Self::Crt { .. } => true,
             Self::Launcher { command } => !matches!(command, LauncherCommand::Status),

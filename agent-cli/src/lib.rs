@@ -27,8 +27,6 @@ pub mod game_databases;
 pub mod git;
 pub mod guidance;
 mod host;
-pub mod lab_build;
-pub mod live_particles;
 pub mod local_main_delivery;
 pub mod model;
 pub mod platform_bundle;
@@ -41,7 +39,6 @@ pub mod redact;
 pub mod release;
 pub mod request;
 pub mod return_qualification;
-pub mod startup_particles;
 pub mod transport;
 pub mod workflow;
 

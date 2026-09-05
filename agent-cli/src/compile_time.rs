@@ -30,8 +30,6 @@ pub enum RevisionComparisonScenario {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum CompileTimeTarget {
-    FramebufferLabArm,
-    FramebufferLabMacos,
     MagikFullAppArm,
     MagikFullAppMacos,
     MagikReleaseDeviceArmAll,
@@ -39,8 +37,6 @@ pub enum CompileTimeTarget {
     MagikReleaseDeviceArmThin,
     MagikReleaseDeviceArmThinStripped,
     MagikReleaseDeviceArmThinCgu32,
-    FramebufferSceneLabArm,
-    FramebufferSceneLabMacos,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
@@ -48,18 +44,12 @@ pub enum CompileTimeTarget {
 pub enum CompileTimeEdit {
     #[default]
     SharedMagik,
-    SharedNavigation,
-    SharedScreenshotParade,
-    LabHost,
 }
 
 impl CompileTimeEdit {
     const fn label(self) -> &'static str {
         match self {
             Self::SharedMagik => "shared-magik",
-            Self::SharedNavigation => "shared-navigation",
-            Self::SharedScreenshotParade => "shared-screenshot-parade",
-            Self::LabHost => "lab-host",
         }
     }
 }
@@ -67,8 +57,6 @@ impl CompileTimeEdit {
 impl CompileTimeTarget {
     const fn label(self) -> &'static str {
         match self {
-            Self::FramebufferLabArm => "framebuffer-lab-arm",
-            Self::FramebufferLabMacos => "framebuffer-lab-macos",
             Self::MagikFullAppArm => "magik-full-app-arm",
             Self::MagikFullAppMacos => "magik-full-app-macos",
             Self::MagikReleaseDeviceArmAll => "magik-release-device-arm-all",
@@ -76,8 +64,6 @@ impl CompileTimeTarget {
             Self::MagikReleaseDeviceArmThin => "magik-release-device-arm-thin",
             Self::MagikReleaseDeviceArmThinStripped => "magik-release-device-arm-thin-stripped",
             Self::MagikReleaseDeviceArmThinCgu32 => "magik-release-device-arm-thin-cgu32",
-            Self::FramebufferSceneLabArm => "framebuffer-scene-lab-arm",
-            Self::FramebufferSceneLabMacos => "framebuffer-scene-lab-macos",
         }
     }
 }
@@ -509,12 +495,6 @@ fn timed_build(
 
 fn run_build(repository: &Path, target: CompileTimeTarget, target_dir: &Path) -> AgentResult<()> {
     match target {
-        CompileTimeTarget::FramebufferLabArm => execute_quiet_at_target_dir(
-            repository,
-            &BuildSpec::framebuffer_lab_device(),
-            target_dir,
-        ),
-        CompileTimeTarget::FramebufferLabMacos => build_macos_lab(repository, target_dir),
         CompileTimeTarget::MagikFullAppArm => execute_quiet_at_target_dir(
             repository,
             &BuildSpec::magik_full_app_baseline(),
@@ -555,27 +535,12 @@ fn run_build(repository: &Path, target: CompileTimeTarget, target_dir: &Path) ->
             ),
             target_dir,
         ),
-        CompileTimeTarget::FramebufferSceneLabArm => execute_quiet_at_target_dir(
-            repository,
-            &BuildSpec::framebuffer_scene_lab_device(),
-            target_dir,
-        ),
-        CompileTimeTarget::FramebufferSceneLabMacos => {
-            build_macos_framebuffer_scene_lab(repository, target_dir)
-        }
     }
 }
 
 impl CompileTimeTarget {
     fn source_path(self, edit: CompileTimeEdit) -> AgentResult<&'static str> {
         match self {
-            Self::FramebufferLabArm | Self::FramebufferLabMacos => {
-                if edit == CompileTimeEdit::SharedMagik {
-                    Ok("apps/framebuffer-lab/src/particles/showcase.rs")
-                } else {
-                    Err("the framebuffer showcase supports only --edit shared-magik".into())
-                }
-            }
             Self::MagikFullAppArm | Self::MagikFullAppMacos => {
                 if edit == CompileTimeEdit::SharedMagik {
                     Ok("crates/particles/src/magik.rs")
@@ -597,14 +562,6 @@ impl CompileTimeTarget {
                     )
                 }
             }
-            Self::FramebufferSceneLabArm | Self::FramebufferSceneLabMacos => Ok(match edit {
-                CompileTimeEdit::SharedMagik => "crates/particles/src/magik.rs",
-                CompileTimeEdit::SharedNavigation => "crates/framebuffer-scenes/src/navigation.rs",
-                CompileTimeEdit::SharedScreenshotParade => {
-                    "crates/screenshot-parade/src/schedule.rs"
-                }
-                CompileTimeEdit::LabHost => "apps/framebuffer-scene-lab/src/main.rs",
-            }),
         }
     }
 }
@@ -635,50 +592,6 @@ fn build_macos_full_app(repository: &Path, target_dir: &Path) -> AgentResult<()>
     )?;
     if !status.success() {
         return Err(format!("macOS full-app Magik build exited with {status}").into());
-    }
-    Ok(())
-}
-
-fn build_macos_lab(repository: &Path, target_dir: &Path) -> AgentResult<()> {
-    let mut child = Command::new("cargo")
-        .current_dir(repository.join("apps/framebuffer-lab"))
-        .env("CARGO_TARGET_DIR", target_dir)
-        .env("RUSTC_WRAPPER", "")
-        .args(["build", "--locked"])
-        .stdin(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("cannot start macOS framebuffer lab build: {error}"))?;
-    let status = process::wait(
-        &mut child,
-        Some(BUILD_DEADLINE),
-        "macOS framebuffer lab build",
-        None,
-        || Ok(()),
-    )?;
-    if !status.success() {
-        return Err(format!("macOS framebuffer lab build exited with {status}").into());
-    }
-    Ok(())
-}
-
-fn build_macos_framebuffer_scene_lab(repository: &Path, target_dir: &Path) -> AgentResult<()> {
-    let mut child = Command::new("cargo")
-        .current_dir(repository.join("apps/framebuffer-scene-lab"))
-        .env("CARGO_TARGET_DIR", target_dir)
-        .env("RUSTC_WRAPPER", "")
-        .args(["build", "--locked", "--profile", "release-live"])
-        .stdin(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("cannot start macOS startup particle lab build: {error}"))?;
-    let status = process::wait(
-        &mut child,
-        Some(BUILD_DEADLINE),
-        "macOS startup particle lab build",
-        None,
-        || Ok(()),
-    )?;
-    if !status.success() {
-        return Err(format!("macOS startup particle lab build exited with {status}").into());
     }
     Ok(())
 }
@@ -1194,14 +1107,6 @@ mod tests {
     #[test]
     fn compile_target_labels_are_stable() {
         assert_eq!(
-            CompileTimeTarget::FramebufferLabArm.label(),
-            "framebuffer-lab-arm"
-        );
-        assert_eq!(
-            CompileTimeTarget::FramebufferLabMacos.label(),
-            "framebuffer-lab-macos"
-        );
-        assert_eq!(
             CompileTimeTarget::MagikFullAppArm.label(),
             "magik-full-app-arm"
         );
@@ -1216,39 +1121,6 @@ mod tests {
         assert_eq!(
             CompileTimeTarget::MagikReleaseDeviceArmThinCgu32.label(),
             "magik-release-device-arm-thin-cgu32"
-        );
-        assert_eq!(
-            CompileTimeTarget::FramebufferSceneLabArm.label(),
-            "framebuffer-scene-lab-arm"
-        );
-        assert_eq!(
-            CompileTimeTarget::FramebufferSceneLabMacos.label(),
-            "framebuffer-scene-lab-macos"
-        );
-    }
-
-    #[test]
-    fn scene_lab_measurements_select_each_real_edit_boundary() {
-        let target = CompileTimeTarget::FramebufferSceneLabMacos;
-        assert_eq!(
-            target.source_path(CompileTimeEdit::SharedMagik).unwrap(),
-            "crates/particles/src/magik.rs"
-        );
-        assert_eq!(
-            target
-                .source_path(CompileTimeEdit::SharedNavigation)
-                .unwrap(),
-            "crates/framebuffer-scenes/src/navigation.rs"
-        );
-        assert_eq!(
-            target.source_path(CompileTimeEdit::LabHost).unwrap(),
-            "apps/framebuffer-scene-lab/src/main.rs"
-        );
-        assert_eq!(
-            target
-                .source_path(CompileTimeEdit::SharedScreenshotParade)
-                .unwrap(),
-            "crates/screenshot-parade/src/schedule.rs"
         );
     }
 

@@ -354,10 +354,6 @@ fn require_clean_installed_commit(
     } else {
         None
     };
-    if let Some(command) = particle_scene_lab_command(scenario) {
-        reporter.emit(EventKind::Warning, "scene-lab-required", command, Some(100))?;
-        return Ok(Outcome::ExternalRequired);
-    }
     let mut device = DeviceClient::default();
     reporter.emit(
         EventKind::Progress,
@@ -392,13 +388,6 @@ fn require_clean_installed_commit(
     match scenario {
         BenchmarkScenario::Screensaver => {
             execute_screensaver(&mut device, manifest, output_dir, reporter)
-        }
-        BenchmarkScenario::Particles
-        | BenchmarkScenario::ParticleCapacity
-        | BenchmarkScenario::ParticleDemo40k
-        | BenchmarkScenario::ParticleStep
-        | BenchmarkScenario::ParticleProfile => {
-            unreachable!("particle scenarios are redirected before installed-runtime preflight")
         }
         BenchmarkScenario::CatalogLifecycle => {
             execute_catalog_lifecycle(&mut device, manifest, output_dir, reporter)
@@ -1093,86 +1082,6 @@ fn evaluate_pmu_summary(summary: &Value) -> AgentResult<()> {
         }
     }
     Ok(())
-}
-
-fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static str> {
-    match scenario {
-        BenchmarkScenario::Particles => Some(
-            "particle qualification moved to the dedicated lab; sweep --particle-count with: scripts/agent device scene-lab --scene magik --recipe crates/particles/assets/recipes/magik-v1.json --particle-preset visual --particle-count COUNT --seconds 90 --assess --attended",
-        ),
-        BenchmarkScenario::ParticleCapacity => Some(
-            "particle capacity qualification moved to the dedicated lab; sweep --particle-count with: scripts/agent device scene-lab --scene magik --recipe crates/particles/assets/recipes/magik-v1.json --particle-preset capacity --particle-count COUNT --seconds 90 --assess --attended",
-        ),
-        BenchmarkScenario::ParticleDemo40k => Some(
-            "run: scripts/agent device scene-lab --scene magik --recipe crates/particles/assets/recipes/magik-v1.json --particle-preset visual --particle-count 40960 --seconds 90 --assess --attended",
-        ),
-        BenchmarkScenario::ParticleStep => Some(
-            "run: scripts/agent device scene-lab --scene magik --recipe crates/particles/assets/recipes/magik-v1.json --particle-preset capacity --particle-count 14336 --seconds 90 --assess --attended",
-        ),
-        BenchmarkScenario::ParticleProfile => Some(
-            "particle CPU profiling moved to the dedicated lab; run the required count with scripts/agent device scene-lab --scene magik --recipe crates/particles/assets/recipes/magik-v1.json --particle-preset PRESET --particle-count COUNT --seconds 90 --assess --attended",
-        ),
-        BenchmarkScenario::Streamline
-        | BenchmarkScenario::Screensaver
-        | BenchmarkScenario::ColdBoot
-        | BenchmarkScenario::ColdBootPprof
-        | BenchmarkScenario::CatalogLifecycle
-        | BenchmarkScenario::CatalogBuildRebuild
-        | BenchmarkScenario::CatalogChangedRefresh
-        | BenchmarkScenario::CatalogResumeValidation
-        | BenchmarkScenario::CatalogFullBuildRebuild
-        | BenchmarkScenario::CatalogCorpusInventory
-        | BenchmarkScenario::ArcadeCatalogPrototypeCold
-        | BenchmarkScenario::CatalogAttributionControl
-        | BenchmarkScenario::CatalogAttributionHotpath
-        | BenchmarkScenario::CatalogAttributionPprof
-        | BenchmarkScenario::CatalogAttributionPmu
-        | BenchmarkScenario::CatalogAttributionStorage
-        | BenchmarkScenario::CatalogAttributionFunctionGraph
-        | BenchmarkScenario::CatalogAttributionStreamline
-        | BenchmarkScenario::CatalogAttributionReport
-        | BenchmarkScenario::SystemEntry
-        | BenchmarkScenario::SystemEntryCritical
-        | BenchmarkScenario::SystemEntryCriticalConfirm
-        | BenchmarkScenario::SystemEntryCriticalProfile
-        | BenchmarkScenario::SystemEntryCriticalStreamline
-        | BenchmarkScenario::SystemEntryQualification
-        | BenchmarkScenario::LaunchReturn
-        | BenchmarkScenario::LaunchReturnOnce
-        | BenchmarkScenario::LaunchReturnFallback
-        | BenchmarkScenario::LaunchReturnAttribution
-        | BenchmarkScenario::ModalInput
-        | BenchmarkScenario::InputIntegrity
-        | BenchmarkScenario::LauncherResponse
-        | BenchmarkScenario::LauncherResponseRetained
-        | BenchmarkScenario::LauncherResponseAttribution
-        | BenchmarkScenario::GuiFrameAttribution
-        | BenchmarkScenario::SettledComposition
-        | BenchmarkScenario::BridgeModelChurn
-        | BenchmarkScenario::BridgeModelChurnRetained
-        | BenchmarkScenario::SchedulerTrace
-        | BenchmarkScenario::StorageAttribution
-        | BenchmarkScenario::ArcadeVelocityScroll
-        | BenchmarkScenario::ArcadeVelocityScrollAttribution
-        | BenchmarkScenario::TransitionStreamline
-        | BenchmarkScenario::AgentObserverAttribution
-        | BenchmarkScenario::AgentIoAttribution
-        | BenchmarkScenario::InputLatencyLab
-        | BenchmarkScenario::LauncherResponseStreamline
-        | BenchmarkScenario::NavigationTransitions
-        | BenchmarkScenario::SettingsNavigation
-        | BenchmarkScenario::SettingsNavigationPprof
-        | BenchmarkScenario::OrientationTransitionFade
-        | BenchmarkScenario::OrientationTransitionZoom
-        | BenchmarkScenario::OrientationTransitionFadePprof
-        | BenchmarkScenario::OrientationTransitionZoomPprof
-        | BenchmarkScenario::NeonAttribution
-        | BenchmarkScenario::PmuProfile
-        | BenchmarkScenario::MediaPackPersistence
-        | BenchmarkScenario::RomIdentityHashing
-        | BenchmarkScenario::PreviewWorkAttribution
-        | BenchmarkScenario::Search => None,
-    }
 }
 
 fn execute_orientation_transition(
@@ -3526,23 +3435,6 @@ mod tests {
             }))
             .is_err()
         );
-    }
-
-    #[test]
-    fn particle_benchmarks_redirect_to_the_dedicated_scene_lab() {
-        for scenario in [
-            BenchmarkScenario::Particles,
-            BenchmarkScenario::ParticleCapacity,
-            BenchmarkScenario::ParticleDemo40k,
-            BenchmarkScenario::ParticleStep,
-            BenchmarkScenario::ParticleProfile,
-        ] {
-            let command = particle_scene_lab_command(scenario).expect("particle lab command");
-            assert!(command.contains("device scene-lab"));
-            assert!(command.contains("--scene magik"));
-            assert!(command.contains("--particle-preset"));
-            assert!(command.contains("--particle-count"));
-        }
     }
 
     #[test]
