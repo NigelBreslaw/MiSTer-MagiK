@@ -3,21 +3,9 @@
 
 version: 2
 
-# Dependabot cannot resolve private git submodules unless it has explicit repository
-# access. Point this to a Dependabot secret containing a PAT with read access to
-# the required private submodule repositories.
-registries:
-  github-private:
-    type: git
-    url: https://github.com
-    username: x-access-token
-    password: ${{ secrets.DEPENDABOT_GIT_PRIVATE_TOKEN }}
-
 updates:
   - package-ecosystem: "pip"
     directory: "/"
-    registries:
-      - github-private
     schedule:
       interval: "weekly"
       day: "friday"
@@ -29,8 +17,6 @@ updates:
           - "*"
   - package-ecosystem: "pip"
     directory: "/magik2/host"
-    registries:
-      - github-private
     schedule:
       interval: "weekly"
       day: "friday"
