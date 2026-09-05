@@ -28,13 +28,31 @@ not device acceptance.
   is 2606 ms, below the five-second requirement. One separate 11 MB upload
   timed out before acknowledgment and remains retained as failure evidence;
   it was excluded from the successful 20-sample set.
+- A one-line Slint edit was sampled 20 times, then the source was restored and
+  rebuilt normally. Invocation-to-completion samples were 11,009, 10,213,
+  10,195, 10,946, 11,320, 11,007, 10,896, 10,434, 10,064, 9,927, 9,772,
+  9,969, 9,829, 9,785, 9,994, 9,911, 9,874, 9,702, 10,960, and 9,844 ms.
+  The retained bundles contain each build, upload-byte, upload-elapsed, start,
+  and completion event; nearest-rank p95 is 11,009 ms, below 15 seconds.
+- A one-line Rust edit was sampled separately 20 times, then the source was
+  restored and rebuilt normally. Invocation-to-completion samples were 13,150,
+  13,358, 13,769, 12,665, 13,605, 13,630, 11,587, 10,669, 11,622, 10,118,
+  10,325, 10,008, 10,330, 10,745, 10,776, 10,008, 10,496, 9,628, 10,224,
+  and 11,338 ms. The same retained per-phase byte/timing evidence gives a
+  nearest-rank p95 of 13,630 ms, below 15 seconds.
+- Current deploy bundles record upload bytes, elapsed time, and calculated
+  bytes/second together. The source-edit runs predate that explicit derived
+  field but retain the corresponding byte and elapsed values in every bundle.
 - Native observation delivered metrics, 100 recent probe logs, and a
   1,036,872-byte keyframe (72-byte wire header plus a 960x540 RGB565 surface)
   to the localhost viewer with no stream error. No framebuffer device polling
   was introduced.
 - The agent advertises `agent-update-v1`, `artifacts-v1`, `lifecycle-v1`,
-  `metrics-v1`, `status`, `test-bridge-v1`, `upload-v1`, and `watch-v1`; the current probe remains
-  running after deploy and after a failed profiled-check setup.
+  `legacy-isolation-v1`, `metrics-v1`, `request-replay-v1`, `status`,
+  `test-bridge-v1`, `test-deadline-v1`, `upload-v1`, and `watch-v1`; the
+  current probe remains running after deploy and after a failed profiled-check
+  setup. Its typed status reports `legacy_agent_running=False`, so normal 2.0
+  operation is verified while the retired device agent is stopped.
 - A native `agent-update-v1` replacement completed against the running service.
   The replacement acknowledged its SHA-256, retained the complete capability
   set, and adopted the already-running probe without a probe restart.
@@ -54,19 +72,31 @@ not device acceptance.
 
 ## Automated evidence
 
-- 20 focused host tests cover wire framing, hash publication, cached builds,
+- 26 focused host tests cover wire framing, hash publication, cached builds,
   frame decoding, result bundles, capability compatibility A→B→A, absent-agent
-  bootstrap, missing-capability upgrade, authentication failure, and command
-  dispatch.
-- 5 focused native-agent tests cover framing, truncation, hash verification,
-  atomic publication, and authenticated loopback upload.
+  bootstrap, missing-capability upgrade, authentication failure, command
+  dispatch, lost-reply request-identifier reuse, and primary/cleanup failure
+  retention.
+- 11 focused native-agent tests cover framing, truncation, hash verification,
+  atomic publication, authenticated loopback upload, replay-safe mutation
+  responses, the absolute deadline under continuous session traffic, and a
+  blocked watch stream that still permits a separate control response. The
+  relay tests also cover client disconnect and application-exit paths.
 - The probe and agent build for `armv7-unknown-linux-gnueabihf`; the probe links
   pprof revision `431b88c4fc67bef98126eaa8932287583d1a660e`.
 
-## Remaining acceptance gates
+## Failure and streaming matrices
 
-- Measure 20 invocation-to-completion runs for Rust-edit and Slint-edit cases.
-  Retain all samples, bytes, throughput, and nearest-rank p95; do not
-  substitute phase timing for those targets.
-- Exercise failure, lost-reply, deadline, concurrent-stream, and cleanup
-  matrices; retain both primary and cleanup outcomes.
+- The lost-reply test reconnects once with the same request identifier; the
+  native replay cache returns the original mutation result without publishing
+  the upload twice. Reusing that identifier for different request content is
+  rejected.
+- Test sessions hold the mutation lane, use an absolute 20-second deadline from
+  session start, and stop the owned test process on application failure, client
+  disconnect, or deadline. The deadline test uses continuous traffic, so it
+  cannot be extended by read activity.
+- Control mutations are serialized while native watch streams remain on their
+  own connections. Watch writes have a 500 ms bound, retain only the newest
+  preview, and device motion with an active viewer retained zero physical drops.
+- A deliberately induced smoke failure plus failed persistent restart retains
+  distinct primary `check` and cleanup events and fails the command.

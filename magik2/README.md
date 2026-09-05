@@ -32,6 +32,12 @@ logs, and already-rendered RGB565 previews; the agent retains only the newest
 preview and a bounded log tail, so a slow or disconnected viewer cannot block
 rendering or control traffic.
 
+Mutations are serialized and replay-safe: a host retries one lost transport
+reply with the same request identifier, and the agent returns the original
+result instead of running the mutation again. Test sessions have an absolute
+deadline even under continuous traffic. `status` also reports whether the
+retired device agent is present; this tool never invokes that legacy CLI.
+
 `check` uses a fresh native Slint system-testing session and restores ordinary
 persistent probe mode afterwards. The motion profile is the same workload,
 sampled at 99 Hz by the pinned ARM-compatible pprof revision; its folded stacks
@@ -42,7 +48,9 @@ to a legacy bridge or claiming a pass.
 
 Result directories under `build/magik2-results/` contain source revision and
 dirty-state context, incremental events, phase timings, retained screenshots,
-and any profile artifacts. They are local evidence, not a workflow database.
+and any profile artifacts. Upload completion events include bytes/second as
+well as byte count and elapsed time. They are local evidence, not a workflow
+database.
 
 The wire contract is deliberately small. JSON headers are capped at 64 KiB;
 bulk bytes follow a fixed 64-bit big-endian length and are never encoded into a
