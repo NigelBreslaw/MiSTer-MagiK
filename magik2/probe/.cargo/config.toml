@@ -1,0 +1,5 @@
+[env]
+# Slint's system-test client needs `std`, which enables its system-font path.
+# Resolve fontconfig dynamically on the MiSTer instead of requiring a target
+# fontconfig development sysroot during ARM cross-compilation.
+RUST_FONTCONFIG_DLOPEN = "1"

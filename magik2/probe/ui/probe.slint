@@ -29,10 +29,10 @@ export component Probe inherits Window {
     Rectangle {
         x: 16px; y: 80px; width: 250px; height: 160px;
         background: #182235; border-radius: 6px;
-        Text { x: 16px; y: 16px; text: "Counter: " + root.counter; color: #f8fafc; font-size: 22px; accessible-role: text; accessible-label: "counter"; }
-        Rectangle { x: 16px; y: 60px; width: 98px; height: 42px; background: #2563eb; border-radius: 5px; Text { x: 14px; y: 10px; text: "Increment"; color: white; } TouchArea { clicked => { root.increment(); } } }
-        Rectangle { x: 126px; y: 60px; width: 98px; height: 42px; background: #475569; border-radius: 5px; Text { x: 23px; y: 10px; text: "Reset"; color: white; } TouchArea { clicked => { root.reset(); } } }
-        Rectangle { x: 16px; y: 114px; width: 208px; height: 30px; background: #334155; border-radius: 5px; Text { x: 12px; y: 6px; text: root.details-open ? "Close details" : "Open details"; color: white; } TouchArea { clicked => { root.toggle-details(); } } }
+        counter-value := Text { x: 16px; y: 16px; text: "Counter: " + root.counter; color: #f8fafc; font-size: 22px; accessible-role: text; accessible-label: "counter"; accessible-value: "" + root.counter; }
+        increment-button := Rectangle { x: 16px; y: 60px; width: 98px; height: 42px; background: #2563eb; border-radius: 5px; accessible-role: button; accessible-label: "increment"; accessible-action-default => { root.increment(); } Text { x: 14px; y: 10px; text: "Increment"; color: white; } TouchArea { clicked => { root.increment(); } } }
+        reset-button := Rectangle { x: 126px; y: 60px; width: 98px; height: 42px; background: #475569; border-radius: 5px; accessible-role: button; accessible-label: "reset"; accessible-action-default => { root.reset(); } Text { x: 23px; y: 10px; text: "Reset"; color: white; } TouchArea { clicked => { root.reset(); } } }
+        details-button := Rectangle { x: 16px; y: 114px; width: 208px; height: 30px; background: #334155; border-radius: 5px; accessible-role: button; accessible-label: "details-toggle"; accessible-action-default => { root.toggle-details(); } Text { x: 12px; y: 6px; text: root.details-open ? "Close details" : "Open details"; color: white; } TouchArea { clicked => { root.toggle-details(); } } }
     }
 
     if root.details-open : Rectangle {
@@ -43,13 +43,13 @@ export component Probe inherits Window {
     Rectangle {
         x: 16px; y: 256px; width: parent.width - 32px; height: parent.height - 272px;
         background: #0b1220; border-radius: 6px;
-        Text { x: 14px; y: 12px; text: root.motion-running ? "Motion workload running" : root.motion-complete ? "Motion workload complete" : "Deterministic motion workload (64 rectangles)"; color: #94a3b8; accessible-role: text; accessible-label: "motion-state"; }
+        motion-state := Text { x: 14px; y: 12px; text: root.motion-running ? "Motion workload running" : root.motion-complete ? "Motion workload complete" : "Deterministic motion workload (64 rectangles)"; color: #94a3b8; accessible-role: text; accessible-label: "motion-state"; accessible-value: root.motion-running ? "running" : root.motion-complete ? "complete" : "idle"; }
         for i in 64 : Rectangle {
             width: 9px; height: 9px;
             x: 12px + Math.mod(i * 47 + root.motion-step * (Math.mod(i, 5) + 2), 570) * 1px;
             y: 42px + Math.mod(i * 29 + root.motion-step * (Math.mod(i, 7) + 1), 150) * 1px;
             background: Math.mod(i, 2) == 0 ? #22d3ee : #a78bfa;
         }
-        Rectangle { x: parent.width - 138px; y: 10px; width: 124px; height: 30px; background: #0f766e; border-radius: 5px; Text { x: 13px; y: 6px; text: "Start motion"; color: white; } TouchArea { clicked => { root.start-motion(); } } }
+        start-motion-button := Rectangle { x: parent.width - 138px; y: 10px; width: 124px; height: 30px; background: #0f766e; border-radius: 5px; accessible-role: button; accessible-label: "start-motion"; accessible-action-default => { root.start-motion(); } Text { x: 13px; y: 6px; text: "Start motion"; color: white; } TouchArea { clicked => { root.start-motion(); } } }
     }
 }

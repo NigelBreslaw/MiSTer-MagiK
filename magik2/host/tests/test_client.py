@@ -39,3 +39,10 @@ def test_authentication_error_is_not_retreated_as_bootstrap() -> None:
     with pytest.raises(AgentError, match="authentication-failed"):
         NativeAgent("127.0.0.1", "wrong", port).status()
     thread.join()
+
+
+def test_test_tunnel_keeps_the_connection_open_after_native_handshake() -> None:
+    port, thread = one_reply({"ready": True}, "test-ready")
+    tunnel = NativeAgent("127.0.0.1", "token", port).open_test_tunnel()
+    tunnel.close()
+    thread.join()

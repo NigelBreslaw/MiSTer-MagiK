@@ -12,10 +12,13 @@ from .bootstrap import BootstrapError, SshBootstrap
 from .client import AgentError, NativeAgent
 from .compatibility import AgentStatus
 from .results import append_event, create_run
+from .scenarios import motion, smoke
+from .testing import fresh_session
 from .token_store import TokenStore
 
 
 REQUIRED_AGENT_CAPABILITIES = {"status", "upload-v1", "lifecycle-v1"}
+CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {"metrics-v1", "test-bridge-v1"}
 
 
 def main() -> int:
@@ -40,6 +43,8 @@ def main() -> int:
         return deploy(arguments, run)
     if arguments.command == "stop":
         return stop(run)
+    if arguments.command == "check":
+        return check(arguments, run)
     if arguments.command != "status":
         print(f"magik2 {arguments.command}: not implemented yet (result: {run})", file=os.sys.stderr)
         return 2
@@ -55,31 +60,51 @@ def main() -> int:
 
 
 def deploy(_arguments: argparse.Namespace, run: Path) -> int:
-    artifact = Path(__file__).resolve().parents[2] / "probe" / "target" / "armv7-unknown-linux-gnueabihf" / "release" / "mister-magik2-probe"
-    if not artifact.is_file():
-        print(f"magik2 deploy: ARM probe artifact is unavailable (result: {run})", file=os.sys.stderr)
-        return 2
     try:
         agent, status = connect_agent(run)
-        payload = artifact.read_bytes()
-        artifact_hash = hashlib.sha256(payload).hexdigest()
-        healthy = status.fields.get("running") is True and status.fields.get("artifact_sha256") == artifact_hash
-        if healthy:
-            append_event(run, {"phase": "complete", "outcome": "no-op", "bytes": 0})
+        if ensure_probe(agent, status, run):
             print(f"magik2 deploy: probe already ready (result: {run})")
             return 0
-        changed = status.fields.get("artifact_sha256") != artifact_hash
-        if changed:
-            append_event(run, {"phase": "upload", "bytes": len(payload)})
-            agent.upload("probe", payload)
-        append_event(run, {"phase": "start", "restart": status.fields.get("running") is True})
-        agent.start(restart=status.fields.get("running") is True)
         append_event(run, {"phase": "complete", "outcome": "started"})
     except (BootstrapError, AgentError, OSError) as error:
         append_event(run, {"phase": "failed", "error": type(error).__name__})
         print(f"magik2 deploy: {type(error).__name__} (result: {run})", file=os.sys.stderr)
         return 2
     print(f"magik2 deploy: probe started (result: {run})")
+    return 0
+
+
+def check(arguments: argparse.Namespace, run: Path) -> int:
+    scenarios = (arguments.scenario,) if arguments.scenario else ("smoke", "motion")
+    if arguments.profile:
+        append_event(run, {"phase": "profile", "outcome": "unavailable"})
+        print(f"magik2 check: CPU profiling is not available yet (result: {run})", file=os.sys.stderr)
+        return 2
+    try:
+        agent, status = connect_agent(run, CHECK_AGENT_CAPABILITIES)
+        ensure_probe(agent, status, run)
+        with fresh_session(agent) as application:
+            if "smoke" in scenarios:
+                append_event(run, {"phase": "smoke", "outcome": "started"})
+                append_event(run, {"phase": "smoke", "outcome": "passed", **smoke(application, run / "smoke.png")})
+            if "motion" in scenarios:
+                append_event(run, {"phase": "motion", "outcome": "started"})
+                measurement = motion(application, agent)
+                append_event(run, {"phase": "motion", "outcome": "measured", **measurement})
+                if not measurement["physical_evidence_valid"]:
+                    raise AssertionError("motion has no validated physical-presentation evidence")
+    except (AssertionError, BootstrapError, AgentError, OSError, RuntimeError) as error:
+        append_event(run, {"phase": "check", "outcome": "failed", "error": str(error)})
+        print(f"magik2 check: {error} (result: {run})", file=os.sys.stderr)
+        return 2
+    finally:
+        try:
+            agent.start(restart=True)
+            append_event(run, {"phase": "persistent-restart", "outcome": "passed"})
+        except (BootstrapError, AgentError, OSError, UnboundLocalError) as error:
+            append_event(run, {"phase": "persistent-restart", "outcome": "failed", "error": type(error).__name__})
+    append_event(run, {"phase": "check", "outcome": "passed"})
+    print(f"magik2 check: passed ({','.join(scenarios)}) (result: {run})")
     return 0
 
 
@@ -96,7 +121,28 @@ def stop(run: Path) -> int:
     return 0
 
 
-def connect_agent(run: Path) -> tuple[NativeAgent, AgentStatus]:
+def ensure_probe(agent: NativeAgent, status: AgentStatus, run: Path) -> bool:
+    artifact = Path(__file__).resolve().parents[2] / "probe" / "target" / "armv7-unknown-linux-gnueabihf" / "release" / "mister-magik2-probe"
+    if not artifact.is_file():
+        raise AgentError("ARM probe artifact is unavailable")
+    payload = artifact.read_bytes()
+    artifact_hash = hashlib.sha256(payload).hexdigest()
+    healthy = status.fields.get("running") is True and status.fields.get("artifact_sha256") == artifact_hash
+    if healthy:
+        append_event(run, {"phase": "deploy", "outcome": "no-op", "bytes": 0})
+        return True
+    changed = status.fields.get("artifact_sha256") != artifact_hash
+    if changed:
+        append_event(run, {"phase": "upload", "bytes": len(payload)})
+        agent.upload("probe", payload)
+    append_event(run, {"phase": "start", "restart": status.fields.get("running") is True})
+    agent.start(restart=status.fields.get("running") is True)
+    return False
+
+
+def connect_agent(
+    run: Path, required: set[str] = REQUIRED_AGENT_CAPABILITIES
+) -> tuple[NativeAgent, AgentStatus]:
     """Use SSH only when native discovery or repair is genuinely unavailable."""
     device = os.environ["MISTER_IP"]
     store = TokenStore(Path(os.environ.get("MISTER_MAGIK2_STATE", "build/magik2-state")), device)
@@ -110,7 +156,7 @@ def connect_agent(run: Path) -> tuple[NativeAgent, AgentStatus]:
         except OSError:
             pass
         else:
-            if status.supports(REQUIRED_AGENT_CAPABILITIES) and os.environ.get("MISTER_MAGIK2_REPAIR") != "1":
+            if status.supports(required) and os.environ.get("MISTER_MAGIK2_REPAIR") != "1":
                 return agent, status
     bootstrap = SshBootstrap.from_environment()
     agent_binary = Path(__file__).resolve().parents[2] / "agent" / "target" / "armv7-unknown-linux-gnueabihf" / "release" / "mister-magik2-agent"
@@ -119,7 +165,7 @@ def connect_agent(run: Path) -> tuple[NativeAgent, AgentStatus]:
     time.sleep(1)
     agent = NativeAgent(device, token)
     status = agent.status()
-    if not status.supports(REQUIRED_AGENT_CAPABILITIES):
+    if not status.supports(required):
         raise AgentError("missing-required-capability-after-repair")
     append_event(run, {"phase": "bootstrap", "outcome": "passed"})
     return agent, status
