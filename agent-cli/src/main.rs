@@ -39,7 +39,7 @@ fn run() -> AgentResult<ExitCode> {
     };
     let output = cli.output_format;
     let command = match cli.command {
-        Some(CliCommand::Device { command }) if !command.requires_repository() => {
+        Some(CliCommand::Device { command }) => {
             return match agent_cli::commands::device::run(command) {
                 Ok(()) => Ok(ExitCode::SUCCESS),
                 Err(error) => {
@@ -129,9 +129,6 @@ fn command_label(command: &CliCommand) -> &'static str {
         CliCommand::Alpha { .. } => "alpha",
         CliCommand::Release { .. } => "release",
         CliCommand::CompileTime { .. } => "compile-time",
-        CliCommand::LiveParticles { .. } => "live-particles",
-        CliCommand::StartupParticles { .. } => "startup-particles",
-        CliCommand::SceneLab { .. } => "scene-lab",
         CliCommand::Clean => "clean",
         CliCommand::Dependencies { .. } => "dependencies",
         CliCommand::Fpga { .. } => "fpga",
@@ -354,18 +351,6 @@ fn dispatch(
             agent_cli::compile_time::execute(repository, command, reporter)?;
             return Ok(Outcome::Passed);
         }
-        CliCommand::LiveParticles { command } => {
-            agent_cli::live_particles::execute_preview(repository, command)?;
-            return Ok(Outcome::Passed);
-        }
-        CliCommand::StartupParticles { command } => {
-            agent_cli::startup_particles::execute_preview(repository, command)?;
-            return Ok(Outcome::Passed);
-        }
-        CliCommand::SceneLab { command } => {
-            agent_cli::startup_particles::execute_scene_preview(repository, command, reporter)?;
-            return Ok(Outcome::Passed);
-        }
         CliCommand::Clean => {
             agent_cli::clean::execute(repository, reporter)?;
             return Ok(Outcome::Passed);
@@ -376,24 +361,6 @@ fn dispatch(
         }
         CliCommand::Fpga { command } => {
             agent_cli::fpga::execute(repository, command, reporter)?;
-            return Ok(Outcome::Passed);
-        }
-        CliCommand::Device {
-            command: agent_cli::commands::device::DeviceCommand::LiveParticles(args),
-        } => {
-            agent_cli::live_particles::execute_device(repository, args, reporter)?;
-            return Ok(Outcome::Passed);
-        }
-        CliCommand::Device {
-            command: agent_cli::commands::device::DeviceCommand::StartupParticles(args),
-        } => {
-            agent_cli::startup_particles::execute_device(repository, args, reporter)?;
-            return Ok(Outcome::Passed);
-        }
-        CliCommand::Device {
-            command: agent_cli::commands::device::DeviceCommand::SceneLab(args),
-        } => {
-            agent_cli::startup_particles::execute_scene_device(repository, args, reporter)?;
             return Ok(Outcome::Passed);
         }
         CliCommand::Build { intent } => {

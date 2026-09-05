@@ -39,16 +39,12 @@ mod framebuffer_views;
 mod installed_layout;
 mod latch_v5_qualification;
 mod launcher_automation;
-mod live_particles;
 mod media;
 mod performance_attribution;
 mod platform_deploy;
 mod remote;
-mod startup_particles;
 mod tracefs;
 mod transfer_check;
-
-pub(crate) use startup_particles::SceneLabRequest;
 
 use agent_client::{
     AGENT_PORT, AgentEndpoint, agent_framebuffer_capture_stream,
@@ -348,30 +344,6 @@ impl NativeDevice {
         Ok(())
     }
 
-    pub(crate) fn run_live_particles(
-        &mut self,
-        binary: &Path,
-        family: &Path,
-        demo: &str,
-    ) -> std::result::Result<(), DeviceFailure> {
-        live_particles::run(self, binary, family, demo)
-    }
-
-    pub(crate) fn run_startup_particles(
-        &mut self,
-        binary: &Path,
-        recipe: &Path,
-    ) -> std::result::Result<(), DeviceFailure> {
-        startup_particles::run(self, binary, recipe)
-    }
-
-    pub(crate) fn run_scene_lab(
-        &mut self,
-        request: startup_particles::SceneLabRequest<'_>,
-    ) -> std::result::Result<(), DeviceFailure> {
-        startup_particles::run_scene_lab(self, request)
-    }
-
     pub(crate) fn run_operator(
         &mut self,
         command: &crate::commands::device::DeviceCommand,
@@ -435,11 +407,6 @@ impl NativeDevice {
                 }
                 DeviceCommand::ArmingStatus => arming_status(),
                 DeviceCommand::TransferCheck(args) => transfer_check::run(args, &prepared.config),
-                DeviceCommand::LiveParticles(_)
-                | DeviceCommand::StartupParticles(_)
-                | DeviceCommand::SceneLab(_) => {
-                    unreachable!("particle sessions use the repository workflow")
-                }
                 DeviceCommand::Mode { command } => match command {
                     ModeCommand::Status => mode_cli(&device_strings(["status"])),
                     ModeCommand::Set(args) => mode_cli(&device_strings([args.mode.as_str()])),

@@ -6,9 +6,7 @@ use crate::commands::device::DeviceCommand;
 use crate::compile_time::CompileTimeCommand;
 use crate::dependencies::DependenciesCommand;
 use crate::fpga::FpgaCommand;
-use crate::live_particles::LiveParticlesCommand;
 use crate::model::{ArcadeVelocityScrollArm, ArcadeVelocityScrollRoute, BenchmarkScenario};
-use crate::startup_particles::{SceneLabCommand, StartupParticlesCommand};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
@@ -135,18 +133,6 @@ pub enum Command {
     CompileTime {
         #[command(subcommand)]
         command: CompileTimeCommand,
-    },
-    LiveParticles {
-        #[command(subcommand)]
-        command: LiveParticlesCommand,
-    },
-    StartupParticles {
-        #[command(subcommand)]
-        command: StartupParticlesCommand,
-    },
-    SceneLab {
-        #[command(subcommand)]
-        command: SceneLabCommand,
     },
     /// Remove Cargo build artifacts from every project in the repository.
     Clean,
@@ -512,6 +498,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn retired_experiment_commands_are_not_available() {
+        for command in ["live-particles", "startup-particles", "scene-lab"] {
+            assert!(Cli::try_parse_from(["agent-cli", command, "preview"]).is_err());
+            assert!(Cli::try_parse_from(["agent-cli", "device", command, "--attended"]).is_err());
+        }
+        for target in [
+            "framebuffer-lab-device",
+            "framebuffer-scene-lab-device",
+            "framebuffer-scene-lab-analysis",
+        ] {
+            assert!(Cli::try_parse_from(["agent-cli", "build", target]).is_err());
+        }
+        for target in [
+            "framebuffer-lab-arm",
+            "framebuffer-lab-macos",
+            "framebuffer-scene-lab-arm",
+            "framebuffer-scene-lab-macos",
+        ] {
+            assert!(
+                Cli::try_parse_from([
+                    "agent-cli",
+                    "compile-time",
+                    "build",
+                    target,
+                    "--target-dir",
+                    "/tmp/retired-target"
+                ])
+                .is_err()
+            );
+        }
+        for edit in ["shared-navigation", "shared-screenshot-parade", "lab-host"] {
+            assert!(
+                Cli::try_parse_from([
+                    "agent-cli",
+                    "compile-time",
+                    "measure",
+                    "magik-full-app-macos",
+                    "--edit",
+                    edit,
+                    "--target-dir",
+                    "/tmp/retired-target",
+                    "--output",
+                    "/tmp/retired.json"
+                ])
+                .is_err()
+            );
+        }
+        for scenario in [
+            "particles",
+            "particle-capacity",
+            "particle-demo-40k",
+            "particle-step",
+            "particle-profile",
+        ] {
+            assert!(Cli::try_parse_from(["agent-cli", "benchmark", scenario]).is_err());
+        }
+    }
+
+    #[test]
     fn bare_invocation_displays_help_instead_of_creating_an_intent() {
         assert!(Cli::try_parse_from(["agent-cli"]).is_err());
     }
@@ -587,102 +632,13 @@ mod tests {
     }
 
     #[test]
-    fn card_flip_scene_lab_commands_are_typed_and_recipe_free() {
-        assert!(
-            Cli::try_parse_from(["agent-cli", "scene-lab", "preview", "--scene", "card-flip"])
-                .is_ok()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "agent-cli",
-                "scene-lab",
-                "capture",
-                "--scene",
-                "card-flip",
-                "--time-ms",
-                "0",
-                "--output",
-                "/tmp/card-flip-front.ppm",
-            ])
-            .is_ok()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "agent-cli",
-                "device",
-                "scene-lab",
-                "--scene",
-                "card-flip",
-                "--assess",
-                "--attended",
-            ])
-            .is_ok()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "agent-cli",
-                "device",
-                "scene-lab",
-                "--scene",
-                "card-flip",
-                "--profile",
-                "--attended",
-            ])
-            .is_ok()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "agent-cli",
-                "scene-lab",
-                "capture",
-                "--scene",
-                "card-flip",
-                "--direction",
-                "reverse",
-                "--time-ms",
-                "220",
-                "--output",
-                "/tmp/card-flip.ppm",
-            ])
-            .is_ok()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "agent-cli",
-                "device",
-                "scene-lab",
-                "--scene",
-                "card-flip",
-                "--attended",
-            ])
-            .is_ok()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "agent-cli",
-                "scene-lab",
-                "capture",
-                "--scene",
-                "card-flip",
-                "--direction",
-                "sideways",
-                "--time-ms",
-                "220",
-                "--output",
-                "/tmp/card-flip.ppm",
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
     fn compile_time_commands_require_closed_targets_and_explicit_paths() {
         assert!(
             Cli::try_parse_from([
                 "agent-cli",
                 "compile-time",
                 "build",
-                "framebuffer-lab-macos",
+                "magik-full-app-macos",
                 "--target-dir",
                 "/tmp/mac-target",
             ])
@@ -693,7 +649,7 @@ mod tests {
                 "agent-cli",
                 "compile-time",
                 "measure",
-                "framebuffer-lab-arm",
+                "magik-full-app-arm",
                 "--target-dir",
                 "/tmp/arm-target",
                 "--output",
@@ -741,7 +697,7 @@ mod tests {
                 "agent-cli",
                 "compile-time",
                 "measure",
-                "framebuffer-lab-arm",
+                "magik-full-app-arm",
                 "--target-dir",
                 "/tmp/arm-target",
             ])
@@ -919,11 +875,6 @@ mod tests {
             "system-entry-critical-profile",
             "system-entry-critical-streamline",
             "system-entry-qualification",
-            "particles",
-            "particle-profile",
-            "particle-capacity",
-            "particle-demo-40k",
-            "particle-step",
             "navigation-transitions",
             "settings-navigation",
             "settings-navigation-pprof",
@@ -1175,8 +1126,6 @@ mod tests {
             "arcade-catalog-prototype-device",
             "five-system-catalog-prototype-device",
             "five-system-catalog-prototype-analysis",
-            "framebuffer-scene-lab-device",
-            "framebuffer-scene-lab-analysis",
             "release-binaries",
         ] {
             assert!(Cli::try_parse_from(["agent-cli", "build", intent]).is_ok());
