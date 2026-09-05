@@ -93,9 +93,13 @@ def application_session(request, magik2_run):
         | {"measurement"}
         | application(request.config.getoption("--magik2-app")).agent_capabilities,
     )
-    ensure_application(
-        agent, status, magik2_run, request.config.getoption("--magik2-app")
-    )
+    try:
+        ensure_application(
+            agent, status, magik2_run, request.config.getoption("--magik2-app")
+        )
+    except Exception:
+        retain_diagnostics(magik2_run, agent)
+        raise
     with managed_session(
         agent, magik2_run, profile_id, "shared application session"
     ) as application:

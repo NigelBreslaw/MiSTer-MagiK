@@ -111,6 +111,24 @@ export component Launcher inherits MisterWindow {
     accessible-enabled: true;
     accessible-description: NavigationView.menu-title;
 
+    // Development events use the same bounded action queue as UI intents.
+    in property <bool> development-keyboard-input: false;
+    forward-focus: development-keys;
+    development-keys := FocusScope {
+        key-pressed(event) => {
+            if !root.development-keyboard-input { return reject; }
+            if event.text == Key.Home { LauncherActions.home(); }
+            else if event.text == Key.UpArrow { LauncherActions.navigate(NavigationDirection.up); }
+            else if event.text == Key.DownArrow { LauncherActions.navigate(NavigationDirection.down); }
+            else if event.text == Key.LeftArrow { LauncherActions.navigate(NavigationDirection.left); }
+            else if event.text == Key.RightArrow { LauncherActions.navigate(NavigationDirection.right); }
+            else if event.text == Key.Return { LauncherActions.activate(); }
+            else if event.text == Key.Escape { LauncherActions.back(); }
+            else { return reject; }
+            accept
+        }
+    }
+
     if MisterUi.crt-layout : CrtLauncherUi { }
     if !MisterUi.crt-layout : HdmiLauncherUi { }
 

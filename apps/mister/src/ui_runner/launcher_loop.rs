@@ -5009,6 +5009,8 @@ pub(super) fn run_launcher_loop(
     launcher_config: mister_magik_fb::process_config::LauncherProcessConfig,
 ) {
     let launcher_ui_actions = LauncherUiActionsAdapter::install(&app);
+    #[cfg(feature = "magik2")]
+    app.set_development_keyboard_input(true);
     let start = Instant::now();
     #[cfg(feature = "ui-device-tests")]
     let ui_test_fixture = std::env::var(crate::ui_test_support::FIXTURE_ENV)

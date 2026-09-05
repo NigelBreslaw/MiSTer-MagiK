@@ -159,6 +159,52 @@ def launcher_smoke(application, screenshot_path, expected_sha256):
     return {"sha256": expected_sha256, "screenshot": screenshot_path.name}
 
 
+def _press_key(application, text):
+    from slint_testing import KeyPressedEvent, KeyReleasedEvent
+
+    window = application.first_window
+    if window is None:
+        raise AssertionError("real launcher window is unavailable")
+    window.dispatch_event(KeyPressedEvent(text))
+    window.dispatch_event(KeyReleasedEvent(text))
+
+
+def _settings_open(application):
+    return any(
+        element.accessible_label == "Settings"
+        and element.accessible_role.name == "Main"
+        for element in application.first_window.root_element.query_descendants()
+        .match_inherits("Rectangle")
+        .find_all()
+    )
+
+
+def launcher_navigation(application, screenshot_path):
+    """One bounded UI journey; response times include host RPC and polling."""
+    _press_key(application, "\uf729")  # Slint Key.Home
+    _wait(lambda: not _settings_open(application), "Home did not close Settings")
+    started = time.monotonic()
+    _press_key(application, "\uf700")  # Slint Key.UpArrow: focus Settings
+    _press_key(application, "\n")  # Slint Key.Return
+    try:
+        _wait(lambda: _settings_open(application), "Settings did not open")
+        opened_ms = round((time.monotonic() - started) * 1000, 2)
+        screenshot(application, screenshot_path)
+    finally:
+        # Return without changing a setting, including after screenshot failure.
+        returned = time.monotonic()
+        if _settings_open(application):
+            _press_key(application, "\x1b")  # Slint Key.Escape
+    _wait(lambda: not _settings_open(application), "Settings did not close")
+    return {
+        "workload": "home-settings-home",
+        "open_response_ms": opened_ms,
+        "back_response_ms": round((time.monotonic() - returned) * 1000, 2),
+        "timing_source": "host RPC and accessibility polling; not frame latency",
+        "screenshot": screenshot_path.name,
+    }
+
+
 def launcher_idle(application, agent, *, instrumented=False):
     """Measure the real launcher's ordinary idle loop; no synthetic FPS target."""
     if application.first_window is None:
