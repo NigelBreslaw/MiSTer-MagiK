@@ -10,19 +10,28 @@ not device acceptance.
   MagiK binary, manifest, Main, and FPGA platform untouched.
 - `scripts/magik2 deploy` starts the RGB565 probe after its readiness signal.
   The probe reports a 960x540 initial presentation.
-- The unchanged warm path was sampled 20 times on 2026-09-05. Every run was a
-  zero-byte no-op; recorded native-connect samples were 508–698 ms, with
-  nearest-rank p95 615 ms. This is phase timing, **not yet** the required
-  invocation-to-completion p95.
-- Native observation delivered metrics, probe logs, and a 1,036,872-byte
-  keyframe (72-byte wire header plus a 960x540 RGB565 surface). No framebuffer
-  device polling was introduced.
+- The unchanged warm path was sampled 20 times on 2026-09-05 with the viewer
+  closed. Every run was a zero-byte no-op; invocation-to-completion samples
+  were 727, 729, 733, 743, 745, 747, 748, 749, 755, 759, 760, 761, 764, 800,
+  823, 829, 849, 849, 868, and 893 ms. Nearest-rank p95 is 849 ms, below the
+  one-second requirement.
+- Native observation delivered metrics, 100 recent probe logs, and a
+  1,036,872-byte keyframe (72-byte wire header plus a 960x540 RGB565 surface)
+  to the localhost viewer with no stream error. No framebuffer device polling
+  was introduced.
 - The agent advertises `agent-update-v1`, `artifacts-v1`, `lifecycle-v1`,
   `metrics-v1`, `status`, `test-bridge-v1`, `upload-v1`, and `watch-v1`; the current probe remains
   running after deploy and after a failed profiled-check setup.
 - A native `agent-update-v1` replacement completed against the running service.
   The replacement acknowledged its SHA-256, retained the complete capability
   set, and adopted the already-running probe without a probe restart.
+- Smoke passed through the isolated pinned Slint Python client and retained its
+  screenshot. Motion passed through the same client with 1,800 confirmed
+  scanout-latch posts and flips, zero physical drops, and a persistent-probe
+  restart after the session.
+- The profiled motion repetition retained a 17,211-byte folded stack file and
+  a 37,549-byte flamegraph. The stacks contain both `mister_magik2_probe::main`
+  and Slint software-renderer symbols.
 
 ## Automated evidence
 
@@ -37,18 +46,10 @@ not device acceptance.
 
 ## Remaining acceptance gates
 
-- The pinned `slint-testing==0.3` package index currently returns HTTP 401.
-  Until valid credentials are configured, smoke, motion, and profile sessions
-  cannot run through the required isolated host environment.
-- Run and retain smoke and motion evidence through the Slint framework. Motion
-  must retain valid physical-presentation evidence with zero physical drops;
-  software timings and vsync counters are deliberately insufficient.
-- Verify the browser viewer itself and measure its observation overhead,
+- Measure viewer observation overhead,
   including slow/disconnected viewers.
-- Produce and inspect an on-device ten-second profile with nonzero useful
-  probe/rendering symbols, folded stacks, and a flamegraph.
-- Measure 20 invocation-to-completion runs for unchanged, changed-prebuilt,
-  Rust-edit, and Slint-edit cases. Retain all samples, bytes, throughput, and
-  nearest-rank p95; do not substitute phase timing for those targets.
+- Measure 20 invocation-to-completion runs for changed-prebuilt, Rust-edit,
+  and Slint-edit cases. Retain all samples, bytes, throughput, and nearest-rank
+  p95; do not substitute phase timing for those targets.
 - Exercise failure, lost-reply, deadline, concurrent-stream, and cleanup
   matrices; retain both primary and cleanup outcomes.
