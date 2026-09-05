@@ -233,6 +233,9 @@ impl Agent {
             if request.op == "watch" {
                 return self.watch(stream, &request, &body);
             }
+            if request.op == "read-artifact" {
+                return self.read_artifact(stream, &request, &body);
+            }
         }
         let response = if request.token != self.token {
             response(
@@ -344,6 +347,17 @@ impl Agent {
             .stderr(Stdio::piped());
         if let Some(test_server) = test_server {
             command.env("SLINT_TEST_SERVER", test_server);
+        }
+        if let Some(profile_id) = request
+            .fields
+            .get("profile_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| is_plain_name(value))
+        {
+            command.env(
+                "MISTER_MAGIK2_PROFILE_DIR",
+                self.state_root.join("profiles").join(profile_id),
+            );
         }
         match command.spawn() {
             Ok(mut child) => {
@@ -523,6 +537,53 @@ impl Agent {
         let destination = self.state_root.join("viewer-lease");
         if fs::write(&temporary, deadline.to_string()).is_ok() {
             let _ = fs::rename(temporary, destination);
+        }
+    }
+
+    fn read_artifact(
+        &self,
+        stream: &mut TcpStream,
+        request: &Envelope,
+        body: &[u8],
+    ) -> Result<(), FrameError> {
+        let profile_id = request
+            .fields
+            .get("profile_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| is_plain_name(value));
+        let name = request
+            .fields
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| is_plain_name(value));
+        let Some(profile_id) = profile_id else {
+            return artifact_request_error(stream, request, body);
+        };
+        let Some(name) = name else {
+            return artifact_request_error(stream, request, body);
+        };
+        if !body.is_empty() {
+            return artifact_request_error(stream, request, body);
+        }
+        match fs::read(self.state_root.join("profiles").join(profile_id).join(name)) {
+            Ok(bytes) => write_frame(
+                stream,
+                &response(
+                    &request.id,
+                    "artifact",
+                    serde_json::json!({"profile_id":profile_id,"name":name}),
+                ),
+                &bytes,
+            ),
+            Err(error) => write_frame(
+                stream,
+                &response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"artifact-unavailable","detail":error.to_string()}),
+                ),
+                &[],
+            ),
         }
     }
 
@@ -801,6 +862,28 @@ fn main_handoff(command: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     fifo.write_all(command.as_bytes())
         .map_err(|error| error.to_string())
+}
+
+fn is_plain_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && Path::new(value).file_name().and_then(|name| name.to_str()) == Some(value)
+}
+
+fn artifact_request_error(
+    stream: &mut TcpStream,
+    request: &Envelope,
+    _body: &[u8],
+) -> Result<(), FrameError> {
+    write_frame(
+        stream,
+        &response(
+            &request.id,
+            "error",
+            serde_json::json!({"code":"invalid-artifact-request"}),
+        ),
+        &[],
+    )
 }
 
 fn response(id: &str, op: &str, value: serde_json::Value) -> Envelope {

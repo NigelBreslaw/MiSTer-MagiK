@@ -84,14 +84,15 @@ def deploy(_arguments: argparse.Namespace, run: Path) -> int:
 
 def check(arguments: argparse.Namespace, run: Path) -> int:
     scenarios = (arguments.scenario,) if arguments.scenario else ("smoke", "motion")
-    if arguments.profile:
-        append_event(run, {"phase": "profile", "outcome": "unavailable"})
-        print(f"magik2 check: CPU profiling is not available yet (result: {run})", file=os.sys.stderr)
+    if arguments.profile and scenarios != ("motion",):
+        append_event(run, {"phase": "profile", "outcome": "invalid-selection"})
+        print(f"magik2 check: --profile requires the motion scenario (result: {run})", file=os.sys.stderr)
         return 2
+    profile_id = "profile" if arguments.profile else None
     try:
         agent, status = connect_agent(run, CHECK_AGENT_CAPABILITIES)
         ensure_probe(agent, status, run)
-        with fresh_session(agent) as application:
+        with fresh_session(agent, profile_id=profile_id) as application:
             if "smoke" in scenarios:
                 append_event(run, {"phase": "smoke", "outcome": "started"})
                 append_event(run, {"phase": "smoke", "outcome": "passed", **smoke(application, run / "smoke.png")})
@@ -106,6 +107,13 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
         print(f"magik2 check: {error} (result: {run})", file=os.sys.stderr)
         return 2
     finally:
+        if profile_id is not None and "agent" in locals():
+            for name in ("profile.folded", "flamegraph.svg"):
+                try:
+                    (run / name).write_bytes(agent.read_profile_artifact(profile_id, name))
+                    append_event(run, {"phase": "profile-artifact", "outcome": "retained", "name": name, "instrumented": True})
+                except (AgentError, OSError) as error:
+                    append_event(run, {"phase": "profile-artifact", "outcome": "unavailable", "name": name, "error": str(error)})
         try:
             agent.start(restart=True)
             append_event(run, {"phase": "persistent-restart", "outcome": "passed"})

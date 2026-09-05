@@ -41,8 +41,17 @@ class NativeAgent:
     def metrics(self) -> Mapping[str, object]:
         return self._successful("metrics")
 
-    def open_test_tunnel(self) -> socket.socket:
-        request = Envelope(uuid.uuid4().hex, "test-start", self.token, {})
+    def read_profile_artifact(self, profile_id: str, name: str) -> bytes:
+        response, body = self._request("read-artifact", {"profile_id": profile_id, "name": name})
+        if response.operation == "error":
+            raise AgentError(str(response.fields.get("code", "artifact retrieval failed")))
+        if response.operation != "artifact":
+            raise AgentError("agent returned an unexpected artifact response")
+        return body
+
+    def open_test_tunnel(self, profile_id: str | None = None) -> socket.socket:
+        fields = {} if profile_id is None else {"profile_id": profile_id}
+        request = Envelope(uuid.uuid4().hex, "test-start", self.token, fields)
         connection = socket.create_connection((self.host, self.port), timeout=20)
         try:
             send_message(connection, request)
