@@ -70,18 +70,29 @@ def main() -> int:
     )
     check_command = subcommands.add_parser("check")
     check_command.add_argument(
-        "scenario", choices=("smoke", "motion", "idle"), nargs="?"
+        "scenario", choices=("smoke", "motion", "idle"), nargs="?", default="smoke"
     )
     check_command.add_argument("--profile", action="store_true")
     subcommands.add_parser("watch")
     subcommands.add_parser("status")
     subcommands.add_parser("stop")
     for name, command in subcommands.choices.items():
-        command.set_defaults(app="mini-magik")
+        command.set_defaults(app="magik")
         if name not in {"build", "deploy", "check", "watch"}:
             continue
-        command.add_argument("--app", choices=tuple(APPLICATIONS), default="mini-magik")
+        command.add_argument("--app", choices=tuple(APPLICATIONS), default="magik")
     arguments = parser.parse_args()
+    if arguments.command in {"deploy", "check", "watch"} or (
+        arguments.command == "build" and arguments.target == "app"
+    ):
+        print(
+            f"Application: {arguments.app} on {os.environ.get('MISTER_IP', '(not configured)')}"
+        )
+        print(f"Executable: /media/fat/mister-magik2/{arguments.app}")
+        if arguments.app == "magik":
+            print("Data: /media/fat/mister-magik-dev; Main: /media/fat/MiSTer_MagiKDev")
+        else:
+            print("Experiment state: /tmp/mister-magik2")
 
     output_root = Path(os.environ.get("MISTER_MAGIK2_RESULTS", "build/magik2-results"))
     run = create_run(
@@ -105,6 +116,12 @@ def main() -> int:
         print(f"magik2: {error} (result: {run})", file=os.sys.stderr)
     finally:
         finalize(run, code, int((time.monotonic() - started) * 1000))
+        if code:
+            print(f"Failure details: {run.resolve() / 'run.json'}", file=os.sys.stderr)
+            print(
+                f"Device logs (if available): {run.resolve() / 'logs.txt'}",
+                file=os.sys.stderr,
+            )
     return code
 
 
@@ -152,7 +169,9 @@ def dispatch(arguments, run) -> int:
         )
         return 2
     try:
-        agent, status = connect_agent(run, STATUS_CAPABILITIES)
+        agent, status = connect_agent(
+            run, STATUS_CAPABILITIES | {"legacy-process-status"}
+        )
     except (BootstrapError, AgentError, OSError, RuntimeError) as error:
         append_event(run, {"phase": "status", "outcome": "failed", "error": str(error)})
         print(

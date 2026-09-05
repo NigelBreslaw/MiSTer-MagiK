@@ -35,6 +35,14 @@ Only the MagiK launcher belongs in the Scripts menu. See
 [installer safety and upgrade notes](docs/installer.md) for the obsolete
 constants helper and failed-package recovery.
 
+## Application development
+
+Use `scripts/magik2 deploy`, `scripts/magik2 check`, and `scripts/magik2 watch`.
+These target the real development app and `/media/fat/mister-magik-dev` data.
+Use `--app mini-magik` for the fast experiment. The default check is one smoke
+journey; benchmarks and profiles are explicit. See [development setup and
+commands](magik2/README.md). Production installation above is a separate workflow.
+
 ## Built With Slint
 
 MiSTer MagiK is built with [Slint](https://slint.dev), a modern declarative UI

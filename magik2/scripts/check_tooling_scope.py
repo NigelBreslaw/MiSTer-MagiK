@@ -19,6 +19,8 @@ CORE = (
 # These are the explicit integration seams; unrelated app features remain consumer PRs.
 COMPANIONS = (
     "AGENTS.md",
+    "README.md",
+    "apps/mister/ui/launcher.slint",
     "scripts/AGENTS.md",
     "scripts/magik_ci/host.py",
     "apps/mister/Cargo.toml",

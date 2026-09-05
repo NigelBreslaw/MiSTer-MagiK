@@ -21,9 +21,7 @@ from .testing import fresh_session
 
 def pytest_addoption(parser):
     group = parser.getgroup("magik2")
-    group.addoption(
-        "--magik2-app", choices=("mini-magik", "magik"), default="mini-magik"
-    )
+    group.addoption("--magik2-app", choices=("mini-magik", "magik"), default="magik")
     group.addoption(
         "--magik2-device",
         action="store_true",
