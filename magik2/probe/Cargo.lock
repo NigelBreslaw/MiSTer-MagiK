@@ -2181,7 +2181,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi 0.5.3",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2608,6 +2608,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mini-magik"
+version = "0.1.0"
+dependencies = [
+ "fontique",
+ "mister-magik-mister-runtime",
+ "mister-magik-tooling-support",
+ "slint",
+ "slint-build",
+]
+
+[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2663,16 +2674,13 @@ name = "mister-magik-scanout-contract"
 version = "0.1.0"
 
 [[package]]
-name = "mister-magik2-probe"
+name = "mister-magik-tooling-support"
 version = "0.1.0"
 dependencies = [
- "fontique",
  "mister-magik-framebuffer-stream",
- "mister-magik-mister-runtime",
  "pprof",
  "serde_json",
  "slint",
- "slint-build",
 ]
 
 [[package]]
@@ -3592,7 +3600,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
  "heck",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "petgraph",
@@ -3611,7 +3619,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
