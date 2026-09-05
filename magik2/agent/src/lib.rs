@@ -1,5 +1,6 @@
 //! Bounded native control framing for the independently owned MagiK 2.0 agent.
 
+mod capture;
 mod main_control;
 mod upload;
 mod wire;
@@ -176,6 +177,7 @@ impl Agent {
             "test-session",
             "metrics-v1",
             "watch-v1",
+            "capture-framebuffer",
             "artifacts-v1",
             "agent-update-v1",
             "request-replay-v1",
@@ -341,6 +343,39 @@ impl Agent {
         let mut body = vec![0; body_length];
         wire::DeadlineReader { stream, deadline }.read_exact(&mut body)?;
 
+        if request.op == "capture-framebuffer" {
+            if !body.is_empty() || !request.fields.is_empty() {
+                return write_frame(
+                    stream,
+                    &response(
+                        &request.id,
+                        "error",
+                        serde_json::json!({"code": "capture-invalid-request", "detail": "capture takes no fields or body"}),
+                    ),
+                    &[],
+                );
+            }
+            return match capture::capture() {
+                Ok(capture) => write_frame(
+                    stream,
+                    &response(
+                        &request.id,
+                        "framebuffer",
+                        serde_json::to_value(&capture).expect("capture metadata"),
+                    ),
+                    &capture.pixels,
+                ),
+                Err(error) => write_frame(
+                    stream,
+                    &response(
+                        &request.id,
+                        "error",
+                        serde_json::json!({"code": error.code, "detail": error.detail}),
+                    ),
+                    &[],
+                ),
+            };
+        }
         if request.op == "watch" {
             return self.watch(stream, &request, &body);
         }

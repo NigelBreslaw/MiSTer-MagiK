@@ -80,7 +80,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "mister-magik-core"
+version = "0.1.0"
+
+[[package]]
 name = "mister-magik-framebuffer-stream"
+version = "0.1.0"
+
+[[package]]
+name = "mister-magik-latch-contract"
+version = "0.1.0"
+
+[[package]]
+name = "mister-magik-mister-runtime"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "mister-magik-core",
+ "mister-magik-latch-contract",
+ "mister-magik-scanout-contract",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "mister-magik-scanout-contract"
 version = "0.1.0"
 
 [[package]]
@@ -89,6 +113,8 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "mister-magik-framebuffer-stream",
+ "mister-magik-mister-runtime",
+ "mister-magik-scanout-contract",
  "serde",
  "serde_json",
  "sha2",
