@@ -45,7 +45,8 @@ def _environment(
     environment["RUSTFLAGS"] = rustflags
 
     if runner == "cross" and intent in {"runtime-ci", "runtime-device"}:
-        dist = repository / "apps/mister/target/ffmpeg-minimal/armv7/dist"
+        # cross mounts the repository at /project, not at the host checkout path.
+        dist = Path("/project/apps/mister/target/ffmpeg-minimal/armv7/dist")
         include = dist / "include"
         environment.update(
             {

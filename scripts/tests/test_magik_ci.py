@@ -310,21 +310,26 @@ import scripts.magik_ci.cli
             ("apps/mister/Cargo.toml", "all", ""),
         )
 
-    def test_cross_runtime_environment_supplies_ffmpeg_headers_to_host_probes(
+    def test_cross_runtime_environment_uses_container_ffmpeg_paths(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            include = root / "apps/mister/target/ffmpeg-minimal/armv7/dist/include"
             with patch.dict(os.environ, {}, clear=True):
                 environment = build._environment(
                     root, "runtime-ci", "ci-fast", "ui", "cross"
                 )
 
-            expected = f"-I{include}"
+            dist = Path("/project/apps/mister/target/ffmpeg-minimal/armv7/dist")
+            expected = f"-I{dist / 'include'}"
+            self.assertEqual(environment["FFMPEG_DIR"], str(dist))
+            self.assertEqual(
+                environment["PKG_CONFIG_PATH"], str(dist / "lib/pkgconfig")
+            )
             self.assertEqual(environment["CFLAGS"], expected)
             self.assertEqual(environment["HOST_CFLAGS"], expected)
             self.assertEqual(environment["CFLAGS_x86_64_unknown_linux_gnu"], expected)
+            self.assertNotIn(str(root), environment["FFMPEG_DIR"])
 
     def test_build_writes_artifact_identity_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
