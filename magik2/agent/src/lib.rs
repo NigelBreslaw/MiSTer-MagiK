@@ -1,5 +1,7 @@
 //! Bounded native control framing for the independently owned MagiK 2.0 agent.
 
+mod main_control;
+
 use mister_magik_framebuffer_stream::read_frame as read_preview_frame;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -215,6 +217,7 @@ impl Agent {
             "lifecycle-v1",
             "start-artifact",
             "test-bridge-v1",
+            "test-session",
             "metrics-v1",
             "watch-v1",
             "artifacts-v1",
@@ -443,7 +446,13 @@ impl Agent {
             }
         }
         if self.running() {
-            self.stop_owned_process();
+            if let Err(error) = self.stop_owned_process() {
+                return response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"stop-failed","detail":error}),
+                );
+            }
         }
         if let Err(error) = main_handoff("mister_magik_suspend\n") {
             return response(
@@ -497,7 +506,13 @@ impl Agent {
     }
 
     fn stop(&self, request: &Envelope) -> Envelope {
-        self.stop_owned_process();
+        if let Err(error) = self.stop_owned_process() {
+            return response(
+                &request.id,
+                "error",
+                serde_json::json!({"code":"stop-failed","detail":error}),
+            );
+        }
         match main_handoff("mister_magik_resume\n") {
             Ok(()) => response(
                 &request.id,
@@ -842,29 +857,52 @@ impl Agent {
         Some(record)
     }
 
-    fn stop_owned_process(&self) {
+    fn stop_owned_process(&self) -> Result<(), String> {
         let mut process = self.process.lock().expect("agent process state poisoned");
-        if let Some(mut child) = process.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-            self.clear_owned_process();
-            return;
-        }
-        drop(process);
-        if let Some(record) = self.read_owned_process() {
-            // The record is accepted only when /proc confirms it still runs our
-            // exact executable, preventing a recycled PID from being signalled.
-            if self.owned_process_is_running() {
-                // SAFETY: `kill` is called with a validated positive PID and a
-                // fixed SIGTERM value; no pointers are passed across the FFI.
-                let _ = unsafe { libc::kill(record.pid as libc::pid_t, libc::SIGTERM) };
+        if let Some(child) = process.as_mut() {
+            if child.try_wait().map_err(|e| e.to_string())?.is_none() {
+                child
+                    .kill()
+                    .map_err(|e| format!("cannot stop owned child: {e}"))?;
                 let deadline = Instant::now() + Duration::from_secs(2);
-                while self.owned_process_is_running() && Instant::now() < deadline {
-                    std::thread::sleep(Duration::from_millis(25));
+                while child.try_wait().map_err(|e| e.to_string())?.is_none() {
+                    if Instant::now() >= deadline {
+                        return Err("owned child did not exit".into());
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
                 }
             }
+            *process = None;
             self.clear_owned_process();
+            return Ok(());
         }
+        drop(process);
+        if let Some(record) = self.running_identity() {
+            for signal in [libc::SIGTERM, libc::SIGKILL] {
+                if process_start_ticks(record.pid).as_deref() != Some(&record.start_ticks) {
+                    break;
+                }
+                // SAFETY: signal only the process with the verified birth identity.
+                if unsafe { libc::kill(record.pid as libc::pid_t, signal) } != 0 {
+                    return Err(format!(
+                        "cannot stop adopted child: {}",
+                        io::Error::last_os_error()
+                    ));
+                }
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while self.owned_process_is_running() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                if !self.owned_process_is_running() {
+                    break;
+                }
+            }
+            if self.owned_process_is_running() {
+                return Err("adopted child did not exit".into());
+            }
+        }
+        self.clear_owned_process();
+        Ok(())
     }
 
     fn start_test_session(
@@ -884,40 +922,60 @@ impl Agent {
                 &[],
             );
         }
-        let listener = match TcpListener::bind("127.0.0.1:0") {
-            Ok(listener) => listener,
-            Err(error) => {
-                return write_frame(
-                    stream,
-                    &response(
-                        &request.id,
-                        "error",
-                        serde_json::json!({"code":"test-bridge-bind-failed","detail":error.to_string()}),
-                    ),
-                    &[],
-                );
-            }
-        };
+        let deadline = Instant::now() + TEST_SESSION_DEADLINE;
+        let listener = TcpListener::bind("127.0.0.1:0").map_err(FrameError::from)?;
         let endpoint = listener.local_addr().map_err(FrameError::from)?.to_string();
         let started = self.start_with_test_server(request, Some(endpoint));
         if started.op == "error" {
             return write_frame(stream, &started, &[]);
         }
-        write_frame(
-            stream,
-            &response(&request.id, "test-ready", serde_json::json!({"ready":true})),
-            &[],
-        )?;
-        self.forward_test_connection(listener, stream)
+        let primary = (|| {
+            write_frame(
+                stream,
+                &response(&request.id, "test-ready", serde_json::json!({"ready":true})),
+                &[],
+            )?;
+            self.forward_test_connection(listener, stream, deadline)
+        })();
+        let cleanup = self.stop_owned_process();
+        let mut restore = request.clone();
+        restore.op = "start".into();
+        restore.fields.remove("profile_id");
+        restore
+            .fields
+            .insert("restart".into(), serde_json::json!(false));
+        let restored = if cleanup.is_ok() {
+            self.start(&restore)
+        } else {
+            response(
+                &request.id,
+                "error",
+                serde_json::json!({"code":"session-stop-failed","detail":cleanup}),
+            )
+        };
+        self.observation.record_log(format!(
+            "test-session primary={primary:?} cleanup={cleanup:?} restore={:?}",
+            restored.fields
+        ));
+        let recovery = if restored.op == "error" {
+            Err(FrameError::Io(format!(
+                "persistent restore: {:?}",
+                restored.fields
+            )))
+        } else {
+            Ok(())
+        };
+        primary.and(cleanup.map_err(FrameError::Io)).and(recovery)
     }
 
     fn forward_test_connection(
         &self,
         listener: TcpListener,
         stream: &mut TcpStream,
+        deadline: Instant,
     ) -> Result<(), FrameError> {
         listener.set_nonblocking(true).map_err(FrameError::from)?;
-        let connect_deadline = Instant::now() + TEST_APPLICATION_CONNECT_DEADLINE;
+        let connect_deadline = deadline.min(Instant::now() + TEST_APPLICATION_CONNECT_DEADLINE);
         let mut application = loop {
             match listener.accept() {
                 Ok((connection, _)) => break connection,
@@ -928,13 +986,11 @@ impl Agent {
                     std::thread::sleep(Duration::from_millis(25));
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    self.stop_owned_process();
                     return Err(FrameError::Io(
                         "test application did not connect before deadline".to_owned(),
                     ));
                 }
                 Err(error) => {
-                    self.stop_owned_process();
                     return Err(FrameError::from(error));
                 }
             }
@@ -951,17 +1007,17 @@ impl Agent {
         stream
             .set_write_timeout(Some(SESSION_IO_TIMEOUT))
             .map_err(FrameError::from)?;
-        let deadline = Instant::now() + TEST_SESSION_DEADLINE;
         let mut device_to_host = application.try_clone().map_err(FrameError::from)?;
         let mut host_clone = stream.try_clone().map_err(FrameError::from)?;
         let upstream = std::thread::spawn(move || {
             let _ = relay_until_deadline(&mut device_to_host, &mut host_clone, deadline);
-            let _ = host_clone.shutdown(Shutdown::Write);
+            let _ = host_clone.shutdown(Shutdown::Both);
+            let _ = device_to_host.shutdown(Shutdown::Both);
         });
         let primary = relay_until_deadline(stream, &mut application, deadline);
-        let _ = application.shutdown(Shutdown::Write);
+        let _ = application.shutdown(Shutdown::Both);
+        let _ = stream.shutdown(Shutdown::Both);
         let _ = upstream.join();
-        self.stop_owned_process();
         primary
     }
 
@@ -1067,12 +1123,7 @@ fn process_start_ticks(pid: u32) -> Option<String> {
 }
 
 fn main_handoff(command: &str) -> Result<(), String> {
-    let mut fifo = File::options()
-        .write(true)
-        .open("/dev/MiSTer_cmd")
-        .map_err(|error| error.to_string())?;
-    fifo.write_all(command.as_bytes())
-        .map_err(|error| error.to_string())
+    main_control::handoff(command)
 }
 
 fn is_plain_name(value: &str) -> bool {

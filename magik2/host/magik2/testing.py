@@ -39,6 +39,8 @@ def fresh_session(agent: NativeAgent, timeout: float = 20, profile_id: str | Non
             "MISTER_MAGIK2_TOKEN": agent.token,
         }
     )
+    if agent.expected_sha256 is not None:
+        environment["MISTER_MAGIK2_EXPECTED_SHA256"] = agent.expected_sha256
     factory = _application_factory()
     bridge = [sys.executable, "-m", "magik2.test_bridge"]
     if profile_id is not None:

@@ -28,7 +28,9 @@ def main() -> int:
     if not token or not device:
         raise RuntimeError("MISTER_IP and MISTER_MAGIK2_TOKEN are required for the native test bridge")
     native_port = int(os.environ.get("MISTER_MAGIK2_PORT", "7500"))
-    with NativeAgent(device, token, native_port).open_test_tunnel(arguments.profile_id) as device_connection:
+    agent = NativeAgent(device, token, native_port)
+    agent.expected_sha256 = os.environ.get("MISTER_MAGIK2_EXPECTED_SHA256")
+    with agent.open_test_tunnel(arguments.profile_id) as device_connection:
         with socket.create_connection((host, port), timeout=10) as testing_connection:
             device_connection.settimeout(None)
             testing_connection.settimeout(None)
