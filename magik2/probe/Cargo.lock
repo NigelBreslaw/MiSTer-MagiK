@@ -2545,6 +2545,10 @@ name = "mister-magik-core"
 version = "0.1.0"
 
 [[package]]
+name = "mister-magik-framebuffer-stream"
+version = "0.1.0"
+
+[[package]]
 name = "mister-magik-latch-contract"
 version = "0.1.0"
 
@@ -2570,6 +2574,7 @@ name = "mister-magik2-probe"
 version = "0.1.0"
 dependencies = [
  "fontique",
+ "mister-magik-framebuffer-stream",
  "mister-magik-mister-runtime",
  "slint",
  "slint-build",

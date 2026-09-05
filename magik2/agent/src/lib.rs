@@ -1,14 +1,17 @@
 //! Bounded native control framing for the independently owned MagiK 2.0 agent.
 
+use mister_magik_framebuffer_stream::read_frame as read_preview_frame;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::VecDeque;
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus};
-use std::sync::Mutex;
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub const MAX_HEADER_BYTES: usize = 64 * 1024;
@@ -21,6 +24,12 @@ pub struct Envelope {
     pub token: String,
     #[serde(flatten)]
     pub fields: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct OwnedProcess {
+    pid: u32,
+    executable: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -90,6 +99,67 @@ pub struct Agent {
     install_root: PathBuf,
     state_root: PathBuf,
     process: Mutex<Option<Child>>,
+    observation: Arc<Observation>,
+}
+
+const MAX_RECENT_LOGS: usize = 100;
+const WATCH_INTERVAL: Duration = Duration::from_millis(200);
+const VIEWER_LEASE: Duration = Duration::from_secs(2);
+
+#[derive(Default)]
+struct ObservationState {
+    latest_frame: Option<Vec<u8>>,
+    latest_frame_sequence: u64,
+    logs: VecDeque<(u64, String)>,
+    next_log_sequence: u64,
+}
+
+#[derive(Default)]
+struct Observation {
+    state: Mutex<ObservationState>,
+}
+
+impl Observation {
+    fn record_log(&self, line: String) {
+        let mut state = self.state.lock().expect("observation state poisoned");
+        state.next_log_sequence += 1;
+        let sequence = state.next_log_sequence;
+        state.logs.push_back((sequence, line));
+        while state.logs.len() > MAX_RECENT_LOGS {
+            state.logs.pop_front();
+        }
+    }
+
+    fn record_frame(&self, sequence: u64, bytes: Vec<u8>) {
+        let mut state = self.state.lock().expect("observation state poisoned");
+        if sequence >= state.latest_frame_sequence {
+            state.latest_frame_sequence = sequence;
+            state.latest_frame = Some(bytes);
+        }
+    }
+
+    fn snapshot(
+        &self,
+        after_log: u64,
+        after_frame: u64,
+    ) -> (Vec<(u64, String)>, Option<(u64, Vec<u8>)>) {
+        let state = self.state.lock().expect("observation state poisoned");
+        let logs = state
+            .logs
+            .iter()
+            .filter(|(sequence, _)| *sequence > after_log)
+            .cloned()
+            .collect();
+        let frame = (state.latest_frame_sequence > after_frame)
+            .then(|| {
+                state
+                    .latest_frame
+                    .clone()
+                    .map(|frame| (state.latest_frame_sequence, frame))
+            })
+            .flatten();
+        (logs, frame)
+    }
 }
 
 impl Agent {
@@ -114,6 +184,7 @@ impl Agent {
             install_root,
             state_root,
             process: Mutex::new(None),
+            observation: Arc::default(),
         }
     }
 
@@ -124,13 +195,44 @@ impl Agent {
             "lifecycle-v1",
             "test-bridge-v1",
             "metrics-v1",
+            "watch-v1",
         ]
+    }
+
+    /// Starts the probe-produced frame receiver. This socket never reads a
+    /// framebuffer device: the owned application publishes already-rendered
+    /// previews and the agent retains only the newest complete frame.
+    pub fn start_observation_receiver(&self) -> Result<(), String> {
+        fs::create_dir_all(&self.state_root).map_err(|error| error.to_string())?;
+        let socket_path = self.state_root.join("probe-frames.sock");
+        if socket_path.exists() {
+            fs::remove_file(&socket_path).map_err(|error| error.to_string())?;
+        }
+        let listener = UnixListener::bind(&socket_path).map_err(|error| error.to_string())?;
+        let observation = self.observation.clone();
+        std::thread::spawn(move || {
+            for connection in listener.incoming() {
+                match connection {
+                    Ok(connection) => {
+                        let observation = observation.clone();
+                        std::thread::spawn(move || receive_preview_frames(connection, observation));
+                    }
+                    Err(error) => eprintln!("magik2 preview accept failed: {error}"),
+                }
+            }
+        });
+        Ok(())
     }
 
     pub fn handle(&self, stream: &mut TcpStream) -> Result<(), FrameError> {
         let (request, body) = read_frame(stream)?;
-        if request.token == self.token && request.op == "test-start" {
-            return self.start_test_session(stream, &request, &body);
+        if request.token == self.token {
+            if request.op == "test-start" {
+                return self.start_test_session(stream, &request, &body);
+            }
+            if request.op == "watch" {
+                return self.watch(stream, &request, &body);
+            }
         }
         let response = if request.token != self.token {
             response(
@@ -167,13 +269,15 @@ impl Agent {
 
     fn running(&self) -> bool {
         let mut process = self.process.lock().expect("agent process state poisoned");
+        let has_owned_child = process.is_some();
         let active = process
             .as_mut()
             .is_some_and(|child| child.try_wait().ok().flatten().is_none());
-        if !active {
+        if has_owned_child && !active {
             *process = None;
+            self.clear_owned_process();
         }
-        active
+        active || self.owned_process_is_running()
     }
 
     fn start(&self, request: &Envelope) -> Envelope {
@@ -234,11 +338,23 @@ impl Agent {
             );
         }
         let mut command = Command::new(executable);
+        command
+            .env("MISTER_MAGIK2_STATE_ROOT", &self.state_root)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         if let Some(test_server) = test_server {
             command.env("SLINT_TEST_SERVER", test_server);
         }
         match command.spawn() {
-            Ok(child) => self.wait_for_readiness(request, child),
+            Ok(mut child) => {
+                if let Some(stdout) = child.stdout.take() {
+                    forward_child_logs(stdout, self.observation.clone());
+                }
+                if let Some(stderr) = child.stderr.take() {
+                    forward_child_logs(stderr, self.observation.clone());
+                }
+                self.wait_for_readiness(request, child)
+            }
             Err(error) => {
                 let recovery = main_handoff("mister_magik_resume\n");
                 response(
@@ -304,13 +420,7 @@ impl Agent {
     }
 
     fn metrics(&self, request: &Envelope) -> Envelope {
-        let path = self.state_root.join("probe-metrics.json");
-        match fs::read(&path)
-            .map_err(|error| error.to_string())
-            .and_then(|bytes| {
-                serde_json::from_slice::<serde_json::Value>(&bytes)
-                    .map_err(|error| error.to_string())
-            }) {
+        match self.read_metrics() {
             Ok(value) if value.is_object() => response(&request.id, "metrics", value),
             Ok(_) => response(
                 &request.id,
@@ -325,8 +435,139 @@ impl Agent {
         }
     }
 
+    fn read_metrics(&self) -> Result<serde_json::Value, String> {
+        fs::read(self.state_root.join("probe-metrics.json"))
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|error| error.to_string()))
+    }
+
+    fn watch(
+        &self,
+        stream: &mut TcpStream,
+        request: &Envelope,
+        body: &[u8],
+    ) -> Result<(), FrameError> {
+        if !body.is_empty() {
+            return write_frame(
+                stream,
+                &response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"watch-has-no-body"}),
+                ),
+                &[],
+            );
+        }
+        stream
+            .set_write_timeout(Some(Duration::from_millis(500)))
+            .map_err(FrameError::from)?;
+        write_frame(
+            stream,
+            &response(
+                &request.id,
+                "watch-ready",
+                serde_json::json!({"ready":true}),
+            ),
+            &[],
+        )?;
+        let mut log_sequence = 0;
+        let mut frame_sequence = 0;
+        loop {
+            self.renew_viewer_lease();
+            if let Ok(metrics) = self.read_metrics() {
+                write_frame(
+                    stream,
+                    &response(
+                        &request.id,
+                        "watch-metrics",
+                        serde_json::json!({"metrics":metrics}),
+                    ),
+                    &[],
+                )?;
+            }
+            let (logs, frame) = self.observation.snapshot(log_sequence, frame_sequence);
+            for (sequence, line) in logs {
+                write_frame(
+                    stream,
+                    &response(
+                        &request.id,
+                        "watch-log",
+                        serde_json::json!({"sequence":sequence,"line":line}),
+                    ),
+                    &[],
+                )?;
+                log_sequence = sequence;
+            }
+            if let Some((sequence, bytes)) = frame {
+                write_frame(
+                    stream,
+                    &response(
+                        &request.id,
+                        "watch-frame",
+                        serde_json::json!({"sequence":sequence}),
+                    ),
+                    &bytes,
+                )?;
+                frame_sequence = sequence;
+            }
+            std::thread::sleep(WATCH_INTERVAL);
+        }
+    }
+
+    fn renew_viewer_lease(&self) {
+        let deadline = std::time::SystemTime::now()
+            .checked_add(VIEWER_LEASE)
+            .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |value| value.as_millis());
+        let temporary = self.state_root.join("viewer-lease.next");
+        let destination = self.state_root.join("viewer-lease");
+        if fs::write(&temporary, deadline.to_string()).is_ok() {
+            let _ = fs::rename(temporary, destination);
+        }
+    }
+
     fn readiness_path(&self) -> PathBuf {
         self.state_root.join("probe-ready.json")
+    }
+
+    fn owned_process_path(&self) -> PathBuf {
+        self.state_root.join("owned-process.json")
+    }
+
+    fn write_owned_process(&self, pid: u32) -> Result<(), String> {
+        let record = OwnedProcess {
+            pid,
+            executable: self.install_root.join("probe").display().to_string(),
+        };
+        let temporary = self.owned_process_path().with_extension("next");
+        let bytes = serde_json::to_vec(&record).map_err(|error| error.to_string())?;
+        fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
+        fs::rename(temporary, self.owned_process_path()).map_err(|error| error.to_string())
+    }
+
+    fn read_owned_process(&self) -> Option<OwnedProcess> {
+        serde_json::from_slice(&fs::read(self.owned_process_path()).ok()?).ok()
+    }
+
+    fn clear_owned_process(&self) {
+        let _ = fs::remove_file(self.owned_process_path());
+    }
+
+    fn owned_process_is_running(&self) -> bool {
+        let Some(record) = self.read_owned_process() else {
+            return false;
+        };
+        let Ok(command) = fs::read(format!("/proc/{}/cmdline", record.pid)) else {
+            self.clear_owned_process();
+            return false;
+        };
+        let executable = command.split(|byte| *byte == 0).next().unwrap_or_default();
+        if executable == record.executable.as_bytes() {
+            true
+        } else {
+            self.clear_owned_process();
+            false
+        }
     }
 
     fn stop_owned_process(&self) {
@@ -334,6 +575,23 @@ impl Agent {
         if let Some(mut child) = process.take() {
             let _ = child.kill();
             let _ = child.wait();
+            self.clear_owned_process();
+            return;
+        }
+        drop(process);
+        if let Some(record) = self.read_owned_process() {
+            // The record is accepted only when /proc confirms it still runs our
+            // exact executable, preventing a recycled PID from being signalled.
+            if self.owned_process_is_running() {
+                // SAFETY: `kill` is called with a validated positive PID and a
+                // fixed SIGTERM value; no pointers are passed across the FFI.
+                let _ = unsafe { libc::kill(record.pid as libc::pid_t, libc::SIGTERM) };
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while self.owned_process_is_running() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            }
+            self.clear_owned_process();
         }
     }
 
@@ -425,6 +683,9 @@ impl Agent {
         let deadline = Instant::now() + Duration::from_secs(8);
         loop {
             if self.readiness_path().is_file() {
+                if let Err(error) = self.write_owned_process(child.id()) {
+                    return self.failed_start(request, &error, None, &mut child);
+                }
                 *self.process.lock().expect("agent process state poisoned") = Some(child);
                 return response(
                     &request.id,
@@ -466,6 +727,43 @@ impl Agent {
                 "recovery":recovery.err(),
             }),
         )
+    }
+}
+
+fn forward_child_logs(reader: impl Read + Send + 'static, observation: Arc<Observation>) {
+    std::thread::spawn(move || {
+        for line in BufReader::new(reader).lines() {
+            match line {
+                Ok(line) => observation.record_log(line),
+                Err(error) => {
+                    observation.record_log(format!("probe log read failed: {error}"));
+                    return;
+                }
+            }
+        }
+    });
+}
+
+fn receive_preview_frames(mut stream: UnixStream, observation: Arc<Observation>) {
+    loop {
+        let mut encoded = Vec::new();
+        match read_preview_frame(&mut stream) {
+            Ok((header, payload)) => {
+                let capacity = mister_magik_framebuffer_stream::HEADER_LEN + payload.len();
+                if encoded.try_reserve_exact(capacity).is_err() {
+                    observation.record_log("probe preview allocation failed".to_owned());
+                    return;
+                }
+                encoded.extend_from_slice(&header.encode());
+                encoded.extend_from_slice(&payload);
+                observation.record_frame(header.sequence, encoded);
+            }
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return,
+            Err(error) => {
+                observation.record_log(format!("probe preview rejected: {error}"));
+                return;
+            }
+        }
     }
 }
 
