@@ -10,6 +10,7 @@ import webbrowser
 from pathlib import Path
 
 from .bootstrap import BootstrapError, SshBootstrap
+from .build import ensure_arm_probe
 from .client import AgentError, NativeAgent
 from .compatibility import AgentStatus
 from .results import append_event, create_run
@@ -55,7 +56,7 @@ def main() -> int:
         return 2
     try:
         agent, status = connect_agent(run)
-    except (BootstrapError, AgentError, OSError) as error:
+    except (BootstrapError, AgentError, OSError, RuntimeError) as error:
         append_event(run, {"phase": "status", "outcome": "failed", "error": type(error).__name__})
         print(f"magik2 status: native agent unavailable ({type(error).__name__}) (result: {run})", file=os.sys.stderr)
         return 2
@@ -71,7 +72,7 @@ def deploy(_arguments: argparse.Namespace, run: Path) -> int:
             print(f"magik2 deploy: probe already ready (result: {run})")
             return 0
         append_event(run, {"phase": "complete", "outcome": "started"})
-    except (BootstrapError, AgentError, OSError) as error:
+    except (BootstrapError, AgentError, OSError, RuntimeError) as error:
         append_event(run, {"phase": "failed", "error": type(error).__name__})
         print(f"magik2 deploy: {type(error).__name__} (result: {run})", file=os.sys.stderr)
         return 2
@@ -147,9 +148,13 @@ def watch(run: Path) -> int:
 
 
 def ensure_probe(agent: NativeAgent, status: AgentStatus, run: Path) -> bool:
-    artifact = Path(__file__).resolve().parents[2] / "probe" / "target" / "armv7-unknown-linux-gnueabihf" / "release" / "mister-magik2-probe"
-    if not artifact.is_file():
-        raise AgentError("ARM probe artifact is unavailable")
+    probe_root = Path(__file__).resolve().parents[2] / "probe"
+    built = ensure_arm_probe(
+        probe_root,
+        Path(os.environ.get("MISTER_MAGIK2_STATE", "build/magik2-state")) / "probe-build.json",
+    )
+    append_event(run, {"phase": "build", "outcome": "rebuilt" if built.rebuilt else "reused", "elapsed_ms": built.elapsed_ms})
+    artifact = built.artifact
     payload = artifact.read_bytes()
     artifact_hash = hashlib.sha256(payload).hexdigest()
     healthy = status.fields.get("running") is True and status.fields.get("artifact_sha256") == artifact_hash
