@@ -52,15 +52,13 @@ def fresh_session(agent: NativeAgent, timeout: float = 20, profile_id: str | Non
 
 
 def one_element(application: Any, label: str) -> Any:
-    from slint_testing import AccessibleRole
-
     window = application.first_window
     if window is None:
         raise AssertionError("probe exposed no Slint window")
-    role = AccessibleRole.Text if label in {"build-label", "counter", "details-panel", "motion-state"} else AccessibleRole.Button
+    type_name = "Text" if label in {"build-label", "counter", "details-panel", "motion-state"} else "Rectangle"
     matches = [
         element
-        for element in window.root_element.query_descendants().match_accessible_role(role).find_all()
+        for element in window.root_element.query_descendants().match_inherits(type_name).find_all()
         if element.accessible_label == label
     ]
     if len(matches) != 1:

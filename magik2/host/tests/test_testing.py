@@ -3,12 +3,12 @@ from types import SimpleNamespace
 from magik2.testing import one_element
 
 
-def test_one_element_filters_the_accessibility_role_query_by_label() -> None:
+def test_one_element_filters_the_visual_tree_query_by_accessibility_label() -> None:
     target = SimpleNamespace(accessible_label="build-label")
 
     class Query:
-        def match_accessible_role(self, role):
-            assert role.name == "Text"
+        def match_inherits(self, type_name: str):
+            assert type_name == "Text"
             return self
 
         def find_all(self):
