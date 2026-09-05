@@ -51,7 +51,7 @@ class SshBootstrap:
             command = (
                 f"mkdir -p {self.install_root} {self.state_root} && "
                 f"mv {self.install_root}/mister-magik2-agent.next {self.install_root}/mister-magik2-agent && "
-                f"pkill -f '[m]ister-magik2-agent' || true; "
+                f"killall mister-magik2-agent 2>/dev/null || true; sleep 1; "
                 f"MISTER_MAGIK2_TOKEN={shlex.quote(token)} MISTER_MAGIK2_INSTALL_ROOT={self.install_root} "
                 f"nohup {self.install_root}/mister-magik2-agent >{self.state_root}/agent.log 2>&1 &"
             )
