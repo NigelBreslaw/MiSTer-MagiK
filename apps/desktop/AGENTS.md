@@ -1,30 +1,14 @@
-# AGENTS.md - desktop companion
+# Desktop companion
 
-## Ownership
+UI starts at `ui/main.slint`, composition at `src/main.rs`, and SD browsing at
+`src/sd_card.rs`. Primer and Material icons are vendor submodules.
 
-Slint UI starts at `ui/main.slint`; Rust state and global updates start at
-`src/main.rs`; SD-card browsing lives in `src/sd_card.rs`. Primer Slint and
-Material icons are git submodules under `vendor/`.
+Reusable Primer fixes belong in `vendor/github-app/packages/primer-slint`;
+TreeViewRow changes must cover gallery literals. Load Material icons from disk
+with `slint::Image::load_from_path` or the local helper, not generated tables.
+Analytics proxies producer RGB565 streams; do not add host raw-to-PNG paths.
 
-## Rules
-
-- Analytics live mode proxies producer-side RGB565 frames through the MagiK
-  agent. One-shot capture uses the typed capture API. Never add raw `/dev/fb0`
-  or host-side raw-to-PNG paths.
-- Reusable Primer fixes belong in
-  `vendor/github-app/packages/primer-slint`. When changing `TreeViewRow`, update
-  every struct literal, including the gallery.
-- Load Material icons from disk through `slint::Image::load_from_path` or the
-  local helper. Do not bake large icon tables into generated code.
-- Commit and push a changed vendor submodule before updating its gitlink.
-
-## UI Feedback
-
-Use `apps/desktop/scripts/dev-live-mcp.sh` for a live MCP session and
-`apps/desktop/scripts/mcp-smoke.sh` for one endpoint check. Both require
-first-attempt escalation. Do not improvise environment-prefixed launch commands
-or retry on alternate ports. Use `dev-live.sh` when live Skia rendering is
-needed; tests intentionally use the software renderer.
-
-Use `$magik-rust-lsp` for Rust and the Slint MCP for UI behavior. Visually
-verify UI changes. Let pre-commit, pre-push, and CI own automated assurance.
+Use `apps/desktop/scripts/dev-live-mcp.sh` for live MCP and `mcp-smoke.sh` for
+one endpoint check, both with first-attempt escalation. Do not improvise
+environment-prefixed commands or alternate ports. `dev-live.sh` supplies live
+Skia rendering; tests use the software renderer. Visually verify UI changes.

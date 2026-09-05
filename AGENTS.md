@@ -1,101 +1,65 @@
-# AGENTS.md - mister-slint
+# MiSTer MagiK
 
-Use universal rules plus nearest scoped `AGENTS.md`. Other references: open only
-needed sections; never follow recursively unless blocked.
+Preserve user changes. Stage exact paths with `git add -- PATH...`; commit with
+`git commit -m MESSAGE`. Both require first-attempt sandbox escalation. Never
+rewrite pushed history without an explicit request. Exclude secrets, credentials,
+`.env`, `.wrangler/`, screenshots, caches, archives, ignored fixtures, and private
+contents. Commit and push changed submodules before staging their gitlinks.
 
-## Safety
+Use **MiSTer MagiK**, processes `MiSTer_MagiK`/`MiSTer_MagiKDev`, slug
+`mister-magik`, package `mister-magik-fb`, crate `mister_magik_fb`. Never set
+`main=mister-magik-fb` or introduce the retired spelling.
 
-- Preserve user changes. Never reset, checkout, clean, overwrite, or broadly
-  stage unrelated work. Never rewrite pushed history without an explicit
-  request identifying the history to replace.
-- Never leave the MiSTer in an unattended or persistent reboot loop. Destructive
-  reset tests require volatile `/tmp` arming, bounded host timeouts,
-  interruption-safe cleanup, and confirmed non-network recovery.
-- Cleanup for destructive runners must remove
-  `/media/fat/mister-magik{,-dev}/{launcher.env,rebuild-on-next-boot}` and
-  `/tmp/mister-magik/{fs-fault-launcher.env,fs-fault-session,fs-fault.json}`.
-  After `direct-reset-no-sync`, run
-  `scripts/agent device arming-status` and verify nothing remains armed.
-- `scripts/agent diagnose` may clear stale arming state and issue one raw Linux
-  reboot only when the installed platform is coherent and launcher health is
-  down. Never replay it. Stop and use SD-card recovery
-  plus `bootlogs/main-reboot.log` if rebooting repeats or SSH is unstable.
-- Device, Apple-container, virtualization, and attended `scripts/agent device`
-  commands require first-attempt sandbox escalation. Retry read-only typed
-  requests once after transport failures; reconcile mutations. Authentication
-  failures require changed access.
-- Never stage screenshots, caches, archives, secrets, `.env`, `.wrangler/`,
-  credentials, ignored fixtures, or private-repository contents. Commit and
-  push a private submodule before staging its parent gitlink.
+Portable domain/wire logic belongs in `crates/`; hardware in `mister/`; device
+UI in `apps/mister/`; desktop UI in `apps/desktop/`; operational workflows in
+`agent-cli/`; thin host entrypoints in `scripts/`. `reference/` is read-only;
+private submodules are independent repositories.
 
-## Names And Ownership
+## Development
 
-Use **MiSTer MagiK**, processes `MiSTer_MagiK` and `MiSTer_MagiKDev`, slug
-`mister-magik`, binary/package `mister-magik-fb`, and Rust crate
-`mister_magik_fb`. Never introduce the retired `magic` spelling.
+Use `$magik-rust-lsp` for Rust/Cargo and Slint MCP for UI behavior. Run focused
+checks, tests, and lints through `scripts/cargo`. `scripts/agent plan` previews
+validation. Pre-commit checks the index; pre-push owns bootstrap-free Python
+checks and affected Python tests, never Rust assurance. CI owns broad workspace,
+host, ARM, and visual matrices; do not repeat these locally unless a typed
+workflow requires them. Python `scripts/magik-ci` owns CI/release processing.
 
-Portable domain logic belongs in `crates/`; MiSTer hardware integration in
-`mister/`; device UI in `apps/mister/`; macOS UI in `apps/desktop/`; typed host
-workflow in `agent-cli/`; thin host entrypoints in `scripts/`. Existing
-`reference/` repositories are read-only. Private submodules are independent
-repositories.
+Use `gh` for GitHub. Dependency changes use
+`scripts/agent dependencies sync PATH/Cargo.toml`, staging only the owning
+manifest and adjacent lockfile.
 
-## Workflow
+## Operations
 
-- Use `$magik-rust-lsp` for Rust/Cargo navigation and diagnostics. Use Slint MCP
-  for behavior. Agents run focused local Cargo checks, tests, and lints through
-  `scripts/cargo` so linked worktrees share primary-checkout targets. Do not run
-  broad full-workspace, host-assurance, ARM, or Apple-container validation
-  unless its typed workflow explicitly calls for it; CI owns that expensive
-  assurance. Pre-push stays a bootstrap-free Python fast gate with affected
-  Python tests and must not run Rust tests or lints.
-- `scripts/agent plan` previews the Python pre-push checks and CI ownership. Agents use the typed
-  `scripts/agent deliver`, `benchmark`, and `diagnose` workflows. Human device
-  operations use attended `scripts/agent device` commands. Never use raw
-  SSH/SCP or generic remote-shell orchestration. Use `scripts/agent db report`,
-  never ad-hoc SQL.
-- CI host orchestration and release artifact processing use `scripts/magik-ci`
-  (Python); the Rust agent is reserved for attended device and delivery
-  operations.
-- Dependency changes use `scripts/agent dependencies sync PATH/Cargo.toml` and
-  include only the owning manifest plus adjacent lockfile.
-- Stage exact paths with `git add -- PATH...` and commit with
-  `git commit -m MESSAGE`; both require first-attempt sandbox escalation. The
-  pre-commit hook is the index-only gate, the pre-push hook owns bootstrap-free
-  fast clean-`HEAD` assurance, and CI owns full assurance. Use `gh`, never the
-  Codex GitHub plugin.
-- “Build and deploy” means commit, then `scripts/agent deliver`. Delivery uses
-  the exact clean app commit and the latest qualified platform. Use
-  `scripts/agent deliver local-main` only for committed Dev Main work.
-  `scripts/agent release qualify` is an attended operator gate requiring an
-  explicit request.
-- FPGA synthesis runs only through GitHub `Build MiSTer MagiK Platform` or the
-  typed Apple Silicon `scripts/agent fpga signoff` workflow. Never invoke
-  Quartus or FPGA build scripts directly. Local RBFs may be installed only by
-  the attended rollback-capable Dev transaction, never copied to the device.
+Use typed `scripts/agent deliver`, `benchmark`, `diagnose`, and `db report`;
+human device operations use attended `scripts/agent device`. Never use raw
+SSH/SCP, generic remote shells, or ad-hoc SQL. Device, Apple-container, and
+virtualization commands require first-attempt escalation. Retry read-only
+requests once after transport failure; reconcile mutations. Authentication
+failures require changed access.
 
-## Hard Invariants
+Before reset/recovery work, read `docs/device.md#boot-loop-safety`: volatile
+arming, bounded timeouts, interruption-safe cleanup, verified disarming, and
+non-network recovery are mandatory. Never leave persistent/unattended reboot
+loops or replay diagnosis's one-shot reboot; stop on reboot/SSH instability.
 
-- Never set `main=mister-magik-fb`; use `MiSTer_MagiK` or `MiSTer_MagiKDev`.
-- Never replace `mister-magik-fb` without its regenerated
-  `platform-v3.manifest` in one rollback-capable delivery transaction.
-- Launch cores through Main's command/FIFO handoff, never external `rbf_load`.
-  Never SIGSTOP MiSTer for the launcher.
-- Experimental FPGA activation uses Main's `load_core` with the exact
-  manifest-selected Dev latch RBF, never `/media/fat/menu.rbf`.
-- Use Analytics streaming for continuous framebuffer inspection and typed
-  `mister --capture-buffer` for stills. Never add raw `/dev/fb0` capture paths.
-- Measure latch rejection separately from physical dropped frames. Authoritative
-  animation requires zero dropped frames. Production rendering is RGB565-only,
-  and preview caches must never rebuild on the MiSTer hot path.
-- Edit `MiSTer.ini` only through typed mutators or approved install/restore
-  scripts. Apple Silicon ARM work uses Apple `container`, never Docker.
+“Build and deploy” means commit then deliver the exact clean app revision with
+the latest qualified platform. Replace runtime and regenerated
+`platform-v3.manifest` transactionally. Local Main delivery requires committed
+Dev Main work. Release qualification requires an explicit attended request.
 
-## Context Discipline
+FPGA synthesis uses only the GitHub platform workflow or typed Apple Silicon
+`fpga signoff`; local RBF activation requires an attended rollback transaction.
+Use Apple `container`, never Docker. Launch through Main's FIFO/load_core with
+the manifest-selected Dev RBF, never external loading, menu.rbf, or SIGSTOP.
+Mutate `MiSTer.ini` only through typed/approved mutators.
 
-Start with source and nearest scoped rules. `scripts/agent guidance PATH`
-reports authority, regeneration, one canonical reference, and extra assurance.
-Initial reads stop at 150 lines and searches at 100 matches. Routine tool output
-stays under 1,200 tokens and stored output under 3,000 tokens. Reduce broad
-output at its source; never forward unconditional broad `r.output`. Make one
-focused expansion only when needed. Read `history/` only for provenance.
+Production rendering is RGB565; never rebuild previews on the hot path.
+Separate latch rejection from physical repeats; authoritative animation requires
+zero dropped frames. Use Analytics streaming or typed captures, never raw fb0.
+
+## Context
+
+Read applicable ancestor instructions and needed source/document sections.
+`scripts/agent guidance PATH` reports ownership and references. Batch independent
+reads; return bounded findings with failures, provenance, and truncation intact.
+Keep full logs in ignored artifacts; read history only for provenance.

@@ -3,8 +3,9 @@
 For local macOS UI design and deterministic RGB565 captures, see
 [UI_PREVIEW.md](UI_PREVIEW.md).
 
-Agents build and validate through `scripts/agent`; they do not invoke Cargo,
-Apple container, cross, or deployment implementation commands directly.
+Run focused local Rust checks through `scripts/cargo`. Operational builds and
+delivery use `scripts/agent`; do not invoke Apple container, cross, or deployment
+implementation commands directly.
 
 The typed build state machine is:
 
@@ -31,9 +32,8 @@ git push
 scripts/agent deliver
 ```
 
-The analyzer provides bounded Rust diagnostics while editing. Pre-commit checks
-cheap commit safety; pre-push and CI own builds, tests, feature matrices, and
-platform assurance.
+Validation ownership is defined in root `AGENTS.md`; `scripts/agent plan`
+previews the selected fast Python checks and CI boundary.
 `deliver` owns build scope, artifact qualification, transport, activation,
 rollback, and smoke verification. Human-only fixed scene operation is available
 through `scripts/agent device scene`; it is separate from building and deployment.
@@ -72,7 +72,7 @@ Compilation intent is explicit:
 
 | Intent | Cargo policy | Artifact use |
 | --- | --- | --- |
-| Unit tests, Clippy, checks, pre-push, host CI | Dev/test, optimization 0, no debug info or LTO, incremental, 256 codegen units | Correctness only |
+| Focused Rust tests, Clippy, checks, host CI | Dev/test, optimization 0, no debug info or LTO, incremental, 256 codegen units | Correctness only |
 | Ordinary PR and main ARM CI | `ci-fast`, with the same compile-first settings | Linked non-production diagnostics |
 | Runnable labs and captures | `release-live` or the owning device/profile release profile | Performance-sensitive iteration and evidence |
 | Delivery | `release-device` runtime plus optimized manager | Installed development runtime |

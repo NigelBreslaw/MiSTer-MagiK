@@ -1,28 +1,19 @@
-# AGENTS.md - FPGA development
+# FPGA development
 
-FPGA work must fail closed and preserve the last qualified platform.
+Preserve the last qualified platform. Prove structural, simulation, and formal
+properties before synthesis; only fixed-seed Quartus signoff proves area/timing.
 
-- Prove cheap structural, simulation, and formal properties before Quartus.
-- Simulation and formal prove behavior, not QoR. Use structural synthesis only
-  to reject candidates; only fixed-seed Quartus signoff proves area and timing.
-- Do not infer FPGA cost from RTL register count. Compare mapped cells, mux
-  widths, and fanout with the prior candidate.
-- Use only `QUARTUS_ACCEPT_EULA=1 scripts/agent fpga setup` and
-  `scripts/agent fpga signoff` for local synthesis. Never invoke Quartus, its
-  installer, or underlying build scripts directly.
-- Signoff builds committed local `main`, not an arbitrary worktree. Freeze the
-  exact candidate before the expensive build and preserve source, RBF,
-  metadata, and report hashes together.
-- Before replacing a completed patched cache, preserve its RBF, metadata,
-  reports, and delta result under its commit.
-- Never seed-sweep, waive timing, add false paths, alter fitter settings, or
-  change unrelated RTL to rescue a failing candidate.
-- A local pass permits only an attended rollback-capable Dev install. CI must
-  rebuild the exact platform tuple before release qualification.
-- Physical output-rate evidence is required for visual claims; framebuffer or
-  protocol acknowledgement is insufficient.
+Local synthesis uses `QUARTUS_ACCEPT_EULA=1 scripts/agent fpga setup` and
+`scripts/agent fpga signoff`, never underlying tools. Signoff uses committed
+local `main`; freeze the candidate and preserve source, RBF, metadata, and
+report hashes together. Preserve completed cache evidence before replacement.
+Never seed-sweep, waive timing, add false paths, alter fitter settings, or change
+unrelated RTL to rescue failure.
 
-Consult `docs/fpga-development.md` only for proof-model or Quartus-cache work.
-Consult the relevant section of `docs/fpga-latch-release.md` only while
-qualifying a release. Hooks, typed FPGA signoff, CI, and attended qualification
-own their respective gates.
+A local pass permits only attended rollback-capable Dev installation. CI must
+rebuild the exact platform tuple before release qualification. Physical
+output-rate evidence is mandatory for visual claims; acknowledgements alone
+are insufficient.
+
+Consult `docs/fpga-development.md` for proof/cost models and cache work, or
+`docs/fpga-latch-release.md` for release requirements.
