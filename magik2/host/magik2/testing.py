@@ -56,7 +56,7 @@ def one_element(application: Any, label: str) -> Any:
     if window is None:
         raise AssertionError("probe exposed no Slint window")
     root = window.root_element
-    elements = [root, *root.query_descendants().find_all()]
+    elements = [root, *root.query_descendants().match_descendants().find_all()]
     matches = [element for element in elements if element.accessible_label == label]
     if len(matches) != 1:
         raise AssertionError(f"expected one accessibility label {label!r}, got {len(matches)}")
