@@ -47,6 +47,10 @@ uv run --extra device-ui-tests python -m apps.mister.ui_tests.suite \
   startup-sequence --fixture deterministic-arcade-v1 --attended
 ```
 
+The retired 12-session display/orientation/feature matrix is no longer part of
+this suite. Everyday development uses `scripts/magik2 check`; this legacy
+attended suite remains available for its other scenarios.
+
 The complete suite is:
 
 ```sh
@@ -57,7 +61,6 @@ uv run --extra device-ui-tests python -m apps.mister.ui_tests.suite \
   startup-home startup-sequence system-hub arcade-navigation arcade-filters \
   settings-display screensaver-motion about-licenses \
   menu-confirmations \
-  profile-matrix \
   --fixture deterministic-arcade-v1 --attended
 ```
 
@@ -69,11 +72,8 @@ Expand device qualification in this order, stopping at the first failure:
 4. Run `arcade-navigation`, `arcade-filters`, `settings-display`,
    `screensaver-motion`, and `about-licenses` independently.
 5. Run `menu-confirmations`.
-6. Run `profile-matrix` (12 display/orientation/feature sessions: HDMI
-   1920×1080 and CRT 240p, each in normal and monitor-left orientation across
-   three views).
-7. Run the complete command once.
-8. Run the complete command a second time immediately afterward.
+6. Run the complete command once.
+7. Run the complete command a second time immediately afterward.
 
 Only the two consecutive complete runs qualify the suite. A diagnostic rerun
 of one failed case helps isolate a fault but does not count as qualification;
