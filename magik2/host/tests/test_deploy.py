@@ -61,3 +61,21 @@ def test_real_app_uses_the_same_delivery_with_its_own_artifact(monkeypatch, tmp_
     agent.start.assert_called_once_with(
         expected_sha256=sha256_hex(b"real app"), restart=False
     )
+
+
+def test_real_deploy_requires_input_proxy_but_mini_does_not(monkeypatch, tmp_path):
+    from argparse import Namespace
+    from magik2.apps import application
+
+    required = []
+    agent = Mock()
+    monkeypatch.setattr(
+        cli,
+        "connect_agent",
+        lambda run, capabilities: (required.append(capabilities) or agent, Mock()),
+    )
+    monkeypatch.setattr(cli, "ensure_application", lambda *args: True)
+    monkeypatch.setattr(cli, "retain_diagnostics", lambda *args: None)
+    assert cli.deploy(Namespace(app="magik"), create_run(tmp_path, "deploy", {})) == 0
+    assert "main-input-proxy" in required[0]
+    assert "main-input-proxy" not in application("mini-magik").agent_capabilities
