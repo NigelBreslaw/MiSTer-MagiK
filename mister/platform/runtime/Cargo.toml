@@ -39,6 +39,9 @@ slint = { git = "https://github.com/slint-ui/slint", rev = "72cf74306784e7d15374
 default = []
 app-runtime = ["dep:mister-magik-catalog"]
 framebuffer-lab = []
+cached-rgb565-presenter = [
+    "dep:slint",
+]
 ui = [
     "app-runtime",
     "dep:bytemuck",

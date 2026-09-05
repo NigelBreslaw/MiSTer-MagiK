@@ -12,7 +12,7 @@ pub mod hidden_latch;
 pub mod hidden_scanout;
 #[cfg(feature = "ui")]
 pub mod latch_state;
-#[cfg(feature = "ui")]
+#[cfg(any(feature = "ui", feature = "cached-rgb565-presenter"))]
 pub mod mapped;
 #[cfg(feature = "ui")]
 pub mod mode;
@@ -21,7 +21,7 @@ pub mod ownership;
 pub mod present;
 pub mod rgb565;
 pub mod route;
-#[cfg(feature = "ui")]
+#[cfg(any(feature = "ui", feature = "cached-rgb565-presenter"))]
 pub mod sample;
 #[cfg(feature = "ui")]
 pub mod scanout_slots;
