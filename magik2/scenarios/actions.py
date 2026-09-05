@@ -207,9 +207,12 @@ def validate_development_paths(context):
         "user_state",
         "assets",
     ):
-        if not isinstance(context.get(name), str) or not Path(
-            context[name]
-        ).is_relative_to(root):
+        value = context.get(name)
+        if (
+            not isinstance(value, str)
+            or ".." in Path(value).parts
+            or not Path(value).is_relative_to(root)
+        ):
             raise AssertionError(
                 f"{name} is outside the development layout: {context.get(name)}"
             )
