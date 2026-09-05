@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from magik2.build import ensure_arm_probe, needs_build, source_fingerprint, write_build_cache
+from magik2.build import (
+    ensure_arm_probe,
+    needs_build,
+    source_fingerprint,
+    write_build_cache,
+)
 
 
 def test_only_probe_inputs_affect_the_fingerprint(tmp_path) -> None:
@@ -10,7 +15,7 @@ def test_only_probe_inputs_affect_the_fingerprint(tmp_path) -> None:
     baseline = source_fingerprint(probe)
     (tmp_path / "unrelated.md").write_text("dirty checkout state\n")
     assert source_fingerprint(probe) == baseline
-    (probe / "src" / "main.rs").write_text("fn main() { println!(\"changed\"); }\n")
+    (probe / "src" / "main.rs").write_text('fn main() { println!("changed"); }\n')
     assert source_fingerprint(probe) != baseline
 
 
@@ -27,7 +32,13 @@ def test_build_runs_only_when_a_probe_artifact_is_stale(tmp_path, monkeypatch) -
     probe = tmp_path / "probe"
     (probe / "src").mkdir(parents=True)
     (probe / "src" / "main.rs").write_text("fn main() {}\n")
-    artifact = probe / "target" / "armv7-unknown-linux-gnueabihf" / "release" / "mister-magik2-probe"
+    artifact = (
+        probe
+        / "target"
+        / "armv7-unknown-linux-gnueabihf"
+        / "release"
+        / "mister-magik2-probe"
+    )
     cache = tmp_path / "cache.json"
     calls: list[list[str]] = []
 
@@ -40,8 +51,12 @@ def test_build_runs_only_when_a_probe_artifact_is_stale(tmp_path, monkeypatch) -
         artifact.write_bytes(b"probe")
         return Result()
 
-    first = ensure_arm_probe(probe, cache, runner=runner, prepare=lambda *_: "test-builder")
-    second = ensure_arm_probe(probe, cache, runner=runner, prepare=lambda *_: "test-builder")
+    first = ensure_arm_probe(
+        probe, cache, runner=runner, prepare=lambda *_: "test-builder"
+    )
+    second = ensure_arm_probe(
+        probe, cache, runner=runner, prepare=lambda *_: "test-builder"
+    )
 
     assert first.rebuilt and not second.rebuilt
     assert len(calls) == 1

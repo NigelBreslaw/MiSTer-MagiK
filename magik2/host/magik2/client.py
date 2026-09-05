@@ -22,7 +22,6 @@ class AgentError(RuntimeError):
         return cls(text)
 
 
-
 class NativeAgent:
     def __init__(self, host: str, token: str, port: int = 7500) -> None:
         self.host = host
@@ -37,20 +36,26 @@ class NativeAgent:
         return AgentStatus.from_response(response.fields)
 
     def upload(self, artifact: str, payload: bytes) -> Mapping[str, object]:
-        response, _ = self._request("upload", {"artifact": artifact, "sha256": sha256_hex(payload)}, payload)
+        response, _ = self._request(
+            "upload", {"artifact": artifact, "sha256": sha256_hex(payload)}, payload
+        )
         if response.operation == "error":
             raise AgentError.from_fields(response.fields)
         return response.fields
 
     def upgrade_agent(self, payload: bytes) -> Mapping[str, object]:
-        response, _ = self._request("agent-update", {"sha256": sha256_hex(payload)}, payload)
+        response, _ = self._request(
+            "agent-update", {"sha256": sha256_hex(payload)}, payload
+        )
         if response.operation == "error":
             raise AgentError.from_fields(response.fields)
         if response.operation != "agent-updating":
             raise AgentError("agent did not acknowledge its replacement")
         return response.fields
 
-    def start(self, *, restart: bool = False, expected_sha256: str | None = None) -> Mapping[str, object]:
+    def start(
+        self, *, restart: bool = False, expected_sha256: str | None = None
+    ) -> Mapping[str, object]:
         fields: dict[str, object] = {"restart": restart}
         if expected_sha256 is not None:
             fields["expected_sha256"] = expected_sha256
@@ -66,7 +71,9 @@ class NativeAgent:
         return self._successful("metrics")
 
     def read_profile_artifact(self, profile_id: str, name: str) -> bytes:
-        response, body = self._request("read-artifact", {"profile_id": profile_id, "name": name})
+        response, body = self._request(
+            "read-artifact", {"profile_id": profile_id, "name": name}
+        )
         if response.operation == "error":
             raise AgentError.from_fields(response.fields)
         if response.operation != "artifact":
@@ -118,19 +125,28 @@ class NativeAgent:
             raise AgentError(f"unexpected watch event: {response.operation}")
         return response, body
 
-    def _successful(self, operation: str, fields: Mapping[str, object] | None = None) -> Mapping[str, object]:
+    def _successful(
+        self, operation: str, fields: Mapping[str, object] | None = None
+    ) -> Mapping[str, object]:
         response, _ = self._request(operation, fields)
         if response.operation == "error":
             raise AgentError.from_fields(response.fields)
         return response.fields
 
-    def _request(self, operation: str, fields: Mapping[str, object] | None = None, body: bytes = b"") -> tuple[Envelope, bytes]:
+    def _request(
+        self,
+        operation: str,
+        fields: Mapping[str, object] | None = None,
+        body: bytes = b"",
+    ) -> tuple[Envelope, bytes]:
         request = Envelope(uuid.uuid4().hex, operation, self.token, fields or {})
         last_error: OSError | ProtocolError | None = None
         attempts = 1 if operation == "agent-update" else 2
         for attempt in range(attempts):
             try:
-                with socket.create_connection((self.host, self.port), timeout=5) as connection:
+                with socket.create_connection(
+                    (self.host, self.port), timeout=5
+                ) as connection:
                     connection.settimeout(15)
                     send_message(connection, request, body)
                     response, response_body = receive_message(connection)

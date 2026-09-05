@@ -10,15 +10,28 @@ def test_published_new_artifact_does_not_mean_it_is_running(monkeypatch, tmp_pat
     artifact = tmp_path / "probe"
     artifact.write_bytes(b"new binary")
     sha = sha256_hex(artifact.read_bytes())
-    monkeypatch.setattr(cli, "ensure_arm_probe", lambda *args: BuildResult(artifact, False, 0))
+    monkeypatch.setattr(
+        cli, "ensure_arm_probe", lambda *args: BuildResult(artifact, False, 0)
+    )
     agent = Mock()
-    status = AgentStatus("other", frozenset(), {"running": True, "ready": True, "artifact_sha256": sha, "running_sha256": "old"})
+    status = AgentStatus(
+        "other",
+        frozenset(),
+        {
+            "running": True,
+            "ready": True,
+            "artifact_sha256": sha,
+            "running_sha256": "old",
+        },
+    )
     assert not cli.ensure_probe(agent, status, create_run(tmp_path, "deploy", {}))
     agent.upload.assert_not_called()
     agent.start.assert_called_once_with(expected_sha256=sha, restart=True)
 
 
 def test_deployment_has_no_testing_or_legacy_diagnostic_requirement():
-    assert not any("test" in name or "legacy" in name for name in cli.REQUIRED_AGENT_CAPABILITIES)
+    assert not any(
+        "test" in name or "legacy" in name for name in cli.REQUIRED_AGENT_CAPABILITIES
+    )
     assert cli.STATUS_CAPABILITIES == {"status"}
     assert "upload-v1" not in cli.STOP_CAPABILITIES

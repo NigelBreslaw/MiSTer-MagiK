@@ -20,7 +20,12 @@ def keyframe(payload: bytes = b"\0" * 8) -> bytes:
 
 def test_decodes_shared_rgb565_keyframe() -> None:
     frame = decode_preview(keyframe())
-    assert (frame.sequence, frame.width, frame.height, frame.pixels) == (4, 2, 2, b"\0" * 8)
+    assert (frame.sequence, frame.width, frame.height, frame.pixels) == (
+        4,
+        2,
+        2,
+        b"\0" * 8,
+    )
 
 
 def test_rejects_truncated_or_non_keyframe_preview() -> None:

@@ -9,7 +9,9 @@ from magik2.client import AgentError, NativeAgent
 from magik2.protocol import Envelope, receive_message, send_message
 
 
-def one_reply(fields: dict[str, object], operation: str = "status") -> tuple[int, threading.Thread]:
+def one_reply(
+    fields: dict[str, object], operation: str = "status"
+) -> tuple[int, threading.Thread]:
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
@@ -19,7 +21,9 @@ def one_reply(fields: dict[str, object], operation: str = "status") -> tuple[int
         connection, _ = listener.accept()
         with connection:
             request, _ = receive_message(connection)
-            send_message(connection, Envelope(request.request_id, operation, "", fields))
+            send_message(
+                connection, Envelope(request.request_id, operation, "", fields)
+            )
         listener.close()
 
     thread = threading.Thread(target=serve)
@@ -28,7 +32,13 @@ def one_reply(fields: dict[str, object], operation: str = "status") -> tuple[int
 
 
 def test_status_accepts_a_superset_and_unknown_optional_fields() -> None:
-    port, thread = one_reply({"identity": "other-branch", "capabilities": ["status", "upload-v1", "future"], "new-field": 1})
+    port, thread = one_reply(
+        {
+            "identity": "other-branch",
+            "capabilities": ["status", "upload-v1", "future"],
+            "new-field": 1,
+        }
+    )
     status = NativeAgent("127.0.0.1", "token", port).status()
     thread.join()
     assert status.supports({"status", "upload-v1"})
@@ -79,7 +89,9 @@ def test_lost_reply_reuses_the_same_request_identifier_once() -> None:
         with second:
             request, _ = receive_message(second)
             request_ids.append(request.request_id)
-            send_message(second, Envelope(request.request_id, "started", "", {"ready": True}))
+            send_message(
+                second, Envelope(request.request_id, "started", "", {"ready": True})
+            )
         listener.close()
 
     thread = threading.Thread(target=serve)

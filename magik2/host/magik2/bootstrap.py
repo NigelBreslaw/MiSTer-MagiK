@@ -25,10 +25,18 @@ class SshBootstrap:
 
     @classmethod
     def from_environment(cls) -> "SshBootstrap":
-        missing = [name for name in ("MISTER_IP", "MISTER_USER", "MISTER_PASS") if not os.environ.get(name)]
+        missing = [
+            name
+            for name in ("MISTER_IP", "MISTER_USER", "MISTER_PASS")
+            if not os.environ.get(name)
+        ]
         if missing:
             raise BootstrapError("missing configured MiSTer SSH access")
-        return cls(os.environ["MISTER_IP"], os.environ["MISTER_USER"], os.environ["MISTER_PASS"])
+        return cls(
+            os.environ["MISTER_IP"],
+            os.environ["MISTER_USER"],
+            os.environ["MISTER_PASS"],
+        )
 
     def install_and_start(self, agent_binary: Path) -> str:
         if not agent_binary.is_file():
@@ -36,15 +44,26 @@ class SshBootstrap:
         try:
             import paramiko
         except ImportError as error:  # pragma: no cover - dependency declares this
-            raise BootstrapError("the SSH bootstrap dependency is unavailable") from error
+            raise BootstrapError(
+                "the SSH bootstrap dependency is unavailable"
+            ) from error
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
-            client.connect(self.host, username=self.username, password=self.password, timeout=10, banner_timeout=10, auth_timeout=10)
+            client.connect(
+                self.host,
+                username=self.username,
+                password=self.password,
+                timeout=10,
+                banner_timeout=10,
+                auth_timeout=10,
+            )
             token = self._read_or_create_token(client)
             sftp = client.open_sftp()
             try:
-                sftp.put(str(agent_binary), f"{self.install_root}/mister-magik2-agent.next")
+                sftp.put(
+                    str(agent_binary), f"{self.install_root}/mister-magik2-agent.next"
+                )
                 sftp.chmod(f"{self.install_root}/mister-magik2-agent.next", 0o700)
             finally:
                 sftp.close()
@@ -62,7 +81,9 @@ class SshBootstrap:
         except BootstrapError:
             raise
         except Exception as error:
-            raise BootstrapError(f"native-agent bootstrap failed: {type(error).__name__}") from error
+            raise BootstrapError(
+                f"native-agent bootstrap failed: {type(error).__name__}"
+            ) from error
         finally:
             client.close()
 
@@ -71,17 +92,30 @@ class SshBootstrap:
         try:
             import paramiko
         except ImportError as error:  # pragma: no cover - dependency declares this
-            raise BootstrapError("the SSH bootstrap dependency is unavailable") from error
+            raise BootstrapError(
+                "the SSH bootstrap dependency is unavailable"
+            ) from error
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
-            client.connect(self.host, username=self.username, password=self.password, timeout=10, banner_timeout=10, auth_timeout=10)
-            _, stdout, _ = client.exec_command(f"cat {self.install_root}/token 2>/dev/null || true", timeout=10)
+            client.connect(
+                self.host,
+                username=self.username,
+                password=self.password,
+                timeout=10,
+                banner_timeout=10,
+                auth_timeout=10,
+            )
+            _, stdout, _ = client.exec_command(
+                f"cat {self.install_root}/token 2>/dev/null || true", timeout=10
+            )
             return stdout.read().decode().strip() or None
         except BootstrapError:
             raise
         except Exception as error:
-            raise BootstrapError(f"native-agent token recovery failed: {type(error).__name__}") from error
+            raise BootstrapError(
+                f"native-agent token recovery failed: {type(error).__name__}"
+            ) from error
         finally:
             client.close()
 
@@ -90,20 +124,36 @@ class SshBootstrap:
         client = None
         try:
             import paramiko
+
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(self.host, username=self.username, password=self.password, timeout=10, banner_timeout=10, auth_timeout=10)
-            _, stdout, _ = client.exec_command(f"tail -n 80 {self.state_root}/agent.log 2>/dev/null || true", timeout=10)
+            client.connect(
+                self.host,
+                username=self.username,
+                password=self.password,
+                timeout=10,
+                banner_timeout=10,
+                auth_timeout=10,
+            )
+            _, stdout, _ = client.exec_command(
+                f"tail -n 80 {self.state_root}/agent.log 2>/dev/null || true",
+                timeout=10,
+            )
             return stdout.read().decode(errors="replace")
         except Exception as error:
-            raise BootstrapError(f"agent log retrieval failed: {type(error).__name__}") from error
+            raise BootstrapError(
+                f"agent log retrieval failed: {type(error).__name__}"
+            ) from error
         finally:
             if client is not None:
                 client.close()
 
     def _read_or_create_token(self, client: object) -> str:
         token_path = f"{self.install_root}/token"
-        _, stdout, _ = client.exec_command(f"mkdir -p {self.install_root} {self.state_root}; cat {token_path} 2>/dev/null || true", timeout=10)
+        _, stdout, _ = client.exec_command(
+            f"mkdir -p {self.install_root} {self.state_root}; cat {token_path} 2>/dev/null || true",
+            timeout=10,
+        )
         token = stdout.read().decode().strip()
         if token:
             return token
