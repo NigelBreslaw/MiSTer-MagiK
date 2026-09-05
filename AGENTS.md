@@ -57,6 +57,36 @@ Production rendering is RGB565; never rebuild previews on the hot path.
 Separate latch rejection from physical repeats; authoritative animation requires
 zero dropped frames. Use Analytics streaming or typed captures, never raw fb0.
 
+## MiSTer MagiK Tooling 2.0 exception
+
+The user-approved 2.0 plan authorizes the isolated `magik2/` project and its
+thin `scripts/magik2` entrypoint. Within this scope, these rules take precedence
+over conflicting legacy tooling requirements in this file and `scripts/AGENTS.md`:
+
+- Python host orchestration belongs in `magik2/host/magik2`; the native Rust
+  device service belongs in `magik2/agent`. Do not invoke or wrap the legacy
+  agent CLI to build, bootstrap, deploy, test, profile, or observe 2.0.
+- Use typed `scripts/magik2` operations. Their internal bootstrap/repair adapter
+  may use SSH to install/start the native service when absent or unreachable,
+  or repair it when native recovery is unavailable. This is the approved
+  exception to the raw SSH/SCP prohibition; it does not authorize ad-hoc shell
+  SSH/SCP commands or a generic remote-shell interface. Normal delivery,
+  reachable-service upgrades, control, testing, profiling, and streams use
+  the native connection.
+- Within an authorized 2.0 operation, bootstrap and missing-capability updates
+  happen automatically and then resume that operation. Build/version mismatch
+  alone never requires an update. Keep a compatible installed service.
+- Experiment delivery may use a dirty worktree and does not require a commit,
+  qualified platform release, production manifest update, or rollback
+  transaction. Scope installation to `/media/fat/mister-magik2` and temporary
+  state to `/tmp/mister-magik2`; preserve the real app and installed platform.
+- Use the new native metrics/frame streams and 2.0 viewer for observation.
+  Existing Main handoff, RGB565 presentation, and no-raw-framebuffer rules
+  still apply. Do not introduce automatic reboot recovery.
+- Device and Apple-container operations through `scripts/magik2` still require
+  first-attempt sandbox escalation. This transport approval does not bypass
+  the sandbox. Reconcile ambiguous mutations instead of blindly replaying them.
+
 ## Context
 
 Read applicable ancestor instructions and needed source/document sections.
