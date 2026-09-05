@@ -3,6 +3,18 @@
 
 version: 2
 updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "friday"
+      time: "08:00"
+      timezone: "Europe/Helsinki"
+    groups:
+      python-projects:
+        patterns:
+          - "*"
+
   - package-ecosystem: "cargo"
     directories:
       - "**/*"
