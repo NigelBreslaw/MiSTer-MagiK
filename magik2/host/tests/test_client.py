@@ -4,7 +4,6 @@ import socket
 import threading
 
 import pytest
-
 from magik2.client import AgentError, NativeAgent
 from magik2.protocol import Envelope, receive_message, send_message
 
@@ -100,3 +99,43 @@ def test_lost_reply_reuses_the_same_request_identifier_once() -> None:
     thread.join()
     assert len(request_ids) == 2
     assert request_ids[0] == request_ids[1]
+
+
+def test_capture_error_is_not_retried():
+    port, thread = one_reply({"code": "capture-unavailable"}, "error")
+    with pytest.raises(AgentError, match="capture-unavailable"):
+        NativeAgent("127.0.0.1", "token", port).capture_framebuffer()
+    thread.join()
+
+
+def test_capture_transport_failure_has_one_attempt(monkeypatch):
+    attempts = []
+
+    def fail(*args, **kwargs):
+        attempts.append(kwargs["timeout"])
+        raise ConnectionRefusedError("offline")
+
+    monkeypatch.setattr(socket, "create_connection", fail)
+    with pytest.raises(ConnectionRefusedError):
+        NativeAgent("offline", "token").capture_framebuffer()
+    assert attempts == [10]
+
+
+def test_capture_deadline_includes_connect_time(monkeypatch):
+    from magik2 import client
+
+    clock = iter([100, 111])
+    monkeypatch.setattr(client.time, "monotonic", lambda: next(clock))
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr(
+        socket, "create_connection", lambda *args, **kwargs: Connection()
+    )
+    with pytest.raises(TimeoutError, match="deadline"):
+        NativeAgent("fixture", "token").capture_framebuffer()

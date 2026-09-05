@@ -6,6 +6,7 @@ import hashlib
 import json
 import socket
 import struct
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -18,9 +19,16 @@ class ProtocolError(RuntimeError):
     """The peer sent malformed or unsafe framed data."""
 
 
-def _read_exact(connection: socket.socket, size: int) -> bytes:
+def _read_exact(
+    connection: socket.socket, size: int, deadline: float | None = None
+) -> bytes:
     result = bytearray()
     while len(result) < size:
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("capture deadline exceeded")
+            connection.settimeout(remaining)
         chunk = connection.recv(size - len(result))
         if not chunk:
             raise ProtocolError("connection closed while reading a framed message")
@@ -48,7 +56,7 @@ class Envelope:
         return encoded
 
     @classmethod
-    def from_json(cls, raw: bytes) -> "Envelope":
+    def from_json(cls, raw: bytes) -> Envelope:
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as error:
@@ -72,13 +80,15 @@ def send_message(
         connection.sendall(view[offset : offset + 64 * 1024])
 
 
-def receive_message(connection: socket.socket) -> tuple[Envelope, bytes]:
-    header_size, body_size = struct.unpack("!IQ", _read_exact(connection, 12))
+def receive_message(
+    connection: socket.socket, *, deadline: float | None = None
+) -> tuple[Envelope, bytes]:
+    header_size, body_size = struct.unpack("!IQ", _read_exact(connection, 12, deadline))
     if header_size > MAX_HEADER_BYTES or body_size > MAX_BODY_BYTES:
         raise ProtocolError("peer declared an oversized message")
-    return Envelope.from_json(_read_exact(connection, header_size)), _read_exact(
-        connection, body_size
-    )
+    return Envelope.from_json(
+        _read_exact(connection, header_size, deadline)
+    ), _read_exact(connection, body_size, deadline)
 
 
 def sha256_hex(data: bytes) -> str:

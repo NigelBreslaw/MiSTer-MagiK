@@ -11,19 +11,18 @@ from pathlib import Path
 
 from .apps import APPLICATIONS, application, repository
 from .bootstrap import BootstrapError, SshBootstrap
-from .build import ensure_arm_application, ensure_arm_agent, ensure_arm_package
+from .build import ensure_arm_agent, ensure_arm_application, ensure_arm_package
 from .client import AgentError, NativeAgent
 from .compatibility import AgentStatus
 from .results import (
     append_event,
     create_run,
-    source_context,
     finalize,
     retain_diagnostics,
+    source_context,
 )
 from .token_store import TokenStore, state_root
 from .viewer import serve
-
 
 STATUS_CAPABILITIES = {"status"}
 STOP_CAPABILITIES = {"status", "lifecycle-v1"}
@@ -51,6 +50,9 @@ def main() -> int:
     started = time.monotonic()
     parser = argparse.ArgumentParser(prog="scripts/magik2")
     subcommands = parser.add_subparsers(dest="command", required=True)
+    subcommands.add_parser(
+        "mcp", help="serve framebuffer screenshots to Codex over stdio"
+    )
     subcommands.add_parser("deploy")
     transfer = subcommands.add_parser(
         "transfer-check", help="measure one saved upload without starting it"
@@ -85,6 +87,10 @@ def main() -> int:
             continue
         command.add_argument("--app", choices=tuple(APPLICATIONS), default="magik")
     arguments = parser.parse_args()
+    if arguments.command == "mcp":
+        from .mcp_capture import main as mcp_main
+
+        return mcp_main()
     if arguments.command in {"deploy", "check", "watch"} or (
         arguments.command == "build" and arguments.target == "app"
     ):

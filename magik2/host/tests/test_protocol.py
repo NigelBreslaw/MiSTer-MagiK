@@ -3,7 +3,6 @@ from __future__ import annotations
 import socket
 
 import pytest
-
 from magik2.compatibility import AgentStatus, needs_install
 from magik2.protocol import (
     Envelope,
@@ -56,3 +55,20 @@ def test_capabilities_not_build_identity_select_agent() -> None:
     )
     assert not needs_install(older, {"status", "upload"})
     assert needs_install(older, {"frames"})
+
+
+def test_total_deadline_expires_even_when_peer_keeps_sending(monkeypatch):
+    from magik2 import protocol
+
+    clock = iter([0, 9, 11])
+    monkeypatch.setattr(protocol.time, "monotonic", lambda: next(clock))
+
+    class SlowPeer:
+        def settimeout(self, seconds):
+            assert seconds > 0
+
+        def recv(self, size):
+            return b"x"
+
+    with pytest.raises(TimeoutError, match="deadline"):
+        protocol._read_exact(SlowPeer(), 4, deadline=10)
