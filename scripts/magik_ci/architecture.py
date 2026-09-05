@@ -20,6 +20,7 @@ class Hotspot:
     owner_id: str
     path: str
     intended_destination: str
+    family: tuple[str, ...]
 
 
 HOTSPOTS = (
@@ -27,21 +28,37 @@ HOTSPOTS = (
         "launcher-runtime",
         "apps/mister/src/ui_runner/launcher_loop.rs",
         "P1 Decompose launcher state and frame phases",
+        ("apps/mister/src/ui_runner/",),
     ),
     Hotspot(
         "host-workflows",
         "agent-cli/src/host/mod.rs",
         "P2-A typed host workflow modules",
+        ("agent-cli/src/host/",),
     ),
     Hotspot(
         "desktop-app",
         "apps/desktop/src/main.rs",
         "P2 next-tier desktop ownership seams",
+        ("apps/desktop/src/",),
     ),
     Hotspot(
         "catalog-persistence",
         "crates/catalog/src/sqlite_catalog.rs",
         "P2-B characterization then P3 persistence split",
+        ("crates/catalog/src/sqlite_catalog.rs", "crates/catalog/src/sqlite_catalog/"),
+    ),
+    Hotspot(
+        "launcher-state",
+        "apps/mister/src/launcher.rs",
+        "navigation policies and platform effects",
+        ("apps/mister/src/launcher.rs", "apps/mister/src/launcher/"),
+    ),
+    Hotspot(
+        "device-agent",
+        "mister/tools/agent/src/main.rs",
+        "portable protocol, authenticated transport, Linux services",
+        ("mister/tools/agent/src/",),
     ),
 )
 
@@ -78,14 +95,48 @@ def report(repository: Path, base: str, head: str) -> dict[str, object]:
         if len(parts) == 3 and parts[0].isdigit():
             changed[parts[2]] = int(parts[0]) + int(parts[1])
             total += changed[parts[2]]
+    paths = git(repository, "ls-tree", "-r", "--name-only", head).splitlines()
     hotspots: list[dict[str, object]] = []
     for hotspot in HOTSPOTS:
         source = git(repository, "show", f"{head}:{hotspot.path}", check=False)
         present = bool(source)
+        members = [
+            path
+            for path in paths
+            if path.endswith(".rs")
+            and any(
+                path.startswith(prefix) if prefix.endswith("/") else path == prefix
+                for prefix in hotspot.family
+            )
+        ]
+        sources = {path: git(repository, "show", f"{head}:{path}") for path in members}
+        largest = [(path, _function(text)) for path, text in sources.items()]
+        largest = [(path, item) for path, item in largest if item is not None]
+        largest.sort(key=lambda pair: int(cast(int, pair[1]["lines"])), reverse=True)
+        family_changed = sum(changed.get(path, 0) for path in members)
         hotspots.append(
             {
                 **asdict(hotspot),
                 "present": present,
+                "subsystem": {
+                    "files": members,
+                    "file_count": len(members),
+                    "lines": sum(len(text.splitlines()) for text in sources.values()),
+                    "largest_file_lines": max(
+                        (len(text.splitlines()) for text in sources.values()), default=0
+                    ),
+                    "largest_function": {"path": largest[0][0], **largest[0][1]}
+                    if largest
+                    else None,
+                    "mutable_binding_count": sum(
+                        text.count("let mut ") for text in sources.values()
+                    ),
+                    "direct_environment_read_count": sum(
+                        text.count("env::var(") + text.count("env::var_os(")
+                        for text in sources.values()
+                    ),
+                    "changed_lines": family_changed,
+                },
                 "file_lines": len(source.splitlines()),
                 "largest_function": _function(source),
                 "mutable_binding_count": source.count("let mut "),
@@ -121,11 +172,11 @@ def execute(repository: Path, args: Namespace) -> None:
             "",
             "Advisory only.",
             "",
-            "| Owner | File | Changed lines |",
-            "| --- | --- | ---: |",
+            "| Owner | Facade lines | Subsystem files | Subsystem lines | Largest file |",
+            "| --- | ---: | ---: | ---: | ---: |",
         ]
         lines.extend(
-            f"| {item['owner_id']} | `{item['path']}` | {item['changed_lines']} |"
+            f"| {item['owner_id']} | {item['file_lines']} | {item['subsystem']['file_count']} | {item['subsystem']['lines']} | {item['subsystem']['largest_file_lines']} |"
             for item in cast(list[dict[str, Any]], value_data["hotspots"])
         )
         rendered = "\n".join(lines) + "\n"
