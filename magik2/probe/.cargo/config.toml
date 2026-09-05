@@ -3,3 +3,6 @@
 # Resolve fontconfig dynamically on the MiSTer instead of requiring a target
 # fontconfig development sysroot during ARM cross-compilation.
 RUST_FONTCONFIG_DLOPEN = "1"
+
+[target.armv7-unknown-linux-gnueabihf]
+rustflags = ["-C", "force-frame-pointers=yes"]
