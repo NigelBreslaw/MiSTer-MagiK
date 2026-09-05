@@ -209,6 +209,11 @@ class PreCommitTests(unittest.TestCase):
             "cargo fmt --manifest-path apps/mister/Cargo.toml --check", result.stderr
         )
 
+    def test_magik2_paths_are_classified(self) -> None:
+        self.repository.stage("magik2/host/magik2/protocol.py", "VALUE = 1\n")
+        result = self.repository.gate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_deleted_shell_files_are_not_syntax_checked(self) -> None:
         self.repository.stage("scripts/probe.sh", "#!/bin/bash\ntrue\n")
         self.repository.run("git", "commit", "-qm", "fixture")
