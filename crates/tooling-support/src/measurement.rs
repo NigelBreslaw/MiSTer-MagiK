@@ -12,6 +12,7 @@ pub struct Counters {
 }
 #[derive(Default)]
 pub struct PresentationMetrics {
+    pub context: Value,
     pub counters: Counters,
     pub last_render_us: u64,
     pub last_physical_drop_count: Option<u16>,
@@ -35,7 +36,7 @@ impl PresentationMetrics {
         );
     }
     pub fn json(&self, width: usize, height: usize, elapsed_ms: u64) -> Value {
-        json!({"width":width,"height":height,"elapsed_ms":elapsed_ms,"pid":std::process::id(),
+        json!({"context":self.context,"width":width,"height":height,"elapsed_ms":elapsed_ms,"pid":std::process::id(),
             "sha256":std::env::var("MISTER_MAGIK2_ARTIFACT_SHA256").unwrap_or_default(),
             "presentations":self.counters.presentations,"last_render_us":self.last_render_us,
             "render_us_total":self.counters.render_us,"render_to_present_us_total":self.counters.render_to_present_us,

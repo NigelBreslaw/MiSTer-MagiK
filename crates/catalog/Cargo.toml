@@ -54,6 +54,8 @@ walkdir = "2"
 
 [features]
 default = []
+# Development consumers must not infer production paths from an unfamiliar executable directory.
+development-layout = []
 builder = []
 hotpath = ["hotpath/hotpath"]
 hotpath-mcp = ["hotpath", "hotpath/hotpath-mcp"]

@@ -6155,6 +6155,18 @@ pub(super) fn run_launcher_loop(
     #[cfg(feature = "magik2")]
     let mut tooling = mister_magik_tooling_support::Session::from_environment();
     #[cfg(feature = "magik2")]
+    if let Some(session) = tooling.as_mut() {
+        let paths = launcher_config.device_paths();
+        let catalog = launcher_config.catalog_paths();
+        session.metrics.context = serde_json::json!({
+            "data_root":paths.app_dir(), "main":paths.main_path(),
+            "settings":paths.app_path("settings.json"), "controllers":paths.app_path("controllers.json"),
+            "catalog":catalog.sharded_catalog_dir(), "library":catalog.library_sqlite(),
+            "user_state":catalog.user_state_sqlite(), "assets":catalog.media_asset_dir(),
+        });
+        crate::ui_logln!("magik2_context {}", session.metrics.context);
+    }
+    #[cfg(feature = "magik2")]
     let mut tooling_drop_baseline: Option<u32> = None;
     #[cfg(feature = "magik2")]
     let mut tooling_reject_baseline: Option<u16> = None;

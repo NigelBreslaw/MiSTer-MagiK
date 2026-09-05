@@ -51,3 +51,30 @@ def test_missing_or_invalid_physical_evidence_fails(key, value):
     evidence[key] = value
     with pytest.raises(AssertionError):
         actions.validate_window(evidence, instrumented=False, seconds=5)
+
+
+def test_development_paths_reject_production_or_missing_evidence():
+    root = "/media/fat/mister-magik-dev"
+    context = {"data_root": root, "main": "/media/fat/MiSTer_MagiKDev"}
+    context.update(
+        {
+            name: f"{root}/{name}"
+            for name in (
+                "settings",
+                "controllers",
+                "catalog",
+                "library",
+                "user_state",
+                "assets",
+            )
+        }
+    )
+    assert actions.validate_development_paths(context) == context
+    for bad in (
+        None,
+        {},
+        {**context, "assets": "/media/fat/mister-magik/assets"},
+        {**context, "main": "/media/fat/MiSTer_MagiK"},
+    ):
+        with pytest.raises(AssertionError):
+            actions.validate_development_paths(bad)
