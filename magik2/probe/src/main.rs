@@ -201,6 +201,7 @@ fn folded_samples(debug_report: &str) -> String {
         .lines()
         .filter_map(|line| {
             let (frames, thread_and_count) = line.rsplit_once(" THREAD: ")?;
+            let frames = frames.trim_end_matches(" ->");
             let (thread, count) = thread_and_count.rsplit_once(' ')?;
             let mut stack = vec![thread.trim().to_owned()];
             stack.extend(
@@ -507,4 +508,20 @@ fn write_metrics(
 
 fn option_json(value: Option<u64>) -> String {
     value.map_or_else(|| "null".to_owned(), |value| value.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::folded_samples;
+
+    #[test]
+    fn converts_pprof_debug_stacks_to_folded_stacks() {
+        let debug = "FRAME: app::render -> FRAME: core::loop -> THREAD: probe 12\n";
+        assert_eq!(folded_samples(debug), "probe;app::render;core::loop 12");
+    }
+
+    #[test]
+    fn ignores_unrecognised_pprof_debug_lines() {
+        assert!(folded_samples("no profile samples\n").is_empty());
+    }
 }
