@@ -9,22 +9,7 @@ model_reasoning_summary = "concise"
 model_verbosity = "low"
 
 [mcp_servers.magik-rust-lsp]
-command = "./scripts/cargo"
-args = [
-  "run",
-  "--quiet",
-  "--locked",
-  "--manifest-path",
-  "private/lspi/Cargo.toml",
-  "-p",
-  "lspi",
-  "--",
-  "mcp",
-  "--workspace-root",
-  ".",
-  "--config",
-  ".codex/lspi.toml",
-]
+command = "./scripts/rust-lsp"
 required = false
 startup_timeout_sec = 120
 enabled_tools = [

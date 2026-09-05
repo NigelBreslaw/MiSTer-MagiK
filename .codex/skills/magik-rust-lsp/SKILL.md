@@ -33,3 +33,13 @@ and `max_total_chars=10000`. If incomplete, use ordinary patches. Otherwise:
 If MCP is unavailable or fails once, report reduced semantic assurance and
 fall back to source navigation and focused Cargo validation. Do not repeatedly
 retry or broaden allowed roots to unrelated directories.
+
+## Runtime startup
+
+`scripts/rust-lsp` prepares this checkout's pinned `private/lspi` revision and
+passes explicit workspace/config paths. It refuses to overwrite local submodule
+edits. After updating the launching checkout or MCP configuration, restart the
+MCP session; an already-running server does not reload these changes. Rebasing
+a different worktree cannot update a server launched from an older checkout.
+If worktree routing is rejected, compare the launching checkout and its config
+with the intended branch before changing allowed roots.
