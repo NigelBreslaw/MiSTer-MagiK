@@ -9,7 +9,10 @@ the revised scope plan. Parent commits remain local for review.
 The earlier `nigel/agent-effectiveness` branch is preserved separately with its
 completed host characterization and extractions. It is not merged, rebased, or
 represented as finished work on this focused branch. The original checkout has
-advanced independently and remains outside this integration.
+advanced independently and remains outside this integration. This focused branch
+is clean. The preserved old worktree still has its clean private LSP checkout at
+the newer committed revision; an optional detached switch back to its recorded
+gitlink was rejected by automatic approval review, so it was not retried.
 
 The private LSP repository is pinned to `8b2991e`, which bounds oversized
 read-only format and routing failures as well as normal results. A fresh MCP
