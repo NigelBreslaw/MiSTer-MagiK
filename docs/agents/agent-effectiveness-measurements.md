@@ -1,45 +1,76 @@
 # Agent effectiveness measurements
 
 Implementation baseline: `367823f48fe55e75b952384d1b43357fe38a8533`.
-Branch: `nigel/agent-effectiveness`, in a separate linked worktree.
+Focused integration branch: `nigel/agent-effectiveness-tooling`, created in a
+separate worktree from that baseline. The preserved
+`nigel/agent-effectiveness` branch contains earlier host extractions and is not
+part of this comparison.
 
-| Owner | Facade lines | Subsystem lines | Rust files |
-| --- | ---: | ---: | ---: |
-| Launcher runtime | 18,995 | 59,282 | 51 |
-| Host workflows | 44,756 | 59,192 | 15 |
-| Desktop | 6,766 | 13,518 | 13 |
-| Catalog persistence | 7,519 | 7,519 | 1 |
-| Launcher state | 10,312 | 10,312 | 1 |
-| Device agent | 9,328 | 10,749 | 6 |
+## Instruction ancestry fixtures
 
-Metrics include complete responsibility families, including pre-existing helpers.
-The report keeps facade metrics for compatibility and adds aggregate `subsystem`
-metrics. Function lengths are lexical estimates, not a Rust complexity analysis.
-Moving implementation into another counted file does not remove its cost.
+These controlled scenarios count whitespace-delimited words and UTF-8 bytes in
+tracked repository `AGENTS.md` ancestor chains. They exclude global
+instructions, skills, model tokens, and the actual context injected into a
+session. The before revision is the implementation baseline; the after revision
+is the instruction-cleanup revision `2c0e277db039842205cf081e450dab920c3b4d8f`.
 
-Reproduce the baseline and final comparison from the implementation checkout:
+| Scenario | Before words | After words | Change | Before bytes | After bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Documentation (`docs/catalog.md`) | 749 | 432 | -42.3% | 5,842 | 3,512 |
+| Portable Rust (`crates/catalog/src/sqlite_catalog.rs`) | 800 | 460 | -42.5% | 6,240 | 3,753 |
+| UI (`apps/mister/src/ui_runner/launcher_loop.rs`) | 1,093 | 607 | -44.5% | 8,420 | 4,914 |
+| Host workflow (`agent-cli/src/host/mod.rs`) | 749 | 432 | -42.3% | 5,842 | 3,512 |
+| Recovery planning (`/tmp/mister-magik/fs-fault.json`) | 749 | 432 | -42.3% | 5,842 | 3,512 |
+
+The tracked repository now has nine `AGENTS.md` files with 992 words in total;
+the root file has 432 words. These are editorial measurements, not claims about
+prompt size, productivity, or runtime performance. Reproduce with the
+privacy-safe receipt `/private/tmp/magik-instruction-scenarios.json` while it is
+available, or by counting the same ancestor chains at the recorded revisions.
+
+## LSP bounded-output fixture
+
+A six-symbol controlled fixture serialized the following results. Values are
+serialized UTF-8 bytes, not a repository-wide context measurement.
+
+| Format and requested budget | Symbols returned | Payload bytes | MCP result bytes | Truncated |
+| --- | ---: | ---: | ---: | --- |
+| Full, 20,000 | 6 | 4,474 | 4,575 | No |
+| Full, 3,000 | 3 | 2,565 | 2,697 | Yes |
+| Compact, 3,000 | 6 | 2,165 | 2,266 | No |
+| Invalid format with 10,000-character synthetic input, 3,000 | — | 283 | — | Explicit error |
+
+The compact fixture payload is 51.6% smaller than the equivalent full payload
+at the 20,000-character budget. The final row verifies that a request-format
+failure now receives the same cap. Registered-worktree routing has a matching
+dispatch regression and smoke test. These results do not measure productivity,
+loaded context, or physical performance.
+
+The current connected MCP process was started from the original checkout and
+has not been restarted. Start a fresh MCP session using this branch's
+configuration to activate the compact defaults and branch/worktree routing.
+
+## Available and unavailable session evidence
+
+The existing privacy-safe context reporter can read incomplete records without
+publishing prompts, tool arguments, secrets, or raw session contents. Its
+available baseline record has 27 context samples, 19,143 initial input tokens,
+198,660 final input tokens, no tool-size samples, and 27 records classified as
+unknown. There is no matched focused-branch session comparison, so session
+savings and productivity effects are unavailable.
 
 ```sh
-scripts/magik-ci architecture report --base 367823f48fe55e75b952384d1b43357fe38a8533 --head 367823f48fe55e75b952384d1b43357fe38a8533 --format markdown
-scripts/magik-ci architecture report --base 367823f48fe55e75b952384d1b43357fe38a8533 --head HEAD --format markdown
 python3 scripts/codex-context-report.py --recent 1 --json
 ```
 
-For session comparisons, pass the same explicitly selected session files to the
-existing context reporter. Its output includes only aggregate counts and sizes;
-do not publish session files, prompts, arguments, or raw tool contents. Incomplete
-records remain readable. The available baseline session has 27 context samples,
-19,143 initial input tokens, 198,660 final input tokens, and no tool-size samples;
-27 records are classified as unknown. This is not a matched productivity trial.
+## Architecture metrics
 
-Instruction baseline: ten AGENTS.md files, 1,838 words; root 749 words. After the
-documentation cleanup: nine files, 992 words; root 432 words. Count tracked AGENTS.md
-files at each revision, excluding independent submodule contents.
+The earlier architecture report measured complete responsibility families so
+moving code could not appear to remove complexity. Its original baseline values
+remain useful for future maintenance, but this focused branch intentionally does
+not integrate host, device-agent, launcher/runtime, desktop, or catalog
+extractions. No final decomposition comparison is reported here.
 
-Representative checks for final comparison: guidance and planning for
-`docs/catalog.md`, `crates/catalog/src/sqlite_catalog.rs`,
-`apps/mister/src/ui_runner/launcher_loop.rs`, `agent-cli/src/host/mod.rs`, and
-`/tmp/mister-magik/fs-fault.json` (guidance only for this device-state path).
-These are read-only planning scenarios; they do not contact a device. LSP budget
-and worktree fixtures measure serialized output and identity independently.
-No physical-performance or productivity improvement follows from file splitting.
+Hardware qualification debt remains unresolved and is outside these tooling
+measurements. Run only the focused checks named by the affected workflow; CI
+continues to own Linux, ARM, feature-matrix, and expensive assurance.
