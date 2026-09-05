@@ -17,11 +17,11 @@ The experiment remains running after deployment. An explicit stop command restor
 The thin entrypoint is `scripts/magik2`.
 
 ```text
-scripts/magik2 deploy
-scripts/magik2 check smoke
-scripts/magik2 check motion
-scripts/magik2 check motion --profile
-scripts/magik2 watch
+scripts/magik2 deploy --app mini-magik
+scripts/magik2 check smoke --app mini-magik
+scripts/magik2 check motion --app mini-magik
+scripts/magik2 check motion --profile --app mini-magik
+scripts/magik2 watch --app mini-magik
 scripts/magik2 status
 scripts/magik2 stop
 ```
