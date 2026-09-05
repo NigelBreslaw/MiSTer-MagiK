@@ -6,8 +6,9 @@
 use mister_magik_framebuffer_stream::{
     FrameGeometry, FrameHeader, FrameKind, FrameRect, write_frame as write_preview_frame,
 };
+use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
 use mister_magik_mister_runtime::framebuffer::mapped::MappedRgb565Framebuffer;
-use mister_magik_mister_runtime::framebuffer::vsync::VsyncWaitStatus;
+use mister_magik_mister_runtime::framebuffer::rgb565::Rgb565;
 use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel, SoftwareRenderer};
 use slint::platform::{EventLoopProxy, Platform, WindowAdapter};
 use slint::{EventLoopError, PhysicalSize, Window};
@@ -147,6 +148,10 @@ struct PresentationMetrics {
     last_render_us: u64,
     vsync_hits: u64,
     vsync_misses: u64,
+    physical_latch_posts: u64,
+    physical_latch_flips: u64,
+    physical_drops: u64,
+    last_physical_drop_count: Option<u16>,
     motion_started_ms: Option<u64>,
     motion_completed_ms: Option<u64>,
 }
@@ -305,8 +310,16 @@ impl Platform for ProbePlatform {
 }
 
 fn main() -> Result<(), String> {
-    let mut framebuffer =
+    let direct_framebuffer =
         MappedRgb565Framebuffer::open_current_rgb565().map_err(|error| error.to_string())?;
+    let width = direct_framebuffer.width();
+    let height = direct_framebuffer.height();
+    drop(direct_framebuffer);
+    let mut framebuffer = HiddenLatchPresenter::open(
+        u16::try_from(width).map_err(|error: std::num::TryFromIntError| error.to_string())?,
+        u16::try_from(height).map_err(|error: std::num::TryFromIntError| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     let window = ProbeWindow::new();
     slint::platform::set_platform(Box::new(ProbePlatform {
         window: window.clone(),
@@ -317,12 +330,10 @@ fn main() -> Result<(), String> {
     let probe = Probe::new().map_err(|error| error.to_string())?;
     probe.show().map_err(|error| error.to_string())?;
     window.set_size(PhysicalSize::new(
-        framebuffer
-            .width()
+        width
             .try_into()
             .map_err(|error: std::num::TryFromIntError| error.to_string())?,
-        framebuffer
-            .height()
+        height
             .try_into()
             .map_err(|error: std::num::TryFromIntError| error.to_string())?,
     ));
@@ -411,8 +422,6 @@ fn main() -> Result<(), String> {
         eprintln!("magik2-probe motion-start");
     });
 
-    let width = framebuffer.width();
-    let height = framebuffer.height();
     let mut cached = vec![Rgb565Pixel(0); width * height];
     let mut previews = PreviewProducer::new();
     loop {
@@ -421,20 +430,26 @@ fn main() -> Result<(), String> {
         let rendered = window.draw_if_needed(|renderer| {
             let render_start = Instant::now();
             renderer.render(&mut cached, width);
-            let vsync = framebuffer.wait_vsync();
-            framebuffer
-                .present_rows_565(&cached, 0, height)
-                .expect("present cached RGB565 frame");
+            for (destination, source) in framebuffer.pixels_mut().iter_mut().zip(&cached) {
+                *destination = Rgb565(source.0);
+            }
+            let posted = framebuffer.post().expect("post physical latch frame");
+            let presented = framebuffer
+                .settle_pending()
+                .expect("confirm physical latch frame")
+                .expect("physical latch frame must settle");
             let mut metrics = metrics_for_frame.borrow_mut();
             metrics.presentations += 1;
             metrics.last_render_us = render_start.elapsed().as_micros() as u64;
             metrics.render_us_total += metrics.last_render_us;
-            match vsync {
-                VsyncWaitStatus::Hit { .. } => metrics.vsync_hits += 1,
-                VsyncWaitStatus::Timeout { .. } | VsyncWaitStatus::Error { .. } => {
-                    metrics.vsync_misses += 1
-                }
-            }
+            metrics.vsync_hits += 1;
+            metrics.physical_latch_posts += 1;
+            metrics.physical_latch_flips += 1;
+            metrics.physical_drops += metrics
+                .last_physical_drop_count
+                .map_or(0, |previous| u64::from(presented.drop_count.wrapping_sub(previous)));
+            metrics.last_physical_drop_count = Some(presented.drop_count);
+            debug_assert_eq!(posted.slot_index, presented.slot_index);
         });
         let metrics = metrics.borrow();
         if rendered && metrics.presentations == 1 {
@@ -489,7 +504,7 @@ fn write_metrics(
     std::fs::write(
         &temporary,
         format!(
-            "{{\"width\":{},\"height\":{},\"elapsed_ms\":{},\"presentations\":{},\"render_us_total\":{},\"last_render_us\":{},\"vsync_hits\":{},\"vsync_misses\":{},\"motion_started_ms\":{},\"motion_completed_ms\":{}}}\n",
+            "{{\"width\":{},\"height\":{},\"elapsed_ms\":{},\"presentations\":{},\"render_us_total\":{},\"last_render_us\":{},\"vsync_hits\":{},\"vsync_misses\":{},\"physical_latch_posts\":{},\"physical_latch_flips\":{},\"physical_drops\":{},\"motion_started_ms\":{},\"motion_completed_ms\":{}}}\n",
             width,
             height,
             elapsed.as_millis(),
@@ -498,6 +513,9 @@ fn write_metrics(
             metrics.last_render_us,
             metrics.vsync_hits,
             metrics.vsync_misses,
+            metrics.physical_latch_posts,
+            metrics.physical_latch_flips,
+            metrics.physical_drops,
             option_json(metrics.motion_started_ms),
             option_json(metrics.motion_completed_ms),
         ),

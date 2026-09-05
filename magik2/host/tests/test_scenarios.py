@@ -9,6 +9,9 @@ def test_measurement_requires_complete_device_timing_fields() -> None:
         "last_render_us": 4,
         "vsync_hits": 5,
         "vsync_misses": 0,
+        "physical_latch_posts": 2,
+        "physical_latch_flips": 2,
+        "physical_drops": 0,
     }
     assert _measurement(complete) == complete
 
