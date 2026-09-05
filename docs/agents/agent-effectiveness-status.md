@@ -1,18 +1,15 @@
 # Agent effectiveness cleanup status
 
-The focused integration is `nigel/agent-effectiveness-tooling`, created from
-`367823f48fe55e75b952384d1b43357fe38a8533` in its own worktree. It selects only
-agent guidance, concise instructions, retired narratives, bounded LSP adoption,
-local validation planning, context metrics, the direct-guidance CLI test, and
-the revised scope plan. Parent commits remain local for review.
+The focused integration is `nigel/agent-effectiveness-tooling`, rebased onto
+`9b07180a7b34075a4cfab2c8ed8c4ed935914f77` (`origin/main`) for PR review. It selects only agent guidance, concise
+instructions, retired narratives, bounded LSP adoption, local validation planning,
+context metrics, the direct-guidance CLI test, and the revised scope plan.
 
-The earlier `nigel/agent-effectiveness` branch is preserved separately with its
-completed host characterization and extractions. It is not merged, rebased, or
-represented as finished work on this focused branch. The original checkout has
-advanced independently and remains outside this integration. This focused branch
-is clean. The preserved old worktree still has its clean private LSP checkout at
-the newer committed revision; an optional detached switch back to its recorded
-gitlink was rejected by automatic approval review, so it was not retried.
+The discarded `nigel/agent-effectiveness` parent branch and its worktree were
+removed at the user's request. Their host characterization and extractions are
+excluded from this integration. The wanted private LSP revision remains pushed
+and checked out independently in the focused worktree. Other worktrees and the
+original checkout's unrelated changes were left untouched.
 
 The private LSP repository is pinned to `8b2991e`, which bounds oversized
 read-only format and routing failures as well as normal results. A fresh MCP
