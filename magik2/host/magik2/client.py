@@ -58,6 +58,31 @@ class NativeAgent:
             connection.close()
             raise
 
+    def open_watch(self) -> socket.socket:
+        request = Envelope(uuid.uuid4().hex, "watch", self.token, {})
+        connection = socket.create_connection((self.host, self.port), timeout=20)
+        try:
+            send_message(connection, request)
+            response, body = receive_message(connection)
+            if response.request_id != request.request_id:
+                raise ProtocolError("agent reply request identifier did not match")
+            if body or response.operation == "error":
+                raise AgentError(str(response.fields.get("code", "watch failed")))
+            if response.operation != "watch-ready":
+                raise AgentError("agent did not establish observation stream")
+            connection.settimeout(None)
+            return connection
+        except Exception:
+            connection.close()
+            raise
+
+    @staticmethod
+    def read_watch_event(connection: socket.socket) -> tuple[Envelope, bytes]:
+        response, body = receive_message(connection)
+        if response.operation not in {"watch-metrics", "watch-log", "watch-frame"}:
+            raise AgentError(f"unexpected watch event: {response.operation}")
+        return response, body
+
     def _successful(self, operation: str, fields: Mapping[str, object] | None = None) -> Mapping[str, object]:
         response, _ = self._request(operation, fields)
         if response.operation == "error":

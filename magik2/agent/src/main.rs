@@ -20,6 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         PathBuf::from(root),
         PathBuf::from(state_root),
     ));
+    agent.start_observation_receiver()?;
     let listener = TcpListener::bind(format!("0.0.0.0:{port}"))?;
     for connection in listener.incoming() {
         match connection {

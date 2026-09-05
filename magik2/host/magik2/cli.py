@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import os
 import time
+import webbrowser
 from pathlib import Path
 
 from .bootstrap import BootstrapError, SshBootstrap
@@ -15,10 +16,12 @@ from .results import append_event, create_run
 from .scenarios import motion, smoke
 from .testing import fresh_session
 from .token_store import TokenStore
+from .viewer import serve
 
 
 REQUIRED_AGENT_CAPABILITIES = {"status", "upload-v1", "lifecycle-v1"}
 CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {"metrics-v1", "test-bridge-v1"}
+WATCH_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {"metrics-v1", "watch-v1"}
 
 
 def main() -> int:
@@ -45,6 +48,8 @@ def main() -> int:
         return stop(run)
     if arguments.command == "check":
         return check(arguments, run)
+    if arguments.command == "watch":
+        return watch(run)
     if arguments.command != "status":
         print(f"magik2 {arguments.command}: not implemented yet (result: {run})", file=os.sys.stderr)
         return 2
@@ -119,6 +124,26 @@ def stop(run: Path) -> int:
     append_event(run, {"phase": "stop", "outcome": "passed"})
     print(f"magik2 stop: launcher resume requested (result: {run})")
     return 0
+
+
+def watch(run: Path) -> int:
+    try:
+        agent, _ = connect_agent(run, WATCH_AGENT_CAPABILITIES)
+        server, url = serve(agent)
+        append_event(run, {"phase": "watch", "outcome": "started", "url": url})
+        webbrowser.open(url)
+        print(f"magik2 watch: {url} (Ctrl-C to stop; result: {run})")
+        server.serve_forever()
+    except KeyboardInterrupt:
+        append_event(run, {"phase": "watch", "outcome": "stopped"})
+        return 0
+    except (BootstrapError, AgentError, OSError, RuntimeError) as error:
+        append_event(run, {"phase": "watch", "outcome": "failed", "error": str(error)})
+        print(f"magik2 watch: {error} (result: {run})", file=os.sys.stderr)
+        return 2
+    finally:
+        if "server" in locals():
+            server.server_close()
 
 
 def ensure_probe(agent: NativeAgent, status: AgentStatus, run: Path) -> bool:

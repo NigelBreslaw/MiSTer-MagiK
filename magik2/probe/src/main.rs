@@ -3,6 +3,9 @@
 
 //! Deliberately small consumer application for Tooling 2.0.
 
+use mister_magik_framebuffer_stream::{
+    FrameGeometry, FrameHeader, FrameKind, FrameRect, write_frame as write_preview_frame,
+};
 use mister_magik_mister_runtime::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_mister_runtime::framebuffer::vsync::VsyncWaitStatus;
 use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel, SoftwareRenderer};
@@ -10,6 +13,8 @@ use slint::platform::{EventLoopProxy, Platform, WindowAdapter};
 use slint::{EventLoopError, PhysicalSize, Window};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::io::Write;
+use std::os::unix::net::UnixStream;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -146,6 +151,84 @@ struct PresentationMetrics {
     motion_completed_ms: Option<u64>,
 }
 
+struct PreviewProducer {
+    state_root: std::path::PathBuf,
+    last_preview: Instant,
+    sequence: u64,
+}
+
+impl PreviewProducer {
+    fn new() -> Self {
+        Self {
+            state_root: std::env::var("MISTER_MAGIK2_STATE_ROOT")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| "/tmp/mister-magik2".into()),
+            last_preview: Instant::now() - Duration::from_secs(1),
+            sequence: 0,
+        }
+    }
+
+    fn publish_if_watched(
+        &mut self,
+        pixels: &[Rgb565Pixel],
+        width: usize,
+        height: usize,
+        elapsed: Duration,
+    ) {
+        if self.last_preview.elapsed() < Duration::from_millis(200) || !self.viewer_is_active() {
+            return;
+        }
+        let Ok(width) = u32::try_from(width) else {
+            return;
+        };
+        let Ok(height) = u32::try_from(height) else {
+            return;
+        };
+        let raw_bytes = pixels.len().saturating_mul(2);
+        let Ok(raw_bytes) = u32::try_from(raw_bytes) else {
+            return;
+        };
+        let mut bytes = Vec::with_capacity(raw_bytes as usize);
+        for pixel in pixels {
+            bytes.extend_from_slice(&pixel.0.to_ne_bytes());
+        }
+        self.sequence += 1;
+        let geometry = FrameGeometry {
+            width,
+            height,
+            stride_pixels: width,
+        };
+        let header = FrameHeader {
+            kind: FrameKind::Keyframe,
+            flags: 0,
+            sequence: self.sequence,
+            timestamp_us: elapsed.as_micros() as u64,
+            geometry,
+            rect: FrameRect::full(geometry),
+            raw_bytes,
+            payload_bytes: raw_bytes,
+        };
+        if let Ok(mut socket) = UnixStream::connect(self.state_root.join("probe-frames.sock"))
+            && write_preview_frame(&mut socket, header, &bytes).is_ok()
+            && socket.flush().is_ok()
+        {
+            self.last_preview = Instant::now();
+        }
+    }
+
+    fn viewer_is_active(&self) -> bool {
+        let Ok(deadline) = std::fs::read_to_string(self.state_root.join("viewer-lease")) else {
+            return false;
+        };
+        let Ok(deadline) = deadline.trim().parse::<u128>() else {
+            return false;
+        };
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .is_ok_and(|now| now.as_millis() < deadline)
+    }
+}
+
 impl Platform for ProbePlatform {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
         Ok(self.window.clone())
@@ -247,6 +330,7 @@ fn main() -> Result<(), String> {
     let width = framebuffer.width();
     let height = framebuffer.height();
     let mut cached = vec![Rgb565Pixel(0); width * height];
+    let mut previews = PreviewProducer::new();
     loop {
         slint::platform::update_timers_and_animations();
         let metrics_for_frame = metrics.clone();
@@ -257,6 +341,7 @@ fn main() -> Result<(), String> {
             framebuffer
                 .present_rows_565(&cached, 0, height)
                 .expect("present cached RGB565 frame");
+            previews.publish_if_watched(&cached, width, height, metrics_start.elapsed());
             let mut metrics = metrics_for_frame.borrow_mut();
             metrics.presentations += 1;
             metrics.last_render_us = render_start.elapsed().as_micros() as u64;
@@ -269,7 +354,7 @@ fn main() -> Result<(), String> {
             }
         });
         let metrics = metrics.borrow();
-        if metrics.presentations == 1 {
+        if rendered && metrics.presentations == 1 {
             write_readiness(width, height, metrics.presentations)?;
             eprintln!(
                 "magik2-probe ready width={width} height={height} presentations={}",

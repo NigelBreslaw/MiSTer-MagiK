@@ -46,3 +46,10 @@ def test_test_tunnel_keeps_the_connection_open_after_native_handshake() -> None:
     tunnel = NativeAgent("127.0.0.1", "token", port).open_test_tunnel()
     tunnel.close()
     thread.join()
+
+
+def test_watch_keeps_the_connection_open_after_native_handshake() -> None:
+    port, thread = one_reply({"ready": True}, "watch-ready")
+    watch = NativeAgent("127.0.0.1", "token", port).open_watch()
+    watch.close()
+    thread.join()
