@@ -822,9 +822,16 @@ mod tests {
             "apps/mister/src/ui_runner/launcher_loop.rs",
         ])
         .unwrap();
-        let Some(Command::Guidance { path }) = cli.command else {
+        let Some(Command::Guidance { path, json }) = cli.command else {
             panic!("expected guidance command");
         };
+        assert!(!json);
+        assert!(matches!(
+            Cli::try_parse_from(["agent-cli", "guidance", "--json", "a"])
+                .unwrap()
+                .command,
+            Some(Command::Guidance { json: true, .. })
+        ));
         assert_eq!(
             path,
             PathBuf::from("apps/mister/src/ui_runner/launcher_loop.rs")
