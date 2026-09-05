@@ -20,3 +20,13 @@ def test_consumers_remain_independent_and_label_cannot_hide_mixed_core_work():
         )
         is None
     )
+
+
+def test_only_initial_introduction_allows_the_exact_runtime_integration():
+    paths = ["magik2/AGENTS.md", *scope.INTRODUCTION_PATHS]
+    assert scope.scope_error(paths, True)
+    assert scope.scope_error(paths, True, introduction=True) is None
+    assert scope.scope_error(paths, False, introduction=True)
+    assert scope.scope_error(
+        paths + ["apps/mister/src/main.rs"], True, introduction=True
+    )

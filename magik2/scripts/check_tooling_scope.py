@@ -16,9 +16,20 @@ CORE = (
     ".github/CODEOWNERS",
 )
 COMPANIONS = ("AGENTS.md", "scripts/AGENTS.md")
+# Only the PR first adding this project may include its existing-runtime export
+# and repository classification changes. Later tooling PRs stay isolated.
+INTRODUCTION_PATHS = {
+    "mister/platform/runtime/Cargo.toml",
+    "mister/platform/runtime/src/framebuffer/mapped.rs",
+    "mister/platform/runtime/src/framebuffer/mod.rs",
+    "scripts/checks/repository_policy.py",
+    "scripts/tests/test-pre-commit.py",
+}
 
 
-def scope_error(paths: list[str], tooling: bool) -> str | None:
+def scope_error(
+    paths: list[str], tooling: bool, *, introduction: bool = False
+) -> str | None:
     core = [
         path
         for path in paths
@@ -29,7 +40,11 @@ def scope_error(paths: list[str], tooling: bool) -> str | None:
     if not tooling:
         return "MagiK 2 core changes require the magik2-tooling PR label and tooling review."
     unrelated = [
-        path for path in paths if not path.startswith(CORE) and path not in COMPANIONS
+        path
+        for path in paths
+        if not path.startswith(CORE)
+        and path not in COMPANIONS
+        and not (introduction and path in INTRODUCTION_PATHS)
     ]
     if unrelated:
         return "Keep the tooling PR focused; unrelated changes: " + ", ".join(unrelated)
@@ -49,8 +64,22 @@ def main() -> int:
     if not base:
         print("BASE_SHA is required for the tooling scope check", file=sys.stderr)
         return 2
+    added = subprocess.check_output(
+        [
+            "git",
+            "diff",
+            "--name-only",
+            "--diff-filter=A",
+            f"{base}...{head}",
+            "--",
+            "magik2/AGENTS.md",
+        ],
+        text=True,
+    ).splitlines()
     error = scope_error(
-        changed_paths(base, head), os.environ.get("MAGIK2_TOOLING_PR") == "1"
+        changed_paths(base, head),
+        os.environ.get("MAGIK2_TOOLING_PR") == "1",
+        introduction="magik2/AGENTS.md" in added,
     )
     if error:
         print(error, file=sys.stderr)
