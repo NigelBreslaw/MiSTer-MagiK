@@ -79,3 +79,101 @@ def run_delivery_matrix(run: Path) -> int:
         index["restoration"] = attempt("restoration", 0)
         save()
     return int(index["restoration"]["exit_code"] != 0 or any(case["summary"]["failures"] for case in index["cases"].values()))
+
+
+def run_contract_checks(run: Path) -> int:
+    """Exercise native recovery without altering Main, platform files or rebooting."""
+    from .cli import connect_agent, ensure_probe, CHECK_AGENT_CAPABILITIES
+    from .client import AgentError
+    from .frames import decode_preview
+    from .results import append_event, retain_diagnostics
+    agent, status = connect_agent(run, CHECK_AGENT_CAPABILITIES | {"watch-v1", "diagnostics"})
+    ensure_probe(agent, status, run)
+    expected = agent.expected_sha256
+    def record(case, **evidence):
+        append_event(run, {"phase": "contract", "case": case, "outcome": "passed", **evidence})
+    try:
+        before = dict(agent.status().fields)
+        # Simulate a fresh checkout's absent credential cache using the fixed
+        # token discovery adapter, then return to the original shared cache.
+        import tempfile
+        repository = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory(prefix="magik2-token-check-") as credentials:
+            folder = run / "fresh-credentials"
+            folder.mkdir()
+            env = {**os.environ, "MISTER_MAGIK2_STATE": credentials, "MISTER_MAGIK2_RESULTS": str(folder.resolve())}
+            with (folder / "command.log").open("w") as output:
+                result = subprocess.run([str(repository / "scripts/magik2"), "status"], cwd=repository,
+                    env=env, stdout=output, stderr=subprocess.STDOUT, timeout=30)
+            assert result.returncode == 0, "fresh credential discovery failed"
+        retained = agent.status().fields
+        assert retained["agent_pid"] == before["agent_pid"] and retained["pid"] == before["pid"]
+        record("fresh credential cache retains compatible agent and probe", agent_pid=retained["agent_pid"], probe_pid=retained["pid"])
+        reply, _ = agent._request("upload", {"artifact":"probe", "sha256":"0"*64}, b"invalid probe")
+        assert reply.operation == "error", "bad hash was accepted"
+        assert agent.status().fields["running_sha256"] == expected
+        record("bad upload preserves running artifact", error=dict(reply.fields))
+        try:
+            agent.start(expected_sha256="0"*64)
+        except AgentError as error:
+            assert "artifact-superseded" in str(error)
+        else:
+            raise AssertionError("superseded artifact started")
+        after = agent.status().fields
+        assert after["pid"] == before["pid"] and after["running_sha256"] == before["running_sha256"]
+        record("superseded start preserves process")
+        for cycle in range(5):
+            with agent.open_watch() as connection:
+                connection.settimeout(5)
+                kinds = set()
+                deadline = time.monotonic() + 8
+                while time.monotonic() < deadline and len(kinds) < 3:
+                    event, body = agent.read_watch_event(connection)
+                    kinds.add(event.operation)
+                    if event.operation == "watch-frame":
+                        decode_preview(body)
+                assert kinds == {"watch-frame", "watch-log", "watch-metrics"}, kinds
+            record("watch reconnect", cycle=cycle, events=sorted(kinds))
+        with agent.open_watch() as connection:
+            time.sleep(2)
+            started = time.monotonic()
+            assert agent.status().fields["ready"]
+            elapsed = round((time.monotonic()-started)*1000)
+            assert elapsed < 2000, elapsed
+            record("stalled viewer leaves control responsive", elapsed_ms=elapsed)
+        # Exercise the real native preview producer during the same pytest workload.
+        from .viewer import serve
+        server, _url = serve(agent)
+        try:
+            repository = Path(__file__).resolve().parents[3]
+            folder = run / "viewer-motion"
+            folder.mkdir()
+            env = {**os.environ, "MISTER_MAGIK2_RESULTS": str(folder.resolve())}
+            with (folder / "command.log").open("w") as output:
+                result = subprocess.run([str(repository / "scripts/magik2"), "check", "motion"],
+                    cwd=repository, env=env, stdout=output, stderr=subprocess.STDOUT, timeout=150)
+            assert result.returncode == 0, "motion failed with active native viewer; see viewer-motion"
+            record("five motion repetitions with active viewer", bundles=[str(p.parent.relative_to(run)) for p in folder.glob("*/run.json")])
+        finally:
+            server.server_close()
+        tunnel = agent.open_test_tunnel()
+        test_pid = agent.status().fields.get("pid")
+        tunnel.close()
+        deadline = time.monotonic() + 35
+        while time.monotonic() < deadline:
+            restored = agent.status().fields
+            if restored.get("ready") and restored.get("pid") != test_pid:
+                break
+            time.sleep(.2)
+        else:
+            raise AssertionError("disconnected session did not restore persistent probe")
+        assert restored["running_sha256"] == expected
+        record("partial attachment restores persistent probe", test_pid=test_pid, restored=dict(restored))
+        stopped = agent.stop()
+        device = agent.diagnostics()
+        assert stopped["launcher_resumed"] and not agent.status().fields["running"]
+        record("stop observes launcher recovery", diagnostics=device)
+    finally:
+        agent.start(expected_sha256=expected)
+        retain_diagnostics(run, agent)
+    return 0

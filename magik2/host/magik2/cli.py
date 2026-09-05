@@ -35,7 +35,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="scripts/magik2")
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("deploy")
-    subcommands.add_parser("acceptance", help="run 20 delivery attempts per warm case and restore sources")
+    acceptance = subcommands.add_parser("acceptance", help="run bounded hardware acceptance")
+    acceptance.add_argument("--contracts", action="store_true", help="exercise recovery and streaming instead of timing")
     build_command = subcommands.add_parser("build")
     build_command.add_argument("target", choices=("agent", "probe"))
     check_command = subcommands.add_parser("check")
@@ -73,8 +74,8 @@ def dispatch(arguments, run) -> int:
         print("MISTER_IP is required; no legacy transport was attempted.", file=os.sys.stderr)
         return 2
     if arguments.command == "acceptance":
-        from .acceptance import run_delivery_matrix
-        return run_delivery_matrix(run)
+        from .acceptance import run_contract_checks, run_delivery_matrix
+        return run_contract_checks(run) if arguments.contracts else run_delivery_matrix(run)
     if arguments.command == "deploy":
         return deploy(arguments, run)
     if arguments.command == "stop":
