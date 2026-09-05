@@ -196,6 +196,7 @@ impl Agent {
             "test-bridge-v1",
             "metrics-v1",
             "watch-v1",
+            "artifacts-v1",
         ]
     }
 
