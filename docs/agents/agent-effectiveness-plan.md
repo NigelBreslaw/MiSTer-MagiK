@@ -29,34 +29,16 @@ Six thin facades and completion of the original extraction sequence are explicit
 removed from this cleanup's acceptance criteria. Existing source complexity is
 not reported as eliminated when the work is deferred.
 
-## Ordered remaining work
+## Focused tidy-up status
 
-1. **Preserve the existing branches and user changes.** Keep
-   `nigel/agent-effectiveness` with its completed source extractions. Leave the
-   original checkout and its unrelated private work untouched. Do not merge or
-   rewrite that branch merely to tidy the history.
-2. **Finish the bounded LSP correction.** Request-format and path-routing failures
-   must obey the serialized structured-output budget, including oversized input.
-   Preserve explicit failure information, full response compatibility, and
-   complete rename/mutation responses. Test actual dispatch, not only a payload
-   helper. Commit and push the independent LSP repository before updating a
-   parent gitlink.
-3. **Prepare a focused integration branch.** Create
-   `nigel/agent-effectiveness-tooling` in a separate worktree from implementation
-   baseline `367823f48fe55e75b952384d1b43357fe38a8533`. Select only the useful
-   documentation and agent-tooling commits, plus this revised plan and the LSP
-   correction. Exclude host characterization and extraction commits. Keep parent
-   commits local for review.
-4. **Reconcile documentation and status.** Mark superseded/deferred work clearly
-   in the existing backlog and measurement documents. Do not create another
-   startup instruction hierarchy. Do not apply future `magik2` development policy
-   globally: active 1.0 workflows keep their applicable protections; future scoped
-   instructions must distinguish the new development loop from legacy delivery.
-5. **Verify and report the reduced scope.** Run selected Python tooling tests and
-   focused Rust compatibility checks through `scripts/cargo`. Report instruction
-   words/bytes, bounded LSP output, and available aggregate session evidence with
-   their limits. Record how to start a fresh MCP session using the branch-local
-   configuration. Do not claim hardware acceptance or productivity improvement.
+The bounded LSP correction, focused integration branch, documentation
+reconciliation, and selected verification are complete. See
+[`agent-effectiveness-status.md`](agent-effectiveness-status.md) for the branch
+selection, preserved legacy branch, LSP activation boundary, and deferred work.
+
+Future work must be a separate bounded task for a retained system or a project
+with its own scoped instructions. Do not infer a broader migration, delivery
+policy change, or hardware qualification result from this completed tidy-up.
 
 The intended existing parent commit selection, before any new fixes, is:
 `5339b1a6f`, `b1bc7737d`, `4776fb7cc`, `78514d9b7`, `91b43f645`,

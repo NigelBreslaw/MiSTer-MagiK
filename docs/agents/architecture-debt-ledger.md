@@ -26,25 +26,28 @@ registered aliases/external inputs remain explicit, and negative tests reject
 downstream reads. Keep the registry and generated reference; do not introduce a
 second vocabulary. This is separate from behavior-preserving module extraction.
 
-## Decomposition
+## Decomposition disposition
 
-| Owner | Remaining boundary |
-|---|---|
-| Host workflows | Device access/recovery, delivery, display/qualification, profiling, input/navigation, catalog/launch-return workflows. |
-| Launcher state | Navigation/search/filter state and catalog presentation separated from persistence and platform effects. |
-| Launcher runtime | Explicit frame phases, typed session state, diagnostic drivers, and ordered presentation/accounting. |
-| Device agent | Portable request validation, authenticated transports, Linux services, and thin bootstrap. |
-| Desktop app | Analytics/stream presentation, live/compiled bindings, and diagnostic modes. |
-| Catalog persistence | SQL readers/projections separated from writers and transactional publication. |
+The former all-six-boundary extraction sequence is not active work for this
+cleanup. Preserve the completed host characterization and extraction commits on
+`nigel/agent-effectiveness`, but do not treat them as integrated or complete on
+the focused tooling branch.
 
-Use the existing architecture report to measure whole owner families; a shorter
-facade alone does not prove completion. Existing shared typed UI globals,
-presenters, platform capabilities, and the library-owned application module
-graph are established boundaries, not migration targets. Preserve ready-v2
-posted-frame semantics and feature-local diagnostic allowances.
+| Owner | Revised disposition |
+| --- | --- |
+| Host workflows and device agent | Superseded by the replacement roadmap; stop the old decomposition sequence. |
+| Launcher state and runtime | Defer until a concrete retained-application maintenance need justifies it. |
+| Desktop app | Defer until the desktop's role alongside the new viewer is decided. |
+| Catalog persistence | Defer until a concrete retained-application maintenance need justifies it. |
 
-Serialize changes to shared launcher composition, presenter, runtime-config,
-installed-layout, and assurance interfaces. Every extraction must preserve its
-observable sequence tests and update any affected source-path inventories in
-the same commit. Do not claim that historical static-check descriptions prove
-current enforcement; verify the selected check implementation.
+The existing architecture report remains a whole-family measurement tool for
+future work; a shorter facade alone does not prove a reduction in complexity.
+Existing shared typed UI globals, presenters, platform capabilities, and the
+library-owned application module graph remain boundaries to preserve. Keep
+ready-v2 posted-frame semantics and feature-local diagnostic allowances.
+
+If a future bounded extraction is approved, preserve its observable sequence
+tests and update affected source-path inventories in the same change. Do not
+claim that historical static-check descriptions prove current enforcement;
+verify the selected check implementation. This disposition does not waive any
+qualification debt, hardware-interface safeguard, or active delivery contract.
