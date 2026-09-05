@@ -23,6 +23,7 @@ from .viewer import serve
 REQUIRED_AGENT_CAPABILITIES = {"status", "upload-v1", "lifecycle-v1"}
 CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {"metrics-v1", "test-bridge-v1"}
 WATCH_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {"metrics-v1", "watch-v1"}
+PROFILE_AGENT_CAPABILITIES = CHECK_AGENT_CAPABILITIES | {"artifacts-v1"}
 
 
 def main() -> int:
@@ -90,7 +91,7 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
         return 2
     profile_id = "profile" if arguments.profile else None
     try:
-        agent, status = connect_agent(run, CHECK_AGENT_CAPABILITIES)
+        agent, status = connect_agent(run, PROFILE_AGENT_CAPABILITIES if profile_id is not None else CHECK_AGENT_CAPABILITIES)
         ensure_probe(agent, status, run)
         with fresh_session(agent, profile_id=profile_id) as application:
             if "smoke" in scenarios:
