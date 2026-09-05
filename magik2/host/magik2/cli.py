@@ -20,16 +20,11 @@ from .token_store import TokenStore
 from .viewer import serve
 
 
-REQUIRED_AGENT_CAPABILITIES = {
-    "status",
-    "upload-v1",
-    "lifecycle-v1",
-    "request-replay-v1",
-    "test-deadline-v2",
-    "legacy-isolation-v1",
-}
-CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {"metrics-v1", "test-bridge-v1"}
-WATCH_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {"metrics-v1", "watch-v1"}
+STATUS_CAPABILITIES = {"status"}
+STOP_CAPABILITIES = {"status", "lifecycle-v1"}
+REQUIRED_AGENT_CAPABILITIES = {"status", "upload-v1", "start-artifact", "request-replay-v1"}
+CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {"metrics-v1", "test-bridge-v1", "test-deadline-v2"}
+WATCH_AGENT_CAPABILITIES = {"status", "metrics-v1", "watch-v1"}
 PROFILE_AGENT_CAPABILITIES = CHECK_AGENT_CAPABILITIES | {"artifacts-v1"}
 
 
@@ -67,7 +62,7 @@ def main() -> int:
         print(f"magik2 {arguments.command}: not implemented yet (result: {run})", file=os.sys.stderr)
         return 2
     try:
-        agent, status = connect_agent(run)
+        agent, status = connect_agent(run, STATUS_CAPABILITIES)
     except (BootstrapError, AgentError, OSError, RuntimeError) as error:
         append_event(run, {"phase": "status", "outcome": "failed", "error": type(error).__name__})
         print(f"magik2 status: native agent unavailable ({type(error).__name__}) (result: {run})", file=os.sys.stderr)
@@ -157,7 +152,7 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
 
 def stop(run: Path) -> int:
     try:
-        agent, _ = connect_agent(run)
+        agent, _ = connect_agent(run, STOP_CAPABILITIES)
         agent.stop()
     except (BootstrapError, AgentError, OSError) as error:
         append_event(run, {"phase": "stop", "outcome": "failed", "error": type(error).__name__})
@@ -205,7 +200,7 @@ def ensure_probe(agent: NativeAgent, status: AgentStatus, run: Path) -> bool:
     artifact = built.artifact
     payload = artifact.read_bytes()
     artifact_hash = hashlib.sha256(payload).hexdigest()
-    healthy = status.fields.get("running") is True and status.fields.get("artifact_sha256") == artifact_hash
+    healthy = status.fields.get("running") is True and status.fields.get("running_sha256") == artifact_hash and status.fields.get("ready") is True
     if healthy:
         append_event(run, {"phase": "deploy", "outcome": "no-op", "bytes": 0})
         return True
@@ -225,7 +220,7 @@ def ensure_probe(agent: NativeAgent, status: AgentStatus, run: Path) -> bool:
         )
     start_started = time.monotonic()
     append_event(run, {"phase": "start", "restart": status.fields.get("running") is True})
-    agent.start(restart=status.fields.get("running") is True)
+    agent.start(expected_sha256=artifact_hash, restart=status.fields.get("running") is True)
     append_event(run, {"phase": "start-complete", "elapsed_ms": int((time.monotonic() - start_started) * 1_000)})
     return False
 
