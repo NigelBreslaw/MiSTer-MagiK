@@ -32,14 +32,14 @@ class NativeAgent:
             raise AgentError(str(response.fields.get("code", "upload failed")))
         return response.fields
 
-    def start(self) -> Mapping[str, object]:
-        return self._successful("start")
+    def start(self, *, restart: bool = False) -> Mapping[str, object]:
+        return self._successful("start", {"restart": restart})
 
     def stop(self) -> Mapping[str, object]:
         return self._successful("stop")
 
-    def _successful(self, operation: str) -> Mapping[str, object]:
-        response, _ = self._request(operation)
+    def _successful(self, operation: str, fields: Mapping[str, object] | None = None) -> Mapping[str, object]:
+        response, _ = self._request(operation, fields)
         if response.operation == "error":
             raise AgentError(str(response.fields.get("code", f"{operation} failed")))
         return response.fields

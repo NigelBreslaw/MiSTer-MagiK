@@ -52,7 +52,7 @@ class SshBootstrap:
                 f"mkdir -p {self.install_root} {self.state_root} && "
                 f"mv {self.install_root}/mister-magik2-agent.next {self.install_root}/mister-magik2-agent && "
                 f"killall mister-magik2-agent 2>/dev/null || true; sleep 1; "
-                f"MISTER_MAGIK2_TOKEN={shlex.quote(token)} MISTER_MAGIK2_INSTALL_ROOT={self.install_root} "
+                f"MISTER_MAGIK2_TOKEN={shlex.quote(token)} MISTER_MAGIK2_INSTALL_ROOT={self.install_root} MISTER_MAGIK2_STATE_ROOT={self.state_root} "
                 f"nohup {self.install_root}/mister-magik2-agent >{self.state_root}/agent.log 2>&1 &"
             )
             _, stdout, stderr = client.exec_command(command, timeout=15)
@@ -81,6 +81,20 @@ class SshBootstrap:
             raise
         except Exception as error:
             raise BootstrapError(f"native-agent token recovery failed: {type(error).__name__}") from error
+        finally:
+            client.close()
+
+    def recent_agent_log(self) -> str:
+        """Read only the fixed 2.0 service log for failed-start diagnostics."""
+        try:
+            import paramiko
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(self.host, username=self.username, password=self.password, timeout=10, banner_timeout=10, auth_timeout=10)
+            _, stdout, _ = client.exec_command(f"tail -n 80 {self.state_root}/agent.log 2>/dev/null || true", timeout=10)
+            return stdout.read().decode(errors="replace")
+        except Exception as error:
+            raise BootstrapError(f"agent log retrieval failed: {type(error).__name__}") from error
         finally:
             client.close()
 
