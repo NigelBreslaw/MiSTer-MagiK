@@ -5,6 +5,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Framebuffer scene lab
 
+The legacy agent preview, capture, device-session and lab measurement commands
+were removed in milestone 4. This document retains the underlying renderer
+and asset contracts; it is not an instruction to recreate those workflows.
+
+
 This is the focused, Slint-free development app for portable production RGB565
 scenes: the MagiK text and arcade-cabinet particle effects, launcher
 navigation-transition rasterization, the procedural card flip, and the
@@ -14,33 +19,7 @@ recipe-family abstraction.
 The separate 36-demo `apps/framebuffer-lab` remains unchanged and is not a
 dependency of this app.
 
-Use the supported host workflow for a macOS preview:
-
-```text
-scripts/agent scene-lab preview --scene magik --recipe RECIPE
-scripts/agent scene-lab preview --scene cabinet --recipe RECIPE
-scripts/agent scene-lab preview --scene navigation-transition --fixture home-arcade
-scripts/agent scene-lab preview --scene card-flip
-scripts/agent scene-lab preview --scene screenshot-screensaver --archive FILE [--seed SEED]
-```
-
-For attended MiSTer sessions, use one of:
-
-```text
-scripts/agent device scene-lab --scene magik --recipe RECIPE --attended
-scripts/agent device scene-lab --scene navigation-transition --fixture home-arcade --attended
-scripts/agent device scene-lab --scene card-flip --attended
-scripts/agent device scene-lab --scene screenshot-screensaver [--seed SEED] --attended
-scripts/agent device scene-lab --scene screenshot-screensaver --pmu --attended
-scripts/agent device scene-lab --scene SCENE --seconds N --attended
-scripts/agent device scene-lab --scene SCENE --seconds N --profile --attended
-scripts/agent device scene-lab --scene SCENE --seconds N --assess --attended
-scripts/agent device startup-particles RECIPE --runtime dev-launcher --attended
-```
-
-The older `startup-particles preview RECIPE` and attended `--runtime lab`
-commands remain typed compatibility aliases. The old particle-only lab app and
-binary names are compatibility-only; new workflows use `framebuffer-scene-lab`.
+No compatibility command aliases remain. The underlying lab sources are retained.
 The focused lab accepts the MagiK and cabinet schemas or one of the generated
 `home-arcade`, `home-consoles`, and `consoles-system` navigation fixtures. The
 Dev launcher accepts
@@ -50,9 +29,9 @@ watches an external recipe.
 
 The screenshot scene accepts `--archive` and optional decimal or `0x` seed on
 macOS. Interactive preview streams decoded/scaled cards; `--check` and fixed-time
-PPM capture fully prepare the population for deterministic pixels. The attended
-MiSTer command resolves the installed Dev Arcade screenshot pack before
-suspending Main and never uploads that pack. The shared crate owns RGB565
+PPM capture fully prepare the population for deterministic pixels. The removed attended
+MiSTer command previously resolved the installed Dev Arcade screenshot pack before
+suspending Main and did not upload that pack. The shared crate owns RGB565
 rasterization and scheduling; the production launcher still owns asset-path
 selection, cancellation, thread policy, render-ahead, telemetry presentation,
 and latch lifecycle.
@@ -66,11 +45,8 @@ lab never infers HDMI geometry from core-video registers after Main has been
 suspended. CRT routes retain the shared production vertical transform because
 their direct-video porch offsets are route-specific.
 
-Run a live macOS preview with a validated recipe:
-
-```text
-mister-magik-framebuffer-scene-lab --scene magik --recipe path/to/magik.json
-```
+The remaining text describes the retained native binary and renderer contracts;
+there is no supported legacy host preview command.
 
 Saving the recipe reloads the renderer. The last valid renderer stays visible
 after rejected or partial saves, and `status.json` is written beside the recipe.
@@ -103,12 +79,6 @@ sampled attribution pass; `--assess` runs an equal-duration unprofiled cadence
 pass followed by the sampled pass. Both assessment passes execute the same
 optimized binary and configuration, and the launcher is restored on every exit
 path:
-
-```text
-scripts/agent device scene-lab --scene screenshot-screensaver --seconds 90 --assess --attended
-scripts/agent device scene-lab --scene navigation-transition --fixture home-arcade --seconds 10 --attended
-scripts/agent device scene-lab --scene card-flip --seconds 30 --profile --attended
-```
 
 Every bounded run retains evidence under
 `build/scene-lab/<scene>/<timestamp>/`. Single passes contain `manifest.json`,
@@ -187,27 +157,6 @@ mister-magik-framebuffer-scene-lab \
   --fixture consoles-system \
   --time-ms 1080 \
   --output transition.ppm
-```
-
-Card checkpoints are recipe-free and can select a direction:
-
-```text
-scripts/agent scene-lab capture \
-  --scene card-flip \
-  --direction forward \
-  --time-ms 220 \
-  --output card-midpoint.ppm
-```
-
-Screenshot checkpoints use the prepared startup path:
-
-```text
-scripts/agent scene-lab capture \
-  --scene screenshot-screensaver \
-  --archive path/to/arcade-screenshots-320x320.mmlz4b \
-  --seed 0x4d6167694b54696c \
-  --time-ms 2000 \
-  --output screenshot-parade.ppm
 ```
 
 The engine, palettes, frame hashes, and MiSTer presentation remain RGB565. The
