@@ -16,6 +16,7 @@ def test_only_probe_inputs_affect_the_fingerprint(tmp_path) -> None:
 
 def test_cache_reuses_exact_probe_inputs(tmp_path) -> None:
     cache = tmp_path / "cache.json"
+    (tmp_path / "probe").write_bytes(b"probe")
     write_build_cache(cache, "fingerprint", tmp_path / "probe")
     assert not needs_build(cache, "fingerprint")
     assert needs_build(cache, "different")
@@ -38,12 +39,13 @@ def test_build_runs_only_when_a_probe_artifact_is_stale(tmp_path) -> None:
         artifact.write_bytes(b"probe")
         return Result()
 
-    first = ensure_arm_probe(probe, cache, runner=runner)
-    second = ensure_arm_probe(probe, cache, runner=runner)
+    first = ensure_arm_probe(probe, cache, runner=runner, prepare=lambda *_: "test-builder")
+    second = ensure_arm_probe(probe, cache, runner=runner, prepare=lambda *_: "test-builder")
 
     assert first.rebuilt and not second.rebuilt
     assert len(calls) == 1
-    assert calls[0][:3] == ["container", "exec", "magik2-arm-build"]
+    assert calls[0][:2] == ["container", "exec"]
+    assert "test-builder" in calls[0]
 
 
 def test_prebuilt_artifact_bypasses_compilation(monkeypatch, tmp_path) -> None:
@@ -55,3 +57,35 @@ def test_prebuilt_artifact_bypasses_compilation(monkeypatch, tmp_path) -> None:
 
     assert result.artifact == artifact
     assert result.prebuilt and not result.rebuilt
+
+
+def test_configuration_and_dependency_inputs_but_not_outputs(tmp_path):
+    probe = tmp_path / "probe"
+    (probe / ".cargo").mkdir(parents=True)
+    dep = tmp_path / "dep"
+    (dep / "src").mkdir(parents=True)
+    (dep / "Cargo.toml").write_text('[package]\nname="dep"\nversion="0.1.0"')
+    shared = dep / "src/lib.rs"
+    shared.write_text("// A")
+    (probe / "Cargo.toml").write_text('[dependencies]\ndep={path="../dep"}')
+    config = probe / ".cargo/config.toml"
+    config.write_text("# A")
+    first = source_fingerprint(probe)
+    config.write_text("# B")
+    assert source_fingerprint(probe) != first
+    first = source_fingerprint(probe)
+    shared.write_text("// B")
+    assert source_fingerprint(probe) != first
+    first = source_fingerprint(probe)
+    (probe / "target").mkdir()
+    (probe / "target/generated.rs").write_text("generated")
+    assert source_fingerprint(probe) == first
+
+
+def test_replaced_artifact_invalidates_cache(tmp_path):
+    artifact = tmp_path / "probe"
+    artifact.write_bytes(b"A")
+    cache = tmp_path / "cache.json"
+    write_build_cache(cache, "inputs", artifact)
+    artifact.write_bytes(b"B")
+    assert needs_build(cache, "inputs")

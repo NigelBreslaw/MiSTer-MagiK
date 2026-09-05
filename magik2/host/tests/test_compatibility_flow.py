@@ -21,6 +21,9 @@ def configure_native(monkeypatch: pytest.MonkeyPatch, tmp_path, responses: list[
     monkeypatch.setenv("MISTER_IP", "mister.test")
     monkeypatch.setenv("MISTER_MAGIK2_STATE", str(tmp_path / "state"))
     TokenStore(tmp_path / "state", "mister.test").save("cached-token")
+    binary = tmp_path / "agent"
+    binary.write_bytes(b"agent")
+    monkeypatch.setattr(cli, "agent_binary_path", lambda: binary)
     tokens: list[str] = []
 
     class FakeAgent:
@@ -46,9 +49,13 @@ def test_branch_clients_keep_a_suitable_agent_despite_identity_changes(monkeypat
     )
 
     class Bootstrap:
+        def native_token(self):
+            return None
+
         def install_and_start(self, _binary) -> str:  # pragma: no cover - must not run
             raise AssertionError("compatible agent must be retained")
 
+    monkeypatch.setattr(cli, "agent_binary_path", lambda: tmp_path / "agent")
     monkeypatch.setattr(cli.SshBootstrap, "from_environment", lambda: Bootstrap())
     run = create_run(tmp_path, "status", {})
     for _ in range(3):
@@ -63,10 +70,14 @@ def test_missing_capability_bootstraps_once_and_continues(monkeypatch: pytest.Mo
     installs: list[str] = []
 
     class Bootstrap:
+        def native_token(self):
+            return None
+
         def install_and_start(self, _binary) -> str:
             installs.append("install")
             return "replacement-token"
 
+    monkeypatch.setattr(cli, "agent_binary_path", lambda: tmp_path / "agent")
     monkeypatch.setattr(cli.SshBootstrap, "from_environment", lambda: Bootstrap())
     monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
     run = create_run(tmp_path, "status", {})
@@ -99,10 +110,14 @@ def test_missing_capability_prefers_a_native_agent_update(monkeypatch: pytest.Mo
             uploaded.append(payload)
 
     class Bootstrap:
+        def native_token(self):
+            return None
+
         def install_and_start(self, _binary) -> str:  # pragma: no cover - must not run
             raise AssertionError("native update should precede SSH bootstrap")
 
     monkeypatch.setattr(cli, "NativeAgent", FakeAgent)
+    monkeypatch.setattr(cli, "agent_binary_path", lambda: binary)
     monkeypatch.setattr(cli.SshBootstrap, "from_environment", lambda: Bootstrap())
     monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
     run = create_run(tmp_path, "status", {})
@@ -117,10 +132,14 @@ def test_absent_agent_bootstraps_and_authentication_failure_does_not(monkeypatch
     installs: list[str] = []
 
     class Bootstrap:
+        def native_token(self):
+            return None
+
         def install_and_start(self, _binary) -> str:
             installs.append("install")
             return "replacement-token"
 
+    monkeypatch.setattr(cli, "agent_binary_path", lambda: tmp_path / "agent")
     monkeypatch.setattr(cli.SshBootstrap, "from_environment", lambda: Bootstrap())
     monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
     run = create_run(tmp_path, "status", {})
@@ -182,3 +201,30 @@ def test_check_retains_primary_and_cleanup_failures(monkeypatch: pytest.MonkeyPa
     assert {"phase": "check", "outcome": "failed", "error": "smoke client disconnected"} in events
     assert any(event["phase"] == "persistent-restart" and event["outcome"] == "failed" for event in events)
     assert any(event["phase"] == "cleanup" and event["outcome"] == "failed" for event in events)
+
+
+def test_fresh_worktrees_retrieve_token_without_replacing_compatible_agent(monkeypatch, tmp_path):
+    monkeypatch.setenv("MISTER_IP", "mister.test")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "shared"))
+    monkeypatch.delenv("MISTER_MAGIK2_STATE", raising=False)
+    seen = []
+    class Bootstrap:
+        def native_token(self):
+            seen.append("retrieve")
+            return "existing-token"
+        def install_and_start(self, _binary):
+            raise AssertionError("must retain compatible agent")
+    class Agent:
+        def __init__(self, _host, token):
+            assert token == "existing-token"
+        def status(self):
+            return status("other-branch", cli.REQUIRED_AGENT_CAPABILITIES | {"extra"})
+    monkeypatch.setattr(cli.SshBootstrap, "from_environment", lambda: Bootstrap())
+    monkeypatch.setattr(cli, "NativeAgent", Agent)
+    monkeypatch.setattr(cli, "agent_binary_path", lambda: pytest.fail("compatible agent needs no local build"))
+    for name in ("A", "B", "A"):
+        checkout = tmp_path / name
+        checkout.mkdir(exist_ok=True)
+        monkeypatch.chdir(checkout)
+        assert cli.connect_agent(create_run(checkout, "deploy", {}))[1].identity == "other-branch"
+    assert seen == ["retrieve"]

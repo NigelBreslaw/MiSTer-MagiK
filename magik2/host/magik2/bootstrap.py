@@ -66,7 +66,7 @@ class SshBootstrap:
         finally:
             client.close()
 
-    def native_token(self) -> str:
+    def native_token(self) -> str | None:
         """Retrieve/provision only the agent token before native control traffic."""
         try:
             import paramiko
@@ -76,7 +76,8 @@ class SshBootstrap:
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
             client.connect(self.host, username=self.username, password=self.password, timeout=10, banner_timeout=10, auth_timeout=10)
-            return self._read_or_create_token(client)
+            _, stdout, _ = client.exec_command(f"cat {self.install_root}/token 2>/dev/null || true", timeout=10)
+            return stdout.read().decode().strip() or None
         except BootstrapError:
             raise
         except Exception as error:
@@ -86,6 +87,7 @@ class SshBootstrap:
 
     def recent_agent_log(self) -> str:
         """Read only the fixed 2.0 service log for failed-start diagnostics."""
+        client = None
         try:
             import paramiko
             client = paramiko.SSHClient()
@@ -96,7 +98,8 @@ class SshBootstrap:
         except Exception as error:
             raise BootstrapError(f"agent log retrieval failed: {type(error).__name__}") from error
         finally:
-            client.close()
+            if client is not None:
+                client.close()
 
     def _read_or_create_token(self, client: object) -> str:
         token_path = f"{self.install_root}/token"
