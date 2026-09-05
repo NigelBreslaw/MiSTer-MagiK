@@ -11,6 +11,7 @@ class Application:
     binary: str
     profile: str = "release"
     features: tuple[str, ...] = ()
+    agent_capabilities: frozenset[str] = frozenset()
 
 
 APPLICATIONS = {
@@ -21,6 +22,7 @@ APPLICATIONS = {
         "mister-magik-fb",
         "release-device-ui-tests",
         ("magik2",),
+        frozenset({"main-input-proxy"}),
     ),
 }
 

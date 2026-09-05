@@ -166,6 +166,7 @@ impl Agent {
             "status",
             "transfer-check",
             "applications",
+            "main-input-proxy",
             "measurement",
             "diagnostics",
             "upload-v1",

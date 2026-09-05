@@ -85,12 +85,15 @@ def application_session(request, magik2_run):
         PROFILE_AGENT_CAPABILITIES,
     )
 
+    from .apps import application
+
     profiled = request.config.getoption("--magik2-profile")
     profile_id = f"{magik2_run.name}-{uuid.uuid4().hex[:8]}" if profiled else None
     agent, status = connect_agent(
         magik2_run,
         (PROFILE_AGENT_CAPABILITIES if profiled else CHECK_AGENT_CAPABILITIES)
-        | {"measurement"},
+        | {"measurement"}
+        | application(request.config.getoption("--magik2-app")).agent_capabilities,
     )
     ensure_application(
         agent, status, magik2_run, request.config.getoption("--magik2-app")

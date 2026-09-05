@@ -174,7 +174,11 @@ def dispatch(arguments, run) -> int:
 def deploy(_arguments: argparse.Namespace, run: Path) -> int:
     started = time.monotonic()
     try:
-        agent, status = connect_agent(run)
+        agent, status = connect_agent(
+            run,
+            REQUIRED_AGENT_CAPABILITIES
+            | application(_arguments.app).agent_capabilities,
+        )
         append_event(
             run,
             {
@@ -222,6 +226,7 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
             / ("test_magik.py" if arguments.app == "magik" else "test_probe.py")
         ),
         "-q",
+        "--maxfail=1",
         "-p",
         "no:cacheprovider",
         "--magik2-device",
@@ -275,7 +280,10 @@ def stop(run: Path) -> int:
 def watch(run: Path, app_name: str = "mini-magik") -> int:
     try:
         agent, status = connect_agent(
-            run, WATCH_AGENT_CAPABILITIES | REQUIRED_AGENT_CAPABILITIES
+            run,
+            WATCH_AGENT_CAPABILITIES
+            | REQUIRED_AGENT_CAPABILITIES
+            | application(app_name).agent_capabilities,
         )
         ensure_application(agent, status, run, app_name)
         server, url = serve(agent)
