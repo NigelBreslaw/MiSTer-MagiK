@@ -20,7 +20,14 @@ from .token_store import TokenStore
 from .viewer import serve
 
 
-REQUIRED_AGENT_CAPABILITIES = {"status", "upload-v1", "lifecycle-v1"}
+REQUIRED_AGENT_CAPABILITIES = {
+    "status",
+    "upload-v1",
+    "lifecycle-v1",
+    "request-replay-v1",
+    "test-deadline-v1",
+    "legacy-isolation-v1",
+}
 CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {"metrics-v1", "test-bridge-v1"}
 WATCH_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {"metrics-v1", "watch-v1"}
 PROFILE_AGENT_CAPABILITIES = CHECK_AGENT_CAPABILITIES | {"artifacts-v1"}
@@ -66,7 +73,11 @@ def main() -> int:
         print(f"magik2 status: native agent unavailable ({type(error).__name__}) (result: {run})", file=os.sys.stderr)
         return 2
     append_event(run, {"phase": "status", "outcome": "passed", "identity": status.identity})
-    print(f"identity={status.identity} running={status.fields.get('running', False)} capabilities={','.join(sorted(status.capabilities))}")
+    print(
+        f"identity={status.identity} running={status.fields.get('running', False)} "
+        f"legacy_agent_running={status.fields.get('legacy_agent_running', 'unknown')} "
+        f"capabilities={','.join(sorted(status.capabilities))}"
+    )
     return 0
 
 
@@ -96,6 +107,8 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
         return 2
     profile_id = "profile" if arguments.profile else None
     session_started = False
+    primary_error: Exception | None = None
+    cleanup_errors: list[str] = []
     try:
         agent, status = connect_agent(run, PROFILE_AGENT_CAPABILITIES if profile_id is not None else CHECK_AGENT_CAPABILITIES)
         ensure_probe(agent, status, run)
@@ -111,9 +124,8 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
                 if not measurement["physical_evidence_valid"]:
                     raise AssertionError("motion has no validated physical-presentation evidence")
     except (AssertionError, BootstrapError, AgentError, OSError, RuntimeError) as error:
+        primary_error = error
         append_event(run, {"phase": "check", "outcome": "failed", "error": str(error)})
-        print(f"magik2 check: {error} (result: {run})", file=os.sys.stderr)
-        return 2
     finally:
         if profile_id is not None and "agent" in locals():
             for name in ("profile.folded", "flamegraph.svg"):
@@ -122,12 +134,22 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
                     append_event(run, {"phase": "profile-artifact", "outcome": "retained", "name": name, "instrumented": True})
                 except (AgentError, OSError) as error:
                     append_event(run, {"phase": "profile-artifact", "outcome": "unavailable", "name": name, "error": str(error)})
+                    cleanup_errors.append(f"profile artifact {name}: {error}")
         if session_started:
             try:
                 agent.start(restart=True)
                 append_event(run, {"phase": "persistent-restart", "outcome": "passed"})
             except (BootstrapError, AgentError, OSError, UnboundLocalError) as error:
                 append_event(run, {"phase": "persistent-restart", "outcome": "failed", "error": type(error).__name__})
+                cleanup_errors.append(f"persistent restart: {type(error).__name__}")
+    if cleanup_errors:
+        append_event(run, {"phase": "cleanup", "outcome": "failed", "errors": cleanup_errors})
+    else:
+        append_event(run, {"phase": "cleanup", "outcome": "passed"})
+    if primary_error is not None or cleanup_errors:
+        message = str(primary_error) if primary_error is not None else "; ".join(cleanup_errors)
+        print(f"magik2 check: {message} (result: {run})", file=os.sys.stderr)
+        return 2
     append_event(run, {"phase": "check", "outcome": "passed"})
     print(f"magik2 check: passed ({','.join(scenarios)}) (result: {run})")
     return 0
@@ -192,7 +214,15 @@ def ensure_probe(agent: NativeAgent, status: AgentStatus, run: Path) -> bool:
         upload_started = time.monotonic()
         append_event(run, {"phase": "upload", "bytes": len(payload)})
         agent.upload("probe", payload)
-        append_event(run, {"phase": "upload-complete", "elapsed_ms": int((time.monotonic() - upload_started) * 1_000)})
+        upload_elapsed_ms = max(1, int((time.monotonic() - upload_started) * 1_000))
+        append_event(
+            run,
+            {
+                "phase": "upload-complete",
+                "elapsed_ms": upload_elapsed_ms,
+                "bytes_per_second": len(payload) * 1_000 // upload_elapsed_ms,
+            },
+        )
     start_started = time.monotonic()
     append_event(run, {"phase": "start", "restart": status.fields.get("running") is True})
     agent.start(restart=status.fields.get("running") is True)

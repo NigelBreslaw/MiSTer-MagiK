@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 pub const MAX_HEADER_BYTES: usize = 64 * 1024;
 pub const MAX_BODY_BYTES: usize = 512 * 1024 * 1024;
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Envelope {
     pub id: String,
     pub op: String,
@@ -100,12 +100,24 @@ pub struct Agent {
     install_root: PathBuf,
     state_root: PathBuf,
     process: Mutex<Option<Child>>,
+    mutations: Mutex<()>,
+    replayed_mutations: Mutex<VecDeque<ReplayedMutation>>,
     observation: Arc<Observation>,
 }
 
 const MAX_RECENT_LOGS: usize = 100;
+const MAX_REPLAYED_MUTATIONS: usize = 64;
 const WATCH_INTERVAL: Duration = Duration::from_millis(200);
 const VIEWER_LEASE: Duration = Duration::from_secs(2);
+const TEST_SESSION_DEADLINE: Duration = Duration::from_secs(20);
+const SESSION_IO_TIMEOUT: Duration = Duration::from_millis(200);
+
+#[derive(Clone)]
+struct ReplayedMutation {
+    request_id: String,
+    fingerprint: String,
+    response: Envelope,
+}
 
 #[derive(Default)]
 struct ObservationState {
@@ -185,6 +197,8 @@ impl Agent {
             install_root,
             state_root,
             process: Mutex::new(None),
+            mutations: Mutex::new(()),
+            replayed_mutations: Mutex::new(VecDeque::new()),
             observation: Arc::default(),
         }
     }
@@ -199,6 +213,9 @@ impl Agent {
             "watch-v1",
             "artifacts-v1",
             "agent-update-v1",
+            "request-replay-v1",
+            "test-deadline-v1",
+            "legacy-isolation-v1",
         ]
     }
 
@@ -229,51 +246,111 @@ impl Agent {
 
     pub fn handle(&self, stream: &mut TcpStream) -> Result<(), FrameError> {
         let (request, body) = read_frame(stream)?;
-        if request.token == self.token {
-            if request.op == "test-start" {
-                return self.start_test_session(stream, &request, &body);
-            }
-            if request.op == "watch" {
-                return self.watch(stream, &request, &body);
-            }
-            if request.op == "read-artifact" {
-                return self.read_artifact(stream, &request, &body);
-            }
-            if request.op == "agent-update" {
-                return self.upgrade_agent(stream, &request, &body);
-            }
-        }
-        let response = if request.token != self.token {
-            response(
-                &request.id,
-                "error",
-                serde_json::json!({"code":"authentication-failed"}),
-            )
-        } else {
-            match request.op.as_str() {
-                "status" => response(
-                    &request.id,
-                    "status",
-                    serde_json::json!({
-                        "identity": self.identity,
-                        "capabilities": Self::capabilities(),
-                        "running": self.running(),
-                        "artifact": "probe",
-                        "artifact_sha256": installed_hash(&self.install_root.join("probe")),
-                    }),
-                ),
-                "upload" => self.upload(&request, &body),
-                "start" => self.start(&request),
-                "stop" => self.stop(&request),
-                "metrics" => self.metrics(&request),
-                _ => response(
+        if request.token != self.token {
+            return write_frame(
+                stream,
+                &response(
                     &request.id,
                     "error",
-                    serde_json::json!({"code":"unsupported-operation"}),
+                    serde_json::json!({"code":"authentication-failed"}),
                 ),
+                &[],
+            );
+        }
+
+        if request.op == "watch" {
+            return self.watch(stream, &request, &body);
+        }
+        if request.op == "read-artifact" {
+            return self.read_artifact(stream, &request, &body);
+        }
+        if request.op == "test-start" {
+            let _mutation = self.mutations.lock().expect("mutation state poisoned");
+            return self.start_test_session(stream, &request, &body);
+        }
+        if request.op == "agent-update" {
+            let _mutation = self.mutations.lock().expect("mutation state poisoned");
+            return self.upgrade_agent(stream, &request, &body);
+        }
+
+        let replayable = matches!(request.op.as_str(), "upload" | "start" | "stop");
+        let _mutation = replayable.then(|| self.mutations.lock().expect("mutation state poisoned"));
+        if replayable {
+            match self.replayed_response(&request, &body) {
+                Ok(Some(response)) => return write_frame(stream, &response, &[]),
+                Ok(None) => {}
+                Err(response) => return write_frame(stream, &response, &[]),
             }
+        }
+        let response = match request.op.as_str() {
+            "status" => response(
+                &request.id,
+                "status",
+                serde_json::json!({
+                    "identity": self.identity,
+                    "capabilities": Self::capabilities(),
+                    "running": self.running(),
+                    "artifact": "probe",
+                    "artifact_sha256": installed_hash(&self.install_root.join("probe")),
+                    "legacy_agent_running": legacy_agent_running(),
+                }),
+            ),
+            "upload" => self.upload(&request, &body),
+            "start" => self.start(&request),
+            "stop" => self.stop(&request),
+            "metrics" => self.metrics(&request),
+            _ => response(
+                &request.id,
+                "error",
+                serde_json::json!({"code":"unsupported-operation"}),
+            ),
         };
+        if replayable {
+            self.remember_response(&request, &body, &response);
+        }
         write_frame(stream, &response, &[])
+    }
+
+    fn replayed_response(
+        &self,
+        request: &Envelope,
+        body: &[u8],
+    ) -> Result<Option<Envelope>, Envelope> {
+        let fingerprint = mutation_fingerprint(request, body);
+        let replayed = self
+            .replayed_mutations
+            .lock()
+            .expect("mutation replay state poisoned");
+        let Some(previous) = replayed
+            .iter()
+            .find(|previous| previous.request_id == request.id)
+        else {
+            return Ok(None);
+        };
+        if previous.fingerprint == fingerprint {
+            Ok(Some(previous.response.clone()))
+        } else {
+            Err(response(
+                &request.id,
+                "error",
+                serde_json::json!({"code":"request-id-reused"}),
+            ))
+        }
+    }
+
+    fn remember_response(&self, request: &Envelope, body: &[u8], response: &Envelope) {
+        let mut replayed = self
+            .replayed_mutations
+            .lock()
+            .expect("mutation replay state poisoned");
+        replayed.push_back(ReplayedMutation {
+            request_id: request.id.clone(),
+            fingerprint: mutation_fingerprint(request, body),
+            response: response.clone(),
+        });
+        while replayed.len() > MAX_REPLAYED_MUTATIONS {
+            replayed.pop_front();
+        }
     }
 
     fn running(&self) -> bool {
@@ -795,7 +872,7 @@ impl Agent {
         stream: &mut TcpStream,
     ) -> Result<(), FrameError> {
         listener.set_nonblocking(true).map_err(FrameError::from)?;
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + TEST_SESSION_DEADLINE;
         let mut application = loop {
             match listener.accept() {
                 Ok((connection, _)) => break connection,
@@ -816,17 +893,29 @@ impl Agent {
                 }
             }
         };
+        application
+            .set_read_timeout(Some(SESSION_IO_TIMEOUT))
+            .map_err(FrameError::from)?;
+        application
+            .set_write_timeout(Some(SESSION_IO_TIMEOUT))
+            .map_err(FrameError::from)?;
+        stream
+            .set_read_timeout(Some(SESSION_IO_TIMEOUT))
+            .map_err(FrameError::from)?;
+        stream
+            .set_write_timeout(Some(SESSION_IO_TIMEOUT))
+            .map_err(FrameError::from)?;
         let mut device_to_host = application.try_clone().map_err(FrameError::from)?;
         let mut host_clone = stream.try_clone().map_err(FrameError::from)?;
         let upstream = std::thread::spawn(move || {
-            let _ = io::copy(&mut device_to_host, &mut host_clone);
+            let _ = relay_until_deadline(&mut device_to_host, &mut host_clone, deadline);
             let _ = host_clone.shutdown(Shutdown::Write);
         });
-        let _ = io::copy(stream, &mut application);
+        let primary = relay_until_deadline(stream, &mut application, deadline);
         let _ = application.shutdown(Shutdown::Write);
         let _ = upstream.join();
         self.stop_owned_process();
-        Ok(())
+        primary
     }
 
     fn wait_for_readiness(&self, request: &Envelope, mut child: Child) -> Envelope {
@@ -958,6 +1047,46 @@ fn response(id: &str, op: &str, value: serde_json::Value) -> Envelope {
     }
 }
 
+fn mutation_fingerprint(request: &Envelope, body: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(request.op.as_bytes());
+    hasher.update([0]);
+    hasher
+        .update(serde_json::to_vec(&request.fields).expect("request fields are serializable JSON"));
+    hasher.update([0]);
+    hasher.update(body);
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn relay_until_deadline(
+    source: &mut impl Read,
+    destination: &mut impl Write,
+    deadline: Instant,
+) -> Result<(), FrameError> {
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        if Instant::now() >= deadline {
+            return Err(FrameError::Io("test session deadline elapsed".to_owned()));
+        }
+        match source.read(&mut buffer) {
+            Ok(0) => return Ok(()),
+            Ok(size) => destination
+                .write_all(&buffer[..size])
+                .map_err(FrameError::from)?,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) => {}
+            Err(error) => return Err(FrameError::from(error)),
+        }
+    }
+}
+
 fn installed_hash(path: &Path) -> Option<String> {
     Some(
         Sha256::digest(fs::read(path).ok()?)
@@ -965,6 +1094,21 @@ fn installed_hash(path: &Path) -> Option<String> {
             .map(|byte| format!("{byte:02x}"))
             .collect(),
     )
+}
+
+fn legacy_agent_running() -> bool {
+    let Ok(processes) = fs::read_dir("/proc") else {
+        return false;
+    };
+    processes.flatten().any(|entry| {
+        entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.bytes().all(|byte| byte.is_ascii_digit()))
+            && fs::read_to_string(entry.path().join("comm"))
+                .ok()
+                .is_some_and(|name| name.trim() == "mister-magik-agent")
+    })
 }
 
 fn publish_atomically(
@@ -1107,6 +1251,159 @@ mod tests {
             std::fs::read(directory.join("probe")).expect("published probe"),
             body
         );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn repeated_mutation_identifier_replays_without_republishing() {
+        let directory =
+            std::env::temp_dir().join(format!("magik2-agent-replay-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let address = listener.local_addr().expect("listener address");
+        let agent = std::sync::Arc::new(Agent::new(
+            "other-branch".to_owned(),
+            "token".to_owned(),
+            directory.clone(),
+        ));
+        let server_agent = agent.clone();
+        let server = std::thread::spawn(move || {
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().expect("accept client");
+                server_agent.handle(&mut stream).expect("handle upload");
+            }
+        });
+        let body = b"probe payload";
+        let hash = Sha256::digest(body)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let mut fields = serde_json::Map::new();
+        fields.insert("artifact".to_owned(), serde_json::json!("probe"));
+        fields.insert("sha256".to_owned(), serde_json::json!(hash));
+        let request = Envelope {
+            id: "lost-reply".into(),
+            op: "upload".into(),
+            token: "token".into(),
+            fields,
+        };
+        let mut first = std::net::TcpStream::connect(address).expect("connect first client");
+        write_frame(&mut first, &request, body).expect("write first upload");
+        assert_eq!(
+            read_frame(&mut first).expect("read first reply").0.op,
+            "uploaded"
+        );
+        std::fs::write(directory.join("probe"), b"already handled")
+            .expect("change published probe");
+        let mut retry = std::net::TcpStream::connect(address).expect("connect retry client");
+        write_frame(&mut retry, &request, body).expect("write retried upload");
+        assert_eq!(
+            read_frame(&mut retry).expect("read replayed reply").0.op,
+            "uploaded"
+        );
+        let mut reused = std::net::TcpStream::connect(address).expect("connect mismatched retry");
+        write_frame(&mut reused, &request, b"different body").expect("write mismatched retry");
+        assert_eq!(
+            read_frame(&mut reused).expect("read rejected retry").0.op,
+            "error"
+        );
+        server.join().expect("server thread");
+        assert_eq!(
+            std::fs::read(directory.join("probe")).expect("read probe"),
+            b"already handled"
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn continuous_traffic_cannot_extend_a_test_session_deadline() {
+        struct BusyReader;
+        impl Read for BusyReader {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                buffer[0] = 1;
+                Ok(1)
+            }
+        }
+        let mut reader = BusyReader;
+        let mut output = Vec::new();
+        let result = relay_until_deadline(
+            &mut reader,
+            &mut output,
+            Instant::now() + Duration::from_millis(5),
+        );
+        assert!(
+            matches!(result, Err(FrameError::Io(message)) if message == "test session deadline elapsed")
+        );
+        assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn slow_watch_does_not_block_a_separate_control_request() {
+        let directory =
+            std::env::temp_dir().join(format!("magik2-agent-watch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("create state directory");
+        std::fs::write(directory.join("probe-metrics.json"), b"{}").expect("write metrics");
+        let agent = std::sync::Arc::new(Agent::with_state_root(
+            "test".to_owned(),
+            "token".to_owned(),
+            directory.join("install"),
+            directory.clone(),
+        ));
+        agent.observation.record_frame(1, vec![0; 4 * 1024 * 1024]);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let address = listener.local_addr().expect("listener address");
+        let (finished_sender, finished_receiver) = std::sync::mpsc::channel();
+        let server_agent = agent.clone();
+        let server = std::thread::spawn(move || {
+            let (mut watch, _) = listener.accept().expect("accept watch");
+            let watching_agent = server_agent.clone();
+            let watching = std::thread::spawn(move || watching_agent.handle(&mut watch));
+            let (mut status, _) = listener.accept().expect("accept status");
+            server_agent.handle(&mut status).expect("handle status");
+            finished_sender
+                .send(watching.join().expect("watch thread"))
+                .expect("send watch result");
+        });
+        let mut slow = std::net::TcpStream::connect(address).expect("connect watch");
+        write_frame(
+            &mut slow,
+            &Envelope {
+                id: "watch".into(),
+                op: "watch".into(),
+                token: "token".into(),
+                fields: serde_json::Map::new(),
+            },
+            &[],
+        )
+        .expect("start watch");
+        assert_eq!(
+            read_frame(&mut slow).expect("watch ready").0.op,
+            "watch-ready"
+        );
+        let mut status = std::net::TcpStream::connect(address).expect("connect status");
+        write_frame(
+            &mut status,
+            &Envelope {
+                id: "status".into(),
+                op: "status".into(),
+                token: "token".into(),
+                fields: serde_json::Map::new(),
+            },
+            &[],
+        )
+        .expect("request status");
+        assert_eq!(
+            read_frame(&mut status).expect("status reply").0.op,
+            "status"
+        );
+        assert!(
+            finished_receiver
+                .recv_timeout(Duration::from_secs(3))
+                .expect("bounded watch result")
+                .is_err()
+        );
+        server.join().expect("server thread");
         let _ = std::fs::remove_dir_all(directory);
     }
 }
