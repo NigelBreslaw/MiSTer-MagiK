@@ -130,6 +130,15 @@ def commands(group: str) -> list[list[str]]:
     if group == "app":
         manifest = "apps/mister/Cargo.toml"
         return [
+            [
+                "cargo",
+                "check",
+                "--locked",
+                "--manifest-path",
+                manifest,
+                "--features",
+                "magik2",
+            ],
             ["cargo", "fmt", "--manifest-path", manifest, "--check"],
             [
                 "cargo",

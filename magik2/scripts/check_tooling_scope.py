@@ -9,13 +9,27 @@ import sys
 
 CONSUMERS = ("magik2/probe/", "magik2/scenarios/")
 CORE = (
+    "crates/tooling-support/",
     "magik2/",
     "scripts/magik2",
     ".github/workflows/magik2.yml",
     ".github/PULL_REQUEST_TEMPLATE/magik2-tooling.md",
     ".github/CODEOWNERS",
 )
-COMPANIONS = ("AGENTS.md", "scripts/AGENTS.md")
+# These are the explicit integration seams; unrelated app features remain consumer PRs.
+COMPANIONS = (
+    "AGENTS.md",
+    "scripts/AGENTS.md",
+    "scripts/magik_ci/host.py",
+    "apps/mister/Cargo.toml",
+    "apps/mister/Cargo.lock",
+    "apps/mister/src/ui_runner/launcher_loop.rs",
+    "apps/mister/src/ui_runner/launcher_present/latch.rs",
+    "apps/mister/src/ui_runner/launcher_present/orchestrator.rs",
+    "agent-cli/src/host/transfer_check.rs",
+    "agent-cli/src/host/mod.rs",
+    "agent-cli/src/commands/device.rs",
+)
 # Only the PR first adding this project may include its existing-runtime export
 # and repository classification changes. Later tooling PRs stay isolated.
 INTRODUCTION_PATHS = {
