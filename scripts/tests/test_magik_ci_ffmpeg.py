@@ -105,11 +105,12 @@ def test_failed_preparation_stops_cargo(repository: Path) -> None:
         run.assert_not_called()
 
 
-def test_cross_environment_uses_container_paths(repository: Path) -> None:
+def test_cross_environment_uses_host_mounted_paths(repository: Path) -> None:
     env = build._environment(repository, "runtime-ci", "ci-fast", "ui", "cross")
-    assert env["FFMPEG_DIR"] == str(ffmpeg.CONTAINER_DIST)
-    assert env["PKG_CONFIG_PATH"] == str(ffmpeg.CONTAINER_DIST / "lib/pkgconfig")
-    assert env["HOST_CFLAGS"] == f"-I{ffmpeg.CONTAINER_DIST}/include"
+    dist = repository / ffmpeg.RELATIVE_WORK / "dist"
+    assert env["FFMPEG_DIR"] == str(dist)
+    assert env["PKG_CONFIG_PATH"] == str(dist / "lib/pkgconfig")
+    assert env["HOST_CFLAGS"] == f"-I{dist}/include"
     assert env["CFLAGS"] == env["HOST_CFLAGS"]
 
 

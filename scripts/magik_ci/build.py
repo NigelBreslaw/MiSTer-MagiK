@@ -47,7 +47,10 @@ def _environment(
     environment["RUSTFLAGS"] = rustflags
 
     if runner == "cross" and intent in {"runtime-ci", "runtime-device"}:
-        dist = ffmpeg.CONTAINER_DIST
+        # Cross mounts configured host volumes at their canonical host paths.
+        # The FFmpeg preparation container uses /project, but Cross cannot see
+        # that mount point when MISTER_REPO_ROOT enables volume mounting.
+        dist = repository / ffmpeg.RELATIVE_WORK / "dist"
         include = dist / "include"
         environment.update(
             {
