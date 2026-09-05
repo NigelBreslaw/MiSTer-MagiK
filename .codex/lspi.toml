@@ -4,11 +4,13 @@
 workspace_root = ".."
 
 [mcp]
+linked_worktrees = true
 context = "codex"
 read_only = false
 
 [mcp.output]
-max_total_chars_default = 10000
+format = "compact"
+max_total_chars_default = 3000
 max_total_chars_hard = 20000
 
 [mcp.tools]
