@@ -27,6 +27,19 @@ updates:
       python-projects:
         patterns:
           - "*"
+  - package-ecosystem: "pip"
+    directory: "/magik2/host"
+    registries:
+      - github-private
+    schedule:
+      interval: "weekly"
+      day: "friday"
+      time: "08:00"
+      timezone: "Europe/Helsinki"
+    groups:
+      python-host-projects:
+        patterns:
+          - "*"
 
   - package-ecosystem: "cargo"
     directories:
