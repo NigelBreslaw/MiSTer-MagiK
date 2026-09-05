@@ -1334,7 +1334,7 @@ mod stub {
         if config.enabled {
             crate::ui_errln!(
                 "cpu_profile: MISTER_PPROF=1 ignored — the runtime lacks the `profile` feature; \
-                 install the canonical device runtime with `scripts/agent deliver`"
+                 install the canonical device runtime with `scripts/agent deliver platform`"
             );
         }
         None

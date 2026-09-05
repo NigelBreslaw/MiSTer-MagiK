@@ -748,16 +748,6 @@ impl NativeDevice {
         .map(|_| ())
     }
 
-    pub(crate) fn restart_ui(&mut self) -> std::result::Result<(), DeviceFailure> {
-        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
-        let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
-        restart_ui_with(&SshDeployRemote {
-            sess: &session,
-            agent: None,
-        })
-        .map_err(device_failure)
-    }
-
     pub(crate) fn deliver_databases(
         &mut self,
         stage: &Path,
@@ -1310,7 +1300,7 @@ impl NativeDevice {
             parse_active_runtime_status(remote_read(&session, MAIN_STATUS_REMOTE).as_deref());
         if !active.is_development_launcher() {
             return Err(DeviceFailure::Unhealthy(format!(
-                "benchmark requires the active development launcher, found {}; run scripts/agent deliver",
+                "benchmark requires the active development launcher, found {}; run scripts/agent deliver platform",
                 active.description()
             )));
         }
@@ -32018,11 +32008,6 @@ fn resume_runtime_launcher<R: DeployRemote>(remote: &R) -> Result<()> {
     deploy_fifo_command(remote, "mister_magik_resume")
 }
 
-fn restart_ui_with<R: DeployRemote>(remote: &R) -> Result<()> {
-    suspend_runtime_launcher(remote)?;
-    resume_runtime_launcher(remote)
-}
-
 impl MagikDeployReport {
     fn print(&self) {
         let finish_ms = self.swap_ms + self.chmod_size_ms;
@@ -41377,18 +41362,6 @@ H: Handlers=event3 js0"#
         }
         let _ = fs::remove_file(local);
         let _ = fs::remove_file(manifest);
-    }
-
-    #[test]
-    fn restart_ui_only_suspends_then_resumes_the_launcher() {
-        let remote = scripted_deploy_remote(0);
-
-        restart_ui_with(&remote).unwrap();
-
-        let events = remote.events();
-        assert_eq!(events.len(), 2);
-        assert!(events[0].contains("mister_magik_suspend"));
-        assert!(events[1].contains("mister_magik_resume"));
     }
 
     #[test]

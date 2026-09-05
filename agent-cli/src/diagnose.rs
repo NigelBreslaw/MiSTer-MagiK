@@ -376,12 +376,12 @@ pub fn correlate(facts: &DeviceFacts, repaired: bool) -> DiagnosticReport {
     } else if !facts.firmware_compatible {
         Some("Install the compatible MiSTer MagiK platform firmware, then rerun diagnosis.".into())
     } else if !facts.scanout_ready || !facts.latch_ready {
-        Some("Run scripts/agent deliver to restore the coherent development platform, then rerun scripts/agent diagnose.".into())
+        Some("Run scripts/agent deliver platform to restore the coherent development platform, then rerun scripts/agent diagnose.".into())
     } else if facts.present_backend == "compatibility-fb0"
         || facts.present_status == "compatibility"
     {
         Some(if facts.latch_failure_state == "platform-incompatible" {
-            "Run scripts/agent deliver to restore the coherent development platform, then rerun scripts/agent diagnose.".into()
+            "Run scripts/agent deliver platform to restore the coherent development platform, then rerun scripts/agent diagnose.".into()
         } else {
             "Use A: Retry latch or B: Continue in compatibility mode on the device, then rerun scripts/agent diagnose.".into()
         })
@@ -570,7 +570,7 @@ mod tests {
             report
                 .next_action
                 .unwrap()
-                .contains("scripts/agent deliver")
+                .contains("scripts/agent deliver platform")
         );
     }
 
@@ -615,7 +615,7 @@ mod tests {
             report
                 .next_action
                 .unwrap()
-                .contains("scripts/agent deliver")
+                .contains("scripts/agent deliver platform")
         );
     }
 
