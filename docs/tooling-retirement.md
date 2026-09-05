@@ -1,5 +1,68 @@
 # Tooling retirement
 
+## Milestone 7: catalog experiment tooling removed
+
+Based on `f4e09c025`, after merged PR #94. This removes the remaining catalog
+experiment command family without porting a feature into 2.0 or touching a device.
+
+### Removed interfaces and support
+
+The following `device catalog` commands are gone: `fast-five-prototype`,
+`fast-five-c64-experiments`, `fast-five-experiments`, `fast-five-pprof`,
+`fast-refresh-pprof`, `fast-refresh-benchmark`, `fast-source-ab`, `fast-media-ab`,
+and `fast-five-old-cold`. They now fail as unknown subcommands, not as missing
+arguments. Their argument types, dispatch, mutation classification, cold-run
+matrices, reboot/staging wrappers, completion polling, telemetry and exclusive
+report/test helpers are deleted. No aliases or archived copies remain.
+
+The standalone `five-system-catalog-prototype` executable and Cargo target are
+also deleted, along with its exclusive snapshot-import/search-probe wrappers,
+argument parsers, C64 artifact experiments and source/media comparison wrappers.
+The catalog crate's optional `pprof` dependency and `profile` feature are gone.
+Package-targeted dependency sync removes 38 lockfile packages, adds none, and
+preserves all remaining package versions.
+
+### Preserved behavior and owners
+
+`fast_five_catalog` remains production code: shared snapshot formats,
+publication, refresh, transport, fingerprints and runtime behavior are retained.
+The other catalog executables remain. Ordinary inspection, queries, metadata
+and screenshot qualification, ROM/Neo Geo audits, core listing and explicit
+purge keep their existing CLI contracts.
+
+Shared shard writer signatures and production durability/SQLite/search defaults
+are unchanged. Only five variants constructed exclusively by the deleted
+experiment and their unreachable branches are removed. A private scanner
+comparison field is deleted; emitted games and launch plans are unchanged.
+The existing nested-ROM regression now calls production discovery directly.
+The C64 scanner fixture still needed by a retained subtree-pruning test is
+preserved as test-only support.
+
+Desktop, installed-agent startup, platform/release delivery, physical input
+qualification, catalog publication and standalone trace analyzers remain under
+their existing owners. The 2.0 core, protocol, scope guard, two-repetition checks
+and 15-second journey allowance are unchanged.
+
+### Validation and review
+
+- Five device parser tests pass, including all nine rejected commands and the
+  retained catalog command set; 117 retained host tests pass.
+- Catalog: three snapshot/transport tests, 12 publication tests, five production
+  scanner tests and 14 shard tests pass. Both affected crates pass focused
+  Clippy checks with warnings denied; the consuming app library check passes.
+- The new worktree needed its unchanged asset submodule initialized for the app
+  check. No asset, gitlink or private content is included in this change.
+- Compiler diagnostics were checked against source callers, including retained
+  tests. Source-text tests and references to deleted entrypoints were searched
+  explicitly. Histogram diff review confirms retained fast-catalog function
+  bodies are unchanged; shared writer edits remove only unreachable variants.
+- No deployment, Linux reboot, benchmark or profile ran. Full cross-platform
+  assurance remains CI's responsibility.
+
+The host module falls from 18,483 to 15,416 lines. The milestone removes roughly
+5,900 lines net before this documentation; future retirement should continue
+from actual remaining consumers, not by migrating the deleted experiments.
+
 ## Milestone 6: legacy application test/benchmark retirement
 
 Based on merged PR #93 (`929ae3e3c`). Implementation is on

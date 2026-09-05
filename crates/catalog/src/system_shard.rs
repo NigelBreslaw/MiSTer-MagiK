@@ -117,23 +117,18 @@ pub struct SystemNavigationOpenTiming {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShardDurability {
     Immediate,
-    Deferred,
 }
 
 #[cfg(feature = "builder")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShardSqliteTuning {
     Conservative,
-    MemoryHeavy,
 }
 
 #[cfg(feature = "builder")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShardSearchTuning {
     FullOptimized,
-    FullUnoptimized,
-    ColumnOptimized,
-    ColumnUnoptimized,
 }
 
 #[cfg(feature = "builder")]
@@ -415,14 +410,12 @@ fn write_system_shard_with_options_and_profile(
         .map_err(|error| SystemShardError::with("open staging SQLite", error))?;
     let durability_pragmas = match durability {
         ShardDurability::Immediate => "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;",
-        ShardDurability::Deferred => "PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;",
     };
     connection
         .execute_batch(durability_pragmas)
         .map_err(|error| SystemShardError::with("configure shard durability", error))?;
     let sqlite_tuning_pragmas = match sqlite_tuning {
         ShardSqliteTuning::Conservative => "PRAGMA cache_size=-2048; PRAGMA temp_store=FILE;",
-        ShardSqliteTuning::MemoryHeavy => "PRAGMA cache_size=-16384; PRAGMA temp_store=MEMORY;",
     };
     let games_schema = if artifact_profile.stores_games() {
         "CREATE TABLE games (
@@ -488,11 +481,8 @@ fn write_system_shard_with_options_and_profile(
         (ShardArtifactProfile::SearchColumn, _) => {
             crate::persisted_search::PersistedSearchDetail::Column
         }
-        (_, ShardSearchTuning::FullOptimized | ShardSearchTuning::FullUnoptimized) => {
+        (_, ShardSearchTuning::FullOptimized) => {
             crate::persisted_search::PersistedSearchDetail::Full
-        }
-        (_, ShardSearchTuning::ColumnOptimized | ShardSearchTuning::ColumnUnoptimized) => {
-            crate::persisted_search::PersistedSearchDetail::Column
         }
     };
     crate::persisted_search::create_schema_with_detail(&connection, search_detail)
@@ -627,12 +617,10 @@ fn write_system_shard_with_options_and_profile(
     drop(games_pmu);
     let search_index_pmu =
         mister_magik_perf_events::sampled_span(crate::pmu_phase::SHARD_SEARCH_INDEX);
-    let optimize_search = matches!(
-        search_tuning,
-        ShardSearchTuning::FullOptimized | ShardSearchTuning::ColumnOptimized
-    ) && !std::env::var("MISTER_CATALOG_FTS_OPTIMIZE").is_ok_and(|value| {
-        value.eq_ignore_ascii_case("off") || value.eq_ignore_ascii_case("false") || value == "0"
-    });
+    let optimize_search = matches!(search_tuning, ShardSearchTuning::FullOptimized)
+        && !std::env::var("MISTER_CATALOG_FTS_OPTIMIZE").is_ok_and(|value| {
+            value.eq_ignore_ascii_case("off") || value.eq_ignore_ascii_case("false") || value == "0"
+        });
     let search =
         crate::persisted_search::populate_with_options(&transaction, &data.games, optimize_search)
             .map_err(|error| SystemShardError::new("write", error.to_string()))?;

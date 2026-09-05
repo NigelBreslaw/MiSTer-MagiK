@@ -281,24 +281,6 @@ pub enum CatalogCommand {
     ScreenshotQualification(CatalogScreenshotQualificationArgs),
     Query(CatalogQueryArgs),
     Cores,
-    /// Publish and open the isolated five-system prototype in the Dev UI.
-    FastFivePrototype(CatalogFastFivePrototypeArgs),
-    /// Cold-benchmark isolated C64 artifact-writer strategies.
-    FastFiveC64Experiments(CatalogFastFiveC64ExperimentsArgs),
-    /// Cold-benchmark the complete fast-five snapshot and artifact matrix.
-    FastFiveExperiments(CatalogFastFiveExperimentsArgs),
-    /// Profile one reboot-cold all-five prototype publication with pprof.
-    FastFivePprof(CatalogFastFivePprofArgs),
-    /// Profile a reboot-cold incremental refresh of the independent fast catalog.
-    FastRefreshPprof(CatalogFastRefreshPprofArgs),
-    /// Benchmark a reboot-cold incremental refresh without profiler overhead.
-    FastRefreshBenchmark(CatalogFastRefreshBenchmarkArgs),
-    /// Compare specialised and generic source scanners in alternating cold order.
-    FastSourceAb(CatalogFastSourceAbArgs),
-    /// Compare baseline and optimized media scanners in alternating cold order.
-    FastMediaAb(CatalogFastMediaAbArgs),
-    /// Cold-build the five systems independently with the existing builder.
-    FastFiveOldCold(CatalogFastFiveOldColdArgs),
     /// Delete the Dev catalog and screenshot packs, then perform one supervised reboot.
     Purge(CatalogPurgeArgs),
 }
@@ -307,129 +289,6 @@ pub enum CatalogCommand {
 pub struct CatalogMetadataQualificationArgs {
     #[arg(long)]
     pub(crate) out: PathBuf,
-}
-
-#[derive(Debug, Args)]
-pub struct CatalogFastFivePrototypeArgs {
-    #[arg(long, required = true)]
-    attended: bool,
-    #[arg(long, required = true)]
-    reboot: bool,
-    #[arg(long, value_name = "PATH")]
-    pub(crate) binary: PathBuf,
-    #[arg(long, value_name = "PATH")]
-    pub(crate) out: PathBuf,
-    #[arg(long, default_value = "json")]
-    pub(crate) input_encoding: String,
-    #[arg(long, default_value = "legacy")]
-    pub(crate) artifact_profile: String,
-    /// Add ZX Spectrum, SNES, Neo Geo, and Saturn from the live filesystem.
-    #[arg(long)]
-    pub(crate) generic_examples: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct CatalogFastFiveC64ExperimentsArgs {
-    #[arg(long, required = true)]
-    attended: bool,
-    #[arg(long, required = true)]
-    reboot: bool,
-    #[arg(long, value_name = "PATH")]
-    pub(crate) binary: PathBuf,
-    #[arg(long, value_name = "PATH")]
-    pub(crate) out: PathBuf,
-}
-
-#[derive(Debug, Args)]
-pub struct CatalogFastFiveExperimentsArgs {
-    #[arg(long, required = true)]
-    attended: bool,
-    #[arg(long, required = true)]
-    reboot: bool,
-    #[arg(long, value_name = "PATH")]
-    pub(crate) binary: PathBuf,
-    #[arg(long, value_name = "DIRECTORY")]
-    pub(crate) out: PathBuf,
-}
-
-#[derive(Debug, Args)]
-pub struct CatalogFastFivePprofArgs {
-    #[arg(long, required = true)]
-    attended: bool,
-    #[arg(long, required = true)]
-    reboot: bool,
-    #[arg(long, value_name = "PATH")]
-    pub(crate) binary: PathBuf,
-    #[arg(long, value_name = "DIRECTORY")]
-    pub(crate) out: PathBuf,
-    #[arg(long, default_value = "json")]
-    pub(crate) input_encoding: String,
-    #[arg(long, default_value = "legacy")]
-    pub(crate) artifact_profile: String,
-}
-
-#[derive(Debug, Args)]
-pub struct CatalogFastRefreshPprofArgs {
-    #[arg(long, required = true)]
-    attended: bool,
-    #[arg(long, required = true)]
-    reboot: bool,
-    #[arg(long, value_name = "PATH")]
-    pub(crate) binary: PathBuf,
-    #[arg(long, value_name = "DIRECTORY")]
-    pub(crate) out: PathBuf,
-    #[arg(long, default_value = "no-change")]
-    pub(crate) scenario: String,
-}
-
-#[derive(Debug, Args)]
-pub struct CatalogFastRefreshBenchmarkArgs {
-    #[arg(long, required = true)]
-    attended: bool,
-    #[arg(long, required = true)]
-    reboot: bool,
-    #[arg(long, value_name = "PATH")]
-    pub(crate) binary: PathBuf,
-    #[arg(long, value_name = "PATH")]
-    pub(crate) out: PathBuf,
-    #[arg(long, default_value = "no-change")]
-    pub(crate) scenario: String,
-}
-
-#[derive(Debug, Args)]
-pub struct CatalogFastSourceAbArgs {
-    #[arg(long, required = true)]
-    attended: bool,
-    #[arg(long, required = true)]
-    reboot: bool,
-    #[arg(long, value_name = "PATH")]
-    pub(crate) binary: PathBuf,
-    #[arg(long, value_name = "PATH")]
-    pub(crate) out: PathBuf,
-}
-
-#[derive(Debug, Args)]
-pub struct CatalogFastMediaAbArgs {
-    #[arg(long, required = true)]
-    attended: bool,
-    #[arg(long, required = true)]
-    reboot: bool,
-    #[arg(long, value_name = "PATH")]
-    pub(crate) binary: PathBuf,
-    #[arg(long, value_name = "PATH")]
-    pub(crate) out: PathBuf,
-}
-
-#[derive(Debug, Args)]
-pub struct CatalogFastFiveOldColdArgs {
-    #[arg(long, required = true)]
-    attended: bool,
-    #[arg(long, required = true)]
-    reboot: bool,
-    #[arg(long, value_name = "PATH")]
-    pub(crate) out: PathBuf,
-    #[arg(long, default_value = "fast-five")]
-    pub(crate) target_set: String,
 }
 
 #[derive(Debug, Args)]
@@ -552,19 +411,7 @@ impl DeviceCommand {
             Self::Display { command } => !matches!(command, DisplayCommand::RouteStatus),
             Self::Crt { .. } => true,
             Self::Launcher { command } => !matches!(command, LauncherCommand::Status),
-            Self::Catalog { command } => matches!(
-                command,
-                CatalogCommand::FastFivePrototype(_)
-                    | CatalogCommand::FastFiveC64Experiments(_)
-                    | CatalogCommand::FastFiveExperiments(_)
-                    | CatalogCommand::FastFivePprof(_)
-                    | CatalogCommand::FastRefreshPprof(_)
-                    | CatalogCommand::FastRefreshBenchmark(_)
-                    | CatalogCommand::FastSourceAb(_)
-                    | CatalogCommand::FastMediaAb(_)
-                    | CatalogCommand::FastFiveOldCold(_)
-                    | CatalogCommand::Purge(_)
-            ),
+            Self::Catalog { command } => matches!(command, CatalogCommand::Purge(_)),
             Self::Media { command } => matches!(command, MediaCommand::Download(_)),
             Self::Fpga { .. } => true,
         }
@@ -647,53 +494,6 @@ mod tests {
         assert!(
             TestCli::try_parse_from([
                 "test",
-                "catalog",
-                "fast-five-prototype",
-                "--binary",
-                "prototype",
-                "--out",
-                "report.json",
-            ])
-            .is_err()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
-                "catalog",
-                "fast-five-old-cold",
-                "--attended",
-                "--out",
-                "report.json",
-            ])
-            .is_err()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
-                "catalog",
-                "fast-five-c64-experiments",
-                "--binary",
-                "prototype",
-                "--out",
-                "report.json",
-            ])
-            .is_err()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
-                "catalog",
-                "fast-five-pprof",
-                "--binary",
-                "prototype",
-                "--out",
-                "profile",
-            ])
-            .is_err()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
                 "fpga",
                 "install-experimental",
                 "--rbf",
@@ -714,18 +514,6 @@ mod tests {
                 "--attended",
                 "--output",
                 "/tmp/launch-return-once",
-            ])
-            .is_ok()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
-                "catalog",
-                "fast-five-old-cold",
-                "--attended",
-                "--reboot",
-                "--out",
-                "report.json",
             ])
             .is_ok()
         );
@@ -848,48 +636,6 @@ mod tests {
         assert!(
             TestCli::try_parse_from([
                 "test",
-                "catalog",
-                "fast-five-prototype",
-                "--attended",
-                "--reboot",
-                "--binary",
-                "prototype",
-                "--out",
-                "report.json",
-            ])
-            .is_ok()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
-                "catalog",
-                "fast-five-c64-experiments",
-                "--attended",
-                "--reboot",
-                "--binary",
-                "prototype",
-                "--out",
-                "report.json",
-            ])
-            .is_ok()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
-                "catalog",
-                "fast-five-pprof",
-                "--attended",
-                "--reboot",
-                "--binary",
-                "prototype",
-                "--out",
-                "profile",
-            ])
-            .is_ok()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
                 "fpga",
                 "install-experimental",
                 "--rbf",
@@ -902,6 +648,47 @@ mod tests {
             ])
             .is_ok()
         );
+    }
+
+    #[test]
+    fn retired_catalog_experiments_are_not_parseable() {
+        for command in [
+            "fast-five-prototype",
+            "fast-five-c64-experiments",
+            "fast-five-experiments",
+            "fast-five-pprof",
+            "fast-refresh-pprof",
+            "fast-refresh-benchmark",
+            "fast-source-ab",
+            "fast-media-ab",
+            "fast-five-old-cold",
+        ] {
+            let error = TestCli::try_parse_from(["test", "catalog", command])
+                .err()
+                .expect("retired command");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::InvalidSubcommand,
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn retained_catalog_commands_still_parse() {
+        for args in [
+            vec!["inspect"],
+            vec!["cores"],
+            vec!["metadata-qualification", "--out", "report.json"],
+            vec!["rom-audit", "--out", "report.json"],
+            vec!["neogeo-family-audit", "--out", "report.json"],
+            vec!["screenshots", "--system", "arcade", "--out", "report.tsv"],
+            vec!["screenshot-qualification", "--out-dir", "reports"],
+            vec!["query", "--database", "catalog", "--sql", "SELECT 1"],
+            vec!["purge", "--attended", "--reboot"],
+        ] {
+            assert!(TestCli::try_parse_from(["test", "catalog"].into_iter().chain(args)).is_ok());
+        }
     }
 
     #[test]
@@ -922,55 +709,5 @@ mod tests {
         let purge = TestCli::try_parse_from(["test", "catalog", "purge", "--attended", "--reboot"])
             .unwrap();
         assert!(purge.command.is_mutation());
-        let fast_five = TestCli::try_parse_from([
-            "test",
-            "catalog",
-            "fast-five-prototype",
-            "--attended",
-            "--reboot",
-            "--binary",
-            "prototype",
-            "--out",
-            "report.json",
-        ])
-        .unwrap();
-        assert!(fast_five.command.is_mutation());
-        let old_cold = TestCli::try_parse_from([
-            "test",
-            "catalog",
-            "fast-five-old-cold",
-            "--attended",
-            "--reboot",
-            "--out",
-            "report.json",
-        ])
-        .unwrap();
-        assert!(old_cold.command.is_mutation());
-        let c64_experiments = TestCli::try_parse_from([
-            "test",
-            "catalog",
-            "fast-five-c64-experiments",
-            "--attended",
-            "--reboot",
-            "--binary",
-            "prototype",
-            "--out",
-            "report.json",
-        ])
-        .unwrap();
-        assert!(c64_experiments.command.is_mutation());
-        let pprof = TestCli::try_parse_from([
-            "test",
-            "catalog",
-            "fast-five-pprof",
-            "--attended",
-            "--reboot",
-            "--binary",
-            "prototype",
-            "--out",
-            "profile",
-        ])
-        .unwrap();
-        assert!(pprof.command.is_mutation());
     }
 }
