@@ -90,10 +90,12 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
         print(f"magik2 check: --profile requires the motion scenario (result: {run})", file=os.sys.stderr)
         return 2
     profile_id = "profile" if arguments.profile else None
+    session_started = False
     try:
         agent, status = connect_agent(run, PROFILE_AGENT_CAPABILITIES if profile_id is not None else CHECK_AGENT_CAPABILITIES)
         ensure_probe(agent, status, run)
         with fresh_session(agent, profile_id=profile_id) as application:
+            session_started = True
             if "smoke" in scenarios:
                 append_event(run, {"phase": "smoke", "outcome": "started"})
                 append_event(run, {"phase": "smoke", "outcome": "passed", **smoke(application, run / "smoke.png")})
@@ -115,11 +117,12 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
                     append_event(run, {"phase": "profile-artifact", "outcome": "retained", "name": name, "instrumented": True})
                 except (AgentError, OSError) as error:
                     append_event(run, {"phase": "profile-artifact", "outcome": "unavailable", "name": name, "error": str(error)})
-        try:
-            agent.start(restart=True)
-            append_event(run, {"phase": "persistent-restart", "outcome": "passed"})
-        except (BootstrapError, AgentError, OSError, UnboundLocalError) as error:
-            append_event(run, {"phase": "persistent-restart", "outcome": "failed", "error": type(error).__name__})
+        if session_started:
+            try:
+                agent.start(restart=True)
+                append_event(run, {"phase": "persistent-restart", "outcome": "passed"})
+            except (BootstrapError, AgentError, OSError, UnboundLocalError) as error:
+                append_event(run, {"phase": "persistent-restart", "outcome": "failed", "error": type(error).__name__})
     append_event(run, {"phase": "check", "outcome": "passed"})
     print(f"magik2 check: passed ({','.join(scenarios)}) (result: {run})")
     return 0
