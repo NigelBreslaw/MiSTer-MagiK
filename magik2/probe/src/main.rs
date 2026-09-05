@@ -341,7 +341,6 @@ fn main() -> Result<(), String> {
             framebuffer
                 .present_rows_565(&cached, 0, height)
                 .expect("present cached RGB565 frame");
-            previews.publish_if_watched(&cached, width, height, metrics_start.elapsed());
             let mut metrics = metrics_for_frame.borrow_mut();
             metrics.presentations += 1;
             metrics.last_render_us = render_start.elapsed().as_micros() as u64;
@@ -369,6 +368,7 @@ fn main() -> Result<(), String> {
             write_metrics(width, height, metrics_start.elapsed(), &metrics)?;
         }
         drop(metrics);
+        previews.publish_if_watched(&cached, width, height, metrics_start.elapsed());
         if !rendered {
             std::thread::sleep(Duration::from_millis(2));
         }
