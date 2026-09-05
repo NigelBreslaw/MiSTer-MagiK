@@ -7,6 +7,9 @@ Raw logs, metrics, profiles and command results remain under ignored
 `build/magik2-results`; the index records their paths and exact artifact identities.
 No production app, Main binary, FPGA or platform manifest was changed.
 
+The current delivery matrix now uses **two attempts per case** and reports the
+slower time. The twenty-attempt results below are historical evidence.
+
 ## Delivery timings
 
 Twenty attempts per completed case, nearest-rank p95, including all failures.

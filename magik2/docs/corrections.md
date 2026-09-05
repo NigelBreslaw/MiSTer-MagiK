@@ -35,5 +35,5 @@ connection limit. Cleanup and Main recovery have their own bounded deadlines;
 the relay deadline is not a promise that every recovery completes at exactly
 60 seconds. Errors remain actionable and do not trigger reboot or rollback ladders.
 
-Delivery timing targets are diagnostics, not deployment gates. All attempts,
-including failures and slow samples, belong in the nearest-rank p95 calculation.
+Delivery timing targets are diagnostics, not deployment gates. The current delivery matrix uses two attempts per case, retaining failures and
+reporting the slower result. Historical acceptance used twenty-sample p95.

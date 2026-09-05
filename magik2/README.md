@@ -91,10 +91,11 @@ Core changes use a dedicated tooling PR and `magik2-tooling` label. Probe and
 scenario edits are consumer work. CI checks scope and the focused tests; it has
 no device access and does not impose runtime delivery gates.
 
-Run `scripts/magik2 acceptance` for twenty attempts each of unchanged deploy,
+Run `scripts/magik2 acceptance` for two attempts each of unchanged deploy,
 changed prebuilt deploy, Rust edit and Slint edit. It temporarily edits the
 probe and restores its original sources and app in cleanup; use a checkout
 that no other process is editing during the run. `scripts/magik2 acceptance
 --contracts` checks rejected uploads, superseded starts, viewer streams,
 viewer-on motion, disconnected test attachment and observed Main recovery.
+The timing matrix reports both attempts and the slower time, without percentile estimates.
 Both retain indexed results. See [review corrections](docs/corrections.md).

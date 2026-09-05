@@ -1,19 +1,26 @@
 from magik2.acceptance import summarize
 
 
-def test_failed_attempts_remain_in_the_percentile_and_failures():
-    attempts = [{"elapsed_ms": 100, "exit_code": 0}] * 18 + [
+def test_failed_attempts_remain_in_the_timings_and_failures():
+    attempts = [
         {"elapsed_ms": 3000, "exit_code": 2},
         {"elapsed_ms": 4000, "exit_code": 0},
     ]
     result = summarize(attempts, 1000)
     assert result == {
-        "attempts": 20,
+        "attempts": 2,
         "failures": 1,
-        "p95_ms": 3000,
+        "slowest_ms": 4000,
         "target_ms": 1000,
         "target_met": False,
     }
+
+
+def test_two_successful_attempts_are_sufficient():
+    rows = [{"elapsed_ms": 500, "exit_code": 0}, {"elapsed_ms": 900, "exit_code": 0}]
+    assert summarize(rows, 1000)["target_met"]
+    assert summarize(rows, 1000)["slowest_ms"] == 900
+    assert not summarize(rows[:1], 1000)["target_met"]
 
 
 def test_cancellation_retains_attempt_and_restores_sources(monkeypatch, tmp_path):
