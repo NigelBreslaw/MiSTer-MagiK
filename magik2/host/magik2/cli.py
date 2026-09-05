@@ -9,8 +9,9 @@ import time
 import webbrowser
 from pathlib import Path
 
+from .apps import APPLICATIONS, application, repository
 from .bootstrap import BootstrapError, SshBootstrap
-from .build import ensure_arm_probe, ensure_arm_agent, ensure_arm_package
+from .build import ensure_arm_application, ensure_arm_agent, ensure_arm_package
 from .client import AgentError, NativeAgent
 from .compatibility import AgentStatus
 from .results import (
@@ -28,6 +29,7 @@ STATUS_CAPABILITIES = {"status"}
 STOP_CAPABILITIES = {"status", "lifecycle-v1"}
 REQUIRED_AGENT_CAPABILITIES = {
     "status",
+    "applications",
     "upload-v1",
     "start-artifact",
     "request-replay-v1",
@@ -63,20 +65,28 @@ def main() -> int:
         help="exercise recovery and streaming instead of timing",
     )
     build_command = subcommands.add_parser("build")
-    build_command.add_argument("target", choices=("agent", "probe"))
+    build_command.add_argument(
+        "target", choices=("agent", "app"), nargs="?", default="app"
+    )
     check_command = subcommands.add_parser("check")
-    check_command.add_argument("scenario", choices=("smoke", "motion"), nargs="?")
+    check_command.add_argument(
+        "scenario", choices=("smoke", "motion", "idle"), nargs="?"
+    )
     check_command.add_argument("--profile", action="store_true")
     subcommands.add_parser("watch")
     subcommands.add_parser("status")
     subcommands.add_parser("stop")
+    for command in subcommands.choices.values():
+        command.add_argument("--app", choices=tuple(APPLICATIONS), default="mini-magik")
     arguments = parser.parse_args()
 
     output_root = Path(os.environ.get("MISTER_MAGIK2_RESULTS", "build/magik2-results"))
     run = create_run(
         output_root, arguments.command, source_context(os.environ.get("MISTER_IP", ""))
     )
-    append_event(run, {"phase": "requested", "command": arguments.command})
+    append_event(
+        run, {"phase": "requested", "command": arguments.command, "app": arguments.app}
+    )
     code = 2
     try:
         code = dispatch(arguments, run)
@@ -97,7 +107,11 @@ def main() -> int:
 
 def dispatch(arguments, run) -> int:
     if arguments.command == "build":
-        package = Path(__file__).resolve().parents[2] / arguments.target
+        package = (
+            Path(__file__).resolve().parents[2] / "agent"
+            if arguments.target == "agent"
+            else repository() / application(arguments.app).package
+        )
         built = ensure_arm_package(package, package / "target/magik2-build.json")
         print(built.artifact)
         return 0
@@ -127,7 +141,7 @@ def dispatch(arguments, run) -> int:
     if arguments.command == "check":
         return check(arguments, run)
     if arguments.command == "watch":
-        return watch(run)
+        return watch(run, arguments.app)
     if arguments.command != "status":
         print(
             f"magik2 {arguments.command}: not implemented yet (result: {run})",
@@ -165,7 +179,7 @@ def deploy(_arguments: argparse.Namespace, run: Path) -> int:
                 "elapsed_ms": int((time.monotonic() - started) * 1_000),
             },
         )
-        if ensure_probe(agent, status, run):
+        if ensure_application(agent, status, run, _arguments.app):
             append_event(
                 run,
                 {
@@ -174,7 +188,7 @@ def deploy(_arguments: argparse.Namespace, run: Path) -> int:
                     "elapsed_ms": int((time.monotonic() - started) * 1_000),
                 },
             )
-            print(f"magik2 deploy: probe already ready (result: {run})")
+            print(f"magik2 deploy: application already ready (result: {run})")
             return 0
         append_event(
             run,
@@ -191,7 +205,7 @@ def deploy(_arguments: argparse.Namespace, run: Path) -> int:
     finally:
         if "agent" in locals():
             retain_diagnostics(run, agent)
-    print(f"magik2 deploy: probe started (result: {run})")
+    print(f"magik2 deploy: application started (result: {run})")
     return 0
 
 
@@ -200,24 +214,30 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
 
     scenarios = Path(__file__).resolve().parents[2] / "scenarios"
     options = [
-        str(scenarios),
+        str(
+            scenarios
+            / ("test_magik.py" if arguments.app == "magik" else "test_probe.py")
+        ),
         "-q",
         "-p",
         "no:cacheprovider",
         "--magik2-device",
         "--magik2-run",
         str(run.resolve()),
+        "--magik2-app",
+        arguments.app,
     ]
     if arguments.scenario:
         options += ["-k", arguments.scenario]
     if arguments.profile:
-        if arguments.scenario != "motion":
+        measurement = "idle" if arguments.app == "magik" else "motion"
+        if arguments.scenario != measurement:
             append_event(
                 run,
                 {
                     "phase": "check",
                     "outcome": "failed",
-                    "error": "--profile requires motion",
+                    "error": f"--profile requires {measurement}",
                 },
             )
             return 2
@@ -249,9 +269,12 @@ def stop(run: Path) -> int:
     return 0
 
 
-def watch(run: Path) -> int:
+def watch(run: Path, app_name: str = "mini-magik") -> int:
     try:
-        agent, _ = connect_agent(run, WATCH_AGENT_CAPABILITIES)
+        agent, status = connect_agent(
+            run, WATCH_AGENT_CAPABILITIES | REQUIRED_AGENT_CAPABILITIES
+        )
+        ensure_application(agent, status, run, app_name)
         server, url = serve(agent)
         append_event(run, {"phase": "watch", "outcome": "started", "url": url})
         webbrowser.open(url)
@@ -269,9 +292,13 @@ def watch(run: Path) -> int:
             server.server_close()
 
 
-def ensure_probe(agent: NativeAgent, status: AgentStatus, run: Path) -> bool:
-    probe_root = Path(__file__).resolve().parents[2] / "probe"
-    built = ensure_arm_probe(
+def ensure_application(
+    agent: NativeAgent, status: AgentStatus, run: Path, app_name: str = "mini-magik"
+) -> bool:
+    app = application(app_name)
+    agent.artifact = app.name
+    probe_root = repository() / app.package
+    built = ensure_arm_application(
         probe_root,
         probe_root / "target/magik2-build.json",
     )
@@ -303,17 +330,18 @@ def ensure_probe(agent: NativeAgent, status: AgentStatus, run: Path) -> bool:
     )
     healthy = (
         status.fields.get("running") is True
+        and status.fields.get("artifact") == app.name
         and status.fields.get("running_sha256") == artifact_hash
         and status.fields.get("ready") is True
     )
     if healthy:
         append_event(run, {"phase": "deploy", "outcome": "no-op", "bytes": 0})
         return True
-    changed = status.fields.get("artifact_sha256") != artifact_hash
+    changed = status.fields.get("artifacts", {}).get(app.name) != artifact_hash
     if changed:
         upload_started = time.monotonic()
         append_event(run, {"phase": "upload", "bytes": len(payload)})
-        agent.upload("probe", payload)
+        agent.upload(app.name, payload)
         upload_elapsed_ms = max(1, int((time.monotonic() - upload_started) * 1_000))
         append_event(
             run,

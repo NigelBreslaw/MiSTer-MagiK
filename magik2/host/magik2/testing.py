@@ -37,6 +37,7 @@ def fresh_session(
     environment.update(
         {
             "MISTER_IP": agent.host,
+            "MISTER_MAGIK2_APP": getattr(agent, "artifact", "mini-magik"),
             "MISTER_MAGIK2_PORT": str(agent.port),
             "MISTER_MAGIK2_TOKEN": agent.token,
         }

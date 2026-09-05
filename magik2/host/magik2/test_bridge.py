@@ -31,6 +31,7 @@ def main() -> int:
         )
     native_port = int(os.environ.get("MISTER_MAGIK2_PORT", "7500"))
     agent = NativeAgent(device, token, native_port)
+    agent.artifact = os.environ.get("MISTER_MAGIK2_APP", "mini-magik")
     agent.expected_sha256 = os.environ.get("MISTER_MAGIK2_EXPECTED_SHA256")
     with agent.open_test_tunnel(arguments.profile_id) as device_connection:
         with socket.create_connection((host, port), timeout=10) as testing_connection:

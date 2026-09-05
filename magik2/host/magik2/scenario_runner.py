@@ -3,7 +3,6 @@
 from __future__ import annotations
 import json
 from contextlib import contextmanager
-import math
 import os
 import statistics
 import time
@@ -22,6 +21,9 @@ from .testing import fresh_session
 
 def pytest_addoption(parser):
     group = parser.getgroup("magik2")
+    group.addoption(
+        "--magik2-app", choices=("mini-magik", "magik"), default="mini-magik"
+    )
     group.addoption(
         "--magik2-device",
         action="store_true",
@@ -63,22 +65,29 @@ def magik2_run(request):
 
 
 @pytest.fixture
-def probe_session(request, magik2_run):
+def application_session(request, magik2_run):
     from .cli import (
         connect_agent,
-        ensure_probe,
+        ensure_application,
         CHECK_AGENT_CAPABILITIES,
         PROFILE_AGENT_CAPABILITIES,
     )
 
+    selected = request.config.getoption("--magik2-app")
+    if (request.node.path.name == "test_magik.py") != (selected == "magik"):
+        pytest.skip("scenario belongs to the other application")
     profiled = request.node.get_closest_marker("magik2_profile") is not None
     if profiled and not request.config.getoption("--magik2-profile"):
         pytest.skip("profiling not requested")
     profile_id = f"{magik2_run.name}-{uuid.uuid4().hex[:8]}" if profiled else None
     agent, status = connect_agent(
-        magik2_run, PROFILE_AGENT_CAPABILITIES if profiled else CHECK_AGENT_CAPABILITIES
+        magik2_run,
+        (PROFILE_AGENT_CAPABILITIES if profiled else CHECK_AGENT_CAPABILITIES)
+        | {"measurement"},
     )
-    ensure_probe(agent, status, magik2_run)
+    ensure_application(
+        agent, status, magik2_run, request.config.getoption("--magik2-app")
+    )
     with managed_session(
         agent, magik2_run, profile_id, request.node.nodeid
     ) as application:
@@ -179,13 +188,19 @@ def summarize(run: Path) -> None:
     samples = [
         e
         for e in events
-        if e.get("phase") == "motion"
+        if e.get("phase") in {"motion", "idle"}
         and e.get("outcome") == "measured"
         and e.get("instrumented") is False
     ]
     if not samples:
         return
-    values = sorted(e["render_us_total"] / e["presentations"] for e in samples)
+    values = sorted(
+        e["render_us_total"] / e["presentations"]
+        for e in samples
+        if e["presentations"] > 0
+    )
+    if not values:
+        return
     append_event(
         run,
         {
@@ -195,7 +210,7 @@ def summarize(run: Path) -> None:
             "render_us_per_frame": {
                 "min": values[0],
                 "median": statistics.median(values),
-                "p95": values[math.ceil(0.95 * len(values)) - 1],
+                "max": values[-1],
             },
             "samples": samples,
         },

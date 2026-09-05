@@ -148,6 +148,8 @@ impl Agent {
         &[
             "status",
             "transfer-check",
+            "applications",
+            "measurement",
             "diagnostics",
             "upload-v1",
             "lifecycle-v1",
@@ -348,9 +350,10 @@ impl Agent {
                     "agent_sha256": installed_hash(&PathBuf::from("/proc/self/exe")),
                     "capabilities": Self::capabilities(),
                     "running": self.running(),
-                    "artifact": "probe",
+                    "artifact": self.running_identity().and_then(|record| PathBuf::from(record.executable).file_name().map(|name|name.to_string_lossy().into_owned())),
                     "pid": self.running_identity().map(|record| record.pid),
                     "artifact_sha256": installed_hash(&self.install_root.join("probe")),
+                    "artifacts": {"mini-magik":installed_hash(&self.install_root.join("mini-magik")), "magik":installed_hash(&self.install_root.join("magik"))},
                     "running_sha256": self.running_identity().map(|record| record.sha256),
                     "ready": self.running_identity().is_some_and(|record| self.ready_for(record.pid, &record.sha256)),
                     "legacy_agent_running": legacy_agent_running(),
@@ -359,6 +362,14 @@ impl Agent {
             "start" => self.start(&request),
             "stop" => self.stop(&request),
             "metrics" => self.metrics(&request),
+            "measure" => match fs::write(self.state_root.join("measure-request"), b"start") {
+                Ok(()) => response(&request.id, "measurement-requested", serde_json::json!({})),
+                Err(error) => response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"measurement-request","detail":error.to_string()}),
+                ),
+            },
             "diagnostics" => response(
                 &request.id,
                 "diagnostics",
@@ -447,7 +458,7 @@ impl Agent {
             .get("artifact")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("probe");
-        if artifact != "probe" {
+        if !matches!(artifact, "probe" | "mini-magik" | "magik") {
             return response(
                 &request.id,
                 "error",
@@ -479,6 +490,7 @@ impl Agent {
             && test_server.is_none()
             && self.running_identity().is_some_and(|record| {
                 Some(&record.sha256) == published_hash.as_ref()
+                    && record.executable == executable.to_string_lossy()
                     && self.ready_for(record.pid, &record.sha256)
             })
         {
@@ -544,7 +556,11 @@ impl Agent {
                 serde_json::json!({"code":"main-suspend-failed","detail":error,"recovery":main_handoff("mister_magik_resume\n").err()}),
             );
         }
+        let _ = fs::remove_file(self.state_root.join("measure-request"));
         let mut command = Command::new(executable);
+        if artifact == "magik" {
+            command.args(["ui", "launcher", "0"]);
+        }
         command
             .env("MISTER_MAGIK2_STATE_ROOT", &self.state_root)
             .env(
@@ -817,7 +833,11 @@ impl Agent {
     fn write_owned_process(&self, pid: u32, verified_hash: &str) -> Result<(), String> {
         let record = OwnedProcess {
             pid,
-            executable: self.install_root.join("probe").display().to_string(),
+            executable: fs::read_link(format!("/proc/{pid}/exe"))
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .trim_end_matches(" (deleted)")
+                .to_owned(),
             start_ticks: process_start_ticks(pid).ok_or("cannot identify child birth")?,
             sha256: verified_hash.to_owned(),
         };
@@ -860,11 +880,17 @@ impl Agent {
     }
 
     fn discover_owned_process(&self) -> Option<OwnedProcess> {
-        let executable = self.install_root.join("probe").display().to_string();
         let mut matches = fs::read_dir("/proc").ok()?.flatten().filter_map(|entry| {
             let pid = entry.file_name().to_string_lossy().parse::<u32>().ok()?;
             let path = fs::read_link(format!("/proc/{pid}/exe")).ok()?;
-            if path.to_string_lossy().trim_end_matches(" (deleted)") != executable {
+            let executable = path
+                .to_string_lossy()
+                .trim_end_matches(" (deleted)")
+                .to_owned();
+            if !["probe", "mini-magik", "magik"]
+                .iter()
+                .any(|name| self.install_root.join(name).to_string_lossy() == executable)
+            {
                 return None;
             }
             Some(OwnedProcess {
@@ -1069,7 +1095,7 @@ impl Agent {
         mut child: Child,
         expected_hash: &str,
     ) -> Envelope {
-        let deadline = Instant::now() + Duration::from_secs(8);
+        let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             if self.ready_for(child.id(), expected_hash) {
                 // Hash the actual executable once after readiness, not on every

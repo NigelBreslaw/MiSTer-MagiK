@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from magik2.build import (
-    ensure_arm_probe,
+    ensure_arm_application,
     needs_build,
     source_fingerprint,
     write_build_cache,
@@ -33,11 +33,7 @@ def test_build_runs_only_when_a_probe_artifact_is_stale(tmp_path, monkeypatch) -
     (probe / "src").mkdir(parents=True)
     (probe / "src" / "main.rs").write_text("fn main() {}\n")
     artifact = (
-        probe
-        / "target"
-        / "armv7-unknown-linux-gnueabihf"
-        / "release"
-        / "mister-magik2-probe"
+        probe / "target" / "armv7-unknown-linux-gnueabihf" / "release" / "mini-magik"
     )
     cache = tmp_path / "cache.json"
     calls: list[list[str]] = []
@@ -51,10 +47,10 @@ def test_build_runs_only_when_a_probe_artifact_is_stale(tmp_path, monkeypatch) -
         artifact.write_bytes(b"probe")
         return Result()
 
-    first = ensure_arm_probe(
+    first = ensure_arm_application(
         probe, cache, runner=runner, prepare=lambda *_: "test-builder"
     )
-    second = ensure_arm_probe(
+    second = ensure_arm_application(
         probe, cache, runner=runner, prepare=lambda *_: "test-builder"
     )
 
@@ -70,7 +66,7 @@ def test_prebuilt_artifact_bypasses_compilation(monkeypatch, tmp_path) -> None:
     artifact.write_bytes(b"prebuilt")
     monkeypatch.setenv("MISTER_MAGIK2_PREBUILT_ARTIFACT", str(artifact))
 
-    result = ensure_arm_probe(tmp_path / "probe", tmp_path / "cache.json")
+    result = ensure_arm_application(tmp_path / "probe", tmp_path / "cache.json")
 
     assert result.artifact == artifact
     assert result.prebuilt and not result.rebuilt
@@ -106,3 +102,18 @@ def test_replaced_artifact_invalidates_cache(tmp_path):
     write_build_cache(cache, "inputs", artifact)
     artifact.write_bytes(b"B")
     assert needs_build(cache, "inputs")
+
+
+def test_embedded_private_fonts_invalidate_the_real_app(tmp_path):
+    app = tmp_path / "apps/mister"
+    (app / "src").mkdir(parents=True)
+    fonts = tmp_path / "private/fonts"
+    fonts.mkdir(parents=True)
+    font = fonts / "font.mmbf"
+    font.write_bytes(b"first")
+    (app / "src/font.rs").write_text(
+        'const FONT: &[u8] = include_bytes!("../../../private/fonts/font.mmbf");'
+    )
+    before = source_fingerprint(app)
+    font.write_bytes(b"changed")
+    assert source_fingerprint(app) != before

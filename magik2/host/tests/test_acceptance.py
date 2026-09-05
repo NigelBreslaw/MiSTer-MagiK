@@ -36,9 +36,7 @@ def test_cancellation_retains_attempt_and_restores_sources(monkeypatch, tmp_path
     rust = probe / "src/main.rs"
     rust.write_text("original Rust")
     (probe / "ui/probe.slint").write_text("original Slint")
-    artifact = (
-        probe / "target/armv7-unknown-linux-gnueabihf/release/mister-magik2-probe"
-    )
+    artifact = probe / "target/armv7-unknown-linux-gnueabihf/release/mini-magik"
     artifact.parent.mkdir(parents=True)
     artifact.write_bytes(b"probe")
     monkeypatch.setattr(

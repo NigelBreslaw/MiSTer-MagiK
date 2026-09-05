@@ -29,9 +29,7 @@ def run_delivery_matrix(run: Path) -> int:
     rust = probe / "src/main.rs"
     slint = probe / "ui/probe.slint"
     originals = {path: path.read_bytes() for path in (rust, slint)}
-    artifact = (
-        probe / "target/armv7-unknown-linux-gnueabihf/release/mister-magik2-probe"
-    )
+    artifact = probe / "target/armv7-unknown-linux-gnueabihf/release/mini-magik"
     index = {"cases": {}, "restoration": None}
     interrupted = False
     base_env = dict(os.environ)
@@ -137,7 +135,7 @@ def run_delivery_matrix(run: Path) -> int:
 
 def run_contract_checks(run: Path) -> int:
     """Exercise native recovery without altering Main, platform files or rebooting."""
-    from .cli import connect_agent, ensure_probe, CHECK_AGENT_CAPABILITIES
+    from .cli import connect_agent, ensure_application, CHECK_AGENT_CAPABILITIES
     from .client import AgentError
     from .frames import decode_preview
     from .results import append_event, retain_diagnostics
@@ -145,7 +143,7 @@ def run_contract_checks(run: Path) -> int:
     agent, status = connect_agent(
         run, CHECK_AGENT_CAPABILITIES | {"watch-v1", "diagnostics"}
     )
-    ensure_probe(agent, status, run)
+    ensure_application(agent, status, run)
     expected = agent.expected_sha256
 
     def record(case, **evidence):
