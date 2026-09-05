@@ -34,7 +34,7 @@ Streamline and gator sources:
 
 ## Reproduction
 
-The exact installed Dev runtime is delivered through `scripts/agent deliver`.
+The exact installed Dev runtime is delivered through `scripts/agent deliver platform`.
 The authoritative counter entry point is then run through:
 
 ```text

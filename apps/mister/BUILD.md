@@ -3,9 +3,21 @@
 For local macOS UI design and deterministic RGB565 captures, see
 [UI_PREVIEW.md](UI_PREVIEW.md).
 
-Run focused local Rust checks through `scripts/cargo`. Operational builds and
-delivery use `scripts/agent`; do not invoke Apple container, cross, or deployment
-implementation commands directly.
+Run focused local Rust checks through `scripts/cargo`. For everyday application
+builds, deployment, testing and profiling, use the shared [2.0 workflow](../../magik2/README.md):
+
+```sh
+scripts/magik2 deploy
+scripts/magik2 check
+scripts/magik2 watch
+scripts/magik2 check idle --profile
+```
+
+These commands target the development copy. No clean-commit or platform
+qualification gate applies. The remaining sections describe retained legacy
+platform/release builds, not prerequisites for application development.
+
+## Platform/release builds
 
 The typed build state machine is:
 
@@ -29,12 +41,12 @@ $magik-rust-lsp
 git add -- PATH...
 git commit -m "Describe the change"
 git push
-scripts/agent deliver
+scripts/agent deliver platform
 ```
 
 Validation ownership is defined in root `AGENTS.md`; `scripts/agent plan`
 previews the selected fast Python checks and CI boundary.
-`deliver` owns build scope, artifact qualification, transport, activation,
+`deliver platform` owns build scope, artifact qualification, transport, activation,
 rollback, and smoke verification. Human-only fixed scene operation is available
 through `scripts/agent device scene`; it is separate from building and deployment.
 

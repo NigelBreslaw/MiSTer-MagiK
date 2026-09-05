@@ -7,7 +7,7 @@ and an attended release qualification.
 ```text
 git add -- PATH...
 git commit -m "Describe the release candidate"
-scripts/agent deliver
+scripts/agent deliver platform
 scripts/agent release qualify
 ```
 

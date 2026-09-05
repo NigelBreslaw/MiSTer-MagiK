@@ -82,7 +82,7 @@ rebooting or running the installer; incomplete packages fail verification.
 ## Attended device/platform qualification
 
 The pre-push hook and CI must pass for the exact release commit before delivery
-and explicitly requested attended qualification (`scripts/agent deliver`, then
+and explicitly requested attended qualification (`scripts/agent deliver platform`, then
 `scripts/agent release qualify`). Distribution publication does not implicitly
 authorize or schedule these physical-device operations.
 Development delivery builds the app from its clean local commit and never
