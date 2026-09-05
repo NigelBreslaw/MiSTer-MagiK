@@ -256,7 +256,13 @@ jobs:
         uses: actions/cache@v6
         with:
           path: apps/mister/target/ffmpeg-minimal/armv7
-          key: ffmpeg-minimal-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-8.1.2-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.ffmpeg }}
+          # FFmpeg depends on its recipe and cross image, not the Rust toolchain.
+          # Keep the recipe hash ahead of the Rust-derived cache identity so a
+          # toolchain-only update restores this expensive, complete prefix.
+          key: ffmpeg-minimal-v3-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-8.1.2-${{ steps.cache-id.outputs.ffmpeg }}-${{ steps.cache-id.outputs.cross_abi }}
+          restore-keys: |
+            ffmpeg-minimal-v3-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-8.1.2-${{ steps.cache-id.outputs.ffmpeg }}-
+            ffmpeg-minimal-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-8.1.2-
 
       - name: Cache ARM build outputs
         uses: actions/cache@v6
