@@ -8,6 +8,7 @@ import re
 import subprocess
 import time
 import tomllib
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Callable
@@ -93,9 +94,13 @@ def needs_build(cache_file: Path, fingerprint: str) -> bool:
 
 def write_build_cache(cache_file: Path, fingerprint: str, artifact: Path) -> None:
     cache_file.parent.mkdir(parents=True, exist_ok=True)
-    temporary = cache_file.with_suffix(".tmp")
-    temporary.write_text(json.dumps({"fingerprint": fingerprint, "artifact": str(artifact.resolve()), "sha256": artifact_hash(artifact)}) + "\n")
-    temporary.replace(cache_file)
+    with tempfile.NamedTemporaryFile(mode="w", dir=cache_file.parent, delete=False) as output:
+        temporary = Path(output.name)
+        json.dump({"fingerprint": fingerprint, "artifact": str(artifact.resolve()), "sha256": artifact_hash(artifact)}, output)
+    try:
+        temporary.replace(cache_file)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def prepare_container(repository: Path, runner: Callable = subprocess.run) -> str:
@@ -133,7 +138,11 @@ def ensure_arm_package(package: Path, cache_file: Path, *, runner: Callable = su
         return BuildResult(artifact, False, int((time.monotonic() - started) * 1000), fingerprint=fingerprint)
     repository = package.resolve().parents[1]
     name = (prepare or prepare_container)(repository, runner)
-    result = runner(["container", "exec", "--workdir", f"/workspace/magik2/{package.name}", name,
+    environment = []
+    for variable in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"):
+        if variable in os.environ:
+            environment += ["--env", f"{variable}={os.environ[variable]}"]
+    result = runner(["container", "exec", *environment, "--workdir", f"/workspace/magik2/{package.name}", name,
                     "cargo", "build", "--locked", "--release", "--target", TARGET], check=False)
     if result.returncode or not artifact.is_file():
         raise RuntimeError(f"MagiK 2 ARM {package.name} build failed")

@@ -13,6 +13,22 @@ impl CpuProfile {
         if let Some(parent) = root.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
+        // Keep only the newest completed profiles. Never remove incomplete runs here.
+        if let Some(parent) = root.parent() {
+            let mut completed: Vec<_> = std::fs::read_dir(parent)
+                .map_err(|e| e.to_string())?
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry.file_type().is_ok_and(|kind| kind.is_dir())
+                        && entry.path().join("profile.json").is_file()
+                })
+                .collect();
+            completed.sort_by_key(|entry| entry.metadata().and_then(|m| m.modified()).ok());
+            let excess = completed.len().saturating_sub(19);
+            for entry in completed.into_iter().take(excess) {
+                std::fs::remove_dir_all(entry.path()).map_err(|e| e.to_string())?;
+            }
+        }
         // Refuse a reused run directory: a previous profile must never pass this run.
         std::fs::create_dir(&root).map_err(|e| e.to_string())?;
         let guard = pprof::ProfilerGuardBuilder::default()

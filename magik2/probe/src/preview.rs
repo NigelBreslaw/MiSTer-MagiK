@@ -26,11 +26,11 @@ impl PreviewProducer {
         std::thread::spawn(move || {
             loop {
                 let packet = worker_slot.lock().expect("preview slot").take();
-                if let Some((header, bytes)) = packet {
-                    if let Ok(mut socket) = UnixStream::connect(&socket_path) {
-                        let _ = socket.set_write_timeout(Some(Duration::from_millis(100)));
-                        let _ = write_preview_frame(&mut socket, header, &bytes);
-                    }
+                if let Some((header, bytes)) = packet
+                    && let Ok(mut socket) = UnixStream::connect(&socket_path)
+                {
+                    let _ = socket.set_write_timeout(Some(Duration::from_millis(100)));
+                    let _ = write_preview_frame(&mut socket, header, &bytes);
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }

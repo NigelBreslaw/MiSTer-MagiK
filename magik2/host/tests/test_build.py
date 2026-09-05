@@ -22,7 +22,8 @@ def test_cache_reuses_exact_probe_inputs(tmp_path) -> None:
     assert needs_build(cache, "different")
 
 
-def test_build_runs_only_when_a_probe_artifact_is_stale(tmp_path) -> None:
+def test_build_runs_only_when_a_probe_artifact_is_stale(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("RUSTFLAGS", "-C debuginfo=1")
     probe = tmp_path / "probe"
     (probe / "src").mkdir(parents=True)
     (probe / "src" / "main.rs").write_text("fn main() {}\n")
@@ -46,6 +47,7 @@ def test_build_runs_only_when_a_probe_artifact_is_stale(tmp_path) -> None:
     assert len(calls) == 1
     assert calls[0][:2] == ["container", "exec"]
     assert "test-builder" in calls[0]
+    assert "RUSTFLAGS=-C debuginfo=1" in calls[0]
 
 
 def test_prebuilt_artifact_bypasses_compilation(monkeypatch, tmp_path) -> None:

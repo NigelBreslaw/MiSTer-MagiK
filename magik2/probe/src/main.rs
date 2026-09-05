@@ -270,10 +270,10 @@ fn main() -> Result<(), String> {
                 motion_timer.stop();
                 probe.set_motion_running(false);
                 probe.set_motion_complete(true);
-                if let Some(session) = profile.take() {
-                    if let Err(error) = session.finish() {
-                        counters.error = Some(error);
-                    }
+                if let Some(session) = profile.take()
+                    && let Err(error) = session.finish()
+                {
+                    counters.error = Some(error);
                 }
             }
         }
