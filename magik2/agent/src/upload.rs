@@ -64,6 +64,10 @@ pub fn receive(
     Ok(staged)
 }
 
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,8 +104,4 @@ mod tests {
         drop(staged);
         fs::remove_dir_all(root).unwrap();
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }

@@ -72,6 +72,8 @@ struct ObservationState {
     next_log_sequence: u64,
 }
 
+type ObservationSnapshot = (Vec<(u64, String)>, Option<(u64, Vec<u8>)>);
+
 #[derive(Default)]
 struct Observation {
     state: Mutex<ObservationState>,
@@ -94,11 +96,7 @@ impl Observation {
         state.latest_frame = Some(bytes);
     }
 
-    fn snapshot(
-        &self,
-        after_log: u64,
-        after_frame: u64,
-    ) -> (Vec<(u64, String)>, Option<(u64, Vec<u8>)>) {
+    fn snapshot(&self, after_log: u64, after_frame: u64) -> ObservationSnapshot {
         let state = self.state.lock().expect("observation state poisoned");
         let logs = state
             .logs
@@ -193,10 +191,10 @@ impl Agent {
                 }
                 for name in ["probe.log", "agent.log"] {
                     let path = root.join(name);
-                    if fs::metadata(&path).is_ok_and(|m| m.len() > 1024 * 1024) {
-                        if let Ok(file) = OpenOptions::new().write(true).open(path) {
-                            let _ = file.set_len(0);
-                        }
+                    if fs::metadata(&path).is_ok_and(|m| m.len() > 1024 * 1024)
+                        && let Ok(file) = OpenOptions::new().write(true).open(path)
+                    {
+                        let _ = file.set_len(0);
                     }
                 }
                 std::thread::sleep(Duration::from_millis(200));
@@ -448,14 +446,13 @@ impl Agent {
             .fields
             .get("expected_sha256")
             .and_then(serde_json::Value::as_str)
+            && published_hash.as_deref() != Some(expected)
         {
-            if published_hash.as_deref() != Some(expected) {
-                return response(
-                    &request.id,
-                    "error",
-                    serde_json::json!({"code":"artifact-superseded","expected_sha256":expected,"published_sha256":published_hash}),
-                );
-            }
+            return response(
+                &request.id,
+                "error",
+                serde_json::json!({"code":"artifact-superseded","expected_sha256":expected,"published_sha256":published_hash}),
+            );
         }
         if !restart
             && test_server.is_none()
@@ -501,23 +498,23 @@ impl Agent {
                 );
             }
         };
-        if let Err(error) = fs::remove_file(self.readiness_path()) {
-            if error.kind() != io::ErrorKind::NotFound {
-                return response(
-                    &request.id,
-                    "error",
-                    serde_json::json!({"code":"readiness-clear-failed","detail":error.to_string()}),
-                );
-            }
+        if let Err(error) = fs::remove_file(self.readiness_path())
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            return response(
+                &request.id,
+                "error",
+                serde_json::json!({"code":"readiness-clear-failed","detail":error.to_string()}),
+            );
         }
-        if self.running() {
-            if let Err(error) = self.stop_owned_process() {
-                return response(
-                    &request.id,
-                    "error",
-                    serde_json::json!({"code":"stop-failed","detail":error}),
-                );
-            }
+        if self.running()
+            && let Err(error) = self.stop_owned_process()
+        {
+            return response(
+                &request.id,
+                "error",
+                serde_json::json!({"code":"stop-failed","detail":error}),
+            );
         }
         if let Err(error) = main_handoff("mister_magik_suspend\n") {
             return response(
@@ -1057,14 +1054,29 @@ impl Agent {
         child: &mut Child,
     ) -> Envelope {
         let _ = child.kill();
-        let _ = child.wait();
-        let recovery = main_handoff("mister_magik_resume\n");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let cleanup = loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break None,
+                Err(error) => break Some(error.to_string()),
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20))
+                }
+                Ok(None) => break Some("probe did not exit within cleanup deadline".to_owned()),
+            }
+        };
+        let recovery = if cleanup.is_none() {
+            main_handoff("mister_magik_resume\n")
+        } else {
+            Err(cleanup.clone().unwrap())
+        };
         response(
             &request.id,
             "error",
             serde_json::json!({
                 "code":code,
                 "exit_status":status.and_then(|value| value.code()),
+                "cleanup_error":cleanup,
                 "recovery":recovery.err(),
             }),
         )

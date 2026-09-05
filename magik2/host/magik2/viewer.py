@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import threading
 from pathlib import Path
 from collections import deque
@@ -24,6 +25,18 @@ class WatchState:
         self.logs: deque[str] = deque(maxlen=100)
         self.frame: bytes | None = None
         self.error: str | None = None
+        self.closed = threading.Event()
+        self.connection = None
+
+    def close(self) -> None:
+        self.closed.set()
+        connection = self.connection
+        if connection is not None:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            connection.close()
 
     def snapshot(self) -> dict[str, object]:
         with self._lock:
@@ -32,7 +45,8 @@ class WatchState:
     def consume(self, agent: NativeAgent) -> None:
         try:
             with agent.open_watch() as connection:
-                while True:
+                self.connection = connection
+                while not self.closed.is_set():
                     event, body = agent.read_watch_event(connection)
                     with self._lock:
                         if event.operation == "watch-metrics":
@@ -53,7 +67,8 @@ class WatchState:
 
 def serve(agent: NativeAgent) -> tuple[ThreadingHTTPServer, str]:
     state = WatchState()
-    threading.Thread(target=state.consume, args=(agent,), daemon=True).start()
+    consumer = threading.Thread(target=state.consume, args=(agent,), daemon=True)
+    consumer.start()
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -85,5 +100,11 @@ def serve(agent: NativeAgent) -> tuple[ThreadingHTTPServer, str]:
             self.end_headers()
             self.wfile.write(body)
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    class Server(ThreadingHTTPServer):
+        def server_close(self):
+            state.close()
+            super().server_close()
+            consumer.join(timeout=1)
+
+    server = Server(("127.0.0.1", 0), Handler)
     return server, f"http://127.0.0.1:{server.server_port}/"
