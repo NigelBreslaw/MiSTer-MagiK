@@ -15,7 +15,9 @@ class AgentStatus:
     @classmethod
     def from_response(cls, response: Mapping[str, object]) -> "AgentStatus":
         capabilities = response.get("capabilities", [])
-        if not isinstance(capabilities, list) or not all(isinstance(item, str) for item in capabilities):
+        if not isinstance(capabilities, list) or not all(
+            isinstance(item, str) for item in capabilities
+        ):
             raise ValueError("agent status has invalid capabilities")
         identity = response.get("identity", "unknown")
         if not isinstance(identity, str):

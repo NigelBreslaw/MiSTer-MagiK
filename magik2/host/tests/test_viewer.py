@@ -9,11 +9,13 @@ def test_closing_viewer_unblocks_a_native_read():
     state = WatchState()
     state.connection = local
     finished = threading.Event()
+
     def read():
         try:
             local.recv(1)
         finally:
             finished.set()
+
     thread = threading.Thread(target=read)
     thread.start()
     try:

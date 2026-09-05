@@ -33,4 +33,14 @@ class TokenStore:
 
 def state_root() -> Path:
     """Device credentials are shared by worktrees; an explicit override stays available."""
-    return Path(os.environ.get("MISTER_MAGIK2_STATE", str(Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "mister-magik2"))).expanduser()
+    return Path(
+        os.environ.get(
+            "MISTER_MAGIK2_STATE",
+            str(
+                Path(
+                    os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
+                )
+                / "mister-magik2"
+            ),
+        )
+    ).expanduser()

@@ -25,7 +25,9 @@ def _application_factory() -> Any:
 
 
 @contextlib.contextmanager
-def fresh_session(agent: NativeAgent, timeout: float = 20, profile_id: str | None = None) -> Iterator[Any]:
+def fresh_session(
+    agent: NativeAgent, timeout: float = 20, profile_id: str | None = None
+) -> Iterator[Any]:
     """Attach a fresh Slint test session over the native agent only."""
     environment = {
         key: value
@@ -57,17 +59,29 @@ def one_element(application: Any, label: str) -> Any:
     window = application.first_window
     if window is None:
         raise AssertionError("probe exposed no Slint window")
-    type_name = "Text" if label in {"build-label", "counter", "details-panel", "motion-state"} else "Rectangle"
+    type_name = (
+        "Text"
+        if label in {"build-label", "counter", "details-panel", "motion-state"}
+        else "Rectangle"
+    )
     matches = [
         element
-        for element in window.root_element.query_descendants().match_inherits(type_name).find_all()
+        for element in window.root_element.query_descendants()
+        .match_inherits(type_name)
+        .find_all()
         if element.accessible_label == label
     ]
     if len(matches) != 1:
         available = []
         for candidate_type in ("Text", "Rectangle"):
-            for element in window.root_element.query_descendants().match_inherits(candidate_type).find_all():
-                available.append(f"{element.type_name}:{element.id}:{element.accessible_label}")
+            for element in (
+                window.root_element.query_descendants()
+                .match_inherits(candidate_type)
+                .find_all()
+            ):
+                available.append(
+                    f"{element.type_name}:{element.id}:{element.accessible_label}"
+                )
                 if len(available) == 20:
                     break
             if len(available) == 20:

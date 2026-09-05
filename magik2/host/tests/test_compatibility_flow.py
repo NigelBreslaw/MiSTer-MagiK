@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import argparse
-import json
 import sys
 
 import pytest
@@ -14,10 +12,14 @@ from magik2.token_store import TokenStore
 
 
 def status(identity: str, capabilities: set[str]) -> AgentStatus:
-    return AgentStatus.from_response({"identity": identity, "capabilities": sorted(capabilities)})
+    return AgentStatus.from_response(
+        {"identity": identity, "capabilities": sorted(capabilities)}
+    )
 
 
-def configure_native(monkeypatch: pytest.MonkeyPatch, tmp_path, responses: list[AgentStatus | Exception]) -> list[str]:
+def configure_native(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, responses: list[AgentStatus | Exception]
+) -> list[str]:
     monkeypatch.setenv("MISTER_IP", "mister.test")
     monkeypatch.setenv("MISTER_MAGIK2_STATE", str(tmp_path / "state"))
     TokenStore(tmp_path / "state", "mister.test").save("cached-token")
@@ -40,12 +42,18 @@ def configure_native(monkeypatch: pytest.MonkeyPatch, tmp_path, responses: list[
     return tokens
 
 
-def test_branch_clients_keep_a_suitable_agent_despite_identity_changes(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_branch_clients_keep_a_suitable_agent_despite_identity_changes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     required = cli.REQUIRED_AGENT_CAPABILITIES
     tokens = configure_native(
         monkeypatch,
         tmp_path,
-        [status("branch-a", required), status("branch-b", required | {"future-v1"}), status("branch-a", required)],
+        [
+            status("branch-a", required),
+            status("branch-b", required | {"future-v1"}),
+            status("branch-a", required),
+        ],
     )
 
     class Bootstrap:
@@ -64,9 +72,13 @@ def test_branch_clients_keep_a_suitable_agent_despite_identity_changes(monkeypat
     assert tokens == ["cached-token", "cached-token", "cached-token"]
 
 
-def test_missing_capability_bootstraps_once_and_continues(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_missing_capability_bootstraps_once_and_continues(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     required = cli.REQUIRED_AGENT_CAPABILITIES
-    tokens = configure_native(monkeypatch, tmp_path, [status("old", {"status"}), status("new", required)])
+    tokens = configure_native(
+        monkeypatch, tmp_path, [status("old", {"status"}), status("new", required)]
+    )
     installs: list[str] = []
 
     class Bootstrap:
@@ -88,7 +100,9 @@ def test_missing_capability_bootstraps_once_and_continues(monkeypatch: pytest.Mo
     assert tokens == ["cached-token", "replacement-token"]
 
 
-def test_missing_capability_prefers_a_native_agent_update(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_missing_capability_prefers_a_native_agent_update(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     required = cli.REQUIRED_AGENT_CAPABILITIES
     monkeypatch.setenv("MISTER_IP", "mister.test")
     monkeypatch.setenv("MISTER_MAGIK2_STATE", str(tmp_path / "state"))
@@ -126,9 +140,13 @@ def test_missing_capability_prefers_a_native_agent_update(monkeypatch: pytest.Mo
     assert uploaded == [b"replacement-agent"]
 
 
-def test_absent_agent_bootstraps_and_authentication_failure_does_not(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_absent_agent_bootstraps_and_authentication_failure_does_not(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     required = cli.REQUIRED_AGENT_CAPABILITIES
-    configure_native(monkeypatch, tmp_path, [OSError("absent"), status("new", required)])
+    configure_native(
+        monkeypatch, tmp_path, [OSError("absent"), status("new", required)]
+    )
     installs: list[str] = []
 
     class Bootstrap:
@@ -146,13 +164,17 @@ def test_absent_agent_bootstraps_and_authentication_failure_does_not(monkeypatch
     assert cli.connect_agent(run)[1].supports(required)
     assert installs == ["install"]
 
-    configure_native(monkeypatch, tmp_path / "auth", [AgentError("authentication-failed")])
+    configure_native(
+        monkeypatch, tmp_path / "auth", [AgentError("authentication-failed")]
+    )
     with pytest.raises(AgentError, match="authentication-failed"):
         cli.connect_agent(create_run(tmp_path / "auth", "status", {}))
     assert installs == ["install"]
 
 
-def test_check_command_dispatches_without_shadowing_the_handler(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_check_command_dispatches_without_shadowing_the_handler(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     monkeypatch.setenv("MISTER_IP", "mister.test")
     monkeypatch.setenv("MISTER_MAGIK2_RESULTS", str(tmp_path / "results"))
     monkeypatch.setattr(sys, "argv", ["scripts/magik2", "check", "motion", "--profile"])
@@ -170,28 +192,42 @@ def test_check_command_dispatches_without_shadowing_the_handler(monkeypatch: pyt
     assert received["profile"] is True
 
 
-def test_fresh_worktrees_retrieve_token_without_replacing_compatible_agent(monkeypatch, tmp_path):
+def test_fresh_worktrees_retrieve_token_without_replacing_compatible_agent(
+    monkeypatch, tmp_path
+):
     monkeypatch.setenv("MISTER_IP", "mister.test")
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "shared"))
     monkeypatch.delenv("MISTER_MAGIK2_STATE", raising=False)
     seen = []
+
     class Bootstrap:
         def native_token(self):
             seen.append("retrieve")
             return "existing-token"
+
         def install_and_start(self, _binary):
             raise AssertionError("must retain compatible agent")
+
     class Agent:
         def __init__(self, _host, token):
             assert token == "existing-token"
+
         def status(self):
             return status("other-branch", cli.REQUIRED_AGENT_CAPABILITIES | {"extra"})
+
     monkeypatch.setattr(cli.SshBootstrap, "from_environment", lambda: Bootstrap())
     monkeypatch.setattr(cli, "NativeAgent", Agent)
-    monkeypatch.setattr(cli, "agent_binary_path", lambda: pytest.fail("compatible agent needs no local build"))
+    monkeypatch.setattr(
+        cli,
+        "agent_binary_path",
+        lambda: pytest.fail("compatible agent needs no local build"),
+    )
     for name in ("A", "B", "A"):
         checkout = tmp_path / name
         checkout.mkdir(exist_ok=True)
         monkeypatch.chdir(checkout)
-        assert cli.connect_agent(create_run(checkout, "deploy", {}))[1].identity == "other-branch"
+        assert (
+            cli.connect_agent(create_run(checkout, "deploy", {}))[1].identity
+            == "other-branch"
+        )
     assert seen == ["retrieve"]

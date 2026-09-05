@@ -40,7 +40,12 @@ class WatchState:
 
     def snapshot(self) -> dict[str, object]:
         with self._lock:
-            return {"metrics": self.metrics, "logs": list(self.logs), "frame": self.frame is not None, "error": self.error}
+            return {
+                "metrics": self.metrics,
+                "logs": list(self.logs),
+                "frame": self.frame is not None,
+                "error": self.error,
+            }
 
     def consume(self, agent: NativeAgent) -> None:
         try:
@@ -73,13 +78,21 @@ def serve(agent: NativeAgent) -> tuple[ThreadingHTTPServer, str]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
             if self.path == "/":
-                self._send(HTTPStatus.OK, "text/html; charset=utf-8", (STATIC / "index.html").read_bytes())
+                self._send(
+                    HTTPStatus.OK,
+                    "text/html; charset=utf-8",
+                    (STATIC / "index.html").read_bytes(),
+                )
             elif self.path in {"/viewer.js", "/viewer.css"}:
                 name = self.path[1:]
                 content_type = "text/javascript" if name.endswith(".js") else "text/css"
                 self._send(HTTPStatus.OK, content_type, (STATIC / name).read_bytes())
             elif self.path == "/state":
-                self._send(HTTPStatus.OK, "application/json", json.dumps(state.snapshot()).encode())
+                self._send(
+                    HTTPStatus.OK,
+                    "application/json",
+                    json.dumps(state.snapshot()).encode(),
+                )
             elif self.path == "/frame":
                 with state._lock:
                     frame = state.frame
