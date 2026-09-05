@@ -42,6 +42,7 @@ path = "src/bin/ui_preview.rs"
 required-features = ["ui-preview"]
 
 [dependencies]
+mister-magik-tooling-support = { path = "../../crates/tooling-support", optional = true }
 bytemuck = "1"
 crc32fast = "1"
 flate2 = "1"
@@ -100,6 +101,7 @@ asset-tools = ["dep:swash"]
 profile = ["dep:pprof"]
 hotpath = ["dep:hotpath", "hotpath/hotpath-mcp", "mister-magik-catalog/hotpath-mcp"]
 ui = ["dep:slint", "dep:i-slint-core", "dep:mister-magik-ui", "dep:ffmpeg-next", "mister-magik-mister-runtime/ui"]
+magik2 = ["ui-device-tests", "dep:mister-magik-tooling-support"]
 ui-device-tests = [
     "ui",
     "slint/system-testing",
