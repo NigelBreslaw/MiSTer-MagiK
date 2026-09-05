@@ -25,3 +25,8 @@ or invoke `scripts/agent`, `agent-cli`, or `mister/tools/agent`.
   dedicated tooling PR. Probe and scenario changes are consumer changes.
 - Run focused tests only: `uv run --project magik2/host pytest tests -q` and
   `scripts/cargo test --manifest-path magik2/agent/Cargo.toml`.
+
+- Everyday commands default to real MagiK; keep Mini-specific runners explicit
+  with `--app mini-magik`. Default smoke must not expand into benchmark matrices.
+- `legacy-stop` is an explicit migration operation, never an automatic deployment
+  step. Preserve startup files and do not add retry/escalation loops to it.
