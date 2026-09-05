@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 MAX_HEADER_BYTES = 64 * 1024
-MAX_BODY_BYTES = 512 * 1024 * 1024
+MAX_BODY_BYTES = 64 * 1024 * 1024
 
 
 class ProtocolError(RuntimeError):
@@ -57,7 +57,10 @@ def send_message(connection: socket.socket, envelope: Envelope, body: bytes = b"
     if len(body) > MAX_BODY_BYTES:
         raise ProtocolError("binary body exceeds configured limit")
     header = envelope.to_json()
-    connection.sendall(struct.pack("!IQ", len(header), len(body)) + header + body)
+    connection.sendall(struct.pack("!IQ", len(header), len(body)) + header)
+    view = memoryview(body)
+    for offset in range(0, len(body), 64 * 1024):
+        connection.sendall(view[offset:offset + 64 * 1024])
 
 
 def receive_message(connection: socket.socket) -> tuple[Envelope, bytes]:
