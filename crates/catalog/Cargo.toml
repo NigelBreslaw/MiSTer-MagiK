@@ -16,11 +16,6 @@ path = "src/bin/arcade_catalog_prototype/main.rs"
 required-features = ["builder"]
 
 [[bin]]
-name = "five-system-catalog-prototype"
-path = "src/bin/five_system_catalog_prototype.rs"
-required-features = ["builder"]
-
-[[bin]]
 name = "catalog-hotpath-profile"
 path = "src/bin/catalog_hotpath_profile.rs"
 required-features = ["builder", "hotpath"]
@@ -43,7 +38,6 @@ lz4_flex = "0.14.0"
 memmap2 = "0.9.11"
 mister-magik-perf-events = { path = "../perf-events" }
 mister-magik-platform-manifest-contract = { path = "../../mister/platform/contracts/manifest" }
-pprof = { git = "https://github.com/NigelBreslaw/pprof-rs", branch = "armv7-itimer-abi", optional = true, default-features = false, features = ["flamegraph"] }
 postcard = { version = "1.1.3", features = ["alloc"] }
 quick-xml = "0.42"
 rusqlite = { version = "0.40.0", default-features = false, features = ["bundled", "functions", "modern_sqlite"] }
@@ -59,7 +53,6 @@ development-layout = []
 builder = []
 hotpath = ["hotpath/hotpath"]
 hotpath-mcp = ["hotpath", "hotpath/hotpath-mcp"]
-profile = ["dep:pprof"]
 
 [profile.release]
 opt-level = 3
