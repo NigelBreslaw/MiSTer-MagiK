@@ -16,12 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-mod measurement;
-mod preview;
-mod profile;
-use measurement::PresentationMetrics;
-use preview::PreviewProducer;
-use profile::CpuProfile;
+use mister_magik_tooling_support::Session;
 
 slint::include_modules!();
 
@@ -209,14 +204,12 @@ fn main() -> Result<(), String> {
         }
     });
     let motion_timer = Rc::new(slint::Timer::default());
-    let metrics = Rc::new(RefCell::new(PresentationMetrics::default()));
-    let mut profile: Option<CpuProfile> = None;
-    let instrumented = std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some();
-    let measured_ms = if instrumented { 10_000 } else { 5_000 };
-    let metrics_start = Instant::now();
+    let session = Rc::new(RefCell::new(
+        Session::from_environment().ok_or("missing tooling state root")?,
+    ));
     let timer = motion_timer.clone();
     let weak = probe.as_weak();
-    let metrics_for_motion = metrics.clone();
+    let session_for_motion = session.clone();
     probe.on_start_motion(move || {
         let Some(probe) = weak.upgrade() else {
             return;
@@ -227,10 +220,7 @@ fn main() -> Result<(), String> {
         probe.set_motion_step(0);
         probe.set_motion_complete(false);
         probe.set_motion_running(true);
-        let mut metrics = metrics_for_motion.borrow_mut();
-        metrics.motion_started_ms = Some(metrics_start.elapsed().as_millis() as u64);
-        metrics.window_start = None;
-        metrics.window = None;
+        session_for_motion.borrow_mut().begin();
         let weak = probe.as_weak();
         timer.start(
             slint::TimerMode::Repeated,
@@ -244,40 +234,14 @@ fn main() -> Result<(), String> {
     });
 
     let mut cached = vec![Rgb565Pixel(0); width * height];
-    let mut previews = PreviewProducer::new();
     loop {
         slint::platform::update_timers_and_animations();
-        let now = metrics_start.elapsed().as_millis() as u64;
-        if probe.get_motion_running() {
-            let mut counters = metrics.borrow_mut();
-            if counters.window_start.is_none()
-                && counters
-                    .motion_started_ms
-                    .is_some_and(|start| now - start >= 2000)
-            {
-                counters.window_start = Some((now, counters.counters.clone()));
-                match CpuProfile::start() {
-                    Ok(session) => profile = session,
-                    Err(error) => counters.error = Some(error),
-                }
-            }
-            if counters
-                .window_start
-                .as_ref()
-                .is_some_and(|(start, _)| now - start >= measured_ms)
-            {
-                counters.finish_window(now, width, height, instrumented);
-                motion_timer.stop();
-                probe.set_motion_running(false);
-                probe.set_motion_complete(true);
-                if let Some(session) = profile.take()
-                    && let Err(error) = session.finish()
-                {
-                    counters.error = Some(error);
-                }
-            }
+        if session.borrow_mut().tick(width, height)? {
+            motion_timer.stop();
+            probe.set_motion_running(false);
+            probe.set_motion_complete(true);
         }
-        let metrics_for_frame = metrics.clone();
+        let session_for_frame = session.clone();
         let rendered = window.draw_if_needed(|renderer| {
             let render_start = Instant::now();
             renderer.render(&mut cached, width);
@@ -285,7 +249,8 @@ fn main() -> Result<(), String> {
             for (destination, source) in framebuffer.pixels_mut().iter_mut().zip(&cached) {
                 *destination = Rgb565(source.0);
             }
-            let mut metrics = metrics_for_frame.borrow_mut();
+            let mut session = session_for_frame.borrow_mut();
+            let metrics = &mut session.metrics;
             match framebuffer.post() {
                 Ok(_) => metrics.counters.posts += 1,
                 Err(error) => {
@@ -313,61 +278,9 @@ fn main() -> Result<(), String> {
             metrics.counters.render_us += render_us;
             metrics.counters.render_to_present_us += render_start.elapsed().as_micros() as u64;
         });
-        let metrics = metrics.borrow();
-        if rendered && metrics.counters.presentations == 1 {
-            write_readiness(width, height, metrics.counters.presentations)?;
-            eprintln!(
-                "magik2-probe ready width={width} height={height} presentations={}",
-                metrics.counters.presentations
-            );
-        }
-        if rendered
-            && (metrics.counters.presentations == 1
-                || metrics.counters.presentations % 5 == 0
-                || probe.get_motion_complete())
-        {
-            write_metrics(width, height, metrics_start.elapsed(), &metrics)?;
-        }
-        drop(metrics);
-        previews.publish_if_watched(&cached, width, height, metrics_start.elapsed());
+        session.borrow_mut().preview(&cached, width, height);
         if !rendered {
             std::thread::sleep(Duration::from_millis(2));
         }
     }
-}
-
-fn write_readiness(width: usize, height: usize, presentations: u64) -> Result<(), String> {
-    let state_root = std::env::var("MISTER_MAGIK2_STATE_ROOT")
-        .unwrap_or_else(|_| "/tmp/mister-magik2".to_owned());
-    let root = std::path::PathBuf::from(state_root);
-    std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
-    let ready = root.join("probe-ready.json");
-    let temporary = root.join("probe-ready.json.next");
-    std::fs::write(
-        &temporary,
-        format!("{{\"pid\":{},\"sha256\":\"{}\",\"width\":{width},\"height\":{height},\"presentations\":{presentations}}}\n", std::process::id(), std::env::var("MISTER_MAGIK2_ARTIFACT_SHA256").unwrap_or_default()),
-    )
-    .map_err(|error| error.to_string())?;
-    std::fs::rename(temporary, ready).map_err(|error| error.to_string())
-}
-
-fn write_metrics(
-    width: usize,
-    height: usize,
-    elapsed: Duration,
-    metrics: &PresentationMetrics,
-) -> Result<(), String> {
-    let root = std::path::PathBuf::from(
-        std::env::var("MISTER_MAGIK2_STATE_ROOT").unwrap_or_else(|_| "/tmp/mister-magik2".into()),
-    );
-    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-    let temporary = root.join("probe-metrics.json.next");
-    std::fs::write(
-        &temporary,
-        metrics
-            .json(width, height, elapsed.as_millis() as u64)
-            .to_string(),
-    )
-    .map_err(|e| e.to_string())?;
-    std::fs::rename(temporary, root.join("probe-metrics.json")).map_err(|e| e.to_string())
 }

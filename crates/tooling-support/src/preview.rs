@@ -61,6 +61,23 @@ impl PreviewProducer {
         height: usize,
         elapsed: Duration,
     ) {
+        self.publish_rows(pixels, width, height, width, elapsed);
+    }
+    pub fn publish_rows(
+        &mut self,
+        pixels: &[Rgb565Pixel],
+        width: usize,
+        height: usize,
+        stride: usize,
+        elapsed: Duration,
+    ) {
+        if width == 0
+            || height == 0
+            || stride < width
+            || pixels.len() < stride.saturating_mul(height)
+        {
+            return;
+        }
         if self.last_preview.elapsed() < Duration::from_millis(200) || !self.viewer_is_active() {
             return;
         }
@@ -68,7 +85,7 @@ impl PreviewProducer {
         let (Ok(width), Ok(height), Ok(raw_bytes)) = (
             u32::try_from(width),
             u32::try_from(height),
-            u32::try_from(pixels.len().saturating_mul(2)),
+            u32::try_from(width.saturating_mul(height).saturating_mul(2)),
         ) else {
             return;
         };
@@ -76,8 +93,10 @@ impl PreviewProducer {
             return;
         };
         let mut bytes = Vec::with_capacity(raw_bytes as usize);
-        for pixel in pixels {
-            bytes.extend_from_slice(&pixel.0.to_le_bytes());
+        for row in pixels.chunks(stride).take(height as usize) {
+            for pixel in &row[..width as usize] {
+                bytes.extend_from_slice(&pixel.0.to_le_bytes());
+            }
         }
         self.sequence += 1;
         let geometry = FrameGeometry {

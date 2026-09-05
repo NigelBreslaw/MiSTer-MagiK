@@ -1,9 +1,9 @@
 [package]
-name = "mister-magik2-probe"
+name = "mini-magik"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.97.1"
-description = "Small standalone Slint experiment for MiSTer MagiK Tooling 2.0"
+description = "Fast consumer experiment for the shared MiSTer MagiK tooling"
 license = "GPL-3.0-or-later"
 
 [lints.rust]
@@ -13,7 +13,7 @@ warnings = "deny"
 all = "deny"
 
 [[bin]]
-name = "mister-magik2-probe"
+name = "mini-magik"
 path = "src/main.rs"
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -24,10 +24,8 @@ fontique = { version = "0.11.1", default-features = false, features = ["fontconf
 slint = { git = "https://github.com/slint-ui/slint", rev = "72cf74306784e7d15374639ef110c1bb85c21cb0", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std", "system-testing"] }
 
 [dependencies]
-serde_json = "1"
+mister-magik-tooling-support = { path = "../../crates/tooling-support" }
 mister-magik-mister-runtime = { path = "../../mister/platform/runtime", default-features = false, features = ["cached-rgb565-presenter", "framebuffer-lab"] }
-mister-magik-framebuffer-stream = { path = "../../crates/framebuffer-stream" }
-pprof = { git = "https://github.com/NigelBreslaw/pprof-rs", rev = "431b88c4fc67bef98126eaa8932287583d1a660e", default-features = false, features = ["flamegraph"] }
 
 [build-dependencies]
 slint-build = { git = "https://github.com/slint-ui/slint", rev = "72cf74306784e7d15374639ef110c1bb85c21cb0" }
