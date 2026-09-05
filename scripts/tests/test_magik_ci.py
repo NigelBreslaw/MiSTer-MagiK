@@ -310,6 +310,22 @@ import scripts.magik_ci.cli
             ("apps/mister/Cargo.toml", "all", ""),
         )
 
+    def test_cross_runtime_environment_supplies_ffmpeg_headers_to_host_probes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            include = root / "apps/mister/target/ffmpeg-minimal/armv7/dist/include"
+            with patch.dict(os.environ, {}, clear=True):
+                environment = build._environment(
+                    root, "runtime-ci", "ci-fast", "ui", "cross"
+                )
+
+            expected = f"-I{include}"
+            self.assertEqual(environment["CFLAGS"], expected)
+            self.assertEqual(environment["HOST_CFLAGS"], expected)
+            self.assertEqual(environment["CFLAGS_x86_64_unknown_linux_gnu"], expected)
+
     def test_build_writes_artifact_identity_sidecars(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

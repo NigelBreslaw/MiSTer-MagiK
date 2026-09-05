@@ -54,6 +54,7 @@ def _environment(
                 "PKG_CONFIG_ALLOW_CROSS": "1",
                 "CFLAGS": f"-I{include}",
                 "HOST_CFLAGS": f"-I{include}",
+                "CFLAGS_x86_64_unknown_linux_gnu": f"-I{include}",
             }
         )
     return environment
