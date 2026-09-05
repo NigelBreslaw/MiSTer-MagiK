@@ -2,9 +2,9 @@ name: MiSTer MagiK Tooling 2.0
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
-    paths: ["magik2/**", "scripts/magik2", ".github/workflows/magik2.yml", ".github/CODEOWNERS", ".github/PULL_REQUEST_TEMPLATE/magik2-tooling.md", "crates/framebuffer-stream/**", "crates/magik-core/**", "mister/platform/runtime/**", "mister/platform/contracts/latch/**", "mister/platform/contracts/scanout/**", "apps/mister/ui/fonts/Jersey25-Regular.ttf"]
+    paths: ["crates/tooling-support/**", "apps/mister/**", "magik2/**", "scripts/magik2", ".github/workflows/magik2.yml", ".github/CODEOWNERS", ".github/PULL_REQUEST_TEMPLATE/magik2-tooling.md", "crates/framebuffer-stream/**", "crates/magik-core/**", "mister/platform/runtime/**", "mister/platform/contracts/latch/**", "mister/platform/contracts/scanout/**", "apps/mister/ui/fonts/Jersey25-Regular.ttf"]
   push:
-    paths: ["magik2/**", "scripts/magik2", ".github/workflows/magik2.yml"]
+    paths: ["crates/tooling-support/**", "apps/mister/**", "magik2/**", "scripts/magik2", ".github/workflows/magik2.yml"]
 permissions:
   contents: read
 jobs:
@@ -28,6 +28,7 @@ jobs:
       - run: cargo test --locked --manifest-path magik2/agent/Cargo.toml
       - run: cargo test --locked
         working-directory: magik2/probe
+      - run: cargo test --locked --manifest-path magik2/probe/Cargo.toml -p mister-magik-tooling-support
       - if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

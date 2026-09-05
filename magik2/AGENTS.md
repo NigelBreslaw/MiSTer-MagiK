@@ -4,7 +4,8 @@
 or invoke `scripts/agent`, `agent-cli`, or `mister/tools/agent`.
 
 - Keep host orchestration in `host/magik2`, native device service code in
-  `agent/`, and the disposable consumer experiment in `probe/`.
+  `agent/`, and Mini-MagiK in `probe/`. Shared application-side observation belongs in
+  `crates/tooling-support`; the real application remains in `apps/mister`.
 - A compatible agent is selected by required capabilities, never build or
   version equality. Native payloads are binary framed; never base64 them.
 - Use typed `scripts/magik2` operations for device work, with first-attempt
