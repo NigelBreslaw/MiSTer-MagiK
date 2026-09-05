@@ -9,6 +9,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
@@ -197,6 +198,7 @@ impl Agent {
             "metrics-v1",
             "watch-v1",
             "artifacts-v1",
+            "agent-update-v1",
         ]
     }
 
@@ -236,6 +238,9 @@ impl Agent {
             }
             if request.op == "read-artifact" {
                 return self.read_artifact(stream, &request, &body);
+            }
+            if request.op == "agent-update" {
+                return self.upgrade_agent(stream, &request, &body);
             }
         }
         let response = if request.token != self.token {
@@ -432,6 +437,62 @@ impl Agent {
                 serde_json::json!({"code":"upload-failed","detail":error}),
             ),
         }
+    }
+
+    fn upgrade_agent(
+        &self,
+        stream: &mut TcpStream,
+        request: &Envelope,
+        body: &[u8],
+    ) -> Result<(), FrameError> {
+        let expected_hash = request
+            .fields
+            .get("sha256")
+            .and_then(serde_json::Value::as_str);
+        let Some(expected_hash) = expected_hash else {
+            return write_frame(
+                stream,
+                &response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"missing-sha256"}),
+                ),
+                &[],
+            );
+        };
+        if let Err(error) = publish_atomically(
+            &self.install_root,
+            "mister-magik2-agent",
+            expected_hash,
+            body,
+        ) {
+            return write_frame(
+                stream,
+                &response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"agent-update-failed","detail":error}),
+                ),
+                &[],
+            );
+        }
+        write_frame(
+            stream,
+            &response(
+                &request.id,
+                "agent-updating",
+                serde_json::json!({"sha256":expected_hash}),
+            ),
+            &[],
+        )?;
+        let error = Command::new(self.install_root.join("mister-magik2-agent"))
+            .env("MISTER_MAGIK2_TOKEN", &self.token)
+            .env("MISTER_MAGIK2_INSTALL_ROOT", &self.install_root)
+            .env("MISTER_MAGIK2_STATE_ROOT", &self.state_root)
+            .exec();
+        Err(FrameError::Io(format!(
+            "agent replacement exec failed: {error}"
+        )))
     }
 
     fn metrics(&self, request: &Envelope) -> Envelope {

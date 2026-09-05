@@ -75,6 +75,40 @@ def test_missing_capability_bootstraps_once_and_continues(monkeypatch: pytest.Mo
     assert tokens == ["cached-token", "replacement-token"]
 
 
+def test_missing_capability_prefers_a_native_agent_update(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    required = cli.REQUIRED_AGENT_CAPABILITIES
+    monkeypatch.setenv("MISTER_IP", "mister.test")
+    monkeypatch.setenv("MISTER_MAGIK2_STATE", str(tmp_path / "state"))
+    TokenStore(tmp_path / "state", "mister.test").save("cached-token")
+    binary = tmp_path / "mister-magik2-agent"
+    binary.write_bytes(b"replacement-agent")
+    monkeypatch.setattr(cli, "agent_binary_path", lambda: binary)
+    statuses = [status("old", {"status", "agent-update-v1"}), status("new", required)]
+    uploaded: list[bytes] = []
+
+    class FakeAgent:
+        def __init__(self, _host: str, _token: str) -> None:
+            pass
+
+        def status(self) -> AgentStatus:
+            return statuses.pop(0)
+
+        def upgrade_agent(self, payload: bytes) -> None:
+            uploaded.append(payload)
+
+    class Bootstrap:
+        def install_and_start(self, _binary) -> str:  # pragma: no cover - must not run
+            raise AssertionError("native update should precede SSH bootstrap")
+
+    monkeypatch.setattr(cli, "NativeAgent", FakeAgent)
+    monkeypatch.setattr(cli.SshBootstrap, "from_environment", lambda: Bootstrap())
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+    run = create_run(tmp_path, "status", {})
+
+    assert cli.connect_agent(run)[1].supports(required)
+    assert uploaded == [b"replacement-agent"]
+
+
 def test_absent_agent_bootstraps_and_authentication_failure_does_not(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     required = cli.REQUIRED_AGENT_CAPABILITIES
     configure_native(monkeypatch, tmp_path, [OSError("absent"), status("new", required)])
