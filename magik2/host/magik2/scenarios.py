@@ -46,22 +46,35 @@ def motion(
         samples.append(_measurement(agent.metrics()))
     _wait(lambda: _value_is(state, "complete"), "motion workload did not complete", timeout=10)
     final = _measurement(agent.metrics())
-    evidence_valid = final["vsync_misses"] == 0 and final["vsync_hits"] >= final["presentations"]
+    evidence_valid = (
+        final["vsync_misses"] == 0
+        and final["vsync_hits"] >= final["presentations"]
+        and final["physical_latch_posts"] == final["presentations"]
+        and final["physical_latch_flips"] == final["presentations"]
+        and final["physical_drops"] == 0
+    )
     return {
         "warmup_seconds": 2,
         "sample_seconds": 5,
         "samples": samples,
         "final": final,
-        # The direct fb0 presenter exposes timing and vsync evidence, but it has
-        # no scanout-latch acknowledgement. Keep that limitation explicit until
-        # the hardware presenter adds the required physical confirmation.
-        "physical_evidence_valid": False,
+        "physical_evidence_valid": evidence_valid,
         "vsync_evidence_consistent": evidence_valid,
     }
 
 
 def _measurement(metrics: Mapping[str, object]) -> dict[str, int]:
-    names = ("elapsed_ms", "presentations", "render_us_total", "last_render_us", "vsync_hits", "vsync_misses")
+    names = (
+        "elapsed_ms",
+        "presentations",
+        "render_us_total",
+        "last_render_us",
+        "vsync_hits",
+        "vsync_misses",
+        "physical_latch_posts",
+        "physical_latch_flips",
+        "physical_drops",
+    )
     values = {name: metrics.get(name) for name in names}
     if not all(type(value) is int for value in values.values()):
         raise AssertionError("agent returned incomplete device timing metrics")
