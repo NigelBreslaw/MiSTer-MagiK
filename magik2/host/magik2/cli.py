@@ -13,7 +13,7 @@ from .bootstrap import BootstrapError, SshBootstrap
 from .build import ensure_arm_probe
 from .client import AgentError, NativeAgent
 from .compatibility import AgentStatus
-from .results import append_event, create_run
+from .results import append_event, create_run, source_context
 from .scenarios import motion, smoke
 from .testing import fresh_session
 from .token_store import TokenStore
@@ -38,7 +38,7 @@ def main() -> int:
     arguments = parser.parse_args()
 
     output_root = Path(os.environ.get("MISTER_MAGIK2_RESULTS", "build/magik2-results"))
-    run = create_run(output_root, arguments.command, {"mister_ip": os.environ.get("MISTER_IP", "")})
+    run = create_run(output_root, arguments.command, source_context(os.environ.get("MISTER_IP", "")))
     append_event(run, {"phase": "requested", "command": arguments.command})
     if not os.environ.get("MISTER_IP"):
         print("MISTER_IP is required; no legacy transport was attempted.", file=os.sys.stderr)
@@ -66,15 +66,17 @@ def main() -> int:
 
 
 def deploy(_arguments: argparse.Namespace, run: Path) -> int:
+    started = time.monotonic()
     try:
         agent, status = connect_agent(run)
+        append_event(run, {"phase": "connect", "elapsed_ms": int((time.monotonic() - started) * 1_000)})
         if ensure_probe(agent, status, run):
             print(f"magik2 deploy: probe already ready (result: {run})")
             return 0
         append_event(run, {"phase": "complete", "outcome": "started"})
     except (BootstrapError, AgentError, OSError, RuntimeError) as error:
         append_event(run, {"phase": "failed", "error": type(error).__name__})
-        print(f"magik2 deploy: {type(error).__name__} (result: {run})", file=os.sys.stderr)
+        print(f"magik2 deploy: {error} (result: {run})", file=os.sys.stderr)
         return 2
     print(f"magik2 deploy: probe started (result: {run})")
     return 0
@@ -163,10 +165,14 @@ def ensure_probe(agent: NativeAgent, status: AgentStatus, run: Path) -> bool:
         return True
     changed = status.fields.get("artifact_sha256") != artifact_hash
     if changed:
+        upload_started = time.monotonic()
         append_event(run, {"phase": "upload", "bytes": len(payload)})
         agent.upload("probe", payload)
+        append_event(run, {"phase": "upload-complete", "elapsed_ms": int((time.monotonic() - upload_started) * 1_000)})
+    start_started = time.monotonic()
     append_event(run, {"phase": "start", "restart": status.fields.get("running") is True})
     agent.start(restart=status.fields.get("running") is True)
+    append_event(run, {"phase": "start-complete", "elapsed_ms": int((time.monotonic() - start_started) * 1_000)})
     return False
 
 

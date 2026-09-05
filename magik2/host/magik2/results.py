@@ -4,11 +4,28 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+
+def source_context(device: str) -> dict[str, object]:
+    """Capture Git provenance without letting unrelated changes affect builds."""
+    try:
+        revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+        ).stdout.strip()
+        dirty = bool(
+            subprocess.run(
+                ["git", "status", "--porcelain"], check=True, capture_output=True, text=True
+            ).stdout
+        )
+    except (OSError, subprocess.CalledProcessError):
+        revision, dirty = "unknown", None
+    return {"mister_ip": device, "git_revision": revision, "git_dirty": dirty}
 
 
 def create_run(root: Path, operation: str, source: Mapping[str, Any]) -> Path:
