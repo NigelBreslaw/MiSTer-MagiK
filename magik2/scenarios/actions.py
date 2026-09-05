@@ -285,7 +285,8 @@ def _focus_label(application, label, key, limit):
         _wait(
             lambda: _selected_labels(application) != before, "menu focus did not move"
         )
-    raise AssertionError(f"{label!r} was not selectable within {limit} steps")
+    if label not in _selected_labels(application):
+        raise AssertionError(f"{label!r} was not selectable within {limit} steps")
 
 
 def launcher_catalog(application, screenshot_path):
@@ -293,6 +294,8 @@ def launcher_catalog(application, screenshot_path):
     _press_key(application, "\uf729")
     _focus_label(application, "Arcade", "\uf703", 16)
     started = time.monotonic()
+    before = None
+    reverse = None
     try:
         _press_key(application, "\n")
         _wait(
@@ -303,7 +306,7 @@ def launcher_catalog(application, screenshot_path):
         games = one_element(application, "Arcade games")
         if not games.accessible_enabled:
             raise AssertionError("Arcade catalog is disabled")
-        # Rust paints the rows; the list exposes the current game identity.
+        # Rust paints the rows; the list exposes the one-based selection.
         _wait(
             lambda: bool(one_element(application, "Arcade games").accessible_value),
             "Arcade catalog has no active game",
@@ -318,7 +321,12 @@ def launcher_catalog(application, screenshot_path):
                 f"journey requires at least two Dev Arcade games; found {count!r}"
             )
         before = one_element(application, "Arcade games").accessible_value
-        _press_key(application, "\uf701")
+        if not before.isdigit() or not 1 <= int(before) <= int(
+            count.removesuffix(" games")
+        ):
+            raise AssertionError(f"invalid catalog selection: {before!r}")
+        key, reverse = ("\uf700", "\uf701") if int(before) > 1 else ("\uf701", "\uf700")
+        _press_key(application, key)
         _wait(
             lambda: one_element(application, "Arcade games").accessible_value != before,
             f"catalog selection did not move from {before!r}",
@@ -326,7 +334,18 @@ def launcher_catalog(application, screenshot_path):
         screenshot(application, screenshot_path)
         elapsed_ms = round((time.monotonic() - started) * 1000, 2)
     finally:
-        _press_key(application, "\uf729")
+        try:
+            if reverse is not None:
+                current = one_element(application, "Arcade games").accessible_value
+                if current != before:
+                    _press_key(application, reverse)
+                _wait(
+                    lambda: one_element(application, "Arcade games").accessible_value
+                    == before,
+                    "catalog selection was not restored",
+                )
+        finally:
+            _press_key(application, "\uf729")
     _wait(
         lambda: not _exists(application, "Arcade games"),
         "Home did not close the catalog",

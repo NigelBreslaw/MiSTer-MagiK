@@ -6185,14 +6185,7 @@ pub(super) fn run_launcher_loop(
             if nav.screen == Screen::Arcade
                 && arcade.get_selected_game_index() != nav.arcade.selected as i32
             {
-                let selected_id = active_system(&catalog, &nav)
-                    .and_then(|system| {
-                        nav.active_arcade_game_at(&catalog, &system.id, nav.arcade.selected)
-                    })
-                    .map(|game| game.mra_path.to_string())
-                    .unwrap_or_default();
                 arcade.set_selected_game_index(nav.arcade.selected as i32);
-                arcade.set_selected_game_id(selected_id.into());
             }
             if let Err(error) = session.tick(ui.render_w(), ui.render_h()) {
                 session.metrics.error = Some(error);
