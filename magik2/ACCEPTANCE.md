@@ -44,6 +44,8 @@ not device acceptance.
   motion retained 1,802 confirmed latch flips and zero physical drops in
   33.3 seconds. The comparable viewer-closed run retained 1,800 flips in
   30.7 seconds; observation overhead is measurable but did not introduce drops.
+- Five native watch attach/disconnect cycles each received telemetry and left
+  the persistent probe healthy with zero physical drops.
 
 ## Automated evidence
 
@@ -58,7 +60,6 @@ not device acceptance.
 
 ## Remaining acceptance gates
 
-- Exercise slow/disconnected viewer behavior under continuous traffic.
 - Measure 20 invocation-to-completion runs for Rust-edit and Slint-edit cases.
   Retain all samples, bytes, throughput, and nearest-rank p95; do not
   substitute phase timing for those targets.
