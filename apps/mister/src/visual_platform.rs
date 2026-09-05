@@ -74,6 +74,11 @@ impl MisterSoftwareWindow {
         window
     }
 
+    /// Service UI-thread requests even when the launcher has no frame to draw.
+    pub fn process_pending_callbacks(&self) {
+        self.event_loop.process_pending_callbacks();
+    }
+
     pub fn redraw_pending(&self) -> bool {
         self.redraw_pending.get()
     }

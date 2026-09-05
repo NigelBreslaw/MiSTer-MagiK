@@ -24,6 +24,7 @@ COMPANIONS = (
     "apps/mister/Cargo.toml",
     "apps/mister/Cargo.lock",
     "apps/mister/src/ui_runner/launcher_loop.rs",
+    "apps/mister/src/visual_platform.rs",
     "apps/mister/src/ui_runner/launcher_present/latch.rs",
     "apps/mister/src/ui_runner/launcher_present/orchestrator.rs",
     "agent-cli/src/host/transfer_check.rs",

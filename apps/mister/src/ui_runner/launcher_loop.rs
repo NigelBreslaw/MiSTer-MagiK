@@ -6162,6 +6162,7 @@ pub(super) fn run_launcher_loop(
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
         record_launcher_frame_phase!(LauncherFramePhase::Begin);
+        window.process_pending_callbacks();
         #[cfg(feature = "magik2")]
         if let Some(session) = tooling.as_mut() {
             if let Err(error) = session.tick(ui.render_w(), ui.render_h()) {
