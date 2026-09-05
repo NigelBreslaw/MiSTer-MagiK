@@ -43,8 +43,8 @@ Use `--app mini-magik` for the fast experiment. The default check is one smoke
 journey; benchmarks and profiles are explicit. See [development setup and
 commands](magik2/README.md). Production installation above is a separate workflow.
 
-See [retired experiment tooling and remaining legacy consumers](docs/tooling-retirement.md)
-for the deletion milestone.
+See [retired tooling and remaining legacy consumers](docs/tooling-retirement.md)
+for the current deletion inventory.
 
 ## Built With Slint
 
