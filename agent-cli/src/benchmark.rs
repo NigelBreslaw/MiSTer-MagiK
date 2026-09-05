@@ -371,7 +371,7 @@ fn require_clean_installed_commit(
     let reconciliation = crate::deploy::reconcile(repository, &manifest, &head);
     if reconciliation.decision != crate::deploy::DeliveryDecision::NoOp {
         return Err(format!(
-            "benchmark requires delivery reconciliation to be no-op, found {}; run scripts/agent deliver first",
+            "benchmark requires delivery reconciliation to be no-op, found {}; run scripts/agent deliver platform first",
             reconciliation.decision.label()
         )
         .into());
@@ -1707,7 +1707,7 @@ fn require_active_development_runtime(active: &crate::host::ActiveRuntime) -> Ag
         Ok(())
     } else {
         Err(format!(
-            "benchmark requires the active development launcher, found {}; run scripts/agent deliver",
+            "benchmark requires the active development launcher, found {}; run scripts/agent deliver platform",
             active.description()
         )
         .into())
@@ -3861,7 +3861,7 @@ mod tests {
         ] {
             let error = require_active_development_runtime(&active).unwrap_err();
             assert!(error.to_string().contains(&active.description()));
-            assert!(error.to_string().contains("scripts/agent deliver"));
+            assert!(error.to_string().contains("scripts/agent deliver platform"));
         }
         assert!(
             require_active_development_runtime(&crate::host::ActiveRuntime::new(

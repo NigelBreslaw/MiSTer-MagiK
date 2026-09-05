@@ -123,7 +123,6 @@ fn command_label(command: &CliCommand) -> &'static str {
         CliCommand::Diagnose => "diagnose",
         CliCommand::Device { .. } => "device",
         CliCommand::Deliver { .. } => "deliver",
-        CliCommand::RestartUi => "restart-ui",
         CliCommand::Benchmark { .. } => "benchmark",
         CliCommand::Capture { .. } => "capture",
         CliCommand::Alpha { .. } => "alpha",
@@ -145,7 +144,7 @@ fn dispatch(
 ) -> AgentResult<Outcome> {
     match command {
         CliCommand::Deliver {
-            target: Some(DeliverTarget::GameDatabases),
+            target: DeliverTarget::GameDatabases,
             game_databases_release_dir,
         } => {
             let Some(release_dir) = game_databases_release_dir.as_deref() else {
@@ -156,46 +155,26 @@ fn dispatch(
             return deliver_game_databases(repository, release_dir, reporter);
         }
         CliCommand::Deliver {
-            target: Some(DeliverTarget::LocalMain),
+            target: DeliverTarget::LocalMain,
             game_databases_release_dir: Some(_),
         } => {
             return Err("--game-databases-release-dir is not valid with deliver local-main".into());
         }
         CliCommand::Deliver {
-            target: Some(DeliverTarget::Runtime),
+            target: DeliverTarget::Platform,
             game_databases_release_dir,
         } => {
             return deliver(
                 evidence,
                 repository,
                 game_databases_release_dir.as_deref(),
-                true,
                 reporter,
             );
         }
         CliCommand::Deliver {
-            target: None,
-            game_databases_release_dir: Some(release_dir),
-        } => {
-            return deliver(
-                evidence,
-                repository,
-                Some(release_dir.as_path()),
-                false,
-                reporter,
-            );
-        }
-        CliCommand::Deliver {
-            target: None,
-            game_databases_release_dir: None,
-        } => {
-            return deliver(evidence, repository, None, false, reporter);
-        }
-        CliCommand::Deliver {
-            target: Some(DeliverTarget::LocalMain),
+            target: DeliverTarget::LocalMain,
             ..
         } => return deliver_local_main(repository, reporter),
-        CliCommand::RestartUi => return agent_cli::delivery::restart_ui(),
         CliCommand::Benchmark {
             scenario,
             arm,
@@ -435,17 +414,10 @@ fn deliver(
     evidence: &Evidence,
     repository: &std::path::Path,
     game_databases_release_dir: Option<&std::path::Path>,
-    runtime_only: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     let total_started = Instant::now();
-    let delivery = deliver_inner(
-        evidence,
-        repository,
-        game_databases_release_dir,
-        runtime_only,
-        reporter,
-    );
+    let delivery = deliver_inner(evidence, repository, game_databases_release_dir, reporter);
     reporter.emit(
         EventKind::Progress,
         "cleanup",
@@ -485,7 +457,6 @@ fn deliver_inner(
     _evidence: &Evidence,
     repository: &std::path::Path,
     game_databases_release_dir: Option<&std::path::Path>,
-    runtime_only: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<agent_cli::delivery::DeliveryExecution> {
     let preflight_started = Instant::now();
@@ -499,16 +470,7 @@ fn deliver_inner(
     })();
     emit_delivery_timing(reporter, "preflight", preflight.is_ok(), preflight_started)?;
     let sha = preflight?;
-    if runtime_only {
-        agent_cli::delivery::execute_runtime_only(
-            repository,
-            &sha,
-            game_databases_release_dir,
-            reporter,
-        )
-    } else {
-        agent_cli::delivery::execute(repository, &sha, game_databases_release_dir, reporter)
-    }
+    agent_cli::delivery::execute(repository, &sha, game_databases_release_dir, reporter)
 }
 
 fn emit_delivery_timing(

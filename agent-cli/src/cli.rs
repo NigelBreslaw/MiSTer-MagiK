@@ -44,13 +44,13 @@ impl Cli {
         }) = &cli.command
         {
             match (target, game_databases_release_dir) {
-                (Some(DeliverTarget::GameDatabases), None) => {
+                (DeliverTarget::GameDatabases, None) => {
                     return Err(clap::Error::raw(
                         clap::error::ErrorKind::MissingRequiredArgument,
                         "deliver game-databases requires --game-databases-release-dir PATH",
                     ));
                 }
-                (Some(DeliverTarget::LocalMain), Some(_)) => {
+                (DeliverTarget::LocalMain, Some(_)) => {
                     return Err(clap::Error::raw(
                         clap::error::ErrorKind::ArgumentConflict,
                         "--game-databases-release-dir is not valid with deliver local-main",
@@ -87,9 +87,10 @@ pub enum Command {
         #[command(subcommand)]
         command: DeviceCommand,
     },
+    /// Deliver the retained platform or database transaction; app development uses scripts/magik2.
     Deliver {
         #[arg(value_enum)]
-        target: Option<DeliverTarget>,
+        target: DeliverTarget,
         #[arg(
             long,
             value_name = "PATH",
@@ -97,10 +98,9 @@ pub enum Command {
         )]
         game_databases_release_dir: Option<PathBuf>,
     },
-    /// Restart the UI through delivery's suspend-and-resume lifecycle.
-    RestartUi,
+    /// Run an explicit legacy qualification workload; everyday measurements use scripts/magik2 check.
     Benchmark {
-        #[arg(value_enum, default_value_t)]
+        #[arg(value_enum)]
         scenario: BenchmarkScenario,
         #[arg(value_enum)]
         arm: Option<ArcadeVelocityScrollArm>,
@@ -154,7 +154,7 @@ pub enum Command {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum DeliverTarget {
-    Runtime,
+    Platform,
     LocalMain,
     GameDatabases,
 }
@@ -798,7 +798,7 @@ mod tests {
 
     #[test]
     fn deliver_accepts_only_the_bounded_local_database_input() {
-        assert!(Cli::try_parse_from(["agent-cli", "deliver"]).is_ok());
+        assert!(Cli::try_parse_from(["agent-cli", "deliver"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "local-main"]).is_ok());
         assert!(
             Cli::try_parse_from([
@@ -815,7 +815,7 @@ mod tests {
             Cli::try_parse_from([
                 "agent-cli",
                 "deliver",
-                "runtime",
+                "platform",
                 "--game-databases-release-dir",
                 "build/game-databases"
             ])
@@ -828,7 +828,7 @@ mod tests {
                 "--game-databases-release-dir",
                 "build/game-databases"
             ])
-            .is_ok()
+            .is_err()
         );
         assert!(
             Cli::try_parse_from([
@@ -848,9 +848,10 @@ mod tests {
     }
 
     #[test]
-    fn restart_ui_is_a_flag_free_command() {
-        assert!(Cli::try_parse_from(["agent-cli", "restart-ui"]).is_ok());
-        assert!(Cli::try_parse_from(["agent-cli", "restart-ui", "--fast"]).is_err());
+    fn retired_app_workflows_are_rejected() {
+        assert!(Cli::try_parse_from(["agent-cli", "restart-ui"]).is_err());
+        assert!(Cli::try_parse_from(["agent-cli", "deliver", "runtime"]).is_err());
+        assert!(Cli::try_parse_from(["agent-cli", "deliver", "platform"]).is_ok());
     }
 
     #[test]
@@ -914,7 +915,7 @@ mod tests {
             "search",
             "streamline",
         ];
-        assert!(Cli::try_parse_from(["agent-cli", "benchmark"]).is_ok());
+        assert!(Cli::try_parse_from(["agent-cli", "benchmark"]).is_err());
         for scenario in accepted {
             assert!(Cli::try_parse_from(["agent-cli", "benchmark", scenario]).is_ok());
         }
