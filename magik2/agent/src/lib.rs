@@ -1338,6 +1338,43 @@ mod tests {
     }
 
     #[test]
+    fn test_relay_returns_when_a_client_disconnects() {
+        let mut disconnected = io::Cursor::new(Vec::<u8>::new());
+        let mut output = Vec::new();
+        assert!(
+            relay_until_deadline(
+                &mut disconnected,
+                &mut output,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_relay_reports_an_application_failure() {
+        struct FailedReader;
+        impl Read for FailedReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "application exited",
+                ))
+            }
+        }
+        let mut failed = FailedReader;
+        let mut output = Vec::new();
+        assert!(matches!(
+            relay_until_deadline(
+                &mut failed,
+                &mut output,
+                Instant::now() + Duration::from_secs(1),
+            ),
+            Err(FrameError::Io(message)) if message.contains("application exited")
+        ));
+    }
+
+    #[test]
     fn slow_watch_does_not_block_a_separate_control_request() {
         let directory =
             std::env::temp_dir().join(format!("magik2-agent-watch-{}", std::process::id()));
