@@ -1047,7 +1047,6 @@ mod linux {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::OpenOptionsExt;
     use std::path::{Path, PathBuf};
-    use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::thread;

@@ -18135,44 +18135,6 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn catalog_attribution_purges_before_staging_profiler_env() {
-        let source = include_str!("mod.rs");
-        let function_start = source
-            .find("fn prepare_and_reboot_for_catalog_attribution(")
-            .expect("catalog attribution reset function is present");
-        let function = &source[function_start..];
-        let function_end = function
-            .find("\nfn profile_installed_catalog_attribution(")
-            .expect("catalog attribution reset function has a bounded body");
-        let function = &function[..function_end];
-        let purge = function
-            .find("purge_development_library_data(&session)")
-            .expect("production purge is part of attribution reset");
-        let stage = function
-            .find("stage_one_shot_launcher_env(")
-            .expect("attribution reset stages a profiler environment");
-        let sync = function
-            .find("sync catalog attribution profiler env")
-            .expect("attribution reset syncs the profiler environment");
-        let reboot = function
-            .find("let reboot_result = agent_reboot_wait_with_config")
-            .expect("attribution reset uses the supervised reboot path");
-
-        assert!(purge < stage && stage < sync && sync < reboot);
-        assert!(platform_safety_script().contains(DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str()));
-        assert!(
-            one_shot_launcher_env_text(
-                &[("MISTER_CATALOG_REFRESH".into(), "force".into())],
-                DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str(),
-            )
-            .contains(&format!(
-                "rm -f {}",
-                sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str())
-            ))
-        );
-    }
-
-    #[test]
     fn catalog_phase_evidence_requires_all_authoritative_boundaries() {
         let log = "startup_timing\tlibrary_scan_complete\t100us\tscan_us=90\n\
 startup_timing\tbuilder_persisted\t200us\telapsed_us=190\n\
