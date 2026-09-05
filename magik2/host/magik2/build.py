@@ -21,6 +21,7 @@ class BuildResult:
     artifact: Path
     rebuilt: bool
     elapsed_ms: int
+    prebuilt: bool = False
 
 
 def relevant_inputs(probe_root: Path) -> list[Path]:
@@ -75,6 +76,12 @@ def ensure_arm_probe(
     runner: Callable[..., subprocess.CompletedProcess[object]] = subprocess.run,
 ) -> BuildResult:
     """Build only when relevant probe inputs or its ARM artifact changed."""
+    prebuilt = os.environ.get("MISTER_MAGIK2_PREBUILT_ARTIFACT")
+    if prebuilt:
+        artifact = Path(prebuilt).expanduser().resolve()
+        if not artifact.is_file():
+            raise RuntimeError("MagiK 2 prebuilt probe artifact is unavailable")
+        return BuildResult(artifact, False, 0, prebuilt=True)
     artifact = probe_root / "target" / "armv7-unknown-linux-gnueabihf" / "release" / "mister-magik2-probe"
     fingerprint = source_fingerprint(probe_root)
     started = time.monotonic()

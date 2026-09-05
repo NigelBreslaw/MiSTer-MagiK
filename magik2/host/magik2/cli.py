@@ -172,7 +172,14 @@ def ensure_probe(agent: NativeAgent, status: AgentStatus, run: Path) -> bool:
         probe_root,
         Path(os.environ.get("MISTER_MAGIK2_STATE", "build/magik2-state")) / "probe-build.json",
     )
-    append_event(run, {"phase": "build", "outcome": "rebuilt" if built.rebuilt else "reused", "elapsed_ms": built.elapsed_ms})
+    append_event(
+        run,
+        {
+            "phase": "build",
+            "outcome": "prebuilt" if built.prebuilt else "rebuilt" if built.rebuilt else "reused",
+            "elapsed_ms": built.elapsed_ms,
+        },
+    )
     artifact = built.artifact
     payload = artifact.read_bytes()
     artifact_hash = hashlib.sha256(payload).hexdigest()

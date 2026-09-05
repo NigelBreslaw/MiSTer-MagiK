@@ -44,3 +44,14 @@ def test_build_runs_only_when_a_probe_artifact_is_stale(tmp_path) -> None:
     assert first.rebuilt and not second.rebuilt
     assert len(calls) == 1
     assert calls[0][:3] == ["container", "exec", "magik2-arm-build"]
+
+
+def test_prebuilt_artifact_bypasses_compilation(monkeypatch, tmp_path) -> None:
+    artifact = tmp_path / "prebuilt-probe"
+    artifact.write_bytes(b"prebuilt")
+    monkeypatch.setenv("MISTER_MAGIK2_PREBUILT_ARTIFACT", str(artifact))
+
+    result = ensure_arm_probe(tmp_path / "probe", tmp_path / "cache.json")
+
+    assert result.artifact == artifact
+    assert result.prebuilt and not result.rebuilt
