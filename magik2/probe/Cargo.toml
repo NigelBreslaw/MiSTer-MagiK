@@ -1,0 +1,29 @@
+[package]
+name = "mister-magik2-probe"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+description = "Small standalone Slint experiment for MiSTer MagiK Tooling 2.0"
+license = "GPL-3.0-or-later"
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = "deny"
+
+[[bin]]
+name = "mister-magik2-probe"
+path = "src/main.rs"
+
+[dependencies]
+slint = { git = "https://github.com/slint-ui/slint", rev = "72cf74306784e7d15374639ef110c1bb85c21cb0", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std"] }
+
+[build-dependencies]
+slint-build = { git = "https://github.com/slint-ui/slint", rev = "72cf74306784e7d15374639ef110c1bb85c21cb0" }
+
+[profile.release]
+opt-level = 3
+lto = false
+codegen-units = 16
+strip = "debuginfo"
