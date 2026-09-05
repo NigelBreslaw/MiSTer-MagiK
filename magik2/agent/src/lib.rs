@@ -554,9 +554,10 @@ impl Agent {
     }
 
     fn owned_process_is_running(&self) -> bool {
-        let Some(record) = self.read_owned_process() else {
-            return false;
-        };
+        let record = self
+            .read_owned_process()
+            .or_else(|| self.discover_owned_process());
+        let Some(record) = record else { return false };
         let Ok(command) = fs::read(format!("/proc/{}/cmdline", record.pid)) else {
             self.clear_owned_process();
             return false;
@@ -568,6 +569,32 @@ impl Agent {
             self.clear_owned_process();
             false
         }
+    }
+
+    fn discover_owned_process(&self) -> Option<OwnedProcess> {
+        let executable = self.install_root.join("probe").display().to_string();
+        let mut matches = fs::read_dir("/proc")
+            .ok()?
+            .flatten()
+            .filter_map(|entry| entry.file_name().to_string_lossy().parse::<u32>().ok())
+            .filter(|pid| {
+                fs::read(format!("/proc/{pid}/cmdline"))
+                    .ok()
+                    .and_then(|command| {
+                        command
+                            .split(|byte| *byte == 0)
+                            .next()
+                            .map(ToOwned::to_owned)
+                    })
+                    .is_some_and(|command| command == executable.as_bytes())
+            });
+        let pid = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        let record = OwnedProcess { pid, executable };
+        let _ = self.write_owned_process(record.pid);
+        Some(record)
     }
 
     fn stop_owned_process(&self) {
