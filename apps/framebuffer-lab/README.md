@@ -1,35 +1,21 @@
 # MiSTer MagiK Framebuffer Lab
 
+The legacy agent preview, capture, device-session and lab measurement commands
+were removed in milestone 4. This document retains the underlying renderer
+and asset contracts; it is not an instruction to recreate those workflows.
+
+
 This package is a Slint-free RGB565 particle sandbox. It contains the 36-demo
 experimental showcase, validated JSON recipe families, deterministic capture,
 and a native macOS `winit`/`softbuffer` preview.
 
-Interactive macOS preview:
-
-```bash
-scripts/agent live-particles preview \
-  apps/framebuffer-lab/assets/experiments/particles/procedural.json \
-  --demo 13
-```
-
 The selected JSON file is polled every 100 ms. A valid save restarts the pinned
 demo at logical time zero. Invalid content leaves the last good recipe active
 and reports the bounded error in the window title. Escape closes the window.
-The same command is the Rust iteration loop: stop it, edit the standalone lab,
-and rerun without compiling the Slint application.
 
-Attended MiSTer preview uses the same renderer and recipe watcher while writing
-straight to the hidden RGB565 scanout slots and presenting through the latch:
-
-```bash
-scripts/agent device live-particles \
-  apps/framebuffer-lab/assets/experiments/particles/procedural.json \
-  --demo 13 --attended
-```
-
-The device session uploads only the lab binary and selected recipe to a volatile
-directory. Saving valid JSON updates the running session; invalid JSON keeps the
-last good recipe. Ctrl-C restores the launcher and removes the session files.
+The former device-session uploader and launcher-restoration workflow have been
+deleted. The following describes retained native binary capabilities, not a
+supported host development workflow.
 
 Deterministic headless capture parses the family exactly once and starts no
 watcher:

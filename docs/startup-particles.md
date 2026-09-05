@@ -5,6 +5,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Shared framebuffer-scene development
 
+The legacy agent preview, capture, device-session and lab measurement commands
+were removed in milestone 4. This document retains the underlying renderer
+and asset contracts; it is not an instruction to recreate those workflows.
+
+
 The production-quality MagiK text and arcade-cabinet effects share the
 Slint-free `crates/particles` engine. Portable scene contracts and pure launcher
 navigation-transition rasterization live in the Slint-free
@@ -162,31 +167,8 @@ an acknowledgement by itself.
 
 The Dev launcher gate is structural: `DeviceLayout::current()` must be `Dev`
 before watcher construction. There is no environment override or persistent
-recipe path. Attended device sessions use only volatile `/tmp` state, require a
-terminal, and remove their recipe before waiting for an embedded-default
-acknowledgement and restoring the launcher.
-
-Use the supported workflow entry points rather than invoking build or transport
-details directly:
-
-```text
-scripts/agent startup-particles preview RECIPE
-scripts/agent scene-lab preview --scene magik --recipe RECIPE
-scripts/agent scene-lab preview --scene cabinet --recipe RECIPE
-scripts/agent scene-lab preview --scene navigation-transition --fixture home-arcade
-scripts/agent scene-lab preview --scene card-flip
-scripts/agent scene-lab preview --scene screenshot-screensaver --archive FILE [--seed SEED]
-scripts/agent scene-lab capture --scene screenshot-screensaver --archive FILE [--seed SEED] --time-ms N --output FILE
-scripts/agent device scene-lab --scene magik --recipe RECIPE --attended
-scripts/agent device scene-lab --scene navigation-transition --fixture home-arcade --attended
-scripts/agent device scene-lab --scene card-flip --attended
-scripts/agent device scene-lab --scene screenshot-screensaver [--seed SEED] --attended
-scripts/agent device scene-lab --scene SCENE --seconds N --attended
-scripts/agent device scene-lab --scene SCENE --seconds N --profile --attended
-scripts/agent device scene-lab --scene SCENE --seconds N --assess --attended
-scripts/agent device startup-particles RECIPE --runtime lab --attended
-scripts/agent device startup-particles RECIPE --runtime dev-launcher --attended
-```
+recipe path. The removed attended device sessions used only volatile `/tmp` state and
+restored the launcher. Those host sessions are no longer available.
 
 `scene-lab` is canonical. The older `startup-particles preview` command and
 attended `--runtime lab` path remain thin typed compatibility aliases; the old
@@ -274,15 +256,6 @@ stay below one second.
 | Shared navigation rasterizer | 8.924 s | 0.181 s | 3.143 s |
 | Lab host | 8.867 s | 0.184 s | 0.776 s |
 | Shared screenshot parade | qualification recorded separately | target ≤ 0.500 s | target ≤ 4.000 s |
-
-Use the repository-owned measurement inputs explicitly:
-
-```text
-scripts/agent compile-time measure framebuffer-scene-lab-macos --edit shared-magik --target-dir NEW_ABSOLUTE_PATH --output NEW_JSON_PATH
-scripts/agent compile-time measure framebuffer-scene-lab-macos --edit shared-navigation --target-dir NEW_ABSOLUTE_PATH --output NEW_JSON_PATH
-scripts/agent compile-time measure framebuffer-scene-lab-macos --edit shared-screenshot-parade --target-dir NEW_ABSOLUTE_PATH --output NEW_JSON_PATH
-scripts/agent compile-time measure framebuffer-scene-lab-macos --edit lab-host --target-dir NEW_ABSOLUTE_PATH --output NEW_JSON_PATH
-```
 
 The focused ARM lab completed a separate build in 10.46 seconds. That is a
 single build result, not a five-sample edit median, so it must not be presented
