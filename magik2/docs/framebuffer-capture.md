@@ -38,7 +38,8 @@ build/bootstrap; diagnostics and inherited child-process output use stderr.
 Both real MagiK and Mini-MagiK are captured from the currently latched scanout slot.
 The shared platform contracts provide the slot layout and FPGA status primitive.
 The tool holds the platform transaction lock while reading and copying the active
-slot, then checks that its sequence, base, flip count and route epoch stayed stable.
+slot, then checks that its geometry, sequence, base, flip count and route epoch
+stayed stable and that MagiK still owns an enabled scanout.
 There is no dependency on the legacy device agent, Slint screenshots, `watch-frame`
 preview cache, or a raw `/dev/fb0` reader.
 

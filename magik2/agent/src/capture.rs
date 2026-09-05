@@ -151,7 +151,13 @@ pub(crate) fn capture() -> Result<Capture, CaptureError> {
         libc::munmap(mapped, layout.map_bytes as usize);
     }
     let after = fpga.read_magik_latched_fbuf_status().map_err(unavailable)?;
-    if before.active_base != after.active_base
+    if !after.supported()
+        || !after.active_enabled()
+        || !after.magik_owned()
+        || before.active_width != after.active_width
+        || before.active_height != after.active_height
+        || before.active_stride != after.active_stride
+        || before.active_base != after.active_base
         || before.active_sequence != after.active_sequence
         || before.flip_count != after.flip_count
         || before.active_route_epoch != after.active_route_epoch
