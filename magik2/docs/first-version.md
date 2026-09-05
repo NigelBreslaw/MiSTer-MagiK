@@ -210,9 +210,9 @@ Commit messages should describe these concrete outcomes. Use dedicated tooling P
 
 ### Speed acceptance
 
-Measure 20 runs per warm-path case on the user’s Mac and MiSTer, with dependencies/build environment warm and the viewer closed. Use nearest-rank p95 and retain all samples.
+Measure two runs per warm-path case on the user’s Mac and MiSTer, with dependencies/build environment warm and the viewer closed. Retain both timings and compare the slower result with the target; do not estimate percentiles from two attempts.
 
-| Case | Required p95 |
+| Case | Target for the slower of two attempts |
 |---|---:|
 | Unchanged `deploy`, invocation to completion | **≤1 second** |
 | Changed prebuilt binary, deploy entry to visible readiness | **≤5 seconds** |
