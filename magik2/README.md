@@ -104,7 +104,10 @@ PYTHONPATH=magik2/host uv run --project magik2/host pytest magik2/scenarios --ma
 ```
 
 The ordinary selection has two repetitions in one app session; profiling selects
-one separate run. They require a populated Dev Arcade catalog with multiple games.
+one separate run with a 15-second whole-sequence allowance. Its ten-second
+device profile is a sample within the sequence, not a claim that every action
+and cleanup operation was sampled. They require a populated Dev Arcade catalog
+with multiple games. Catalog navigation restores the original selection.
 They do not launch cores, refresh the catalog, or alter production settings.
 Response timings include host RPC/accessibility polling and are not frame latency.
 Default `scripts/magik2 check` still runs only smoke. No new tooling-core API is

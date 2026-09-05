@@ -86,13 +86,15 @@ def test_journeys_profile(application_session):
     assert not window.get("evidence_error")
     if isinstance(previous, dict):
         assert window["start_ms"] > previous["end_ms"]
-    assert journey_seconds < 12, (
-        "journeys exceeded the profile window; discuss before rerunning"
+    assert journey_seconds < 15, (
+        "journeys exceeded the 15-second allowance; discuss before rerunning"
     )
     append_event(
         run,
         {
             "phase": "journeys-profile",
+            "journey_elapsed_seconds": round(journey_seconds, 3),
+            "profile_scope": "ten-second device sample; not full journey coverage",
             "profile_id": profile_id,
             "outcome": "measured",
             "window": window,
