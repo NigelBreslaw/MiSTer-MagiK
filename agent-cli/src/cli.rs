@@ -71,6 +71,8 @@ pub enum Command {
     /// Print the bounded guidance and authority record for one path.
     Guidance {
         path: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     #[command(hide = true)]
     Run {
