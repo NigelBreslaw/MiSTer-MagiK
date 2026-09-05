@@ -40,6 +40,10 @@ not device acceptance.
 - The profiled motion repetition retained a 17,211-byte folded stack file and
   a 37,549-byte flamegraph. The stacks contain both `mister_magik2_probe::main`
   and Slint software-renderer symbols.
+- With an active localhost viewer consuming native frames, metrics, and logs,
+  motion retained 1,802 confirmed latch flips and zero physical drops in
+  33.3 seconds. The comparable viewer-closed run retained 1,800 flips in
+  30.7 seconds; observation overhead is measurable but did not introduce drops.
 
 ## Automated evidence
 
@@ -54,8 +58,7 @@ not device acceptance.
 
 ## Remaining acceptance gates
 
-- Measure viewer observation overhead,
-  including slow/disconnected viewers.
+- Exercise slow/disconnected viewer behavior under continuous traffic.
 - Measure 20 invocation-to-completion runs for Rust-edit and Slint-edit cases.
   Retain all samples, bytes, throughput, and nearest-rank p95; do not
   substitute phase timing for those targets.
