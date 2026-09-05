@@ -163,6 +163,7 @@ def launcher_idle(application, agent, *, instrumented=False):
     """Measure the real launcher's ordinary idle loop; no synthetic FPS target."""
     if application.first_window is None:
         raise AssertionError("real launcher window is unavailable")
+    previous = agent.metrics().get("window")
     agent._successful("measure")
     seconds = 10 if instrumented else 5
     time.sleep(2 + seconds + 0.4)
@@ -174,6 +175,10 @@ def launcher_idle(application, agent, *, instrumented=False):
         raise AssertionError("real launcher returned no matching measurement window")
     if not seconds * 1000 <= window.get("elapsed_ms", 0) <= (seconds + 1) * 1000:
         raise AssertionError("real launcher measurement duration is invalid")
+    if isinstance(previous, dict) and window.get("start_ms", -1) <= previous.get(
+        "end_ms", -1
+    ):
+        raise AssertionError("measurement returned a previous window")
     if window.get("evidence_error"):
         raise AssertionError(window["evidence_error"])
     return {

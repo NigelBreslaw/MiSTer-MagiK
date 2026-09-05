@@ -74,7 +74,20 @@ def test_development_paths_reject_production_or_missing_evidence():
         None,
         {},
         {**context, "assets": "/media/fat/mister-magik/assets"},
+        {**context, "assets": f"{root}/../mister-magik/assets"},
         {**context, "main": "/media/fat/MiSTer_MagiK"},
     ):
         with pytest.raises(AssertionError):
             actions.validate_development_paths(bad)
+
+
+def test_idle_cannot_reuse_a_previous_completed_window(monkeypatch):
+    from types import SimpleNamespace
+
+    evidence = {"sha256": "app", "pid": 1, "window": window()}
+    agent = SimpleNamespace(
+        expected_sha256="app", metrics=lambda: evidence, _successful=lambda _: None
+    )
+    monkeypatch.setattr(actions.time, "sleep", lambda _: None)
+    with pytest.raises(AssertionError, match="previous window"):
+        actions.launcher_idle(SimpleNamespace(first_window=object()), agent)
