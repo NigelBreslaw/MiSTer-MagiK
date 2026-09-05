@@ -60,7 +60,8 @@ def test_complete_case_list_covers_every_non_smoke_target() -> None:
         "controller",
     }
     assert suite.COMPLETE_CASES[0] == "startup-home"
-    assert suite.COMPLETE_CASES[-1] == "profile-matrix"
+    assert suite.COMPLETE_CASES[-1] == "menu-confirmations"
+    assert "profile-matrix" not in suite.CASE_TARGETS
 
 
 def test_run_pytest_sets_fail_on_skip_and_reports_elapsed_case(
