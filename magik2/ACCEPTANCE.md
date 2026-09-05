@@ -49,7 +49,8 @@ not device acceptance.
   was introduced.
 - The agent advertises `agent-update-v1`, `artifacts-v1`, `lifecycle-v1`,
   `legacy-isolation-v1`, `metrics-v1`, `request-replay-v1`, `status`,
-  `test-bridge-v1`, `test-deadline-v1`, `upload-v1`, and `watch-v1`; the
+  `test-bridge-v1`, `test-deadline-v1`, `test-deadline-v2`, `upload-v1`, and
+  `watch-v1`; the
   current probe remains running after deploy and after a failed profiled-check
   setup. Its typed status reports `legacy_agent_running=False`, so normal 2.0
   operation is verified while the retired device agent is stopped.
@@ -69,6 +70,10 @@ not device acceptance.
   30.7 seconds; observation overhead is measurable but did not introduce drops.
 - Five native watch attach/disconnect cycles each received telemetry and left
   the persistent probe healthy with zero physical drops.
+- After the deadline correction, a fresh current-device motion session retained
+  `build/magik2-results/20260905T105830Z-2f0a2eaf8fe3`: 30,915 ms elapsed,
+  1,802 latch posts and flips, zero physical drops, zero vsync misses, and a
+  successful persistent restart and cleanup.
 
 ## Automated evidence
 
