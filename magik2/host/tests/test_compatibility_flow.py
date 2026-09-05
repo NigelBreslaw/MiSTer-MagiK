@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from magik2 import cli
@@ -93,3 +95,21 @@ def test_absent_agent_bootstraps_and_authentication_failure_does_not(monkeypatch
     with pytest.raises(AgentError, match="authentication-failed"):
         cli.connect_agent(create_run(tmp_path / "auth", "status", {}))
     assert installs == ["install"]
+
+
+def test_check_command_dispatches_without_shadowing_the_handler(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("MISTER_IP", "mister.test")
+    monkeypatch.setenv("MISTER_MAGIK2_RESULTS", str(tmp_path / "results"))
+    monkeypatch.setattr(sys, "argv", ["scripts/magik2", "check", "motion", "--profile"])
+    received: dict[str, object] = {}
+
+    def handler(arguments, run) -> int:
+        received["scenario"] = arguments.scenario
+        received["profile"] = arguments.profile
+        received["run"] = run
+        return 17
+
+    monkeypatch.setattr(cli, "check", handler)
+    assert cli.main() == 17
+    assert received["scenario"] == "motion"
+    assert received["profile"] is True
