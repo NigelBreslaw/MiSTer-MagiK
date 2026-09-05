@@ -1,4 +1,4 @@
-# Milestone 2: transfer comparison stopped for user input
+# Milestone 2: bounded transfer comparison
 
 The new worktree is on `nigel/mini-magik-shared`, based on merged main. The
 two-attempt acceptance change is preserved. The old worktree and old local tooling branches were removed as requested.
@@ -46,7 +46,37 @@ attempted after this result.
 Raw comparison results remain in `build/transfer-comparison/result.json` and
 native diagnostic bundles in `build/magik2-results/`; binaries are not committed.
 
-## Suggested next step — requires user direction
+## Authorized second pair — 5 September 2026
+
+The user authorized the remaining pair without code changes. Execution order
+across the complete comparison was legacy, new, new, legacy; exactly two
+transfers per system were performed.
+
+| System | Receive, verify and save | Sustained MB/s | Sustained Mb/s | Host request to acknowledgement |
+|---|---:|---:|---:|---:|
+| New, attempt 2 | 5,977 ms | 5.314 | 42.515 | 6,136 ms |
+| Legacy, attempt 2 | 5,913 ms | 5.372 | 42.975 | 5,927 ms |
+
+The second new transfer was **1.1% lower throughput** than the second legacy
+transfer. The initial 28.6% difference did not repeat. These two samples show
+that the new path can match legacy throughput closely, but do not explain its
+first slow result or establish consistent performance. Across both attempts,
+aggregate bytes divided by total receive/save time gives 4.410 MB/s for new
+and 5.323 MB/s for legacy (17.2% lower for new).
+
+Both second commands succeeded with the same byte count and SHA-256 as the
+first pair. The legacy command reported no cleanup error. No code changes,
+optimizations or additional performance runs were made. The authorized
+comparison is complete; application integration remains pending.
+
+## Next decision
+
+There is no repeated large slowdown in this bounded comparison. Proceeding
+with the shared application workflow is reasonable, retaining the first
+result as unexplained variability. If the user wants to investigate that
+variability first, agree a bounded diagnostic before doing further work.
+
+## Original recommendation after the first pair (now completed)
 
 Finish the remaining **one new and one legacy transfer**, without changing any
 transfer code. If the difference repeats, propose a separate bounded diagnostic
