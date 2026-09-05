@@ -10,6 +10,8 @@ not device acceptance.
   MagiK binary, manifest, Main, and FPGA platform untouched.
 - `scripts/magik2 deploy` starts the RGB565 probe after its readiness signal.
   The probe reports a 960x540 initial presentation.
+- `scripts/magik2 stop` stopped the owned probe and restored Main's ordinary
+  launcher; a subsequent unchanged deploy restarted the probe successfully.
 - The unchanged warm path was sampled 20 times on 2026-09-05 with the viewer
   closed. Every run was a zero-byte no-op; invocation-to-completion samples
   were 727, 729, 733, 743, 745, 747, 748, 749, 755, 759, 760, 761, 764, 800,
