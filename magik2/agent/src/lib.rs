@@ -182,6 +182,7 @@ impl Agent {
             "test-deadline-v1",
             "test-deadline-v2",
             "legacy-isolation-v1",
+            "legacy-process-status",
         ]
     }
 
@@ -1338,8 +1339,14 @@ fn legacy_agent_running() -> bool {
             .is_some_and(|name| name.bytes().all(|byte| byte.is_ascii_digit()))
             && fs::read_to_string(entry.path().join("comm"))
                 .ok()
-                .is_some_and(|name| name.trim() == "mister-magik-agent")
+                .is_some_and(|name| is_legacy_agent_comm(name.trim()))
     })
+}
+
+fn is_legacy_agent_comm(name: &str) -> bool {
+    // Linux /proc/PID/comm contains at most 15 bytes, even for a longer binary name.
+    let legacy = "mister-magik-agent";
+    name == legacy || name == &legacy[..15]
 }
 
 #[cfg(test)]
@@ -1380,6 +1387,15 @@ fn publish_atomically(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_process_detection_handles_linux_comm_truncation() {
+        assert!(is_legacy_agent_comm("mister-magik-agent"));
+        assert!(is_legacy_agent_comm(&"mister-magik-agent"[..15]));
+        assert!(!is_legacy_agent_comm(&"mister-magik2-agent"[..15]));
+        assert!(!is_legacy_agent_comm("MiSTer_MagiKDev"));
+    }
+
 
     #[test]
     fn app_switch_discards_cached_and_inflight_old_previews() {
