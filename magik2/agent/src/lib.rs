@@ -147,6 +147,7 @@ impl Agent {
     pub fn capabilities() -> &'static [&'static str] {
         &[
             "status",
+            "transfer-check",
             "diagnostics",
             "upload-v1",
             "lifecycle-v1",
@@ -238,10 +239,15 @@ impl Agent {
             );
         }
 
-        if matches!(request.op.as_str(), "upload" | "agent-update") {
+        if matches!(
+            request.op.as_str(),
+            "upload" | "agent-update" | "transfer-check"
+        ) {
             let _mutation = self.mutations.lock().expect("mutation state poisoned");
             let artifact = if request.op == "agent-update" {
                 "mister-magik2-agent"
+            } else if request.op == "transfer-check" {
+                "transfer-check"
             } else {
                 request
                     .fields
@@ -286,6 +292,19 @@ impl Agent {
             staged
                 .publish(&self.install_root.join(artifact))
                 .map_err(FrameError::Io)?;
+            if request.op == "transfer-check" {
+                let receive_ms = staged.receive_ms().max(1);
+                let bytes_per_second = (body_length as u128) * 1000 / receive_ms;
+                let saved = response(
+                    &request.id,
+                    "transfer-saved",
+                    serde_json::json!({"bytes":body_length,"sha256":hash,"receive_ms":receive_ms,"bytes_per_second":bytes_per_second}),
+                );
+                // The saved timing ends after file and parent-directory sync.
+                // Remove only this command's fixed disposable file before reply.
+                fs::remove_file(self.install_root.join(artifact)).map_err(FrameError::from)?;
+                return write_frame(stream, &saved, &[]);
+            }
             let result = response(
                 &request.id,
                 "uploaded",
@@ -1310,6 +1329,53 @@ fn publish_atomically(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transfer_check_saves_and_cleans_without_replacing_probe() {
+        let root = std::env::temp_dir().join(format!("magik2-transfer-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("probe"), b"running app").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let device_root = root.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            Agent::with_state_root(
+                "test".into(),
+                "token".into(),
+                device_root.clone(),
+                device_root.join("state"),
+            )
+            .handle(&mut stream)
+            .unwrap();
+        });
+        let body = vec![42; 128 * 1024];
+        let hash = Sha256::digest(&body)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        let request = Envelope {
+            id: "transfer".into(),
+            op: "transfer-check".into(),
+            token: "token".into(),
+            fields: serde_json::from_value(serde_json::json!({"sha256":hash})).unwrap(),
+        };
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        write_frame(&mut client, &request, &body).unwrap();
+        let (reply, _) = read_frame(&mut client).unwrap();
+        server.join().unwrap();
+        assert_eq!(reply.op, "transfer-saved");
+        assert_eq!(reply.fields["sha256"], hash);
+        assert_eq!(reply.fields["bytes"], body.len());
+        assert!(reply.fields["receive_ms"].as_u64().unwrap() > 0);
+        assert_eq!(fs::read(root.join("probe")).unwrap(), b"running app");
+        assert!(!root.join("transfer-check").exists());
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn failed_test_start_retains_primary_and_restoration_outcomes() {

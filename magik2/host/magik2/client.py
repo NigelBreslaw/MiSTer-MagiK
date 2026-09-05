@@ -141,7 +141,7 @@ class NativeAgent:
     ) -> tuple[Envelope, bytes]:
         request = Envelope(uuid.uuid4().hex, operation, self.token, fields or {})
         last_error: OSError | ProtocolError | None = None
-        attempts = 1 if operation == "agent-update" else 2
+        attempts = 1 if operation in {"agent-update", "transfer-check"} else 2
         for attempt in range(attempts):
             try:
                 with socket.create_connection(

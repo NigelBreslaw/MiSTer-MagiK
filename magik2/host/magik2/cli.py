@@ -50,6 +50,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="scripts/magik2")
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("deploy")
+    transfer = subcommands.add_parser(
+        "transfer-check", help="measure one saved upload without starting it"
+    )
+    transfer.add_argument("--artifact", type=Path, required=True)
     acceptance = subcommands.add_parser(
         "acceptance", help="run bounded hardware acceptance"
     )
@@ -103,6 +107,11 @@ def dispatch(arguments, run) -> int:
             file=os.sys.stderr,
         )
         return 2
+    if arguments.command == "transfer-check":
+        from .transfer import transfer_check
+
+        agent, _status = connect_agent(run, {"status", "transfer-check"})
+        return transfer_check(agent, arguments.artifact, run)
     if arguments.command == "acceptance":
         from .acceptance import run_contract_checks, run_delivery_matrix
 

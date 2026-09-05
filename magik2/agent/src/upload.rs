@@ -4,9 +4,11 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 pub struct Staged {
     path: PathBuf,
+    received_at: Instant,
 }
 impl Drop for Staged {
     fn drop(&mut self) {
@@ -15,7 +17,17 @@ impl Drop for Staged {
 }
 impl Staged {
     pub fn publish(&self, destination: &Path) -> Result<(), String> {
-        fs::rename(&self.path, destination).map_err(|e| e.to_string())
+        fs::rename(&self.path, destination).map_err(|e| e.to_string())?;
+        File::open(
+            destination
+                .parent()
+                .ok_or("upload destination has no parent")?,
+        )
+        .and_then(|directory| directory.sync_all())
+        .map_err(|e| e.to_string())
+    }
+    pub fn receive_ms(&self) -> u128 {
+        self.received_at.elapsed().as_millis()
     }
 }
 
@@ -27,7 +39,7 @@ pub fn receive(
     length: usize,
     id: &str,
 ) -> Result<Staged, String> {
-    if !matches!(artifact, "probe" | "mister-magik2-agent")
+    if !matches!(artifact, "probe" | "mister-magik2-agent" | "transfer-check")
         || hash.len() != 64
         || !hash.bytes().all(|b| b.is_ascii_hexdigit())
     {
@@ -37,6 +49,7 @@ pub fn receive(
     let request_hash = hex(&Sha256::digest(id.as_bytes()));
     let staged = Staged {
         path: root.join(format!(".{artifact}.{}.part", &request_hash[..16])),
+        received_at: Instant::now(),
     };
     let mut output = File::create(&staged.path).map_err(|e| e.to_string())?;
     let mut remaining = length;
