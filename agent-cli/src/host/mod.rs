@@ -46,6 +46,7 @@ mod platform_deploy;
 mod remote;
 mod startup_particles;
 mod tracefs;
+mod transfer_check;
 
 pub(crate) use startup_particles::SceneLabRequest;
 
@@ -382,7 +383,8 @@ impl NativeDevice {
 
         let agent = matches!(
             command,
-            DeviceCommand::Capture { .. }
+            DeviceCommand::TransferCheck(_)
+                | DeviceCommand::Capture { .. }
                 | DeviceCommand::Reboot(_)
                 | DeviceCommand::Logs
                 | DeviceCommand::Events
@@ -432,6 +434,7 @@ impl NativeDevice {
                     Ok(())
                 }
                 DeviceCommand::ArmingStatus => arming_status(),
+                DeviceCommand::TransferCheck(args) => transfer_check::run(args, &prepared.config),
                 DeviceCommand::LiveParticles(_)
                 | DeviceCommand::StartupParticles(_)
                 | DeviceCommand::SceneLab(_) => {
