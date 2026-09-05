@@ -849,6 +849,17 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         })
     }
 
+    #[cfg(feature = "magik2")]
+    pub(in crate::ui_runner) fn tooling_preview(
+        &self,
+        session: &mut mister_magik_tooling_support::Session,
+    ) {
+        if let Some(slot) = self.last_committed_buffer {
+            let frame = self.committed_frame_view(slot);
+            session.preview_rows(frame.pixels, frame.width, frame.height, frame.stride_pixels);
+        }
+    }
+
     pub(in crate::ui_runner) fn committed_frame_view(
         &self,
         buffer_index: u8,

@@ -541,6 +541,16 @@ trait PresentationAdapters<L> {
 }
 
 impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
+    #[cfg(feature = "magik2")]
+    pub(in crate::ui_runner) fn tooling_preview(
+        &self,
+        session: &mut mister_magik_tooling_support::Session,
+    ) {
+        if let LauncherPresenterState::Latch(latch) = &self.state {
+            latch.tooling_preview(session);
+        }
+    }
+
     pub(in crate::ui_runner) fn new(
         ui: &UiDisplay,
         present_backend: LauncherPresentBackend,

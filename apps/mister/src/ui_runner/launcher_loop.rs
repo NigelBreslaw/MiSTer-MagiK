@@ -6152,10 +6152,23 @@ pub(super) fn run_launcher_loop(
             launcher_frame_phase_observer.record($phase);
         }};
     }
+    #[cfg(feature = "magik2")]
+    let mut tooling = mister_magik_tooling_support::Session::from_environment();
+    #[cfg(feature = "magik2")]
+    let mut tooling_drop_baseline: Option<u32> = None;
+    #[cfg(feature = "magik2")]
+    let mut tooling_reject_baseline: Option<u16> = None;
     'launcher: while (secs == 0 || run_start.elapsed().as_secs() < secs)
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
         record_launcher_frame_phase!(LauncherFramePhase::Begin);
+        #[cfg(feature = "magik2")]
+        if let Some(session) = tooling.as_mut() {
+            if let Err(error) = session.tick(ui.render_w(), ui.render_h()) {
+                session.metrics.error = Some(error);
+            }
+            launcher_presenter.tooling_preview(session);
+        }
         gui_profiling.tick(Instant::now());
         let mut scheduler_phase = launcher_response_trace.scheduler_boundary();
         screensaver_cpu_profile.poll(frames);
@@ -9633,6 +9646,12 @@ pub(super) fn run_launcher_loop(
             let idle_sleep = catalog_scan_blink
                 .time_until_toggle(loop_start)
                 .map_or(idle_sleep, |blink| idle_sleep.min(blink));
+            #[cfg(feature = "magik2")]
+            let idle_sleep = if tooling.is_some() {
+                idle_sleep.min(Duration::from_millis(100))
+            } else {
+                idle_sleep
+            };
             let _ = pad.wait_for_input(input_observation, idle_sleep);
             let _ = launcher_response_trace
                 .record_scheduler_interval("idle-input-wait", scheduler_phase);
@@ -11828,6 +11847,14 @@ pub(super) fn run_launcher_loop(
             match completion {
                 Ok(completion) => {
                     let status = completion.status;
+                    #[cfg(feature = "magik2")]
+                    if let Some(session) = tooling.as_mut() {
+                        if let Some(previous) = tooling_reject_baseline {
+                            session.metrics.counters.rejections +=
+                                u64::from(status.reject_count.wrapping_sub(previous));
+                        }
+                        tooling_reject_baseline = Some(status.reject_count);
+                    }
                     readiness_post = Some(super::launcher_readiness::ConfirmedLatchPost {
                         sequence: status.active_sequence,
                         route_epoch: status.active_route_epoch,
@@ -12015,6 +12042,35 @@ pub(super) fn run_launcher_loop(
                 if launcher_response_trace.launcher_profile_start_ready() {
                     launcher_response_trace.start_pmu_if_ready();
                     screensaver_cpu_profile.begin_launcher_response(frames.saturating_add(1));
+                }
+                #[cfg(feature = "magik2")]
+                if let Some(session) = tooling.as_mut() {
+                    let metrics = &mut session.metrics;
+                    metrics.counters.presentations += 1;
+                    metrics.counters.posts += 1;
+                    metrics.counters.flips += 1;
+                    let render_us = frame_t2.saturating_duration_since(frame_t1).as_micros() as u64;
+                    metrics.last_render_us = render_us;
+                    metrics.counters.render_us += render_us;
+                    metrics.counters.render_to_present_us += Instant::now()
+                        .saturating_duration_since(frame_t1)
+                        .as_micros()
+                        as u64;
+                    match f.read_magik_presentation_telemetry() {
+                        Ok(telemetry) => {
+                            if let Some(previous) = tooling_drop_baseline {
+                                metrics.counters.drops += u64::from(
+                                    telemetry.repeated_vblank_count.wrapping_sub(previous),
+                                );
+                            }
+                            tooling_drop_baseline = Some(telemetry.repeated_vblank_count);
+                            metrics.last_physical_drop_count =
+                                Some(presented_frame.main_present_drop_count);
+                        }
+                        Err(error) => {
+                            metrics.error = Some(format!("presentation telemetry: {error}"))
+                        }
+                    }
                 }
                 if let Ok(telemetry) = f.read_magik_presentation_telemetry() {
                     launcher_response_trace.observe_presentation(
