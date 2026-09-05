@@ -19,7 +19,7 @@ def summarize(attempts, target_ms):
         "failures": failures,
         "p95_ms": p95,
         "target_ms": target_ms,
-        "target_met": bool(durations) and not failures and p95 <= target_ms,
+        "target_met": len(durations) >= 20 and not failures and p95 <= target_ms,
     }
 
 
@@ -34,6 +34,7 @@ def run_delivery_matrix(run: Path) -> int:
         probe / "target/armv7-unknown-linux-gnueabihf/release/mister-magik2-probe"
     )
     index = {"cases": {}, "restoration": None}
+    interrupted = False
     base_env = dict(os.environ)
     base_env.pop("MISTER_MAGIK2_REPAIR", None)
     base_env.pop("MISTER_MAGIK2_PREBUILT_ARTIFACT", None)
@@ -42,6 +43,7 @@ def run_delivery_matrix(run: Path) -> int:
         (run / "acceptance.json").write_text(json.dumps(index, indent=2) + "\n")
 
     def attempt(case, number, extra=None):
+        nonlocal interrupted
         folder = run / case / str(number)
         folder.mkdir(parents=True)
         env = {
@@ -63,6 +65,9 @@ def run_delivery_matrix(run: Path) -> int:
                 code = result.returncode
             except subprocess.TimeoutExpired:
                 code = 124
+            except KeyboardInterrupt:
+                code = 130
+                interrupted = True
         bundles = list(folder.glob("*/run.json"))
         return {
             "number": number,
@@ -114,6 +119,8 @@ def run_delivery_matrix(run: Path) -> int:
                 rows.append(attempt(case, number, extra))
                 index["cases"][case]["summary"] = summarize(rows, target)
                 save()
+                if interrupted:
+                    raise KeyboardInterrupt
             for path, original in originals.items():
                 path.write_bytes(original)
             print(f"{case}: {index['cases'][case]['summary']}", flush=True)

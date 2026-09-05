@@ -1,108 +1,79 @@
-# MiSTer MagiK Tooling 2.0 acceptance record
+# First-version correction acceptance — 5 September 2026
 
-This is a living evidence record for Document 2. An item is complete only when
-the cited command and its retained result prove it; host compilation alone is
-not device acceptance.
+The review corrections are implemented on `nigel/magik2-tooling`. This record
+supersedes the prototype's earlier acceptance claims. See the [correction
+list](docs/corrections.md) and [machine-readable evidence index](docs/acceptance-2026-09-05.json).
+Raw logs, metrics, profiles and command results remain under ignored
+`build/magik2-results`; the index records their paths and exact artifact identities.
+No production app, Main binary, FPGA or platform manifest was changed.
 
-## Verified on the configured MiSTer
+## Delivery timings
 
-- Native bootstrap installed the separate agent on TCP 7500 and left the real
-  MagiK binary, manifest, Main, and FPGA platform untouched.
-- `scripts/magik2 deploy` starts the RGB565 probe after its readiness signal.
-  The probe reports a 960x540 initial presentation.
-- `scripts/magik2 stop` stopped the owned probe and restored Main's ordinary
-  launcher; a subsequent unchanged deploy restarted the probe successfully.
-- A deliberately invalid prebuilt artifact produced a retained
-  `start-failed; launcher-recovery=passed` result; the valid probe was then
-  redeployed successfully.
-- The unchanged warm path was sampled 20 times on 2026-09-05 with the viewer
-  closed. Every run was a zero-byte no-op; invocation-to-completion samples
-  were 727, 729, 733, 743, 745, 747, 748, 749, 755, 759, 760, 761, 764, 800,
-  823, 829, 849, 849, 868, and 893 ms. Nearest-rank p95 is 849 ms, below the
-  one-second requirement.
-- The internal prebuilt-artifact path was sampled 20 times with distinct
-  executable hashes and no compilation. Invocation-to-completion samples were
-  2147, 2176, 2192, 2200, 2206, 2236, 2300, 2301, 2331, 2344, 2360, 2365,
-  2399, 2399, 2475, 2481, 2502, 2594, 2606, and 2618 ms. The 11,957,000-byte
-  uploads completed in roughly 1.5–2.0 seconds; nearest-rank p95 completion
-  is 2606 ms, below the five-second requirement. One separate 11 MB upload
-  timed out before acknowledgment and remains retained as failure evidence;
-  it was excluded from the successful 20-sample set.
-- A one-line Slint edit was sampled 20 times, then the source was restored and
-  rebuilt normally. Invocation-to-completion samples were 11,009, 10,213,
-  10,195, 10,946, 11,320, 11,007, 10,896, 10,434, 10,064, 9,927, 9,772,
-  9,969, 9,829, 9,785, 9,994, 9,911, 9,874, 9,702, 10,960, and 9,844 ms.
-  The retained bundles contain each build, upload-byte, upload-elapsed, start,
-  and completion event; nearest-rank p95 is 11,009 ms, below 15 seconds.
-- A one-line Rust edit was sampled separately 20 times, then the source was
-  restored and rebuilt normally. Invocation-to-completion samples were 13,150,
-  13,358, 13,769, 12,665, 13,605, 13,630, 11,587, 10,669, 11,622, 10,118,
-  10,325, 10,008, 10,330, 10,745, 10,776, 10,008, 10,496, 9,628, 10,224,
-  and 11,338 ms. The same retained per-phase byte/timing evidence gives a
-  nearest-rank p95 of 13,630 ms, below 15 seconds.
-- Current deploy bundles record upload bytes, elapsed time, and calculated
-  bytes/second together. The source-edit runs predate that explicit derived
-  field but retain the corresponding byte and elapsed values in every bundle.
-- Native observation delivered metrics, 100 recent probe logs, and a
-  1,036,872-byte keyframe (72-byte wire header plus a 960x540 RGB565 surface)
-  to the localhost viewer with no stream error. No framebuffer device polling
-  was introduced.
-- The agent advertises `agent-update-v1`, `artifacts-v1`, `lifecycle-v1`,
-  `legacy-isolation-v1`, `metrics-v1`, `request-replay-v1`, `status`,
-  `test-bridge-v1`, `test-deadline-v1`, `test-deadline-v2`, `upload-v1`, and
-  `watch-v1`; the
-  current probe remains running after deploy and after a failed profiled-check
-  setup. Its typed status reports `legacy_agent_running=False`, so normal 2.0
-  operation is verified while the retired device agent is stopped.
-- A native `agent-update-v1` replacement completed against the running service.
-  The replacement acknowledged its SHA-256, retained the complete capability
-  set, and adopted the already-running probe without a probe restart.
-- Smoke passed through the isolated pinned Slint Python client and retained its
-  screenshot. Motion passed through the same client with 1,800 confirmed
-  scanout-latch posts and flips, zero physical drops, and a persistent-probe
-  restart after the session.
-- The profiled motion repetition retained a 17,211-byte folded stack file and
-  a 37,549-byte flamegraph. The stacks contain both `mister_magik2_probe::main`
-  and Slint software-renderer symbols.
-- With an active localhost viewer consuming native frames, metrics, and logs,
-  motion retained 1,802 confirmed latch flips and zero physical drops in
-  33.3 seconds. The comparable viewer-closed run retained 1,800 flips in
-  30.7 seconds; observation overhead is measurable but did not introduce drops.
-- Five native watch attach/disconnect cycles each received telemetry and left
-  the persistent probe healthy with zero physical drops.
-- After the deadline correction, a fresh current-device motion session retained
-  `build/magik2-results/20260905T105830Z-2f0a2eaf8fe3`: 30,915 ms elapsed,
-  1,802 latch posts and flips, zero physical drops, zero vsync misses, and a
-  successful persistent restart and cleanup.
+Twenty attempts per completed case, nearest-rank p95, including all failures.
+The first full matrix completed 80/80 deliveries successfully. After removing
+repeated executable hashing from startup, the rerun was stopped at the user's
+request during Slint measurements. Original sources and the running probe were
+restored successfully; the interrupted invocation correctly exits 130.
 
-## Automated evidence
+| Case | First complete matrix p95 | Final rerun p95 | Target |
+|---|---:|---:|---:|
+| Unchanged deploy | 954 ms | 990 ms (20/20 passed) | 1,000 ms |
+| Changed prebuilt | 5,025 ms | 4,615 ms (20/20 passed) | 5,000 ms |
+| Rust edit | 14,101 ms | 12,796 ms (20/20 passed) | 15,000 ms |
+| Slint edit | 16,073 ms | Incomplete: two completed samples, then interruption | 15,000 ms |
 
-- 26 focused host tests cover wire framing, hash publication, cached builds,
-  frame decoding, result bundles, capability compatibility A→B→A, absent-agent
-  bootstrap, missing-capability upgrade, authentication failure, command
-  dispatch, lost-reply request-identifier reuse, and primary/cleanup failure
-  retention.
-- 11 focused native-agent tests cover framing, truncation, hash verification,
-  atomic publication, authenticated loopback upload, replay-safe mutation
-  responses, the absolute deadline under continuous session traffic, and a
-  blocked watch stream that still permits a separate control response. The
-  relay tests also cover client disconnect and application-exit paths.
-- The probe and agent build for `armv7-unknown-linux-gnueabihf`; the probe links
-  pprof revision `431b88c4fc67bef98126eaa8932287583d1a660e`.
+**The Slint-edit target remains unverified after optimization.** The complete
+pre-optimization sample exceeded it. Partial samples are not a replacement for
+twenty attempts, and performance warnings never block ordinary deployment.
+Both matrices, including the interrupted attempt, are preserved in the index.
 
-## Failure and streaming matrices
+Reproduce with `scripts/magik2 acceptance` using the configured device login.
+It edits only the disposable probe, retains every attempt, and restores the
+original sources and app. Avoid concurrent edits in that checkout during the run.
 
-- The lost-reply test reconnects once with the same request identifier; the
-  native replay cache returns the original mutation result without publishing
-  the upload twice. Reusing that identifier for different request content is
-  rejected.
-- Test sessions hold the mutation lane, use a 20-second application-connect
-  limit and a 60-second absolute deadline from session start, and stop the
-  owned test process on application failure, client
-  disconnect, or deadline. The deadline test uses continuous traffic, so it
-  cannot be extended by read activity.
-- Control mutations are serialized while native watch streams remain on their
-  own connections. Watch writes have a 500 ms bound, retain only the newest
-  preview, and device motion with an active viewer retained zero physical drops.
-- A deliberately induced smoke failure plus failed persistent restart retains
-  distinct primary `check` and cleanup events and fails the command.
+## Hardware correctness and recovery
+
+`scripts/magik2 acceptance --contracts` passed on `192.168.1.117` in 74.855 seconds:
+
+- A fresh credential cache discovered the existing native token and retained
+  both agent and probe PIDs; no compatible-service replacement.
+- Invalid upload hashes and superseded starts preserved the running artifact.
+- Five watch reconnects each received metrics, logs and a valid RGB565 frame.
+- A stalled viewer left status responsive in 621 ms.
+- Five independent viewer-on motion windows passed; each had zero physical
+  drops and zero latch rejections.
+- Dropping attachment after test startup restored the persistent probe.
+- Stop confirmed Main's launcher recovery; cleanup restarted the probe.
+
+Viewer-on windows presented 280–285 frames in five seconds, compared with 300
+in the earlier viewer-closed windows. This is measurable observation overhead,
+not physical latch-drop evidence. Keep viewer state explicit when comparing
+benchmarks. The host producer test also stalls a real Unix receiver and confirms
+publication stays responsive with a bounded latest-frame slot.
+
+## Tests, measurements and profiling
+
+- 42 focused Python tests, 17 native-agent tests and three probe tests pass.
+- Both Rust packages pass focused Clippy with warnings denied. Python formatting
+  and basic correctness lint pass; hosted CI has not been run from this task.
+- Smoke passed through the pinned Slint Python client with exact build identity.
+- The shared pytest runner recorded five independent 2-second warmup/5-second
+  measurement windows: 300 presentations each, no physical drops or rejections.
+- The separate 10-second instrumented window retained 909 CPU samples, matching
+  run and artifact identity, nonempty folded stacks and SVG, and app/renderer
+  symbols. This profile preceded the final startup/preview cleanup; it is not
+  relabeled as a new final-build profile.
+- Latest recovery and viewer-on checks used the final device implementation.
+  The user ended further acceptance before another profile repetition.
+
+Run `scripts/magik2 check smoke` or `scripts/magik2 check motion --profile` to
+reproduce those scenarios. Both use the same consumer pytest tests; profiling
+is an additional labeled repetition, not part of the benchmark distribution.
+
+## Code size
+
+Physical lines including comments, whitespace and embedded tests: Python host
+and viewer about 2,200; native agent 2,110; probe 740; host tests about 840;
+consumer scenarios 170; scope checker 62. Formatting increased physical line
+count without adding a second orchestration engine. No legacy orchestrator
+imports, database, release-version gate or rollback ladder was introduced.
