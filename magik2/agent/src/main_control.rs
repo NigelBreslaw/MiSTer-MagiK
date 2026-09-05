@@ -39,6 +39,15 @@ pub fn handoff(command: &str) -> Result<(), String> {
     }
 }
 
+/// Main normally passes these when spawning the launcher. The development
+/// service must preserve the same input capability when it owns the child.
+pub fn configure_input_proxy(command: &mut std::process::Command, status: &serde_json::Value) {
+    if let Some(protocol @ (2 | 3)) = status["input_proxy_protocol"].as_u64() {
+        command.env("MISTER_MAGIK_INPUT_PROXY", "1");
+        command.env("MISTER_MAGIK_INPUT_PROXY_PROTOCOL", protocol.to_string());
+    }
+}
+
 fn exchange(
     command: &str,
     fifo: &Path,
@@ -108,6 +117,33 @@ fn exchange(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn development_child_receives_mains_actual_input_capability() {
+        for protocol in [2, 3] {
+            let mut command = std::process::Command::new("magik");
+            configure_input_proxy(
+                &mut command,
+                &serde_json::json!({"input_proxy_protocol":protocol}),
+            );
+            let environment: std::collections::HashMap<_, _> = command
+                .get_envs()
+                .map(|(k, v)| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        v.unwrap().to_string_lossy().into_owned(),
+                    )
+                })
+                .collect();
+            assert_eq!(environment["MISTER_MAGIK_INPUT_PROXY"], "1");
+            assert_eq!(
+                environment["MISTER_MAGIK_INPUT_PROXY_PROTOCOL"],
+                protocol.to_string()
+            );
+        }
+        let mut command = std::process::Command::new("magik");
+        configure_input_proxy(&mut command, &serde_json::json!({}));
+        assert_eq!(command.get_envs().count(), 0);
+    }
     #[test]
     fn missing_fifo_reader_is_bounded() {
         let root = std::env::temp_dir().join(format!("magik2-fifo-{}", std::process::id()));

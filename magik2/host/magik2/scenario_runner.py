@@ -46,6 +46,18 @@ def pytest_configure(config):
     )
 
 
+def pytest_collection_modifyitems(config, items):
+    selected_app = config.getoption("--magik2-app")
+    profile = config.getoption("--magik2-profile")
+    selected, deselected = [], []
+    for item in items:
+        matches_app = (item.path.name == "test_magik.py") == (selected_app == "magik")
+        is_profile = item.get_closest_marker("magik2_profile") is not None
+        (selected if matches_app and is_profile == profile else deselected).append(item)
+    items[:] = selected
+    config.hook.pytest_deselected(items=deselected)
+
+
 @pytest.fixture(scope="session")
 def magik2_run(request):
     if not request.config.getoption("--magik2-device"):
@@ -64,7 +76,7 @@ def magik2_run(request):
     return run
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def application_session(request, magik2_run):
     from .cli import (
         connect_agent,
@@ -73,12 +85,7 @@ def application_session(request, magik2_run):
         PROFILE_AGENT_CAPABILITIES,
     )
 
-    selected = request.config.getoption("--magik2-app")
-    if (request.node.path.name == "test_magik.py") != (selected == "magik"):
-        pytest.skip("scenario belongs to the other application")
-    profiled = request.node.get_closest_marker("magik2_profile") is not None
-    if profiled and not request.config.getoption("--magik2-profile"):
-        pytest.skip("profiling not requested")
+    profiled = request.config.getoption("--magik2-profile")
     profile_id = f"{magik2_run.name}-{uuid.uuid4().hex[:8]}" if profiled else None
     agent, status = connect_agent(
         magik2_run,
@@ -89,7 +96,7 @@ def application_session(request, magik2_run):
         agent, status, magik2_run, request.config.getoption("--magik2-app")
     )
     with managed_session(
-        agent, magik2_run, profile_id, request.node.nodeid
+        agent, magik2_run, profile_id, "shared application session"
     ) as application:
         yield application, agent, magik2_run, profile_id
 
