@@ -7,8 +7,19 @@ or invoke `scripts/agent`, `agent-cli`, or `mister/tools/agent`.
   `agent/`, and the disposable consumer experiment in `probe/`.
 - A compatible agent is selected by required capabilities, never build or
   version equality. Native payloads are binary framed; never base64 them.
-- Device mutations remain explicit attended operations. Keep installation under
-  `/media/fat/mister-magik2` and temporary state under `/tmp/mister-magik2`.
+- Use typed `scripts/magik2` operations for device work, with first-attempt
+  sandbox escalation. An authorized operation includes automatic bootstrap,
+  missing-capability installation, and resumption; do not request separate
+  user confirmation for those steps.
+- SSH is explicitly approved inside the fixed-purpose Python bootstrap/repair
+  adapter when the native service is absent/unreachable or cannot recover
+  natively. Use the configured device and existing SSH authentication inputs;
+  load the SSH library only when needed. Do not expose arbitrary remote shell
+  commands. Normal traffic and reachable-service upgrades use native transport.
+- Keep installation under `/media/fat/mister-magik2` and temporary state under
+  `/tmp/mister-magik2`. Dirty-worktree experiment delivery is supported; legacy
+  clean-commit, platform qualification, and rollback gates do not apply here.
+  Preserve the real app/platform and use Main's handoff for probe lifecycle.
 - Tool-core changes (`host/magik2/**`, `agent/**`, protocol docs) need a
   dedicated tooling PR. Probe and scenario changes are consumer changes.
 - Run focused tests only: `uv run --project magik2/host pytest tests -q` and
