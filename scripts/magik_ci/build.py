@@ -8,6 +8,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from scripts.magik_ci import ffmpeg
+
 TARGET = "armv7-unknown-linux-gnueabihf"
 COMMANDS = {
     "runtime-ci": ("apps/mister/Cargo.toml", "ci-fast", "ui"),
@@ -45,7 +47,7 @@ def _environment(
     environment["RUSTFLAGS"] = rustflags
 
     if runner == "cross" and intent in {"runtime-ci", "runtime-device"}:
-        dist = repository / "apps/mister/target/ffmpeg-minimal/armv7/dist"
+        dist = ffmpeg.CONTAINER_DIST
         include = dist / "include"
         environment.update(
             {
@@ -176,5 +178,7 @@ def execute(repository: Path, intent: str) -> None:
     if os.environ.get("MISTER_CARGO_TIMINGS") == "1":
         command.append("--timings")
     environment = _environment(repository, intent, profile, features, runner)
+    if runner == "cross" and intent in {"runtime-ci", "runtime-device"}:
+        ffmpeg.prepare(repository)
     subprocess.run(command, cwd=repository, env=environment, check=True)
     _write_build_identity(repository, intent, profile, features, runner)

@@ -171,6 +171,7 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "agent-cli/src/build.rs",
     ),
     "ffmpeg": (
+        "scripts/magik_ci/ffmpeg.py",
         "apps/mister/Cross.toml",
         "apps/mister/Dockerfile.cross-armv7",
     ),
