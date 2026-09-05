@@ -76,9 +76,10 @@ def deploy(_arguments: argparse.Namespace, run: Path) -> int:
         agent, status = connect_agent(run)
         append_event(run, {"phase": "connect", "elapsed_ms": int((time.monotonic() - started) * 1_000)})
         if ensure_probe(agent, status, run):
+            append_event(run, {"phase": "complete", "outcome": "no-op", "elapsed_ms": int((time.monotonic() - started) * 1_000)})
             print(f"magik2 deploy: probe already ready (result: {run})")
             return 0
-        append_event(run, {"phase": "complete", "outcome": "started"})
+        append_event(run, {"phase": "complete", "outcome": "started", "elapsed_ms": int((time.monotonic() - started) * 1_000)})
     except (BootstrapError, AgentError, OSError, RuntimeError) as error:
         append_event(run, {"phase": "failed", "error": type(error).__name__})
         print(f"magik2 deploy: {error} (result: {run})", file=os.sys.stderr)
