@@ -13,18 +13,6 @@ from typing import Any
 from .client import NativeAgent
 
 
-_ELEMENT_IDS = {
-    "build-label": "Probe::build-label-text",
-    "counter": "Probe::counter-value",
-    "increment": "Probe::increment-button",
-    "reset": "Probe::reset-button",
-    "details-toggle": "Probe::details-button",
-    "details-panel": "Probe::details-panel",
-    "motion-state": "Probe::motion-state",
-    "start-motion": "Probe::start-motion-button",
-}
-
-
 def _application_factory() -> Any:
     try:
         module = importlib.import_module("slint_testing")
@@ -64,17 +52,19 @@ def fresh_session(agent: NativeAgent, timeout: float = 20, profile_id: str | Non
 
 
 def one_element(application: Any, label: str) -> Any:
+    from slint_testing import AccessibleRole
+
     window = application.first_window
     if window is None:
         raise AssertionError("probe exposed no Slint window")
-    element_id = _ELEMENT_IDS.get(label)
-    if element_id is None:
-        raise AssertionError(f"no test element id is defined for {label!r}")
-    matches = window.find_elements_by_id(element_id)
+    role = AccessibleRole.Text if label in {"build-label", "counter", "details-panel", "motion-state"} else AccessibleRole.Button
+    matches = [
+        element
+        for element in window.root_element.query_descendants().match_accessible_role(role).find_all()
+        if element.accessible_label == label
+    ]
     if len(matches) != 1:
         raise AssertionError(f"expected one element for {label!r}, got {len(matches)}")
-    if matches[0].accessible_label != label:
-        raise AssertionError(f"element {label!r} has incorrect accessibility label")
     return matches[0]
 
 
