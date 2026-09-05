@@ -4,12 +4,11 @@
 """Exercise pinned LSP startup using temporary local Git repositories."""
 
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
-
+from pathlib import Path
 
 LAUNCHER = Path(__file__).resolve().parents[1] / "rust-lsp"
 
@@ -61,6 +60,7 @@ class RustLspStartupTests(unittest.TestCase):
     def launch(self, repo=None):
         return subprocess.run(
             [str((repo or self.repo) / "scripts/rust-lsp")],
+            check=False,
             cwd=self.root,
             env=self.env,
             text=True,
