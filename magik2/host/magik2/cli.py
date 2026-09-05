@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
 from pathlib import Path
 
+from .bootstrap import BootstrapError, SshBootstrap
+from .client import AgentError, NativeAgent
 from .results import append_event, create_run
 
 
@@ -27,8 +30,31 @@ def main() -> int:
     if not os.environ.get("MISTER_IP"):
         print("MISTER_IP is required; no legacy transport was attempted.", file=os.sys.stderr)
         return 2
-    print(f"magik2 {arguments.command}: device bootstrap/probe adapter is not installed yet (result: {run})", file=os.sys.stderr)
-    return 2
+    if arguments.command != "status":
+        print(f"magik2 {arguments.command}: lifecycle/probe adapter is not installed yet (result: {run})", file=os.sys.stderr)
+        return 2
+    try:
+        bootstrap = SshBootstrap.from_environment()
+        token = bootstrap.native_token()
+        status = NativeAgent(os.environ["MISTER_IP"], token).status()
+    except (AgentError, OSError):
+        try:
+            agent_binary = Path(__file__).resolve().parents[2] / "agent" / "target" / "armv7-unknown-linux-gnueabihf" / "release" / "mister-magik2-agent"
+            token = bootstrap.install_and_start(agent_binary)
+            time.sleep(1)
+            status = NativeAgent(os.environ["MISTER_IP"], token).status()
+            append_event(run, {"phase": "bootstrap", "outcome": "passed"})
+        except (BootstrapError, AgentError, OSError) as error:
+            append_event(run, {"phase": "status", "outcome": "failed", "error": type(error).__name__})
+            print(f"magik2 status: native agent unavailable ({type(error).__name__}) (result: {run})", file=os.sys.stderr)
+            return 2
+    except BootstrapError as error:
+        append_event(run, {"phase": "status", "outcome": "failed", "error": type(error).__name__})
+        print(f"magik2 status: native agent token unavailable ({type(error).__name__}) (result: {run})", file=os.sys.stderr)
+        return 2
+    append_event(run, {"phase": "status", "outcome": "passed", "identity": status.identity})
+    print(f"identity={status.identity} capabilities={','.join(sorted(status.capabilities))}")
+    return 0
 
 
 if __name__ == "__main__":

@@ -6,4 +6,4 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PYTHONPATH="$ROOT/magik2/host${PYTHONPATH:+:$PYTHONPATH}"
-exec python3 -m magik2.cli "$@"
+exec uv run --project "$ROOT/magik2/host" python -m magik2.cli "$@"
