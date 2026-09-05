@@ -113,9 +113,18 @@ class NativeAgent:
 
     def _request(self, operation: str, fields: Mapping[str, object] | None = None, body: bytes = b"") -> tuple[Envelope, bytes]:
         request = Envelope(uuid.uuid4().hex, operation, self.token, fields or {})
-        with socket.create_connection((self.host, self.port), timeout=5) as connection:
-            send_message(connection, request, body)
-            response, response_body = receive_message(connection)
-        if response.request_id != request.request_id:
-            raise ProtocolError("agent reply request identifier did not match")
-        return response, response_body
+        last_error: OSError | ProtocolError | None = None
+        for attempt in range(2):
+            try:
+                with socket.create_connection((self.host, self.port), timeout=5) as connection:
+                    send_message(connection, request, body)
+                    response, response_body = receive_message(connection)
+                if response.request_id != request.request_id:
+                    raise ProtocolError("agent reply request identifier did not match")
+                return response, response_body
+            except (OSError, ProtocolError) as error:
+                last_error = error
+                if attempt:
+                    raise
+        assert last_error is not None
+        raise last_error

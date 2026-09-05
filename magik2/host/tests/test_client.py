@@ -60,3 +60,31 @@ def test_watch_keeps_the_connection_open_after_native_handshake() -> None:
     watch = NativeAgent("127.0.0.1", "token", port).open_watch()
     watch.close()
     thread.join()
+
+
+def test_lost_reply_reuses_the_same_request_identifier_once() -> None:
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(2)
+    port = listener.getsockname()[1]
+    request_ids: list[str] = []
+
+    def serve() -> None:
+        first, _ = listener.accept()
+        with first:
+            request, _ = receive_message(first)
+            request_ids.append(request.request_id)
+            # The mutation has completed but its acknowledgement is lost.
+        second, _ = listener.accept()
+        with second:
+            request, _ = receive_message(second)
+            request_ids.append(request.request_id)
+            send_message(second, Envelope(request.request_id, "started", "", {"ready": True}))
+        listener.close()
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    assert NativeAgent("127.0.0.1", "token", port).start() == {"ready": True}
+    thread.join()
+    assert len(request_ids) == 2
+    assert request_ids[0] == request_ids[1]
