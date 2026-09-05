@@ -23,9 +23,17 @@ impl PreviewProducer {
         Self::with_root(state_root)
     }
     fn with_root(state_root: PathBuf) -> Self {
+        let socket_path = state_root.join("probe-frames.sock");
+        Self::with_sender(state_root, move |(header, bytes)| {
+            if let Ok(mut socket) = UnixStream::connect(&socket_path) {
+                let _ = socket.set_write_timeout(Some(Duration::from_millis(100)));
+                let _ = write_preview_frame(&mut socket, header, &bytes);
+            }
+        })
+    }
+    fn with_sender(state_root: PathBuf, mut send: impl FnMut(Packet) + Send + 'static) -> Self {
         let pending = Arc::new(Mutex::new(None::<Packet>));
         let worker_slot = Arc::downgrade(&pending);
-        let socket_path = state_root.join("probe-frames.sock");
         std::thread::spawn(move || {
             loop {
                 let Some(slot) = worker_slot.upgrade() else {
@@ -33,11 +41,8 @@ impl PreviewProducer {
                 };
                 let packet = slot.lock().expect("preview slot").take();
                 drop(slot);
-                if let Some((header, bytes)) = packet
-                    && let Ok(mut socket) = UnixStream::connect(&socket_path)
-                {
-                    let _ = socket.set_write_timeout(Some(Duration::from_millis(100)));
-                    let _ = write_preview_frame(&mut socket, header, &bytes);
+                if let Some(packet) = packet {
+                    send(packet);
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
@@ -113,27 +118,63 @@ mod tests {
             std::env::temp_dir().join(format!("magik2-preview-socket-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("viewer-lease"), u128::MAX.to_string()).unwrap();
-        let listener =
-            std::os::unix::net::UnixListener::bind(root.join("probe-frames.sock")).unwrap();
-        let (accepted, ready) = std::sync::mpsc::channel();
-        let receiver = std::thread::spawn(move || {
-            let (_socket, _) = listener.accept().unwrap();
-            accepted.send(()).unwrap();
-            std::thread::sleep(Duration::from_millis(500)); // Deliberately never read.
-        });
-        let mut producer = PreviewProducer::with_root(root.clone());
-        let pixels = vec![Rgb565Pixel(0); 960 * 540];
-        producer.publish_if_watched(&pixels, 960, 540, Duration::ZERO);
-        ready.recv_timeout(Duration::from_secs(2)).unwrap();
-        let started = Instant::now();
-        for _ in 0..10 {
-            producer.last_preview = Instant::now() - Duration::from_secs(1);
-            producer.publish_if_watched(&pixels, 960, 540, Duration::ZERO);
+        use std::io::Write;
+        use std::sync::mpsc;
+        let (mut writer, receiver) = UnixStream::pair().unwrap();
+        // Fill the socket before publication so transport cannot finish until
+        // this test releases the receiver, regardless of runner CPU speed.
+        writer.set_nonblocking(true).unwrap();
+        loop {
+            match writer.write(&[0; 64 * 1024]) {
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("cannot fill preview socket: {error}"),
+            }
         }
-        assert!(started.elapsed() < Duration::from_millis(200));
-        assert!(producer.sequence > 1);
-        drop(producer);
-        receiver.join().unwrap();
+        writer.set_nonblocking(false).unwrap();
+        let (entered, sending) = mpsc::channel();
+        let (sent, send_finished) = mpsc::channel();
+        let mut producer = PreviewProducer::with_sender(root.clone(), move |(header, bytes)| {
+            entered.send(()).unwrap();
+            let _ = write_preview_frame(&mut writer, header, &bytes);
+            let _ = sent.send(());
+        });
+        let (proceed, continue_publication) = mpsc::channel();
+        let (complete, published) = mpsc::channel();
+        let publisher = std::thread::spawn(move || {
+            let pixels = vec![Rgb565Pixel(0); 960 * 540];
+            producer.publish_if_watched(&pixels, 960, 540, Duration::ZERO);
+            if continue_publication
+                .recv_timeout(Duration::from_secs(10))
+                .is_err()
+            {
+                return;
+            }
+            for _ in 0..10 {
+                producer.last_preview = Instant::now() - Duration::from_secs(1);
+                producer.publish_if_watched(&pixels, 960, 540, Duration::ZERO);
+            }
+            let latest = producer
+                .pending
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|(header, _)| header.sequence);
+            let _ = complete.send((producer.sequence, latest));
+        });
+        let started = sending.recv_timeout(Duration::from_secs(10));
+        let _ = proceed.send(());
+        let result = published.recv_timeout(Duration::from_secs(10));
+        let transport_blocked = matches!(send_finished.try_recv(), Err(mpsc::TryRecvError::Empty));
+        // Always release I/O and join before asserting, including failure paths.
+        drop(receiver);
+        publisher.join().unwrap();
+        assert!(started.is_ok(), "preview worker did not start");
+        assert!(
+            transport_blocked,
+            "socket unexpectedly completed without a reader"
+        );
+        assert_eq!(result.unwrap(), (11, Some(11)));
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -150,10 +191,15 @@ mod tests {
             sequence: 0,
             pending: pending.clone(),
         };
-        let start = Instant::now();
-        producer.publish_if_watched(&[Rgb565Pixel(0); 4], 2, 2, Duration::ZERO);
-        assert!(start.elapsed() < Duration::from_millis(50));
+        let (complete, published) = std::sync::mpsc::channel();
+        let publisher = std::thread::spawn(move || {
+            producer.publish_if_watched(&[Rgb565Pixel(0); 4], 2, 2, Duration::ZERO);
+            let _ = complete.send(producer.sequence);
+        });
+        let result = published.recv_timeout(Duration::from_secs(10));
         drop(held);
+        publisher.join().unwrap();
+        assert_eq!(result.unwrap(), 0, "busy slot should skip the preview");
         std::fs::remove_dir_all(root).unwrap();
     }
 }
