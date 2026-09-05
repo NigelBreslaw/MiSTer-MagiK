@@ -26,6 +26,7 @@ to uv. Keep credentials in the environment/user credential store, never Git.
 scripts/magik2 deploy
 scripts/magik2 check
 scripts/magik2 watch
+scripts/magik2 mcp # stdio MCP server; configure in Codex, not an interactive viewer
 scripts/magik2 check idle
 scripts/magik2 check idle --profile
 scripts/magik2 status
@@ -60,6 +61,13 @@ The agent owns the selected app after disconnect and restores it after test sess
 `stop` confirms Main's acknowledgement and observed launcher readiness.
 No matching-version, clean-commit, platform qualification, or rollback gate is
 part of this development path.
+
+## Screenshots directly into Codex
+
+The [framebuffer capture tool](docs/framebuffer-capture.md) returns a native PNG
+image directly to Codex. It reads authoritative scanout, including application
+composition outside Slint; the existing live viewer remains a preview stream.
+Both real MagiK and Mini-MagiK use the same capture operation. Desktop is unchanged.
 
 ## One scenario system
 
