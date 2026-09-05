@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -15,13 +16,10 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from scripts.checks.repository_policy import is_classified
-from scripts.magik_ci import assurance, python_tests, quality
+from scripts.magik_ci import assurance, planning, python_tests, quality
 
 ZERO_OID = "0" * 40
-CI_BOUNDARY = (
-    "pre-push: NOT RUN LOCALLY: Cargo tests/Clippy, ARM builds, visual matrix, "
-    "and full Python assurance; a fast-gate pass is not a CI pass"
-)
+CI_BOUNDARY = planning.CI_BOUNDARY
 
 
 class PrePushError(Exception):
@@ -161,13 +159,11 @@ def run_checks(repository: Path, paths: list[str]) -> None:
         raise PrePushError(f"Python tests exited {error.returncode}") from error
 
 
-def print_plan(paths: list[str]) -> None:
-    check_classification(paths)
-    local = assurance.fast_checks(ROOT, paths)
-    tests = python_tests.commands(paths)
-    print(f"pre-push: {len(local)} fast static checks + 3 Python quality checks")
-    print(f"pre-push: {len(tests)} affected Python test command(s)")
-    print(CI_BOUNDARY)
+def print_plan(
+    paths: list[str] | None, repository: Path = ROOT, json_output: bool = False
+) -> None:
+    record = planning.report(repository, paths)
+    print(json.dumps(record) if json_output else planning.render(record))
 
 
 def parse_args() -> argparse.Namespace:
@@ -175,8 +171,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repository", type=Path, required=True)
     parser.add_argument("--remote", default="origin")
     parser.add_argument("--plan", action="store_true")
-    parser.add_argument("--paths", nargs="*", default=[])
-    return parser.parse_args()
+    parser.add_argument("--paths", nargs="*", default=None)
+    parser.add_argument("--json", action="store_true", dest="json_output")
+    args = parser.parse_args()
+    if args.json_output and not args.plan:
+        parser.error("--json requires --plan")
+    return args
 
 
 def main() -> int:
@@ -184,7 +184,7 @@ def main() -> int:
     repository = args.repository.resolve()
     try:
         if args.plan:
-            print_plan(args.paths)
+            print_plan(args.paths, repository, args.json_output)
             return 0
         paths = pushed_paths(repository, args.remote, sys.stdin.read())
         if not paths:
@@ -196,7 +196,7 @@ def main() -> int:
         run_checks(repository, paths)
         print("pre-push: fast gate passed; full CI remains authoritative")
         return 0
-    except PrePushError as error:
+    except (PrePushError, ValueError, OSError, subprocess.CalledProcessError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
