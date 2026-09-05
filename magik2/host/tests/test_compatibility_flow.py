@@ -152,6 +152,9 @@ def test_check_command_dispatches_without_shadowing_the_handler(monkeypatch: pyt
 
 
 def test_check_retains_primary_and_cleanup_failures(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    class ClientDisconnected(Exception):
+        pass
+
     class Agent:
         def start(self, *, restart: bool) -> None:
             assert restart
@@ -167,11 +170,15 @@ def test_check_retains_primary_and_cleanup_failures(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(cli, "connect_agent", lambda _run, _required: (Agent(), status("test", set())))
     monkeypatch.setattr(cli, "ensure_probe", lambda *_unused: False)
     monkeypatch.setattr(cli, "fresh_session", lambda *_unused, **_kwargs: Session())
-    monkeypatch.setattr(cli, "smoke", lambda *_unused: (_ for _ in ()).throw(AssertionError("smoke failed")))
+    monkeypatch.setattr(
+        cli,
+        "smoke",
+        lambda *_unused: (_ for _ in ()).throw(ClientDisconnected("smoke client disconnected")),
+    )
     run = create_run(tmp_path, "check", {})
 
     assert cli.check(argparse.Namespace(scenario="smoke", profile=False), run) == 2
     events = [json.loads(line) for line in (run / "events.jsonl").read_text().splitlines()]
-    assert {"phase": "check", "outcome": "failed", "error": "smoke failed"} in events
+    assert {"phase": "check", "outcome": "failed", "error": "smoke client disconnected"} in events
     assert any(event["phase"] == "persistent-restart" and event["outcome"] == "failed" for event in events)
     assert any(event["phase"] == "cleanup" and event["outcome"] == "failed" for event in events)
