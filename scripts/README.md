@@ -3,7 +3,6 @@
 The `scripts/` tree contains the Python `scripts/magik-ci` host CI/release
 tooling plus the retained `scripts/agent` operational entrypoint.
 
-- `bench/analyze/` and `bench/reports/` — offline evidence analysis
 - `checks/` — static architecture and workflow checks
 - `media/` — host conversion and manifest generation
 - `release/` — host release-data and packaging tools
