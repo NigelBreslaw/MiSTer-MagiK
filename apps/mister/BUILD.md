@@ -47,8 +47,9 @@ scripts/agent deliver platform
 Validation ownership is defined in root `AGENTS.md`; `scripts/agent plan`
 previews the selected fast Python checks and CI boundary.
 `deliver platform` owns build scope, artifact qualification, transport, activation,
-rollback, and smoke verification. Human-only fixed scene operation is available
-through `scripts/agent device scene`; it is separate from building and deployment.
+rollback, and smoke verification. Ordinary attended launcher control uses
+`scripts/agent device launcher restart --attended`. The fixed scene runners
+were retired in milestone 9.
 
 ## Local FPGA signoff
 

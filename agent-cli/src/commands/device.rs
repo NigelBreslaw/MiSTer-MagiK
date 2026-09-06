@@ -400,11 +400,16 @@ mod tests {
                 "legacy-480",
             ],
         ] {
-            assert!(
+            let error =
                 TestCli::try_parse_from(std::iter::once("test").chain(args.iter().copied()))
-                    .is_err(),
-                "accepted retired arguments: {args:?}"
-            );
+                    .err()
+                    .expect("retired visual interface must be rejected");
+            let expected = if args.contains(&"restart") {
+                clap::error::ErrorKind::UnknownArgument
+            } else {
+                clap::error::ErrorKind::InvalidSubcommand
+            };
+            assert_eq!(error.kind(), expected, "{args:?}: {error}");
         }
     }
 

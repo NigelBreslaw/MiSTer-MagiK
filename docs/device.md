@@ -55,7 +55,7 @@ scripts/agent device mode status
 scripts/agent device mode set dev --attended
 scripts/agent device mode set public --attended
 scripts/agent device mode set stock --attended
-scripts/agent device scene launcher --attended
+scripts/agent device launcher restart --attended
 scripts/agent device capture framebuffer
 scripts/agent device display route-status
 scripts/agent device display set hdmi1280x720p60 --attended
@@ -202,67 +202,12 @@ three files:
   the physical 4:3 display aspect.
 
 The latter two are inspection views, not new scanout evidence. Other routes or
-non-authoritative sources produce only the raw artifact. The deterministic
-Arcade fixture is available through
-`scripts/agent device launcher capture-first-arcade --attended --output STEM`.
+non-authoritative sources produce only the raw artifact.
 
-Use
-`scripts/agent device launcher verify-neogeo-sdram --attended --output DIRECTORY`
-after installing a Main candidate. It runs the installed Metal Slug 3
-structured plan, a second high-memory NeoGeo plan, a low-memory control, and a
-real `.mgl` entry. Each core is observed through USB video while active and is
-returned through Main's typed launcher recovery path. Passing requires the
-operator to confirm correct title/attract graphics with no memory warning and
-the Main event stream to prove 128 MiB SDRAM was configured before handoff.
-
-For the first CRT font A/B review, use the attended row-phase harness:
-`scripts/agent device launcher capture-crt-font-ab --attended --pair row-phase --output STEM`.
-It switches to 240p for the pair, restores the prior route afterward, and
-writes labeled A/B bundles plus a side-by-side true-4:3 comparison.
-
-For the font-only coverage experiment, restart the launcher with
-`scripts/agent device launcher restart --attended --crt-font-experiment coverage-max`,
-open the Arcade list manually, and capture only after the operator confirms the
-fixture is visible. The one-shot experiment does not refresh or replace the
-catalog.
-
-For the non-merging follow-up, use
-`scripts/agent device launcher restart --attended --crt-font-experiment dominant-row`.
-It selects one complete glyph row for each absolute two-row group based on total
-coverage, preferring the production odd row on ties, and leaves the catalog
-untouched. Again, capture only after the operator confirms the Arcade list is
-visible.
-
-For the Xerxes typeface comparison, use
-`scripts/agent device launcher restart --attended --crt-font-experiment xerxes`.
-This selects the existing exact-size Xerxes 10 bitmap resource only for CRT240
-Arcade titles, applies no glyph-row reconstruction, and does not touch the
-catalog. Capture only after the operator confirms the Arcade list is visible.
-
-For the pixel-perfect Xerxes comparison, use
-`scripts/agent device launcher restart --attended --crt-font-experiment xerxes-perfect`.
-It selects the generated 32px Xerxes resource only for CRT240 Arcade titles
-and game rows. Each design cell becomes a 2×2 composition block and survives
-the unchanged centered 480→240 conversion exactly; the catalog is untouched.
-
-For the pixel-perfect Yesterday comparison, use
-`scripts/agent device launcher restart --attended --crt-font-experiment yesterday-perfect`.
-It selects the generated 32px Yesterday resource only for CRT240 Arcade titles
-and game rows, uses unchanged centered scanout with exact 2×2 composition
-cells, and leaves the catalog untouched.
-
-For the pixel-grid Bacteria 12 comparison, use
-`scripts/agent device launcher restart --attended --crt-font-experiment bacteria`.
-It selects the generated 32px Bacteria resource only for CRT240 Arcade titles
-and game rows. Each 64-unit design cell becomes a 2×2 composition block, so the
-normal centered 480→240 conversion retains the intended bitmap exactly. It
-does not use glyph-row reconstruction or touch the catalog.
-
-For the direct half-size comparison, use
-`scripts/agent device launcher restart --attended --crt-font-experiment bacteria-half`.
-It uses the native 16px Bacteria resource with unchanged centered scanout and
-no row reconstruction. Its 12-row capitals reduce to roughly six CRT
-scanlines; the catalog remains untouched.
+Fixed-screen capture fixtures, font A/B runners and the NeoGeo SDRAM/core-return
+runner were retired in milestone 9. Ordinary framebuffer capture remains; it
+captures the current screen without navigating to a fixture. Catalog
+`neogeo-family-audit` remains an installed-data audit, not a hardware memory test.
 
 CRT UI typography uses Jersey 25 for major headings, Spleen bitmap resources
 for settings and compact status text, and Nocive 15 for footer hints. Press
@@ -295,18 +240,10 @@ restart without RBF reload, game return, and injected preflight failure. Each
 movie is retained beside Main events/status and latch status; none of these
 physical checks may be replaced by `/dev/fb0` inspection.
 
-`scripts/agent device display matrix --attended --out DIRECTORY [--usb-video]`
-performs the bounded runtime display
-matrix without rebooting Linux. Main applies each supported resolution as a
-provisional transaction, the launcher restarts, and the authenticated MagiK
-agent returns one PNG per mode. The command writes deterministic PNG names and
-`manifest.json`, cancels every provisional mode after capture, and verifies the
-original working mode is restored between cases. It requires an interactive
-`31KHZ` acknowledgement because the matrix includes 480p/576p CRT modes, then
-checks launcher PID replacement, output/framebuffer geometry, advancing frame
-counters, RGB565 stride, nonblank content, and unique capture hashes. The v3
-manifest records partial failures before cleanup. Framebuffer evidence still
-requires attended sink observation for HDMI or CRT visibility claims.
+The automated runtime display matrix was retired in milestone 9. Ordinary
+`scripts/agent device display set MODE --attended` remains available for one
+attended display change. The separately owned release qualification matrix is
+unchanged. No replacement matrix or synthetic equivalent was added.
 
 With `--usb-video`, each case also captures the fixed `USB Video` input after
 the authoritative framebuffer capture through the native agent capture command,

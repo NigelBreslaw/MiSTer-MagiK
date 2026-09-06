@@ -3,12 +3,10 @@
 Effect sources remain non-production UI fixtures. Their former device,
 profiling, capture, and benchmark shell matrices are retired.
 
-Changes to effects use normal Git-scoped repository validation. If a changed
-component has a canonical device performance scenario, run the
-flag-free `scripts/agent benchmark` after committing. Humans may inspect one of
-the fixed supported scenes with `scripts/agent device scene` and capture a still with
-`mister --capture-buffer`; those operations do not build or deploy artifacts.
+Changes to effects use normal Git-scoped repository validation. The fixed
+scene runners were retired in milestone 9; no replacement scenarios were added.
+Ordinary current-screen capture remains available through
+`scripts/agent device capture framebuffer` or the 2.0 Codex capture tool.
 
-Do not infer production performance from direct effect scenes. Production
-conclusions require the supervised launcher velocity scenario and RGB565
-presentation evidence.
+Do not infer production performance from isolated effect scenes. Request a
+concrete full-app measurement through 2.0 when production evidence is needed.
