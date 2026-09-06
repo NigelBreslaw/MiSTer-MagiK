@@ -30,7 +30,11 @@ async def list_tools() -> list[types.Tool]:
                 "Capture the currently displayed MiSTer framebuffer as a PNG image. "
                 "Does not navigate or restart the app. May install/update the native tooling service "
                 "when capture support is missing. Raw pixels are the default; display derives a "
-                "4:3 inspection view for 640x240/288 CRT rasters."
+                "4:3 inspection view for 640x240/288 CRT rasters. "
+                "The returned image is input for the agent, not proof that the user can see it. "
+                "When asked to show it in chat, explicitly embed the image in your reply. "
+                "If needed, decode this same PNG to a temporary local file and use an absolute-path "
+                "Markdown image embed. Do not take another capture just to display it."
             ),
             inputSchema={
                 "type": "object",

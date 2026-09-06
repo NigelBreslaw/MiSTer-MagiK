@@ -30,3 +30,9 @@ or invoke `scripts/agent`, `agent-cli`, or `mister/tools/agent`.
   with `--app mini-magik`. Default smoke must not expand into benchmark matrices.
 - `legacy-stop` is an explicit migration operation, never an automatic deployment
   step. Preserve startup files and do not add retry/escalation loops to it.
+
+- Framebuffer images returned by MCP are agent input; do not assume tool output
+  is visible in the user's chat. When asked to show a capture, explicitly embed
+  it in the reply. If needed, decode the same PNG into a temporary local file
+  and use an absolute-path Markdown image embed. Do not recapture for display
+  or commit the temporary image. See `docs/framebuffer-capture.md`.

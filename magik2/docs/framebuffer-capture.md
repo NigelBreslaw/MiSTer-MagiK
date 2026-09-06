@@ -33,6 +33,24 @@ Call `capture_framebuffer` with `{}` for raw raster pixels, or
 continuous feed. The server reserves stdout for MCP, including during automatic
 build/bootstrap; diagnostics and inherited child-process output use stderr.
 
+## Showing the image to the user
+
+Receiving an MCP image proves delivery to the agent, not visibility in the chat.
+When the user asks to see a capture, explicitly embed it in the assistant reply;
+do not simply say "shown above" because the tool returned image content.
+
+If the client does not expose the returned image as a reusable attachment, decode
+that same base64 PNG into a temporary local file and embed its absolute path:
+
+```markdown
+![MiSTer MagiK framebuffer](/absolute/temporary/path/capture.png)
+```
+
+This optional presentation copy does not change the in-memory MCP capture path.
+Do not capture again, navigate, restart the app, or commit screenshots just to
+make an existing result visible. Keep agent receipt and user-visible presentation
+as separate acceptance checks; a PNG decoding test only verifies the former.
+
 ## Pixels and presentation
 
 Both real MagiK and Mini-MagiK are captured from the currently latched scanout slot.
@@ -92,10 +110,16 @@ after the Mini-MagiK capture. Hardware evidence details are recorded below.
   including the automatic service build/update. Image inspected directly in Codex.
 - Mini-MagiK: native 960x540 RGB565 scanout, sequence 1; MCP call 2.958 s.
   Image inspected directly in Codex; the installed real app was then restored ready.
-- Acceptance limitation: the real-app image was captured on Home, not the Arcade
-  list. It proves native image delivery from scanout but does not visually verify
-  the Rust-painted Arcade rows. One additional screenshot requires user approval
-  because the two planned successful captures have already been used.
+- With explicit approval for one additional capture, the real app's Arcade view
+  was captured at 960x540, sequence 48. The Rust-painted rows and game preview
+  were visible to the agent. The full MCP call took 11.291 s; this includes
+  connection/preparation, so it is not a standalone capture-duration measurement.
+  No navigation, restart or performance tuning was performed.
+- Presentation correction: the tool image was not visible in the user's chat.
+  The same returned PNG (86,157 bytes) was decoded into a temporary display copy
+  and explicitly embedded in the assistant reply. No new capture was needed.
+  Tool discovery guidance and scoped agent instructions now require this explicit
+  presentation step when the user asks to see an image.
 
 Local validation: 24 agent library tests; focused agent Clippy; typed ARM agent
 build; 40 focused Python tests including real MCP stdio exchange. The unchanged
