@@ -38,25 +38,6 @@ pub(crate) fn derive_15khz_views(
     }))
 }
 
-pub(crate) fn side_by_side_4x3_png(left_png: &[u8], right_png: &[u8]) -> super::Result<Vec<u8>> {
-    let left_width = CRT_VIEW_WIDTH;
-    let left_height = CRT_VIEW_HEIGHT;
-    let right_width = CRT_VIEW_WIDTH;
-    let left = decode_rgb8(left_png, left_width, left_height)?;
-    let right = decode_rgb8(right_png, right_width, left_height)?;
-    let mut combined = vec![0; left_width * 2 * left_height * 3];
-    for y in 0..left_height {
-        let source_row = y * left_width * 3;
-        let destination_row = y * left_width * 2 * 3;
-        let left_destination = &mut combined[destination_row..destination_row + left_width * 3];
-        left_destination.copy_from_slice(&left[source_row..source_row + left_width * 3]);
-        let right_destination =
-            &mut combined[destination_row + left_width * 3..destination_row + left_width * 2 * 3];
-        right_destination.copy_from_slice(&right[source_row..source_row + right_width * 3]);
-    }
-    encode_rgb8(&combined, left_width * 2, left_height)
-}
-
 fn decode_rgb8(raw_png: &[u8], width: usize, height: usize) -> super::Result<Vec<u8>> {
     let expected_len = width
         .checked_mul(height)
@@ -321,19 +302,5 @@ mod tests {
         let raw = encode_fixture(640, 240);
         let error = derive_15khz_views(&raw, 640, 288).unwrap_err();
         assert!(error.to_string().contains("does not match metadata"));
-    }
-
-    #[test]
-    fn side_by_side_preview_preserves_left_and_right_halves() {
-        let left = encode_fixture(640, 480);
-        let right = encode_fixture(640, 480);
-        let combined = side_by_side_4x3_png(&left, &right).unwrap();
-        let pixels = decode_rgb8(&combined, 1280, 480).unwrap();
-        let (width, height) = (1280, 480);
-        assert_eq!((width, height), (1280, 480));
-        assert_eq!(pixels[0], 0);
-        assert_eq!(pixels[640 * 3], 0);
-        assert_eq!(pixels[(640 * 3) - 1], 2);
-        assert_eq!(pixels[(1280 * 3) - 1], 2);
     }
 }
