@@ -1,5 +1,165 @@
 # Tooling retirement
 
+## Milestone 9: visual retirement and remaining legacy audit
+
+Based on `02387d891`, the merge of PR #104, on
+`nigel/retire-visual-tooling`. This section is the current disposition; older
+milestone sections below are historical records and can describe tools since
+removed. No functionality is ported to 2.0 in this milestone.
+
+### Deletion record
+
+Removed `device launcher capture-first-arcade`, `capture-crt-font-ab`,
+`capture-snes-hub`, `launch-return-once`, `verify-neogeo-sdram`, `device display
+matrix`, and all `device scene` entrypoints (launcher, controller-test,
+tear-pattern, video-playback and CRT-trial). Launcher restart no longer accepts
+`--crt-font-experiment` or `--crt240-composition`. Unknown-command/argument
+errors replace these interfaces; there are no aliases.
+
+Deleted their exclusive staging, navigation, comparison, USB temporal luma,
+core-return, report and test helpers, including the entire 1,473-line host
+`launcher_automation.rs`. The standalone `launcher-present-trace.py`,
+`analyze-max-scroll-drops.py` and `analyze-arcade-frame-trace.py` remove exactly
+2,070 lines, including their embedded fixtures/self-tests. No external callers,
+registrations, exclusive dependency packages or separate fixtures were found.
+No Cargo manifest, lockfile or Python dependency changes were needed.
+
+The two code-removal commits delete 6,166 lines and add 209 (5,957 net removed),
+including one obsolete script-layout documentation line. Git's default diff
+pairs repeated Rust blocks poorly; histogram review shows only the intended
+restart dispatch simplification, imports and removal of an unused capture
+timing field in retained production functions. Ordinary capture pixel handling
+and USB-video handling are unchanged. Documentation changes are additional to
+these implementation counts.
+The complete reviewed diff, including this audit and parser refinements,
+deletes 6,269 lines and adds 416 (5,853 net removed).
+
+This deliberately drops automated font comparisons, fixed-screen fixtures,
+the attended runtime multi-resolution matrix, SDRAM/core-return experiments and
+these three trace reports. Current Python scenarios do **not** replace that
+coverage. Add a focused scenario only when a concrete need justifies it.
+Production rendering, trace producers/formats, frame measurements and CPU
+profiling are unchanged. Single-mode display changes still use helpers named
+`DisplayMatrix*`; those helpers have retained callers and must not be deleted
+based on their names. The separately owned release display matrix also stays.
+
+### Complete remaining CLI inventory
+
+Source authority: `agent-cli/src/cli.rs`, `commands/device.rs`, `build.rs`,
+`compile_time.rs`, `dependencies.rs`, `fpga.rs`, `model.rs`, and dispatch in
+`main.rs`/`host/mod.rs`. All paths in this audit are repository-relative code
+owners, not inferred individual maintainers. Hidden CLI leaves are included.
+`deliver`, `benchmark` and `build` take positional enum values; every value is
+listed below. Automatic Clap help/version is not an operational command.
+
+Blockers: **C** legacy CLI; **A** device agent; **P** protocol crate; **S** startup
+installation; **I** legacy agent CI/package artifact. A group marked **C** is
+host-only and does not itself require A/P/S/I. **C + device** means C and the
+shared legacy connection/health/bootstrap path (A/P/S/I), even when the final
+operation also uses typed SSH or Main. Deleting a CLI leaf alone does not remove
+its independently used library code. Tests are validation, not evidence of an
+external consumer. “No caller found” means repository search, not proof about
+private/operator usage.
+
+| Remaining leaves (prefix `scripts/agent`) | Purpose and code owner | Consumer evidence and disposition | Blockers |
+|---|---|---|---|
+| `guidance PATH`; wrapper `plan` | Ownership/instructions and validation preview; `scripts/magik_ci/guidance.py`, `scripts/checks/pre-push.py`, `guidance.rs` | Root AGENTS and contributor workflow; retain separately. Wrapper routes these without compiling Rust. | Wrapper only; Rust duplicate guidance is a later candidate |
+| `run show` (hidden) | Read a recorded run; `main.rs`, `evidence.rs` | Dispatch and tests; no current external invocation found. Later deletion candidate; do not delete shared run storage. | C |
+| `db report` (hidden) | Report host evidence database; `main.rs`, `evidence.rs` | Explicit root AGENTS operator workflow; retain separately. | C |
+| `diagnose` | Bounded recovery and diagnostics; `diagnose.rs`, `host/mod.rs` | `docs/device.md` boot-loop recovery; retain separately. | C + device |
+| `device status`, `arming-status`, `logs`, `events`, `diagnostics` | Status, reboot arming and bounded evidence; `commands/device.rs`, `host/mod.rs` | `docs/device.md` operator workflows; retain separately. | C + device |
+| `device transfer-check` | Explicit legacy upload/fetch throughput check; `host/transfer_check.rs` | Added for the old/new delivery comparison; parser/transfer tests remain, no ongoing scripted caller found. Later deletion candidate after the comparison is no longer useful. | C + device |
+| `device mode status`, `mode set` | Dev/Public/Stock Main selection; `host/mod.rs` | Device operator instructions; retain separately. | C + device |
+| `device display route-status`, `display set` | Inspect route; change one mode with attended restoration/confirmation; `host/mod.rs` | `docs/device.md`, display parser/readiness tests; retain separately. | C + device |
+| `device crt qualify`, `crt probe`, `crt restore` | Physical CRT qualification/pattern probing and restoration; `host/crt_qualification.rs` | `docs/crt.md`, retained CRT implementation; retain separately as platform qualification. | C + device |
+| `device capture framebuffer` | Legacy authoritative capture and derived 4:3 files; `host/mod.rs`, `host/framebuffer_views.rs` | `docs/device.md`; retain separately alongside 2.0 capture. Desktop uses the device endpoint directly. | C + device |
+| `device reboot` | One attended supervised reboot; `host/mod.rs` | Device recovery instructions; retain separately. | C + device |
+| `device launcher status`, `restart`, `return-to-launcher` | Ordinary Main-supervised launcher control; `host/mod.rs` | Device/Main operator instructions and platform recovery; retain separately. | C + device |
+| `device catalog inspect`, `query`, `cores` | Inspect installed catalog, read-only query and core inventory; `host/mod.rs` | Catalog operator interface documented in `docs/device.md` and this inventory; parser/host tests verify it. Retain separately. | C + device |
+| `device catalog metadata-qualification`, `rom-audit`, `neogeo-family-audit` | Validate published metadata, installed ROMs and NeoGeo family data; `host/mod.rs`, production `crates/catalog` | Explicit user retention decision and retained audit implementations/tests; retain separately. NeoGeo family audit does not launch cores or test SDRAM. | C + device |
+| `device catalog screenshots`, `screenshot-qualification` | Export screenshot identities and validate packs against catalog; `host/mod.rs` | Published catalog/media qualification workflow and retained tests; retain separately. | C + device |
+| `device catalog purge` | Explicit Dev data deletion with attended reboot; `host/mod.rs` | `docs/device.md` recovery; retain separately. | C + device |
+| `device media check`, `media download` | Inspect/download configured media packs; `host/mod.rs` | `docs/media-download-security.md`, catalog/media operator use; retain separately. | C + device |
+| `device fpga install-experimental`, `install-experimental-agent` | Attended FPGA candidate or matched legacy-agent activation; `host/mod.rs` | `docs/fpga-development.md`/platform workflows; retain separately. | C + device |
+| `deliver platform`, `deliver local-main`, `deliver game-databases` | Qualified platform delivery, committed Main development, ordinary database publication; `delivery.rs`, `local_main_delivery.rs`, `database_delivery.rs`, `host/mod.rs` | Root AGENTS, `docs/main-mister-fork.md`, release/catalog workflows; retain separately. | C + device |
+| `benchmark input-integrity` | Physical input proxy/kernel qualification; `benchmark.rs`, `host/mod.rs` | Explicit user decision and physical qualification contract; retain separately. Synthetic Slint input does not replace it. | C + device |
+| `capture usb-video` | Native macOS AVFoundation still/movie capture; `capture.rs` | `docs/device.md`, attended hardware/release evidence; retain separately. No agent is needed for this host capture. | C |
+| `release qualify` | Attended platform/latch/return gate, including release display matrix; `release.rs`, `host/mod.rs` | `docs/production-readiness.md`, `docs/fpga-latch-release.md`; retain separately. | C + device |
+| `release frame-evidence verify` | Validate recorded frame evidence; `return_qualification.rs` | `docs/return-video-qualification.md`; retain separately, local file validation. | C |
+| `release return-qualification record-board`, `aggregate`, `verify-aggregate` | Record/check board evidence and aggregate certificates; `return_qualification.rs` | `docs/return-video-qualification.md`, `release qualify` certificate consumer; retain separately. These leaves process evidence, not new device runs. | C |
+| `compile-time build`, `measure`, `compare-revisions`, `campaign` | Full-app build timing and comparisons; `compile_time.rs`, `build.rs` | Implementation and tests remain; no current external scripted invocation found. User explicitly retains for now; further deletion deferred. | C |
+| `clean` | Remove local Cargo artifacts; `clean.rs` | CLI help/implementation and tests; no external caller found. Later deletion candidate; shared build caches need a separate decision. | C |
+| `dependencies sync` | Package-scoped lockfile maintenance; `dependencies.rs` | Root AGENTS, guidance workflow; retain separately. | C |
+| `fpga setup`, `fpga signoff` | Apple-container Quartus installation and matched platform signoff; `fpga.rs` | `docs/fpga-development.md`, installer wrapper; retain separately. | C; signoff does not require a running agent |
+| `build runtime-device`, `runtime-ci`, `runtime-analysis` (hidden) | Runtime build recipes; `build.rs` | Runtime baseline/CI specs also consumed by compile-time tools. No separate live CLI invocation established for each hidden value; retain pending build audit. | C; runtime artifacts are independent of old-agent removal |
+| `build validate-launcher`, `validate-library`, `validate-runtime` (hidden) | Focused app checks and combined validation; `build.rs` | `execute_runtime_validation` uses launcher/library specs; tests cover recipes. No current external CLI caller found; defer with build audit. | C |
+| `build device-agent`, `device-agent-ci` (hidden) | Build the retained service; `build.rs` | Legacy bootstrap needs the agent; current ARM CI uses Python `magik-ci build device-agent-ci`, not this hidden CLI alias. Keep while build audit is deferred. | C for aliases; A/P/S/I for the artifact |
+| `build manager-device`, `release-binaries` (hidden) | Manager and packaged runtime builds; `build.rs` | `execute_release_binaries` consumes manager spec; production packaging remains. No current external invocation of these aliases found; defer alias decision. | C; keep manager/runtime packaging independently |
+
+Compile-time detail: targets are `magik-full-app-arm`, `magik-full-app-macos`,
+`magik-release-device-arm-all`, `magik-release-device-arm-production`,
+`magik-release-device-arm-thin`, and `magik-release-device-arm-thin-stripped`.
+Comparison scenarios are `pre-push-catalog` and `arm-runtime-ci`; edit selector
+is `shared-magik`. Existing measurement code still requests one cold plus five
+no-op plus five source rebuilds. That is audited legacy behavior, **not** a new
+recommendation or permission to run those matrices. The 2.0 two-repetition
+checks and 15-second journey allowance remain unchanged; no measurements ran.
+
+### Device-agent dependency inventory
+
+| Dependency group and code owner | Actual consumers / evidence | Disposition and removal blockers |
+|---|---|---|
+| Authenticated control/envelopes, failure classification, discovery and identity; `crates/agent-protocol`, `agent-cli/src/host/agent_client.rs`, `mister/tools/agent/src/main.rs` | Retained CLI connection/bootstrap and Desktop `apps/desktop/src/agent_client.rs` import the protocol. Ping/status are live requests. | Retain separately for platform CLI; Desktop migration deferred. Blocks A/P/S/I; CLI connection also blocks C. |
+| Status, logs, timeline, diagnostics, crash/boot evidence and supervised reboot; device `main.rs`, host `mod.rs` | Retained diagnostics/recovery/release lanes and Desktop status polling. | Retain separately. Blocks A/P/S/I and retained C workflows. |
+| Main `magik` control/status, acknowledged operations and handoff; device `main.rs` | Retained launcher/platform control; Desktop requests `magik` status. Some verbs may have no current UI caller, but shared control remains. | Retain separately; Desktop migration deferred. Blocks A/P/S/I. Do not remove production Main behavior. |
+| SD directory/stat/MRA/image preview endpoints (`sd_list_dir`, `sd_list_dir_v2`, `sd_stat_item_v1`, `sd_parse_mra_v1`, `sd_read_preview_image_v1`); device `main.rs` | Desktop browser calls v2 listing with an explicit v1 fallback, stat, MRA parsing and binary previews. Both listing versions have real callers. | Desktop migration deferred. Blocks A/P/S/I; Desktop itself does not require C. |
+| PNG/raw/LZ4 framebuffer captures and `framebuffer_stream_v1`; device `main.rs`, `host/framebuffer_views.rs` | Retained CLI capture; Desktop LZ4 seed and stream. Actual scanout/platform primitives and runtime producer are shared behavior. | Retain legacy path separately; Desktop migration deferred. Blocks A/P/S/I. 2.0 capture is already independent and does not justify deleting Desktop's protocol. |
+| `device_telemetry_stream_v2`, analytics leases, frame/process counters and FPGA diagnostics; device `main.rs`, `crates/agent-protocol` | Desktop Analytics requests process telemetry; platform health and qualification consume diagnostic state. | Retain separately; Desktop migration deferred. Blocks A/P/S/I. Removing trace report scripts does not remove runtime trace formats or telemetry. |
+| Native runtime upload; `mister/tools/agent/src/runtime_upload.rs`, host `agent_client.rs` | `host/transfer_check.rs` and retained `SshDeployRemote::put_runtime_binary` delivery path. | Retain separately with delivery; blocks A/P/S/I. |
+| Device `launcher_automation_begin`/`launcher_automation_request`; `mister/tools/agent/src/launcher_automation.rs` | Repository request-name search finds only device dispatch after this milestone. Its capability is still required by host `agent_client::version_action`. Tests are not a consumer. | Later deletion candidate, **not deleted here**. Capability/connection cleanup is needed before removal; nominal compatibility requirement still ties it to retained C/A/P. |
+| `alpha_candidate_install`; `mister/tools/agent/src/alpha_candidate.rs` | Request-name search finds device dispatch, no current repository client. Old alpha acceptance was removed earlier. | Later deletion candidate; keep this batch scoped. No demonstrated functional consumer justifies it as a permanent A blocker. |
+| Service boot/install/repair; host `agent_client.rs` (`REMOTE_INIT`, bootstrap), device `main.rs` (`net-boot`) | Retained CLI installs `/etc/init.d/S00magik-agent`; Desktop assumes the service is reachable. Device boot/crash logging is part of the service. | Retain while these named consumers remain. Blocks S/A/I; cannot remove startup merely because 2.0 runs another service. |
+| Agent build and distribution artifact; `.github/workflows/rust-arm.yml`, `scripts/magik_ci/build.py`, `scripts/magik_ci/distribution.py`, host bootstrap | ARM job `device-agent-arm-build` builds/uploads `mister-magik-agent-ci-fast`; legacy bootstrap/platform consumers still need a service binary. | Retain I while A/S are required. Python CI/release processing is separately owned, not something to port into 2.0. |
+| Production catalog/media formats and publication; `crates/catalog`, `crates/media-contract`, host catalog/database modules | Real app, ordinary publication and audit consumers. `fast_five_catalog` remains production. | Retain separately even after eventual C/A retirement. Shared library formats are not legacy-service protocols to delete. |
+
+### Later candidates and concrete completion blockers
+
+The reachable CLI inventory above excludes the old block comment in `cli.rs`
+containing `GameDatabaseCommand`, `PlatformManifestCommand` and platform bundle
+argument shapes. These are commented-out declarations, not compiled APIs or
+working CLI commands. That stale comment is a later documentation cleanup
+candidate; underlying publication code is still used by separately owned Python
+CI/release workflows.
+
+The most direct later cleanup is device-side launcher automation and the
+orphan alpha installer, plus their capability advertisements/requirements.
+Hidden run inspection, transfer comparison and duplicate build/manifest command
+surfaces also deserve individual consumer decisions. These are findings, not
+additional deletions authorized by this batch.
+
+Removing 1.0 completely is still blocked by three concrete groups: Desktop's
+browser/Analytics/capture protocol; retained platform/Main/recovery/physical
+qualification operations; and catalog/media publication/inspection. Their
+shared legacy bootstrap then keeps the service, protocol crate, startup script
+and CI artifact alive. Host-only build/dependency/evidence/USB tools separately
+keep the CLI alive, but need not become device-service features. Keeping a
+small separately owned legacy tool for those jobs is a valid disposition; this
+audit is not a proposal to copy them all into 2.0.
+
+### Validation and review
+
+Seven device parser tests, 187 host tests (including framebuffer views), and
+five USB capture tests pass. Focused agent Clippy (`--lib --tests`, warnings
+denied) and Rust LSP diagnostics pass. Repository references and source-text
+tests were searched explicitly for deleted helpers and analyzer names. Syntax
+comparison plus histogram diff confirms retained capture functions changed only
+to drop the unused elapsed-time field; retained rendering bodies are untouched.
+
+No deployment, capture, reboot, profile, benchmark or broad local Rust matrix
+ran. The mandatory Python pre-push gate and unchanged tooling scope check apply
+to the full committed diff; CI owns broader assurance. No 2.0 core path, scope
+guard, runtime/application code, manifest or lockfile is modified.
+
 ## Milestone 7: catalog experiment tooling removed
 
 Based on `f4e09c025`, after merged PR #94. This removes the remaining catalog

@@ -223,21 +223,12 @@ workflow:
 scripts/agent deliver local-main
 ```
 
-After installing a candidate Main, run the attended NeoGeo memory matrix:
+The former attended NeoGeo SDRAM/core-return matrix was retired in milestone 9.
+Its automated high/low-memory and `.mgl` coverage is deliberately dropped;
+catalog `neogeo-family-audit` does not replace that hardware check. Main's
+production SDRAM configuration and launcher handoff remain unchanged.
 
-```bash
-scripts/agent device launcher verify-neogeo-sdram --attended --output artifacts/neogeo-sdram
-```
-
-The command discovers installed NeoGeo rows and requires Metal Slug 3, another
-high-memory structured plan, a low-memory control, and a real `.mgl` entry. It
-uses the production launcher handoff and typed return path for each run,
-captures USB video while the core is active, requires an operator confirmation
-that title/attract graphics are correct with no memory warning, and verifies a
-preceding `sdram_config_ready size_code=3` event. The JSON report and bounded
-supporting evidence are written below the requested output directory.
-
-It requires clean exact commits in this repository and the sibling
+The `deliver local-main` workflow requires clean exact commits in this repository and the sibling
 `Main_MiSTer` checkout (`MISTER_MAIN_DIR` may override the latter), runs the
 fork state and patch-surface tests, and builds `bin/MiSTer` with
 `build-container.sh clean all`. It first verifies the complete installed Dev

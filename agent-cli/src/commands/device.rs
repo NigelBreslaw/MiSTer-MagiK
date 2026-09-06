@@ -14,7 +14,6 @@ pub enum DeviceCommand {
         #[command(subcommand)]
         command: ModeCommand,
     },
-    Scene(SceneArgs),
     Display {
         #[command(subcommand)]
         command: DisplayCommand,
@@ -86,30 +85,10 @@ pub enum DeviceMode {
     Stock,
 }
 
-#[derive(Debug, Args)]
-pub struct SceneArgs {
-    #[arg(value_enum)]
-    pub(crate) scene: Scene,
-    #[arg(long, required = true)]
-    attended: bool,
-    #[arg(long)]
-    pub(crate) seconds: Option<u64>,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-pub enum Scene {
-    Launcher,
-    ControllerTest,
-    TearPattern,
-    VideoPlayback,
-    CrtTrial,
-}
-
 #[derive(Debug, Subcommand)]
 pub enum DisplayCommand {
     RouteStatus,
     Set(DisplaySetArgs),
-    Matrix(DisplayMatrixArgs),
 }
 
 #[derive(Debug, Args)]
@@ -135,16 +114,6 @@ pub enum DisplayMode {
     Crt288p50,
     Crt480p60,
     Crt576p50,
-}
-
-#[derive(Debug, Args)]
-pub struct DisplayMatrixArgs {
-    #[arg(long, required = true)]
-    attended: bool,
-    #[arg(long)]
-    pub(crate) out: PathBuf,
-    #[arg(long)]
-    pub(crate) usb_video: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -201,11 +170,6 @@ pub struct DiagnosticsArgs {
 pub enum LauncherCommand {
     Status,
     Restart(LauncherRestartArgs),
-    CaptureFirstArcade(FirstArcadeCaptureArgs),
-    LaunchReturnOnce(FirstArcadeCaptureArgs),
-    VerifyNeogeoSdram(FirstArcadeCaptureArgs),
-    CaptureCrtFontAb(CrtFontAbCaptureArgs),
-    CaptureSnesHub(FirstArcadeCaptureArgs),
     ReturnToLauncher(AttendedArgs),
 }
 
@@ -213,56 +177,6 @@ pub enum LauncherCommand {
 pub struct LauncherRestartArgs {
     #[arg(long, required = true)]
     attended: bool,
-    #[arg(long, value_enum)]
-    pub(crate) crt_font_experiment: Option<CrtFontExperiment>,
-    #[arg(long, value_enum)]
-    pub(crate) crt240_composition: Option<Crt240Composition>,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-pub enum CrtFontExperiment {
-    PhaseEven,
-    CoverageMax,
-    DominantRow,
-    Xerxes,
-    XerxesPerfect,
-    YesterdayPerfect,
-    Bacteria,
-    BacteriaHalf,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-pub enum Crt240Composition {
-    Native,
-    #[value(name = "legacy-480")]
-    Legacy480,
-}
-
-impl Crt240Composition {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Native => "native",
-            Self::Legacy480 => "legacy-480",
-        }
-    }
-}
-
-#[derive(Debug, Args)]
-pub struct FirstArcadeCaptureArgs {
-    #[arg(long, required = true)]
-    attended: bool,
-    #[arg(long, value_name = "STEM")]
-    pub(crate) output: PathBuf,
-}
-
-#[derive(Debug, Args)]
-pub struct CrtFontAbCaptureArgs {
-    #[arg(long, required = true)]
-    attended: bool,
-    #[arg(long, value_name = "PAIR")]
-    pub(crate) pair: String,
-    #[arg(long, value_name = "STEM")]
-    pub(crate) output: PathBuf,
 }
 
 #[derive(Debug, Subcommand)]
@@ -407,7 +321,7 @@ impl DeviceCommand {
             | Self::Diagnostics(_)
             | Self::Capture { .. } => false,
             Self::Mode { command } => matches!(command, ModeCommand::Set(_)),
-            Self::TransferCheck(_) | Self::Scene(_) | Self::Reboot(_) => true,
+            Self::TransferCheck(_) | Self::Reboot(_) => true,
             Self::Display { command } => !matches!(command, DisplayCommand::RouteStatus),
             Self::Crt { .. } => true,
             Self::Launcher { command } => !matches!(command, LauncherCommand::Status),
@@ -424,33 +338,6 @@ impl DeviceMode {
             Self::Dev => "dev",
             Self::Public => "public",
             Self::Stock => "stock",
-        }
-    }
-}
-
-impl Scene {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Launcher => "launcher",
-            Self::ControllerTest => "controller_test",
-            Self::TearPattern => "tear_pattern",
-            Self::VideoPlayback => "video_playback",
-            Self::CrtTrial => "crt_trial",
-        }
-    }
-}
-
-impl CrtFontExperiment {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::PhaseEven => "phase-even",
-            Self::CoverageMax => "coverage-max",
-            Self::DominantRow => "dominant-row",
-            Self::Xerxes => "xerxes",
-            Self::XerxesPerfect => "xerxes-perfect",
-            Self::YesterdayPerfect => "yesterday-perfect",
-            Self::Bacteria => "bacteria",
-            Self::BacteriaHalf => "bacteria-half",
         }
     }
 }
@@ -485,6 +372,67 @@ mod tests {
     }
 
     #[test]
+    fn retired_visual_commands_and_flags_are_rejected() {
+        for args in [
+            vec!["launcher", "capture-first-arcade"],
+            vec!["launcher", "capture-crt-font-ab"],
+            vec!["launcher", "capture-snes-hub"],
+            vec!["launcher", "launch-return-once"],
+            vec!["launcher", "verify-neogeo-sdram"],
+            vec!["display", "matrix"],
+            vec!["scene", "launcher"],
+            vec!["scene", "controller-test"],
+            vec!["scene", "tear-pattern"],
+            vec!["scene", "video-playback"],
+            vec!["scene", "crt-trial"],
+            vec![
+                "launcher",
+                "restart",
+                "--attended",
+                "--crt-font-experiment",
+                "phase-even",
+            ],
+            vec![
+                "launcher",
+                "restart",
+                "--attended",
+                "--crt240-composition",
+                "legacy-480",
+            ],
+        ] {
+            let error =
+                TestCli::try_parse_from(std::iter::once("test").chain(args.iter().copied()))
+                    .err()
+                    .expect("retired visual interface must be rejected");
+            let expected = if args.contains(&"restart") {
+                clap::error::ErrorKind::UnknownArgument
+            } else {
+                clap::error::ErrorKind::InvalidSubcommand
+            };
+            assert_eq!(error.kind(), expected, "{args:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn retained_visual_neighbors_still_parse() {
+        for args in [
+            vec!["launcher", "status"],
+            vec!["launcher", "restart", "--attended"],
+            vec!["launcher", "return-to-launcher", "--attended"],
+            vec!["display", "route-status"],
+            vec!["display", "set", "auto", "--attended"],
+            vec!["capture", "framebuffer"],
+            vec!["catalog", "neogeo-family-audit", "--out", "report.json"],
+        ] {
+            assert!(
+                TestCli::try_parse_from(std::iter::once("test").chain(args.iter().copied()))
+                    .is_ok(),
+                "rejected retained arguments: {args:?}"
+            );
+        }
+    }
+
+    #[test]
     fn mutations_require_attendance_during_parsing() {
         assert!(TestCli::try_parse_from(["test", "mode", "set", "dev"]).is_err());
         assert!(TestCli::try_parse_from(["test", "reboot"]).is_err());
@@ -509,28 +457,6 @@ mod tests {
         assert!(
             TestCli::try_parse_from([
                 "test",
-                "launcher",
-                "launch-return-once",
-                "--attended",
-                "--output",
-                "/tmp/launch-return-once",
-            ])
-            .is_ok()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
-                "launcher",
-                "restart",
-                "--attended",
-                "--crt-font-experiment",
-                "phase-even",
-            ])
-            .is_ok()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
                 "fpga",
                 "install-experimental-agent",
                 "--agent",
@@ -538,94 +464,6 @@ mod tests {
                 "--expected-rbf-sha256",
                 "3701ec7e5ef7be168bc221fe208f41e8035e60d31d308ed3ecafcbb9a96ffde0",
                 "--attended",
-            ])
-            .is_ok()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
-                "launcher",
-                "restart",
-                "--attended",
-                "--crt240-composition",
-                "legacy-480",
-            ])
-            .is_ok()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
-                "launcher",
-                "restart",
-                "--attended",
-                "--crt-font-experiment",
-                "yesterday-perfect",
-            ])
-            .is_ok()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
-                "launcher",
-                "restart",
-                "--attended",
-                "--crt-font-experiment",
-                "xerxes-perfect",
-            ])
-            .is_ok()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
-                "launcher",
-                "restart",
-                "--attended",
-                "--crt-font-experiment",
-                "bacteria-half",
-            ])
-            .is_ok()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
-                "launcher",
-                "restart",
-                "--attended",
-                "--crt-font-experiment",
-                "bacteria",
-            ])
-            .is_ok()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
-                "launcher",
-                "restart",
-                "--attended",
-                "--crt-font-experiment",
-                "xerxes",
-            ])
-            .is_ok()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
-                "launcher",
-                "restart",
-                "--attended",
-                "--crt-font-experiment",
-                "dominant-row",
-            ])
-            .is_ok()
-        );
-        assert!(
-            TestCli::try_parse_from([
-                "test",
-                "launcher",
-                "restart",
-                "--attended",
-                "--crt-font-experiment",
-                "coverage-max",
             ])
             .is_ok()
         );

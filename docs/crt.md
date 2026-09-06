@@ -66,8 +66,17 @@ inspection views. `STEM-raw-letterbox-4x3.png` places the unchanged source
 raster on a black `640×480` canvas. `STEM-display-4x3.png` maps source rows to
 the same `640×480` canvas with centered nearest-scanline sampling. This makes
 the square-pixel and physical-aspect interpretations visible together without
-changing the device capture or inventing blended colors. The Arcade-list
-workflow is the deterministic typography fixture:
+changing the device capture or inventing blended colors. The historical experiments below used a deterministic Arcade-list fixture.
+
+## Historical typography experiments (runners retired)
+
+The commands and flags in this section describe pre-milestone-9 evidence and
+are no longer available. They are not current operating instructions. The
+production rendering and fonts are unchanged; use ordinary current-screen
+framebuffer capture for new inspection. No automated comparison replaces these
+retired runners.
+
+The former fixture command was:
 
 ```text
 scripts/agent device launcher capture-first-arcade --attended --output STEM
@@ -165,6 +174,8 @@ design rows by construction.
 ```text
 scripts/agent device launcher restart --attended --crt-font-experiment bacteria-half
 ```
+
+## Current typography and capture semantics
 
 The production CRT typography uses Jersey 25 for major headings, Spleen for
 settings, status, and small text, and Nocive 15 for footer hints. Press Start
