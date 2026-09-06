@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import time
 import uuid
 from collections.abc import Mapping
 
@@ -61,6 +62,25 @@ class NativeAgent:
         if expected_sha256 is not None:
             fields["expected_sha256"] = expected_sha256
         return self._successful("start", fields)
+
+    def capture_framebuffer(self) -> tuple[Mapping[str, object], bytes]:
+        """One binary capture, with a total ten-second deadline and no retry."""
+        deadline = time.monotonic() + 10
+        request = Envelope(uuid.uuid4().hex, "capture-framebuffer", self.token, {})
+        with socket.create_connection((self.host, self.port), timeout=10) as connection:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("capture deadline exceeded")
+            connection.settimeout(remaining)
+            send_message(connection, request)
+            response, body = receive_message(connection, deadline=deadline)
+        if response.request_id != request.request_id:
+            raise ProtocolError("agent reply request identifier did not match")
+        if response.operation == "error":
+            raise AgentError.from_fields(response.fields)
+        if response.operation != "framebuffer":
+            raise ProtocolError("agent returned an unexpected capture response")
+        return response.fields, body
 
     def stop_legacy(self) -> Mapping[str, object]:
         """Explicit migration check; no startup files or application processes change."""

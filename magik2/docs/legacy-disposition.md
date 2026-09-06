@@ -39,3 +39,11 @@ against Linux's 15-byte `comm` field. They cannot establish absence. Milestone 3
 corrects that check, verifies the actual executable before its explicit one-shot
 stop, and records fresh before/after evidence. Neither normal delivery nor tests
 automatically stop the old agent.
+
+## Milestone 8: direct framebuffer images
+
+The 2.0 service now exposes authoritative framebuffer capture through the
+`capture_framebuffer` MCP tool. See [capture setup and protocol](framebuffer-capture.md).
+This adds no dependency on the legacy agent. Desktop migration remains deferred;
+its existing client, capture commands and legacy service/startup dependencies are
+retained. No other decisions in this historical milestone-3 inventory are changed.

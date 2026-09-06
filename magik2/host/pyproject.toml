@@ -3,7 +3,7 @@ name = "mister-magik2-host"
 version = "0.1.0"
 description = "Independent host tooling for the MiSTer MagiK probe"
 requires-python = ">=3.12"
-dependencies = ["paramiko>=4,<5", "slint-testing==0.3", "pytest>=8"]
+dependencies = ["paramiko>=4,<5", "slint-testing==0.3", "pytest>=8", "mcp>=1,<2"]
 
 [[tool.uv.index]]
 name = "slint-private"
