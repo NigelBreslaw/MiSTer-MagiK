@@ -626,9 +626,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.4.4"
+version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
+checksum = "005ec2760ca554fae18df7a11195552ec576cd665632a881bc011d5bb2fd4d80"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1414,9 +1414,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.11"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
+checksum = "3e0f1c7c3a72c66fd80abe965175f7523475c0489a87d3ff9d6e8c87d87a9d2d"
 
 [[package]]
 name = "findshlibs"
@@ -1924,7 +1924,34 @@ dependencies = [
  "crossbeam-channel",
  "futures-util",
  "hdrhistogram",
- "hotpath-macros",
+ "hotpath-macros 0.24.0",
+ "libc",
+ "pin-project-lite",
+ "prettytable-rs",
+ "quanta",
+ "regex",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tiny_http",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "hotpath"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ec7782e005cabd5eaf350febde384cd799faa3a0e624587aa8759c240e0b592"
+dependencies = [
+ "arc-swap",
+ "axum",
+ "cfg-if",
+ "crossbeam-channel",
+ "futures-util",
+ "hdrhistogram",
+ "hotpath-macros 0.25.1",
  "libc",
  "pin-project-lite",
  "prettytable-rs",
@@ -1944,6 +1971,17 @@ name = "hotpath-macros"
 version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "89a3d3cdf9b0d4d3d4f6d4a29798f3b9170401ba500eaa58dd8f890f926af0f1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "hotpath-macros"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "846bde0d9600d98434e1aac376977d7718bfe3d2f5312a041b7c59a6a466c51a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3088,7 +3126,7 @@ dependencies = [
 name = "mister-magik-catalog"
 version = "0.1.0"
 dependencies = [
- "hotpath",
+ "hotpath 0.24.0",
  "libc",
  "lz4_flex",
  "memmap2",
@@ -3116,7 +3154,7 @@ dependencies = [
  "crc32fast",
  "ffmpeg-next",
  "flate2",
- "hotpath",
+ "hotpath 0.25.0",
  "i-slint-common",
  "i-slint-core",
  "libc",
