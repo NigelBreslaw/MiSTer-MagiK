@@ -509,9 +509,11 @@ fn text_mask(text: &str) -> Vec<[u8; 7]> {
 }
 
 fn draw_reflection(pixels: &mut [Rgb565Pixel], x: usize, width: usize, bottom: usize) {
+    let left = x.max(296);
+    let right = x.saturating_add(width).min(934);
     for row in 0..REFLECTION_HEIGHT {
         let source_y = bottom.saturating_sub(1 + row);
-        for column in x..x + width {
+        for column in left..right {
             let target_y = REFLECTION_TOP + row;
             if target_y < LOGICAL_HEIGHT {
                 let source = pixels[source_y * LOGICAL_WIDTH + column].0;
