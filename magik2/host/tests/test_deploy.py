@@ -77,5 +77,5 @@ def test_real_deploy_requires_input_proxy_but_mini_does_not(monkeypatch, tmp_pat
     monkeypatch.setattr(cli, "ensure_application", lambda *args: True)
     monkeypatch.setattr(cli, "retain_diagnostics", lambda *args: None)
     assert cli.deploy(Namespace(app="magik"), create_run(tmp_path, "deploy", {})) == 0
-    assert "main-input-proxy" in required[0]
-    assert "main-input-proxy" not in application("mini-magik").agent_capabilities
+    assert "main-managed-magik" in required[0]
+    assert "main-managed-magik" not in application("mini-magik").agent_capabilities
