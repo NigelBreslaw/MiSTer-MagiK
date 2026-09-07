@@ -66,7 +66,7 @@ enum VersionAction {
     RejectNewer,
 }
 
-type InstalledIdentity = (u64, u64, bool, bool, bool, bool, bool);
+type InstalledIdentity = (u64, u64, bool, bool, bool, bool);
 
 pub(crate) fn agent_token() -> Result<String> {
     let device_id = env::var("MISTER_DEVICE_ID")?;
@@ -138,7 +138,6 @@ pub(crate) fn bootstrap_agent_with(
                 true,
                 true,
                 true,
-                true,
             ))
         {
             cleanup_agent_backup(&session)?;
@@ -169,7 +168,6 @@ fn apply_installed_version_policy(endpoint: &AgentEndpoint) -> Result<bool> {
         protocol,
         has_capture_v2,
         has_device_telemetry_v2,
-        has_launcher_automation,
         has_runtime_upload,
         has_fpga_video_diagnostics,
     )) = installed_identity(endpoint)
@@ -181,7 +179,6 @@ fn apply_installed_version_policy(endpoint: &AgentEndpoint) -> Result<bool> {
         protocol,
         has_capture_v2,
         has_device_telemetry_v2,
-        has_launcher_automation,
         has_runtime_upload,
         has_fpga_video_diagnostics,
     ) {
@@ -199,7 +196,6 @@ fn version_action(
     protocol: u64,
     has_capture_v2: bool,
     has_device_telemetry_v2: bool,
-    has_launcher_automation: bool,
     has_runtime_upload: bool,
     has_fpga_video_diagnostics: bool,
 ) -> VersionAction {
@@ -207,7 +203,6 @@ fn version_action(
         && protocol == agent_protocol::PROTOCOL_VERSION
         && has_capture_v2
         && has_device_telemetry_v2
-        && has_launcher_automation
         && has_runtime_upload
         && has_fpga_video_diagnostics
     {
@@ -239,14 +234,6 @@ fn installed_identity(endpoint: &AgentEndpoint) -> std::result::Result<Installed
                 capability.as_str() == Some(agent_protocol::FRAMEBUFFER_CAPTURE_CAPABILITY)
             })
         });
-    let has_launcher_automation = result
-        .get("capabilities")
-        .and_then(Value::as_array)
-        .is_some_and(|capabilities| {
-            capabilities.iter().any(|capability| {
-                capability.as_str() == Some(agent_protocol::LAUNCHER_AUTOMATION_CAPABILITY)
-            })
-        });
     let has_device_telemetry_v2 = result
         .get("capabilities")
         .and_then(Value::as_array)
@@ -276,7 +263,6 @@ fn installed_identity(endpoint: &AgentEndpoint) -> std::result::Result<Installed
         protocol,
         has_capture_v2,
         has_device_telemetry_v2,
-        has_launcher_automation,
         has_runtime_upload,
         has_fpga_video_diagnostics,
     ))
@@ -844,13 +830,12 @@ mod tests {
                 true,
                 true,
                 true,
-                true,
-                true,
+                true
             ),
             VersionAction::Current
         );
         assert_eq!(
-            version_action(0, 0, false, false, false, false, false),
+            version_action(0, 0, false, false, false, false),
             VersionAction::Upgrade
         );
         assert_eq!(
@@ -860,8 +845,18 @@ mod tests {
                 false,
                 true,
                 true,
+                true
+            ),
+            VersionAction::Upgrade
+        );
+        assert_eq!(
+            version_action(
+                agent_protocol::AGENT_VERSION,
+                agent_protocol::PROTOCOL_VERSION,
                 true,
                 true,
+                false,
+                true
             ),
             VersionAction::Upgrade
         );
@@ -872,20 +867,7 @@ mod tests {
                 true,
                 true,
                 true,
-                false,
-                true,
-            ),
-            VersionAction::Upgrade
-        );
-        assert_eq!(
-            version_action(
-                agent_protocol::AGENT_VERSION,
-                agent_protocol::PROTOCOL_VERSION,
-                true,
-                true,
-                true,
-                true,
-                false,
+                false
             ),
             VersionAction::Upgrade
         );
@@ -896,8 +878,7 @@ mod tests {
                 false,
                 false,
                 false,
-                false,
-                false,
+                false
             ),
             VersionAction::RejectNewer
         );
@@ -908,8 +889,7 @@ mod tests {
                 false,
                 false,
                 false,
-                false,
-                false,
+                false
             ),
             VersionAction::RejectNewer
         );
