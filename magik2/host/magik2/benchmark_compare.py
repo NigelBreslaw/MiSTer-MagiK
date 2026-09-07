@@ -28,6 +28,8 @@ def validate_pmu(pmu, mode):
     if not isinstance(pmu, dict):
         raise ValueError("missing PMU record")
     reading = pmu.get("counters", {})
+    if not isinstance(reading, dict):
+        raise ValueError("invalid PMU reading")
     expected = "cortex-a9-" + mode.removeprefix("pmu-")
     if pmu.get("counter_set") != expected or reading.get("counter_set") != expected:
         raise ValueError("incorrect PMU group")
@@ -39,6 +41,8 @@ def validate_pmu(pmu, mode):
     ):
         raise ValueError("PMU counters unavailable or multiplexed")
     counts = reading.get("counters", {})
+    if not isinstance(counts, dict):
+        raise ValueError("invalid PMU counts")
     if (
         set(counts) != EVENTS[mode]
         or any(type(v) is not int or v < 0 for v in counts.values())

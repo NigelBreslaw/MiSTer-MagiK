@@ -87,7 +87,7 @@ def main() -> int:
         "legacy-stop", help="stop the old agent once; preserve its startup files"
     )
     for name, command in subcommands.choices.items():
-        command.set_defaults(app="magik")
+        command.set_defaults(app="mini-magik" if name == "bench" else "magik")
         if name not in {"build", "deploy", "check", "watch"}:
             continue
         command.add_argument("--app", choices=tuple(APPLICATIONS), default="magik")

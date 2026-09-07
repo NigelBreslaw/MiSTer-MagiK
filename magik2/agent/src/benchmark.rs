@@ -107,6 +107,14 @@ fn workload_valid(value: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
+fn with_restoration<T>(
+    operation: impl FnOnce() -> T,
+    restore: impl FnOnce() -> Result<(), String>,
+) -> (T, Result<(), String>) {
+    let output = operation();
+    (output, restore())
+}
+
 impl Agent {
     pub(super) fn run_benchmark(
         &self,
@@ -145,40 +153,44 @@ impl Agent {
                 &[],
             );
         }
-        let prepared = self
-            .stop_owned_process()
-            .and_then(|()| main_handoff("mister_magik_suspend\n"));
-        let output = match prepared {
-            Ok(()) => {
-                let mut command = Command::new(self.install_root.join("mini-magik"));
-                command.args(["--bench", workload, "--mode", mode]);
-                command.env(
-                    "MISTER_MAGIK2_ARTIFACT_SHA256",
-                    hash.as_deref().unwrap_or_default(),
-                );
-                execute(
-                    &mut command,
-                    Duration::from_secs(if mode == "visual" { 90 } else { 30 }),
-                    || {
-                        let mut byte = 0_u8;
-                        // SAFETY: the socket and one-byte buffer are live; this never consumes data.
-                        unsafe {
-                            libc::recv(
-                                stream.as_raw_fd(),
-                                (&raw mut byte).cast(),
-                                1,
-                                libc::MSG_PEEK | libc::MSG_DONTWAIT,
-                            ) == 0
-                        }
+        let (output, recovery) = with_restoration(
+            || {
+                let prepared = self
+                    .stop_owned_process()
+                    .and_then(|()| main_handoff("mister_magik_suspend\n"));
+                match prepared {
+                    Ok(()) => {
+                        let mut command = Command::new(self.install_root.join("mini-magik"));
+                        command.args(["--bench", workload, "--mode", mode]);
+                        command.env(
+                            "MISTER_MAGIK2_ARTIFACT_SHA256",
+                            hash.as_deref().unwrap_or_default(),
+                        );
+                        execute(
+                            &mut command,
+                            Duration::from_secs(if mode == "visual" { 90 } else { 30 }),
+                            || {
+                                let mut byte = 0_u8;
+                                // SAFETY: the socket and one-byte buffer are live; this never consumes data.
+                                unsafe {
+                                    libc::recv(
+                                        stream.as_raw_fd(),
+                                        (&raw mut byte).cast(),
+                                        1,
+                                        libc::MSG_PEEK | libc::MSG_DONTWAIT,
+                                    ) == 0
+                                }
+                            },
+                        )
+                    }
+                    Err(error) => Output {
+                        error: Some(error),
+                        ..Output::default()
                     },
-                )
-            }
-            Err(error) => Output {
-                error: Some(error),
-                ..Output::default()
+                }
             },
-        };
-        let recovery = main_handoff("mister_magik_resume\n");
+            || main_handoff("mister_magik_resume\n"),
+        );
         write_frame(
             stream,
             &response(
@@ -201,6 +213,23 @@ mod tests {
         let mut c = Command::new("/bin/sh");
         c.args(["-c", script]);
         c
+    }
+    #[test]
+    fn restoration_runs_after_failed_execution_and_reports_its_failure() {
+        let restored = std::cell::Cell::new(false);
+        let (output, recovery) = with_restoration(
+            || Output {
+                error: Some("execution failed".into()),
+                ..Output::default()
+            },
+            || {
+                restored.set(true);
+                Err("resume failed".into())
+            },
+        );
+        assert!(restored.get());
+        assert!(output.error.is_some());
+        assert_eq!(recovery, Err("resume failed".into()));
     }
     #[test]
     fn collects_exit_and_output() {

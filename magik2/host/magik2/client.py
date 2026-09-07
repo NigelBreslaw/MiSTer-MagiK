@@ -70,7 +70,7 @@ class NativeAgent:
             self.token,
             {"expected_sha256": sha256, "workload": workload, "mode": mode},
         )
-        timeout = 100 if mode == "visual" else 40
+        timeout = 120 if mode == "visual" else 60
         deadline = time.monotonic() + timeout
         with socket.create_connection((self.host, self.port), timeout=5) as connection:
             connection.settimeout(timeout)

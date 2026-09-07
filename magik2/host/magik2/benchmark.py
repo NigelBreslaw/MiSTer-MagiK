@@ -29,7 +29,13 @@ def validate_result(value, *, workload, mode, sha256):
     ):
         if value.get(key) != expected:
             raise ValueError(f"benchmark result mismatch: {key}")
+    if mode not in ("timing", "visual", "pmu-neon", "pmu-memory"):
+        raise ValueError("invalid benchmark mode")
+    if not isinstance(sha256, str) or not re.fullmatch("[0-9a-f]{64}", sha256):
+        raise ValueError("invalid artifact hash")
     fixture = value.get("fixture", {})
+    if not isinstance(fixture, dict):
+        raise ValueError("invalid fixture")
     identity = fixture.get("identity", "")
     if not isinstance(identity, str) or not re.fullmatch("[0-9a-f]{64}", identity):
         raise ValueError("missing fixture identity")
@@ -41,6 +47,8 @@ def validate_result(value, *, workload, mode, sha256):
     if not isinstance(samples, list) or len(samples) != expected_count:
         raise ValueError("incorrect sample count")
     for index, sample in enumerate(samples):
+        if not isinstance(sample, dict):
+            raise ValueError("invalid sample")
         if (
             sample.get("repetition") != index
             or sample.get("fixture_identity") != identity
@@ -63,6 +71,8 @@ def validate_result(value, *, workload, mode, sha256):
             raise ValueError("instrumented sample in timing result")
     if mode == "visual":
         visual = value.get("visual", {})
+        if not isinstance(visual, dict):
+            raise ValueError("invalid visual result")
         if not positive(visual.get("duration_ms")) or not positive(
             visual.get("presentations")
         ):
