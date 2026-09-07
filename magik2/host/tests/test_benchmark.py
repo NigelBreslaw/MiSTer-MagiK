@@ -54,3 +54,50 @@ def test_rejects_bad_records(change):
     change(value)
     with pytest.raises(ValueError):
         check(value)
+
+
+def test_counter_validation_and_zeroes():
+    from magik2.benchmark_compare import EVENTS, validate_pmu
+
+    counts = dict.fromkeys(EVENTS["pmu-neon"], 0)
+    counts["cycles"] = 100
+    pmu = {
+        "counter_set": "cortex-a9-neon",
+        "counters": {
+            "counter_set": "cortex-a9-neon",
+            "time_enabled_ns": 100,
+            "time_running_ns": 100,
+            "counters": counts,
+        },
+    }
+    assert validate_pmu(pmu, "pmu-neon")["l1d-refills"] == 0
+    pmu["counters"]["time_running_ns"] = 99
+    with pytest.raises(ValueError):
+        validate_pmu(pmu, "pmu-neon")
+    pmu["counters"]["time_running_ns"] = 100
+    del counts["neon-instructions"]
+    with pytest.raises(ValueError):
+        validate_pmu(pmu, "pmu-neon")
+
+
+def test_offline_comparison_requires_matching_fixture_and_provenance():
+    from magik2.benchmark_compare import compare
+
+    old = result()
+    old["provenance"] = {
+        "git_revision": "a",
+        "git_dirty": False,
+        "mister_ip": "device",
+        "build_fingerprint": "hash",
+    }
+    old["build"] = {"target": "arm", "flags": "same"}
+    new = copy.deepcopy(old)
+    new["provenance"]["git_revision"] = "b"
+    assert compare(old, new)["median_change_percent"] == 0
+    new["fixture"]["identity"] = "c" * 64
+    with pytest.raises(ValueError):
+        compare(old, new)
+    new = copy.deepcopy(old)
+    new["provenance"]["git_dirty"] = True
+    with pytest.raises(ValueError):
+        compare(old, new)

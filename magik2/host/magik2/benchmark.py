@@ -55,6 +55,10 @@ def validate_result(value, *, workload, mode, sha256):
             sample["ns_per_pixel"], sample["duration_ns"] / count, rel_tol=1e-9
         ):
             raise ValueError("inconsistent normalized timing")
+        if mode.startswith("pmu-"):
+            from .benchmark_compare import validate_pmu
+
+            validate_pmu(sample.get("pmu"), mode)
         if mode == "timing" and sample.get("pmu") is not None:
             raise ValueError("instrumented sample in timing result")
     if mode == "visual":
@@ -128,6 +132,10 @@ def run_benchmark(arguments, run):
     result = validate_result(
         json.loads(output), workload=arguments.workload, mode=mode, sha256=digest
     )
+    result["provenance"] = {
+        **json.loads((run / "run.json").read_text())["source"],
+        "build_fingerprint": built.fingerprint,
+    }
     (run / "benchmark.json").write_text(json.dumps(result, indent=2) + "\n")
     for sample in result["samples"]:
         print(
