@@ -26,6 +26,8 @@ export component Probe inherits Window {
     in-out property <string> launcher-target: "ARCADE";
     in-out property <string> launcher-motion-state: "settled";
     in-out property <string> launcher-input-source: "main-proxy-unavailable";
+    in-out property <string> launcher-measurement: "idle";
+    in-out property <int> launcher-selected-index: 0;
     in property <string> build-label: "Mini-MagiK";
     callback increment();
     callback reset();
@@ -38,6 +40,7 @@ export component Probe inherits Window {
     callback launcher-right-down();
     callback launcher-right-up();
     callback launcher-input-reset();
+    callback start-launcher-motion(bool);
 
     Rectangle {
         x: 16px; y: 16px; width: parent.width - 32px; height: 48px;
@@ -85,6 +88,24 @@ export component Probe inherits Window {
         accessible-role: text; accessible-label: "launcher-input-source";
         accessible-value: root.launcher-input-source;
     }
+    Text {
+        width: 1px; height: 1px; opacity: 0;
+        accessible-role: text; accessible-label: "launcher-selected-index";
+        accessible-value: "" + root.launcher-selected-index;
+    }
+    Text {
+        width: 1px; height: 1px; opacity: 0;
+        accessible-role: text; accessible-label: "launcher-measurement";
+        accessible-value: root.launcher-measurement;
+    }
+    // Automation actions only: the custom framebuffer never renders these.
+    Rectangle { width: 1px; height: 1px; opacity: 0; accessible-role: button; accessible-label: "launcher-left-down"; accessible-action-default => { root.launcher-left-down(); } }
+    Rectangle { width: 1px; height: 1px; opacity: 0; accessible-role: button; accessible-label: "launcher-left-up"; accessible-action-default => { root.launcher-left-up(); } }
+    Rectangle { width: 1px; height: 1px; opacity: 0; accessible-role: button; accessible-label: "launcher-right-down"; accessible-action-default => { root.launcher-right-down(); } }
+    Rectangle { width: 1px; height: 1px; opacity: 0; accessible-role: button; accessible-label: "launcher-right-up"; accessible-action-default => { root.launcher-right-up(); } }
+    Rectangle { width: 1px; height: 1px; opacity: 0; accessible-role: button; accessible-label: "launcher-input-reset"; accessible-action-default => { root.launcher-input-reset(); } }
+    Rectangle { width: 1px; height: 1px; opacity: 0; accessible-role: button; accessible-label: "launcher-start-right-motion"; accessible-action-default => { root.start-launcher-motion(true); } }
+    Rectangle { width: 1px; height: 1px; opacity: 0; accessible-role: button; accessible-label: "launcher-start-left-motion"; accessible-action-default => { root.start-launcher-motion(false); } }
 
     Rectangle {
         x: 16px; y: 80px; width: 250px; height: 160px;

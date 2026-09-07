@@ -1,24 +1,22 @@
-//! Small reader for Main's mapped virtual EV_KEY input device.
-//!
-//! This intentionally does not inspect raw joystick nodes or guess a layout.
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Bounded nonblocking reader for Main's already-mapped virtual EV_KEY device.
+//! No raw joystick fallback, grab, configuration or repeat generation.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
-use std::path::Path;
 
 const EVENT_SIZE: usize = if cfg!(target_pointer_width = "64") {
     24
 } else {
     16
 };
-const EV_KEY: u16 = 1;
-const EV_SYN: u16 = 0;
-const SYN_DROPPED: u16 = 3;
+pub const INPUT_BATCH_CAPACITY: usize = 64;
 const KEY_LEFT: u16 = 105;
 const KEY_RIGHT: u16 = 106;
-const INPUT_PROXY_CAPABILITY: &str = "MISTER_MAGIK_INPUT_PROXY";
-const INPUT_PROXY_PROTOCOL: &str = "MISTER_MAGIK_INPUT_PROXY_PROTOCOL";
+// Linux EVIOCGKEY(64), matching the buffer passed below exactly.
 const EVIOCGKEY: libc::c_ulong = 0x8040_4518;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,37 +24,77 @@ pub enum MainInputDirection {
     Left,
     Right,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MainInputPhase {
     Pressed,
     Released,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MainInputEvent {
     pub direction: MainInputDirection,
     pub phase: MainInputPhase,
 }
-
+struct KeyState {
+    held: [bool; 2],
+    await_neutral: bool,
+}
+impl KeyState {
+    fn new(held: [bool; 2]) -> Self {
+        Self {
+            held,
+            await_neutral: held[0] || held[1],
+        }
+    }
+    fn event(&mut self, kind: u16, code: u16, value: i32) -> io::Result<Option<MainInputEvent>> {
+        if kind == 0 && code == 3 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Main input SYN_DROPPED; reopen required",
+            ));
+        }
+        if kind != 1 || !matches!(value, 0 | 1) {
+            return Ok(None);
+        }
+        let (index, direction) = match code {
+            KEY_LEFT => (0, MainInputDirection::Left),
+            KEY_RIGHT => (1, MainInputDirection::Right),
+            _ => return Ok(None),
+        };
+        let pressed = value == 1;
+        let changed = self.held[index] != pressed;
+        self.held[index] = pressed;
+        if self.await_neutral {
+            self.await_neutral = self.held[0] || self.held[1];
+            return Ok(None);
+        }
+        Ok(changed.then_some(MainInputEvent {
+            direction,
+            phase: if pressed {
+                MainInputPhase::Pressed
+            } else {
+                MainInputPhase::Released
+            },
+        }))
+    }
+}
 pub struct MainProxyInput {
     file: File,
-    await_neutral: bool,
-    left: bool,
-    right: bool,
+    keys: KeyState,
+    partial: [u8; EVENT_SIZE],
+    filled: usize,
 }
-
 impl MainProxyInput {
     pub fn open() -> io::Result<Self> {
-        if std::env::var(INPUT_PROXY_CAPABILITY).as_deref() != Ok("1")
+        if !cfg!(target_os = "linux")
+            || std::env::var("MISTER_MAGIK_INPUT_PROXY").as_deref() != Ok("1")
             || !matches!(
-                std::env::var(INPUT_PROXY_PROTOCOL).as_deref(),
+                std::env::var("MISTER_MAGIK_INPUT_PROXY_PROTOCOL").as_deref(),
                 Ok("2" | "3")
             )
         {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                "Main mapped input proxy is unavailable",
+                "Main mapped input proxy v2/v3 unavailable",
             ));
         }
         let path = discover_proxy().ok_or_else(|| {
@@ -67,134 +105,171 @@ impl MainProxyInput {
         })?;
         let file = OpenOptions::new().read(true).open(path)?;
         set_nonblocking(&file)?;
-        let mut input = Self {
+        let mut bits = [0_u8; 64];
+        // SAFETY: owned evdev descriptor; kernel writes at most the encoded 64 bytes.
+        if unsafe { libc::ioctl(file.as_raw_fd(), EVIOCGKEY, bits.as_mut_ptr()) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let held = [KEY_LEFT, KEY_RIGHT].map(|key| bits[key as usize / 8] & (1 << (key % 8)) != 0);
+        Ok(Self {
             file,
-            await_neutral: false,
-            left: false,
-            right: false,
-        };
-        input.refresh_held_snapshot();
-        Ok(input)
+            keys: KeyState::new(held),
+            partial: [0; EVENT_SIZE],
+            filled: 0,
+        })
     }
-
-    pub fn poll(&mut self) -> io::Result<Vec<MainInputEvent>> {
-        let mut events = Vec::new();
-        self.poll_into(&mut events)?;
-        Ok(events)
+    pub fn ready(&self) -> bool {
+        !self.keys.await_neutral
     }
-
+    /// At most 64 kernel events per call. Caller reuses a capacity-64 vector.
+    /// Any transport/desync error discards the entire untrusted batch.
     pub fn poll_into(&mut self, events: &mut Vec<MainInputEvent>) -> io::Result<()> {
         events.clear();
-        let mut bytes = [0_u8; EVENT_SIZE];
-        loop {
-            match self.file.read_exact(&mut bytes) {
-                Ok(()) => {
-                    let type_offset = if EVENT_SIZE == 24 { 16 } else { 8 };
-                    let code_offset = type_offset + 2;
-                    let value_offset = type_offset + 4;
-                    let event_type =
-                        u16::from_ne_bytes([bytes[type_offset], bytes[type_offset + 1]]) & 0x7fff;
-                    let code = u16::from_ne_bytes([bytes[code_offset], bytes[code_offset + 1]]);
-                    let value = i32::from_ne_bytes([
-                        bytes[value_offset],
-                        bytes[value_offset + 1],
-                        bytes[value_offset + 2],
-                        bytes[value_offset + 3],
-                    ]);
-                    if event_type == EV_SYN && code == SYN_DROPPED {
-                        self.left = false;
-                        self.right = false;
-                        self.await_neutral = true;
-                        return Err(io::Error::new(
-                            io::ErrorKind::Interrupted,
-                            "Main input resync required",
-                        ));
-                    }
-                    if event_type != EV_KEY || !(value == 0 || value == 1) {
-                        continue;
-                    }
-                    let Some(direction) = (match code {
-                        KEY_LEFT => Some(MainInputDirection::Left),
-                        KEY_RIGHT => Some(MainInputDirection::Right),
-                        _ => None,
-                    }) else {
-                        continue;
-                    };
-                    let pressed = value == 1;
-                    match direction {
-                        MainInputDirection::Left => self.left = pressed,
-                        MainInputDirection::Right => self.right = pressed,
-                    }
-                    if self.await_neutral {
-                        if !self.left && !self.right {
-                            self.await_neutral = false;
-                        }
-                        continue;
-                    }
-                    events.push(MainInputEvent {
-                        direction,
-                        phase: if pressed {
-                            MainInputPhase::Pressed
-                        } else {
-                            MainInputPhase::Released
-                        },
-                    });
+        let result = self.drain(events);
+        if result.is_err() {
+            events.clear();
+        }
+        result
+    }
+    fn drain(&mut self, events: &mut Vec<MainInputEvent>) -> io::Result<()> {
+        for _ in 0..INPUT_BATCH_CAPACITY {
+            match self.file.read(&mut self.partial[self.filled..]) {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "Main input disconnected",
+                    ));
                 }
+                Ok(count) => self.filled += count,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(error) => return Err(error),
             }
+            if self.filled == EVENT_SIZE {
+                self.filled = 0;
+                let (kind, code, value) = parse_event(&self.partial);
+                if let Some(event) = self.keys.event(kind, code, value)? {
+                    events.push(event);
+                }
+            }
         }
-    }
-
-    fn refresh_held_snapshot(&mut self) {
-        let mut bits = [0_u8; 96];
-        // SAFETY: the file descriptor is owned and the kernel writes only the
-        // fixed EVIOCGKEY bitset represented by this buffer.
-        let result = unsafe {
-            libc::ioctl(
-                self.file.as_raw_fd(),
-                EVIOCGKEY,
-                bits.as_mut_ptr().cast::<libc::c_void>(),
-            )
-        };
-        if result < 0 {
-            self.await_neutral = true;
-            return;
-        }
-        self.left = bits[(KEY_LEFT / 8) as usize] & (1 << (KEY_LEFT % 8)) != 0;
-        self.right = bits[(KEY_RIGHT / 8) as usize] & (1 << (KEY_RIGHT % 8)) != 0;
-        self.await_neutral = self.left || self.right;
+        Ok(())
     }
 }
-
+fn parse_event(bytes: &[u8]) -> (u16, u16, i32) {
+    let offset = bytes.len() - 8;
+    (
+        u16::from_ne_bytes(bytes[offset..offset + 2].try_into().expect("event type")),
+        u16::from_ne_bytes(
+            bytes[offset + 2..offset + 4]
+                .try_into()
+                .expect("event code"),
+        ),
+        i32::from_ne_bytes(bytes[offset + 4..].try_into().expect("event value")),
+    )
+}
 fn discover_proxy() -> Option<String> {
-    let mut paths: Vec<_> = std::fs::read_dir("/dev/input").ok()?.flatten().collect();
+    let mut paths: Vec<_> = std::fs::read_dir("/sys/class/input")
+        .ok()?
+        .flatten()
+        .collect();
     paths.sort_by_key(|entry| entry.file_name());
     paths.into_iter().find_map(|entry| {
-        let path = entry.path();
-        if !path.file_name()?.to_string_lossy().starts_with("event") {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let index = name.strip_prefix("event")?;
+        if index.is_empty() || !index.bytes().all(|byte| byte.is_ascii_digit()) {
             return None;
         }
-        let name = std::fs::read_to_string(
-            Path::new("/sys/class/input")
-                .join(path.file_name()?)
-                .join("device/name"),
-        )
-        .ok()?;
-        (name.trim() == "MiSTer virtual input").then(|| path.to_string_lossy().into_owned())
+        let device_name = std::fs::read_to_string(entry.path().join("device/name")).ok()?;
+        (device_name.trim() == "MiSTer virtual input").then(|| format!("/dev/input/{name}"))
     })
 }
-
 fn set_nonblocking(file: &File) -> io::Result<()> {
-    let fd = file.as_raw_fd();
-    // SAFETY: fd belongs to file and only its status flags are changed.
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: fd belongs to file and only O_NONBLOCK is added.
-    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+    // SAFETY: both fcntl operations use an owned, live descriptor.
+    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+    if flags < 0
+        || unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+    {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn neutral_start_delivers_first_tap_and_ignores_repeats() {
+        let mut keys = KeyState::new([false; 2]);
+        assert_eq!(
+            keys.event(1, KEY_RIGHT, 1).unwrap().unwrap().phase,
+            MainInputPhase::Pressed
+        );
+        assert!(keys.event(1, KEY_RIGHT, 1).unwrap().is_none());
+        assert!(keys.event(1, KEY_RIGHT, 2).unwrap().is_none());
+        assert!(keys.event(1, KEY_RIGHT, -1).unwrap().is_none());
+        assert_eq!(
+            keys.event(1, KEY_RIGHT, 0).unwrap().unwrap().phase,
+            MainInputPhase::Released
+        );
+    }
+    #[test]
+    fn inherited_hold_requires_all_directions_neutral() {
+        let mut keys = KeyState::new([true, true]);
+        assert!(keys.event(1, KEY_LEFT, 0).unwrap().is_none());
+        assert!(keys.await_neutral);
+        assert!(keys.event(1, KEY_RIGHT, 0).unwrap().is_none());
+        assert!(!keys.await_neutral);
+        assert!(keys.event(1, KEY_LEFT, 1).unwrap().is_some());
+    }
+    #[test]
+    fn desync_is_a_reset_not_a_silent_lost_release() {
+        let mut keys = KeyState::new([false; 2]);
+        keys.event(1, KEY_RIGHT, 1).unwrap();
+        assert!(keys.event(0, 3, 0).is_err());
+        assert!(keys.event(4, 0, 12).unwrap().is_none());
+    }
+    #[test]
+    fn parses_both_linux_event_abis() {
+        for size in [16, 24] {
+            let mut bytes = vec![0; size];
+            bytes[size - 8..size - 6].copy_from_slice(&1_u16.to_ne_bytes());
+            bytes[size - 6..size - 4].copy_from_slice(&KEY_LEFT.to_ne_bytes());
+            bytes[size - 4..].copy_from_slice(&1_i32.to_ne_bytes());
+            assert_eq!(parse_event(&bytes), (1, KEY_LEFT, 1));
+        }
+    }
+
+    #[test]
+    fn partial_reads_are_retained_and_desync_discards_batch() {
+        use std::io::Write;
+        use std::os::fd::OwnedFd;
+        use std::os::unix::net::UnixStream;
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        reader.set_nonblocking(true).unwrap();
+        let mut input = MainProxyInput {
+            file: File::from(OwnedFd::from(reader)),
+            keys: KeyState::new([false; 2]),
+            partial: [0; EVENT_SIZE],
+            filled: 0,
+        };
+        let mut bytes = [0_u8; EVENT_SIZE];
+        bytes[EVENT_SIZE - 8..EVENT_SIZE - 6].copy_from_slice(&1_u16.to_ne_bytes());
+        bytes[EVENT_SIZE - 6..EVENT_SIZE - 4].copy_from_slice(&KEY_RIGHT.to_ne_bytes());
+        bytes[EVENT_SIZE - 4..].copy_from_slice(&1_i32.to_ne_bytes());
+        let mut events = Vec::with_capacity(INPUT_BATCH_CAPACITY);
+        writer.write_all(&bytes[..7]).unwrap();
+        input.poll_into(&mut events).unwrap();
+        assert!(events.is_empty());
+        writer.write_all(&bytes[7..]).unwrap();
+        input.poll_into(&mut events).unwrap();
+        assert_eq!(events.len(), 1);
+        bytes[EVENT_SIZE - 4..].copy_from_slice(&0_i32.to_ne_bytes());
+        writer.write_all(&bytes).unwrap();
+        bytes[EVENT_SIZE - 8..EVENT_SIZE - 6].copy_from_slice(&0_u16.to_ne_bytes());
+        bytes[EVENT_SIZE - 6..EVENT_SIZE - 4].copy_from_slice(&3_u16.to_ne_bytes());
+        writer.write_all(&bytes).unwrap();
+        assert!(input.poll_into(&mut events).is_err());
+        assert!(events.is_empty());
+    }
 }

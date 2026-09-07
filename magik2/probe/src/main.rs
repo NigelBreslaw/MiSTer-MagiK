@@ -6,12 +6,16 @@
 use mister_magik_framebuffer_scenes::Rgb565Pixel as ScenePixel;
 use mister_magik_framebuffer_scenes::launcher::{LauncherCard, LauncherData, LauncherScene};
 use mister_magik_framebuffer_scenes::launcher_navigation::{
-    BrowseDirection, BrowsePhase, LauncherBrowser,
+    BrowseDirection, BrowseFrame, BrowsePhase,
 };
 use mister_magik_mister_runtime::display_plan::query_main_display_plan;
 use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
 use mister_magik_mister_runtime::framebuffer::rgb565::Rgb565;
-use mister_magik_mister_runtime::main_input::{MainInputDirection, MainInputPhase, MainProxyInput};
+use mister_magik_mister_runtime::main_input::{
+    INPUT_BATCH_CAPACITY, MainInputDirection, MainInputPhase, MainProxyInput,
+};
+mod launcher_control;
+use launcher_control::LauncherControl;
 use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel, SoftwareRenderer};
 use slint::platform::{EventLoopProxy, Platform, WindowAdapter};
 use slint::{EventLoopError, PhysicalSize, Window};
@@ -87,13 +91,6 @@ impl ProbeWindow {
             size: Cell::new(PhysicalSize::default()),
             event_loop: ProbeEventLoop::default(),
         })
-    }
-
-    fn draw_if_needed(&self, render: impl FnOnce(&SoftwareRenderer, bool)) -> bool {
-        self.event_loop.process_pending_callbacks();
-        let redraw_requested = self.redraw_pending.replace(false);
-        render(&self.renderer, redraw_requested);
-        redraw_requested
     }
 
     fn set_size(&self, size: PhysicalSize) {
@@ -191,19 +188,25 @@ fn main() -> Result<(), String> {
     ));
     let weak = probe.as_weak();
     probe.on_increment(move || {
-        if let Some(probe) = weak.upgrade() {
+        if let Some(probe) = weak.upgrade()
+            && !probe.get_launcher_mode()
+        {
             probe.set_counter(probe.get_counter() + 1);
         }
     });
     let weak = probe.as_weak();
     probe.on_reset(move || {
-        if let Some(probe) = weak.upgrade() {
+        if let Some(probe) = weak.upgrade()
+            && !probe.get_launcher_mode()
+        {
             probe.set_counter(0);
         }
     });
     let weak = probe.as_weak();
     probe.on_toggle_details(move || {
-        if let Some(probe) = weak.upgrade() {
+        if let Some(probe) = weak.upgrade()
+            && !probe.get_launcher_mode()
+        {
             probe.set_details_open(!probe.get_details_open());
         }
     });
@@ -211,7 +214,6 @@ fn main() -> Result<(), String> {
     let launcher_mode = Rc::new(Cell::new(true));
     let launcher_dirty = Rc::new(Cell::new(true));
     let launcher_scene = LauncherScene::new(width, height);
-    let launcher_cached = Rc::new(RefCell::new(None::<Vec<ScenePixel>>));
     let launcher_cards = [
         LauncherCard {
             name: "ARCADE",
@@ -239,85 +241,126 @@ fn main() -> Result<(), String> {
             colour: 0xb9a6,
         },
     ];
-    let launcher_browser = Rc::new(RefCell::new(LauncherBrowser::new(launcher_cards.len(), 0)));
-    launcher_browser.borrow_mut().neutral();
-    let launcher_input = Rc::new(RefCell::new(MainProxyInput::open().ok()));
-    probe.set_launcher_input_source(if launcher_input.borrow().is_some() {
-        "main-proxy".into()
-    } else {
-        "main-proxy-unavailable".into()
+    let mut prepared = launcher_scene.prepare(LauncherData {
+        cards: &launcher_cards,
+        selected: 0,
+        library_games: 6842,
+        collections: 18,
+        favourites: 126,
+        clock: "21:37",
     });
-    probe.set_launcher_mode(true);
-    probe.set_launcher_ready(false);
-    probe.set_launcher_selection("ARCADE".into());
-    let mode = launcher_mode.clone();
-    let dirty = launcher_dirty.clone();
-    let weak = probe.as_weak();
-    let timer = motion_timer.clone();
-    probe.on_show_launcher(move || {
-        mode.set(true);
-        dirty.set(true);
-        timer.stop();
-        if let Some(probe) = weak.upgrade() {
-            probe.set_launcher_mode(true);
-            probe.set_launcher_ready(false);
-            probe.set_motion_running(false);
-        }
-    });
+    let launcher_labels: Vec<slint::SharedString> =
+        launcher_cards.iter().map(|card| card.name.into()).collect();
+    let control = Rc::new(RefCell::new(LauncherControl::new(launcher_cards.len())));
     let launcher_epoch = Rc::new(Instant::now());
-    let weak = probe.as_weak();
-    let browser = launcher_browser.clone();
-    let dirty = launcher_dirty.clone();
-    let epoch = launcher_epoch.clone();
-    probe.on_launcher_left_down(move || {
-        browser
-            .borrow_mut()
-            .press(BrowseDirection::Left, epoch.elapsed().as_millis() as u64);
-        dirty.set(true);
-        if let Some(probe) = weak.upgrade() {
-            probe.set_launcher_motion_state("sliding".into());
-        }
-    });
-    let browser = launcher_browser.clone();
-    probe.on_launcher_left_up(move || browser.borrow_mut().release(BrowseDirection::Left));
-    let weak = probe.as_weak();
-    let browser = launcher_browser.clone();
-    let dirty = launcher_dirty.clone();
-    let epoch = launcher_epoch.clone();
-    probe.on_launcher_right_down(move || {
-        browser
-            .borrow_mut()
-            .press(BrowseDirection::Right, epoch.elapsed().as_millis() as u64);
-        dirty.set(true);
-        if let Some(probe) = weak.upgrade() {
-            probe.set_launcher_motion_state("sliding".into());
-        }
-    });
-    let browser = launcher_browser.clone();
-    probe.on_launcher_right_up(move || browser.borrow_mut().release(BrowseDirection::Right));
-    let browser = launcher_browser.clone();
-    let dirty = launcher_dirty.clone();
-    probe.on_launcher_input_reset(move || {
-        browser.borrow_mut().reset();
-        dirty.set(true);
-    });
-    let mode = launcher_mode.clone();
-    let dirty = launcher_dirty.clone();
-    let weak = probe.as_weak();
-    let timer = motion_timer.clone();
-    probe.on_show_probe(move || {
-        mode.set(false);
-        dirty.set(false);
-        timer.stop();
-        if let Some(probe) = weak.upgrade() {
-            probe.set_launcher_mode(false);
-            probe.set_launcher_ready(false);
-            probe.set_motion_running(false);
-        }
-    });
+    let measure_running = Rc::new(Cell::new(false));
+    let measure_direction = Rc::new(Cell::new(BrowseDirection::Right));
     let session = Rc::new(RefCell::new(
         Session::from_environment().ok_or("missing tooling state root")?,
     ));
+    probe.set_launcher_mode(true);
+    probe.set_launcher_ready(false);
+    probe.set_launcher_selection("ARCADE".into());
+
+    let install_mode = |launcher: bool| {
+        let mode = launcher_mode.clone();
+        let dirty = launcher_dirty.clone();
+        let control = control.clone();
+        let weak = probe.as_weak();
+        let timer = motion_timer.clone();
+        let measure = measure_running.clone();
+        let session = session.clone();
+        move || {
+            mode.set(launcher);
+            dirty.set(launcher);
+            control.borrow_mut().reset(false);
+            timer.stop();
+            measure.set(false);
+            let mut session = session.borrow_mut();
+            session.metrics.motion_started_ms = None;
+            session.metrics.window_start = None;
+            session.metrics.window = None;
+            if let Some(probe) = weak.upgrade() {
+                probe.set_launcher_mode(launcher);
+                probe.set_launcher_ready(false);
+                probe.set_motion_running(false);
+                probe.set_launcher_measurement("idle".into());
+            }
+        }
+    };
+    probe.on_show_launcher(install_mode(true));
+    probe.on_show_probe(install_mode(false));
+
+    let install_input = |direction, down| {
+        let control = control.clone();
+        let mode = launcher_mode.clone();
+        let epoch = launcher_epoch.clone();
+        move || {
+            if mode.get() {
+                control.borrow_mut().input(
+                    false,
+                    direction,
+                    down,
+                    epoch.elapsed().as_millis() as u64,
+                );
+            }
+        }
+    };
+    probe.on_launcher_left_down(install_input(BrowseDirection::Left, true));
+    probe.on_launcher_left_up(install_input(BrowseDirection::Left, false));
+    probe.on_launcher_right_down(install_input(BrowseDirection::Right, true));
+    probe.on_launcher_right_up(install_input(BrowseDirection::Right, false));
+    let reset_control = control.clone();
+    let dirty = launcher_dirty.clone();
+    let mode = launcher_mode.clone();
+    probe.on_launcher_input_reset(move || {
+        if mode.get() {
+            reset_control.borrow_mut().reset(true);
+            dirty.set(true);
+        }
+    });
+    let browser = control.clone();
+    let mode = launcher_mode.clone();
+    let epoch = launcher_epoch.clone();
+    let measure = measure_running.clone();
+    let direction = measure_direction.clone();
+    let session_for_launcher = session.clone();
+    let weak = probe.as_weak();
+    let dirty = launcher_dirty.clone();
+    probe.on_start_launcher_motion(move |right| {
+        if !mode.get() || measure.get() {
+            return;
+        }
+        let chosen = if right {
+            BrowseDirection::Right
+        } else {
+            BrowseDirection::Left
+        };
+        browser.borrow_mut().reset(true);
+        browser
+            .borrow_mut()
+            .input(false, chosen, true, epoch.elapsed().as_millis() as u64);
+        direction.set(chosen);
+        measure.set(true);
+        dirty.set(true);
+        let mut session = session_for_launcher.borrow_mut();
+        session.metrics.context["workload"] = "launcher-slide".into();
+        if let Some(context) = session.metrics.context.as_object_mut() {
+            for name in [
+                "launcher_telemetry_error",
+                "launcher_owned_vblanks",
+                "launcher_presented_vblanks",
+                "launcher_repeated_vblanks",
+                "launcher_ownership_losses",
+            ] {
+                context.remove(name);
+            }
+        }
+        session.begin();
+        if let Some(probe) = weak.upgrade() {
+            probe.set_launcher_measurement("running".into());
+        }
+    });
     {
         let mut session = session.borrow_mut();
         let context = &mut session.metrics.context;
@@ -335,12 +378,13 @@ fn main() -> Result<(), String> {
         let Some(probe) = weak.upgrade() else {
             return;
         };
-        if probe.get_motion_running() {
+        if probe.get_launcher_mode() || probe.get_motion_running() {
             return;
         }
         probe.set_motion_step(0);
         probe.set_motion_complete(false);
         probe.set_motion_running(true);
+        session_for_motion.borrow_mut().metrics.context["workload"] = "probe-motion".into();
         session_for_motion.borrow_mut().begin();
         let weak = probe.as_weak();
         timer.start(
@@ -355,184 +399,239 @@ fn main() -> Result<(), String> {
     });
 
     let mut cached = vec![Rgb565Pixel(0); width * height];
-    let mut launcher_input = launcher_input.borrow_mut().take();
-    let mut input_events = Vec::with_capacity(8);
-    let mut last_input_open_ms = 0_u64;
+    let mut scene_pixels = vec![ScenePixel(0); width * height];
+    let mut launcher_input: Option<MainProxyInput> = None;
+    let mut input_events = Vec::with_capacity(INPUT_BATCH_CAPACITY);
+    let mut next_input_open_ms = 0;
+    let mut last_presented: Option<BrowseFrame> = None;
+    let mut pending: Option<(Option<BrowseFrame>, Instant)> = None;
+    let mut telemetry_start: Option<(u32, u32, u32, u32)> = None;
     loop {
+        window.event_loop.process_pending_callbacks();
+        slint::platform::update_timers_and_animations();
+        if window.event_loop.terminated.load(Ordering::Acquire) {
+            return Ok(());
+        }
         let now_ms = launcher_epoch.elapsed().as_millis() as u64;
-        if let Some(input) = launcher_input.as_mut() {
-            if input.poll_into(&mut input_events).is_err() {
-                launcher_browser.borrow_mut().reset();
-                launcher_dirty.set(true);
-                launcher_input = None;
-                probe.set_launcher_input_source("main-proxy-unavailable".into());
+        if control.borrow().rearm_input {
+            control.borrow_mut().rearm_input = false;
+            launcher_input = None;
+            next_input_open_ms = 0;
+        }
+        if launcher_input.is_none() && now_ms >= next_input_open_ms {
+            next_input_open_ms = now_ms.saturating_add(1000);
+            match MainProxyInput::open() {
+                Ok(input) => launcher_input = Some(input),
+                Err(error) => {
+                    session.borrow_mut().metrics.context["input_error"] = error.to_string().into();
+                }
             }
-            for event in input_events.drain(..) {
-                let mut browser = launcher_browser.borrow_mut();
-                match (event.direction, event.phase) {
-                    (MainInputDirection::Left, MainInputPhase::Pressed) => {
-                        browser.press(BrowseDirection::Left, now_ms)
-                    }
-                    (MainInputDirection::Left, MainInputPhase::Released) => {
-                        browser.release(BrowseDirection::Left)
-                    }
-                    (MainInputDirection::Right, MainInputPhase::Pressed) => {
-                        browser.press(BrowseDirection::Right, now_ms)
-                    }
-                    (MainInputDirection::Right, MainInputPhase::Released) => {
-                        browser.release(BrowseDirection::Right)
+        }
+        if let Some(input) = launcher_input.as_mut() {
+            match input.poll_into(&mut input_events) {
+                Ok(()) => {
+                    if launcher_mode.get() {
+                        for event in input_events.drain(..) {
+                            let direction = match event.direction {
+                                MainInputDirection::Left => BrowseDirection::Left,
+                                MainInputDirection::Right => BrowseDirection::Right,
+                            };
+                            control.borrow_mut().input(
+                                true,
+                                direction,
+                                event.phase == MainInputPhase::Pressed,
+                                now_ms,
+                            );
+                        }
                     }
                 }
-                launcher_dirty.set(true);
+                Err(error) => {
+                    input_events.clear();
+                    control.borrow_mut().reset(false);
+                    control.borrow_mut().rearm_input = false;
+                    launcher_dirty.set(launcher_mode.get());
+                    launcher_input = None;
+                    next_input_open_ms = now_ms.saturating_add(1000);
+                    session.borrow_mut().metrics.context["input_error"] = error.to_string().into();
+                }
             }
-        } else if now_ms.saturating_sub(last_input_open_ms) >= 1_000 {
-            last_input_open_ms = now_ms;
-            if let Ok(input) = MainProxyInput::open() {
-                launcher_input = Some(input);
-                probe.set_launcher_input_source("main-proxy".into());
+        }
+        let input_source = match launcher_input.as_ref() {
+            Some(input) if input.ready() => "main-proxy",
+            Some(_) => "main-proxy-awaiting-neutral",
+            None => "main-proxy-unavailable",
+        };
+        if probe.get_launcher_input_source() != input_source {
+            probe.set_launcher_input_source(input_source.into());
+            session.borrow_mut().metrics.context["input_source"] = input_source.into();
+        }
+        let completed = session.borrow_mut().tick(width, height)?;
+        if measure_running.get() {
+            if session.borrow().metrics.window_start.is_none() {
+                telemetry_start = None;
             }
-        }
-        let launcher_frame = launcher_browser.borrow_mut().frame(now_ms);
-        if launcher_frame.phase != BrowsePhase::Settled {
-            launcher_dirty.set(true);
-        }
-        probe.set_launcher_motion_state(
-            match launcher_frame.phase {
-                BrowsePhase::Settled => "settled",
-                BrowsePhase::Sliding => "sliding",
-                BrowsePhase::Held => "held",
+            if telemetry_start.is_none() && session.borrow().metrics.window_start.is_some() {
+                match framebuffer.presentation_telemetry() {
+                    Ok(t)
+                        if t.lifetime_invariant_valid() && t.magik_ownership() && !t.pending() =>
+                    {
+                        telemetry_start = Some((
+                            t.owned_vblank_count,
+                            t.presented_vblank_count,
+                            t.repeated_vblank_count,
+                            t.ownership_loss_count,
+                        ));
+                    }
+                    _ => {
+                        session.borrow_mut().metrics.context["launcher_telemetry_error"] =
+                            "invalid start telemetry".into()
+                    }
+                }
             }
-            .into(),
-        );
-        if launcher_frame.selected < launcher_cards.len() {
-            probe.set_launcher_selection(launcher_cards[launcher_frame.selected].name.into());
-        }
-        if launcher_frame.target < launcher_cards.len() {
-            probe.set_launcher_target(launcher_cards[launcher_frame.target].name.into());
-        }
-        slint::platform::update_timers_and_animations();
-        if session.borrow_mut().tick(width, height)? {
+            if completed {
+                if let Some((owned, presented, repeated, losses)) = telemetry_start.take() {
+                    match framebuffer.presentation_telemetry() {
+                        Ok(t)
+                            if t.lifetime_invariant_valid()
+                                && t.magik_ownership()
+                                && !t.pending() =>
+                        {
+                            let mut session = session.borrow_mut();
+                            let c = &mut session.metrics.context;
+                            c["launcher_owned_vblanks"] =
+                                u64::from(t.owned_vblank_count.wrapping_sub(owned)).into();
+                            c["launcher_presented_vblanks"] =
+                                u64::from(t.presented_vblank_count.wrapping_sub(presented)).into();
+                            c["launcher_repeated_vblanks"] =
+                                u64::from(t.repeated_vblank_count.wrapping_sub(repeated)).into();
+                            c["launcher_ownership_losses"] =
+                                u64::from(t.ownership_loss_count.wrapping_sub(losses)).into();
+                        }
+                        _ => {
+                            session.borrow_mut().metrics.context["launcher_telemetry_error"] =
+                                "invalid end telemetry".into()
+                        }
+                    }
+                }
+                control
+                    .borrow_mut()
+                    .input(false, measure_direction.get(), false, now_ms);
+                measure_running.set(false);
+                probe.set_launcher_measurement("draining".into());
+            }
+        } else if completed {
             motion_timer.stop();
             probe.set_motion_running(false);
             probe.set_motion_complete(true);
         }
-        let session_for_frame = session.clone();
-        let mode_for_frame = launcher_mode.clone();
-        let dirty_for_frame = launcher_dirty.clone();
-        let probe_for_frame = probe.as_weak();
-        let launcher_cached_for_frame = launcher_cached.clone();
-        let launcher_frame_for_frame = launcher_frame;
-        let rendered = window.draw_if_needed(|renderer, redraw_requested| {
-            if mode_for_frame.get() {
-                if !dirty_for_frame.replace(false) {
-                    return;
-                }
-                *launcher_cached_for_frame.borrow_mut() = None;
+
+        let redraw_requested = window.redraw_pending.replace(false);
+        let frame = if pending.is_none() {
+            Some(control.borrow_mut().frame(now_ms))
+        } else {
+            None
+        };
+        if pending.is_none() {
+            let launcher_frame = frame.expect("no pending presentation");
+            let render_launcher = launcher_mode.get()
+                && (launcher_dirty.get() || last_presented != Some(launcher_frame));
+            if render_launcher || (!launcher_mode.get() && redraw_requested) {
                 let render_start = Instant::now();
-                if launcher_cached_for_frame.borrow().is_none() {
-                    *launcher_cached_for_frame.borrow_mut() = Some(
-                        launcher_scene.render_browse(
-                            LauncherData {
-                                cards: &launcher_cards,
-                                selected: launcher_frame_for_frame.selected,
-                                library_games: 6842,
-                                collections: 18,
-                                favourites: 126,
-                                clock: "21:37",
-                            },
-                            (launcher_frame_for_frame.phase != BrowsePhase::Settled)
-                                .then_some(launcher_frame_for_frame),
-                        ),
-                    );
-                }
-                let packed = launcher_cached_for_frame.borrow();
-                let packed = packed
-                    .as_deref()
-                    .expect("launcher cache was just populated");
-                for (destination, source) in cached.iter_mut().zip(packed) {
-                    *destination = Rgb565Pixel(source.0);
+                if render_launcher {
+                    probe.set_launcher_ready(false);
+                    prepared.render_into(launcher_frame, &mut scene_pixels);
+                    for (destination, source) in cached.iter_mut().zip(&scene_pixels) {
+                        *destination = Rgb565Pixel(source.0);
+                    }
+                } else {
+                    window.renderer.render(&mut cached, width);
                 }
                 let render_us = render_start.elapsed().as_micros() as u64;
                 let stride = framebuffer.stride_pixels();
                 for row in 0..height {
-                    let destination =
-                        &mut framebuffer.pixels_mut()[row * stride..row * stride + width];
-                    let source = &cached[row * width..(row + 1) * width];
-                    for (destination, source) in destination.iter_mut().zip(source) {
+                    for (destination, source) in framebuffer.pixels_mut()
+                        [row * stride..row * stride + width]
+                        .iter_mut()
+                        .zip(&cached[row * width..(row + 1) * width])
+                    {
                         *destination = Rgb565(source.0);
                     }
                 }
-                let mut session = session_for_frame.borrow_mut();
-                let metrics = &mut session.metrics;
-                metrics.last_render_us = render_us;
-                metrics.counters.render_us += render_us;
+                let mut session = session.borrow_mut();
+                session.metrics.last_render_us = render_us;
+                session.metrics.counters.render_us += render_us;
                 match framebuffer.post() {
-                    Ok(_) => metrics.counters.posts += 1,
+                    Ok(_) => {
+                        session.metrics.counters.posts += 1;
+                        pending = Some((render_launcher.then_some(launcher_frame), render_start));
+                    }
                     Err(error) => {
-                        metrics.counters.rejections += 1;
-                        metrics.error = Some(error.to_string());
-                        return;
+                        session.metrics.counters.rejections += 1;
+                        session.metrics.error = Some(error.to_string());
+                        launcher_dirty.set(true);
+                        window.redraw_pending.set(true);
                     }
                 }
-                match framebuffer.settle_pending() {
-                    Ok(Some(presented)) => {
-                        metrics.counters.flips += 1;
-                        metrics.counters.drops +=
-                            metrics.last_physical_drop_count.map_or(0, |previous| {
-                                u64::from(presented.drop_count.wrapping_sub(previous))
-                            });
-                        metrics.last_physical_drop_count = Some(presented.drop_count);
-                        metrics.counters.presentations += 1;
-                        metrics.counters.render_to_present_us +=
-                            render_start.elapsed().as_micros() as u64;
-                        if let Some(probe) = probe_for_frame.upgrade() {
-                            probe.set_launcher_ready(true);
-                        }
-                    }
-                    _ => metrics.error = Some("physical latch did not settle".into()),
-                }
-                return;
             }
-            if !redraw_requested {
-                return;
-            }
-            let render_start = Instant::now();
-            renderer.render(&mut cached, width);
-            let render_us = render_start.elapsed().as_micros() as u64;
-            for (destination, source) in framebuffer.pixels_mut().iter_mut().zip(&cached) {
-                *destination = Rgb565(source.0);
-            }
-            let mut session = session_for_frame.borrow_mut();
-            let metrics = &mut session.metrics;
-            match framebuffer.post() {
-                Ok(_) => metrics.counters.posts += 1,
-                Err(error) => {
-                    metrics.counters.rejections += 1;
-                    metrics.error = Some(error.to_string());
-                    return;
-                }
-            }
+        }
+        let mut presented_this_loop = false;
+        if let Some((posted_frame, started)) = pending {
             match framebuffer.settle_pending() {
-                Ok(Some(presented)) => {
+                Ok(Some(receipt)) => {
+                    pending = None;
+                    presented_this_loop = true;
+                    let mut session = session.borrow_mut();
+                    let metrics = &mut session.metrics;
                     metrics.counters.flips += 1;
+                    metrics.counters.presentations += 1;
                     metrics.counters.drops +=
                         metrics.last_physical_drop_count.map_or(0, |previous| {
-                            u64::from(presented.drop_count.wrapping_sub(previous))
+                            u64::from(receipt.drop_count.wrapping_sub(previous))
                         });
-                    metrics.last_physical_drop_count = Some(presented.drop_count);
+                    metrics.last_physical_drop_count = Some(receipt.drop_count);
+                    metrics.counters.render_to_present_us += started.elapsed().as_micros() as u64;
+                    if let Some(frame) = posted_frame {
+                        last_presented = Some(frame);
+                        launcher_dirty.set(false);
+                        if probe.get_launcher_selection() != launcher_labels[frame.selected] {
+                            probe.set_launcher_selection(launcher_labels[frame.selected].clone());
+                        }
+                        probe.set_launcher_selected_index(frame.selected as i32);
+                        if probe.get_launcher_target() != launcher_labels[frame.target] {
+                            probe.set_launcher_target(launcher_labels[frame.target].clone());
+                        }
+                        let phase = match frame.phase {
+                            BrowsePhase::Settled => "settled",
+                            BrowsePhase::Sliding => "sliding",
+                            BrowsePhase::Held => "held",
+                        };
+                        if probe.get_launcher_motion_state() != phase {
+                            probe.set_launcher_motion_state(phase.into());
+                        }
+                        probe.set_launcher_ready(frame.phase == BrowsePhase::Settled);
+                        if frame.phase == BrowsePhase::Settled
+                            && probe.get_launcher_measurement() == "draining"
+                        {
+                            probe.set_launcher_measurement("complete".into());
+                        }
+                    } else {
+                        last_presented = None;
+                    }
                 }
-                _ => {
-                    metrics.error = Some("physical latch did not settle".into());
-                    return;
+                Ok(None) => {
+                    session.borrow_mut().metrics.error =
+                        Some("posted frame missing pending latch".into());
+                    pending = None;
+                    launcher_dirty.set(true);
+                }
+                Err(error) => {
+                    session.borrow_mut().metrics.error = Some(error.to_string());
+                    // Retain pending state and retry settlement before touching a slot.
                 }
             }
-            metrics.counters.presentations += 1;
-            metrics.last_render_us = render_us;
-            metrics.counters.render_us += render_us;
-            metrics.counters.render_to_present_us += render_start.elapsed().as_micros() as u64;
-        });
+        }
         session.borrow_mut().preview(&cached, width, height);
-        if !rendered {
+        if !presented_this_loop {
             std::thread::sleep(Duration::from_millis(2));
         }
     }
