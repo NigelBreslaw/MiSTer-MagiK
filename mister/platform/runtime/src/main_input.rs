@@ -85,18 +85,13 @@ pub struct MainProxyInput {
 }
 impl MainProxyInput {
     pub fn open() -> io::Result<Self> {
-        if !cfg!(target_os = "linux")
-            || std::env::var("MISTER_MAGIK_INPUT_PROXY").as_deref() != Ok("1")
-            || !matches!(
-                std::env::var("MISTER_MAGIK_INPUT_PROXY_PROTOCOL").as_deref(),
-                Ok("2" | "3")
-            )
-        {
+        if !cfg!(target_os = "linux") {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "Main mapped input proxy v2/v3 unavailable",
             ));
         }
+        verify_capability()?;
         let path = discover_proxy().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
@@ -156,6 +151,43 @@ impl MainProxyInput {
         Ok(())
     }
 }
+
+fn verify_capability() -> io::Result<()> {
+    let enabled = std::env::var("MISTER_MAGIK_INPUT_PROXY").ok();
+    let protocol = std::env::var("MISTER_MAGIK_INPUT_PROXY_PROTOCOL").ok();
+    if enabled.is_some() || protocol.is_some() {
+        return if enabled.as_deref() == Some("1") && matches!(protocol.as_deref(), Some("2" | "3"))
+        {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "unsupported Main input environment capability",
+            ))
+        };
+    }
+    // Mini is launched by the isolated service, which currently forwards these
+    // variables only for the real app. Read the same existing Main authority
+    // used by that service; never infer mapping from raw joystick capabilities.
+    let text = std::fs::read_to_string("/tmp/mister-magik/main-status.json")?;
+    verify_status_capability(&text)
+}
+
+fn verify_status_capability(text: &str) -> io::Result<()> {
+    let status: serde_json::Value = serde_json::from_str(text)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if status["schema"] == "mister-magik-main-status-v2"
+        && status["command_channel"] == "ready"
+        && matches!(status["input_proxy_protocol"].as_u64(), Some(2 | 3))
+    {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Main status does not advertise mapped input v2/v3",
+        ))
+    }
+}
 fn parse_event(bytes: &[u8]) -> (u16, u16, i32) {
     let offset = bytes.len() - 8;
     (
@@ -198,6 +230,20 @@ fn set_nonblocking(file: &File) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mini_reads_existing_main_capability_without_environment_forwarding() {
+        for protocol in [2, 3] {
+            assert!(verify_status_capability(&format!(r#"{{"schema":"mister-magik-main-status-v2","command_channel":"ready","input_proxy_protocol":{protocol}}}"#)).is_ok());
+        }
+        for status in [
+            r#"{}"#,
+            r#"{"schema":"mister-magik-main-status-v2","command_channel":"ready","input_proxy_protocol":1}"#,
+            r#"{"schema":"mister-magik-main-status-v2","command_channel":"starting","input_proxy_protocol":2}"#,
+        ] {
+            assert!(verify_status_capability(status).is_err());
+        }
+    }
     #[test]
     fn neutral_start_delivers_first_tap_and_ignores_repeats() {
         let mut keys = KeyState::new([false; 2]);
