@@ -33,12 +33,29 @@ def smoke(
         lambda: not _exists(application, "details-panel"), "details panel did not close"
     )
     one_element(application, "show-launcher").invoke_accessible_default_action()
+    one_element(application, "launcher-input-reset").invoke_accessible_default_action()
     ready = _text_element(application, "launcher-ready")
     _wait(lambda: _value_is(ready, "presented"), "launcher was not latched")
     selection = _text_element(application, "launcher-selection")
     _expect_value(selection, "ARCADE")
     fixtures = _text_element(application, "launcher-fixtures")
     _expect_value(fixtures, "fixture-data")
+    input_source = _text_element(application, "launcher-input-source")
+    _wait(lambda: _value_is(input_source, "main-proxy"), "Main mapped input is not ready")
+    # The native readiness gate verifies Main ownership. Do not run a device
+    # operation inside the test session: it owns the same lifecycle lane.
+    if not agent.status().fields.get("ready"):
+        raise AssertionError("Main-supervised Mini is not ready")
+    # Bounded navigation smoke, including the cyclic boundary in both directions.
+    for direction, expected in [
+        ("right", "SNK NEOGEO"), ("left", "ARCADE"),
+        ("left", "COMPUTERS"), ("right", "ARCADE"),
+        ("right", "SNK NEOGEO"),
+    ]:
+        try:
+            _mini_tap(application, direction, expected)
+        except AssertionError as error:
+            raise AssertionError(f"{error}; metrics={agent.metrics()}") from error
     fields, pixels = agent.capture_framebuffer()
     png, metadata = capture_png(fields, pixels, "raw")
     screenshot_path.write_bytes(png)
@@ -49,6 +66,9 @@ def smoke(
         "screenshot": screenshot_path.name,
         "capture_source": metadata["source"],
         "capture_sequence": metadata["frame_sequence"],
+        "selected_category": selection.accessible_value,
+        "input_source": input_source.accessible_value,
+        "physical_joystick_verified": False,
         **idle,
         **display,
     }
@@ -144,7 +164,7 @@ def validate_window(
         or value["latch_rejections"]
     ):
         raise AssertionError(
-            "physical presentation failed: drops, rejections, or unmatched latches"
+            f"physical presentation failed: drops, rejections, or unmatched latches: {value}"
         )
     return {**value, "physical_evidence_valid": True}
 
@@ -247,6 +267,67 @@ def launcher_smoke(application, screenshot_path, expected_sha256):
         raise AssertionError("launcher input unavailable: " + "; ".join(errors))
     screenshot(application, screenshot_path)
     return {"sha256": expected_sha256, "screenshot": screenshot_path.name}
+
+
+def _mini_tap(application, direction, expected):
+    # Resolve both handles first: walking the remote tree while pressed would
+    # turn a nominal tap into a real hold (and correctly trigger repeat).
+    down = one_element(application, f"launcher-{direction}-down")
+    up = one_element(application, f"launcher-{direction}-up")
+    down.invoke_accessible_default_action()
+    up.invoke_accessible_default_action()
+    selection = _text_element(application, "launcher-selection")
+    ready = _text_element(application, "launcher-ready")
+    try:
+        _wait(lambda: _value_is(selection, expected) and _value_is(ready, "presented"),
+              f"{direction} tap did not latch {expected}")
+    except AssertionError as error:
+        state = _text_element(application, "launcher-motion-state").accessible_value
+        target = _text_element(application, "launcher-target").accessible_value
+        raise AssertionError(f"{error}; selection={selection.accessible_value}, ready={ready.accessible_value}, state={state}, target={target}") from error
+
+
+def validate_launcher_motion(metrics, expected_sha256):
+    if metrics.get("sha256") != expected_sha256:
+        raise AssertionError("launcher measurement belongs to another artifact")
+    window = validate_window(metrics.get("window"), instrumented=False, seconds=5)
+    context = metrics.get("context", {})
+    names = ("launcher_owned_vblanks", "launcher_presented_vblanks",
+             "launcher_repeated_vblanks", "launcher_ownership_losses")
+    if (context.get("workload") != "launcher-slide"
+            or context.get("launcher_telemetry_error")
+            or any(type(context.get(name)) is not int or context[name] < 0 for name in names)):
+        raise AssertionError("launcher-specific physical telemetry is unavailable")
+    if (context["launcher_owned_vblanks"] <= 0
+            or context["launcher_owned_vblanks"] != context["launcher_presented_vblanks"] + context["launcher_repeated_vblanks"]
+            or context["launcher_ownership_losses"]):
+        raise AssertionError("launcher physical telemetry is inconsistent")
+    return {**window, **{name: context[name] for name in names},
+            "no_physical_repeats": context["launcher_repeated_vblanks"] == 0}
+
+
+def launcher_motion(application, agent, direction="right"):
+    """Device-clock launcher measurement, separate from the retained Slint demo."""
+    one_element(application, "show-launcher").invoke_accessible_default_action()
+    ready = _text_element(application, "launcher-ready")
+    _wait(lambda: _value_is(ready, "presented"), "launcher was not latched")
+    one_element(application, f"launcher-start-{direction}-motion").invoke_accessible_default_action()
+    # App supplies input through the same controller and chooses both measurement
+    # boundaries. No tree inspection/capture/metrics polling inside the window.
+    time.sleep(7.4)
+    state = _text_element(application, "launcher-measurement")
+    _wait(lambda: _value_is(state, "complete"), "launcher measurement did not settle", timeout=4)
+    time.sleep(0.25)
+    metrics = agent.metrics()
+    evidence = validate_launcher_motion(metrics, agent.expected_sha256)
+    idle = assert_static_idle(agent, agent.expected_sha256)
+    return {
+        **evidence, **idle,
+        "workload": "launcher-slide", "direction": direction,
+        "input": "automation-through-browser", "physical_joystick_verified": False,
+        "sha256": agent.expected_sha256,
+        "pid": metrics.get("pid"),
+    }
 
 
 def _press_key(application, text):

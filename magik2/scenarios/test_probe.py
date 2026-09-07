@@ -1,7 +1,7 @@
 """Consumer scenarios: the same pytest cases assert behavior and retain timings."""
 
 import pytest
-from actions import smoke, motion
+from actions import launcher_motion, motion, smoke
 from magik2.results import append_event
 
 
@@ -28,4 +28,14 @@ def test_motion_profile(application_session):
     append_event(
         run,
         {"phase": "motion", "outcome": "measured", "profile_id": profile_id, **result},
+    )
+
+
+@pytest.mark.parametrize("direction", ["right", "left"])
+def test_launcher_motion(application_session, direction):
+    application, agent, run, profile_id = application_session
+    result = launcher_motion(application, agent, direction)
+    append_event(
+        run,
+        {"phase": "launcher-motion", "outcome": "measured", **result},
     )
