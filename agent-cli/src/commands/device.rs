@@ -185,7 +185,6 @@ pub enum CatalogCommand {
     /// Validate every compact runtime metadata shard on the active installation.
     #[command(name = "metadata-qualification")]
     MetadataQualification(CatalogMetadataQualificationArgs),
-    RomAudit(CatalogRomAuditArgs),
     #[command(name = "neogeo-family-audit")]
     NeoGeoFamilyAudit(CatalogNeoGeoFamilyAuditArgs),
     /// Export exact screenshot identities from one live Catalog V3 system shard.
@@ -201,12 +200,6 @@ pub enum CatalogCommand {
 
 #[derive(Debug, Args)]
 pub struct CatalogMetadataQualificationArgs {
-    #[arg(long)]
-    pub(crate) out: PathBuf,
-}
-
-#[derive(Debug, Args)]
-pub struct CatalogRomAuditArgs {
     #[arg(long)]
     pub(crate) out: PathBuf,
 }
@@ -237,10 +230,22 @@ pub struct CatalogScreenshotQualificationArgs {
 
 #[derive(Debug, Args)]
 pub struct CatalogQueryArgs {
-    #[arg(long)]
+    #[arg(long, value_parser = catalog_database_selector)]
     pub(crate) database: String,
     #[arg(long)]
     pub(crate) sql: String,
+}
+
+fn catalog_database_selector(value: &str) -> Result<String, String> {
+    let valid = value.strip_prefix("system:").is_some_and(|id| {
+        !id.is_empty()
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    });
+    valid
+        .then(|| value.to_string())
+        .ok_or_else(|| "expected system:ID".to_string())
 }
 
 #[derive(Debug, Args)]
@@ -491,6 +496,7 @@ mod tests {
     #[test]
     fn retired_catalog_experiments_are_not_parseable() {
         for command in [
+            "rom-audit",
             "fast-five-prototype",
             "fast-five-c64-experiments",
             "fast-five-experiments",
@@ -518,14 +524,38 @@ mod tests {
             vec!["inspect"],
             vec!["cores"],
             vec!["metadata-qualification", "--out", "report.json"],
-            vec!["rom-audit", "--out", "report.json"],
             vec!["neogeo-family-audit", "--out", "report.json"],
             vec!["screenshots", "--system", "arcade", "--out", "report.tsv"],
             vec!["screenshot-qualification", "--out-dir", "reports"],
-            vec!["query", "--database", "catalog", "--sql", "SELECT 1"],
+            vec!["query", "--database", "system:arcade", "--sql", "SELECT 1"],
             vec!["purge", "--attended", "--reboot"],
         ] {
             assert!(TestCli::try_parse_from(["test", "catalog"].into_iter().chain(args)).is_ok());
+        }
+    }
+
+    #[test]
+    fn retired_and_malformed_catalog_database_selectors_are_rejected() {
+        for selector in [
+            "registry",
+            "library",
+            "system:",
+            "system:../arcade",
+            "system:arcade/other",
+        ] {
+            assert!(
+                TestCli::try_parse_from([
+                    "test",
+                    "catalog",
+                    "query",
+                    "--database",
+                    selector,
+                    "--sql",
+                    "SELECT 1",
+                ])
+                .is_err(),
+                "{selector}"
+            );
         }
     }
 

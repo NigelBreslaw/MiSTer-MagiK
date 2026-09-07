@@ -140,8 +140,6 @@ mod controller_setup_input_session;
 #[allow(dead_code)]
 mod crt_backdrop_controller;
 mod crt_trial_loop;
-#[cfg(mister_experiments)]
-mod experiments;
 pub(crate) mod latch_v5_qualification;
 #[allow(dead_code)]
 mod launch_handoff_session;
@@ -204,11 +202,6 @@ use catalog_worker::*;
 #[cfg(not(mister_ui_scope_launcher))]
 use controller_loop::*;
 use crt_trial_loop::*;
-#[cfg(mister_experiments)]
-use experiments::effects::{
-    run_camera_effects_loop, run_raster_effects_loop, run_sprite_effects_loop,
-    run_text_effects_loop, run_transition_effects_loop,
-};
 use latch_v5_qualification::*;
 use launch_handoff_session::*;
 use launcher_automation::*;
@@ -271,16 +264,6 @@ fn screen_label(screen: Screen) -> &'static str {
 
 pub const UI_SCENES: &[&str] = &[
     "launcher",
-    #[cfg(mister_experiments)]
-    "camera-effects",
-    #[cfg(mister_experiments)]
-    "sprite-effects",
-    #[cfg(mister_experiments)]
-    "text-effects",
-    #[cfg(mister_experiments)]
-    "raster-effects",
-    #[cfg(mister_experiments)]
-    "transition-effects",
     #[cfg(not(mister_ui_scope_launcher))]
     "controller_test",
     "crt_probe", // Bounded attended slot diagnostics; never a production launcher mode.
@@ -340,31 +323,6 @@ pub fn print_effects() {
             crate::ui_logln!("  {w}x{h}");
         }
     }
-}
-
-#[cfg(mister_experiments)]
-pub fn print_camera_effects() {
-    experiments::effects::print_camera_effects();
-}
-
-#[cfg(mister_experiments)]
-pub fn print_sprite_effects() {
-    experiments::effects::print_sprite_effects();
-}
-
-#[cfg(mister_experiments)]
-pub fn print_text_effects() {
-    experiments::effects::print_text_effects();
-}
-
-#[cfg(mister_experiments)]
-pub fn print_raster_effects() {
-    experiments::effects::print_raster_effects();
-}
-
-#[cfg(mister_experiments)]
-pub fn print_transition_effects() {
-    experiments::effects::print_transition_effects();
 }
 
 macro_rules! with_scene_app_layout {
@@ -454,35 +412,6 @@ pub fn run_ui(
             crate::ui_errln!("warning: failed to set FPGA audio volume: {e}");
             boot_analytics::event("set_audio_volume_failed", format!("error={e}"));
         }
-    }
-    #[cfg(mister_experiments)]
-    if scene == "camera-effects" {
-        run_camera_effects_loop(secs, &ui, &mut disp);
-        return;
-    }
-
-    #[cfg(mister_experiments)]
-    if scene == "sprite-effects" {
-        run_sprite_effects_loop(secs, &ui, &mut disp);
-        return;
-    }
-
-    #[cfg(mister_experiments)]
-    if scene == "text-effects" {
-        run_text_effects_loop(secs, &ui, &mut disp);
-        return;
-    }
-
-    #[cfg(mister_experiments)]
-    if scene == "raster-effects" {
-        run_raster_effects_loop(secs, &ui, &mut disp);
-        return;
-    }
-
-    #[cfg(mister_experiments)]
-    if scene == "transition-effects" {
-        run_transition_effects_loop(secs, &ui, &mut disp);
-        return;
     }
 
     if scene == "crt_probe" {

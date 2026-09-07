@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const INNER_PROGRESS_BATCH: u64 = 4096;
 static INNER_PROGRESS_UNITS: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) type ProgressCallback<'a> = Option<&'a mut dyn FnMut(&str, &str)>;
 pub const CATALOG_SAFETY_LIMIT_NONRETRYABLE: &str = "catalog-safety-limit-nonretryable";
 
 /// Record that a bounded batch of catalog work completed. The counter is
@@ -224,13 +223,6 @@ impl CatalogProgressDisplay<'_> {
     }
 }
 
-pub(crate) fn report_catalog_progress(progress: &mut ProgressCallback<'_>, event: CatalogProgress) {
-    let display = event.display();
-    if let Some(report) = progress.as_mut() {
-        report(display.title(), display.detail());
-    }
-}
-
 pub fn catalog_progress_percent_from_display(title: &str, detail: &str) -> i32 {
     catalog_progress_percent(CatalogProgressPhase::from_display_title(title), detail)
 }
@@ -438,19 +430,11 @@ mod tests {
     }
 
     #[test]
-    fn legacy_callback_adapter_emits_display_text() {
-        let mut messages = Vec::<(String, String)>::new();
-        let mut callback = |title: &str, detail: &str| {
-            messages.push((title.to_string(), detail.to_string()));
-        };
-        let mut progress: ProgressCallback<'_> = Some(&mut callback);
-
-        report_catalog_progress(&mut progress, CatalogProgress::finding_games_found(50));
-
-        assert_eq!(
-            messages,
-            vec![("Finding games".to_string(), "Games found: 50".to_string())]
-        );
+    fn finding_games_progress_preserves_display_text() {
+        let progress = CatalogProgress::finding_games_found(50);
+        let display = progress.display();
+        assert_eq!(display.title(), "Finding games");
+        assert_eq!(display.detail(), "Games found: 50");
     }
 
     #[test]

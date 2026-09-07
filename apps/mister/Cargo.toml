@@ -93,6 +93,7 @@ ffmpeg-next = { version = "8.1", optional = true, default-features = false, feat
 cc = "1.4.2"
 
 [dev-dependencies]
+mister-magik-catalog = { path = "../../crates/catalog", features = ["io-test-metrics"] }
 swash = { version = "0.2.7", features = ["scale", "render"] }
 
 [features]

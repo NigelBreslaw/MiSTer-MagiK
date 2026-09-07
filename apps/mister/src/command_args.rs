@@ -21,7 +21,6 @@ impl CommandSpec {
 }
 
 pub const CATALOG_INSPECT_COMMAND: &str = "catalog-inspect";
-pub const CATALOG_ROM_AUDIT_COMMAND: &str = "catalog-arcade-rom-audit";
 pub const CATALOG_NEOGEO_FAMILY_AUDIT_COMMAND: &str = "catalog-neogeo-family-audit";
 pub const CATALOG_CORPUS_INVENTORY_COMMAND: &str = "catalog-corpus-inventory";
 pub const CATALOG_REGISTRY_REPORT_COMMAND: &str = "catalog-registry-report";
@@ -42,16 +41,6 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("preview-transitions", CommandKind::ListOnly),
     #[cfg(mister_experiments)]
     CommandSpec::new("effects", CommandKind::Fpga),
-    #[cfg(mister_experiments)]
-    CommandSpec::new("camera-effects", CommandKind::ListOnly),
-    #[cfg(mister_experiments)]
-    CommandSpec::new("sprite-effects", CommandKind::ListOnly),
-    #[cfg(mister_experiments)]
-    CommandSpec::new("text-effects", CommandKind::ListOnly),
-    #[cfg(mister_experiments)]
-    CommandSpec::new("raster-effects", CommandKind::ListOnly),
-    #[cfg(mister_experiments)]
-    CommandSpec::new("transition-effects", CommandKind::ListOnly),
     #[cfg(mister_experiments)]
     CommandSpec::new("effect-bench", CommandKind::Fpga),
     #[cfg(feature = "diagnostics")]
@@ -83,17 +72,13 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("pmu-probe", CommandKind::PreFpga),
     CommandSpec::new("pmu-profile", CommandKind::PreFpga),
     CommandSpec::new("search-bench", CommandKind::PreFpga),
-    CommandSpec::new("rom-identity-bench", CommandKind::PreFpga),
     CommandSpec::new(CATALOG_CORPUS_INVENTORY_COMMAND, CommandKind::PreFpga),
     CommandSpec::new("media-bench-download", CommandKind::PreFpga),
     #[cfg(feature = "bench-tools")]
     CommandSpec::new("media-bench-save", CommandKind::PreFpga),
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     CommandSpec::new("preview-pack-bench", CommandKind::PreFpga),
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    CommandSpec::new("preview-index-refresh-bench", CommandKind::PreFpga),
     CommandSpec::new(CATALOG_INSPECT_COMMAND, CommandKind::PreFpga),
-    CommandSpec::new(CATALOG_ROM_AUDIT_COMMAND, CommandKind::PreFpga),
     CommandSpec::new(CATALOG_NEOGEO_FAMILY_AUDIT_COMMAND, CommandKind::PreFpga),
     CommandSpec::new(CATALOG_REGISTRY_REPORT_COMMAND, CommandKind::PreFpga),
     CommandSpec::new(CATALOG_SCREENSHOT_AUDIT_COMMAND, CommandKind::PreFpga),
@@ -101,12 +86,6 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(RUNTIME_METADATA_QUALIFICATION_COMMAND, CommandKind::PreFpga),
     // Internal supervised child. It deliberately does not take the UI process lock.
     CommandSpec::new(CATALOG_WORKER_COMMAND, CommandKind::PreFpga),
-    #[cfg(feature = "diagnostics")]
-    CommandSpec::new("hbmame-metadata-from-library", CommandKind::PreFpga),
-    #[cfg(feature = "diagnostics")]
-    CommandSpec::new("library-scan-bench", CommandKind::Fpga),
-    #[cfg(feature = "bench-tools")]
-    CommandSpec::new("launch-prep-bench", CommandKind::PreFpga),
     #[cfg(feature = "bench-tools")]
     CommandSpec::new("framebuffer-stream-scalar-bench", CommandKind::PreFpga),
 ];
@@ -182,10 +161,6 @@ pub fn requires_process_exclusive(command: &str) -> bool {
             | "reset-delete-screenshot-packs"
             | "media-bench-save"
             | "preview-pack-bench"
-            | "preview-index-refresh-bench"
-            | "hbmame-metadata-from-library"
-            | "library-scan-bench"
-            | "launch-prep-bench"
     )
 }
 
@@ -278,7 +253,6 @@ mod tests {
         assert!(is_known_command("pmu-probe"));
         assert!(is_known_command("pmu-profile"));
         assert!(is_known_command("search-bench"));
-        assert!(is_known_command("rom-identity-bench"));
         assert!(is_known_command("media-bench-download"));
         assert!(is_known_command("read"));
         assert!(is_known_command("fpga-latch-report"));
@@ -288,15 +262,29 @@ mod tests {
             "vsync-probe",
             "cpu-profile-smoke",
             "input",
-            "hbmame-metadata-from-library",
-            "library-scan-bench",
             "preview-pack-bench",
-            "preview-index-refresh-bench",
             "framebuffer-stream-scalar-bench",
         ] {
             assert!(!is_known_command(command), "{command}");
         }
-        for command in ["media-bench-save", "launch-prep-bench", "audio-tone"] {
+    }
+
+    #[test]
+    fn retired_catalog_commands_are_rejected_under_every_feature_set() {
+        for command in [
+            "library-scan-bench",
+            "preview-index-refresh-bench",
+            "hbmame-metadata-from-library",
+            "library-sql",
+            "catalog-arcade-rom-audit",
+            "launch-prep-bench",
+            "rom-identity-bench",
+            "camera-effects",
+            "sprite-effects",
+            "text-effects",
+            "raster-effects",
+            "transition-effects",
+        ] {
             assert!(!is_known_command(command), "{command}");
         }
     }
@@ -314,10 +302,7 @@ mod tests {
             "fpga-latch-report",
             "input",
             "catalog-inspect",
-            "hbmame-metadata-from-library",
-            "library-scan-bench",
             "preview-pack-bench",
-            "preview-index-refresh-bench",
             RUNTIME_METADATA_QUALIFICATION_COMMAND,
         ] {
             assert!(is_known_command(command), "{command}");
@@ -355,10 +340,8 @@ mod tests {
         for command in [
             "media-bench-download",
             "media-bench-save",
-            "launch-prep-bench",
             "fpga-latch-report",
             "preview-pack-bench",
-            "preview-index-refresh-bench",
         ] {
             assert!(is_known_command(command), "{command}");
         }
@@ -371,11 +354,6 @@ mod tests {
     fn production_command_list_hides_experiments() {
         for command in [
             "preview-transitions",
-            "camera-effects",
-            "sprite-effects",
-            "text-effects",
-            "raster-effects",
-            "transition-effects",
             "effects",
             "effect-bench",
             "experiment-capabilities",
@@ -393,11 +371,6 @@ mod tests {
     fn experiment_command_list_exposes_experiments() {
         for command in [
             "preview-transitions",
-            "camera-effects",
-            "sprite-effects",
-            "text-effects",
-            "raster-effects",
-            "transition-effects",
             "effects",
             "effect-bench",
             "experiment-capabilities",
@@ -406,7 +379,6 @@ mod tests {
         }
         assert_command_kind("experiment-capabilities", CommandKind::ListOnly);
         assert_command_kind("preview-transitions", CommandKind::ListOnly);
-        assert_command_kind("camera-effects", CommandKind::ListOnly);
         assert_command_kind("effects", CommandKind::Fpga);
         assert_command_kind("effect-bench", CommandKind::Fpga);
     }

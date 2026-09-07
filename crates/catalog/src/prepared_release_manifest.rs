@@ -20,7 +20,6 @@ struct ZeroMhzManifest {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ZeroMhzPackage {
-    pub(crate) title: String,
     launcher_path: String,
     pub(crate) payloads: Vec<ZeroMhzPayload>,
 }
@@ -31,7 +30,6 @@ pub(crate) struct ZeroMhzPayload {
 }
 
 struct ZeroMhzIndex {
-    release_id: String,
     packages: Vec<ZeroMhzPackage>,
     by_launcher: HashMap<String, usize>,
 }
@@ -56,7 +54,6 @@ fn zero_mhz_index() -> Option<&'static ZeroMhzIndex> {
                 .map(|(index, package)| (package.launcher_path.to_ascii_lowercase(), index))
                 .collect::<HashMap<_, _>>();
             (by_launcher.len() == manifest.packages.len()).then_some(ZeroMhzIndex {
-                release_id: manifest.release_id,
                 packages: manifest.packages,
                 by_launcher,
             })
@@ -84,10 +81,6 @@ impl ZeroMhzPackage {
     }
 }
 
-pub(crate) fn zero_mhz_release_id() -> Option<&'static str> {
-    zero_mhz_index().map(|index| index.release_id.as_str())
-}
-
 fn relative_to_named_ancestor(path: &Path, name: &str) -> Option<(PathBuf, String)> {
     let ancestor = path.ancestors().find(|ancestor| {
         ancestor
@@ -111,11 +104,12 @@ mod tests {
     #[test]
     fn bundled_0mhz_manifest_is_complete_and_addressable() {
         let index = zero_mhz_index().unwrap();
-        assert_eq!(index.release_id, "internet-archive-0mhz-dos-v0.04");
+        let manifest: ZeroMhzManifest = serde_json::from_slice(ZERO_MHZ_BYTES).unwrap();
+        assert_eq!(manifest.release_id, "internet-archive-0mhz-dos-v0.04");
         assert_eq!(index.packages.len(), 319);
         assert_eq!(index.by_launcher.len(), 319);
         assert!(index.packages.iter().all(|package| {
-            !package.title.is_empty()
+            !package.launcher_relative_path().is_empty()
                 && !package.payloads.is_empty()
                 && package
                     .payloads
@@ -131,6 +125,9 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(launch.storage_root, Path::new("/media/fat"));
-        assert_eq!(launch.package.title, "4D Sports Driving (MT-32)");
+        assert_eq!(
+            launch.package.launcher_relative_path(),
+            "_DOS Games/4D Sports Driving (MT-32).mgl"
+        );
     }
 }

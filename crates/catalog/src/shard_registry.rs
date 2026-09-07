@@ -630,7 +630,7 @@ pub(crate) fn sync_artifact_batch(storage_root: &Path) -> Result<(), RegistryErr
     sync_directory(storage_root)
 }
 
-#[cfg(feature = "builder")]
+#[cfg(all(test, feature = "builder"))]
 pub(crate) fn publish_manifest(
     storage_root: &Path,
     manifest: &CatalogManifest,
@@ -750,6 +750,8 @@ pub fn read_latest_manifest_lazy(
 }
 
 pub fn manifest_slots_present(storage_root: &Path) -> bool {
+    #[cfg(any(test, feature = "io-test-metrics"))]
+    crate::io_test_metrics::record_read();
     [MANIFEST_A, MANIFEST_B]
         .iter()
         .any(|relative| fs::symlink_metadata(storage_root.join(relative)).is_ok())
@@ -763,6 +765,8 @@ fn read_manifest_slots(
     let mut manifests = Vec::new();
     for relative in [PathBuf::from(MANIFEST_A), PathBuf::from(MANIFEST_B)] {
         let path = storage_root.join(&relative);
+        #[cfg(any(test, feature = "io-test-metrics"))]
+        crate::io_test_metrics::record_read();
         if !path.exists() {
             continue;
         }
@@ -868,7 +872,7 @@ fn validate_manifest_system_with_options(
 /// Fully validates one unpublished system entry before it is retained or
 /// adopted into a manifest. Unlike normal manifest reads, this verifies the
 /// stored hashes and reopens each shard to validate its schema and navigation.
-#[cfg(test)]
+#[cfg(all(test, feature = "builder"))]
 pub(crate) fn validate_published_system(
     storage_root: &Path,
     system: &ManifestSystem,
@@ -1306,11 +1310,15 @@ fn regular_file_size(path: &Path, maximum: u64) -> Result<u64, RegistryError> {
 }
 
 fn read_regular_bounded(path: &Path, maximum: usize) -> Result<Vec<u8>, RegistryError> {
+    #[cfg(any(test, feature = "io-test-metrics"))]
+    crate::io_test_metrics::record_read();
     regular_file_size(path, maximum as u64)?;
     fs::read(path).map_err(|error| RegistryError::with("read manifest slot", error))
 }
 
 fn file_checksum(path: &Path) -> Result<String, RegistryError> {
+    #[cfg(any(test, feature = "io-test-metrics"))]
+    crate::io_test_metrics::record_read();
     let mut file = File::open(path)
         .map_err(|error| RegistryError::with("open artifact for checksum", error))?;
     let mut hash = 0xcbf2_9ce4_8422_2325u64;

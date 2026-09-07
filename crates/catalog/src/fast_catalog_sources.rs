@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Independent source adapters for the fast nine-system catalog.
+//! Independent source adapters for the dynamic fast catalog.
 //!
 //! These adapters consume installed files and the dedicated Arcade metadata
 //! contract directly. They never read retired catalog artifacts or scanner state.
@@ -34,7 +34,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 pub const FAST_SOURCE_ADAPTER_VERSION: u32 = 15;
 const PREPARED_SYSTEM_IDS: [&str; 5] = ["arcade", "amiga", "c64", "dos", "x68000"];
@@ -689,13 +689,6 @@ struct ArcadeUpdaterEvidence {
     load_us: u64,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct FastArcadeAuditCandidate {
-    pub title: String,
-    pub launch_ref: String,
-    pub family_id: String,
-}
-
 #[cfg(test)]
 fn scan_arcade(
     storage_root: &Path,
@@ -725,20 +718,6 @@ fn scan_arcade_with_resolver(
     report.family_visible = scan.games.len();
     report.family_variants = scan.variants.len();
     Ok(scan)
-}
-
-pub(crate) fn audit_arcade_candidates(storage_root: &Path) -> Vec<FastArcadeAuditCandidate> {
-    let mut report = FastSourceSystemReport::default();
-    let mut resolver = MachineFamilyResolver::for_storage_root(storage_root).unwrap_or_default();
-    scan_arcade_candidates(storage_root, &mut report, &mut resolver)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|candidate| FastArcadeAuditCandidate {
-            title: candidate.game.title,
-            launch_ref: candidate.game.launch_ref,
-            family_id: candidate.family_id,
-        })
-        .collect()
 }
 
 fn scan_arcade_candidates(
@@ -1265,19 +1244,13 @@ fn scan_amiga(
                     .is_some_and(|name| name.contains("amigavision") || name.contains("megaags"))
         })?;
         for archive in archives {
-            let Ok(metadata) = fs::metadata(&archive) else {
+            let Ok(_metadata) = fs::metadata(&archive) else {
                 report.invalid += 1;
                 continue;
             };
             let found = FoundFile {
                 path: archive,
                 ext: "7z".to_string(),
-                size: metadata.len(),
-                mtime_secs: metadata
-                    .modified()
-                    .ok()
-                    .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                    .map_or(0, |duration| duration.as_secs() as i64),
             };
             for (entry_path, kind) in [
                 ("games/Amiga/listings/games.txt", "games"),

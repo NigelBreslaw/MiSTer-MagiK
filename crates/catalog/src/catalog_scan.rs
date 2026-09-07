@@ -7,175 +7,31 @@ use crate::catalog_discovery::{GameDirFact, GameDirHeader};
 use crate::launch_profiles::{
     self, CatalogScanPlan, LaunchProfile, PayloadDisposition, ProfilePathClass,
 };
-use crate::library_db::{
-    self, ArchiveFormat, ArchiveScanStatus, LibraryContainer, LibraryContainerEntry,
-};
+use crate::library_db;
+#[cfg(any(test, feature = "builder"))]
+use crate::library_db::LibraryContainerEntry;
 use crate::namespace_walk::{
-    self, NamespaceEntry, NamespaceEntryKind, NamespaceRootPolicy, NamespaceSignatureCapture,
-    NamespaceWalkStats,
+    self, NamespaceEntryKind, NamespaceRootPolicy, NamespaceSignatureCapture, NamespaceWalkStats,
 };
-use crate::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use std::collections::{BTreeMap, HashSet};
+#[cfg(any(test, feature = "builder"))]
 use std::fs::File;
+#[cfg(any(test, feature = "builder"))]
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::time::Instant;
 
-pub(crate) const DISCOVERY_EVENT_BUFFER: usize = 8192;
 /// A runtime directory normally contributes a small set of candidate records.
 /// Keep that transient buffer bounded; the overflow path deliberately re-walks
 /// just that directory after its facts have selected a profile, rather than
 /// dropping a possible game.
 const MAX_RUNTIME_DIRECTORY_BUFFERED_FILES: usize = 65_536;
+#[cfg(any(test, feature = "builder"))]
 const ZIP_CENTRAL_DIRECTORY_BUFFER_BYTES: usize = 64 * 1024;
+#[cfg(any(test, feature = "builder"))]
 const ZIP_CENTRAL_DIRECTORY_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
+#[cfg(any(test, feature = "builder"))]
 const ZIP_SKIP_BUFFER_BYTES: usize = 4 * 1024;
-const SLOWEST_WALK_TARGETS: usize = 10;
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct SlowWalkTarget {
-    pub(crate) path: String,
-    pub(crate) elapsed_us: u64,
-    pub(crate) dirs: usize,
-    pub(crate) files: usize,
-    pub(crate) candidates: usize,
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct NamespaceRouteAttribution {
-    pub(crate) targets: usize,
-    pub(crate) aborted_targets: usize,
-    pub(crate) dirs: usize,
-    pub(crate) files: usize,
-    pub(crate) candidates: usize,
-    pub(crate) target_elapsed_us: u64,
-    pub(crate) producer_us: u64,
-    pub(crate) sync_send_us: u64,
-    pub(crate) sync_sends: usize,
-    pub(crate) sync_slow_sends: usize,
-    pub(crate) sync_send_max_us: u64,
-    pub(crate) dir_opens: usize,
-    pub(crate) read_calls: usize,
-    pub(crate) read_bytes: u64,
-    pub(crate) type_stats: usize,
-    pub(crate) captured_entries: usize,
-    pub(crate) peak_buffered_entries: usize,
-    pub(crate) peak_buffered_bytes: usize,
-    pub(crate) buffer_allocations: usize,
-    pub(crate) fallback_count: usize,
-    pub(crate) restart_count: usize,
-    pub(crate) backends: BTreeMap<String, usize>,
-    pub(crate) fallbacks: BTreeMap<String, usize>,
-    pub(crate) slowest_targets: Vec<SlowWalkTarget>,
-}
-
-impl NamespaceRouteAttribution {
-    fn record(&mut self, path: &Path, stats: &WalkTargetStats) {
-        self.targets = self.targets.saturating_add(1);
-        self.aborted_targets = self
-            .aborted_targets
-            .saturating_add(usize::from(stats.aborted));
-        self.dirs = self.dirs.saturating_add(stats.dirs);
-        self.files = self.files.saturating_add(stats.files);
-        self.candidates = self.candidates.saturating_add(stats.candidates);
-        self.target_elapsed_us = self.target_elapsed_us.saturating_add(stats.elapsed_us);
-        self.dir_opens = self.dir_opens.saturating_add(stats.namespace.dir_opens);
-        self.read_calls = self.read_calls.saturating_add(stats.namespace.read_calls);
-        self.read_bytes = self.read_bytes.saturating_add(stats.namespace.read_bytes);
-        self.type_stats = self.type_stats.saturating_add(stats.namespace.type_stats);
-        self.captured_entries = self
-            .captured_entries
-            .saturating_add(stats.namespace.captured_entries);
-        self.peak_buffered_entries = self
-            .peak_buffered_entries
-            .max(stats.namespace.peak_buffered_entries);
-        self.peak_buffered_bytes = self
-            .peak_buffered_bytes
-            .max(stats.namespace.peak_buffered_bytes);
-        self.buffer_allocations = self
-            .buffer_allocations
-            .saturating_add(stats.namespace.buffer_allocations);
-        self.fallback_count = self
-            .fallback_count
-            .saturating_add(stats.namespace.fallback_count);
-        self.restart_count = self
-            .restart_count
-            .saturating_add(stats.namespace.restart_count);
-        *self
-            .backends
-            .entry(stats.namespace.backend.to_string())
-            .or_default() += 1;
-        if let Some(reason) = stats.namespace.fallback_reason.as_ref() {
-            *self.fallbacks.entry(reason.clone()).or_default() += 1;
-        }
-        self.slowest_targets.push(SlowWalkTarget {
-            path: path.display().to_string(),
-            elapsed_us: stats.elapsed_us,
-            dirs: stats.dirs,
-            files: stats.files,
-            candidates: stats.candidates,
-        });
-        self.slowest_targets.sort_unstable_by(|a, b| {
-            b.elapsed_us
-                .cmp(&a.elapsed_us)
-                .then_with(|| a.path.cmp(&b.path))
-        });
-        self.slowest_targets.truncate(SLOWEST_WALK_TARGETS);
-    }
-
-    fn finish_pipeline(&mut self, producer_us: u64, send: &SyncSendStats) {
-        self.producer_us = producer_us;
-        self.sync_send_us = send.elapsed_us;
-        self.sync_sends = send.sends;
-        self.sync_slow_sends = send.slow_sends;
-        self.sync_send_max_us = send.max_us;
-    }
-
-    pub(crate) fn compact_detail(&self, prefix: &str) -> String {
-        let backends = bounded_map_detail(&self.backends);
-        let fallbacks = bounded_map_detail(&self.fallbacks);
-        let slowest = self
-            .slowest_targets
-            .iter()
-            .map(|target| {
-                format!(
-                    "{}:{}:{}:{}:{}",
-                    target.path.replace([' ', '\t', '\n', ','], "_"),
-                    target.elapsed_us,
-                    target.dirs,
-                    target.files,
-                    target.candidates
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        format!(
-            "{prefix}_targets={} {prefix}_aborted={} {prefix}_dirs={} {prefix}_files={} {prefix}_candidates={} {prefix}_target_us={} {prefix}_producer_us={} {prefix}_send_us={} {prefix}_sends={} {prefix}_slow_sends={} {prefix}_send_max_us={} {prefix}_dir_opens={} {prefix}_reads={} {prefix}_read_bytes={} {prefix}_type_stats={} {prefix}_captured={} {prefix}_peak_buffered_entries={} {prefix}_peak_buffered_bytes={} {prefix}_buffer_allocations={} {prefix}_fallback_count={} {prefix}_restart_count={} {prefix}_backends={backends} {prefix}_fallbacks={fallbacks} {prefix}_slowest={slowest}",
-            self.targets,
-            self.aborted_targets,
-            self.dirs,
-            self.files,
-            self.candidates,
-            self.target_elapsed_us,
-            self.producer_us,
-            self.sync_send_us,
-            self.sync_sends,
-            self.sync_slow_sends,
-            self.sync_send_max_us,
-            self.dir_opens,
-            self.read_calls,
-            self.read_bytes,
-            self.type_stats,
-            self.captured_entries,
-            self.peak_buffered_entries,
-            self.peak_buffered_bytes,
-            self.buffer_allocations,
-            self.fallback_count,
-            self.restart_count,
-        )
-    }
-}
 
 fn bounded_map_detail(values: &BTreeMap<String, usize>) -> String {
     if values.is_empty() {
@@ -192,61 +48,11 @@ fn bounded_map_detail(values: &BTreeMap<String, usize>) -> String {
 pub(crate) struct FoundFile {
     pub(crate) path: PathBuf,
     pub(crate) ext: String,
-    pub(crate) size: u64,
-    pub(crate) mtime_secs: i64,
-}
-
-pub(crate) struct TargetFingerprint(u64);
-
-impl TargetFingerprint {
-    pub(crate) fn new() -> Self {
-        Self(0xcbf29ce484222325)
-    }
-
-    pub(crate) fn for_descriptor(descriptor: &ScanTargetDescriptor) -> Self {
-        let mut value = Self::new();
-        value.bytes(descriptor.path.to_string_lossy().as_bytes());
-        value.bytes(format!("{:?}", descriptor.kind).as_bytes());
-        value
-    }
-
-    fn bytes(&mut self, bytes: &[u8]) {
-        for byte in bytes {
-            self.0 ^= u64::from(*byte);
-            self.0 = self.0.wrapping_mul(0x100000001b3);
-        }
-        self.0 ^= 0xff;
-        self.0 = self.0.wrapping_mul(0x100000001b3);
-    }
-
-    pub(crate) fn file(&mut self, file: &FoundFile) {
-        self.bytes(file.path.to_string_lossy().as_bytes());
-        self.bytes(file.ext.as_bytes());
-        self.bytes(&file.size.to_le_bytes());
-        self.bytes(&file.mtime_secs.to_le_bytes());
-    }
-
-    pub(crate) fn facts(&mut self, facts: &GameDirFact) {
-        if let Ok(encoded) = serde_json::to_vec(facts) {
-            self.bytes(&encoded);
-        }
-    }
-
-    pub(crate) fn finish(&self) -> String {
-        format!("{:016x}", self.0)
-    }
-}
-
-pub(crate) struct ResumeFingerprintWalk {
-    pub(crate) fingerprints: Vec<(ScanTargetDescriptor, String)>,
-    pub(crate) attribution: NamespaceRouteAttribution,
 }
 
 pub(crate) struct RuntimeDirectoryCandidates {
-    pub(crate) header: GameDirHeader,
     pub(crate) facts: GameDirFact,
     pub(crate) files: Vec<FoundFile>,
-    pub(crate) overflowed: bool,
 }
 
 /// Stable identity and ordering for one target in a planned library scan.
@@ -261,47 +67,11 @@ pub(crate) struct ScanTargetDescriptor {
     pub(crate) kind: ScanTargetKind,
 }
 
-/// Requests that the consumer discard every output produced since the
-/// matching `TargetStart` and wait for the same target to begin again.
-/// Whole-target capture never emits this event.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TargetRestart {
-    pub(crate) descriptor: ScanTargetDescriptor,
-    pub(crate) reason: String,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ScanTargetKind {
     Static,
     Runtime,
     FactsOnly,
-}
-
-pub(crate) struct ArchiveScan {
-    pub(crate) container: LibraryContainer,
-    pub(crate) entries: Vec<LibraryContainerEntry>,
-}
-
-pub(crate) fn precount_discovery_candidates(roots: &[String]) -> (usize, usize, u64) {
-    let started = Instant::now();
-    let rx = discover_files_pipelined(roots.to_vec());
-    let mut candidates = 0usize;
-    let mut dirs = 0usize;
-    while let Ok(event) = rx.recv() {
-        match event {
-            DiscoveryEvent::TargetStart(_)
-            | DiscoveryEvent::TargetRestart(_)
-            | DiscoveryEvent::TargetComplete(_) => {}
-            DiscoveryEvent::File(_) => candidates += 1,
-            DiscoveryEvent::GameDirFacts(_) => {}
-            DiscoveryEvent::RuntimeDirectory(runtime) => candidates += runtime.files.len(),
-            DiscoveryEvent::Done { dirs: count, .. } => {
-                dirs = count;
-                break;
-            }
-        }
-    }
-    (candidates, dirs, started.elapsed().as_micros() as u64)
 }
 
 pub(crate) fn classify_profile_path<'a>(
@@ -341,306 +111,12 @@ fn path_components_str(path: &Path) -> impl Iterator<Item = &str> {
         .filter_map(|component| component.as_os_str().to_str())
 }
 
-pub(crate) enum DiscoveryEvent {
-    TargetStart(ScanTargetDescriptor),
-    #[expect(
-        dead_code,
-        reason = "restart handoff is a neutral prerequisite until the streaming experiment"
-    )]
-    TargetRestart(TargetRestart),
-    File(FoundFile),
-    GameDirFacts(GameDirFact),
-    RuntimeDirectory(RuntimeDirectoryCandidates),
-    TargetComplete(ScanTargetDescriptor),
-    Done {
-        dirs: usize,
-        discover_us: u64,
-        attribution: NamespaceRouteAttribution,
-    },
-}
-
 struct WalkTargetStats {
     dirs: usize,
     files: usize,
     candidates: usize,
     elapsed_us: u64,
-    aborted: bool,
     namespace: NamespaceWalkStats,
-}
-
-/// Aggregate time spent handing producer events to the bounded discovery
-/// channel. This deliberately measures the complete `SyncSender::send` call:
-/// with the channel's fixed capacity, sustained time here is producer
-/// backpressure rather than filesystem enumeration.
-#[derive(Default)]
-struct SyncSendStats {
-    elapsed_us: u64,
-    sends: usize,
-    slow_sends: usize,
-    max_us: u64,
-}
-
-impl SyncSendStats {
-    fn send(&mut self, tx: &mpsc::SyncSender<DiscoveryEvent>, event: DiscoveryEvent) -> bool {
-        let started = Instant::now();
-        let sent = tx.send(event).is_ok();
-        let elapsed_us = started.elapsed().as_micros() as u64;
-        self.elapsed_us = self.elapsed_us.saturating_add(elapsed_us);
-        self.sends = self.sends.saturating_add(1);
-        self.slow_sends = self
-            .slow_sends
-            .saturating_add(usize::from(elapsed_us >= 1_000));
-        self.max_us = self.max_us.max(elapsed_us);
-        sent
-    }
-
-    fn add(&mut self, other: &Self) {
-        self.elapsed_us = self.elapsed_us.saturating_add(other.elapsed_us);
-        self.sends = self.sends.saturating_add(other.sends);
-        self.slow_sends = self.slow_sends.saturating_add(other.slow_sends);
-        self.max_us = self.max_us.max(other.max_us);
-    }
-}
-
-pub(crate) fn discover_files_pipelined(roots: Vec<String>) -> mpsc::Receiver<DiscoveryEvent> {
-    discover_files_pipelined_with_role(roots, None, RuntimeThreadRole::LibraryWalker)
-}
-
-pub(crate) fn discover_files_pipelined_foreground_with_plan(
-    roots: Vec<String>,
-    plan: CatalogScanPlan,
-    excluded_targets: Vec<PathBuf>,
-    prevalidated_targets: Vec<PathBuf>,
-    pruned_paths: Vec<PathBuf>,
-) -> mpsc::Receiver<DiscoveryEvent> {
-    discover_files_pipelined_with_plan_and_phase(
-        roots,
-        plan,
-        excluded_targets,
-        prevalidated_targets,
-        pruned_paths,
-        RuntimeThreadRole::LibraryWalkerForeground,
-        crate::pmu_phase::WALK_EXECUTION,
-    )
-}
-
-pub(crate) fn discover_files_pipelined_with_plan(
-    roots: Vec<String>,
-    plan: CatalogScanPlan,
-    excluded_targets: Vec<PathBuf>,
-    prevalidated_targets: Vec<PathBuf>,
-    pruned_paths: Vec<PathBuf>,
-    role: RuntimeThreadRole,
-) -> mpsc::Receiver<DiscoveryEvent> {
-    discover_files_pipelined_with_plan_and_phase(
-        roots,
-        plan,
-        excluded_targets,
-        prevalidated_targets,
-        pruned_paths,
-        role,
-        crate::pmu_phase::WALK_EXECUTION,
-    )
-}
-
-pub(crate) fn fingerprint_resume_targets(
-    roots: Vec<String>,
-    plan: CatalogScanPlan,
-    excluded_targets: Vec<PathBuf>,
-    role: RuntimeThreadRole,
-) -> std::thread::JoinHandle<ResumeFingerprintWalk> {
-    std::thread::Builder::new()
-        .name("library-walker".to_string())
-        .spawn(move || {
-            apply_runtime_thread_policy(role);
-            let _background_scope = (role == RuntimeThreadRole::LibraryWalker)
-                .then(crate::cooperative_work::BackgroundScope::enter);
-            let walk_pmu =
-                mister_magik_perf_events::sampled_span(crate::pmu_phase::WALK_RESUME_VALIDATION);
-            let result = fingerprint_resume_targets_on_worker(&roots, &plan, &excluded_targets);
-            drop(walk_pmu);
-            mister_magik_perf_events::submit_thread_profile("library-walker");
-            result
-        })
-        .expect("spawn resume-validation walker")
-}
-
-fn fingerprint_resume_targets_on_worker(
-    roots: &[String],
-    plan: &CatalogScanPlan,
-    excluded_targets: &[PathBuf],
-) -> ResumeFingerprintWalk {
-    let profiles = plan.base_profiles();
-    let candidate_exts = source_index_extensions(profiles);
-    let targets = scan_targets_for_plan(roots, plan, profiles, excluded_targets);
-    let mut fingerprints = Vec::with_capacity(targets.len());
-    let mut attribution = NamespaceRouteAttribution::default();
-    let producer_started = Instant::now();
-    for (ordinal, target) in targets.into_iter().enumerate() {
-        let descriptor = target.descriptor(ordinal);
-        let mut fingerprint = TargetFingerprint::for_descriptor(&descriptor);
-        let stats = match target {
-            PlannedScanTarget::Static {
-                path,
-                game_dir_header,
-            } => {
-                let (stats, facts) = scan_target_candidates_with_facts(
-                    &path,
-                    profiles,
-                    &candidate_exts,
-                    game_dir_header.as_ref(),
-                    &[],
-                    |file| {
-                        fingerprint.file(&file);
-                        true
-                    },
-                );
-                if let Some(facts) = facts {
-                    fingerprint.facts(&facts);
-                }
-                stats
-            }
-            PlannedScanTarget::Runtime(header) => {
-                let (stats, runtime) = scan_runtime_target_candidates(&header, plan, &[]);
-                fingerprint.facts(&runtime.facts);
-                for file in &runtime.files {
-                    fingerprint.file(file);
-                }
-                stats
-            }
-            PlannedScanTarget::FactsOnly(header) => {
-                let (stats, facts) = scan_game_dir_facts_only(&header);
-                fingerprint.facts(&facts);
-                stats
-            }
-        };
-        attribution.record(&descriptor.path, &stats);
-        report_namespace_target(&descriptor, &stats);
-        if stats.aborted {
-            break;
-        }
-        fingerprints.push((descriptor, fingerprint.finish()));
-    }
-    attribution.producer_us = producer_started.elapsed().as_micros() as u64;
-    ResumeFingerprintWalk {
-        fingerprints,
-        attribution,
-    }
-}
-
-fn discover_files_pipelined_with_plan_and_phase(
-    roots: Vec<String>,
-    plan: CatalogScanPlan,
-    excluded_targets: Vec<PathBuf>,
-    prevalidated_targets: Vec<PathBuf>,
-    pruned_paths: Vec<PathBuf>,
-    role: RuntimeThreadRole,
-    pmu_phase: &'static str,
-) -> mpsc::Receiver<DiscoveryEvent> {
-    let (tx, rx) = mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
-    std::thread::Builder::new()
-        .name("library-walker".to_string())
-        .spawn(move || {
-            apply_runtime_thread_policy(role);
-            let _background_scope = (role == RuntimeThreadRole::LibraryWalker)
-                .then(crate::cooperative_work::BackgroundScope::enter);
-            let t = Instant::now();
-            let walk_pmu = mister_magik_perf_events::sampled_span(pmu_phase);
-            let (dirs, attribution) = walk_index_candidates_with_plan(
-                &roots,
-                &plan,
-                &excluded_targets,
-                &prevalidated_targets,
-                &pruned_paths,
-                &tx,
-            );
-            drop(walk_pmu);
-            mister_magik_perf_events::submit_thread_profile("library-walker");
-            let _ = tx.send(DiscoveryEvent::Done {
-                dirs,
-                discover_us: t.elapsed().as_micros() as u64,
-                attribution,
-            });
-        })
-        .expect("spawn library-walker");
-    rx
-}
-
-fn discover_files_pipelined_with_role(
-    roots: Vec<String>,
-    profiles: Option<Vec<LaunchProfile>>,
-    role: RuntimeThreadRole,
-) -> mpsc::Receiver<DiscoveryEvent> {
-    let (tx, rx) = mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
-    std::thread::Builder::new()
-        .name("library-walker".to_string())
-        .spawn(move || {
-            apply_runtime_thread_policy(role);
-            let _background_scope = (role == RuntimeThreadRole::LibraryWalker)
-                .then(crate::cooperative_work::BackgroundScope::enter);
-            let t = Instant::now();
-            let walk_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::WALK);
-            let dirs = discover_files_streaming(&roots, profiles, &tx);
-            drop(walk_pmu);
-            mister_magik_perf_events::submit_thread_profile("library-walker");
-            let _ = tx.send(DiscoveryEvent::Done {
-                dirs,
-                discover_us: t.elapsed().as_micros() as u64,
-                attribution: NamespaceRouteAttribution::default(),
-            });
-        })
-        .expect("spawn library-walker");
-    rx
-}
-
-fn discover_files_streaming(
-    roots: &[String],
-    profiles: Option<Vec<LaunchProfile>>,
-    tx: &mpsc::SyncSender<DiscoveryEvent>,
-) -> usize {
-    walk_index_candidates(roots, profiles, Some(tx))
-}
-
-fn walk_index_candidates(
-    roots: &[String],
-    profiles: Option<Vec<LaunchProfile>>,
-    tx: Option<&mpsc::SyncSender<DiscoveryEvent>>,
-) -> usize {
-    let profiles = match profiles {
-        Some(profiles) => profiles,
-        None => {
-            let profiles_t = Instant::now();
-            let profiles = launch_profiles::active_profiles_for_roots(roots);
-            library_db::report_library_scan_timing(
-                "active_profiles",
-                profiles_t.elapsed().as_micros() as u64,
-                format!("profiles={}", profiles.len()),
-            );
-            profiles
-        }
-    };
-    let candidate_exts = source_index_extensions(&profiles);
-    let targets = scan_targets_for_roots(roots, &profiles);
-    library_db::report_library_scan_timing(
-        "walk_targets",
-        0,
-        format!(
-            "roots={} targets={} extensions={}",
-            roots.len(),
-            targets.len(),
-            candidate_exts.len()
-        ),
-    );
-    let mut dirs = 0usize;
-    if let Some(tx) = tx {
-        return walk_index_candidates_streaming(targets, &profiles, &candidate_exts, tx);
-    }
-    for target in targets {
-        let stats = scan_target_candidates(&target, &profiles, &candidate_exts, |_| true);
-        dirs += stats.dirs;
-        report_walk_target(&target, &stats, 0, &SyncSendStats::default());
-    }
-    dirs
 }
 
 enum PlannedScanTarget {
@@ -801,132 +277,6 @@ fn tsv_value(value: &str) -> String {
     value.replace(['\t', '\n', '\r'], "_")
 }
 
-pub(crate) fn planned_scan_target_descriptors(
-    roots: &[String],
-    plan: &CatalogScanPlan,
-    excluded_targets: &[PathBuf],
-) -> Vec<ScanTargetDescriptor> {
-    scan_targets_for_plan(roots, plan, plan.base_profiles(), excluded_targets)
-        .iter()
-        .enumerate()
-        .map(|(ordinal, target)| target.descriptor(ordinal))
-        .collect()
-}
-
-fn walk_index_candidates_with_plan(
-    roots: &[String],
-    plan: &CatalogScanPlan,
-    excluded_targets: &[PathBuf],
-    prevalidated_targets: &[PathBuf],
-    pruned_paths: &[PathBuf],
-    tx: &mpsc::SyncSender<DiscoveryEvent>,
-) -> (usize, NamespaceRouteAttribution) {
-    let profiles = plan.base_profiles();
-    let candidate_exts = source_index_extensions(profiles);
-    let targets = scan_targets_for_plan(roots, plan, profiles, excluded_targets);
-    library_db::report_library_scan_timing(
-        "walk_targets",
-        0,
-        format!(
-            "roots={} targets={} extensions={} runtime_dirs={}",
-            roots.len(),
-            targets.len(),
-            candidate_exts.len(),
-            plan.game_dir_headers().len(),
-        ),
-    );
-    let mut dirs = 0usize;
-    let mut producer_us = 0u64;
-    let mut send_stats = SyncSendStats::default();
-    let mut attribution = NamespaceRouteAttribution::default();
-    for (ordinal, target) in targets.into_iter().enumerate() {
-        let mut target_send_stats = SyncSendStats::default();
-        let descriptor = target.descriptor(ordinal);
-        if !target_send_stats.send(tx, DiscoveryEvent::TargetStart(descriptor.clone())) {
-            break;
-        }
-        if prevalidated_targets
-            .iter()
-            .any(|path| same_library_path(path, &descriptor.path))
-        {
-            library_db::report_library_scan_timing(
-                "walk_target_reused",
-                0,
-                format!(
-                    "ordinal={} path={}",
-                    descriptor.ordinal,
-                    descriptor.path.display()
-                ),
-            );
-            if !target_send_stats.send(tx, DiscoveryEvent::TargetComplete(descriptor)) {
-                send_stats.add(&target_send_stats);
-                break;
-            }
-            send_stats.add(&target_send_stats);
-            continue;
-        }
-        let stats = match target {
-            PlannedScanTarget::Static {
-                path,
-                game_dir_header,
-            } => {
-                let (stats, facts) = scan_target_candidates_with_facts(
-                    &path,
-                    profiles,
-                    &candidate_exts,
-                    game_dir_header.as_ref(),
-                    pruned_paths,
-                    |file| target_send_stats.send(tx, DiscoveryEvent::File(file)),
-                );
-                let in_target_send_us = target_send_stats.elapsed_us;
-                if let Some(facts) = facts
-                    && !target_send_stats.send(tx, DiscoveryEvent::GameDirFacts(facts))
-                {
-                    break;
-                }
-                producer_us =
-                    producer_us.saturating_add(stats.elapsed_us.saturating_sub(in_target_send_us));
-                report_walk_target(&path, &stats, in_target_send_us, &target_send_stats);
-                stats
-            }
-            PlannedScanTarget::Runtime(header) => {
-                let (stats, candidates) =
-                    scan_runtime_target_candidates(&header, plan, pruned_paths);
-                if !target_send_stats.send(tx, DiscoveryEvent::RuntimeDirectory(candidates)) {
-                    break;
-                }
-                producer_us = producer_us.saturating_add(stats.elapsed_us);
-                report_walk_target(&header.path, &stats, 0, &target_send_stats);
-                stats
-            }
-            PlannedScanTarget::FactsOnly(header) => {
-                let (stats, facts) = scan_game_dir_facts_only(&header);
-                if !target_send_stats.send(tx, DiscoveryEvent::GameDirFacts(facts)) {
-                    break;
-                }
-                producer_us = producer_us.saturating_add(stats.elapsed_us);
-                report_walk_target(&header.path, &stats, 0, &target_send_stats);
-                stats
-            }
-        };
-        attribution.record(&descriptor.path, &stats);
-        report_namespace_target(&descriptor, &stats);
-        dirs += stats.dirs;
-        if stats.aborted {
-            send_stats.add(&target_send_stats);
-            break;
-        }
-        if !target_send_stats.send(tx, DiscoveryEvent::TargetComplete(descriptor)) {
-            send_stats.add(&target_send_stats);
-            break;
-        }
-        send_stats.add(&target_send_stats);
-    }
-    report_walker_pipeline_breakdown(producer_us, &send_stats);
-    attribution.finish_pipeline(producer_us, &send_stats);
-    (dirs, attribution)
-}
-
 impl PlannedScanTarget {
     fn descriptor(&self, ordinal: usize) -> ScanTargetDescriptor {
         let (path, kind) = match self {
@@ -1002,50 +352,6 @@ fn same_library_path(a: &Path, b: &Path) -> bool {
         .eq_ignore_ascii_case(&b.to_string_lossy())
 }
 
-fn walk_index_candidates_streaming(
-    targets: Vec<PathBuf>,
-    profiles: &[LaunchProfile],
-    candidate_exts: &HashSet<String>,
-    tx: &mpsc::SyncSender<DiscoveryEvent>,
-) -> usize {
-    let mut dirs = 0usize;
-    let mut producer_us = 0u64;
-    let mut send_stats = SyncSendStats::default();
-    for target in targets {
-        let mut target_send_stats = SyncSendStats::default();
-        let stats = scan_target_candidates(&target, profiles, candidate_exts, |file| {
-            target_send_stats.send(tx, DiscoveryEvent::File(file))
-        });
-        dirs += stats.dirs;
-        producer_us = producer_us.saturating_add(
-            stats
-                .elapsed_us
-                .saturating_sub(target_send_stats.elapsed_us),
-        );
-        report_walk_target(
-            &target,
-            &stats,
-            target_send_stats.elapsed_us,
-            &target_send_stats,
-        );
-        send_stats.add(&target_send_stats);
-        if stats.aborted {
-            break;
-        }
-    }
-    report_walker_pipeline_breakdown(producer_us, &send_stats);
-    dirs
-}
-
-fn scan_target_candidates(
-    target: &Path,
-    profiles: &[LaunchProfile],
-    candidate_exts: &HashSet<String>,
-    emit: impl FnMut(FoundFile) -> bool,
-) -> WalkTargetStats {
-    scan_target_candidates_with_facts(target, profiles, candidate_exts, None, &[], emit).0
-}
-
 fn scan_target_candidates_with_facts(
     target: &Path,
     profiles: &[LaunchProfile],
@@ -1058,7 +364,6 @@ fn scan_target_candidates_with_facts(
     let mut dirs = 1usize;
     let mut files = 0usize;
     let mut candidates = 0usize;
-    let mut aborted = false;
     let mut nested_directory_seen = false;
     let mut facts = game_dir_header.map(|header| GameDirFact {
         name: header.name.clone(),
@@ -1136,16 +441,12 @@ fn scan_target_candidates_with_facts(
             if !is_index_candidate(profiles, p, &ext) {
                 return true;
             }
-            let (size, mtime_secs) = candidate_signature_for_namespace_entry(entry, &ext);
             let file = FoundFile {
                 path: p.to_path_buf(),
                 ext,
-                size,
-                mtime_secs,
             };
             candidates += 1;
             if !emit(file) {
-                aborted = true;
                 return false;
             }
             true
@@ -1158,7 +459,6 @@ fn scan_target_candidates_with_facts(
             files,
             candidates,
             elapsed_us: target_t.elapsed().as_micros() as u64,
-            aborted,
             namespace: namespace_stats,
         },
         facts.map(|mut facts| {
@@ -1247,12 +547,9 @@ fn scan_runtime_target_candidates(
                     payload_extensions.insert(ext.clone());
                 }
             }
-            let (size, mtime_secs) = candidate_signature_for_namespace_entry(entry, &ext);
             let file = FoundFile {
                 path: path.to_path_buf(),
                 ext,
-                size,
-                mtime_secs,
             };
             shallow_files.push(file);
             true
@@ -1283,14 +580,11 @@ fn scan_runtime_target_candidates(
                 files: files_seen,
                 candidates: 0,
                 elapsed_us: target_t.elapsed().as_micros() as u64,
-                aborted: false,
                 namespace: namespace_stats,
             },
             RuntimeDirectoryCandidates {
-                header: header.clone(),
                 facts,
                 files: Vec::new(),
-                overflowed: false,
             },
         );
     };
@@ -1326,12 +620,9 @@ fn scan_runtime_target_candidates(
                     .and_then(|value| value.to_str())
                     .unwrap_or("")
                     .to_ascii_lowercase();
-                let (size, mtime_secs) = candidate_signature_for_namespace_entry(entry, &ext);
                 let file = FoundFile {
                     path: path.to_path_buf(),
                     ext,
-                    size,
-                    mtime_secs,
                 };
                 push_runtime_candidate(
                     &mut files,
@@ -1350,7 +641,6 @@ fn scan_runtime_target_candidates(
         files: files_seen,
         candidates: files.len(),
         elapsed_us: target_t.elapsed().as_micros() as u64,
-        aborted: false,
         namespace: namespace_stats,
     };
     library_db::report_library_scan_timing(
@@ -1364,15 +654,7 @@ fn scan_runtime_target_candidates(
             overflowed,
         ),
     );
-    (
-        stats,
-        RuntimeDirectoryCandidates {
-            header: header.clone(),
-            facts,
-            files,
-            overflowed,
-        },
-    )
+    (stats, RuntimeDirectoryCandidates { facts, files })
 }
 
 fn push_runtime_candidate(
@@ -1466,7 +748,6 @@ fn scan_game_dir_facts_only(header: &GameDirHeader) -> (WalkTargetStats, GameDir
             files,
             candidates: 0,
             elapsed_us: target_t.elapsed().as_micros() as u64,
-            aborted: false,
             namespace: namespace_stats,
         },
         GameDirFact {
@@ -1482,91 +763,6 @@ fn scan_game_dir_facts_only(header: &GameDirHeader) -> (WalkTargetStats, GameDir
             payload_extensions,
         },
     )
-}
-
-/// Correctness-preserving rare fallback for a runtime directory that exceeded
-/// the in-RAM candidate bound. The normal path never calls this second walk.
-pub(crate) fn collect_runtime_candidates_after_overflow(
-    header: &GameDirHeader,
-    profiles: &[LaunchProfile],
-) -> Vec<FoundFile> {
-    let candidate_exts = source_index_extensions(profiles);
-    let mut files = Vec::new();
-    let stats = scan_target_candidates(&header.path, profiles, &candidate_exts, |file| {
-        files.push(file);
-        true
-    });
-    report_walk_target(&header.path, &stats, 0, &SyncSendStats::default());
-    files
-}
-
-fn report_walk_target(
-    target: &Path,
-    stats: &WalkTargetStats,
-    in_target_send_us: u64,
-    send: &SyncSendStats,
-) {
-    let producer_us = stats.elapsed_us.saturating_sub(in_target_send_us);
-    library_db::report_library_scan_timing(
-        "walk_target",
-        stats.elapsed_us,
-        format!(
-            "path={} dirs={} files={} candidates={} producer_us={} sync_send_us={} sync_sends={} sync_slow_sends={} sync_send_max_us={} namespace_backend={} namespace_entries={} namespace_dir_opens={} namespace_reads={} namespace_bytes={} namespace_type_stats={} namespace_fallback={}",
-            target.display(),
-            stats.dirs,
-            stats.files,
-            stats.candidates,
-            producer_us,
-            send.elapsed_us,
-            send.sends,
-            send.slow_sends,
-            send.max_us,
-            stats.namespace.backend,
-            stats.namespace.captured_entries,
-            stats.namespace.dir_opens,
-            stats.namespace.read_calls,
-            stats.namespace.read_bytes,
-            stats.namespace.type_stats,
-            stats.namespace.fallback_reason.as_deref().unwrap_or("none"),
-        ),
-    );
-}
-
-fn report_namespace_target(descriptor: &ScanTargetDescriptor, stats: &WalkTargetStats) {
-    crate::catalog_logln!(
-        "catalog_namespace_target_tsv\tordinal={}\tfirst_entry_us={}\tfinal_entry_us={}\tproducer_complete_us={}\tbuffered_entries={}\tbuffered_bytes={}\tbuffer_allocations={}\tfallbacks={}\trestarts={}\tbackend={}\tpath={}",
-        descriptor.ordinal,
-        stats.namespace.first_entry_us.unwrap_or(0),
-        stats.namespace.final_entry_us.unwrap_or(0),
-        stats.elapsed_us,
-        stats.namespace.peak_buffered_entries,
-        stats.namespace.peak_buffered_bytes,
-        stats.namespace.buffer_allocations,
-        stats.namespace.fallback_count,
-        stats.namespace.restart_count,
-        stats.namespace.backend,
-        descriptor
-            .path
-            .display()
-            .to_string()
-            .replace(['\t', '\n', '\r', ' '], "_"),
-    );
-}
-
-fn report_walker_pipeline_breakdown(producer_us: u64, send: &SyncSendStats) {
-    library_db::report_library_scan_timing(
-        "walker_producer",
-        producer_us,
-        format!("sync_send_us={} sync_sends={}", send.elapsed_us, send.sends,),
-    );
-    library_db::report_library_scan_timing(
-        "walker_sync_send",
-        send.elapsed_us,
-        format!(
-            "sends={} slow_sends={} max_us={} channel_capacity={}",
-            send.sends, send.slow_sends, send.max_us, DISCOVERY_EVENT_BUFFER,
-        ),
-    );
 }
 
 fn source_index_extensions(profiles: &[LaunchProfile]) -> HashSet<String> {
@@ -1709,57 +905,7 @@ fn is_real_dir(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn candidate_signature_for_namespace_entry(entry: &NamespaceEntry, ext: &str) -> (u64, i64) {
-    if ext.eq_ignore_ascii_case("zip")
-        && let Some(signature) = entry.zip_signature
-    {
-        return signature;
-    }
-    (0, 0)
-}
-
-pub(crate) fn scan_archive_toc(
-    file: &FoundFile,
-    format: ArchiveFormat,
-    profile: &LaunchProfile,
-) -> ArchiveScan {
-    let t = Instant::now();
-    let (status, entries) = match format {
-        ArchiveFormat::Zip => match scan_zip_central_directory(file, profile) {
-            Ok(entries) => (ArchiveScanStatus::Ok, entries),
-            Err(e) => (ArchiveScanStatus::Error(e), Vec::new()),
-        },
-        ArchiveFormat::SevenZip | ArchiveFormat::Lha | ArchiveFormat::Lzh | ArchiveFormat::Rar => {
-            (ArchiveScanStatus::Unsupported, Vec::new())
-        }
-        ArchiveFormat::Chd => (ArchiveScanStatus::HeaderOnly, Vec::new()),
-    };
-    ArchiveScan {
-        container: LibraryContainer {
-            file_path: file.path.display().to_string(),
-            format,
-            size: file.size,
-            mtime_secs: file.mtime_secs,
-            entry_count: entries.len() as u32,
-            scan_status: status,
-            scan_us: t.elapsed().as_micros() as u64,
-        },
-        entries,
-    }
-}
-
-pub(crate) fn scan_container_header(file: &FoundFile, format: ArchiveFormat) -> LibraryContainer {
-    LibraryContainer {
-        file_path: file.path.display().to_string(),
-        format,
-        size: file.size,
-        mtime_secs: file.mtime_secs,
-        entry_count: 0,
-        scan_status: ArchiveScanStatus::HeaderOnly,
-        scan_us: 0,
-    }
-}
-
+#[cfg(any(test, feature = "builder"))]
 pub(crate) fn scan_zip_central_directory(
     file: &FoundFile,
     profile: &LaunchProfile,
@@ -1820,6 +966,7 @@ pub(crate) fn scan_zip_central_directory(
     )
 }
 
+#[cfg(any(test, feature = "builder"))]
 fn scan_zip_central_directory_entries(
     mut central_directory: &mut impl Read,
     cd_size: u64,
@@ -1908,6 +1055,7 @@ fn scan_zip_central_directory_entries(
     Ok(entries)
 }
 
+#[cfg(any(test, feature = "builder"))]
 fn decode_zip64_member_metadata(
     compressed: u32,
     uncompressed: u32,
@@ -1968,6 +1116,7 @@ fn decode_zip64_member_metadata(
     Err("missing ZIP64 member metadata".to_string())
 }
 
+#[cfg(any(test, feature = "builder"))]
 fn discard_zip_bytes(reader: &mut impl Read, mut len: u64) -> Result<(), std::io::Error> {
     let mut scratch = [0u8; ZIP_SKIP_BUFFER_BYTES];
     while len > 0 {
@@ -1978,12 +1127,14 @@ fn discard_zip_bytes(reader: &mut impl Read, mut len: u64) -> Result<(), std::io
     Ok(())
 }
 
+#[cfg(any(test, feature = "builder"))]
 struct ZipCentralDirectoryLocation {
     entries: usize,
     size: u64,
     offset: u64,
 }
 
+#[cfg(any(test, feature = "builder"))]
 fn read_zip64_central_directory_location(
     f: &mut File,
     tail: &[u8],
@@ -2086,123 +1237,9 @@ fn is_arcade_non_game_tree(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game_discovery::DiscoverySourceKind;
     use crate::launch_profiles::{self, ProfilePathClass};
-    use crate::library_db::{BenchConfig, mtime_secs, scan_library};
-    use crate::sqlite_catalog::{load_arcade_catalog_from_sqlite_at, save_sqlite_scan};
     use crate::test_support::*;
-    use std::collections::BTreeSet;
     use std::path::Path;
-    use std::sync::mpsc;
-    use std::time::Duration;
-
-    #[test]
-    fn walker_native_resume_fingerprints_match_event_pipeline() {
-        let root = unique_temp_dir("resume-fingerprint-parity");
-        let arcade = root.join("_Arcade");
-        std::fs::create_dir_all(&arcade).unwrap();
-        std::fs::write(
-            arcade.join("Parity Game.mra"),
-            "<misterromdescription><name>Parity Game</name><setname>parity</setname></misterromdescription>",
-        )
-        .unwrap();
-        let roots = vec![root.display().to_string()];
-        let plan = CatalogScanPlan::for_roots(&roots);
-        let rx = discover_files_pipelined_with_plan_and_phase(
-            roots.clone(),
-            plan.clone(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            RuntimeThreadRole::LibraryWalkerForeground,
-            crate::pmu_phase::WALK_RESUME_VALIDATION,
-        );
-        let mut current = None;
-        let mut event_fingerprints = Vec::new();
-        while let Ok(event) = rx.recv() {
-            match event {
-                DiscoveryEvent::TargetStart(descriptor) => {
-                    current = Some((
-                        descriptor.clone(),
-                        TargetFingerprint::for_descriptor(&descriptor),
-                    ));
-                }
-                DiscoveryEvent::TargetRestart(restart) => {
-                    current = Some((
-                        restart.descriptor.clone(),
-                        TargetFingerprint::for_descriptor(&restart.descriptor),
-                    ));
-                }
-                DiscoveryEvent::File(file) => current.as_mut().unwrap().1.file(&file),
-                DiscoveryEvent::GameDirFacts(facts) => {
-                    current.as_mut().unwrap().1.facts(&facts);
-                }
-                DiscoveryEvent::RuntimeDirectory(runtime) => {
-                    let fingerprint = &mut current.as_mut().unwrap().1;
-                    fingerprint.facts(&runtime.facts);
-                    for file in &runtime.files {
-                        fingerprint.file(file);
-                    }
-                }
-                DiscoveryEvent::TargetComplete(_) => {
-                    let (descriptor, fingerprint) = current.take().unwrap();
-                    event_fingerprints.push((descriptor.path, fingerprint.finish()));
-                }
-                DiscoveryEvent::Done { .. } => break,
-            }
-        }
-
-        let native = fingerprint_resume_targets(
-            roots,
-            plan,
-            Vec::new(),
-            RuntimeThreadRole::LibraryWalkerForeground,
-        )
-        .join()
-        .unwrap();
-        let native_fingerprints = native
-            .fingerprints
-            .into_iter()
-            .map(|(descriptor, fingerprint)| (descriptor.path, fingerprint))
-            .collect::<Vec<_>>();
-        assert_eq!(native_fingerprints, event_fingerprints);
-        assert_eq!(native.attribution.targets, event_fingerprints.len());
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn background_scanner_pauses_and_resumes_without_losing_discoveries() {
-        let _test_lock = crate::cooperative_work::TEST_LOCK.lock().unwrap();
-        let root = unique_temp_dir("background-scan-gate");
-        let arcade = root.join("_Arcade");
-        std::fs::create_dir_all(&arcade).unwrap();
-        for index in 0..40 {
-            std::fs::write(
-                arcade.join(format!("Game {index}.mra")),
-                format!("<misterromdescription><name>Game {index}</name><setname>game-{index}</setname></misterromdescription>"),
-            )
-            .unwrap();
-        }
-        crate::cooperative_work::set_background_allowed(false);
-        let (started_tx, started_rx) = mpsc::channel();
-        let (done_tx, done_rx) = mpsc::channel();
-        let worker_root = root.clone();
-        let worker = std::thread::spawn(move || {
-            let _scope = crate::cooperative_work::BackgroundScope::enter();
-            started_tx.send(()).unwrap();
-            let cfg = BenchConfig {
-                roots: vec![worker_root.display().to_string()],
-                sqlite_path: worker_root.join("library.sqlite3"),
-            };
-            done_tx.send(scan_library(&cfg).discoveries.len()).unwrap();
-        });
-        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
-        crate::cooperative_work::set_background_allowed(true);
-        assert_eq!(done_rx.recv_timeout(Duration::from_secs(3)).unwrap(), 40);
-        worker.join().unwrap();
-        std::fs::remove_dir_all(root).unwrap();
-    }
 
     #[test]
     fn profile_ignored_support_files_do_not_become_payloads() {
@@ -2218,39 +1255,6 @@ mod tests {
             Some((profile, ProfilePathClass::Ignored { reason: launch_profiles::IgnoreReason::Bios, .. }))
                 if profile.id == "ao486"
         ));
-    }
-
-    #[test]
-    fn atari_2600_shared_core_scan_keeps_distinct_system_and_games() {
-        let root = unique_temp_dir("atari2600-shared-core-scan");
-        install_test_console_core(&root, "Atari7800");
-        std::fs::create_dir_all(root.join("games/Atari2600")).expect("create games");
-        std::fs::write(
-            root.join("_Console/Atari 2600.mgl"),
-            r#"<mistergamedescription><rbf>_Console/Atari7800</rbf><setname>Atari2600</setname></mistergamedescription>"#,
-        )
-        .expect("write descriptor");
-        std::fs::write(root.join("games/Atari2600/Adventure.a26"), b"rom").expect("write game");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-
-        let scan = scan_library(&cfg);
-
-        let profile = scan
-            .profiles
-            .iter()
-            .find(|profile| profile.system_id == "atari2600")
-            .expect("Atari 2600 profile");
-        assert_eq!(
-            profile.core_path.as_deref(),
-            Some("_Console/Atari7800_20260630")
-        );
-        assert!(scan.discoveries.iter().any(|discovery| {
-            discovery.platform_id == "atari2600" && discovery.title == "Adventure"
-        }));
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2271,123 +1275,6 @@ mod tests {
             )
             .is_none()
         );
-    }
-
-    #[test]
-    fn survivability_wild_sd_card_builds_limited_usable_catalog_and_audit() {
-        let root = WildSdCardFixture::new("survivability-wild-sd")
-            .install_console_core("Gameboy")
-            .install_console_core("ColecoVision")
-            .install_console_core("SMS")
-            .install_console_core("NeoGeo")
-            .write_arcade_mra("Puck Man.mra", "Puck Man", "puckman")
-            .write_game("Gameboy", "Tetris.gb", b"gb")
-            .write_game("Gameboy-Sinden", "Camera.gb", b"gb")
-            .write_game("Coleco", "Smurf Rescue.col", b"col")
-            .write_game_zip("SMS", "Packed.zip", &[("Hang On.sms", b"sms")])
-            .write_game("Loose", "Zaxxon.sg", b"sg")
-            .write_game("NotInstalledCore", "Mystery.nes", b"nes")
-            .write_game("Saturn", "boot.rom", b"bios")
-            .write_game(
-                "NeoGeo-CD",
-                "Metal Slug.cue",
-                b"FILE \"Metal Slug.bin\" BINARY",
-            )
-            .write_game("NeoGeo-CD", "Metal Slug.bin", b"track")
-            .write_game("NeoGeo-CD", "neocd.rom", b"bios")
-            .build();
-        let db = root.join("library.sqlite3");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: db.clone(),
-        };
-
-        let scan = scan_library(&cfg);
-        let profile_ids = scan
-            .profiles
-            .iter()
-            .map(|profile| profile.id.as_str())
-            .collect::<Vec<_>>();
-        let unique_profile_ids = profile_ids.iter().copied().collect::<BTreeSet<_>>();
-
-        assert_eq!(
-            profile_ids.len(),
-            unique_profile_ids.len(),
-            "{profile_ids:?}"
-        );
-        assert!(
-            scan.discoveries
-                .iter()
-                .any(|discovery| discovery.platform_id == "gameboy" && discovery.title == "Tetris")
-        );
-        assert!(
-            scan.discoveries
-                .iter()
-                .any(|discovery| discovery.platform_id == "gameboy" && discovery.title == "Camera")
-        );
-        assert!(scan.discoveries.iter().any(|discovery| {
-            discovery.platform_id == "colecovision" && discovery.title == "Smurf Rescue"
-        }));
-        assert!(
-            scan.discoveries
-                .iter()
-                .any(|discovery| discovery.platform_id == "sms" && discovery.title == "Hang On")
-        );
-        assert!(scan.discoveries.iter().any(|discovery| {
-            discovery.platform_id == "neogeo-cd" && discovery.title == "Metal Slug"
-        }));
-        assert!(!scan.discoveries.iter().any(|discovery| {
-            discovery.title.contains("boot")
-                || discovery.title.contains("neocd")
-                || discovery.title.contains("Metal Slug.bin")
-        }));
-        assert!(scan.audit_rows.iter().any(|row| {
-            row.expected_game_dir == "games/Loose"
-                && row.catalog_status == "uncataloged"
-                && row.reason == "ambiguous-alias"
-        }));
-        assert!(scan.audit_rows.iter().any(|row| {
-            row.expected_game_dir == "games/NotInstalledCore"
-                && row.catalog_status == "uncataloged"
-                && row.reason == "no-installed-core"
-        }));
-
-        save_sqlite_scan(&db, &scan).expect("save limited but usable sqlite catalog");
-        let loaded =
-            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
-        let conn = library_db::open_sqlite_read_only(&db).expect("open sqlite");
-        let duplicate_profiles: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM (
-                    SELECT profile_id FROM profiles GROUP BY profile_id HAVING count(*) > 1
-                )",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query duplicate profiles");
-        let launcher_rows_without_games: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM launcher_catalog
-                 LEFT JOIN launch_targets ON launch_targets.launch_id = launcher_catalog.launch_id
-                 LEFT JOIN games ON games.game_key_id = launch_targets.game_key_id
-                 WHERE launch_targets.launch_id IS NULL OR games.game_id IS NULL",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query launcher consistency");
-        let audit_rows: i64 = conn
-            .query_row("SELECT count(*) FROM catalog_audit", [], |row| row.get(0))
-            .expect("query audit rows");
-
-        assert_eq!(duplicate_profiles, 0);
-        assert_eq!(launcher_rows_without_games, 0);
-        assert!(audit_rows >= 2);
-        assert_eq!(loaded.catalog.system_game_count("gameboy"), 2);
-        assert_eq!(loaded.catalog.system_game_count("colecovision"), 1);
-        assert_eq!(loaded.catalog.system_game_count("sms"), 1);
-        assert_eq!(loaded.catalog.system_game_count("neogeo-cd"), 1);
-        assert!(loaded.catalog.system_game_count("arcade") >= 1);
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2464,166 +1351,7 @@ mod tests {
     }
 
     #[test]
-    fn target_streaming_emits_candidates_in_target_order_without_gaps() {
-        let root = unique_temp_dir("target-streaming-order");
-        let nes = root.join("games/NES");
-        let snes = root.join("games/SNES");
-        let gba = root.join("games/GBA");
-        let gbc = root.join("games/GBC");
-        std::fs::create_dir_all(&nes).expect("create nes dir");
-        std::fs::create_dir_all(&snes).expect("create snes dir");
-        std::fs::create_dir_all(&gba).expect("create gba dir");
-        std::fs::create_dir_all(&gbc).expect("create gbc dir");
-        let paths = [
-            nes.join("01-first.nes"),
-            snes.join("02-second.sfc"),
-            gba.join("03-third.gba"),
-            gbc.join("04-fourth.gbc"),
-        ];
-        for path in &paths {
-            std::fs::write(path, "rom").expect("write candidate");
-        }
-        let profiles = launch_profiles::builtin_profiles();
-        let candidate_exts = source_index_extensions(&profiles);
-        let targets = vec![nes, snes, gba, gbc];
-        let (tx, rx) = std::sync::mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
-
-        let dirs = walk_index_candidates_streaming(targets, &profiles, &candidate_exts, &tx);
-        drop(tx);
-        let found = rx
-            .try_iter()
-            .map(|event| match event {
-                DiscoveryEvent::TargetStart(_)
-                | DiscoveryEvent::TargetRestart(_)
-                | DiscoveryEvent::TargetComplete(_) => {
-                    unreachable!("direct walk does not emit planned target boundaries")
-                }
-                DiscoveryEvent::File(file) => file.path,
-                DiscoveryEvent::GameDirFacts(_) => {
-                    unreachable!("direct walk does not collect game-dir facts")
-                }
-                DiscoveryEvent::RuntimeDirectory(_) => {
-                    unreachable!("direct walk does not buffer runtime directories")
-                }
-                DiscoveryEvent::Done { .. } => unreachable!("direct walk does not send done"),
-            })
-            .collect::<Vec<_>>();
-
-        assert_eq!(dirs, 4);
-        assert_eq!(found, paths);
-        let unique = found.iter().collect::<std::collections::HashSet<_>>();
-        assert_eq!(unique.len(), paths.len());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn target_streaming_aborts_when_downstream_closes() {
-        let root = unique_temp_dir("target-streaming-abort");
-        let nes = root.join("games/NES");
-        let snes = root.join("games/SNES");
-        std::fs::create_dir_all(&nes).expect("create nes dir");
-        std::fs::create_dir_all(&snes).expect("create snes dir");
-        std::fs::write(nes.join("01-first.nes"), "rom").expect("write first candidate");
-        std::fs::write(snes.join("02-second.sfc"), "rom").expect("write second candidate");
-        let profiles = launch_profiles::builtin_profiles();
-        let candidate_exts = source_index_extensions(&profiles);
-        let targets = vec![nes, snes];
-        let (tx, rx) = std::sync::mpsc::sync_channel(0);
-        drop(rx);
-
-        let dirs = walk_index_candidates_streaming(targets, &profiles, &candidate_exts, &tx);
-
-        assert_eq!(dirs, 1);
-    }
-
-    #[test]
-    fn planned_scan_brackets_each_target_with_stable_descriptors() {
-        let root = unique_temp_dir("planned-target-boundaries");
-        let arcade = root.join("_Arcade");
-        std::fs::create_dir_all(&arcade).expect("create arcade dir");
-        std::fs::write(arcade.join("game.mra"), "<misterromdescription/>")
-            .expect("write arcade launcher");
-
-        let roots = vec![root.display().to_string()];
-        let plan = CatalogScanPlan::for_roots(&roots);
-        let (tx, rx) = std::sync::mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
-        let (dirs, attribution) =
-            walk_index_candidates_with_plan(&roots, &plan, &[], &[], &[], &tx);
-        drop(tx);
-
-        let mut open = None;
-        let mut completed = Vec::new();
-        for event in rx.try_iter() {
-            match event {
-                DiscoveryEvent::TargetStart(descriptor) => {
-                    assert!(
-                        open.replace(descriptor).is_none(),
-                        "targets must not overlap"
-                    );
-                }
-                DiscoveryEvent::TargetComplete(descriptor) => {
-                    let started = open.take().expect("target completion must have a start");
-                    assert_eq!(descriptor, started);
-                    completed.push(descriptor);
-                }
-                DiscoveryEvent::TargetRestart(_) => {
-                    unreachable!("whole-target capture never restarts")
-                }
-                DiscoveryEvent::File(_)
-                | DiscoveryEvent::GameDirFacts(_)
-                | DiscoveryEvent::RuntimeDirectory(_) => {
-                    assert!(open.is_some(), "target payload must be bracketed");
-                }
-                DiscoveryEvent::Done { .. } => unreachable!("direct planned walk has no done"),
-            }
-        }
-
-        assert!(open.is_none(), "last target must be complete");
-        assert_eq!(attribution.targets, completed.len());
-        assert_eq!(attribution.aborted_targets, 0);
-        assert!(!attribution.slowest_targets.is_empty());
-        assert!(!completed.is_empty());
-        assert_eq!(
-            completed
-                .iter()
-                .map(|target| target.ordinal)
-                .collect::<Vec<_>>(),
-            (0..completed.len()).collect::<Vec<_>>()
-        );
-        assert!(
-            completed
-                .iter()
-                .any(|target| { target.path == arcade && target.kind == ScanTargetKind::Static })
-        );
-        assert!(dirs >= 1);
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn prevalidated_target_keeps_boundaries_without_second_walk() {
-        let root = unique_temp_dir("planned-target-prevalidated");
-        let arcade = root.join("_Arcade");
-        std::fs::create_dir_all(&arcade).expect("create arcade dir");
-        std::fs::write(arcade.join("game.mra"), "<misterromdescription/>")
-            .expect("write arcade launcher");
-        let roots = vec![root.display().to_string()];
-        let plan = CatalogScanPlan::for_roots(&roots);
-        let (tx, rx) = std::sync::mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
-
-        let (dirs, attribution) =
-            walk_index_candidates_with_plan(&roots, &plan, &[], &[arcade], &[], &tx);
-        drop(tx);
-        let events = rx.try_iter().collect::<Vec<_>>();
-
-        assert_eq!(dirs, 0);
-        assert_eq!(attribution.targets, 0);
-        assert_eq!(events.len(), 2);
-        assert!(matches!(events[0], DiscoveryEvent::TargetStart(_)));
-        assert!(matches!(events[1], DiscoveryEvent::TargetComplete(_)));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
+    #[cfg(feature = "builder")]
     fn subtree_pruning_keeps_personal_c64_content_visible() {
         let root = unique_temp_dir("oneload-pruning");
         let c64 = root.join("games/C64");
@@ -2654,139 +1382,6 @@ mod tests {
     }
 
     #[test]
-    fn namespace_attribution_bounds_and_orders_slowest_targets() {
-        let mut attribution = NamespaceRouteAttribution::default();
-        for index in 0..(SLOWEST_WALK_TARGETS + 3) {
-            attribution.record(
-                Path::new(&format!("/games/system-{index}")),
-                &WalkTargetStats {
-                    dirs: index,
-                    files: index * 2,
-                    candidates: index * 3,
-                    elapsed_us: index as u64,
-                    aborted: index == 2,
-                    namespace: NamespaceWalkStats {
-                        backend: "fd-relative",
-                        fallback_reason: (index == 1).then(|| "fixture-fallback".to_string()),
-                        dir_opens: 1,
-                        read_calls: 2,
-                        read_bytes: 3,
-                        type_stats: 4,
-                        captured_entries: 5,
-                        peak_buffered_entries: 6,
-                        peak_buffered_bytes: 7,
-                        buffer_allocations: 8,
-                        fallback_count: usize::from(index == 1),
-                        restart_count: usize::from(index == 1),
-                        errors: 0,
-                        first_entry_us: Some(9),
-                        final_entry_us: Some(10),
-                        target_signature: None,
-                    },
-                },
-            );
-        }
-
-        assert_eq!(attribution.targets, SLOWEST_WALK_TARGETS + 3);
-        assert_eq!(attribution.aborted_targets, 1);
-        assert_eq!(attribution.slowest_targets.len(), SLOWEST_WALK_TARGETS);
-        assert_eq!(
-            attribution.slowest_targets[0].elapsed_us,
-            (SLOWEST_WALK_TARGETS + 2) as u64
-        );
-        assert_eq!(
-            attribution.backends.get("fd-relative"),
-            Some(&(SLOWEST_WALK_TARGETS + 3))
-        );
-        assert_eq!(attribution.fallbacks.get("fixture-fallback"), Some(&1));
-    }
-
-    #[test]
-    fn planned_scan_exclusions_cover_every_target_kind() {
-        let root = unique_temp_dir("planned-target-exclusions");
-        std::fs::create_dir_all(root.join("_Console")).expect("create console cores");
-        std::fs::create_dir_all(root.join("games/NES")).expect("create NES games");
-        std::fs::create_dir_all(root.join("games/SNES")).expect("create SNES games");
-        std::fs::write(root.join("_Console/NES_20260101.rbf"), b"core").expect("write NES core");
-        std::fs::write(root.join("_Console/SNES_20260101.rbf"), b"core").expect("write SNES core");
-        std::fs::write(root.join("games/NES/Game.nes"), b"rom").expect("write NES game");
-        std::fs::write(root.join("games/SNES/Game.sfc"), b"rom").expect("write SNES game");
-        let roots = vec![root.display().to_string()];
-        let plan = CatalogScanPlan::for_roots(&roots);
-        let descriptors = planned_scan_target_descriptors(&roots, &plan, &[root.join("games/NES")]);
-        assert!(
-            descriptors
-                .iter()
-                .all(|target| !same_library_path(&target.path, &root.join("games/NES")))
-        );
-        assert!(
-            descriptors
-                .iter()
-                .any(|target| same_library_path(&target.path, &root.join("games/SNES")))
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn neogeo_zip_entries_generate_virtual_launches_and_system() {
-        let root = unique_temp_dir("neogeo-zip-entries");
-        let neogeo_dir = root.join("games/NEOGEO");
-        std::fs::create_dir_all(&neogeo_dir).expect("create neogeo dir");
-        let zip_path = neogeo_dir.join("Neo Geo Mister FGPA Ultra Pack.zip");
-        write_stored_zip(
-            &zip_path,
-            &[
-                (
-                    "Neo Geo Mister FGPA Ultra Pack/ World A-Z/Neo Bomberman (neobombe).neo",
-                    b"neo",
-                ),
-                ("Neo Geo Mister FGPA Ultra Pack/readme.txt", b"ignore"),
-            ],
-        );
-        let db = root.join("library.sqlite3");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: db.clone(),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert_eq!(scan.containers.len(), 1);
-        assert_eq!(scan.entries.len(), 1);
-        assert!(scan.normal_files.is_empty());
-        let discovery = scan
-            .discoveries
-            .iter()
-            .find(|d| d.source_kind == DiscoverySourceKind::ArchiveEntry)
-            .expect("archive entry discovery");
-        assert_eq!(discovery.platform_id, "neogeo");
-        let member = crate::archive_member::decode_archive_member_ref(&discovery.launch_ref)
-            .expect("decode archive launch ref")
-            .expect("explicit archive member");
-        assert_eq!(member.archive_path, zip_path.display().to_string());
-        assert_eq!(
-            member.member_path,
-            "Neo Geo Mister FGPA Ultra Pack/ World A-Z/Neo Bomberman (neobombe).neo"
-        );
-
-        save_sqlite_scan(&db, &scan).expect("save sqlite");
-        let loaded =
-            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
-
-        assert_eq!(loaded.rows, 1);
-        assert_eq!(loaded.catalog.games[0].system_id.as_ref(), "neogeo");
-        assert!(loaded.catalog.games[0].mra_path.starts_with("magik-plan:"));
-        assert!(
-            loaded
-                .catalog
-                .systems
-                .iter()
-                .any(|system| system.id == "neogeo" && system.count == 1)
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
     fn zip_central_directory_scans_entries_with_extra_and_comment_padding() {
         let root = unique_temp_dir("zip-central-padding");
         std::fs::create_dir_all(&root).expect("create temp root");
@@ -2797,12 +1392,9 @@ mod tests {
             b"extra",
             b"comment",
         );
-        let meta = std::fs::metadata(&zip_path).expect("stat zip");
         let file = FoundFile {
             path: zip_path.clone(),
             ext: "zip".to_string(),
-            size: meta.len(),
-            mtime_secs: mtime_secs(&meta),
         };
         let profiles = launch_profiles::builtin_profiles();
         let profile = profiles
@@ -2826,12 +1418,9 @@ mod tests {
         std::fs::create_dir_all(&root).expect("create temp root");
         let zip_path = root.join("games.zip");
         write_stored_zip64_member(&zip_path, "World A-Z/Neo Bomberman (neobombe).neo", b"neo");
-        let meta = std::fs::metadata(&zip_path).expect("stat zip");
         let file = FoundFile {
             path: zip_path.clone(),
             ext: "zip".to_string(),
-            size: meta.len(),
-            mtime_secs: mtime_secs(&meta),
         };
         let profiles = launch_profiles::builtin_profiles();
         let profile = profiles
@@ -2869,12 +1458,9 @@ mod tests {
             &extra,
             &comment,
         );
-        let meta = std::fs::metadata(&zip_path).expect("stat zip");
         let file = FoundFile {
             path: zip_path.clone(),
             ext: "zip".to_string(),
-            size: meta.len(),
-            mtime_secs: mtime_secs(&meta),
         };
         let profiles = launch_profiles::builtin_profiles();
         let profile = profiles
@@ -2888,42 +1474,6 @@ mod tests {
         assert_eq!(
             entries[1].entry_path,
             "World A-Z/Neo Bomberman (neobombe).neo"
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn scanner_ignores_gamelists_and_screenshot_media_dirs() {
-        let root = unique_temp_dir("ignore-screenshot-media");
-        install_test_console_core(&root, "NES");
-        let nes_dir = root.join("games/NES");
-        let screenshot_dir = nes_dir.join("screenshot");
-        std::fs::create_dir_all(&screenshot_dir).expect("create screenshot dir");
-        std::fs::write(nes_dir.join("Mario.nes"), "rom").expect("write rom");
-        std::fs::write(
-            nes_dir.join("gamelist.xml"),
-            "<game><path>./Mario.nes</path><image>./screenshot/Mario.png</image></game>",
-        )
-        .expect("write gamelist");
-        std::fs::write(screenshot_dir.join("Not A Game.nes"), "media").expect("write media");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert_eq!(scan.normal_files.len(), 1);
-        assert_eq!(scan.discoveries.len(), 1);
-        assert_eq!(
-            scan.normal_files[0].path,
-            nes_dir.join("Mario.nes").display().to_string()
-        );
-        assert!(
-            scan.discoveries
-                .iter()
-                .all(|discovery| !discovery.launch_ref.contains("gamelist.xml")
-                    && !discovery.launch_ref.contains("Not A Game.nes"))
         );
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2958,10 +1508,17 @@ mod tests {
         let candidate_exts = source_index_extensions(&profiles);
         let mut found = Vec::new();
 
-        let stats = scan_target_candidates(&arcade_dir, &profiles, &candidate_exts, |file| {
-            found.push(file.path);
-            true
-        });
+        let (stats, _) = scan_target_candidates_with_facts(
+            &arcade_dir,
+            &profiles,
+            &candidate_exts,
+            None,
+            &[],
+            |file| {
+                found.push(file.path);
+                true
+            },
+        );
 
         assert_eq!(stats.files, 1);
         assert_eq!(stats.candidates, 1);
@@ -2986,12 +1543,9 @@ mod tests {
                 (".metadata-cache/Hidden Game.neo", b"hidden"),
             ],
         );
-        let meta = std::fs::metadata(&zip_path).expect("stat zip");
         let file = FoundFile {
             path: zip_path.clone(),
             ext: "zip".to_string(),
-            size: meta.len(),
-            mtime_secs: mtime_secs(&meta),
         };
         let profiles = launch_profiles::builtin_profiles();
         let profile = profiles
@@ -3003,720 +1557,6 @@ mod tests {
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].entry_path, "Visible/Real Game.neo");
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn scanner_adds_exact_runtime_game_dirs_without_walking_unmatched_dirs() {
-        let root = unique_temp_dir("target-runtime-game-dirs");
-        install_test_console_core(&root, "Gameboy");
-        let gameboy_dir = root.join("games/Gameboy");
-        let unrelated_dir = root.join("games/NotACoreProfile");
-        std::fs::create_dir_all(&gameboy_dir).expect("create gameboy dir");
-        std::fs::create_dir_all(&unrelated_dir).expect("create unrelated dir");
-        std::fs::write(gameboy_dir.join("Tetris.gb"), "rom").expect("write gameboy rom");
-        std::fs::write(unrelated_dir.join("Ghost.nope"), "rom").expect("write unrelated rom");
-        let db = root.join("library.sqlite3");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: db.clone(),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert_eq!(scan.normal_files.len(), 1);
-        assert_eq!(
-            scan.normal_files[0].path,
-            gameboy_dir.join("Tetris.gb").display().to_string()
-        );
-        assert!(
-            scan.profiles
-                .iter()
-                .any(|profile| profile.id == "runtime-gameboy")
-        );
-        assert!(
-            scan.discoveries
-                .iter()
-                .any(|discovery| discovery.platform_id == "gameboy" && discovery.title == "Tetris")
-        );
-        assert!(
-            scan.discoveries
-                .iter()
-                .all(|discovery| !discovery.launch_ref.contains("Ghost.nope"))
-        );
-        assert!(scan.audit_rows.iter().any(|row| {
-            row.expected_game_dir == "games/NotACoreProfile"
-                && row.catalog_status == "uncataloged"
-                && row.reason == "no-installed-core"
-        }));
-
-        save_sqlite_scan(&db, &scan).expect("save sqlite");
-        let conn = library_db::open_sqlite_read_only(&db).expect("open sqlite");
-        let systems: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM systems WHERE system_id='gameboy'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query systems");
-        let games: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM games WHERE system_id='gameboy'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query games");
-        let launcher_rows: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM launcher_catalog WHERE system_id='gameboy'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query launcher");
-        assert_eq!((systems, games, launcher_rows), (0, 1, 0));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn scanner_derives_exact_runtime_extensions_for_unmanifested_cores() {
-        let root = unique_temp_dir("target-runtime-derived-extensions");
-        std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
-        std::fs::write(root.join("_Computer/BBCMicro_20260630.rbf"), b"rbf")
-            .expect("write bbc micro core");
-        let bbc_dir = root.join("games/BBCMicro");
-        std::fs::create_dir_all(&bbc_dir).expect("create bbc micro dir");
-        std::fs::write(bbc_dir.join("Elite.ssd"), "disk").expect("write disk");
-        std::fs::write(bbc_dir.join("metadata.xml"), "xml").expect("write metadata");
-        std::fs::write(bbc_dir.join("cover.jpg"), "jpg").expect("write image");
-        let db = root.join("library.sqlite3");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: db.clone(),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert_eq!(scan.normal_files.len(), 1);
-        assert_eq!(
-            scan.normal_files[0].path,
-            bbc_dir.join("Elite.ssd").display().to_string()
-        );
-        assert!(scan.profiles.iter().any(|profile| {
-            profile.id == "runtime-bbcmicro"
-                && profile.system_id == "bbcmicro"
-                && profile.game_dirs == vec!["BBCMicro".to_string()]
-        }));
-        assert!(
-            scan.discoveries
-                .iter()
-                .any(|discovery| discovery.platform_id == "bbcmicro" && discovery.title == "Elite")
-        );
-        assert!(
-            scan.discoveries
-                .iter()
-                .all(|discovery| !discovery.launch_ref.ends_with("metadata.xml"))
-        );
-
-        save_sqlite_scan(&db, &scan).expect("save sqlite");
-        let conn = library_db::open_sqlite_read_only(&db).expect("open sqlite");
-        let systems: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM systems WHERE system_id='bbcmicro'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query systems");
-        let games: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM games WHERE system_id='bbcmicro'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query games");
-        let launcher_rows: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM launcher_catalog WHERE system_id='bbcmicro'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query launcher");
-        assert_eq!((systems, games, launcher_rows), (0, 1, 0));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn scanner_does_not_create_empty_runtime_system_rows() {
-        let root = unique_temp_dir("target-runtime-empty");
-        install_test_console_core(&root, "Gameboy");
-        std::fs::create_dir_all(root.join("games/Gameboy")).expect("create empty gameboy dir");
-        let db = root.join("library.sqlite3");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: db.clone(),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert!(scan.normal_files.is_empty());
-        assert!(scan.discoveries.is_empty());
-
-        save_sqlite_scan(&db, &scan).expect("save sqlite");
-        let conn = library_db::open_sqlite_read_only(&db).expect("open sqlite");
-        let systems: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM systems WHERE system_id='gameboy'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query systems");
-        let games: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM games WHERE system_id='gameboy'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query games");
-        let launcher_rows: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM launcher_catalog WHERE system_id='gameboy'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query launcher");
-        assert_eq!((systems, games, launcher_rows), (0, 0, 0));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn scanner_catalogs_unique_extension_alias_game_dirs() {
-        let root = unique_temp_dir("target-runtime-coleco-alias");
-        install_test_console_core(&root, "ColecoVision");
-        let coleco_dir = root.join("games/Coleco");
-        std::fs::create_dir_all(&coleco_dir).expect("create coleco alias dir");
-        std::fs::write(coleco_dir.join("Smurf Rescue.col"), "rom").expect("write coleco rom");
-        let db = root.join("library.sqlite3");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: db.clone(),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert_eq!(scan.normal_files.len(), 1);
-        assert!(scan.profiles.iter().any(|profile| {
-            profile.id == "runtime-colecovision" && profile.game_dirs == vec!["Coleco".to_string()]
-        }));
-        assert!(scan.discoveries.iter().any(|discovery| {
-            discovery.platform_id == "colecovision" && discovery.title == "Smurf Rescue"
-        }));
-
-        save_sqlite_scan(&db, &scan).expect("save sqlite");
-        let conn = library_db::open_sqlite_read_only(&db).expect("open sqlite");
-        let systems: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM systems WHERE system_id='colecovision'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query systems");
-        let games: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM games WHERE system_id='colecovision'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query games");
-        let launcher_rows: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM launcher_catalog WHERE system_id='colecovision'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query launcher");
-        assert_eq!((systems, games, launcher_rows), (1, 1, 1));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn scanner_catalogs_spectrum_alias_without_shared_rom_ambiguity() {
-        let root = unique_temp_dir("target-runtime-spectrum-alias");
-        std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
-        install_test_console_core(&root, "ColecoVision");
-        install_test_console_core(&root, "Intellivision");
-        let spectrum_dir = root.join("games/Spectrum");
-        std::fs::create_dir_all(&spectrum_dir).expect("create spectrum dir");
-        std::fs::write(root.join("_Computer/ZX-Spectrum_20260630.rbf"), b"rbf")
-            .expect("write spectrum core");
-        std::fs::write(spectrum_dir.join("Jet Set Willy.tzx"), "tape")
-            .expect("write spectrum tape");
-        std::fs::write(spectrum_dir.join("support.rom"), "bios").expect("write support rom");
-        let db = root.join("library.sqlite3");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: db.clone(),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert!(scan.profiles.iter().any(|profile| {
-            profile.id == "runtime-zx-spectrum"
-                && profile.system_id == "zx-spectrum"
-                && profile.game_dirs == vec!["Spectrum".to_string()]
-        }));
-        assert!(scan.discoveries.iter().any(|discovery| {
-            discovery.platform_id == "zx-spectrum" && discovery.title == "Jet Set Willy"
-        }));
-        assert!(
-            scan.discoveries
-                .iter()
-                .all(|discovery| !discovery.launch_ref.ends_with("support.rom"))
-        );
-
-        save_sqlite_scan(&db, &scan).expect("save sqlite");
-        let conn = library_db::open_sqlite_read_only(&db).expect("open sqlite");
-        let systems: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM systems WHERE system_id='zx-spectrum'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query systems");
-        let games: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM games WHERE system_id='zx-spectrum'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query games");
-        let launcher_rows: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM launcher_catalog WHERE system_id='zx-spectrum'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query launcher");
-        let launch_target: (String, i64, i64) = conn
-            .query_row(
-                "SELECT launch_targets.mount_kind,
-                        launch_targets.mount_index,
-                        launch_targets.delay_secs
-                 FROM launch_targets
-                 JOIN games ON games.game_key_id=launch_targets.game_key_id
-                 WHERE games.system_id='zx-spectrum'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .expect("query spectrum launch target");
-        assert_eq!((systems, games, launcher_rows), (0, 1, 0));
-        assert_eq!(launch_target, ("load-file".to_string(), 1, 1));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn scanner_preserves_runtime_profile_mounts_when_profile_id_is_system_id() {
-        let root = unique_temp_dir("target-runtime-profile-mount");
-        install_test_console_core(&root, "Intellivision");
-        let game_dir = root.join("games/Intellivision");
-        std::fs::create_dir_all(&game_dir).expect("create intellivision dir");
-        std::fs::write(game_dir.join("Armor Battle.int"), "rom").expect("write intellivision rom");
-        let db = root.join("library.sqlite3");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: db.clone(),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert!(scan.profiles.iter().any(|profile| {
-            profile.id == "runtime-intellivision"
-                && profile.system_id == "intellivision"
-                && profile.game_dirs == vec!["Intellivision".to_string()]
-        }));
-
-        save_sqlite_scan(&db, &scan).expect("save sqlite");
-        let conn = library_db::open_sqlite_read_only(&db).expect("open sqlite");
-        let launch_target: (String, i64, i64) = conn
-            .query_row(
-                "SELECT launch_targets.mount_kind,
-                        launch_targets.mount_index,
-                        launch_targets.delay_secs
-                 FROM launch_targets
-                 JOIN games ON games.game_key_id=launch_targets.game_key_id
-                 WHERE games.system_id='intellivision'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .expect("query intellivision launch target");
-
-        assert_eq!(launch_target, ("load-file".to_string(), 1, 1));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn scanner_keeps_ambiguous_extension_aliases_audited_only() {
-        let root = unique_temp_dir("target-runtime-ambiguous-alias");
-        install_test_console_core(&root, "ColecoVision");
-        install_test_console_core(&root, "SMS");
-        let loose_dir = root.join("games/Loose");
-        std::fs::create_dir_all(&loose_dir).expect("create loose dir");
-        std::fs::write(loose_dir.join("Zaxxon.sg"), "rom").expect("write sg rom");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert!(scan.normal_files.is_empty());
-        assert!(scan.discoveries.is_empty());
-        assert!(scan.audit_rows.iter().any(|row| {
-            row.expected_game_dir == "games/Loose"
-                && row.catalog_status == "uncataloged"
-                && row.reason == "ambiguous-alias"
-        }));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn scanner_uses_numeric_core_alias_and_boot_rom_evidence_for_pc8801() {
-        let root = unique_temp_dir("target-runtime-pc8801-alias");
-        install_test_console_core(&root, "PC88");
-        let game_dir = root.join("games/PC8801");
-        std::fs::create_dir_all(&game_dir).expect("create PC8801 dir");
-        std::fs::write(game_dir.join("boot.rom"), "firmware").expect("write boot ROM");
-        std::fs::write(game_dir.join("Ys.7z"), "archive").expect("write PC8801 game");
-        std::fs::write(game_dir.join("Thexder.7z"), "archive").expect("write PC8801 game");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-
-        let scan = scan_library(&cfg);
-
-        let pc88_games = scan
-            .discoveries
-            .iter()
-            .filter(|discovery| discovery.platform_id == "pc88")
-            .map(|discovery| discovery.title.as_str())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(pc88_games, BTreeSet::from(["Thexder", "Ys"]));
-        assert!(
-            scan.discoveries
-                .iter()
-                .all(|discovery| discovery.title != "boot")
-        );
-        assert!(scan.audit_rows.iter().any(|row| {
-            row.expected_game_dir == "games/PC8801"
-                && row.catalog_status == "cataloged"
-                && row.core_id == "PC88"
-        }));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn cartridge_zip_entries_index_as_games() {
-        let root = unique_temp_dir("sms-loose-vs-zip");
-        install_test_console_core(&root, "SMS");
-        let sms_dir = root.join("games/SMS");
-        std::fs::create_dir_all(&sms_dir).expect("create sms dir");
-        std::fs::write(sms_dir.join("Loose.sms"), "rom").expect("write sms rom");
-        write_stored_zip(&sms_dir.join("Packed.zip"), &[("Packed.sms", b"rom")]);
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert_eq!(scan.normal_files.len(), 1);
-        assert_eq!(scan.entries.len(), 1);
-        assert_eq!(scan.discoveries.len(), 2);
-        assert!(
-            scan.discoveries
-                .iter()
-                .all(|discovery| discovery.platform_id == "sms")
-        );
-        assert!(scan.audit_rows.iter().all(|row| {
-            row.expected_game_dir != "games/SMS" || !row.reason.contains("zip-archive-not-indexed")
-        }));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn installed_manifest_core_catalogs_loose_colecovision_games() {
-        let root = unique_temp_dir("colecovision-loose-visible");
-        install_test_console_core(&root, "ColecoVision");
-        let coleco_dir = root.join("games/ColecoVision");
-        std::fs::create_dir_all(&coleco_dir).expect("create colecovision dir");
-        std::fs::write(coleco_dir.join("Mouse Trap.col"), "rom").expect("write coleco rom");
-        let db = root.join("library.sqlite3");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: db.clone(),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert_eq!(scan.normal_files.len(), 1);
-        assert!(
-            scan.profiles
-                .iter()
-                .any(|profile| profile.id == "colecovision")
-        );
-        assert!(scan.discoveries.iter().any(|discovery| {
-            discovery.platform_id == "colecovision" && discovery.title == "Mouse Trap"
-        }));
-        save_sqlite_scan(&db, &scan).expect("save sqlite");
-        let loaded =
-            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
-        assert!(
-            loaded
-                .catalog
-                .systems
-                .iter()
-                .any(|system| system.id == "colecovision" && system.count == 1)
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn installed_manifest_core_catalogs_colecovision_zip_entries() {
-        let root = unique_temp_dir("colecovision-zip-visible");
-        install_test_console_core(&root, "ColecoVision");
-        let coleco_dir = root.join("games/ColecoVision");
-        std::fs::create_dir_all(&coleco_dir).expect("create colecovision dir");
-        write_stored_zip(
-            &coleco_dir.join("Additions.zip"),
-            &[("Venture (USA).col", b"rom"), ("readme.txt", b"ignore")],
-        );
-        let db = root.join("library.sqlite3");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: db.clone(),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert_eq!(scan.normal_files.len(), 0);
-        assert_eq!(scan.entries.len(), 1);
-        assert!(scan.discoveries.iter().any(|discovery| {
-            discovery.source_kind == DiscoverySourceKind::ArchiveEntry
-                && discovery.platform_id == "colecovision"
-                && discovery.title.starts_with("Venture")
-        }));
-        save_sqlite_scan(&db, &scan).expect("save sqlite");
-        let loaded =
-            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
-        assert!(
-            loaded
-                .catalog
-                .systems
-                .iter()
-                .any(|system| system.id == "colecovision" && system.count == 1)
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn installed_manifest_core_with_empty_game_dir_audits_cataloged_zero_games() {
-        let root = unique_temp_dir("colecovision-empty-cataloged");
-        install_test_console_core(&root, "ColecoVision");
-        std::fs::create_dir_all(root.join("games/ColecoVision"))
-            .expect("create empty colecovision dir");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert!(scan.discoveries.is_empty());
-        assert!(scan.audit_rows.iter().any(|row| {
-            row.core_id == "ColecoVision"
-                && row.expected_game_dir == "games/ColecoVision"
-                && row.catalog_status == "cataloged"
-        }));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn manifest_game_dir_without_installed_core_is_support_only_not_launchable() {
-        let root = unique_temp_dir("colecovision-folder-no-core");
-        let coleco_dir = root.join("games/ColecoVision");
-        std::fs::create_dir_all(&coleco_dir).expect("create colecovision dir");
-        std::fs::write(coleco_dir.join("Mouse Trap.col"), "rom").expect("write coleco rom");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert!(scan.normal_files.is_empty());
-        assert!(scan.discoveries.is_empty());
-        assert!(
-            scan.profiles
-                .iter()
-                .all(|profile| profile.id != "colecovision")
-        );
-        assert!(scan.audit_rows.iter().any(|row| {
-            row.core_id == "ColecoVision"
-                && row.expected_game_dir == "games/ColecoVision"
-                && row.catalog_status == "support-only"
-                && row.reason == "no-installed-core"
-        }));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn wonderswan_zip_entries_generate_visible_system() {
-        let root = unique_temp_dir("wonderswan-zip-entries");
-        install_test_console_core(&root, "WonderSwan");
-        let ws_dir = root.join("games/WonderSwan");
-        std::fs::create_dir_all(&ws_dir).expect("create wonderswan dir");
-        write_stored_zip(
-            &ws_dir.join("Packed WonderSwan Games.zip"),
-            &[("Gunpey (Japan).ws", b"rom")],
-        );
-        let db = root.join("library.sqlite3");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: db.clone(),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert_eq!(scan.entries.len(), 1);
-        assert!(scan.discoveries.iter().any(|discovery| {
-            discovery.platform_id == "wonderswan" && discovery.title.contains("Gunpey")
-        }));
-        save_sqlite_scan(&db, &scan).expect("save sqlite");
-        let loaded =
-            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
-        assert!(
-            loaded
-                .catalog
-                .systems
-                .iter()
-                .any(|system| system.id == "wonderswan" && system.count == 1)
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn primary_scan_retains_direct_zip_paths_for_deferred_audit() {
-        let root = unique_temp_dir("scan-retained-direct-zip-audit");
-        let psx_dir = root.join("games/PSX");
-        let nested_dir = psx_dir.join("Nested");
-        let direct_zip = psx_dir.join("Packed PSX Games.zip");
-        let nested_zip = nested_dir.join("Nested PSX Games.zip");
-        std::fs::create_dir_all(&nested_dir).expect("create psx dirs");
-        write_stored_zip(&direct_zip, &[("Game.cue", b"cue")]);
-        write_stored_zip(&nested_zip, &[("Nested.cue", b"cue")]);
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-
-        let scan = scan_library(&cfg);
-        let facts = scan
-            .game_dir_facts
-            .iter()
-            .find(|facts| facts.name == "PSX")
-            .expect("PSX facts");
-
-        assert!(facts.has_zip_files);
-        assert_eq!(facts.direct_zip_paths, vec![direct_zip.clone()]);
-        assert!(scan.audit_rows.iter().any(|row| {
-            row.reason == format!("zip-archive-not-indexed:{}", direct_zip.display())
-        }));
-        assert!(
-            !scan
-                .audit_rows
-                .iter()
-                .any(|row| row.reason.contains("Nested PSX Games.zip"))
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn empty_static_target_with_nested_directory_forces_exact_warm_fallback() {
-        let root = unique_temp_dir("scan-empty-static-nested-probe");
-        std::fs::create_dir_all(root.join("games/NES/Incoming")).expect("create empty nested dir");
-        install_test_console_core(&root, "NES");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-
-        let scan = scan_library(&cfg);
-        let facts = scan
-            .game_dir_facts
-            .iter()
-            .find(|facts| facts.name == "NES")
-            .expect("NES facts");
-
-        assert!(!facts.has_payloadish_files());
-        assert_eq!(
-            facts.signature,
-            crate::catalog_discovery::GameDirSignature::Unavailable
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn scanner_skips_attached_media_only_targets_but_keeps_dos_mgl_launchers() {
-        let root = unique_temp_dir("skip-attached-media-target");
-        install_test_console_core(&root, "NES");
-        let dos_dir = root.join("_DOS Games");
-        let ao486_dir = root.join("games/AO486");
-        let nes_dir = root.join("games/NES");
-        std::fs::create_dir_all(&dos_dir).expect("create dos dir");
-        std::fs::create_dir_all(&ao486_dir).expect("create ao486 dir");
-        std::fs::create_dir_all(&nes_dir).expect("create nes dir");
-        let dos_mgl = dos_dir.join("Doom.mgl");
-        std::fs::write(
-            &dos_mgl,
-            r#"<mistergamelist><rbf>AO486</rbf><file delay="1" type="s">../games/AO486/Doom.vhd</file></mistergamelist>"#,
-        )
-        .expect("write dos mgl");
-        let raw_media = ao486_dir.join("Doom.vhd");
-        std::fs::write(&raw_media, "disk").expect("write raw ao486 media");
-        let nes_rom = nes_dir.join("Mario.nes");
-        std::fs::write(&nes_rom, "rom").expect("write nes rom");
-        let profiles = launch_profiles::builtin_profiles();
-        let targets = scan_targets_for_roots(&[root.display().to_string()], &profiles);
-
-        assert!(targets.iter().any(|target| target == &dos_dir));
-        assert!(targets.iter().any(|target| target == &nes_dir));
-        assert!(!targets.iter().any(|target| target == &ao486_dir));
-
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-        let scan = scan_library(&cfg);
-
-        assert!(scan.discoveries.iter().any(|discovery| discovery.launch_ref
-            == dos_mgl.display().to_string()
-            && discovery.platform_id == "dos"));
-        assert!(
-            scan.discoveries
-                .iter()
-                .any(|discovery| discovery.launch_ref == nes_rom.display().to_string())
-        );
-        assert!(
-            !scan
-                .discoveries
-                .iter()
-                .any(|discovery| discovery.launch_ref == raw_media.display().to_string())
-        );
-        assert!(
-            !scan
-                .normal_files
-                .iter()
-                .any(|file| file.path == raw_media.display().to_string())
-        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -3733,376 +1573,6 @@ mod tests {
 
         assert_eq!(targets, vec![arcade]);
         assert!(!targets.contains(&prepared));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn scanner_discovers_preinstalled_x68000_game_mgls_under_computer() {
-        let root = unique_temp_dir("neon68k-mgl-scan");
-        let launcher_dir = root.join("_Computer/_X68000 Games/Minor Bugs");
-        let payload_dir = root.join("games/X68000/media/Akumajou Dracula");
-        std::fs::create_dir_all(&launcher_dir).expect("create launcher dir");
-        std::fs::create_dir_all(&payload_dir).expect("create payload dir");
-        std::fs::write(payload_dir.join("Akumajou Dracula.hdf"), b"hdf").expect("write HDF");
-        let mgl = launcher_dir.join("Akumajou Dracula.mgl");
-        std::fs::write(
-            &mgl,
-            r#"<mistergamedescription><rbf>_Computer/X68000</rbf><setname>Akumajou</setname><file index="2" path="media/Akumajou Dracula/Akumajou Dracula.hdf"/></mistergamedescription>"#,
-        )
-        .expect("write MGL");
-        let cfg = BenchConfig {
-            roots: vec![root.join("games").display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-
-        let scan = scan_library(&cfg);
-        let discovery = scan
-            .discoveries
-            .iter()
-            .find(|discovery| discovery.launch_ref == mgl.display().to_string())
-            .expect("discover X68000 MGL");
-
-        assert_eq!(discovery.platform_id, "x68000");
-        assert_eq!(discovery.setname.as_deref(), Some("Akumajou"));
-        assert_eq!(discovery.genre.as_deref(), Some("Neon68K / Minor Bugs"));
-        assert_eq!(
-            discovery.prepared.map(|value| value.collection_id),
-            Some(crate::prepared_collections::PreparedCollectionId::Neon68k)
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn scanner_follows_only_neon68k_launcher_root_symlink() {
-        use std::os::unix::fs::symlink;
-
-        let root = unique_temp_dir("neon68k-root-symlink-scan");
-        let launcher_source = root.join("launcher-source");
-        let canonical_group = launcher_source.join("_Keyboard and Mouse");
-        let genre_group = launcher_source.join("_Genre/_Platformer - 2D");
-        let payload_dir = root.join("games/X68000/media/Akumajou Dracula");
-        std::fs::create_dir_all(&canonical_group).expect("create canonical group");
-        std::fs::create_dir_all(&genre_group).expect("create genre alias group");
-        std::fs::create_dir_all(&payload_dir).expect("create payload dir");
-        std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
-        std::fs::write(payload_dir.join("Akumajou Dracula.hdf"), b"hdf").expect("write HDF");
-        let mgl_document = r#"<mistergamedescription><rbf>_Computer/X68000</rbf><setname>Akumajou</setname><file index="2" path="media/Akumajou Dracula/Akumajou Dracula.hdf"/></mistergamedescription>"#;
-        let mgl = canonical_group.join("Akumajou Dracula.mgl");
-        std::fs::write(&mgl, mgl_document).expect("write MGL");
-        std::fs::write(genre_group.join("Akumajou Dracula.mgl"), mgl_document)
-            .expect("write genre alias MGL");
-        let duplicate_dir = root.join("duplicate-collection");
-        std::fs::create_dir_all(&duplicate_dir).expect("create duplicate collection");
-        std::fs::write(duplicate_dir.join("Duplicate.mgl"), b"duplicate")
-            .expect("write duplicate MGL");
-        symlink(&duplicate_dir, launcher_source.join("Collection"))
-            .expect("create nested collection symlink");
-        let launcher_root = root.join("_Computer/_X68000 Games");
-        symlink(&launcher_source, &launcher_root).expect("create launcher root symlink");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-
-        let scan = scan_library(&cfg);
-        let prepared = scan
-            .discoveries
-            .iter()
-            .filter(|discovery| {
-                discovery.prepared.is_some_and(|prepared| {
-                    prepared.collection_id
-                        == crate::prepared_collections::PreparedCollectionId::Neon68k
-                })
-            })
-            .collect::<Vec<_>>();
-
-        assert_eq!(prepared.len(), 1);
-        assert_eq!(
-            prepared[0].launch_ref,
-            launcher_root
-                .join("_Keyboard and Mouse/Akumajou Dracula.mgl")
-                .display()
-                .to_string()
-        );
-        assert!(!scan.discoveries.iter().any(|discovery| {
-            discovery.launch_ref.contains("_Genre")
-                || discovery.launch_ref.contains("Collection/Duplicate.mgl")
-        }));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn scanner_marks_only_primary_oneload64_crts_as_prepared() {
-        let root = unique_temp_dir("oneload64-scan");
-        std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
-        std::fs::write(root.join("_Computer/C64_20260630.rbf"), b"rbf").expect("write core");
-        let install = root.join("games/C64/OneLoad64 Games Collection v4");
-        let multi = install.join("MultiLoad64");
-        let dumps = install.join("Dumps");
-        let alternatives = install.join("AlternativeFormats");
-        for path in [&multi, &dumps, &alternatives] {
-            std::fs::create_dir_all(path).expect("create collection dir");
-        }
-        let primary = install.join("Impossible Mission.crt");
-        let multiload = multi.join("Summer Games.crt");
-        let dump = dumps.join("Dump.crt");
-        for path in [&primary, &multiload, &dump] {
-            std::fs::write(path, b"crt").expect("write CRT");
-        }
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-
-        let scan = scan_library(&cfg);
-        let prepared_paths = scan
-            .discoveries
-            .iter()
-            .filter(|discovery| {
-                discovery.prepared.is_some_and(|prepared| {
-                    prepared.collection_id
-                        == crate::prepared_collections::PreparedCollectionId::OneLoad64
-                })
-            })
-            .map(|discovery| discovery.launch_ref.as_str())
-            .collect::<Vec<_>>();
-
-        assert!(prepared_paths.contains(&primary.to_str().expect("primary path")));
-        assert!(prepared_paths.contains(&multiload.to_str().expect("multiload path")));
-        assert!(!prepared_paths.contains(&dump.to_str().expect("dump path")));
-        save_sqlite_scan(&cfg.sqlite_path, &scan).expect("save catalog");
-        let conn = rusqlite::Connection::open(&cfg.sqlite_path).expect("open catalog");
-        let prepared_count: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM prepared_launch_rows WHERE collection_id='oneload64'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("count prepared launches");
-        assert_eq!(prepared_count, 2);
-        let generic_count: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM launch_provenance WHERE launch_quality='generic'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("count generic launches");
-        assert_eq!(generic_count, 1);
-        let excluded_count: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM prepared_launch_diagnostic_rows WHERE collection_id='oneload64' AND status='excluded'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("count excluded collection files");
-        assert_eq!(excluded_count, 1);
-        let loaded =
-            load_arcade_catalog_from_sqlite_at(&root, &cfg.sqlite_path).expect("load catalog");
-        let game = loaded
-            .catalog
-            .games
-            .iter()
-            .find(|game| game.title.as_ref() == "Impossible Mission")
-            .expect("find primary game");
-        let target = loaded.catalog.launch_target_for_ref(&game.mra_path);
-        let crate::arcade_catalog::LaunchTarget::Structured(plan) = target else {
-            panic!("expected structured OneLoad64 plan");
-        };
-        assert_eq!(plan.mount_kind.as_ref(), "load-file");
-        assert_eq!(plan.mount_index, 1);
-        assert_eq!(plan.payload_path.as_ref(), primary.display().to_string());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn invalid_prepared_mgl_stays_generic_and_records_diagnostic() {
-        let root = unique_temp_dir("invalid-prepared-mgl");
-        let dos = root.join("_DOS Games");
-        std::fs::create_dir_all(&dos).expect("create DOS dir");
-        let mgl = dos.join("Broken Game.mgl");
-        std::fs::write(
-            &mgl,
-            r#"<mistergamedescription><rbf>Minimig</rbf><file path="missing.vhd"/><reset/></mistergamedescription>"#,
-        )
-        .expect("write invalid MGL");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-
-        let scan = scan_library(&cfg);
-        let discovery = scan
-            .discoveries
-            .iter()
-            .find(|discovery| discovery.launch_ref == mgl.display().to_string())
-            .expect("retain generic MGL discovery");
-        assert!(discovery.prepared.is_none());
-        save_sqlite_scan(&cfg.sqlite_path, &scan).expect("save catalog");
-        let conn = rusqlite::Connection::open(&cfg.sqlite_path).expect("open catalog");
-        let diagnostic: (String, String, String) = conn
-            .query_row(
-                "SELECT collection_id,status,reason FROM prepared_launch_diagnostic_rows",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .expect("read prepared launch diagnostic");
-        assert_eq!(diagnostic.0, "0mhz");
-        assert_eq!(diagnostic.1, "invalid");
-        assert!(diagnostic.2.contains("expected AO486"));
-        let loaded = load_arcade_catalog_from_sqlite_at(&root, &cfg.sqlite_path)
-            .expect("load generic fallback");
-        assert!(
-            loaded
-                .catalog
-                .games
-                .iter()
-                .any(|game| game.mra_path.as_ref() == mgl.display().to_string())
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn scanner_prunes_arcade_media_and_cores_but_keeps_arcade_game_mras() {
-        let root = unique_temp_dir("target-arcade-game-dirs");
-        let arcade_dir = root.join("_Arcade");
-        let media_dir = arcade_dir.join("media");
-        let cores_dir = arcade_dir.join("cores");
-        let alternatives_dir = arcade_dir.join("_alternatives/_Alt");
-        std::fs::create_dir_all(&media_dir).expect("create media dir");
-        std::fs::create_dir_all(&cores_dir).expect("create cores dir");
-        std::fs::create_dir_all(&alternatives_dir).expect("create alternatives dir");
-        std::fs::write(
-            arcade_dir.join("Real Game.mra"),
-            "<misterromdescription><name>Real Game</name><setname>realgame</setname></misterromdescription>",
-        )
-        .expect("write real mra");
-        std::fs::write(
-            alternatives_dir.join("Alt Game.mra"),
-            "<misterromdescription><name>Alt Game</name><setname>altgame</setname></misterromdescription>",
-        )
-        .expect("write alt mra");
-        std::fs::write(
-            arcade_dir.join("NeoGeo Pocket.mra"),
-            "<misterromdescription><name>NeoGeo Pocket</name><setname>ngp</setname><rbf>jtngp</rbf></misterromdescription>",
-        )
-        .expect("write system launcher mra");
-        std::fs::write(
-            alternatives_dir.join("NeoGeo Pocket Color.mra"),
-            "<misterromdescription><name>NeoGeo Pocket Color</name><setname>ngpc</setname><rbf>jtngp</rbf></misterromdescription>",
-        )
-        .expect("write alternative system launcher mra");
-        std::fs::write(
-            media_dir.join("Fake Screenshot.mra"),
-            "<misterromdescription><name>Fake Screenshot</name></misterromdescription>",
-        )
-        .expect("write media fake");
-        std::fs::write(cores_dir.join("Core.rbf"), "core").expect("write rbf");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert_eq!(scan.normal_files.len(), 2);
-        let titles = scan
-            .discoveries
-            .iter()
-            .map(|discovery| discovery.title.as_str())
-            .collect::<Vec<_>>();
-        assert!(titles.contains(&"Real Game"));
-        assert!(titles.contains(&"Alt Game"));
-        assert!(!titles.contains(&"Fake Screenshot"));
-        assert!(!titles.contains(&"NeoGeo Pocket"));
-        assert!(!titles.contains(&"NeoGeo Pocket Color"));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn scanner_does_not_follow_symlinked_game_dirs() {
-        let root = unique_temp_dir("ignore-symlinked-game-dir");
-        install_test_console_core(&root, "NES");
-        let outside = unique_temp_dir("symlink-target-games");
-        let games_dir = root.join("games");
-        let linked_nes = games_dir.join("NES");
-        std::fs::create_dir_all(&games_dir).expect("create games dir");
-        std::fs::create_dir_all(&outside).expect("create symlink target");
-        std::fs::write(outside.join("Mario.nes"), "rom").expect("write outside rom");
-        std::os::unix::fs::symlink(&outside, &linked_nes).expect("create linked game dir");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert!(scan.normal_files.is_empty());
-        assert!(scan.discoveries.is_empty());
-        let _ = std::fs::remove_dir_all(root);
-        let _ = std::fs::remove_dir_all(outside);
-    }
-
-    #[test]
-    fn scanner_does_not_follow_symlinked_game_files() {
-        let root = unique_temp_dir("ignore-symlinked-game-file");
-        install_test_console_core(&root, "NES");
-        let outside = unique_temp_dir("symlink-target-file");
-        let nes_dir = root.join("games/NES");
-        std::fs::create_dir_all(&nes_dir).expect("create nes dir");
-        std::fs::create_dir_all(&outside).expect("create symlink target dir");
-        let outside_rom = outside.join("Mario.nes");
-        std::fs::write(&outside_rom, "rom").expect("write outside rom");
-        std::os::unix::fs::symlink(&outside_rom, nes_dir.join("Mario.nes"))
-            .expect("create linked game file");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert!(scan.normal_files.is_empty());
-        assert!(scan.discoveries.is_empty());
-        let _ = std::fs::remove_dir_all(root);
-        let _ = std::fs::remove_dir_all(outside);
-    }
-
-    #[test]
-    fn scanner_ignores_organized_alias_dirs() {
-        let root = unique_temp_dir("ignore-organized-aliases");
-        let arcade_dir = root.join("_Arcade");
-        let organized_dir = arcade_dir.join("_Organized/_1 A-E");
-        std::fs::create_dir_all(&organized_dir).expect("create organized dir");
-        std::fs::write(
-            arcade_dir.join("Diamond Run.mra"),
-            "<misterromdescription><name>Diamond Run</name><setname>diamond</setname></misterromdescription>",
-        )
-        .expect("write source mra");
-        std::fs::write(
-            organized_dir.join("Diamond Run.mra"),
-            "<misterromdescription><name>Diamond Run Alias</name><setname>diamond-alias</setname></misterromdescription>",
-        )
-        .expect("write organized alias mra");
-        let cfg = BenchConfig {
-            roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
-        };
-
-        let scan = scan_library(&cfg);
-
-        assert_eq!(scan.normal_files.len(), 1);
-        assert_eq!(scan.discoveries.len(), 1);
-        assert_eq!(scan.discoveries[0].title, "Diamond Run");
-        assert_eq!(
-            scan.normal_files[0].path,
-            arcade_dir.join("Diamond Run.mra").display().to_string()
-        );
-        assert!(
-            scan.discoveries
-                .iter()
-                .all(|discovery| !discovery.launch_ref.contains("_Organized"))
-        );
         let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -18,8 +18,6 @@ use crate::launcher_taxonomy::{
     LauncherCollection, LauncherMenuItem, LauncherMenuItemKind, LauncherTaxonomy,
     LauncherTaxonomyToken, ROOT_MENU_ID,
 };
-#[cfg(test)]
-use crate::library_db;
 use crate::settings::{MagikSettings, ScreenOrientation};
 use crate::spring_animation::{SpringAnimation, SpringConfiguration};
 use mister_magik_catalog::media_identity::screenshot_reset_deletes_filename;
@@ -6318,11 +6316,11 @@ mod tests {
     }
 
     fn assert_no_catalog_loads_during(action: impl FnOnce()) {
-        library_db::reset_catalog_load_counters();
+        let before = mister_magik_catalog::io_test_metrics::read_attempts();
         action();
         assert_eq!(
-            library_db::catalog_load_counters(),
-            library_db::CatalogLoadCounters::default()
+            mister_magik_catalog::io_test_metrics::read_attempts(),
+            before
         );
     }
 

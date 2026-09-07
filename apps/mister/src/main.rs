@@ -8,6 +8,10 @@ static GLOBAL_ALLOCATOR: mister_magik_fb::allocation_metrics::TrackingAllocator 
     mister_magik_fb::allocation_metrics::TrackingAllocator;
 
 fn main() {
+    #[cfg(feature = "magik2")]
+    if mister_magik_fb::catalog_equivalence::run_requested_child() {
+        return;
+    }
     // Hotpath remains compiled but dormant until an attended benchmark enables
     // its loopback metrics and MCP servers.
     #[cfg(feature = "hotpath")]

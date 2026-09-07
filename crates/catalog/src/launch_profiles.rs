@@ -564,10 +564,6 @@ impl CatalogScanPlan {
         })
     }
 
-    pub(crate) fn installed_cores(&self) -> &[catalog_discovery::InstalledCore] {
-        &self.installed_cores
-    }
-
     pub(crate) fn game_dir_headers(&self) -> &[catalog_discovery::GameDirHeader] {
         &self.game_dir_headers
     }
@@ -646,14 +642,6 @@ pub(crate) fn try_active_profiles_for_roots(
         .map(catalog_discovery::game_dir_payload_facts_for_header_checked)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(plan.finalize_profiles(&game_dirs))
-}
-
-pub(crate) fn active_profiles_for_roots_with_facts(
-    installed_cores: &[catalog_discovery::InstalledCore],
-    game_dirs: &[catalog_discovery::GameDirFact],
-) -> Vec<LaunchProfile> {
-    let base_profiles = base_profiles_for_installed_cores(installed_cores);
-    finalize_profiles_from_facts(&base_profiles, installed_cores, game_dirs)
 }
 
 fn base_profiles_for_installed_cores(
@@ -813,22 +801,6 @@ pub fn generic_manifest_profile_for_core(core_id: &str) -> Option<LaunchProfile>
         .iter()
         .find(|profile| profile.core_name.eq_ignore_ascii_case(&normalized))
         .cloned()
-}
-
-pub(crate) fn profile_for_launch_target_id<'a>(
-    profiles: &'a [LaunchProfile],
-    profile_id: &str,
-) -> Option<&'a LaunchProfile> {
-    profiles
-        .iter()
-        .find(|profile| profile.id.as_str() == profile_id)
-        .or_else(|| {
-            let mut matches = profiles
-                .iter()
-                .filter(|profile| profile.system_id.as_str() == profile_id);
-            let profile = matches.next()?;
-            matches.next().is_none().then_some(profile)
-        })
 }
 
 fn active_profile_game_dirs(profiles: &[LaunchProfile]) -> BTreeSet<String> {
@@ -2361,7 +2333,7 @@ mod tests {
         let plan = CatalogScanPlan::for_roots(&roots);
 
         assert!(
-            plan.installed_cores()
+            plan.installed_cores
                 .iter()
                 .any(|core| core.core_id == "NES")
         );
@@ -2538,11 +2510,6 @@ mod tests {
                 plan.decision
             );
         };
-        let profiles = vec![profile.as_ref().clone()];
-
-        let profile = profile_for_launch_target_id(&profiles, "intellivision")
-            .expect("runtime profile matched by system id");
-
         assert_eq!(profile.id, "runtime-intellivision");
         assert_eq!(profile.system_id, "intellivision");
         assert_eq!(profile.payload_rules[0].mount, MountSpec::load_file(1));

@@ -4,8 +4,6 @@
 //! Launch-ref classification and materialization before Main handoff.
 
 use crate::arcade_catalog::LaunchTarget;
-#[cfg(feature = "bench-tools")]
-use crate::library_db;
 use flate2::read::DeflateDecoder;
 use std::cell::Cell;
 use std::fmt;
@@ -13,8 +11,6 @@ use std::fs::{self, File};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-#[cfg(feature = "bench-tools")]
-use std::time::Instant;
 
 const VIRTUAL_LAUNCH_PREFIX: &str = "magik-plan:";
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
@@ -66,7 +62,7 @@ struct AmigaVisionInstall {
     demos_listing: PathBuf,
 }
 
-#[cfg(any(feature = "bench-tools", test))]
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct LaunchPrepDescriptorStats {
     written: u64,
@@ -623,14 +619,14 @@ fn descriptor_temp_path(path: &Path) -> PathBuf {
     ))
 }
 
-#[cfg(any(feature = "bench-tools", test))]
+#[cfg(test)]
 fn reset_descriptor_stats() {
     DESCRIPTOR_WRITTEN.with(|value| value.set(0));
     DESCRIPTOR_SKIPPED.with(|value| value.set(0));
     DESCRIPTOR_BYTES.with(|value| value.set(0));
 }
 
-#[cfg(any(feature = "bench-tools", test))]
+#[cfg(test)]
 fn descriptor_stats_snapshot() -> LaunchPrepDescriptorStats {
     LaunchPrepDescriptorStats {
         written: DESCRIPTOR_WRITTEN.with(Cell::get),
@@ -703,334 +699,6 @@ fn hex_value(byte: u8) -> Option<u8> {
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
     }
-}
-
-#[cfg(feature = "bench-tools")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LaunchPrepBenchScenario {
-    Warm,
-    Cold,
-    PriorityPrewarm,
-}
-
-#[cfg(feature = "bench-tools")]
-impl LaunchPrepBenchScenario {
-    fn from_arg(value: Option<&str>) -> Self {
-        match value.unwrap_or("warm").trim().to_ascii_lowercase().as_str() {
-            "cold" => Self::Cold,
-            "priority-prewarm" | "prewarm" => Self::PriorityPrewarm,
-            _ => Self::Warm,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Warm => "warm",
-            Self::Cold => "cold",
-            Self::PriorityPrewarm => "priority-prewarm",
-        }
-    }
-}
-
-#[cfg(feature = "bench-tools")]
-#[derive(Clone, Debug)]
-struct LaunchPrepBenchRef {
-    kind: String,
-    launch_ref: String,
-}
-
-#[cfg(any(feature = "bench-tools", all(test, not(target_os = "linux"))))]
-#[derive(Clone, Copy, Debug, Default)]
-struct ProcIoCounters {
-    read_bytes: u64,
-    rchar: u64,
-    syscr: u64,
-    write_bytes: u64,
-    wchar: u64,
-    syscw: u64,
-}
-
-#[cfg(feature = "bench-tools")]
-pub fn run_launch_prep_bench() {
-    let args: Vec<String> = std::env::args().collect();
-    let label = std::env::var("MISTER_LAUNCH_PREP_LABEL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| args.get(2).cloned())
-        .unwrap_or_else(|| "launch-prep".to_string());
-    let scenario = LaunchPrepBenchScenario::from_arg(args.get(3).map(String::as_str));
-    let iterations = std::env::var("MISTER_LAUNCH_PREP_ITERATIONS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .or_else(|| args.get(4).and_then(|value| value.parse::<usize>().ok()))
-        .unwrap_or(5)
-        .max(1);
-    let catalog = match library_db::load_arcade_catalog_from_sqlite(
-        crate::arcade_catalog::DEFAULT_ARCADE_ROOT,
-    ) {
-        Ok(loaded) => loaded.catalog,
-        Err(e) => {
-            crate::ui_errln!("launch_prep_bench\tfailed\tload catalog: {e}");
-            std::process::exit(1);
-        }
-    };
-    let refs = match launch_prep_bench_refs_from_env()
-        .or_else(|_| load_default_launch_prep_bench_refs(&catalog))
-    {
-        Ok(refs) => refs,
-        Err(e) => {
-            crate::ui_errln!("launch_prep_bench\tfailed\t{e}");
-            std::process::exit(1);
-        }
-    };
-    crate::ui_logln!(
-        "launch_prep_bench label={label} scenario={} iterations={} refs={}",
-        scenario.label(),
-        iterations,
-        refs.len()
-    );
-    if refs.is_empty() {
-        crate::ui_logln!(
-            "launch_prep_bench_summary\t{label}\t{}\tcount=0\terrors=0\tp50_us=0\tp95_us=0\tread_bytes=0\trchar=0\tsyscr=0\twrite_bytes=0\twchar=0\tsyscw=0",
-            scenario.label()
-        );
-        return;
-    }
-
-    let mut samples = Vec::with_capacity(refs.len() * iterations);
-    let mut errors = 0usize;
-    let mut total_read_bytes = 0u64;
-    let mut total_rchar = 0u64;
-    let mut total_syscr = 0u64;
-    let mut total_write_bytes = 0u64;
-    let mut total_wchar = 0u64;
-    let mut total_syscw = 0u64;
-    let mut total_descriptor_written = 0u64;
-    let mut total_descriptor_skipped = 0u64;
-    let mut total_descriptor_bytes = 0u64;
-    for iteration in 0..iterations {
-        if scenario == LaunchPrepBenchScenario::PriorityPrewarm {
-            let before = read_self_proc_io();
-            let start = Instant::now();
-            let prewarm_us = start.elapsed().as_micros() as u64;
-            let after = read_self_proc_io();
-            let read_bytes = after.read_bytes.saturating_sub(before.read_bytes);
-            let rchar = after.rchar.saturating_sub(before.rchar);
-            let syscr = after.syscr.saturating_sub(before.syscr);
-            let write_bytes = after.write_bytes.saturating_sub(before.write_bytes);
-            let wchar = after.wchar.saturating_sub(before.wchar);
-            let syscw = after.syscw.saturating_sub(before.syscw);
-            total_read_bytes = total_read_bytes.saturating_add(read_bytes);
-            total_rchar = total_rchar.saturating_add(rchar);
-            total_syscr = total_syscr.saturating_add(syscr);
-            total_write_bytes = total_write_bytes.saturating_add(write_bytes);
-            total_wchar = total_wchar.saturating_add(wchar);
-            total_syscw = total_syscw.saturating_add(syscw);
-            crate::ui_logln!(
-                "launch_prep_bench_prewarm_tsv\t{label}\t{}\t{iteration}\tstatus=removed\ttotal=0\twritten=0\tunchanged=0\terrors=0\tprewarm_us={prewarm_us}\tread_bytes={read_bytes}\trchar={rchar}\tsyscr={syscr}\twrite_bytes={write_bytes}\twchar={wchar}\tsyscw={syscw}",
-                scenario.label()
-            );
-        }
-        for (idx, bench_ref) in refs.iter().enumerate() {
-            if scenario == LaunchPrepBenchScenario::Cold {
-                prepare_cold_launch_prep_ref(&bench_ref.launch_ref);
-            }
-            reset_descriptor_stats();
-            let before = read_self_proc_io();
-            let start = Instant::now();
-            let result = prepare_launch_bench_ref(&catalog, &bench_ref.launch_ref);
-            let prepare_us = start.elapsed().as_micros() as u64;
-            let after = read_self_proc_io();
-            let descriptor = descriptor_stats_snapshot();
-            let read_bytes = after.read_bytes.saturating_sub(before.read_bytes);
-            let rchar = after.rchar.saturating_sub(before.rchar);
-            let syscr = after.syscr.saturating_sub(before.syscr);
-            let write_bytes = after.write_bytes.saturating_sub(before.write_bytes);
-            let wchar = after.wchar.saturating_sub(before.wchar);
-            let syscw = after.syscw.saturating_sub(before.syscw);
-            total_read_bytes = total_read_bytes.saturating_add(read_bytes);
-            total_rchar = total_rchar.saturating_add(rchar);
-            total_syscr = total_syscr.saturating_add(syscr);
-            total_write_bytes = total_write_bytes.saturating_add(write_bytes);
-            total_wchar = total_wchar.saturating_add(wchar);
-            total_syscw = total_syscw.saturating_add(syscw);
-            total_descriptor_written = total_descriptor_written.saturating_add(descriptor.written);
-            total_descriptor_skipped = total_descriptor_skipped.saturating_add(descriptor.skipped);
-            total_descriptor_bytes = total_descriptor_bytes.saturating_add(descriptor.bytes);
-            let (status, target) = match result {
-                Ok(target) => ("ok", target),
-                Err(e) => {
-                    errors += 1;
-                    ("error", e)
-                }
-            };
-            if status == "ok" {
-                samples.push(prepare_us);
-            }
-            crate::ui_logln!(
-                "launch_prep_bench_tsv\t{label}\t{}\t{iteration}\t{idx}\t{}\t{status}\t{prepare_us}\tread_bytes={read_bytes}\trchar={rchar}\tsyscr={syscr}\twrite_bytes={write_bytes}\twchar={wchar}\tsyscw={syscw}\tdescriptor_written={}\tdescriptor_skipped={}\tdescriptor_bytes={}\ttarget={}\tref={}",
-                scenario.label(),
-                bench_ref.kind,
-                descriptor.written,
-                descriptor.skipped,
-                descriptor.bytes,
-                target,
-                bench_ref.launch_ref
-            );
-        }
-    }
-    samples.sort_unstable();
-    let p50 = percentile_sample(&samples, 0.50);
-    let p95 = percentile_sample(&samples, 0.95);
-    crate::ui_logln!(
-        "launch_prep_bench_summary\t{label}\t{}\tcount={}\terrors={errors}\tp50_us={p50}\tp95_us={p95}\tread_bytes={total_read_bytes}\trchar={total_rchar}\tsyscr={total_syscr}\twrite_bytes={total_write_bytes}\twchar={total_wchar}\tsyscw={total_syscw}\tdescriptor_written={total_descriptor_written}\tdescriptor_skipped={total_descriptor_skipped}\tdescriptor_bytes={total_descriptor_bytes}",
-        scenario.label(),
-        samples.len()
-    );
-}
-
-#[cfg(feature = "bench-tools")]
-fn prepare_launch_bench_ref(
-    catalog: &crate::arcade_catalog::ArcadeCatalog,
-    launch_ref: &str,
-) -> Result<String, String> {
-    if launch_ref.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)
-        || launch_ref == AMIGAVISION_LAUNCHER_REF
-    {
-        return prepare_launch_ref(launch_ref);
-    }
-    Ok(match catalog.launch_target_for_ref(launch_ref) {
-        LaunchTarget::Path(path) => path.to_string(),
-        LaunchTarget::Structured(plan) => format!("structured:{}", plan.launch_ref),
-        LaunchTarget::Prepared(selection) => prepare_launch_ref(&selection.launch_ref)?,
-        LaunchTarget::MissingStructured(launch_ref) => {
-            return Err(format!(
-                "structured launch plan missing from catalog: {launch_ref}"
-            ));
-        }
-    })
-}
-
-#[cfg(feature = "bench-tools")]
-fn launch_prep_bench_refs_from_env() -> Result<Vec<LaunchPrepBenchRef>, String> {
-    let Ok(value) = std::env::var("MISTER_LAUNCH_PREP_REFS") else {
-        return Err("MISTER_LAUNCH_PREP_REFS unset".to_string());
-    };
-    let refs = value
-        .split('|')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|launch_ref| LaunchPrepBenchRef {
-            kind: launch_prep_kind(launch_ref).to_string(),
-            launch_ref: launch_ref.to_string(),
-        })
-        .collect();
-    Ok(refs)
-}
-
-#[cfg(feature = "bench-tools")]
-fn load_default_launch_prep_bench_refs(
-    catalog: &crate::arcade_catalog::ArcadeCatalog,
-) -> Result<Vec<LaunchPrepBenchRef>, String> {
-    let virtual_limit = std::env::var("MISTER_LAUNCH_PREP_VIRTUAL_LIMIT")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(8);
-    let amigavision_limit = std::env::var("MISTER_LAUNCH_PREP_AMIGAVISION_LIMIT")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(4);
-    let mut refs = Vec::new();
-    let virtual_systems = std::env::var("MISTER_LAUNCH_PREP_VIRTUAL_SYSTEMS")
-        .unwrap_or_else(|_| "neogeo|saturn|snes".to_string());
-    for system_id in virtual_systems
-        .split('|')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        for game in catalog
-            .system_game_view(system_id)
-            .iter()
-            .filter(|game| game.mra_path.starts_with(VIRTUAL_LAUNCH_PREFIX))
-            .take(virtual_limit)
-        {
-            refs.push(LaunchPrepBenchRef {
-                kind: format!("virtual-{}", game.system_id),
-                launch_ref: game.mra_path.to_string(),
-            });
-        }
-        if refs
-            .iter()
-            .any(|bench_ref| bench_ref.kind.starts_with("virtual-"))
-        {
-            break;
-        }
-    }
-    for launch_ref in library_db::load_amigavision_launch_refs(amigavision_limit)? {
-        refs.push(LaunchPrepBenchRef {
-            kind: "amigavision".to_string(),
-            launch_ref,
-        });
-    }
-    Ok(refs)
-}
-
-#[cfg(any(feature = "bench-tools", test))]
-fn launch_prep_kind(launch_ref: &str) -> &'static str {
-    if launch_ref.starts_with(VIRTUAL_LAUNCH_PREFIX) {
-        "virtual"
-    } else if launch_ref.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX) {
-        "amigavision"
-    } else {
-        "direct"
-    }
-}
-
-#[cfg(feature = "bench-tools")]
-fn prepare_cold_launch_prep_ref(launch_ref: &str) {
-    if launch_ref.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX) {
-        let roots = mister_magik_catalog::catalog_config::library_roots_from_env();
-        if let Ok(install) = resolve_amigavision_install(&roots) {
-            let _ = fs::remove_file(install.ags_boot_path);
-        }
-    }
-}
-
-#[cfg(any(feature = "bench-tools", all(test, not(target_os = "linux"))))]
-fn read_self_proc_io() -> ProcIoCounters {
-    let mut contents = String::new();
-    if File::open("/proc/self/io")
-        .and_then(|mut file| file.read_to_string(&mut contents))
-        .is_err()
-    {
-        return ProcIoCounters::default();
-    }
-    let mut counters = ProcIoCounters::default();
-    for line in contents.lines() {
-        if let Some(value) = line.strip_prefix("read_bytes:") {
-            counters.read_bytes = value.trim().parse::<u64>().unwrap_or(0);
-        } else if let Some(value) = line.strip_prefix("rchar:") {
-            counters.rchar = value.trim().parse::<u64>().unwrap_or(0);
-        } else if let Some(value) = line.strip_prefix("syscr:") {
-            counters.syscr = value.trim().parse::<u64>().unwrap_or(0);
-        } else if let Some(value) = line.strip_prefix("write_bytes:") {
-            counters.write_bytes = value.trim().parse::<u64>().unwrap_or(0);
-        } else if let Some(value) = line.strip_prefix("wchar:") {
-            counters.wchar = value.trim().parse::<u64>().unwrap_or(0);
-        } else if let Some(value) = line.strip_prefix("syscw:") {
-            counters.syscw = value.trim().parse::<u64>().unwrap_or(0);
-        }
-    }
-    counters
-}
-
-#[cfg(any(feature = "bench-tools", test))]
-fn percentile_sample(sorted: &[u64], percentile: f64) -> u64 {
-    if sorted.is_empty() {
-        return 0;
-    }
-    let idx = ((sorted.len().saturating_sub(1)) as f64 * percentile).ceil() as usize;
-    sorted[idx.min(sorted.len() - 1)]
 }
 
 #[cfg(test)]
@@ -1539,53 +1207,5 @@ mod tests {
                 .expect_err("bad utf8")
                 .contains("invalid UTF-8 in launch ref")
         );
-    }
-
-    #[test]
-    #[cfg(feature = "bench-tools")]
-    fn launch_prep_bench_scenario_parses_aliases_and_defaults() {
-        assert_eq!(
-            LaunchPrepBenchScenario::from_arg(None),
-            LaunchPrepBenchScenario::Warm
-        );
-        assert_eq!(
-            LaunchPrepBenchScenario::from_arg(Some(" COLD ")),
-            LaunchPrepBenchScenario::Cold
-        );
-        assert_eq!(
-            LaunchPrepBenchScenario::from_arg(Some("prewarm")),
-            LaunchPrepBenchScenario::PriorityPrewarm
-        );
-        assert_eq!(
-            LaunchPrepBenchScenario::from_arg(Some("priority-prewarm")).label(),
-            "priority-prewarm"
-        );
-        assert_eq!(
-            LaunchPrepBenchScenario::from_arg(Some("surprise")),
-            LaunchPrepBenchScenario::Warm
-        );
-    }
-
-    #[test]
-    fn launch_prep_kind_classifies_ref_families() {
-        assert_eq!(launch_prep_kind("magik-plan:snes/foo"), "virtual");
-        assert_eq!(launch_prep_kind("magik-amigavision:Agony"), "amigavision");
-        assert_eq!(launch_prep_kind("/media/fat/_Arcade/foo.mra"), "direct");
-    }
-
-    #[test]
-    fn percentile_sample_uses_upper_rank_and_handles_empty_samples() {
-        assert_eq!(percentile_sample(&[], 0.95), 0);
-        assert_eq!(percentile_sample(&[10], 0.95), 10);
-        assert_eq!(percentile_sample(&[10, 20, 30, 40], 0.50), 30);
-        assert_eq!(percentile_sample(&[10, 20, 30, 40], 0.95), 40);
-    }
-
-    #[test]
-    #[cfg(not(target_os = "linux"))]
-    fn proc_io_parser_returns_zeros_on_non_linux_hosts() {
-        let counters = read_self_proc_io();
-        assert_eq!(counters.read_bytes, 0);
-        assert_eq!(counters.write_bytes, 0);
     }
 }

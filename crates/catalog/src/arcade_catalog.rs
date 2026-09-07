@@ -7,7 +7,6 @@
 //! in-memory catalog types and presentation helpers used by the SQLite loader.
 
 pub use crate::catalog_classify::PlatformKind;
-use crate::catalog_navigation::CatalogNavigationProjection;
 use crate::library_db::{AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF};
 use crate::prepared_collections::PreparedCollectionId;
 use std::cmp::Ordering;
@@ -959,67 +958,12 @@ impl ArcadeCatalog {
         }
     }
 
-    pub fn from_navigation_projection(
-        root: impl Into<PathBuf>,
-        projection: CatalogNavigationProjection,
-    ) -> Self {
-        Self::from_navigation_projection_with_index_mode(
-            root,
-            projection,
-            CatalogIndexMode::DeferredText,
-        )
-    }
-
-    fn from_navigation_projection_with_index_mode(
-        root: impl Into<PathBuf>,
-        projection: CatalogNavigationProjection,
-        index_mode: CatalogIndexMode,
-    ) -> Self {
-        let platform_kinds = projection
-            .systems
-            .iter()
-            .map(|system| (system.id.clone(), system.platform_kind))
-            .collect();
-        let games: Vec<ArcadeGameEntry> = projection
-            .games
-            .into_iter()
-            .map(ArcadeGameEntry::from)
-            .collect();
-        let systems = projection
-            .systems
-            .into_iter()
-            .map(GameSystemEntry::from)
-            .collect();
-        let launch_plans = projection
-            .launch_plans
-            .into_iter()
-            .map(StructuredLaunchPlan::from)
-            .collect();
-        Self::new_with_launch_plans_and_index_mode_and_platform_kinds(
-            root.into(),
-            games,
-            systems,
-            launch_plans,
-            index_mode,
-            platform_kinds,
-            None,
-        )
-    }
-
     pub fn len(&self) -> usize {
         self.games.len()
     }
 
     pub fn is_empty(&self) -> bool {
         self.games.is_empty()
-    }
-
-    pub(crate) fn with_projection_stats(
-        mut self,
-        stats: HashMap<String, SystemProjectionStats>,
-    ) -> Self {
-        Arc::make_mut(&mut self.projection_stats_by_system).extend(stats);
-        self
     }
 
     pub fn platform_kind(&self, system_id: &str) -> PlatformKind {
@@ -1112,7 +1056,7 @@ impl ArcadeCatalog {
         self.system_game_view(system_id).iter().cloned().collect()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "builder"))]
     pub(crate) fn isolated_system_catalog(&self, system_id: &str) -> Self {
         let games = self.system_games(system_id);
         let retained_refs = games
@@ -3020,7 +2964,7 @@ mod tests {
             control: "".into(),
             is_new: false,
         };
-        let catalog = ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
+        let mut catalog = ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
             PathBuf::from("/fixture"),
             vec![resident_game],
             vec![
@@ -3046,8 +2990,8 @@ mod tests {
                 ("snes".to_string(), PlatformKind::Console),
                 ("apple-iigs".to_string(), PlatformKind::Unknown),
             ]),
-        )
-        .with_projection_stats(HashMap::from([
+        );
+        catalog.projection_stats_by_system = Arc::new(HashMap::from([
             (
                 "arcade".to_string(),
                 SystemProjectionStats {
@@ -3682,7 +3626,7 @@ mod tests {
     }
 
     #[test]
-    fn navigation_projection_catalog_defers_text_indexes_without_changing_search() {
+    fn deferred_catalog_keeps_search_behavior() {
         let mut capcom_shooter = game("1942", "/games/1942.mra", "", "arcade");
         capcom_shooter.year = Some(1984);
         capcom_shooter.manufacturer = "Capcom".into();
@@ -3714,11 +3658,12 @@ mod tests {
             games.clone(),
             systems.clone(),
         );
-        let projection = CatalogNavigationProjection::from_catalog(
-            &ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), games, systems),
-            &crate::catalog_stamp::CatalogStamp::from_lines(vec!["arcade|1|2".into()]),
+        let deferred = ArcadeCatalog::new_with_deferred_text_indexes(
+            PathBuf::from("/media/fat/_Arcade"),
+            games,
+            systems,
+            Vec::new(),
         );
-        let deferred = ArcadeCatalog::from_navigation_projection("/media/fat/_Arcade", projection);
 
         assert!(deferred.search_keys.is_empty());
         assert!(deferred.lazy_text_indexes.get().is_none());
@@ -3740,7 +3685,7 @@ mod tests {
     }
 
     #[test]
-    fn navigation_projection_catalog_defers_text_indexes_without_changing_autocomplete() {
+    fn deferred_catalog_keeps_autocomplete_behavior() {
         let mut street = game("Street Fighter II", "/games/sf2.mra", "", "arcade");
         street.manufacturer = "Capcom".into();
         street.control = "doublejoy".into();
@@ -3771,11 +3716,12 @@ mod tests {
             games.clone(),
             systems.clone(),
         );
-        let projection = CatalogNavigationProjection::from_catalog(
-            &ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), games, systems),
-            &crate::catalog_stamp::CatalogStamp::from_lines(vec!["arcade|1|2".into()]),
+        let deferred = ArcadeCatalog::new_with_deferred_text_indexes(
+            PathBuf::from("/media/fat/_Arcade"),
+            games,
+            systems,
+            Vec::new(),
         );
-        let deferred = ArcadeCatalog::from_navigation_projection("/media/fat/_Arcade", projection);
 
         assert!(deferred.search_keys.is_empty());
         assert!(deferred.lazy_text_indexes.get().is_none());

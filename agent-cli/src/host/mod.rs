@@ -457,10 +457,6 @@ impl NativeDevice {
                         let session = connect(10)?;
                         run_runtime_metadata_qualification(&session, &args.out)
                     }
-                    CatalogCommand::RomAudit(args) => {
-                        let session = connect(10)?;
-                        run_catalog_rom_audit(&session, &args.out)
-                    }
                     CatalogCommand::NeoGeoFamilyAudit(args) => {
                         let session = connect(10)?;
                         run_catalog_neogeo_family_audit(&session, &args.out)
@@ -8397,37 +8393,6 @@ fn validate_runtime_metadata_legacy_sqlite_absence(evidence: &Value) -> Result<(
     Ok(())
 }
 
-fn run_catalog_rom_audit(sess: &Session, output: &Path) -> Result<()> {
-    let status_text = remote_read(sess, MAIN_STATUS_REMOTE)
-        .ok_or("active Main status is unavailable for Arcade ROM audit")?;
-    let status: Value = serde_json::from_str(&status_text)?;
-    let binary = active_installed_gui_binary(&status)?;
-    let command = remote_subcommand(binary, "catalog-arcade-rom-audit", &[]);
-    let out = exec(sess, &command, true)?;
-    if !out.stderr.trim().is_empty() {
-        eprint!("[stderr] {}", out.stderr);
-    }
-    if let Some(error) = exec_failure_message("Arcade ROM visibility audit", &out) {
-        return Err(error.into());
-    }
-    if let Some(parent) = output
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(output, &out.stdout)?;
-    println!("arcade_rom_visibility_report={}", output.display());
-    if let Some(summary) = out
-        .stdout
-        .lines()
-        .find(|line| line.starts_with("arcade_rom_visibility_summary_tsv\t"))
-    {
-        println!("{summary}");
-    }
-    Ok(())
-}
-
 fn run_catalog_neogeo_family_audit(sess: &Session, output: &Path) -> Result<()> {
     let status_text = remote_read(sess, MAIN_STATUS_REMOTE)
         .ok_or("active Main status is unavailable for Neo Geo family audit")?;
@@ -8589,12 +8554,10 @@ fn purge_development_library_data(session: &Session) -> Result<()> {
 
 fn catalog_query(args: &[String]) -> Result<()> {
     if args.len() != 4 {
-        return Err(
-            "catalog query requires --database <registry|library|system:ID> --sql SQL".into(),
-        );
+        return Err("catalog query requires --database system:ID --sql SQL".into());
     }
-    let database = option_value(args, "--database")
-        .ok_or("catalog query requires --database <registry|library|system:ID>")?;
+    let database =
+        option_value(args, "--database").ok_or("catalog query requires --database system:ID")?;
     let sql = option_value(args, "--sql").ok_or("catalog query requires --sql SQL")?;
     let session = connect(10)?;
     let remote_root = active_catalog_root(&session)?;
@@ -8753,8 +8716,6 @@ fn resolve_catalog_database(
     temporary: &Path,
 ) -> Result<String> {
     match database {
-        "registry" => Ok(format!("{remote_root}/state/catalog-state.sqlite3")),
-        "library" => Ok(format!("{remote_root}/state/scanner-cache.sqlite3")),
         value if value.starts_with("system:") => {
             let system_id = value.trim_start_matches("system:");
             if system_id.is_empty()
@@ -8799,7 +8760,7 @@ fn resolve_catalog_database(
                 .ok_or("catalog manifest contains an invalid system database path")?;
             Ok(format!("{remote_root}/{relative}"))
         }
-        _ => Err("catalog database must be registry, library, or system:ID".into()),
+        _ => Err("catalog database must be system:ID".into()),
     }
 }
 

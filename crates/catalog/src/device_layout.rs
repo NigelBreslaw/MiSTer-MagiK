@@ -20,7 +20,6 @@ const RUNTIME_METADATA_ENV: &str = "MISTER_MAGIK_METADATA";
 const PREVIEW_CACHE_DIR_ENV: &str = "MISTER_PREVIEW_CACHE_DIR";
 const MEDIA_ASSET_DIR_ENV: &str = "MISTER_MEDIA_ASSET_DIR";
 const USER_STATE_SQLITE_ENV: &str = "MISTER_USER_STATE_SQLITE";
-const LIBRARY_BENCH_SQLITE_ENV: &str = "MISTER_LIBRARY_BENCH_SQLITE";
 const LIBRARY_SQLITE_BUILD_DIR_ENV: &str = "MISTER_LIBRARY_SQLITE_BUILD_DIR";
 const SHARDED_CATALOG_DIR_ENV: &str = "MISTER_SHARDED_CATALOG_DIR";
 
@@ -143,7 +142,6 @@ pub struct CatalogPathOverrides {
     preview_cache_dir: Option<PathBuf>,
     media_asset_dir: Option<PathBuf>,
     user_state_sqlite: Option<PathBuf>,
-    library_bench_sqlite: Option<PathBuf>,
     library_sqlite_build_dir: Option<PathBuf>,
     sharded_catalog_dir: Option<PathBuf>,
 }
@@ -158,7 +156,6 @@ impl CatalogPathOverrides {
             preview_cache_dir: std::env::var_os(PREVIEW_CACHE_DIR_ENV).map(PathBuf::from),
             media_asset_dir: std::env::var_os(MEDIA_ASSET_DIR_ENV).map(PathBuf::from),
             user_state_sqlite: std::env::var_os(USER_STATE_SQLITE_ENV).map(PathBuf::from),
-            library_bench_sqlite: std::env::var_os(LIBRARY_BENCH_SQLITE_ENV).map(PathBuf::from),
             library_sqlite_build_dir: std::env::var_os(LIBRARY_SQLITE_BUILD_DIR_ENV)
                 .map(PathBuf::from),
             sharded_catalog_dir: std::env::var_os(SHARDED_CATALOG_DIR_ENV).map(PathBuf::from),
@@ -174,7 +171,6 @@ impl CatalogPathOverrides {
             preview_cache_dir: get(PREVIEW_CACHE_DIR_ENV).map(Path::to_path_buf),
             media_asset_dir: get(MEDIA_ASSET_DIR_ENV).map(Path::to_path_buf),
             user_state_sqlite: get(USER_STATE_SQLITE_ENV).map(Path::to_path_buf),
-            library_bench_sqlite: get(LIBRARY_BENCH_SQLITE_ENV).map(Path::to_path_buf),
             library_sqlite_build_dir: get(LIBRARY_SQLITE_BUILD_DIR_ENV).map(Path::to_path_buf),
             sharded_catalog_dir: get(SHARDED_CATALOG_DIR_ENV).map(Path::to_path_buf),
         }
@@ -191,7 +187,6 @@ pub struct CatalogPaths {
     preview_cache_dir: PathBuf,
     media_asset_dir: PathBuf,
     user_state_sqlite: PathBuf,
-    library_bench_sqlite: PathBuf,
     library_sqlite_build_dir: PathBuf,
     sharded_catalog_dir: PathBuf,
 }
@@ -229,9 +224,6 @@ impl CatalogPaths {
             user_state_sqlite: overrides
                 .user_state_sqlite
                 .unwrap_or_else(|| device.app_path("user-state.sqlite3")),
-            library_bench_sqlite: overrides
-                .library_bench_sqlite
-                .unwrap_or_else(|| device.app_path("library-scan-bench.sqlite3")),
             library_sqlite_build_dir: overrides
                 .library_sqlite_build_dir
                 .unwrap_or_else(|| PathBuf::from("/tmp/mister-magik/sqlite-build")),
@@ -271,10 +263,6 @@ impl CatalogPaths {
 
     pub fn user_state_sqlite(&self) -> &Path {
         &self.user_state_sqlite
-    }
-
-    pub fn library_bench_sqlite(&self) -> &Path {
-        &self.library_bench_sqlite
     }
 
     pub fn library_sqlite_build_dir(&self) -> &Path {
@@ -460,10 +448,6 @@ mod tests {
                 PathBuf::from("/tmp/override/user-state.sqlite3"),
             ),
             (
-                LIBRARY_BENCH_SQLITE_ENV,
-                PathBuf::from("/tmp/override/library-bench.sqlite3"),
-            ),
-            (
                 LIBRARY_SQLITE_BUILD_DIR_ENV,
                 PathBuf::from("/tmp/override/sqlite-build"),
             ),
@@ -490,10 +474,6 @@ mod tests {
         assert_eq!(
             paths.user_state_sqlite(),
             Path::new("/tmp/override/user-state.sqlite3")
-        );
-        assert_eq!(
-            paths.library_bench_sqlite(),
-            Path::new("/tmp/override/library-bench.sqlite3")
         );
         assert_eq!(
             paths.library_sqlite_build_dir(),

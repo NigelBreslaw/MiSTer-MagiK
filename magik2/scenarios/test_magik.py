@@ -1,6 +1,10 @@
 """Small real-app checks; the scenario is also its benchmark workload."""
 
 import time
+import json
+import os
+import uuid
+from pathlib import Path
 
 import pytest
 from actions import (
@@ -12,6 +16,59 @@ from actions import (
     validate_development_paths,
 )
 from magik2.results import append_event
+from catalog_equivalence import catalog_identity, assert_catalog_equivalent, restore_application
+
+
+@pytest.mark.skipif(
+    os.environ.get("MISTER_MAGIK2_CATALOG_EQUIVALENCE") != "1",
+    reason="fresh catalog equivalence requires explicit opt-in",
+)
+def test_catalog_equivalence(magik2_run):
+    """Build from today's installed sources into a new isolated catalog root."""
+    from magik2.apps import application
+    from magik2.cli import connect_agent, ensure_application, CHECK_AGENT_CAPABILITIES
+    from magik2.client import AgentError
+    from magik2.results import retain_diagnostics
+
+    agent, status = connect_agent(
+        magik2_run,
+        CHECK_AGENT_CAPABILITIES | {"artifacts-v1"} | application("magik").agent_capabilities,
+    )
+    ensure_application(agent, status, magik2_run, "magik")
+    session_id = f"catalog-equivalence-{uuid.uuid4().hex}"
+    try:
+        agent._successful("start", {
+            "artifact": "magik", "restart": True,
+            "expected_sha256": agent.expected_sha256, "profile_id": session_id,
+        })
+        deadline = time.monotonic() + 900
+        while True:
+            try:
+                raw = agent.read_profile_artifact(session_id, "catalog.json")
+                break
+            except AgentError as error:
+                if not str(error).startswith("artifact-unavailable"):
+                    raise
+                if time.monotonic() >= deadline:
+                    raise AssertionError("fresh catalog did not finish within 900 seconds") from error
+                time.sleep(2)
+        (magik2_run / "catalog.json").write_bytes(raw)
+        result = json.loads(raw)
+        catalog_identity(result)
+        assert result["artifact_sha256"] == agent.expected_sha256
+        baseline = os.environ.get("MISTER_MAGIK2_CATALOG_BASELINE")
+        if baseline:
+            before = json.loads(Path(baseline).read_text())
+            assert_catalog_equivalent(before, result)
+        append_event(magik2_run, {
+            "phase":"catalog-equivalence", "outcome":"passed",
+            "artifact_sha256":agent.expected_sha256, "session_id":session_id,
+            "systems":len(result["systems"]),
+            "games":sum(system["games"] for system in result["systems"]),
+            "baseline":baseline,
+        })
+    finally:
+        restore_application(agent, magik2_run, retain_diagnostics)
 
 
 def test_smoke(application_session):

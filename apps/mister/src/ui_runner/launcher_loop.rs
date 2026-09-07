@@ -6172,6 +6172,8 @@ pub(super) fn run_launcher_loop(
     let mut tooling_drop_baseline: Option<u32> = None;
     #[cfg(feature = "magik2")]
     let mut tooling_reject_baseline: Option<u16> = None;
+    #[cfg(feature = "magik2")]
+    crate::catalog_equivalence::start_requested_probe();
     'launcher: while (secs == 0 || run_start.elapsed().as_secs() < secs)
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {

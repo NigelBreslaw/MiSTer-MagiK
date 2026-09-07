@@ -10,7 +10,6 @@ use crate::device_layout::{CatalogPaths, current_app_path};
 
 const ARCHIVE_READER_ENV: &str = "MISTER_7ZA";
 const ARCHIVE_READER_TIMEOUT_ENV: &str = "MISTER_7ZA_TIMEOUT_SECS";
-const SQLITE_BUILD_DIR_ENV: &str = "MISTER_LIBRARY_SQLITE_BUILD_DIR";
 const DEFAULT_ARCHIVE_READER: &str = "/media/fat/linux/7za";
 const DEFAULT_ARCHIVE_READER_TIMEOUT_SECS: u64 = 1;
 
@@ -43,20 +42,16 @@ impl ArchiveReaderConfig {
 pub struct ArchiveCacheConfig {
     archive_reader: ArchiveReaderConfig,
     preview_cache_dir: PathBuf,
-    sqlite_build_dir: PathBuf,
-    sqlite_build_dir_override: Option<PathBuf>,
 }
 
 impl ArchiveCacheConfig {
     pub fn capture_process(paths: &CatalogPaths) -> Self {
         let archive_reader = std::env::var_os(ARCHIVE_READER_ENV);
         let archive_reader_timeout = std::env::var(ARCHIVE_READER_TIMEOUT_ENV).ok();
-        let sqlite_build_dir_override = std::env::var_os(SQLITE_BUILD_DIR_ENV);
         Self::from_values(
             paths,
             archive_reader.as_deref().map(Path::new),
             archive_reader_timeout.as_deref(),
-            sqlite_build_dir_override.as_deref().map(Path::new),
         )
     }
 
@@ -69,7 +64,6 @@ impl ArchiveCacheConfig {
             paths,
             get_path(ARCHIVE_READER_ENV),
             get(ARCHIVE_READER_TIMEOUT_ENV),
-            get_path(SQLITE_BUILD_DIR_ENV),
         )
     }
 
@@ -77,7 +71,6 @@ impl ArchiveCacheConfig {
         paths: &CatalogPaths,
         archive_reader: Option<&Path>,
         archive_reader_timeout: Option<&str>,
-        sqlite_build_dir_override: Option<&Path>,
     ) -> Self {
         let timeout_secs = archive_reader_timeout
             .and_then(|value| value.parse::<u64>().ok())
@@ -91,8 +84,6 @@ impl ArchiveCacheConfig {
                 archive_reader_timeout: Duration::from_secs(timeout_secs),
             },
             preview_cache_dir: paths.preview_cache_dir().to_path_buf(),
-            sqlite_build_dir: paths.library_sqlite_build_dir().to_path_buf(),
-            sqlite_build_dir_override: sqlite_build_dir_override.map(Path::to_path_buf),
         }
     }
 
@@ -111,14 +102,6 @@ impl ArchiveCacheConfig {
     pub fn preview_cache_dir(&self) -> &Path {
         &self.preview_cache_dir
     }
-
-    pub fn sqlite_build_dir(&self) -> &Path {
-        &self.sqlite_build_dir
-    }
-
-    pub fn sqlite_build_dir_override(&self) -> Option<&Path> {
-        self.sqlite_build_dir_override.as_deref()
-    }
 }
 
 pub const DEFAULT_ROOTS: &[&str] = &[
@@ -128,12 +111,7 @@ pub const DEFAULT_ROOTS: &[&str] = &[
     "/media/fat/_LLAPI",
 ];
 
-pub const DEFAULT_SQLITE_PATH: &str = "/media/fat/mister-magik/library.sqlite3";
-pub const DEFAULT_MAME_SQLITE_PATH: &str = "/media/fat/mister-magik/mame.sqlite3";
 pub const DEFAULT_HBMAME_SQLITE_PATH: &str = "/media/fat/mister-magik/hbmame.sqlite3";
-pub const DEFAULT_RUNTIME_METADATA_PATH: &str = "/media/fat/mister-magik/magik-metadata-v1.bin";
-pub const DEFAULT_SQLITE_BUILD_DIR: &str = "/tmp/mister-magik/sqlite-build";
-pub const DEFAULT_SHARDED_CATALOG_DIR: &str = "/media/fat/mister-magik/catalog-fast-v1";
 pub const DEFAULT_USER_STATE_PATH: &str = "/media/fat/mister-magik/user-state.sqlite3";
 
 pub const SCHEMA_VERSION: u32 = 67;
@@ -180,16 +158,6 @@ pub fn default_user_state_path() -> PathBuf {
         std::env::var("MISTER_USER_STATE_SQLITE").ok().as_deref(),
         "user-state.sqlite3",
     )
-}
-
-/// Mutable, non-authoritative progress for an interrupted catalog build.
-pub fn default_build_progress_path() -> PathBuf {
-    crate::build_progress::path_for_root(&default_sharded_catalog_path())
-}
-
-/// Last successfully published scan-target facts used for warm planning.
-pub fn default_builder_state_path() -> PathBuf {
-    crate::build_progress::committed_path_for_root(&default_sharded_catalog_path())
 }
 
 pub fn library_roots_from_env() -> Vec<String> {
@@ -247,20 +215,6 @@ pub fn parse_library_path_map(value: &str) -> Vec<PathMapRule> {
     rules
 }
 
-pub fn map_library_path(value: &str, rules: &[PathMapRule]) -> String {
-    for rule in rules {
-        if value == rule.from {
-            return rule.to.clone();
-        }
-        if let Some(rest) = value.strip_prefix(&rule.from)
-            && rest.starts_with('/')
-        {
-            return format!("{}{}", rule.to, rest);
-        }
-    }
-    value.to_string()
-}
-
 fn trim_trailing_slash(value: &str) -> &str {
     if value == "/" {
         value
@@ -286,34 +240,22 @@ mod tests {
     #[test]
     fn archive_cache_config_preserves_defaults_overrides_and_timeout_clamping() {
         let paths = catalog_paths();
-        let defaults = ArchiveCacheConfig::from_values(&paths, None, None, None);
+        let defaults = ArchiveCacheConfig::from_values(&paths, None, None);
         assert_eq!(defaults.archive_reader(), Path::new(DEFAULT_ARCHIVE_READER));
         assert_eq!(
             defaults.archive_reader_timeout(),
             Duration::from_secs(DEFAULT_ARCHIVE_READER_TIMEOUT_SECS)
         );
         assert_eq!(defaults.preview_cache_dir(), paths.preview_cache_dir());
-        assert_eq!(
-            defaults.sqlite_build_dir(),
-            paths.library_sqlite_build_dir()
-        );
 
-        let configured = ArchiveCacheConfig::from_values(
-            &paths,
-            Some(Path::new("/tmp/7za")),
-            Some("999"),
-            Some(Path::new("/tmp/sqlite-build")),
-        );
+        let configured =
+            ArchiveCacheConfig::from_values(&paths, Some(Path::new("/tmp/7za")), Some("999"));
         assert_eq!(configured.archive_reader(), Path::new("/tmp/7za"));
         assert_eq!(
             configured.archive_reader_timeout(),
             Duration::from_secs(120)
         );
-        assert_eq!(
-            configured.sqlite_build_dir_override(),
-            Some(Path::new("/tmp/sqlite-build"))
-        );
-        let invalid = ArchiveCacheConfig::from_values(&paths, None, Some("invalid"), None);
+        let invalid = ArchiveCacheConfig::from_values(&paths, None, Some("invalid"));
         assert_eq!(
             invalid.archive_reader_timeout(),
             Duration::from_secs(DEFAULT_ARCHIVE_READER_TIMEOUT_SECS)
@@ -357,22 +299,23 @@ mod tests {
     }
 
     #[test]
-    fn path_map_parses_longest_prefix_first_and_maps_boundaries() {
+    fn path_map_binding_parses_longest_prefix_first() {
         let rules = parse_library_path_map(
             "/tmp/mirror/games=/media/fat/games|/tmp/mirror=/media/fat|broken",
         );
 
         assert_eq!(
-            map_library_path("/tmp/mirror/games/NES/Zelda.nes", &rules),
-            "/media/fat/games/NES/Zelda.nes"
-        );
-        assert_eq!(
-            map_library_path("/tmp/mirror/_Arcade", &rules),
-            "/media/fat/_Arcade"
-        );
-        assert_eq!(
-            map_library_path("/tmp/mirrorish/_Arcade", &rules),
-            "/tmp/mirrorish/_Arcade"
+            rules,
+            vec![
+                PathMapRule {
+                    from: "/tmp/mirror/games".into(),
+                    to: "/media/fat/games".into()
+                },
+                PathMapRule {
+                    from: "/tmp/mirror".into(),
+                    to: "/media/fat".into()
+                },
+            ]
         );
     }
 }

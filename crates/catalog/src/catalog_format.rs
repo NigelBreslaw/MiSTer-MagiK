@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 pub const BINDING_SCHEMA_VERSION: u32 = 1;
 pub const CATALOG_STATE_SCHEMA_VERSION: u32 = 1;
 pub const SCANNER_CACHE_SCHEMA_VERSION: u32 = 1;
+// Retained on-disk identity of the retired external builder protocol.
+const BUILDER_PROTOCOL_VERSION: u32 = 4;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CatalogFormatDescriptor {
@@ -35,7 +37,7 @@ impl CatalogFormatDescriptor {
             binding_schema_version: BINDING_SCHEMA_VERSION,
             catalog_state_schema_version: CATALOG_STATE_SCHEMA_VERSION,
             scanner_cache_schema_version: SCANNER_CACHE_SCHEMA_VERSION,
-            builder_protocol_version: crate::builder_protocol::CATALOG_BUILDER_PROTOCOL_VERSION,
+            builder_protocol_version: BUILDER_PROTOCOL_VERSION,
             projection_contract: crate::sharded_catalog::PRODUCTION_PROJECTION_CONTRACT.to_string(),
         }
     }

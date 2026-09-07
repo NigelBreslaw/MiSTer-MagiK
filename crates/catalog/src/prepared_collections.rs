@@ -3,7 +3,9 @@
 
 //! Shared metadata for collections that provide their own one-click launch artifacts.
 
+#[cfg(any(test, feature = "builder"))]
 use std::cell::{Cell, RefCell};
+#[cfg(any(test, feature = "builder"))]
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
@@ -15,22 +17,15 @@ use crate::media_metadata::{MglInspection, inspect_mgl, resolve_mgl_payload_path
 pub const PREPARED_COLLECTION_ADAPTER_VERSION: u32 = 7;
 
 #[derive(Default)]
+#[cfg(any(test, feature = "builder"))]
 pub(crate) struct PreparedPayloadIndex {
     live_presence: RefCell<HashMap<PathBuf, bool>>,
     lookup_files: Cell<usize>,
     lookup_missing: Cell<usize>,
-    lookup_unknown: Cell<usize>,
     live_fallbacks: Cell<usize>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PreparedPayloadIndexStats {
-    pub(crate) files: usize,
-    pub(crate) missing: usize,
-    pub(crate) unknown: usize,
-    pub(crate) live_fallbacks: usize,
-}
-
+#[cfg(any(test, feature = "builder"))]
 impl PreparedPayloadIndex {
     pub(crate) fn from_library_roots(roots: &[String]) -> Self {
         let mut index = Self::default();
@@ -38,45 +33,6 @@ impl PreparedPayloadIndex {
             index.add_known_0mhz_release(&storage_root);
         }
         index
-    }
-
-    pub(crate) fn file_count(&self) -> usize {
-        self.live_presence
-            .borrow()
-            .values()
-            .filter(|present| **present)
-            .count()
-    }
-
-    pub(crate) fn complete_root_count(&self) -> usize {
-        0
-    }
-
-    pub(crate) fn lookup_stats(&self) -> PreparedPayloadIndexStats {
-        PreparedPayloadIndexStats {
-            files: self.lookup_files.get(),
-            missing: self.lookup_missing.get(),
-            unknown: self.lookup_unknown.get(),
-            live_fallbacks: self.live_fallbacks.get(),
-        }
-    }
-
-    pub(crate) fn resolve_0mhz_payload_path(&self, mgl_path: &Path, payload: &str) -> PathBuf {
-        let local = resolve_mgl_payload_path(mgl_path, payload);
-        if self.path_is_file(&local) {
-            return local;
-        }
-        if payload.starts_with('/') || payload.starts_with("games/") {
-            return local;
-        }
-        let Some(collection_payload) = zero_mhz_collection_payload_path(mgl_path, payload) else {
-            return local;
-        };
-        if self.path_is_file(&collection_payload) {
-            collection_payload
-        } else {
-            local
-        }
     }
 
     pub(crate) fn path_is_file(&self, path: &Path) -> bool {
@@ -251,13 +207,6 @@ pub struct PreparedLaunchProvenance {
     pub adapter_version: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PreparedLaunchDiagnostic {
-    pub(crate) collection_id: PreparedCollectionId,
-    pub(crate) status: &'static str,
-    pub(crate) reason: String,
-}
-
 impl PreparedLaunchProvenance {
     pub const fn prepared(collection_id: PreparedCollectionId) -> Self {
         Self {
@@ -281,18 +230,6 @@ pub(crate) fn validate_0mhz_mgl_inspection(
     validate_0mhz_mgl_inspection_with(inspection, |payload| {
         let path = resolve_0mhz_payload_path(path, payload);
         let exists = path.is_file();
-        (path, exists)
-    })
-}
-
-pub(crate) fn validate_0mhz_mgl_inspection_with_index(
-    path: &Path,
-    inspection: &MglInspection,
-    index: &PreparedPayloadIndex,
-) -> Result<(), String> {
-    validate_0mhz_mgl_inspection_with(inspection, |payload| {
-        let path = index.resolve_0mhz_payload_path(path, payload);
-        let exists = index.path_is_file(&path);
         (path, exists)
     })
 }
@@ -386,11 +323,6 @@ pub(crate) fn is_followable_neon68k_launcher_root_symlink(path: &Path) -> bool {
         && std::fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
 }
 
-pub(crate) fn neon68k_launcher_root_is_available(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
-        || is_followable_neon68k_launcher_root_symlink(path)
-}
-
 pub(crate) fn neon68k_launcher_roots_for_library_root(configured_root: &Path) -> Vec<PathBuf> {
     let name = configured_root
         .file_name()
@@ -419,35 +351,6 @@ pub(crate) fn neon68k_launcher_roots_for_library_root(configured_root: &Path) ->
         storage_root.join("_Computer/_X68000 Games"),
         storage_root.join("_Computer/X68000 Games"),
     ]
-}
-
-pub(crate) fn neon68k_payload_signature_for_library_root(
-    configured_root: &Path,
-) -> Option<PathBuf> {
-    let name = configured_root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default();
-    if [
-        "_Arcade",
-        "_Games",
-        "_DOS Games",
-        "_Console (autoboot)",
-        "_LLAPI",
-        "_X68000 Games",
-        "X68000 Games",
-    ]
-    .iter()
-    .any(|candidate| name.eq_ignore_ascii_case(candidate))
-    {
-        return None;
-    }
-    let games_root = if name.eq_ignore_ascii_case("games") {
-        configured_root.to_path_buf()
-    } else {
-        configured_root.join("games")
-    };
-    Some(games_root.join("X68000/boot3.vhd"))
 }
 
 pub(crate) fn neon68k_duplicate_alias_path(root: &Path, path: &Path) -> bool {
@@ -524,41 +427,7 @@ pub(crate) fn resolve_neon68k_payload_path(mgl_path: &Path, payload: &str) -> Pa
     }
 }
 
-pub(crate) fn neon68k_source_category(path: &Path) -> Option<String> {
-    path.components()
-        .filter_map(|component| component.as_os_str().to_str())
-        .find_map(|component| {
-            let normalized = component.to_ascii_lowercase();
-            if normalized.contains("keyboard") || normalized.contains("mouse") {
-                Some("Keyboard + Mouse".to_string())
-            } else if normalized.contains("major") && normalized.contains("bug") {
-                Some("Major Bugs".to_string())
-            } else if normalized.contains("minor") && normalized.contains("bug") {
-                Some("Minor Bugs".to_string())
-            } else {
-                None
-            }
-        })
-}
-
-pub(crate) fn oneload64_provenance(path: &Path) -> Option<PreparedLaunchProvenance> {
-    if path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_none_or(|extension| !extension.eq_ignore_ascii_case("crt"))
-    {
-        return None;
-    }
-    let install_root = oneload64_install_root(path)?;
-    if !oneload64_root_has_signature(install_root) || oneload64_path_is_excluded(path, install_root)
-    {
-        return None;
-    }
-    Some(PreparedLaunchProvenance::prepared(
-        PreparedCollectionId::OneLoad64,
-    ))
-}
-
+#[cfg(any(test, feature = "builder"))]
 pub(crate) fn oneload64_install_root(path: &Path) -> Option<&Path> {
     path.ancestors().find(|ancestor| {
         ancestor
@@ -571,7 +440,7 @@ pub(crate) fn oneload64_install_root(path: &Path) -> Option<&Path> {
 /// Validate a CRT path that was just observed as a regular file by the
 /// bounded namespace inventory. Avoids repeating one exFAT metadata lookup per
 /// payload while preserving the OneLoad64 signature and tree exclusions.
-#[cfg(feature = "builder")]
+#[cfg(any(test, feature = "builder"))]
 pub(crate) fn observed_oneload64_path_is_valid(path: &Path) -> bool {
     oneload64_install_root(path).is_some_and(|install_root| {
         oneload64_root_has_signature(install_root)
@@ -684,52 +553,6 @@ pub fn validate_prepared_launch_path(path: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
-pub(crate) fn diagnostic_for_candidate(
-    path: &Path,
-    platform_id: &str,
-) -> Option<PreparedLaunchDiagnostic> {
-    let is_mgl = path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("mgl"));
-    if is_mgl && platform_id == "dos" && path_has_component(path, "_DOS Games") {
-        return validate_0mhz_mgl(path)
-            .err()
-            .map(|reason| PreparedLaunchDiagnostic {
-                collection_id: PreparedCollectionId::ZeroMhz,
-                status: "invalid",
-                reason,
-            });
-    }
-    if is_mgl && path_has_neon68k_launcher_component(path) {
-        return validate_neon68k_mgl(path)
-            .err()
-            .map(|reason| PreparedLaunchDiagnostic {
-                collection_id: PreparedCollectionId::Neon68k,
-                status: "invalid",
-                reason,
-            });
-    }
-    let install_root = path.ancestors().find(|ancestor| {
-        ancestor
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(is_oneload64_install_name)
-    })?;
-    if oneload64_path_is_excluded(path, install_root) {
-        return Some(PreparedLaunchDiagnostic {
-            collection_id: PreparedCollectionId::OneLoad64,
-            status: "excluded",
-            reason: "non-primary OneLoad64 tree".to_string(),
-        });
-    }
-    (!oneload64_root_has_signature(install_root)).then(|| PreparedLaunchDiagnostic {
-        collection_id: PreparedCollectionId::OneLoad64,
-        status: "invalid",
-        reason: "OneLoad64 directory is missing its collection signature".to_string(),
-    })
-}
-
 fn path_has_component(path: &Path, expected: &str) -> bool {
     path.components().any(|component| {
         component
@@ -789,9 +612,17 @@ mod tests {
 
         let index = PreparedPayloadIndex::from_library_roots(&[storage.display().to_string()]);
 
-        assert_eq!(index.file_count(), 1);
+        assert_eq!(
+            index
+                .live_presence
+                .borrow()
+                .values()
+                .filter(|present| **present)
+                .count(),
+            1
+        );
         assert!(index.path_is_file(&payload));
-        assert_eq!(index.lookup_stats().live_fallbacks, 0);
+        assert_eq!(index.live_fallbacks.get(), 0);
         let _ = std::fs::remove_dir_all(storage);
     }
 
@@ -818,17 +649,20 @@ mod tests {
         let index = PreparedPayloadIndex::from_library_roots(&roots);
         let inspection = inspect_mgl(&mgl).expect("inspect MGL");
 
-        assert_eq!(index.complete_root_count(), 0);
         assert_eq!(
-            index.resolve_0mhz_payload_path(&mgl, "media/doom/doom.vhd"),
+            resolve_0mhz_payload_path_with(&mgl, "media/doom/doom.vhd", |path| index
+                .path_is_file(path)),
             payload
         );
-        validate_0mhz_mgl_inspection_with_index(&mgl, &inspection, &index)
-            .expect("validate from index");
-        let stats = index.lookup_stats();
-        assert!(stats.files >= 3);
-        assert_eq!(stats.unknown, 0);
-        assert_eq!(stats.live_fallbacks, 2);
+        validate_0mhz_mgl_inspection_with(&inspection, |payload| {
+            let path =
+                resolve_0mhz_payload_path_with(&mgl, payload, |path| index.path_is_file(path));
+            let exists = index.path_is_file(&path);
+            (path, exists)
+        })
+        .expect("validate from index");
+        assert!(index.lookup_files.get() >= 3);
+        assert_eq!(index.live_fallbacks.get(), 2);
         let _ = std::fs::remove_dir_all(storage);
     }
 
@@ -852,17 +686,20 @@ mod tests {
         let index = PreparedPayloadIndex::from_library_roots(&roots);
         let inspection = inspect_mgl(&mgl).expect("inspect MGL");
 
-        let error = validate_0mhz_mgl_inspection_with_index(&mgl, &inspection, &index)
-            .expect_err("missing payload must fail");
+        let error = validate_0mhz_mgl_inspection_with(&inspection, |payload| {
+            let path =
+                resolve_0mhz_payload_path_with(&mgl, payload, |path| index.path_is_file(path));
+            let exists = index.path_is_file(&path);
+            (path, exists)
+        })
+        .expect_err("missing payload must fail");
 
         assert!(error.contains(&format!(
             "{}",
             launchers.join("media/missing.vhd").display()
         )));
-        let stats = index.lookup_stats();
-        assert!(stats.missing >= 2);
-        assert_eq!(stats.unknown, 0);
-        assert_eq!(stats.live_fallbacks, 2);
+        assert!(index.lookup_missing.get() >= 2);
+        assert_eq!(index.live_fallbacks.get(), 2);
         let _ = std::fs::remove_dir_all(storage);
     }
 
@@ -893,12 +730,15 @@ mod tests {
         let index = PreparedPayloadIndex::from_library_roots(&roots);
         let inspection = inspect_mgl(&mgl).expect("inspect MGL");
 
-        validate_0mhz_mgl_inspection_with_index(&mgl, &inspection, &index)
-            .expect("outside payload uses live fallback");
+        validate_0mhz_mgl_inspection_with(&inspection, |payload| {
+            let path =
+                resolve_0mhz_payload_path_with(&mgl, payload, |path| index.path_is_file(path));
+            let exists = index.path_is_file(&path);
+            (path, exists)
+        })
+        .expect("outside payload uses live fallback");
 
-        let stats = index.lookup_stats();
-        assert_eq!(stats.unknown, 0);
-        assert_eq!(stats.live_fallbacks, 1);
+        assert_eq!(index.live_fallbacks.get(), 1);
         let _ = std::fs::remove_dir_all(storage);
     }
 
@@ -1016,10 +856,6 @@ mod tests {
         let inspection = validate_neon68k_mgl(&mgl).expect("validate Neon68K MGL");
 
         assert_eq!(inspection.setname.as_deref(), Some("Akumajou"));
-        assert_eq!(
-            neon68k_source_category(&mgl).as_deref(),
-            Some("Keyboard + Mouse")
-        );
 
         let missing_setname = dir.join("missing-setname.mgl");
         std::fs::write(
@@ -1092,11 +928,11 @@ mod tests {
             std::fs::write(path, b"crt").expect("write CRT");
         }
 
-        assert!(oneload64_provenance(&primary).is_some());
-        assert!(oneload64_provenance(&multiload).is_some());
-        assert!(oneload64_provenance(&dump).is_none());
-        assert!(oneload64_provenance(&alternative).is_none());
-        assert!(oneload64_provenance(&extra).is_none());
+        assert!(observed_oneload64_path_is_valid(&primary));
+        assert!(observed_oneload64_path_is_valid(&multiload));
+        assert!(!observed_oneload64_path_is_valid(&dump));
+        assert!(!observed_oneload64_path_is_valid(&alternative));
+        assert!(!observed_oneload64_path_is_valid(&extra));
         assert_eq!(validate_prepared_launch_path(&primary), Ok(true));
         assert!(
             validate_prepared_launch_path(&dump)
@@ -1108,7 +944,7 @@ mod tests {
         std::fs::create_dir_all(unmarked.parent().expect("unmarked parent"))
             .expect("create unmarked dir");
         std::fs::write(&unmarked, b"crt").expect("write unmarked CRT");
-        assert!(oneload64_provenance(&unmarked).is_none());
+        assert!(!observed_oneload64_path_is_valid(&unmarked));
         assert_eq!(validate_prepared_launch_path(&unmarked), Ok(false));
         let _ = std::fs::remove_dir_all(dir);
     }

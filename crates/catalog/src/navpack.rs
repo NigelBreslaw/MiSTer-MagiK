@@ -112,6 +112,8 @@ impl MappedNavPack {
     ) -> Result<(Self, NavPackOpenTiming), String> {
         let total_started = std::time::Instant::now();
         let file_started = std::time::Instant::now();
+        #[cfg(any(test, feature = "io-test-metrics"))]
+        crate::io_test_metrics::record_read();
         let file = File::open(path).map_err(|error| format!("open NavPack: {error}"))?;
         let actual_bytes = file
             .metadata()

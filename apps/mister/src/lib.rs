@@ -46,6 +46,8 @@ pub mod bitmap_font_resource;
 #[doc(hidden)]
 pub mod bitmap_text;
 pub mod build_identity;
+#[cfg(feature = "magik2")]
+pub mod catalog_equivalence;
 pub mod catalog_failure_report;
 pub mod catalog_progress_report;
 pub mod command_args;
@@ -219,6 +221,4 @@ pub mod video_player;
 #[cfg(feature = "ui")]
 pub use mister_magik_mister_runtime::vt;
 
-pub use mister_magik_catalog::{
-    arcade_catalog, library_bench, library_db, media_identity, preview_worker,
-};
+pub use mister_magik_catalog::{arcade_catalog, library_db, media_identity, preview_worker};

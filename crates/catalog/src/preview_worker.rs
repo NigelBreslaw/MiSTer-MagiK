@@ -1767,24 +1767,6 @@ pub fn preview_archive_paths_from_env() -> Vec<String> {
         .collect()
 }
 
-pub fn preview_archive_paths_for_catalog_projection() -> Vec<String> {
-    let mut paths = Vec::new();
-    append_preview_archive_paths_env(&mut paths);
-    if let Some(path) = preview_archive_path_from_env() {
-        paths.push(path);
-    } else if let Some(path) = default_preview_archive_path() {
-        paths.push(path);
-    }
-    paths.push(neogeo_preview_archive_path_from_env().unwrap_or_else(default_neogeo_archive_path));
-    paths.extend(console_preview_archive_paths_from_env());
-    paths.extend(default_console_archive_paths());
-    let mut seen = HashSet::new();
-    paths
-        .into_iter()
-        .filter(|path| seen.insert(path.clone()))
-        .collect()
-}
-
 fn append_preview_archive_paths_env(paths: &mut Vec<String>) {
     if let Ok(value) = std::env::var("MISTER_PREVIEW_ARCHIVES") {
         for path in value
@@ -1998,15 +1980,6 @@ fn auto_preview_archive_path() -> Option<String> {
     auto_preview_archive_path_in_root(&root, resize)
 }
 
-fn default_preview_archive_path() -> Option<String> {
-    if preview_archive_auto_disabled() {
-        return None;
-    }
-    let resize = PreviewResizeSpec::from_env();
-    let root = default_preview_archive_root();
-    Some(default_preview_archive_path_in_root(&root, resize))
-}
-
 fn preview_archive_auto_disabled() -> bool {
     matches!(
         std::env::var("MISTER_PREVIEW_ARCHIVE_AUTO").as_deref(),
@@ -2041,10 +2014,6 @@ fn neogeo_preview_archive_path_from_env() -> Option<String> {
 fn auto_neogeo_archive_path() -> Option<String> {
     let root = default_preview_archive_root();
     auto_archive_path_for_system(&root, "neogeo")
-}
-
-fn default_neogeo_archive_path() -> String {
-    legacy_archive_path_for_system(&default_screenshot_asset_dir(), "neogeo")
 }
 
 fn console_preview_archive_paths_from_env() -> Vec<String> {
@@ -2097,13 +2066,6 @@ fn auto_console_archive_paths() -> Vec<String> {
     supported_screenshot_pack_ids()
         .filter(|system| !matches!(*system, "arcade" | "neogeo"))
         .filter_map(|system| auto_archive_path_for_system(&default_preview_archive_root(), system))
-        .collect()
-}
-
-fn default_console_archive_paths() -> Vec<String> {
-    supported_screenshot_pack_ids()
-        .filter(|system| !matches!(*system, "arcade" | "neogeo"))
-        .map(|system| legacy_archive_path_for_system(&default_screenshot_asset_dir(), system))
         .collect()
 }
 
@@ -4013,36 +3975,6 @@ mod tests {
         assert_eq!(result.preview_archive_path, legacy.display().to_string());
         let _ = std::fs::remove_file(archive);
         let _ = std::fs::remove_dir(root);
-    }
-
-    #[test]
-    fn catalog_projection_paths_include_default_console_packs_without_stat() {
-        let paths = preview_archive_paths_for_catalog_projection();
-
-        assert!(
-            paths
-                .iter()
-                .any(|path| path == "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b")
-        );
-        assert!(
-            paths
-                .iter()
-                .any(|path| path == "/media/fat/mister-magik/assets/nes-screenshots.mmlz4b")
-        );
-        assert!(
-            paths
-                .iter()
-                .any(|path| path == "/media/fat/mister-magik/assets/saturn-screenshots.mmlz4b")
-        );
-        assert!(
-            paths
-                .iter()
-                .any(|path| path == "/media/fat/mister-magik/assets/c64-screenshots.mmlz4b")
-        );
-        assert!(
-            paths.iter().any(|path| path
-                == "/media/fat/mister-magik/assets/zx-spectrum-screenshots.mmlz4b")
-        );
     }
 
     #[test]

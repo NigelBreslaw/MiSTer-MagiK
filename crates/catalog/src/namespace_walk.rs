@@ -98,12 +98,6 @@ pub(crate) struct NamespaceWalkStats {
     pub(crate) target_signature: Option<(u64, i64)>,
 }
 
-#[derive(Debug)]
-pub(crate) struct DirectorySignatureProbe {
-    pub(crate) target_signature: Option<(u64, i64)>,
-    pub(crate) child_signatures: Vec<Option<(u64, i64)>>,
-}
-
 #[cfg(feature = "builder")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct KnownPathMetadata {
@@ -458,61 +452,6 @@ fn report_namespace_subtree_recovery(
     );
 }
 
-/// Probe a directory and a known set of its immediate child directories.
-/// Linux resolves every child relative to one open parent fd, avoiding the
-/// repeated full-path lookups that are especially costly on exFAT/FUSE.
-pub(crate) fn probe_directory_signatures(
-    target: &Path,
-    child_paths: &[PathBuf],
-) -> DirectorySignatureProbe {
-    #[cfg(target_os = "linux")]
-    {
-        linux::probe_directory_signatures(target, child_paths)
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        let target_before = std::fs::symlink_metadata(target)
-            .ok()
-            .filter(|metadata| metadata.is_dir())
-            .and_then(|metadata| metadata_signature(metadata.len(), metadata.modified().ok()));
-        let child_before = child_paths
-            .iter()
-            .map(|path| {
-                std::fs::symlink_metadata(path)
-                    .ok()
-                    .filter(|metadata| metadata.is_dir())
-                    .and_then(|metadata| {
-                        metadata_signature(metadata.len(), metadata.modified().ok())
-                    })
-            })
-            .collect::<Vec<_>>();
-        let child_after = child_paths
-            .iter()
-            .map(|path| {
-                std::fs::symlink_metadata(path)
-                    .ok()
-                    .filter(|metadata| metadata.is_dir())
-                    .and_then(|metadata| {
-                        metadata_signature(metadata.len(), metadata.modified().ok())
-                    })
-            })
-            .collect::<Vec<_>>();
-        let target_after = std::fs::symlink_metadata(target)
-            .ok()
-            .filter(|metadata| metadata.is_dir())
-            .and_then(|metadata| metadata_signature(metadata.len(), metadata.modified().ok()));
-        DirectorySignatureProbe {
-            target_signature: stable_directory_signature(target_before, target_after),
-            child_signatures: child_before
-                .into_iter()
-                .zip(child_after)
-                .map(|(before, after)| stable_directory_signature(before, after))
-                .collect(),
-        }
-    }
-}
-
 fn stable_directory_signature(
     before: Option<(u64, i64)>,
     after: Option<(u64, i64)>,
@@ -744,8 +683,8 @@ mod linux {
     #[cfg(feature = "builder")]
     use super::KnownPathMetadata;
     use super::{
-        DirectorySignatureProbe, NamespaceEntry, NamespaceEntryKind, NamespaceRootPolicy,
-        NamespaceSignatureCapture, NamespaceWalkStats, is_zip_path, unix_timestamp_nanos,
+        NamespaceEntry, NamespaceEntryKind, NamespaceRootPolicy, NamespaceSignatureCapture,
+        NamespaceWalkStats, is_zip_path, unix_timestamp_nanos,
     };
     use std::ffi::{CString, OsString};
     use std::fmt;
@@ -931,47 +870,6 @@ mod linux {
         )
     }
 
-    pub(super) fn probe_directory_signatures(
-        target: &Path,
-        child_paths: &[std::path::PathBuf],
-    ) -> DirectorySignatureProbe {
-        let Ok(target_name) = c_string(target.as_os_str().as_bytes(), "target path") else {
-            return unavailable_probe(child_paths.len());
-        };
-        let raw_fd = open_retry(
-            target_name.as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-        )
-        .ok()
-        .unwrap_or(-1);
-        if raw_fd < 0 {
-            return unavailable_probe(child_paths.len());
-        }
-        let target_fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
-        let target_before = stat_fd(target_fd.as_raw_fd())
-            .ok()
-            .and_then(directory_signature);
-        let child_before = child_paths
-            .iter()
-            .map(|path| child_directory_signature(target_fd.as_raw_fd(), path))
-            .collect::<Vec<_>>();
-        let child_after = child_paths
-            .iter()
-            .map(|path| child_directory_signature(target_fd.as_raw_fd(), path))
-            .collect::<Vec<_>>();
-        let target_after = stat_fd(target_fd.as_raw_fd())
-            .ok()
-            .and_then(directory_signature);
-        DirectorySignatureProbe {
-            target_signature: super::stable_directory_signature(target_before, target_after),
-            child_signatures: child_before
-                .into_iter()
-                .zip(child_after)
-                .map(|(before, after)| super::stable_directory_signature(before, after))
-                .collect(),
-        }
-    }
-
     #[cfg(feature = "builder")]
     pub(super) fn probe_known_path_metadata(
         parent: &Path,
@@ -1001,22 +899,6 @@ mod linux {
                 Some(known_path_metadata_from_stat(value))
             })
             .collect()
-    }
-
-    fn child_directory_signature(parent_fd: RawFd, path: &Path) -> Option<(u64, i64)> {
-        let name = path.file_name()?;
-        let name = c_string(name.as_bytes(), "directory entry name").ok()?;
-        let value = stat_entry(parent_fd, &name, path).ok()?;
-        (kind_from_mode(value.st_mode) == NamespaceEntryKind::Directory)
-            .then(|| directory_signature(value))
-            .flatten()
-    }
-
-    fn unavailable_probe(child_count: usize) -> DirectorySignatureProbe {
-        DirectorySignatureProbe {
-            target_signature: None,
-            child_signatures: vec![None; child_count],
-        }
     }
 
     fn collect_fd_relative_with_budget(
@@ -1589,28 +1471,6 @@ mod linux {
         CString::new(bytes).map_err(|_| format!("NUL in {description}"))
     }
 
-    fn stat_entry(directory: RawFd, name: &CString, path: &Path) -> Result<libc::stat, String> {
-        loop {
-            let mut value = std::mem::MaybeUninit::<libc::stat>::uninit();
-            let result = unsafe {
-                libc::fstatat(
-                    directory,
-                    name.as_ptr(),
-                    value.as_mut_ptr(),
-                    libc::AT_SYMLINK_NOFOLLOW,
-                )
-            };
-            if result == 0 {
-                return Ok(unsafe { value.assume_init() });
-            }
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::EINTR) {
-                continue;
-            }
-            return Err(format!("fstatat {}: {error}", path.display()));
-        }
-    }
-
     fn stat_entry_capture(
         directory: RawFd,
         name: &CString,
@@ -2078,25 +1938,6 @@ mod tests {
         assert_eq!(stable_directory_signature(before, after), None);
         assert_eq!(stable_directory_signature(before, None), None);
         assert_eq!(stable_directory_signature(None, after), None);
-    }
-
-    #[test]
-    fn batched_directory_probe_rejects_missing_and_non_directories() {
-        let dir = unique_temp_dir("namespace-signature-probe");
-        let child = dir.join("child");
-        let file = dir.join("file.rom");
-        let missing = dir.join("missing");
-        fs::create_dir_all(&child).unwrap();
-        fs::write(&file, b"file").unwrap();
-
-        let probe = probe_directory_signatures(&dir, &[child.clone(), file, missing]);
-
-        assert!(probe.target_signature.is_some());
-        assert!(probe.child_signatures[0].is_some());
-        assert_eq!(probe.child_signatures[1], None);
-        assert_eq!(probe.child_signatures[2], None);
-
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[cfg(feature = "builder")]

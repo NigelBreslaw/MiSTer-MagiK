@@ -880,6 +880,8 @@ fn search_meta_text(connection: &Connection, key: &str) -> Result<String, Persis
 }
 
 fn open_read_only(path: &Path) -> Result<Connection, PersistedSearchError> {
+    #[cfg(any(test, feature = "io-test-metrics"))]
+    crate::io_test_metrics::record_read();
     SEARCH_SQLITE_OPENS.fetch_add(1, AtomicOrdering::Relaxed);
     let connection = Connection::open_with_flags(
         path,

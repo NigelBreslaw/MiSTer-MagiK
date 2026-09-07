@@ -78,14 +78,13 @@ fn remove_predecessor_catalog_artifacts_at(
     let mut removed_artifacts = usize::from(remove_dir_or_symlink_if_exists(
         &app_dir.join(PREDECESSOR_CATALOG_DIR_NAME),
     )?);
-    removed_artifacts =
-        removed_artifacts.saturating_add(crate::sqlite_catalog::remove_catalog_artifacts_at(
-            &app_dir.join(PREDECESSOR_SQLITE_NAME),
-            build_dir,
-            None,
-            snapshot_dir,
-            &app_dir.join("rebuild-on-next-boot"),
-        )?);
+    removed_artifacts = removed_artifacts.saturating_add(remove_catalog_artifacts_at(
+        &app_dir.join(PREDECESSOR_SQLITE_NAME),
+        build_dir,
+        None,
+        snapshot_dir,
+        &app_dir.join("rebuild-on-next-boot"),
+    )?);
     removed_artifacts = removed_artifacts.saturating_add(usize::from(remove_file_if_exists(
         &app_dir.join(PREDECESSOR_ARCADE_BOOTSTRAP_NAME),
         "predecessor arcade bootstrap",
@@ -95,6 +94,102 @@ fn remove_predecessor_catalog_artifacts_at(
         detected,
         removed_artifacts,
     })
+}
+
+fn remove_catalog_artifacts_at(
+    sqlite_path: &Path,
+    build_dir: &Path,
+    configured_snapshot: Option<&Path>,
+    default_snapshot_dir: &Path,
+    rebuild_marker: &Path,
+) -> Result<usize, String> {
+    let mut removed = 0usize;
+    for (path, label) in [
+        (sqlite_path.to_path_buf(), "database"),
+        (
+            sqlite_path.with_file_name("library.summary.json"),
+            "catalog summary",
+        ),
+        (
+            sqlite_path.with_file_name("library.nav.lz4b"),
+            "catalog navigation",
+        ),
+        (
+            sqlite_path.with_file_name("database-build-time.txt"),
+            "catalog build duration",
+        ),
+        (rebuild_marker.to_path_buf(), "catalog rebuild marker"),
+    ] {
+        removed += usize::from(remove_file_if_exists_counted(&path, label)?);
+    }
+
+    let sqlite_name = sqlite_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("library.sqlite3");
+    if let Some(parent) = sqlite_path.parent() {
+        let sqlite_tmp_prefix = format!(".{sqlite_name}.tmp.");
+        let sqlite_journal = format!("{sqlite_name}-journal");
+        let sqlite_wal = format!("{sqlite_name}-wal");
+        let sqlite_shm = format!("{sqlite_name}-shm");
+        removed += remove_matching_files(parent, "catalog adjacent temp", |name| {
+            name.starts_with(&sqlite_tmp_prefix)
+                || name == sqlite_journal
+                || name == sqlite_wal
+                || name == sqlite_shm
+                || name == ".library.summary.json.tmp"
+                || name == ".library.nav.lz4b.tmp"
+                || name == ".library-build-seconds.tmp"
+        })?;
+    }
+    let build_prefix = format!(".{sqlite_name}.build.");
+    removed += remove_matching_files(build_dir, "catalog build temp", |name| {
+        name.starts_with(&build_prefix)
+    })?;
+    if let Some(snapshot) = configured_snapshot {
+        removed += usize::from(remove_file_if_exists_counted(
+            snapshot,
+            "configured catalog ready snapshot",
+        )?);
+    }
+    removed += remove_matching_files(default_snapshot_dir, "catalog ready snapshot", |name| {
+        name.starts_with("catalog-ready-") && name.ends_with(".nav.lz4b")
+    })?;
+    Ok(removed)
+}
+
+fn remove_matching_files(
+    dir: &Path,
+    label: &str,
+    mut matches: impl FnMut(&str) -> bool,
+) -> Result<usize, String> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(format!("read {label} directory {}: {error}", dir.display())),
+    };
+    let mut removed = 0usize;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("read {label} entry: {error}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("stat {label} {}: {error}", entry.path().display()))?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if (file_type.is_file() || file_type.is_symlink()) && matches(&name) {
+            removed += usize::from(remove_file_if_exists_counted(&entry.path(), label)?);
+        }
+    }
+    Ok(removed)
+}
+
+fn remove_file_if_exists_counted(path: &Path, label: &str) -> Result<bool, String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("remove {label} {}: {error}", path.display())),
+    }
 }
 
 fn predecessor_adjacent_file(name: &str) -> bool {

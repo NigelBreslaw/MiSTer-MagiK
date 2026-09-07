@@ -36,27 +36,6 @@ impl PlatformKind {
         platform_kind_for_system(system_id)
     }
 
-    pub(crate) const fn encoded(self) -> u8 {
-        match self {
-            Self::Unknown => 0,
-            Self::Arcade => 1,
-            Self::Console => 2,
-            Self::Handheld => 3,
-            Self::Computer => 4,
-        }
-    }
-
-    pub(crate) fn from_encoded(value: u8) -> Option<Self> {
-        match value {
-            0 => Some(Self::Unknown),
-            1 => Some(Self::Arcade),
-            2 => Some(Self::Console),
-            3 => Some(Self::Handheld),
-            4 => Some(Self::Computer),
-            _ => None,
-        }
-    }
-
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Arcade => "arcade",

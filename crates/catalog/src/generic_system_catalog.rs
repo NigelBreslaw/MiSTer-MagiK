@@ -1203,15 +1203,13 @@ fn scan_archive_with_signature(
     games: &mut Vec<ScannedGame>,
 ) {
     stats.archive_opens = stats.archive_opens.saturating_add(1);
-    let Some((size, mtime_secs)) = signature else {
+    let Some(_signature) = signature else {
         stats.read_errors += 1;
         return;
     };
     let found = FoundFile {
         path: path.to_path_buf(),
         ext: "zip".to_string(),
-        size,
-        mtime_secs,
     };
     match scan_zip_central_directory(&found, profile) {
         Ok(entries) => {

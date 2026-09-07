@@ -1450,89 +1450,11 @@ sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls launch handoff trace behavior", accepted_values = [], value_policy = "document" }
 
-[[control]]
-name = "MISTER_LAUNCH_PREP_AMIGAVISION_LIMIT"
-owner = "apps/mister/src/launch_preparation.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launch prep amigavision limit behavior", accepted_values = [], value_policy = "document" }
 
-[[control]]
-name = "MISTER_LAUNCH_PREP_ITERATIONS"
-owner = "apps/mister/src/launch_preparation.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launch prep iterations behavior", accepted_values = [], value_policy = "document" }
 
-[[control]]
-name = "MISTER_LAUNCH_PREP_LABEL"
-owner = "apps/mister/src/launch_preparation.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launch prep label behavior", accepted_values = [], value_policy = "document" }
 
-[[control]]
-name = "MISTER_LAUNCH_PREP_REFS"
-owner = "apps/mister/src/launch_preparation.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launch prep refs behavior", accepted_values = [], value_policy = "document" }
 
-[[control]]
-name = "MISTER_LAUNCH_PREP_VIRTUAL_LIMIT"
-owner = "apps/mister/src/launch_preparation.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launch prep virtual limit behavior", accepted_values = [], value_policy = "document" }
 
-[[control]]
-name = "MISTER_LAUNCH_PREP_VIRTUAL_SYSTEMS"
-owner = "apps/mister/src/launch_preparation.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls launch prep virtual systems behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT"
@@ -1548,75 +1470,10 @@ sensitivity = "path"
 aliases = []
 documentation = { summary = "Controls launch return pmu handoff out behavior", accepted_values = [], value_policy = "redact" }
 
-[[control]]
-name = "MISTER_LIBRARY_BENCH_FORCE_REBUILD"
-owner = "crates/catalog/src/library_cli.rs"
-classification = "benchmark"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "benchmark only"
-parser = "bool"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls library bench force rebuild behavior", accepted_values = [], value_policy = "document" }
 
-[[control]]
-name = "MISTER_LIBRARY_BENCH_ITERATIONS"
-owner = "crates/catalog/src/library_cli.rs"
-classification = "benchmark"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "benchmark only"
-parser = "u64"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls library bench iterations behavior", accepted_values = [], value_policy = "document" }
 
-[[control]]
-name = "MISTER_LIBRARY_BENCH_LABEL"
-owner = "crates/catalog/src/library_cli.rs"
-classification = "benchmark"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "benchmark only"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls library bench label behavior", accepted_values = [], value_policy = "document" }
 
-[[control]]
-name = "MISTER_LIBRARY_BENCH_PRECOUNT"
-owner = "crates/catalog/src/library_cli.rs"
-classification = "benchmark"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "benchmark only"
-parser = "bool"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls library bench precount behavior", accepted_values = [], value_policy = "document" }
 
-[[control]]
-name = "MISTER_LIBRARY_BENCH_SQLITE"
-owner = "crates/catalog/src/device_layout.rs"
-classification = "benchmark"
-value_shape = "path"
-default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
-visibility = "benchmark only"
-parser = "path"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Controls library bench sqlite behavior", accepted_values = [], value_policy = "redact" }
 
 [[control]]
 name = "MISTER_LIBRARY_NAMESPACE_BACKEND"

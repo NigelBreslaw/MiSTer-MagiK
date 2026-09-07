@@ -92,8 +92,10 @@ pub(crate) fn work_gate_snapshot() -> CatalogWorkGateSnapshot {
     }
 }
 
+#[cfg(any(test, feature = "builder"))]
 pub(crate) struct BackgroundScope;
 
+#[cfg(any(test, feature = "builder"))]
 impl BackgroundScope {
     pub(crate) fn enter() -> Self {
         BACKGROUND_SCOPE_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
@@ -101,6 +103,7 @@ impl BackgroundScope {
     }
 }
 
+#[cfg(any(test, feature = "builder"))]
 impl Drop for BackgroundScope {
     fn drop(&mut self) {
         BACKGROUND_SCOPE_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));

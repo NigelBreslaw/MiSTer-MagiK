@@ -738,6 +738,8 @@ pub fn open_system_shard(
     expected_generation: u64,
     limits: SystemShardLimits,
 ) -> Result<LoadedSystemShard, SystemShardError> {
+    #[cfg(any(test, feature = "io-test-metrics"))]
+    crate::io_test_metrics::record_read();
     let sqlite_size = fs::metadata(sqlite_path)
         .map_err(|error| SystemShardError::with("stat shard SQLite", error))?
         .len();
@@ -1403,6 +1405,8 @@ fn elapsed_us(started: std::time::Instant) -> u64 {
 }
 
 fn read_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, SystemShardError> {
+    #[cfg(any(test, feature = "io-test-metrics"))]
+    crate::io_test_metrics::record_read();
     let size = fs::metadata(path)
         .map_err(|error| SystemShardError::with("stat shard navigation", error))?
         .len();

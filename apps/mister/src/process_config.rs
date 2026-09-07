@@ -1132,10 +1132,6 @@ mod tests {
             config.archive_cache().preview_cache_dir(),
             config.catalog_paths().preview_cache_dir()
         );
-        assert_eq!(
-            config.archive_cache().sqlite_build_dir(),
-            config.catalog_paths().library_sqlite_build_dir()
-        );
     }
 
     #[test]

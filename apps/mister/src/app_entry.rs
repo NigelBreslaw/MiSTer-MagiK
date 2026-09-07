@@ -38,16 +38,11 @@
 //!     metadata-qualification-report
 //!                        report compact-only metadata probes and device acceptance steps
 //!     search-bench       benchmark persisted Arcade FTS5 search
-//!     rom-identity-bench benchmark production ROM identity hashing
-//!     hbmame-metadata-from-library
-//!                        build supplemental HBMAME metadata from parsed MRA parents
 //!   Bench tools (`--features bench-tools`):
 //!     media-bench-download
 //!                        benchmark raw screenshot pack persistence
 //!     media-bench-save   benchmark screenshot pack save/publish paths
 //!     preview-pack-bench benchmark screenshot pack entry access/decode timings
-//!     preview-index-refresh-bench
-//!                        update DB preview flags from screenshot pack indexes
 //!     framebuffer-stream-scalar-bench
 //!                        measure the production RGB565 scalar decimator
 //!     input              gamepad log / sniff / calibrate
@@ -55,15 +50,8 @@
 //!     scenes             list Slint scene names
 //!   Experiments:
 //!     effects            list framebuffer effect benchmark names
-//!     camera-effects     list classic camera/background effect labels
-//!     sprite-effects     list classic sprite/object effect labels
-//!     text-effects       list classic game/Amiga text effect labels
-//!     raster-effects     list classic raster/palette effect labels
-//!     transition-effects list classic screen transition effect labels
 //!     preview-transitions list screenshot transition labels
 //!     effect-bench       run framebuffer effect benchmarks
-//!     library-scan-bench benchmark build, import, cached load, stamp check
-//!     launch-prep-bench  benchmark launch-ref preparation without core launch
 //!
 //! Game/core launch requests must go through MiSTer_MagiK supervision.
 //!
@@ -117,9 +105,9 @@ use mister_magik_fb::screenshot_transitions;
 use mister_magik_fb::ui_effect_bench;
 pub use mister_magik_fb::{
     arcade_button_overrides, arcade_catalog, command_args, controller_db, framebuffer, input_event,
-    input_repeat, input_state, launch_preparation, launcher, launcher_presentation,
-    launcher_taxonomy, library_db, licenses, media_update, particle_engine, preview_worker,
-    return_catalog_capsule, setup_nav, spring_animation, ui_errln, ui_log, ui_logln,
+    input_repeat, input_state, launcher, launcher_presentation, launcher_taxonomy, licenses,
+    media_update, particle_engine, preview_worker, return_catalog_capsule, setup_nav,
+    spring_animation, ui_errln, ui_log, ui_logln,
 };
 use mister_magik_fb::{
     cpu_profile, input_integrity_driver, media_bench_download, pmu_probe, pmu_profile,
@@ -381,22 +369,15 @@ fn dispatch_pre_fpga(
         "pmu-probe" => pmu_probe::run(),
         "pmu-profile" => pmu_profile::run(args.get(2..).unwrap_or_default()),
         "search-bench" => search_bench::run(),
-        "rom-identity-bench" => run_rom_identity_benchmark(args.get(2..).unwrap_or_default()),
         command_args::CATALOG_CORPUS_INVENTORY_COMMAND => run_catalog_corpus_inventory(),
         "media-bench-download" => media_bench_download::run(),
         #[cfg(feature = "bench-tools")]
         "media-bench-save" => media_bench_save::run(),
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         "preview-pack-bench" => preview_pack_bench::run(),
-        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-        "preview-index-refresh-bench" => run_preview_index_refresh_bench(),
         command_args::CATALOG_INSPECT_COMMAND => {
             run_catalog_inspect(process_config.catalog_paths())
         }
-        command_args::CATALOG_ROM_AUDIT_COMMAND => run_catalog_arcade_rom_audit(
-            process_config.catalog_paths(),
-            process_config.archive_cache(),
-        ),
         command_args::CATALOG_NEOGEO_FAMILY_AUDIT_COMMAND => {
             run_catalog_neogeo_family_audit(process_config.device_paths().device_root())
         }
@@ -415,10 +396,6 @@ fn dispatch_pre_fpga(
             run_runtime_metadata_qualification_report()
         }
         command_args::CATALOG_WORKER_COMMAND => ui_runner::run_catalog_worker_child(args),
-        #[cfg(feature = "diagnostics")]
-        "hbmame-metadata-from-library" => run_hbmame_metadata_from_library(),
-        #[cfg(feature = "bench-tools")]
-        "launch-prep-bench" => launch_preparation::run_launch_prep_bench(),
         #[cfg(feature = "bench-tools")]
         "framebuffer-stream-scalar-bench" => {
             if !mister_magik_fb::framebuffer::downsample::run_scalar_bench() {
@@ -429,16 +406,6 @@ fn dispatch_pre_fpga(
         "experiment-capabilities" => print_experiment_capabilities(),
         #[cfg(mister_experiments)]
         "preview-transitions" => print_preview_transitions(),
-        #[cfg(mister_experiments)]
-        "camera-effects" => ui_runner::print_camera_effects(),
-        #[cfg(mister_experiments)]
-        "sprite-effects" => ui_runner::print_sprite_effects(),
-        #[cfg(mister_experiments)]
-        "text-effects" => ui_runner::print_text_effects(),
-        #[cfg(mister_experiments)]
-        "raster-effects" => ui_runner::print_raster_effects(),
-        #[cfg(mister_experiments)]
-        "transition-effects" => ui_runner::print_transition_effects(),
         other => unknown_command(other),
     }
 }
@@ -453,20 +420,6 @@ fn run_catalog_corpus_inventory() {
         "{}",
         mister_magik_catalog::catalog_corpus_inventory_tsv(&roots)
     );
-}
-
-fn run_rom_identity_benchmark(args: &[String]) {
-    if !args.is_empty() {
-        crate::ui_errln!("rom-identity-bench accepts no arguments");
-        std::process::exit(2);
-    }
-    match mister_magik_catalog::rom_identity_benchmark_report() {
-        Ok(report) => crate::ui_logln!("{report}"),
-        Err(error) => {
-            crate::ui_errln!("ROM identity benchmark failed: {error}");
-            std::process::exit(1);
-        }
-    }
 }
 
 fn benchmark_capabilities() -> serde_json::Value {
@@ -487,8 +440,6 @@ fn benchmark_capabilities() -> serde_json::Value {
         "persisted-search-v1": true,
         "search-benchmark-v2": true,
         "media-pack-persistence-v1": true,
-        "rom-identity-benchmark-v1": true,
-        "rom-identity-benchmark-v3": true,
         "runtime-metadata-qualification-v2": true,
         "input-integrity-driver-v1": true,
         "arcade-velocity-scroll-v1": true,
@@ -512,19 +463,6 @@ fn run_catalog_inspect(paths: &mister_magik_catalog::device_layout::CatalogPaths
         Ok(report) => crate::ui_log!("{report}"),
         Err(error) => {
             crate::ui_errln!("catalog_summary_tsv\tvalid=0\terror={error}");
-            std::process::exit(1);
-        }
-    }
-}
-
-fn run_catalog_arcade_rom_audit(
-    paths: &mister_magik_catalog::device_layout::CatalogPaths,
-    archive_cache: &mister_magik_catalog::catalog_config::ArchiveCacheConfig,
-) {
-    match library_db::audit_arcade_rom_visibility_with_paths(paths, archive_cache) {
-        Ok(report) => crate::ui_log!("{report}"),
-        Err(error) => {
-            crate::ui_errln!("arcade_rom_visibility_summary_tsv\tvalid=0\terror={error}");
             std::process::exit(1);
         }
     }
@@ -890,11 +828,6 @@ fn dispatch_fpga(
         "fpga-latch-post-report" => run_fpga_latch_post_report(f),
         #[cfg(all(feature = "diagnostics", feature = "ui"))]
         "fpga-latch-pattern" => run_fpga_latch_pattern(f),
-        #[cfg(feature = "diagnostics")]
-        "library-scan-bench" => library_db::run_scan_bench_with_config(
-            process_config.catalog_paths(),
-            process_config.archive_cache(),
-        ),
         other => unknown_command(other),
     }
 }
@@ -927,9 +860,7 @@ fn print_experiment_capabilities() {
     #[cfg(mister_experiments)]
     {
         crate::ui_logln!("experiments=1");
-        crate::ui_logln!(
-            "commands=effects,camera-effects,sprite-effects,text-effects,raster-effects,transition-effects,effect-bench"
-        );
+        crate::ui_logln!("commands=effects,effect-bench");
     }
     #[cfg(not(mister_experiments))]
     {
@@ -1259,43 +1190,6 @@ fn catalog_filter_inspection_tsv(
 
 fn sanitize_tsv_field(value: &str) -> String {
     value.replace(['\t', '\r', '\n'], " ")
-}
-
-#[cfg(feature = "diagnostics")]
-fn run_hbmame_metadata_from_library() {
-    match library_db::write_default_hbmame_metadata_from_library() {
-        Ok(summary) => {
-            crate::ui_logln!(
-                "hbmame_metadata_from_library\tdone\tpath={}\trows={}",
-                summary.path.display(),
-                summary.rows
-            );
-        }
-        Err(e) => {
-            crate::ui_errln!("hbmame_metadata_from_library\tfailed\t{e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-fn run_preview_index_refresh_bench() {
-    let label = std::env::args()
-        .nth(2)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "PREVIEW-INDEX-REFRESH".to_string());
-    crate::ui_logln!("{}", library_db::PREVIEW_INDEX_REFRESH_TSV_HEADER);
-    match library_db::refresh_default_preview_index_flags(&label) {
-        Ok(rows) => {
-            for row in rows {
-                crate::ui_logln!("{}", row.to_tsv());
-            }
-        }
-        Err(e) => {
-            crate::ui_errln!("preview_index_refresh\tfailed\t{e}");
-            std::process::exit(1);
-        }
-    }
 }
 
 #[cfg(feature = "diagnostics")]

@@ -34,13 +34,14 @@ def main() -> None:
     for needle in (
         "run_catalog_builder_subprocess",
         "MISTER_CATALOG_BUILDER_BIN",
-        "Command::new",
         "builder_service",
     ):
         forbid(worker, needle, "catalog worker")
+    require(worker, "std::env::current_exe()", "self-executable catalog worker")
+    require(worker, ".arg(crate::command_args::CATALOG_WORKER_COMMAND)", "catalog worker command")
 
     app_entry = read("apps/mister/src/app_entry.rs")
-    require(app_entry, "execute_fast_refresh", "library-refresh")
+    require(app_entry, "execute_planned_fast_refresh_with_lease", "library-refresh")
     require(app_entry, "build_fresh_catalog", "library-refresh")
     forbid(app_entry, "builder_service", "library-refresh")
     forbid(app_entry, "MISTER_CATALOG_BUILDER_BIN", "library-refresh")

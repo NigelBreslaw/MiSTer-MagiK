@@ -158,16 +158,6 @@ pub(crate) fn exec_failure_message(context: &str, output: &ExecOutput) -> Option
     Some(format!("{context} failed with rc={}: {detail}", output.rc))
 }
 
-#[cfg(test)]
-pub(crate) fn library_sql_command_unavailable(output: &ExecOutput) -> bool {
-    output.rc != 0
-        && output
-            .stdout
-            .lines()
-            .chain(output.stderr.lines())
-            .any(|line| line.contains("unknown command 'library-sql'"))
-}
-
 pub(crate) fn exec(sess: &Session, command: &str, merge_stderr: bool) -> Result<ExecOutput> {
     let mut channel = sess.channel_session()?;
     if merge_stderr {
@@ -336,11 +326,11 @@ mod tests {
         assert_eq!(shell_quote("it's here"), "'it'\"'\"'s here'");
         assert_eq!(
             remote_subcommand(
-                "/media/fat/mister-magik/mister-magik-fb",
-                "library-sql",
-                &["SELECT *".into(), "name='Pac-Man'".into()]
+                "/fixture/app",
+                "fixture-subcommand",
+                &["a space".into(), "label='Pac-Man'".into()]
             ),
-            "/media/fat/mister-magik/mister-magik-fb library-sql 'SELECT *' 'name='\"'\"'Pac-Man'\"'\"''"
+            "/fixture/app fixture-subcommand 'a space' 'label='\"'\"'Pac-Man'\"'\"''"
         );
         assert_eq!(
             remove_files_command(&["/tmp/a path", "/tmp/it's"]),
@@ -398,21 +388,6 @@ mod tests {
                 Some(expected)
             );
         }
-    }
-
-    #[test]
-    fn library_sql_fallback_requires_nonzero_unknown_command_response() {
-        let mut output = ExecOutput {
-            rc: 1,
-            stdout: String::new(),
-            stderr: "unknown command 'library-sql'".into(),
-        };
-        assert!(library_sql_command_unavailable(&output));
-        output.rc = 0;
-        assert!(!library_sql_command_unavailable(&output));
-        output.rc = 1;
-        output.stderr = "database is corrupt".into();
-        assert!(!library_sql_command_unavailable(&output));
     }
 
     #[test]

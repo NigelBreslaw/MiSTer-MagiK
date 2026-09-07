@@ -5,7 +5,6 @@
 
 use crate::catalog_scan::should_ignore_path;
 use crate::launch_profiles;
-use crate::namespace_walk;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -371,38 +370,6 @@ fn append_zip_member_extensions(path: &Path, extensions: &mut BTreeSet<String>) 
     }
 }
 
-pub(crate) fn top_level_game_dirs_for_roots(roots: &[String]) -> Vec<GameDirFact> {
-    top_level_game_dirs_for_roots_excluding(roots, &BTreeSet::new())
-}
-
-pub(crate) fn top_level_game_dirs_for_roots_excluding(
-    roots: &[String],
-    excluded_names: &BTreeSet<String>,
-) -> Vec<GameDirFact> {
-    top_level_game_dir_probe_headers_for_roots_excluding(roots, excluded_names)
-        .into_iter()
-        .map(|header| {
-            let (
-                has_payload_files,
-                has_zip_files,
-                direct_zip_paths,
-                nested_probe_signatures,
-                payload_extensions,
-            ) = game_dir_payload_facts(&header.path);
-            GameDirFact {
-                name: header.name,
-                path: header.path,
-                signature: header.signature,
-                has_payload_files,
-                has_zip_files,
-                direct_zip_paths,
-                nested_probe_signatures,
-                payload_extensions,
-            }
-        })
-        .collect()
-}
-
 pub(crate) fn top_level_game_dir_headers_for_roots_excluding(
     roots: &[String],
     excluded_names: &BTreeSet<String>,
@@ -552,35 +519,6 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding_checked(
 #[cfg(feature = "builder")]
 fn checked_header_entry_is_rejected(is_dir: Option<bool>) -> bool {
     matches!(is_dir, Some(false))
-}
-
-/// Adds compact directory signatures to the name-only cold scan headers.
-/// Linux obtains them by opening each direct child relative to `/games` and
-/// reading metadata from that fd, avoiding one full exFAT path lookup per
-/// system directory.
-pub(crate) fn top_level_game_dir_probe_headers_for_roots_excluding(
-    roots: &[String],
-    excluded_names: &BTreeSet<String>,
-) -> Vec<GameDirHeader> {
-    let mut headers = top_level_game_dir_headers_for_roots_excluding(roots, excluded_names);
-    for game_root in game_roots(roots) {
-        let indexes = headers
-            .iter()
-            .enumerate()
-            .filter_map(|(index, header)| {
-                (header.path.parent() == Some(game_root.as_path())).then_some(index)
-            })
-            .collect::<Vec<_>>();
-        let child_paths = indexes
-            .iter()
-            .map(|index| headers[*index].path.clone())
-            .collect::<Vec<_>>();
-        let probe = namespace_walk::probe_directory_signatures(&game_root, &child_paths);
-        for (index, signature) in indexes.into_iter().zip(probe.child_signatures) {
-            headers[index].signature = GameDirSignature::from_namespace_signature(signature);
-        }
-    }
-    headers
 }
 
 #[cfg(test)]
@@ -975,7 +913,13 @@ mod tests {
         std::fs::write(games.join("NeoGeoPocket/Additions.zip"), b"zip").expect("write zip");
         std::fs::write(games.join("screenshot-magik/Fake.gb"), b"media").expect("write media");
 
-        let dirs = top_level_game_dirs_for_roots(&[root.display().to_string()]);
+        let dirs = top_level_game_dir_headers_for_roots_excluding(
+            &[root.display().to_string()],
+            &BTreeSet::new(),
+        )
+        .into_iter()
+        .map(game_dir_payload_facts_for_header)
+        .collect::<Vec<_>>();
 
         assert!(dirs.iter().any(|dir| {
             dir.name == "Gameboy"
@@ -1001,14 +945,9 @@ mod tests {
         let roots = vec![root.display().to_string()];
 
         let cold = top_level_game_dir_headers_for_roots_excluding(&roots, &BTreeSet::new());
-        let probe = top_level_game_dir_probe_headers_for_roots_excluding(&roots, &BTreeSet::new());
 
         assert_eq!(cold.len(), 1);
         assert_eq!(cold[0].signature, GameDirSignature::Unavailable);
-        assert!(matches!(
-            probe[0].signature,
-            GameDirSignature::Present { .. }
-        ));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1069,7 +1008,10 @@ mod tests {
         std::fs::write(outside.join("Ghost.gb"), b"rom").expect("write outside rom");
         std::os::unix::fs::symlink(&outside, games.join("Gameboy")).expect("create symlink dir");
 
-        let dirs = top_level_game_dirs_for_roots(&[root.display().to_string()]);
+        let dirs = top_level_game_dir_headers_for_roots_excluding(
+            &[root.display().to_string()],
+            &BTreeSet::new(),
+        );
 
         assert!(dirs.is_empty());
         let _ = std::fs::remove_dir_all(root);
