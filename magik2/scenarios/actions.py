@@ -42,11 +42,13 @@ def smoke(
     fields, pixels = agent.capture_framebuffer()
     png, metadata = capture_png(fields, pixels, "raw")
     screenshot_path.write_bytes(png)
+    idle = assert_static_idle(agent, expected_sha256)
     return {
         "build_label": build.accessible_label,
         "screenshot": screenshot_path.name,
         "capture_source": metadata["source"],
         "capture_sequence": metadata["frame_sequence"],
+        **idle,
     }
 
 
@@ -162,6 +164,39 @@ def _text_element(application: Any, label: str) -> Any:
     if len(matches) != 1:
         raise AssertionError(f"expected one Text element for {label!r}, got {len(matches)}")
     return matches[0]
+
+
+def assert_static_idle(agent: NativeAgent, expected_sha256: str) -> Mapping[str, object]:
+    """Prove a ready static scene remains idle while metrics keep publishing."""
+    time.sleep(0.25)
+    baseline = agent.metrics()
+    time.sleep(0.65)
+    sample = agent.metrics()
+    if baseline.get("sha256") != expected_sha256 or sample.get("sha256") != expected_sha256:
+        raise AssertionError("idle metrics belong to another application")
+    if baseline.get("pid") != sample.get("pid"):
+        raise AssertionError("application pid changed during static idle interval")
+    baseline_elapsed = baseline.get("elapsed_ms")
+    sample_elapsed = sample.get("elapsed_ms")
+    if not all(type(value) is int for value in (baseline_elapsed, sample_elapsed)):
+        raise AssertionError("idle metrics omitted application elapsed time")
+    interval = sample_elapsed - baseline_elapsed
+    if interval < 600:
+        raise AssertionError(f"idle metrics interval was only {interval}ms")
+    counters = ("presentations", "physical_latch_posts", "evidence_error")
+    if any(baseline.get(name) != sample.get(name) for name in counters):
+        raise AssertionError("static launcher changed presentation counters while idle")
+    if sample.get("evidence_error") is not None:
+        raise AssertionError("static launcher reported presentation evidence error")
+    return {
+        "idle_static_verified": True,
+        "idle_baseline_elapsed_ms": baseline_elapsed,
+        "idle_sample_elapsed_ms": sample_elapsed,
+        "idle_interval_ms": interval,
+        "idle_presentations": sample.get("presentations"),
+        "idle_physical_latch_posts": sample.get("physical_latch_posts"),
+        "idle_evidence_error": sample.get("evidence_error"),
+    }
 
 
 def _wait(predicate: Callable[[], bool], failure: str, timeout: float = 3) -> None:
