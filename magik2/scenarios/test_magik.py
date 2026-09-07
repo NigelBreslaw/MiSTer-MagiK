@@ -16,7 +16,11 @@ from actions import (
     validate_development_paths,
 )
 from magik2.results import append_event
-from catalog_equivalence import catalog_identity, assert_catalog_equivalent, restore_application
+from catalog_equivalence import (
+    catalog_identity,
+    assert_catalog_equivalent,
+    restore_application,
+)
 
 
 @pytest.mark.skipif(
@@ -32,15 +36,22 @@ def test_catalog_equivalence(magik2_run):
 
     agent, status = connect_agent(
         magik2_run,
-        CHECK_AGENT_CAPABILITIES | {"artifacts-v1"} | application("magik").agent_capabilities,
+        CHECK_AGENT_CAPABILITIES
+        | {"artifacts-v1"}
+        | application("magik").agent_capabilities,
     )
     ensure_application(agent, status, magik2_run, "magik")
     session_id = f"catalog-equivalence-{uuid.uuid4().hex}"
     try:
-        agent._successful("start", {
-            "artifact": "magik", "restart": True,
-            "expected_sha256": agent.expected_sha256, "profile_id": session_id,
-        })
+        agent._successful(
+            "start",
+            {
+                "artifact": "magik",
+                "restart": True,
+                "expected_sha256": agent.expected_sha256,
+                "profile_id": session_id,
+            },
+        )
         deadline = time.monotonic() + 900
         while True:
             try:
@@ -50,7 +61,9 @@ def test_catalog_equivalence(magik2_run):
                 if not str(error).startswith("artifact-unavailable"):
                     raise
                 if time.monotonic() >= deadline:
-                    raise AssertionError("fresh catalog did not finish within 900 seconds") from error
+                    raise AssertionError(
+                        "fresh catalog did not finish within 900 seconds"
+                    ) from error
                 time.sleep(2)
         (magik2_run / "catalog.json").write_bytes(raw)
         result = json.loads(raw)
@@ -60,13 +73,18 @@ def test_catalog_equivalence(magik2_run):
         if baseline:
             before = json.loads(Path(baseline).read_text())
             assert_catalog_equivalent(before, result)
-        append_event(magik2_run, {
-            "phase":"catalog-equivalence", "outcome":"passed",
-            "artifact_sha256":agent.expected_sha256, "session_id":session_id,
-            "systems":len(result["systems"]),
-            "games":sum(system["games"] for system in result["systems"]),
-            "baseline":baseline,
-        })
+        append_event(
+            magik2_run,
+            {
+                "phase": "catalog-equivalence",
+                "outcome": "passed",
+                "artifact_sha256": agent.expected_sha256,
+                "session_id": session_id,
+                "systems": len(result["systems"]),
+                "games": sum(system["games"] for system in result["systems"]),
+                "baseline": baseline,
+            },
+        )
     finally:
         restore_application(agent, magik2_run, retain_diagnostics)
 

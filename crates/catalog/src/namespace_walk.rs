@@ -1992,7 +1992,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn fd_relative_matches_walkdir_and_zip_signature() {
-        use crate::test_support::{set_file_mtime_for_test, write_stored_zip};
+        use crate::test_support::write_stored_zip;
         use std::os::unix::ffi::OsStringExt;
 
         let dir = unique_temp_dir("namespace-fd-parity");
@@ -2004,7 +2004,11 @@ mod tests {
         fs::write(dir.join("ignored/hidden.rom"), b"hidden").unwrap();
         let zip = dir.join(std::ffi::OsString::from_vec(b"odd\x80.ZIP".to_vec()));
         write_stored_zip(&zip, &[("game.rom", b"game")]);
-        set_file_mtime_for_test(&zip, 1_700_000_123, 456_789_012);
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::new(1_700_000_123, 456_789_012);
+        fs::File::open(&zip)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
         let ignore = |path: &Path| path.file_name().is_some_and(|name| name == "ignored");
 
         for max_depth in [Some(0), Some(1), Some(2), None] {
