@@ -1,6 +1,8 @@
 """Retained device controls over the common native connection."""
 
+import argparse
 import json
+import re
 
 DISPLAY_MODES = (
     "auto",
@@ -15,6 +17,12 @@ DISPLAY_MODES = (
     "crt-480p60",
     "crt-576p50",
 )
+
+
+def catalog_database(value):
+    if not re.fullmatch(r"system:[a-z0-9-]+", value):
+        raise argparse.ArgumentTypeError("expected system:ID")
+    return value
 
 
 def add_commands(commands):
@@ -34,7 +42,6 @@ def add_commands(commands):
     for name in (
         "inspect",
         "metadata-qualification",
-        "rom-audit",
         "neogeo-family-audit",
         "screenshots",
         "query",
@@ -54,7 +61,7 @@ def add_commands(commands):
         if name in {"screenshots", "screenshot-qualification"}:
             item.add_argument("--system", required=True)
         if name == "query":
-            item.add_argument("--database", required=True)
+            item.add_argument("--database", required=True, type=catalog_database)
             item.add_argument("--sql", required=True)
     recover = commands.add_parser("recover")
     recover.add_argument("--attended", action="store_true", required=True)

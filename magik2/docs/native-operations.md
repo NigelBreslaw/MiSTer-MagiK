@@ -14,8 +14,8 @@ does not reboot. `reboot --attended` sends one request and observes one bounded
 boot transition; it never repeats an ambiguous reboot. `recover --attended`
 clears owned arming state and resumes Main without rebooting.
 
-`device catalog` provides `inspect`, `cores`, `metadata-qualification`, `rom-audit`,
-`neogeo-family-audit`, `query --database registry|library|system:ID --sql SQL`,
+`device catalog` provides `inspect`, `cores`, `metadata-qualification`,
+`neogeo-family-audit`, `query --database system:ID --sql SQL`,
 `screenshots --system ID`, and `screenshot-qualification --system ID`.
 Production catalog routines and formats remain authoritative. Queries are
 read-only, bounded and confined to the selected catalog root. Screenshot export

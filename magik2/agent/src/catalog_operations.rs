@@ -20,7 +20,6 @@ fn arguments(request: &Envelope) -> Result<(PathBuf, Vec<String>), String> {
     let command = match action {
         "inspect" => "catalog-inspect",
         "metadata-qualification" => "metadata-qualification-report",
-        "rom-audit" => "catalog-arcade-rom-audit",
         "neogeo-family-audit" => "catalog-neogeo-family-audit",
         "screenshots" => "catalog-screenshot-audit",
         "preview-render" => "preview-render-probe",
@@ -222,6 +221,13 @@ mod tests {
     #[test]
     fn query_rejects_mutation_attachment_and_escaped_storage() {
         let root = std::env::temp_dir().join(format!("magik2-query-{}", std::process::id()));
+        for selector in ["registry", "library", "system:", "system:../arcade"] {
+            assert!(
+                query(&root, selector, "SELECT 1")
+                    .unwrap_err()
+                    .contains("system:ID")
+            );
+        }
         let state = root.join("catalog-fast-v1/state");
         std::fs::create_dir_all(&state).unwrap();
         let path = state.join("catalog-state.sqlite3");
@@ -231,7 +237,15 @@ mod tests {
             .unwrap();
         drop(database);
         assert_eq!(
-            String::from_utf8(query(&root, "registry", "SELECT name FROM games").unwrap()).unwrap(),
+            String::from_utf8(
+                query_file(
+                    &root.join("catalog-fast-v1"),
+                    &path,
+                    "SELECT name FROM games"
+                )
+                .unwrap()
+            )
+            .unwrap(),
             "name\nArcade\n"
         );
         for sql in [
@@ -239,14 +253,17 @@ mod tests {
             "ATTACH ':memory:' AS extra",
             "PRAGMA writable_schema=ON",
         ] {
-            assert!(query(&root, "registry", sql).is_err(), "{sql}");
+            assert!(
+                query_file(&root.join("catalog-fast-v1"), &path, sql).is_err(),
+                "{sql}"
+            );
         }
         std::fs::remove_file(&path).unwrap();
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink("/etc/passwd", &path).unwrap();
             assert!(
-                query(&root, "registry", "SELECT 1")
+                query_file(&root.join("catalog-fast-v1"), &path, "SELECT 1")
                     .unwrap_err()
                     .contains("escapes")
             );
@@ -285,15 +302,18 @@ mod tests {
 }
 
 fn query(root: &std::path::Path, database: &str, sql: &str) -> Result<Vec<u8>, String> {
-    use mister_magik_catalog::{shard_registry, sqlite_inspect};
-    use rusqlite::{Connection, OpenFlags};
-    use std::time::Instant;
+    use mister_magik_catalog::shard_registry;
     let storage = root.join("catalog-fast-v1");
     let path = match database {
-        "registry" => storage.join("state/catalog-state.sqlite3"),
-        "library" => storage.join("state/scanner-cache.sqlite3"),
         value if value.starts_with("system:") => {
             let id = &value[7..];
+            if id.is_empty()
+                || !id
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            {
+                return Err("database must be system:ID".into());
+            }
             let manifest = shard_registry::read_latest_manifest_lazy(
                 &storage,
                 shard_registry::production_registry_limits(),
@@ -314,8 +334,19 @@ fn query(root: &std::path::Path, database: &str, sql: &str) -> Result<Vec<u8>, S
             }
             storage.join(relative)
         }
-        _ => return Err("database must be registry, library or system:ID".into()),
+        _ => return Err("database must be system:ID".into()),
     };
+    query_file(&storage, &path, sql)
+}
+
+fn query_file(
+    storage: &std::path::Path,
+    path: &std::path::Path,
+    sql: &str,
+) -> Result<Vec<u8>, String> {
+    use mister_magik_catalog::sqlite_inspect;
+    use rusqlite::{Connection, OpenFlags};
+    use std::time::Instant;
     let path = path.canonicalize().map_err(|e| e.to_string())?;
     if !path.starts_with(storage.canonicalize().map_err(|e| e.to_string())?) {
         return Err("database escapes catalog storage".into());

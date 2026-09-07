@@ -30,9 +30,8 @@ def parser():
         "catalog inspect",
         "catalog cores",
         "catalog metadata-qualification",
-        "catalog rom-audit",
         "catalog neogeo-family-audit",
-        "catalog query --database registry --sql SELECT",
+        "catalog query --database system:arcade --sql SELECT",
         "catalog screenshots --system arcade",
         "catalog purge --confirm",
         "catalog publish --release-dir /tmp/release",
@@ -52,6 +51,10 @@ def test_native_command_surface(command):
         "catalog query --database registry",
         "catalog screenshots",
         "media download",
+        "catalog rom-audit",
+        "catalog query --database registry --sql SELECT",
+        "catalog query --database library --sql SELECT",
+        "catalog query --database system:../arcade --sql SELECT",
     ],
 )
 def test_mutation_and_query_inputs_are_explicit(command):
