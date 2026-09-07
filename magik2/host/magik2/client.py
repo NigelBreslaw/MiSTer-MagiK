@@ -63,6 +63,27 @@ class NativeAgent:
             fields["expected_sha256"] = expected_sha256
         return self._successful("start", fields)
 
+    def run_benchmark(self, sha256: str, workload: str, mode: str):
+        request = Envelope(
+            uuid.uuid4().hex,
+            "run-benchmark",
+            self.token,
+            {"expected_sha256": sha256, "workload": workload, "mode": mode},
+        )
+        timeout = 100 if mode == "visual" else 40
+        deadline = time.monotonic() + timeout
+        with socket.create_connection((self.host, self.port), timeout=5) as connection:
+            connection.settimeout(timeout)
+            send_message(connection, request)
+            response, body = receive_message(connection, deadline=deadline)
+        if response.request_id != request.request_id:
+            raise ProtocolError("benchmark response identifier mismatch")
+        if response.operation == "error":
+            raise AgentError.from_fields(response.fields)
+        if response.operation != "benchmark-complete":
+            raise ProtocolError("unexpected benchmark response")
+        return response.fields, body
+
     def capture_framebuffer(self) -> tuple[Mapping[str, object], bytes]:
         """One binary capture, with a total ten-second deadline and no retry."""
         deadline = time.monotonic() + 10

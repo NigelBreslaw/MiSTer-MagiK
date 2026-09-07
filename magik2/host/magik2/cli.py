@@ -54,6 +54,11 @@ def main() -> int:
         "mcp", help="serve framebuffer screenshots to Codex over stdio"
     )
     subcommands.add_parser("deploy")
+    bench = subcommands.add_parser("bench", help="run a Mini workload")
+    bench.add_argument("workload", nargs="?", default="blend")
+    modes = bench.add_mutually_exclusive_group()
+    modes.add_argument("--visual", action="store_true")
+    modes.add_argument("--counters", choices=("neon", "memory"))
     transfer = subcommands.add_parser(
         "transfer-check", help="measure one saved upload without starting it"
     )
@@ -171,6 +176,10 @@ def dispatch(arguments, run) -> int:
             file=os.sys.stderr,
         )
         return 2
+    if arguments.command == "bench":
+        from .benchmark import run_benchmark
+
+        return run_benchmark(arguments, run)
     if arguments.command == "transfer-check":
         from .transfer import transfer_check
 
