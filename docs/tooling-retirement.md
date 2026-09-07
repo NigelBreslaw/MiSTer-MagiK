@@ -1,5 +1,24 @@
 # Tooling retirement
 
+## Desktop native migration
+
+Desktop now uses direct native Rust connections for its dashboard, SD browser,
+image/MRA details, screenshots, live framebuffer and retained Analytics. Its
+legacy protocol dependency and token/IP defaults are removed. Python is invoked
+only for exceptional native service preparation. Local image export, profile
+analysis and framebuffer diagnostics remain.
+
+Deleted the legacy `sd_list_dir` fallback/endpoint and its exclusive helpers and
+tests. Dropped only the approved live FPGA counters and unreliable frame-summary
+metrics; production runtime/physical qualification measurements remain.
+
+New deletion candidates are the legacy SD v2/stat/preview/MRA endpoints and
+Desktop-only telemetry/stream wrappers. They were deliberately not deleted in
+this batch. Legacy CLI framebuffer capture remains a consumer of shared capture
+support. Physical input/CRT qualification, its matched agent installer, application
+protocol imports, and the retained legacy CLI/evidence readers still prevent
+complete old-agent/protocol/startup/artifact deletion. Desktop no longer blocks it.
+
 ## Current disposition after host migration
 
 This section supersedes the command inventory in the historical milestones below.
@@ -25,7 +44,7 @@ C = CLI; A = old agent; P = protocol; S = startup; I = legacy CI/package artifac
 | `device arming-status` | Volatile arming inspection; `host/mod.rs` | Attended physical qualification/recovery procedures; retained separately | C/A/P/S/I |
 | `device events` | Legacy timeline evidence; `host/agent_client.rs` | Existing hardware qualification event inspection; retained separately | C/A/P/S/I |
 | `device crt qualify`, `probe`, `restore` | Focused physical CRT checks; `host/crt_qualification.rs` | `docs/crt.md`; retained separately | C/A/P/S/I |
-| `device capture framebuffer` | Legacy file capture/derived views; `host/framebuffer_views.rs` | Existing operator evidence and Desktop endpoint; retained separately, 2.0 capture also supported | C/A/P/S/I |
+| `device capture framebuffer` | Legacy file capture/derived views; `host/framebuffer_views.rs` | Existing operator evidence; retained separately, 2.0 capture also supported | C/A/P/S/I |
 | `device fpga install-experimental-agent` | Matched legacy diagnostic-agent installation; `host/mod.rs` | Physical qualification/legacy diagnostic consumers; retained while those consumers remain | C/A/P/S/I |
 | `benchmark input-integrity` | Physical input qualification; `benchmark.rs`, `host/mod.rs` | Explicit user retention and hardware input contract; retained separately | C/A/P/S/I |
 | `release frame-evidence verify` | Offline historical frame record reader; `return_qualification.rs` | Existing operator evidence files; retained separately | C only |
@@ -35,16 +54,16 @@ C = CLI; A = old agent; P = protocol; S = startup; I = legacy CI/package artifac
 
 | Group / code owner | Actual consumers and disposition | Blocks |
 |---|---|---|
-| `crates/agent-protocol` | Desktop authenticated control, SD browser, image preview, framebuffer stream/capture; retained physical qualification client; deferred Desktop migration | A/P/S/I, and C for retained CLI |
-| `mister/tools/agent` control/status/SD/capture/input/diagnostics | Desktop `apps/desktop/src/agent_client.rs` directly requests ping/status/magik, SD list/stat/preview/MRA and framebuffer streams. Physical CRT/input qualification still uses legacy diagnostics. Retain named endpoints | A/P/S/I |
+| `crates/agent-protocol` | Retained physical qualification client and production application imports; Desktop dependency removed | A/P/S/I, and C for retained CLI |
+| `mister/tools/agent` control/status/SD/capture/input/diagnostics | Desktop has migrated. Physical CRT/input qualification still uses legacy diagnostics; retain those endpoints. Former Desktop-only endpoints are later deletion candidates | A/P/S/I |
 | Legacy host connection/bootstrap, `host/agent_client.rs`/`remote.rs`, SSH dependency | Above physical checks and matched agent installer. No new 2.0 operation invokes these | C/A/P/S/I |
-| Legacy service startup and release/CI package | Desktop and physical qualification still require installation and startup; defer uninstall | S/I |
-| Application protocol imports and shared frame/input contracts | Production app and Desktop compile consumers remain; do not delete based on CLI retirement | P |
+| Legacy service startup and release/CI package | Physical qualification and retained legacy CLI capture/control still require installation/startup; defer uninstall | S/I |
+| Application protocol imports and shared frame/input contracts | Production app compile consumers remain; Desktop protocol import removed | P |
 | Legacy evidence/workflow/transport modules | Retained physical benchmark records and offline readers; public APIs without independent callers are later deletion candidates | C; not A by themselves |
 
 The old CLI is therefore not yet wholly removable. Next decisions are whether to
-extract retained physical qualification/offline readers and how to migrate
-Desktop; only then remove its protocol, startup and CI artifact. Other unused
+extract retained physical qualification/offline readers; Desktop is migrated.
+Only then remove the remaining protocol, startup and CI artifact. Other unused
 public helpers are candidates for a later focused batch, not silently included.
 
 No new framework, UI scenario, campaign database or hardware matrix was added.
