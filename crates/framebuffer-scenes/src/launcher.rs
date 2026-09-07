@@ -336,6 +336,8 @@ fn draw_cached_carousel(
             &cards[index],
             false,
             &ordinals[index],
+            353,
+            256,
         );
     }
     draw_cached_card(
@@ -345,6 +347,8 @@ fn draw_cached_carousel(
         &cards[selected % cards.len()],
         true,
         "",
+        220,
+        768,
     );
 }
 
@@ -380,6 +384,13 @@ fn draw_cached_motion(
         let x = slot_x(relative) + t(slot_x(destination) - slot_x(relative));
         let width = slot_width(relative) + t(slot_width(destination) - slot_width(relative));
         if x >= 0 && width > 0 {
+            let prominence = if relative == 0 {
+                256 - (256 * progress / duration)
+            } else if destination == 0 {
+                256 * progress / duration
+            } else {
+                0
+            };
             draw_cached_card(
                 pixels,
                 x as usize,
@@ -387,6 +398,8 @@ fn draw_cached_motion(
                 &cards[index],
                 relative == 0,
                 &ordinals[index],
+                (353 - 133 * prominence / 256) as usize,
+                (256 + 512 * prominence / 256) as usize,
             );
         }
     }
@@ -399,6 +412,8 @@ fn draw_cached_card(
     card: &PreparedCard,
     selected: bool,
     ordinal_label: &str,
+    title_y: usize,
+    title_scale_q8: usize,
 ) {
     let top = if selected { CARD_TOP } else { CARD_TOP + 8 };
     let bottom = CARD_BOTTOM;
@@ -415,11 +430,27 @@ fn draw_cached_card(
         if width > 8 && bottom - top > 8 {
             draw_rect_outline(pixels, x + 4, top + 4, width - 8, bottom - top - 8, CREAM);
         }
-        draw_text_centered(pixels, x, 220, width, &card.name, foreground, 3);
+        draw_text_scaled_centered(
+            pixels,
+            x,
+            title_y,
+            width,
+            &card.name,
+            foreground,
+            title_scale_q8,
+        );
         draw_text_centered(pixels, x, 385, width, &card.games_label, foreground, 1);
     } else {
         draw_text(pixels, x + 15, 151, ordinal_label, foreground, 1);
-        draw_text_centered(pixels, x, 353, width, &card.name, foreground, 1);
+        draw_text_scaled_centered(
+            pixels,
+            x,
+            title_y,
+            width,
+            &card.name,
+            foreground,
+            title_scale_q8,
+        );
     }
     draw_reflection(pixels, x, width, bottom);
 }
@@ -620,6 +651,35 @@ fn draw_text_centered(
         colour,
         scale,
     );
+}
+
+fn draw_text_scaled_centered(
+    pixels: &mut [Rgb565Pixel],
+    x: usize,
+    y: usize,
+    width: usize,
+    text: &str,
+    colour: u16,
+    scale_q8: usize,
+) {
+    let text_width = text.chars().count() * 6 * scale_q8 / 256;
+    let origin = x + width.saturating_sub(text_width) / 2;
+    let mut cursor = origin;
+    for character in text.chars() {
+        let glyph = glyph(character);
+        for (row, bits) in glyph.iter().enumerate() {
+            let y0 = y + row * scale_q8 / 256;
+            let y1 = y + (row + 1) * scale_q8 / 256;
+            for column in 0..5 {
+                if bits & (1 << (4 - column)) != 0 {
+                    let x0 = cursor + column * scale_q8 / 256;
+                    let x1 = cursor + (column + 1) * scale_q8 / 256;
+                    draw_rect(pixels, x0, y0, (x1 - x0).max(1), (y1 - y0).max(1), colour);
+                }
+            }
+        }
+        cursor += 6 * scale_q8 / 256;
+    }
 }
 
 fn draw_number(
