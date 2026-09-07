@@ -178,6 +178,7 @@ impl Agent {
     pub fn capabilities() -> &'static [&'static str] {
         &[
             "dashboard-status",
+            "application-process-analytics",
             "sd-browser",
             "framebuffer-stream",
             "telemetry-stream",

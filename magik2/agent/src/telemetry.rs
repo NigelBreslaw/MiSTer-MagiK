@@ -425,7 +425,18 @@ pub fn processes(root: &Path) -> Value {
         let Ok(comm) = fs::read_to_string(entry.path().join("comm")) else {
             continue;
         };
-        let Some(process) = result.get_mut(comm.trim()) else {
+        let name = if comm.trim() == "magik"
+            && fs::read_link(entry.path().join("exe"))
+                .ok()
+                .is_some_and(|path| {
+                    path.to_string_lossy().trim_end_matches(" (deleted)")
+                        == "/media/fat/mister-magik2/magik"
+                }) {
+            "mister-magik-fb"
+        } else {
+            comm.trim()
+        };
+        let Some(process) = result.get_mut(name) else {
             continue;
         };
         let Ok(status) = fs::read_to_string(entry.path().join("status")) else {
@@ -580,6 +591,20 @@ impl Sampler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_application_is_included_in_process_analytics() {
+        let root =
+            std::env::temp_dir().join(format!("magik2-process-alias-{}", std::process::id()));
+        let process = root.join("42");
+        fs::create_dir_all(&process).unwrap();
+        fs::write(process.join("comm"), "magik\n").unwrap();
+        fs::write(process.join("status"), "VmRSS: 100 kB\nThreads: 4\n").unwrap();
+        std::os::unix::fs::symlink("/media/fat/mister-magik2/magik", process.join("exe")).unwrap();
+        let result = processes(&root);
+        assert_eq!(result["mister-magik-fb"]["pids"], json!([42]));
+        assert_eq!(result["mister-magik-fb"]["rss_kb"], 100);
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn rates_preserve_measured_zero_and_reject_counter_reset() {
         let a = DiskCounters {
