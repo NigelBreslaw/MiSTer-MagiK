@@ -19,6 +19,43 @@ support. Physical input/CRT qualification, its matched agent installer, applicat
 protocol imports, and the retained legacy CLI/evidence readers still prevent
 complete old-agent/protocol/startup/artifact deletion. Desktop no longer blocks it.
 
+### Desktop validation and hardware acceptance (2026-09-07)
+
+The tooling branch is `nigel/desktop-native-api`; the dependent consumer branch
+is `nigel/desktop-api-cleanup`. Neither is published. Both complete diffs pass
+the unchanged tooling scope guard against their respective bases.
+
+Focused native checks, SD/telemetry/relay/lease fixtures, Desktop wire/discovery/
+subscription/decoder tests, Python preparation tests and both Desktop UI build
+paths pass. Rust LSP reports no diagnostics for the native client. Focused
+Desktop Clippy allows two pre-existing style lints (`collapsible_if` and
+`too_many_arguments`); no broad workspace or hardware matrix was repeated.
+
+One hardware session resolved the remembered device without `MISTER_IP`.
+Only the native service was prepared; the application was not deployed or
+restarted. Dashboard and browsing worked: SD root 73 entries in 26 ms total;
+Arcade 1,029 entries in 186 ms; screenshot directory 910 entries in 733 ms.
+The MRA inspector parsed 136 XML rows from a 3,167-byte existing file, and an
+existing PNG preview rendered correctly. Authoritative capture showed the real
+MagiK Dev screen at 960x540, RGB565, source `fpga-latched-scanout-slots`.
+
+Hardware acceptance is **partial**: producer streaming returned
+`producer-unavailable: Connection refused` for the application's local port 7499.
+No restart or repeated stream attempt was used to work around it. Telemetry
+connected and rendered the retained live CPU and frame information. Leaving the
+views closed the native TCP sockets (verified on the host); lease/worker cleanup
+is additionally covered by local tests, not a separate remote inspection.
+Successful producer-stream hardware acceptance remains outstanding and requires
+an app instance with its producer running; this milestone does not claim it passed.
+
+Starting the failed stream exposed a retained automatic seed capture: two still
+captures occurred instead of the planned one. The review fix deletes that path,
+its seed decoder and exclusive test in both UI modes and stream dumps. Streams
+now wait for a producer keyframe; still screenshots remain explicitly requested.
+No further hardware capture was run. Review also tightened malformed telemetry
+validation and classified invalid wire data as a protocol error, avoiding a
+transport retry for malformed input. Images/logs remain local, outside commits.
+
 ## Current disposition after host migration
 
 This section supersedes the command inventory in the historical milestones below.

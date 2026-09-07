@@ -315,6 +315,7 @@ fn bounded_command(mut command: Command, limit: Duration) -> Result<Vec<u8>, Age
         command.process_group(0);
     }
     let mut child = command.stdout(Stdio::piped()).spawn()?;
+    #[cfg(unix)]
     let pid = child.id();
     let stdout = child.stdout.take().unwrap();
     let (tx, rx) = std::sync::mpsc::sync_channel(1);

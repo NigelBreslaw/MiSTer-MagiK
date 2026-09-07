@@ -105,3 +105,7 @@ runs do not need the Skia prebuilt binary fetch.
 
 For MCP smoke testing, run the app with `scripts/dev-live-mcp.sh` in one
 terminal and then run `scripts/mcp-smoke.sh` in another.
+
+Live streams start from a producer keyframe. They never take an automatic still
+screenshot or use scanout pixels to seed producer deltas. If the application
+producer is unavailable, Desktop reports that error without restarting MagiK.

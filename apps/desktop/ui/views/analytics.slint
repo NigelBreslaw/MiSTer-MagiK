@@ -310,7 +310,7 @@ export component AnalyticsPage {
             if root.analytics-tab-index == 0: TableContainer {
                 vertical-stretch: 1;
                 title: "Framebuffer";
-                subtitle: "Producer-side launcher frames from the MiSTer agent.";
+                subtitle: "Live stream: application-produced frames. Capture: displayed scanout framebuffer.";
                 primary-action-label: AnalyticsState.loading ? "Capturing..." : "Capture framebuffer";
                 primary-action-variant: ButtonVariant.default;
                 primary-action => { Actions.capture-framebuffer(); }

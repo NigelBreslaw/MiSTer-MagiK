@@ -308,25 +308,16 @@ pub fn fetch_framebuffer_capture(host: &str) -> Result<FramebufferCapture, Agent
 }
 
 pub fn connect_framebuffer_stream(host: &str) -> Result<FramebufferStream, AgentError> {
-    connect_framebuffer_stream_seeded(host, None)
+    Ok(FramebufferStream {
+        session: Subscription::open(host, "framebuffer-stream")?,
+        state: FramebufferStreamState::default(),
+    })
 }
 
 pub fn connect_device_telemetry_stream(host: &str) -> Result<DeviceTelemetryStream, AgentError> {
     Ok(DeviceTelemetryStream {
         session: Subscription::open(host, "telemetry-stream")?,
     })
-}
-
-pub fn connect_framebuffer_stream_seeded(
-    host: &str,
-    seed: Option<&FramebufferCapture>,
-) -> Result<FramebufferStream, AgentError> {
-    let session = Subscription::open(host, "framebuffer-stream")?;
-    let mut state = FramebufferStreamState::default();
-    if let Some(seed) = seed {
-        state.seed_from_capture(seed)?;
-    }
-    Ok(FramebufferStream { session, state })
 }
 
 pub fn drain_framebuffer_stream(
@@ -658,69 +649,6 @@ impl FramebufferStreamState {
         self.awaiting_keyframe = false;
         Ok(())
     }
-
-    fn seed_from_capture(&mut self, capture: &FramebufferCapture) -> Result<(), AgentError> {
-        if capture.bpp != 16 || capture.raw_pixels.is_empty() {
-            return Ok(());
-        }
-        if capture.width == 0 || capture.height == 0 || capture.raw_stride_bytes == 0 {
-            return Ok(());
-        }
-        if !capture.raw_stride_bytes.is_multiple_of(2) {
-            return Err(AgentError::Protocol(
-                "framebuffer capture stride is not 16bpp aligned".to_string(),
-            ));
-        }
-        let stride_pixels = capture.raw_stride_bytes / 2;
-        if stride_pixels < capture.width {
-            return Err(AgentError::Protocol(
-                "framebuffer capture stride is smaller than width".to_string(),
-            ));
-        }
-        let expected = capture
-            .raw_stride_bytes
-            .checked_mul(capture.height)
-            .ok_or_else(|| AgentError::Protocol("framebuffer seed size overflow".to_string()))?
-            as usize;
-        if capture.raw_pixels.len() != expected {
-            return Err(AgentError::Protocol(format!(
-                "framebuffer seed size mismatch expected={expected} actual={}",
-                capture.raw_pixels.len()
-            )));
-        }
-        let geometry = FrameGeometry {
-            width: u32::try_from(capture.width).map_err(|_| {
-                AgentError::Protocol("framebuffer seed width too large".to_string())
-            })?,
-            height: u32::try_from(capture.height).map_err(|_| {
-                AgentError::Protocol("framebuffer seed height too large".to_string())
-            })?,
-            stride_pixels: u32::try_from(stride_pixels).map_err(|_| {
-                AgentError::Protocol("framebuffer seed stride too large".to_string())
-            })?,
-        };
-        geometry.validate_seed_shape()?;
-        self.rgb565 = capture.raw_pixels.clone();
-        self.geometry = Some(geometry);
-        self.expected_sequence = None;
-        self.awaiting_keyframe = false;
-        Ok(())
-    }
-}
-
-trait FrameGeometrySeedExt {
-    fn validate_seed_shape(self) -> Result<(), AgentError>;
-}
-
-impl FrameGeometrySeedExt for FrameGeometry {
-    fn validate_seed_shape(self) -> Result<(), AgentError> {
-        if self.width == 0 || self.height == 0 || self.stride_pixels < self.width {
-            return Err(AgentError::Protocol(
-                "invalid framebuffer seed geometry".to_string(),
-            ));
-        }
-        Ok(())
-    }
 }
 
 fn apply_rgb565_rect(
@@ -777,6 +705,11 @@ fn apply_rgb565_rect(
 fn parse_device_telemetry_sample(line: &str) -> Result<DeviceTelemetrySample, AgentError> {
     let value: Value = serde_json::from_str(line.trim())
         .map_err(|err| AgentError::Protocol(format!("invalid telemetry JSON: {err}")))?;
+    if !value.is_object() || value["seq"].as_u64().is_none() {
+        return Err(AgentError::Protocol(
+            "telemetry requires an object and sequence".into(),
+        ));
+    }
     let frame = value
         .pointer("/launcher/frame_budget")
         .unwrap_or(&Value::Null);
@@ -1015,11 +948,11 @@ fn parse_sd_directory(value: &Value) -> Result<SdDirectoryListing, AgentError> {
         Some("mister-magik-sd-list-dir-v2")
     ) {
         return Err(AgentError::Protocol(
-            "unexpected sd_list_dir response schema".to_string(),
+            "unexpected sd-list response schema".to_string(),
         ));
     }
     let path = string_at(value, "/path")
-        .ok_or_else(|| AgentError::Protocol("missing sd_list_dir path".to_string()))?
+        .ok_or_else(|| AgentError::Protocol("missing sd-list path".to_string()))?
         .to_string();
     let elapsed_ms = value
         .pointer("/elapsed_ms")
@@ -1028,7 +961,7 @@ fn parse_sd_directory(value: &Value) -> Result<SdDirectoryListing, AgentError> {
     let entries = value
         .pointer("/entries")
         .and_then(Value::as_array)
-        .ok_or_else(|| AgentError::Protocol("missing sd_list_dir entries".to_string()))?
+        .ok_or_else(|| AgentError::Protocol("missing sd-list entries".to_string()))?
         .iter()
         .map(parse_sd_entry)
         .collect::<Result<Vec<_>, _>>()?;
@@ -1424,9 +1357,65 @@ fn local_sd_preview_path(path: &str, format: &str) -> PathBuf {
     ))
 }
 
+fn parse_native_capture(value: &Value, raw: Vec<u8>) -> Result<FramebufferCapture, AgentError> {
+    let width = u64_at(value, "/width");
+    let height = u64_at(value, "/height");
+    let stride = u64_at(value, "/stride_bytes");
+    if value["source"] != "fpga-latched-scanout-slots"
+        || value["pixel_format"] != "rgb565-le"
+        || value["frame_sequence"].as_u64().is_none()
+        || width == 0
+        || height == 0
+        || width > 4096
+        || height > 4096
+        || !stride.is_multiple_of(2)
+        || stride.checked_mul(height) != Some(raw.len() as u64)
+        || raw.len() > MAX_FRAME_SURFACE_BYTES
+    {
+        return Err(AgentError::Protocol(
+            "invalid authoritative framebuffer geometry/source".into(),
+        ));
+    }
+    let rgba_pixels = framebuffer_raw_to_rgba(&raw, width, height, stride, 16)?;
+    Ok(FramebufferCapture {
+        png_path: PathBuf::new(),
+        rgba_pixels,
+        raw_bytes: raw.len() as u64,
+        payload_bytes: raw.len() as u64,
+        raw_pixels: raw,
+        raw_stride_bytes: stride,
+        width,
+        height,
+        bpp: 16,
+        encoding: format!(
+            "fpga-latched-scanout-slots; frame {}",
+            value["frame_sequence"]
+        ),
+        png_bytes: 0,
+        png_hex_bytes: 0,
+        timing: FramebufferCaptureTiming::default(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_native_results_are_rejected() {
+        for text in ["null", "[]", "{}", r#"{"seq":-1}"#, r#"{"seq":"1"}"#] {
+            assert!(parse_device_telemetry_sample(text).is_err());
+        }
+        let mut header = json!({"source":"fpga-latched-scanout-slots",
+            "pixel_format":"rgb565-le", "frame_sequence":1,
+            "width":1,"height":2,"stride_bytes":4});
+        let pixels = vec![0, 248, 0, 0, 224, 7, 0, 0];
+        let capture = parse_native_capture(&header, pixels.clone()).unwrap();
+        assert_eq!(capture.rgba_pixels, vec![255, 0, 0, 255, 0, 255, 0, 255]);
+        assert!(parse_native_capture(&header, pixels[..6].to_vec()).is_err());
+        header["source"] = json!("preview");
+        assert!(parse_native_capture(&header, pixels).is_err());
+    }
 
     #[test]
     fn parse_device_telemetry_sample_extracts_ui_fields() {
@@ -1467,7 +1456,7 @@ mod tests {
 
     #[test]
     fn parse_device_telemetry_sample_keeps_the_sampled_ui_thread_cpu() {
-        let sample = parse_device_telemetry_sample(r#"{"launcher":{"ui_thread_cpu":1}}"#)
+        let sample = parse_device_telemetry_sample(r#"{"seq":1,"launcher":{"ui_thread_cpu":1}}"#)
             .expect("telemetry should parse");
 
         assert_eq!(sample.launcher.ui_thread_cpu, Some(1));
@@ -1658,54 +1647,6 @@ mod tests {
             vec![0, 1, 0xaa, 0xbb, 4, 5, 6, 7, 0xcc, 0xdd, 10, 11]
         );
         assert_eq!(stream.expected_sequence, Some(3));
-    }
-
-    #[test]
-    fn framebuffer_stream_seed_capture_allows_first_rect_delta() {
-        let mut stream = FramebufferStreamState::default();
-        let seed = FramebufferCapture {
-            png_path: PathBuf::new(),
-            rgba_pixels: Vec::new(),
-            raw_pixels: vec![0, 1, 2, 3, 4, 5, 6, 7],
-            raw_stride_bytes: 4,
-            width: 2,
-            height: 2,
-            bpp: 16,
-            raw_bytes: 8,
-            payload_bytes: 8,
-            encoding: "lz4-block-size-prepended".to_string(),
-            png_bytes: 0,
-            png_hex_bytes: 0,
-            timing: FramebufferCaptureTiming::default(),
-        };
-        stream
-            .seed_from_capture(&seed)
-            .expect("seed capture should apply");
-
-        let geometry = FrameGeometry {
-            width: 2,
-            height: 2,
-            stride_pixels: 2,
-        };
-        let rect = FrameRect {
-            x: 1,
-            y: 0,
-            width: 1,
-            height: 2,
-        };
-        let (header, payload) =
-            encoded_stream_frame(FrameKind::RectDelta, 42, geometry, rect, &[8, 9, 10, 11]);
-        let frame = stream
-            .apply_frame(header, &payload)
-            .expect("seeded delta should apply")
-            .expect("seeded delta should produce capture");
-
-        assert_eq!(frame.capture.width, 2);
-        assert_eq!(frame.kind, FrameKind::RectDelta);
-        assert_eq!(frame.sequence, 42);
-        assert_eq!(frame.rect, rect);
-        assert_eq!(stream.rgb565, vec![0, 1, 8, 9, 4, 5, 10, 11]);
-        assert_eq!(stream.expected_sequence, Some(43));
     }
 
     #[test]
@@ -1917,7 +1858,7 @@ mod tests {
         }))
         .expect_err("missing path should fail");
         assert!(
-            matches!(missing_path, AgentError::Protocol(message) if message == "missing sd_list_dir path")
+            matches!(missing_path, AgentError::Protocol(message) if message == "missing sd-list path")
         );
 
         let missing_entries = parse_sd_directory(&json!({
@@ -1926,7 +1867,7 @@ mod tests {
         }))
         .expect_err("missing entries should fail");
         assert!(
-            matches!(missing_entries, AgentError::Protocol(message) if message == "missing sd_list_dir entries")
+            matches!(missing_entries, AgentError::Protocol(message) if message == "missing sd-list entries")
         );
     }
 
@@ -2015,44 +1956,4 @@ mod tests {
             payload,
         )
     }
-}
-
-fn parse_native_capture(value: &Value, raw: Vec<u8>) -> Result<FramebufferCapture, AgentError> {
-    let width = u64_at(value, "/width");
-    let height = u64_at(value, "/height");
-    let stride = u64_at(value, "/stride_bytes");
-    if value["source"] != "fpga-latched-scanout-slots"
-        || value["pixel_format"] != "rgb565-le"
-        || value["frame_sequence"].as_u64().is_none()
-        || width == 0
-        || height == 0
-        || width > 4096
-        || height > 4096
-        || !stride.is_multiple_of(2)
-        || stride.checked_mul(height) != Some(raw.len() as u64)
-        || raw.len() > MAX_FRAME_SURFACE_BYTES
-    {
-        return Err(AgentError::Protocol(
-            "invalid authoritative framebuffer geometry/source".into(),
-        ));
-    }
-    let rgba_pixels = framebuffer_raw_to_rgba(&raw, width, height, stride, 16)?;
-    Ok(FramebufferCapture {
-        png_path: PathBuf::new(),
-        rgba_pixels,
-        raw_bytes: raw.len() as u64,
-        payload_bytes: raw.len() as u64,
-        raw_pixels: raw,
-        raw_stride_bytes: stride,
-        width,
-        height,
-        bpp: 16,
-        encoding: format!(
-            "fpga-latched-scanout-slots; frame {}",
-            value["frame_sequence"]
-        ),
-        png_bytes: 0,
-        png_hex_bytes: 0,
-        timing: FramebufferCaptureTiming::default(),
-    })
 }

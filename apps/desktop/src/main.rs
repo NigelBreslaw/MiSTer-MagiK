@@ -21,9 +21,9 @@ mod stream_lifecycle;
 use app_state::{DEFAULT_HOST, DashboardSnapshot};
 use device_client::{
     DeviceTelemetrySample, DeviceTelemetryStreamControl, FramebufferStreamControl,
-    connect_device_telemetry_stream, connect_framebuffer_stream, connect_framebuffer_stream_seeded,
-    drain_framebuffer_stream, drain_framebuffer_stream_for, fetch_dashboard,
-    fetch_framebuffer_capture, fetch_sd_directory, fetch_sd_item_detail,
+    connect_device_telemetry_stream, connect_framebuffer_stream, drain_framebuffer_stream,
+    drain_framebuffer_stream_for, fetch_dashboard, fetch_framebuffer_capture, fetch_sd_directory,
+    fetch_sd_item_detail,
 };
 use framebuffer_cadence::{CadenceEventKind, FramebufferCadenceTrace};
 use realtime_frame_chart::{FrameChartState, FrameSample, RenderedFrameChart};
@@ -1536,12 +1536,7 @@ fn run_framebuffer_stream_bench(
         }
         FramebufferBenchMode::Dump(ref dir) => {
             std::fs::create_dir_all(dir)?;
-            let seed_capture = fetch_framebuffer_capture(&host).ok();
-            if let Some(capture) = seed_capture.as_ref() {
-                let png = framebuffer_capture_png_bytes(capture)?;
-                std::fs::write(dir.join("frame-0000-seed.png"), png)?;
-            }
-            let mut stream = connect_framebuffer_stream_seeded(&host, seed_capture.as_ref())?;
+            let mut stream = connect_framebuffer_stream(&host)?;
             let frames = match limit {
                 FramebufferBenchLimit::Frames(frames) => frames,
                 FramebufferBenchLimit::Duration(_) => unreachable!("dump is frame-count only"),
@@ -1725,7 +1720,6 @@ fn run_compiled_framebuffer_display_bench(
                 );
                 spawn_compiled_framebuffer_stream(
                     stream_ui.clone(),
-                    Arc::clone(&stream_capture),
                     Arc::clone(&stream_generation),
                     Arc::clone(&stream_control),
                     Arc::clone(&stream_metrics),
@@ -2390,7 +2384,6 @@ fn create_live_instance(
             );
             spawn_live_framebuffer_stream(
                 stream_instance.clone(),
-                Arc::clone(&stream_capture),
                 Arc::clone(&stream_generation),
                 Arc::clone(&stream_control),
                 Arc::clone(&stream_render_metrics),
@@ -3043,7 +3036,6 @@ fn run_compiled_ui(
                 );
                 spawn_compiled_framebuffer_stream(
                     stream_ui.clone(),
-                    Arc::clone(&stream_capture),
                     Arc::clone(&stream_generation),
                     Arc::clone(&stream_control),
                     Arc::clone(&stream_render_metrics),
@@ -5129,7 +5121,6 @@ fn consume_live_framebuffer_display(
 #[allow(clippy::too_many_arguments)]
 fn spawn_live_framebuffer_stream(
     instance: slint::Weak<slint_interpreter::ComponentInstance>,
-    capture_state: SharedFramebufferCapture,
     stream_generation: SharedLiveStreamGeneration,
     stream_control: SharedFramebufferStreamControl,
     render_metrics: Arc<FramebufferRenderMetrics>,
@@ -5139,24 +5130,7 @@ fn spawn_live_framebuffer_stream(
 ) {
     std::thread::spawn(move || {
         render_metrics.reset();
-        let seed_capture = fetch_framebuffer_capture(&host).ok();
-        if let Some(capture) = seed_capture.clone() {
-            let event_generation = Arc::clone(&stream_generation);
-            let event_capture_state = Arc::clone(&capture_state);
-            let event_instance = instance.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if event_generation.load(Ordering::SeqCst) != generation {
-                    return;
-                }
-                if let Ok(mut state) = event_capture_state.lock() {
-                    *state = Some(capture.clone());
-                }
-                if let Some(instance) = event_instance.upgrade() {
-                    apply_live_framebuffer_capture_result(&instance, Ok(capture));
-                }
-            });
-        }
-        let mut stream = match connect_framebuffer_stream_seeded(&host, seed_capture.as_ref()) {
+        let mut stream = match connect_framebuffer_stream(&host) {
             Ok(stream) => stream,
             Err(err) => {
                 let err = err.to_string();
@@ -5661,7 +5635,6 @@ fn consume_compiled_framebuffer_display(
 #[cfg(feature = "compiled-ui")]
 fn spawn_compiled_framebuffer_stream(
     ui: slint::Weak<AppWindow>,
-    capture_state: SharedFramebufferCapture,
     stream_generation: SharedLiveStreamGeneration,
     stream_control: SharedFramebufferStreamControl,
     render_metrics: Arc<FramebufferRenderMetrics>,
@@ -5671,24 +5644,7 @@ fn spawn_compiled_framebuffer_stream(
 ) {
     std::thread::spawn(move || {
         render_metrics.reset();
-        let seed_capture = fetch_framebuffer_capture(&host).ok();
-        if let Some(capture) = seed_capture.clone() {
-            let event_generation = Arc::clone(&stream_generation);
-            let event_capture_state = Arc::clone(&capture_state);
-            let event_ui = ui.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if event_generation.load(Ordering::SeqCst) != generation {
-                    return;
-                }
-                if let Ok(mut state) = event_capture_state.lock() {
-                    *state = Some(capture.clone());
-                }
-                if let Some(ui) = event_ui.upgrade() {
-                    apply_compiled_framebuffer_capture_result(&ui, Ok(capture));
-                }
-            });
-        }
-        let mut stream = match connect_framebuffer_stream_seeded(&host, seed_capture.as_ref()) {
+        let mut stream = match connect_framebuffer_stream(&host) {
             Ok(stream) => stream,
             Err(err) => {
                 let err = err.to_string();

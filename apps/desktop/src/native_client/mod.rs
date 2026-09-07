@@ -19,7 +19,11 @@ pub enum AgentError {
 }
 impl From<std::io::Error> for AgentError {
     fn from(e: std::io::Error) -> Self {
-        Self::Unreachable(e.to_string())
+        if e.kind() == std::io::ErrorKind::InvalidData {
+            Self::Protocol(e.to_string())
+        } else {
+            Self::Unreachable(e.to_string())
+        }
     }
 }
 impl std::fmt::Display for AgentError {
