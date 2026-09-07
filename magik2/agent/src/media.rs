@@ -147,7 +147,11 @@ pub fn run(fields: &serde_json::Map<String, Value>) -> Result<Value, String> {
         &pack.image_size,
     )?);
     let state_path = PathBuf::from(update::state_path(assets));
-    let mut state: Value = match fs::read(&state_path) {
+    let mut state: Value = match File::open(&state_path).and_then(|file| {
+        let mut bytes = Vec::new();
+        file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }) {
         Ok(bytes) if bytes.len() <= 1024 * 1024 => serde_json::from_slice(&bytes)
             .map_err(|e| format!("invalid existing media state: {e}"))?,
         Ok(_) => return Err("media state exceeds 1 MiB".into()),

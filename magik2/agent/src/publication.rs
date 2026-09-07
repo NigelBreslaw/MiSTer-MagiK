@@ -384,14 +384,6 @@ impl crate::Agent {
             } else {
                 None
             };
-            if platform {
-                crate::mode::disarm()?;
-            }
-            self.stop_owned_process()?;
-            if let Err(error) = crate::main_control::handoff("mister_magik_suspend\n") {
-                let restored = crate::main_control::handoff("mister_magik_resume\n");
-                return Err(format!("{error}; Main restoration: {restored:?}"));
-            }
             let root = stage(&self.install_root, fields)?;
             let requires_reboot = fields["kind"] == "platform";
             if requires_reboot {
@@ -404,6 +396,14 @@ impl crate::Agent {
                 File::open(root.join("pending.json"))
                     .and_then(|f| f.sync_all())
                     .map_err(|e| e.to_string())?;
+            }
+            if platform {
+                crate::mode::disarm()?;
+            }
+            self.stop_owned_process()?;
+            if let Err(error) = crate::main_control::handoff("mister_magik_suspend\n") {
+                let restored = crate::main_control::handoff("mister_magik_resume\n");
+                return Err(format!("{error}; Main restoration: {restored:?}"));
             }
             let published = replace(&paths, &root.join("backup"), || {
                 if platform && !requires_reboot {
