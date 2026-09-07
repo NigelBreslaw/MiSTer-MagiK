@@ -5,8 +5,8 @@
 
 use mister_magik_framebuffer_scenes::Rgb565Pixel as ScenePixel;
 use mister_magik_framebuffer_scenes::launcher::{LauncherCard, LauncherData, LauncherScene};
+use mister_magik_mister_runtime::display_plan::query_main_display_plan;
 use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
-use mister_magik_mister_runtime::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_mister_runtime::framebuffer::rgb565::Rgb565;
 use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel, SoftwareRenderer};
 use slint::platform::{EventLoopProxy, Platform, WindowAdapter};
@@ -152,16 +152,17 @@ impl Platform for ProbePlatform {
 }
 
 fn main() -> Result<(), String> {
-    let direct_framebuffer =
-        MappedRgb565Framebuffer::open_current_rgb565().map_err(|error| error.to_string())?;
-    let width = direct_framebuffer.width();
-    let height = direct_framebuffer.height();
-    drop(direct_framebuffer);
-    let mut framebuffer = HiddenLatchPresenter::open(
-        u16::try_from(width).map_err(|error: std::num::TryFromIntError| error.to_string())?,
-        u16::try_from(height).map_err(|error: std::num::TryFromIntError| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
+    let plan =
+        query_main_display_plan().map_err(|error| format!("resolve Main display: {error}"))?;
+    let (width, height) = (plan.fb_w, plan.fb_h);
+    let (scan_width, scan_height) = (plan.scan_w, plan.scan_h);
+    let mut framebuffer =
+        HiddenLatchPresenter::open_for_plan(plan).map_err(|error| error.to_string())?;
+    eprintln!(
+        "mini-display source={width}x{height} destination={}x{} authority=main-display-state",
+        framebuffer.destination_width(),
+        framebuffer.destination_height(),
+    );
     let window = ProbeWindow::new();
     slint::platform::set_platform(Box::new(ProbePlatform {
         window: window.clone(),
@@ -268,6 +269,16 @@ fn main() -> Result<(), String> {
     let session = Rc::new(RefCell::new(
         Session::from_environment().ok_or("missing tooling state root")?,
     ));
+    {
+        let mut session = session.borrow_mut();
+        let context = &mut session.metrics.context;
+        context["source_width"] = (width as u64).into();
+        context["source_height"] = (height as u64).into();
+        context["scan_width"] = u64::from(scan_width).into();
+        context["scan_height"] = u64::from(scan_height).into();
+        context["destination_width"] = (framebuffer.destination_width() as u64).into();
+        context["destination_height"] = (framebuffer.destination_height() as u64).into();
+    }
     let timer = motion_timer.clone();
     let weak = probe.as_weak();
     let session_for_motion = session.clone();

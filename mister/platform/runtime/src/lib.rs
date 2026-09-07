@@ -16,7 +16,7 @@ macro_rules! ui_logln {
 pub mod boot_analytics;
 #[cfg(feature = "app-runtime")]
 pub mod direct_reset_fault;
-#[cfg(feature = "app-runtime")]
+#[cfg(any(feature = "app-runtime", feature = "framebuffer-lab"))]
 pub mod display_control;
 pub mod display_plan;
 pub mod display_resolution;
@@ -25,7 +25,7 @@ pub mod framebuffer;
 #[cfg(all(feature = "framebuffer-lab", target_os = "linux"))]
 pub mod lab_input;
 pub mod latch_readiness;
-#[cfg(feature = "app-runtime")]
+#[cfg(any(feature = "app-runtime", feature = "framebuffer-lab"))]
 pub mod main_command;
 #[cfg(feature = "app-runtime")]
 pub mod runtime_state;

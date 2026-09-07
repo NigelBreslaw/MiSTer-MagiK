@@ -43,13 +43,31 @@ def smoke(
     png, metadata = capture_png(fields, pixels, "raw")
     screenshot_path.write_bytes(png)
     idle = assert_static_idle(agent, expected_sha256)
+    display = validate_mini_display(agent.metrics(), metadata)
     return {
         "build_label": build.accessible_label,
         "screenshot": screenshot_path.name,
         "capture_source": metadata["source"],
         "capture_sequence": metadata["frame_sequence"],
         **idle,
+        **display,
     }
+
+
+def validate_mini_display(metrics, capture):
+    """A correct source capture alone cannot prove full-screen scaler placement."""
+    context = metrics.get("context")
+    if not isinstance(context, Mapping):
+        raise AssertionError("Mini omitted display geometry")
+    names = ("source_width", "source_height", "scan_width", "scan_height",
+             "destination_width", "destination_height")
+    if any(type(context.get(name)) is not int or context[name] <= 0 for name in names):
+        raise AssertionError("Mini display geometry is incomplete")
+    if (context["source_width"], context["source_height"]) != (capture["width"], capture["height"]):
+        raise AssertionError("Mini source geometry differs from latched capture")
+    if (context["destination_width"], context["destination_height"]) != (context["scan_width"], context["scan_height"]):
+        raise AssertionError("Mini scaler destination does not fill the scanout")
+    return {"display_geometry": {name: context[name] for name in names}}
 
 
 def motion(

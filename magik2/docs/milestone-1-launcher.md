@@ -47,3 +47,27 @@ Slint window screenshot.
 
 Joystick browsing, flips, hold behavior, real catalog data, and game launching
 remain later milestones.
+
+## Scaler destination correction
+
+The initial capture validated only the 960x540 source pixels. Mini used a
+source-sized destination rectangle, so the UI occupied one quarter of the
+1920x1080 display. Source captures cannot establish final HDMI screen coverage.
+
+Mini now queries Main's active `DisplayV1` state through the existing serialized
+command transport and opens `HiddenLatchPresenter::open_for_plan`. The shared
+display plan supplies both the source dimensions and the full destination scan
+rectangle, including the existing pixel-repetition and CRT route rules. It does
+not upscale the CPU-rendered buffer or change the installed video mode. Raw
+`UIO_GET_VRES` timing is not used as a substitute: this device reports core
+timing of 529x240 while Main's active mode is HDMI 1920x1080. Unresolved Main
+modes fail explicitly rather than silently choosing a source-sized rectangle.
+
+Device smoke on 2026-09-07 recorded `source=960x540`, `scan=1920x1080`, and
+`destination=1920x1080` in
+`build/magik2-results/20260907T194040Z-92b554ca28d3/events.jsonl`.
+The smoke now asserts source/capture agreement and destination/scan agreement.
+Three display-contract tests, the existing source-stride/scaled-destination
+regression, three consumer geometry tests, and Mini device smoke passed.
+These checks verify the programmed geometry and acknowledged presentation;
+the native capture remains pre-scaler evidence, not an HDMI capture.
