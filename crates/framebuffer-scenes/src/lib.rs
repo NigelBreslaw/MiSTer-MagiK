@@ -9,6 +9,7 @@ use std::mem::{MaybeUninit, align_of, size_of};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+pub mod launcher;
 pub mod navigation;
 
 #[repr(transparent)]
