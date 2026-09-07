@@ -38,7 +38,11 @@ def main() -> None:
     ):
         forbid(worker, needle, "catalog worker")
     require(worker, "std::env::current_exe()", "self-executable catalog worker")
-    require(worker, ".arg(crate::command_args::CATALOG_WORKER_COMMAND)", "catalog worker command")
+    require(
+        worker,
+        ".arg(crate::command_args::CATALOG_WORKER_COMMAND)",
+        "catalog worker command",
+    )
 
     app_entry = read("apps/mister/src/app_entry.rs")
     require(app_entry, "execute_planned_fast_refresh_with_lease", "library-refresh")
