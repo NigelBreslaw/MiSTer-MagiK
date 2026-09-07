@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::agent_client::FramebufferCapture;
+use crate::device_client::FramebufferCapture;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CaptureUiState {
@@ -96,7 +96,7 @@ pub(crate) fn format_byte_size(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_client::FramebufferCaptureTiming;
+    use crate::device_client::FramebufferCaptureTiming;
     use std::path::PathBuf;
 
     fn capture() -> FramebufferCapture {

@@ -1,7 +1,7 @@
 # MiSTer MagiK Desktop
 
 `mister-magik-desktop` is a macOS-first Slint companion dashboard for MiSTer
-MagiK. V1 is read-only: it shows agent, network, runtime, launcher, catalog, and
+MagiK. The interface is read-only: it shows agent, network, runtime, launcher, catalog, and
 input status without rebooting, deploying, editing `MiSTer.ini`, launching cores,
 or writing to `/dev/MiSTer_cmd`.
 
@@ -30,29 +30,22 @@ That adds Cargo features `slint/mcp,live-ui,skia-renderer` and sets
 Slint 1.18's MCP feature currently pulls in the testing backend and software
 renderer, so the default live loop keeps MCP off for faster Skia-only builds.
 
-The default MiSTer host is `192.168.1.117`. Override it for development with:
+## Native connection and credentials
 
-```bash
-MISTER_IP=192.168.1.50 scripts/dev-live.sh
-```
+Desktop connects directly from Rust to the native service on TCP 7500. It uses
+shared 2.0 device identity, remembered address and token storage, automatically
+rediscovering a changed address. `MISTER_IP` is optional; there is no hard-coded
+address or worktree-local credential file.
 
-## Agent Credentials
+When installation or a missing capability requires it, Desktop invokes the
+checkout's `scripts/magik2 desktop-prepare --json` once, then resumes direct TCP
+communication. The helper uses the existing macOS Keychain SSH login. Different
+compatible service builds are kept. Authentication/Keychain failures are shown;
+there is no credential retry loop.
 
-The app talks to the MiSTer MagiK agent on TCP `7498` with one JSON request per
-line. It reads the agent token from:
-
-1. `MISTER_AGENT_TOKEN`
-2. `MISTER_AGENT_TOKEN_FILE`
-3. `build/mister-agent.token` in the worktree root
-
-Do not commit token files. OS keychain storage is intentionally left for a later
-milestone.
-
-The GUI uses the same token-protected line-delimited JSON protocol documented in
-`docs/magik-agent.md`, but connects directly instead of shelling out through
-`mister`. That keeps the desktop app cross-platform and avoids routing a
-long-running UI through a Unix shell wrapper. Device scripts and recovery work
-should still use `mister`.
+For multiple devices, select one explicitly with `scripts/magik2 device select
+ADDRESS`. This milestone supports repository launch, not standalone bootstrap
+packaging. See [the native API contract](../../magik2/docs/desktop-api.md).
 
 ## Analytics
 
@@ -64,6 +57,18 @@ The Profile Artifacts panel imports local `MISTER_PROFILE_FILE` TSV output and
 renders native frame-budget bars, dirty-region heatmaps, histogram/stat tables,
 and slow-frame rows. Importing a TSV is read-only and local-only; the desktop app
 does not run benchmark scripts or change MiSTer device state.
+
+Live Analytics retains CPU, memory, processes, network, storage, launcher FPS
+and frame-phase timings. It no longer displays FPGA presentation/ownership/repeat
+counters, over-budget counts, maximum frame times or vsync-miss streaks. Missing
+measurements display as unavailable. Offline profile analysis is unchanged.
+
+Still captures use authoritative latched scanout pixels. Live viewing uses the
+application producer stream and is labelled separately; it does not prove which
+frame the FPGA has displayed. Closing a view cancels its subscription. A transport
+failure gets at most one rediscovery/reconnect; subsequent failure needs explicit
+retry. PNG export and the existing local diagnostic modes use the same native
+client.
 
 ## Slint UI Workflow
 
