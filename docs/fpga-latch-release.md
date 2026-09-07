@@ -1,5 +1,11 @@
 # FPGA latch-v5 production requirements
 
+> Command migration: legacy delivery, catalog/device-control, compile-time and
+> combined release-gate examples below are historical. Use the current commands
+> in `docs/host-orchestration.md` and `magik2/docs/native-operations.md`.
+> Physical input/CRT procedures and historical measurement evidence remain valid;
+> retired automatic matrices and certificates are not delivery prerequisites.
+
 Latch v5 is the only production protocol. New builds must not contain v2/v3/v4
 negotiation, decoding, fixtures, feature switches, fallback presentation, or
 rollback paths. Main, the scanout module, the latch RBF, and the MagiK runtime

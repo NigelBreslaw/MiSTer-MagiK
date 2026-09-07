@@ -180,7 +180,6 @@ impl PreparedFile {
 
 struct Paths {
     fat: PathBuf,
-    inittab: PathBuf,
     ini: PathBuf,
     backup: PathBuf,
     app: PathBuf,
@@ -202,9 +201,6 @@ impl Paths {
                 .expect("public app root is below /media/fat"),
         );
         Self {
-            inittab: PathBuf::from(
-                env::var_os("MISTER_MAGIK_INITTAB").unwrap_or_else(|| "/etc/inittab".into()),
-            ),
             ini: fat.join("MiSTer.ini"),
             backup: fat.join("MiSTer.ini.bak.before-magik"),
             manifest: app.join(mister_magik_platform_manifest_contract::FILE_NAME),
@@ -288,13 +284,8 @@ fn install(paths: &Paths) -> Result<()> {
     ensure_executable(paths.fat.join("MiSTer_MagiK"))?;
     ensure_executable(paths.app.join("mister-magik-fb"))?;
     ensure_executable(paths.app.join("mister-magik-manager"))?;
-    remount_root_writable(paths)?;
     let ini = prepare_ini(&paths.ini, apply_install)?;
-    let inittab = prepare_stock_inittab(&paths.inittab)?;
-    let files = vec![
-        PreparedFile::new(paths.inittab.clone(), inittab)?,
-        PreparedFile::new(paths.ini.clone(), ini)?,
-    ];
+    let files = vec![PreparedFile::new(paths.ini.clone(), ini)?];
     replace_transaction(paths, &files, &mut NoWriteFaults, || {
         validate_install(paths)
     })?;
@@ -344,7 +335,6 @@ fn uninstall(paths: &Paths) -> Result<()> {
 
 fn restore_stock(paths: &Paths) -> Result<()> {
     snapshot(paths)?;
-    remount_root_writable(paths)?;
     let backup = if paths.backup.is_file() {
         Some(Document::parse(&fs::read(&paths.backup)?)?)
     } else {
@@ -353,11 +343,7 @@ fn restore_stock(paths: &Paths) -> Result<()> {
     let ini = prepare_ini(&paths.ini, |document| {
         apply_restore(document, backup.as_ref())
     })?;
-    let inittab = prepare_stock_inittab(&paths.inittab)?;
-    let files = vec![
-        PreparedFile::new(paths.inittab.clone(), inittab)?,
-        PreparedFile::new(paths.ini.clone(), ini)?,
-    ];
+    let files = vec![PreparedFile::new(paths.ini.clone(), ini)?];
     replace_transaction(paths, &files, &mut NoWriteFaults, || validate_stock(paths))
 }
 
@@ -625,52 +611,6 @@ fn backup_ini(paths: &Paths) -> Result<()> {
     atomic_write(&paths.backup, &fs::read(&paths.ini)?)
 }
 
-fn prepare_stock_inittab(path: &Path) -> Result<Vec<u8>> {
-    let input = fs::read_to_string(path)?;
-    let newline = if input.contains("\r\n") { "\r\n" } else { "\n" };
-    let mut output = Vec::new();
-    let mut wrote = false;
-    let (magik_main, magik_boot) = magik_inittab_prefixes();
-    for raw in input.lines() {
-        let line = raw.strip_suffix('\r').unwrap_or(raw);
-        if line.starts_with("::sysinit:/media/fat/MiSTer ") && line.ends_with('&') {
-            if !wrote {
-                output.push("::sysinit:/media/fat/MiSTer &");
-                wrote = true;
-            }
-        } else if !line.starts_with(&magik_main) && !line.starts_with(&magik_boot) {
-            output.push(line);
-        }
-    }
-    if !wrote {
-        output.push("::sysinit:/media/fat/MiSTer &");
-    }
-    let mut bytes = output.join(newline).into_bytes();
-    bytes.extend_from_slice(newline.as_bytes());
-    Ok(bytes)
-}
-
-fn magik_inittab_prefixes() -> (String, String) {
-    let public = ManifestLayout::Public.paths();
-    (
-        format!("::sysinit:{}", public.main),
-        format!("::sysinit:{}/boot.sh", public.root),
-    )
-}
-
-fn remount_root_writable(paths: &Paths) -> Result<()> {
-    if paths.test_mode() {
-        return Ok(());
-    }
-    let status = Command::new("mount")
-        .args(["-o", "remount,rw", "/"])
-        .status()?;
-    if !status.success() {
-        return Err("cannot remount root filesystem writable".into());
-    }
-    Ok(())
-}
-
 fn validate_install(paths: &Paths) -> Result<()> {
     let document = Document::parse(&fs::read(&paths.ini)?)?;
     if document.active_count("MiSTer", "main") != 1
@@ -678,7 +618,7 @@ fn validate_install(paths: &Paths) -> Result<()> {
     {
         return Err("MiSTer.main did not validate".into());
     }
-    verify_stock_inittab(&paths.inittab)
+    Ok(())
 }
 
 fn validate_stock(paths: &Paths) -> Result<()> {
@@ -688,23 +628,6 @@ fn validate_stock(paths: &Paths) -> Result<()> {
     }
     if document.active_count("MiSTer", "main") > 1 {
         return Err("MiSTer.main remains duplicated".into());
-    }
-    verify_stock_inittab(&paths.inittab)
-}
-
-fn verify_stock_inittab(path: &Path) -> Result<()> {
-    let text = fs::read_to_string(path)?;
-    let (magik_main, magik_boot) = magik_inittab_prefixes();
-    let stock = text
-        .lines()
-        .filter(|line| line.trim_end_matches('\r') == "::sysinit:/media/fat/MiSTer &")
-        .count();
-    if stock != 1
-        || text
-            .lines()
-            .any(|line| line.starts_with(&magik_main) || line.starts_with(&magik_boot))
-    {
-        return Err("inittab is not in verified stock state".into());
     }
     Ok(())
 }
@@ -839,7 +762,7 @@ fn snapshot(paths: &Paths) -> Result<()> {
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let directory = paths.app.join("snapshots").join(format!("{stamp}-manager"));
     fs::create_dir_all(&directory)?;
-    for (source, name) in [(&paths.inittab, "inittab"), (&paths.ini, "MiSTer.ini")] {
+    for (source, name) in [(&paths.ini, "MiSTer.ini")] {
         if source.is_file() {
             fs::copy(source, directory.join(name))?;
         }
@@ -1168,7 +1091,6 @@ mod tests {
     fn fixture_paths(root: &Path) -> Paths {
         Paths {
             fat: root.to_path_buf(),
-            inittab: root.join("inittab"),
             ini: root.join("MiSTer.ini"),
             backup: root.join("backup"),
             app: root.join("mister-magik"),
@@ -1331,24 +1253,6 @@ mod tests {
             terminal.set_tail_timeout().unwrap();
         }
         assert_terminal_settings_eq(&terminal_settings(fd).unwrap(), &original);
-    }
-
-    #[test]
-    fn stock_inittab_repair_is_idempotent() {
-        let input = "x\n::sysinit:/media/fat/MiSTer_MagiK &\n::sysinit:/media/fat/MiSTer &\n::sysinit:/media/fat/MiSTer &\n";
-        let mut output = Vec::new();
-        let mut wrote = false;
-        for line in input.lines() {
-            if line.starts_with("::sysinit:/media/fat/MiSTer ") && line.ends_with('&') {
-                if !wrote {
-                    output.push("::sysinit:/media/fat/MiSTer &");
-                    wrote = true;
-                }
-            } else if !line.starts_with("::sysinit:/media/fat/MiSTer_MagiK") {
-                output.push(line);
-            }
-        }
-        assert_eq!(output.join("\n"), "x\n::sysinit:/media/fat/MiSTer &");
     }
 
     #[test]
@@ -1632,17 +1536,12 @@ mod tests {
         let root = fixture_root("invalid-platform");
         let paths = fixture_paths(&root);
         fs::write(&paths.ini, b"[MiSTer]\nmain=MiSTer\n").unwrap();
-        fs::write(&paths.inittab, b"::sysinit:/media/fat/MiSTer &\n").unwrap();
         fs::write(&paths.manifest, b"format=unsupported\n").unwrap();
         queue(&paths, [InputEvent::Down]);
 
         let error = install(&paths).unwrap_err();
         assert!(error.to_string().contains("platform verification failed"));
         assert_eq!(fs::read(&paths.ini).unwrap(), b"[MiSTer]\nmain=MiSTer\n");
-        assert_eq!(
-            fs::read(&paths.inittab).unwrap(),
-            b"::sysinit:/media/fat/MiSTer &\n"
-        );
         assert!(!paths.backup.exists());
         fs::remove_dir_all(root).unwrap();
     }
@@ -1653,11 +1552,6 @@ mod tests {
         let paths = fixture_paths(&root);
         let original_ini = b"[MiSTer]\nmain=MiSTer\nvideo_mode=8\n";
         fs::write(&paths.ini, original_ini).unwrap();
-        fs::write(
-            &paths.inittab,
-            b"::sysinit:/media/fat/MiSTer_MagiK &\n::sysinit:/media/fat/MiSTer &\n",
-        )
-        .unwrap();
         write_valid_platform(&paths);
         queue(&paths, [InputEvent::Down]);
 
@@ -1689,22 +1583,13 @@ mod tests {
     }
 
     #[test]
-    fn restore_without_backup_removes_magik_selection_and_repairs_crlf_inittab() {
+    fn restore_without_backup_removes_magik_selection() {
         let root = fixture_root("restore-no-backup");
         let paths = fixture_paths(&root);
         fs::write(&paths.ini, b"[MiSTer]\nmain=MiSTer_MagiK\n").unwrap();
-        fs::write(
-            &paths.inittab,
-            b"::sysinit:/media/fat/mister-magik/boot.sh &\r\nother\r\n",
-        )
-        .unwrap();
 
         restore_stock(&paths).unwrap();
         assert!(!selects_magik(&paths.ini).unwrap());
-        assert_eq!(
-            fs::read(&paths.inittab).unwrap(),
-            b"other\r\n::sysinit:/media/fat/MiSTer &\r\n"
-        );
         validate_stock(&paths).unwrap();
         fs::remove_dir_all(root).unwrap();
     }

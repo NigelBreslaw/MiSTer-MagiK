@@ -57,7 +57,6 @@ actual="$(sha256sum "$MANAGER" | awk '{print $1}')" || fail "cannot hash manager
 chmod +x "$MANAGER" || fail "cannot make manager executable"
 
 exec env MISTER_MAGIK_FAT="$FAT" \
-  MISTER_MAGIK_INITTAB="${MISTER_MAGIK_INITTAB:-/etc/inittab}" \
   MISTER_MAGIK_TEST_MODE="${MISTER_MAGIK_TEST_MODE:-0}" \
   MISTER_MAGIK_TEST_OUTPUT_MODE="${MISTER_MAGIK_TEST_OUTPUT_MODE:-}" \
   MISTER_MAGIK_TEST_KEYS="${MISTER_MAGIK_TEST_KEYS:-}" \

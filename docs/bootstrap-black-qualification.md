@@ -1,5 +1,11 @@
 # Qualified Black Bootstrap
 
+> Command migration: legacy delivery, catalog/device-control, compile-time and
+> combined release-gate examples below are historical. Use the current commands
+> in `docs/host-orchestration.md` and `magik2/docs/native-operations.md`.
+> Physical input/CRT procedures and historical measurement evidence remain valid;
+> retired automatic matrices and certificates are not delivery prerequisites.
+
 This is the acceptance contract for any candidate that changes Main launcher
 startup, the MagiK Menu RBF, framebuffer routing, or latch ownership. Main, the
 RBF, and the scanout module must come from one exact platform bundle. The

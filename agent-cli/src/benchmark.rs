@@ -21,14 +21,6 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
     require_active_development_runtime(&device.read(crate::NativeDevice::read_active_runtime)?)?;
     device.read(crate::NativeDevice::verify_development_health)?;
     let manifest = device.read(crate::NativeDevice::read_development_manifest)?;
-    let reconciliation = crate::deploy::reconcile(repository, &manifest, &head);
-    if reconciliation.decision != crate::deploy::DeliveryDecision::NoOp {
-        return Err(format!(
-            "benchmark requires delivery reconciliation to be no-op, found {}; run scripts/agent deliver platform first",
-            reconciliation.decision.label()
-        )
-        .into());
-    }
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
@@ -52,6 +44,7 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
         EventKind::Progress,
         "benchmark-result",
         &serde_json::to_string(&json!({
+            "source_revision": head,
             "installed_manifest": manifest,
             "summary": summary,
             "output_dir": output_dir,

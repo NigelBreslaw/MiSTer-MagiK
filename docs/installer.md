@@ -41,7 +41,7 @@ reboot after restore or uninstall, but it cannot approve those safety
 boundaries.
 
 If the Scripts entrypoint reports a missing or corrupt manager, do not edit
-`MiSTer.ini` or `inittab` by hand. Re-run Downloader or reinstall the complete
+`MiSTer.ini` by hand. Re-run Downloader or reinstall the complete
 MiSTer MagiK package so `mister-magik-manager` and `platform-v3.manifest` come
 from the same release, then run the entrypoint again. The bootstrap refuses to
 run a partial or mismatched package and leaves boot configuration unchanged.

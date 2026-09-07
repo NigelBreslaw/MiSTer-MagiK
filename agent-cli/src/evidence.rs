@@ -4,8 +4,10 @@
 use crate::model::Outcome;
 use crate::progress::{FailureEvidence, ProgressEvent};
 use crate::request::RawRequest;
+#[cfg(test)]
+use rusqlite::OptionalExtension;
 use rusqlite::backup::Backup;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 use serde::Serialize;
 use std::fs::{self, File, OpenOptions};
 use std::os::fd::AsRawFd;
@@ -79,6 +81,7 @@ pub struct DatabaseReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg(test)]
 pub struct RunDetail {
     pub id: String,
     pub args: serde_json::Value,
@@ -390,6 +393,7 @@ impl Evidence {
         })
     }
 
+    #[cfg(test)]
     pub fn run_detail(&self, id: &str) -> Result<Option<RunDetail>, String> {
         let mut detail = self
             .connection

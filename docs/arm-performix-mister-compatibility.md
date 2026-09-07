@@ -1,5 +1,11 @@
 # Arm Performix and MiSTer compatibility
 
+> Command migration: legacy delivery, catalog/device-control, compile-time and
+> combined release-gate examples below are historical. Use the current commands
+> in `docs/host-orchestration.md` and `magik2/docs/native-operations.md`.
+> Physical input/CRT procedures and historical measurement evidence remain valid;
+> retired automatic matrices and certificates are not delivery prerequisites.
+
 Status: Performix incompatible; Cortex-A9 PMU and Streamline paths validated
 2026-08-06.
 

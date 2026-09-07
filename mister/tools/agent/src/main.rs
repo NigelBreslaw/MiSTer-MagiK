@@ -29,10 +29,6 @@ fn select_framebuffer_capture<T>(
 #[cfg(any(target_os = "linux", test))]
 use serde_json::{Value, json};
 
-#[cfg(target_os = "linux")]
-mod alpha_candidate;
-#[cfg(target_os = "linux")]
-mod launcher_automation;
 #[cfg(any(target_os = "linux", test))]
 mod runtime_upload;
 #[cfg(target_os = "linux")]
@@ -2752,8 +2748,6 @@ mod linux {
                     "capabilities": [
                         mister_magik_agent_protocol::FRAMEBUFFER_CAPTURE_CAPABILITY,
                         mister_magik_agent_protocol::DEVICE_TELEMETRY_CAPABILITY,
-                        mister_magik_agent_protocol::LAUNCHER_AUTOMATION_CAPABILITY,
-                        mister_magik_agent_protocol::ALPHA_CANDIDATE_INSTALL_CAPABILITY,
                         mister_magik_agent_protocol::RUNTIME_UPLOAD_CAPABILITY,
                         mister_magik_agent_protocol::FPGA_VIDEO_DIAGNOSTICS_CAPABILITY,
                     ],
@@ -2791,18 +2785,7 @@ mod linux {
                     Err(err) => operation_failure_response(id, &err),
                 }
             }
-            "launcher_automation_begin" => match crate::launcher_automation::begin(args) {
-                Ok(result) => response(id, true, Some(result), None),
-                Err(err) => operation_failure_response(id, &err),
-            },
-            "launcher_automation_request" => match crate::launcher_automation::request(args) {
-                Ok(result) => response(id, true, Some(result), None),
-                Err(err) => operation_failure_response(id, &err),
-            },
-            "alpha_candidate_install" => match crate::alpha_candidate::install(args) {
-                Ok(result) => response(id, true, Some(result), None),
-                Err(err) => alpha_candidate_failure_response(id, &err),
-            },
+
             "reboot" => match schedule_reboot(args) {
                 Ok(mode) => response(
                     id,
@@ -2900,47 +2883,6 @@ mod linux {
         )
     }
 
-    pub(super) fn alpha_candidate_failure_response(
-        id: Option<Value>,
-        error: &crate::alpha_candidate::InstallFailure,
-    ) -> String {
-        use crate::alpha_candidate::InstallFailureKind;
-        let (code, phase, retry_policy, recovery_required) = match error.kind {
-            InstallFailureKind::InvalidRequest => (
-                mister_magik_agent_protocol::FailureCode::InvalidRequest,
-                mister_magik_agent_protocol::FailurePhase::Request,
-                mister_magik_agent_protocol::RetryPolicy::Never,
-                false,
-            ),
-            InstallFailureKind::OperationFailed => (
-                mister_magik_agent_protocol::FailureCode::OperationFailed,
-                mister_magik_agent_protocol::FailurePhase::Operation,
-                mister_magik_agent_protocol::RetryPolicy::Never,
-                false,
-            ),
-            InstallFailureKind::ArtifactMismatch => (
-                mister_magik_agent_protocol::FailureCode::ArtifactMismatch,
-                mister_magik_agent_protocol::FailurePhase::Artifact,
-                mister_magik_agent_protocol::RetryPolicy::ReconcileThenRetry,
-                false,
-            ),
-            InstallFailureKind::RecoveryRequired => (
-                mister_magik_agent_protocol::FailureCode::RecoveryRequired,
-                mister_magik_agent_protocol::FailurePhase::Recovery,
-                mister_magik_agent_protocol::RetryPolicy::OperatorRequired,
-                true,
-            ),
-        };
-        failure_response(
-            id,
-            &error.detail,
-            code,
-            phase,
-            retry_policy,
-            recovery_required,
-        )
-    }
-
     fn attach_io_operation_evidence(result: &mut Value, evidence: Value) {
         if let Some(result) = result.as_object_mut() {
             result.insert("io_operation".to_string(), evidence);
@@ -2973,8 +2915,6 @@ mod linux {
                 "capabilities": [
                     mister_magik_agent_protocol::FRAMEBUFFER_CAPTURE_CAPABILITY,
                     mister_magik_agent_protocol::DEVICE_TELEMETRY_CAPABILITY,
-                    mister_magik_agent_protocol::LAUNCHER_AUTOMATION_CAPABILITY,
-                    mister_magik_agent_protocol::ALPHA_CANDIDATE_INSTALL_CAPABILITY,
                     mister_magik_agent_protocol::RUNTIME_UPLOAD_CAPABILITY,
                     mister_magik_agent_protocol::FPGA_VIDEO_DIAGNOSTICS_CAPABILITY,
                 ],
@@ -7575,35 +7515,6 @@ mod tests {
         assert_eq!(operation["failure"]["code"], "operation_failed");
         assert_eq!(operation["failure"]["phase"], "operation");
         assert_eq!(operation["failure"]["retry_policy"], "never");
-
-        let artifact = crate::alpha_candidate::InstallFailure {
-            kind: crate::alpha_candidate::InstallFailureKind::ArtifactMismatch,
-            detail: "installed hash mismatch".to_string(),
-        };
-        let artifact: Value = serde_json::from_str(&linux::alpha_candidate_failure_response(
-            Some(json!(13)),
-            &artifact,
-        ))
-        .unwrap();
-        assert_eq!(artifact["error"], "installed hash mismatch");
-        assert_eq!(artifact["failure"]["code"], "artifact_mismatch");
-        assert_eq!(artifact["failure"]["phase"], "artifact");
-        assert_eq!(artifact["failure"]["retry_policy"], "reconcile_then_retry");
-
-        let recovery = crate::alpha_candidate::InstallFailure {
-            kind: crate::alpha_candidate::InstallFailureKind::RecoveryRequired,
-            detail: "config restore failed".to_string(),
-        };
-        let recovery: Value = serde_json::from_str(&linux::alpha_candidate_failure_response(
-            Some(json!(14)),
-            &recovery,
-        ))
-        .unwrap();
-        assert_eq!(recovery["error"], "config restore failed");
-        assert_eq!(recovery["failure"]["code"], "recovery_required");
-        assert_eq!(recovery["failure"]["phase"], "recovery");
-        assert_eq!(recovery["failure"]["retry_policy"], "operator_required");
-        assert_eq!(recovery["failure"]["recovery_required"], true);
     }
 
     #[test]

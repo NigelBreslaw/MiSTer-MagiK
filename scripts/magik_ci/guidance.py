@@ -19,7 +19,7 @@ def authority(path: str) -> tuple[str, str]:
     if path.startswith(("/media/fat/", "/tmp/mister-magik/")):
         return (
             "device-owned runtime state; never copy into Git",
-            "scripts/agent deliver platform or an attended typed scripts/agent device command",
+            "scripts/magik-platform for platform delivery; scripts/magik2 device for migrated controls",
         )
     if file_name.startswith(".env") or "/.wrangler/" in path:
         return "ignored secret; never stage or print", "none"
@@ -103,7 +103,7 @@ def authority(path: str) -> tuple[str, str]:
     if file_name == "Cargo.lock":
         return (
             "checked-in dependency resolution",
-            "scripts/agent dependencies sync PATH/Cargo.toml",
+            "scripts/magik-ci dependencies sync PATH/Cargo.toml",
         )
     if path.endswith((".slint", ".rs", ".toml")):
         return "hand-edited source unless a more specific rule above applies", "none"

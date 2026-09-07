@@ -1,5 +1,11 @@
 # Device operations and recovery
 
+> Command migration: legacy delivery, catalog/device-control, compile-time and
+> combined release-gate examples below are historical. Use the current commands
+> in `docs/host-orchestration.md` and `magik2/docs/native-operations.md`.
+> Physical input/CRT procedures and historical measurement evidence remain valid;
+> retired automatic matrices and certificates are not delivery prerequisites.
+
 ## Screenshot support reports
 
 Screenshot diagnostics are local only. Collect them before uninstalling with
@@ -66,7 +72,7 @@ scripts/agent device display set hdmi1920x1080p60 --attended --keep
 replacement launcher and framebuffer geometry, and rolls back unless `--keep`
 is supplied. It never bypasses the confirmation transaction.
 
-Mode changes verify the selected platform manifest, preserve stock inittab,
+Mode changes verify the selected platform manifest,
 mutate `MiSTer.ini` through the comment-preserving Rust editor, clear all
 arming files, and use a bounded supervised reboot. Fixed non-launcher scenes
 temporarily suspend the supervised launcher and always resume it.

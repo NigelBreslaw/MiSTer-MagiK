@@ -1,5 +1,11 @@
 # FPGA development playbook
 
+> Command migration: legacy delivery, catalog/device-control, compile-time and
+> combined release-gate examples below are historical. Use the current commands
+> in `docs/host-orchestration.md` and `magik2/docs/native-operations.md`.
+> Physical input/CRT procedures and historical measurement evidence remain valid;
+> retired automatic matrices and certificates are not delivery prerequisites.
+
 Use this playbook only for changes to the FPGA proof model, cache identity,
 timing constraints, or Quartus interpretation. Release qualification remains
 governed by `fpga-latch-release.md`.

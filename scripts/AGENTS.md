@@ -1,8 +1,8 @@
 # Host entrypoints
 
-Python `scripts/magik-ci` owns CI/release processing; operational and device
-workflows remain typed Rust behind `scripts/agent`. Do not add competing
-operational wrappers.
+Python `scripts/magik-ci` owns CI/release processing and host-only dependency
+maintenance, package-local cleaning and evidence export. Native device workflows
+belong to `scripts/magik2`; remaining legacy operations stay with `scripts/agent`.
 
 For the user-approved isolated 2.0 project, `scripts/magik2` is a thin
 entrypoint to Python orchestration in `magik2/host/magik2`. The root

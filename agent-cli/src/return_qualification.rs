@@ -357,45 +357,6 @@ pub struct BoardCertificateV1 {
     pub frame_evidence: Vec<EvidenceReference>,
 }
 
-pub fn create_board_certificate(
-    manifest: &str,
-    layout: Layout,
-    attended: bool,
-    paths: &[PathBuf],
-) -> AgentResult<BoardCertificateV1> {
-    if !attended {
-        return classified("attendance_required", "record-board requires --attended");
-    }
-    if paths.is_empty() {
-        return classified("frame_evidence_missing", "no frame evidence supplied");
-    }
-    let candidate = CandidateIdentity::from_manifest(manifest, layout)?;
-    let mut references = Vec::with_capacity(paths.len());
-    for path in paths {
-        let evidence = read_frame_evidence(path)?;
-        if evidence.candidate != candidate {
-            return classified(
-                "frame_candidate_identity_mismatch",
-                path.display().to_string(),
-            );
-        }
-        references.push(EvidenceReference {
-            sha256: digest_json(&evidence)?,
-            evidence,
-        });
-    }
-    let board_id = references[0].evidence.board_id.clone();
-    if references
-        .iter()
-        .any(|entry| entry.evidence.board_id != board_id)
-    {
-        return classified("mixed_board_evidence", board_id);
-    }
-    let certificate = summarize_board(candidate, board_id, references)?;
-    verify_board_certificate(&certificate)?;
-    Ok(certificate)
-}
-
 fn summarize_board(
     candidate: CandidateIdentity,
     board_id: String,
@@ -496,36 +457,6 @@ pub struct AggregateCertificateV1 {
     pub transitions: BTreeMap<TransitionKind, u64>,
     pub modes: BTreeMap<String, u64>,
     pub boards: Vec<BoardReference>,
-}
-
-pub fn create_aggregate_certificate(
-    manifest: &str,
-    layout: Layout,
-    paths: &[PathBuf],
-) -> AgentResult<AggregateCertificateV1> {
-    if paths.is_empty() {
-        return classified("board_evidence_missing", "no board certificates supplied");
-    }
-    let candidate = CandidateIdentity::from_manifest(manifest, layout)?;
-    let mut boards = Vec::with_capacity(paths.len());
-    for path in paths {
-        let bytes = read(path)?;
-        let certificate: BoardCertificateV1 = parse_json(path, &bytes)?;
-        verify_board_certificate(&certificate)?;
-        if certificate.candidate != candidate {
-            return classified(
-                "board_candidate_identity_mismatch",
-                path.display().to_string(),
-            );
-        }
-        boards.push(BoardReference {
-            sha256: digest_json(&certificate)?,
-            certificate,
-        });
-    }
-    let aggregate = summarize_aggregate(candidate, boards)?;
-    verify_aggregate_certificate(&aggregate)?;
-    Ok(aggregate)
 }
 
 fn summarize_aggregate(
@@ -801,7 +732,8 @@ fn verify_classifier_report(evidence_path: &Path, evidence: &FrameEvidenceV1) ->
     Ok(())
 }
 
-pub fn write_json<T: Serialize>(path: &Path, value: &T) -> AgentResult<()> {
+#[cfg(test)]
+fn write_json<T: Serialize>(path: &Path, value: &T) -> AgentResult<()> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())

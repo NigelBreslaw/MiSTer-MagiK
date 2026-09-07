@@ -1,5 +1,11 @@
 # External Main_MiSTer Fork
 
+> Command migration: legacy delivery, catalog/device-control, compile-time and
+> combined release-gate examples below are historical. Use the current commands
+> in `docs/host-orchestration.md` and `magik2/docs/native-operations.md`.
+> Physical input/CRT procedures and historical measurement evidence remain valid;
+> retired automatic matrices and certificates are not delivery prerequisites.
+
 MiSTer MagiK now keeps its Main_MiSTer fork outside this app repo. The normal
 checkout layout is:
 
@@ -69,7 +75,7 @@ NeoGeo memory table or game-specific regression guard.
 The fork is a full Main_MiSTer binary because Main must initialize HDMI/video
 before Slint can produce a visible Linux framebuffer UI.
 
-Production boot still starts stock `/media/fat/MiSTer` from `/etc/inittab`.
+Production boot still starts stock `/media/fat/MiSTer` through the normal Linux startup.
 Stock Main reads `MiSTer.ini`, then `[MiSTer] main=MiSTer_MagiK` re-execs the
 fork.
 

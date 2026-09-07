@@ -1,5 +1,11 @@
 # Return Video Qualification
 
+> Command migration: legacy delivery, catalog/device-control, compile-time and
+> combined release-gate examples below are historical. Use the current commands
+> in `docs/host-orchestration.md` and `magik2/docs/native-operations.md`.
+> Physical input/CRT procedures and historical measurement evidence remain valid;
+> retired automatic matrices and certificates are not delivery prerequisites.
+
 `mister-magik-return-frame-evidence-v1` is the canonical evidence contract for
 qualifying visible HDMI output after a return to MiSTer MagiK. It is deliberately
 separate from `/dev/fb0`, latch counters, launcher health, and FPGA telemetry:
