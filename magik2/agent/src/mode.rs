@@ -43,9 +43,84 @@ pub fn set(fields: &serde_json::Map<String, Value>) -> Result<Value, String> {
     } else if !Path::new("/media/fat/MiSTer").is_file() {
         return Err("stock Main is absent".into());
     }
+    ensure_stock_boot()?;
     disarm()?;
     write_mode(Path::new(INI), main)?;
     status()
+}
+
+fn stock_boot_text(input: &str) -> String {
+    let newline = if input.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut lines = Vec::new();
+    let mut wrote = false;
+    for line in input.lines() {
+        if line.starts_with("::sysinit:/media/fat/MiSTer ") && line.ends_with('&') {
+            if !wrote {
+                lines.push("::sysinit:/media/fat/MiSTer &");
+                wrote = true;
+            }
+        } else if !line.starts_with("::sysinit:/media/fat/MiSTer_MagiK")
+            && !line.starts_with("::sysinit:/media/fat/mister-magik/boot.sh")
+        {
+            lines.push(line);
+        }
+    }
+    if !wrote {
+        lines.push("::sysinit:/media/fat/MiSTer &");
+    }
+    lines.join(newline) + newline
+}
+
+fn ensure_stock_boot() -> Result<(), String> {
+    let path = Path::new("/etc/inittab");
+    let mut input = String::new();
+    File::open(path)
+        .and_then(|f| f.take(16 * 1024 + 1).read_to_string(&mut input))
+        .map_err(|e| e.to_string())?;
+    if input.len() > 16 * 1024 {
+        return Err("inittab exceeds 16 KiB".into());
+    }
+    let edited = stock_boot_text(&input);
+    if edited == input {
+        return Ok(());
+    }
+    // This fixed startup repair is the same prerequisite used by legacy mode
+    // selection: stock Main reads the selected fork from MiSTer.ini.
+    let temporary = Path::new("/etc/inittab.magik2-part");
+    let mut file = match File::create(temporary) {
+        Ok(file) => file,
+        Err(error) if error.raw_os_error() == Some(libc::EROFS) => {
+            let mut command = std::process::Command::new("/bin/mount");
+            command.args(["-o", "remount,rw", "/"]);
+            let output = crate::benchmark::execute_bounded(
+                &mut command,
+                std::time::Duration::from_secs(5),
+                || false,
+                8192,
+            );
+            if output.code != Some(0) || output.error.is_some() {
+                return Err(format!(
+                    "stock boot preparation failed: {:?}; {}",
+                    output.error,
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            File::create(temporary).map_err(|e| e.to_string())?
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    file.write_all(edited.as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|e| e.to_string())?;
+    drop(file);
+    fs::rename(temporary, path).map_err(|e| e.to_string())?;
+    File::open("/etc")
+        .and_then(|f| f.sync_all())
+        .map_err(|e| e.to_string())?;
+    if fs::read_to_string(path).map_err(|e| e.to_string())? != edited {
+        return Err("stock boot preparation verification failed".into());
+    }
+    Ok(())
 }
 
 fn write_mode(path: &Path, main: &str) -> Result<(), String> {
@@ -110,6 +185,14 @@ pub fn disarm() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stock_boot_preserves_services_and_removes_duplicate_fork_startup() {
+        let input = "::sysinit:/etc/init.d/rcS\n::sysinit:/media/fat/MiSTer_MagiK &\n::sysinit:/media/fat/mister-magik/boot.sh\n::sysinit:/media/fat/MiSTer &\n::sysinit:/media/fat/MiSTer &\n";
+        assert_eq!(
+            stock_boot_text(input),
+            "::sysinit:/etc/init.d/rcS\n::sysinit:/media/fat/MiSTer &\n"
+        );
+    }
     #[test]
     fn boot_selection_preserves_unrelated_ini_values() {
         let path = std::env::temp_dir().join(format!("magik2-mode-{}", std::process::id()));
