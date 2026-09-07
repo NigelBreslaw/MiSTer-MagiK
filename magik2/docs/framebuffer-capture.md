@@ -11,7 +11,7 @@ under `MISTER_MAGIK2_RESULTS`; pixels and base64 are never written to those logs
 Use Codex's [MCP configuration](https://developers.openai.com/codex/mcp/):
 
 ```sh
-codex mcp add magik2-framebuffer --env MISTER_IP=192.168.1.117 -- /absolute/path/to/checkout/scripts/magik2 mcp
+codex mcp add magik2-framebuffer -- /absolute/path/to/checkout/scripts/magik2 mcp
 ```
 
 Use an absolute path to the checkout/worktree you intend to run. If that worktree
@@ -21,8 +21,9 @@ The launch environment needs `uv` on PATH and the existing private Slint index
 authentication when installing the host environment for the first time.
 
 The server reuses 2.0's device token cache and capability-based connection flow.
-When bootstrap is necessary, provide `MISTER_USER` and `MISTER_PASS` in its launch
-environment, just as for ordinary 2.0 commands. A service without
+Device selection and SSH bootstrap authentication are shared across worktrees;
+see [remembered access](device-discovery.md). No IP or password belongs in this
+MCP registration. A service without
 `capture-framebuffer` is automatically built and installed through the existing
 native update/bootstrap flow. This may take longer than a screenshot; no matching
 branch, version or build hash is required if the capability is already present.

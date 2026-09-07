@@ -13,6 +13,11 @@ warnings = "deny"
 all = "deny"
 
 [dependencies]
+mister-magik-platform-manifest-contract = { path = "../../mister/platform/contracts/manifest" }
+mister-magik-media-contract = { path = "../../crates/media-contract" }
+mister-magik-catalog = { path = "../../crates/catalog" }
+mister-magik-ini = { path = "../../crates/mister-ini" }
+rusqlite = { version = "0.40.0", default-features = false, features = ["bundled", "hooks"] }
 libc = "0.2"
 mister-magik-framebuffer-stream = { path = "../../crates/framebuffer-stream" }
 mister-magik-scanout-contract = { path = "../../mister/platform/contracts/scanout" }

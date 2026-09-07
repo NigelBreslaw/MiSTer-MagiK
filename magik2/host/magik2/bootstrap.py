@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import os
 import secrets
 import shlex
+import threading
 from pathlib import Path
 
 
@@ -25,18 +25,44 @@ class SshBootstrap:
 
     @classmethod
     def from_environment(cls) -> "SshBootstrap":
-        missing = [
-            name
-            for name in ("MISTER_IP", "MISTER_USER", "MISTER_PASS")
-            if not os.environ.get(name)
-        ]
-        if missing:
-            raise BootstrapError("missing configured MiSTer SSH access")
-        return cls(
-            os.environ["MISTER_IP"],
-            os.environ["MISTER_USER"],
-            os.environ["MISTER_PASS"],
-        )
+        from .discovery import resolve_device
+
+        device = resolve_device()
+        return cls(device.address, device.username, device.password())
+
+    def identify(self, timeout: float = 1.5) -> str:
+        """Read board identity only; does not install or change device state."""
+        import paramiko
+        from .device_profile import device_identity
+
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        timer = threading.Timer(timeout, client.close)
+        timer.daemon = True
+        timer.start()
+        try:
+            client.connect(
+                self.host,
+                username=self.username,
+                password=self.password,
+                timeout=timeout,
+                banner_timeout=timeout,
+                auth_timeout=timeout,
+                look_for_keys=False,
+                allow_agent=False,
+            )
+            _, stdout, _ = client.exec_command(
+                "test -d /media/fat && test -d /sys/class/net/eth0 && cat /sys/class/net/eth0/address",
+                timeout=timeout,
+            )
+            return device_identity(stdout.read(128).decode().strip())
+        except paramiko.AuthenticationException as error:
+            raise BootstrapError(
+                "MiSTer SSH authentication failed; update the stored login"
+            ) from error
+        finally:
+            timer.cancel()
+            client.close()
 
     def install_and_start(self, agent_binary: Path) -> str:
         if not agent_binary.is_file():

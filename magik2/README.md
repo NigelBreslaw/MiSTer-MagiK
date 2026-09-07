@@ -176,3 +176,10 @@ files unchanged. It is never invoked by deploy/check/watch. `status` uses the
 corrected Linux process-name check and reports whether the old agent is running.
 
 See [the everyday milestone](docs/milestone-3.md) and [legacy feature decisions](docs/legacy-disposition.md).
+
+## Numerical and visual benchmarks
+
+Use `scripts/magik2 bench blend` for two headless repetitions, `--visual` for
+one direct-framebuffer pass, or `--counters neon|memory` for an explicit PMU
+diagnostic. See [the benchmark contract](docs/benchmarks.md). These commands do
+not use the Slint test bridge.

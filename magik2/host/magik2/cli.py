@@ -19,9 +19,11 @@ from .results import (
     create_run,
     finalize,
     retain_diagnostics,
+    record_device,
     source_context,
 )
 from .token_store import TokenStore, state_root
+from .discovery import resolve_device
 from .viewer import serve
 
 STATUS_CAPABILITIES = {"status"}
@@ -47,6 +49,10 @@ def agent_binary_path() -> Path:
 
 
 def main() -> int:
+    if len(os.sys.argv) > 1 and os.sys.argv[1] == "platform":
+        from .platform import main as platform_main
+
+        return platform_main(os.sys.argv[2:])
     started = time.monotonic()
     parser = argparse.ArgumentParser(prog="scripts/magik2")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -54,6 +60,20 @@ def main() -> int:
         "mcp", help="serve framebuffer screenshots to Codex over stdio"
     )
     subcommands.add_parser("deploy")
+    device_command = subcommands.add_parser("device")
+    device_subcommands = device_command.add_subparsers(
+        dest="device_command", required=True
+    )
+    select = device_subcommands.add_parser("select")
+    select.add_argument("address")
+    from .device import add_commands
+
+    add_commands(device_subcommands)
+    bench = subcommands.add_parser("bench", help="run a Mini workload")
+    bench.add_argument("workload", nargs="?", default="blend")
+    modes = bench.add_mutually_exclusive_group()
+    modes.add_argument("--visual", action="store_true")
+    modes.add_argument("--counters", choices=("neon", "memory"))
     transfer = subcommands.add_parser(
         "transfer-check", help="measure one saved upload without starting it"
     )
@@ -82,7 +102,7 @@ def main() -> int:
         "legacy-stop", help="stop the old agent once; preserve its startup files"
     )
     for name, command in subcommands.choices.items():
-        command.set_defaults(app="magik")
+        command.set_defaults(app="mini-magik" if name == "bench" else "magik")
         if name not in {"build", "deploy", "check", "watch"}:
             continue
         command.add_argument("--app", choices=tuple(APPLICATIONS), default="magik")
@@ -112,7 +132,7 @@ def main() -> int:
         arguments.command == "build" and arguments.target == "app"
     ):
         print(
-            f"Application: {arguments.app} on {os.environ.get('MISTER_IP', '(not configured)')}"
+            f"Application: {arguments.app} on {os.environ.get('MISTER_IP', '(remembered MiSTer)')}"
         )
         print(f"Executable: /media/fat/mister-magik2/{arguments.app}")
         if arguments.app == "magik":
@@ -165,12 +185,19 @@ def dispatch(arguments, run) -> int:
         built = ensure_arm_package(package, package / "target/magik2-build.json")
         print(built.artifact)
         return 0
-    if not os.environ.get("MISTER_IP"):
-        print(
-            "MISTER_IP is required; no legacy transport was attempted.",
-            file=os.sys.stderr,
-        )
-        return 2
+    if arguments.command == "device" and arguments.device_command != "select":
+        from .device import run_device
+
+        return run_device(arguments, run)
+    if arguments.command == "device":
+        device = resolve_device(arguments.address, select=True)
+        record_device(run, device.identity, device.address)
+        print(f"Selected MiSTer {device.identity} at {device.address}")
+        return 0
+    if arguments.command == "bench":
+        from .benchmark import run_benchmark
+
+        return run_benchmark(arguments, run)
     if arguments.command == "transfer-check":
         from .transfer import transfer_check
 
@@ -220,7 +247,7 @@ def dispatch(arguments, run) -> int:
     except (BootstrapError, AgentError, OSError, RuntimeError) as error:
         append_event(run, {"phase": "status", "outcome": "failed", "error": str(error)})
         print(
-            f"magik2 status: native agent unavailable ({type(error).__name__}) (result: {run})",
+            f"magik2 status: native agent unavailable ({error}) (result: {run})",
             file=os.sys.stderr,
         )
         return 2
@@ -467,11 +494,17 @@ def wait_for_agent(
 def connect_agent(
     run: Path, required: set[str] = REQUIRED_AGENT_CAPABILITIES
 ) -> tuple[NativeAgent, AgentStatus]:
-    device = os.environ["MISTER_IP"]
-    store = TokenStore(state_root(), device)
+    resolved = resolve_device()
+    device = resolved.address
+    record_device(run, resolved.identity, device)
+    store = TokenStore(state_root(), resolved.identity)
+
+    def bootstrap():
+        return SshBootstrap(device, resolved.username, resolved.password())
+
     token = store.load()
     if not token:
-        token = SshBootstrap.from_environment().native_token()
+        token = bootstrap().native_token()
         if token:
             store.save(token)
     agent = NativeAgent(device, token) if token else None
@@ -517,7 +550,7 @@ def connect_agent(
         # Never blindly repeat an update after losing its acknowledgement.
         status = wait_for_agent(agent, required)
     else:
-        token = SshBootstrap.from_environment().install_and_start(binary)
+        token = bootstrap().install_and_start(binary)
         store.save(token)
         agent = NativeAgent(device, token)
         status = wait_for_agent(agent, required)

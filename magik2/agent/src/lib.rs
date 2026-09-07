@@ -1,7 +1,14 @@
 //! Bounded native control framing for the independently owned MagiK 2.0 agent.
 
+mod benchmark;
 mod capture;
+mod catalog_operations;
+mod device;
+mod device_identity;
 mod main_control;
+mod media;
+mod mode;
+mod publication;
 mod upload;
 mod wire;
 
@@ -164,7 +171,13 @@ impl Agent {
 
     pub fn capabilities() -> &'static [&'static str] {
         &[
+            "run-benchmark-v2",
             "status",
+            "device-identity-v1",
+            "device-control-v1",
+            "catalog-operations-v1",
+            "publication-v1",
+            "platform-publication-v1",
             "transfer-check",
             "applications",
             "main-input-proxy",
@@ -251,6 +264,22 @@ impl Agent {
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
         let (request, body_length) =
             wire::read_header(&mut wire::DeadlineReader { stream, deadline })?;
+        // Discovery exposes only the board identity, never control or credentials.
+        if request.op == "identify" && body_length == 0 && request.fields.is_empty() {
+            let reply = match device_identity::read() {
+                Ok(identity) => response(
+                    &request.id,
+                    "identified",
+                    serde_json::json!({"device_identity":identity}),
+                ),
+                Err(_) => response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"device-identity-unavailable"}),
+                ),
+            };
+            return write_frame(stream, &reply, &[]);
+        }
         if request.token != self.token {
             return write_frame(
                 stream,
@@ -263,6 +292,37 @@ impl Agent {
             );
         }
 
+        if request.op == "publication-upload" {
+            let _mutation = self.mutations.lock().expect("mutation state poisoned");
+            let result = publication::receive(
+                &self.install_root,
+                &request,
+                &mut wire::DeadlineReader { stream, deadline },
+                body_length,
+            );
+            let reply = match result {
+                Ok(fields) => response(&request.id, "publication-staged", fields),
+                Err(error) => response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"publication-upload-failed","detail":error}),
+                ),
+            };
+            return write_frame(stream, &reply, &[]);
+        }
+        if matches!(
+            request.op.as_str(),
+            "publication-commit" | "publication-control"
+        ) {
+            if body_length != 0 {
+                return Err(FrameError::BodyTooLarge);
+            }
+            return if request.op == "publication-control" {
+                self.publication_control(stream, &request)
+            } else {
+                self.publish(stream, &request)
+            };
+        }
         if matches!(
             request.op.as_str(),
             "upload" | "agent-update" | "transfer-check"
@@ -343,6 +403,30 @@ impl Agent {
         let mut body = vec![0; body_length];
         wire::DeadlineReader { stream, deadline }.read_exact(&mut body)?;
 
+        if request.op == "catalog-operation" {
+            return self.catalog_operation(stream, &request, &body);
+        }
+        if device::OPERATIONS.contains(&request.op.as_str()) {
+            let _mutation = self.mutations.lock().expect("mutation state poisoned");
+            let result = self.device_operation(&request, &body);
+            if result.op == "error" {
+                return write_frame(stream, &result, &[]);
+            }
+            let body = serde_json::to_vec(&result.fields).expect("device evidence JSON");
+            return write_frame(
+                stream,
+                &response(
+                    &request.id,
+                    "device-result",
+                    serde_json::json!({"format":"json"}),
+                ),
+                &body,
+            );
+        }
+        if request.op == "run-benchmark" {
+            let _mutation = self.mutations.lock().expect("mutation state poisoned");
+            return self.run_benchmark(stream, &request, &body);
+        }
         if request.op == "capture-framebuffer" {
             if !body.is_empty() || !request.fields.is_empty() {
                 return write_frame(
@@ -401,6 +485,7 @@ impl Agent {
                 "status",
                 serde_json::json!({
                     "identity": self.identity,
+                    "device_identity": device_identity::read().ok(),
                     "agent_pid": std::process::id(),
                     "agent_sha256": installed_hash(&PathBuf::from("/proc/self/exe")),
                     "capabilities": Self::capabilities(),

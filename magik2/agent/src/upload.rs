@@ -41,7 +41,7 @@ pub fn receive(
 ) -> Result<Staged, String> {
     if !matches!(
         artifact,
-        "probe" | "mini-magik" | "magik" | "mister-magik2-agent" | "transfer-check"
+        "probe" | "mini-magik" | "magik" | "mister-magik2-agent" | "transfer-check" | "publication"
     ) || hash.len() != 64
         || !hash.bytes().all(|b| b.is_ascii_hexdigit())
     {

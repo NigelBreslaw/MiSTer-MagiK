@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import tempfile
 from pathlib import Path
 
 
@@ -24,11 +25,13 @@ class TokenStore:
 
     def save(self, token: str) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".next")
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-            output.write(token + "\n")
-        os.replace(temporary, self.path)
+        descriptor, temporary = tempfile.mkstemp(dir=self.path.parent, prefix=".token-")
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+                output.write(token + "\n")
+            os.replace(temporary, self.path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
 
 
 def state_root() -> Path:

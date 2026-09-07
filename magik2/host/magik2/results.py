@@ -60,6 +60,16 @@ def append_event(directory: Path, event: Mapping[str, Any]) -> None:
         )
 
 
+def record_device(directory: Path, identity: str, address: str) -> None:
+    path = directory / "run.json"
+    result = json.loads(path.read_text())
+    result["source"].update(device_identity=identity, mister_ip=address)
+    _atomic_json(path, result)
+    append_event(
+        directory, {"phase": "device", "device_identity": identity, "address": address}
+    )
+
+
 def _atomic_json(destination: Path, value: Mapping[str, Any]) -> None:
     temporary = destination.with_suffix(".tmp")
     temporary.write_text(
