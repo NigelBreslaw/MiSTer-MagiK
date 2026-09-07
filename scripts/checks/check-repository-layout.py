@@ -25,14 +25,12 @@ required = (
     "crates/magik-core",
     "crates/catalog",
     "crates/framebuffer-stream",
-    "crates/agent-protocol",
     "crates/media-contract",
     "mister/platform/kernel/scanout-slots",
     "mister/platform/fpga/menu-vblank-latch",
     "mister/platform/contracts/latch",
     "mister/platform/contracts/scanout",
     "mister/platform/runtime",
-    "mister/tools/agent",
 )
 
 errors = [

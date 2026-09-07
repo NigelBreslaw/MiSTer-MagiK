@@ -446,7 +446,7 @@ import scripts.magik_ci.cli
         self.assertEqual(args.host_group, "app")
 
     def test_python_tests_skip_unrelated_paths(self) -> None:
-        self.assertEqual(python_test_commands(["agent-cli/src/main.rs"]), [])
+        self.assertEqual(python_test_commands(["magik/agent/src/lib.rs"]), [])
 
     def test_database_workflow_changes_select_fast_python_tests_once(self) -> None:
         workflow = ".github/workflows/game-databases.yml"

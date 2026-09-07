@@ -29,13 +29,10 @@ if [[ $# -gt 0 ]]; then
 fi
 
 scripts/magik-ci ci host-assurance --paths \
-  agent-cli/src/main.rs \
   crates/catalog/src/lib.rs \
   crates/magik-core/src/lib.rs \
   crates/framebuffer-stream/src/lib.rs \
   mister/platform/runtime/src/lib.rs \
-  agent-cli/src/host/mod.rs \
-  mister/tools/agent/src/main.rs \
   apps/mister/src/lib.rs
 
 scripts/magik-ci build release-binaries

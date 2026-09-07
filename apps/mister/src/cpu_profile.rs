@@ -5,7 +5,7 @@
 //!
 //! Uses `SIGPROF`/`ITIMER_PROF` sampling from the `pprof` crate — no `perf` CLI required.
 //! Canonical device delivery includes this dormant feature. The offline full-debug artifact is
-//! built with `scripts/agent build runtime-analysis`; benchmarks profile the installed runtime.
+//! built with `scripts/magik-ci build runtime-device`; benchmarks profile the installed runtime.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
@@ -1334,7 +1334,7 @@ mod stub {
         if config.enabled {
             crate::ui_errln!(
                 "cpu_profile: MISTER_PPROF=1 ignored — the runtime lacks the `profile` feature; \
-                 install the canonical device runtime with `scripts/agent deliver platform`"
+                 install the canonical device runtime with `scripts/magik-platform platform`"
             );
         }
         None

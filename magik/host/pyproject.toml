@@ -1,0 +1,21 @@
+[project]
+name = "mister-magik-host"
+version = "0.1.0"
+description = "Independent host tooling for the MiSTer MagiK probe"
+requires-python = ">=3.12"
+dependencies = ["paramiko>=4,<6", "slint-testing==0.3", "pytest>=8", "mcp>=1,<2"]
+
+[[tool.uv.index]]
+name = "slint-private"
+url = "https://testing.slint.dev/simple/"
+explicit = true
+
+[tool.uv.sources]
+slint-testing = { index = "slint-private" }
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

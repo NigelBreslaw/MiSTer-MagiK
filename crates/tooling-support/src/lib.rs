@@ -115,7 +115,7 @@ mod tests {
     use super::*;
     #[test]
     fn readiness_requires_a_presentation_and_measurements_exclude_warmup() {
-        let root = std::env::temp_dir().join(format!("magik2-session-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("magik-session-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let mut session = Session {
             metrics: PresentationMetrics::default(),

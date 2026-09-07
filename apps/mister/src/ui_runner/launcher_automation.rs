@@ -3,6 +3,8 @@
 
 //! Volatile, authenticated logical-input automation for alpha acceptance.
 
+const MAX_HOLD_MS: u64 = 40_000;
+
 use crate::build_identity::BuildIdentity;
 use crate::input_event::{
     InputEvent, InputPhase, InputSourceId, InputSourceKind, LogicalAction, PressId, SourceEpoch,
@@ -525,9 +527,7 @@ impl LauncherAutomation {
                 duration_ms,
             } => {
                 self.require_input_enabled(input_enabled)?;
-                if duration_ms == 0
-                    || duration_ms > mister_magik_agent_protocol::LAUNCHER_AUTOMATION_MAX_HOLD_MS
-                {
+                if duration_ms == 0 || duration_ms > MAX_HOLD_MS {
                     return Err("hold_duration_out_of_range".to_string());
                 }
                 let session = self.session.as_mut().ok_or("session_ended")?;

@@ -19,7 +19,6 @@ VIDEO_DIAGNOSTICS_SPEC_PATH = (
 HDMI_EVIDENCE_SPEC_PATH = (
     ROOT / "mister/platform/fpga/menu-vblank-latch/hdmi-evidence-protocol.json"
 )
-AGENT_PROTOCOL_PATH = ROOT / "crates/agent-protocol/src/lib.rs"
 
 
 def crc16_ccitt_false(words: list[int]) -> int:
@@ -430,14 +429,6 @@ if scaler_fetch_liveness != {
 }:
     raise SystemExit(
         "scaler off-domain scheduler terminal schema 23 changed without an ABI update"
-    )
-expected_agent_capability = (
-    f"pub const FPGA_VIDEO_DIAGNOSTICS_CAPABILITY: &str = "
-    f'"fpga-video-diagnostics-schema-{scaler_fetch_liveness["schema"]}";'
-)
-if expected_agent_capability not in AGENT_PROTOCOL_PATH.read_text():
-    raise SystemExit(
-        "device agent FPGA diagnostics capability does not match the canonical scaler schema"
     )
 if raw_scaler["command"] in platform_commands:
     raise SystemExit(

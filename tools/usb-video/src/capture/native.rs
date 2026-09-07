@@ -391,7 +391,7 @@ fn capture_inner(timeout: Duration, require_visible: bool) -> AgentResult<Encode
     let (sender, receiver) = mpsc::sync_channel(1);
     let delegate = FrameDelegate::new(sender, require_visible);
     let queue = DispatchQueue::new(
-        "io.mister-magik.agent-cli.usb-video",
+        "io.mister-magik.usb-video",
         DispatchQueueAttr::SERIAL,
     );
     let protocol = ProtocolObject::from_ref(&*delegate);
@@ -565,7 +565,7 @@ fn record_inner(output_path: &Path, duration: Duration) -> AgentResult<()> {
     let delegate = MovieFrameDelegate::new(sender);
     let protocol = ProtocolObject::from_ref(&*delegate);
     let queue = DispatchQueue::new(
-        "io.mister-magik.agent-cli.usb-video-movie",
+        "io.mister-magik.usb-video-movie",
         DispatchQueueAttr::SERIAL,
     );
     unsafe {

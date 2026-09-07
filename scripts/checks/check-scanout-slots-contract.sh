@@ -10,11 +10,10 @@ UAPI="$ROOT/mister/platform/kernel/scanout-slots/mister_magik_scanout_slots_uapi
 PLATFORM="$ROOT/mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h"
 POLICY="$ROOT/mister/platform/kernel/scanout-slots/mister_magik_scanout_policy.h"
 RUST="$ROOT/mister/platform/runtime/src/framebuffer/hidden_scanout.rs"
-AGENT="$ROOT/mister/tools/agent/src/scanout_slots_contract.rs"
 RUST_CONTRACT="$ROOT/mister/platform/contracts/scanout/src/lib.rs"
 DOC="$ROOT/documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
 KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
-DEPLOY="$ROOT/magik2/agent/src/publication.rs"
+DEPLOY="$ROOT/magik/agent/src/publication.rs"
 PLATFORM_STAGE="$ROOT/mister/platform/contracts/platform-v3.schema.toml"
 
 if ! command -v rg >/dev/null 2>&1; then
@@ -30,7 +29,7 @@ require_text() {
   fi
 }
 
-for file in "$SOURCE" "$UAPI" "$PLATFORM" "$POLICY" "$RUST" "$AGENT" "$RUST_CONTRACT" "$DEPLOY" "$PLATFORM_STAGE" "$DOC"; do
+for file in "$SOURCE" "$UAPI" "$PLATFORM" "$POLICY" "$RUST" "$RUST_CONTRACT" "$DEPLOY" "$PLATFORM_STAGE" "$DOC"; do
   test -f "$file"
 done
 for text in \
@@ -58,7 +57,6 @@ if ! grep -Fq "UAPI_SHA256: &str = \"$uapi_sha256\"" "$RUST_CONTRACT"; then
   exit 1
 fi
 require_text "$RUST" mister_magik_scanout_contract
-require_text "$AGENT" mister_magik_scanout_contract
 source_sha256="$(cd "$ROOT/mister/platform/kernel/scanout-slots" && sha256sum mister_magik_scanout_slots.c mister_magik_scanout_slots_uapi.h mister_magik_scanout_platform.h mister_magik_scanout_policy.h Makefile | sha256sum | awk '{print $1}')"
 [[ "$source_sha256" =~ ^[0-9a-f]{64}$ ]]
 policy_test="$(mktemp "${TMPDIR:-/tmp}/mister-magik-scanout-policy.XXXXXX")"

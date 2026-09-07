@@ -142,8 +142,8 @@ def measure(root: Path, target: str, target_dir: Path, output: Path, kind: str):
         with ExitStack() as session:
             container = None
             if target != "magik-full-app-macos":
-                from magik2.host.magik2.ffmpeg import prepare_ffmpeg
-                from magik2.host.magik2.storage import Storage
+                from magik.host.magik.ffmpeg import prepare_ffmpeg
+                from magik.host.magik.storage import Storage
 
                 storage = Storage()
                 session.enter_context(storage.build_session(root))

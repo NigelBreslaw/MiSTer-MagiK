@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn request_codec_matches_native_fixture() {
         let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../magik2/agent/tests/fixtures/desktop-wire.json"
+            "../../../../magik/agent/tests/fixtures/desktop-wire.json"
         ))
         .unwrap();
         let bytes = fixture["bytes"]

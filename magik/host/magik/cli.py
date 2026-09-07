@@ -1,0 +1,541 @@
+"""Thin public command interface. Device operations are native-only."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import time
+import webbrowser
+from pathlib import Path
+
+from .apps import APPLICATIONS, application, repository
+from .bootstrap import BootstrapError, SshBootstrap
+from .build import ensure_arm_agent, ensure_arm_application, ensure_arm_package
+from .client import AgentError, NativeAgent
+from .compatibility import AgentStatus
+from .results import (
+    append_event,
+    create_run,
+    finalize,
+    retain_diagnostics,
+    record_device,
+    source_context,
+)
+from .token_store import TokenStore, state_root
+from .discovery import resolve_device
+from .viewer import serve
+
+STATUS_CAPABILITIES = {"status"}
+STOP_CAPABILITIES = {"status", "lifecycle-v1"}
+REQUIRED_AGENT_CAPABILITIES = {
+    "status",
+    "applications",
+    "upload-v1",
+    "start-artifact",
+    "request-replay-v1",
+}
+CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {
+    "metrics-v1",
+    "test-bridge-v1",
+    "test-session",
+}
+WATCH_AGENT_CAPABILITIES = {"status", "metrics-v1", "watch-v1"}
+PROFILE_AGENT_CAPABILITIES = CHECK_AGENT_CAPABILITIES | {"artifacts-v1"}
+
+
+def agent_binary_path() -> Path:
+    return ensure_arm_agent()
+
+
+def main() -> int:
+    if len(os.sys.argv) > 1 and os.sys.argv[1] == "platform":
+        from .platform import main as platform_main
+
+        return platform_main(os.sys.argv[2:])
+    started = time.monotonic()
+    parser = argparse.ArgumentParser(prog="scripts/magik")
+    subcommands = parser.add_subparsers(dest="command", required=True)
+    subcommands.add_parser(
+        "mcp", help="serve framebuffer screenshots to Codex over stdio"
+    )
+    prepare = subcommands.add_parser("desktop-prepare")
+    prepare.add_argument("--json", action="store_true", required=True)
+    subcommands.add_parser("deploy")
+    device_command = subcommands.add_parser("device")
+    device_subcommands = device_command.add_subparsers(
+        dest="device_command", required=True
+    )
+    select = device_subcommands.add_parser("select")
+    select.add_argument("address")
+    from .device import add_commands
+
+    add_commands(device_subcommands)
+    bench = subcommands.add_parser("bench", help="run a Mini workload")
+    bench.add_argument("workload", nargs="?", default="blend")
+    modes = bench.add_mutually_exclusive_group()
+    modes.add_argument("--visual", action="store_true")
+    modes.add_argument("--counters", choices=("neon", "memory"))
+    transfer = subcommands.add_parser(
+        "transfer-check", help="measure one saved upload without starting it"
+    )
+    transfer.add_argument("--artifact", type=Path, required=True)
+    build_command = subcommands.add_parser("build")
+    build_command.add_argument(
+        "target", choices=("agent", "app"), nargs="?", default="app"
+    )
+    check_command = subcommands.add_parser("check")
+    check_command.add_argument(
+        "scenario", choices=("smoke", "motion", "idle"), nargs="?", default="smoke"
+    )
+    check_command.add_argument("--profile", action="store_true")
+    subcommands.add_parser("watch")
+    subcommands.add_parser("status")
+    subcommands.add_parser("stop")
+    for name, command in subcommands.choices.items():
+        command.set_defaults(app="mini-magik" if name == "bench" else "magik")
+        if name not in {"build", "deploy", "check", "watch"}:
+            continue
+        command.add_argument("--app", choices=tuple(APPLICATIONS), default="magik")
+    storage = subcommands.add_parser(
+        "storage", help="inspect and clean local build storage"
+    )
+    storage_commands = storage.add_subparsers(dest="storage_command", required=True)
+    report = storage_commands.add_parser(
+        "report", help="report allocation and cleanup eligibility"
+    )
+    report.add_argument("--json", action="store_true")
+    clean = storage_commands.add_parser(
+        "clean", help="preview retention cleanup unless --apply"
+    )
+    clean.add_argument("--apply", action="store_true")
+    clean.add_argument("--all-idle", action="store_true")
+    arguments = parser.parse_args()
+    if arguments.command == "storage":
+        from .storage import run_storage
+
+        return run_storage(arguments, repository())
+    if arguments.command == "mcp":
+        from .mcp_capture import main as mcp_main
+
+        return mcp_main()
+    if arguments.command in {"deploy", "check", "watch"} or (
+        arguments.command == "build" and arguments.target == "app"
+    ):
+        print(
+            f"Application: {arguments.app} on {os.environ.get('MISTER_IP', '(remembered MiSTer)')}"
+        )
+        print(f"Executable: /media/fat/mister-magik2/{arguments.app}")
+        if arguments.app == "magik":
+            print("Data: /media/fat/mister-magik-dev; Main: /media/fat/MiSTer_MagiKDev")
+        else:
+            print("Experiment state: /tmp/mister-magik2")
+
+    output_root = Path(os.environ.get("MISTER_MAGIK2_RESULTS", "build/magik-results"))
+    run = create_run(
+        output_root, arguments.command, source_context(os.environ.get("MISTER_IP", ""))
+    )
+    append_event(
+        run, {"phase": "requested", "command": arguments.command, "app": arguments.app}
+    )
+    code = 2
+    try:
+        code = dispatch(arguments, run)
+    except KeyboardInterrupt:
+        code = 130
+        append_event(
+            run, {"phase": "command", "outcome": "failed", "error": "interrupted"}
+        )
+    except Exception as error:
+        append_event(
+            run, {"phase": "command", "outcome": "failed", "error": str(error)}
+        )
+        print(f"magik: {error} (result: {run})", file=os.sys.stderr)
+    finally:
+        finalize(run, code, int((time.monotonic() - started) * 1000))
+        if code:
+            if (run / "pytest.log").exists():
+                print(
+                    f"Test failure: {run.resolve() / 'pytest.log'}", file=os.sys.stderr
+                )
+            print(f"Failure details: {run.resolve() / 'run.json'}", file=os.sys.stderr)
+            print(
+                f"Device logs (if available): {run.resolve() / 'logs.txt'}",
+                file=os.sys.stderr,
+            )
+    return code
+
+
+def dispatch(arguments, run) -> int:
+    if arguments.command == "desktop-prepare":
+        from .desktop import prepare
+
+        return prepare(run)
+    if arguments.command == "build":
+        package = (
+            Path(__file__).resolve().parents[2] / "agent"
+            if arguments.target == "agent"
+            else repository() / application(arguments.app).package
+        )
+        built = ensure_arm_package(package, package / "target/magik-build.json")
+        print(built.artifact)
+        return 0
+    if arguments.command == "device" and arguments.device_command != "select":
+        from .device import run_device
+
+        return run_device(arguments, run)
+    if arguments.command == "device":
+        device = resolve_device(arguments.address, select=True)
+        record_device(run, device.identity, device.address)
+        print(f"Selected MiSTer {device.identity} at {device.address}")
+        return 0
+    if arguments.command == "bench":
+        from .benchmark import run_benchmark
+
+        return run_benchmark(arguments, run)
+    if arguments.command == "transfer-check":
+        from .transfer import transfer_check
+
+        agent, _status = connect_agent(run, {"status", "transfer-check"})
+        return transfer_check(agent, arguments.artifact, run)
+    if arguments.command == "deploy":
+        return deploy(arguments, run)
+    if arguments.command == "stop":
+        return stop(run)
+    if arguments.command == "check":
+        return check(arguments, run)
+    if arguments.command == "watch":
+        return watch(run, arguments.app)
+    if arguments.command != "status":
+        print(
+            f"magik {arguments.command}: not implemented yet (result: {run})",
+            file=os.sys.stderr,
+        )
+        return 2
+    try:
+        agent, status = connect_agent(
+            run, STATUS_CAPABILITIES | {"legacy-process-status"}
+        )
+    except (BootstrapError, AgentError, OSError, RuntimeError) as error:
+        append_event(run, {"phase": "status", "outcome": "failed", "error": str(error)})
+        print(
+            f"magik status: native agent unavailable ({error}) (result: {run})",
+            file=os.sys.stderr,
+        )
+        return 2
+    append_event(
+        run, {"phase": "status", "outcome": "passed", "identity": status.identity}
+    )
+    print(
+        f"identity={status.identity} running={status.fields.get('running', False)} "
+        f"legacy_agent_running={status.fields.get('legacy_agent_running', 'unknown')} "
+        f"capabilities={','.join(sorted(status.capabilities))}"
+    )
+    return 0
+
+
+def deploy(_arguments: argparse.Namespace, run: Path) -> int:
+    started = time.monotonic()
+    try:
+        agent, status = connect_agent(
+            run,
+            REQUIRED_AGENT_CAPABILITIES
+            | application(_arguments.app).agent_capabilities,
+        )
+        append_event(
+            run,
+            {
+                "phase": "connect",
+                "elapsed_ms": int((time.monotonic() - started) * 1_000),
+            },
+        )
+        if ensure_application(agent, status, run, _arguments.app):
+            append_event(
+                run,
+                {
+                    "phase": "complete",
+                    "outcome": "no-op",
+                    "elapsed_ms": int((time.monotonic() - started) * 1_000),
+                },
+            )
+            print(f"magik deploy: application already ready (result: {run})")
+            return 0
+        append_event(
+            run,
+            {
+                "phase": "complete",
+                "outcome": "started",
+                "elapsed_ms": int((time.monotonic() - started) * 1_000),
+            },
+        )
+    except (BootstrapError, AgentError, OSError, RuntimeError) as error:
+        append_event(run, {"phase": "failed", "outcome": "failed", "error": str(error)})
+        print(f"magik deploy: {error} (result: {run})", file=os.sys.stderr)
+        return 2
+    finally:
+        if "agent" in locals():
+            retain_diagnostics(run, agent)
+    print(f"magik deploy: application started (result: {run})")
+    return 0
+
+
+def check(arguments: argparse.Namespace, run: Path) -> int:
+    import pytest
+
+    scenarios = Path(__file__).resolve().parents[2] / "scenarios"
+    options = [
+        str(
+            scenarios
+            / ("test_magik.py" if arguments.app == "magik" else "test_probe.py")
+        ),
+        "-q",
+        "--maxfail=1",
+        "-p",
+        "no:cacheprovider",
+        "--magik-device",
+        "--magik-run",
+        str(run.resolve()),
+        "--magik-app",
+        arguments.app,
+    ]
+    if arguments.scenario:
+        options += ["-k", arguments.scenario]
+    if arguments.profile:
+        measurement = "idle" if arguments.app == "magik" else "motion"
+        if arguments.scenario != measurement:
+            append_event(
+                run,
+                {
+                    "phase": "check",
+                    "outcome": "failed",
+                    "error": f"--profile requires {measurement}",
+                },
+            )
+            return 2
+        options += ["--magik-profile"]
+    result = int(pytest.main(options))
+    append_event(
+        run,
+        {
+            "phase": "check",
+            "outcome": "passed" if result == 0 else "failed",
+            "pytest_exit_code": result,
+        },
+    )
+    return result
+
+
+def stop(run: Path) -> int:
+    try:
+        agent, _ = connect_agent(run, STOP_CAPABILITIES)
+        agent.stop()
+    except (BootstrapError, AgentError, OSError) as error:
+        append_event(run, {"phase": "stop", "outcome": "failed", "error": str(error)})
+        print(f"magik stop: {type(error).__name__} (result: {run})", file=os.sys.stderr)
+        return 2
+    append_event(run, {"phase": "stop", "outcome": "passed"})
+    print(f"magik stop: launcher resume requested (result: {run})")
+    return 0
+
+
+def watch(run: Path, app_name: str = "mini-magik") -> int:
+    try:
+        agent, status = connect_agent(
+            run,
+            WATCH_AGENT_CAPABILITIES
+            | REQUIRED_AGENT_CAPABILITIES
+            | application(app_name).agent_capabilities,
+        )
+        ensure_application(agent, status, run, app_name)
+        server, url = serve(agent)
+        append_event(run, {"phase": "watch", "outcome": "started", "url": url})
+        webbrowser.open(url)
+        print(f"magik watch: {url} (Ctrl-C to stop; result: {run})")
+        server.serve_forever()
+    except KeyboardInterrupt:
+        append_event(run, {"phase": "watch", "outcome": "stopped"})
+        return 0
+    except (BootstrapError, AgentError, OSError, RuntimeError) as error:
+        append_event(run, {"phase": "watch", "outcome": "failed", "error": str(error)})
+        print(f"magik watch: {error} (result: {run})", file=os.sys.stderr)
+        return 2
+    finally:
+        if "server" in locals():
+            server.server_close()
+
+
+def ensure_application(
+    agent: NativeAgent, status: AgentStatus, run: Path, app_name: str = "mini-magik"
+) -> bool:
+    app = application(app_name)
+    agent.artifact = app.name
+    probe_root = repository() / app.package
+    built = ensure_arm_application(
+        probe_root,
+        probe_root / "target/magik-build.json",
+    )
+    append_event(
+        run,
+        {
+            "phase": "build",
+            "outcome": "prebuilt"
+            if built.prebuilt
+            else "rebuilt"
+            if built.rebuilt
+            else "reused",
+            "elapsed_ms": built.elapsed_ms,
+        },
+    )
+    artifact = built.artifact
+    payload = artifact.read_bytes()
+    artifact_hash = hashlib.sha256(payload).hexdigest()
+    agent.expected_sha256 = artifact_hash
+    append_event(
+        run,
+        {
+            "phase": "artifact",
+            "sha256": artifact_hash,
+            "source_fingerprint": built.fingerprint,
+            "bytes": len(payload),
+            "prebuilt": built.prebuilt,
+        },
+    )
+    healthy = (
+        status.fields.get("running") is True
+        and status.fields.get("artifact") == app.name
+        and status.fields.get("running_sha256") == artifact_hash
+        and status.fields.get("ready") is True
+    )
+    if healthy:
+        append_event(run, {"phase": "deploy", "outcome": "no-op", "bytes": 0})
+        return True
+    changed = status.fields.get("artifacts", {}).get(app.name) != artifact_hash
+    if changed:
+        upload_started = time.monotonic()
+        append_event(run, {"phase": "upload", "bytes": len(payload)})
+        agent.upload(app.name, payload)
+        upload_elapsed_ms = max(1, int((time.monotonic() - upload_started) * 1_000))
+        append_event(
+            run,
+            {
+                "phase": "upload-complete",
+                "elapsed_ms": upload_elapsed_ms,
+                "bytes_per_second": len(payload) * 1_000 // upload_elapsed_ms,
+            },
+        )
+    start_started = time.monotonic()
+    append_event(
+        run, {"phase": "start", "restart": status.fields.get("running") is True}
+    )
+    agent.start(
+        expected_sha256=artifact_hash, restart=status.fields.get("running") is True
+    )
+    append_event(
+        run,
+        {
+            "phase": "start-complete",
+            "elapsed_ms": int((time.monotonic() - start_started) * 1_000),
+        },
+    )
+    return False
+
+
+def wait_for_agent(
+    agent: NativeAgent, required: set[str], timeout: float = 15
+) -> AgentStatus:
+    deadline = time.monotonic() + timeout
+    last: object = "not ready"
+    while time.monotonic() < deadline:
+        try:
+            status = agent.status()
+            if status.supports(required):
+                return status
+            last = "missing capabilities: " + ", ".join(
+                sorted(required - status.capabilities)
+            )
+        except AgentError:
+            raise  # Authentication never authorizes replacement of credentials.
+        except (OSError, RuntimeError) as error:
+            last = error
+        time.sleep(0.1)
+    raise AgentError(f"native agent did not become ready: {last}")
+
+
+def connect_agent(
+    run: Path, required: set[str] = REQUIRED_AGENT_CAPABILITIES
+) -> tuple[NativeAgent, AgentStatus]:
+    resolved = resolve_device()
+    device = resolved.address
+    record_device(run, resolved.identity, device)
+    store = TokenStore(state_root(), resolved.identity)
+
+    def bootstrap():
+        return SshBootstrap(device, resolved.username, resolved.password())
+
+    token = store.load()
+    if not token:
+        token = bootstrap().native_token()
+        if token:
+            store.save(token)
+    agent = NativeAgent(device, token) if token else None
+    status = None
+    if agent is not None:
+        try:
+            status = agent.status()
+        except AgentError:
+            raise
+        except (OSError, RuntimeError):
+            pass
+    repair = os.environ.get("MISTER_MAGIK2_REPAIR") == "1"
+    if status is not None and status.supports(required) and not repair:
+        append_event(
+            run,
+            {
+                "phase": "agent",
+                "identity": status.identity,
+                "capabilities": sorted(status.capabilities),
+                "sha256": status.fields.get("agent_sha256"),
+            },
+        )
+        return agent, status
+    binary = (
+        agent_binary_path()
+    )  # Build only after proving installed support is insufficient.
+    if status is not None and status.supports({"agent-update-v1"}):
+        append_event(run, {"phase": "native-agent-update", "outcome": "requested"})
+        payload = binary.read_bytes()
+        try:
+            agent.upgrade_agent(payload)
+        except (OSError, RuntimeError) as error:
+            if isinstance(error, AgentError):
+                raise
+            append_event(
+                run,
+                {
+                    "phase": "native-agent-update",
+                    "outcome": "reply-lost",
+                    "error": str(error),
+                },
+            )
+        # Never blindly repeat an update after losing its acknowledgement.
+        status = wait_for_agent(agent, required)
+    else:
+        token = bootstrap().install_and_start(binary)
+        store.save(token)
+        agent = NativeAgent(device, token)
+        status = wait_for_agent(agent, required)
+        append_event(run, {"phase": "bootstrap", "outcome": "passed"})
+    append_event(
+        run,
+        {
+            "phase": "agent",
+            "identity": status.identity,
+            "sha256": status.fields.get("agent_sha256"),
+            "capabilities": sorted(status.capabilities),
+        },
+    )
+    return agent, status
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

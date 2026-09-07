@@ -1,10 +1,6 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-import json
-import os
-import shutil
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -112,41 +108,6 @@ class GuidanceTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "guidance_invalid_fallback"):
             report(self.root, Path("apps/file.rs"))
-
-    def test_wrapper_is_bootstrap_free_and_json_is_clean(self):
-        for relative in [
-            "scripts/agent",
-            "scripts/lib/shared-worktree-cache.sh",
-            "scripts/magik_ci/guidance.py",
-        ]:
-            target = self.root / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(ROOT / relative, target)
-        for name in ["cargo", "rustc"]:
-            command = self.write("bin/" + name, "#!/bin/sh\nexit 99\n")
-            command.chmod(0o755)
-        result = subprocess.run(
-            [
-                "bash",
-                str(self.root / "scripts/agent"),
-                "guidance",
-                "apps/mister/new.rs",
-                "--json",
-            ],
-            env={
-                **os.environ,
-                "PATH": str(self.root / "bin") + os.pathsep + os.environ["PATH"],
-            },
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        self.assertEqual(
-            json.loads(result.stdout)["guidance"],
-            ["AGENTS.md", "apps/AGENTS.md", "apps/mister/AGENTS.md"],
-        )
-        self.assertEqual(result.stderr, "")
-        self.assertFalse((self.root / "agent-cli/target").exists())
 
 
 if __name__ == "__main__":

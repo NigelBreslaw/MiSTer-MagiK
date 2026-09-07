@@ -541,7 +541,7 @@ trait PresentationAdapters<L> {
 }
 
 impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
-    #[cfg(feature = "magik2")]
+    #[cfg(feature = "tooling")]
     pub(in crate::ui_runner) fn tooling_preview(
         &self,
         session: &mut mister_magik_tooling_support::Session,

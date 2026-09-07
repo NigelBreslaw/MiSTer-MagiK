@@ -25,39 +25,37 @@ class ArchitectureTests(unittest.TestCase):
             git("init", "-q")
             git("config", "user.name", "Fixture")
             git("config", "user.email", "fixture@example.invalid")
-            host = root / "agent-cli/src/host"
+            host = root / "apps/desktop/src"
             host.mkdir(parents=True)
             body = "fn work() {\n    let mut state = 0;\n    state += 1;\n}\n"
-            (host / "mod.rs").write_text(body)
-            git("add", "--", "agent-cli")
+            (host / "main.rs").write_text(body)
+            git("add", "--", "apps/desktop")
             git("commit", "-qm", "baseline")
             base = git("rev-parse", "HEAD")
-            (host / "mod.rs").write_text("mod delivery;\n")
+            (host / "main.rs").write_text("mod delivery;\n")
             (host / "delivery.rs").write_text(body)
-            git("add", "--", "agent-cli")
+            git("add", "--", "apps/desktop")
             git("commit", "-qm", "extract")
             before = cast(dict[str, Any], report(root, base, base))
             after = cast(dict[str, Any], report(root, base, "HEAD"))
             old = next(
-                item
-                for item in before["hotspots"]
-                if item["owner_id"] == "host-workflows"
+                item for item in before["hotspots"] if item["owner_id"] == "desktop-app"
             )
             new = next(
-                item
-                for item in after["hotspots"]
-                if item["owner_id"] == "host-workflows"
+                item for item in after["hotspots"] if item["owner_id"] == "desktop-app"
             )
             self.assertEqual(new["file_lines"], 1)
             self.assertEqual(new["subsystem"]["lines"], old["subsystem"]["lines"] + 1)
             self.assertEqual(new["subsystem"]["mutable_binding_count"], 1)
             self.assertEqual(
                 new["subsystem"]["largest_function"]["path"],
-                "agent-cli/src/host/delivery.rs",
+                "apps/desktop/src/delivery.rs",
             )
-            self.assertEqual(len(after["hotspots"]), 6)
+            self.assertEqual(len(after["hotspots"]), 4)
             missing = next(
-                item for item in after["hotspots"] if item["owner_id"] == "device-agent"
+                item
+                for item in after["hotspots"]
+                if item["owner_id"] == "launcher-runtime"
             )
             self.assertFalse(missing["present"])
             self.assertEqual(missing["subsystem"]["file_count"], 0)

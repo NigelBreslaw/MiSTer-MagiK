@@ -51,11 +51,6 @@ CRATE_FORMATTERS = (
         "apps/framebuffer-lab/Cargo.toml",
     ),
     (
-        "agent-protocol.format",
-        "crates/agent-protocol",
-        "crates/agent-protocol/Cargo.toml",
-    ),
-    (
         "framebuffer-stream.format",
         "crates/framebuffer-stream",
         "crates/framebuffer-stream/Cargo.toml",
@@ -86,7 +81,6 @@ CRATE_FORMATTERS = (
         "crates/media-contract",
         "crates/media-contract/Cargo.toml",
     ),
-    ("mister-agent.format", "mister/tools/agent", "mister/tools/agent/Cargo.toml"),
     ("mister-ini.format", "crates/mister-ini", "crates/mister-ini/Cargo.toml"),
     (
         "mister-manager.format",
@@ -410,8 +404,6 @@ def is_app_format_path(path: str) -> bool:
 def formatters(paths: Sequence[str]) -> list[tuple[str, str]]:
     selected: dict[str, str] = {}
     for path in paths:
-        if path == "agent-cli" or path.startswith("agent-cli/"):
-            selected["agent-cli.format"] = "agent-cli/Cargo.toml"
         if path == "crates/catalog" or path.startswith("crates/catalog/"):
             selected["catalog.format"] = "crates/catalog/Cargo.toml"
         if is_app_format_path(path):
@@ -447,7 +439,12 @@ def needs_font_text_contract(paths: Sequence[str]) -> bool:
 
 def execute(repository: Path) -> None:
     paths = staged_paths(repository)
-    check_classification(paths)
+    indexed = {
+        os.fsdecode(value)
+        for value in git(repository, ["ls-files", "--cached", "-z"]).stdout.split(b"\0")
+        if value
+    }
+    check_classification([path for path in paths if path in indexed])
     shells = shell_paths(repository, paths)
     cargo_formatters = formatters(paths)
     font_text_contract = needs_font_text_contract(paths)

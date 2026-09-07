@@ -112,11 +112,9 @@ class PreCommitTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.repository.close()
 
-    def test_empty_index_does_not_bootstrap_agent_cli(self) -> None:
+    def test_empty_index_does_not_run_build_tools(self) -> None:
         started = time.monotonic()
-        result = self.repository.gate(
-            MISTER_AGENT_CLI_BINARY="/definitely/missing/agent-cli"
-        )
+        result = self.repository.gate()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertLess(time.monotonic() - started, 5)
         self.assertFalse(self.repository.command_log.exists())
@@ -139,6 +137,13 @@ class PreCommitTests(unittest.TestCase):
         result = self.repository.gate()
         self.assertEqual(result.returncode, 1)
         self.assertIn("staged_git_ignored: ignored.txt", result.stderr)
+
+    def test_deleted_owner_does_not_need_a_permanent_classification(self) -> None:
+        self.repository.stage("retired/tool.py", "pass\n")
+        self.repository.run("git", "commit", "-qm", "old owner")
+        self.repository.run("git", "rm", "--", "retired/tool.py")
+        result = self.repository.gate()
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_unclassified_paths_are_rejected(self) -> None:
         self.repository.stage("unknown/new.txt", "new\n")
@@ -209,8 +214,8 @@ class PreCommitTests(unittest.TestCase):
             "cargo fmt --manifest-path apps/mister/Cargo.toml --check", result.stderr
         )
 
-    def test_magik2_paths_are_classified(self) -> None:
-        self.repository.stage("magik2/host/magik2/protocol.py", "VALUE = 1\n")
+    def test_magik_paths_are_classified(self) -> None:
+        self.repository.stage("magik/host/magik/protocol.py", "VALUE = 1\n")
         result = self.repository.gate()
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -314,7 +319,6 @@ class PreCommitTests(unittest.TestCase):
 
     def test_formatter_selection_matches_affected_packages(self) -> None:
         paths = [
-            "agent-cli/src/main.rs",
             "apps/framebuffer-lab/src/main.rs",
             "apps/framebuffer-scene-lab/src/main.rs",
             "apps/mister/src/main.rs",
@@ -322,17 +326,13 @@ class PreCommitTests(unittest.TestCase):
             "crates/catalog/src/lib.rs",
             "crates/framebuffer-scenes/src/lib.rs",
             "crates/magik-core/src/lib.rs",
-            "crates/agent-protocol/src/lib.rs",
             "mister/platform/runtime/src/lib.rs",
             "mister/platform/contracts/latch/src/lib.rs",
             "mister/platform/contracts/scanout/src/lib.rs",
-            "agent-cli/src/host/mod.rs",
         ]
         self.assertEqual(
             PRE_COMMIT.formatters(paths),
             [
-                ("agent-cli.format", "agent-cli/Cargo.toml"),
-                ("agent-protocol.format", "crates/agent-protocol/Cargo.toml"),
                 ("app.format", "apps/mister/Cargo.toml"),
                 ("catalog.format", "crates/catalog/Cargo.toml"),
                 ("framebuffer-lab.format", "apps/framebuffer-lab/Cargo.toml"),
@@ -374,11 +374,9 @@ class PreCommitTests(unittest.TestCase):
 
     def test_mixed_gate_deduplicates_formatters_under_budget(self) -> None:
         for path in [
-            "agent-cli/src/main.rs",
             "apps/mister/src/main.rs",
             "apps/mister/src/other.rs",
             "crates/catalog/src/lib.rs",
-            "agent-cli/src/host/mod.rs",
         ]:
             self.repository.stage(path, "fn probe() {}\n")
         started = time.monotonic()
@@ -388,7 +386,6 @@ class PreCommitTests(unittest.TestCase):
         self.assertEqual(
             self.repository.command_log.read_text().splitlines(),
             [
-                "fmt --manifest-path agent-cli/Cargo.toml --check",
                 "fmt --manifest-path apps/mister/Cargo.toml --check",
                 "fmt --manifest-path crates/catalog/Cargo.toml --check",
             ],
@@ -398,7 +395,6 @@ class PreCommitTests(unittest.TestCase):
         hook = HOOK.read_text()
         self.assertIn("--seconds 10", hook)
         self.assertIn("scripts/checks/pre-commit.py", hook)
-        self.assertNotIn('"$ROOT/scripts/agent" pre-commit', hook)
 
     def test_watchdog_propagates_status_and_kills_descendants(self) -> None:
         status = subprocess.run(

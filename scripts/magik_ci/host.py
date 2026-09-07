@@ -13,7 +13,6 @@ from pathlib import Path
 
 HOST_GROUPS = (
     "static",
-    "agent",
     "domain",
     "catalog",
     "app",
@@ -41,21 +40,6 @@ def _crate_commands(manifest: str) -> list[list[str]]:
 def commands(group: str) -> list[list[str]]:
     if group == "static":
         return []
-    if group == "agent":
-        return [
-            ["cargo", "fmt", "--manifest-path", "agent-cli/Cargo.toml", "--check"],
-            ["cargo", "test", "--manifest-path", "agent-cli/Cargo.toml"],
-            [
-                "cargo",
-                "clippy",
-                "--manifest-path",
-                "agent-cli/Cargo.toml",
-                "--all-targets",
-                "--",
-                "-D",
-                "warnings",
-            ],
-        ]
     if group == "domain":
         manifests = [
             "crates/magik-core/Cargo.toml",
@@ -64,7 +48,6 @@ def commands(group: str) -> list[list[str]]:
             "crates/perf-events/Cargo.toml",
             "crates/screenshot-parade/Cargo.toml",
             "crates/framebuffer-stream/Cargo.toml",
-            "crates/agent-protocol/Cargo.toml",
             "crates/media-contract/Cargo.toml",
             "crates/mister-ini/Cargo.toml",
             "mister/platform/runtime/Cargo.toml",
@@ -128,7 +111,7 @@ def commands(group: str) -> list[list[str]]:
                 "--manifest-path",
                 manifest,
                 "--features",
-                "magik2",
+                "tooling",
             ],
             ["cargo", "fmt", "--manifest-path", manifest, "--check"],
             [
@@ -217,7 +200,6 @@ def commands(group: str) -> list[list[str]]:
         result = [
             command
             for manifest in (
-                "mister/tools/agent/Cargo.toml",
                 "mister/tools/manager/Cargo.toml",
                 "tools/usb-video/Cargo.toml",
             )

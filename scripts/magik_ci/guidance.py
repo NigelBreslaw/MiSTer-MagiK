@@ -19,7 +19,7 @@ def authority(path: str) -> tuple[str, str]:
     if path.startswith(("/media/fat/", "/tmp/mister-magik/")):
         return (
             "device-owned runtime state; never copy into Git",
-            "scripts/magik-platform for platform delivery; scripts/magik2 device for migrated controls",
+            "scripts/magik-platform for platform delivery; scripts/magik device for migrated controls",
         )
     if file_name.startswith(".env") or "/.wrangler/" in path:
         return "ignored secret; never stage or print", "none"
@@ -132,14 +132,10 @@ def canonical_document(path: str) -> str:
         return "docs/fpga-development.md; release work uses the matching docs/fpga-latch-release.md heading"
     if path.startswith("mister/platform/kernel/"):
         return "docs/kernel-scanout-plugin-assurance.md"
-    if path.startswith("mister/tools/agent/"):
-        return "docs/magik-agent.md"
     if path.startswith("mister/tools/manager/"):
         return "docs/installer.md"
     if path.startswith("scripts/release/") or "package-distribution" in path:
         return "docs/releases.md"
-    if path.startswith("agent-cli/"):
-        return "matching workflow heading in docs/device.md"
     return "none; start with source and tests"
 
 

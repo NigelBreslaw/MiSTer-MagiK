@@ -54,7 +54,6 @@ def main() -> int:
         assert changed_ui["host_target"] != initial["host_target"]
         assert changed_ui["arm_target"] != initial["arm_target"]
         assert changed_ui["arm_build_cache"] == initial["arm_build_cache"]
-        assert changed_ui["agent_cli"] == initial["agent_cli"]
 
         cross = fixture / "apps/mister/Cross.toml"
         cross.write_text(
@@ -65,7 +64,6 @@ def main() -> int:
         assert changed_cross["cross_abi"] != changed_ui["cross_abi"]
         assert changed_cross["arm_build_cache"] == changed_ui["arm_build_cache"]
         assert changed_cross["arm_target"] != changed_ui["arm_target"]
-        assert changed_cross["agent_target"] != changed_ui["agent_target"]
         assert changed_cross["ffmpeg"] != changed_ui["ffmpeg"]
 
         arm_lock = fixture / "apps/mister/Cargo.lock"
@@ -86,8 +84,6 @@ def main() -> int:
         assert changed_lock["arm_build_cache"] == changed_arm_lock["arm_build_cache"]
         assert changed_lock["cargo_host"] != changed_arm_lock["cargo_host"]
         assert changed_lock["host_target"] != changed_arm_lock["host_target"]
-        assert changed_lock["agent_cli"] == changed_arm_lock["agent_cli"]
-        assert changed_lock["agent_cli_deps"] == changed_arm_lock["agent_cli_deps"]
 
         toolchain = fixture / "apps/mister/rust-toolchain.toml"
         toolchain.write_text(
@@ -98,11 +94,8 @@ def main() -> int:
         assert changed_toolchain["rust_abi"] != changed_lock["rust_abi"]
         assert changed_toolchain["cross_abi"] != changed_lock["cross_abi"]
         assert changed_toolchain["arm_build_cache"] == changed_lock["arm_build_cache"]
-        assert changed_toolchain["agent_cli"] != changed_lock["agent_cli"]
-        assert changed_toolchain["agent_cli_deps"] != changed_lock["agent_cli_deps"]
         assert changed_toolchain["host_target"] != changed_lock["host_target"]
         assert changed_toolchain["arm_target"] != changed_lock["arm_target"]
-        assert changed_toolchain["agent_target"] != changed_lock["agent_target"]
 
         manifest = fixture / "apps/mister/Cargo.toml"
         manifest.write_text(
@@ -115,7 +108,6 @@ def main() -> int:
         )
         assert changed_manifest["host_target"] != changed_toolchain["host_target"]
         assert changed_manifest["arm_target"] != changed_toolchain["arm_target"]
-        assert changed_manifest["agent_cli_deps"] == changed_toolchain["agent_cli_deps"]
 
         desktop_lock = fixture / "apps/desktop/Cargo.lock"
         desktop_lock.write_text(
@@ -159,21 +151,16 @@ def main() -> int:
             ("crates/magik-core/src/**/*.rs", ("host_target", "arm_target")),
             (
                 "crates/catalog/src/**/*.rs",
-                ("host_target", "arm_target", "agent_cli"),
+                ("host_target", "arm_target"),
             ),
             ("mister/platform/runtime/src/**/*.rs", ("host_target", "arm_target")),
-            ("mister/tools/agent/src/**/*.rs", ("host_target", "agent_target")),
             (
                 "mister/platform/contracts/video-diagnostics/src/**/*.rs",
-                ("cargo_agent", "host_target", "agent_target"),
+                ("host_target",),
             ),
-            ("agent-cli/src/**/*.rs", ("host_target", "agent_cli")),
-            ("crates/media-contract/src/**/*.rs", ("agent_cli",)),
-            ("crates/agent-protocol/src/**/*.rs", ("agent_cli",)),
         )
         previous = changed_stream_source
         for pattern, changed_groups in source_expectations:
-            previous_agent_cli_deps = previous["agent_cli_deps"]
             previous_arm_build_cache = previous["arm_build_cache"]
             source = next(iter(MODULE.files_for(fixture, (pattern,))))
             source.write_text(
@@ -183,29 +170,25 @@ def main() -> int:
             current = MODULE.identities(fixture)
             for group in changed_groups:
                 assert current[group] != previous[group], (pattern, group)
-            assert current["agent_cli_deps"] == previous_agent_cli_deps, pattern
             assert current["arm_build_cache"] == previous_arm_build_cache, pattern
             previous = current
 
         compiled_input_expectations = (
             (
                 "crates/catalog/data/**/*.json",
-                ("host_target", "arm_target", "agent_cli"),
+                ("host_target", "arm_target"),
             ),
             ("crates/catalog/tests/**/*.rs", ("host_target",)),
             ("apps/mister/ui/fonts/*.ttf", ("host_target", "arm_target")),
             ("apps/mister/ui/icons/*.svg", ("host_target", "arm_target")),
         )
         for pattern, changed_groups in compiled_input_expectations:
-            previous_agent_cli = previous["agent_cli"]
             previous_arm_build_cache = previous["arm_build_cache"]
             source = next(iter(MODULE.files_for(fixture, (pattern,))))
             source.write_bytes(source.read_bytes() + b"\n")
             current = MODULE.identities(fixture)
             for group in changed_groups:
                 assert current[group] != previous[group], (pattern, group)
-            if "agent_cli" not in changed_groups:
-                assert current["agent_cli"] == previous_agent_cli, pattern
             assert current["arm_build_cache"] == previous_arm_build_cache, pattern
             previous = current
 

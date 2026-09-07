@@ -5009,7 +5009,7 @@ pub(super) fn run_launcher_loop(
     launcher_config: mister_magik_fb::process_config::LauncherProcessConfig,
 ) {
     let launcher_ui_actions = LauncherUiActionsAdapter::install(&app);
-    #[cfg(feature = "magik2")]
+    #[cfg(feature = "tooling")]
     app.set_development_keyboard_input(true);
     let start = Instant::now();
     #[cfg(feature = "ui-device-tests")]
@@ -6154,9 +6154,9 @@ pub(super) fn run_launcher_loop(
             launcher_frame_phase_observer.record($phase);
         }};
     }
-    #[cfg(feature = "magik2")]
+    #[cfg(feature = "tooling")]
     let mut tooling = mister_magik_tooling_support::Session::from_environment();
-    #[cfg(feature = "magik2")]
+    #[cfg(feature = "tooling")]
     if let Some(session) = tooling.as_mut() {
         let paths = launcher_config.device_paths();
         let catalog = launcher_config.catalog_paths();
@@ -6166,20 +6166,20 @@ pub(super) fn run_launcher_loop(
             "catalog":catalog.sharded_catalog_dir(), "library":catalog.library_sqlite(),
             "user_state":catalog.user_state_sqlite(), "assets":catalog.media_asset_dir(),
         });
-        crate::ui_logln!("magik2_context {}", session.metrics.context);
+        crate::ui_logln!("magik_context {}", session.metrics.context);
     }
-    #[cfg(feature = "magik2")]
+    #[cfg(feature = "tooling")]
     let mut tooling_drop_baseline: Option<u32> = None;
-    #[cfg(feature = "magik2")]
+    #[cfg(feature = "tooling")]
     let mut tooling_reject_baseline: Option<u16> = None;
-    #[cfg(feature = "magik2")]
+    #[cfg(feature = "tooling")]
     crate::catalog_equivalence::start_requested_probe();
     'launcher: while (secs == 0 || run_start.elapsed().as_secs() < secs)
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
         record_launcher_frame_phase!(LauncherFramePhase::Begin);
         window.process_pending_callbacks();
-        #[cfg(feature = "magik2")]
+        #[cfg(feature = "tooling")]
         if let Some(session) = tooling.as_mut() {
             // Direct Arcade scrolling skips the full Slint presenter. Keep its
             // accessibility selection current for the attached tooling session.
@@ -9671,7 +9671,7 @@ pub(super) fn run_launcher_loop(
             let idle_sleep = catalog_scan_blink
                 .time_until_toggle(loop_start)
                 .map_or(idle_sleep, |blink| idle_sleep.min(blink));
-            #[cfg(feature = "magik2")]
+            #[cfg(feature = "tooling")]
             let idle_sleep = if tooling.is_some() {
                 idle_sleep.min(Duration::from_millis(100))
             } else {
@@ -11872,7 +11872,7 @@ pub(super) fn run_launcher_loop(
             match completion {
                 Ok(completion) => {
                     let status = completion.status;
-                    #[cfg(feature = "magik2")]
+                    #[cfg(feature = "tooling")]
                     if let Some(session) = tooling.as_mut() {
                         if let Some(previous) = tooling_reject_baseline {
                             session.metrics.counters.rejections +=
@@ -12068,7 +12068,7 @@ pub(super) fn run_launcher_loop(
                     launcher_response_trace.start_pmu_if_ready();
                     screensaver_cpu_profile.begin_launcher_response(frames.saturating_add(1));
                 }
-                #[cfg(feature = "magik2")]
+                #[cfg(feature = "tooling")]
                 if let Some(session) = tooling.as_mut() {
                     let metrics = &mut session.metrics;
                     metrics.counters.presentations += 1;

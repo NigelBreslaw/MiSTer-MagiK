@@ -15,7 +15,7 @@ APPLE_IMAGE="${MISTER_APPLE_CONTAINER_IMAGE:-mister-magik-cross-armv7:ubuntu20-a
 
 if [ ! -f "$BIN" ]; then
   echo "ERROR: binary missing: $BIN" >&2
-  echo "Hint: build the offline analysis binary first: scripts/agent build runtime-analysis" >&2
+  echo "Hint: build the offline analysis binary first: scripts/magik-ci build runtime-device" >&2
   exit 1
 fi
 

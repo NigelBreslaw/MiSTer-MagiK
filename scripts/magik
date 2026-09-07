@@ -1,0 +1,9 @@
+#!/bin/bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PYTHONPATH="$ROOT/magik/host${PYTHONPATH:+:$PYTHONPATH}"
+exec uv run --project "$ROOT/magik/host" python -m magik.cli "$@"
