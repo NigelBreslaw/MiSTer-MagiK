@@ -19,9 +19,11 @@ from .results import (
     create_run,
     finalize,
     retain_diagnostics,
+    record_device,
     source_context,
 )
 from .token_store import TokenStore, state_root
+from .discovery import resolve_device
 from .viewer import serve
 
 STATUS_CAPABILITIES = {"status"}
@@ -54,6 +56,12 @@ def main() -> int:
         "mcp", help="serve framebuffer screenshots to Codex over stdio"
     )
     subcommands.add_parser("deploy")
+    device_command = subcommands.add_parser("device")
+    device_subcommands = device_command.add_subparsers(
+        dest="device_command", required=True
+    )
+    select = device_subcommands.add_parser("select")
+    select.add_argument("address")
     bench = subcommands.add_parser("bench", help="run a Mini workload")
     bench.add_argument("workload", nargs="?", default="blend")
     modes = bench.add_mutually_exclusive_group()
@@ -170,12 +178,11 @@ def dispatch(arguments, run) -> int:
         built = ensure_arm_package(package, package / "target/magik2-build.json")
         print(built.artifact)
         return 0
-    if not os.environ.get("MISTER_IP"):
-        print(
-            "MISTER_IP is required; no legacy transport was attempted.",
-            file=os.sys.stderr,
-        )
-        return 2
+    if arguments.command == "device":
+        device = resolve_device(arguments.address, select=True)
+        record_device(run, device.identity, device.address)
+        print(f"Selected MiSTer {device.identity} at {device.address}")
+        return 0
     if arguments.command == "bench":
         from .benchmark import run_benchmark
 
@@ -476,11 +483,17 @@ def wait_for_agent(
 def connect_agent(
     run: Path, required: set[str] = REQUIRED_AGENT_CAPABILITIES
 ) -> tuple[NativeAgent, AgentStatus]:
-    device = os.environ["MISTER_IP"]
-    store = TokenStore(state_root(), device)
+    resolved = resolve_device()
+    device = resolved.address
+    record_device(run, resolved.identity, device)
+    store = TokenStore(state_root(), resolved.identity)
+
+    def bootstrap():
+        return SshBootstrap(device, resolved.username, resolved.password())
+
     token = store.load()
     if not token:
-        token = SshBootstrap.from_environment().native_token()
+        token = bootstrap().native_token()
         if token:
             store.save(token)
     agent = NativeAgent(device, token) if token else None
@@ -526,7 +539,7 @@ def connect_agent(
         # Never blindly repeat an update after losing its acknowledgement.
         status = wait_for_agent(agent, required)
     else:
-        token = SshBootstrap.from_environment().install_and_start(binary)
+        token = bootstrap().install_and_start(binary)
         store.save(token)
         agent = NativeAgent(device, token)
         status = wait_for_agent(agent, required)

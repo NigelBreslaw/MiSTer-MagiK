@@ -9,6 +9,17 @@ from magik2.client import AgentError
 from magik2.compatibility import AgentStatus
 from magik2.results import create_run
 from magik2.token_store import TokenStore
+from magik2.discovery import ResolvedDevice
+
+
+@pytest.fixture(autouse=True)
+def resolved_device(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "resolve_device",
+        lambda: ResolvedDevice("mister.test", "mister.test", "root"),
+    )
+    monkeypatch.setattr(ResolvedDevice, "password", lambda _: "fixture-password")
 
 
 def status(identity: str, capabilities: set[str]) -> AgentStatus:
@@ -64,7 +75,7 @@ def test_branch_clients_keep_a_suitable_agent_despite_identity_changes(
             raise AssertionError("compatible agent must be retained")
 
     monkeypatch.setattr(cli, "agent_binary_path", lambda: tmp_path / "agent")
-    monkeypatch.setattr(cli.SshBootstrap, "from_environment", lambda: Bootstrap())
+    monkeypatch.setattr(cli, "SshBootstrap", lambda *_: Bootstrap())
     run = create_run(tmp_path, "status", {})
     for _ in range(3):
         _agent, discovered = cli.connect_agent(run)
@@ -90,7 +101,7 @@ def test_missing_capability_bootstraps_once_and_continues(
             return "replacement-token"
 
     monkeypatch.setattr(cli, "agent_binary_path", lambda: tmp_path / "agent")
-    monkeypatch.setattr(cli.SshBootstrap, "from_environment", lambda: Bootstrap())
+    monkeypatch.setattr(cli, "SshBootstrap", lambda *_: Bootstrap())
     monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
     run = create_run(tmp_path, "status", {})
     _agent, discovered = cli.connect_agent(run)
@@ -132,7 +143,7 @@ def test_missing_capability_prefers_a_native_agent_update(
 
     monkeypatch.setattr(cli, "NativeAgent", FakeAgent)
     monkeypatch.setattr(cli, "agent_binary_path", lambda: binary)
-    monkeypatch.setattr(cli.SshBootstrap, "from_environment", lambda: Bootstrap())
+    monkeypatch.setattr(cli, "SshBootstrap", lambda *_: Bootstrap())
     monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
     run = create_run(tmp_path, "status", {})
 
@@ -158,7 +169,7 @@ def test_absent_agent_bootstraps_and_authentication_failure_does_not(
             return "replacement-token"
 
     monkeypatch.setattr(cli, "agent_binary_path", lambda: tmp_path / "agent")
-    monkeypatch.setattr(cli.SshBootstrap, "from_environment", lambda: Bootstrap())
+    monkeypatch.setattr(cli, "SshBootstrap", lambda *_: Bootstrap())
     monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
     run = create_run(tmp_path, "status", {})
     assert cli.connect_agent(run)[1].supports(required)
@@ -215,7 +226,7 @@ def test_fresh_worktrees_retrieve_token_without_replacing_compatible_agent(
         def status(self):
             return status("other-branch", cli.REQUIRED_AGENT_CAPABILITIES | {"extra"})
 
-    monkeypatch.setattr(cli.SshBootstrap, "from_environment", lambda: Bootstrap())
+    monkeypatch.setattr(cli, "SshBootstrap", lambda *_: Bootstrap())
     monkeypatch.setattr(cli, "NativeAgent", Agent)
     monkeypatch.setattr(
         cli,

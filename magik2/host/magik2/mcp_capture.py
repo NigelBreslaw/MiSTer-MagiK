@@ -52,13 +52,11 @@ async def list_tools() -> list[types.Tool]:
 
 
 def capture_image(view: str) -> list[types.ImageContent | types.TextContent]:
-    if not os.environ.get("MISTER_IP"):
-        raise ValueError("MISTER_IP is required for framebuffer capture")
     started = time.monotonic()
     run = create_run(
         Path(os.environ.get("MISTER_MAGIK2_RESULTS", "build/magik2-results")),
         "capture-framebuffer",
-        source_context(os.environ["MISTER_IP"]),
+        source_context(os.environ.get("MISTER_IP", "")),
     )
     code = 1
     try:
