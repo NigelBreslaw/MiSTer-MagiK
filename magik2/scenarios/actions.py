@@ -9,11 +9,11 @@ from typing import Any
 
 from magik2.client import NativeAgent
 from magik2.capture import capture_png
-from magik2.testing import one_element
+from magik2.testing import one_element, screenshot
 
 
 def smoke(
-    application: Any, screenshot_path: Path, expected_sha256: str
+    application: Any, agent: NativeAgent, screenshot_path: Path, expected_sha256: str
 ) -> Mapping[str, object]:
     build = one_element(application, "build-label")
     if not build.is_valid:
@@ -33,10 +33,12 @@ def smoke(
         lambda: not _exists(application, "details-panel"), "details panel did not close"
     )
     one_element(application, "show-launcher").invoke_accessible_default_action()
-    ready = one_element(application, "launcher-ready")
+    ready = _text_element(application, "launcher-ready")
     _wait(lambda: _value_is(ready, "presented"), "launcher was not latched")
-    selection = one_element(application, "launcher-selection")
+    selection = _text_element(application, "launcher-selection")
     _expect_value(selection, "ARCADE")
+    fixtures = _text_element(application, "launcher-fixtures")
+    _expect_value(fixtures, "fixture-data")
     fields, pixels = agent.capture_framebuffer()
     png, metadata = capture_png(fields, pixels, "raw")
     screenshot_path.write_bytes(png)
@@ -144,6 +146,22 @@ def _exists(application: Any, label: str) -> bool:
     except AssertionError:
         return False
     return True
+
+
+def _text_element(application: Any, label: str) -> Any:
+    window = application.first_window
+    if window is None:
+        raise AssertionError("probe exposed no Slint window")
+    matches = [
+        element
+        for element in window.root_element.query_descendants()
+        .match_inherits("Text")
+        .find_all()
+        if element.accessible_label == label
+    ]
+    if len(matches) != 1:
+        raise AssertionError(f"expected one Text element for {label!r}, got {len(matches)}")
+    return matches[0]
 
 
 def _wait(predicate: Callable[[], bool], failure: str, timeout: float = 3) -> None:

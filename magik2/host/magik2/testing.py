@@ -62,14 +62,7 @@ def one_element(application: Any, label: str) -> Any:
         raise AssertionError("probe exposed no Slint window")
     type_name = (
         "Text"
-        if label in {
-            "build-label",
-            "counter",
-            "details-panel",
-            "motion-state",
-            "launcher-ready",
-            "launcher-selection",
-        }
+        if label in {"build-label", "counter", "details-panel", "motion-state"}
         else "Rectangle"
     )
     matches = [

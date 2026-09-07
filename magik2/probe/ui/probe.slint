@@ -57,6 +57,11 @@ export component Probe inherits Window {
         accessible-role: text; accessible-label: "launcher-selection";
         accessible-value: root.launcher-selection;
     }
+    launcher-fixtures-state := Text {
+        x: 0px; y: 0px; width: 1px; height: 1px; opacity: 0;
+        accessible-role: text; accessible-label: "launcher-fixtures";
+        accessible-value: root.launcher-fixtures ? "fixture-data" : "catalog-data";
+    }
 
     Rectangle {
         x: 16px; y: 80px; width: 250px; height: 160px;
