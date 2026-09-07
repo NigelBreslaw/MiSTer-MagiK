@@ -190,6 +190,10 @@ def assert_static_idle(agent: NativeAgent, expected_sha256: str) -> Mapping[str,
         raise AssertionError("static launcher reported presentation evidence error")
     return {
         "idle_static_verified": True,
+        "idle_baseline_sha256": baseline.get("sha256"),
+        "idle_sample_sha256": sample.get("sha256"),
+        "idle_baseline_pid": baseline.get("pid"),
+        "idle_sample_pid": sample.get("pid"),
         "idle_baseline_elapsed_ms": baseline_elapsed,
         "idle_sample_elapsed_ms": sample_elapsed,
         "idle_interval_ms": interval,
