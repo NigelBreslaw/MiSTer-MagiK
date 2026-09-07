@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+pub mod update;
+
 use ed25519_dalek::{Signature, VerifyingKey};
 use std::collections::BTreeMap;
 
