@@ -49,7 +49,7 @@ impl LauncherScene {
     }
 }
 
-const BACKGROUND: u16 = rgb(7, 12, 15);
+const BACKGROUND: u16 = rgb(0, 0, 0);
 const CREAM: u16 = rgb(238, 232, 213);
 const MUTED: u16 = rgb(143, 151, 150);
 const RULE: u16 = rgb(48, 61, 63);
@@ -58,7 +58,7 @@ const DARK_TEXT: u16 = rgb(10, 20, 24);
 const CARD_TOP: usize = 135;
 const CARD_BOTTOM: usize = 428;
 const REFLECTION_TOP: usize = 433;
-const REFLECTION_HEIGHT: usize = 44;
+const REFLECTION_HEIGHT: usize = 32;
 
 const fn rgb(red: u16, green: u16, blue: u16) -> u16 {
     ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
@@ -67,9 +67,7 @@ const fn rgb(red: u16, green: u16, blue: u16) -> u16 {
 fn render_logical(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>) {
     draw_rect(pixels, 0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT, BACKGROUND);
     draw_text(pixels, 26, 20, "MISTER MAGIK", CREAM, 3);
-    draw_text(pixels, 26, 53, "PLAY / COLLECT / REMEMBER", MUTED, 1);
     draw_text(pixels, 875, 22, data.clock, CREAM, 2);
-    draw_text(pixels, 842, 53, "SETTINGS", MUTED, 1);
     draw_line(pixels, 26, 76, 934, 76, RULE);
 
     draw_line(pixels, 265, 95, 265, 478, RULE);
@@ -82,8 +80,6 @@ fn render_logical(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>) {
     draw_text(pixels, 30, 310, "COLLECTIONS", MUTED, 1);
     draw_text(pixels, 150, 310, "FAVOURITES", MUTED, 1);
     draw_line(pixels, 28, 340, 240, 340, RULE);
-    draw_text(pixels, 29, 366, "ONE LIBRARY.", CREAM, 2);
-    draw_text(pixels, 29, 393, "EVERY GENERATION.", CREAM, 1);
     for (index, colour) in [
         rgb(226, 52, 67),
         rgb(237, 193, 54),
@@ -95,7 +91,6 @@ fn render_logical(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>) {
     {
         draw_rect(pixels, 29 + index * 54, 436, 48, 7, *colour);
     }
-    draw_text(pixels, 29, 459, "ACROSS ALL COLLECTIONS", MUTED, 1);
 
     draw_text(pixels, 296, 101, "COLLECTIONS", MUTED, 1);
     let selected = if data.cards.is_empty() {
@@ -116,7 +111,6 @@ fn render_logical(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>) {
     draw_text(pixels, 30, 516, "A  OPEN", CREAM, 1);
     draw_text(pixels, 130, 516, "B  BACK", CREAM, 1);
     draw_text(pixels, 586, 516, "←  →   BROWSE CARDS", CREAM, 1);
-    draw_text(pixels, 846, 516, "MISTER / OFFLINE", MUTED, 1);
 }
 
 fn draw_carousel(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>) {
@@ -220,25 +214,30 @@ fn ordinal(index: usize, count: usize) -> String {
 fn draw_reflection(pixels: &mut [Rgb565Pixel], x: usize, width: usize, bottom: usize) {
     for row in 0..REFLECTION_HEIGHT {
         let source_y = bottom.saturating_sub(1 + row);
-        let alpha = 3_u16.saturating_sub((row / 11) as u16);
         for column in x..x + width {
             let target_y = REFLECTION_TOP + row;
             if target_y < LOGICAL_HEIGHT {
                 let source = pixels[source_y * LOGICAL_WIDTH + column].0;
                 pixels[target_y * LOGICAL_WIDTH + column] =
-                    Rgb565Pixel(blend(source, BACKGROUND, alpha, 4));
+                    Rgb565Pixel(reflection_pixel(source, column, row));
             }
         }
     }
 }
 
-fn blend(source: u16, background: u16, level: u16, levels: u16) -> u16 {
-    let mix = |s: u16, b: u16, bits: u16| {
-        ((s * level + b * (levels - level)) / levels) & ((1 << bits) - 1)
+fn reflection_pixel(source: u16, x: usize, row: usize) -> u16 {
+    // A quiet quadratic fade, quantized with a stationary 4x4 Bayer pattern.
+    // Dither only the fractional channel level: never add noise to black.
+    const BAYER: [[u32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+    let remaining = (REFLECTION_HEIGHT - 1 - row) as u32;
+    let span = (REFLECTION_HEIGHT - 1) as u32;
+    let alpha = 56 * remaining * remaining / (span * span);
+    let threshold = BAYER[row % 4][x % 4] * 16 + 8;
+    let fade = |channel: u16| -> u16 {
+        let value = u32::from(channel) * alpha;
+        (value / 256 + u32::from(value % 256 > threshold)) as u16
     };
-    (mix((source >> 11) & 31, (background >> 11) & 31, 5) << 11)
-        | (mix((source >> 5) & 63, (background >> 5) & 63, 6) << 5)
-        | mix(source & 31, background & 31, 5)
+    (fade((source >> 11) & 31) << 11) | (fade((source >> 5) & 63) << 5) | fade(source & 31)
 }
 
 fn scale_letterboxed(logical: &[Rgb565Pixel], width: usize, height: usize) -> Vec<Rgb565Pixel> {
@@ -487,6 +486,26 @@ mod tests {
     }
 
     #[test]
+    fn simplified_chrome_leaves_removed_copy_regions_pure_black() {
+        let frame = LauncherScene::new(960, 540).render(data());
+        assert_eq!(BACKGROUND, 0);
+        for (left, top, right, bottom) in [
+            (26, 53, 934, 60),
+            (29, 366, 240, 407),
+            (29, 459, 240, 466),
+            (846, 516, 934, 523),
+        ] {
+            for y in top..bottom {
+                assert!(
+                    frame[y * 960 + left..y * 960 + right]
+                        .iter()
+                        .all(|pixel| pixel.0 == 0)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn output_is_deterministic_and_packed() {
         let scene = LauncherScene::new(960, 540);
         assert_eq!(scene.render(data()), scene.render(data()));
@@ -521,7 +540,7 @@ mod tests {
         draw_reflection(&mut pixels, 520, 1, CARD_BOTTOM);
         assert_eq!(
             pixels[REFLECTION_TOP * LOGICAL_WIDTH + 520].0,
-            blend(rgb(240, 40, 80), BACKGROUND, 3, 4)
+            reflection_pixel(rgb(240, 40, 80), 520, 0)
         );
         assert_ne!(
             pixels[(REFLECTION_TOP + 1) * LOGICAL_WIDTH + 520].0,
@@ -532,8 +551,25 @@ mod tests {
             pixels[(REFLECTION_TOP + 1) * LOGICAL_WIDTH + 520].0
         );
         assert_eq!(
-            pixels[(REFLECTION_TOP + 33) * LOGICAL_WIDTH + 520].0,
+            pixels[(REFLECTION_TOP + REFLECTION_HEIGHT - 1) * LOGICAL_WIDTH + 520].0,
             BACKGROUND
+        );
+    }
+
+    #[test]
+    fn reflection_is_dim_dithered_and_preserves_black() {
+        for row in 0..REFLECTION_HEIGHT {
+            for x in 0..4 {
+                assert_eq!(reflection_pixel(0, x, row), 0);
+                let pixel = reflection_pixel(0xffff, x, row);
+                assert!((pixel >> 11) <= 7);
+                assert!(((pixel >> 5) & 63) <= 14);
+                assert!((pixel & 31) <= 7);
+            }
+        }
+        assert_ne!(
+            reflection_pixel(0xffff, 0, 1),
+            reflection_pixel(0xffff, 1, 1)
         );
     }
 
