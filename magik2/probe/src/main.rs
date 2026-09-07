@@ -153,8 +153,17 @@ impl Platform for ProbePlatform {
 }
 
 fn main() -> Result<(), String> {
-    let plan =
-        query_main_display_plan().map_err(|error| format!("resolve Main display: {error}"))?;
+    // A supervised child inherits Main's display contracts. Do not request the
+    // command FIFO while Main is waiting for this child's ready acknowledgement.
+    let plan = if std::env::var_os("MISTER_MAGIK_STARTUP_TOKEN").is_some() {
+        let mut fpga =
+            mister_magik_mister_runtime::fpga::Fpga::open().map_err(|e| e.to_string())?;
+        mister_magik_mister_runtime::display_plan::detect_runtime_display_plan(&mut fpga)
+            .map_err(|e| e.to_string())?
+            .plan
+    } else {
+        query_main_display_plan().map_err(|error| format!("resolve Main display: {error}"))?
+    };
     let (width, height) = (plan.fb_w, plan.fb_h);
     let (scan_width, scan_height) = (plan.scan_w, plan.scan_h);
     let mut framebuffer =
@@ -400,7 +409,16 @@ fn main() -> Result<(), String> {
 
     let mut cached = vec![Rgb565Pixel(0); width * height];
     let mut scene_pixels = vec![ScenePixel(0); width * height];
+    if std::env::var_os("MISTER_MAGIK_STARTUP_TOKEN").is_some() {
+        prepared.render_into(control.borrow_mut().frame(0), &mut scene_pixels);
+        let startup_pixels: Vec<_> = scene_pixels.iter().map(|p| Rgb565(p.0)).collect();
+        mister_magik_mister_runtime::main_ready::notify_main_ready(
+            &mut framebuffer,
+            &startup_pixels,
+        )?;
+    }
     let mut launcher_input: Option<MainProxyInput> = None;
+    let mut physical_input_edges = 0_u64;
     let mut input_events = Vec::with_capacity(INPUT_BATCH_CAPACITY);
     let mut next_input_open_ms = 0;
     let mut last_presented: Option<BrowseFrame> = None;
@@ -432,6 +450,13 @@ fn main() -> Result<(), String> {
                 Ok(()) => {
                     if launcher_mode.get() {
                         for event in input_events.drain(..) {
+                            physical_input_edges += 1;
+                            let mut session = session.borrow_mut();
+                            session.metrics.context["physical_input_edges"] =
+                                physical_input_edges.into();
+                            session.metrics.context["physical_input_last"] =
+                                format!("{:?}:{:?}", event.direction, event.phase).into();
+                            drop(session);
                             let direction = match event.direction {
                                 MainInputDirection::Left => BrowseDirection::Left,
                                 MainInputDirection::Right => BrowseDirection::Right,
@@ -592,6 +617,8 @@ fn main() -> Result<(), String> {
                     metrics.counters.render_to_present_us += started.elapsed().as_micros() as u64;
                     if let Some(frame) = posted_frame {
                         last_presented = Some(frame);
+                        metrics.context["selected_category"] =
+                            launcher_cards[frame.selected].name.into();
                         launcher_dirty.set(false);
                         if probe.get_launcher_selection() != launcher_labels[frame.selected] {
                             probe.set_launcher_selection(launcher_labels[frame.selected].clone());

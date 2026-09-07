@@ -81,6 +81,9 @@ impl From<LatchFailure> for HiddenLatchError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HiddenLatchPresentReceipt {
+    pub active_base: u32,
+    pub route_epoch: u16,
+    pub receipt_crc: u16,
     pub slot_index: u8,
     pub sequence: u16,
     pub flip_count: u16,
@@ -113,6 +116,7 @@ pub struct CachedHiddenLatchCopyStats {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PendingPresentation {
+    receipt_crc: u16,
     slot_index: u8,
     sequence: u16,
     base: u32,
@@ -328,6 +332,9 @@ impl HiddenLatchPresenter {
         self.pending = None;
         self.writable_slot = 1 - self.writable_slot;
         Ok(Some(HiddenLatchPresentReceipt {
+            active_base: after.active_base,
+            route_epoch: after.active_route_epoch,
+            receipt_crc: pending.receipt_crc,
             slot_index: pending.slot_index,
             sequence: pending.sequence,
             flip_count: after.flip_count,
@@ -377,6 +384,7 @@ impl HiddenLatchPresenter {
             .settle_us
             .saturating_add(receipt.status_us);
         self.pending = Some(PendingPresentation {
+            receipt_crc: receipt.receipt_crc,
             slot_index,
             sequence,
             base,

@@ -6,6 +6,7 @@ mod catalog_operations;
 mod device;
 mod device_identity;
 mod main_control;
+mod managed_launcher;
 mod media;
 mod mode;
 mod publication;
@@ -181,6 +182,8 @@ impl Agent {
             "transfer-check",
             "applications",
             "main-input-proxy",
+            "main-managed-magik",
+            "main-managed-mini-v1",
             "measurement",
             "diagnostics",
             "upload-v1",
@@ -652,6 +655,14 @@ impl Agent {
                 serde_json::json!({"already_running":true,"ready":true,"sha256":published_hash}),
             );
         }
+        if matches!(artifact, "magik" | "mini-magik") {
+            return self.start_managed_application(
+                request,
+                test_server.as_deref(),
+                published_hash.as_deref().unwrap_or_default(),
+                artifact,
+            );
+        }
         if let Err(error) = fs::create_dir_all(&self.state_root) {
             return response(
                 &request.id,
@@ -968,6 +979,20 @@ impl Agent {
     }
 
     fn ready_for(&self, pid: u32, hash: &str) -> bool {
+        if fs::read_link(format!("/proc/{pid}/exe"))
+            .ok()
+            .is_some_and(|path| {
+                ["magik", "mini-magik"].iter().any(|name| {
+                    path.to_string_lossy().trim_end_matches(" (deleted)")
+                        == self.install_root.join(name).to_string_lossy()
+                })
+            })
+            && !device::status()
+                .ok()
+                .is_some_and(|status| managed_launcher::owns_ready_child(&status, pid))
+        {
+            return false;
+        }
         fs::read(self.readiness_path())
             .ok()
             .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
@@ -1066,6 +1091,16 @@ impl Agent {
     }
 
     fn stop_owned_process(&self) -> Result<(), String> {
+        if let Some(record) = self.running_identity()
+            && device::status().ok().is_some_and(|status| {
+                status["launcher_pid"].as_u64() == Some(u64::from(record.pid))
+            })
+        {
+            main_handoff("mister_magik_suspend\n")?;
+            managed_launcher::update(Path::new(managed_launcher::ENV_PATH), None)?;
+            self.clear_owned_process();
+            return Ok(());
+        }
         let mut process = self.process.lock().expect("agent process state poisoned");
         if let Some(child) = process.as_mut() {
             if child.try_wait().map_err(|e| e.to_string())?.is_none() {

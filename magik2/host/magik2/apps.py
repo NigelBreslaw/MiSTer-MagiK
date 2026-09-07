@@ -15,14 +15,14 @@ class Application:
 
 
 APPLICATIONS = {
-    "mini-magik": Application("mini-magik", "magik2/probe", "mini-magik"),
+    "mini-magik": Application("mini-magik", "magik2/probe", "mini-magik", agent_capabilities=frozenset({"main-managed-mini-v1"})),
     "magik": Application(
         "magik",
         "apps/mister",
         "mister-magik-fb",
         "release-device-ui-tests",
         ("magik2",),
-        frozenset({"main-input-proxy"}),
+        frozenset({"main-managed-magik"}),
     ),
 }
 
