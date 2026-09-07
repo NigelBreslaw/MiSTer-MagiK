@@ -1,5 +1,60 @@
 # Tooling retirement
 
+## Current disposition after host migration
+
+This section supersedes the command inventory in the historical milestones below.
+Device/catalog controls and publication now belong to `magik2/agent` and
+`magik2/host/magik2`; platform entry is `scripts/magik-platform`. Host maintenance,
+compile comparisons and evidence export belong to `scripts/magik_ci`; USB capture
+belongs to `tools/usb-video`. See `docs/host-orchestration.md` for exact entrypoints.
+
+Deleted the migrated legacy command surface, delivery/build/dependency/compile
+campaign modules, catalog/media orchestration, combined release gate, certificate
+creators and their exclusive tests. Production catalog/media formats, physical
+input qualification, CRT checks, Main and Desktop runtime implementations remain.
+USB implementation was moved, not replaced. Shared media update primitives moved
+to `crates/media-contract` in a separate consumer commit.
+
+### Complete remaining legacy CLI leaves
+
+Code owners are repository modules. Tests are validation, not external consumers.
+C = CLI; A = old agent; P = protocol; S = startup; I = legacy CI/package artifact.
+
+| Leaf under `scripts/agent` | Purpose and owner | Named consumer and disposition | Blocks |
+|---|---|---|---|
+| `device arming-status` | Volatile arming inspection; `host/mod.rs` | Attended physical qualification/recovery procedures; retained separately | C/A/P/S/I |
+| `device events` | Legacy timeline evidence; `host/agent_client.rs` | Existing hardware qualification event inspection; retained separately | C/A/P/S/I |
+| `device crt qualify`, `probe`, `restore` | Focused physical CRT checks; `host/crt_qualification.rs` | `docs/crt.md`; retained separately | C/A/P/S/I |
+| `device capture framebuffer` | Legacy file capture/derived views; `host/framebuffer_views.rs` | Existing operator evidence and Desktop endpoint; retained separately, 2.0 capture also supported | C/A/P/S/I |
+| `device fpga install-experimental-agent` | Matched legacy diagnostic-agent installation; `host/mod.rs` | Physical qualification/legacy diagnostic consumers; retained while those consumers remain | C/A/P/S/I |
+| `benchmark input-integrity` | Physical input qualification; `benchmark.rs`, `host/mod.rs` | Explicit user retention and hardware input contract; retained separately | C/A/P/S/I |
+| `release frame-evidence verify` | Offline historical frame record reader; `return_qualification.rs` | Existing operator evidence files; retained separately | C only |
+| `release return-qualification verify-aggregate` | Offline historical aggregate reader; `return_qualification.rs`, `platform_bundle.rs` | Existing certificates; retained reader, never a delivery prerequisite | C only |
+
+### Remaining dependencies preventing final uninstall
+
+| Group / code owner | Actual consumers and disposition | Blocks |
+|---|---|---|
+| `crates/agent-protocol` | Desktop authenticated control, SD browser, image preview, framebuffer stream/capture; retained physical qualification client; deferred Desktop migration | A/P/S/I, and C for retained CLI |
+| `mister/tools/agent` control/status/SD/capture/input/diagnostics | Desktop `apps/desktop/src/agent_client.rs` directly requests ping/status/magik, SD list/stat/preview/MRA and framebuffer streams. Physical CRT/input qualification still uses legacy diagnostics. Retain named endpoints | A/P/S/I |
+| Legacy host connection/bootstrap, `host/agent_client.rs`/`remote.rs`, SSH dependency | Above physical checks and matched agent installer. No new 2.0 operation invokes these | C/A/P/S/I |
+| Legacy service startup and release/CI package | Desktop and physical qualification still require installation and startup; defer uninstall | S/I |
+| Application protocol imports and shared frame/input contracts | Production app and Desktop compile consumers remain; do not delete based on CLI retirement | P |
+| Legacy evidence/workflow/transport modules | Retained physical benchmark records and offline readers; public APIs without independent callers are later deletion candidates | C; not A by themselves |
+
+The old CLI is therefore not yet wholly removable. Next decisions are whether to
+extract retained physical qualification/offline readers and how to migrate
+Desktop; only then remove its protocol, startup and CI artifact. Other unused
+public helpers are candidates for a later focused batch, not silently included.
+
+No new framework, UI scenario, campaign database or hardware matrix was added.
+This retirement intentionally drops combined release-gate coverage rather than
+claiming the new Python framework replaces it. Review explicitly checked retained
+function bodies and source-text references to deleted files. Validation and final
+counts are recorded with the implementation commits.
+
+## Historical records
+
 ## Orphan retirement: current update
 
 Removed the unused device `launcher_automation_begin`,

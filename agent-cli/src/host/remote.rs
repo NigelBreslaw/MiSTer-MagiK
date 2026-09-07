@@ -3,7 +3,7 @@
 
 use ssh2::{ExtendedData, Session};
 use std::env;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
@@ -102,15 +102,6 @@ pub(crate) struct ExecOutput {
 
 pub(crate) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
-pub(crate) fn remote_subcommand(binary: &str, subcommand: &str, args: &[String]) -> String {
-    let mut command = format!("{binary} {subcommand}");
-    for arg in args {
-        command.push(' ');
-        command.push_str(&shell_quote(arg));
-    }
-    command
 }
 
 pub(crate) fn remove_files_command(paths: &[&str]) -> String {
@@ -223,17 +214,6 @@ fn ensure_remote_dir(sftp: &ssh2::Sftp, remote: &Path) -> Result<()> {
     }
 }
 
-pub(crate) fn get(sess: &Session, remote: &str, local: &Path) -> Result<()> {
-    if let Some(parent) = local.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let sftp = sess.sftp()?;
-    let mut src = sftp.open(Path::new(remote))?;
-    let mut dst = File::create(local)?;
-    io::copy(&mut src, &mut dst)?;
-    Ok(())
-}
-
 pub(crate) fn tcp_probe_label_port_with(
     config: &ConnectionConfig,
     port: u16,
@@ -324,14 +304,6 @@ mod tests {
     fn shell_command_builders_quote_every_dynamic_value() {
         assert_eq!(shell_quote("plain"), "'plain'");
         assert_eq!(shell_quote("it's here"), "'it'\"'\"'s here'");
-        assert_eq!(
-            remote_subcommand(
-                "/fixture/app",
-                "fixture-subcommand",
-                &["a space".into(), "label='Pac-Man'".into()]
-            ),
-            "/fixture/app fixture-subcommand 'a space' 'label='\"'\"'Pac-Man'\"'\"''"
-        );
         assert_eq!(
             remove_files_command(&["/tmp/a path", "/tmp/it's"]),
             "rm -f '/tmp/a path' '/tmp/it'\"'\"'s'"

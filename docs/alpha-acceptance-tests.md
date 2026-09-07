@@ -1,5 +1,11 @@
 # Retired alpha UI acceptance
 
+> Command migration: legacy delivery, catalog/device-control, compile-time and
+> combined release-gate examples below are historical. Use the current commands
+> in `docs/host-orchestration.md` and `magik2/docs/native-operations.md`.
+> Physical input/CRT procedures and historical measurement evidence remain valid;
+> retired automatic matrices and certificates are not delivery prerequisites.
+
 `scripts/agent alpha accept` was removed with the legacy application UI harness.
 It no longer produces an acceptance receipt. Development smoke, navigation and
 profiling through [2.0](../magik2/README.md) do not qualify a published alpha,

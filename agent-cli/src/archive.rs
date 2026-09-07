@@ -8,30 +8,15 @@ use std::io::Read;
 use std::path::Path;
 use zip::ZipArchive;
 
-#[derive(Clone, Copy)]
-pub(crate) enum MemberLayout {
-    Flat,
-    Nested,
-}
-
-pub(crate) fn read_zip(
-    path: &Path,
-    layout: MemberLayout,
-) -> AgentResult<BTreeMap<String, Vec<u8>>> {
+pub(crate) fn read_zip(path: &Path) -> AgentResult<BTreeMap<String, Vec<u8>>> {
     let mut archive = ZipArchive::new(File::open(path).map_err(|error| error.to_string())?)
         .map_err(|error| error.to_string())?;
     let mut files = BTreeMap::new();
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
         let name = entry.name().to_owned();
-        let enclosed = entry.enclosed_name().ok_or_else(|| unsafe_member(&name))?;
-        validate_member(
-            &name,
-            &enclosed,
-            entry.is_dir(),
-            layout,
-            files.contains_key(&name),
-        )?;
+        entry.enclosed_name().ok_or_else(|| unsafe_member(&name))?;
+        validate_member(&name, entry.is_dir(), files.contains_key(&name))?;
         let mut bytes = Vec::new();
         entry
             .read_to_end(&mut bytes)
@@ -41,15 +26,8 @@ pub(crate) fn read_zip(
     Ok(files)
 }
 
-fn validate_member(
-    name: &str,
-    enclosed: &Path,
-    is_directory: bool,
-    layout: MemberLayout,
-    duplicate: bool,
-) -> AgentResult<()> {
-    let nested = enclosed.components().count() != 1;
-    if is_directory || matches!(layout, MemberLayout::Flat) && nested || duplicate {
+fn validate_member(name: &str, is_directory: bool, duplicate: bool) -> AgentResult<()> {
+    if is_directory || duplicate {
         Err(unsafe_member(name))
     } else {
         Ok(())
@@ -109,18 +87,14 @@ mod tests {
     }
 
     #[test]
-    fn flat_and_nested_layouts_are_explicit() {
+    fn nested_archive_retains_root_and_component_files() {
         let flat = archive(&[Entry::File("manifest.json", b"manifest")]);
-        assert_eq!(
-            read_zip(&flat, MemberLayout::Flat).unwrap()["manifest.json"],
-            b"manifest"
-        );
+        assert_eq!(read_zip(&flat).unwrap()["manifest.json"], b"manifest");
         fs::remove_file(flat).unwrap();
 
         let nested = archive(&[Entry::File("component/artifact", b"artifact")]);
-        assert!(read_zip(&nested, MemberLayout::Flat).is_err());
         assert_eq!(
-            read_zip(&nested, MemberLayout::Nested).unwrap()["component/artifact"],
+            read_zip(&nested).unwrap()["component/artifact"],
             b"artifact"
         );
         fs::remove_file(nested).unwrap();
@@ -133,11 +107,9 @@ mod tests {
             vec![Entry::Directory("directory/")],
         ] {
             let path = archive(&entries);
-            assert!(read_zip(&path, MemberLayout::Nested).is_err());
+            assert!(read_zip(&path).is_err());
             fs::remove_file(path).unwrap();
         }
-        assert!(
-            validate_member("same", Path::new("same"), false, MemberLayout::Nested, true).is_err()
-        );
+        assert!(validate_member("same", false, true).is_err());
     }
 }

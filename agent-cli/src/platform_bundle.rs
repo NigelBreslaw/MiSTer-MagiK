@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::archive::{MemberLayout, read_zip};
+use crate::archive::read_zip;
 use crate::error::{AgentError, AgentResult};
 use crate::platform_manifest::{
     CURRENT_FPGA_SOURCE_STATUSES, LATCH_CAPABILITY_MASK, LATCH_PROTOCOL_VERSION,
@@ -415,7 +415,7 @@ fn verify_with_options(
     release_version: Option<u64>,
     historical_baseline: bool,
 ) -> AgentResult<Value> {
-    let files = read_zip(archive, MemberLayout::Nested)?;
+    let files = read_zip(archive)?;
     let manifest_bytes = files
         .get(MANIFEST)
         .ok_or("platform bundle manifest is missing")?;
@@ -490,7 +490,7 @@ pub fn extract_component(
         return classified("component_output_exists", output.display().to_string());
     }
     fs::create_dir_all(output).map_err(|e| e.to_string())?;
-    for (name, bytes) in read_zip(archive, MemberLayout::Nested)? {
+    for (name, bytes) in read_zip(archive)? {
         if let Some(relative) = name.strip_prefix(prefix) {
             let path = output.join(relative);
             if let Some(parent) = path.parent() {

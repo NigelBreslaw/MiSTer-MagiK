@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{Shutdown, TcpStream, ToSocketAddrs};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::LazyLock;
@@ -32,12 +32,6 @@ static REMOTE_TOKEN: LazyLock<String> = LazyLock::new(|| {
 pub(crate) struct AgentResponse {
     pub(crate) response: Value,
     pub(crate) elapsed_ms: u128,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AgentRuntimeUploadResponse {
-    pub(crate) receive_ms: u64,
-    pub(crate) bytes_per_second: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -556,96 +550,6 @@ pub(crate) fn agent_request_at(
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line)?;
     parse_agent_response_line(line, start)
-}
-
-pub(crate) fn agent_runtime_upload_at(
-    endpoint: &AgentEndpoint,
-    path: &Path,
-    payload_bytes: u64,
-    sha256: &str,
-    timeout: Duration,
-) -> Result<AgentRuntimeUploadResponse> {
-    let spec = agent_protocol::RuntimeUploadSpec::from_args(&json!({
-        "payload_bytes": payload_bytes,
-        "sha256": sha256,
-    }))?;
-    let mut payload = fs::File::open(path)?;
-    if payload.metadata()?.len() != payload_bytes {
-        return Err("runtime upload source size changed before transfer".into());
-    }
-    let addr = format!("{}:{AGENT_PORT}", endpoint.host)
-        .to_socket_addrs()?
-        .next()
-        .ok_or("could not resolve MiSTer agent host")?;
-    let request = agent_protocol::request(
-        &endpoint.token,
-        1,
-        agent_protocol::RUNTIME_UPLOAD_COMMAND,
-        spec.args(),
-    );
-    let started = Instant::now();
-    let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
-    writeln!(stream, "{request}")?;
-
-    let write_result = (|| -> std::io::Result<()> {
-        let mut remaining = payload_bytes;
-        let mut buffer = [0_u8; 64 * 1024];
-        while remaining != 0 {
-            let limit = usize::try_from(remaining.min(buffer.len() as u64))
-                .expect("runtime upload buffer length fits usize");
-            let read = payload.read(&mut buffer[..limit])?;
-            if read == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "runtime upload source truncated during transfer",
-                ));
-            }
-            stream.write_all(&buffer[..read])?;
-            remaining = remaining.saturating_sub(read as u64);
-        }
-        if payload.read(&mut [0_u8; 1])? != 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "runtime upload source grew during transfer",
-            ));
-        }
-        stream.flush()
-    })();
-    let _ = stream.shutdown(Shutdown::Write);
-    let mut line = String::new();
-    match BufReader::new(stream).read_line(&mut line) {
-        Ok(0) => {
-            return match write_result {
-                Ok(()) => Err("empty response from agent".into()),
-                Err(error) => Err(error.into()),
-            };
-        }
-        Err(read_error) => {
-            return Err(write_result.err().unwrap_or(read_error).into());
-        }
-        Ok(_) => {}
-    }
-    let response = parse_agent_response_line(line, started)?;
-    write_result?;
-    let result = response.response.get("result").unwrap_or(&Value::Null);
-    if result.get("schema").and_then(Value::as_str) != Some(agent_protocol::RUNTIME_UPLOAD_SCHEMA)
-        || result.get("payload_bytes").and_then(Value::as_u64) != Some(payload_bytes)
-        || result.get("sha256").and_then(Value::as_str) != Some(sha256)
-    {
-        return Err("MiSTer agent returned mismatched runtime upload evidence".into());
-    }
-    Ok(AgentRuntimeUploadResponse {
-        receive_ms: result
-            .get("receive_ms")
-            .and_then(Value::as_u64)
-            .ok_or("runtime upload response omitted receive_ms")?,
-        bytes_per_second: result
-            .get("bytes_per_second")
-            .and_then(Value::as_u64)
-            .ok_or("runtime upload response omitted bytes_per_second")?,
-    })
 }
 
 pub(crate) fn agent_request_with_liveness(

@@ -2,17 +2,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use agent_cli::cli::{
-    CaptureCommand, Cli, Command as CliCommand, DbCommand, DeliverTarget, FrameEvidenceCommand,
-    OutputFormat, ReleaseCommand, ReturnQualificationCommand,
+    Cli, Command as CliCommand, FrameEvidenceCommand, OutputFormat, ReleaseCommand,
+    ReturnQualificationCommand,
 };
 use agent_cli::error::{AgentError, AgentResult};
 use agent_cli::evidence::Evidence;
 use agent_cli::model::Outcome;
 use agent_cli::progress::{EventKind, Reporter};
 use agent_cli::request::RawRequest;
+use clap::Parser;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::Instant;
 
 fn main() -> ExitCode {
     match run() {
@@ -51,18 +51,6 @@ fn run() -> AgentResult<ExitCode> {
         Some(command) => command,
         None => unreachable!("clap requires a command"),
     };
-    if let CliCommand::Guidance { path, json } = &command {
-        let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
-        let root = PathBuf::from(agent_cli::git::value(
-            &cwd,
-            &["rev-parse", "--show-toplevel"],
-        )?);
-        print!(
-            "{}",
-            agent_cli::guidance::report_with_format(&root, path, *json)?
-        );
-        return Ok(ExitCode::SUCCESS);
-    }
     let raw = RawRequest::capture(std::env::args_os());
     let context = RepoContext::open()?;
     context.evidence.begin_request(&raw)?;
@@ -117,84 +105,21 @@ impl RepoContext {
 
 fn command_label(command: &CliCommand) -> &'static str {
     match command {
-        CliCommand::Guidance { .. } => "guidance",
-        CliCommand::Db { .. } => "db",
-        CliCommand::Diagnose => "diagnose",
         CliCommand::Device { .. } => "device",
-        CliCommand::Deliver { .. } => "deliver",
         CliCommand::Benchmark { .. } => "benchmark",
-        CliCommand::Capture { .. } => "capture",
         CliCommand::Release { .. } => "release",
-        CliCommand::CompileTime { .. } => "compile-time",
-        CliCommand::Clean => "clean",
-        CliCommand::Dependencies { .. } => "dependencies",
-        CliCommand::Fpga { .. } => "fpga",
-        CliCommand::Build { .. } => "build",
     }
 }
 
 fn dispatch(
-    evidence: &Evidence,
+    _evidence: &Evidence,
     repository: &std::path::Path,
     command: &CliCommand,
-    output: OutputFormat,
+    _output: OutputFormat,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     match command {
-        CliCommand::Deliver {
-            target: DeliverTarget::GameDatabases,
-            game_databases_release_dir,
-        } => {
-            let Some(release_dir) = game_databases_release_dir.as_deref() else {
-                return Err(
-                    "deliver game-databases requires --game-databases-release-dir PATH".into(),
-                );
-            };
-            return deliver_game_databases(repository, release_dir, reporter);
-        }
-        CliCommand::Deliver {
-            target: DeliverTarget::LocalMain,
-            game_databases_release_dir: Some(_),
-        } => {
-            return Err("--game-databases-release-dir is not valid with deliver local-main".into());
-        }
-        CliCommand::Deliver {
-            target: DeliverTarget::Platform,
-            game_databases_release_dir,
-        } => {
-            return deliver(
-                evidence,
-                repository,
-                game_databases_release_dir.as_deref(),
-                reporter,
-            );
-        }
-        CliCommand::Deliver {
-            target: DeliverTarget::LocalMain,
-            ..
-        } => return deliver_local_main(repository, reporter),
-        CliCommand::Benchmark { .. } => return agent_cli::benchmark::execute(repository, reporter),
-        CliCommand::Capture {
-            command:
-                CaptureCommand::UsbVideo {
-                    output: destination,
-                    seconds,
-                },
-        } => {
-            let artifact = match seconds {
-                Some(seconds) => {
-                    agent_cli::capture::execute_movie(destination.as_deref(), *seconds)?
-                }
-                None => agent_cli::capture::execute(destination.as_deref())?,
-            };
-            println!("{}", artifact.markdown_link());
-            return Ok(Outcome::Passed);
-        }
-        CliCommand::Release {
-            command: ReleaseCommand::Qualify,
-        } => {
-            return agent_cli::release::execute(repository, reporter);
-        }
+        CliCommand::Benchmark { .. } => agent_cli::benchmark::execute(repository, reporter),
         CliCommand::Release {
             command:
                 ReleaseCommand::FrameEvidence {
@@ -206,55 +131,7 @@ fn dispatch(
                 "frame-evidence=valid capture={} board={} transitions={}",
                 verified.capture_id, verified.board_id, verified.transitions_observed
             );
-            return Ok(Outcome::Passed);
-        }
-        CliCommand::Release {
-            command:
-                ReleaseCommand::ReturnQualification {
-                    command:
-                        ReturnQualificationCommand::RecordBoard {
-                            candidate,
-                            layout,
-                            frame_evidence,
-                            output,
-                            attended,
-                        },
-                },
-        } => {
-            let manifest = std::fs::read_to_string(candidate)
-                .map_err(|error| format!("cannot read {}: {error}", candidate.display()))?;
-            let certificate = agent_cli::return_qualification::create_board_certificate(
-                &manifest,
-                agent_cli::platform_manifest::parse_layout(layout)?,
-                *attended,
-                frame_evidence,
-            )?;
-            agent_cli::return_qualification::write_json(output, &certificate)?;
-            println!("{}", output.display());
-            return Ok(Outcome::Passed);
-        }
-        CliCommand::Release {
-            command:
-                ReleaseCommand::ReturnQualification {
-                    command:
-                        ReturnQualificationCommand::Aggregate {
-                            candidate,
-                            layout,
-                            board_evidence,
-                            output,
-                        },
-                },
-        } => {
-            let manifest = std::fs::read_to_string(candidate)
-                .map_err(|error| format!("cannot read {}: {error}", candidate.display()))?;
-            let certificate = agent_cli::return_qualification::create_aggregate_certificate(
-                &manifest,
-                agent_cli::platform_manifest::parse_layout(layout)?,
-                board_evidence,
-            )?;
-            agent_cli::return_qualification::write_json(output, &certificate)?;
-            println!("{}", output.display());
-            return Ok(Outcome::Passed);
+            Ok(Outcome::Passed)
         }
         CliCommand::Release {
             command:
@@ -282,212 +159,11 @@ fn dispatch(
                 verified.distinct_sink_chipsets,
                 verified.total_transitions
             );
-            return Ok(Outcome::Passed);
-        }
-        CliCommand::Diagnose => {
-            return agent_cli::diagnose::execute(repository, reporter);
-        }
-        CliCommand::CompileTime { command } => {
-            agent_cli::compile_time::execute(repository, command, reporter)?;
-            return Ok(Outcome::Passed);
-        }
-        CliCommand::Clean => {
-            agent_cli::clean::execute(repository, reporter)?;
-            return Ok(Outcome::Passed);
-        }
-        CliCommand::Dependencies { command } => {
-            agent_cli::dependencies::execute(repository, command, reporter)?;
-            return Ok(Outcome::Passed);
-        }
-        CliCommand::Fpga { command } => {
-            agent_cli::fpga::execute(repository, command, reporter)?;
-            return Ok(Outcome::Passed);
-        }
-        CliCommand::Build { intent } => {
-            agent_cli::build::execute_command(repository, *intent, reporter)?;
-            return Ok(Outcome::Passed);
-        }
-        CliCommand::Guidance { path, json } => {
-            print!(
-                "{}",
-                agent_cli::guidance::report_with_format(repository, path, *json)?
-            );
-            return Ok(Outcome::Passed);
-        }
-        CliCommand::Db {
-            command: DbCommand::Report,
-        } => {
-            let report = evidence.report()?;
-            if output == OutputFormat::Human {
-                println!("{}", serde_json::to_string_pretty(&report).unwrap());
-            }
+            Ok(Outcome::Passed)
         }
         CliCommand::Device { .. } => {
             unreachable!("non-repository device commands dispatch before RepoContext")
         }
-    }
-    Ok(Outcome::NoOp)
-}
-
-fn deliver_game_databases(
-    repository: &std::path::Path,
-    release_dir: &std::path::Path,
-    reporter: &mut Reporter<'_>,
-) -> AgentResult<Outcome> {
-    let started = Instant::now();
-    reporter.emit(
-        EventKind::Progress,
-        "database-preflight",
-        "checking clean exact HEAD for database-only delivery",
-        Some(5),
-    )?;
-    let sha = agent_cli::git::value(repository, &["rev-parse", "HEAD"])?;
-    let dirty = agent_cli::git::value(repository, &["status", "--porcelain"])?;
-    if !dirty.is_empty() {
-        return Err("dirty_worktree: commit or discard changes before database delivery".into());
-    }
-    let result = agent_cli::database_delivery::execute(repository, &sha, release_dir, reporter);
-    reporter.emit(
-        if result.is_ok() {
-            EventKind::Completed
-        } else {
-            EventKind::Warning
-        },
-        "database-preflight",
-        &format!(
-            "database-only delivery finished in {:.3}s",
-            started.elapsed().as_secs_f64()
-        ),
-        None,
-    )?;
-    result
-}
-
-fn deliver(
-    evidence: &Evidence,
-    repository: &std::path::Path,
-    game_databases_release_dir: Option<&std::path::Path>,
-    reporter: &mut Reporter<'_>,
-) -> AgentResult<Outcome> {
-    let total_started = Instant::now();
-    let delivery = deliver_inner(evidence, repository, game_databases_release_dir, reporter);
-    reporter.emit(
-        EventKind::Progress,
-        "cleanup",
-        "cleaning transient delivery staging",
-        None,
-    )?;
-    let cleanup_started = Instant::now();
-    let cleanup = agent_cli::delivery::cleanup_workspace(repository);
-    emit_delivery_timing(reporter, "cleanup", cleanup.is_ok(), cleanup_started)?;
-    let result = match (delivery, cleanup) {
-        (Ok(execution), Ok(())) => {
-            reporter.emit(
-                EventKind::Completed,
-                "delivery-decision",
-                execution.decision.label(),
-                Some(100),
-            )?;
-            Ok(execution.outcome)
-        }
-        (Ok(_), Err(error)) => Err(error.into()),
-        (Err(error), Ok(())) => Err(error),
-        (Err(error), Err(cleanup)) => {
-            let _ = reporter.emit(
-                EventKind::Warning,
-                "cleanup",
-                &format!("delivery workspace cleanup failed: {cleanup}"),
-                None,
-            );
-            Err(error)
-        }
-    };
-    emit_delivery_timing(reporter, "cli-total", result.is_ok(), total_started)?;
-    result
-}
-
-fn deliver_inner(
-    _evidence: &Evidence,
-    repository: &std::path::Path,
-    game_databases_release_dir: Option<&std::path::Path>,
-    reporter: &mut Reporter<'_>,
-) -> AgentResult<agent_cli::delivery::DeliveryExecution> {
-    let preflight_started = Instant::now();
-    let preflight: AgentResult<String> = (|| {
-        let dirty = agent_cli::git::value(repository, &["status", "--porcelain"])?;
-        if !dirty.is_empty() {
-            return Err("dirty_worktree: commit or discard changes before delivery".into());
-        }
-        let sha = agent_cli::git::value(repository, &["rev-parse", "HEAD"])?;
-        Ok(sha)
-    })();
-    emit_delivery_timing(reporter, "preflight", preflight.is_ok(), preflight_started)?;
-    let sha = preflight?;
-    agent_cli::delivery::execute(repository, &sha, game_databases_release_dir, reporter)
-}
-
-fn emit_delivery_timing(
-    reporter: &mut Reporter<'_>,
-    phase: &str,
-    passed: bool,
-    started: Instant,
-) -> AgentResult<()> {
-    reporter.emit(
-        if passed {
-            EventKind::Completed
-        } else {
-            EventKind::Warning
-        },
-        "delivery-timing",
-        &format!(
-            "delivery_phase_tsv\tscope=cli\tphase={phase}\tstatus={}\tseconds={:.3}",
-            if passed { "passed" } else { "failed" },
-            started.elapsed().as_secs_f64(),
-        ),
-        None,
-    )?;
-    Ok(())
-}
-
-fn deliver_local_main(
-    repository: &std::path::Path,
-    reporter: &mut Reporter<'_>,
-) -> AgentResult<Outcome> {
-    let dirty = agent_cli::git::value(repository, &["status", "--porcelain"])?;
-    if !dirty.is_empty() {
-        return Err("dirty_worktree: commit or discard changes before delivery".into());
-    }
-    let app_revision = agent_cli::git::value(repository, &["rev-parse", "HEAD"])?;
-    let delivery = agent_cli::local_main_delivery::execute(repository, &app_revision, reporter);
-    reporter.emit(
-        EventKind::Progress,
-        "cleanup",
-        "cleaning transient local Main staging",
-        None,
-    )?;
-    let cleanup = agent_cli::delivery::cleanup_workspace(repository);
-    match (delivery, cleanup) {
-        (Ok(execution), Ok(())) => {
-            reporter.emit(
-                EventKind::Completed,
-                "delivery-decision",
-                &format!(
-                    "local-main app_revision={} main_revision={} main_sha256={} candidate={}",
-                    execution.app_revision,
-                    execution.main_revision,
-                    execution.main_sha256,
-                    execution.qualification_candidate_id,
-                ),
-                Some(100),
-            )?;
-            Ok(Outcome::Passed)
-        }
-        (Ok(_), Err(error)) => Err(error.into()),
-        (Err(error), Ok(())) => Err(error),
-        (Err(error), Err(cleanup)) => Err(format!(
-            "local Main delivery failed ({error}); staging cleanup failed ({cleanup})"
-        )
-        .into()),
     }
 }
 

@@ -1,5 +1,11 @@
 # CRT and Direct Video output
 
+> Command migration: legacy delivery, catalog/device-control, compile-time and
+> combined release-gate examples below are historical. Use the current commands
+> in `docs/host-orchestration.md` and `magik2/docs/native-operations.md`.
+> Physical input/CRT procedures and historical measurement evidence remain valid;
+> retired automatic matrices and certificates are not delivery prerequisites.
+
 MiSTer MagiK does not implement a CRT raster. The launcher publishes RGB565
 frames through the same `UIO_SET_FBUF`/`LFB` machinery used by Menu on HDMI.
 Main and Menu's `sys_top` exclusively own the output clock, raster, sync, and

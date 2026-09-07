@@ -18,14 +18,14 @@ private submodules are independent repositories.
 ## Development
 
 Use `$magik-rust-lsp` for Rust/Cargo and Slint MCP for UI behavior. Run focused
-checks, tests, and lints through `scripts/cargo`. `scripts/agent plan` previews
+checks, tests, and lints through `scripts/cargo`. `scripts/magik-ci plan` previews
 validation. Pre-commit checks the index; pre-push owns bootstrap-free Python
 checks and affected Python tests, never Rust assurance. CI owns broad workspace,
 host, ARM, and visual matrices; do not repeat these locally unless a typed
 workflow requires them. Python `scripts/magik-ci` owns CI/release processing.
 
 Use `gh` for GitHub. Dependency changes use
-`scripts/agent dependencies sync PATH/Cargo.toml`, staging only the owning
+`scripts/magik-ci dependencies sync PATH/Cargo.toml`, staging only the owning
 manifest and adjacent lockfile.
 
 ## Operations
@@ -36,7 +36,7 @@ one smoke journey; request idle/motion measurements or profiling explicitly.
 Use the 2.0 exception below. Do not route ordinary app development through 1.0.
 
 For retained platform/release and legacy operations, use typed
-`scripts/agent deliver platform`, `benchmark`, `diagnose`, and `db report`;
+`scripts/magik-platform` for platform delivery, `scripts/magik2 device` for device/catalog control, and `scripts/agent benchmark` for retained physical input qualification;
 human device operations use attended `scripts/agent device`. Never use raw
 SSH/SCP, generic remote shells, or ad-hoc SQL. Device, Apple-container, and
 virtualization commands require first-attempt escalation. Retry read-only
@@ -96,6 +96,6 @@ over conflicting legacy tooling requirements in this file and `scripts/AGENTS.md
 ## Context
 
 Read applicable ancestor instructions and needed source/document sections.
-`scripts/agent guidance PATH` reports ownership and references. Batch independent
+`scripts/magik-ci guidance PATH` reports ownership and references. Batch independent
 reads; return bounded findings with failures, provenance, and truncation intact.
 Keep full logs in ignored artifacts; read history only for provenance.
