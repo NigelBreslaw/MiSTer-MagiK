@@ -125,7 +125,7 @@ def main() -> int:
         arguments.command == "build" and arguments.target == "app"
     ):
         print(
-            f"Application: {arguments.app} on {os.environ.get('MISTER_IP', '(not configured)')}"
+            f"Application: {arguments.app} on {os.environ.get('MISTER_IP', '(remembered MiSTer)')}"
         )
         print(f"Executable: /media/fat/mister-magik2/{arguments.app}")
         if arguments.app == "magik":
@@ -236,7 +236,7 @@ def dispatch(arguments, run) -> int:
     except (BootstrapError, AgentError, OSError, RuntimeError) as error:
         append_event(run, {"phase": "status", "outcome": "failed", "error": str(error)})
         print(
-            f"magik2 status: native agent unavailable ({type(error).__name__}) (result: {run})",
+            f"magik2 status: native agent unavailable ({error}) (result: {run})",
             file=os.sys.stderr,
         )
         return 2

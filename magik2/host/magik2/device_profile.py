@@ -42,13 +42,13 @@ class DeviceProfile:
         }:
             raise ValueError("invalid remembered MiSTer configuration")
         profile = cls(**fields)
-        device_identity(profile.identity)
+        identity = device_identity(profile.identity)
         if not all(
             isinstance(value, str) and value
             for value in (profile.address, profile.username)
         ):
             raise ValueError("invalid remembered MiSTer configuration")
-        return profile
+        return cls(identity, profile.address, profile.username)
 
     def save(self, root: Path | None = None) -> None:
         root = root or state_root()

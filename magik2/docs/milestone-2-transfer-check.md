@@ -1,5 +1,9 @@
 # Milestone 2: bounded transfer comparison
 
+Historical comparison evidence. The legacy `scripts/agent device transfer-check`
+command is retired by the companion orphan-deletion branch; commands below describe
+the recorded experiment, not a current development workflow.
+
 The new worktree is on `nigel/mini-magik-shared`, based on merged main. The
 two-attempt acceptance change is preserved. The old worktree and old local tooling branches were removed as requested.
 The remote tooling branch was already absent. Historical acceptance
