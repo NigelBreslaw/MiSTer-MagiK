@@ -46,7 +46,7 @@ def main(argv=None):
             from .client import AgentError
             import json
 
-            agent, _ = connect_agent(run, {"publication-v1"})
+            agent, _ = connect_agent(run, {"publication-v1", "platform-publication-v1"})
             reply, _ = agent._request(
                 "publication-control",
                 {"stage": args.stage, "action": "restore", "attended": True},

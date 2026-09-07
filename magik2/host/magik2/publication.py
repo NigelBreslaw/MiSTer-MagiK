@@ -183,7 +183,7 @@ def platform(arguments, run):
             raise ValueError(
                 "local Main requires a clean committed source checkout matching the manifest"
             )
-    agent, _ = connect_agent(run, {"publication-v1"})
+    agent, _ = connect_agent(run, {"publication-v1", "platform-publication-v1"})
     fields = dict(
         kind=arguments.kind, layout=arguments.layout, attended=arguments.attended
     )

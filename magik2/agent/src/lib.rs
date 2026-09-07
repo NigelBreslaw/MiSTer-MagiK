@@ -177,6 +177,7 @@ impl Agent {
             "device-control-v1",
             "catalog-operations-v1",
             "publication-v1",
+            "platform-publication-v1",
             "transfer-check",
             "applications",
             "main-input-proxy",

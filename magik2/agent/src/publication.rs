@@ -166,6 +166,9 @@ fn replace(
     activate: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
     fs::create_dir_all(backup).map_err(|e| e.to_string())?;
+    File::open(backup.parent().ok_or("backup parent missing")?)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| e.to_string())?;
     if backup.join("transaction.json").exists() {
         return Err("publication transaction already exists; reconcile it explicitly".into());
     }
@@ -222,7 +225,10 @@ fn restore(backup: &Path) -> Result<(), String> {
     for (destination, saved, existed) in entries.into_iter().rev() {
         let result = if existed {
             // Keep backups so an interrupted restoration can be repeated explicitly.
-            fs::copy(&saved, &destination).and_then(|_| File::open(&destination)?.sync_all())
+            let temporary = destination.with_extension("magik2-restore");
+            fs::copy(&saved, &temporary)
+                .and_then(|_| File::open(&temporary)?.sync_all())
+                .and_then(|()| fs::rename(&temporary, &destination))
         } else {
             match fs::remove_file(&destination) {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -394,6 +400,9 @@ impl crate::Agent {
                 )
                 .map_err(|e| e.to_string())?;
                 File::open(root.join("pending.json"))
+                    .and_then(|f| f.sync_all())
+                    .map_err(|e| e.to_string())?;
+                File::open(&root)
                     .and_then(|f| f.sync_all())
                     .map_err(|e| e.to_string())?;
             }
