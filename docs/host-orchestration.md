@@ -1,10 +1,7 @@
-# Host tooling after legacy orchestration retirement
+# Host utilities
 
-Device discovery, remembered authentication, ordinary app delivery, device
-control, catalog/media operations and platform publication use 2.0. See
-`magik2/docs/native-operations.md` for commands, activation semantics and recovery.
-The thin `scripts/magik-platform` entrypoint delegates native work to the same
-2.0 runtime; it does not build or invoke `agent-cli`.
+Device operations use `scripts/magik`; platform operations use `scripts/magik-platform`.
+See [native operations](../magik/docs/native-operations.md).
 
 Host-only operations use existing Python tooling:
 
@@ -17,7 +14,7 @@ Host-only operations use existing Python tooling:
   Cold measurements require a new cache; incremental measurements require an
   existing prepared cache. No implicit warmup, edits, campaign or baseline run.
 - `scripts/magik-ci compile-time compare BASELINE.json CANDIDATE.json` compares
-  compatible successful two-sample files. ARM measurements reuse 2.0's Apple
+  compatible successful two-sample files. ARM measurements reuse the shared Apple
   container/FFmpeg preparation; host measurements use the normal Cargo wrapper.
 - `scripts/magik-ci capture-usb [--seconds N] [--output STEM]` invokes the standalone
   `tools/usb-video` AVFoundation executable. It has no device-agent dependency.
@@ -28,14 +25,4 @@ Host-only operations use existing Python tooling:
 - `scripts/magik-platform fpga setup --local-root DIR` prepares the existing
   Apple Quartus installation. `fpga signoff --stock REPORT --baseline REPORT
   --patched REPORT` runs the existing offline timing/CDC comparison. FPGA synthesis
-  remains an explicitly requested GitHub platform workflow, never a migration test.
-
-The combined `release qualify` gate and its certificate creators are removed.
-This deliberately drops mandatory aggregate-board certification, six-hour stress
-and automatic display/recovery matrices. Existing offline frame and aggregate
-certificate readers remain usable for historical evidence. Physical input and
-focused CRT qualification remain separately requested and are not replaced by
-Python UI scenarios.
-
-No Desktop migration or legacy service uninstall is included. The remaining
-legacy consumer inventory is in `docs/tooling-retirement.md`.
+  remains an explicitly requested GitHub platform workflow, only when requested.

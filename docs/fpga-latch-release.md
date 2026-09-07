@@ -1,11 +1,5 @@
 # FPGA latch-v5 production requirements
 
-> Command migration: legacy delivery, catalog/device-control, compile-time and
-> combined release-gate examples below are historical. Use the current commands
-> in `docs/host-orchestration.md` and `magik2/docs/native-operations.md`.
-> Physical input/CRT procedures and historical measurement evidence remain valid;
-> retired automatic matrices and certificates are not delivery prerequisites.
-
 Latch v5 is the only production protocol. New builds must not contain v2/v3/v4
 negotiation, decoding, fixtures, feature switches, fallback presentation, or
 rollback paths. Main, the scanout module, the latch RBF, and the MagiK runtime
@@ -85,71 +79,3 @@ SET word, every vblank phase, reads on the apply edge, suppressed apply,
 concurrent Main/runtime/agent access, injected illegal pending clearing, and
 seeded randomized interleavings. Assertions must make the forbidden invariant,
 unreceipted active state, and rejected-attempt mutation fatal.
-
-## Six-hour qualification
-
-Qualification is an attended, identity-locked run of the production renderer,
-real catalog worker/scanner, media decoders, and input paths. It repeatedly
-forces cold catalog generation while rotating particle animation, transitions,
-rapid Arcade scrolling, preview/archive decoding, search/model churn, and
-keyboard/controller/pointer traffic.
-
-Run the gate only through:
-
-```text
-scripts/agent release qualify
-```
-
-The fixed workflow performs its runtime, catalog, and handoff preflights, then
-runs `latch-v5-six-hour-stress` before the independent multi-mode display
-matrix. The launcher reads the real installed libraries and metadata, but
-writes every generated catalog artifact to a volatile isolated qualification
-directory. The host rotates the six stress classes every five minutes,
-requests serial cold catalog generations every seven minutes and thirty
-seconds, and reads the CRC-protected receipt/status interfaces every five
-seconds through the same FPGA transaction lock used by production.
-The stress phase arms a self-deleting one-shot qualification environment and
-then performs one supervised clean boot. The qualification launcher is the
-first and only launcher session on that boot; the immutable boot and launcher
-session identities are captured afterward. Main ownership, crash, and
-invariant counters must therefore remain zero from that boot rather than being
-compared with or offset by an earlier baseline.
-The attended host process verifies its volatile release token before a
-supervised reboot and recreates only that token after reconnecting. The
-configuration snapshot is retained on the FAT volume until restoration so a
-reboot cannot silently discard the rollback source.
-
-Raw samples and the terminal summary are retained under
-`build/release-qualification/latch-v5/<candidate-id>/<run-id>/`. The summary
-binds the immutable identity block and the SHA-256 of the NDJSON sample stream.
-An interruption or any failed sample fails the gate and still runs the release
-restoration path.
-
-The exact candidate must retain at least:
-
-- six hours elapsed and 12 cold catalog generations;
-- 1,000,000 accepted and active-confirmed frames;
-- 250,000 catalog/UI overlap frames;
-- 25,000 frames in every UI stress class;
-- 4,000 authoritative receipt/status samples;
-- zero forbidden state, rejected production post, ambiguous transaction,
-  blocked Main write, crash, hang, black frame, or compatibility screen;
-- maximum observed frame wall time of 250 ms;
-- maximum consecutive vblank-miss streak of two frames;
-- launcher RSS high-water mark no greater than 192 MiB;
-- final launcher RSS no more than 32 MiB above the starting RSS.
-
-Evidence is rejected if release, bundle, candidate, manifest, runtime build,
-runtime binary, Main, module, RBF, boot, or launcher session identity differs.
-Any unknown or mixed report created during the run fails qualification. Any
-source or artifact change requires a complete rerun.
-
-Main/RBF changes to the launcher bootstrap additionally require the complete
-qualified-black evidence set in `docs/bootstrap-black-qualification.md` before
-this six-hour gate. The exact Main/RBF/runtime tuple used for those four
-1920x1080 at 30 fps movies must match the six-hour candidate identity; evidence
-from a previous latch qualification cannot be carried forward.
-
-After qualification, the identical candidate tuple runs a seven-day canary
-with daily concurrent cold-catalog/UI stress. Promotion never rebuilds or
-relabels the tuple or its evidence.

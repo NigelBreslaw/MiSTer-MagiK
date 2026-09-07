@@ -1,12 +1,12 @@
 # Remembered MiSTer access
 
-Select a board once with `scripts/magik2 device select ADDRESS`. Explicitly supplied
+Select a board once with `scripts/magik device select ADDRESS`. Explicitly supplied
 `MISTER_USER` and `MISTER_PASS` bootstrap inputs are imported into macOS Keychain
 through Security.framework. Do not put a password in a shell command, repository
 configuration, MCP configuration, or result bundle. Other worktrees use the same
 Keychain item, associated with the board Ethernet MAC and SSH username.
 
-Non-secret selection lives in `device.json` beneath the existing shared 2.0 state
+Non-secret selection lives in `device.json` beneath the existing shared user state
 root (`MISTER_MAGIK2_STATE`, otherwise the XDG state directory). Native tokens stay
 in permission-restricted files, keyed by board identity. An existing address token
 is migrated only after identifying the board at that address. Atomic writes use

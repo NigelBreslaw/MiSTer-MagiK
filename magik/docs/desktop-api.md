@@ -1,7 +1,7 @@
 # Direct Desktop connection
 
 The Rust Desktop connects directly to the native service on TCP 7500. Python is
-used only by `scripts/magik2 desktop-prepare --json` to reuse discovery, Keychain,
+used only by `scripts/magik desktop-prepare --json` to reuse discovery, Keychain,
 credential migration, bootstrap and capability updates. Compatible service builds
 remain installed. The preparation command returns identity/address/outcome, never
 a token or SSH password; build progress and child-process output go to stderr.
@@ -43,10 +43,10 @@ subscription triggers app navigation, restart, display configuration or reboot.
 
 Use the repository-launched Desktop. It shares `device.json` and identity-keyed
 native token files under `MISTER_MAGIK2_STATE`, or
-`${XDG_STATE_HOME:-~/.local/state}/mister-magik2`. It verifies identity before
+`${XDG_STATE_HOME:-~/.local/state}/mister-magik`. It verifies identity before
 remembering a changed address. Rust discovery uses one eight-second local search;
 no public networks are probed. `MISTER_IP` remains an optional explicit override.
-For a genuinely ambiguous selection, use `scripts/magik2 device select ADDRESS`.
+For a genuinely ambiguous selection, use `scripts/magik device select ADDRESS`.
 Keychain or authentication errors are reported; credentials are never cycled.
 
 The client has one native preparation attempt and at most one transport reconnect

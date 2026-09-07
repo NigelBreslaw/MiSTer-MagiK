@@ -4,10 +4,10 @@ The benchmark command runs an installed Mini workload directly. It does not
 start a Slint session or wait for framebuffer readiness.
 
 ```
-scripts/magik2 bench blend
-scripts/magik2 bench blend --visual
-scripts/magik2 bench blend --counters neon
-scripts/magik2 bench blend --counters memory
+scripts/magik bench blend
+scripts/magik bench blend --visual
+scripts/magik bench blend --counters neon
+scripts/magik bench blend --counters memory
 ```
 
 Bare `bench` means `bench blend`. Timing runs exactly twice. Each explicit PMU
@@ -52,7 +52,7 @@ running times. Missing counters are errors, not zeroes. Measured zero refills ar
 valid. NEON clock-enabled cycles do not measure utilization; L1 refills are not
 DRAM misses. Event 0x61 is data-cache-dependent stalls despite its legacy key.
 
-`magik2.benchmark_compare.compare` compares two loaded result objects offline.
+`magik.benchmark_compare.compare` compares two loaded result objects offline.
 It requires matching workload, mode, fixture, work count, target/build flags and
 device, with clean source provenance. It never launches a process. Two timing
 samples are a practical comparison, not statistical proof. PMU comparison is

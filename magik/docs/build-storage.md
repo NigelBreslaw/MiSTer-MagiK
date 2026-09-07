@@ -1,18 +1,18 @@
 # Apple Container build storage
 
-MagiK 2 retains at most **four idle build containers across checkouts** for
+MagiK retains at most **four idle build containers across checkouts** for
 **two hours after their last build use**. It checks retention at build start
 and finish, including cached-artifact builds. Active builds are exempt. There
 is no background timer: the last warm containers can remain past expiry until
 the next build or explicit cleanup.
 
 ```sh
-scripts/magik2 storage report
-scripts/magik2 storage report --json
-scripts/magik2 storage clean
-scripts/magik2 storage clean --apply
-scripts/magik2 storage clean --all-idle
-scripts/magik2 storage clean --all-idle --apply
+scripts/magik storage report
+scripts/magik storage report --json
+scripts/magik storage clean
+scripts/magik storage clean --apply
+scripts/magik storage clean --all-idle
+scripts/magik storage clean --all-idle --apply
 ```
 
 `report` and `clean` without `--apply` only inspect resources and establish
@@ -35,7 +35,7 @@ container, and volume totals are included in JSON disk accounting.
 Containers carry versioned ownership labels, canonical checkout identity,
 recipe identity, and the shared state directory. Metadata and OS locks live
 under `build-storage` within the existing MagiK state root (normally
-`~/.local/state/mister-magik2`). All worktrees should use the same
+`~/.local/state/mister-magik`). All worktrees should use the same
 `MISTER_MAGIK2_STATE` override if one is configured. Containers from another
 state root or management version are protected, and cannot be silently adopted.
 
@@ -57,7 +57,7 @@ result. Explicit storage commands exit nonzero on incomplete inspection or
 failed deletion, and report completed actions alongside failures. Ambiguous
 mutations are reconciled against inventory, never blindly replayed.
 
-Unlabeled old `magik2-*` containers appear as migration candidates. They are
+Unlabeled old `magik-*` containers appear as migration candidates. They are
 excluded from automatic cleanup; updating the tooling creates a separately
 named managed container instead of taking over an old one.
 
@@ -78,7 +78,7 @@ These resources do not participate in the new build-lease protocol.
    image builds recreate it. Never reset the shared builder automatically.
 4. Delete obsolete images individually with `container image delete REFERENCE`,
    checking all container references/digests first. Keep the current checkout's
-   `magik2-build` recipe image and required Apple runtime images. Avoid a global
+   `magik-build` recipe image and required Apple runtime images. Avoid a global
    image prune that also removes unrelated users' resources.
 5. Before `container volume delete NAME`, verify the volume is unreferenced and
    contains only regenerable scratch state. For Quartus, inspect it read-only
@@ -90,23 +90,3 @@ These resources do not participate in the new build-lease protocol.
 Removed legacy images require downloads/rebuilds when those workflows are next
 used. Removed Quartus scratch roots require chroot regeneration; this does not
 remove the separately mounted host installation.
-
-## Validation and initial cleanup evidence — 2026-09-07
-
-The initial cleanup removed five verified idle legacy MagiK 2 containers,
-the idle BuildKit cache, two inspected Quartus scratch volumes, and seven
-obsolete/unused MagiK, Quartus, and Ubuntu image references. The current MagiK 2
-toolchain and a newer container belonging to another task were retained. Host
-source trees, Cargo caches, build outputs, and the Quartus installation were
-preserved.
-
-Filesystem available space increased from **33,706,856,448 bytes** to
-**63,623,061,504 bytes**: **29,916,205,056 bytes (27.86 GiB)** measured across the
-cleanup window. This is an observed host free-space change, not a sum of file
-sizes or a guarantee for other machines.
-
-A disposable real Apple Container verified warm reuse, active host-lease
-protection, protection of a surviving guest workload, two-hour expiry, and
-preservation of host-mounted cache/output markers. Host tests cover age/count
-retention, ownership and metadata failures, interrupted builds, image references,
-CLI previews/JSON, and subprocess-level locking. No device deployment is needed.

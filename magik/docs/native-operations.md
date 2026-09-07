@@ -6,7 +6,7 @@ override is optional. A compatible installed service is reused across branches.
 
 ## Device and catalog
 
-Use `scripts/magik2 device status`, `diagnostics`, or `logs` for bounded evidence;
+Use `scripts/magik device status`, `diagnostics`, or `logs` for bounded evidence;
 `launcher status|restart|return-to-launcher` for Main-owned lifecycle; `display
 status` or `display set MODE --attended` for one display transaction; `mode status`
 or `mode set dev|public|stock --attended` for the next explicit boot. Mode selection
@@ -32,7 +32,7 @@ Raw reports and failures are retained in the command's result directory.
 
 ## Independent platform entrypoint
 
-The companion host-utilities branch supplies `scripts/magik-platform`:
+Use `scripts/magik-platform`:
 
 - `platform --root DIR --layout dev|public --attended --activate-fpga`
 - `local-main --root DIR --source-checkout DIR --attended`

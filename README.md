@@ -37,14 +37,11 @@ constants helper and failed-package recovery.
 
 ## Application development
 
-Use `scripts/magik2 deploy`, `scripts/magik2 check`, and `scripts/magik2 watch`.
+Use `scripts/magik deploy`, `scripts/magik check`, and `scripts/magik watch`.
 These target the real development app and `/media/fat/mister-magik-dev` data.
 Use `--app mini-magik` for the fast experiment. The default check is one smoke
 journey; benchmarks and profiles are explicit. See [development setup and
-commands](magik2/README.md). Production installation above is a separate workflow.
-
-See [retired tooling and remaining legacy consumers](docs/tooling-retirement.md)
-for the current deletion inventory.
+commands](magik/README.md). Production installation above is a separate workflow.
 
 ## Built With Slint
 

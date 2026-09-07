@@ -72,8 +72,7 @@ compact `magik-metadata-v1.bin` container instead.
 
 ## Fresh build
 
-The typed host command scripts/agent device catalog metadata-qualification --out
-<evidence.json> validates the compact container with the v2
+The typed host command scripts/magik device catalog metadata-qualification validates the compact container with the v2
 mister-magik-runtime-metadata-qualification-v2 report. Full device
 acceptance is recorded only after the compact integrity gates pass and all
 four forbidden legacy paths are absent:
@@ -210,7 +209,7 @@ Existing keys remain authoritative; ambiguous or missing matches remain blank.
 This pass is non-fatal and never changes the catalog generation, manifest,
 pack, or index formats. Runtime never opens the legacy SQLite metadata
 databases; those files are CI/private-build inputs only. Use
-`scripts/agent device catalog screenshots --system <id> --out <path>` to audit
+`scripts/magik device catalog screenshots --system <id>` to audit
 the effective runtime rows without downloading or writing catalog state.
 
 ## Fault and performance rules

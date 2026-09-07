@@ -38,14 +38,14 @@ rediscovering a changed address. `MISTER_IP` is optional; there is no hard-coded
 address or worktree-local credential file.
 
 When installation or a missing capability requires it, Desktop invokes the
-checkout's `scripts/magik2 desktop-prepare --json` once, then resumes direct TCP
+checkout's `scripts/magik desktop-prepare --json` once, then resumes direct TCP
 communication. The helper uses the existing macOS Keychain SSH login. Different
 compatible service builds are kept. Authentication/Keychain failures are shown;
 there is no credential retry loop.
 
-For multiple devices, select one explicitly with `scripts/magik2 device select
+For multiple devices, select one explicitly with `scripts/magik device select
 ADDRESS`. This milestone supports repository launch, not standalone bootstrap
-packaging. See [the native API contract](../../magik2/docs/desktop-api.md).
+packaging. See [the native API contract](../../magik/docs/desktop-api.md).
 
 ## Analytics
 
