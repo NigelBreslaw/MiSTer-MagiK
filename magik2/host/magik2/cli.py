@@ -59,6 +59,8 @@ def main() -> int:
     subcommands.add_parser(
         "mcp", help="serve framebuffer screenshots to Codex over stdio"
     )
+    prepare = subcommands.add_parser("desktop-prepare")
+    prepare.add_argument("--json", action="store_true", required=True)
     subcommands.add_parser("deploy")
     device_command = subcommands.add_parser("device")
     device_subcommands = device_command.add_subparsers(
@@ -176,6 +178,10 @@ def main() -> int:
 
 
 def dispatch(arguments, run) -> int:
+    if arguments.command == "desktop-prepare":
+        from .desktop import prepare
+
+        return prepare(run)
     if arguments.command == "build":
         package = (
             Path(__file__).resolve().parents[2] / "agent"
