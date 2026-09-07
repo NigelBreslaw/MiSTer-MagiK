@@ -9,7 +9,7 @@ MiSTer MagiK keeps production boot compatible with stock MiSTer. Stock Main star
 
 ```mermaid
 flowchart TD
-  Inittab["/etc/inittab"] --> Stock["/media/fat/MiSTer"]
+  Linux["Linux startup"] --> Stock["/media/fat/MiSTer"]
   Stock --> Ini["Read MiSTer.ini"]
   Ini --> Fork["main=MiSTer_MagiK"]
   Fork --> Video["video_init() and HDMI setup"]

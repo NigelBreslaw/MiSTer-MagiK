@@ -201,7 +201,6 @@ def verify_root(root: Path) -> dict[str, str]:
         env={
             **os.environ,
             "MISTER_MAGIK_FAT": str(root),
-            "MISTER_MAGIK_INITTAB": str(root / "test-inittab"),
             "MISTER_MAGIK_TEST_MODE": "1",
         },
         capture_output=True,

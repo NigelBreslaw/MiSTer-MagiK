@@ -72,7 +72,7 @@ scripts/agent device display set hdmi1920x1080p60 --attended --keep
 replacement launcher and framebuffer geometry, and rolls back unless `--keep`
 is supplied. It never bypasses the confirmation transaction.
 
-Mode changes verify the selected platform manifest, preserve stock inittab,
+Mode changes verify the selected platform manifest,
 mutate `MiSTer.ini` through the comment-preserving Rust editor, clear all
 arming files, and use a bounded supervised reboot. Fixed non-launcher scenes
 temporarily suspend the supervised launcher and always resume it.

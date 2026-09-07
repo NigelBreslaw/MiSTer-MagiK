@@ -113,7 +113,7 @@ executable error edges.
 
 Production boot stays compatible with stock MiSTer:
 
-1. `/etc/inittab` starts stock `/media/fat/MiSTer`.
+1. Linux starts stock `/media/fat/MiSTer`.
 2. Stock Main reads `MiSTer.ini`.
 3. `[MiSTer] main=MiSTer_MagiK` or `MiSTer_MagiKDev` re-execs the selected
    MagiK Main fork.

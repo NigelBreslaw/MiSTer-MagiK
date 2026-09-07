@@ -4064,7 +4064,6 @@ fn collect_status(sess: &Session) -> Result<Value> {
         },
         "boot": {
             "ini_keys": parse_ini_keys(remote_read(sess, "/media/fat/MiSTer.ini").unwrap_or_default()),
-            "inittab": lines_containing(remote_read(sess, "/etc/inittab").unwrap_or_default(), &["MiSTer", "mister-magik"]),
         },
         "display": {
             "proc_fb": remote_trim(sess, "/proc/fb"),
@@ -4169,13 +4168,6 @@ fn parse_ini_keys(text: String) -> Value {
         }
     }
     Value::Object(root)
-}
-
-fn lines_containing(text: String, needles: &[&str]) -> Vec<String> {
-    text.lines()
-        .filter(|line| needles.iter().any(|n| line.contains(n)))
-        .map(ToString::to_string)
-        .collect()
 }
 
 fn tail_remote(sess: &Session, path: &str, n: usize) -> Option<Vec<String>> {
@@ -4751,22 +4743,6 @@ video_mode=14
 
         assert!(cmd.contains("/sbin/reboot"));
         assert!(!cmd.contains("mister_magik_reboot"));
-    }
-
-    #[test]
-    fn filters_inittab_lines_by_needles() {
-        let lines = lines_containing(
-            "::sysinit:/media/fat/MiSTer &\n::respawn:/sbin/getty tty1\nboot.sh mister-magik\n"
-                .to_string(),
-            &["MiSTer", "mister-magik"],
-        );
-        assert_eq!(
-            lines,
-            vec![
-                "::sysinit:/media/fat/MiSTer &".to_string(),
-                "boot.sh mister-magik".to_string()
-            ]
-        );
     }
 
     #[test]

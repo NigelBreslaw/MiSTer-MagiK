@@ -36,7 +36,6 @@ def smoke(root: Path) -> None:
         env={
             **os.environ,
             "MISTER_MAGIK_FAT": str(root),
-            "MISTER_MAGIK_INITTAB": str(root / "test-inittab"),
             "MISTER_MAGIK_TEST_MODE": "1",
         },
         capture_output=True,
@@ -124,13 +123,11 @@ def downloader_test(
                     unrelated = scripts / "user-script.sh"
                     unrelated.write_bytes(b"user-owned\n")
                     (fat / "MiSTer.ini").write_bytes(b"[MiSTer]\nmain=MiSTer\n")
-                    (fat / "test-inittab").write_bytes(b"user boot configuration\n")
                     protected = {
                         name: (fat / name).read_bytes()
                         for name in (
                             "Scripts/user-script.sh",
                             "MiSTer.ini",
-                            "test-inittab",
                         )
                     }
                     deletion = {"deletion-disabled": 0, "cores-only-deletion": 2}.get(

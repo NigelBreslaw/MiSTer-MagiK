@@ -21,10 +21,8 @@ new_fixture() {
   FIXTURE="$TMP/$name"
   FAT="$FIXTURE/fat"
   APP="$FAT/mister-magik"
-  INITTAB="$FIXTURE/inittab"
   mkdir -p "$APP/fpga" "$FAT/Scripts"
   printf '#!/bin/sh\n' >"$FAT/MiSTer_MagiK"
-  printf '::sysinit:/media/fat/MiSTer &\n' >"$INITTAB"
   printf '[MiSTer]\r\nmain=MiSTer\r\nmain=Other ; retain\r\n[Menu]\r\ndirect_video=9\r\ndirect_video=8 ; retain\r\nmenu_pal=9\r\nforced_scandoubler=9\r\nvideo_mode=8\r\nuser=keep\r\n' >"$FAT/MiSTer.ini"
   cp "$FAT/MiSTer.ini" "$FIXTURE/original.ini"
 }
@@ -62,7 +60,7 @@ seed_package() {
 }
 
 run_manager() {
-  MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$INITTAB" \
+  MISTER_MAGIK_FAT="$FAT" \
     MISTER_MAGIK_TEST_MODE=1 \
     MISTER_MAGIK_TEST_KEYS="${MISTER_MAGIK_TEST_KEYS:-}" \
     "$FAT/Scripts/MiSTer-MagiK.sh" "$@"
@@ -70,7 +68,6 @@ run_manager() {
 
 assert_boot_unchanged() {
   test "$(sha256sum "$FAT/MiSTer.ini")" = "$BEFORE_INI"
-  test "$(sha256sum "$INITTAB")" = "$BEFORE_INITTAB"
 }
 
 assert_stock() {
@@ -83,7 +80,6 @@ active = [line.strip() for line in text.splitlines() if line.strip().startswith(
 assert len(active) == 1
 assert active[0] != "main=MiSTer_MagiK"
 PY
-  grep -qx '::sysinit:/media/fat/MiSTer &' "$INITTAB"
 }
 
 assert_magik_selected() {
@@ -95,7 +91,6 @@ text = pathlib.Path(sys.argv[1]).read_text()
 active = [line.strip() for line in text.splitlines() if line.strip().startswith("main=")]
 assert active == ["main=MiSTer_MagiK"]
 PY
-  grep -qx '::sysinit:/media/fat/MiSTer &' "$INITTAB"
 }
 
 assert_owned_files_removed() {
@@ -132,7 +127,6 @@ assert_unowned_files_preserved() {
 new_fixture cancel-install
 seed_package
 BEFORE_INI="$(sha256sum "$FAT/MiSTer.ini")"
-BEFORE_INITTAB="$(sha256sum "$INITTAB")"
 if MISTER_MAGIK_TEST_KEYS=enter run_manager >"$FIXTURE/cancel.log" 2>&1; then
   echo "Enter unexpectedly confirmed installation" >&2
   exit 1
@@ -217,7 +211,6 @@ cmp "$FIXTURE/original.ini" "$FAT/MiSTer.ini.bak.before-magik"
 assert_magik_selected
 
 BEFORE_INI="$(sha256sum "$FAT/MiSTer.ini")"
-BEFORE_INITTAB="$(sha256sum "$INITTAB")"
 MISTER_MAGIK_TEST_KEYS=cancel run_manager >"$FIXTURE/active-cancel.log"
 assert_boot_unchanged
 assert_magik_selected
@@ -360,7 +353,7 @@ EOF
     test ! -e "$APP/mister-magik-manager"
     test -x "$recovery"
     assert_stock
-    MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$INITTAB" \
+    MISTER_MAGIK_FAT="$FAT" \
       MISTER_MAGIK_TEST_MODE=1 MISTER_MAGIK_TEST_KEYS=down,other \
       MISTER_MAGIK_RECOVERY_MANAGER="$recovery" \
       "$recovery" uninstall >"$FIXTURE/retry.log" 2>&1 || { cat "$FIXTURE/retry.log"; exit 1; }
