@@ -1,9 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-mod agent_client;
 mod analytics_ui_state;
 mod app_state;
+mod device_client;
 mod file_icons;
 mod frame_profile;
 #[cfg_attr(not(feature = "compiled-ui"), allow(dead_code))]
@@ -12,18 +12,19 @@ mod framebuffer_cadence;
 mod macos_display_clock;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
+mod native_client;
 mod platform_lifecycle;
 mod realtime_frame_chart;
 mod sd_card;
 mod stream_lifecycle;
 
-use agent_client::{
-    DeviceTelemetrySample, DeviceTelemetryStreamControl, FramebufferStreamControl,
-    connect_device_telemetry_stream, connect_framebuffer_stream, connect_framebuffer_stream_seeded,
-    drain_framebuffer_stream, drain_framebuffer_stream_for, fetch_dashboard,
-    fetch_framebuffer_capture, fetch_sd_directory, fetch_sd_item_detail,
-};
 use app_state::{DEFAULT_HOST, DashboardSnapshot};
+use device_client::{
+    DeviceTelemetrySample, DeviceTelemetryStreamControl, FramebufferStreamControl,
+    connect_device_telemetry_stream, connect_framebuffer_stream, drain_framebuffer_stream,
+    drain_framebuffer_stream_for, fetch_dashboard, fetch_framebuffer_capture, fetch_sd_directory,
+    fetch_sd_item_detail,
+};
 use framebuffer_cadence::{CadenceEventKind, FramebufferCadenceTrace};
 use realtime_frame_chart::{FrameChartState, FrameSample, RenderedFrameChart};
 use sd_card::SdCardBrowser;
@@ -45,7 +46,7 @@ use std::time::{Duration, Instant, SystemTime};
 const SD_FOLDER_LOADING_DELAY: Duration = Duration::from_millis(150);
 
 type SharedSdBrowser = Arc<Mutex<SdCardBrowser>>;
-type SharedFramebufferCapture = Arc<Mutex<Option<agent_client::FramebufferCapture>>>;
+type SharedFramebufferCapture = Arc<Mutex<Option<device_client::FramebufferCapture>>>;
 type SharedLiveStreamGeneration = Arc<AtomicU64>;
 type SharedFramebufferStreamControl = Arc<Mutex<Option<(u64, FramebufferStreamControl)>>>;
 type SharedRealtimeStreamGeneration = Arc<AtomicU64>;
@@ -273,7 +274,7 @@ impl<T> LatestMailbox<T> {
 }
 
 struct FramebufferDisplayUpdate {
-    frame: agent_client::FramebufferStreamFrame,
+    frame: device_client::FramebufferStreamFrame,
     pixels: Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>>,
     received_at: Instant,
 }
@@ -765,15 +766,13 @@ struct RealtimeViewState {
     other_memory_pct: f64,
     available_memory_pct: f64,
     storage_used_pct: f64,
-    frame_budget_pct: f64,
     ui_thread_cpu: Option<u64>,
-    cores: Vec<agent_client::CpuCoreTelemetry>,
+    cores: Vec<device_client::CpuCoreTelemetry>,
     cpu_history: Vec<RealtimeChartPoint>,
     cpu0_path: String,
     cpu1_path: String,
     storage_read_path: String,
     storage_write_path: String,
-    frame_history: Vec<RealtimeChartPoint>,
     phases: Vec<RealtimeFramePhaseView>,
     frame_samples: Vec<FrameSample>,
     health_tiles: Vec<RealtimeHealthTileView>,
@@ -801,102 +800,6 @@ struct RealtimeHealthTileView {
     state: String,
 }
 
-fn scanout_health_tile(history: &RealtimeHistory) -> RealtimeHealthTileView {
-    let unavailable = |value: &str, detail: String, state: &str| RealtimeHealthTileView {
-        title: "Scanout".to_string(),
-        value: value.to_string(),
-        detail,
-        state: state.to_string(),
-    };
-    let Some(latest) = history.samples.back().map(|sample| &sample.presentation) else {
-        return unavailable("Unavailable", "No FPGA cadence sample.".to_string(), "warn");
-    };
-    if !latest.available {
-        return unavailable(
-            "Unavailable",
-            if latest.error.is_empty() {
-                "FPGA cadence telemetry is unavailable.".to_string()
-            } else {
-                latest.error.clone()
-            },
-            "warn",
-        );
-    }
-    if !latest.magik_ownership {
-        return unavailable("Ownership lost", "MagiK does not own scanout.".to_string(), "bad");
-    }
-    if latest.pending {
-        return unavailable("Pending", "FPGA endpoint is not settled.".to_string(), "warn");
-    }
-    if !latest.lifetime_invariant_valid {
-        return unavailable("Invalid", "FPGA cadence invariant failed.".to_string(), "bad");
-    }
-    let previous = history
-        .samples
-        .iter()
-        .rev()
-        .skip(1)
-        .map(|sample| &sample.presentation)
-        .find(|sample| {
-            sample.available
-                && sample.magik_ownership
-                && !sample.pending
-                && sample.lifetime_invariant_valid
-        });
-    let Some(previous) = previous else {
-        return unavailable("Settling", "Waiting for a second FPGA sample.".to_string(), "warn");
-    };
-    let Some((owned, presented, dropped, losses)) = latest
-        .owned_vblank_count
-        .zip(previous.owned_vblank_count)
-        .map(|(end, start)| end.wrapping_sub(start))
-        .zip(
-            latest
-                .presented_vblank_count
-                .zip(previous.presented_vblank_count)
-                .map(|(end, start)| end.wrapping_sub(start)),
-        )
-        .zip(
-            latest
-                .repeated_vblank_count
-                .zip(previous.repeated_vblank_count)
-                .map(|(end, start)| end.wrapping_sub(start)),
-        )
-        .zip(
-            latest
-                .ownership_loss_count
-                .zip(previous.ownership_loss_count)
-                .map(|(end, start)| end.wrapping_sub(start)),
-        )
-        .map(|(((owned, presented), dropped), losses)| (owned, presented, dropped, losses))
-    else {
-        return unavailable("Unavailable", "FPGA counters are incomplete.".to_string(), "warn");
-    };
-    if owned != presented.wrapping_add(dropped) {
-        return unavailable("Invalid", "FPGA cadence delta invariant failed.".to_string(), "bad");
-    }
-    if losses > 0 {
-        return unavailable(
-            "Ownership lost",
-            format!("{losses} ownership transition(s) in the latest window."),
-            "bad",
-        );
-    }
-    if dropped > 0 {
-        unavailable(
-            &format!("{dropped} dropped"),
-            format!("{presented} new frames across {owned} owned vblanks."),
-            "bad",
-        )
-    } else {
-        unavailable(
-            "0 dropped",
-            format!("{presented} new frames; ownership remained settled."),
-            "good",
-        )
-    }
-}
-
 #[cfg(feature = "compiled-ui")]
 slint::include_modules!();
 
@@ -909,6 +812,7 @@ fn realtime_view_from_history(
     let cpu_history = history
         .samples
         .iter()
+        .filter(|sample| !sample.unavailable.iter().any(|v| v == "cpu"))
         .map(|sample| RealtimeChartPoint {
             value: sample.combined_cpu_pct.clamp(0.0, 100.0),
             alert: sample.combined_cpu_pct >= 85.0,
@@ -932,18 +836,6 @@ fn realtime_view_from_history(
         .collect::<Vec<_>>();
     let storage_read_path = realtime_chart_path(&storage_read_history, REALTIME_HISTORY_CAPACITY);
     let storage_write_path = realtime_chart_path(&storage_write_history, REALTIME_HISTORY_CAPACITY);
-    let frame_history = history
-        .samples
-        .iter()
-        .map(|sample| {
-            let budget = sample.frame_budget.budget_us.max(1) as f64;
-            let value = sample.frame_budget.window_max_wall_us as f64 * 100.0 / budget;
-            RealtimeChartPoint {
-                value: value.clamp(0.0, 100.0),
-                alert: sample.frame_budget.window_over_budget > 0,
-            }
-        })
-        .collect::<Vec<_>>();
     let mut seen_frame_samples = HashSet::new();
     let mut frame_samples = Vec::new();
     for sample in &history.samples {
@@ -987,7 +879,6 @@ fn realtime_view_from_history(
             other_memory_pct: 0.0,
             available_memory_pct: 0.0,
             storage_used_pct: 0.0,
-            frame_budget_pct: 0.0,
             ui_thread_cpu: None,
             cores: Vec::new(),
             cpu_history,
@@ -995,17 +886,12 @@ fn realtime_view_from_history(
             cpu1_path,
             storage_read_path,
             storage_write_path,
-            frame_history,
             phases: Vec::new(),
             frame_samples,
             health_tiles: Vec::new(),
         };
     };
 
-    let frame_budget = sample.frame_budget.budget_us.max(1);
-    let frame_budget_pct = (sample.frame_budget.window_max_wall_us as f64 * 100.0
-        / frame_budget as f64)
-        .clamp(0.0, 100.0);
     let phases = realtime_frame_phases(&sample.frame_budget);
     let memory_total_label = format_kib(sample.memory.total_kb);
     let memory_magik_label = format!("MagiK: {}", format_kib(sample.memory.magik_kb));
@@ -1028,12 +914,7 @@ fn realtime_view_from_history(
     } else {
         "Waiting for SD activity samples.".to_string()
     };
-    let frame_summary = format!(
-        "{} frames, {} over budget, max {}",
-        sample.frame_budget.window_frames,
-        sample.frame_budget.window_over_budget,
-        format_us(sample.frame_budget.window_max_wall_us)
-    );
+    let frame_summary = format!("{} sampled frames", sample.frame_budget.window_frames);
     let health_tiles = vec![
         RealtimeHealthTileView {
             title: "MagiK".to_string(),
@@ -1065,7 +946,6 @@ fn realtime_view_from_history(
             }
             .to_string(),
         },
-        scanout_health_tile(history),
         RealtimeHealthTileView {
             title: "Network".to_string(),
             value: format!(
@@ -1078,7 +958,7 @@ fn realtime_view_from_history(
         },
     ];
 
-    RealtimeViewState {
+    let mut view = RealtimeViewState {
         status: if streaming {
             "Streaming lightweight telemetry at 1 Hz.".to_string()
         } else {
@@ -1107,7 +987,6 @@ fn realtime_view_from_history(
         other_memory_pct: sample.memory.other_used_pct,
         available_memory_pct: sample.memory.available_pct,
         storage_used_pct,
-        frame_budget_pct,
         ui_thread_cpu: sample.launcher.ui_thread_cpu,
         cores: sample.cores.clone(),
         cpu_history,
@@ -1115,17 +994,48 @@ fn realtime_view_from_history(
         cpu1_path,
         storage_read_path,
         storage_write_path,
-        frame_history,
         phases,
         frame_samples,
         health_tiles,
+    };
+    if !sample.unavailable.is_empty() {
+        view.last_error = format!(
+            "Unavailable measurements: {}",
+            sample.unavailable.join(", ")
+        );
     }
+    if sample.unavailable.iter().any(|v| v == "cpu") {
+        view.cpu_summary = "Unavailable".into();
+    }
+    if sample.unavailable.iter().any(|v| v == "memory") {
+        view.memory_total_label = "Unavailable".into();
+        view.memory_magik_label = "Unavailable".into();
+        view.memory_other_label = "Unavailable".into();
+        view.memory_available_label = "Unavailable".into();
+    }
+    if sample.unavailable.iter().any(|v| v == "storage") {
+        view.storage_total_label = "Unavailable".into();
+        view.storage_used_label = "Unavailable".into();
+        view.storage_empty_label = "Unavailable".into();
+    }
+    if sample.unavailable.iter().any(|v| v == "network") {
+        if let Some(tile) = view
+            .health_tiles
+            .iter_mut()
+            .find(|tile| tile.title == "Network")
+        {
+            tile.value = "Unavailable".into();
+            tile.state = "warn".into();
+        }
+    }
+    if !sample.launcher.status_current {
+        view.frame_summary = "Frame timings unavailable".into();
+        view.fps_summary = "Unavailable".into();
+    }
+    view
 }
 
-fn realtime_frame_samples_from_telemetry(
-    sample: &DeviceTelemetrySample,
-) -> Vec<FrameSample> {
-    let budget_us = sample.frame_budget.budget_us.max(1);
+fn realtime_frame_samples_from_telemetry(sample: &DeviceTelemetrySample) -> Vec<FrameSample> {
     let frames = sample
         .frame_budget
         .recent_frames
@@ -1144,7 +1054,7 @@ fn realtime_frame_samples_from_telemetry(
             cpu_vsync_us: frame.cpu_vsync_us,
             cpu_present_us: frame.cpu_present_us,
             process_cpu_us: frame.process_cpu_us,
-            over_budget: frame.wall_us > budget_us,
+            over_budget: false,
             idle: false,
         })
         .collect::<Vec<_>>();
@@ -1184,7 +1094,7 @@ fn realtime_core_history(history: &RealtimeHistory, core_index: usize) -> Vec<f6
         .collect()
 }
 
-fn storage_activity_summary(storage: &agent_client::StorageTelemetry) -> String {
+fn storage_activity_summary(storage: &device_client::StorageTelemetry) -> String {
     format!(
         "Read {:.1}% ({}) / Write {:.1}% ({})",
         storage.read_pct.clamp(0.0, 100.0),
@@ -1229,7 +1139,7 @@ fn push_path_number(path: &mut String, value: f64) {
 }
 
 fn realtime_frame_phases(
-    frame: &agent_client::FrameBudgetTelemetry,
+    frame: &device_client::FrameBudgetTelemetry,
 ) -> Vec<RealtimeFramePhaseView> {
     let phases = [
         ("Prepare", frame.window_prepare_us, 0),
@@ -1254,7 +1164,7 @@ fn realtime_frame_phases(
         .collect()
 }
 
-fn process_tile_value(process: &agent_client::ProcessTelemetry) -> String {
+fn process_tile_value(process: &device_client::ProcessTelemetry) -> String {
     if process.pids.is_empty() {
         "not running".to_string()
     } else {
@@ -1277,14 +1187,6 @@ fn format_kib(kb: u64) -> String {
         format!("{:.1} MiB", kb as f64 / 1024.0)
     } else {
         format!("{kb} KiB")
-    }
-}
-
-fn format_us(us: u64) -> String {
-    if us >= 1000 {
-        format!("{:.1}ms", us as f64 / 1000.0)
-    } else {
-        format!("{us}us")
     }
 }
 
@@ -1381,8 +1283,8 @@ enum RealtimeFrameChartFixture {
     Large,
 }
 
-fn realtime_frame_chart_fixture_args(
-) -> Result<Option<RealtimeFrameChartFixture>, Box<dyn Error>> {
+fn realtime_frame_chart_fixture_args() -> Result<Option<RealtimeFrameChartFixture>, Box<dyn Error>>
+{
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     parse_realtime_frame_chart_fixture_args(&args)
 }
@@ -1634,12 +1536,7 @@ fn run_framebuffer_stream_bench(
         }
         FramebufferBenchMode::Dump(ref dir) => {
             std::fs::create_dir_all(dir)?;
-            let seed_capture = fetch_framebuffer_capture(&host).ok();
-            if let Some(capture) = seed_capture.as_ref() {
-                let png = framebuffer_capture_png_bytes(capture)?;
-                std::fs::write(dir.join("frame-0000-seed.png"), png)?;
-            }
-            let mut stream = connect_framebuffer_stream_seeded(&host, seed_capture.as_ref())?;
+            let mut stream = connect_framebuffer_stream(&host)?;
             let frames = match limit {
                 FramebufferBenchLimit::Frames(frames) => frames,
                 FramebufferBenchLimit::Duration(_) => unreachable!("dump is frame-count only"),
@@ -1823,7 +1720,6 @@ fn run_compiled_framebuffer_display_bench(
                 );
                 spawn_compiled_framebuffer_stream(
                     stream_ui.clone(),
-                    Arc::clone(&stream_capture),
                     Arc::clone(&stream_generation),
                     Arc::clone(&stream_control),
                     Arc::clone(&stream_metrics),
@@ -2065,15 +1961,15 @@ fn fill_synthetic_rect(
 fn synthetic_stream_frame(
     sequence: u64,
     timestamp_us: u64,
-) -> agent_client::FramebufferStreamFrame {
+) -> device_client::FramebufferStreamFrame {
     let geometry = mister_magik_framebuffer_stream::FrameGeometry {
         width: 480,
         height: 270,
         stride_pixels: 480,
     };
     let now = Instant::now();
-    agent_client::FramebufferStreamFrame {
-        capture: agent_client::FramebufferCapture {
+    device_client::FramebufferStreamFrame {
+        capture: device_client::FramebufferCapture {
             png_path: PathBuf::new(),
             rgba_pixels: Vec::new(),
             raw_pixels: Vec::new(),
@@ -2086,7 +1982,7 @@ fn synthetic_stream_frame(
             encoding: "synthetic-shared-pixel-buffer".to_string(),
             png_bytes: 0,
             png_hex_bytes: 0,
-            timing: agent_client::FramebufferCaptureTiming::default(),
+            timing: device_client::FramebufferCaptureTiming::default(),
         },
         kind: if sequence == 0 {
             mister_magik_framebuffer_stream::FrameKind::Keyframe
@@ -2099,7 +1995,7 @@ fn synthetic_stream_frame(
         rect: mister_magik_framebuffer_stream::FrameRect::full(geometry),
         raw_bytes: u64::from(geometry.width) * u64::from(geometry.height) * 2,
         payload_bytes: 0,
-        timing: agent_client::FramebufferStreamTiming {
+        timing: device_client::FramebufferStreamTiming {
             read_started: now,
             read_complete: now,
             decompress_complete: now,
@@ -2410,18 +2306,13 @@ fn create_live_instance(
     let resize_instance = instance.as_weak();
     let resize_frame_chart_state = Arc::clone(&realtime_frame_chart);
     instance.set_global_callback("Actions", "realtime-frame-chart-resized", move |args| {
-        let (Some(Value::Number(width)), Some(Value::Number(height))) =
-            (args.first(), args.get(1))
+        let (Some(Value::Number(width)), Some(Value::Number(height))) = (args.first(), args.get(1))
         else {
             return Value::Void;
         };
         if let (Some(instance), Some(rendered)) = (
             resize_instance.upgrade(),
-            resize_frame_chart(
-                &resize_frame_chart_state,
-                *width as i32,
-                *height as i32,
-            ),
+            resize_frame_chart(&resize_frame_chart_state, *width as i32, *height as i32),
         ) {
             apply_live_frame_chart(&instance, rendered);
         }
@@ -2493,7 +2384,6 @@ fn create_live_instance(
             );
             spawn_live_framebuffer_stream(
                 stream_instance.clone(),
-                Arc::clone(&stream_capture),
                 Arc::clone(&stream_generation),
                 Arc::clone(&stream_control),
                 Arc::clone(&stream_render_metrics),
@@ -3146,7 +3036,6 @@ fn run_compiled_ui(
                 );
                 spawn_compiled_framebuffer_stream(
                     stream_ui.clone(),
-                    Arc::clone(&stream_capture),
                     Arc::clone(&stream_generation),
                     Arc::clone(&stream_control),
                     Arc::clone(&stream_render_metrics),
@@ -3384,7 +3273,7 @@ fn set_live_analytics_loading(instance: &slint_interpreter::ComponentInstance) {
 #[cfg(feature = "live-ui")]
 fn apply_live_framebuffer_stream_capture(
     instance: &slint_interpreter::ComponentInstance,
-    capture: &agent_client::FramebufferCapture,
+    capture: &device_client::FramebufferCapture,
     pixels: Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>>,
     geometry_changed: bool,
 ) {
@@ -3422,7 +3311,7 @@ fn apply_live_framebuffer_stream_capture(
 #[cfg(feature = "live-ui")]
 fn apply_live_framebuffer_capture_result(
     instance: &slint_interpreter::ComponentInstance,
-    result: Result<agent_client::FramebufferCapture, String>,
+    result: Result<device_client::FramebufferCapture, String>,
 ) {
     use slint_interpreter::Value;
 
@@ -3495,7 +3384,7 @@ fn set_compiled_analytics_loading(ui: &AppWindow) {
 #[cfg(feature = "compiled-ui")]
 fn apply_compiled_framebuffer_stream_capture(
     ui: &AppWindow,
-    capture: &agent_client::FramebufferCapture,
+    capture: &device_client::FramebufferCapture,
     pixels: Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>>,
     geometry_changed: bool,
 ) {
@@ -3513,7 +3402,7 @@ fn apply_compiled_framebuffer_stream_capture(
 #[cfg(feature = "compiled-ui")]
 fn apply_compiled_framebuffer_capture_result(
     ui: &AppWindow,
-    result: Result<agent_client::FramebufferCapture, String>,
+    result: Result<device_client::FramebufferCapture, String>,
 ) {
     let next = analytics_ui_state::capture_result_state(result.as_ref().map_err(String::as_str));
     let state = ui.global::<AnalyticsState>();
@@ -3537,7 +3426,7 @@ fn apply_compiled_framebuffer_capture_result(
 }
 
 #[cfg(test)]
-fn framebuffer_capture_status(capture: &agent_client::FramebufferCapture) -> String {
+fn framebuffer_capture_status(capture: &device_client::FramebufferCapture) -> String {
     format!(
         "Captured {}x{} {}bpp framebuffer ({} payload; {} raw; {}).",
         capture.width,
@@ -3549,7 +3438,7 @@ fn framebuffer_capture_status(capture: &agent_client::FramebufferCapture) -> Str
     )
 }
 
-fn framebuffer_capture_image(capture: &agent_client::FramebufferCapture) -> slint::Image {
+fn framebuffer_capture_image(capture: &device_client::FramebufferCapture) -> slint::Image {
     if capture.rgba_pixels.is_empty() && !capture.png_path.as_os_str().is_empty() {
         return slint::Image::load_from_path(&capture.png_path).unwrap_or_default();
     }
@@ -3559,7 +3448,7 @@ fn framebuffer_capture_image(capture: &agent_client::FramebufferCapture) -> slin
 }
 
 fn framebuffer_capture_pixel_buffer(
-    capture: &agent_client::FramebufferCapture,
+    capture: &device_client::FramebufferCapture,
 ) -> Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>> {
     let width = u32::try_from(capture.width).ok()?;
     let height = u32::try_from(capture.height).ok()?;
@@ -3583,7 +3472,7 @@ fn framebuffer_capture_pixel_buffer(
 }
 
 fn framebuffer_capture_png_bytes(
-    capture: &agent_client::FramebufferCapture,
+    capture: &device_client::FramebufferCapture,
 ) -> Result<Vec<u8>, String> {
     if capture.rgba_pixels.is_empty() {
         if !capture.png_path.as_os_str().is_empty() {
@@ -3634,7 +3523,7 @@ fn framebuffer_capture_png_bytes(
 }
 
 fn save_framebuffer_capture_png(
-    capture: &agent_client::FramebufferCapture,
+    capture: &device_client::FramebufferCapture,
 ) -> Result<PathBuf, String> {
     let png_bytes = framebuffer_capture_png_bytes(capture)?;
     let desktop = std::env::var_os("HOME")
@@ -3871,7 +3760,7 @@ fn start_or_stop_compiled_realtime(
 
 fn record_applied_frame(
     state: &mut FramebufferDisplayState,
-    frame: &agent_client::FramebufferStreamFrame,
+    frame: &device_client::FramebufferStreamFrame,
 ) -> bool {
     let geometry_changed = state.geometry != Some(frame.geometry);
     if geometry_changed {
@@ -3914,7 +3803,7 @@ fn framebuffer_display_summary(
 }
 
 fn dirty_rect_from_stream_frame(
-    frame: &agent_client::FramebufferStreamFrame,
+    frame: &device_client::FramebufferStreamFrame,
 ) -> DirtyRectOverlayState {
     DirtyRectOverlayState {
         x: frame.rect.x.min(i32::MAX as u32) as i32,
@@ -3932,7 +3821,7 @@ fn dirty_rect_from_stream_frame(
 
 fn push_recent_dirty_rect(
     recent: &mut VecDeque<DirtyRectOverlayState>,
-    frame: &agent_client::FramebufferStreamFrame,
+    frame: &device_client::FramebufferStreamFrame,
 ) {
     recent.push_back(dirty_rect_from_stream_frame(frame));
     while recent.len() > DIRTY_RECT_LINGER_FRAMES || recent.len() > MAX_DIRTY_RECT_OVERLAYS {
@@ -3941,7 +3830,7 @@ fn push_recent_dirty_rect(
 }
 
 fn dirty_rect_summary(
-    frame: &agent_client::FramebufferStreamFrame,
+    frame: &device_client::FramebufferStreamFrame,
     visible_count: usize,
 ) -> String {
     let kind = match frame.kind {
@@ -4203,11 +4092,6 @@ fn apply_live_realtime_view(
     );
     set(
         instance,
-        "frame-budget-pct",
-        Value::Number(view.frame_budget_pct),
-    );
-    set(
-        instance,
         "ui-thread-cpu",
         Value::Number(view.ui_thread_cpu.map_or(-1.0, |cpu| cpu as f64)),
     );
@@ -4256,13 +4140,6 @@ fn apply_live_realtime_view(
         instance,
         "storage-write-path",
         Value::String(SharedString::from(view.storage_write_path.as_str())),
-    );
-    set(
-        instance,
-        "frame-history",
-        Value::Model(ModelRc::new(VecModel::from(live_realtime_points(
-            &view.frame_history,
-        )))),
     );
     set(
         instance,
@@ -4378,7 +4255,6 @@ fn apply_compiled_realtime_view(
     state.set_other_memory_pct(view.other_memory_pct as f32);
     state.set_available_memory_pct(view.available_memory_pct as f32);
     state.set_storage_used_pct(view.storage_used_pct as f32);
-    state.set_frame_budget_pct(view.frame_budget_pct as f32);
     state.set_ui_thread_cpu(
         view.ui_thread_cpu
             .and_then(|cpu| i32::try_from(cpu).ok())
@@ -4398,7 +4274,6 @@ fn apply_compiled_realtime_view(
     state.set_cpu1_path(view.cpu1_path.as_str().into());
     state.set_storage_read_path(view.storage_read_path.as_str().into());
     state.set_storage_write_path(view.storage_write_path.as_str().into());
-    state.set_frame_history(compiled_realtime_points(&view.frame_history));
     state.set_frame_phases(ModelRc::new(VecModel::from(
         view.phases
             .iter()
@@ -5246,7 +5121,6 @@ fn consume_live_framebuffer_display(
 #[allow(clippy::too_many_arguments)]
 fn spawn_live_framebuffer_stream(
     instance: slint::Weak<slint_interpreter::ComponentInstance>,
-    capture_state: SharedFramebufferCapture,
     stream_generation: SharedLiveStreamGeneration,
     stream_control: SharedFramebufferStreamControl,
     render_metrics: Arc<FramebufferRenderMetrics>,
@@ -5256,24 +5130,7 @@ fn spawn_live_framebuffer_stream(
 ) {
     std::thread::spawn(move || {
         render_metrics.reset();
-        let seed_capture = fetch_framebuffer_capture(&host).ok();
-        if let Some(capture) = seed_capture.clone() {
-            let event_generation = Arc::clone(&stream_generation);
-            let event_capture_state = Arc::clone(&capture_state);
-            let event_instance = instance.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if event_generation.load(Ordering::SeqCst) != generation {
-                    return;
-                }
-                if let Ok(mut state) = event_capture_state.lock() {
-                    *state = Some(capture.clone());
-                }
-                if let Some(instance) = event_instance.upgrade() {
-                    apply_live_framebuffer_capture_result(&instance, Ok(capture));
-                }
-            });
-        }
-        let mut stream = match connect_framebuffer_stream_seeded(&host, seed_capture.as_ref()) {
+        let mut stream = match connect_framebuffer_stream(&host) {
             Ok(stream) => stream,
             Err(err) => {
                 let err = err.to_string();
@@ -5403,6 +5260,7 @@ fn spawn_live_realtime_stream(
 ) {
     std::thread::spawn(move || {
         let mut history = RealtimeHistory::default();
+        let updates = Arc::new(LatestMailbox::default());
         let mut stream = match connect_device_telemetry_stream(&host) {
             Ok(stream) => stream,
             Err(err) => {
@@ -5453,15 +5311,25 @@ fn spawn_live_realtime_stream(
                 Ok(sample) => {
                     history.push(sample);
                     let view = realtime_view_from_history(&history, true, "");
+                    if !updates.publish(view) {
+                        continue;
+                    }
+                    let queued = Arc::clone(&updates);
                     let event_generation = Arc::clone(&stream_generation);
                     let event_instance = instance.clone();
                     let event_frame_chart = Arc::clone(&frame_chart);
                     let _ = slint::invoke_from_event_loop(move || {
-                        if event_generation.load(Ordering::SeqCst) != generation {
-                            return;
-                        }
-                        if let Some(instance) = event_instance.upgrade() {
-                            apply_live_realtime_view(&instance, &view, &event_frame_chart);
+                        while let Some(view) = queued.take() {
+                            if event_generation.load(Ordering::SeqCst) != generation {
+                                queued.close();
+                                return;
+                            }
+                            if let Some(instance) = event_instance.upgrade() {
+                                apply_live_realtime_view(&instance, &view, &event_frame_chart);
+                            }
+                            if !queued.complete_apply() {
+                                break;
+                            }
                         }
                     });
                 }
@@ -5483,6 +5351,7 @@ fn spawn_live_realtime_stream(
                 }
             }
         }
+        updates.close();
         unregister_realtime_stream(&stream_control, generation);
     });
 }
@@ -5766,7 +5635,6 @@ fn consume_compiled_framebuffer_display(
 #[cfg(feature = "compiled-ui")]
 fn spawn_compiled_framebuffer_stream(
     ui: slint::Weak<AppWindow>,
-    capture_state: SharedFramebufferCapture,
     stream_generation: SharedLiveStreamGeneration,
     stream_control: SharedFramebufferStreamControl,
     render_metrics: Arc<FramebufferRenderMetrics>,
@@ -5776,24 +5644,7 @@ fn spawn_compiled_framebuffer_stream(
 ) {
     std::thread::spawn(move || {
         render_metrics.reset();
-        let seed_capture = fetch_framebuffer_capture(&host).ok();
-        if let Some(capture) = seed_capture.clone() {
-            let event_generation = Arc::clone(&stream_generation);
-            let event_capture_state = Arc::clone(&capture_state);
-            let event_ui = ui.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if event_generation.load(Ordering::SeqCst) != generation {
-                    return;
-                }
-                if let Ok(mut state) = event_capture_state.lock() {
-                    *state = Some(capture.clone());
-                }
-                if let Some(ui) = event_ui.upgrade() {
-                    apply_compiled_framebuffer_capture_result(&ui, Ok(capture));
-                }
-            });
-        }
-        let mut stream = match connect_framebuffer_stream_seeded(&host, seed_capture.as_ref()) {
+        let mut stream = match connect_framebuffer_stream(&host) {
             Ok(stream) => stream,
             Err(err) => {
                 let err = err.to_string();
@@ -5917,6 +5768,7 @@ fn spawn_compiled_realtime_stream(
 ) {
     std::thread::spawn(move || {
         let mut history = RealtimeHistory::default();
+        let updates = Arc::new(LatestMailbox::default());
         let mut stream = match connect_device_telemetry_stream(&host) {
             Ok(stream) => stream,
             Err(err) => {
@@ -5967,15 +5819,25 @@ fn spawn_compiled_realtime_stream(
                 Ok(sample) => {
                     history.push(sample);
                     let view = realtime_view_from_history(&history, true, "");
+                    if !updates.publish(view) {
+                        continue;
+                    }
+                    let queued = Arc::clone(&updates);
                     let event_generation = Arc::clone(&stream_generation);
                     let event_ui = ui.clone();
                     let event_frame_chart = Arc::clone(&frame_chart);
                     let _ = slint::invoke_from_event_loop(move || {
-                        if event_generation.load(Ordering::SeqCst) != generation {
-                            return;
-                        }
-                        if let Some(ui) = event_ui.upgrade() {
-                            apply_compiled_realtime_view(&ui, &view, &event_frame_chart);
+                        while let Some(view) = queued.take() {
+                            if event_generation.load(Ordering::SeqCst) != generation {
+                                queued.close();
+                                return;
+                            }
+                            if let Some(ui) = event_ui.upgrade() {
+                                apply_compiled_realtime_view(&ui, &view, &event_frame_chart);
+                            }
+                            if !queued.complete_apply() {
+                                break;
+                            }
                         }
                     });
                 }
@@ -5997,6 +5859,7 @@ fn spawn_compiled_realtime_stream(
                 }
             }
         }
+        updates.close();
         unregister_realtime_stream(&stream_control, generation);
     });
 }
@@ -6114,31 +5977,19 @@ mod tests {
     fn telemetry_sample(seq: u64) -> DeviceTelemetrySample {
         DeviceTelemetrySample {
             seq,
+            unavailable: Vec::new(),
             combined_cpu_pct: 12.5,
-            presentation: agent_client::PresentationTelemetrySample {
-                available: true,
-                captured_monotonic_us: seq.saturating_mul(1_000_000),
-                owned_vblank_count: Some(seq as u32),
-                presented_vblank_count: Some(seq as u32),
-                repeated_vblank_count: Some(0),
-                ownership_loss_count: Some(0),
-                active_sequence: Some(seq as u16),
-                magik_ownership: true,
-                pending: false,
-                lifetime_invariant_valid: true,
-                error: String::new(),
-            },
             cores: vec![
-                agent_client::CpuCoreTelemetry {
+                device_client::CpuCoreTelemetry {
                     label: "CPU0".to_string(),
                     busy_pct: 12.5,
                 },
-                agent_client::CpuCoreTelemetry {
+                device_client::CpuCoreTelemetry {
                     label: "CPU1".to_string(),
                     busy_pct: 25.0,
                 },
             ],
-            memory: agent_client::MemoryTelemetry {
+            memory: device_client::MemoryTelemetry {
                 total_kb: 1_000_000,
                 magik_kb: 100_000,
                 main_kb: 20_000,
@@ -6148,22 +5999,16 @@ mod tests {
                 other_used_pct: 50.0,
                 available_pct: 40.0,
             },
-            frame_budget: agent_client::FrameBudgetTelemetry {
+            frame_budget: device_client::FrameBudgetTelemetry {
                 budget_us: 16_667,
                 frames_total: seq,
                 window_frames: 60,
-                window_over_budget: 1,
-                window_over_20ms: 1,
-                window_over_33ms: 0,
-                window_max_wall_us: 21_000,
-                max_wall_us: 21_000,
-                max_vsync_miss_streak: 1,
                 window_prepare_us: 100,
                 window_render_us: 200,
                 window_custom_draw_us: 300,
                 window_vsync_us: 400,
                 window_present_us: 500,
-                recent_frames: vec![agent_client::FrameBudgetFrameTelemetry {
+                recent_frames: vec![device_client::FrameBudgetFrameTelemetry {
                     frame: seq,
                     wall_us: 21_000,
                     prepare_us: 100,
@@ -6178,31 +6023,30 @@ mod tests {
                     cpu_present_us: 5,
                     process_cpu_us: 80,
                     vsync_source: "vsync".to_string(),
-                    vsync_miss_streak: 1,
                 }],
             },
-            launcher: agent_client::LauncherTelemetry {
+            launcher: device_client::LauncherTelemetry {
                 status_current: true,
                 idle: false,
                 fps: "59.9 fps".to_string(),
                 preview_cache_state: "exact".to_string(),
                 ui_thread_cpu: Some(0),
             },
-            magik: agent_client::ProcessTelemetry {
+            magik: device_client::ProcessTelemetry {
                 pids: vec![42],
                 rss_kb: 100_000,
                 threads: 7,
             },
-            main: agent_client::ProcessTelemetry {
+            main: device_client::ProcessTelemetry {
                 pids: vec![9],
                 rss_kb: 20_000,
                 threads: 1,
             },
-            network: agent_client::NetworkTelemetry {
+            network: device_client::NetworkTelemetry {
                 rx_bytes_per_sec: 1024,
                 tx_bytes_per_sec: 2048,
             },
-            storage: agent_client::StorageTelemetry {
+            storage: device_client::StorageTelemetry {
                 available_bytes: 137_000_000_000,
                 total_bytes: 512_000_000_000,
                 available_pct: 26.8,
@@ -6248,17 +6092,14 @@ mod tests {
         assert_eq!(view.memory_magik_label, "MagiK: 97.7 MiB");
         assert_eq!(view.memory_other_label, "Other: 488.3 MiB");
         assert_eq!(view.memory_available_label, "Available: 390.6 MiB");
-        assert!(view.frame_history[0].alert);
         assert_eq!(view.frame_samples.len(), 1);
         assert_eq!(view.frame_samples[0].process_cpu_us, 80);
         assert!(!view.frame_samples[0].idle);
         assert_eq!(view.phases.len(), 5);
-        assert_eq!(view.health_tiles.len(), 4);
+        assert_eq!(view.health_tiles.len(), 3);
         assert_eq!(view.health_tiles[0].title, "MagiK");
         assert_eq!(view.health_tiles[1].title, "Main");
-        assert_eq!(view.health_tiles[2].title, "Scanout");
-        assert_eq!(view.health_tiles[2].value, "Settling");
-        assert_eq!(view.health_tiles[3].title, "Network");
+        assert_eq!(view.health_tiles[2].title, "Network");
         assert_eq!(view.storage_total_label, "512GB");
         assert_eq!(view.storage_used_label, "Used: 375GB");
         assert_eq!(view.storage_empty_label, "Free: 137GB");
@@ -6269,42 +6110,6 @@ mod tests {
         );
         assert!(!view.storage_read_path.is_empty());
         assert!(!view.storage_write_path.is_empty());
-    }
-
-    #[test]
-    fn scanout_health_uses_fpga_repeat_and_ownership_deltas() {
-        let mut history = RealtimeHistory::default();
-        history.push(telemetry_sample(10));
-        history.push(telemetry_sample(11));
-        let healthy = scanout_health_tile(&history);
-        assert_eq!(healthy.value, "0 dropped");
-        assert_eq!(healthy.state, "good");
-
-        let mut repeated = telemetry_sample(12);
-        repeated.presentation.owned_vblank_count = Some(12);
-        repeated.presentation.presented_vblank_count = Some(11);
-        repeated.presentation.repeated_vblank_count = Some(1);
-        history.push(repeated);
-        let dropped = scanout_health_tile(&history);
-        assert_eq!(dropped.value, "1 dropped");
-        assert_eq!(dropped.state, "bad");
-
-        let mut lost = telemetry_sample(13);
-        lost.presentation.presented_vblank_count = Some(12);
-        lost.presentation.repeated_vblank_count = Some(1);
-        lost.presentation.ownership_loss_count = Some(1);
-        history.push(lost);
-        let ownership = scanout_health_tile(&history);
-        assert_eq!(ownership.value, "Ownership lost");
-        assert_eq!(ownership.state, "bad");
-
-        let mut unavailable = telemetry_sample(14);
-        unavailable.presentation.available = false;
-        unavailable.presentation.error = "missing capability".to_string();
-        history.push(unavailable);
-        let missing = scanout_health_tile(&history);
-        assert_eq!(missing.value, "Unavailable");
-        assert_eq!(missing.state, "warn");
     }
 
     #[test]
@@ -6442,7 +6247,7 @@ mod tests {
 
     #[test]
     fn storage_activity_summary_formats_idle_read_write_and_combined() {
-        let mut storage = agent_client::StorageTelemetry::default();
+        let mut storage = device_client::StorageTelemetry::default();
         assert_eq!(
             storage_activity_summary(&storage),
             "Read 0.0% (0 B/s) / Write 0.0% (0 B/s)"
@@ -6472,7 +6277,7 @@ mod tests {
 
     #[test]
     fn framebuffer_capture_status_includes_payload_and_raw_sizes() {
-        let capture = agent_client::FramebufferCapture {
+        let capture = device_client::FramebufferCapture {
             png_path: std::path::PathBuf::from("/tmp/fb.png"),
             rgba_pixels: Vec::new(),
             raw_pixels: Vec::new(),
@@ -6485,7 +6290,7 @@ mod tests {
             encoding: "lz4-block-size-prepended".to_string(),
             png_bytes: 0,
             png_hex_bytes: 0,
-            timing: agent_client::FramebufferCaptureTiming::default(),
+            timing: device_client::FramebufferCaptureTiming::default(),
         };
 
         assert_eq!(
@@ -6496,7 +6301,7 @@ mod tests {
 
     #[test]
     fn framebuffer_capture_png_bytes_encodes_rgba_pixels() {
-        let capture = agent_client::FramebufferCapture {
+        let capture = device_client::FramebufferCapture {
             png_path: std::path::PathBuf::new(),
             rgba_pixels: vec![
                 255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
@@ -6511,7 +6316,7 @@ mod tests {
             encoding: "lz4-block-size-prepended".to_string(),
             png_bytes: 0,
             png_hex_bytes: 0,
-            timing: agent_client::FramebufferCaptureTiming::default(),
+            timing: device_client::FramebufferCaptureTiming::default(),
         };
 
         let png_bytes =

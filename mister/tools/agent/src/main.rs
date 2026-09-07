@@ -341,54 +341,6 @@ mod sd_browse {
     pub const MRA_RAW_DISPLAY_LIMIT_BYTES: u64 = 256 * 1024;
     pub const IMAGE_PREVIEW_LIMIT_BYTES: u64 = 16 * 1024 * 1024;
 
-    pub fn list_dir_at_root(
-        root: &Path,
-        requested_path: &str,
-        show_hidden: bool,
-    ) -> Result<Value, String> {
-        let start = Instant::now();
-        let relative_path = normalize_sd_relative_path(requested_path)?;
-        let host_path = checked_sd_host_path(root, &relative_path)
-            .map_err(|err| format!("read_dir {relative_path}: {err}"))?;
-        let enumerate_start = Instant::now();
-        let mut entries = Vec::new();
-        for entry in
-            fs::read_dir(&host_path).map_err(|err| format!("read_dir {relative_path}: {err}"))?
-        {
-            let entry = entry.map_err(|err| format!("read_dir {relative_path}: {err}"))?;
-            if !show_hidden && is_hidden_name(&entry.file_name().to_string_lossy()) {
-                continue;
-            }
-            entries.push(sd_entry_json(&relative_path, entry)?);
-        }
-        let enumerate_us = enumerate_start.elapsed().as_micros() as u64;
-        let sort_start = Instant::now();
-        entries.sort_by(sd_entry_value_cmp);
-        let sort_us = sort_start.elapsed().as_micros() as u64;
-        let serialization_start = Instant::now();
-        let serialized_bytes = serde_json::to_vec(&entries)
-            .map_err(|err| format!("serialize directory entries: {err}"))?
-            .len() as u64;
-        let serialization_us = serialization_start.elapsed().as_micros() as u64;
-        let entry_count = entries.len() as u64;
-        Ok(json!({
-            "schema": "mister-magik-sd-list-dir-v1",
-            "path": relative_path,
-            "show_hidden": show_hidden,
-            "entries": entries,
-            "elapsed_ms": start.elapsed().as_millis() as u64,
-            "io_phases_us": {
-                "directory_enumeration": enumerate_us,
-                "sort": sort_us,
-                "serialization": serialization_us,
-            },
-            "io_counts": {
-                "entries": entry_count,
-                "serialized_bytes": serialized_bytes,
-            },
-        }))
-    }
-
     pub fn list_dir_fast_at_root(
         root: &Path,
         requested_path: &str,
@@ -616,32 +568,6 @@ mod sd_browse {
             ));
         }
         Ok(canonical_path)
-    }
-
-    pub fn sd_entry_json(parent_path: &str, entry: fs::DirEntry) -> Result<Value, String> {
-        let name = entry.file_name().to_string_lossy().to_string();
-        let entry_path = child_sd_path(parent_path, &name);
-        let file_type = entry
-            .file_type()
-            .map_err(|err| format!("file_type {entry_path}: {err}"))?;
-        let metadata = entry
-            .metadata()
-            .map_err(|err| format!("metadata {entry_path}: {err}"))?;
-        let kind = if file_type.is_dir() {
-            "directory"
-        } else {
-            "file"
-        };
-        let modified_unix_ms = modified_unix_ms(&metadata);
-        Ok(json!({
-            "name": name,
-            "path": entry_path,
-            "kind": kind,
-            "size": if file_type.is_dir() { 0 } else { metadata.len() },
-            "modified_unix_ms": modified_unix_ms,
-            "readonly": metadata.permissions().readonly(),
-            "hidden": is_hidden_name(&name),
-        }))
     }
 
     fn sd_entry_fast_json(parent_path: &str, entry: fs::DirEntry) -> Result<Value, String> {
@@ -2762,10 +2688,6 @@ mod linux {
                 Ok(result) => response(id, true, Some(result), None),
                 Err(err) => operation_failure_response(id, &err),
             },
-            "sd_list_dir" => match sd_list_dir(args, request_received_monotonic_us) {
-                Ok(result) => response(id, true, Some(result), None),
-                Err(err) => operation_failure_response(id, &err),
-            },
             "sd_list_dir_v2" => match sd_list_dir_v2(args, request_received_monotonic_us) {
                 Ok(result) => response(id, true, Some(result), None),
                 Err(err) => operation_failure_response(id, &err),
@@ -3207,30 +3129,6 @@ mod linux {
             | "exit-to-menu" => magik_acknowledged_action(action, &args),
             _ => Err(format!("unsupported magik action: {action}")),
         }
-    }
-
-    fn sd_list_dir(args: Value, request_received_monotonic_us: u64) -> Result<Value, String> {
-        let path = args
-            .get("path")
-            .and_then(Value::as_str)
-            .unwrap_or(crate::sd_browse::ROOT_PATH);
-        let show_hidden = args
-            .get("show_hidden")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let operation_started_monotonic_us = monotonic_us_now();
-        let mut result = crate::sd_browse::list_dir_at_root(
-            Path::new(crate::sd_browse::SD_ROOT),
-            path,
-            show_hidden,
-        )?;
-        attach_directory_io_evidence(
-            &mut result,
-            "directory_list_v1",
-            request_received_monotonic_us,
-            operation_started_monotonic_us,
-        );
-        Ok(result)
     }
 
     fn sd_list_dir_v2(args: Value, request_received_monotonic_us: u64) -> Result<Value, String> {
@@ -7579,112 +7477,6 @@ mod tests {
 
         assert!(error.contains("outside SD root"), "{error}");
         let _ = std::fs::remove_dir_all(base);
-    }
-
-    #[test]
-    fn sd_list_dir_sorts_and_classifies_entries() {
-        let root =
-            std::env::temp_dir().join(format!("mister-magik-agent-sd-list-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("folder10")).unwrap();
-        std::fs::create_dir_all(root.join("folder2")).unwrap();
-        std::fs::create_dir_all(root.join("MyVision")).unwrap();
-        std::fs::create_dir_all(root.join("mame")).unwrap();
-        std::fs::create_dir_all(root.join("MegaDrive")).unwrap();
-        std::fs::write(root.join("file10.rom"), b"0123456789").unwrap();
-        std::fs::write(root.join("file2.rom"), b"12").unwrap();
-        std::fs::write(root.join(".hidden"), b"h").unwrap();
-        std::fs::write(root.join("readonly.txt"), b"r").unwrap();
-        let mut readonly_permissions = std::fs::metadata(root.join("readonly.txt"))
-            .unwrap()
-            .permissions();
-        readonly_permissions.set_readonly(true);
-        std::fs::set_permissions(root.join("readonly.txt"), readonly_permissions).unwrap();
-
-        let visible = sd_browse::list_dir_at_root(&root, "/", false).unwrap();
-        let entries = visible["entries"].as_array().unwrap();
-
-        let names = entries
-            .iter()
-            .map(|entry| entry["name"].as_str().unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            names,
-            vec![
-                "folder2",
-                "folder10",
-                "mame",
-                "MegaDrive",
-                "MyVision",
-                "file2.rom",
-                "file10.rom",
-                "readonly.txt"
-            ]
-        );
-        assert_eq!(visible["show_hidden"], false);
-        assert_eq!(entries[0]["kind"], "directory");
-        let file2 = entries
-            .iter()
-            .find(|entry| entry["name"] == "file2.rom")
-            .unwrap();
-        let readonly = entries
-            .iter()
-            .find(|entry| entry["name"] == "readonly.txt")
-            .unwrap();
-        assert_eq!(file2["size"], 2);
-        assert_eq!(readonly["readonly"], true);
-
-        let hidden = sd_browse::list_dir_at_root(&root, "/", true).unwrap();
-        let hidden_entries = hidden["entries"].as_array().unwrap();
-        let hidden_names = hidden_entries
-            .iter()
-            .map(|entry| entry["name"].as_str().unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            hidden_names,
-            vec![
-                "folder2",
-                "folder10",
-                "mame",
-                "MegaDrive",
-                "MyVision",
-                ".hidden",
-                "file2.rom",
-                "file10.rom",
-                "readonly.txt"
-            ]
-        );
-        assert_eq!(hidden["show_hidden"], true);
-        let hidden_entry = hidden_entries
-            .iter()
-            .find(|entry| entry["name"] == ".hidden")
-            .unwrap();
-        assert_eq!(hidden_entry["hidden"], true);
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn sd_list_dir_returns_expected_json_shape() {
-        let root =
-            std::env::temp_dir().join(format!("mister-magik-agent-sd-json-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("games")).unwrap();
-        std::fs::write(root.join("MiSTer.ini"), b"ini").unwrap();
-
-        let result = sd_browse::list_dir_at_root(&root, "/", false).unwrap();
-        assert_eq!(result["schema"], "mister-magik-sd-list-dir-v1");
-        assert_eq!(result["path"], "/");
-        assert_eq!(result["show_hidden"], false);
-        assert_eq!(result["entries"][0]["name"], "games");
-        assert_eq!(result["entries"][0]["kind"], "directory");
-        assert_eq!(result["entries"][1]["name"], "MiSTer.ini");
-        assert_eq!(result["entries"][1]["kind"], "file");
-
-        let err = sd_browse::list_dir_at_root(&root, "/missing", false).unwrap_err();
-        assert!(err.contains("read_dir /missing"));
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

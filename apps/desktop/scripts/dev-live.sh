@@ -16,4 +16,4 @@ if [ "${MISTER_DESKTOP_MCP:-0}" = 1 ]; then
   features="slint/mcp,live-ui,skia-renderer"
 fi
 
-exec cargo run --release --manifest-path "$DESKTOP_DIR/Cargo.toml" --features "$features" "$@"
+exec "$DESKTOP_DIR/../../scripts/cargo" run --release --manifest-path "$DESKTOP_DIR/Cargo.toml" --features "$features" "$@"

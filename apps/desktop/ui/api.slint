@@ -36,7 +36,7 @@ import {
 import { LayoutTokens, PrimerColors } from "../vendor/github-app/packages/primer-slint/tokens.slint";
 
 export global DeviceState {
-    in-out property <string> host: "192.168.1.117";
+    in-out property <string> host: "Remembered MiSTer";
     in-out property <string> connection-state: "Looking for MiSTer";
     in-out property <string> agent-status: "Not checked yet";
     in-out property <string> token-source: "Not checked yet";
@@ -124,7 +124,7 @@ export global AnalyticsState {
     in-out property <image> framebuffer-image;
     in-out property <int> framebuffer-width: 0;
     in-out property <int> framebuffer-height: 0;
-    in-out property <string> status: "Ready for producer stream or agent capture.";
+    in-out property <string> status: "Ready for producer stream or authoritative capture.";
     in-out property <string> last-error: "";
     in-out property <bool> loading: false;
     in-out property <bool> has-image: false;
@@ -168,7 +168,6 @@ export global RealtimeState {
     in-out property <float> other-memory-pct: 0;
     in-out property <float> available-memory-pct: 0;
     in-out property <float> storage-used-pct: 0;
-    in-out property <float> frame-budget-pct: 0;
     in-out property <int> ui-thread-cpu: -1;
     in-out property <[RealtimeCpuCore]> cpu-cores: [];
     in-out property <[RealtimePoint]> cpu-history: [];
@@ -176,7 +175,6 @@ export global RealtimeState {
     in-out property <string> cpu1-path: "";
     in-out property <string> storage-read-path: "";
     in-out property <string> storage-write-path: "";
-    in-out property <[RealtimePoint]> frame-history: [];
     in-out property <[RealtimeFramePhase]> frame-phases: [];
     in-out property <image> frame-chart-image;
     in-out property <bool> frame-chart-has-data: false;

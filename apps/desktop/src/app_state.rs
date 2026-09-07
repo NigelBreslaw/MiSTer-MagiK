@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-pub const DEFAULT_HOST: &str = "192.168.1.117";
+pub const DEFAULT_HOST: &str = "";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DashboardSnapshot {
