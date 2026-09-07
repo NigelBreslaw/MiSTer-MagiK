@@ -62,6 +62,15 @@ The agent owns the selected app after disconnect and restores it after test sess
 No matching-version, clean-commit, platform qualification, or rollback gate is
 part of this development path.
 
+## Local build storage
+
+Build containers stay warm for two hours, with at most four idle containers
+across checkouts. Cleanup runs during builds; active builds and host caches
+are preserved. Use `scripts/magik2 storage report` to inspect usage and
+`scripts/magik2 storage clean --apply` to apply retention without a device
+connection. See [build storage](docs/build-storage.md) for previews, ownership,
+concurrency, and the separate legacy/BuildKit maintenance procedure.
+
 ## Screenshots directly into Codex
 
 The [framebuffer capture tool](docs/framebuffer-capture.md) returns a native PNG

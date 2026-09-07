@@ -152,82 +152,29 @@ def write_build_cache(cache_file: Path, fingerprint: str, artifact: Path) -> Non
         temporary.unlink(missing_ok=True)
 
 
-def prepare_container(repository: Path, runner: Callable = subprocess.run) -> str:
-    recipe = repository / "magik2/build/Containerfile"
-    recipe_id = hashlib.sha256(recipe.read_bytes()).hexdigest()[:12]
-    image = f"magik2-build:{recipe_id}"
-    name = (
-        "magik2-"
-        + hashlib.sha256(str(repository.resolve()).encode()).hexdigest()[:12]
-        + "-"
-        + recipe_id
-    )
-    result = runner(
-        ["container", "list", "--all", "--format", "json"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    containers = json.loads(result.stdout)
-    existing = next((entry for entry in containers if entry["id"] == name), None)
-    if existing:
-        mounts = existing["configuration"]["mounts"]
-        if not any(
-            mount["destination"] == "/workspace"
-            and Path(mount["source"]).resolve() == repository.resolve()
-            for mount in mounts
-        ):
-            raise RuntimeError("build container belongs to another checkout")
-        if existing["status"]["state"] != "running":
-            runner(["container", "start", name], check=True)
-        return name
-    if runner(
-        ["container", "image", "inspect", image], check=False, capture_output=True
-    ).returncode:
-        runner(
-            [
-                "container",
-                "build",
-                "--tag",
-                image,
-                "--file",
-                str(recipe),
-                str(recipe.parent),
-            ],
-            check=True,
-        )
-    cache = Path(
-        os.environ.get(
-            "MISTER_MAGIK2_BUILD_CACHE", str(Path.home() / ".cache/mister-magik2/cargo")
-        )
-    )
-    mounts = ["--volume", f"{repository.resolve()}:/workspace"]
-    for component in ("registry", "git"):
-        path = cache / component
-        path.mkdir(parents=True, exist_ok=True)
-        mounts += ["--volume", f"{path}:/root/.cargo/{component}"]
-    runner(
-        [
-            "container",
-            "run",
-            "--detach",
-            "--name",
-            name,
-            "--cpus",
-            "4",
-            "--memory",
-            "4g",
-            *mounts,
-            image,
-            "sleep",
-            "infinity",
-        ],
-        check=True,
-    )
-    return name
-
-
 def ensure_arm_package(
+    package: Path,
+    cache_file: Path,
+    *,
+    runner: Callable = subprocess.run,
+    prepare: Callable | None = None,
+) -> BuildResult:
+    # Injectable preparation keeps pure build tests independent of Apple Container.
+    if prepare is not None:
+        return _ensure_arm_package(package, cache_file, runner=runner, prepare=prepare)
+    from .storage import Storage
+
+    storage = Storage(runner=runner)
+    with storage.build_session(package.resolve().parents[1]):
+        return _ensure_arm_package(
+            package,
+            cache_file,
+            runner=runner,
+            prepare=lambda repository, _: storage.prepare(repository),
+        )
+
+
+def _ensure_arm_package(
     package: Path,
     cache_file: Path,
     *,
@@ -276,7 +223,7 @@ def ensure_arm_package(
             fingerprint=fingerprint,
         )
     repository = package.resolve().parents[1]
-    name = (prepare or prepare_container)(repository, runner)
+    name = prepare(repository, runner)
     environment = []
     if app and app.name == "magik":
         from .ffmpeg import prepare_ffmpeg
