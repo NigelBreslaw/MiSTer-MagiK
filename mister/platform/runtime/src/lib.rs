@@ -27,6 +27,8 @@ pub mod lab_input;
 pub mod latch_readiness;
 #[cfg(any(feature = "app-runtime", feature = "framebuffer-lab"))]
 pub mod main_command;
+#[cfg(feature = "framebuffer-lab")]
+pub mod main_input;
 #[cfg(feature = "app-runtime")]
 pub mod runtime_state;
 #[cfg(feature = "app-runtime")]

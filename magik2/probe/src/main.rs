@@ -5,9 +5,13 @@
 
 use mister_magik_framebuffer_scenes::Rgb565Pixel as ScenePixel;
 use mister_magik_framebuffer_scenes::launcher::{LauncherCard, LauncherData, LauncherScene};
+use mister_magik_framebuffer_scenes::launcher_navigation::{
+    BrowseDirection, BrowsePhase, LauncherBrowser,
+};
 use mister_magik_mister_runtime::display_plan::query_main_display_plan;
 use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
 use mister_magik_mister_runtime::framebuffer::rgb565::Rgb565;
+use mister_magik_mister_runtime::main_input::{MainInputDirection, MainInputPhase, MainProxyInput};
 use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel, SoftwareRenderer};
 use slint::platform::{EventLoopProxy, Platform, WindowAdapter};
 use slint::{EventLoopError, PhysicalSize, Window};
@@ -235,6 +239,14 @@ fn main() -> Result<(), String> {
             colour: 0xb9a6,
         },
     ];
+    let launcher_browser = Rc::new(RefCell::new(LauncherBrowser::new(launcher_cards.len(), 0)));
+    launcher_browser.borrow_mut().neutral();
+    let launcher_input = Rc::new(RefCell::new(MainProxyInput::open().ok()));
+    probe.set_launcher_input_source(if launcher_input.borrow().is_some() {
+        "main-proxy".into()
+    } else {
+        "main-proxy-unavailable".into()
+    });
     probe.set_launcher_mode(true);
     probe.set_launcher_ready(false);
     probe.set_launcher_selection("ARCADE".into());
@@ -251,6 +263,43 @@ fn main() -> Result<(), String> {
             probe.set_launcher_ready(false);
             probe.set_motion_running(false);
         }
+    });
+    let launcher_epoch = Rc::new(Instant::now());
+    let weak = probe.as_weak();
+    let browser = launcher_browser.clone();
+    let dirty = launcher_dirty.clone();
+    let epoch = launcher_epoch.clone();
+    probe.on_launcher_left_down(move || {
+        browser
+            .borrow_mut()
+            .press(BrowseDirection::Left, epoch.elapsed().as_millis() as u64);
+        dirty.set(true);
+        if let Some(probe) = weak.upgrade() {
+            probe.set_launcher_motion_state("sliding".into());
+        }
+    });
+    let browser = launcher_browser.clone();
+    probe.on_launcher_left_up(move || browser.borrow_mut().release(BrowseDirection::Left));
+    let weak = probe.as_weak();
+    let browser = launcher_browser.clone();
+    let dirty = launcher_dirty.clone();
+    let epoch = launcher_epoch.clone();
+    probe.on_launcher_right_down(move || {
+        browser
+            .borrow_mut()
+            .press(BrowseDirection::Right, epoch.elapsed().as_millis() as u64);
+        dirty.set(true);
+        if let Some(probe) = weak.upgrade() {
+            probe.set_launcher_motion_state("sliding".into());
+        }
+    });
+    let browser = launcher_browser.clone();
+    probe.on_launcher_right_up(move || browser.borrow_mut().release(BrowseDirection::Right));
+    let browser = launcher_browser.clone();
+    let dirty = launcher_dirty.clone();
+    probe.on_launcher_input_reset(move || {
+        browser.borrow_mut().reset();
+        dirty.set(true);
     });
     let mode = launcher_mode.clone();
     let dirty = launcher_dirty.clone();
@@ -306,7 +355,61 @@ fn main() -> Result<(), String> {
     });
 
     let mut cached = vec![Rgb565Pixel(0); width * height];
+    let mut launcher_input = launcher_input.borrow_mut().take();
+    let mut input_events = Vec::with_capacity(8);
+    let mut last_input_open_ms = 0_u64;
     loop {
+        let now_ms = launcher_epoch.elapsed().as_millis() as u64;
+        if let Some(input) = launcher_input.as_mut() {
+            if input.poll_into(&mut input_events).is_err() {
+                launcher_browser.borrow_mut().reset();
+                launcher_dirty.set(true);
+                launcher_input = None;
+                probe.set_launcher_input_source("main-proxy-unavailable".into());
+            }
+            for event in input_events.drain(..) {
+                let mut browser = launcher_browser.borrow_mut();
+                match (event.direction, event.phase) {
+                    (MainInputDirection::Left, MainInputPhase::Pressed) => {
+                        browser.press(BrowseDirection::Left, now_ms)
+                    }
+                    (MainInputDirection::Left, MainInputPhase::Released) => {
+                        browser.release(BrowseDirection::Left)
+                    }
+                    (MainInputDirection::Right, MainInputPhase::Pressed) => {
+                        browser.press(BrowseDirection::Right, now_ms)
+                    }
+                    (MainInputDirection::Right, MainInputPhase::Released) => {
+                        browser.release(BrowseDirection::Right)
+                    }
+                }
+                launcher_dirty.set(true);
+            }
+        } else if now_ms.saturating_sub(last_input_open_ms) >= 1_000 {
+            last_input_open_ms = now_ms;
+            if let Ok(input) = MainProxyInput::open() {
+                launcher_input = Some(input);
+                probe.set_launcher_input_source("main-proxy".into());
+            }
+        }
+        let launcher_frame = launcher_browser.borrow_mut().frame(now_ms);
+        if launcher_frame.phase != BrowsePhase::Settled {
+            launcher_dirty.set(true);
+        }
+        probe.set_launcher_motion_state(
+            match launcher_frame.phase {
+                BrowsePhase::Settled => "settled",
+                BrowsePhase::Sliding => "sliding",
+                BrowsePhase::Held => "held",
+            }
+            .into(),
+        );
+        if launcher_frame.selected < launcher_cards.len() {
+            probe.set_launcher_selection(launcher_cards[launcher_frame.selected].name.into());
+        }
+        if launcher_frame.target < launcher_cards.len() {
+            probe.set_launcher_target(launcher_cards[launcher_frame.target].name.into());
+        }
         slint::platform::update_timers_and_animations();
         if session.borrow_mut().tick(width, height)? {
             motion_timer.stop();
@@ -318,22 +421,29 @@ fn main() -> Result<(), String> {
         let dirty_for_frame = launcher_dirty.clone();
         let probe_for_frame = probe.as_weak();
         let launcher_cached_for_frame = launcher_cached.clone();
+        let launcher_frame_for_frame = launcher_frame;
         let rendered = window.draw_if_needed(|renderer, redraw_requested| {
             if mode_for_frame.get() {
                 if !dirty_for_frame.replace(false) {
                     return;
                 }
+                *launcher_cached_for_frame.borrow_mut() = None;
                 let render_start = Instant::now();
                 if launcher_cached_for_frame.borrow().is_none() {
-                    *launcher_cached_for_frame.borrow_mut() =
-                        Some(launcher_scene.render(LauncherData {
-                            cards: &launcher_cards,
-                            selected: 0,
-                            library_games: 6842,
-                            collections: 18,
-                            favourites: 126,
-                            clock: "21:37",
-                        }));
+                    *launcher_cached_for_frame.borrow_mut() = Some(
+                        launcher_scene.render_browse(
+                            LauncherData {
+                                cards: &launcher_cards,
+                                selected: launcher_frame_for_frame.selected,
+                                library_games: 6842,
+                                collections: 18,
+                                favourites: 126,
+                                clock: "21:37",
+                            },
+                            (launcher_frame_for_frame.phase != BrowsePhase::Settled)
+                                .then_some(launcher_frame_for_frame),
+                        ),
+                    );
                 }
                 let packed = launcher_cached_for_frame.borrow();
                 let packed = packed

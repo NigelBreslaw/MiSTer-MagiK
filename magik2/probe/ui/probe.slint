@@ -23,6 +23,9 @@ export component Probe inherits Window {
     in-out property <bool> launcher-ready: false;
     in-out property <string> launcher-selection: "ARCADE";
     in-out property <bool> launcher-fixtures: true;
+    in-out property <string> launcher-target: "ARCADE";
+    in-out property <string> launcher-motion-state: "settled";
+    in-out property <string> launcher-input-source: "main-proxy-unavailable";
     in property <string> build-label: "Mini-MagiK";
     callback increment();
     callback reset();
@@ -30,6 +33,11 @@ export component Probe inherits Window {
     callback start-motion();
     callback show-probe();
     callback show-launcher();
+    callback launcher-left-down();
+    callback launcher-left-up();
+    callback launcher-right-down();
+    callback launcher-right-up();
+    callback launcher-input-reset();
 
     Rectangle {
         x: 16px; y: 16px; width: parent.width - 32px; height: 48px;
@@ -61,6 +69,21 @@ export component Probe inherits Window {
         x: 0px; y: 0px; width: 1px; height: 1px; opacity: 0;
         accessible-role: text; accessible-label: "launcher-fixtures";
         accessible-value: root.launcher-fixtures ? "fixture-data" : "catalog-data";
+    }
+    launcher-target-state := Text {
+        x: 0px; y: 0px; width: 1px; height: 1px; opacity: 0;
+        accessible-role: text; accessible-label: "launcher-target";
+        accessible-value: root.launcher-target;
+    }
+    launcher-motion-state-state := Text {
+        x: 0px; y: 0px; width: 1px; height: 1px; opacity: 0;
+        accessible-role: text; accessible-label: "launcher-motion-state";
+        accessible-value: root.launcher-motion-state;
+    }
+    launcher-input-source-state := Text {
+        x: 0px; y: 0px; width: 1px; height: 1px; opacity: 0;
+        accessible-role: text; accessible-label: "launcher-input-source";
+        accessible-value: root.launcher-input-source;
     }
 
     Rectangle {
