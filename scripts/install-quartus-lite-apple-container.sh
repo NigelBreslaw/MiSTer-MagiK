@@ -19,7 +19,7 @@ CYCLONEV_URL="${QUARTUS_17_0_CYCLONEV_QDZ_URL:-https://downloads.intel.com/akdlm
 usage() {
   cat <<'EOF'
 Usage:
-  QUARTUS_ACCEPT_EULA=1 scripts/agent fpga setup
+  QUARTUS_ACCEPT_EULA=1 scripts/magik-platform fpga setup
 
 Installs the pinned Quartus Prime Lite 17.0 Build 595 runtime for the local
 Apple Silicon FPGA signoff workflow. Apple Container Rosetta runs Quartus;

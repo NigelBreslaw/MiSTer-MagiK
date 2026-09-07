@@ -171,7 +171,7 @@ if the entry is missing, the preview worker records the failed lookup and the UI
 shows the blank preview state. Preview pack changes are not catalog stamp inputs
 and do not trigger database rebuilds.
 
-For device acceptance, `scripts/agent device catalog inspect` reports `preview_keys` and
+For device acceptance, `scripts/magik device catalog inspect` reports `preview_keys` and
 `available_previews` on every `catalog_v3_system_tsv` row. Atari Lynx must have
 nonzero values for both after rebuilding with current MAME metadata and the
 installed screenshot-pack index.
@@ -204,7 +204,7 @@ The read-only device audit runs the same reconciliation without writing the
 catalog or downloading media:
 
 ```bash
-scripts/agent device catalog screenshots --system nes --out work/nes-screenshots.tsv
+scripts/magik device catalog screenshots --system nes
 ```
 
 It prints a `catalog_screenshot_summary_tsv` record separately from the TSV,
@@ -224,8 +224,8 @@ does not build or copy screenshot packs or MAME/HBMAME metadata databases; treat
 those as fixed release artifacts produced by the host-side catalog/media tools.
 
 Screenshot-pack updates from Cloudflare R2 are handled by the MagiK runtime,
-`scripts/agent device media check`, `scripts/agent device media download --attended`, and the component-selected
-`scripts/agent benchmark` media scenario. Runtime v1 uses raw manifest
+`scripts/magik device media check --system ID`, and
+`scripts/magik device media download --system ID`. Runtime v1 uses raw manifest
 `compression: "none"` with `Accept-Encoding: identity`. The launcher runtime
 queues downloads only for systems discovered by the active catalog scan and
 runs one active pack download at a time; the active pack may fetch its small
@@ -235,6 +235,5 @@ negotiated responses and recorded header/cache evidence for the canonical
 improves after including download, decompression, saving,
 verification, and cache behavior.
 
-Changes to the save/publish path use `scripts/agent benchmark`; structured
-events report copy, file sync, rename, parent sync, total time, and progress
+Save/publish structured events report copy, file sync, rename, parent sync, total time, and progress
 event count for the supported progress-capable save path.

@@ -1,11 +1,5 @@
 # FPGA development playbook
 
-> Command migration: legacy delivery, catalog/device-control, compile-time and
-> combined release-gate examples below are historical. Use the current commands
-> in `docs/host-orchestration.md` and `magik2/docs/native-operations.md`.
-> Physical input/CRT procedures and historical measurement evidence remain valid;
-> retired automatic matrices and certificates are not delivery prerequisites.
-
 Use this playbook only for changes to the FPGA proof model, cache identity,
 timing constraints, or Quartus interpretation. Release qualification remains
 governed by `fpga-latch-release.md`.
@@ -20,8 +14,8 @@ untracked binary or assemble a different proof command and call it equivalent.
 The only synthesis entrypoints are:
 
 ```text
-QUARTUS_ACCEPT_EULA=1 scripts/agent fpga setup
-scripts/agent fpga signoff
+QUARTUS_ACCEPT_EULA=1 scripts/magik-platform fpga setup
+scripts/magik-platform fpga signoff
 ```
 
 The default reusable root is the primary checkout's

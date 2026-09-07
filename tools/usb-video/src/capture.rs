@@ -707,7 +707,7 @@ mod tests {
     }
 
     fn temp_root(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("agent-cli-capture-{label}-{}", std::process::id()))
+        std::env::temp_dir().join(format!("usb-video-capture-{label}-{}", std::process::id()))
     }
 
     #[test]

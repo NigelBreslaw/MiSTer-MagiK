@@ -1,11 +1,5 @@
 # External Main_MiSTer Fork
 
-> Command migration: legacy delivery, catalog/device-control, compile-time and
-> combined release-gate examples below are historical. Use the current commands
-> in `docs/host-orchestration.md` and `magik2/docs/native-operations.md`.
-> Physical input/CRT procedures and historical measurement evidence remain valid;
-> retired automatic matrices and certificates are not delivery prerequisites.
-
 MiSTer MagiK now keeps its Main_MiSTer fork outside this app repo. The normal
 checkout layout is:
 
@@ -15,7 +9,7 @@ slint/
   Main_MiSTer/         # real GitHub fork of MiSTer-devel/Main_MiSTer
 ```
 
-`scripts/agent deliver platform` installs one coherent development platform. Main, the
+`scripts/magik-platform platform` installs one coherent development platform. Main, the
 scanout kernel module, and the FPGA latch come from the same latest qualified
 GitHub platform release; the tag-addressed verified archive is reused while
 that release remains latest. The platform manifest binds those components to
@@ -219,14 +213,14 @@ protocol details and device smoke results current in the fork's
 Deploy from this app repo:
 
 ```bash
-scripts/agent deliver platform
+scripts/magik-platform platform
 ```
 
 For committed Main-only development experiments, use the permanent positional
 workflow:
 
 ```bash
-scripts/agent deliver local-main
+scripts/magik-platform local-main
 ```
 
 The former attended NeoGeo SDRAM/core-return matrix was retired in milestone 9.
@@ -251,7 +245,7 @@ An installed Main that advertises supervised local reload is replaced without
 rebooting Linux. The initial commit that introduces that capability necessarily
 uses one bounded Linux reboot. A rollback uses supervised replacement where
 possible and at most one bounded recovery reboot when the failed Main can no
-longer reload itself. Ordinary `scripts/agent deliver platform` remains the canonical
+longer reload itself. Ordinary `scripts/magik-platform platform` remains the canonical
 way to restore the latest published platform.
 
 Development delivery first compares the installed manifest with the exact clean

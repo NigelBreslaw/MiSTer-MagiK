@@ -8,7 +8,7 @@ static GLOBAL_ALLOCATOR: mister_magik_fb::allocation_metrics::TrackingAllocator 
     mister_magik_fb::allocation_metrics::TrackingAllocator;
 
 fn main() {
-    #[cfg(feature = "magik2")]
+    #[cfg(feature = "tooling")]
     if mister_magik_fb::catalog_equivalence::run_requested_child() {
         return;
     }

@@ -4,13 +4,13 @@ For local macOS UI design and deterministic RGB565 captures, see
 [UI_PREVIEW.md](UI_PREVIEW.md).
 
 Run focused local Rust checks through `scripts/cargo`. For everyday application
-builds, deployment, testing and profiling, use the shared [2.0 workflow](../../magik2/README.md):
+builds, deployment, testing and profiling, use the shared [development workflow](../../magik/README.md):
 
 ```sh
-scripts/magik2 deploy
-scripts/magik2 check
-scripts/magik2 watch
-scripts/magik2 check idle --profile
+scripts/magik deploy
+scripts/magik check
+scripts/magik watch
+scripts/magik check idle --profile
 ```
 
 These commands target the development copy. No clean-commit or platform
@@ -19,45 +19,20 @@ platform/release builds, not prerequisites for application development.
 
 ## Platform/release builds
 
-The typed build state machine is:
+Use `scripts/magik-ci build runtime-device` for the profile-enabled ARM runtime.
+`scripts/magik-platform platform --help` and `local-main --help` describe explicit
+artifact publication and Main delivery. Normal application iteration uses
+`scripts/magik deploy`; a clean release receipt is not a development prerequisite.
 
-```text
-Infer → Preflight → PrepareContainer → Compile → Verify → Receipt → Complete
-```
-
-`BuildSpec` infers profile, UI scope, production features, toolchain, artifact,
-and cache identity from changed components and delivery intent. Apple Silicon
-uses Apple `container`; Linux CI may use the explicitly typed cross adapter.
-There is no automatic backend fallback.
-
-Every artifact receipt records the exact clean source SHA, lock/toolchain/cache
-identity, target, profile, features, and output digest. Runtime and platform
-delivery reject mismatched or dirty receipts.
-
-Use:
-
-```text
-$magik-rust-lsp
-git add -- PATH...
-git commit -m "Describe the change"
-git push
-scripts/agent deliver platform
-```
-
-Validation ownership is defined in root `AGENTS.md`; `scripts/agent plan`
-previews the selected fast Python checks and CI boundary.
-`deliver platform` owns build scope, artifact qualification, transport, activation,
-rollback, and smoke verification. Ordinary attended launcher control uses
-`scripts/agent device launcher restart --attended`. The fixed scene runners
-were retired in milestone 9.
+`scripts/magik-ci plan` previews local checks. CI owns broad Rust/ARM validation.
 
 ## Local FPGA signoff
 
 Apple Silicon can run the complete matched FPGA signoff locally:
 
 ```text
-QUARTUS_ACCEPT_EULA=1 scripts/agent fpga setup
-scripts/agent fpga signoff
+QUARTUS_ACCEPT_EULA=1 scripts/magik-platform fpga setup
+scripts/magik-platform fpga signoff
 ```
 
 Setup installs pinned Quartus Lite 17.0 Build 595 into the ignored local cache.
@@ -105,8 +80,5 @@ The canonical `release-device` runtime uses the measured thin-LTO profile
 support, and retains function symbols. Binary size is not a release gate;
 device correctness, memory headroom, and frame cadence remain required.
 Benchmarks activate profiling only on the already-installed runtime.
-`scripts/agent build runtime-analysis` produces
-the `release-device-profile` offline artifact and is not callable from the
-benchmark workflow or deployable by it. Runtime delivery always
-publishes `mister-magik-fb` together with its regenerated
-`platform-v3.manifest`; no binary-only build or deployment command is exposed.
+Offline profile analysis is available in Desktop. Platform publication includes its
+verified manifest; ordinary development application delivery uses the native service.

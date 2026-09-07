@@ -16,7 +16,7 @@ updates:
         patterns:
           - "*"
   - package-ecosystem: "pip"
-    directory: "/magik2/host"
+    directory: "/magik/host"
     schedule:
       interval: "weekly"
       day: "friday"

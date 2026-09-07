@@ -31,12 +31,6 @@ HOTSPOTS = (
         ("apps/mister/src/ui_runner/",),
     ),
     Hotspot(
-        "host-workflows",
-        "agent-cli/src/host/mod.rs",
-        "P2-A typed host workflow modules",
-        ("agent-cli/src/host/",),
-    ),
-    Hotspot(
         "desktop-app",
         "apps/desktop/src/main.rs",
         "P2 next-tier desktop ownership seams",
@@ -53,12 +47,6 @@ HOTSPOTS = (
         "apps/mister/src/launcher.rs",
         "navigation policies and platform effects",
         ("apps/mister/src/launcher.rs", "apps/mister/src/launcher/"),
-    ),
-    Hotspot(
-        "device-agent",
-        "mister/tools/agent/src/main.rs",
-        "portable protocol, authenticated transport, Linux services",
-        ("mister/tools/agent/src/",),
     ),
 )
 

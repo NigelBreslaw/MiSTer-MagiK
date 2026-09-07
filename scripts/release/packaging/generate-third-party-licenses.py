@@ -13,7 +13,7 @@ MANIFEST = ROOT / "apps/mister/Cargo.toml"
 OUTPUT = ROOT / "apps/mister/licenses/RUST-LIBRARIES.txt"
 FFMPEG_OUTPUT = ROOT / "apps/mister/licenses/FFMPEG.txt"
 FONT_OUTPUT = ROOT / "apps/mister/licenses/PRESS-START-2P.txt"
-FFMPEG_BUILD_SOURCE = ROOT / "magik2/host/magik2/ffmpeg.py"
+FFMPEG_BUILD_SOURCE = ROOT / "magik/host/magik/ffmpeg.py"
 FONT_LICENSE = ROOT / "apps/mister/ui/fonts/PressStart2P-Regular.ttf.license"
 
 

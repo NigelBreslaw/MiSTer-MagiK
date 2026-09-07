@@ -3,8 +3,8 @@
 Preserve the last qualified platform. Prove structural, simulation, and formal
 properties before synthesis; only fixed-seed Quartus signoff proves area/timing.
 
-Local synthesis uses `QUARTUS_ACCEPT_EULA=1 scripts/agent fpga setup` and
-`scripts/agent fpga signoff`, never underlying tools. Signoff uses committed
+Local setup and offline signoff use `QUARTUS_ACCEPT_EULA=1 scripts/magik-platform fpga setup` and
+`scripts/magik-platform fpga signoff`, never underlying tools. Signoff uses committed
 local `main`; freeze the candidate and preserve source, RBF, metadata, and
 report hashes together. Preserve completed cache evidence before replacement.
 Never seed-sweep, waive timing, add false paths, alter fitter settings, or change

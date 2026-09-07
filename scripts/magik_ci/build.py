@@ -14,7 +14,6 @@ TARGET = "armv7-unknown-linux-gnueabihf"
 COMMANDS = {
     "runtime-ci": ("apps/mister/Cargo.toml", "ci-fast", "ui"),
     "runtime-device": ("apps/mister/Cargo.toml", "release-device", "ui,profile"),
-    "device-agent-ci": ("mister/tools/agent/Cargo.toml", "ci-fast", ""),
     "manager-device": ("mister/tools/manager/Cargo.toml", "release", ""),
 }
 CHECKS = {
@@ -23,7 +22,6 @@ CHECKS = {
 ARTIFACTS = {
     "runtime-ci": "apps/mister/target/armv7-unknown-linux-gnueabihf/ci-fast/mister-magik-fb",
     "runtime-device": "apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb",
-    "device-agent-ci": "mister/tools/agent/target/armv7-unknown-linux-gnueabihf/ci-fast/mister-magik-agent",
     "manager-device": "mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager",
 }
 

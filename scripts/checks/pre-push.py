@@ -190,7 +190,10 @@ def main() -> int:
         if not paths:
             print("pre-push: no branch updates require verification")
             return 0
-        check_classification(paths)
+        retained = set(
+            git_paths(repository, ["ls-tree", "--name-only", "-r", "-z", "HEAD"])
+        )
+        check_classification([path for path in paths if path in retained])
         print(f"pre-push: fast assurance for {len(paths)} changed paths")
         print(CI_BOUNDARY)
         run_checks(repository, paths)

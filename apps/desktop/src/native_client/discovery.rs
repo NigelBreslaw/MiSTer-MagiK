@@ -143,12 +143,12 @@ impl Client {
         let mut attempted = PREPARATION.lock().unwrap();
         if *attempted {
             return Err(AgentError::Command(
-                "Native setup failed; run scripts/magik2 desktop-prepare --json and retry".into(),
+                "Native setup failed; run scripts/magik desktop-prepare --json and retry".into(),
             ));
         }
         *attempted = true;
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let mut command = Command::new(root.join("scripts/magik2"));
+        let mut command = Command::new(root.join("scripts/magik"));
         command
             .args(["desktop-prepare", "--json"])
             .current_dir(&root)
@@ -258,7 +258,7 @@ impl Client {
         found.dedup_by(|a, b| a.1 == b.1);
         if found.len() > 1 {
             return Err(AgentError::Command(format!(
-                "Multiple MiSTers found: {}. Select with scripts/magik2 device select ADDRESS",
+                "Multiple MiSTers found: {}. Select with scripts/magik device select ADDRESS",
                 found
                     .iter()
                     .map(|v| v.0.as_str())
@@ -464,7 +464,7 @@ mod tests {
     #[test]
     fn identity_and_token_name_match_python() {
         let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../magik2/agent/tests/fixtures/desktop-wire.json"
+            "../../../../magik/agent/tests/fixtures/desktop-wire.json"
         ))
         .unwrap();
         assert_eq!(identity("AA:BB:CC:DD:EE:FF").unwrap(), fixture["identity"]);

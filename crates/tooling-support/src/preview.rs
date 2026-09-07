@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn stalled_unix_receiver_does_not_block_render_publication() {
         let root =
-            std::env::temp_dir().join(format!("magik2-preview-socket-{}", std::process::id()));
+            std::env::temp_dir().join(format!("magik-preview-socket-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("viewer-lease"), u128::MAX.to_string()).unwrap();
         use std::io::Write;
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn held_sender_slot_does_not_block_the_producer() {
-        let root = std::env::temp_dir().join(format!("magik2-preview-slot-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("magik-preview-slot-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("viewer-lease"), u128::MAX.to_string()).unwrap();
         let pending = Arc::new(Mutex::new(None));

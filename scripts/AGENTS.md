@@ -1,16 +1,8 @@
 # Host entrypoints
 
-Python `scripts/magik-ci` owns CI/release processing and host-only dependency
-maintenance, package-local cleaning and evidence export. Native device workflows
-belong to `scripts/magik2`; remaining legacy operations stay with `scripts/agent`.
-
-For the user-approved isolated 2.0 project, `scripts/magik2` is a thin
-entrypoint to Python orchestration in `magik2/host/magik2`. The root
-`AGENTS.md` 2.0 exception governs its native transport and internal SSH
-bootstrap/repair. The legacy-agent and typed-Rust requirements in this file
-apply to 1.0 tooling; do not route 2.0 through the legacy CLI.
+`scripts/magik` delegates to `magik/host/magik`; `scripts/magik-platform` reuses
+that runtime. `scripts/magik-ci` owns CI, releases and host-only maintenance.
 
 Preserve command shapes used by sandbox approvals. Bash uses `set -euo pipefail`
 and macOS-compatible syntax. Self-tests use temporary fixtures, never the MiSTer.
-Generated output belongs in ignored `build/`, `dist/`, `outputs/`, or temporary
-storage.
+Generated output belongs in ignored build/results directories or temporary storage.

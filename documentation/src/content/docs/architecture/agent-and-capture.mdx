@@ -1,29 +1,20 @@
 ---
-title: Agent and Capture
-description: TCP agent, diagnostics, framebuffer stream, and still-image capture.
+title: Native Service and Capture
+description: Direct native control, application frame streams and authoritative screenshots.
 sidebar:
   order: 6
 ---
 
-The MiSTer-side agent is a development backplane. It exposes token-protected JSON commands on TCP `7498`, diagnostics, deployment helpers, reboot helpers, telemetry, still captures, and the framebuffer stream proxy.
+The Rust native service accepts authenticated, bounded requests and binary payloads
+on TCP port `7500`. Desktop connects directly. Python host tooling provides device
+discovery, deployment, testing and exceptional bootstrap or capability updates.
+Compatible services remain installed across branches.
 
-```mermaid
-sequenceDiagram
-  participant Host
-  participant Agent as mister-magik-agent:7498
-  participant UI as mister-magik-fb
-  participant FB as /dev/fb0
-  Host->>Agent: JSON command + token
-  Agent-->>Host: JSON response
-  Host->>Agent: framebuffer-capture request
-  Agent->>FB: one-shot read while UI is running
-  Agent-->>Host: PNG + metadata
-  Host->>Agent: framebuffer_stream_v1 request
-  Agent->>UI: proxy producer stream on 127.0.0.1:7499
-  UI-->>Host: keyframes, deltas, heartbeats
-```
+Authoritative screenshots use `capture-framebuffer`: the service reads the latched
+scanout slot and returns RGB565 pixels with geometry and frame metadata. The
+`scripts/magik mcp` adapter converts those pixels to an in-memory PNG and returns
+base64 MCP image content directly to Codex. No raw `/dev/fb0` read is involved.
 
-Still captures use `mister --capture-buffer`. A human terminal receives
-a timestamped PNG on the Mac Desktop; a programmatic caller receives an
-MCP-style base64 PNG image object. The live stream is different: it proxies
-frames produced by the running UI and must not poll `/dev/fb0`.
+Desktop's live framebuffer stream relays application-produced frames, including
+keyframes and deltas. It is distinct from authoritative still capture. Analytics
+uses a separately owned, bounded subscription; disconnecting releases its lease.

@@ -200,7 +200,6 @@ def report(repository: Path, explicit: list[str] | None = None) -> PlanReport:
         if metadata.get("features") and relative not in {
             "apps/mister/Cargo.toml",
             "apps/desktop/Cargo.toml",
-            "agent-cli/Cargo.toml",
         }:
             unresolved.append(
                 f"{relative}: additional feature combinations need owner review or CI"

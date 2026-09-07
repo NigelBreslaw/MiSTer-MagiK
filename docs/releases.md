@@ -1,11 +1,5 @@
 # Releases
 
-> Command migration: legacy delivery, catalog/device-control, compile-time and
-> combined release-gate examples below are historical. Use the current commands
-> in `docs/host-orchestration.md` and `magik2/docs/native-operations.md`.
-> Physical input/CRT procedures and historical measurement evidence remain valid;
-> retired automatic matrices and certificates are not delivery prerequisites.
-
 The **Publish MiSTer MagiK** workflow is the only distribution publication path.
 Python `scripts/magik-ci` owns orchestration; the Rust manifest contract and
 manager own platform validation. FPGA/platform qualification remains separate.
@@ -85,39 +79,10 @@ Immutable hosting prevents server-side mixed releases. It does not make an
 interrupted SD-card update atomic. Users should let Downloader complete before
 rebooting or running the installer; incomplete packages fail verification.
 
-## Attended device/platform qualification
+## Device and platform delivery
 
-The pre-push hook and CI must pass for the exact release commit before delivery
-and explicitly requested attended qualification (`scripts/agent deliver platform`, then
-`scripts/agent release qualify`). Distribution publication does not implicitly
-authorize or schedule these physical-device operations.
-Development delivery builds the app from its clean local commit and never
-pushes automatically. Main, the scanout kernel module, and the latch RBF come
-from the latest qualified GitHub platform release, with its verified
-tag-addressed archive reused across deliveries.
-
-The platform workflow preserves completed stock and patched Quartus synthesis
-under a synthesis-only content identity before qualification begins. If a
-validator fails and its logic is subsequently fixed, the next run may restore
-those identical RBF outputs, but it always reruns the complete FPGA validation
-and creates fresh component provenance before assembly or publication.
-
-The attended qualification is fixed and flag-free. It checks runtime, catalog,
-input/handoff/return, display, recovery capability, and restoration. Rollback is
-the typed `scripts/agent device mode set stock --attended` operator command. Packaging output, credentials,
-caches, and private fixtures must not be staged.
-
-CRT qualification additionally records a
-`mister-magik-crt-qualification-v3` evidence document. It binds the exact app,
-Main, and Menu revisions; kernel, RBF, platform-contract, platform-manifest,
-protocol, and FPGA-component hashes; the local alpha device journey; bounded
-RGB565 publication trial; resolved standard mode; and external analyzer
-measurements for clock, totals, porches, sync widths, polarity, and rates. It
-also records launcher/OSD/input, native-core-timing handoff, game lifecycle,
-HDMI regression, cleanup, limitations, and rollback. Until that attended
-real-CRT document passes
-`scripts/checks/verify-crt-qualification-evidence.py`, CRT remains implemented
-but not hardware-qualified.
-
-Retained protocol-v2 RBF or CRT evidence is rollback-only and must be verified
-with the explicit `--historical-v2` option. It cannot qualify a new platform.
+Use `scripts/magik deploy` for development applications and
+`scripts/magik-platform` for explicit platform/Main transactions. Normal platform
+delivery checks artifact integrity, activation and bounded startup health.
+Physical qualification is requested separately; there is no aggregate certificate
+or mandatory stress matrix. Distribution publication does not authorize device work.

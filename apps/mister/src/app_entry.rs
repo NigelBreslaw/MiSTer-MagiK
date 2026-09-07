@@ -452,7 +452,7 @@ fn benchmark_capabilities() -> serde_json::Value {
         .as_object_mut()
         .expect("benchmark capabilities must be an object")
         .insert(
-            mister_magik_agent_protocol::SCREENSAVER_FRAME_EVIDENCE_CAPABILITY.to_owned(),
+            "screensaver-frame-evidence-v6".to_owned(),
             serde_json::Value::Bool(cfg!(feature = "profile")),
         );
     capabilities

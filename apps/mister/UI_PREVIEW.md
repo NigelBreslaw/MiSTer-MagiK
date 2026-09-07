@@ -2,9 +2,7 @@
 
 The macOS preview runs the compiled production Slint launcher and the shared
 Rust RGB565 composition code in a native Mac window. Its
-`apps/mister/scripts/dev-ui-mac.sh` launcher is the deliberate non-operational
-shell exception to the typed `scripts/agent` boundary: it cannot contact or
-mutate a MiSTer. The preview is intended for fast UI design, visual review, and
+`apps/mister/scripts/dev-ui-mac.sh` launcher is host-only: it cannot contact or mutate a MiSTer. The preview is intended for fast UI design, visual review, and
 deterministic capture—not MiSTer performance or scanout qualification.
 
 ## Start the preview

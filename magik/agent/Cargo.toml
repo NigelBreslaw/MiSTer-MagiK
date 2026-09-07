@@ -1,0 +1,30 @@
+[package]
+name = "mister-magik-service"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+description = "Native development service for the MiSTer MagiK probe"
+license = "GPL-3.0-or-later"
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = "deny"
+
+[dependencies]
+quick-xml = "0.42.0"
+mister-magik-platform-manifest-contract = { path = "../../mister/platform/contracts/manifest" }
+mister-magik-media-contract = { path = "../../crates/media-contract" }
+mister-magik-catalog = { path = "../../crates/catalog" }
+mister-magik-ini = { path = "../../crates/mister-ini" }
+rusqlite = { version = "0.40.0", default-features = false, features = ["bundled", "hooks"] }
+libc = "0.2"
+mister-magik-framebuffer-stream = { path = "../../crates/framebuffer-stream" }
+mister-magik-scanout-contract = { path = "../../mister/platform/contracts/scanout" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+mister-magik-mister-runtime = { path = "../../mister/platform/runtime", default-features = false }

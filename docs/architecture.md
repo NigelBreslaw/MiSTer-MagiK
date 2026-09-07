@@ -47,27 +47,11 @@ another production authority.
 
 ## Tooling Shape
 
-There is one supported host entrypoint and one device-side service:
-
-```mermaid
-flowchart LR
-    U["Human or automation"] --> S["scripts/agent"]
-    S --> C["agent-cli (single host executable)"]
-    C --> R["Repository workflows, CI, and evidence"]
-    C --> D["Typed device operations"]
-    D --> SSH["Bounded SSH operations"]
-    D --> A["mister-magik-agent protocol"]
-    A --> DA["mister-magik-agent (MiSTer-side service)"]
-    SSH --> M["MiSTer"]
-    DA --> M
-    M --> MAIN["MiSTer_MagiK Main fork"]
-    MAIN --> GUI["mister-magik-fb Rust/Slint GUI"]
-```
-
-`agent-cli` is an internal binary name; documentation and operators use
-`scripts/agent`. The MiSTer-side `mister-magik-agent` is deliberately separate:
-it provides authenticated, fixed protocol operations and is not a second host
-CLI or a GUI process.
+`scripts/magik` runs Python orchestration and connects to the Rust native service.
+Desktop connects directly to that same service. SSH is confined to bootstrap and
+repair; ordinary control and binary streams use authenticated native transport.
+`scripts/magik-platform` shares discovery and delivery; `scripts/magik-ci` owns
+host-only CI and release work. Main owns the application launch and FPGA handoff.
 
 ### Advisory architecture trends
 
@@ -84,9 +68,7 @@ line count without clearer ownership or dependency direction is not success.
 Stable owner IDs keep moved or temporarily absent hotspot paths visible rather
 than silently treating them as resolved.
 
-Remaining decomposition, typed runtime-configuration, and qualification work is
-recorded in `docs/agents/architecture-debt-ledger.md`. Validation ownership is
-defined in root `AGENTS.md`; the architecture report is advisory evidence.
+Validation ownership is defined in root `AGENTS.md`; the architecture report is advisory evidence.
 
 ### Enforced executable boundaries
 
@@ -990,7 +972,7 @@ Current rules:
   attended `purge-library-data --confirm`.
   Low-level probes are diagnostic/experiment builds, not release commands.
 - Build/update the catalog outside the UI hot path through the typed benchmark
-  or delivery workflows; humans may inspect it with `scripts/agent device catalog inspect`.
+  or delivery workflows; humans may inspect it with `scripts/magik device catalog inspect`.
 - Launcher boot seeds Home/system counts from the V3 registry and eagerly
   hydrates only Arcade. Other systems load lazily. If source state is stale,
   the launcher shows a `Library changed` dialog; `Rebuild` uses the same
