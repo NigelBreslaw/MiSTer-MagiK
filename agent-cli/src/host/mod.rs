@@ -34,7 +34,6 @@ mod latch_v5_qualification;
 mod media;
 mod platform_deploy;
 mod remote;
-mod transfer_check;
 
 use agent_client::{
     AGENT_PORT, AgentEndpoint, agent_request, agent_request_at, agent_request_with_liveness,
@@ -336,8 +335,7 @@ impl NativeDevice {
 
         let agent = matches!(
             command,
-            DeviceCommand::TransferCheck(_)
-                | DeviceCommand::Capture { .. }
+            DeviceCommand::Capture { .. }
                 | DeviceCommand::Reboot(_)
                 | DeviceCommand::Logs
                 | DeviceCommand::Events
@@ -376,7 +374,6 @@ impl NativeDevice {
                     Ok(())
                 }
                 DeviceCommand::ArmingStatus => arming_status(),
-                DeviceCommand::TransferCheck(args) => transfer_check::run(args, &prepared.config),
                 DeviceCommand::Mode { command } => match command {
                     ModeCommand::Status => mode_cli(&device_strings(["status"])),
                     ModeCommand::Set(args) => mode_cli(&device_strings([args.mode.as_str()])),
@@ -4253,46 +4250,9 @@ const DISPLAY_MATRIX_MODES: &[DisplayMatrixMode] = &[
 
 static DISPLAY_MATRIX_INTERRUPTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-static ATTENDED_OPERATION_INTERRUPTED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
 
 extern "C" fn display_matrix_interrupt_handler(_: libc::c_int) {
     DISPLAY_MATRIX_INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
-}
-
-extern "C" fn attended_operation_interrupt_handler(_: libc::c_int) {
-    ATTENDED_OPERATION_INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
-}
-
-pub(crate) fn attended_operation_interrupted() -> bool {
-    ATTENDED_OPERATION_INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst)
-}
-
-struct AttendedOperationSignalGuard([(libc::c_int, libc::sighandler_t); 3]);
-
-impl AttendedOperationSignalGuard {
-    fn install() -> Self {
-        ATTENDED_OPERATION_INTERRUPTED.store(false, std::sync::atomic::Ordering::SeqCst);
-        Self([libc::SIGHUP, libc::SIGINT, libc::SIGTERM].map(|signal| {
-            let previous = unsafe {
-                libc::signal(
-                    signal,
-                    attended_operation_interrupt_handler as *const () as libc::sighandler_t,
-                )
-            };
-            (signal, previous)
-        }))
-    }
-}
-
-impl Drop for AttendedOperationSignalGuard {
-    fn drop(&mut self) {
-        for (signal, previous) in self.0 {
-            unsafe {
-                libc::signal(signal, previous);
-            }
-        }
-    }
 }
 
 struct SignalHandlerGuard(libc::sighandler_t);

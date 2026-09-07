@@ -3,7 +3,7 @@
 
 use agent_cli::cli::{
     CaptureCommand, Cli, Command as CliCommand, DbCommand, DeliverTarget, FrameEvidenceCommand,
-    OutputFormat, ReleaseCommand, ReturnQualificationCommand, RunCommand,
+    OutputFormat, ReleaseCommand, ReturnQualificationCommand,
 };
 use agent_cli::error::{AgentError, AgentResult};
 use agent_cli::evidence::Evidence;
@@ -118,7 +118,6 @@ impl RepoContext {
 fn command_label(command: &CliCommand) -> &'static str {
     match command {
         CliCommand::Guidance { .. } => "guidance",
-        CliCommand::Run { .. } => "run",
         CliCommand::Db { .. } => "db",
         CliCommand::Diagnose => "diagnose",
         CliCommand::Device { .. } => "device",
@@ -321,14 +320,6 @@ fn dispatch(
             let report = evidence.report()?;
             if output == OutputFormat::Human {
                 println!("{}", serde_json::to_string_pretty(&report).unwrap());
-            }
-        }
-        CliCommand::Run {
-            command: RunCommand::Show { run_id },
-        } => {
-            let detail = evidence.run_detail(run_id)?;
-            if output == OutputFormat::Human {
-                println!("{}", serde_json::to_string_pretty(&detail).unwrap());
             }
         }
         CliCommand::Device { .. } => {

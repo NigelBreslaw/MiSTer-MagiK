@@ -9,7 +9,6 @@ use std::path::PathBuf;
 pub enum DeviceCommand {
     Status(StatusArgs),
     ArmingStatus,
-    TransferCheck(TransferCheckArgs),
     Mode {
         #[command(subcommand)]
         command: ModeCommand,
@@ -46,16 +45,6 @@ pub enum DeviceCommand {
         #[command(subcommand)]
         command: DeviceFpgaCommand,
     },
-}
-
-#[derive(Debug, Args)]
-pub struct TransferCheckArgs {
-    #[arg(long)]
-    pub(crate) artifact: PathBuf,
-    #[arg(long)]
-    pub(crate) fetch_installed: bool,
-    #[arg(long, required = true)]
-    attended: bool,
 }
 
 #[derive(Debug, Args)]
@@ -326,7 +315,7 @@ impl DeviceCommand {
             | Self::Diagnostics(_)
             | Self::Capture { .. } => false,
             Self::Mode { command } => matches!(command, ModeCommand::Set(_)),
-            Self::TransferCheck(_) | Self::Reboot(_) => true,
+            Self::Reboot(_) => true,
             Self::Display { command } => !matches!(command, DisplayCommand::RouteStatus),
             Self::Crt { .. } => true,
             Self::Launcher { command } => !matches!(command, LauncherCommand::Status),

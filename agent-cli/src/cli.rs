@@ -73,11 +73,6 @@ pub enum Command {
         json: bool,
     },
     #[command(hide = true)]
-    Run {
-        #[command(subcommand)]
-        command: RunCommand,
-    },
-    #[command(hide = true)]
     Db {
         #[command(subcommand)]
         command: DbCommand,
@@ -140,249 +135,6 @@ pub enum DeliverTarget {
     LocalMain,
     GameDatabases,
 }
-
-/* CI artifact commands are implemented by scripts/magik_ci. */
-/*
-    Create {
-        #[arg(long)]
-        main_dir: PathBuf,
-        #[arg(long)]
-        fpga_dir: PathBuf,
-        #[arg(long)]
-        scanout_dir: PathBuf,
-        #[arg(long)]
-        main_id: String,
-        #[arg(long)]
-        fpga_id: String,
-        #[arg(long)]
-        kernel_id: String,
-        #[arg(long)]
-        main_run_id: String,
-        #[arg(long)]
-        fpga_run_id: String,
-        #[arg(long)]
-        kernel_run_id: String,
-        #[arg(long)]
-        main_head_sha: String,
-        #[arg(long)]
-        fpga_head_sha: String,
-        #[arg(long)]
-        kernel_head_sha: String,
-        #[arg(long)]
-        main_source: String,
-        #[arg(long)]
-        fpga_source: String,
-        #[arg(long)]
-        kernel_source: String,
-        #[arg(long)]
-        release_version: u64,
-        #[arg(long)]
-        output: PathBuf,
-    },
-    Verify {
-        archive: PathBuf,
-        #[arg(long)]
-        manifest: Option<PathBuf>,
-        #[arg(long)]
-        release_version: Option<u64>,
-    },
-    ExtractComponent {
-        archive: PathBuf,
-        #[arg(long)]
-        manifest: PathBuf,
-        #[arg(long)]
-        component: String,
-        #[arg(long)]
-        component_id: String,
-        #[arg(long)]
-        output: PathBuf,
-    },
-    VerifyComponent {
-        #[arg(long)]
-        component: String,
-        #[arg(long)]
-        artifact: PathBuf,
-        #[arg(long)]
-        component_id: String,
-        #[arg(long)]
-        revision: Option<String>,
-    },
-    CompactComponent {
-        #[arg(long)]
-        component: String,
-        #[arg(long)]
-        artifact: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
-        #[arg(long)]
-        component_id: String,
-    },
-    WriteComponentCache {
-        #[arg(long)]
-        component: String,
-        #[arg(long)]
-        artifact: PathBuf,
-        #[arg(long)]
-        component_id: String,
-        #[arg(long)]
-        run_id: String,
-        #[arg(long)]
-        head_sha: String,
-    },
-    PlanUpdate {
-        #[arg(long)]
-        manifest: Option<PathBuf>,
-        #[arg(long)]
-        current_version: u64,
-        #[arg(long)]
-        main_id: String,
-        #[arg(long)]
-        fpga_id: String,
-        #[arg(long)]
-        kernel_id: String,
-        #[arg(long)]
-        github_output: Option<PathBuf>,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize, Subcommand)]
-pub enum GameDatabaseCommand {
-    BuildUpdaterArcade {
-        #[arg(long)]
-        input_manifest: PathBuf,
-        #[arg(long)]
-        out: PathBuf,
-    },
-    BuildMame {
-        #[arg(long)]
-        out: PathBuf,
-        #[arg(long, conflicts_with_all = ["mame", "machine_sqlite"])]
-        listxml: Option<PathBuf>,
-        #[arg(long, conflicts_with_all = ["listxml", "machine_sqlite"])]
-        mame: Option<PathBuf>,
-        #[arg(long, conflicts_with_all = ["listxml", "mame"])]
-        machine_sqlite: Option<PathBuf>,
-        #[arg(long)]
-        software_dir: Option<PathBuf>,
-    },
-    ImportArcade {
-        #[arg(long)]
-        sqlite: PathBuf,
-        #[arg(long)]
-        csv: PathBuf,
-        #[arg(long)]
-        source_sha: String,
-    },
-    Create {
-        #[arg(long)]
-        mame_sqlite: PathBuf,
-        #[arg(long)]
-        hbmame_sqlite: PathBuf,
-        #[arg(long)]
-        release_version: u64,
-        #[arg(long)]
-        mame_tag: String,
-        #[arg(long)]
-        mame_sha: String,
-        #[arg(long)]
-        mame_listxml_asset: String,
-        #[arg(long)]
-        mame_listxml_sha256: String,
-        #[arg(long)]
-        hbmame_tag: String,
-        #[arg(long)]
-        hbmame_sha: String,
-        #[arg(long)]
-        mame_builder_sha: String,
-        #[arg(long)]
-        hbmame_builder_sha: String,
-        #[arg(long)]
-        arcade_database_csv: PathBuf,
-        #[arg(long)]
-        arcade_database_license: PathBuf,
-        #[arg(long)]
-        arcade_database_sha: String,
-        #[arg(long)]
-        arcade_database_builder_sha: String,
-        #[arg(long)]
-        arcade_updater_builder_sha: String,
-        #[arg(long)]
-        arcade_updater_index: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
-    },
-    Verify {
-        archive: PathBuf,
-        #[arg(long)]
-        manifest: Option<PathBuf>,
-        #[arg(long)]
-        checksums: Option<PathBuf>,
-    },
-    ExtractRelease {
-        release: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
-    },
-    PlanUpdate {
-        #[arg(long)]
-        manifest: Option<PathBuf>,
-        #[arg(long)]
-        mame_tag: String,
-        #[arg(long)]
-        mame_sha: String,
-        #[arg(long)]
-        hbmame_tag: String,
-        #[arg(long)]
-        hbmame_sha: String,
-        #[arg(long)]
-        arcade_database_sha: String,
-        #[arg(long)]
-        arcade_updater_builder_sha: String,
-        #[arg(long = "arcade-updater-revision", value_name = "ID=SHA")]
-        arcade_updater_revisions: Vec<String>,
-        #[arg(long)]
-        github_output: Option<PathBuf>,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-#[allow(clippy::large_enum_variant)] // CI-only parsed data; boxing a single field would obscure the schema.
-pub enum PlatformManifestCommand {
-    Generate {
-        #[arg(long)]
-        output: PathBuf,
-        #[arg(long)]
-        main: PathBuf,
-        #[arg(long)]
-        gui: PathBuf,
-        #[arg(long)]
-        manager: PathBuf,
-        #[arg(long)]
-        scanout_module: PathBuf,
-        #[arg(long)]
-        scanout_metadata: PathBuf,
-        #[arg(long)]
-        latch_rbf: PathBuf,
-        #[arg(long)]
-        latch_metadata: PathBuf,
-        #[arg(long)]
-        platform_bundle_manifest: PathBuf,
-        #[arg(long)]
-        main_revision: String,
-        #[arg(long)]
-        magik_revision: String,
-        #[arg(long, default_value = "public")]
-        layout: String,
-    },
-    Verify {
-        manifest: PathBuf,
-        #[arg(long)]
-        root: Option<PathBuf>,
-        #[arg(long, default_value = "public")]
-        layout: String,
-    },
-}
-*/
 
 #[derive(Debug, Subcommand)]
 pub enum ReleaseCommand {
@@ -447,11 +199,6 @@ pub enum CaptureCommand {
 }
 
 #[derive(Debug, Subcommand)]
-pub enum RunCommand {
-    Show { run_id: String },
-}
-
-#[derive(Debug, Subcommand)]
 pub enum DbCommand {
     Report,
 }
@@ -459,6 +206,29 @@ pub enum DbCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn orphan_commands_are_rejected_and_neighbors_remain() {
+        for args in [
+            vec!["agent", "run", "show", "fixture"],
+            vec![
+                "agent",
+                "device",
+                "transfer-check",
+                "--artifact",
+                "fixture",
+                "--attended",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+        for args in [
+            vec!["agent", "db", "report"],
+            vec!["agent", "device", "status"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+    }
 
     #[test]
     fn retired_experiment_commands_are_not_available() {
