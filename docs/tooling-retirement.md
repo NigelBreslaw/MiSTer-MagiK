@@ -53,6 +53,33 @@ claiming the new Python framework replaces it. Review explicitly checked retaine
 function bodies and source-text references to deleted files. Validation and final
 counts are recorded with the implementation commits.
 
+### Implementation and validation record
+
+The independent host-utility and deletion commits (`4fdaae8ee`, `b0ea63ae9`)
+add 7,348 lines and delete 31,379: **24,031 net lines removed**. This includes
+the standalone USB move and its owning lockfile; it is not a claim that moved
+USB code is new functionality. Native replacement commits live on the separate
+`nigel/native-device-operations` branch, based on the portable media extraction
+`897ecf82b`. The dependent retirement branch merges that history without rewriting
+it. Both complete PR diffs pass the unchanged tooling scope guard when compared
+to their respective dependency branches.
+
+Focused validation passed: 92 retained host tests before final exclusive-helper
+cleanup; 12 CLI parser and 2 device parser tests; agent library/test Clippy;
+53 affected Python host tests; 30 native-command Python tests; focused native
+catalog/query, mode, publication-restoration and device-control tests; native
+Clippy and Rust LSP diagnostics. The standalone USB capture check and five
+capture tests passed without accessing a camera. The unchanged scanout hardware
+contract checks also pass after updating their retired host-file references.
+No broad workspace matrix or performance workload was run.
+
+Device acceptance was one read-only status/catalog session and one launcher
+restart, recorded in `magik2/docs/native-operations.md`. There was no platform
+activation, reboot, purge or media-publication hardware run. Those destructive
+acceptance operations require a separately identified attended session; local
+validation does not establish their hardware behavior. No new commits have been
+pushed, and CI/pre-push validation is reserved for the publishing request.
+
 ## Historical records
 
 ## Orphan retirement: current update
