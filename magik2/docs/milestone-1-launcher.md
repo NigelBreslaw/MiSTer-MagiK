@@ -37,12 +37,13 @@ scripts/magik2 check --app mini-magik
 Deployment reused the committed Mini artifact and started it at
 `/media/fat/mister-magik2/mini-magik`. The smoke check passed on the remembered
 MiSTer with a native `fpga-latched-scanout-slots` capture at 960x540 RGB565;
-the retained PNG is `build/magik2-results/20260907T192514Z-0efe147b88c6/smoke.png`.
+the retained PNG is `build/magik2-results/20260907T192939Z-40de9bc8a191/smoke.png`.
 The check waited for custom-scene readiness after post/settle, then sampled
-native metrics across at least 600ms. It observed unchanged presentation and
-physical post counters, the same process identity and artifact hash, and no
-evidence error. The PNG is derived from that native capture, never from a Slint
-window screenshot.
+native metrics across 807ms. It observed unchanged presentation and physical
+post counters (2 and 2), the same process identity (PID 4371) and artifact hash
+(`0751282d03aa8a17d568f6277f6535814659570dd42cb770cae32ecc2e12b4d7`), and no
+evidence error. The PNG is derived from that native capture, never from a
+Slint window screenshot.
 
 Joystick browsing, flips, hold behavior, real catalog data, and game launching
 remain later milestones.
