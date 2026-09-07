@@ -19,16 +19,43 @@ export component Probe inherits Window {
     in-out property <int> motion-step: 0;
     in-out property <bool> motion-running: false;
     in-out property <bool> motion-complete: false;
+    in-out property <bool> launcher-mode: false;
+    in-out property <bool> launcher-ready: false;
+    in-out property <string> launcher-selection: "ARCADE";
+    in-out property <bool> launcher-fixtures: true;
     in property <string> build-label: "Mini-MagiK";
     callback increment();
     callback reset();
     callback toggle-details();
     callback start-motion();
+    callback show-probe();
+    callback show-launcher();
 
     Rectangle {
         x: 16px; y: 16px; width: parent.width - 32px; height: 48px;
         background: #1f2937; border-radius: 6px;
         Text { x: 14px; y: 13px; text: root.build-label; color: #dbeafe; font-size: 18px; accessible-role: text; accessible-label: "build-label"; accessible-value: root.build-label; }
+    }
+
+    launcher-mode-button := Rectangle {
+        x: 0px; y: 0px; width: 1px; height: 1px; opacity: 0;
+        accessible-role: button; accessible-label: "show-launcher";
+        accessible-action-default => { root.show-launcher(); }
+    }
+    probe-mode-button := Rectangle {
+        x: 0px; y: 0px; width: 1px; height: 1px; opacity: 0;
+        accessible-role: button; accessible-label: "show-probe";
+        accessible-action-default => { root.show-probe(); }
+    }
+    launcher-ready-state := Text {
+        x: 0px; y: 0px; width: 1px; height: 1px; opacity: 0;
+        accessible-role: text; accessible-label: "launcher-ready";
+        accessible-value: root.launcher-ready ? "presented" : "not-presented";
+    }
+    launcher-selection-state := Text {
+        x: 0px; y: 0px; width: 1px; height: 1px; opacity: 0;
+        accessible-role: text; accessible-label: "launcher-selection";
+        accessible-value: root.launcher-selection;
     }
 
     Rectangle {

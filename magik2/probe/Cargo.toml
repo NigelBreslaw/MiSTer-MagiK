@@ -25,6 +25,7 @@ slint = { git = "https://github.com/slint-ui/slint", rev = "72cf74306784e7d15374
 
 [dependencies]
 mister-magik-tooling-support = { path = "../../crates/tooling-support" }
+mister-magik-framebuffer-scenes = { path = "../../crates/framebuffer-scenes" }
 mister-magik-mister-runtime = { path = "../../mister/platform/runtime", default-features = false, features = ["cached-rgb565-presenter", "framebuffer-lab"] }
 
 [build-dependencies]

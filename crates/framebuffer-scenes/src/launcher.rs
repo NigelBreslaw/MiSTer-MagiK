@@ -54,6 +54,7 @@ const CREAM: u16 = rgb(238, 232, 213);
 const MUTED: u16 = rgb(143, 151, 150);
 const RULE: u16 = rgb(48, 61, 63);
 const WHITE: u16 = rgb(250, 247, 232);
+const DARK_TEXT: u16 = rgb(10, 20, 24);
 const CARD_TOP: usize = 135;
 const CARD_BOTTOM: usize = 428;
 const REFLECTION_TOP: usize = 433;
@@ -97,11 +98,16 @@ fn render_logical(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>) {
     draw_text(pixels, 29, 459, "ACROSS ALL COLLECTIONS", MUTED, 1);
 
     draw_text(pixels, 296, 101, "COLLECTIONS", MUTED, 1);
+    let selected = if data.cards.is_empty() {
+        0
+    } else {
+        data.selected % data.cards.len()
+    };
     draw_text(
         pixels,
         888,
         101,
-        &format!("{:02} / {:02}", data.selected + 1, data.cards.len()),
+        &format!("{:02} / {:02}", selected + 1, data.cards.len()),
         MUTED,
         1,
     );
@@ -162,11 +168,29 @@ fn draw_card(
     if selected {
         draw_rect_outline(pixels, x, top, width, bottom - top, CREAM);
         draw_rect_outline(pixels, x + 4, top + 4, width - 8, bottom - top - 8, CREAM);
-        draw_text_centered(pixels, x, 220, width, card.name, WHITE, 3);
-        draw_text_centered(pixels, x, 385, width, &format_games(card.games), CREAM, 1);
+        let foreground = if card.colour == rgb(199, 190, 167) {
+            DARK_TEXT
+        } else {
+            WHITE
+        };
+        draw_text_centered(pixels, x, 220, width, card.name, foreground, 3);
+        draw_text_centered(
+            pixels,
+            x,
+            385,
+            width,
+            &format_games(card.games),
+            foreground,
+            1,
+        );
     } else {
         draw_text(pixels, x + 15, 151, &ordinal(index, card_count), CREAM, 1);
-        draw_text_centered(pixels, x, 353, width, card.name, CREAM, 1);
+        let foreground = if card.colour == rgb(199, 190, 167) {
+            DARK_TEXT
+        } else {
+            CREAM
+        };
+        draw_text_centered(pixels, x, 353, width, card.name, foreground, 1);
     }
     draw_reflection(pixels, x, width, bottom);
 }
@@ -389,6 +413,7 @@ fn glyph(character: char) -> [u8; 7] {
         '7' => [31, 1, 2, 4, 8, 8, 8],
         '8' => [14, 17, 17, 14, 17, 17, 14],
         '9' => [14, 17, 17, 15, 1, 1, 14],
+        ':' => [0, 6, 6, 0, 6, 6, 0],
         '/' => [1, 2, 2, 4, 8, 8, 16],
         '←' => [4, 2, 31, 2, 4, 0, 0],
         '→' => [4, 8, 31, 8, 4, 0, 0],

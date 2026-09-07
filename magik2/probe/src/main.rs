@@ -3,6 +3,8 @@
 
 //! Deliberately small consumer application for Tooling 2.0.
 
+use mister_magik_framebuffer_scenes::Rgb565Pixel as ScenePixel;
+use mister_magik_framebuffer_scenes::launcher::{LauncherCard, LauncherData, LauncherScene};
 use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
 use mister_magik_mister_runtime::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_mister_runtime::framebuffer::rgb565::Rgb565;
@@ -204,6 +206,67 @@ fn main() -> Result<(), String> {
         }
     });
     let motion_timer = Rc::new(slint::Timer::default());
+    let launcher_mode = Rc::new(Cell::new(true));
+    let launcher_dirty = Rc::new(Cell::new(true));
+    let launcher_scene = LauncherScene::new(width, height);
+    let launcher_cached = Rc::new(RefCell::new(None::<Vec<ScenePixel>>));
+    let launcher_cards = [
+        LauncherCard {
+            name: "ARCADE",
+            games: 1752,
+            colour: 0x88a6,
+        },
+        LauncherCard {
+            name: "SNK",
+            games: 324,
+            colour: 0x195f,
+        },
+        LauncherCard {
+            name: "CONSOLES",
+            games: 842,
+            colour: 0xc5b5,
+        },
+        LauncherCard {
+            name: "HANDHELDS",
+            games: 126,
+            colour: 0x2c92,
+        },
+        LauncherCard {
+            name: "COMPUTERS",
+            games: 86,
+            colour: 0xb9a6,
+        },
+    ];
+    probe.set_launcher_mode(true);
+    probe.set_launcher_ready(false);
+    probe.set_launcher_selection("ARCADE".into());
+    let mode = launcher_mode.clone();
+    let dirty = launcher_dirty.clone();
+    let weak = probe.as_weak();
+    let timer = motion_timer.clone();
+    probe.on_show_launcher(move || {
+        mode.set(true);
+        dirty.set(true);
+        timer.stop();
+        if let Some(probe) = weak.upgrade() {
+            probe.set_launcher_mode(true);
+            probe.set_launcher_ready(false);
+        }
+    });
+    let mode = launcher_mode.clone();
+    let dirty = launcher_dirty.clone();
+    let weak = probe.as_weak();
+    let timer = motion_timer.clone();
+    probe.on_show_probe(move || {
+        mode.set(false);
+        dirty.set(false);
+        timer.stop();
+        if let Some(probe) = weak.upgrade() {
+            probe.set_launcher_mode(false);
+            probe.set_launcher_ready(false);
+            probe.set_motion_running(false);
+        }
+    });
     let session = Rc::new(RefCell::new(
         Session::from_environment().ok_or("missing tooling state root")?,
     ));
@@ -242,7 +305,75 @@ fn main() -> Result<(), String> {
             probe.set_motion_complete(true);
         }
         let session_for_frame = session.clone();
+        let mode_for_frame = launcher_mode.clone();
+        let dirty_for_frame = launcher_dirty.clone();
+        let probe_for_frame = probe.as_weak();
+        let launcher_cached_for_frame = launcher_cached.clone();
         let rendered = window.draw_if_needed(|renderer| {
+            if mode_for_frame.get() {
+                if !dirty_for_frame.replace(false) {
+                    return;
+                }
+                let render_start = Instant::now();
+                if launcher_cached_for_frame.borrow().is_none() {
+                    *launcher_cached_for_frame.borrow_mut() =
+                        Some(launcher_scene.render(LauncherData {
+                            cards: &launcher_cards,
+                            selected: 0,
+                            library_games: 6842,
+                            collections: 18,
+                            favourites: 126,
+                            clock: "21:37",
+                        }));
+                }
+                let packed = launcher_cached_for_frame.borrow();
+                let packed = packed
+                    .as_deref()
+                    .expect("launcher cache was just populated");
+                for (destination, source) in cached.iter_mut().zip(packed) {
+                    *destination = Rgb565Pixel(source.0);
+                }
+                let render_us = render_start.elapsed().as_micros() as u64;
+                let stride = framebuffer.stride_pixels();
+                for row in 0..height {
+                    let destination =
+                        &mut framebuffer.pixels_mut()[row * stride..row * stride + width];
+                    let source = &cached[row * width..(row + 1) * width];
+                    for (destination, source) in destination.iter_mut().zip(source) {
+                        *destination = Rgb565(source.0);
+                    }
+                }
+                let mut session = session_for_frame.borrow_mut();
+                let metrics = &mut session.metrics;
+                metrics.last_render_us = render_us;
+                metrics.counters.render_us += render_us;
+                match framebuffer.post() {
+                    Ok(_) => metrics.counters.posts += 1,
+                    Err(error) => {
+                        metrics.counters.rejections += 1;
+                        metrics.error = Some(error.to_string());
+                        return;
+                    }
+                }
+                match framebuffer.settle_pending() {
+                    Ok(Some(presented)) => {
+                        metrics.counters.flips += 1;
+                        metrics.counters.drops +=
+                            metrics.last_physical_drop_count.map_or(0, |previous| {
+                                u64::from(presented.drop_count.wrapping_sub(previous))
+                            });
+                        metrics.last_physical_drop_count = Some(presented.drop_count);
+                        metrics.counters.presentations += 1;
+                        metrics.counters.render_to_present_us +=
+                            render_start.elapsed().as_micros() as u64;
+                        if let Some(probe) = probe_for_frame.upgrade() {
+                            probe.set_launcher_ready(true);
+                        }
+                    }
+                    _ => metrics.error = Some("physical latch did not settle".into()),
+                }
+                return;
+            }
             let render_start = Instant::now();
             renderer.render(&mut cached, width);
             let render_us = render_start.elapsed().as_micros() as u64;

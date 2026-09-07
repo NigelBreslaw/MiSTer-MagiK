@@ -2612,6 +2612,7 @@ name = "mini-magik"
 version = "0.1.0"
 dependencies = [
  "fontique",
+ "mister-magik-framebuffer-scenes",
  "mister-magik-mister-runtime",
  "mister-magik-tooling-support",
  "slint",
@@ -2647,6 +2648,13 @@ dependencies = [
 [[package]]
 name = "mister-magik-core"
 version = "0.1.0"
+
+[[package]]
+name = "mister-magik-framebuffer-scenes"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "mister-magik-framebuffer-stream"
