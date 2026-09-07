@@ -86,7 +86,24 @@ def main() -> int:
         if name not in {"build", "deploy", "check", "watch"}:
             continue
         command.add_argument("--app", choices=tuple(APPLICATIONS), default="magik")
+    storage = subcommands.add_parser(
+        "storage", help="inspect and clean local build storage"
+    )
+    storage_commands = storage.add_subparsers(dest="storage_command", required=True)
+    report = storage_commands.add_parser(
+        "report", help="report allocation and cleanup eligibility"
+    )
+    report.add_argument("--json", action="store_true")
+    clean = storage_commands.add_parser(
+        "clean", help="preview retention cleanup unless --apply"
+    )
+    clean.add_argument("--apply", action="store_true")
+    clean.add_argument("--all-idle", action="store_true")
     arguments = parser.parse_args()
+    if arguments.command == "storage":
+        from .storage import run_storage
+
+        return run_storage(arguments, repository())
     if arguments.command == "mcp":
         from .mcp_capture import main as mcp_main
 
