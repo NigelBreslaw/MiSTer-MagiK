@@ -51,6 +51,7 @@ def agent_binary_path() -> Path:
 def main() -> int:
     if len(os.sys.argv) > 1 and os.sys.argv[1] == "platform":
         from .platform import main as platform_main
+
         return platform_main(os.sys.argv[2:])
     started = time.monotonic()
     parser = argparse.ArgumentParser(prog="scripts/magik2")
