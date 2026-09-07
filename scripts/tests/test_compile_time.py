@@ -2,23 +2,24 @@
 
 import copy
 import unittest
+
 from scripts.magik_ci.compile_time import compare
 
 
 class CompileComparisonTests(unittest.TestCase):
     def test_two_sample_comparison_and_invalid_evidence(self):
-        baseline = dict(
-            schema=1,
-            target="app",
-            kind="incremental",
-            machine="mac",
-            architecture="arm64",
-            recipe=["dev"],
-            samples=[
-                dict(repetition=1, seconds=2, exit_code=0),
-                dict(repetition=2, seconds=4, exit_code=0),
+        baseline = {
+            "schema": 1,
+            "target": "app",
+            "kind": "incremental",
+            "machine": "mac",
+            "architecture": "arm64",
+            "recipe": ["dev"],
+            "samples": [
+                {"repetition": 1, "seconds": 2, "exit_code": 0},
+                {"repetition": 2, "seconds": 4, "exit_code": 0},
             ],
-        )
+        }
         candidate = copy.deepcopy(baseline)
         candidate["samples"][0]["seconds"] = 1
         candidate["samples"][1]["seconds"] = 2

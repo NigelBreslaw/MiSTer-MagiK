@@ -9,8 +9,8 @@ import platform
 import signal
 import statistics
 import subprocess
-import sys
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 TARGETS = {
@@ -40,7 +40,7 @@ TARGETS = {
 }
 
 
-def command(root: Path, target: str, target_dir: Path):
+def command(root: Path, target: str, target_dir: Path, container: str | None = None):
     profile, features, scope = TARGETS[target]
     environment = dict(
         os.environ,
@@ -64,13 +64,8 @@ def command(root: Path, target: str, target_dir: Path):
             "--bin",
             "mister-magik-ui-preview",
         ], environment
-    # Reuse 2.0's prepared Apple build environment and FFmpeg artifacts.
-    sys.path.insert(0, str(root / "magik2/host"))
-    from magik2.build import prepare_container
-    from magik2.ffmpeg import prepare_ffmpeg
-
-    name = prepare_container(root, subprocess.run)
-    prepare_ffmpeg(root, name, subprocess.run)
+    if container is None:
+        raise ValueError("ARM compilation requires an active build session")
     dist = "/workspace/apps/mister/target/ffmpeg-minimal/armv7/dist"
     values = {
         "CARGO_TARGET_DIR": "/workspace/" + str(target_dir.relative_to(root)),
@@ -95,7 +90,7 @@ def command(root: Path, target: str, target_dir: Path):
         *env_args,
         "--workdir",
         "/workspace",
-        name,
+        container,
         "scripts/cargo",
         *cargo,
         "--profile",
@@ -144,37 +139,49 @@ def measure(root: Path, target: str, target_dir: Path, output: Path, kind: str):
         ).strip(),
     }
     try:
-        for repetition in (1, 2):
-            cache = target_dir / str(repetition) if kind == "cold" else target_dir
-            argv, environment = command(root, target, cache)
-            # Preparation is outside measured Cargo time. Logs go to files, never pipes.
-            started = time.monotonic()
-            with output.with_suffix(f".run-{repetition}.log").open("x") as log:
-                child = subprocess.Popen(
-                    argv,
-                    cwd=root,
-                    env=environment,
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=True,
-                )
-                try:
-                    code = child.wait(timeout=1800)
-                finally:
-                    # Include container/compilation descendants on interruption.
+        with ExitStack() as session:
+            container = None
+            if target != "magik-full-app-macos":
+                from magik2.host.magik2.ffmpeg import prepare_ffmpeg
+                from magik2.host.magik2.storage import Storage
+
+                storage = Storage()
+                session.enter_context(storage.build_session(root))
+                container = storage.prepare(root)
+                prepare_ffmpeg(root, container, subprocess.run)
+            for repetition in (1, 2):
+                cache = target_dir / str(repetition) if kind == "cold" else target_dir
+                argv, environment = command(root, target, cache, container)
+                # Preparation is outside measured Cargo time. Logs go to files, never pipes.
+                started = time.monotonic()
+                with output.with_suffix(f".run-{repetition}.log").open("x") as log:
+                    child = subprocess.Popen(
+                        argv,
+                        cwd=root,
+                        env=environment,
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                    )
                     try:
-                        os.killpg(child.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    child.wait(timeout=5)
-            sample = {
-                "repetition": repetition,
-                "seconds": time.monotonic() - started,
-                "exit_code": code,
-            }
-            report["samples"].append(sample)
-            if code:
-                raise RuntimeError(f"compile sample {repetition} failed; see its log")
+                        code = child.wait(timeout=1800)
+                    finally:
+                        # Include container/compilation descendants on interruption.
+                        try:
+                            os.killpg(child.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        child.wait(timeout=5)
+                sample = {
+                    "repetition": repetition,
+                    "seconds": time.monotonic() - started,
+                    "exit_code": code,
+                }
+                report["samples"].append(sample)
+                if code:
+                    raise RuntimeError(
+                        f"compile sample {repetition} failed; see its log"
+                    )
     except BaseException as error:
         report["error"] = str(error)
         raise

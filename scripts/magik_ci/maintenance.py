@@ -122,8 +122,8 @@ def export_evidence(database: Path, output: Path) -> None:
             result,
             stream,
             indent=2,
-            default=lambda value: {"hex": value.hex()}
-            if isinstance(value, bytes)
-            else str(value),
+            default=lambda value: (
+                {"hex": value.hex()} if isinstance(value, bytes) else str(value)
+            ),
         )
         stream.write("\n")

@@ -1,6 +1,7 @@
 """Platform preparation and offline FPGA evidence, independent of the device client."""
 
 from __future__ import annotations
+
 import argparse
 import os
 import subprocess
