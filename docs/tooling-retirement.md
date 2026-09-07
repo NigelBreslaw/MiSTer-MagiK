@@ -1,9 +1,38 @@
 # Tooling retirement
 
+## Orphan retirement: current update
+
+Removed the unused device `launcher_automation_begin`,
+`launcher_automation_request` and `alpha_candidate_install` endpoints, capability
+advertisements and exclusive implementations. The legacy host no longer requires
+launcher automation when deciding whether an installed service is usable. This
+change does not alter its other capability or version rules.
+
+Removed hidden `run show`, legacy `device transfer-check`, exclusive transfer
+signal handling, and 241 lines of commented CI command declarations. Shared run
+storage remains; its run-detail accessor is compiled only for tests that verify
+stored evidence. Existing Python CI artifact ownership is unchanged.
+
+Retained consumers include Desktop's status, SD browser, framebuffer and control
+endpoints, legacy platform/runtime upload, physical-input qualification, and the
+application's `LAUNCHER_AUTOMATION_MAX_HOLD_MS` constant. The application and its
+protocol dependency are not removed. No dependency changes or device operations
+were needed for this deletion batch. Prior transfer comparison documents and
+result bundles are historical evidence, not supported legacy command instructions.
+
+The two implementation commits delete 1,295 lines and add 40 (1,255 net removed).
+No Cargo dependency or lockfile changes were needed. Focused validation passed:
+19 parser tests, the installed-agent version policy test, host Clippy, and the
+ARM device-agent check/Clippy.
+
+The command parser rejects both removed leaves and retains `db report` and device
+status. Public symbols, request/capability strings and source-text tests were
+searched; histogram review covers retained dispatch and installed-service checks.
+
 ## Milestone 9: visual retirement and remaining legacy audit
 
 Based on `02387d891`, the merge of PR #104, on
-`nigel/retire-visual-tooling`. This section is the current disposition; older
+`nigel/retire-visual-tooling`. This inventory includes the orphan retirement update above; older
 milestone sections below are historical records and can describe tools since
 removed. No functionality is ported to 2.0 in this milestone.
 
@@ -64,11 +93,11 @@ private/operator usage.
 | Remaining leaves (prefix `scripts/agent`) | Purpose and code owner | Consumer evidence and disposition | Blockers |
 |---|---|---|---|
 | `guidance PATH`; wrapper `plan` | Ownership/instructions and validation preview; `scripts/magik_ci/guidance.py`, `scripts/checks/pre-push.py`, `guidance.rs` | Root AGENTS and contributor workflow; retain separately. Wrapper routes these without compiling Rust. | Wrapper only; Rust duplicate guidance is a later candidate |
-| `run show` (hidden) | Read a recorded run; `main.rs`, `evidence.rs` | Dispatch and tests; no current external invocation found. Later deletion candidate; do not delete shared run storage. | C |
+| `run show` (hidden) | Removed in orphan retirement | Shared storage remains; detail inspection is now test-only for evidence/delivery assertions. | None |
 | `db report` (hidden) | Report host evidence database; `main.rs`, `evidence.rs` | Explicit root AGENTS operator workflow; retain separately. | C |
 | `diagnose` | Bounded recovery and diagnostics; `diagnose.rs`, `host/mod.rs` | `docs/device.md` boot-loop recovery; retain separately. | C + device |
 | `device status`, `arming-status`, `logs`, `events`, `diagnostics` | Status, reboot arming and bounded evidence; `commands/device.rs`, `host/mod.rs` | `docs/device.md` operator workflows; retain separately. | C + device |
-| `device transfer-check` | Explicit legacy upload/fetch throughput check; `host/transfer_check.rs` | Added for the old/new delivery comparison; parser/transfer tests remain, no ongoing scripted caller found. Later deletion candidate after the comparison is no longer useful. | C + device |
+| `device transfer-check` | Removed in orphan retirement | Historical comparison evidence remains; ordinary runtime uploads are retained. | None |
 | `device mode status`, `mode set` | Dev/Public/Stock Main selection; `host/mod.rs` | Device operator instructions; retain separately. | C + device |
 | `device display route-status`, `display set` | Inspect route; change one mode with attended restoration/confirmation; `host/mod.rs` | `docs/device.md`, display parser/readiness tests; retain separately. | C + device |
 | `device crt qualify`, `crt probe`, `crt restore` | Physical CRT qualification/pattern probing and restoration; `host/crt_qualification.rs` | `docs/crt.md`, retained CRT implementation; retain separately as platform qualification. | C + device |
@@ -116,8 +145,8 @@ checks and 15-second journey allowance remain unchanged; no measurements ran.
 | PNG/raw/LZ4 framebuffer captures and `framebuffer_stream_v1`; device `main.rs`, `host/framebuffer_views.rs` | Retained CLI capture; Desktop LZ4 seed and stream. Actual scanout/platform primitives and runtime producer are shared behavior. | Retain legacy path separately; Desktop migration deferred. Blocks A/P/S/I. 2.0 capture is already independent and does not justify deleting Desktop's protocol. |
 | `device_telemetry_stream_v2`, analytics leases, frame/process counters and FPGA diagnostics; device `main.rs`, `crates/agent-protocol` | Desktop Analytics requests process telemetry; platform health and qualification consume diagnostic state. | Retain separately; Desktop migration deferred. Blocks A/P/S/I. Removing trace report scripts does not remove runtime trace formats or telemetry. |
 | Native runtime upload; `mister/tools/agent/src/runtime_upload.rs`, host `agent_client.rs` | `host/transfer_check.rs` and retained `SshDeployRemote::put_runtime_binary` delivery path. | Retain separately with delivery; blocks A/P/S/I. |
-| Device `launcher_automation_begin`/`launcher_automation_request`; `mister/tools/agent/src/launcher_automation.rs` | Repository request-name search finds only device dispatch after this milestone. Its capability is still required by host `agent_client::version_action`. Tests are not a consumer. | Later deletion candidate, **not deleted here**. Capability/connection cleanup is needed before removal; nominal compatibility requirement still ties it to retained C/A/P. |
-| `alpha_candidate_install`; `mister/tools/agent/src/alpha_candidate.rs` | Request-name search finds device dispatch, no current repository client. Old alpha acceptance was removed earlier. | Later deletion candidate; keep this batch scoped. No demonstrated functional consumer justifies it as a permanent A blocker. |
+| Legacy launcher automation endpoints | Removed in orphan retirement, including the host capability prerequisite. | No remaining blocker; shared application hold-duration constant remains. |
+| `alpha_candidate_install` | Removed in orphan retirement; no repository clients remained. | No remaining blocker; normal publication and runtime upload are retained. |
 | Service boot/install/repair; host `agent_client.rs` (`REMOTE_INIT`, bootstrap), device `main.rs` (`net-boot`) | Retained CLI installs `/etc/init.d/S00magik-agent`; Desktop assumes the service is reachable. Device boot/crash logging is part of the service. | Retain while these named consumers remain. Blocks S/A/I; cannot remove startup merely because 2.0 runs another service. |
 | Agent build and distribution artifact; `.github/workflows/rust-arm.yml`, `scripts/magik_ci/build.py`, `scripts/magik_ci/distribution.py`, host bootstrap | ARM job `device-agent-arm-build` builds/uploads `mister-magik-agent-ci-fast`; legacy bootstrap/platform consumers still need a service binary. | Retain I while A/S are required. Python CI/release processing is separately owned, not something to port into 2.0. |
 | Production catalog/media formats and publication; `crates/catalog`, `crates/media-contract`, host catalog/database modules | Real app, ordinary publication and audit consumers. `fast_five_catalog` remains production. | Retain separately even after eventual C/A retirement. Shared library formats are not legacy-service protocols to delete. |
