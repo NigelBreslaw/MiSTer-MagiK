@@ -20,6 +20,7 @@ pub struct BrowseFrame {
     pub phase: BrowsePhase,
     pub direction: Option<BrowseDirection>,
     pub progress_millis: u32,
+    pub duration_millis: u32,
 }
 
 pub const TAP_SLIDE_MS: u64 = 180;
@@ -94,6 +95,7 @@ impl LauncherBrowser {
 
     pub fn reset(&mut self) {
         self.direction = None;
+        self.target = self.selected;
         self.pending = None;
         self.left = false;
         self.right = false;
@@ -136,7 +138,7 @@ impl LauncherBrowser {
         }
         if self.direction.is_none()
             && self.count > 1
-            && (self.left || self.right)
+            && (self.left ^ self.right)
             && now_ms.saturating_sub(self.hold_started_ms) >= HOLD_THRESHOLD_MS
         {
             let next = if self.left {
@@ -186,6 +188,7 @@ impl LauncherBrowser {
             },
             direction: self.direction,
             progress_millis: elapsed.min(self.duration_ms) as u32,
+            duration_millis: self.duration_ms as u32,
         }
     }
 }
@@ -256,6 +259,18 @@ mod tests {
         browser.release(BrowseDirection::Right);
         assert_eq!(browser.frame(180).selected, 1);
         assert_eq!(browser.frame(180).target, 2);
+    }
+
+    #[test]
+    fn both_directions_held_complete_once_then_stay_idle() {
+        let mut browser = ready(5);
+        browser.press(BrowseDirection::Right, 0);
+        browser.press(BrowseDirection::Left, 20);
+        assert_eq!(browser.frame(180).selected, 1);
+        assert_eq!(browser.frame(1_200).phase, BrowsePhase::Settled);
+        assert_eq!(browser.selected(), 1);
+        assert_eq!(browser.frame(2_000).phase, BrowsePhase::Settled);
+        assert_eq!(browser.selected(), 1);
     }
 
     #[test]

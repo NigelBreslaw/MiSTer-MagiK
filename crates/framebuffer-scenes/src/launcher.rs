@@ -8,6 +8,7 @@
 //! design with nearest-neighbour letterboxing.
 
 use crate::Rgb565Pixel;
+use crate::launcher_navigation::{BrowseDirection, BrowseFrame};
 
 pub const LOGICAL_WIDTH: usize = 960;
 pub const LOGICAL_HEIGHT: usize = 540;
@@ -43,8 +44,17 @@ impl LauncherScene {
 
     #[must_use]
     pub fn render(self, data: LauncherData<'_>) -> Vec<Rgb565Pixel> {
+        self.render_browse(data, None)
+    }
+
+    #[must_use]
+    pub fn render_browse(
+        self,
+        data: LauncherData<'_>,
+        motion: Option<BrowseFrame>,
+    ) -> Vec<Rgb565Pixel> {
         let mut logical = vec![Rgb565Pixel(BACKGROUND); LOGICAL_WIDTH * LOGICAL_HEIGHT];
-        render_logical(&mut logical, data);
+        render_logical(&mut logical, data, motion);
         scale_letterboxed(&logical, self.width, self.height)
     }
 }
@@ -64,7 +74,7 @@ const fn rgb(red: u16, green: u16, blue: u16) -> u16 {
     ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
 }
 
-fn render_logical(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>) {
+fn render_logical(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>, motion: Option<BrowseFrame>) {
     draw_rect(pixels, 0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT, BACKGROUND);
     draw_text(pixels, 26, 20, "MISTER MAGIK", CREAM, 3);
     draw_text(pixels, 875, 22, data.clock, CREAM, 2);
@@ -106,11 +116,71 @@ fn render_logical(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>) {
         MUTED,
         1,
     );
-    draw_carousel(pixels, data);
+    if let Some(motion) = motion {
+        draw_carousel_motion(pixels, data, motion);
+    } else {
+        draw_carousel(pixels, data);
+    }
     draw_line(pixels, 26, 500, 934, 500, RULE);
     draw_text(pixels, 30, 516, "A  OPEN", CREAM, 1);
     draw_text(pixels, 130, 516, "B  BACK", CREAM, 1);
     draw_text(pixels, 586, 516, "←  →   BROWSE CARDS", CREAM, 1);
+}
+
+fn draw_carousel_motion(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>, motion: BrowseFrame) {
+    if data.cards.is_empty() || motion.direction.is_none() {
+        draw_carousel(pixels, data);
+        return;
+    }
+    draw_rect(
+        pixels,
+        296,
+        CARD_TOP,
+        638,
+        REFLECTION_TOP + REFLECTION_HEIGHT - CARD_TOP,
+        BACKGROUND,
+    );
+    let selected = motion.selected % data.cards.len();
+    let progress = motion.progress_millis.min(motion.duration_millis.max(1)) as u32;
+    let duration = motion.duration_millis.max(1);
+    let right = motion.direction == Some(BrowseDirection::Right);
+    let t = |value: i32| value * progress as i32 / duration as i32;
+    let slot_x = |relative: isize| match relative {
+        -3 => 187,
+        -2 => 296,
+        -1 => 405,
+        0 => 514,
+        1 => 702,
+        2 => 813,
+        _ => 934,
+    };
+    let slot_width = |relative: isize| match relative {
+        0 => 188,
+        1 => 111,
+        2 => 121,
+        _ => 109,
+    };
+    for relative in [-3_isize, -2, -1, 1, 2, 3, 0] {
+        let index = (selected as isize + relative).rem_euclid(data.cards.len() as isize) as usize;
+        let destination_relative = if right { relative - 1 } else { relative + 1 };
+        let source_x = slot_x(relative);
+        let destination_x = slot_x(destination_relative);
+        let source_width = slot_width(relative);
+        let destination_width = slot_width(destination_relative);
+        let x = source_x + t(destination_x - source_x);
+        let width = source_width + t(destination_width - source_width);
+        if x >= 0 && width > 0 {
+            draw_card(
+                pixels,
+                x as usize,
+                width as usize,
+                data.cards[index],
+                relative == 0,
+                index,
+                data.cards.len(),
+            );
+        }
+    }
 }
 
 fn draw_carousel(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>) {
