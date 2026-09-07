@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import secrets
 import shlex
 import threading
