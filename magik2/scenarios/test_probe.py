@@ -7,7 +7,7 @@ from magik2.results import append_event
 
 def test_smoke(application_session):
     application, agent, run, profile_id = application_session
-    result = smoke(application, run / "smoke.png", agent.expected_sha256)
+    result = smoke(application, agent, run / "smoke.png", agent.expected_sha256)
     append_event(run, {"phase": "smoke", "outcome": "passed", **result})
 
 

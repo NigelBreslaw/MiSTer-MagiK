@@ -85,14 +85,11 @@ impl ProbeWindow {
         })
     }
 
-    fn draw_if_needed(&self, render: impl FnOnce(&SoftwareRenderer)) -> bool {
+    fn draw_if_needed(&self, render: impl FnOnce(&SoftwareRenderer, bool)) -> bool {
         self.event_loop.process_pending_callbacks();
-        if self.redraw_pending.replace(false) {
-            render(&self.renderer);
-            true
-        } else {
-            false
-        }
+        let redraw_requested = self.redraw_pending.replace(false);
+        render(&self.renderer, redraw_requested);
+        redraw_requested
     }
 
     fn set_size(&self, size: PhysicalSize) {
@@ -310,7 +307,7 @@ fn main() -> Result<(), String> {
         let dirty_for_frame = launcher_dirty.clone();
         let probe_for_frame = probe.as_weak();
         let launcher_cached_for_frame = launcher_cached.clone();
-        let rendered = window.draw_if_needed(|renderer| {
+        let rendered = window.draw_if_needed(|renderer, redraw_requested| {
             if mode_for_frame.get() {
                 if !dirty_for_frame.replace(false) {
                     return;
@@ -373,6 +370,9 @@ fn main() -> Result<(), String> {
                     }
                     _ => metrics.error = Some("physical latch did not settle".into()),
                 }
+                return;
+            }
+            if !redraw_requested {
                 return;
             }
             let render_start = Instant::now();
