@@ -22,7 +22,7 @@ APPLICATIONS = {
         "mister-magik-fb",
         "release-device-ui-tests",
         ("magik2",),
-        frozenset({"main-input-proxy"}),
+        frozenset({"main-managed-magik"}),
     ),
 }
 

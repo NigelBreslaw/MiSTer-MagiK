@@ -90,3 +90,23 @@ impl Read for DeadlineReader<'_> {
         self.stream.read(bytes)
     }
 }
+
+#[cfg(test)]
+mod desktop_fixture {
+    use super::*;
+    #[test]
+    fn accepts_shared_desktop_request() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/desktop-wire.json")).unwrap();
+        let bytes = fixture["bytes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b.as_u64().unwrap() as u8)
+            .collect::<Vec<_>>();
+        let (header, body) = read_frame(&mut bytes.as_slice()).unwrap();
+        assert_eq!(header.op, "status");
+        assert_eq!(header.id, "fixture");
+        assert!(body.is_empty());
+    }
+}

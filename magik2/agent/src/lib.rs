@@ -3,12 +3,16 @@
 mod benchmark;
 mod capture;
 mod catalog_operations;
+mod desktop;
 mod device;
 mod device_identity;
 mod main_control;
+mod managed_launcher;
 mod media;
 mod mode;
 mod publication;
+mod sd;
+mod telemetry;
 mod upload;
 mod wire;
 
@@ -47,6 +51,7 @@ pub struct Status<'a> {
 
 /// Single-device native service state. It owns only the 2.0 installation root.
 pub struct Agent {
+    started: Instant,
     identity: String,
     token: String,
     install_root: PathBuf,
@@ -158,6 +163,7 @@ impl Agent {
         state_root: PathBuf,
     ) -> Self {
         Self {
+            started: Instant::now(),
             identity,
             token,
             install_root,
@@ -171,6 +177,11 @@ impl Agent {
 
     pub fn capabilities() -> &'static [&'static str] {
         &[
+            "dashboard-status",
+            "application-process-analytics",
+            "sd-browser",
+            "framebuffer-stream",
+            "telemetry-stream",
             "run-benchmark-v2",
             "status",
             "device-identity-v1",
@@ -181,6 +192,7 @@ impl Agent {
             "transfer-check",
             "applications",
             "main-input-proxy",
+            "main-managed-magik",
             "measurement",
             "diagnostics",
             "upload-v1",
@@ -403,6 +415,9 @@ impl Agent {
         let mut body = vec![0; body_length];
         wire::DeadlineReader { stream, deadline }.read_exact(&mut body)?;
 
+        if desktop::OPERATIONS.contains(&request.op.as_str()) {
+            return desktop::handle(stream, &request, &body);
+        }
         if request.op == "catalog-operation" {
             return self.catalog_operation(stream, &request, &body);
         }
@@ -487,6 +502,7 @@ impl Agent {
                     "identity": self.identity,
                     "device_identity": device_identity::read().ok(),
                     "agent_pid": std::process::id(),
+                    "uptime_ms": self.started.elapsed().as_millis() as u64,
                     "agent_sha256": installed_hash(&PathBuf::from("/proc/self/exe")),
                     "capabilities": Self::capabilities(),
                     "running": self.running(),
@@ -652,6 +668,13 @@ impl Agent {
                 serde_json::json!({"already_running":true,"ready":true,"sha256":published_hash}),
             );
         }
+        if artifact == "magik" {
+            return self.start_managed_magik(
+                request,
+                test_server.as_deref(),
+                published_hash.as_deref().unwrap_or_default(),
+            );
+        }
         if let Err(error) = fs::create_dir_all(&self.state_root) {
             return response(
                 &request.id,
@@ -711,14 +734,6 @@ impl Agent {
         }
         let _ = fs::remove_file(self.state_root.join("measure-request"));
         let mut command = Command::new(executable);
-        if artifact == "magik" {
-            command.args(["ui", "launcher", "0"]);
-            let main_status = fs::read("/tmp/mister-magik/main-status.json")
-                .ok()
-                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-                .unwrap_or_default();
-            main_control::configure_input_proxy(&mut command, &main_status);
-        }
         command
             .env("MISTER_MAGIK2_STATE_ROOT", &self.state_root)
             .env(
@@ -968,6 +983,19 @@ impl Agent {
     }
 
     fn ready_for(&self, pid: u32, hash: &str) -> bool {
+        if fs::read_link(format!("/proc/{pid}/exe"))
+            .ok()
+            .is_some_and(|path| {
+                path.to_string_lossy().trim_end_matches(" (deleted)")
+                    == self.install_root.join("magik").to_string_lossy()
+            })
+            && !device::status()
+                .ok()
+                .is_some_and(|status| managed_launcher::owns_ready_child(&status, pid))
+        {
+            return false;
+        }
+
         fs::read(self.readiness_path())
             .ok()
             .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
@@ -1066,6 +1094,17 @@ impl Agent {
     }
 
     fn stop_owned_process(&self) -> Result<(), String> {
+        if let Some(record) = self.running_identity()
+            && device::status().ok().is_some_and(|status| {
+                status["launcher_pid"].as_u64() == Some(u64::from(record.pid))
+            })
+        {
+            main_handoff("mister_magik_suspend\n")?;
+            managed_launcher::update(Path::new(managed_launcher::ENV_PATH), None)?;
+            self.clear_owned_process();
+            return Ok(());
+        }
+
         let mut process = self.process.lock().expect("agent process state poisoned");
         if let Some(child) = process.as_mut() {
             if child.try_wait().map_err(|e| e.to_string())?.is_none() {
