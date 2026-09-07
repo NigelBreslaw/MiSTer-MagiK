@@ -1,24 +1,23 @@
 ---
 title: Catalog and Preview
-description: Catalog V2, SQLite, warm projections, and screenshot media.
+description: Source snapshots, immutable system catalogs, and screenshot media.
 sidebar:
   order: 5
 ---
 
-The catalog builder treats first usable RAM catalog readiness separately from durable SQLite persistence. This lets cold first scan reveal the launcher as soon as the catalog can be used, while the durable database finishes in the background.
+MiSTer MagiK uses the fast catalog under `catalog-fast-v1`. Source adapters discover installed games and publish immutable per-system NavPacks and SQLite search databases. A small registry provides Home counts without opening every system artifact.
 
 ```mermaid
 flowchart TD
-  Roots["/media/fat roots"] --> Scan["Library scan"]
-  Scan --> Classify["Classify discoveries"]
-  Classify --> Ram["RAM catalog usable"]
-  Ram --> UI["Launcher ready"]
-  Ram --> SQLite["Persist SQLite in /tmp"]
-  SQLite --> Publish["Atomic publish to /media/fat"]
-  Publish --> Summary["library.summary.json"]
-  Publish --> Nav["library.nav.lz4b"]
+  Roots["Installed game sources"] --> Scan["Source adapters"]
+  Scan --> Snapshot["Per-system source snapshots"]
+  Snapshot --> Artifacts["NavPack and SQLite search"]
+  Artifacts --> Registry["Atomic registry publication"]
+  Registry --> UI["Home counts and on-demand system reads"]
   Packs["Screenshot packs"] --> PreviewIndex["Preview archive indexes"]
   PreviewIndex --> UI
 ```
 
-Warm startup can use `library.summary.json` for Home counts before full rows hydrate. The Arcade screen must pause list and preview requests until the full navigation rows are available.
+Warm startup is load-only. Entering a system opens its NavPack; searching opens its SQLite database. Missing catalog state triggers a fresh build while the first frame remains responsive. Explicit refresh checks source watches and republishes only changed systems. The previous generation remains usable until publication succeeds.
+
+Screenshot packs are independent media. Installing a pack reconciles preview availability in memory without rewriting catalog artifacts or source snapshots. The retired monolithic SQLite catalog, summary/navigation sidecars, and scanner caches are not startup or refresh inputs.

@@ -235,7 +235,7 @@ the effective runtime rows without downloading or writing catalog state.
   incremental publication.
 - `fast_five_catalog.rs`: canonical snapshot and artifact interchange. The
   historical filename is internal; it no longer imposes a five-system limit.
-- `shard_registry.rs`, `system_shard.rs`, `nav_pack.rs`: immutable registry
+- `shard_registry.rs`, `system_shard.rs`, `navpack.rs`: immutable registry
   and per-system artifacts.
 - `lazy_sharded_reader.rs`, `persisted_search.rs`: on-demand UI reads.
 - `preview_availability.rs`: in-memory screenshot availability reconciliation.
