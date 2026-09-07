@@ -2,6 +2,7 @@
 
 mod benchmark;
 mod capture;
+mod device_identity;
 mod main_control;
 mod upload;
 mod wire;
@@ -253,6 +254,22 @@ impl Agent {
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
         let (request, body_length) =
             wire::read_header(&mut wire::DeadlineReader { stream, deadline })?;
+        // Discovery exposes only the board identity, never control or credentials.
+        if request.op == "identify" && body_length == 0 && request.fields.is_empty() {
+            let reply = match device_identity::read() {
+                Ok(identity) => response(
+                    &request.id,
+                    "identified",
+                    serde_json::json!({"device_identity":identity}),
+                ),
+                Err(_) => response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"device-identity-unavailable"}),
+                ),
+            };
+            return write_frame(stream, &reply, &[]);
+        }
         if request.token != self.token {
             return write_frame(
                 stream,
@@ -407,6 +424,7 @@ impl Agent {
                 "status",
                 serde_json::json!({
                     "identity": self.identity,
+                    "device_identity": device_identity::read().ok(),
                     "agent_pid": std::process::id(),
                     "agent_sha256": installed_hash(&PathBuf::from("/proc/self/exe")),
                     "capabilities": Self::capabilities(),
