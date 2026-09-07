@@ -50,14 +50,23 @@ fn drain(pipe: &mut impl Read, bytes: &mut Vec<u8>, limit: usize) -> Result<bool
 }
 
 #[derive(Default)]
-struct Output {
-    code: Option<i32>,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-    error: Option<String>,
+pub(crate) struct Output {
+    pub(crate) code: Option<i32>,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+    pub(crate) error: Option<String>,
 }
 
 fn execute(command: &mut Command, timeout: Duration, cancelled: impl Fn() -> bool) -> Output {
+    execute_bounded(command, timeout, cancelled, STDOUT_LIMIT)
+}
+
+pub(crate) fn execute_bounded(
+    command: &mut Command,
+    timeout: Duration,
+    cancelled: impl Fn() -> bool,
+    stdout_limit: usize,
+) -> Output {
     let mut output = Output::default();
     let result = (|| -> Result<(), String> {
         let mut child = Running(
@@ -81,7 +90,7 @@ fn execute(command: &mut Command, timeout: Duration, cancelled: impl Fn() -> boo
             if Instant::now() >= deadline {
                 return Err("benchmark deadline exceeded".into());
             }
-            let out_done = drain(&mut stdout, &mut output.stdout, STDOUT_LIMIT)?;
+            let out_done = drain(&mut stdout, &mut output.stdout, stdout_limit)?;
             let err_done = drain(&mut stderr, &mut output.stderr, STDERR_LIMIT)?;
             if status.is_none() {
                 status = child.0.try_wait().map_err(|e| e.to_string())?;

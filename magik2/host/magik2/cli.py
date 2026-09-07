@@ -49,6 +49,9 @@ def agent_binary_path() -> Path:
 
 
 def main() -> int:
+    if len(os.sys.argv) > 1 and os.sys.argv[1] == "platform":
+        from .platform import main as platform_main
+        return platform_main(os.sys.argv[2:])
     started = time.monotonic()
     parser = argparse.ArgumentParser(prog="scripts/magik2")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -62,6 +65,9 @@ def main() -> int:
     )
     select = device_subcommands.add_parser("select")
     select.add_argument("address")
+    from .device import add_commands
+
+    add_commands(device_subcommands)
     bench = subcommands.add_parser("bench", help="run a Mini workload")
     bench.add_argument("workload", nargs="?", default="blend")
     modes = bench.add_mutually_exclusive_group()
@@ -178,6 +184,10 @@ def dispatch(arguments, run) -> int:
         built = ensure_arm_package(package, package / "target/magik2-build.json")
         print(built.artifact)
         return 0
+    if arguments.command == "device" and arguments.device_command != "select":
+        from .device import run_device
+
+        return run_device(arguments, run)
     if arguments.command == "device":
         device = resolve_device(arguments.address, select=True)
         record_device(run, device.identity, device.address)

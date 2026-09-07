@@ -6,6 +6,17 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+/// Exchange one fixed-purpose command; callers validate their own completion state.
+pub fn request(command: &str) -> Result<String, String> {
+    exchange(
+        command,
+        Path::new("/dev/MiSTer_cmd"),
+        Path::new("/dev/MiSTer_cmd_reply"),
+        Path::new("/tmp/mister-magik/command-operation.lock"),
+        Duration::from_secs(5),
+    )
+}
+
 pub fn handoff(command: &str) -> Result<(), String> {
     exchange(
         command,
@@ -54,7 +65,7 @@ fn exchange(
     replies: &Path,
     lock: &Path,
     timeout: Duration,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let deadline = Instant::now() + timeout;
     let lock = OpenOptions::new()
         .create(true)
@@ -101,7 +112,7 @@ fn exchange(
         if let Some(end) = bytes.iter().position(|b| *b == b'\n') {
             let line = String::from_utf8_lossy(&bytes[..end]);
             return if line == "ok" || line.starts_with("ok ") {
-                Ok(())
+                Ok(line.into_owned())
             } else {
                 Err(format!("Main rejected command: {line}"))
             };

@@ -173,6 +173,23 @@ class NativeAgent:
             raise AgentError(f"unexpected watch event: {response.operation}")
         return response, body
 
+    def device_operation(self, operation: str, fields=None, *, timeout=None):
+        response, body = self._request(
+            operation,
+            fields,
+            attempts=1,
+            timeout=timeout
+            if timeout is not None
+            else (2550 if operation == "media-operation" else 90),
+        )
+        if response.operation == "error":
+            raise AgentError.from_fields(response.fields)
+        if response.operation != "device-result":
+            raise ProtocolError("unexpected device operation response")
+        import json
+
+        return json.loads(body) if body else dict(response.fields)
+
     def _successful(
         self, operation: str, fields: Mapping[str, object] | None = None
     ) -> Mapping[str, object]:
@@ -186,10 +203,13 @@ class NativeAgent:
         operation: str,
         fields: Mapping[str, object] | None = None,
         body: bytes = b"",
+        *,
+        attempts: int | None = None,
+        timeout: float | None = None,
     ) -> tuple[Envelope, bytes]:
         request = Envelope(uuid.uuid4().hex, operation, self.token, fields or {})
         last_error: OSError | ProtocolError | None = None
-        attempts = (
+        attempts = attempts or (
             1 if operation in {"agent-update", "transfer-check", "measure"} else 2
         )
         for attempt in range(attempts):
@@ -197,9 +217,13 @@ class NativeAgent:
                 with socket.create_connection(
                     (self.host, self.port), timeout=5
                 ) as connection:
-                    connection.settimeout(25 if operation == "start" else 15)
+                    budget = timeout or (25 if operation == "start" else 15)
+                    deadline = time.monotonic() + budget
+                    connection.settimeout(budget)
                     send_message(connection, request, body)
-                    response, response_body = receive_message(connection)
+                    response, response_body = receive_message(
+                        connection, deadline=deadline
+                    )
                 if response.request_id != request.request_id:
                     raise ProtocolError("agent reply request identifier did not match")
                 return response, response_body
