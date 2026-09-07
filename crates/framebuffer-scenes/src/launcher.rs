@@ -371,8 +371,8 @@ fn draw_cached_motion(
     motion: BrowseFrame,
 ) {
     let selected = motion.selected % cards.len();
-    let progress = motion.progress_millis.min(motion.duration_millis.max(1)) as i32;
     let duration = motion.duration_millis.max(1) as i32;
+    let progress = eased_progress(motion.progress_millis.min(duration as u32), duration as u32);
     let right = motion.direction == Some(BrowseDirection::Right);
     let t = |value: i32| value * progress / duration;
     let slot_x = |relative: isize| match relative {
@@ -421,6 +421,17 @@ fn draw_cached_motion(
                 prominence as usize,
             );
         }
+    }
+}
+
+fn eased_progress(progress: u32, duration: u32) -> i32 {
+    if duration == crate::launcher_navigation::TAP_SLIDE_MS as u32 {
+        let t = progress.min(duration) as i64;
+        let d = duration as i64;
+        // Integer smoothstep: 3t^2 - 2t^3, with exact 0 and duration ends.
+        ((3 * t * t * d - 2 * t * t * t) / (d * d)) as i32
+    } else {
+        progress.min(duration) as i32
     }
 }
 
@@ -1026,6 +1037,23 @@ mod tests {
         prepared.render_into(frame(90), &mut middle);
         assert_ne!(start, middle);
         assert_eq!(frame(90).duration_millis, 180);
+    }
+
+    #[test]
+    fn tap_motion_uses_smoothstep_with_exact_endpoints() {
+        assert_eq!(eased_progress(0, 180), 0);
+        assert!(eased_progress(45, 180) < 45);
+        assert_eq!(eased_progress(90, 180), 90);
+        assert!(eased_progress(135, 180) > 135);
+        assert_eq!(eased_progress(180, 180), 180);
+    }
+
+    #[test]
+    fn held_motion_stays_linear_and_release_does_not_change_duration() {
+        assert_eq!(eased_progress(0, 150), 0);
+        assert_eq!(eased_progress(37, 150), 37);
+        assert_eq!(eased_progress(75, 150), 75);
+        assert_eq!(eased_progress(150, 150), 150);
     }
 
     #[test]
