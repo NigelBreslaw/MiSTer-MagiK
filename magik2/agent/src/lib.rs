@@ -3,12 +3,15 @@
 mod benchmark;
 mod capture;
 mod catalog_operations;
+mod desktop;
 mod device;
 mod device_identity;
 mod main_control;
 mod media;
 mod mode;
 mod publication;
+mod sd;
+mod telemetry;
 mod upload;
 mod wire;
 
@@ -47,6 +50,7 @@ pub struct Status<'a> {
 
 /// Single-device native service state. It owns only the 2.0 installation root.
 pub struct Agent {
+    started: Instant,
     identity: String,
     token: String,
     install_root: PathBuf,
@@ -158,6 +162,7 @@ impl Agent {
         state_root: PathBuf,
     ) -> Self {
         Self {
+            started: Instant::now(),
             identity,
             token,
             install_root,
@@ -171,6 +176,10 @@ impl Agent {
 
     pub fn capabilities() -> &'static [&'static str] {
         &[
+            "dashboard-status",
+            "sd-browser",
+            "framebuffer-stream",
+            "telemetry-stream",
             "run-benchmark-v2",
             "status",
             "device-identity-v1",
@@ -403,6 +412,9 @@ impl Agent {
         let mut body = vec![0; body_length];
         wire::DeadlineReader { stream, deadline }.read_exact(&mut body)?;
 
+        if desktop::OPERATIONS.contains(&request.op.as_str()) {
+            return desktop::handle(stream, &request, &body);
+        }
         if request.op == "catalog-operation" {
             return self.catalog_operation(stream, &request, &body);
         }
@@ -487,6 +499,7 @@ impl Agent {
                     "identity": self.identity,
                     "device_identity": device_identity::read().ok(),
                     "agent_pid": std::process::id(),
+                    "uptime_ms": self.started.elapsed().as_millis() as u64,
                     "agent_sha256": installed_hash(&PathBuf::from("/proc/self/exe")),
                     "capabilities": Self::capabilities(),
                     "running": self.running(),

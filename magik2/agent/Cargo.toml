@@ -13,6 +13,7 @@ warnings = "deny"
 all = "deny"
 
 [dependencies]
+quick-xml = "0.42.0"
 mister-magik-platform-manifest-contract = { path = "../../mister/platform/contracts/manifest" }
 mister-magik-media-contract = { path = "../../crates/media-contract" }
 mister-magik-catalog = { path = "../../crates/catalog" }

@@ -480,6 +480,7 @@ dependencies = [
  "mister-magik-mister-runtime",
  "mister-magik-platform-manifest-contract",
  "mister-magik-scanout-contract",
+ "quick-xml",
  "rusqlite",
  "serde",
  "serde_json",
