@@ -57,6 +57,107 @@ impl LauncherScene {
         render_logical(&mut logical, data, motion);
         scale_letterboxed(&logical, self.width, self.height)
     }
+
+    #[must_use]
+    pub fn prepare(self, data: LauncherData<'_>) -> PreparedLauncher {
+        PreparedLauncher::new(self, data)
+    }
+}
+
+/// Reusable launcher composition. All owned strings and working buffers are
+/// created during preparation; `render_into` is allocation-free.
+pub struct PreparedLauncher {
+    scene: LauncherScene,
+    chrome: Vec<Rgb565Pixel>,
+    logical: Vec<Rgb565Pixel>,
+    cards: Vec<PreparedCard>,
+    ordinals: Vec<String>,
+    collection_labels: Vec<String>,
+}
+
+struct PreparedCard {
+    name: String,
+    games: u32,
+    games_label: String,
+    colour: u16,
+}
+
+impl PreparedLauncher {
+    fn new(scene: LauncherScene, data: LauncherData<'_>) -> Self {
+        let cards: Vec<_> = data
+            .cards
+            .iter()
+            .map(|card| PreparedCard {
+                name: card.name.to_owned(),
+                games: card.games,
+                games_label: format_games(card.games),
+                colour: card.colour,
+            })
+            .collect();
+        let ordinals = (0..cards.len())
+            .map(|index| ordinal(index, cards.len()))
+            .collect();
+        let collection_labels = (0..cards.len())
+            .map(|index| format!("{:02} / {:02}", index + 1, cards.len()))
+            .collect();
+        let borrowed: Vec<_> = cards
+            .iter()
+            .map(|card| LauncherCard {
+                name: &card.name,
+                games: card.games,
+                colour: card.colour,
+            })
+            .collect();
+        let source = LauncherData {
+            cards: &borrowed,
+            selected: data.selected,
+            library_games: data.library_games,
+            collections: data.collections,
+            favourites: data.favourites,
+            clock: data.clock,
+        };
+        let mut chrome = vec![Rgb565Pixel(BACKGROUND); LOGICAL_WIDTH * LOGICAL_HEIGHT];
+        render_logical(&mut chrome, source, None);
+        draw_rect(
+            &mut chrome,
+            296,
+            CARD_TOP,
+            638,
+            REFLECTION_TOP + REFLECTION_HEIGHT - CARD_TOP,
+            BACKGROUND,
+        );
+        draw_rect(&mut chrome, 880, 95, 54, 16, BACKGROUND);
+        Self {
+            scene,
+            chrome,
+            logical: vec![Rgb565Pixel(BACKGROUND); LOGICAL_WIDTH * LOGICAL_HEIGHT],
+            cards,
+            ordinals,
+            collection_labels,
+        }
+    }
+
+    pub fn render_into(&mut self, frame: BrowseFrame, output: &mut [Rgb565Pixel]) {
+        self.logical.copy_from_slice(&self.chrome);
+        if let Some(label) = self.collection_labels.get(frame.selected) {
+            draw_text(&mut self.logical, 888, 101, label, MUTED, 1);
+        }
+        if self.cards.is_empty() {
+            scale_into(&self.logical, self.scene.width, self.scene.height, output);
+            return;
+        }
+        if frame.phase == crate::launcher_navigation::BrowsePhase::Settled {
+            draw_cached_carousel(
+                &mut self.logical,
+                &self.cards,
+                &self.ordinals,
+                frame.selected,
+            );
+        } else {
+            draw_cached_motion(&mut self.logical, &self.cards, &self.ordinals, frame);
+        }
+        scale_into(&self.logical, self.scene.width, self.scene.height, output);
+    }
 }
 
 const BACKGROUND: u16 = rgb(0, 0, 0);
@@ -217,6 +318,112 @@ fn draw_carousel(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>) {
     );
 }
 
+fn draw_cached_carousel(
+    pixels: &mut [Rgb565Pixel],
+    cards: &[PreparedCard],
+    ordinals: &[String],
+    selected: usize,
+) {
+    let positions = [296_usize, 405, 514, 702, 813];
+    let widths = [109_usize, 109, 188, 111, 121];
+    for slot in [4_usize, 3, 1, 0] {
+        let relative = slot as isize - 2;
+        let index = (selected as isize + relative).rem_euclid(cards.len() as isize) as usize;
+        draw_cached_card(
+            pixels,
+            positions[slot],
+            widths[slot],
+            &cards[index],
+            false,
+            &ordinals[index],
+        );
+    }
+    draw_cached_card(
+        pixels,
+        positions[2],
+        widths[2],
+        &cards[selected % cards.len()],
+        true,
+        "",
+    );
+}
+
+fn draw_cached_motion(
+    pixels: &mut [Rgb565Pixel],
+    cards: &[PreparedCard],
+    ordinals: &[String],
+    motion: BrowseFrame,
+) {
+    let selected = motion.selected % cards.len();
+    let progress = motion.progress_millis.min(motion.duration_millis.max(1)) as i32;
+    let duration = motion.duration_millis.max(1) as i32;
+    let right = motion.direction == Some(BrowseDirection::Right);
+    let t = |value: i32| value * progress / duration;
+    let slot_x = |relative: isize| match relative {
+        -3 => 187,
+        -2 => 296,
+        -1 => 405,
+        0 => 514,
+        1 => 702,
+        2 => 813,
+        _ => 934,
+    };
+    let slot_width = |relative: isize| match relative {
+        0 => 188,
+        1 => 111,
+        2 => 121,
+        _ => 109,
+    };
+    for relative in [-3_isize, -2, -1, 1, 2, 3, 0] {
+        let index = (selected as isize + relative).rem_euclid(cards.len() as isize) as usize;
+        let destination = if right { relative - 1 } else { relative + 1 };
+        let x = slot_x(relative) + t(slot_x(destination) - slot_x(relative));
+        let width = slot_width(relative) + t(slot_width(destination) - slot_width(relative));
+        if x >= 0 && width > 0 {
+            draw_cached_card(
+                pixels,
+                x as usize,
+                width as usize,
+                &cards[index],
+                relative == 0,
+                &ordinals[index],
+            );
+        }
+    }
+}
+
+fn draw_cached_card(
+    pixels: &mut [Rgb565Pixel],
+    x: usize,
+    width: usize,
+    card: &PreparedCard,
+    selected: bool,
+    ordinal_label: &str,
+) {
+    let top = if selected { CARD_TOP } else { CARD_TOP + 8 };
+    let bottom = CARD_BOTTOM;
+    draw_rect(pixels, x, top, width, bottom - top, card.colour);
+    let foreground = if is_light_card(card.colour) {
+        DARK_TEXT
+    } else if selected {
+        WHITE
+    } else {
+        CREAM
+    };
+    if selected {
+        draw_rect_outline(pixels, x, top, width, bottom - top, CREAM);
+        if width > 8 && bottom - top > 8 {
+            draw_rect_outline(pixels, x + 4, top + 4, width - 8, bottom - top - 8, CREAM);
+        }
+        draw_text_centered(pixels, x, 220, width, &card.name, foreground, 3);
+        draw_text_centered(pixels, x, 385, width, &card.games_label, foreground, 1);
+    } else {
+        draw_text(pixels, x + 15, 151, ordinal_label, foreground, 1);
+        draw_text_centered(pixels, x, 353, width, &card.name, foreground, 1);
+    }
+    draw_reflection(pixels, x, width, bottom);
+}
+
 fn draw_card(
     pixels: &mut [Rgb565Pixel],
     x: usize,
@@ -314,6 +521,16 @@ fn scale_letterboxed(logical: &[Rgb565Pixel], width: usize, height: usize) -> Ve
     if width == 0 || height == 0 {
         return Vec::new();
     }
+    let mut output = vec![Rgb565Pixel(BACKGROUND); width * height];
+    scale_into(logical, width, height, &mut output);
+    output
+}
+
+fn scale_into(logical: &[Rgb565Pixel], width: usize, height: usize, output: &mut [Rgb565Pixel]) {
+    if width == 0 || height == 0 || output.len() < width.saturating_mul(height) {
+        return;
+    }
+    output.fill(Rgb565Pixel(BACKGROUND));
     let (scaled_width, scaled_height) =
         if width.saturating_mul(LOGICAL_HEIGHT) <= height.saturating_mul(LOGICAL_WIDTH) {
             (width, width * LOGICAL_HEIGHT / LOGICAL_WIDTH)
@@ -321,11 +538,10 @@ fn scale_letterboxed(logical: &[Rgb565Pixel], width: usize, height: usize) -> Ve
             (height * LOGICAL_WIDTH / LOGICAL_HEIGHT, height)
         };
     if scaled_width == 0 || scaled_height == 0 {
-        return vec![Rgb565Pixel(BACKGROUND); width * height];
+        return;
     }
     let x_offset = (width - scaled_width) / 2;
     let y_offset = (height - scaled_height) / 2;
-    let mut output = vec![Rgb565Pixel(BACKGROUND); width * height];
     for y in 0..scaled_height {
         let source_y = y * LOGICAL_HEIGHT / scaled_height;
         for x in 0..scaled_width {
@@ -334,7 +550,6 @@ fn scale_letterboxed(logical: &[Rgb565Pixel], width: usize, height: usize) -> Ve
                 logical[source_y * LOGICAL_WIDTH + source_x];
         }
     }
-    output
 }
 
 fn draw_line(pixels: &mut [Rgb565Pixel], x0: usize, y0: usize, x1: usize, y1: usize, colour: u16) {
@@ -651,5 +866,42 @@ mod tests {
             assert_eq!(pixels[row * LOGICAL_WIDTH + 295].0, BACKGROUND);
             assert_eq!(pixels[row * LOGICAL_WIDTH + 934].0, BACKGROUND);
         }
+    }
+
+    #[test]
+    fn prepared_resting_frame_matches_cold_render() {
+        let scene = LauncherScene::new(960, 540);
+        let mut prepared = scene.prepare(data());
+        let mut output = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
+        let frame = BrowseFrame {
+            selected: 0,
+            target: 0,
+            phase: crate::launcher_navigation::BrowsePhase::Settled,
+            direction: None,
+            progress_millis: 0,
+            duration_millis: 180,
+        };
+        prepared.render_into(frame, &mut output);
+        assert_eq!(output, scene.render(data()));
+    }
+
+    #[test]
+    fn prepared_motion_changes_continuously_and_keeps_fixed_duration() {
+        let scene = LauncherScene::new(960, 540);
+        let mut prepared = scene.prepare(data());
+        let mut start = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
+        let mut middle = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
+        let frame = |progress_millis| BrowseFrame {
+            selected: 0,
+            target: 1,
+            phase: crate::launcher_navigation::BrowsePhase::Sliding,
+            direction: Some(BrowseDirection::Right),
+            progress_millis,
+            duration_millis: 180,
+        };
+        prepared.render_into(frame(0), &mut start);
+        prepared.render_into(frame(90), &mut middle);
+        assert_ne!(start, middle);
+        assert_eq!(frame(90).duration_millis, 180);
     }
 }
