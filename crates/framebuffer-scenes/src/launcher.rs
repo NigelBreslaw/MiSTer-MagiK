@@ -71,15 +71,16 @@ pub struct PreparedLauncher {
     chrome: Vec<Rgb565Pixel>,
     logical: Vec<Rgb565Pixel>,
     cards: Vec<PreparedCard>,
-    ordinals: Vec<String>,
+    ordinals: Vec<Vec<[u8; 7]>>,
     collection_labels: Vec<String>,
 }
 
 struct PreparedCard {
     name: String,
     games: u32,
-    games_label: String,
     colour: u16,
+    name_mask: Vec<[u8; 7]>,
+    games_mask: Vec<[u8; 7]>,
 }
 
 impl PreparedLauncher {
@@ -90,12 +91,13 @@ impl PreparedLauncher {
             .map(|card| PreparedCard {
                 name: card.name.to_owned(),
                 games: card.games,
-                games_label: format_games(card.games),
                 colour: card.colour,
+                name_mask: text_mask(card.name),
+                games_mask: text_mask(&format_games(card.games)),
             })
             .collect();
         let ordinals = (0..cards.len())
-            .map(|index| ordinal(index, cards.len()))
+            .map(|index| text_mask(&ordinal(index, cards.len())))
             .collect();
         let collection_labels = (0..cards.len())
             .map(|index| format!("{:02} / {:02}", index + 1, cards.len()))
@@ -155,6 +157,14 @@ impl PreparedLauncher {
             );
         } else {
             draw_cached_motion(&mut self.logical, &self.cards, &self.ordinals, frame);
+        }
+        // Moving neighbours may be partially outside the carousel; restore
+        // the clip margins after rasterizing signed slot geometry.
+        for y in CARD_TOP..REFLECTION_TOP + REFLECTION_HEIGHT {
+            let row = y * LOGICAL_WIDTH;
+            self.logical[row..row + 296].copy_from_slice(&self.chrome[row..row + 296]);
+            self.logical[row + 934..row + LOGICAL_WIDTH]
+                .copy_from_slice(&self.chrome[row + 934..row + LOGICAL_WIDTH]);
         }
         scale_into(&self.logical, self.scene.width, self.scene.height, output);
     }
@@ -247,13 +257,15 @@ fn draw_carousel_motion(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>, moti
     let right = motion.direction == Some(BrowseDirection::Right);
     let t = |value: i32| value * progress as i32 / duration as i32;
     let slot_x = |relative: isize| match relative {
+        -4 => 78,
         -3 => 187,
         -2 => 296,
         -1 => 405,
         0 => 514,
         1 => 702,
         2 => 813,
-        _ => 934,
+        3 => 934,
+        _ => 1055,
     };
     let slot_width = |relative: isize| match relative {
         0 => 188,
@@ -321,7 +333,7 @@ fn draw_carousel(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>) {
 fn draw_cached_carousel(
     pixels: &mut [Rgb565Pixel],
     cards: &[PreparedCard],
-    ordinals: &[String],
+    ordinals: &[Vec<[u8; 7]>],
     selected: usize,
 ) {
     let positions = [296_usize, 405, 514, 702, 813];
@@ -334,10 +346,10 @@ fn draw_cached_carousel(
             positions[slot],
             widths[slot],
             &cards[index],
-            false,
             &ordinals[index],
             353,
             256,
+            0,
         );
     }
     draw_cached_card(
@@ -345,17 +357,17 @@ fn draw_cached_carousel(
         positions[2],
         widths[2],
         &cards[selected % cards.len()],
-        true,
-        "",
+        &[],
         220,
         768,
+        256,
     );
 }
 
 fn draw_cached_motion(
     pixels: &mut [Rgb565Pixel],
     cards: &[PreparedCard],
-    ordinals: &[String],
+    ordinals: &[Vec<[u8; 7]>],
     motion: BrowseFrame,
 ) {
     let selected = motion.selected % cards.len();
@@ -364,13 +376,15 @@ fn draw_cached_motion(
     let right = motion.direction == Some(BrowseDirection::Right);
     let t = |value: i32| value * progress / duration;
     let slot_x = |relative: isize| match relative {
+        -4 => 78,
         -3 => 187,
         -2 => 296,
         -1 => 405,
         0 => 514,
         1 => 702,
         2 => 813,
-        _ => 934,
+        3 => 934,
+        _ => 1055,
     };
     let slot_width = |relative: isize| match relative {
         0 => 188,
@@ -378,13 +392,18 @@ fn draw_cached_motion(
         2 => 121,
         _ => 109,
     };
-    for relative in [-3_isize, -2, -1, 1, 2, 3, 0] {
-        let index = (selected as isize + relative).rem_euclid(cards.len() as isize) as usize;
-        let destination = if right { relative - 1 } else { relative + 1 };
-        let x = slot_x(relative) + t(slot_x(destination) - slot_x(relative));
-        let width = slot_width(relative) + t(slot_width(destination) - slot_width(relative));
+    let relatives: &[isize] = if right {
+        &[-2, -1, 1, 2, 3, 0]
+    } else {
+        &[-3, -2, -1, 1, 2, 0]
+    };
+    for relative in relatives {
+        let index = (selected as isize + *relative).rem_euclid(cards.len() as isize) as usize;
+        let destination = if right { *relative - 1 } else { *relative + 1 };
+        let x = slot_x(*relative) + t(slot_x(destination) - slot_x(*relative));
+        let width = slot_width(*relative) + t(slot_width(destination) - slot_width(*relative));
         if x >= 0 && width > 0 {
-            let prominence = if relative == 0 {
+            let prominence = if *relative == 0 {
                 256 - (256 * progress / duration)
             } else if destination == 0 {
                 256 * progress / duration
@@ -396,10 +415,10 @@ fn draw_cached_motion(
                 x as usize,
                 width as usize,
                 &cards[index],
-                false,
                 &ordinals[index],
                 (353 - 133 * prominence / 256) as usize,
                 (256 + 512 * prominence / 256) as usize,
+                prominence as usize,
             );
         }
     }
@@ -410,48 +429,48 @@ fn draw_cached_card(
     x: usize,
     width: usize,
     card: &PreparedCard,
-    selected: bool,
-    ordinal_label: &str,
+    ordinal_label: &[[u8; 7]],
     title_y: usize,
     title_scale_q8: usize,
+    prominence: usize,
 ) {
-    let top = if selected { CARD_TOP } else { CARD_TOP + 8 };
+    let top = CARD_TOP + 8 - 8 * prominence / 256;
     let bottom = CARD_BOTTOM;
     draw_rect(pixels, x, top, width, bottom - top, card.colour);
     let foreground = if is_light_card(card.colour) {
         DARK_TEXT
-    } else if selected {
-        WHITE
     } else {
-        CREAM
+        mix_colour(CREAM, WHITE, prominence)
     };
-    if selected {
-        draw_rect_outline(pixels, x, top, width, bottom - top, CREAM);
+    if prominence > 0 {
+        let outline = mix_colour(card.colour, CREAM, prominence);
+        draw_rect_outline(pixels, x, top, width, bottom - top, outline);
         if width > 8 && bottom - top > 8 {
-            draw_rect_outline(pixels, x + 4, top + 4, width - 8, bottom - top - 8, CREAM);
+            draw_rect_outline(pixels, x + 4, top + 4, width - 8, bottom - top - 8, outline);
         }
-        draw_text_scaled_centered(
+        draw_mask_scaled_centered(
             pixels,
             x,
             title_y,
             width,
-            &card.name,
+            &card.name_mask,
             foreground,
             title_scale_q8,
         );
-        draw_text_centered(pixels, x, 385, width, &card.games_label, foreground, 1);
-    } else {
-        draw_text(pixels, x + 15, 151, ordinal_label, foreground, 1);
-        draw_text_scaled_centered(
-            pixels,
-            x,
-            title_y,
-            width,
-            &card.name,
-            foreground,
-            title_scale_q8,
-        );
+        let count_colour = mix_colour(card.colour, foreground, prominence);
+        draw_mask_scaled_centered(pixels, x, 385, width, &card.games_mask, count_colour, 256);
     }
+    let ordinal_colour = mix_colour(card.colour, foreground, 256 - prominence);
+    draw_mask(pixels, x + 15, 151, ordinal_label, ordinal_colour, 256);
+    draw_mask_scaled_centered(
+        pixels,
+        x,
+        title_y,
+        width,
+        &card.name_mask,
+        foreground,
+        title_scale_q8,
+    );
     draw_reflection(pixels, x, width, bottom);
 }
 
@@ -511,12 +530,27 @@ fn is_light_card(colour: u16) -> bool {
     red + green + blue > 480
 }
 
+fn mix_colour(background: u16, foreground: u16, amount: usize) -> u16 {
+    let amount = amount.min(256) as u32;
+    let channel = |shift: u32, bits: u32| {
+        let mask = (1_u16 << bits) - 1;
+        let a = u32::from((background >> shift) & mask);
+        let b = u32::from((foreground >> shift) & mask);
+        ((a * (256 - amount) + b * amount) / 256) as u16
+    };
+    (channel(11, 5) << 11) | (channel(5, 6) << 5) | channel(0, 5)
+}
+
 fn format_games(games: u32) -> String {
     format!("{} GAMES", games)
 }
 
 fn ordinal(index: usize, count: usize) -> String {
     format!("{:02}", (index + 1).min(count))
+}
+
+fn text_mask(text: &str) -> Vec<[u8; 7]> {
+    text.chars().map(glyph).collect()
 }
 
 fn draw_reflection(pixels: &mut [Rgb565Pixel], x: usize, width: usize, bottom: usize) {
@@ -559,6 +593,10 @@ fn scale_letterboxed(logical: &[Rgb565Pixel], width: usize, height: usize) -> Ve
 
 fn scale_into(logical: &[Rgb565Pixel], width: usize, height: usize, output: &mut [Rgb565Pixel]) {
     if width == 0 || height == 0 || output.len() < width.saturating_mul(height) {
+        return;
+    }
+    if width == LOGICAL_WIDTH && height == LOGICAL_HEIGHT {
+        output[..LOGICAL_WIDTH * LOGICAL_HEIGHT].copy_from_slice(logical);
         return;
     }
     output.fill(Rgb565Pixel(BACKGROUND));
@@ -653,32 +691,57 @@ fn draw_text_centered(
     );
 }
 
-fn draw_text_scaled_centered(
+fn draw_mask(
+    pixels: &mut [Rgb565Pixel],
+    x: usize,
+    y: usize,
+    mask: &[[u8; 7]],
+    colour: u16,
+    scale_q8: usize,
+) {
+    for (index, glyph) in mask.iter().enumerate() {
+        let origin = x + index * 6 * scale_q8 / 256;
+        for (row, bits) in glyph.iter().enumerate() {
+            for column in 0..5 {
+                if bits & (1 << (4 - column)) != 0 {
+                    draw_rect(
+                        pixels,
+                        origin + column * scale_q8 / 256,
+                        y + row * scale_q8 / 256,
+                        (scale_q8 / 256).max(1),
+                        (scale_q8 / 256).max(1),
+                        colour,
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn draw_mask_scaled_centered(
     pixels: &mut [Rgb565Pixel],
     x: usize,
     y: usize,
     width: usize,
-    text: &str,
+    mask: &[[u8; 7]],
     colour: u16,
     scale_q8: usize,
 ) {
-    let text_width = text.chars().count() * 6 * scale_q8 / 256;
+    let text_width = mask.len() * 6 * scale_q8 / 256;
     let origin = x + width.saturating_sub(text_width) / 2;
-    let mut cursor = origin;
-    for character in text.chars() {
-        let glyph = glyph(character);
+    for (index, glyph) in mask.iter().enumerate() {
+        let glyph_x = origin + index * 6 * scale_q8 / 256;
         for (row, bits) in glyph.iter().enumerate() {
             let y0 = y + row * scale_q8 / 256;
             let y1 = y + (row + 1) * scale_q8 / 256;
             for column in 0..5 {
                 if bits & (1 << (4 - column)) != 0 {
-                    let x0 = cursor + column * scale_q8 / 256;
-                    let x1 = cursor + (column + 1) * scale_q8 / 256;
+                    let x0 = glyph_x + column * scale_q8 / 256;
+                    let x1 = glyph_x + (column + 1) * scale_q8 / 256;
                     draw_rect(pixels, x0, y0, (x1 - x0).max(1), (y1 - y0).max(1), colour);
                 }
             }
         }
-        cursor += 6 * scale_q8 / 256;
     }
 }
 
@@ -963,5 +1026,41 @@ mod tests {
         prepared.render_into(frame(90), &mut middle);
         assert_ne!(start, middle);
         assert_eq!(frame(90).duration_millis, 180);
+    }
+
+    #[test]
+    fn prepared_motion_has_pixel_identical_resting_endpoints() {
+        let scene = LauncherScene::new(960, 540);
+        let mut prepared = scene.prepare(data());
+        let mut old = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
+        let mut start = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
+        let mut end = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
+        let settled = |selected| BrowseFrame {
+            selected,
+            target: selected,
+            phase: crate::launcher_navigation::BrowsePhase::Settled,
+            direction: None,
+            progress_millis: 0,
+            duration_millis: 180,
+        };
+        let moving = |progress_millis| BrowseFrame {
+            selected: 0,
+            target: 1,
+            phase: crate::launcher_navigation::BrowsePhase::Sliding,
+            direction: Some(BrowseDirection::Right),
+            progress_millis,
+            duration_millis: 180,
+        };
+        prepared.render_into(settled(0), &mut old);
+        prepared.render_into(moving(0), &mut start);
+        prepared.render_into(moving(180), &mut end);
+        assert_eq!(start, old);
+        prepared.render_into(settled(1), &mut old);
+        for y in CARD_TOP..REFLECTION_TOP + REFLECTION_HEIGHT {
+            assert_eq!(
+                &end[y * LOGICAL_WIDTH + 296..y * LOGICAL_WIDTH + 934],
+                &old[y * LOGICAL_WIDTH + 296..y * LOGICAL_WIDTH + 934]
+            );
+        }
     }
 }
