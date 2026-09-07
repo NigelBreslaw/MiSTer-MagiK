@@ -217,7 +217,7 @@ fn main() -> Result<(), String> {
             colour: 0x88a6,
         },
         LauncherCard {
-            name: "SNK",
+            name: "SNK NEOGEO",
             games: 324,
             colour: 0x195f,
         },
@@ -251,6 +251,7 @@ fn main() -> Result<(), String> {
         if let Some(probe) = weak.upgrade() {
             probe.set_launcher_mode(true);
             probe.set_launcher_ready(false);
+            probe.set_motion_running(false);
         }
     });
     let mode = launcher_mode.clone();

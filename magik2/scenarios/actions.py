@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from magik2.client import NativeAgent
-from magik2.testing import one_element, screenshot
+from magik2.capture import capture_png
+from magik2.testing import one_element
 
 
 def smoke(
@@ -18,6 +19,7 @@ def smoke(
     if not build.is_valid:
         raise AssertionError("build label is not valid")
     _expect_value(build, expected_sha256)
+    one_element(application, "show-probe").invoke_accessible_default_action()
     counter = one_element(application, "counter")
     _expect_value(counter, "0")
     one_element(application, "increment").invoke_accessible_default_action()
@@ -30,8 +32,20 @@ def smoke(
     _wait(
         lambda: not _exists(application, "details-panel"), "details panel did not close"
     )
-    screenshot(application, screenshot_path)
-    return {"build_label": build.accessible_label, "screenshot": screenshot_path.name}
+    one_element(application, "show-launcher").invoke_accessible_default_action()
+    ready = one_element(application, "launcher-ready")
+    _wait(lambda: _value_is(ready, "presented"), "launcher was not latched")
+    selection = one_element(application, "launcher-selection")
+    _expect_value(selection, "ARCADE")
+    fields, pixels = agent.capture_framebuffer()
+    png, metadata = capture_png(fields, pixels, "raw")
+    screenshot_path.write_bytes(png)
+    return {
+        "build_label": build.accessible_label,
+        "screenshot": screenshot_path.name,
+        "capture_source": metadata["source"],
+        "capture_sequence": metadata["frame_sequence"],
+    }
 
 
 def motion(
@@ -42,6 +56,7 @@ def motion(
     sleep: Callable[[float], None] = time.sleep,
 ) -> Mapping[str, object]:
     state = one_element(application, "motion-state")
+    one_element(application, "show-probe").invoke_accessible_default_action()
     if state.accessible_value not in {"idle", "complete"}:
         raise AssertionError("motion workload is already running")
     one_element(application, "start-motion").invoke_accessible_default_action()
