@@ -12,6 +12,7 @@ pub enum BrowseDirection {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrowsePhase {
     Settled,
+    Flipping,
     Sliding,
     Held,
 }
@@ -27,6 +28,7 @@ pub struct BrowseFrame {
 }
 
 pub const TAP_SLIDE_MS: u64 = 180;
+pub const TAP_FLIP_MS: u64 = 460;
 pub const HOLD_THRESHOLD_MS: u64 = 300;
 pub const HELD_STEP_MS: u64 = 150;
 
@@ -43,6 +45,8 @@ pub struct LauncherBrowser {
     right: bool,
     pending: Option<BrowseDirection>,
     neutral_required: bool,
+    flip_taps: bool,
+    step_flips: bool,
 }
 
 impl LauncherBrowser {
@@ -61,7 +65,15 @@ impl LauncherBrowser {
             right: false,
             pending: None,
             neutral_required: true,
+            flip_taps: false,
+            step_flips: false,
         }
+    }
+
+    /// Configure only at a clean reset; never changes an in-flight step.
+    pub fn with_flips(mut self, enabled: bool) -> Self {
+        self.flip_taps = enabled;
+        self
     }
 
     pub fn press(&mut self, direction: BrowseDirection, now_ms: u64) {
@@ -171,7 +183,12 @@ impl LauncherBrowser {
         }
         self.direction = Some(direction);
         self.started_ms = now_ms;
-        self.duration_ms = duration_ms;
+        self.step_flips = self.flip_taps && duration_ms == TAP_SLIDE_MS;
+        self.duration_ms = if self.step_flips {
+            TAP_FLIP_MS
+        } else {
+            duration_ms
+        };
         self.target = match direction {
             BrowseDirection::Left => (self.selected + self.count - 1) % self.count,
             BrowseDirection::Right => (self.selected + 1) % self.count,
@@ -184,6 +201,8 @@ impl LauncherBrowser {
             target: self.target,
             phase: if self.direction.is_none() {
                 BrowsePhase::Settled
+            } else if self.step_flips {
+                BrowsePhase::Flipping
             } else if held {
                 BrowsePhase::Held
             } else {
@@ -199,6 +218,66 @@ impl LauncherBrowser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flip_finishes_before_hold_slides_and_release_never_changes_kind() {
+        let mut browser = ready(5).with_flips(true);
+        browser.press(BrowseDirection::Right, 0);
+        assert_eq!(browser.frame(300).phase, BrowsePhase::Flipping);
+        assert_eq!(browser.frame(459).duration_millis, 460);
+        let slide = browser.frame(460);
+        assert_eq!(
+            (
+                slide.selected,
+                slide.target,
+                slide.phase,
+                slide.duration_millis
+            ),
+            (1, 2, BrowsePhase::Held, 150)
+        );
+        browser.release(BrowseDirection::Right);
+        assert_eq!(browser.frame(500).phase, BrowsePhase::Sliding);
+        assert_eq!(browser.frame(610).phase, BrowsePhase::Settled);
+        browser.press(BrowseDirection::Left, 700);
+        browser.release(BrowseDirection::Left);
+        assert_eq!(browser.frame(1000).phase, BrowsePhase::Flipping);
+        assert_eq!(browser.frame(1160).selected, 1);
+    }
+
+    #[test]
+    fn flip_reversal_retap_and_long_stall_are_bounded() {
+        let mut browser = ready(5).with_flips(true);
+        browser.press(BrowseDirection::Left, 0);
+        browser.release(BrowseDirection::Left);
+        browser.press(BrowseDirection::Right, 30);
+        browser.release(BrowseDirection::Right);
+        let frame = browser.frame(5000);
+        assert_eq!(
+            (
+                frame.selected,
+                frame.target,
+                frame.phase,
+                frame.progress_millis
+            ),
+            (4, 0, BrowsePhase::Flipping, 0)
+        );
+        assert_eq!(browser.frame(5460).selected, 0);
+    }
+
+    #[test]
+    fn twelve_held_steps_never_flip_and_both_held_finish_only_once() {
+        let mut browser = ready(5).with_flips(true);
+        browser.press(BrowseDirection::Right, 0);
+        for step in 0..12 {
+            let frame = browser.frame(TAP_FLIP_MS + step * HELD_STEP_MS);
+            assert_eq!(frame.phase, BrowsePhase::Held);
+            assert_eq!(frame.duration_millis, HELD_STEP_MS as u32);
+        }
+        browser.press(BrowseDirection::Left, 2150);
+        let final_frame = browser.frame(2300);
+        assert_eq!(final_frame.phase, BrowsePhase::Settled);
+        assert_eq!(browser.frame(5000), final_frame);
+    }
 
     fn ready(count: usize) -> LauncherBrowser {
         let mut browser = LauncherBrowser::new(count, 0);

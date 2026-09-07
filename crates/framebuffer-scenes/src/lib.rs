@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 pub mod launcher;
+mod launcher_flip;
 pub mod launcher_navigation;
 pub mod navigation;
 

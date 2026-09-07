@@ -41,6 +41,20 @@ export component Probe inherits Window {
     callback launcher-right-up();
     callback launcher-input-reset();
     callback start-launcher-motion(bool);
+    callback configure-flips(bool, bool);
+    callback preview-flip(bool, int);
+    in-out property <string> launcher-flip-mode: "perspective";
+    in-out property <string> launcher-flip-mapping: "reverse";
+    in-out property <int> launcher-pose: -1;
+    Text { width: 1px; height: 1px; opacity: 0; accessible-role: text; accessible-label: "launcher-flip-mode"; accessible-value: root.launcher-flip-mode; }
+    Text { width: 1px; height: 1px; opacity: 0; accessible-role: text; accessible-label: "launcher-flip-mapping"; accessible-value: root.launcher-flip-mapping; }
+    Text { width: 1px; height: 1px; opacity: 0; accessible-role: text; accessible-label: "launcher-pose"; accessible-value: "" + root.launcher-pose; }
+    Rectangle { width: 1px; height: 1px; opacity: 0; accessible-role: button; accessible-label: "launcher-flips-reverse"; accessible-action-default => { root.configure-flips(true, true); } }
+    Rectangle { width: 1px; height: 1px; opacity: 0; accessible-role: button; accessible-label: "launcher-flips-normal"; accessible-action-default => { root.configure-flips(true, false); } }
+    Rectangle { width: 1px; height: 1px; opacity: 0; accessible-role: button; accessible-label: "launcher-slides-only"; accessible-action-default => { root.configure-flips(false, true); } }
+    Rectangle { width: 1px; height: 1px; opacity: 0; accessible-role: button; accessible-label: "launcher-pose-right-early"; accessible-action-default => { root.preview-flip(true, 150); } }
+    Rectangle { width: 1px; height: 1px; opacity: 0; accessible-role: button; accessible-label: "launcher-pose-right-late"; accessible-action-default => { root.preview-flip(true, 310); } }
+    Rectangle { width: 1px; height: 1px; opacity: 0; accessible-role: button; accessible-label: "launcher-pose-left-early"; accessible-action-default => { root.preview-flip(false, 150); } }
 
     Rectangle {
         x: 16px; y: 16px; width: parent.width - 32px; height: 48px;

@@ -79,6 +79,45 @@ pub struct PreparedLauncher {
     cards: Vec<PreparedCard>,
     ordinals: Vec<Vec<[u8; 7]>>,
     collection_labels: Vec<String>,
+    faces: Vec<CardFaces>,
+    flip_columns: Vec<crate::launcher_flip::Column>,
+    reverse_flip: bool,
+}
+
+struct CardFaces {
+    compact: [crate::launcher_flip::Face; 3],
+    detail: crate::launcher_flip::Face,
+}
+
+fn bake_face(
+    card: &PreparedCard,
+    ordinal: &[[u8; 7]],
+    width: usize,
+    selected: bool,
+) -> crate::launcher_flip::Face {
+    let mut scratch = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
+    draw_cached_card(
+        &mut scratch,
+        296,
+        width,
+        card,
+        if selected { &[] } else { ordinal },
+        if selected { 220 } else { 353 },
+        if selected { 768 } else { 256 },
+        if selected { 256 } else { 0 },
+    );
+    let top = if selected { CARD_TOP } else { CARD_TOP + 8 };
+    let height = CARD_BOTTOM - top;
+    let mut pixels = Vec::with_capacity(width * height);
+    for y in top..CARD_BOTTOM {
+        pixels
+            .extend_from_slice(&scratch[y * LOGICAL_WIDTH + 296..y * LOGICAL_WIDTH + 296 + width]);
+    }
+    crate::launcher_flip::Face {
+        pixels,
+        width,
+        height,
+    }
 }
 
 struct PreparedCard {
@@ -102,7 +141,7 @@ impl PreparedLauncher {
                 games_mask: text_mask(&format_games(card.games)),
             })
             .collect();
-        let ordinals = (0..cards.len())
+        let ordinals: Vec<_> = (0..cards.len())
             .map(|index| text_mask(&ordinal(index, cards.len())))
             .collect();
         let collection_labels = (0..cards.len())
@@ -126,15 +165,16 @@ impl PreparedLauncher {
         };
         let mut chrome = vec![Rgb565Pixel(BACKGROUND); LOGICAL_WIDTH * LOGICAL_HEIGHT];
         render_logical(&mut chrome, source);
-        draw_rect(
-            &mut chrome,
-            296,
-            CARD_TOP,
-            638,
-            REFLECTION_TOP + REFLECTION_HEIGHT - CARD_TOP,
-            BACKGROUND,
-        );
+        draw_rect(&mut chrome, 296, 120, 638, 477 - 120, BACKGROUND);
         draw_rect(&mut chrome, 880, 95, 54, 16, BACKGROUND);
+        let faces = cards
+            .iter()
+            .zip(&ordinals)
+            .map(|(card, ordinal)| CardFaces {
+                compact: [109, 111, 121].map(|width| bake_face(card, ordinal, width, false)),
+                detail: bake_face(card, ordinal, 188, true),
+            })
+            .collect();
         Self {
             scene,
             chrome,
@@ -142,7 +182,14 @@ impl PreparedLauncher {
             cards,
             ordinals,
             collection_labels,
+            faces,
+            flip_columns: vec![crate::launcher_flip::Column::default(); LOGICAL_WIDTH],
+            reverse_flip: true,
         }
+    }
+
+    pub fn set_reverse_flip(&mut self, reverse: bool) {
+        self.reverse_flip = reverse;
     }
 
     pub fn render_into(&mut self, frame: BrowseFrame, output: &mut [Rgb565Pixel]) {
@@ -162,11 +209,17 @@ impl PreparedLauncher {
                 frame.selected,
             );
         } else {
-            draw_cached_motion(&mut self.logical, &self.cards, &self.ordinals, frame);
+            let flip = (frame.phase == crate::launcher_navigation::BrowsePhase::Flipping)
+                .then_some((
+                    &self.faces[..],
+                    &mut self.flip_columns[..],
+                    self.reverse_flip,
+                ));
+            draw_cached_motion(&mut self.logical, &self.cards, &self.ordinals, frame, flip);
         }
         // Moving neighbours may be partially outside the carousel; restore
         // the clip margins after rasterizing signed slot geometry.
-        for y in CARD_TOP..REFLECTION_TOP + REFLECTION_HEIGHT {
+        for y in 120..477 {
             let row = y * LOGICAL_WIDTH;
             self.logical[row..row + 296].copy_from_slice(&self.chrome[row..row + 296]);
             self.logical[row + 934..row + LOGICAL_WIDTH]
@@ -313,6 +366,7 @@ fn draw_cached_motion(
     cards: &[PreparedCard],
     ordinals: &[Vec<[u8; 7]>],
     motion: BrowseFrame,
+    mut flip: Option<(&[CardFaces], &mut [crate::launcher_flip::Column], bool)>,
 ) {
     let selected = motion.selected % cards.len();
     let duration = motion.duration_millis.max(1) as i32;
@@ -336,7 +390,13 @@ fn draw_cached_motion(
         2 => 121,
         _ => 109,
     };
-    let relatives: &[isize] = if right {
+    let relatives: &[isize] = if flip.is_some() && progress * 2 > duration {
+        if right {
+            &[-2, -1, 2, 3, 0, 1]
+        } else {
+            &[-3, -2, 1, 2, 0, -1]
+        }
+    } else if right {
         &[-2, -1, 1, 2, 3, 0]
     } else {
         &[-3, -2, -1, 1, 2, 0]
@@ -354,6 +414,43 @@ fn draw_cached_motion(
             } else {
                 0
             };
+            if (*relative == 0 || destination == 0) && progress > 0 && progress < duration {
+                if let Some((faces, columns, reverse)) = flip.as_mut() {
+                    let spin = (if right { 1_i64 } else { -1 }) * if *reverse { -1 } else { 1 };
+                    let angle = if *relative == 0 { 65536 } else { 0 }
+                        + spin * i64::from(progress) * 65536 / i64::from(duration);
+                    let (_, cos) = crate::launcher_flip::sin_cos(angle);
+                    let face = if cos < 0 {
+                        &faces[index].detail
+                    } else {
+                        let compact_width = if *relative == 0 {
+                            slot_width(destination)
+                        } else {
+                            slot_width(*relative)
+                        };
+                        &faces[index].compact[match compact_width {
+                            111 => 1,
+                            121 => 2,
+                            _ => 0,
+                        }]
+                    };
+                    let top = CARD_TOP as i32 + 8 - 8 * prominence / 256;
+                    crate::launcher_flip::draw(
+                        pixels,
+                        face,
+                        crate::launcher_flip::Pose {
+                            x,
+                            top,
+                            width,
+                            height: CARD_BOTTOM as i32 - top,
+                            angle,
+                        },
+                        columns,
+                        reflection_pixel,
+                    );
+                    continue;
+                }
+            }
             draw_cached_card(
                 pixels,
                 x as usize,
@@ -369,7 +466,9 @@ fn draw_cached_motion(
 }
 
 fn eased_progress(progress: u32, duration: u32) -> i32 {
-    if duration == crate::launcher_navigation::TAP_SLIDE_MS as u32 {
+    if duration == crate::launcher_navigation::TAP_SLIDE_MS as u32
+        || duration == crate::launcher_navigation::TAP_FLIP_MS as u32
+    {
         let t = progress.min(duration) as i64;
         let d = duration as i64;
         // Integer smoothstep: 3t^2 - 2t^3, with exact 0 and duration ends.

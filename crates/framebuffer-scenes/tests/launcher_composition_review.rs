@@ -50,8 +50,57 @@ fn prepared_animation_performs_no_heap_allocations() {
     for progress in (0..=180).step_by(15) {
         prepared.render_into(moving(0, BrowseDirection::Right, progress), &mut output);
     }
+    for progress in (0..=460).step_by(10) {
+        let mut frame = moving(0, BrowseDirection::Right, progress);
+        frame.phase = BrowsePhase::Flipping;
+        frame.duration_millis = 460;
+        prepared.render_into(frame, &mut output);
+    }
     WATCH_ALLOCATIONS.with(|watch| watch.set(false));
     assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+}
+
+#[test]
+fn perspective_endpoints_clipping_and_reverse_mapping() {
+    let scene = LauncherScene::new(960, 540);
+    let baseline = scene.render(data(0));
+    let mut prepared = scene.prepare(data(0));
+    let mut output = vec![Rgb565Pixel(0); 960 * 540];
+    let mut other = output.clone();
+    for direction in [BrowseDirection::Left, BrowseDirection::Right] {
+        for progress in [0, 1, 150, 229, 230, 231, 310, 459, 460] {
+            let mut frame = moving(0, direction, progress);
+            frame.phase = BrowsePhase::Flipping;
+            frame.duration_millis = 460;
+            prepared.set_reverse_flip(true);
+            prepared.render_into(frame, &mut output);
+            for row in 0..540 {
+                assert_eq!(
+                    &output[row * 960..row * 960 + 296],
+                    &baseline[row * 960..row * 960 + 296]
+                );
+                assert_eq!(
+                    &output[row * 960 + 934..(row + 1) * 960],
+                    &baseline[row * 960 + 934..(row + 1) * 960]
+                );
+            }
+            if progress == 0 || progress == 460 {
+                let expected = scene.render(data(if progress == 0 { 0 } else { frame.target }));
+                assert_eq!(
+                    &output[135 * 960..465 * 960],
+                    &expected[135 * 960..465 * 960]
+                );
+            }
+            if progress == 150 {
+                prepared.set_reverse_flip(false);
+                prepared.render_into(frame, &mut other);
+                assert_ne!(
+                    output, other,
+                    "mapping must change perspective, not navigation"
+                );
+            }
+        }
+    }
 }
 
 const CARDS: [LauncherCard<'static>; 5] = [

@@ -261,6 +261,35 @@ fn main() -> Result<(), String> {
     let launcher_labels: Vec<slint::SharedString> =
         launcher_cards.iter().map(|card| card.name.into()).collect();
     let control = Rc::new(RefCell::new(LauncherControl::new(launcher_cards.len())));
+    let reverse_flip = Rc::new(Cell::new(true));
+    {
+        let control = control.clone();
+        let dirty = launcher_dirty.clone();
+        let reverse = reverse_flip.clone();
+        let weak = probe.as_weak();
+        probe.on_configure_flips(move |flips, reversed| {
+            control.borrow_mut().configure(flips);
+            reverse.set(reversed);
+            dirty.set(true);
+            if let Some(probe) = weak.upgrade() {
+                probe.set_launcher_flip_mode(if flips { "perspective" } else { "slides" }.into());
+                probe.set_launcher_flip_mapping(if reversed { "reverse" } else { "normal" }.into());
+                probe.set_launcher_pose(-1);
+            }
+        });
+    }
+    {
+        let control = control.clone();
+        let dirty = launcher_dirty.clone();
+        let weak = probe.as_weak();
+        probe.on_preview_flip(move |right, progress| {
+            control.borrow_mut().preview(right, progress.max(0) as u32);
+            dirty.set(true);
+            if let Some(probe) = weak.upgrade() {
+                probe.set_launcher_pose(-1);
+            }
+        });
+    }
     let launcher_epoch = Rc::new(Instant::now());
     let measure_running = Rc::new(Cell::new(false));
     let measure_direction = Rc::new(Cell::new(BrowseDirection::Right));
@@ -279,8 +308,15 @@ fn main() -> Result<(), String> {
         let timer = motion_timer.clone();
         let measure = measure_running.clone();
         let session = session.clone();
+        let window = window.clone();
         move || {
             mode.set(launcher);
+            // Renderer mode is external to Slint's dependency graph. The shared
+            // output buffer currently contains custom pixels, not its last frame.
+            window
+                .renderer
+                .set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+            window.request_redraw();
             dirty.set(launcher);
             control.borrow_mut().reset(false);
             timer.stop();
@@ -424,6 +460,7 @@ fn main() -> Result<(), String> {
     let mut last_presented: Option<BrowseFrame> = None;
     let mut pending: Option<(Option<BrowseFrame>, Instant)> = None;
     let mut telemetry_start: Option<(u32, u32, u32, u32)> = None;
+    let mut flip_sample = None;
     loop {
         window.event_loop.process_pending_callbacks();
         slint::platform::update_timers_and_animations();
@@ -558,18 +595,36 @@ fn main() -> Result<(), String> {
         };
         if pending.is_none() {
             let launcher_frame = frame.expect("no pending presentation");
+            if launcher_mode.get()
+                && launcher_frame.phase == BrowsePhase::Flipping
+                && !control.borrow().is_preview()
+                && flip_sample.is_none()
+                && let Ok(t) = framebuffer.presentation_telemetry()
+                && t.lifetime_invariant_valid()
+                && t.magik_ownership()
+                && !t.pending()
+            {
+                flip_sample = Some((t, session.borrow().metrics.counters.clone()));
+            }
+            if control.borrow().is_preview() || !launcher_mode.get() {
+                flip_sample = None;
+            }
             let render_launcher = launcher_mode.get()
                 && (launcher_dirty.get() || last_presented != Some(launcher_frame));
             if render_launcher || (!launcher_mode.get() && redraw_requested) {
                 let render_start = Instant::now();
                 if render_launcher {
                     probe.set_launcher_ready(false);
+                    prepared.set_reverse_flip(reverse_flip.get());
                     prepared.render_into(launcher_frame, &mut scene_pixels);
                     for (destination, source) in cached.iter_mut().zip(&scene_pixels) {
                         *destination = Rgb565Pixel(source.0);
                     }
                 } else {
                     window.renderer.render(&mut cached, width);
+                    window
+                        .renderer
+                        .set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
                 }
                 let render_us = render_start.elapsed().as_micros() as u64;
                 let stride = framebuffer.stride_pixels();
@@ -615,6 +670,40 @@ fn main() -> Result<(), String> {
                         });
                     metrics.last_physical_drop_count = Some(receipt.drop_count);
                     metrics.counters.render_to_present_us += started.elapsed().as_micros() as u64;
+                    if posted_frame.is_some_and(|frame| frame.phase != BrowsePhase::Flipping)
+                        && let Some((baseline, counters)) = flip_sample.take()
+                        && let Ok(t) = framebuffer.presentation_telemetry()
+                        && t.lifetime_invariant_valid()
+                        && t.magik_ownership()
+                        && !t.pending()
+                    {
+                        metrics.context["tap_flip_owned_vblanks"] = u64::from(
+                            t.owned_vblank_count
+                                .wrapping_sub(baseline.owned_vblank_count),
+                        )
+                        .into();
+                        metrics.context["tap_flip_presented_vblanks"] = u64::from(
+                            t.presented_vblank_count
+                                .wrapping_sub(baseline.presented_vblank_count),
+                        )
+                        .into();
+                        metrics.context["tap_flip_repeated_vblanks"] = u64::from(
+                            t.repeated_vblank_count
+                                .wrapping_sub(baseline.repeated_vblank_count),
+                        )
+                        .into();
+                        metrics.context["tap_flip_ownership_losses"] = u64::from(
+                            t.ownership_loss_count
+                                .wrapping_sub(baseline.ownership_loss_count),
+                        )
+                        .into();
+                        metrics.context["tap_flip_drops"] =
+                            (metrics.counters.drops - counters.drops).into();
+                        metrics.context["tap_flip_rejections"] =
+                            (metrics.counters.rejections - counters.rejections).into();
+                        metrics.context["tap_flip_render_us"] =
+                            (metrics.counters.render_us - counters.render_us).into();
+                    }
                     if let Some(frame) = posted_frame {
                         last_presented = Some(frame);
                         metrics.context["selected_category"] =
@@ -629,6 +718,7 @@ fn main() -> Result<(), String> {
                         }
                         let phase = match frame.phase {
                             BrowsePhase::Settled => "settled",
+                            BrowsePhase::Flipping => "flipping",
                             BrowsePhase::Sliding => "sliding",
                             BrowsePhase::Held => "held",
                         };
@@ -636,6 +726,8 @@ fn main() -> Result<(), String> {
                             probe.set_launcher_motion_state(phase.into());
                         }
                         probe.set_launcher_ready(frame.phase == BrowsePhase::Settled);
+                        probe.set_launcher_pose(frame.progress_millis as i32);
+                        metrics.context["motion_kind"] = phase.into();
                         if frame.phase == BrowsePhase::Settled
                             && probe.get_launcher_measurement() == "draining"
                         {
