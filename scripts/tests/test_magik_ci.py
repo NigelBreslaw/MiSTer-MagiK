@@ -360,9 +360,7 @@ import scripts.magik_ci.cli
         )
 
     def test_host_groups_have_unique_commands_and_no_preview_build(self) -> None:
-        self.assertEqual(
-            HOST_GROUPS, ("static", "agent", "domain", "catalog", "app", "tools")
-        )
+        self.assertEqual(HOST_GROUPS, ("static", "domain", "catalog", "app", "tools"))
         all_commands = [command for group in HOST_GROUPS for command in commands(group)]
         self.assertEqual(
             len(all_commands), len({tuple(command) for command in all_commands})
