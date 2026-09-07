@@ -53,3 +53,23 @@ The client has one native preparation attempt and at most one transport reconnec
 per stream. Leaving the view cancels it. Frames are reconstructed before UI
 coalescing; telemetry and display updates use bounded latest-value mailboxes.
 Standalone application packaging and old-agent uninstall remain separate work.
+
+## Main-managed real application delivery
+
+Real MagiK now requires `main-managed-magik`. A compatible native service stays
+installed regardless of its build identifier. The service uses Dev Main's existing
+`launcher.env` hook to select `/media/fat/mister-magik2/magik` and its tooling
+settings, then resumes Main. It changes only a marked block in
+`/media/fat/mister-magik-dev/launcher.env`; operator settings and production paths
+are preserved. Main retains its startup handshake, input routing and FPGA ownership.
+No Main_MiSTer change is needed. Its existing installed application still supplies
+Main's platform preflight; the actual launched executable hash is checked separately.
+
+Success requires the new process to publish a frame, the executable hash to match,
+and Main to report the same PID active and ready, with FPGA owner `magik` and input
+proxy capability. An independently spawned process while Main is suspended is no
+longer healthy. Stopping or replacing a managed app suspends it through Main, never
+signals the supervised child directly. Test/profile settings use the same marked
+block; ending the session replaces them on normal restoration. Mini remains an
+independent bounded workload. Failed starts report the Main state without rebooting
+or silently retrying the deployment.
