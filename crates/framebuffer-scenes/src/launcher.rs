@@ -276,7 +276,7 @@ fn draw_carousel_motion(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>, moti
                 x as usize,
                 width as usize,
                 data.cards[index],
-                relative == 0,
+                false,
                 index,
                 data.cards.len(),
             );
@@ -396,7 +396,7 @@ fn draw_cached_motion(
                 x as usize,
                 width as usize,
                 &cards[index],
-                relative == 0,
+                false,
                 &ordinals[index],
                 (353 - 133 * prominence / 256) as usize,
                 (256 + 512 * prominence / 256) as usize,
