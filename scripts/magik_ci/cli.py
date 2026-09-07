@@ -15,6 +15,39 @@ from .common import github_output, repository_root
 def parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="magik-ci")
     sub = parser.add_subparsers(dest="group", required=True)
+    dependencies = sub.add_parser("dependencies").add_subparsers(
+        dest="command", required=True
+    )
+    sync = dependencies.add_parser("sync")
+    sync.add_argument("manifest", type=Path)
+    sync.add_argument("--package")
+    clean = sub.add_parser("clean")
+    clean.add_argument("--manifest", type=Path, required=True)
+    clean.add_argument("--package", required=True)
+    evidence = sub.add_parser("evidence").add_subparsers(dest="command", required=True)
+    export = evidence.add_parser("export")
+    export.add_argument("--database", type=Path, required=True)
+    export.add_argument("--output", type=Path, required=True)
+    guidance = sub.add_parser("guidance")
+    guidance.add_argument("path", type=Path)
+    guidance.add_argument("--json", action="store_true")
+    plan = sub.add_parser("plan")
+    plan.add_argument("arguments", nargs=argparse.REMAINDER)
+    capture = sub.add_parser("capture-usb")
+    capture.add_argument("--output", type=Path)
+    capture.add_argument("--seconds", type=int, choices=range(1, 61))
+    from .compile_time import TARGETS
+
+    compile_parser = sub.add_parser("compile-time")
+    compile_sub = compile_parser.add_subparsers(dest="command", required=True)
+    measure = compile_sub.add_parser("measure")
+    measure.add_argument("target", choices=TARGETS)
+    measure.add_argument("--target-dir", type=Path, required=True)
+    measure.add_argument("--output", type=Path, required=True)
+    measure.add_argument("--kind", choices=("cold", "incremental"), required=True)
+    compare = compile_sub.add_parser("compare")
+    compare.add_argument("baseline", type=Path)
+    compare.add_argument("candidate", type=Path)
     architecture_parser = sub.add_parser("architecture")
     architecture_sub = architecture_parser.add_subparsers(dest="command", required=True)
     report = architecture_sub.add_parser("report")
@@ -234,7 +267,66 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     root = repository_root()
-    if args.group == "architecture":
+    if args.group == "guidance":
+        from . import guidance
+
+        record = guidance.report(root, args.path)
+        print(json.dumps(record) if args.json else guidance.render(record))
+    elif args.group == "plan":
+        import subprocess
+        import sys
+
+        subprocess.run(
+            [
+                sys.executable,
+                str(root / "scripts/checks/pre-push.py"),
+                "--repository",
+                str(root),
+                "--plan",
+                *args.arguments,
+            ],
+            check=True,
+        )
+    elif args.group == "capture-usb":
+        import subprocess
+
+        command = [
+            str(root / "scripts/cargo"),
+            "run",
+            "--quiet",
+            "--locked",
+            "--manifest-path",
+            str(root / "tools/usb-video/Cargo.toml"),
+            "--",
+        ]
+        if args.output:
+            command += ["--output", str(args.output)]
+        if args.seconds is not None:
+            command += ["--seconds", str(args.seconds)]
+        subprocess.run(command, cwd=root, check=True)
+    elif args.group == "compile-time":
+        from . import compile_time
+
+        if args.command == "measure":
+            result = compile_time.measure(
+                root, args.target, args.target_dir, args.output, args.kind
+            )
+        else:
+            result = compile_time.compare(
+                json.loads(args.baseline.read_text()),
+                json.loads(args.candidate.read_text()),
+            )
+        print(json.dumps(result, indent=2))
+    elif args.group in {"dependencies", "clean", "evidence"}:
+        from . import maintenance
+
+        if args.group == "dependencies":
+            maintenance.dependencies(root, args.manifest, args.package)
+        elif args.group == "clean":
+            maintenance.clean(root, args.manifest, args.package)
+        else:
+            maintenance.export_evidence(args.database, args.output)
+    elif args.group == "architecture":
         architecture.execute(root, args)
     elif args.group == "build":
         build.execute(root, args.intent)

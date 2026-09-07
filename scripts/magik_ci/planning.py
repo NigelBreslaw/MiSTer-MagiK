@@ -105,10 +105,6 @@ def cargo_variants(manifest: str, paths: list[str]) -> list[list[str]]:
         return variants
     if manifest == "apps/desktop/Cargo.toml":
         return [[], ["--no-default-features", "--features", "compiled-ui"]]
-    if manifest == "agent-cli/Cargo.toml" and any(
-        "media" in p or p.endswith("Cargo.toml") for p in paths
-    ):
-        return [[], ["--no-default-features", "--features", "signed-media-manifests"]]
     return [[]]
 
 

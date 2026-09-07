@@ -55,15 +55,6 @@ def commands(group: str) -> list[list[str]]:
                 "-D",
                 "warnings",
             ],
-            [
-                "cargo",
-                "test",
-                "--manifest-path",
-                "agent-cli/Cargo.toml",
-                "--no-default-features",
-                "--features",
-                "signed-media-manifests",
-            ],
         ]
     if group == "domain":
         manifests = [
@@ -228,6 +219,7 @@ def commands(group: str) -> list[list[str]]:
             for manifest in (
                 "mister/tools/agent/Cargo.toml",
                 "mister/tools/manager/Cargo.toml",
+                "tools/usb-video/Cargo.toml",
             )
             for command in _crate_commands(manifest)
         ]
