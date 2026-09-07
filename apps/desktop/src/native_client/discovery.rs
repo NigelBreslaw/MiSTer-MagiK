@@ -17,6 +17,7 @@ const CAPS: &[&str] = &[
     "status",
     "device-identity-v1",
     "dashboard-status",
+    "application-process-analytics",
     "sd-browser",
     "framebuffer-stream",
     "telemetry-stream",

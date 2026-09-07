@@ -22,7 +22,7 @@ complete old-agent/protocol/startup/artifact deletion. Desktop no longer blocks 
 ### Desktop validation and hardware acceptance (2026-09-07)
 
 The tooling branch is `nigel/desktop-native-api`; the dependent consumer branch
-is `nigel/desktop-api-cleanup`. Neither is published. Both complete diffs pass
+is `nigel/desktop-api-cleanup`. Both complete diffs pass
 the unchanged tooling scope guard against their respective bases.
 
 Focused native checks, SD/telemetry/relay/lease fixtures, Desktop wire/discovery/
@@ -55,6 +55,27 @@ now wait for a producer keyframe; still screenshots remain explicitly requested.
 No further hardware capture was run. Review also tightened malformed telemetry
 validation and classified invalid wire data as a protocol error, avoiding a
 transport retry for malformed input. Images/logs remain local, outside commits.
+
+### Deployment regression follow-up
+
+Real-app deployment had reused Mini's independent spawn path: Main remained
+`LauncherSuspended` while the Rust app rendered. Main only forwards physical
+input when `LauncherActive`. The native fix now selects the 2.0 executable using
+Dev Main's existing `launcher.env` hook and resumes its managed launcher. No
+Main_MiSTer change or reboot is required. It verifies the executable hash, first
+presentation, active Main child PID, input protocol and FPGA ownership together.
+
+The corrected deployment on 2026-09-07 reported `LauncherActive`, PID 3637,
+`launcher_ready_phase=ready`, `fpga_owner=magik`, input proxy protocol 2, zero
+crashes and zero supervised restarts. The user confirmed joystick navigation
+works. Evidence: ignored run `20260907T172923Z-57c2a93809d6`. The earlier
+independent-spawn acceptance is retained above as historical evidence of the bug.
+
+Review also corrected process Analytics to recognize the installed 2.0 `magik`
+executable under the canonical application model. A fixture verifies its PID and
+RSS are included. Compatible service builds remain installed; Desktop requests
+the explicit `application-process-analytics` capability when preparation is needed.
+The intermittent physical-screen black flash is not claimed fixed or reproduced.
 
 ## Current disposition after host migration
 
