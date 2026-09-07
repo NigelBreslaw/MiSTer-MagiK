@@ -202,6 +202,23 @@ void mister_magik_rgb565_blend(
 ) {
     const uint16_t clamped_alpha = alpha > 32u ? 32u : alpha;
     size_t index = start;
+    if (clamped_alpha == 16u) {
+        // Floor-average each RGB565 channel without cross-channel carries.
+        // Mask each channel's low bit before shifting the differing bits.
+        const uint16x8_t mask = vdupq_n_u16(0xf7de);
+        for (; index + 7 < end; index += 8) {
+            const uint16x8_t from = vld1q_u16(previous + index);
+            const uint16x8_t to = vld1q_u16(current + index);
+            const uint16x8_t half_difference =
+                vshrq_n_u16(vandq_u16(veorq_u16(from, to), mask), 1);
+            vst1q_u16(destination + index, vaddq_u16(vandq_u16(from, to), half_difference));
+        }
+        for (; index < end; ++index) {
+            const uint16_t from = previous[index], to = current[index];
+            destination[index] = (from & to) + (((from ^ to) & 0xf7deu) >> 1);
+        }
+        return;
+    }
     for (; index + 7 < end; index += 8) {
         const uint16x8_t from = vld1q_u16(previous + index);
         const uint16x8_t to = vld1q_u16(current + index);
