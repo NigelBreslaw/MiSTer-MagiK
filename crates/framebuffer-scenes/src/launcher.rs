@@ -168,7 +168,7 @@ fn draw_card(
     if selected {
         draw_rect_outline(pixels, x, top, width, bottom - top, CREAM);
         draw_rect_outline(pixels, x + 4, top + 4, width - 8, bottom - top - 8, CREAM);
-        let foreground = if card.colour == rgb(199, 190, 167) {
+        let foreground = if is_light_card(card.colour) {
             DARK_TEXT
         } else {
             WHITE
@@ -184,15 +184,29 @@ fn draw_card(
             1,
         );
     } else {
-        draw_text(pixels, x + 15, 151, &ordinal(index, card_count), CREAM, 1);
-        let foreground = if card.colour == rgb(199, 190, 167) {
+        let foreground = if is_light_card(card.colour) {
             DARK_TEXT
         } else {
             CREAM
         };
+        draw_text(
+            pixels,
+            x + 15,
+            151,
+            &ordinal(index, card_count),
+            foreground,
+            1,
+        );
         draw_text_centered(pixels, x, 353, width, card.name, foreground, 1);
     }
     draw_reflection(pixels, x, width, bottom);
+}
+
+fn is_light_card(colour: u16) -> bool {
+    let red = ((colour >> 11) & 31) * 255 / 31;
+    let green = ((colour >> 5) & 63) * 255 / 63;
+    let blue = (colour & 31) * 255 / 31;
+    red + green + blue > 480
 }
 
 fn format_games(games: u32) -> String {
