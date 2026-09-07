@@ -1,5 +1,6 @@
 //! Bounded native control framing for the independently owned MagiK 2.0 agent.
 
+mod benchmark;
 mod capture;
 mod main_control;
 mod upload;
@@ -164,6 +165,7 @@ impl Agent {
 
     pub fn capabilities() -> &'static [&'static str] {
         &[
+            "run-benchmark-v2",
             "status",
             "transfer-check",
             "applications",
@@ -343,6 +345,10 @@ impl Agent {
         let mut body = vec![0; body_length];
         wire::DeadlineReader { stream, deadline }.read_exact(&mut body)?;
 
+        if request.op == "run-benchmark" {
+            let _mutation = self.mutations.lock().expect("mutation state poisoned");
+            return self.run_benchmark(stream, &request, &body);
+        }
         if request.op == "capture-framebuffer" {
             if !body.is_empty() || !request.fields.is_empty() {
                 return write_frame(
