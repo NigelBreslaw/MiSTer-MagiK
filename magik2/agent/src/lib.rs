@@ -168,6 +168,7 @@ impl Agent {
         &[
             "run-benchmark-v2",
             "status",
+            "device-identity-v1",
             "transfer-check",
             "applications",
             "main-input-proxy",

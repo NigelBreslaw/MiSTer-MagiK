@@ -13,7 +13,9 @@ from .token_store import state_root
 
 
 def device_identity(value: object) -> str:
-    if not isinstance(value, str) or not re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", value.lower()):
+    if not isinstance(value, str) or not re.fullmatch(
+        r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", value.lower()
+    ):
         raise ValueError("MiSTer returned an invalid device identity")
     value = value.lower()
     if value in {"00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"}:
@@ -33,11 +35,18 @@ class DeviceProfile:
             fields = json.loads(((root or state_root()) / "device.json").read_text())
         except FileNotFoundError:
             return None
-        if not isinstance(fields, dict) or set(fields) != {"identity", "address", "username"}:
+        if not isinstance(fields, dict) or set(fields) != {
+            "identity",
+            "address",
+            "username",
+        }:
             raise ValueError("invalid remembered MiSTer configuration")
         profile = cls(**fields)
         device_identity(profile.identity)
-        if not all(isinstance(value, str) and value for value in (profile.address, profile.username)):
+        if not all(
+            isinstance(value, str) and value
+            for value in (profile.address, profile.username)
+        ):
             raise ValueError("invalid remembered MiSTer configuration")
         return profile
 

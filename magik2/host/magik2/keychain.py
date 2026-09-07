@@ -18,25 +18,63 @@ class Keychain:
             raise KeychainError("macOS Keychain is unavailable on this platform")
         try:
             self.api = C.CDLL("/System/Library/Frameworks/Security.framework/Security")
-            self.core = C.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+            self.core = C.CDLL(
+                "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+            )
         except OSError as error:
             raise KeychainError("macOS Keychain is unavailable") from error
-        self.api.SecKeychainFindGenericPassword.argtypes = [C.c_void_p, C.c_uint32, C.c_char_p, C.c_uint32, C.c_char_p, C.POINTER(C.c_uint32), C.POINTER(C.c_void_p), C.POINTER(C.c_void_p)]
-        self.api.SecKeychainAddGenericPassword.argtypes = [C.c_void_p, C.c_uint32, C.c_char_p, C.c_uint32, C.c_char_p, C.c_uint32, C.c_void_p, C.POINTER(C.c_void_p)]
-        self.api.SecKeychainItemModifyAttributesAndData.argtypes = [C.c_void_p, C.c_void_p, C.c_uint32, C.c_void_p]
+        self.api.SecKeychainFindGenericPassword.argtypes = [
+            C.c_void_p,
+            C.c_uint32,
+            C.c_char_p,
+            C.c_uint32,
+            C.c_char_p,
+            C.POINTER(C.c_uint32),
+            C.POINTER(C.c_void_p),
+            C.POINTER(C.c_void_p),
+        ]
+        self.api.SecKeychainAddGenericPassword.argtypes = [
+            C.c_void_p,
+            C.c_uint32,
+            C.c_char_p,
+            C.c_uint32,
+            C.c_char_p,
+            C.c_uint32,
+            C.c_void_p,
+            C.POINTER(C.c_void_p),
+        ]
+        self.api.SecKeychainItemModifyAttributesAndData.argtypes = [
+            C.c_void_p,
+            C.c_void_p,
+            C.c_uint32,
+            C.c_void_p,
+        ]
         self.api.SecKeychainItemFreeContent.argtypes = [C.c_void_p, C.c_void_p]
         self.core.CFRelease.argtypes = [C.c_void_p]
 
     @staticmethod
     def _check(status: int) -> None:
         if status:
-            detail = "access denied or interaction unavailable" if status in {-25293, -25308, -128} else "operation failed"
+            detail = (
+                "access denied or interaction unavailable"
+                if status in {-25293, -25308, -128}
+                else "operation failed"
+            )
             raise KeychainError(f"macOS Keychain {detail} (status {status})")
 
     def _find(self, identity: str, username: str):
         account = f"{identity}/{username}".encode()
         length, data, item = C.c_uint32(), C.c_void_p(), C.c_void_p()
-        status = self.api.SecKeychainFindGenericPassword(None, len(self.service), self.service, len(account), account, C.byref(length), C.byref(data), C.byref(item))
+        status = self.api.SecKeychainFindGenericPassword(
+            None,
+            len(self.service),
+            self.service,
+            len(account),
+            account,
+            C.byref(length),
+            C.byref(data),
+            C.byref(item),
+        )
         if status == -25300:
             return account, None, None
         self._check(status)
@@ -57,9 +95,20 @@ class Keychain:
         secret = password.encode()
         try:
             if item:
-                status = self.api.SecKeychainItemModifyAttributesAndData(item, None, len(secret), secret)
+                status = self.api.SecKeychainItemModifyAttributesAndData(
+                    item, None, len(secret), secret
+                )
             else:
-                status = self.api.SecKeychainAddGenericPassword(None, len(self.service), self.service, len(account), account, len(secret), secret, None)
+                status = self.api.SecKeychainAddGenericPassword(
+                    None,
+                    len(self.service),
+                    self.service,
+                    len(account),
+                    account,
+                    len(secret),
+                    secret,
+                    None,
+                )
             self._check(status)
         finally:
             if item:
