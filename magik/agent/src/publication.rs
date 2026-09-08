@@ -344,6 +344,52 @@ fn reload_healthy(previous: &Value, expected: &str) -> Result<(), String> {
     }
 }
 
+fn database_hashes(staged: &Path) -> Result<Value, String> {
+    let mut hashes = serde_json::Map::new();
+    for name in DATABASES {
+        hashes.insert(
+            (*name).to_owned(),
+            json!(crate::media::hash(&staged.join(name))?),
+        );
+    }
+    Ok(Value::Object(hashes))
+}
+
+fn finish_databases(staged: &Path, pending: &Value, assets: &Path) -> Result<(), String> {
+    let expected = pending["database_sha256"]
+        .as_object()
+        .ok_or("database publication has no persisted hashes; restore explicitly")?;
+    if expected.len() != DATABASES.len() {
+        return Err(
+            "database publication has incomplete persisted hashes; restore explicitly".into(),
+        );
+    }
+    for name in DATABASES {
+        let hash = expected
+            .get(*name)
+            .and_then(Value::as_str)
+            .ok_or("database publication has incomplete persisted hashes; restore explicitly")?;
+        if crate::media::hash(&assets.join(name))? != hash {
+            return Err("database publication is incomplete; restore explicitly".into());
+        }
+    }
+    fs::remove_dir_all(staged).map_err(|e| e.to_string())
+}
+
+fn platform_active(
+    state: &Value,
+    running_hash: Option<&str>,
+    installed_hash: Option<&str>,
+) -> bool {
+    state["running"]["executable_path"] == Layout::Development.paths().main
+        && state["running"]["scanout_slots_module_loaded"] == true
+        && running_hash.is_some()
+        && running_hash == installed_hash
+        && state["stages"]
+            .as_array()
+            .is_some_and(|stages| stages.is_empty())
+}
+
 impl crate::Agent {
     pub(super) fn publication_state(
         &self,
@@ -361,16 +407,13 @@ impl crate::Agent {
             let running_hash = state["running"]["pid"]
                 .as_u64()
                 .and_then(|pid| crate::media::hash(Path::new(&format!("/proc/{pid}/exe"))).ok());
-            state["platform"]["active"] = json!(
-                state["running"]["executable_path"] == paths.main
-                    && state["running"]["launcher_ready_phase"] == "ready"
-                    && state["running"]["scanout_slots_module_loaded"] == true
-                    && running_hash.is_some()
-                    && running_hash == crate::media::hash(Path::new(paths.main)).ok()
-                    && state["stages"]
-                        .as_array()
-                        .is_some_and(|stages| stages.is_empty())
-            );
+            // Application readiness is handled by deploy/start. Main and the
+            // module remain active while the launcher is idle in the stock menu.
+            state["platform"]["active"] = json!(platform_active(
+                &state,
+                running_hash.as_deref(),
+                crate::media::hash(Path::new(paths.main)).ok().as_deref(),
+            ));
             state["configured_main"] = crate::mode::status()?["configured_main"].clone();
             state["boot_id"] = json!(
                 fs::read_to_string("/proc/sys/kernel/random/boot_id").map_err(|e| e.to_string())?
@@ -408,17 +451,15 @@ impl crate::Agent {
             match request.fields.get("action").and_then(Value::as_str) {
                 Some("finish") => {
                     if pending["kind"] == "databases" {
-                        let fields = json!({"stage":request.fields["stage"],"kind":"databases","layout":pending["layout"]});
-                        for (source, destination) in
-                            files(&self.install_root, fields.as_object().unwrap())?
-                        {
-                            if crate::media::hash(&source)? != crate::media::hash(&destination)? {
-                                return Err(
-                                    "database publication is incomplete; restore explicitly".into(),
-                                );
-                            }
-                        }
-                        fs::remove_dir_all(root).map_err(|e| e.to_string())?;
+                        let layout = Layout::parse(
+                            pending["layout"].as_str().ok_or("pending layout absent")?,
+                        )
+                        .map_err(|e| e.to_string())?;
+                        finish_databases(
+                            &root,
+                            &pending,
+                            &Path::new(layout.paths().root).join("assets"),
+                        )?;
                         return Ok(json!({"activated":true}));
                     }
                     if pending["boot_id"]
@@ -542,7 +583,10 @@ impl crate::Agent {
                 } else {
                     "game-databases-manifest.json"
                 };
-                let pending = json!({"kind":fields["kind"],"layout":fields["layout"],"manifest_sha256":crate::media::hash(&root.join(expected_manifest))?,"boot_id":fs::read_to_string("/proc/sys/kernel/random/boot_id").map_err(|e|e.to_string())?});
+                let mut pending = json!({"kind":fields["kind"],"layout":fields["layout"],"manifest_sha256":crate::media::hash(&root.join(expected_manifest))?,"boot_id":fs::read_to_string("/proc/sys/kernel/random/boot_id").map_err(|e|e.to_string())?});
+                if fields["kind"] == "databases" {
+                    pending["database_sha256"] = database_hashes(&root)?;
+                }
                 fs::write(
                     root.join("pending.json"),
                     serde_json::to_vec(&pending).unwrap(),
@@ -606,6 +650,61 @@ impl crate::Agent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn database_finish_uses_persisted_hashes_after_replacement() {
+        let root = std::env::temp_dir().join(format!("magik-db-finish-{}", std::process::id()));
+        let staged = root.join("stage");
+        let assets = root.join("assets");
+        fs::create_dir_all(&staged).unwrap();
+        fs::create_dir_all(&assets).unwrap();
+        for name in DATABASES {
+            fs::write(staged.join(name), format!("new {name}")).unwrap();
+            fs::write(assets.join(name), b"old").unwrap();
+        }
+        let pending = json!({"database_sha256":database_hashes(&staged).unwrap()});
+        fs::write(
+            staged.join("pending.json"),
+            serde_json::to_vec(&pending).unwrap(),
+        )
+        .unwrap();
+        let paths: Vec<_> = DATABASES
+            .iter()
+            .map(|name| (staged.join(name), assets.join(name)))
+            .collect();
+        replace(&paths, &staged.join("backup"), || Ok(())).unwrap();
+        // Simulate interruption after replacement, before stage cleanup. Every
+        // source has been renamed away, including the staged manifest.
+        assert!(DATABASES.iter().all(|name| !staged.join(name).exists()));
+        let persisted =
+            serde_json::from_slice(&fs::read(staged.join("pending.json")).unwrap()).unwrap();
+        fs::write(assets.join(DATABASES[0]), b"corrupt").unwrap();
+        assert!(finish_databases(&staged, &persisted, &assets).is_err());
+        assert!(staged.join("backup/transaction.json").exists());
+        fs::write(assets.join(DATABASES[0]), format!("new {}", DATABASES[0])).unwrap();
+        assert!(finish_databases(&staged, &json!({}), &assets).is_err());
+        assert!(staged.exists());
+        finish_databases(&staged, &persisted, &assets).unwrap();
+        assert!(!staged.exists());
+        assert!(DATABASES.iter().all(|name| assets.join(name).exists()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn platform_activation_does_not_require_a_running_application() {
+        let mut state = json!({"running":{"executable_path":Layout::Development.paths().main,
+            "scanout_slots_module_loaded":true,"launcher_ready_phase":"idle"},"stages":[]});
+        assert!(platform_active(&state, Some("main"), Some("main")));
+        state["running"]["launcher_ready_phase"] = json!("ready");
+        assert!(platform_active(&state, Some("main"), Some("main")));
+        assert!(!platform_active(&state, Some("old"), Some("main")));
+        assert!(!platform_active(&state, None, None));
+        state["running"]["scanout_slots_module_loaded"] = json!(false);
+        assert!(!platform_active(&state, Some("main"), Some("main")));
+        state["running"]["scanout_slots_module_loaded"] = json!(true);
+        state["stages"] = json!([{"stage":"unfinished"}]);
+        assert!(!platform_active(&state, Some("main"), Some("main")));
+    }
+
     #[test]
     fn installed_state_hashes_databases_and_retains_interrupted_stage() {
         let root =

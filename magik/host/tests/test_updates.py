@@ -102,6 +102,48 @@ def test_current_pair_is_noop_on_multiple_devices(deploy_case, tmp_path):
     assert len(list((updates.root() / "devices").glob("*.json"))) == 2
 
 
+def test_queued_deploy_starts_idle_application(deploy_case, tmp_path, monkeypatch):
+    from argparse import Namespace
+    from magik import cli
+    from magik.build import BuildResult
+    from magik.compatibility import AgentStatus
+    from magik.protocol import sha256_hex
+    from magik.results import create_run
+
+    pair, current, publish = deploy_case
+    current["running"]["launcher_ready_phase"] = "idle"
+    artifact = tmp_path / "application"
+    artifact.write_bytes(b"application")
+    status = AgentStatus(
+        "device",
+        frozenset(),
+        {
+            "running": False,
+            "ready": False,
+            "artifacts": {"magik": sha256_hex(b"application")},
+        },
+    )
+    agent = Mock()
+    agent.status.return_value = status
+    monkeypatch.setattr(updates, "desired", lambda: pair)
+    monkeypatch.setattr(cli, "connect_agent", lambda *_: (agent, status))
+    monkeypatch.setattr(
+        cli, "ensure_arm_application", lambda *_: BuildResult(artifact, False, 0)
+    )
+    monkeypatch.setattr(cli, "retain_diagnostics", lambda *_: None)
+    assert (
+        cli.deploy(
+            Namespace(app="magik", attended=False), create_run(tmp_path, "deploy", {})
+        )
+        == 0
+    )
+    publish.assert_not_called()
+    agent.upload.assert_not_called()
+    agent.start.assert_called_once_with(
+        expected_sha256=sha256_hex(b"application"), restart=False
+    )
+
+
 def test_missing_attendance_prevents_all_publication(deploy_case, tmp_path):
     pair, current, publish = deploy_case
     current["platform"]["version"] = 1
