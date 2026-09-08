@@ -119,6 +119,7 @@ def desired():
 
 
 def update(*, return_pair=False):
+    print("Discovering latest published platform and databases...", flush=True)
     with lock(root() / "download.lock"):
         result = subprocess.run(
             [
@@ -173,6 +174,7 @@ def update(*, return_pair=False):
                 with tempfile.TemporaryDirectory(
                     dir=directory.parent, prefix="download-"
                 ) as temporary:
+                    print(f"Downloading {tag}...", flush=True)
                     args = [
                         "gh",
                         "release",
@@ -190,7 +192,7 @@ def update(*, return_pair=False):
                     os.rename(temporary, directory)
                 outcome = "downloaded"
             pair[kind] = entry
-            print(f"{tag}: {outcome}, verified: {directory.resolve()}")
+            print(f"{tag}: {outcome}, verified: {directory.resolve()}", flush=True)
         atomic_json(root() / "desired.json", pair)
         print("Queued for all devices.")
         if not return_pair:

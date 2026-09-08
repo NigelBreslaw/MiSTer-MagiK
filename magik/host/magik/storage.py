@@ -159,6 +159,9 @@ class Storage:
         }
 
     def owned(self, entry: dict) -> tuple[Path, str] | None:
+        if re.fullmatch(r"magik2-v1-[0-9a-f]{12}-[0-9a-f]{12}", entry["id"]):
+            # Known retired namespace is retained, never adopted or auto-deleted.
+            return None
         config = entry["configuration"]
         labels = config.get("labels", {})
         if labels.get(LABEL + "version") != VERSION:
@@ -433,7 +436,14 @@ class Storage:
                         )
                     ownership = self.owned(entry)
                     if ownership is None:
-                        if LABEL + "version" in config.get("labels", {}):
+                        if re.fullmatch(
+                            r"magik2-v1-[0-9a-f]{12}-[0-9a-f]{12}", entry["id"]
+                        ):
+                            row.update(
+                                ownership="legacy-retained",
+                                reason="retired MagiK 2 container; explicit cleanup required",
+                            )
+                        elif LABEL + "version" in config.get("labels", {}):
                             row.update(
                                 ownership="other-manager",
                                 reason="different management version or state root",
@@ -585,7 +595,8 @@ class Storage:
                 if (
                     record["version"] != VERSION
                     or not re.fullmatch(r"[0-9a-f]{12}", path.stem)
-                    or ref != f"magik-build:{path.stem}"
+                    or ref
+                    not in {f"magik-build:{path.stem}", f"magik2-build:{path.stem}"}
                 ):
                     raise ValueError("invalid managed image record")
                 last_used = self.timestamp(record["last_used"])
@@ -593,6 +604,12 @@ class Storage:
                     continue
                 if images[ref] != record["digest"]:
                     raise ValueError("image digest changed; skipped")
+                if ref == f"magik2-build:{path.stem}":
+                    image_rows[ref].update(
+                        ownership="legacy-retained",
+                        reason="retired MagiK 2 image; explicit cleanup required",
+                    )
+                    continue
                 eligible = (
                     path.stem not in protected_recipes
                     and images[ref] not in protected

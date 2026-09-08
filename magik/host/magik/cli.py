@@ -273,6 +273,7 @@ def deploy(_arguments: argparse.Namespace, run: Path) -> int:
             | (
                 {
                     "publication-state-v1",
+                    "publication-runtime-evidence-v1",
                     "publication-v1",
                     "platform-publication-v1",
                     "service-boot-v1",

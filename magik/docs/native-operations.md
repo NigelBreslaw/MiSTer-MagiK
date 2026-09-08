@@ -59,7 +59,14 @@ platform transaction is finished automatically only when its saved host journal
 matches and a new boot is confirmed. Otherwise deployment stops with the stage ID
 for explicit inspection/restoration; it never repeats an ambiguous reboot.
 
-Before platform replacement, native `service-boot-state`/`service-boot-install`
+Every real-MagiK deployment with queued releases checks native boot registration,
+including already-current devices and recovered platform transactions. Missing
+registration is repaired idempotently before further publication or a completion
+receipt. Database-only/current-platform registration needs no attendance or reboot;
+platform activation still requires attendance. Receipts include `service_boot`.
+This verifies startup configuration, not a witnessed successful future boot.
+
+Native `service-boot-state`/`service-boot-install`
 operations verify/register the service through MiSTer's `linux/user-startup.sh`
 hook. Existing commands are preserved, with the original saved as
 `mister-magik2/user-startup.before-magik`. No boot-mode changes or reboot loops
@@ -70,6 +77,21 @@ an ambiguous reboot to recover connectivity.
 Host download and build preparation check disk headroom before proceeding.
 The CLI uses its frozen lock; private Slint testing dependencies are installed
 only for `check`, not update/deploy. Build errors retain container diagnostics.
+CLI output is unbuffered; discovery, download, reconciliation, preparation and
+installation phases are emitted as they happen.
+
+### What verification proves
+
+`publication-state` includes `platform.runtime_verification` under the
+`publication-runtime-evidence-v1` capability. Installed artifact hashes and
+the platform's existing `verified` flag describe files, not every running component.
+Main's running `/proc/PID/exe` SHA-256 is reported with `matches_installed`.
+The scanout module's `loaded` flag is separate from its unknown loaded build
+identity; FPGA identity is likewise unknown. `identity_verified: null` means
+unsupported evidence, not success. The Linux kernel image is not managed by this
+platform update (the scanout `.ko` is a kernel module). The CLI explicitly reports
+these limits; older responses without runtime evidence are reported as unavailable.
+Hardware acceptance must still verify a service return after an attended boot.
 
 Download/verification errors preserve the previous desired pair; installation
 errors retain the newly verified desired pair for recovery. Corrupt cached releases fail

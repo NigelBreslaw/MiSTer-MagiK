@@ -8,6 +8,16 @@ import zipfile
 import pytest
 
 from magik import updates, update_deploy
+from magik.update_deploy import ensure_service_boot
+
+
+def test_verification_progress_is_flushed(deploy_case, monkeypatch):
+    _, current, _ = deploy_case
+    writer = Mock()
+    monkeypatch.setattr("builtins.print", writer)
+    update_deploy.report_verification(current)
+    assert writer.call_count == 2
+    assert all(call.kwargs.get("flush") is True for call in writer.call_args_list)
 
 
 def test_boot_registration_reconciles_lost_reply_without_replay():
@@ -117,6 +127,9 @@ def deploy_case(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(update_deploy, "state", lambda *_: current)
     monkeypatch.setattr(update_deploy, "ensure_arm_application", Mock())
+    monkeypatch.setattr(
+        update_deploy, "ensure_service_boot", Mock(return_value={"ready": True})
+    )
     publish = Mock()
     monkeypatch.setattr(update_deploy, "publish", publish)
     return pair, current, publish
@@ -128,6 +141,102 @@ def test_current_pair_is_noop_on_multiple_devices(deploy_case, tmp_path):
         update_deploy.apply_updates(Mock(), identity, pair, tmp_path, False)
     publish.assert_not_called()
     assert len(list((updates.root() / "devices").glob("*.json"))) == 2
+
+
+@pytest.mark.parametrize("recover", [False, True])
+@pytest.mark.parametrize("database_change", [False, True])
+@pytest.mark.parametrize("boot_ready", [False, True])
+def test_boot_check_includes_recovery_and_current_platform(
+    deploy_case, tmp_path, monkeypatch, recover, database_change, boot_ready
+):
+    pair, current, publish = deploy_case
+    monkeypatch.setattr(update_deploy, "ensure_service_boot", ensure_service_boot)
+    monkeypatch.setattr(update_deploy, "database_files", lambda *_: {"db": tmp_path})
+    if database_change:
+        current["databases"]["version"] = 1
+    if recover:
+        current["stages"] = [
+            {
+                "stage": "a" * 32,
+                "pending": {"kind": "platform", "layout": "dev", "boot_id": "previous"},
+            }
+        ]
+        previous = tmp_path / "previous"
+        updates.atomic_json(previous / "platform/publication.json", {"stage": "a" * 32})
+        updates.atomic_json(
+            updates.root()
+            / "devices"
+            / f"{hashlib.sha256(b'one').hexdigest()}-pending.json",
+            {"run": str(previous)},
+        )
+    agent = Mock()
+    installed_boot = boot_ready
+
+    def request(operation, fields, **kwargs):
+        nonlocal installed_boot
+        if operation == "publication-control":
+            assert fields["action"] == "finish"
+            current["stages"] = []
+            return SimpleNamespace(operation="publication-complete", fields={}), b""
+        if operation == "service-boot-install":
+            assert kwargs["attempts"] == 1
+            installed_boot = True
+        else:
+            assert operation == "service-boot-state"
+        return SimpleNamespace(
+            operation="service-boot-state", fields={"ready": installed_boot}
+        ), b""
+
+    agent._request.side_effect = request
+
+    def published(*args, **kwargs):
+        assert installed_boot
+        assert kwargs["kind"] == "databases"
+        current["databases"]["version"] = 2
+
+    publish.side_effect = published
+    update_deploy.apply_updates(agent, "one", pair, tmp_path, recover)
+    operations = [call.args[0] for call in agent._request.call_args_list]
+    assert operations.count("service-boot-install") == int(not boot_ready)
+    assert publish.call_count == int(database_change)
+    receipt = json.loads(
+        (
+            updates.root() / "devices" / f"{hashlib.sha256(b'one').hexdigest()}.json"
+        ).read_text()
+    )
+    assert receipt["service_boot"]["ready"] is True
+
+
+def test_boot_failure_blocks_completion_and_database_install(
+    deploy_case, tmp_path, monkeypatch
+):
+    pair, current, publish = deploy_case
+    current["databases"]["version"] = 1
+    monkeypatch.setattr(update_deploy, "database_files", lambda *_: {"db": tmp_path})
+    monkeypatch.setattr(
+        update_deploy,
+        "ensure_service_boot",
+        Mock(side_effect=RuntimeError("boot unverified")),
+    )
+    with pytest.raises(RuntimeError, match="boot unverified"):
+        update_deploy.apply_updates(Mock(), "one", pair, tmp_path, False)
+    publish.assert_not_called()
+    assert not (
+        updates.root() / "devices" / f"{hashlib.sha256(b'one').hexdigest()}.json"
+    ).exists()
+
+
+def test_runtime_report_does_not_equate_active_with_verified_identity(
+    deploy_case, capsys
+):
+    _, current, _ = deploy_case
+    update_deploy.report_verification(current)
+    output = capsys.readouterr().out
+    assert "running Main identity: unavailable" in output
+    assert "exact loaded identities unverified" in output
+    current["platform"]["runtime_verification"] = {"main": {"matches_installed": True}}
+    update_deploy.report_verification(current)
+    assert "running Main identity: verified" in capsys.readouterr().out
 
 
 def test_unrelated_corrupt_journal_does_not_block_current_device(deploy_case, tmp_path):
@@ -300,7 +409,6 @@ def test_platform_success_database_failure_retries_only_database(
     current["platform"]["version"] = 1
     current["databases"]["version"] = 1
     prepare = Mock(return_value={"platform": tmp_path})
-    monkeypatch.setattr(update_deploy, "ensure_service_boot", Mock())
     monkeypatch.setattr(update_deploy, "prepare", prepare)
     monkeypatch.setattr(update_deploy, "database_files", lambda *_: {"db": tmp_path})
 
