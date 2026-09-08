@@ -2092,20 +2092,6 @@ aliases = []
 documentation = { summary = "Controls media bench contention behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_MEDIA_CONCURRENCY"
-owner = "apps/mister/src/launcher_runtime/media.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls media concurrency behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_MEDIA_MANIFEST_URL"
 owner = "apps/mister/src/launcher_runtime/media.rs"
 classification = "production"

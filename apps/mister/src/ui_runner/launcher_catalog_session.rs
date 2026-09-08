@@ -81,9 +81,7 @@ pub(super) enum CatalogSessionEffect {
     },
     CatalogBuildFinished,
     Ui(LauncherWorkerUiIntent),
-    FinishMediaWorker,
     CatalogValidationFinished,
-    RequestMediaCatalogSeed,
     ApplySystemShard {
         system_id: String,
         catalog: ArcadeCatalog,
@@ -272,7 +270,6 @@ impl LauncherCatalogSession {
                 self.foreground_update = false;
                 self.refresh_failed = true;
                 self.deferred_worker = None;
-                effects.push(CatalogSessionEffect::FinishMediaWorker);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 effects.push(CatalogSessionEffect::CatalogBuildFinished);
                 effects.event("library_load_failed", error.clone());
@@ -435,7 +432,6 @@ impl LauncherCatalogSession {
                 self.refresh_done = true;
                 self.foreground_update = false;
                 self.refresh_failed = true;
-                effects.push(CatalogSessionEffect::FinishMediaWorker);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 effects.push(CatalogSessionEffect::CatalogBuildFinished);
                 effects.event("library_db_save_failed", error.clone());
@@ -458,7 +454,6 @@ impl LauncherCatalogSession {
                 self.refresh_done = true;
                 self.foreground_update = false;
                 self.refresh_failed = false;
-                effects.push(CatalogSessionEffect::FinishMediaWorker);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 effects.push(CatalogSessionEffect::CatalogBuildFinished);
                 if context.catalog_ready {
@@ -628,7 +623,6 @@ impl LauncherCatalogSession {
                     | CatalogSource::SummaryProjection
                     | CatalogSource::NavigationProjection
             );
-            effects.push(CatalogSessionEffect::RequestMediaCatalogSeed);
             effects.push(CatalogSessionEffect::UseCatalog {
                 catalog: ready_catalog,
                 load_us,
@@ -788,9 +782,7 @@ mod tests {
                     unreachable!("presentation effects filtered above")
                 }
                 CatalogSessionEffect::Ui(_) => "ui",
-                CatalogSessionEffect::FinishMediaWorker => "finish-media",
                 CatalogSessionEffect::CatalogValidationFinished => "catalog-validation-finished",
-                CatalogSessionEffect::RequestMediaCatalogSeed => "request-media-seed",
                 CatalogSessionEffect::RequestLibraryRebuildOnNextBoot => "request-rebuild-marker",
                 CatalogSessionEffect::Confirm(_) => "confirm",
                 CatalogSessionEffect::Lifecycle(_) => "lifecycle",
@@ -853,12 +845,8 @@ mod tests {
                         LauncherWorkerUiIntent::None => "none",
                     });
                 }
-                CatalogSessionEffect::FinishMediaWorker => effect_names.push("finish-media"),
                 CatalogSessionEffect::CatalogValidationFinished => {
                     effect_names.push("catalog-validation-finished")
-                }
-                CatalogSessionEffect::RequestMediaCatalogSeed => {
-                    effect_names.push("request-media-seed")
                 }
                 CatalogSessionEffect::RequestLibraryRebuildOnNextBoot => {
                     effect_names.push("request-rebuild-marker")
@@ -1182,7 +1170,7 @@ mod tests {
     }
 
     #[test]
-    fn ready_catalog_replaces_cache_and_requests_media_seed() {
+    fn ready_catalog_replaces_cache_and_syncs_bridge() {
         let now = Instant::now();
         let mut session = LauncherCatalogSession::new(false);
         let effects = session.handle_worker_message(
@@ -1203,7 +1191,7 @@ mod tests {
 
         assert_eq!(
             effect_names(effects),
-            vec!["request-media-seed", "catalog", "event", "ui", "sync"]
+            vec!["catalog", "event", "ui", "sync"]
         );
         assert!(!session.refresh_done());
     }
@@ -1261,13 +1249,7 @@ mod tests {
 
         assert_eq!(
             effects,
-            vec![
-                "finish-media",
-                "catalog-validation-finished",
-                "event",
-                "ui",
-                "lifecycle"
-            ]
+            vec!["catalog-validation-finished", "event", "ui", "lifecycle"]
         );
         assert_eq!(ui_effects, vec!["clear-catalog-scan"]);
         assert!(session.refresh_done());
@@ -1297,7 +1279,7 @@ mod tests {
 
         assert_eq!(
             effect_names(ready_effects),
-            vec!["request-media-seed", "catalog", "event", "ui", "sync"]
+            vec!["catalog", "event", "ui", "sync"]
         );
         assert!(!session.refresh_done());
 
@@ -1352,13 +1334,7 @@ mod tests {
 
         assert_eq!(
             effects,
-            vec![
-                "finish-media",
-                "catalog-validation-finished",
-                "event",
-                "ui",
-                "lifecycle"
-            ]
+            vec!["catalog-validation-finished", "event", "ui", "lifecycle"]
         );
         assert_eq!(ui_effects, vec!["clear-catalog-scan"]);
         assert!(session.refresh_done());

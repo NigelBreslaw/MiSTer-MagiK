@@ -1874,9 +1874,7 @@ impl MediaWorkerConfig {
             image_size,
             asset_dir: paths.media_asset_dir().to_path_buf(),
             catalog_root: paths.sharded_catalog_dir().to_path_buf(),
-            max_concurrent_downloads: media_download_concurrency_from_value(get(
-                "MISTER_MEDIA_CONCURRENCY",
-            )),
+            max_concurrent_downloads: DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS,
             benchmark_auto_finish: media_benchmark_auto_finish_from_value(get(
                 "MISTER_MEDIA_BENCH_CONTENTION",
             )),
@@ -1913,10 +1911,6 @@ fn media_benchmark_auto_finish_from_value(value: Option<&str>) -> bool {
 #[cfg(not(feature = "bench-tools"))]
 fn media_benchmark_auto_finish_from_value(_value: Option<&str>) -> bool {
     false
-}
-
-fn media_download_concurrency_from_value(_value: Option<&str>) -> usize {
-    DEFAULT_MAX_CONCURRENT_MEDIA_DOWNLOADS
 }
 
 #[derive(Default)]
@@ -2447,11 +2441,6 @@ mod tests {
         );
         assert!(pending.is_empty());
         assert!(take_pending_reconciliations(true, &mut pending).is_empty());
-    }
-
-    #[test]
-    fn media_download_concurrency_env_is_clamped_to_single_pack() {
-        assert_eq!(media_download_concurrency_from_value(Some("3")), 1);
     }
 
     #[test]
