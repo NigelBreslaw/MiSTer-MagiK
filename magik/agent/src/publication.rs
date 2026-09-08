@@ -390,6 +390,19 @@ fn platform_active(
             .is_some_and(|stages| stages.is_empty())
 }
 
+fn runtime_verification(
+    state: &Value,
+    running_main: Option<&str>,
+    installed_main: Option<&str>,
+) -> Value {
+    json!({
+        "main": {"sha256": running_main, "matches_installed": running_main.zip(installed_main).map(|(running, installed)| running == installed)},
+        "scanout_module": {"loaded": state["running"]["scanout_slots_module_loaded"], "identity_verified": null, "reason": "loaded module build identity is not exposed"},
+        "fpga": {"identity_verified": null, "reason": "loaded bitstream build identity is not exposed"},
+        "linux_kernel": {"managed": false}
+    })
+}
+
 impl crate::Agent {
     pub(super) fn publication_state(
         &self,
@@ -407,12 +420,15 @@ impl crate::Agent {
             let running_hash = state["running"]["pid"]
                 .as_u64()
                 .and_then(|pid| crate::media::hash(Path::new(&format!("/proc/{pid}/exe"))).ok());
+            let installed_hash = crate::media::hash(Path::new(paths.main)).ok();
+            state["platform"]["runtime_verification"] =
+                runtime_verification(&state, running_hash.as_deref(), installed_hash.as_deref());
             // Application readiness is handled by deploy/start. Main and the
             // module remain active while the launcher is idle in the stock menu.
             state["platform"]["active"] = json!(platform_active(
                 &state,
                 running_hash.as_deref(),
-                crate::media::hash(Path::new(paths.main)).ok().as_deref(),
+                installed_hash.as_deref(),
             ));
             state["configured_main"] = crate::mode::status()?["configured_main"].clone();
             state["boot_id"] = json!(
@@ -699,6 +715,19 @@ mod tests {
     fn platform_activation_does_not_require_a_running_application() {
         let mut state = json!({"running":{"executable_path":Layout::Development.paths().main,
             "scanout_slots_module_loaded":true,"launcher_ready_phase":"idle"},"stages":[]});
+        let evidence = runtime_verification(&state, Some("main"), Some("main"));
+        assert_eq!(evidence["main"]["matches_installed"], true);
+        assert_eq!(evidence["scanout_module"]["loaded"], true);
+        assert!(evidence["scanout_module"]["identity_verified"].is_null());
+        assert!(evidence["fpga"]["identity_verified"].is_null());
+        assert_eq!(evidence["linux_kernel"]["managed"], false);
+        assert_eq!(
+            runtime_verification(&state, Some("old"), Some("main"))["main"]["matches_installed"],
+            false
+        );
+        assert!(
+            runtime_verification(&state, None, Some("main"))["main"]["matches_installed"].is_null()
+        );
         assert!(platform_active(&state, Some("main"), Some("main")));
         state["running"]["launcher_ready_phase"] = json!("ready");
         assert!(platform_active(&state, Some("main"), Some("main")));

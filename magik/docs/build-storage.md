@@ -61,6 +61,12 @@ Unlabeled old `magik-*` containers appear as migration candidates. They are
 excluded from automatic cleanup; updating the tooling creates a separately
 named managed container instead of taking over an old one.
 
+Recognized `magik2-v1-*` containers and valid `magik2-build:*` image records are
+shown as `legacy-retained`, not ownership errors. They are never adopted, stopped,
+or deleted by this manager, including `clean --all-idle --apply`. Inspect them and
+arrange explicit cleanup separately. Malformed or changed image metadata still
+reports an error and remains protected.
+
 ## Initial and occasional maintenance
 
 Use a quiet build window for legacy resources and the shared image builder.

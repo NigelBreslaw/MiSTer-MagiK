@@ -171,10 +171,12 @@ def device_lock(identity):
 
 
 def ensure_service_boot(agent):
+    print("Verifying native service boot registration...", flush=True)
     reply, _ = agent._request("service-boot-state", {}, attempts=2, timeout=10)
     if reply.operation != "service-boot-state":
         raise AgentError.from_fields(reply.fields)
     if reply.fields.get("ready") is not True:
+        print("Registering native service startup (no reboot)...", flush=True)
         # Idempotent fixed boot registration; reconcile a lost mutation reply.
         try:
             reply, _ = agent._request(
@@ -190,8 +192,33 @@ def ensure_service_boot(agent):
             or reply.fields.get("ready") is not True
         ):
             raise AgentError(
-                "native service boot registration is not verified; platform not installed"
+                "native service boot registration is not verified; deployment incomplete"
             )
+    return dict(reply.fields)
+
+
+def report_verification(current):
+    platform = current["platform"]
+    runtime = platform.get("runtime_verification", {})
+    main = runtime.get("main", {}).get("matches_installed")
+    main_result = (
+        "verified" if main is True else "mismatch" if main is False else "unavailable"
+    )
+    loaded = current.get("running", {}).get("scanout_slots_module_loaded")
+    loaded_result = (
+        "yes" if loaded is True else "no" if loaded is False else "unavailable"
+    )
+    print(
+        f"Platform v0.{platform.get('version')}: installed files "
+        f"{'verified' if platform.get('verified') else 'NOT verified'}; "
+        f"running Main identity: {main_result}.",
+        flush=True,
+    )
+    print(
+        f"Scanout module loaded: {loaded_result}. "
+        "FPGA and scanout module: exact loaded identities unverified. Linux kernel: not managed by this update.",
+        flush=True,
+    )
 
 
 def apply_updates(agent, identity, pair, run, attended, *, already_locked=False):
@@ -202,6 +229,9 @@ def apply_updates(agent, identity, pair, run, attended, *, already_locked=False)
         payloads = {
             kind: verify(kind, pair[kind]) for kind in ("platform", "databases")
         }
+        print(
+            "Inspecting installed releases and unfinished publications...", flush=True
+        )
         current = state(agent)
         if not previous and current["stages"]:
             # Older hosts incorrectly keyed journals by service version. Adopt only
@@ -265,6 +295,10 @@ def apply_updates(agent, identity, pair, run, attended, *, already_locked=False)
                     kind == "databases" or pending.get("boot_id") != current["boot_id"]
                 )
             ):
+                print(
+                    f"Reconciling {kind} stage {stage['stage']} (no reboot)...",
+                    flush=True,
+                )
                 reply, _ = agent._request(
                     "publication-control",
                     {"stage": stage["stage"], "action": "finish", "attended": True},
@@ -273,6 +307,17 @@ def apply_updates(agent, identity, pair, run, attended, *, already_locked=False)
                 )
                 if reply.operation != "publication-complete":
                     raise AgentError.from_fields(reply.fields)
+                from .results import append_event
+
+                append_event(
+                    run,
+                    {
+                        "phase": "publication-reconciled",
+                        "kind": kind,
+                        "stage": stage["stage"],
+                        "outcome": "verified",
+                    },
+                )
             else:
                 raise AgentError(
                     f"unfinished publication {stage['stage']}; inspect/restore the saved stage before retrying; no reboot repeated"
@@ -304,6 +349,10 @@ def apply_updates(agent, identity, pair, run, attended, *, already_locked=False)
         with tempfile.TemporaryDirectory(prefix="magik-update-") as temporary:
             directory = Path(temporary)
             if platform_needed or databases_needed:
+                print(
+                    "Preparing required release artifacts and local application...",
+                    flush=True,
+                )
                 from .preflight import require_space
 
                 require_space(directory, 2 * 1024**3, "release preparation")
@@ -313,11 +362,12 @@ def apply_updates(agent, identity, pair, run, attended, *, already_locked=False)
                 else None
             )
             platform_files = prepare(pair, directory) if platform_needed else None
-            if platform_needed:
-                ensure_service_boot(agent)
             if databases_needed and not platform_needed:
                 package = repository() / "apps/mister"
                 ensure_arm_application(package)
+            # Recovery/current-platform paths also need durable service startup.
+            # This fixed, idempotent registration never changes boot mode/reboots.
+            boot_registration = ensure_service_boot(agent)
             if platform_files or db_files:
                 atomic_json(pending_path, {"desired": pair, "run": str(run.resolve())})
             for kind, files in (("platform", platform_files), ("databases", db_files)):
@@ -332,20 +382,23 @@ def apply_updates(agent, identity, pair, run, attended, *, already_locked=False)
                 fields = {"kind": kind, "layout": "dev"}
                 if kind == "platform":
                     fields.update(attended=True, activate_fpga=True)
-                print(f"Installing {pair[kind]['tag']}")
+                print(f"Installing {pair[kind]['tag']}", flush=True)
                 publish(agent, evidence, files, **fields)
                 current = state(agent)
                 if needed(current[kind], pair[kind], kind, payloads[kind]):
                     raise AgentError(
                         f"{kind} installation did not verify; evidence: {evidence}"
                     )
+                print(f"{pair[kind]['tag']}: installed files verified.", flush=True)
         atomic_json(
             root() / "devices" / f"{device_key}.json",
             {
                 "identity": identity,
                 "desired": pair,
                 "verified": current,
+                "service_boot": boot_registration,
                 "run": str(run.resolve()),
             },
         )
         pending_path.unlink(missing_ok=True)
+        report_verification(current)

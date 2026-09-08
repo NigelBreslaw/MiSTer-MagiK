@@ -11,4 +11,4 @@ case "${1:-}" in
     check) UV_ARGS+=(--extra testing) ;;
     mcp) UV_ARGS+=(--extra mcp) ;;
 esac
-exec uv run "${UV_ARGS[@]}" --project "$ROOT/magik/host" python -m magik.cli "$@"
+exec uv run "${UV_ARGS[@]}" --project "$ROOT/magik/host" python -u -m magik.cli "$@"

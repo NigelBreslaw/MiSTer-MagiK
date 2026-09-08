@@ -133,6 +133,38 @@ def setup(tmp_path, monkeypatch):
     return manager, host, repository, now
 
 
+def test_retired_namespace_is_reported_without_adoption_or_cleanup(setup):
+    manager, host, repo, now = setup
+    recipe = recipe_key(repo)
+    item = entry(repo, recipe)
+    item["id"] = item["id"].replace("magik-v1-", "magik2-v1-")
+    item["configuration"]["labels"][LABEL + "state"] = str(manager.root.resolve())
+    ref = f"magik2-build:{recipe}"
+    item["configuration"]["image"]["reference"] = ref
+    host.entries.append(item)
+    host.images[ref] = "sha256:" + recipe
+    record = manager.root / "images" / f"{recipe}.json"
+    atomic_json(
+        record,
+        {
+            "version": "1",
+            "reference": ref,
+            "digest": host.images[ref],
+            "last_used": now[0] - IDLE_SECONDS - 1,
+        },
+    )
+    result = manager.inspect(repo, apply=True, all_idle=True, measure=False)
+    assert not result["errors"]
+    assert result["containers"][0]["ownership"] == "legacy-retained"
+    row = next(row for row in result["images"] if row["reference"] == ref)
+    assert row["ownership"] == "legacy-retained"
+    assert not row["eligible"] and not row["removed"]
+    assert host.entries == [item] and ref in host.images and record.exists()
+    assert not any(
+        call[1] in {"start", "stop", "delete", "exec"} for call in host.calls
+    )
+
+
 def add(setup, name="other", *, age=0, managed=True, recipe=None):
     manager, host, repository, now = setup
     owner = repository.parent / name

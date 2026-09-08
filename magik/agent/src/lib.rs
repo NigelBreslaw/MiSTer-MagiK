@@ -191,6 +191,7 @@ impl Agent {
             "publication-v1",
             "platform-publication-v1",
             "publication-state-v1",
+            "publication-runtime-evidence-v1",
             "service-boot-v1",
             "transfer-check",
             "applications",
