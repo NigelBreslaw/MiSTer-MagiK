@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-from . import architecture, build, bundle, databases, host, metadata, quality
+from . import architecture, build, bundle, host, metadata, quality
 from .common import github_output, repository_root
 
 
@@ -415,6 +415,8 @@ def main() -> int:
             else:
                 manifest.verify(args.manifest, args.root, layout=args.layout)
         elif args.command == "game-databases":
+            from . import databases
+
             if args.action == "verify":
                 databases.verify(
                     args.archive, args.manifest, release_version=args.release_version

@@ -4,7 +4,5 @@
 # MiSTer MagiK kernel component identity inputs, format v0.1.
 mister/platform/kernel/scanout-slots
 scripts/build-scanout-slots-module.sh
-scripts/checks/check-scanout-slots-contract.sh
-scripts/tests/test-scanout-platform-contract.py
-.github/workflows/kernel-scanout.yml
+# Host integration checks run before reuse; they do not change the module.
 .github/workflows/platform-bundle.yml

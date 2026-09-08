@@ -44,9 +44,9 @@ jobs:
       fpga-changed: ${{ steps.plan.outputs.fpga_changed }}
       kernel-changed: ${{ steps.plan.outputs.kernel_changed }}
       main-id: ${{ steps.identity.outputs.main_id }}
-      fpga-id: ${{ steps.reuse.outputs.fpga_id || steps.identity.outputs.fpga_id }}
+      fpga-id: ${{ steps.reuse.outputs.fpga_id || steps.baseline.outputs.fpga_id }}
       fpga-synthesis-id: ${{ steps.identity.outputs.fpga_synthesis_id }}
-      kernel-id: ${{ steps.reuse.outputs.kernel_id || steps.identity.outputs.kernel_id }}
+      kernel-id: ${{ steps.reuse.outputs.kernel_id || steps.baseline.outputs.kernel_id }}
       main-revision: ${{ steps.identity.outputs.main_revision }}
       bundle-id: ${{ steps.plan.outputs.bundle_id }}
       candidate-hit: ${{ steps.reuse.outputs.candidate_hit }}
@@ -111,6 +111,15 @@ jobs:
           printf 'version=%s\ntag=%s\nmanifest=%s\n' "$version" "$tag" "$manifest" >> "$GITHUB_OUTPUT"
           printf 'latest manifest inspection: %ss, %s bytes\n' "$((SECONDS-started))" "$(stat -c %s "$manifest")" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Validate current host contracts and compare released inputs
+        id: baseline
+        run: |
+          set -euo pipefail
+          python3 scripts/checks/check-latch-protocol.py
+          scripts/checks/check-scanout-slots-contract.sh
+          python3 scripts/release/platform/platform-component-id.py release-identities \
+            --manifest '${{ steps.current.outputs.manifest }}' --github-output "$GITHUB_OUTPUT"
+
       - name: Plan platform update
         id: plan
         run: |
@@ -118,8 +127,8 @@ jobs:
             --manifest '${{ steps.current.outputs.manifest }}' \
             --current-version '${{ steps.current.outputs.version }}' \
             --main-id '${{ steps.identity.outputs.main_id }}' \
-            --fpga-id '${{ steps.identity.outputs.fpga_id }}' \
-            --kernel-id '${{ steps.identity.outputs.kernel_id }}' \
+            --fpga-id '${{ steps.baseline.outputs.fpga_id }}' \
+            --kernel-id '${{ steps.baseline.outputs.kernel_id }}' \
             --github-output "$GITHUB_OUTPUT"
 
       - name: Resolve exact reusable candidate and components
@@ -133,8 +142,8 @@ jobs:
           FPGA_CHANGED: ${{ steps.plan.outputs.fpga_changed }}
           KERNEL_CHANGED: ${{ steps.plan.outputs.kernel_changed }}
           MAIN_ID: ${{ steps.identity.outputs.main_id }}
-          FPGA_ID: ${{ steps.identity.outputs.fpga_id }}
-          KERNEL_ID: ${{ steps.identity.outputs.kernel_id }}
+          FPGA_ID: ${{ steps.baseline.outputs.fpga_id }}
+          KERNEL_ID: ${{ steps.baseline.outputs.kernel_id }}
           MAIN_REVISION: ${{ steps.identity.outputs.main_revision }}
         run: |
           set -euo pipefail
@@ -195,8 +204,7 @@ jobs:
             return 1
           }
           resolve_equivalent() {
-            local kind="$1" prefix="$2" inputs_manifest="$3" artifact_id run_id head_sha name identity attempt details verification canonical
-            local -a component_inputs
+            local kind="$1" prefix="$2" artifact_id run_id head_sha name identity attempt details verification canonical
             while IFS=$'\t' read -r artifact_id run_id head_sha name; do
               [[ "$artifact_id" =~ ^[0-9]+$ ]] || continue
               [[ "$run_id" =~ ^[0-9]+$ ]] || continue
@@ -220,10 +228,8 @@ jobs:
               if ! head_sha="$(jq -er '.origin.head_sha | strings | select(test("^[0-9a-f]{40}$"))' "$verification")"; then
                 continue
               fi
-              git merge-base --is-ancestor "$head_sha" "$GITHUB_SHA" || continue
-              mapfile -t component_inputs < <(sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' -e '\#^\.github/workflows/platform-bundle.yml$#d' "$inputs_manifest")
-              component_inputs+=("$inputs_manifest")
-              git diff --quiet "$head_sha" "$GITHUB_SHA" -- "${component_inputs[@]}" || continue
+              python3 scripts/release/platform/platform-component-id.py equivalent \
+                "$kind" --revision "$head_sha" || continue
               canonical="build/platform-reuse/$kind"
               if [ "$kind" = fpga ]; then
                 scripts/magik-ci ci platform-bundle compact-component \
@@ -254,10 +260,10 @@ jobs:
           else
             [ "$MAIN_CHANGED" = true ] && resolve main "platform-main-v0.1-$MAIN_ID" "$MAIN_ID" || [ "$MAIN_CHANGED" != true ] || true
             if [ "$FPGA_CHANGED" = true ] && ! resolve fpga "platform-fpga-v0.1-$FPGA_ID" "$FPGA_ID"; then
-              resolve_equivalent fpga platform-fpga-v0.1- scripts/platform-component-inputs/fpga-v0.1.txt || true
+              resolve_equivalent fpga platform-fpga-v0.1- || true
             fi
             if [ "$KERNEL_CHANGED" = true ] && ! resolve kernel "platform-kernel-v0.1-$KERNEL_ID" "$KERNEL_ID"; then
-              resolve_equivalent kernel platform-kernel-v0.1- scripts/platform-component-inputs/kernel-v0.1.txt || true
+              resolve_equivalent kernel platform-kernel-v0.1- || true
             fi
             [ "$MAIN_CHANGED" = true ] || echo 'main_hit=false' >> "$GITHUB_OUTPUT"
             [ "$FPGA_CHANGED" = true ] || echo 'fpga_hit=false' >> "$GITHUB_OUTPUT"
@@ -322,8 +328,8 @@ jobs:
             echo "| Component | Decision | Identity |"
             echo "|---|---|---|"
             echo "| Main | $(status '${{ steps.plan.outputs.main_changed }}' '${{ steps.reuse.outputs.main_hit }}') | \`${{ steps.identity.outputs.main_id }}\` |"
-            echo "| FPGA | $(status '${{ steps.plan.outputs.fpga_changed }}' '${{ steps.reuse.outputs.fpga_hit }}') | \`${{ steps.reuse.outputs.fpga_id || steps.identity.outputs.fpga_id }}\` |"
-            echo "| Kernel | $(status '${{ steps.plan.outputs.kernel_changed }}' '${{ steps.reuse.outputs.kernel_hit }}') | \`${{ steps.reuse.outputs.kernel_id || steps.identity.outputs.kernel_id }}\` |"
+            echo "| FPGA | $(status '${{ steps.plan.outputs.fpga_changed }}' '${{ steps.reuse.outputs.fpga_hit }}') | \`${{ steps.reuse.outputs.fpga_id || steps.baseline.outputs.fpga_id }}\` |"
+            echo "| Kernel | $(status '${{ steps.plan.outputs.kernel_changed }}' '${{ steps.reuse.outputs.kernel_hit }}') | \`${{ steps.reuse.outputs.kernel_id || steps.baseline.outputs.kernel_id }}\` |"
             if [ '${{ steps.reuse.outputs.candidate_hit }}' = true ]; then
               echo
               echo "Exact verified candidate recovered; component builds and assembly will be skipped."

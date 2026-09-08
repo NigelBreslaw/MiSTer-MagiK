@@ -253,6 +253,31 @@ import scripts.magik_ci.cli
 """
         subprocess.run([sys.executable, "-c", command], check=True)
 
+    def test_kernel_attestation_does_not_import_new_python_dependencies(self) -> None:
+        # The kernel builder runs Python 3.8. These unrelated imports must stay
+        # lazy even when the complete CLI parser is constructed.
+        command = """
+import builtins, json, pathlib, sys, tempfile
+real_import = builtins.__import__
+def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == 'tomllib' or (name == 'itertools' and 'pairwise' in (fromlist or ())):
+        raise ModuleNotFoundError(name)
+    return real_import(name, globals, locals, fromlist, level)
+builtins.__import__ = guarded_import
+from scripts.magik_ci.cli import main
+with tempfile.TemporaryDirectory() as directory:
+    root = pathlib.Path(directory)
+    (root / 'module.ko').write_bytes(b'fixture')
+    sys.argv = ['magik-ci', 'ci', 'platform-bundle', 'write-component-cache',
+        '--component', 'kernel', '--artifact', directory,
+        '--component-id', 'a' * 64, '--run-id', '123', '--head-sha', 'b' * 40]
+    assert main() == 0
+    origin = json.loads((root / 'platform-component-origin-v1.json').read_text())
+    assert origin['component_id'] == 'a' * 64
+    assert (root / 'platform-component-SHA256SUMS').is_file()
+"""
+        subprocess.run([sys.executable, "-c", command], check=True)
+
     def test_failed_platform_run_is_eligible_only_for_verified_components(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run = Path(directory) / "run.json"

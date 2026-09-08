@@ -8,8 +8,6 @@ import os
 import subprocess
 from pathlib import Path
 
-from scripts.magik_ci import ffmpeg
-
 TARGET = "armv7-unknown-linux-gnueabihf"
 COMMANDS = {
     "runtime-ci": ("apps/mister/Cargo.toml", "ci-fast", "ui"),
@@ -48,6 +46,8 @@ def _environment(
         # Cross mounts configured host volumes at their canonical host paths.
         # The FFmpeg preparation container uses /project, but Cross cannot see
         # that mount point when MISTER_REPO_ROOT enables volume mounting.
+        from scripts.magik_ci import ffmpeg
+
         dist = repository / ffmpeg.RELATIVE_WORK / "dist"
         include = dist / "include"
         environment.update(
@@ -180,6 +180,8 @@ def execute(repository: Path, intent: str) -> None:
         command.append("--timings")
     environment = _environment(repository, intent, profile, features, runner)
     if runner == "cross" and intent in {"runtime-ci", "runtime-device"}:
+        from scripts.magik_ci import ffmpeg
+
         ffmpeg.prepare(repository)
     subprocess.run(command, cwd=repository, env=environment, check=True)
     _write_build_identity(repository, intent, profile, features, runner)

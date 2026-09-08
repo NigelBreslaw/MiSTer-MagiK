@@ -81,6 +81,26 @@ rebooting or running the installer; incomplete packages fail verification.
 
 ## Device and platform delivery
 
+Platform component IDs hash selected input contents; the last-changing Git
+revision remains provenance, not part of the cache key. The platform workflow
+contributes each component's build job and shared build settings, rather than
+unrelated planning and publication steps. The explicit FPGA build date is a
+synthesis input. Host protocol/scanout integration checks run before reuse, so
+retiring an agent adapter does not by itself rebuild the RBF or module.
+
+Before planning a release, compare the latest published component's recorded
+source tree with the current selected inputs. Identical inputs may reuse the
+original component ID and receipts even across reconstructed Git history or an
+identity-algorithm update. Missing source objects or changed inputs require a
+new build; published receipts are never relabelled. The complete baseline
+archive is still downloaded and verified before assembly. FPGA report-validation
+changes remain component inputs, while the separate synthesis key allows the
+existing RBFs to be checked again without rerunning Quartus.
+
+Kernel cache attestation is intentionally usable with the Ubuntu 20.04 build
+container's Python 3.8. The CLI loads FFmpeg and database dependencies only for
+operations that use them; the general host-tooling Python requirement is unchanged.
+
 Use `scripts/magik deploy` for development applications and
 `scripts/magik-platform` for explicit platform/Main transactions. Normal platform
 delivery checks artifact integrity, activation and bounded startup health.
