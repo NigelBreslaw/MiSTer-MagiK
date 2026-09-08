@@ -24,6 +24,81 @@ const DATABASES: &[&str] = &[
     "game-databases-manifest.json",
 ];
 
+fn installed_state(fat: &Path, install_root: &Path) -> Result<Value, String> {
+    let paths = Layout::Development.paths();
+    let local = |path: &str| fat.join(path.strip_prefix("/media/fat/").expect("layout path"));
+    let mut platform = json!({"version":0,"verified":false});
+    let manifest_path = local(paths.manifest);
+    if manifest_path.exists() {
+        let text = fs::read_to_string(manifest_path).map_err(|e| e.to_string())?;
+        let manifest = parse(&text, Layout::Development, ValidationProfile::AgentStrict)
+            .map_err(|e| e.to_string())?;
+        let mut hashes = serde_json::Map::new();
+        let mut verified = true;
+        for (name, path) in paths.components() {
+            let hash = crate::media::hash(&local(path)).ok();
+            if !matches!(name, "gui" | "manager") {
+                verified &= hash.as_deref()
+                    == Some(
+                        manifest
+                            .required(&format!("{name}_sha256"))
+                            .map_err(|e| e.to_string())?,
+                    );
+            }
+            hashes.insert(name.to_owned(), json!(hash));
+        }
+        platform = json!({"version":manifest.required("platform_release_number").map_err(|e| e.to_string())?.parse::<u64>().map_err(|e| e.to_string())?,
+            "bundle_id":manifest.required("platform_bundle_id").map_err(|e| e.to_string())?,"verified":verified,"hashes":hashes});
+    }
+    let assets = local(paths.root).join("assets");
+    let mut databases = json!({"version":0,"verified":false});
+    let manifest_path = assets.join("game-databases-manifest.json");
+    if manifest_path.exists() {
+        let manifest: Value =
+            serde_json::from_slice(&fs::read(manifest_path).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        let checks =
+            fs::read_to_string(assets.join("game-databases-SHA256SUMS")).unwrap_or_default();
+        let mut hashes = serde_json::Map::new();
+        let mut verified = manifest["format"] == "mister-magik-game-databases-manifest-v4";
+        for name in &DATABASES[..2] {
+            let hash = crate::media::hash(&assets.join(name)).ok();
+            let expected = checks
+                .lines()
+                .filter_map(|line| line.split_once("  "))
+                .find_map(|(hash, path)| (path == *name).then_some(hash));
+            verified &= expected.is_some() && hash.as_deref() == expected;
+            hashes.insert((*name).to_owned(), json!(hash));
+        }
+        hashes.insert(
+            "manifest".into(),
+            json!(crate::media::hash(
+                &assets.join("game-databases-manifest.json")
+            )?),
+        );
+        databases =
+            json!({"version":manifest["release_version"],"verified":verified,"hashes":hashes});
+    }
+    let mut stages = Vec::new();
+    let publication = install_root.join("publication");
+    if publication.exists() {
+        for entry in fs::read_dir(publication).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let pending = entry.path().join("pending.json");
+            if pending.exists() || entry.path().join("backup").exists() {
+                let detail = if pending.exists() {
+                    serde_json::from_slice::<Value>(&fs::read(pending).map_err(|e| e.to_string())?)
+                        .map_err(|e| e.to_string())?
+                } else {
+                    Value::Null
+                };
+                stages.push(json!({"stage":entry.file_name().to_string_lossy(),"pending":detail}));
+            }
+        }
+    }
+    Ok(json!({"platform":platform,"databases":databases,"stages":stages}))
+}
+
 fn stage(root: &Path, fields: &serde_json::Map<String, Value>) -> Result<PathBuf, String> {
     let id = fields
         .get("stage")
@@ -269,7 +344,93 @@ fn reload_healthy(previous: &Value, expected: &str) -> Result<(), String> {
     }
 }
 
+fn database_hashes(staged: &Path) -> Result<Value, String> {
+    let mut hashes = serde_json::Map::new();
+    for name in DATABASES {
+        hashes.insert(
+            (*name).to_owned(),
+            json!(crate::media::hash(&staged.join(name))?),
+        );
+    }
+    Ok(Value::Object(hashes))
+}
+
+fn finish_databases(staged: &Path, pending: &Value, assets: &Path) -> Result<(), String> {
+    let expected = pending["database_sha256"]
+        .as_object()
+        .ok_or("database publication has no persisted hashes; restore explicitly")?;
+    if expected.len() != DATABASES.len() {
+        return Err(
+            "database publication has incomplete persisted hashes; restore explicitly".into(),
+        );
+    }
+    for name in DATABASES {
+        let hash = expected
+            .get(*name)
+            .and_then(Value::as_str)
+            .ok_or("database publication has incomplete persisted hashes; restore explicitly")?;
+        if crate::media::hash(&assets.join(name))? != hash {
+            return Err("database publication is incomplete; restore explicitly".into());
+        }
+    }
+    fs::remove_dir_all(staged).map_err(|e| e.to_string())
+}
+
+fn platform_active(
+    state: &Value,
+    running_hash: Option<&str>,
+    installed_hash: Option<&str>,
+) -> bool {
+    state["running"]["executable_path"] == Layout::Development.paths().main
+        && state["running"]["scanout_slots_module_loaded"] == true
+        && running_hash.is_some()
+        && running_hash == installed_hash
+        && state["stages"]
+            .as_array()
+            .is_some_and(|stages| stages.is_empty())
+}
+
 impl crate::Agent {
+    pub(super) fn publication_state(
+        &self,
+        stream: &mut TcpStream,
+        request: &Envelope,
+    ) -> Result<(), FrameError> {
+        let _mutation = self.mutations.lock().expect("mutation state poisoned");
+        let result = (|| -> Result<Value, String> {
+            if request.fields.len() != 1 || request.fields["layout"] != "dev" {
+                return Err("publication-state requires layout=dev".into());
+            }
+            let mut state = installed_state(Path::new("/media/fat"), &self.install_root)?;
+            state["running"] = crate::device::status()?;
+            let paths = Layout::Development.paths();
+            let running_hash = state["running"]["pid"]
+                .as_u64()
+                .and_then(|pid| crate::media::hash(Path::new(&format!("/proc/{pid}/exe"))).ok());
+            // Application readiness is handled by deploy/start. Main and the
+            // module remain active while the launcher is idle in the stock menu.
+            state["platform"]["active"] = json!(platform_active(
+                &state,
+                running_hash.as_deref(),
+                crate::media::hash(Path::new(paths.main)).ok().as_deref(),
+            ));
+            state["configured_main"] = crate::mode::status()?["configured_main"].clone();
+            state["boot_id"] = json!(
+                fs::read_to_string("/proc/sys/kernel/random/boot_id").map_err(|e| e.to_string())?
+            );
+            Ok(state)
+        })();
+        let reply = match result {
+            Ok(fields) => response(&request.id, "publication-state", fields),
+            Err(error) => response(
+                &request.id,
+                "error",
+                json!({"code":"publication-state-failed","detail":error}),
+            ),
+        };
+        write_frame(stream, &reply, &[])
+    }
+
     pub(super) fn publication_control(
         &self,
         stream: &mut TcpStream,
@@ -289,6 +450,18 @@ impl crate::Agent {
             .map_err(|e| e.to_string())?;
             match request.fields.get("action").and_then(Value::as_str) {
                 Some("finish") => {
+                    if pending["kind"] == "databases" {
+                        let layout = Layout::parse(
+                            pending["layout"].as_str().ok_or("pending layout absent")?,
+                        )
+                        .map_err(|e| e.to_string())?;
+                        finish_databases(
+                            &root,
+                            &pending,
+                            &Path::new(layout.paths().root).join("assets"),
+                        )?;
+                        return Ok(json!({"activated":true}));
+                    }
                     if pending["boot_id"]
                         == fs::read_to_string("/proc/sys/kernel/random/boot_id")
                             .map_err(|e| e.to_string())?
@@ -299,6 +472,18 @@ impl crate::Agent {
                     crate::mode::verify_platform(layout)?;
                     let state = crate::device::status()?;
                     let layout = Layout::parse(layout).map_err(|e| e.to_string())?;
+                    let expected = pending["manifest_sha256"].as_str().ok_or(
+                        "pending publication has no expected manifest; restore explicitly",
+                    )?;
+                    if crate::media::hash(Path::new(layout.paths().manifest))? != expected {
+                        return Err("activated manifest differs from staged publication".into());
+                    }
+                    let pid = state["pid"].as_u64().ok_or("Main PID missing")?;
+                    if crate::media::hash(Path::new(&format!("/proc/{pid}/exe")))?
+                        != crate::media::hash(Path::new(layout.paths().main))?
+                    {
+                        return Err("running Main differs from installed Main".into());
+                    }
                     if state["executable_path"] != layout.paths().main
                         || state["launcher_ready_phase"] != "ready"
                         || state["scanout_slots_module_loaded"] != true
@@ -392,8 +577,16 @@ impl crate::Agent {
             };
             let root = stage(&self.install_root, fields)?;
             let requires_reboot = fields["kind"] == "platform";
-            if requires_reboot {
-                let pending = json!({"layout":fields["layout"],"boot_id":fs::read_to_string("/proc/sys/kernel/random/boot_id").map_err(|e|e.to_string())?});
+            if requires_reboot || fields["kind"] == "databases" {
+                let expected_manifest = if requires_reboot {
+                    "manifest"
+                } else {
+                    "game-databases-manifest.json"
+                };
+                let mut pending = json!({"kind":fields["kind"],"layout":fields["layout"],"manifest_sha256":crate::media::hash(&root.join(expected_manifest))?,"boot_id":fs::read_to_string("/proc/sys/kernel/random/boot_id").map_err(|e|e.to_string())?});
+                if fields["kind"] == "databases" {
+                    pending["database_sha256"] = database_hashes(&root)?;
+                }
                 fs::write(
                     root.join("pending.json"),
                     serde_json::to_vec(&pending).unwrap(),
@@ -457,6 +650,98 @@ impl crate::Agent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn database_finish_uses_persisted_hashes_after_replacement() {
+        let root = std::env::temp_dir().join(format!("magik-db-finish-{}", std::process::id()));
+        let staged = root.join("stage");
+        let assets = root.join("assets");
+        fs::create_dir_all(&staged).unwrap();
+        fs::create_dir_all(&assets).unwrap();
+        for name in DATABASES {
+            fs::write(staged.join(name), format!("new {name}")).unwrap();
+            fs::write(assets.join(name), b"old").unwrap();
+        }
+        let pending = json!({"database_sha256":database_hashes(&staged).unwrap()});
+        fs::write(
+            staged.join("pending.json"),
+            serde_json::to_vec(&pending).unwrap(),
+        )
+        .unwrap();
+        let paths: Vec<_> = DATABASES
+            .iter()
+            .map(|name| (staged.join(name), assets.join(name)))
+            .collect();
+        replace(&paths, &staged.join("backup"), || Ok(())).unwrap();
+        // Simulate interruption after replacement, before stage cleanup. Every
+        // source has been renamed away, including the staged manifest.
+        assert!(DATABASES.iter().all(|name| !staged.join(name).exists()));
+        let persisted =
+            serde_json::from_slice(&fs::read(staged.join("pending.json")).unwrap()).unwrap();
+        fs::write(assets.join(DATABASES[0]), b"corrupt").unwrap();
+        assert!(finish_databases(&staged, &persisted, &assets).is_err());
+        assert!(staged.join("backup/transaction.json").exists());
+        fs::write(assets.join(DATABASES[0]), format!("new {}", DATABASES[0])).unwrap();
+        assert!(finish_databases(&staged, &json!({}), &assets).is_err());
+        assert!(staged.exists());
+        finish_databases(&staged, &persisted, &assets).unwrap();
+        assert!(!staged.exists());
+        assert!(DATABASES.iter().all(|name| assets.join(name).exists()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn platform_activation_does_not_require_a_running_application() {
+        let mut state = json!({"running":{"executable_path":Layout::Development.paths().main,
+            "scanout_slots_module_loaded":true,"launcher_ready_phase":"idle"},"stages":[]});
+        assert!(platform_active(&state, Some("main"), Some("main")));
+        state["running"]["launcher_ready_phase"] = json!("ready");
+        assert!(platform_active(&state, Some("main"), Some("main")));
+        assert!(!platform_active(&state, Some("old"), Some("main")));
+        assert!(!platform_active(&state, None, None));
+        state["running"]["scanout_slots_module_loaded"] = json!(false);
+        assert!(!platform_active(&state, Some("main"), Some("main")));
+        state["running"]["scanout_slots_module_loaded"] = json!(true);
+        state["stages"] = json!([{"stage":"unfinished"}]);
+        assert!(!platform_active(&state, Some("main"), Some("main")));
+    }
+
+    #[test]
+    fn installed_state_hashes_databases_and_retains_interrupted_stage() {
+        let root =
+            std::env::temp_dir().join(format!("magik2-publication-state-{}", std::process::id()));
+        let fat = root.join("fat");
+        let assets = fat.join("mister-magik-dev/assets");
+        let install = root.join("agent");
+        fs::create_dir_all(&assets).unwrap();
+        let mut checks = String::new();
+        for name in &DATABASES[..2] {
+            fs::write(assets.join(name), b"content").unwrap();
+            checks.push_str(&format!(
+                "{}  {name}\n",
+                crate::media::hash(&assets.join(name)).unwrap()
+            ));
+        }
+        fs::write(assets.join("game-databases-SHA256SUMS"), checks).unwrap();
+        fs::write(
+            assets.join("game-databases-manifest.json"),
+            br#"{"format":"mister-magik-game-databases-manifest-v4","release_version":4}"#,
+        )
+        .unwrap();
+        let stage = install.join("publication").join("a".repeat(32));
+        fs::create_dir_all(stage.join("backup")).unwrap();
+        let state = installed_state(&fat, &install).unwrap();
+        assert_eq!(state["databases"]["verified"], true);
+        assert_eq!(state["databases"]["version"], 4);
+        assert_eq!(state["stages"].as_array().unwrap().len(), 1);
+        assert!(stage.join("backup").exists());
+        fs::write(assets.join(DATABASES[0]), b"corrupt").unwrap();
+        assert_eq!(
+            installed_state(&fat, &install).unwrap()["databases"]["verified"],
+            false
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn failed_activation_restores_original_artifact_set() {
         let root = std::env::temp_dir().join(format!("magik-publish-{}", std::process::id()));

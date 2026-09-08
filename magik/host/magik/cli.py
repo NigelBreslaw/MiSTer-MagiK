@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import hashlib
 import os
+import subprocess
 import time
 import webbrowser
 from pathlib import Path
@@ -61,7 +63,10 @@ def main() -> int:
     )
     prepare = subcommands.add_parser("desktop-prepare")
     prepare.add_argument("--json", action="store_true", required=True)
-    subcommands.add_parser("deploy")
+    subcommands.add_parser("deploy").add_argument("--attended", action="store_true")
+    subcommands.add_parser(
+        "update", help="download and queue latest platform and databases"
+    )
     device_command = subcommands.add_parser("device")
     device_subcommands = device_command.add_subparsers(
         dest="device_command", required=True
@@ -111,6 +116,14 @@ def main() -> int:
     clean.add_argument("--apply", action="store_true")
     clean.add_argument("--all-idle", action="store_true")
     arguments = parser.parse_args()
+    if arguments.command == "update":
+        from .updates import update
+
+        try:
+            return update()
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+            print(f"magik update: {error}", file=os.sys.stderr)
+            return 2
     if arguments.command == "storage":
         from .storage import run_storage
 
@@ -236,12 +249,34 @@ def dispatch(arguments, run) -> int:
 
 def deploy(_arguments: argparse.Namespace, run: Path) -> int:
     started = time.monotonic()
+    deployment_locks = ExitStack()
     try:
+        from .updates import desired
+
+        queued = desired() if _arguments.app == "magik" else None
         agent, status = connect_agent(
             run,
             REQUIRED_AGENT_CAPABILITIES
-            | application(_arguments.app).agent_capabilities,
+            | application(_arguments.app).agent_capabilities
+            | (
+                {"publication-state-v1", "publication-v1", "platform-publication-v1"}
+                if queued
+                else set()
+            ),
         )
+        if queued:
+            from .update_deploy import apply_updates, device_lock
+
+            deployment_locks.enter_context(device_lock(status.identity))
+            apply_updates(
+                agent,
+                status.identity,
+                queued,
+                run,
+                getattr(_arguments, "attended", False),
+                already_locked=True,
+            )
+            status = agent.status()
         append_event(
             run,
             {
@@ -273,6 +308,7 @@ def deploy(_arguments: argparse.Namespace, run: Path) -> int:
         print(f"magik deploy: {error} (result: {run})", file=os.sys.stderr)
         return 2
     finally:
+        deployment_locks.close()
         if "agent" in locals():
             retain_diagnostics(run, agent)
     print(f"magik deploy: application started (result: {run})")

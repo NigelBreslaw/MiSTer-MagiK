@@ -189,6 +189,7 @@ impl Agent {
             "catalog-operations-v1",
             "publication-v1",
             "platform-publication-v1",
+            "publication-state-v1",
             "transfer-check",
             "applications",
             "main-input-proxy",
@@ -322,12 +323,14 @@ impl Agent {
         }
         if matches!(
             request.op.as_str(),
-            "publication-commit" | "publication-control"
+            "publication-commit" | "publication-control" | "publication-state"
         ) {
             if body_length != 0 {
                 return Err(FrameError::BodyTooLarge);
             }
-            return if request.op == "publication-control" {
+            return if request.op == "publication-state" {
+                self.publication_state(stream, &request)
+            } else if request.op == "publication-control" {
                 self.publication_control(stream, &request)
             } else {
                 self.publish(stream, &request)

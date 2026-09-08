@@ -152,6 +152,10 @@ def write_build_cache(cache_file: Path, fingerprint: str, artifact: Path) -> Non
         temporary.unlink(missing_ok=True)
 
 
+def build_repository(package: Path) -> Path:
+    return package.resolve().parents[2 if package.name == "manager" else 1]
+
+
 def ensure_arm_package(
     package: Path,
     cache_file: Path,
@@ -165,7 +169,7 @@ def ensure_arm_package(
     from .storage import Storage
 
     storage = Storage(runner=runner)
-    with storage.build_session(package.resolve().parents[1]):
+    with storage.build_session(build_repository(package)):
         return _ensure_arm_package(
             package,
             cache_file,
@@ -192,9 +196,15 @@ def _ensure_arm_package(
         None,
     )
     profile = app.profile if app else "release"
-    binary = app.binary if app else "mister-magik-service"
+    binary = (
+        app.binary
+        if app
+        else "mister-magik-manager"
+        if package.name == "manager"
+        else "mister-magik-service"
+    )
     artifact = package / "target" / TARGET / profile / binary
-    repository = package.resolve().parents[1]
+    repository = build_repository(package)
     if (
         app
         and app.name == "magik"
@@ -222,7 +232,7 @@ def _ensure_arm_package(
             int((time.monotonic() - started) * 1000),
             fingerprint=fingerprint,
         )
-    repository = package.resolve().parents[1]
+    repository = build_repository(package)
     name = prepare(repository, runner)
     environment = []
     if app and app.name == "magik":
