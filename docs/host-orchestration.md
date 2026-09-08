@@ -8,6 +8,9 @@ The thin `scripts/magik-platform` entrypoint delegates native work to the same
 
 Host-only operations use existing Python tooling:
 
+- `scripts/magik2 update` downloads and queues the latest verified platform and
+  databases. The next `scripts/magik2 deploy --attended` installs outstanding Dev
+  updates before starting real MagiK; subsequent deploys skip verified releases.
 - `scripts/magik-ci dependencies sync PATH/Cargo.toml` resolves only the owning
   manifest and adjacent lockfile. `--package NAME` requests a targeted update.
 - `scripts/magik-ci clean --manifest PATH/Cargo.toml --package NAME` cleans that

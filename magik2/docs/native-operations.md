@@ -32,6 +32,35 @@ Raw reports and failures are retained in the command's result directory.
 
 ## Independent platform entrypoint
 
+### Queue published releases for the next deploy
+
+Run `scripts/magik2 update` to download and verify the latest numbered platform
+and game-database releases from `NigelBreslaw/MiSTer-MagiK`. Published prereleases
+are included; drafts are excluded. The command does not contact the device.
+Both releases must verify before the shared desired pair changes. Downloads live
+under `$MISTER_MAGIK2_STATE/updates` (the normal shared state directory when unset).
+The output includes the database release directory usable with `catalog publish`.
+
+Run `scripts/magik2 deploy --attended` to install that pair on the selected MiSTer
+before starting real MagiK. A platform change requires running and selected Dev
+mode and one bounded reboot. Plain `deploy` stops before publication when attendance
+is needed. Database-only updates require no reboot or attendance. Installed hashes
+and versions determine what is outstanding; newer installed releases are never
+downgraded. Normal GUI edits do not reinstall the platform. Mini, `check`, and
+`watch` do not consume the queue.
+
+The desired pair remains available for other devices; each device has separate
+completion evidence. Platform and database publication journals are retained in
+separate subdirectories of the deploy result. If the platform succeeds and the
+database step fails, the next deploy retries only outstanding work. An interrupted
+platform transaction is finished automatically only when its saved host journal
+matches and a new boot is confirmed. Otherwise deployment stops with the stage ID
+for explicit inspection/restoration; it never repeats an ambiguous reboot.
+
+`update` errors preserve the previous desired pair. Corrupt cached releases fail
+verification rather than silently falling back. A deployment uses the desired
+pair captured when it starts, even if another update completes concurrently.
+
 The companion host-utilities branch supplies `scripts/magik-platform`:
 
 - `platform --root DIR --layout dev|public --attended --activate-fpga`

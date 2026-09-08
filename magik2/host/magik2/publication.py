@@ -20,7 +20,9 @@ def publish(agent, run: Path, files: dict[str, Path], **fields):
     evidence = run / "publication.json"
 
     def save():
-        evidence.write_text(json.dumps(journal, indent=2) + "\n")
+        from .updates import atomic_json
+
+        atomic_json(evidence, journal)
 
     save()
     try:
