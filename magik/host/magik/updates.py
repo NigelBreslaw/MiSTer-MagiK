@@ -118,7 +118,7 @@ def desired():
     return value
 
 
-def update():
+def update(*, return_pair=False):
     with lock(root() / "download.lock"):
         result = subprocess.run(
             [
@@ -165,6 +165,10 @@ def update():
                 verify(kind, entry)
                 outcome = "cached"
             else:
+                from .preflight import require_space
+
+                size = sum(asset.get("size", 0) for asset in release.get("assets", []))
+                require_space(directory, size + 512 * 1024**2, "release download")
                 directory.parent.mkdir(parents=True, exist_ok=True)
                 with tempfile.TemporaryDirectory(
                     dir=directory.parent, prefix="download-"
@@ -188,5 +192,7 @@ def update():
             pair[kind] = entry
             print(f"{tag}: {outcome}, verified: {directory.resolve()}")
         atomic_json(root() / "desired.json", pair)
-        print("Queued for all devices. Next: scripts/magik deploy --attended")
-    return 0
+        print("Queued for all devices.")
+        if not return_pair:
+            print("Next: scripts/magik deploy --attended")
+    return pair if return_pair else 0

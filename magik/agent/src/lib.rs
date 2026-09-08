@@ -12,6 +12,7 @@ mod media;
 mod mode;
 mod publication;
 mod sd;
+mod service_boot;
 mod telemetry;
 mod upload;
 mod wire;
@@ -190,6 +191,7 @@ impl Agent {
             "publication-v1",
             "platform-publication-v1",
             "publication-state-v1",
+            "service-boot-v1",
             "transfer-check",
             "applications",
             "main-input-proxy",
@@ -303,6 +305,41 @@ impl Agent {
             );
         }
 
+        if matches!(
+            request.op.as_str(),
+            "service-boot-state" | "service-boot-install"
+        ) {
+            if body_length != 0 {
+                return Err(FrameError::BodyTooLarge);
+            }
+            let _mutation = self.mutations.lock().expect("mutation state poisoned");
+            let fat = Path::new("/media/fat");
+            let init = Path::new("/etc/init.d/S99user");
+            let result = if request.op == "service-boot-install" {
+                if self.install_root != fat.join("mister-magik2") {
+                    Err(std::io::Error::other(
+                        "boot registration requires the standard service root",
+                    ))
+                } else {
+                    service_boot::install(fat, init)
+                }
+            } else {
+                Ok(())
+            };
+            let reply = match result {
+                Ok(()) => response(
+                    &request.id,
+                    "service-boot-state",
+                    serde_json::json!({"ready":service_boot::ready(fat, init)}),
+                ),
+                Err(error) => response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"service-boot-failed","detail":error.to_string()}),
+                ),
+            };
+            return write_frame(stream, &reply, &[]);
+        }
         if request.op == "publication-upload" {
             let _mutation = self.mutations.lock().expect("mutation state poisoned");
             let result = publication::receive(

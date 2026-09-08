@@ -10,6 +10,24 @@ from magik.token_store import TokenStore
 IDENTITY = "02:12:34:56:78:90"
 
 
+def test_native_only_recovery_never_reads_credentials_or_uses_ssh(monkeypatch):
+    from unittest.mock import Mock
+
+    DeviceProfile(IDENTITY, "192.168.1.99", "root").save()
+    monkeypatch.setenv("MISTER_PASS", "must-not-use")
+    keychain = Mock(side_effect=AssertionError("credential fallback"))
+    ssh = Mock(side_effect=AssertionError("SSH fallback"))
+    monkeypatch.setattr(discovery, "Keychain", keychain)
+    monkeypatch.setattr(discovery, "SshBootstrap", ssh)
+    monkeypatch.setattr(
+        discovery, "native_identity", Mock(side_effect=ConnectionRefusedError())
+    )
+    with pytest.raises(discovery.DiscoveryError):
+        discovery.resolve_device(native_only=True, expected_identity=IDENTITY)
+    keychain.assert_not_called()
+    ssh.assert_not_called()
+
+
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch, tmp_path):
     monkeypatch.setenv("MISTER_MAGIK2_STATE", str(tmp_path))

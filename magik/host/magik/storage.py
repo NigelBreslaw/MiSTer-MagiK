@@ -130,9 +130,18 @@ class Storage:
         )
 
     def command(self, *args: str):
-        return self.runner(
-            ["container", *args], check=True, capture_output=True, text=True, timeout=30
-        )
+        try:
+            return self.runner(
+                ["container", *args],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except subprocess.CalledProcessError as error:
+            raise RuntimeError(
+                f"container {' '.join(args[:2])} failed: {error.stderr or error.stdout or error}"
+            ) from error
 
     def containers(self) -> list[dict]:
         entries = json.loads(self.command("list", "--all", "--format", "json").stdout)
@@ -254,13 +263,17 @@ class Storage:
                 if existing["status"]["state"] == "stopped":
                     self.command("start", name)
             else:
+                from .preflight import require_space
+
+                require_space(repository, 8 * 1024**3, "ARM build preparation")
+                require_space(self.data_root, 8 * 1024**3, "container build storage")
                 if image not in self.images():
                     self.runner(
                         [
                             "container",
                             "build",
                             "--tag",
-                            image,
+                            f"docker.io/library/{image}",
                             "--file",
                             str(repository / "magik/build/Containerfile"),
                             str(repository / "magik/build"),
@@ -270,7 +283,7 @@ class Storage:
                 cache = Path(
                     os.environ.get(
                         "MISTER_MAGIK2_BUILD_CACHE",
-                        str(Path.home() / ".cache/mister-magik/cargo"),
+                        str(Path.home() / ".cache/mister-magik2/cargo"),
                     )
                 ).expanduser()
                 mounts = ["--volume", f"{repository}:/workspace"]
@@ -297,7 +310,7 @@ class Storage:
                     "--memory",
                     "4g",
                     *mounts,
-                    image,
+                    f"docker.io/library/{image}",
                     "sleep",
                     "infinity",
                 )

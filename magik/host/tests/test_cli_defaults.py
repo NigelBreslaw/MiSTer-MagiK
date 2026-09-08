@@ -1,4 +1,43 @@
 from magik import cli
+from unittest.mock import Mock
+import pytest
+
+
+@pytest.mark.parametrize(
+    "flags,deploys", [([], True), (["--attended"], True), (["--download-only"], False)]
+)
+def test_update_downloads_and_pins_exact_pair(monkeypatch, tmp_path, flags, deploys):
+    from magik import updates
+
+    pair = {"platform": {"version": 41}, "databases": {"version": 23}}
+    monkeypatch.setenv("MISTER_MAGIK2_RESULTS", str(tmp_path))
+    monkeypatch.setattr("sys.argv", ["scripts/magik", "update", *flags])
+    download = Mock(return_value=pair)
+    monkeypatch.setattr(updates, "update", download)
+    monkeypatch.setattr(
+        updates, "desired", Mock(side_effect=AssertionError("snapshot reread"))
+    )
+    dispatch = Mock(return_value=0)
+    monkeypatch.setattr(cli, "dispatch", dispatch)
+    assert cli.main() == 0
+    download.assert_called_once_with(return_pair=True)
+    assert dispatch.call_count == int(deploys)
+    if deploys:
+        arguments = dispatch.call_args.args[0]
+        assert arguments.desired_pair is pair
+        assert arguments.command == "deploy"
+        assert arguments.attended == ("--attended" in flags)
+
+
+def test_failed_download_never_deploys(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["scripts/magik", "update", "--attended"])
+    monkeypatch.setattr(
+        "magik.updates.update", Mock(side_effect=RuntimeError("offline"))
+    )
+    dispatch = Mock()
+    monkeypatch.setattr(cli, "dispatch", dispatch)
+    assert cli.main() == 2
+    dispatch.assert_not_called()
 
 
 def test_everyday_check_is_real_smoke_and_prints_dev_target(

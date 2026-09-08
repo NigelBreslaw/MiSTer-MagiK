@@ -170,6 +170,30 @@ def device_lock(identity):
     return lock(root() / "devices" / f"{key}.lock")
 
 
+def ensure_service_boot(agent):
+    reply, _ = agent._request("service-boot-state", {}, attempts=2, timeout=10)
+    if reply.operation != "service-boot-state":
+        raise AgentError.from_fields(reply.fields)
+    if reply.fields.get("ready") is not True:
+        # Idempotent fixed boot registration; reconcile a lost mutation reply.
+        try:
+            reply, _ = agent._request(
+                "service-boot-install", {}, attempts=1, timeout=15
+            )
+            if reply.operation != "service-boot-state":
+                raise AgentError.from_fields(reply.fields)
+        except (OSError, TimeoutError):
+            pass
+        reply, _ = agent._request("service-boot-state", {}, attempts=2, timeout=10)
+        if (
+            reply.operation != "service-boot-state"
+            or reply.fields.get("ready") is not True
+        ):
+            raise AgentError(
+                "native service boot registration is not verified; platform not installed"
+            )
+
+
 def apply_updates(agent, identity, pair, run, attended, *, already_locked=False):
     device_key = hashlib.sha256(identity.encode()).hexdigest()
     with nullcontext() if already_locked else device_lock(identity):
@@ -179,6 +203,45 @@ def apply_updates(agent, identity, pair, run, attended, *, already_locked=False)
             kind: verify(kind, pair[kind]) for kind in ("platform", "databases")
         }
         current = state(agent)
+        if not previous and current["stages"]:
+            # Older hosts incorrectly keyed journals by service version. Adopt only
+            # evidence whose parent deployment names this physical board; do not
+            # delete the shared legacy journal or trust its filename.
+            matches = []
+            for candidate in pending_path.parent.glob("*-pending.json"):
+                try:
+                    saved = json.loads(candidate.read_text())
+                    evidence = Path(saved["run"]) / "run.json"
+                    if (
+                        json.loads(evidence.read_text())["source"]["device_identity"]
+                        != identity
+                    ):
+                        continue
+                    # Old receipts may survive a finished deployment. Only adopt
+                    # one referring to an actual unfinished stage on this board.
+                    for kind in ("platform", "databases"):
+                        journal = evidence.parent / kind / "publication.json"
+                        if not journal.is_file():
+                            continue
+                        decoded = json.loads(journal.read_text())
+                        if not isinstance(decoded, dict):
+                            continue
+                        if decoded.get("stage") in {
+                            stage["stage"] for stage in current["stages"]
+                        }:
+                            matches.append(saved)
+                            break
+                except (OSError, ValueError, KeyError, TypeError):
+                    # Unrelated/partial host evidence is not authority to mutate.
+                    # Unmatched native stages still fail closed below.
+                    continue
+            if len(matches) > 1:
+                raise AgentError(
+                    "multiple pending deployments for this board; reconcile explicitly"
+                )
+            if matches:
+                previous = matches[0]
+                atomic_json(pending_path, previous)
         # A confirmed reboot may have completed while the previous host lost its reply.
         for stage in current["stages"]:
             pending = stage["pending"]
@@ -240,12 +303,18 @@ def apply_updates(agent, identity, pair, run, attended, *, already_locked=False)
                 )
         with tempfile.TemporaryDirectory(prefix="magik-update-") as temporary:
             directory = Path(temporary)
+            if platform_needed or databases_needed:
+                from .preflight import require_space
+
+                require_space(directory, 2 * 1024**3, "release preparation")
             db_files = (
                 database_files(pair, directory / "databases")
                 if databases_needed
                 else None
             )
             platform_files = prepare(pair, directory) if platform_needed else None
+            if platform_needed:
+                ensure_service_boot(agent)
             if databases_needed and not platform_needed:
                 package = repository() / "apps/mister"
                 ensure_arm_application(package)
