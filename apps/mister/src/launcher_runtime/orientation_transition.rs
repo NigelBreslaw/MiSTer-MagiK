@@ -461,6 +461,9 @@ impl OrientationTransitionRuntime {
             self.to,
             OrientationPmuPhase::Crossfade,
         ));
+        let previous =
+            (self.previous_levels_valid && self.previous_revealing == revealing && !done)
+                .then_some(&self.previous_levels);
         match self.effect {
             OrientationTransitionEffect::BrightnessFade => render_brightness_wave_dirty(
                 frame,
@@ -470,13 +473,14 @@ impl OrientationTransitionRuntime {
                 &levels,
                 damage,
             ),
-            OrientationTransitionEffect::CenterPixelZoom => render_center_pixel_zoom_wave_dirty(
+            OrientationTransitionEffect::CenterPixelZoom => render_center_pixel_zoom_wave_retained(
                 frame,
                 output,
                 self.width,
                 self.height,
                 &levels,
                 damage,
+                previous,
             ),
         };
         self.previous_levels = levels;
@@ -598,6 +602,27 @@ fn render_center_pixel_zoom_wave(
     output.len().min(u64::MAX as usize) as u64
 }
 
+fn zoom_words<'a, 'b>(
+    frame: &'a [Rgb565Pixel],
+    output: &'b mut [Rgb565Pixel],
+) -> (&'a [u16], &'b mut [u16]) {
+    const {
+        assert!(std::mem::size_of::<Rgb565Pixel>() == std::mem::size_of::<u16>());
+    }
+    const {
+        assert!(std::mem::align_of::<Rgb565Pixel>() >= std::mem::align_of::<u16>());
+    }
+    // SAFETY: Slint RGB565 is a transparent packed u16 with every bit pattern
+    // valid; preserve the original disjoint slice borrows and lengths.
+    unsafe {
+        (
+            std::slice::from_raw_parts(frame.as_ptr().cast(), frame.len()),
+            std::slice::from_raw_parts_mut(output.as_mut_ptr().cast(), output.len()),
+        )
+    }
+}
+
+#[cfg(test)]
 fn render_center_pixel_zoom_wave_dirty(
     frame: &[Rgb565Pixel],
     output: &mut [Rgb565Pixel],
@@ -606,12 +631,42 @@ fn render_center_pixel_zoom_wave_dirty(
     black_levels: &[u8; ORIENTATION_TILE_COUNT],
     damage: OrientationTransitionDamage,
 ) {
-    if render_center_pixel_zoom_wave_neon(frame, output, width, height, black_levels, damage) {
-        return;
-    }
-    render_center_pixel_zoom_wave_scalar(frame, output, width, height, black_levels, damage);
+    render_center_pixel_zoom_wave_retained(
+        frame,
+        output,
+        width,
+        height,
+        black_levels,
+        damage,
+        None,
+    );
 }
 
+fn render_center_pixel_zoom_wave_retained(
+    frame: &[Rgb565Pixel],
+    output: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    black_levels: &[u8; ORIENTATION_TILE_COUNT],
+    damage: OrientationTransitionDamage,
+    previous: Option<&[u8; ORIENTATION_TILE_COUNT]>,
+) {
+    let (frame, output) = zoom_words(frame, output);
+    assert!(
+        mister_magik_framebuffer_scenes::orientation::render_zoom_retained(
+            frame,
+            output,
+            width,
+            height,
+            black_levels,
+            &damage.rows,
+            previous,
+        )
+        .is_some()
+    );
+}
+
+#[cfg(test)]
 fn render_center_pixel_zoom_wave_scalar(
     frame: &[Rgb565Pixel],
     output: &mut [Rgb565Pixel],
@@ -620,25 +675,17 @@ fn render_center_pixel_zoom_wave_scalar(
     black_levels: &[u8; ORIENTATION_TILE_COUNT],
     damage: OrientationTransitionDamage,
 ) {
-    for tile_row in 0..ORIENTATION_GRID_ROWS {
-        let tile_y0 = tile_row * height / ORIENTATION_GRID_ROWS;
-        let tile_y1 = (tile_row + 1) * height / ORIENTATION_GRID_ROWS;
-        for tile_column in 0..ORIENTATION_GRID_COLUMNS {
-            if damage.rows[tile_row] & (1_u16 << tile_column) == 0 {
-                continue;
-            }
-            let tile_x0 = tile_column * width / ORIENTATION_GRID_COLUMNS;
-            let tile_x1 = (tile_column + 1) * width / ORIENTATION_GRID_COLUMNS;
-            copy_rect(frame, output, width, tile_x0, tile_x1, tile_y0, tile_y1);
-            let black_level = black_levels[tile_row * ORIENTATION_GRID_COLUMNS + tile_column];
-            if black_level == ORIENTATION_TILE_SKIP {
-                continue;
-            }
-            let (x0, x1) = centered_span(tile_x0, tile_x1, black_level);
-            let (y0, y1) = centered_span(tile_y0, tile_y1, black_level);
-            fill_black_rect(output, width, x0, x1, y0, y1);
-        }
-    }
+    let (frame, output) = zoom_words(frame, output);
+    assert!(
+        mister_magik_framebuffer_scenes::orientation::render_zoom_scalar(
+            frame,
+            output,
+            width,
+            height,
+            black_levels,
+            &damage.rows
+        )
+    );
 }
 
 fn orientation_wave_state<'a>(
@@ -758,55 +805,27 @@ fn render_brightness_wave_neon(
     false
 }
 
+#[cfg(all(test, target_os = "linux", target_arch = "arm"))]
 fn render_center_pixel_zoom_wave_neon(
     frame: &[Rgb565Pixel],
     output: &mut [Rgb565Pixel],
     width: usize,
     height: usize,
-    black_levels: &[u8; ORIENTATION_TILE_COUNT],
+    levels: &[u8; ORIENTATION_TILE_COUNT],
     damage: OrientationTransitionDamage,
 ) -> bool {
-    #[cfg(all(target_os = "linux", target_arch = "arm"))]
-    if orientation_neon_enabled()
-        && frame.len() == output.len()
-        && frame.len() == width.saturating_mul(height)
-        && width >= ORIENTATION_GRID_COLUMNS
-        && height >= ORIENTATION_GRID_ROWS
-    {
-        unsafe extern "C" {
-            fn mister_magik_orientation_zoom_neon(
-                source: *const u16,
-                output: *mut u16,
-                width: usize,
-                height: usize,
-                black_levels: *const u8,
-                dirty_rows: *const u16,
-            );
-        }
-        // SAFETY: the slices are complete, distinct RGB565 planes with the
-        // supplied geometry; the fixed level array covers every grid tile.
-        unsafe {
-            mister_magik_orientation_zoom_neon(
-                frame.as_ptr().cast(),
-                output.as_mut_ptr().cast(),
-                width,
-                height,
-                black_levels.as_ptr(),
-                damage.rows.as_ptr(),
-            );
-        }
-        return true;
+    if !orientation_neon_enabled() {
+        return false;
     }
-    let _ = (
+    let (frame, output) = zoom_words(frame, output);
+    mister_magik_framebuffer_scenes::orientation::render_zoom(
         frame,
         output,
         width,
         height,
-        black_levels,
-        damage,
-        orientation_neon_enabled(),
-    );
-    false
+        levels,
+        &damage.rows,
+    )
 }
 
 fn orientation_tile_eased_level(phase_elapsed_us: u64, row: usize, column: usize) -> Option<u8> {
@@ -831,56 +850,6 @@ fn orientation_tile_eased_level(phase_elapsed_us: u64, row: usize, column: usize
         .saturating_add(u64::from(u16::MAX) / 2)
         / u64::from(u16::MAX);
     Some(u8::try_from(level).unwrap_or(RGB565_OPACITY_LEVELS))
-}
-
-fn centered_span(start: usize, end: usize, level: u8) -> (usize, usize) {
-    let span = end.saturating_sub(start);
-    if span == 0 {
-        return (start, start);
-    }
-    let scaled = span
-        .saturating_sub(1)
-        .saturating_mul(usize::from(level))
-        .saturating_add(usize::from(RGB565_OPACITY_LEVELS / 2))
-        / usize::from(RGB565_OPACITY_LEVELS);
-    let visible_span = 1usize.saturating_add(scaled).min(span);
-    let center = start + span.saturating_sub(1) / 2;
-    let centered_start = center.saturating_sub((visible_span - 1) / 2).max(start);
-    (
-        centered_start,
-        centered_start.saturating_add(visible_span).min(end),
-    )
-}
-
-fn fill_black_rect(
-    output: &mut [Rgb565Pixel],
-    stride: usize,
-    x0: usize,
-    x1: usize,
-    y0: usize,
-    y1: usize,
-) {
-    for y in y0..y1 {
-        let start = y * stride + x0;
-        let end = y * stride + x1;
-        output[start..end].fill(Rgb565Pixel(0));
-    }
-}
-
-fn copy_rect(
-    source: &[Rgb565Pixel],
-    output: &mut [Rgb565Pixel],
-    stride: usize,
-    x0: usize,
-    x1: usize,
-    y0: usize,
-    y1: usize,
-) {
-    for y in y0..y1 {
-        let start = y * stride + x0;
-        let end = y * stride + x1;
-        output[start..end].copy_from_slice(&source[start..end]);
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1267,6 +1236,71 @@ mod tests {
             false,
         ));
         assert_eq!(runtime.duration, ORIENTATION_WAVE_TOTAL_DURATION);
+    }
+
+    #[test]
+    fn retained_zoom_runtime_matches_full_redraw_through_restart_and_reveal() {
+        for (width, height) in [(33, 31), (160, 90)] {
+            let source = (0..width * height)
+                .map(|i| Rgb565Pixel((i as u16).wrapping_mul(7919)))
+                .collect::<Vec<_>>();
+            let destination = source.iter().map(|p| Rgb565Pixel(!p.0)).collect::<Vec<_>>();
+            let start = Instant::now();
+            let mut runtime = OrientationTransitionRuntime::new_with_effect(
+                width,
+                height,
+                OrientationTransitionEffect::CenterPixelZoom,
+            );
+            assert!(runtime.start(
+                ScreenOrientation::Normal,
+                ScreenOrientation::MonitorClockwise,
+                &source,
+                start,
+                false
+            ));
+            assert!(runtime.capture_destination(&destination));
+            let mut retained = source.clone();
+            for elapsed in (0..1550).step_by(17).chain([1550]) {
+                let duration = Duration::from_millis(elapsed);
+                let mut expected = source.clone();
+                render_center_pixel_zoom_wave(
+                    &source,
+                    &destination,
+                    &mut expected,
+                    width,
+                    height,
+                    duration,
+                );
+                assert!(
+                    runtime
+                        .render_into(&mut retained, start + duration)
+                        .is_some()
+                );
+                assert!(retained == expected, "retained mismatch at {elapsed}ms");
+            }
+            assert!(runtime.start(
+                ScreenOrientation::MonitorClockwise,
+                ScreenOrientation::Normal,
+                &destination,
+                start,
+                false
+            ));
+            assert!(runtime.capture_destination(&source));
+            assert!(runtime.restart_animation(start));
+            runtime.render_into(&mut retained, start).unwrap();
+            let mut expected = destination.clone();
+            // Level zero already covers the first tile's centre pixel; it is
+            // distinct from the skip sentinel, even at the restart timestamp.
+            render_center_pixel_zoom_wave(
+                &destination,
+                &source,
+                &mut expected,
+                width,
+                height,
+                Duration::ZERO,
+            );
+            assert!(retained == expected, "restart differs from fresh redraw");
+        }
     }
 
     #[test]

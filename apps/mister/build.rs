@@ -15,7 +15,6 @@ fn main() {
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rerun-if-changed=src/particle_neon.c");
     println!("cargo:rerun-if-changed=src/arcade_list_neon.c");
-    println!("cargo:rerun-if-changed=src/orientation_transition_neon.c");
     println!("cargo:rerun-if-changed=src/crt_backdrop_neon.c");
     println!("cargo:rerun-if-changed=../../mister/platform/runtime/c_build_support.rs");
     println!("cargo:rerun-if-changed=../../.git/HEAD");
@@ -59,7 +58,6 @@ fn main() {
         particle_neon
             .file("src/particle_neon.c")
             .file("src/arcade_list_neon.c")
-            .file("src/orientation_transition_neon.c")
             .file("src/crt_backdrop_neon.c")
             .flag("-std=c11")
             .flag("-O3")

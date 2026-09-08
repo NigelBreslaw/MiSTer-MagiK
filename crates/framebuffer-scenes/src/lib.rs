@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 pub mod navigation;
+pub mod orientation;
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
