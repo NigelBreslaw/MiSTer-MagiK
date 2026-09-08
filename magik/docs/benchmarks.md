@@ -14,8 +14,8 @@ Bare `bench` means `bench blend`. Timing runs exactly twice. Each explicit PMU
 command runs once. Visual mode runs one pass and resumes Main automatically;
 it cannot be combined with counters. No command automatically retries a workload.
 
-The host reuses compatible services, unchanged builds, and installed artifact
-hashes. It records build, upload, execution, and total durations in the result
+The host reuses compatible services and installed artifact hashes. Cargo decides
+whether source builds need compilation. It records build, upload, execution, and total durations in the result
 bundle. A service update requires the `run-benchmark-v2` capability, not a matching
 build identifier. Adding a workload to Mini does not require a service update.
 
@@ -37,7 +37,10 @@ outcomes are reported without rerunning the workload.
 `benchmark-raw.json` preserves received bytes, including invalid/truncated output.
 `benchmark-process.json` records exit status, artifact identity, stderr, execution
 errors, and Main restoration. Validated `benchmark.json` adds host provenance.
-Build/upload phase evidence and source dirty status are in `run.json`.
+Build/upload phase evidence and source dirty status are in `run.json`. Artifact
+SHA-256, Git provenance and target/build flags identify new results; the former
+custom source fingerprint is no longer produced or required for comparisons.
+Historical results containing that extra field remain readable.
 
 Schema version 1 contains workload, mode, artifact SHA-256, correctness, fixture
 identity and structured metadata, positive work count, samples, and optional

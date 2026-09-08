@@ -63,9 +63,9 @@ def prepare(pair, directory):
         extracted,
     )
     package = repository() / "apps/mister"
-    gui = ensure_arm_application(package, package / "target/magik-build.json").artifact
+    gui = ensure_arm_application(package).artifact
     package = repository() / "mister/tools/manager"
-    manager = ensure_arm_package(package, package / "target/magik-build.json").artifact
+    manager = ensure_arm_package(package).artifact
     files = {
         "main": unique(extracted / "main", "MiSTer_MagiK"),
         "gui": gui,
@@ -248,7 +248,7 @@ def apply_updates(agent, identity, pair, run, attended, *, already_locked=False)
             platform_files = prepare(pair, directory) if platform_needed else None
             if databases_needed and not platform_needed:
                 package = repository() / "apps/mister"
-                ensure_arm_application(package, package / "target/magik-build.json")
+                ensure_arm_application(package)
             if platform_files or db_files:
                 atomic_json(pending_path, {"desired": pair, "run": str(run.resolve())})
             for kind, files in (("platform", platform_files), ("databases", db_files)):

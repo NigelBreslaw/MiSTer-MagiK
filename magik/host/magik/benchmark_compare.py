@@ -63,7 +63,7 @@ def compare(baseline, candidate):
             sha256=record["artifact_sha256"],
         )
         provenance = record.get("provenance", {})
-        for key in ("git_revision", "mister_ip", "build_fingerprint"):
+        for key in ("git_revision", "mister_ip"):
             if not provenance.get(key):
                 raise ValueError(f"missing comparison provenance: {key}")
         if provenance.get("git_dirty") is not False:

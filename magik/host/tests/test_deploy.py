@@ -1,5 +1,5 @@
 from unittest.mock import Mock
-from magik import cli
+from magik import cli, updates
 from magik.build import BuildResult
 from magik.compatibility import AgentStatus
 from magik.protocol import sha256_hex
@@ -43,7 +43,7 @@ def test_real_app_uses_the_same_delivery_with_its_own_artifact(monkeypatch, tmp_
     artifact.write_bytes(b"real app")
     builds = []
 
-    def build(package, cache):
+    def build(package):
         builds.append(package)
         return BuildResult(artifact, False, 0)
 
@@ -67,6 +67,7 @@ def test_real_deploy_requires_input_proxy_but_mini_does_not(monkeypatch, tmp_pat
     from argparse import Namespace
     from magik.apps import application
 
+    monkeypatch.setattr(updates, "desired", lambda: None)
     required = []
     agent = Mock()
     monkeypatch.setattr(
@@ -79,3 +80,29 @@ def test_real_deploy_requires_input_proxy_but_mini_does_not(monkeypatch, tmp_pat
     assert cli.deploy(Namespace(app="magik"), create_run(tmp_path, "deploy", {})) == 0
     assert "main-managed-magik" in required[0]
     assert "main-managed-magik" not in application("mini-magik").agent_capabilities
+
+
+def test_unchanged_ready_artifact_skips_upload_and_restart(monkeypatch, tmp_path):
+    artifact = tmp_path / "application"
+    artifact.write_bytes(b"same binary")
+    digest = sha256_hex(artifact.read_bytes())
+    build = Mock(return_value=BuildResult(artifact, False, 0))
+    monkeypatch.setattr(cli, "ensure_arm_application", build)
+    agent = Mock()
+    status = AgentStatus(
+        "device",
+        frozenset(),
+        {
+            "running": True,
+            "ready": True,
+            "artifact": "magik",
+            "running_sha256": digest,
+            "artifacts": {"magik": digest},
+        },
+    )
+    assert cli.ensure_application(
+        agent, status, create_run(tmp_path, "deploy", {}), "magik"
+    )
+    build.assert_called_once()
+    agent.upload.assert_not_called()
+    agent.start.assert_not_called()
