@@ -105,9 +105,9 @@ pub fn render_zoom_retained(
         });
     }
     let mut writes = 0;
-    for row in 0..ROWS {
+    for (row, &dirty_columns) in dirty_rows.iter().enumerate() {
         for col in 0..COLUMNS {
-            if dirty_rows[row] & (1 << col) == 0 {
+            if dirty_columns & (1 << col) == 0 {
                 continue;
             }
             let tile = row * COLUMNS + col;
