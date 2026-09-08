@@ -21,8 +21,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         PathBuf::from(root),
         PathBuf::from(state_root),
     ));
-    agent.start_observation_receiver()?;
     let listener = TcpListener::bind(format!("0.0.0.0:{port}"))?;
+    // A duplicate boot launch must not disturb the running observation receiver.
+    agent.start_observation_receiver()?;
     let active = Arc::new(AtomicUsize::new(0));
     for connection in listener.incoming() {
         match connection {

@@ -134,3 +134,40 @@ def test_failed_platform_reboot_keeps_recoverable_stage(monkeypatch, tmp_path):
         publish(agent, tmp_path, {}, kind="platform", layout="dev", attended=True)
     assert agent._request.call_count == reboot.call_count == 1
     assert json.loads((tmp_path / "publication.json").read_text())["stage"]
+
+
+def test_reboot_timeout_uses_only_native_discovery_and_never_replays(
+    monkeypatch, tmp_path
+):
+    import time
+    from magik import discovery
+    from magik.device_profile import DeviceProfile
+
+    monkeypatch.setenv("MISTER_MAGIK2_STATE", str(tmp_path / "state"))
+    DeviceProfile("02:12:34:56:78:90", "192.168.1.2", "root").save()
+    tick = iter(range(1000))
+    monkeypatch.setattr(time, "monotonic", lambda: next(tick))
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    agent = Mock()
+    agent.device_operation.side_effect = [
+        {"boot_id": {"text": "original"}},
+        {"reboot_requested": True},
+    ] + [ConnectionRefusedError("offline")] * 100
+    discover = Mock(side_effect=discovery.DiscoveryError("offline"))
+    monkeypatch.setattr(discovery, "resolve_device", discover)
+    with pytest.raises(AgentError, match="do not replay"):
+        device.reboot_device(SimpleNamespace(attended=True), tmp_path, agent=agent)
+    assert (
+        sum(
+            call.args[0] == "device-reboot"
+            for call in agent.device_operation.call_args_list
+        )
+        == 1
+    )
+    assert discover.call_count == 1
+    assert discover.call_args.kwargs["native_only"] is True
+    assert discover.call_args.kwargs["expected_identity"] == "02:12:34:56:78:90"
+    assert (
+        json.loads((tmp_path / "reboot.json").read_text())["discovery_error"]
+        == "offline"
+    )

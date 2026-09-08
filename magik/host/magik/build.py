@@ -93,6 +93,9 @@ def _ensure_arm_package(
             check=True,
         )
     started = time.monotonic()
+    from .preflight import require_space
+
+    require_space(repository, 8 * 1024**3, "ARM build")
     name = prepare(repository, runner)
     environment = []
     if app and app.name == "magik":

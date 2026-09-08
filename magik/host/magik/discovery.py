@@ -110,16 +110,24 @@ def local_candidates() -> list[str]:
 
 
 def resolve_device(
-    address: str | None = None, *, select: bool = False
+    address: str | None = None,
+    *,
+    select: bool = False,
+    native_only: bool = False,
+    expected_identity: str | None = None,
+    timeout: float | None = None,
 ) -> ResolvedDevice:
     remembered = DeviceProfile.load()
     explicit = address or os.environ.get("MISTER_IP")
     username = os.environ.get("MISTER_USER") or (
         remembered.username if remembered else "root"
     )
-    supplied = os.environ.get("MISTER_PASS")
+    supplied = None if native_only else os.environ.get("MISTER_PASS")
     password = supplied
-    deadline = time.monotonic() + DISCOVERY_SECONDS
+    deadline = time.monotonic() + (DISCOVERY_SECONDS if timeout is None else timeout)
+    expected = expected_identity or (
+        remembered.identity if remembered and not select else None
+    )
     errors: list[Exception] = []
 
     def probe(candidate: str) -> ResolvedDevice | None:
@@ -147,7 +155,7 @@ def resolve_device(
                 raise
             except (OSError, ValueError, EOFError):
                 return None
-        if remembered and not select and identity != remembered.identity:
+        if expected and identity != expected:
             return None
         return ResolvedDevice(identity, candidate, username)
 
@@ -172,11 +180,9 @@ def resolve_device(
             identity = native_identity(initial, 0.4)
         except (OSError, RuntimeError, ValueError):
             identity = None
-        if identity is not None and (
-            not remembered or select or identity == remembered.identity
-        ):
+        if identity is not None and (not expected or identity == expected):
             return accept(ResolvedDevice(identity, initial, username))
-    if password is None and remembered:
+    if password is None and remembered and not native_only:
         password = Keychain().load(remembered.identity, username)
     if initial:
         found = probe(initial)

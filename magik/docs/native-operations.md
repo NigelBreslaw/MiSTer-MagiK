@@ -32,11 +32,13 @@ Raw reports and failures are retained in the command's result directory.
 
 ## Independent platform entrypoint
 
-### Queue published releases for the next deploy
+### Update published releases in one command
 
-Run `scripts/magik update` to download and verify the latest numbered platform
+Run `scripts/magik update --attended` to download, verify and deploy the latest numbered platform
 and game-database releases from `NigelBreslaw/MiSTer-MagiK`. Published prereleases
-are included; drafts are excluded. The command does not contact the device.
+are included; drafts are excluded. Use `scripts/magik update --download-only`
+to queue releases without contacting the device. Plain `update` installs database-only
+changes, but requests attendance before a required platform activation.
 Both releases must verify before the shared desired pair changes. Downloads live
 under `$MISTER_MAGIK2_STATE/updates` (the normal shared state directory when unset).
 The output includes the database release directory usable with `catalog publish`.
@@ -57,7 +59,20 @@ platform transaction is finished automatically only when its saved host journal
 matches and a new boot is confirmed. Otherwise deployment stops with the stage ID
 for explicit inspection/restoration; it never repeats an ambiguous reboot.
 
-`update` errors preserve the previous desired pair. Corrupt cached releases fail
+Before platform replacement, native `service-boot-state`/`service-boot-install`
+operations verify/register the service through MiSTer's `linux/user-startup.sh`
+hook. Existing commands are preserved, with the original saved as
+`mister-magik2/user-startup.before-magik`. No boot-mode changes or reboot loops
+are added. Reboot rediscovery is native-only and bound to the selected board.
+Unavailable service recovery is separate from platform activation; never repeat
+an ambiguous reboot to recover connectivity.
+
+Host download and build preparation check disk headroom before proceeding.
+The CLI uses its frozen lock; private Slint testing dependencies are installed
+only for `check`, not update/deploy. Build errors retain container diagnostics.
+
+Download/verification errors preserve the previous desired pair; installation
+errors retain the newly verified desired pair for recovery. Corrupt cached releases fail
 verification rather than silently falling back. A deployment uses the desired
 pair captured when it starts, even if another update completes concurrently.
 

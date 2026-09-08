@@ -196,6 +196,9 @@ def reboot_device(arguments, run, *, agent=None):
     if not boot_id:
         raise AgentError("cannot identify current boot; reboot not sent")
     report = {"before": before}
+    from .device_profile import DeviceProfile
+
+    profile = DeviceProfile.load()
     try:
         # Never replay this mutation if its acknowledgement is lost.
         try:
@@ -233,7 +236,15 @@ def reboot_device(arguments, run, *, agent=None):
 
                     rediscovered = True
                     try:
-                        resolved = resolve_device()
+                        if profile is None:
+                            raise DiscoveryError(
+                                "missing board identity; native rediscovery skipped"
+                            )
+                        resolved = resolve_device(
+                            native_only=True,
+                            expected_identity=profile.identity,
+                            timeout=min(8, max(0.1, deadline - time.monotonic())),
+                        )
                         agent.host = resolved.address
                         record_device(run, resolved.identity, resolved.address)
                     except DiscoveryError as discovery_error:

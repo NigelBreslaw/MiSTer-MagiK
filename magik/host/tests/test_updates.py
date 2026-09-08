@@ -10,6 +10,34 @@ import pytest
 from magik import updates, update_deploy
 
 
+def test_boot_registration_reconciles_lost_reply_without_replay():
+    agent = Mock()
+
+    def reply(ready):
+        return SimpleNamespace(
+            operation="service-boot-state", fields={"ready": ready}
+        ), b""
+
+    agent._request.side_effect = [reply(False), TimeoutError("reply lost"), reply(True)]
+    update_deploy.ensure_service_boot(agent)
+    assert [call.args[0] for call in agent._request.call_args_list] == [
+        "service-boot-state",
+        "service-boot-install",
+        "service-boot-state",
+    ]
+    assert agent._request.call_args_list[1].kwargs["attempts"] == 1
+
+
+def test_boot_registration_must_verify():
+    agent = Mock()
+    agent._request.return_value = (
+        SimpleNamespace(operation="service-boot-state", fields={"ready": False}),
+        b"",
+    )
+    with pytest.raises(RuntimeError, match="not verified"):
+        update_deploy.ensure_service_boot(agent)
+
+
 def test_numbered_release_selection_includes_prereleases():
     selector = updates.selectors()
     releases = [
@@ -102,6 +130,15 @@ def test_current_pair_is_noop_on_multiple_devices(deploy_case, tmp_path):
     assert len(list((updates.root() / "devices").glob("*.json"))) == 2
 
 
+def test_unrelated_corrupt_journal_does_not_block_current_device(deploy_case, tmp_path):
+    pair, _, publish = deploy_case
+    directory = updates.root() / "devices"
+    directory.mkdir(parents=True)
+    (directory / "other-pending.json").write_text("interrupted")
+    update_deploy.apply_updates(Mock(), "one", pair, tmp_path, False)
+    publish.assert_not_called()
+
+
 def test_queued_deploy_starts_idle_application(deploy_case, tmp_path, monkeypatch):
     from argparse import Namespace
     from magik import cli
@@ -115,9 +152,10 @@ def test_queued_deploy_starts_idle_application(deploy_case, tmp_path, monkeypatc
     artifact = tmp_path / "application"
     artifact.write_bytes(b"application")
     status = AgentStatus(
-        "device",
+        "0.1.0",
         frozenset(),
         {
+            "device_identity": "e2:b1:0a:86:84:3c",
             "running": False,
             "ready": False,
             "artifacts": {"magik": sha256_hex(b"application")},
@@ -142,6 +180,62 @@ def test_queued_deploy_starts_idle_application(deploy_case, tmp_path, monkeypatc
     agent.start.assert_called_once_with(
         expected_sha256=sha256_hex(b"application"), restart=False
     )
+    assert (
+        updates.root()
+        / "devices"
+        / f"{hashlib.sha256(b'e2:b1:0a:86:84:3c').hexdigest()}.json"
+    ).exists()
+    assert not (
+        updates.root() / "devices" / f"{hashlib.sha256(b'0.1.0').hexdigest()}.json"
+    ).exists()
+
+
+@pytest.mark.parametrize("board_matches", [True, False])
+def test_legacy_journal_recovery_requires_board_and_stage(
+    deploy_case, tmp_path, board_matches
+):
+    pair, current, publish = deploy_case
+    previous_run = tmp_path / "previous"
+    updates.atomic_json(
+        previous_run / "run.json",
+        {"source": {"device_identity": "one" if board_matches else "another"}},
+    )
+    updates.atomic_json(previous_run / "platform/publication.json", {"stage": "a" * 32})
+    legacy = (
+        updates.root()
+        / "devices"
+        / f"{hashlib.sha256(b'0.1.0').hexdigest()}-pending.json"
+    )
+    updates.atomic_json(legacy, {"desired": pair, "run": str(previous_run)})
+    current["stages"] = [
+        {
+            "stage": "a" * 32,
+            "pending": {
+                "kind": "platform",
+                "layout": "dev",
+                "boot_id": "previous-boot",
+            },
+        }
+    ]
+    agent = Mock()
+
+    def finish(*args, **kwargs):
+        assert args[0] == "publication-control"
+        assert args[1]["action"] == "finish"
+        assert kwargs["attempts"] == 1
+        current["stages"] = []
+        return SimpleNamespace(operation="publication-complete", fields={}), b""
+
+    agent._request.side_effect = finish
+    if board_matches:
+        update_deploy.apply_updates(agent, "one", pair, tmp_path, True)
+        agent._request.assert_called_once()
+    else:
+        with pytest.raises(RuntimeError, match="no reboot repeated"):
+            update_deploy.apply_updates(agent, "one", pair, tmp_path, True)
+        agent._request.assert_not_called()
+    publish.assert_not_called()
+    assert legacy.exists()
 
 
 def test_missing_attendance_prevents_all_publication(deploy_case, tmp_path):
@@ -189,6 +283,7 @@ def test_platform_success_database_failure_retries_only_database(
     current["platform"]["version"] = 1
     current["databases"]["version"] = 1
     prepare = Mock(return_value={"platform": tmp_path})
+    monkeypatch.setattr(update_deploy, "ensure_service_boot", Mock())
     monkeypatch.setattr(update_deploy, "prepare", prepare)
     monkeypatch.setattr(update_deploy, "database_files", lambda *_: {"db": tmp_path})
 

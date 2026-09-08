@@ -64,9 +64,11 @@ def main() -> int:
     prepare = subcommands.add_parser("desktop-prepare")
     prepare.add_argument("--json", action="store_true", required=True)
     subcommands.add_parser("deploy").add_argument("--attended", action="store_true")
-    subcommands.add_parser(
-        "update", help="download and queue latest platform and databases"
+    update_command = subcommands.add_parser(
+        "update", help="download, queue and install latest platform and databases"
     )
+    update_command.add_argument("--attended", action="store_true")
+    update_command.add_argument("--download-only", action="store_true")
     device_command = subcommands.add_parser("device")
     device_subcommands = device_command.add_subparsers(
         dest="device_command", required=True
@@ -120,7 +122,13 @@ def main() -> int:
         from .updates import update
 
         try:
-            return update()
+            pair = update(return_pair=True)
+            if arguments.download_only:
+                print("Next: scripts/magik deploy --attended")
+                return 0
+            # Pin this invocation's verified pair, not a later concurrent update.
+            arguments.desired_pair = pair
+            arguments.command = "deploy"
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
             print(f"magik update: {error}", file=os.sys.stderr)
             return 2
@@ -253,13 +261,22 @@ def deploy(_arguments: argparse.Namespace, run: Path) -> int:
     try:
         from .updates import desired
 
-        queued = desired() if _arguments.app == "magik" else None
+        queued = (
+            getattr(_arguments, "desired_pair", None) or desired()
+            if _arguments.app == "magik"
+            else None
+        )
         agent, status = connect_agent(
             run,
             REQUIRED_AGENT_CAPABILITIES
             | application(_arguments.app).agent_capabilities
             | (
-                {"publication-state-v1", "publication-v1", "platform-publication-v1"}
+                {
+                    "publication-state-v1",
+                    "publication-v1",
+                    "platform-publication-v1",
+                    "service-boot-v1",
+                }
                 if queued
                 else set()
             ),
@@ -267,10 +284,13 @@ def deploy(_arguments: argparse.Namespace, run: Path) -> int:
         if queued:
             from .update_deploy import apply_updates, device_lock
 
-            deployment_locks.enter_context(device_lock(status.identity))
+            from .device_profile import device_identity
+
+            identity = device_identity(status.fields.get("device_identity"))
+            deployment_locks.enter_context(device_lock(identity))
             apply_updates(
                 agent,
-                status.identity,
+                identity,
                 queued,
                 run,
                 getattr(_arguments, "attended", False),

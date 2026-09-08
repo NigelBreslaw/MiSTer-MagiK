@@ -83,7 +83,7 @@ class ContainerHost:
             item["configuration"]["labels"] = labels
             self.entries.append(item)
         elif args[0] == "build":
-            ref = args[args.index("--tag") + 1]
+            ref = args[args.index("--tag") + 1].removeprefix("docker.io/library/")
             self.images[ref] = "sha256:" + ref.split(":")[1]
         elif args[:2] == ["system", "df"]:
             output = "{}"

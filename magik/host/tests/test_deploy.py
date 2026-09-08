@@ -64,6 +64,7 @@ def test_real_app_uses_the_same_delivery_with_its_own_artifact(monkeypatch, tmp_
 
 
 def test_real_deploy_requires_input_proxy_but_mini_does_not(monkeypatch, tmp_path):
+    monkeypatch.setenv("MISTER_MAGIK2_STATE", str(tmp_path / "state"))
     from argparse import Namespace
     from magik.apps import application
 

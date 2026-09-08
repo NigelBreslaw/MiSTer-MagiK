@@ -543,6 +543,12 @@ impl crate::Agent {
                 }
             }
             if fields["kind"] == "platform" {
+                if !crate::service_boot::ready(
+                    Path::new("/media/fat"),
+                    Path::new("/etc/init.d/S99user"),
+                ) {
+                    return Err("native service boot registration must be verified before platform publication".into());
+                }
                 let selected = crate::mode::status()?["configured_main"]
                     .as_str()
                     .unwrap_or("")
