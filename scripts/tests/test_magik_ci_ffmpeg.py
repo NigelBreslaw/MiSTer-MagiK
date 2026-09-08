@@ -79,7 +79,7 @@ def test_runtime_prepares_ffmpeg_before_cross(repository: Path, intent: str) -> 
     with (
         patch.dict("os.environ", {"MISTER_ARM_BUILD_BACKEND": "cross"}),
         patch.object(
-            build.ffmpeg, "prepare", side_effect=lambda root: events.append("ffmpeg")
+            ffmpeg, "prepare", side_effect=lambda root: events.append("ffmpeg")
         ),
         patch.object(
             build.subprocess, "run", side_effect=lambda *a, **kw: events.append("cross")
@@ -94,7 +94,7 @@ def test_failed_preparation_stops_cargo(repository: Path) -> None:
     with (
         patch.dict("os.environ", {"MISTER_ARM_BUILD_BACKEND": "cross"}),
         patch.object(
-            build.ffmpeg,
+            ffmpeg,
             "prepare",
             side_effect=subprocess.CalledProcessError(1, "ffmpeg"),
         ),
@@ -117,7 +117,7 @@ def test_cross_environment_uses_host_mounted_paths(repository: Path) -> None:
 def test_library_check_does_not_prepare_ffmpeg(repository: Path) -> None:
     with (
         patch.dict("os.environ", {"MISTER_ARM_BUILD_BACKEND": "cross"}),
-        patch.object(build.ffmpeg, "prepare") as prepare,
+        patch.object(ffmpeg, "prepare") as prepare,
         patch.object(build.subprocess, "run"),
     ):
         build.execute(repository, "runtime-library-ci")

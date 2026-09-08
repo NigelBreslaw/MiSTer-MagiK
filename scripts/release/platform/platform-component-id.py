@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -127,14 +129,110 @@ def component_id(root: Path, component: str) -> tuple[str, str]:
     require_clean_repository(root)
     revision = component_revision(root, component)
     digest = hashlib.sha256()
-    digest.update(
-        f"format={FORMAT}\ncomponent={component}\nrevision={revision}\n".encode()
-    )
+    digest.update(f"format={FORMAT}\ncomponent={component}\n".encode())
     for path in selected_files(root, component):
         relative = path.relative_to(root).as_posix()
-        file_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        file_hash = hashlib.sha256(
+            identity_bytes(component, relative, path.read_bytes())
+        ).hexdigest()
         digest.update(f"path={relative}\nsha256={file_hash}\n".encode())
     return digest.hexdigest(), revision
+
+
+def identity_bytes(component: str, relative: str, data: bytes) -> bytes:
+    """Build jobs are inputs; unrelated planning/publication jobs are not."""
+    if relative != ".github/workflows/platform-bundle.yml":
+        return data
+    job = {"fpga": "build-fpga", "kernel": "build-kernel"}[component]
+    matches = re.findall(
+        rf"^  {job}:\n.*?(?=^  [\w-]+:|\Z)",
+        data.decode(),
+        re.MULTILINE | re.DOTALL,
+    )
+    if len(matches) != 1:
+        raise IdentityError(f"expected one {job} job in {relative}")
+    # Global defaults or non-Main environment settings can affect either build.
+    # The three existing Main-only settings must not invalidate FPGA/kernel.
+    globals_ = []
+    for key in ("env", "defaults"):
+        for block in re.findall(
+            rf"^{key}:\n.*?(?=^[\w-]+:|\Z)", data.decode(), re.MULTILINE | re.DOTALL
+        ):
+            lines = [
+                line
+                for line in block.splitlines()
+                if not re.match(r"^  MAIN_(REPOSITORY|BRANCH|TOOLCHAIN_VERSION):", line)
+            ]
+            globals_.append("\n".join(lines).rstrip())
+    return "\n".join([*globals_, matches[0].rstrip()]).encode()
+
+
+def equivalent_inputs(root: Path, component: str, revision: str) -> bool:
+    """Compare actual input blobs, even across reconstructed Git history.
+
+    Use the current input selection on both trees. Identity implementation and
+    selection-file bytes describe the hashing scheme, not the built artifact.
+    A release keeps its original identity and provenance when inputs match.
+    """
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        return False
+    inputs = component_inputs(root, component)[:-2]
+    try:
+        previous = run_git(
+            root, "ls-tree", "-r", "--full-tree", revision, "--", *inputs
+        )
+        current = run_git(root, "ls-tree", "-r", "--full-tree", "HEAD", "--", *inputs)
+
+        def entries(tree: str) -> dict[str, tuple[str, str]]:
+            result = {}
+            for line in tree.splitlines():
+                metadata, name = line.split("\t", 1)
+                mode, kind, oid = metadata.split()
+                if kind != "blob" or mode not in {"100644", "100755"}:
+                    raise IdentityError("component inputs must be regular files")
+                result[name] = (mode, oid)
+            return result
+
+        old, new = entries(previous), entries(current)
+        if not old or old.keys() != new.keys():
+            return False
+        for name, (mode, oid) in new.items():
+            old_mode, old_oid = old[name]
+            if mode != old_mode:
+                return False
+            if oid != old_oid:
+                if name != ".github/workflows/platform-bundle.yml":
+                    return False
+                before = run_git(root, "cat-file", "blob", old_oid).encode()
+                after = run_git(root, "cat-file", "blob", oid).encode()
+                # Only the workflow has a deliberately selected input region.
+                if identity_bytes(component, name, before) != identity_bytes(
+                    component, name, after
+                ):
+                    return False
+        return True
+    except IdentityError:
+        return False
+
+
+def release_identities(root: Path, manifest: dict) -> dict[str, str]:
+    require_clean_repository(root)
+    if manifest.get("format") != "mister-magik-platform-bundle-v0.2":
+        raise IdentityError("unsupported release manifest")
+    result = {}
+    for component in ("fpga", "kernel"):
+        desired, _ = component_id(root, component)
+        origin = manifest.get("components", {}).get(component, {})
+        previous = manifest.get(f"{component}_input_sha256", "")
+        reuse = (
+            origin.get("component") == component
+            and origin.get("head_branch") == "main"
+            and re.fullmatch(r"[0-9a-f]{64}", previous)
+            and equivalent_inputs(root, component, origin.get("head_sha", ""))
+        )
+        result[f"{component}_id"] = previous if reuse else desired
+        result[f"{component}_release_equivalent"] = "true" if reuse else "false"
+    return result
 
 
 def bundle_id(fpga_id: str, kernel_id: str) -> str:
@@ -152,6 +250,12 @@ def main() -> int:
         "--root", type=Path, default=Path(__file__).resolve().parents[3]
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    release = commands.add_parser("release-identities")
+    release.add_argument("--manifest", type=Path, required=True)
+    release.add_argument("--github-output", type=Path, required=True)
+    equivalent = commands.add_parser("equivalent")
+    equivalent.add_argument("name", choices=sorted(COMPONENT_INPUT_MANIFESTS))
+    equivalent.add_argument("--revision", required=True)
     component = commands.add_parser("component")
     component.add_argument("name", choices=sorted(COMPONENT_INPUT_MANIFESTS))
     component_output = component.add_mutually_exclusive_group()
@@ -166,7 +270,22 @@ def main() -> int:
     bundle.add_argument("--kernel-id", required=True)
     try:
         args = parser.parse_args()
-        if args.command == "component":
+        if args.command == "release-identities":
+            values = release_identities(
+                args.root.resolve(), json.loads(args.manifest.read_text())
+            )
+            with args.github_output.open("a") as output:
+                for key, value in values.items():
+                    output.write(f"{key}={value}\n")
+            print(json.dumps(values, sort_keys=True))
+        elif args.command == "equivalent":
+            require_clean_repository(args.root.resolve())
+            return (
+                0
+                if equivalent_inputs(args.root.resolve(), args.name, args.revision)
+                else 1
+            )
+        elif args.command == "component":
             identity, revision = component_id(args.root.resolve(), args.name)
             if args.revision_only:
                 print(revision)

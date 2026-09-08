@@ -9,7 +9,8 @@ mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h
 scripts/build-fpga-vblank-latch-core.sh
 scripts/prepare-fpga-menu-signoff.py
 scripts/install-quartus-lite-docker.sh
-scripts/checks/check-latch-protocol.py
+scripts/quartus/fpga-build-epoch-v1.txt
+# Host protocol consistency checks run before reuse; they do not change the RBF.
 scripts/checks/generate-latch-protocol.py
 scripts/checks/generate-video-diagnostics-protocol.py
 scripts/checks/generate-hdmi-evidence-protocol.py
@@ -18,10 +19,4 @@ scripts/checks/check-fpga-latch-coverage.py
 scripts/checks/check-fpga-quartus-delta.py
 scripts/checks/verify-fpga-rbf-manifest.py
 scripts/checks/verify-crt-qualification-evidence.py
-scripts/tests/test-fpga-vblank-latch.sh
-scripts/tests/test-fpga-rbf-manifest.py
-scripts/tests/test-fpga-quartus-delta.py
-scripts/tests/test-crt-qualification-evidence.py
-scripts/tests/test-platform-component-id.py
-.github/workflows/fpga-latch-fast.yml
 .github/workflows/platform-bundle.yml

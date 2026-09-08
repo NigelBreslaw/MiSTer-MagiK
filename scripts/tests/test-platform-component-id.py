@@ -71,6 +71,12 @@ class ComponentIdentityTests(unittest.TestCase):
                     if not fixture.exists():
                         fixture.write_text(f"{component}:{relative}\n")
         subprocess.run(["git", "init", "-q", str(self.root)], check=True, env=git_env())
+        (self.root / ".github/workflows/platform-bundle.yml").write_text(
+            "jobs:\n  plan:\n    name: Plan\n"
+            "  build-kernel:\n    container: ubuntu:20.04\n"
+            "  build-fpga:\n    env:\n      QUARTUS_VERSION: '17.0'\n"
+            "  publish:\n    name: Publish\n"
+        )
         run_git(self.root, "config", "user.email", "test@example.invalid")
         run_git(self.root, "config", "user.name", "Test")
         run_git(self.root, "add", ".")
@@ -200,6 +206,116 @@ class ComponentIdentityTests(unittest.TestCase):
         kernel_after, _ = component_id.component_id(self.root, "kernel")
         self.assertEqual(fpga_before, fpga_after)
         self.assertEqual(kernel_before, kernel_after)
+
+    def head(self) -> str:
+        return component_id.run_git(self.root, "rev-parse", "HEAD")
+
+    def test_reverted_input_restores_identity_despite_changed_history(self) -> None:
+        before, revision = component_id.component_id(self.root, "fpga-synthesis")
+        path = self.root / "scripts/build-fpga-vblank-latch-core.sh"
+        original = path.read_text()
+        path.write_text("temporary change\n")
+        self.commit("change")
+        path.write_text(original)
+        self.commit("restore")
+        after, new_revision = component_id.component_id(self.root, "fpga-synthesis")
+        self.assertNotEqual(revision, new_revision)
+        self.assertEqual(before, after)
+
+    def test_planning_changes_do_not_invalidate_build_jobs(self) -> None:
+        before = {
+            name: component_id.component_id(self.root, name)[0]
+            for name in ("kernel", "fpga")
+        }
+        base = self.head()
+        path = self.root / ".github/workflows/platform-bundle.yml"
+        path.write_text(path.read_text().replace("name: Plan", "name: Better planning"))
+        self.commit("change orchestration")
+        for name, identity in before.items():
+            self.assertEqual(identity, component_id.component_id(self.root, name)[0])
+            self.assertTrue(component_id.equivalent_inputs(self.root, name, base))
+        path.write_text(path.read_text().replace("ubuntu:20.04", "ubuntu:24.04"))
+        self.commit("change compiler environment")
+        self.assertNotEqual(
+            before["kernel"], component_id.component_id(self.root, "kernel")[0]
+        )
+        self.assertFalse(component_id.equivalent_inputs(self.root, "kernel", base))
+
+    def test_host_contract_checks_do_not_invalidate_components(self) -> None:
+        before = {
+            name: component_id.component_id(self.root, name)[0]
+            for name in ("kernel", "fpga")
+        }
+        for check in ("check-latch-protocol.py", "check-scanout-slots-contract.sh"):
+            path = self.root / "scripts/checks" / check
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("current host integration checks\n")
+        self.commit("retire old host adapters")
+        for name, identity in before.items():
+            self.assertEqual(identity, component_id.component_id(self.root, name)[0])
+
+    def test_release_reuse_keeps_original_identity_across_reconstructed_history(
+        self,
+    ) -> None:
+        base = self.head()
+        manifest = {"format": "mister-magik-platform-bundle-v0.2", "components": {}}
+        for component in ("fpga", "kernel"):
+            manifest[f"{component}_input_sha256"] = (
+                "a" if component == "fpga" else "b"
+            ) * 64
+            manifest["components"][component] = {
+                "component": component,
+                "head_branch": "main",
+                "head_sha": base,
+            }
+        run_git(self.root, "checkout", "--orphan", "reconstructed")
+        self.commit("same files, unrelated history")
+        result = component_id.release_identities(self.root, manifest)
+        self.assertEqual(result["fpga_id"], "a" * 64)
+        self.assertEqual(result["kernel_id"], "b" * 64)
+        self.assertEqual(result["kernel_release_equivalent"], "true")
+        path = self.root / "mister/platform/kernel/scanout-slots/input.txt"
+        path.write_text("real module change\n")
+        self.commit("change module")
+        result = component_id.release_identities(self.root, manifest)
+        self.assertEqual(result["fpga_id"], "a" * 64)
+        self.assertNotEqual(result["kernel_id"], "b" * 64)
+        self.assertEqual(result["kernel_release_equivalent"], "false")
+        self.assertEqual(manifest["components"]["kernel"]["head_sha"], base)
+
+    def test_reuse_rejects_missing_revision_and_changed_file_set(self) -> None:
+        base = self.head()
+        self.assertFalse(component_id.equivalent_inputs(self.root, "kernel", "0" * 40))
+        path = self.root / "mister/platform/kernel/scanout-slots/new.c"
+        path.write_text("new module source\n")
+        self.commit("add source")
+        self.assertFalse(component_id.equivalent_inputs(self.root, "kernel", base))
+
+    def test_build_epoch_invalidates_synthesis(self) -> None:
+        before, _ = component_id.component_id(self.root, "fpga-synthesis")
+        (self.root / "scripts/quartus/fpga-build-epoch-v1.txt").write_text("260909\n")
+        self.commit("change embedded build date")
+        self.assertNotEqual(
+            before, component_id.component_id(self.root, "fpga-synthesis")[0]
+        )
+
+    def test_shared_build_environment_is_an_input(self) -> None:
+        path = self.root / ".github/workflows/platform-bundle.yml"
+        path.write_text("env:\n  CROSS_COMPILE: old-compiler-\n" + path.read_text())
+        self.commit("shared build setting")
+        before, _ = component_id.component_id(self.root, "kernel")
+        base = self.head()
+        path.write_text(path.read_text().replace("old-compiler-", "new-compiler-"))
+        self.commit("change shared compiler")
+        self.assertNotEqual(before, component_id.component_id(self.root, "kernel")[0])
+        self.assertFalse(component_id.equivalent_inputs(self.root, "kernel", base))
+
+    def test_missing_build_job_is_rejected(self) -> None:
+        path = self.root / ".github/workflows/platform-bundle.yml"
+        path.write_text("jobs:\n  plan:\n    name: Only planning\n")
+        self.commit("remove build jobs")
+        with self.assertRaisesRegex(ValueError, "expected one build-kernel job"):
+            component_id.component_id(self.root, "kernel")
 
     def test_dirty_checkout_is_rejected(self) -> None:
         (self.root / "scripts/build-fpga-vblank-latch-core.sh").write_text("dirty\n")
