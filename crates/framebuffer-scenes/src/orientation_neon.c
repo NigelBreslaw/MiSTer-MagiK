@@ -217,3 +217,57 @@ void mister_magik_orientation_zoom_neon(
         }
     }
 }
+
+typedef struct { size_t x0, y0, x1, y1; } zoom_rect;
+
+static zoom_rect black_rect(size_t width, size_t height, size_t tile, uint8_t level) {
+    zoom_rect r = {0,0,0,0};
+    if (level == ORIENTATION_SKIP) return r;
+    const size_t row = tile / ORIENTATION_COLUMNS, col = tile % ORIENTATION_COLUMNS;
+    centered_span(col * width / ORIENTATION_COLUMNS, (col+1) * width / ORIENTATION_COLUMNS,
+        level, &r.x0, &r.x1);
+    centered_span(row * height / ORIENTATION_ROWS, (row+1) * height / ORIENTATION_ROWS,
+        level, &r.y0, &r.y1);
+    return r;
+}
+
+static size_t paint_rect(const uint16_t *source, uint16_t *output,
+    size_t width, zoom_rect r, int black) {
+    for (size_t y = r.y0; y < r.y1; ++y) {
+        if (black) zero_pixels(output + y * width + r.x0, r.x1-r.x0);
+        else copy_pixels(source + y * width + r.x0, output + y * width + r.x0, r.x1-r.x0);
+    }
+    return (r.x1-r.x0) * (r.y1-r.y0);
+}
+
+static size_t paint_difference(const uint16_t *source, uint16_t *output,
+    size_t width, zoom_rect a, zoom_rect b, int black) {
+    const size_t x0 = a.x0 > b.x0 ? a.x0 : b.x0;
+    const size_t y0 = a.y0 > b.y0 ? a.y0 : b.y0;
+    const size_t x1 = a.x1 < b.x1 ? a.x1 : b.x1;
+    const size_t y1 = a.y1 < b.y1 ? a.y1 : b.y1;
+    if (x0 >= x1 || y0 >= y1) return paint_rect(source, output, width, a, black);
+    size_t writes = paint_rect(source, output, width, (zoom_rect){a.x0,a.y0,a.x1,y0},black);
+    writes += paint_rect(source, output, width, (zoom_rect){a.x0,y1,a.x1,a.y1},black);
+    writes += paint_rect(source, output, width, (zoom_rect){a.x0,y0,x0,y1},black);
+    writes += paint_rect(source, output, width, (zoom_rect){x1,y0,a.x1,y1},black);
+    return writes;
+}
+
+size_t mister_magik_orientation_zoom_delta_neon(const uint16_t *restrict source,
+    uint16_t *restrict output, size_t width, size_t height,
+    const uint8_t *restrict levels, const uint8_t *restrict previous,
+    const uint16_t *restrict dirty_rows) {
+    size_t writes = 0;
+    for (size_t row = 0; row < ORIENTATION_ROWS; ++row) {
+        for (size_t col = 0; col < ORIENTATION_COLUMNS; ++col) {
+            if ((dirty_rows[row] & (1u << col)) == 0) continue;
+            const size_t tile = row * ORIENTATION_COLUMNS + col;
+            const zoom_rect old = black_rect(width,height,tile,previous[tile]);
+            const zoom_rect now = black_rect(width,height,tile,levels[tile]);
+            writes += paint_difference(source,output,width,old,now,0);
+            writes += paint_difference(source,output,width,now,old,1);
+        }
+    }
+    return writes;
+}

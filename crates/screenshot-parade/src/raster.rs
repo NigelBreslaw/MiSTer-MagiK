@@ -233,19 +233,29 @@ impl PreparedScreenshotCard {
             kernel,
             preparation_slack,
         );
-        let shifted = std::array::from_fn(|index| {
-            if let Some(slack) = preparation_slack {
-                slack.checkpoint();
-            }
-            prepare_linear_phase(
-                &styled,
-                &coverage,
-                &source_opaque_spans,
-                &premultiplied,
-                index + 1,
-                kernel,
-                preparation_slack,
-            )
+        let shifted = prepare_shifted_phases_batched(
+            &styled,
+            &coverage,
+            &source_opaque_spans,
+            &premultiplied,
+            kernel,
+            preparation_slack,
+        )
+        .unwrap_or_else(|| {
+            std::array::from_fn(|index| {
+                if let Some(slack) = preparation_slack {
+                    slack.checkpoint();
+                }
+                prepare_linear_phase(
+                    &styled,
+                    &coverage,
+                    &source_opaque_spans,
+                    &premultiplied,
+                    index + 1,
+                    kernel,
+                    preparation_slack,
+                )
+            })
         });
         let phase_us = phase_started.elapsed().as_micros();
         (
@@ -828,6 +838,107 @@ fn premultiply_linear_source(
         }
     }
     premultiplied
+}
+
+fn prepare_shifted_phases_batched(
+    image: &LinearImage,
+    source_coverage: &[u8],
+    source_opaque_spans: &[OpaqueSpan],
+    premultiplied_source: &[[u16; 4]],
+    kernel: LinearPhaseKernel,
+    preparation_slack: Option<&PreparationSlack>,
+) -> Option<[PreparedLinearPhase; CRT_SHIFTED_PHASE_COUNT]> {
+    let batch = match kernel {
+        #[cfg(test)]
+        LinearPhaseKernel::Scalar => return None,
+        LinearPhaseKernel::Neon => 5,
+    };
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    {
+        unsafe extern "C" {
+            fn mister_magik_screenshot_phase_batch_neon(
+                source: *const u16,
+                source_width: usize,
+                height: usize,
+                output_width: usize,
+                weights: *const i32,
+                source_opaque_spans: *const OpaqueSpan,
+                linear_to_srgb: *const u8,
+                pixels: *const *mut u16,
+                phases: usize,
+            );
+        }
+        let width = image.width + 1;
+        let mut pixels: [Vec<Rgb565Pixel>; CRT_SHIFTED_PHASE_COUNT] =
+            std::array::from_fn(|_| vec![Rgb565Pixel(0); width * image.height]);
+        let weights: [[i32; 6]; CRT_SHIFTED_PHASE_COUNT] =
+            std::array::from_fn(|i| fractional_delay_weights(i + 1));
+        for first in (0..CRT_SHIFTED_PHASE_COUNT).step_by(batch) {
+            let phases = batch.min(CRT_SHIFTED_PHASE_COUNT - first);
+            for row in (0..image.height).step_by(4) {
+                if let Some(slack) = preparation_slack {
+                    slack.checkpoint();
+                }
+                let rows = 4.min(image.height - row);
+                let pointers: [*mut u16; 5] = std::array::from_fn(|i| {
+                    if i < phases {
+                        pixels[first + i][row * width..].as_mut_ptr().cast()
+                    } else {
+                        std::ptr::null_mut()
+                    }
+                });
+                // SAFETY: each live pointer addresses a distinct complete output plane;
+                // inputs cover the same four-row stripe, with six coefficients per phase.
+                unsafe {
+                    mister_magik_screenshot_phase_batch_neon(
+                        premultiplied_source[row * image.width..].as_ptr().cast(),
+                        image.width,
+                        rows,
+                        width,
+                        weights[first].as_ptr(),
+                        source_opaque_spans[row..].as_ptr(),
+                        linear_to_srgb_table().as_ptr(),
+                        pointers.as_ptr(),
+                        phases,
+                    );
+                }
+            }
+        }
+        Some(std::array::from_fn(|index| {
+            let phase_image = ScreenshotImage {
+                pixels: std::mem::take(&mut pixels[index]),
+                width,
+                height: image.height,
+                stride: width,
+            };
+            // As in the single-phase path, visible coverage is shape-preserving,
+            // not the temporary alpha written by the C colour reconstruction.
+            let coverage = shape_preserving_shifted_coverage(
+                source_coverage,
+                image.width,
+                image.height,
+                index + 1,
+                preparation_slack,
+            );
+            let coverage = coverage_plane(coverage, &phase_image, preparation_slack);
+            PreparedLinearPhase {
+                image: phase_image,
+                coverage,
+            }
+        }))
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+    {
+        let _ = (
+            image,
+            source_coverage,
+            source_opaque_spans,
+            premultiplied_source,
+            batch,
+            preparation_slack,
+        );
+        None
+    }
 }
 
 fn prepare_linear_phase(

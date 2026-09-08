@@ -160,32 +160,30 @@ void mister_magik_rgb565_rotate_counter_clockwise(
 }
 
 static inline uint16x8_t blend8(uint16x8_t from, uint16x8_t to, uint16_t alpha) {
-    const uint16_t inverse = (uint16_t)(32u - alpha);
-    const uint16x4_t from_lo = vget_low_u16(from);
-    const uint16x4_t from_hi = vget_high_u16(from);
-    const uint16x4_t to_lo = vget_low_u16(to);
-    const uint16x4_t to_hi = vget_high_u16(to);
-    const uint16x4_t red_blue_mask = vdup_n_u16(0xf81f);
-    const uint16x4_t green_mask = vdup_n_u16(0x07e0);
-    const uint16x4_t lo = vorr_u16(
-        vmovn_u32(vandq_u32(vshrq_n_u32(
-            vmlal_n_u16(vmull_n_u16(vand_u16(from_lo, red_blue_mask), inverse),
-                        vand_u16(to_lo, red_blue_mask), alpha), 5),
-            vdupq_n_u32(0xf81f))),
-        vmovn_u32(vandq_u32(vshrq_n_u32(
-            vmlal_n_u16(vmull_n_u16(vand_u16(from_lo, green_mask), inverse),
-                        vand_u16(to_lo, green_mask), alpha), 5),
-            vdupq_n_u32(0x07e0))));
-    const uint16x4_t hi = vorr_u16(
-        vmovn_u32(vandq_u32(vshrq_n_u32(
-            vmlal_n_u16(vmull_n_u16(vand_u16(from_hi, red_blue_mask), inverse),
-                        vand_u16(to_hi, red_blue_mask), alpha), 5),
-            vdupq_n_u32(0xf81f))),
-        vmovn_u32(vandq_u32(vshrq_n_u32(
-            vmlal_n_u16(vmull_n_u16(vand_u16(from_hi, green_mask), inverse),
-                        vand_u16(to_hi, green_mask), alpha), 5),
-            vdupq_n_u32(0x07e0))));
-    return vcombine_u16(lo, hi);
+    if (alpha == 0) return from;
+    if (alpha == 32) return to;
+    // For 0 < alpha < 32, vqdmulh(delta, alpha << 10) is exactly
+    // floor(delta * alpha / 32), including negative deltas (not truncation
+    // toward zero). Unpacked channel deltas are bounded by 63, so the
+    // doubled product cannot saturate. Handle alpha 32 above: its coefficient
+    // is not representable in signed 16 bits. No rounding step is introduced.
+    const int16x8_t coefficient = vdupq_n_s16((int16_t)(alpha << 10));
+    const uint16x8_t red_from = vshrq_n_u16(from, 11);
+    const uint16x8_t red_to = vshrq_n_u16(to, 11);
+    const uint16x8_t green_from = vandq_u16(vshrq_n_u16(from, 5), vdupq_n_u16(63));
+    const uint16x8_t green_to = vandq_u16(vshrq_n_u16(to, 5), vdupq_n_u16(63));
+    const uint16x8_t blue_from = vandq_u16(from, vdupq_n_u16(31));
+    const uint16x8_t blue_to = vandq_u16(to, vdupq_n_u16(31));
+    const uint16x8_t red = vreinterpretq_u16_s16(vaddq_s16(
+        vreinterpretq_s16_u16(red_from), vqdmulhq_s16(vsubq_s16(
+            vreinterpretq_s16_u16(red_to), vreinterpretq_s16_u16(red_from)), coefficient)));
+    const uint16x8_t green = vreinterpretq_u16_s16(vaddq_s16(
+        vreinterpretq_s16_u16(green_from), vqdmulhq_s16(vsubq_s16(
+            vreinterpretq_s16_u16(green_to), vreinterpretq_s16_u16(green_from)), coefficient)));
+    const uint16x8_t blue = vreinterpretq_u16_s16(vaddq_s16(
+        vreinterpretq_s16_u16(blue_from), vqdmulhq_s16(vsubq_s16(
+            vreinterpretq_s16_u16(blue_to), vreinterpretq_s16_u16(blue_from)), coefficient)));
+    return vorrq_u16(vorrq_u16(vshlq_n_u16(red, 11), vshlq_n_u16(green, 5)), blue);
 }
 
 static inline uint16_t blend1(uint16_t from, uint16_t to, uint16_t alpha) {
@@ -204,6 +202,23 @@ void mister_magik_rgb565_blend(
 ) {
     const uint16_t clamped_alpha = alpha > 32u ? 32u : alpha;
     size_t index = start;
+    if (clamped_alpha == 16u) {
+        // Floor-average each RGB565 channel without cross-channel carries.
+        // Mask each channel's low bit before shifting the differing bits.
+        const uint16x8_t mask = vdupq_n_u16(0xf7de);
+        for (; index + 7 < end; index += 8) {
+            const uint16x8_t from = vld1q_u16(previous + index);
+            const uint16x8_t to = vld1q_u16(current + index);
+            const uint16x8_t half_difference =
+                vshrq_n_u16(vandq_u16(veorq_u16(from, to), mask), 1);
+            vst1q_u16(destination + index, vaddq_u16(vandq_u16(from, to), half_difference));
+        }
+        for (; index < end; ++index) {
+            const uint16_t from = previous[index], to = current[index];
+            destination[index] = (from & to) + (((from ^ to) & 0xf7deu) >> 1);
+        }
+        return;
+    }
     for (; index + 7 < end; index += 8) {
         const uint16x8_t from = vld1q_u16(previous + index);
         const uint16x8_t to = vld1q_u16(current + index);

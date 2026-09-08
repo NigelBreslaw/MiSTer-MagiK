@@ -7,26 +7,17 @@
 
 #include "screenshot_phase_reciprocals.h"
 
-static inline uint16x4_t reconstruct_six_tap(
+static inline uint16x4_t reconstruct_six_tap_extrema(
     uint16x4_t value0,
     uint16x4_t value1,
     uint16x4_t value2,
     uint16x4_t value3,
     uint16x4_t value4,
     uint16x4_t value5,
+    uint16x4_t minima,
+    uint16x4_t maxima,
     const int32_t *restrict weights
 ) {
-    uint16x4_t minima = vmin_u16(value0, value1);
-    uint16x4_t maxima = vmax_u16(value0, value1);
-    minima = vmin_u16(minima, value2);
-    maxima = vmax_u16(maxima, value2);
-    minima = vmin_u16(minima, value3);
-    maxima = vmax_u16(maxima, value3);
-    minima = vmin_u16(minima, value4);
-    maxima = vmax_u16(maxima, value4);
-    minima = vmin_u16(minima, value5);
-    maxima = vmax_u16(maxima, value5);
-
     int32x4_t sums = vmulq_n_s32(
         vreinterpretq_s32_u32(vmovl_u16(value0)),
         weights[0]
@@ -50,6 +41,30 @@ static inline uint16x4_t reconstruct_six_tap(
         vreinterpretq_s32_u32(vmovl_u16(maxima))
     );
     return vmovn_u32(vreinterpretq_u32_s32(reconstructed));
+}
+
+static inline uint16x4_t reconstruct_six_tap(
+    uint16x4_t value0,
+    uint16x4_t value1,
+    uint16x4_t value2,
+    uint16x4_t value3,
+    uint16x4_t value4,
+    uint16x4_t value5,
+    const int32_t *restrict weights
+) {
+    uint16x4_t minima = vmin_u16(value0, value1);
+    uint16x4_t maxima = vmax_u16(value0, value1);
+    minima = vmin_u16(minima, value2);
+    maxima = vmax_u16(maxima, value2);
+    minima = vmin_u16(minima, value3);
+    maxima = vmax_u16(maxima, value3);
+    minima = vmin_u16(minima, value4);
+    maxima = vmax_u16(maxima, value4);
+    minima = vmin_u16(minima, value5);
+    maxima = vmax_u16(maxima, value5);
+
+    return reconstruct_six_tap_extrema(value0, value1, value2, value3, value4,
+        value5, minima, maxima, weights);
 }
 
 static inline uint16_t unpremultiply_exact(
@@ -296,6 +311,59 @@ void mister_magik_screenshot_phase_neon(
                 row_pixels + output_x,
                 row_coverage + output_x
             );
+        }
+    }
+}
+
+void mister_magik_screenshot_phase_batch_neon(
+    const uint16_t *restrict source,
+    size_t source_width, size_t height, size_t output_width,
+    const int32_t *restrict weights,
+    const uint16_t *restrict source_opaque_spans,
+    const uint8_t *restrict linear_to_srgb,
+    uint16_t *const *restrict pixels,
+    size_t phases
+) {
+    const uint16x4_t zero = vdup_n_u16(0);
+    for (size_t y = 0; y < height; ++y) {
+        const uint16_t *row = source + y * source_width * 4;
+        const size_t opaque_start = (size_t)source_opaque_spans[y * 2] + 3;
+        const size_t opaque_end = source_opaque_spans[y * 2 + 1];
+        for (size_t x = 0; x < output_width; ++x) {
+            const ptrdiff_t sx = (ptrdiff_t)x - 3;
+            const uint16x4_t value0 = load_or_zero(row, source_width, sx, zero);
+            const uint16x4_t value1 = load_or_zero(row, source_width, sx + 1, zero);
+            const uint16x4_t value2 = load_or_zero(row, source_width, sx + 2, zero);
+            const uint16x4_t value3 = load_or_zero(row, source_width, sx + 3, zero);
+            const uint16x4_t value4 = load_or_zero(row, source_width, sx + 4, zero);
+            const uint16x4_t value5 = load_or_zero(row, source_width, sx + 5, zero);
+            uint16x4_t minima = vmin_u16(value0, value1);
+            uint16x4_t maxima = vmax_u16(value0, value1);
+            minima = vmin_u16(minima, value2);
+            maxima = vmax_u16(maxima, value2);
+            minima = vmin_u16(minima, value3);
+            maxima = vmax_u16(maxima, value3);
+            minima = vmin_u16(minima, value4);
+            maxima = vmax_u16(maxima, value4);
+            minima = vmin_u16(minima, value5);
+            maxima = vmax_u16(maxima, value5);
+            const int opaque = opaque_end > 2 && x >= opaque_start && x < opaque_end - 2;
+            for (size_t phase = 0; phase < phases; ++phase) {
+                const uint16x4_t value = reconstruct_six_tap_extrema(
+                    value0, value1, value2, value3, value4, value5,
+                    minima, maxima, weights + phase * 6
+                );
+                // Rust replaces this temporary with shape-preserving coverage.
+                // Retain reconstructed alpha for exact unpremultiplication.
+                uint8_t discarded_coverage;
+                if (opaque) {
+                    write_opaque_phase_pixel(value, linear_to_srgb,
+                        pixels[phase] + y * output_width + x, &discarded_coverage);
+                } else {
+                    write_phase_pixel(value, linear_to_srgb,
+                        pixels[phase] + y * output_width + x, &discarded_coverage);
+                }
+            }
         }
     }
 }
