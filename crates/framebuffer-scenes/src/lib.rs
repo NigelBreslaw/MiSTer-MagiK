@@ -1109,6 +1109,136 @@ mod tests {
     use super::*;
 
     #[test]
+    fn half_blend_preserves_channel_floor_without_cross_channel_carries() {
+        for (bits, shift) in [(5_u32, 11_u32), (6, 5), (5, 0)] {
+            for from in 0_u16..(1 << bits) {
+                for to in 0_u16..(1 << bits) {
+                    let a = from << shift;
+                    let b = to << shift;
+                    assert_eq!(
+                        (a & b) + (((a ^ b) & 0xf7de) >> 1),
+                        ((from + to) / 2) << shift
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    fn scalar_blend_exact(from: Rgb565Pixel, to: Rgb565Pixel, alpha: u16) -> Rgb565Pixel {
+        let from = u32::from(from.0);
+        let to = u32::from(to.0);
+        let alpha = u32::from(alpha.min(32));
+        let inverse = 32 - alpha;
+        let red_blue = (((from & 0xf81f) * inverse + (to & 0xf81f) * alpha) >> 5) & 0xf81f;
+        let green = (((from & 0x07e0) * inverse + (to & 0x07e0) * alpha) >> 5) & 0x07e0;
+        Rgb565Pixel((red_blue | green) as u16)
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    fn assert_neon_blend_case(
+        previous: &[Rgb565Pixel],
+        current: &[Rgb565Pixel],
+        start: usize,
+        end: usize,
+        alpha: u16,
+    ) {
+        const CANARY: Rgb565Pixel = Rgb565Pixel(0xdead);
+        assert!(start <= end && end <= previous.len() && end <= current.len());
+        let mut actual = vec![CANARY; end + 5];
+        let mut expected = actual.clone();
+        for index in start..end {
+            expected[index] = scalar_blend_exact(previous[index], current[index], alpha);
+        }
+        if start == end {
+            assert!(!blend_rgb565_neon_if_available(
+                &mut actual,
+                previous,
+                current,
+                start,
+                end,
+                alpha,
+            ));
+        } else {
+            assert!(blend_rgb565_neon_if_available(
+                &mut actual,
+                previous,
+                current,
+                start,
+                end,
+                alpha,
+            ));
+        }
+        assert_eq!(actual, expected, "range={start}..{end} alpha={alpha}");
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    #[test]
+    fn neon_blend_covers_empty_small_boundaries_alignment_and_canaries() {
+        let previous = (0..96)
+            .map(|index| Rgb565Pixel((index as u16).wrapping_mul(977).wrapping_add(13)))
+            .collect::<Vec<_>>();
+        let current = (0..96)
+            .map(|index| Rgb565Pixel((index as u16).wrapping_mul(613).wrapping_add(29)))
+            .collect::<Vec<_>>();
+        for offset in [0, 1] {
+            let previous = &previous[offset..];
+            let current = &current[offset..];
+            for length in [0, 1, 2, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
+                assert_neon_blend_case(previous, current, 3, 3 + length, 16);
+            }
+        }
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    #[test]
+    fn neon_blend_exhausts_each_channel_and_mixed_patterns() {
+        fn pack(red: u16, green: u16, blue: u16) -> Rgb565Pixel {
+            Rgb565Pixel((red << 11) | (green << 5) | blue)
+        }
+
+        for alpha in [0, 1, 2, 15, 16, 31, 32, 33, 255] {
+            let channels: [(u16, fn(u16, u16) -> (Rgb565Pixel, Rgb565Pixel)); 3] = [
+                (32, |from: u16, to: u16| {
+                    (pack(from, 17, 9), pack(to, 17, 9))
+                }),
+                (64, |from: u16, to: u16| {
+                    (pack(19, from, 11), pack(19, to, 11))
+                }),
+                (32, |from: u16, to: u16| {
+                    (pack(23, 41, from), pack(23, 41, to))
+                }),
+            ];
+            for (limit, pack_pixel) in channels {
+                let mut previous = Vec::with_capacity(usize::from(limit) * usize::from(limit));
+                let mut current = Vec::with_capacity(usize::from(limit) * usize::from(limit));
+                for from in 0..limit {
+                    for to in 0..limit {
+                        let (previous_pixel, current_pixel) = pack_pixel(from, to);
+                        previous.push(previous_pixel);
+                        current.push(current_pixel);
+                    }
+                }
+                assert_neon_blend_case(&previous, &current, 0, previous.len(), alpha);
+            }
+
+            let previous = (0..40)
+                .map(|index| pack(index % 32, (index * 11) % 64, (index * 7) % 32))
+                .collect::<Vec<_>>();
+            let current = (0..40)
+                .map(|index| {
+                    pack(
+                        31 - index % 32,
+                        63 - (index * 5) % 64,
+                        31 - (index * 3) % 32,
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_neon_blend_case(&previous, &current, 3, 37, alpha);
+        }
+    }
+
+    #[test]
     fn geometry_rejects_invalid_or_overflowing_lengths() {
         assert!(SceneGeometry::new(0, 1, 1).is_err());
         assert!(SceneGeometry::new(1, 0, 1).is_err());
