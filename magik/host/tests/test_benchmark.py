@@ -88,11 +88,12 @@ def test_offline_comparison_requires_matching_fixture_and_provenance():
         "git_revision": "a",
         "git_dirty": False,
         "mister_ip": "device",
-        "build_fingerprint": "hash",
     }
     old["build"] = {"target": "arm", "flags": "same"}
     new = copy.deepcopy(old)
     new["provenance"]["git_revision"] = "b"
+    assert compare(old, new)["median_change_percent"] == 0
+    old["provenance"]["build_fingerprint"] = "historical-extra-field"
     assert compare(old, new)["median_change_percent"] == 0
     new["fixture"]["identity"] = "c" * 64
     with pytest.raises(ValueError):

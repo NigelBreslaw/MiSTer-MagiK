@@ -1,14 +1,12 @@
-"""Reproducible per-checkout ARM builds with a small, content-validated cache."""
+"""Per-checkout ARM builds with Cargo-owned dependency tracking."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-import re
 import subprocess
+import sys
 import time
-import tomllib
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,7 +14,6 @@ from collections.abc import Callable
 
 TARGET = "armv7-unknown-linux-gnueabihf"
 RUST_TOOLCHAIN = "1.98.0"
-EXCLUDED = {"target", ".git", ".venv", "__pycache__", "build", "outputs"}
 
 
 @dataclass(frozen=True)
@@ -25,131 +22,6 @@ class BuildResult:
     rebuilt: bool
     elapsed_ms: int
     prebuilt: bool = False
-    fingerprint: str = ""
-
-
-def relevant_inputs(package: Path) -> list[Path]:
-    """Walk local Cargo dependencies, never generated outputs or unrelated crates."""
-    inputs: set[Path] = set()
-    visited: set[Path] = set()
-
-    def visit(root: Path) -> None:
-        root = root.resolve()
-        if root in visited:
-            return
-        visited.add(root)
-        for directory, folders, files in os.walk(root):
-            folders[:] = [name for name in folders if name not in EXCLUDED]
-            for name in files:
-                path = Path(directory) / name
-                if path.suffix in {
-                    ".rs",
-                    ".slint",
-                    ".ttf",
-                    ".otf",
-                    ".png",
-                    ".svg",
-                } or name in {
-                    "Cargo.toml",
-                    "Cargo.lock",
-                    "config.toml",
-                    "rust-toolchain.toml",
-                }:
-                    inputs.add(path)
-        manifest = root / "Cargo.toml"
-        if manifest.exists():
-
-            def dependencies(value: object) -> None:
-                if isinstance(value, dict):
-                    for key, child in value.items():
-                        if key in {"dependencies", "build-dependencies"} and isinstance(
-                            child, dict
-                        ):
-                            for dependency in child.values():
-                                if (
-                                    isinstance(dependency, dict)
-                                    and "path" in dependency
-                                ):
-                                    visit(root / dependency["path"])
-                        elif key == "target":
-                            for target in child.values():
-                                dependencies(target)
-
-            dependencies(tomllib.loads(manifest.read_text()))
-
-    visit(package)
-    # Slint embeds fonts/images outside a package. Follow quoted file imports.
-    pending = list(inputs)
-    while pending:
-        path = pending.pop()
-        if path.suffix not in {".slint", ".rs"}:
-            continue
-        for imported in re.findall(
-            r'["\']([^"\']+\.(?:slint|ttf|otf|png|svg|mmbf))["\']', path.read_text()
-        ):
-            candidate = (path.parent / imported).resolve()
-            if candidate.is_file() and candidate not in inputs:
-                inputs.add(candidate)
-                pending.append(candidate)
-    return sorted(inputs)
-
-
-def source_fingerprint(package: Path) -> str:
-    digest = hashlib.sha256()
-    for path in relevant_inputs(package):
-        digest.update(
-            os.path.relpath(path, package).encode() + b"\0" + path.read_bytes() + b"\0"
-        )
-    recipe = Path(__file__).resolve().parents[2] / "build/Containerfile"
-    digest.update(recipe.read_bytes())
-    digest.update(Path(__file__).read_bytes())
-    for name in ("apps.py", "ffmpeg.py"):
-        digest.update(Path(__file__).with_name(name).read_bytes())
-    digest.update(
-        json.dumps(
-            {
-                name: os.environ.get(name, "")
-                for name in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS")
-            },
-            sort_keys=True,
-        ).encode()
-    )
-    return digest.hexdigest()
-
-
-def artifact_hash(artifact: Path) -> str:
-    return hashlib.sha256(artifact.read_bytes()).hexdigest()
-
-
-def needs_build(cache_file: Path, fingerprint: str) -> bool:
-    try:
-        cached = json.loads(cache_file.read_text())
-        return (
-            cached["fingerprint"] != fingerprint
-            or artifact_hash(Path(cached["artifact"])) != cached["sha256"]
-        )
-    except (OSError, ValueError, KeyError):
-        return True
-
-
-def write_build_cache(cache_file: Path, fingerprint: str, artifact: Path) -> None:
-    cache_file.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w", dir=cache_file.parent, delete=False
-    ) as output:
-        temporary = Path(output.name)
-        json.dump(
-            {
-                "fingerprint": fingerprint,
-                "artifact": str(artifact.resolve()),
-                "sha256": artifact_hash(artifact),
-            },
-            output,
-        )
-    try:
-        temporary.replace(cache_file)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def build_repository(package: Path) -> Path:
@@ -158,21 +30,19 @@ def build_repository(package: Path) -> Path:
 
 def ensure_arm_package(
     package: Path,
-    cache_file: Path,
     *,
     runner: Callable = subprocess.run,
     prepare: Callable | None = None,
 ) -> BuildResult:
     # Injectable preparation keeps pure build tests independent of Apple Container.
     if prepare is not None:
-        return _ensure_arm_package(package, cache_file, runner=runner, prepare=prepare)
+        return _ensure_arm_package(package, runner=runner, prepare=prepare)
     from .storage import Storage
 
     storage = Storage(runner=runner)
     with storage.build_session(build_repository(package)):
         return _ensure_arm_package(
             package,
-            cache_file,
             runner=runner,
             prepare=lambda repository, _: storage.prepare(repository),
         )
@@ -180,7 +50,6 @@ def ensure_arm_package(
 
 def _ensure_arm_package(
     package: Path,
-    cache_file: Path,
     *,
     runner: Callable = subprocess.run,
     prepare: Callable | None = None,
@@ -223,16 +92,7 @@ def _ensure_arm_package(
             ],
             check=True,
         )
-    fingerprint = source_fingerprint(package)
     started = time.monotonic()
-    if artifact.is_file() and not needs_build(cache_file, fingerprint):
-        return BuildResult(
-            artifact,
-            False,
-            int((time.monotonic() - started) * 1000),
-            fingerprint=fingerprint,
-        )
-    repository = build_repository(package)
     name = prepare(repository, runner)
     environment = []
     if app and app.name == "magik":
@@ -254,41 +114,67 @@ def _ensure_arm_package(
     for variable in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"):
         if variable in os.environ:
             environment += ["--env", f"{variable}={os.environ[variable]}"]
-    result = runner(
-        [
-            "container",
-            "exec",
-            *environment,
-            "--workdir",
-            f"/workspace/{package.resolve().relative_to(repository)}",
-            name,
-            "cargo",
-            "build",
-            "--locked",
-            "--profile",
-            profile,
-            *(["--features", ",".join(app.features)] if app and app.features else []),
-            "--bin",
-            binary,
-            "--target",
-            TARGET,
-        ],
-        check=False,
-    )
-    if result.returncode or not artifact.is_file():
-        raise RuntimeError(f"MagiK ARM {package.name} build failed")
-    write_build_cache(cache_file, fingerprint, artifact)
-    return BuildResult(
-        artifact,
-        True,
-        int((time.monotonic() - started) * 1000),
-        fingerprint=fingerprint,
-    )
+    # Spool Cargo messages to keep memory bounded; Cargo progress stays on stderr.
+    with tempfile.TemporaryFile(mode="w+") as messages:
+        result = runner(
+            [
+                "container",
+                "exec",
+                *environment,
+                "--workdir",
+                f"/workspace/{package.resolve().relative_to(repository)}",
+                name,
+                "cargo",
+                "build",
+                "--locked",
+                "--message-format=json-render-diagnostics",
+                "--profile",
+                profile,
+                *(
+                    ["--features", ",".join(app.features)]
+                    if app and app.features
+                    else []
+                ),
+                "--bin",
+                binary,
+                "--target",
+                TARGET,
+            ],
+            check=False,
+            stdout=messages,
+        )
+        messages.seek(0)
+        fresh = None
+        expected_executable = str(
+            Path("/workspace") / artifact.resolve().relative_to(repository)
+        )
+        for line in messages:
+            try:
+                message = json.loads(line)
+            except ValueError:
+                print(line, end="", file=sys.stderr)
+                continue
+            if message.get("reason") == "compiler-message":
+                rendered = message.get("message", {}).get("rendered")
+                if rendered:
+                    print(rendered, end="", file=sys.stderr)
+            elif (
+                message.get("reason") == "compiler-artifact"
+                and message.get("target", {}).get("name") == binary
+                and "bin" in message.get("target", {}).get("kind", [])
+                and message.get("executable") == expected_executable
+                and type(message.get("fresh")) is bool
+            ):
+                fresh = message["fresh"]
+    if result.returncode or fresh is None or not artifact.is_file():
+        raise RuntimeError(
+            f"MagiK ARM {package.name} build failed or omitted its binary artifact"
+        )
+    return BuildResult(artifact, not fresh, int((time.monotonic() - started) * 1000))
 
 
 def ensure_arm_application(
     probe_root: Path,
-    cache_file: Path,
     *,
     runner: Callable = subprocess.run,
     prepare: Callable | None = None,
@@ -299,9 +185,9 @@ def ensure_arm_application(
         if not artifact.is_file():
             raise RuntimeError("MagiK prebuilt application artifact is unavailable")
         return BuildResult(artifact, False, 0, prebuilt=True)
-    return ensure_arm_package(probe_root, cache_file, runner=runner, prepare=prepare)
+    return ensure_arm_package(probe_root, runner=runner, prepare=prepare)
 
 
 def ensure_arm_agent() -> Path:
     package = Path(__file__).resolve().parents[2] / "agent"
-    return ensure_arm_package(package, package / "target/magik-build.json").artifact
+    return ensure_arm_package(package).artifact

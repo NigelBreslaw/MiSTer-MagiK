@@ -5504,7 +5504,7 @@ pub(super) fn run_launcher_loop(
             )
         }
     };
-    let user_state_session = UserStateSession::start(user_state_path, user_state_media_root);
+    let mut user_state_session = UserStateSession::start(user_state_path, user_state_media_root);
     let mut user_state_catalog_version = None;
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
@@ -5690,9 +5690,6 @@ pub(super) fn run_launcher_loop(
     } else if capsule_seed_ready {
         startup_ready_catalog_source = CatalogSource::ReturnCapsule;
         catalog_session.note_summary_seed_ready();
-        if preview_route.allows_preview_work() {
-            media_session.request_catalog_seed();
-        }
         catalog_version = catalog_version.wrapping_add(1);
         let request = summary_seed_catalog_worker_request(
             catalog_refresh_policy,
@@ -5723,9 +5720,6 @@ pub(super) fn run_launcher_loop(
     } else if sharded_seed_ready {
         startup_ready_catalog_source = CatalogSource::ShardedRegistry;
         catalog_session.note_summary_seed_ready();
-        if preview_route.allows_preview_work() {
-            media_session.request_catalog_seed();
-        }
         catalog_version = catalog_version.wrapping_add(1);
         let return_catalog_hydration_needed = startup_return_requested;
         let request = summary_seed_catalog_worker_request(
@@ -6456,6 +6450,7 @@ pub(super) fn run_launcher_loop(
         let bridge_churn_frame_start = crate::launcher_presentation::bridge_churn_snapshot();
         if background_work_allowed
             && catalog_ready
+            && user_state_session.available()
             && user_state_catalog_version != Some(catalog_version)
         {
             let games = catalog
@@ -6469,12 +6464,14 @@ pub(super) fn run_launcher_loop(
                 .ok()
                 .and_then(|duration| i64::try_from(duration.as_secs()).ok())
                 .unwrap_or(0);
-            user_state_session.refresh(games, now);
+            if let Err(error) = user_state_session.refresh(games, now) {
+                crate::ui_errln!("user-state: {error}");
+            }
             user_state_catalog_version = Some(catalog_version);
         }
         while background_work_allowed && let Some(event) = user_state_session.poll() {
             match event {
-                UserStateEvent::Snapshot(snapshot) => {
+                UserStateEvent::Snapshot { snapshot, .. } => {
                     nav.set_user_game_refs(
                         &catalog,
                         snapshot.favourite_launch_refs,
@@ -6483,13 +6480,8 @@ pub(super) fn run_launcher_loop(
                     full_bridge_dirty = true;
                     request_launcher_redraw!();
                 }
-                UserStateEvent::Failed { error, rollback } => {
-                    if let Some((launch_ref, favourite)) = rollback {
-                        nav.reconcile_favourite_state(&catalog, &launch_ref, favourite);
-                    }
+                UserStateEvent::Failed { error, .. } | UserStateEvent::Unavailable { error } => {
                     crate::ui_errln!("user-state: {error}");
-                    full_bridge_dirty = true;
-                    request_launcher_redraw!();
                 }
             }
         }
@@ -6844,7 +6836,6 @@ pub(super) fn run_launcher_loop(
                     catalog_ready_stationary_edge_since = None;
                     process_catalog_worker_message(
                         message,
-                        preview_route,
                         &mut prepare_trace,
                         &mut launcher_response_trace,
                         loop_start,
@@ -6857,7 +6848,6 @@ pub(super) fn run_launcher_loop(
                         &mut catalog_generation,
                         &mut launch_return_session,
                         &mut preview,
-                        &mut media_session,
                         &mut scheduler,
                         &mut catalog_session,
                         &mut lifecycle,
@@ -6903,7 +6893,6 @@ pub(super) fn run_launcher_loop(
                 }
                 process_catalog_worker_message(
                     message,
-                    preview_route,
                     &mut prepare_trace,
                     &mut launcher_response_trace,
                     loop_start,
@@ -6916,7 +6905,6 @@ pub(super) fn run_launcher_loop(
                     &mut catalog_generation,
                     &mut launch_return_session,
                     &mut preview,
-                    &mut media_session,
                     &mut scheduler,
                     &mut catalog_session,
                     &mut lifecycle,
@@ -7227,7 +7215,6 @@ pub(super) fn run_launcher_loop(
             let effects = catalog_session.qualification_fresh_rebuild(arcade_root.clone());
             apply_catalog_session_effects(
                 effects,
-                preview_route,
                 &mut launcher_response_trace,
                 &app,
                 &mut nav,
@@ -7238,7 +7225,6 @@ pub(super) fn run_launcher_loop(
                 &mut catalog_generation,
                 &mut launch_return_session,
                 &mut preview,
-                &mut media_session,
                 &mut scheduler,
                 &mut lifecycle,
                 &mut lifecycle_effects,
@@ -8281,7 +8267,6 @@ pub(super) fn run_launcher_loop(
                                         );
                                         apply_catalog_session_effects(
                                             effects,
-                                            preview_route,
                                             &mut launcher_response_trace,
                                             &app,
                                             &mut nav,
@@ -8292,7 +8277,6 @@ pub(super) fn run_launcher_loop(
                                             &mut catalog_generation,
                                             &mut launch_return_session,
                                             &mut preview,
-                                            &mut media_session,
                                             &mut scheduler,
                                             &mut lifecycle,
                                             &mut lifecycle_effects,
@@ -8354,7 +8338,6 @@ pub(super) fn run_launcher_loop(
                                         let effects = catalog_session.continue_with_stale_library();
                                         apply_catalog_session_effects(
                                             effects,
-                                            preview_route,
                                             &mut launcher_response_trace,
                                             &app,
                                             &mut nav,
@@ -8365,7 +8348,6 @@ pub(super) fn run_launcher_loop(
                                             &mut catalog_generation,
                                             &mut launch_return_session,
                                             &mut preview,
-                                            &mut media_session,
                                             &mut scheduler,
                                             &mut lifecycle,
                                             &mut lifecycle_effects,
@@ -8390,7 +8372,6 @@ pub(super) fn run_launcher_loop(
                                             catalog_session.rebuild_library(arcade_root.clone());
                                         apply_catalog_session_effects(
                                             effects,
-                                            preview_route,
                                             &mut launcher_response_trace,
                                             &app,
                                             &mut nav,
@@ -8401,7 +8382,6 @@ pub(super) fn run_launcher_loop(
                                             &mut catalog_generation,
                                             &mut launch_return_session,
                                             &mut preview,
-                                            &mut media_session,
                                             &mut scheduler,
                                             &mut lifecycle,
                                             &mut lifecycle_effects,
@@ -8592,9 +8572,6 @@ pub(super) fn run_launcher_loop(
                                             && let Some(game) =
                                                 catalog.user_game_identity_for_ref(launch_ref)
                                         {
-                                            nav.reconcile_favourite_state(
-                                                &catalog, launch_ref, favourite,
-                                            );
                                             let now = std::time::SystemTime::now()
                                                 .duration_since(std::time::UNIX_EPOCH)
                                                 .ok()
@@ -8602,13 +8579,18 @@ pub(super) fn run_launcher_loop(
                                                     i64::try_from(duration.as_secs()).ok()
                                                 })
                                                 .unwrap_or(0);
-                                            if !ui_test_fixture {
-                                                user_state_session
-                                                    .set_favourite(game, favourite, now);
-                                            } else {
+                                            if ui_test_fixture {
+                                                nav.reconcile_favourite_state(
+                                                    &catalog, launch_ref, favourite,
+                                                );
                                                 crate::ui_logln!(
                                                     "ui_test_effect_blocked effect=favourite_persist"
                                                 );
+                                            } else if user_state_session.available()
+                                                && let Err(error) = user_state_session
+                                                    .set_favourite(game, favourite, now)
+                                            {
+                                                crate::ui_errln!("user-state: {error}");
                                             }
                                             full_bridge_dirty = true;
                                             request_launcher_redraw!();
@@ -12810,32 +12792,6 @@ fn preview_terminal_for_route(
         && matches!(presentation_label, "visible" | "detached")
 }
 
-/// Runs the catalog-to-media boundary only for routes that own screenshot work.
-fn dispatch_catalog_media_effect(
-    policy: PreviewRoutePolicy,
-    effect: &CatalogSessionEffect,
-    media_session: &mut ScreenshotMediaUpdateSession,
-) -> Option<ScreenshotMediaUpdateEffects> {
-    let is_media_effect = matches!(
-        effect,
-        CatalogSessionEffect::FinishMediaWorker | CatalogSessionEffect::RequestMediaCatalogSeed
-    );
-    if !is_media_effect {
-        return None;
-    }
-    if !policy.allows_preview_work() {
-        return Some(ScreenshotMediaUpdateEffects::default());
-    }
-    Some(match effect {
-        CatalogSessionEffect::FinishMediaWorker => media_session.finish_worker(),
-        CatalogSessionEffect::RequestMediaCatalogSeed => {
-            media_session.request_catalog_seed();
-            ScreenshotMediaUpdateEffects::default()
-        }
-        _ => unreachable!("non-media catalog effect returned above"),
-    })
-}
-
 #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
 fn preview_scroll_exit_after_trace_deadline(_run_start: Instant) -> Option<Instant> {
     None
@@ -12916,7 +12872,6 @@ fn retain_startup_intro_catalog_ui_intent(
 #[allow(clippy::too_many_arguments)]
 fn process_catalog_worker_message(
     message: CatalogWorkerMessage,
-    preview_route: PreviewRoutePolicy,
     prepare_trace: &mut LauncherPrepareTrace,
     launcher_response_trace: &mut LauncherResponseTrace,
     loop_start: Instant,
@@ -12929,7 +12884,6 @@ fn process_catalog_worker_message(
     catalog_generation: &mut CatalogGenerationState,
     launch_return_session: &mut LaunchReturnSession,
     preview: &mut PreviewState,
-    media_session: &mut ScreenshotMediaUpdateSession,
     scheduler: &mut LauncherScheduler,
     catalog_session: &mut LauncherCatalogSession,
     lifecycle: &mut LauncherLifecycle,
@@ -12951,7 +12905,6 @@ fn process_catalog_worker_message(
     );
     apply_catalog_session_effects(
         effects,
-        preview_route,
         launcher_response_trace,
         app,
         nav,
@@ -12962,7 +12915,6 @@ fn process_catalog_worker_message(
         catalog_generation,
         launch_return_session,
         preview,
-        media_session,
         scheduler,
         lifecycle,
         lifecycle_effects,
@@ -13539,7 +13491,6 @@ fn maybe_present_modal_input_test_dialog(
 #[allow(clippy::too_many_arguments)]
 fn apply_catalog_session_effects(
     effects: CatalogSessionEffects,
-    preview_route: PreviewRoutePolicy,
     launcher_response_trace: &mut LauncherResponseTrace,
     app: &slint_ui::launcher::Launcher,
     nav: &mut LauncherNav,
@@ -13550,7 +13501,6 @@ fn apply_catalog_session_effects(
     catalog_generation: &mut CatalogGenerationState,
     launch_return_session: &mut LaunchReturnSession,
     preview: &mut PreviewState,
-    media_session: &mut ScreenshotMediaUpdateSession,
     scheduler: &mut LauncherScheduler,
     lifecycle: &mut LauncherLifecycle,
     lifecycle_effects: &mut LifecycleEffects,
@@ -13562,20 +13512,6 @@ fn apply_catalog_session_effects(
     start: Instant,
 ) {
     for effect in effects.into_effects() {
-        if let Some(media_effects) =
-            dispatch_catalog_media_effect(preview_route, &effect, media_session)
-        {
-            apply_screenshot_media_update_effects(
-                media_effects,
-                app,
-                catalog,
-                scheduler,
-                Some(&mut *preview),
-                full_bridge_dirty,
-                start,
-            );
-            continue;
-        }
         match effect {
             CatalogSessionEffect::StartupEvent(event) => {
                 print_startup_event(start, &event.name, event.detail);
@@ -13881,10 +13817,6 @@ fn apply_catalog_session_effects(
                 } else {
                     apply_launcher_worker_ui_intent(app, intent, full_bridge_dirty);
                 }
-            }
-            CatalogSessionEffect::FinishMediaWorker
-            | CatalogSessionEffect::RequestMediaCatalogSeed => {
-                unreachable!("media effects dispatched before general catalog effects")
             }
             CatalogSessionEffect::CatalogValidationFinished => {
                 lifecycle.handle(

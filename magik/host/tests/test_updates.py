@@ -308,11 +308,21 @@ def test_manager_build_uses_repository_root_and_manager_binary(tmp_path):
         commands.append(command)
         artifact.parent.mkdir(parents=True, exist_ok=True)
         artifact.write_bytes(b"manager")
+        kwargs["stdout"].write(
+            json.dumps(
+                {
+                    "reason": "compiler-artifact",
+                    "target": {"name": "mister-magik-manager", "kind": ["bin"]},
+                    "executable": f"/workspace/mister/tools/manager/target/{TARGET}/release/mister-magik-manager",
+                    "fresh": False,
+                }
+            )
+            + "\n"
+        )
         return SimpleNamespace(returncode=0)
 
     result = ensure_arm_package(
         package,
-        package / "target/cache.json",
         runner=runner,
         prepare=lambda repo, _: roots.append(repo) or "builder",
     )

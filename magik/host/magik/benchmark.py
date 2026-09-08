@@ -98,7 +98,7 @@ def run_benchmark(arguments, run):
     agent, status = connect_agent(run, {"status", "upload-v1", "run-benchmark-v2"})
     package = repository() / "magik/probe"
     phase = time.monotonic()
-    built = ensure_arm_application(package, package / "target/magik-build.json")
+    built = ensure_arm_application(package)
     append_event(
         run,
         {
@@ -110,9 +110,7 @@ def run_benchmark(arguments, run):
     )
     payload = built.artifact.read_bytes()
     digest = hashlib.sha256(payload).hexdigest()
-    append_event(
-        run, {"phase": "artifact", "sha256": digest, "fingerprint": built.fingerprint}
-    )
+    append_event(run, {"phase": "artifact", "sha256": digest})
     phase = time.monotonic()
     skipped = status.fields.get("artifacts", {}).get("mini-magik") == digest
     if not skipped:
@@ -144,7 +142,6 @@ def run_benchmark(arguments, run):
     )
     result["provenance"] = {
         **json.loads((run / "run.json").read_text())["source"],
-        "build_fingerprint": built.fingerprint,
     }
     (run / "benchmark.json").write_text(json.dumps(result, indent=2) + "\n")
     for sample in result["samples"]:

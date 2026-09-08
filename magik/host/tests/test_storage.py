@@ -317,7 +317,7 @@ def test_cleanup_warning_does_not_mask_build_failure(setup, monkeypatch, capsys)
     assert "storage warning" in capsys.readouterr().err
 
 
-def test_cache_hit_still_holds_lease_and_cleans_twice(setup, monkeypatch):
+def test_build_holds_lease_and_cleans_twice(setup, monkeypatch):
     from magik import build
 
     manager, host, repo, _ = setup
@@ -327,15 +327,13 @@ def test_cache_hit_still_holds_lease_and_cleans_twice(setup, monkeypatch):
     monkeypatch.setattr(storage, "Storage", lambda **_: manager)
     monkeypatch.setattr(manager, "automatic_cleanup", lambda _: calls.append("clean"))
 
-    def cache_hit(*args, **kwargs):
+    def checked_build(*args, **kwargs):
         with manager.checkout_lock(repo, blocking=False) as acquired:
             assert not acquired
-        return "cached artifact"
+        return "built artifact"
 
-    monkeypatch.setattr(build, "_ensure_arm_package", cache_hit)
-    assert (
-        build.ensure_arm_package(package, package / "cache.json") == "cached artifact"
-    )
+    monkeypatch.setattr(build, "_ensure_arm_package", checked_build)
+    assert build.ensure_arm_package(package) == "built artifact"
     assert calls == ["clean", "clean"]
     assert not any(c[1] == "run" for c in host.calls)
 

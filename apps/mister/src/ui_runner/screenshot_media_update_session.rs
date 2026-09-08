@@ -103,8 +103,6 @@ impl Default for ScreenshotMediaUpdateSession {
 }
 
 impl ScreenshotMediaUpdateSession {
-    pub(super) fn request_catalog_seed(&mut self) {}
-
     pub(super) fn observe_system_entry(&mut self, system_id: Option<&str>) {
         if self.visible_system_id.as_deref() == system_id {
             return;
@@ -188,27 +186,6 @@ impl ScreenshotMediaUpdateSession {
             reason: gate.reason,
         });
         effects
-    }
-
-    pub(super) fn handle_catalog_system_discovered(
-        &mut self,
-        system_id: String,
-        _media_gate: Option<MediaInteractionGate>,
-    ) -> ScreenshotMediaUpdateEffects {
-        let mut effects = ScreenshotMediaUpdateEffects::default();
-        effects.event(
-            "screenshot_media_catalog_discovery_ignored",
-            format!("system={system_id} policy=entry-only"),
-        );
-        effects
-    }
-
-    pub(super) fn finish_worker_if_no_catalog_seed_pending(&self) -> ScreenshotMediaUpdateEffects {
-        ScreenshotMediaUpdateEffects::default()
-    }
-
-    pub(super) fn finish_worker(&self) -> ScreenshotMediaUpdateEffects {
-        ScreenshotMediaUpdateEffects::default()
     }
 
     pub(super) fn apply_gate(
@@ -477,21 +454,6 @@ mod tests {
         );
         assert!(session.pending_system_checks.contains("arcade"));
         assert!(session.dispatched_system_checks.contains("arcade"));
-    }
-
-    #[test]
-    fn catalog_discovery_never_queues_a_screenshot_pack() {
-        let mut session = ScreenshotMediaUpdateSession::default();
-
-        let effects = session.handle_catalog_system_discovered(
-            "neogeo".to_string(),
-            Some(MediaInteractionGate {
-                active: true,
-                reason: "catalog-build",
-            }),
-        );
-        assert_eq!(effect_names(effects), vec!["event"]);
-        assert!(!session.pending_system_checks.contains("neogeo"));
     }
 
     #[test]

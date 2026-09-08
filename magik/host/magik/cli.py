@@ -190,7 +190,7 @@ def dispatch(arguments, run) -> int:
             if arguments.target == "agent"
             else repository() / application(arguments.app).package
         )
-        built = ensure_arm_package(package, package / "target/magik-build.json")
+        built = ensure_arm_package(package)
         print(built.artifact)
         return 0
     if arguments.command == "device" and arguments.device_command != "select":
@@ -406,10 +406,7 @@ def ensure_application(
     app = application(app_name)
     agent.artifact = app.name
     probe_root = repository() / app.package
-    built = ensure_arm_application(
-        probe_root,
-        probe_root / "target/magik-build.json",
-    )
+    built = ensure_arm_application(probe_root)
     append_event(
         run,
         {
@@ -431,7 +428,6 @@ def ensure_application(
         {
             "phase": "artifact",
             "sha256": artifact_hash,
-            "source_fingerprint": built.fingerprint,
             "bytes": len(payload),
             "prebuilt": built.prebuilt,
         },
