@@ -191,8 +191,9 @@ def test_queued_deploy_starts_idle_application(deploy_case, tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("board_matches", [True, False])
+@pytest.mark.parametrize("malformed_journal", [[], None, True, 17, "not-an-object"])
 def test_legacy_journal_recovery_requires_board_and_stage(
-    deploy_case, tmp_path, board_matches
+    deploy_case, tmp_path, monkeypatch, board_matches, malformed_journal
 ):
     pair, current, publish = deploy_case
     previous_run = tmp_path / "previous"
@@ -207,6 +208,22 @@ def test_legacy_journal_recovery_requires_board_and_stage(
         / f"{hashlib.sha256(b'0.1.0').hexdigest()}-pending.json"
     )
     updates.atomic_json(legacy, {"desired": pair, "run": str(previous_run)})
+    malformed_run = tmp_path / "malformed"
+    updates.atomic_json(
+        malformed_run / "run.json", {"source": {"device_identity": "one"}}
+    )
+    updates.atomic_json(malformed_run / "platform/publication.json", malformed_journal)
+    malformed = legacy.parent / "malformed-pending.json"
+    updates.atomic_json(malformed, {"desired": pair, "run": str(malformed_run)})
+    # Visit the malformed same-board candidate first regardless of filesystem order.
+    original_glob = update_deploy.Path.glob
+    monkeypatch.setattr(
+        update_deploy.Path,
+        "glob",
+        lambda path, pattern: iter([malformed, legacy])
+        if path == legacy.parent and pattern == "*-pending.json"
+        else original_glob(path, pattern),
+    )
     current["stages"] = [
         {
             "stage": "a" * 32,

@@ -221,9 +221,14 @@ def apply_updates(agent, identity, pair, run, attended, *, already_locked=False)
                     # one referring to an actual unfinished stage on this board.
                     for kind in ("platform", "databases"):
                         journal = evidence.parent / kind / "publication.json"
-                        if journal.is_file() and json.loads(journal.read_text()).get(
-                            "stage"
-                        ) in {stage["stage"] for stage in current["stages"]}:
+                        if not journal.is_file():
+                            continue
+                        decoded = json.loads(journal.read_text())
+                        if not isinstance(decoded, dict):
+                            continue
+                        if decoded.get("stage") in {
+                            stage["stage"] for stage in current["stages"]
+                        }:
                             matches.append(saved)
                             break
                 except (OSError, ValueError, KeyError, TypeError):
