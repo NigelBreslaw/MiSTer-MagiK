@@ -161,29 +161,6 @@ impl PersistedSearchCatalog {
     }
 }
 
-pub fn search_system_shards(
-    storage_root: &Path,
-    system_ids: &[String],
-    query: &str,
-    limits: crate::shard_registry::RegistryLimits,
-) -> Result<PersistedCollectionSearchResult, PersistedSearchError> {
-    let total_started = Instant::now();
-    let prepare_started = Instant::now();
-    let manifest_pmu = mister_magik_perf_events::sampled_span("search.manifest");
-    let manifest = crate::shard_registry::read_latest_manifest_lazy(storage_root, limits)
-        .map_err(|error| PersistedSearchError::with("open catalog manifest", error))?;
-    drop(manifest_pmu);
-    let manifest_prepare_us = elapsed_us(prepare_started);
-    search_system_shards_in_manifest(
-        storage_root,
-        &manifest,
-        system_ids,
-        query,
-        total_started,
-        manifest_prepare_us,
-    )
-}
-
 fn search_system_shards_in_manifest(
     storage_root: &Path,
     manifest: &crate::shard_registry::CatalogManifest,
