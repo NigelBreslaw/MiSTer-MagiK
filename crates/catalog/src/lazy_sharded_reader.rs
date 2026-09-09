@@ -30,15 +30,6 @@ pub struct LazySystemGeneration {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
-pub struct EntryPreludeWarmupReport {
-    pub systems: usize,
-    pub viewport_rows: usize,
-    pub exact_previews: usize,
-    pub terminal_empty: usize,
-    pub elapsed_us: u64,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
 pub struct LazySystemOpenTiming {
     pub descriptor_lookup_us: u64,
     pub navigation: SystemNavigationOpenTiming,
@@ -245,59 +236,6 @@ impl LazyShardedCatalogReader {
             })?,
         })
     }
-
-    /// Maps and faults only each populated system's bounded entry prelude.
-    pub fn warm_entry_preludes(&self) -> Result<EntryPreludeWarmupReport, CatalogError> {
-        let started = std::time::Instant::now();
-        let mut report = EntryPreludeWarmupReport::default();
-        for system in &self.manifest.systems {
-            if system.active.games == 0 {
-                continue;
-            }
-            let generation = &system.active;
-            let navpack = generation.navpack.as_ref().ok_or_else(|| {
-                CatalogError::new(
-                    "warm-entry-preludes",
-                    format!("{} active generation has no NavPack", system.system_id),
-                )
-            })?;
-            let games = usize::try_from(generation.games).map_err(|_| {
-                CatalogError::new(
-                    "warm-entry-preludes",
-                    "system game count exceeds platform size",
-                )
-            })?;
-            let path = self.storage_root.join(&navpack.path);
-            let (mapped, _) = crate::navpack::MappedNavPack::open(
-                &path,
-                navpack.bytes,
-                system.system_id.as_str(),
-                generation.generation,
-                games,
-            )
-            .map_err(|error| {
-                CatalogError::new(
-                    "warm-entry-preludes",
-                    format!("{} active NavPack is unusable: {error}", system.system_id),
-                )
-            })?;
-            let prelude = mapped.fault_entry_viewport().map_err(|error| {
-                CatalogError::new(
-                    "warm-entry-preludes",
-                    format!("{} entry prelude is unusable: {error}", system.system_id),
-                )
-            })?;
-            let viewport_rows = prelude.first_viewport_ordinals.len();
-            let exact_preview = prelude.selected_preview.is_some();
-            let terminal_empty = prelude.terminal_empty;
-            report.systems += 1;
-            report.viewport_rows += viewport_rows;
-            report.exact_previews += usize::from(exact_preview);
-            report.terminal_empty += usize::from(terminal_empty);
-        }
-        report.elapsed_us = elapsed_us(started);
-        Ok(report)
-    }
 }
 
 fn elapsed_us(started: std::time::Instant) -> u64 {
@@ -351,31 +289,6 @@ mod tests {
         assert_eq!(registry.generation(), 1);
         assert_eq!(registry.systems().len(), 2);
         assert!(reader.open_system(&system("snes")).is_err());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn entry_prelude_warmup_maps_every_system_without_opening_shards() {
-        let root = temporary_root("entry-prelude-warmup");
-        seed(&root);
-        fs::write(
-            root.join("systems/c64/1.nav.lz4b"),
-            b"corrupt navigation must remain untouched",
-        )
-        .unwrap();
-        fs::write(
-            root.join("systems/snes/1.nav.lz4b"),
-            b"corrupt navigation must remain untouched",
-        )
-        .unwrap();
-
-        let reader = LazyShardedCatalogReader::open(&root, limits()).unwrap();
-        let report = reader.warm_entry_preludes().unwrap();
-        assert_eq!(report.systems, 2);
-        assert_eq!(report.viewport_rows, 2);
-        assert_eq!(report.exact_previews, 0);
-        assert_eq!(report.terminal_empty, 2);
-        assert!(reader.open_system(&system("c64")).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
