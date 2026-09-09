@@ -567,13 +567,19 @@ pub struct FastFiveVerificationReport {
 pub enum FastFiveArtifactProfile {
     #[default]
     Legacy,
-    SinglePass,
-    NoEmbeddedNavigation,
-    NoAdjacentNavigation,
-    NavpackOnly,
     SearchOnly,
     SearchColumn,
-    SearchDetailNone,
+}
+
+#[cfg(feature = "builder")]
+impl From<FastFiveArtifactProfile> for crate::system_shard::ShardArtifactProfile {
+    fn from(profile: FastFiveArtifactProfile) -> Self {
+        match profile {
+            FastFiveArtifactProfile::Legacy => Self::Legacy,
+            FastFiveArtifactProfile::SearchOnly => Self::SearchOnly,
+            FastFiveArtifactProfile::SearchColumn => Self::SearchColumn,
+        }
+    }
 }
 
 /// A complete system artifact pair staged outside catalog storage.
@@ -652,17 +658,7 @@ pub(crate) fn build_staged_system_artifacts(
         ),
         games: source.games.clone(),
     };
-    let shard_profile = match artifact_profile {
-        FastFiveArtifactProfile::Legacy | FastFiveArtifactProfile::SinglePass => {
-            ShardArtifactProfile::Legacy
-        }
-        FastFiveArtifactProfile::NoEmbeddedNavigation => ShardArtifactProfile::NoEmbeddedNavigation,
-        FastFiveArtifactProfile::NoAdjacentNavigation => ShardArtifactProfile::NoAdjacentNavigation,
-        FastFiveArtifactProfile::NavpackOnly => ShardArtifactProfile::NavpackOnly,
-        FastFiveArtifactProfile::SearchOnly => ShardArtifactProfile::SearchOnly,
-        FastFiveArtifactProfile::SearchColumn => ShardArtifactProfile::SearchColumn,
-        FastFiveArtifactProfile::SearchDetailNone => ShardArtifactProfile::SearchDetailNone,
-    };
+    let shard_profile = ShardArtifactProfile::from(artifact_profile);
     let variant_payload = encode_variant_payload(source)?;
     if artifact_profile == FastFiveArtifactProfile::Legacy {
         write_system_shard_with_variant_payload(
@@ -973,10 +969,7 @@ fn publish_snapshot_selection(
         }
         let stage_all_in_tmpfs = matches!(
             artifact_profile,
-            FastFiveArtifactProfile::SinglePass
-                | FastFiveArtifactProfile::SearchOnly
-                | FastFiveArtifactProfile::SearchColumn
-                | FastFiveArtifactProfile::SearchDetailNone
+            FastFiveArtifactProfile::SearchOnly | FastFiveArtifactProfile::SearchColumn
         );
         let stage_in_tmpfs = cfg!(all(target_os = "linux", not(test)))
             && (stage_all_in_tmpfs || source.system_id == "c64");
@@ -1060,21 +1053,7 @@ fn publish_snapshot_selection(
                 games: source.games.clone(),
             };
             let variant_payload = encode_variant_payload(source)?;
-            let shard_profile = match artifact_profile {
-                FastFiveArtifactProfile::Legacy | FastFiveArtifactProfile::SinglePass => {
-                    ShardArtifactProfile::Legacy
-                }
-                FastFiveArtifactProfile::NoEmbeddedNavigation => {
-                    ShardArtifactProfile::NoEmbeddedNavigation
-                }
-                FastFiveArtifactProfile::NoAdjacentNavigation => {
-                    ShardArtifactProfile::NoAdjacentNavigation
-                }
-                FastFiveArtifactProfile::NavpackOnly => ShardArtifactProfile::NavpackOnly,
-                FastFiveArtifactProfile::SearchOnly => ShardArtifactProfile::SearchOnly,
-                FastFiveArtifactProfile::SearchColumn => ShardArtifactProfile::SearchColumn,
-                FastFiveArtifactProfile::SearchDetailNone => ShardArtifactProfile::SearchDetailNone,
-            };
+            let shard_profile = ShardArtifactProfile::from(artifact_profile);
             if artifact_profile == FastFiveArtifactProfile::Legacy && stage_in_tmpfs {
                 write_system_shard_with_durability_and_variant_payload(
                     &sqlite,

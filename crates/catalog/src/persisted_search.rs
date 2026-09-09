@@ -50,7 +50,6 @@ fn search_pipeline_batch_size() -> Result<usize, PersistedSearchError> {
 pub(crate) enum PersistedSearchDetail {
     Full,
     Column,
-    None,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -367,7 +366,6 @@ pub(crate) fn create_schema_with_detail(
     let detail = match detail {
         PersistedSearchDetail::Full => "full",
         PersistedSearchDetail::Column => "column",
-        PersistedSearchDetail::None => "none",
     };
     connection
         .execute_batch(&format!(
