@@ -136,33 +136,26 @@ pub(crate) enum ShardSearchTuning {
 pub(crate) enum ShardArtifactProfile {
     #[default]
     Legacy,
-    NoEmbeddedNavigation,
-    NoAdjacentNavigation,
-    NavpackOnly,
     SearchOnly,
     SearchColumn,
-    SearchDetailNone,
 }
 
 #[cfg(feature = "builder")]
 impl ShardArtifactProfile {
     fn embeds_navigation(self) -> bool {
-        matches!(self, Self::Legacy | Self::NoAdjacentNavigation)
+        matches!(self, Self::Legacy)
     }
 
     fn writes_navigation(self) -> bool {
-        matches!(self, Self::Legacy | Self::NoEmbeddedNavigation)
+        matches!(self, Self::Legacy)
     }
 
     fn writes_adjacent_navigation(self) -> bool {
-        self.writes_navigation() || matches!(self, Self::NoAdjacentNavigation | Self::NavpackOnly)
+        self.writes_navigation()
     }
 
     fn stores_games(self) -> bool {
-        !matches!(
-            self,
-            Self::SearchOnly | Self::SearchColumn | Self::SearchDetailNone
-        )
+        !matches!(self, Self::SearchOnly | Self::SearchColumn)
     }
 }
 
@@ -475,9 +468,6 @@ fn write_system_shard_with_options_and_profile(
         ))
         .map_err(|error| SystemShardError::with("create shard schema", error))?;
     let search_detail = match (artifact_profile, search_tuning) {
-        (ShardArtifactProfile::SearchDetailNone, _) => {
-            crate::persisted_search::PersistedSearchDetail::None
-        }
         (ShardArtifactProfile::SearchColumn, _) => {
             crate::persisted_search::PersistedSearchDetail::Column
         }

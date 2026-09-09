@@ -8,10 +8,6 @@ use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 use std::path::Path;
 
-pub fn inspect_production_registry() -> Result<String, String> {
-    inspect_registry(&crate::catalog_config::default_sharded_catalog_path())
-}
-
 pub fn inspect_registry(storage: &Path) -> Result<String, String> {
     let reader = crate::lazy_sharded_reader::LazyShardedCatalogReader::open(
         storage,
@@ -43,10 +39,6 @@ pub fn inspect_registry(storage: &Path) -> Result<String, String> {
     )
     .expect("write to String");
     Ok(output)
-}
-
-pub fn inspect_production_catalog() -> Result<String, String> {
-    inspect_catalog(&crate::catalog_config::default_sharded_catalog_path())
 }
 
 pub fn inspect_catalog(storage: &Path) -> Result<String, String> {

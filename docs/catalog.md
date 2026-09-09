@@ -126,7 +126,7 @@ of anonymous PCs.
 
 ## Incremental refresh
 
-Refresh state is under `catalog-fast-v1/fast-refresh-v1` and is bound to:
+Refresh state is under `catalog-fast-v1/fast-refresh-v4` and is bound to:
 
 - the active catalog generation and registry fingerprint;
 - source-adapter and launch-profile compatibility identities;
@@ -134,16 +134,14 @@ Refresh state is under `catalog-fast-v1/fast-refresh-v1` and is bound to:
 - watched directories and archive/container identities;
 - canonical row fingerprints.
 
-The small watch index is separate from the larger cached row snapshot. A
+The watch index stores source identities rather than cached game rows. A
 no-change refresh stats known directories, parent anchors, and containers
-without decoding cached rows or opening published NavPack/SQLite artifacts.
-It performs no writes.
+without opening published NavPack/SQLite artifacts. It performs no writes.
 
-When a source unit changes, only that system's row snapshot is decoded. Deleted
-or replaced source-owned rows are removed, affected directories or ZIP central
-directories are rescanned, and the rows are merged, sorted, deduplicated, and
-validated. Direct ROM contents are not hashed because the catalog identity and
-launch plan are path-based.
+When a source unit changes, the affected system is rebuilt from authoritative
+sources. Its discovered rows are sorted, deduplicated, and validated rather
+than merged with persisted game rows. Direct ROM contents are not hashed
+because the catalog identity and launch plan are path-based.
 
 If source facts changed but canonical rows did not, only refresh state is
 updated. If rows changed, only that system's NavPack and search database are
