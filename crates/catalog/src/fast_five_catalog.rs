@@ -730,7 +730,7 @@ pub fn publish_snapshot(
         storage_root,
         snapshot,
         limits,
-        FastFiveArtifactProfile::Legacy,
+        FastFiveArtifactProfile::SearchOnly,
     )
 }
 
@@ -1896,13 +1896,8 @@ mod builder_tests {
         let snapshot = populated_snapshot();
         let limits = crate::shard_registry::production_registry_limits();
         for profile in [
-            FastFiveArtifactProfile::NoEmbeddedNavigation,
-            FastFiveArtifactProfile::NoAdjacentNavigation,
-            FastFiveArtifactProfile::NavpackOnly,
-            FastFiveArtifactProfile::SinglePass,
             FastFiveArtifactProfile::SearchOnly,
             FastFiveArtifactProfile::SearchColumn,
-            FastFiveArtifactProfile::SearchDetailNone,
         ] {
             let root = std::env::temp_dir().join(format!(
                 "mister-magik-fast-five-profile-{profile:?}-{}-{}",
@@ -1922,9 +1917,7 @@ mod builder_tests {
             );
             if matches!(
                 profile,
-                FastFiveArtifactProfile::SearchOnly
-                    | FastFiveArtifactProfile::SearchColumn
-                    | FastFiveArtifactProfile::SearchDetailNone
+                FastFiveArtifactProfile::SearchOnly | FastFiveArtifactProfile::SearchColumn
             ) {
                 let manifest = read_latest_manifest(&root, limits).unwrap();
                 assert!(
