@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: GPL-2.0-only
 // Copyright (C) 2026 Nigel Breslaw
 #include <linux/module.h>
 #include "provider.h"
@@ -19,5 +19,5 @@ static void __exit window_provider_exit(void)
 module_init(window_provider_init);
 module_exit(window_provider_exit);
 MODULE_DESCRIPTION("MiSTer MagiK unqualified fixed-window provider (activation disabled)");
-MODULE_LICENSE("Proprietary");
-MODULE_INFO(mister_magik_source_license, "GPL-3.0-or-later");
+MODULE_LICENSE("GPL");
+MODULE_INFO(mister_magik_source_license, "GPL-2.0-only");

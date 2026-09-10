@@ -33,7 +33,7 @@ With `CONFIG_PER_VMA_LOCK=y`, `vm_flags_set/clear` introduce the GPL-only
 kernel's `mm/vma.c::__mmap_new_vma`, the legacy file mmap callback runs before
 `vma_iter_store_new`, so the VMA is not yet published. This is not valid for
 editing an existing VMA and must not be reused in later permission callbacks.
-No raw private-field mutation, export bypass or license change is used.
+No raw private-field mutation or export bypass is used.
 
 The build script uses the same pinned source/config/compiler archives as the
 successful probe. It reuses the SHA-256-verified `vmlinux.symvers` from the two
@@ -58,23 +58,33 @@ duplicate registration, mapping permissions/selectors, copy/remap failures,
 both layout queries and idempotent cleanup. It does not prove kernel VMA lifetime
 or target page-table attributes. The 58 focused host tests pass.
 
-## Current blocker
+## Component licensing
+
+The provider C sources and internal header are GPL-2.0-only, with
+`MODULE_LICENSE("GPL")` and matching source-license metadata. The license text
+is in `LICENSES/GPL-2.0-only.txt`. Nigel approved this component-specific grant;
+the application, host tools and existing 5.15 module retain their licenses.
+The three Main-window headers and slot UAPI header offer
+`GPL-2.0-only OR GPL-3.0-or-later`, so the module and userspace can each select
+the appropriate grant. Their ABI and implementations are unchanged. These
+first-party files carry Nigel's copyright; no kernel implementation was copied.
+The earlier build hashes above describe the pre-change artifact, not this source.
+
+## Remaining qualification gates
 
 The running config disables `CONFIG_ARM_PTDUMP_DEBUGFS`. The supported
 `follow_pfnmap_start/end` helpers expose PFNs and mapping protections but are
-GPL-only, as are `get_task_mm` and relevant device-enumeration helpers. They
-cannot be imported by the current module under its existing license declaration.
+GPL-only, as are `get_task_mm` and relevant device-enumeration helpers. The
+approved GPLv2 provider can now use these supported exports.
 Source-predicted attributes and resource reservation do not satisfy the promised
 actual-target mapping verification.
 
-The next supported inspection route identified requires approval to independently
-author a **separate GPL-2.0-only diagnostic module**. This would not relicense
-existing code, change the production module's declaration or fork the kernel.
-It would still need a bounded protocol, tests and separate approval before any
-device load. It would address PFN-mapping inspection, not automatically establish
-the stock driver's alias attributes or prevent console/VT/mode writes.
+No separately licensed diagnostic project or kernel fork is required. Inspection
+still needs bounded operations, tests and separate approval before any device
+load. PFN-mapping inspection does not automatically establish the stock driver's
+alias attributes or prevent console/VT/mode writes.
 
-Until that decision and the remaining platform checks are resolved, leave the
+Until the remaining platform checks are resolved, leave the
 entry point closed. The stock config enables framebuffer console/VT, and the
 driver's mode path clears the whole aperture. Main's admission gate alone cannot
 exclude all those accesses. No unsafe activation or claim of completed migration

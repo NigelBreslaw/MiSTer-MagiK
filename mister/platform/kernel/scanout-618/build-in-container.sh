@@ -42,6 +42,8 @@ sha256sum scanout-618/entry.c scanout-618/provider.c scanout-618/provider.h \
 modinfo "$out/mister_magik_window_provider.ko" > "$out/modinfo.txt"
 arm-none-linux-gnueabihf-nm -u "$out/mister_magik_window_provider.ko" > "$out/imports.txt"
 [[ -z "$(modinfo -F depends "$out/mister_magik_window_provider.ko")" ]]
+[[ "$(modinfo -F license "$out/mister_magik_window_provider.ko")" == GPL ]]
+[[ "$(modinfo -F mister_magik_source_license "$out/mister_magik_window_provider.ko")" == GPL-2.0-only ]]
 [[ "$(modinfo -F vermagic "$out/mister_magik_window_provider.ko")" == '6.18.38-MiSTer SMP mod_unload ARMv7 p2v8 ' ]]
 cd "$out"
 sha256sum mister_magik_window_provider.ko vmlinux.symvers kernel.config source-sha256.txt compiler.txt modinfo.txt imports.txt > SHA256SUMS
