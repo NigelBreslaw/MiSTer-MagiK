@@ -37,6 +37,34 @@ static int window_open(struct inode *inode, struct file *file)
 	return smp_load_acquire(&ready) ? 0 : -ENODEV;
 }
 
+static int verify_mapping(struct vm_area_struct *vma, unsigned long physical)
+{
+	unsigned long address;
+	const unsigned long mask = L_PTE_MT_MASK | L_PTE_SHARED | L_PTE_XN;
+	const unsigned long expected = pgprot_val(vma->vm_page_prot) & mask;
+
+	/* Called only during initial mmap, with the caller's mmap write lock
+	 * held. Inspect every installed Linux PTE through the supported API;
+	 * never touch the mapped memory or retain lookup fields after end().
+	 * This does not inspect ARM hardware PTEs/PRRR/NMRR, other aliases,
+	 * future mprotect changes, or establish CPU/FPGA ownership.
+	 */
+	for (address = vma->vm_start; address < vma->vm_end;
+	     address += PAGE_SIZE) {
+		struct follow_pfnmap_args args = { .vma = vma, .address = address };
+		bool valid;
+		int result = follow_pfnmap_start(&args);
+		if (result)
+			return result;
+		valid = args.pfn == (physical + address - vma->vm_start) >> PAGE_SHIFT &&
+			args.writable && (pgprot_val(args.pgprot) & mask) == expected;
+		follow_pfnmap_end(&args);
+		if (!valid)
+			return -EIO;
+	}
+	return 0;
+}
+
 static int map_fixed(struct vm_area_struct *vma, unsigned long physical)
 {
 	vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
@@ -47,8 +75,11 @@ static int map_fixed(struct vm_area_struct *vma, unsigned long physical)
 	 */
 	vm_flags_init(vma, (vma->vm_flags & ~(VM_EXEC | VM_MAYEXEC)) |
 		VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP | VM_DONTCOPY);
-	return remap_pfn_range(vma, vma->vm_start, physical >> PAGE_SHIFT,
-		vma->vm_end - vma->vm_start, vma->vm_page_prot) ? -EAGAIN : 0;
+	if (remap_pfn_range(vma, vma->vm_start, physical >> PAGE_SHIFT,
+		vma->vm_end - vma->vm_start, vma->vm_page_prot))
+		return -EAGAIN;
+	/* On failure the mmap core tears down this unsuccessful mapping. */
+	return verify_mapping(vma, physical);
 }
 
 static int main_mmap(struct file *file, struct vm_area_struct *vma)

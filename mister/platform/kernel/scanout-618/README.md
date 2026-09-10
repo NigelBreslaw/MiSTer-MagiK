@@ -11,6 +11,8 @@ inputs or the native probe's artifact allowlist.
 - The unchanged two-slot ABI v3 and the separate Main-window ABI v1.
 - Shared, read/write, non-executable WC mappings with fixed selectors/lengths.
 - Prevention of later execute permission, VMA expansion, inheritance and dumps.
+- Inspection of every newly mapped page through `follow_pfnmap_start/end`,
+  rejecting PFN, write permission, memory-type, shareability or XN mismatch.
 - Two root-only misc devices, with open refused until both registrations finish.
 - Reverse-order rollback after partial registration and normal resource cleanup.
 - Module ownership through file references, including VMA-held references after
@@ -71,6 +73,27 @@ first-party files carry Nigel's copyright; no kernel implementation was copied.
 The earlier build hashes above describe the pre-change artifact, not this source.
 
 ## Remaining qualification gates
+
+The provider verifies its installed Linux PTE representation immediately after
+`remap_pfn_range`, inside initial mmap with the mmap write lock held. Every
+successful lookup is ended before returning or advancing; no result fields are
+read after unlock. Failed lookups propagate their error and mismatches return
+`EIO`. The pinned kernel's `mm/vma.c::__mmap_new_file_vma` calls `unmap_region`
+when the callback fails, undoing the unsuccessful mapping. No memory contents
+are read. The host fault tests cover first/last-page lookup failure, wrong PFN,
+memory type, shareability, XN and writability, plus unrelated PTE-bit tolerance.
+
+This is deliberately not a hardware-attribute attestation: ARM's Linux PTE
+representation is not the raw hardware translation, and this check neither
+reads PRRR/NMRR nor inspects pre-existing aliases or later permission changes.
+It adds no diagnostic ioctl, arbitrary address access or activation bypass.
+
+Independent builds 5 and 6 produce byte-identical modules and pass stock-kernel
+modpost with both GPL-only lookup imports and matching `GPL` / `GPL-2.0-only`
+module metadata. Their SHA-256 is
+`d797b0532def95d6e89af4dc2b468a954703dd432049179e01c769cb5ac3f36c`;
+vermagic remains `6.18.38-MiSTer SMP mod_unload ARMv7 p2v8`. The focused host
+suite passes 58 tests. No provider has been loaded on the device.
 
 The running config disables `CONFIG_ARM_PTDUMP_DEBUGFS`. The supported
 `follow_pfnmap_start/end` helpers expose PFNs and mapping protections but are

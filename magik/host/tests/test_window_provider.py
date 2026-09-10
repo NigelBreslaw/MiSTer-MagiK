@@ -48,6 +48,10 @@ typedef uint32_t __u32;
 #define IS_ENABLED(x) (x)
 #define PAGE_SIZE 4096UL
 #define PAGE_SHIFT 12
+#define L_PTE_MT_MASK 0x3cUL
+#define L_PTE_SHARED 0x400UL
+#define L_PTE_XN 0x200UL
+#define pgprot_val(p) (p)
 #define VM_SHARED 1UL
 #define VM_READ 2UL
 #define VM_WRITE 4UL
@@ -85,6 +89,38 @@ struct miscdevice { int minor; const char *name; const struct file_operations *f
 static int board=1, valid_ram, claim_fail, register_fail, map_fail, copy_fail;
 static int claims, releases, registrations, deregistrations, maps;
 static unsigned long mapped_phys;
+static unsigned long lookup_bad_page;
+static int lookup_fault;
+static unsigned long lookups, lookup_ends;
+static bool lookup_held;
+struct follow_pfnmap_args {
+    struct vm_area_struct *vma;
+    unsigned long address, pfn, pgprot;
+    bool writable;
+};
+static int follow_pfnmap_start(struct follow_pfnmap_args *a) {
+    assert(!lookup_held);
+    unsigned long page=(a->address-a->vma->vm_start)/PAGE_SIZE;
+    lookups++;
+    if(page==lookup_bad_page && lookup_fault==1) return -ENOENT;
+    lookup_held=true;
+    a->pfn=(mapped_phys>>PAGE_SHIFT)+page;
+    a->pgprot=a->vma->vm_page_prot;
+    a->writable=true;
+    if(page==lookup_bad_page) {
+        if(lookup_fault==2) a->pfn++;
+        if(lookup_fault==3) a->pgprot^=4;
+        if(lookup_fault==4) a->pgprot^=L_PTE_SHARED;
+        if(lookup_fault==5) a->pgprot^=L_PTE_XN;
+        if(lookup_fault==6) a->writable=false;
+        if(lookup_fault==7) a->pgprot^=0x8000; /* unrelated PTE state */
+    }
+    return 0;
+}
+static void follow_pfnmap_end(struct follow_pfnmap_args *a) {
+    assert(lookup_held); lookup_held=false; lookup_ends++;
+    memset(a,0,sizeof(*a)); /* results invalid after unlock */
+}
 static bool held;
 static int of_machine_is_compatible(const char *s) { assert(!strcmp(s,"altr,socfpga-cyclone5")); return board; }
 static int pfn_valid(unsigned long pfn) { assert(pfn>=0x22000 && pfn<0x237bb); return valid_ram; }
@@ -118,6 +154,8 @@ static int copy_to_user(void *to, const void *from, unsigned long n) { if(copy_f
 static void reset(void) {
     board=1; valid_ram=claim_fail=register_fail=map_fail=copy_fail=0;
     claims=releases=registrations=deregistrations=maps=0;
+    lookup_fault=lookups=lookup_ends=0; lookup_bad_page=0;
+    assert(!lookup_held);
     assert(!held && !claimed && !ready);
 }
 int main(void) {
@@ -151,6 +189,21 @@ int main(void) {
     struct vm_area_struct v={0x1000,0x1000+0x17bb000,1,7,0};
     assert(main_mmap(0,&v)==-EINVAL); v.vm_pgoff=0; map_fail=1;
     assert(main_mmap(0,&v)==-EAGAIN);
+    map_fail=0;
+    /* Each failure position must stop the walk and release every acquired
+     * lookup, including first/last pages. No end follows a failed start.
+     */
+    for(unsigned long page=0; page<0x17bb000/PAGE_SIZE; page+=0x17bb000/PAGE_SIZE-1) {
+        lookup_bad_page=page;
+        for(int fault=1; fault<=7; fault++) {
+            lookup_fault=fault; lookups=lookup_ends=0;
+            assert(main_mmap(0,&v)==(fault==1?-ENOENT:fault==7?0:-EIO));
+            assert(!lookup_held);
+            assert(lookups==(fault==7?0x17bb000/PAGE_SIZE:page+1));
+            assert(lookup_ends==lookups-(fault==1));
+        }
+    }
+    lookup_fault=0;
     struct mister_magik_main_window_layout layout;
     assert(main_ioctl(0,0,(unsigned long)&layout)==-ENOTTY);
     assert(main_ioctl(0,MISTER_MAGIK_MAIN_WINDOW_GET_LAYOUT,(unsigned long)&layout)==0);
