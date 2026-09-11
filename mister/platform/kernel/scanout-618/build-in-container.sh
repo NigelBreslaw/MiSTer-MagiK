@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Nigel Breslaw
 set -euo pipefail
-[[ $# == 1 ]] || exit 2
+[[ $# == 1 || ($# == 2 && "$1" == --development-trial) ]] || exit 2
+trial=0
+if [[ $# == 2 ]]; then trial=1; shift; fi
 out="$1"
 mkdir "$out"
 cd /inputs
@@ -28,8 +30,14 @@ cmp /inputs/kernel.config "$scratch/kernel/.config"
 # builds window-probe-build-2/3 (identical tables), not fabricated declarations.
 make -C "$scratch/source" O="$scratch/kernel" -j8 modules_prepare
 cp /inputs/vmlinux.symvers "$scratch/kernel/Module.symvers"
-make -C "$scratch/source" O="$scratch/kernel" M="$scratch/modules/scanout-618" modules
-cp "$scratch/modules/scanout-618/mister_magik_window_provider.ko" "$out/"
+make_args=()
+module=mister_magik_window_provider.ko
+if [[ $trial == 1 ]]; then
+  make_args+=(MISTER_MAGIK_DEVELOPMENT_TRIAL=1)
+  module=mister_magik_scanout_slots.ko
+fi
+make -C "$scratch/source" O="$scratch/kernel" M="$scratch/modules/scanout-618" "${make_args[@]}" modules
+cp "$scratch/modules/scanout-618/$module" "$out/"
 cp /inputs/vmlinux.symvers "$out/"
 cp /inputs/kernel.config "$out/"
 cd /provider
@@ -39,12 +47,21 @@ sha256sum scanout-618/entry.c scanout-618/provider.c scanout-618/provider.h \
     main-window/mister_magik_main_window_policy.h \
     main-window/mister_magik_main_window_uapi.h \
     scanout-slots/mister_magik_scanout_slots_uapi.h > "$out/source-sha256.txt"
-modinfo "$out/mister_magik_window_provider.ko" > "$out/modinfo.txt"
-arm-none-linux-gnueabihf-nm -u "$out/mister_magik_window_provider.ko" > "$out/imports.txt"
-[[ -z "$(modinfo -F depends "$out/mister_magik_window_provider.ko")" ]]
-[[ "$(modinfo -F license "$out/mister_magik_window_provider.ko")" == GPL ]]
-[[ "$(modinfo -F mister_magik_source_license "$out/mister_magik_window_provider.ko")" == GPL-2.0-only ]]
-[[ "$(modinfo -F vermagic "$out/mister_magik_window_provider.ko")" == '6.18.38-MiSTer SMP mod_unload ARMv7 p2v8 ' ]]
+modinfo "$out/$module" > "$out/modinfo.txt"
+arm-none-linux-gnueabihf-nm -u "$out/$module" > "$out/imports.txt"
+[[ -z "$(modinfo -F depends "$out/$module")" ]]
+[[ "$(modinfo -F license "$out/$module")" == GPL ]]
+[[ "$(modinfo -F mister_magik_source_license "$out/$module")" == GPL-2.0-only ]]
+[[ "$(modinfo -F vermagic "$out/$module")" == '6.18.38-MiSTer SMP mod_unload ARMv7 p2v8 ' ]]
+if [[ $trial == 1 ]]; then
+  [[ "$(modinfo -F mister_magik_development_trial "$out/$module")" == stock-6.18-latch-reuse-v1 ]]
+else
+  [[ -z "$(modinfo -F mister_magik_development_trial "$out/$module")" ]]
+fi
 cd "$out"
-sha256sum mister_magik_window_provider.ko vmlinux.symvers kernel.config source-sha256.txt compiler.txt modinfo.txt imports.txt > SHA256SUMS
-echo 'Provider builds; entry point intentionally refuses activation. Not a release artifact.'
+sha256sum "$module" vmlinux.symvers kernel.config source-sha256.txt compiler.txt modinfo.txt imports.txt > SHA256SUMS
+if [[ $trial == 1 ]]; then
+  echo 'Development trial provider builds; never use as a release artifact.'
+else
+  echo 'Provider builds; entry point intentionally refuses activation. Not a release artifact.'
+fi

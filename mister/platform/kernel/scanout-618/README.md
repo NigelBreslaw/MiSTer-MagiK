@@ -19,10 +19,14 @@ inputs or the native probe's artifact allowlist.
   fd closure. Actual kernel lifetime/mprotect tests remain unperformed.
 
 The internal registration routine requires platform qualification.
-**`entry.c` always passes false**, so this module returns `EOPNOTSUPP` before
+The ordinary build passes false, so this module returns `EOPNOTSUPP` before
 reserving memory or registering devices. There is no module parameter or ioctl
-to bypass the gate. Removing it requires an implemented, reviewed platform
-validator and satisfaction of the outstanding writer/attribute gates.
+to bypass the gate. `build-in-container.sh --development-trial OUT` produces a
+separately named `mister_magik_scanout_slots.ko` carrying
+`mister_magik_development_trial=stock-6.18-latch-reuse-v1`. That object is only
+for the attended rollback-bound qualification campaign; it is excluded from
+release inputs and still enforces every exact platform, PFN, resource and
+mapping check in `provider.c`.
 
 ## Kernel APIs and build evidence
 

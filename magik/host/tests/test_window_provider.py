@@ -160,8 +160,14 @@ static void reset(void) {
 }
 int main(void) {
     reset();
+#ifdef MISTER_MAGIK_DEVELOPMENT_TRIAL
+    assert(window_provider_init()==0 && claims==1 && ready);
+    window_provider_exit(); assert(releases==1 && !ready);
+    reset();
+#else
     assert(window_provider_init()==-EOPNOTSUPP && !claims);
     window_provider_exit(); assert(!releases);
+#endif
     assert(mister_magik_window_provider_register(false)==-EOPNOTSUPP && !claims);
     board=0; assert(mister_magik_window_provider_register(true)==-ENODEV && !claims);
     board=1; valid_ram=1; assert(mister_magik_window_provider_register(true)==-EPERM && !claims);
@@ -222,8 +228,7 @@ int main(void) {
 """
     )
     binary = tmp_path / "provider-test"
-    subprocess.run(
-        [
+    command = [
             compiler,
             "-std=c11",
             "-Wall",
@@ -235,7 +240,12 @@ int main(void) {
             str(source),
             "-o",
             str(binary),
-        ],
+        ]
+    subprocess.run(command, check=True)
+    subprocess.run([str(binary)], check=True)
+    subprocess.run(
+        command[:1] + ["-DMISTER_MAGIK_DEVELOPMENT_TRIAL"] + command[1:-1]
+        + [str(binary) + "-trial"],
         check=True,
     )
-    subprocess.run([str(binary)], check=True)
+    subprocess.run([str(binary) + "-trial"], check=True)
