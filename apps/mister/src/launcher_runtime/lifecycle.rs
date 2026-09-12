@@ -1205,8 +1205,6 @@ impl LauncherLifecycle {
         );
     }
 
-    pub fn recovery_frame_presented(&mut self, _at: Instant, _out: &mut LifecycleEffects) {}
-
     pub fn state(&self) -> &LauncherLifecycleState {
         &self.state
     }
@@ -2215,14 +2213,11 @@ mod tests {
             Some(LauncherEffect::PresentRecoveryFrame)
         ));
 
-        effects.clear();
-        lifecycle.recovery_frame_presented(Instant::now(), &mut effects);
-
         assert!(matches!(
             lifecycle.state(),
             LauncherLifecycleState::Recovered { .. }
         ));
-        assert!(effects.as_slice().is_empty());
+        effects.clear();
         let dialog = lifecycle
             .view()
             .launch_failure_dialog()

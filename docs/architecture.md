@@ -812,8 +812,8 @@ bridge and presents the loading frame. Only after
 `loading_frame_presented(...)` does the scheduler let the existing
 `LaunchHandoffSession` start the Main/FIFO handoff. If handoff fails, the
 lifecycle enters `Recovered`, the scheduler reasserts the launcher framebuffer
-route, the recovery UI is presented, and only then does
-`recovery_frame_presented(...)` return the lifecycle to `Idle`.
+route, and the recovery UI remains visible until the user acknowledges the
+failure and returns the lifecycle to `Idle`.
 
 Current command surface:
 

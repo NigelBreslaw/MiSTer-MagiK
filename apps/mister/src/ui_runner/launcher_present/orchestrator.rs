@@ -693,10 +693,6 @@ impl<L> LauncherPresenter<L> {
         }
     }
 
-    pub(in crate::ui_runner) fn needs_frame(&self) -> bool {
-        false
-    }
-
     pub(in crate::ui_runner) fn latch_failure(&self) -> Option<&LatchFailure> {
         match &self.state {
             LauncherPresenterState::Frozen { failure } => Some(failure),

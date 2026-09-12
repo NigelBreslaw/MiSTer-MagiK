@@ -3811,7 +3811,6 @@ impl LauncherWakeReasons {
     const COMPOSITION_FORCES_FULL_PRESENT: Self = Self(1 << 21);
     const COMPOSITION_CLEARS_DIRECT_LAYERS: Self = Self(1 << 22);
     const HOME_HORIZONTAL_INPUT_HELD: Self = Self(1 << 23);
-    const FB0_ROUTE_RECOVERY_PENDING: Self = Self(1 << 24);
     const LATENCY_CRITICAL_INPUT: Self = Self(1 << 25);
     const CRT_BACKDROP_PREPARED: Self = Self(1 << 26);
 
@@ -3845,15 +3844,6 @@ impl LauncherRenderIntent {
     fn can_sleep(self) -> bool {
         self.first_visible_copy_done && self.startup_input_enabled && self.wake_reasons.is_empty()
     }
-}
-
-fn launcher_presentation_recovery_wake_reasons(presenter_needs_frame: bool) -> LauncherWakeReasons {
-    let mut reasons = LauncherWakeReasons::default();
-    reasons.insert_if(
-        LauncherWakeReasons::FB0_ROUTE_RECOVERY_PENDING,
-        presenter_needs_frame,
-    );
-    reasons
 }
 
 fn screensaver_pipeline_start_allowed(screensaver_active: bool, ram_pipeline_active: bool) -> bool {
@@ -7013,8 +7003,6 @@ pub(super) fn run_launcher_loop(
                     let recovery_presented = Instant::now();
                     request_launcher_redraw!();
                     scheduler.finish_launch_failure_recovery(recovery_presented);
-                    lifecycle.recovery_frame_presented(recovery_presented, &mut lifecycle_effects);
-                    apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
                     record_launcher_frame_phase!(LauncherFramePhase::LaunchRecoveryApplied);
                     crate::ui_errln!("game launch failed: {error}");
                 }
@@ -9532,8 +9520,6 @@ pub(super) fn run_launcher_loop(
             LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
             composition_decision.clear_direct_layers,
         );
-        wake_reasons = wake_reasons
-            | launcher_presentation_recovery_wake_reasons(launcher_presenter.needs_frame());
         let render_intent = LauncherRenderIntent {
             first_visible_copy_done: frame_accounting.first_visible_copy_done(),
             startup_input_enabled: startup_status.input_enabled,
@@ -17827,7 +17813,6 @@ mod tests {
             LauncherWakeReasons::CRT_BACKDROP_PREPARED,
             LauncherWakeReasons::COMPOSITION_FORCES_FULL_PRESENT,
             LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
-            LauncherWakeReasons::FB0_ROUTE_RECOVERY_PENDING,
             LauncherWakeReasons::LATENCY_CRITICAL_INPUT,
         ] {
             assert!(
@@ -17892,19 +17877,6 @@ mod tests {
                 "{screen:?}"
             );
         }
-    }
-
-    #[test]
-    pub(super) fn presenter_recovery_keeps_launcher_awake() {
-        let sleeping_intent = |wake_reasons| LauncherRenderIntent {
-            first_visible_copy_done: true,
-            startup_input_enabled: true,
-            wake_reasons,
-        };
-
-        assert!(sleeping_intent(launcher_presentation_recovery_wake_reasons(false)).can_sleep());
-        assert!(!sleeping_intent(launcher_presentation_recovery_wake_reasons(true)).can_sleep());
-        assert!(sleeping_intent(launcher_presentation_recovery_wake_reasons(false)).can_sleep());
     }
 
     #[test]
