@@ -484,9 +484,10 @@ jobs:
           set -eu
           scripts/checks/check-scanout-slots-contract.sh
           ln -s "$GITHUB_WORKSPACE/mister/platform/kernel" /provider
-          mister/platform/kernel/scanout-618/build-in-container.sh \
+          bash mister/platform/kernel/scanout-618/build-in-container.sh \
             --development-trial "$GITHUB_WORKSPACE/build/scanout-618"
           sha256sum build/scanout-618/mister_magik_scanout_slots.ko
+          cat build/scanout-618/provenance.txt
           {
             echo "component_input_sha256=${{ needs.plan.outputs.kernel-id }}"
             echo "component_revision=$(git log -1 --format=%H -- $(sed '/^#/d;/^$/d' scripts/platform-component-inputs/kernel-v0.1.txt))"
