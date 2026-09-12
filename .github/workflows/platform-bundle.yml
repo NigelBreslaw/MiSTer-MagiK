@@ -465,7 +465,7 @@ jobs:
           wget -qO /inputs/toolchain.tar.xz \
             https://developer.arm.com/-/media/Files/downloads/gnu-a/10.2-2020.11/binrel/gcc-arm-10.2-2020.11-x86_64-arm-none-linux-gnueabihf.tar.xz
           echo '0702694110b54441b0a8323be43538e1d5b394645c4970616867b56e55496672  /inputs/kernel.tar' | sha256sum -c -
-          echo 'd169f9196e3a6c4248ee79ca85987ebce0e4ea9174c1f8d51af9b28fecf22da1  /inputs/toolchain.tar.xz' | sha256sum -c -
+          echo '102825ae56c9e00142d06f35d2bdd3299edb6060e84a275a25b095e66fd3fc2a  /inputs/toolchain.tar.xz' | sha256sum -c -
           tar -xf /inputs/toolchain.tar.xz -C /work/toolchain --strip-components=1
           export PATH="/work/toolchain/bin:$PATH"
           export ARCH=arm CROSS_COMPILE=arm-none-linux-gnueabihf- LOCALVERSION=-MiSTer

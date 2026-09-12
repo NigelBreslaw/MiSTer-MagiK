@@ -46,7 +46,7 @@ kernel/module build:
 - Final `Module.symvers` SHA-256:
   `f58b220d8cdcb925afdd4ba4a4c0a04c02154a8f2fc658cc1fa885b89f79952f`.
 - Arm GNU toolchain archive SHA-256:
-  `d169f9196e3a6c4248ee79ca85987ebce0e4ea9174c1f8d51af9b28fecf22da1`.
+  `102825ae56c9e00142d06f35d2bdd3299edb6060e84a275a25b095e66fd3fc2a`.
 - Vermagic: `6.18.38-MiSTer SMP mod_unload ARMv7 p2v8`.
 
 Mount those files at `/inputs` as `kernel.tar`, `kernel.config`,
