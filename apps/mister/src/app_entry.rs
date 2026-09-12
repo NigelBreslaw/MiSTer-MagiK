@@ -1614,22 +1614,27 @@ fn run_latch_readiness_report(fpga: &mut Fpga, json_output: bool) {
         .unwrap_or_else(|_| "unknown".to_string())
         .trim()
         .to_string();
-    if kernel_release != mister_magik_scanout_contract::QUALIFIED_KERNEL_RELEASE {
-        let failure = LatchFailure::incompatible(
-            LatchFailureStage::Kernel,
-            LatchFailureReason::KernelReleaseUnsupported,
-            format!(
-                "detected={} expected={}",
-                kernel_release,
-                mister_magik_scanout_contract::QUALIFIED_KERNEL_RELEASE
-            ),
-        );
-        publish_latch_readiness_report(
-            &LatchReadinessReport::failed(kernel_release, &failure),
-            json_output,
-        );
-        return;
-    }
+    let profile = match crate::scanout_platform::current(&kernel_release) {
+        Ok(profile) => profile,
+        Err(error) => {
+            let expected =
+                if kernel_release == mister_magik_scanout_contract::DEVELOPMENT_KERNEL_RELEASE {
+                    mister_magik_scanout_contract::DEVELOPMENT_PROFILE
+                } else {
+                    mister_magik_scanout_contract::LEGACY_PROFILE
+                };
+            let failure = LatchFailure::incompatible(
+                LatchFailureStage::Kernel,
+                LatchFailureReason::KernelReleaseUnsupported,
+                error,
+            );
+            publish_latch_readiness_report(
+                &LatchReadinessReport::failed_for_profile(kernel_release, expected, &failure),
+                json_output,
+            );
+            return;
+        }
+    };
 
     let device = match OpenOptions::new()
         .read(true)
@@ -1644,7 +1649,7 @@ fn run_latch_readiness_report(fpga: &mut Fpga, json_output: bool) {
                 error.to_string(),
             );
             publish_latch_readiness_report(
-                &LatchReadinessReport::failed(kernel_release, &failure),
+                &LatchReadinessReport::failed_for_profile(kernel_release, profile, &failure),
                 json_output,
             );
             return;
@@ -1660,7 +1665,7 @@ fn run_latch_readiness_report(fpga: &mut Fpga, json_output: bool) {
                     error.to_string(),
                 );
                 publish_latch_readiness_report(
-                    &LatchReadinessReport::failed(kernel_release, &failure),
+                    &LatchReadinessReport::failed_for_profile(kernel_release, profile, &failure),
                     json_output,
                 );
                 return;
@@ -1676,7 +1681,7 @@ fn run_latch_readiness_report(fpga: &mut Fpga, json_output: bool) {
                 error.to_string(),
             );
             publish_latch_readiness_report(
-                &LatchReadinessReport::failed(kernel_release, &failure),
+                &LatchReadinessReport::failed_for_profile(kernel_release, profile, &failure),
                 json_output,
             );
             return;
@@ -1702,7 +1707,7 @@ fn run_latch_readiness_report(fpga: &mut Fpga, json_output: bool) {
             ),
         );
         publish_latch_readiness_report(
-            &LatchReadinessReport::failed(kernel_release, &failure),
+            &LatchReadinessReport::failed_for_profile(kernel_release, profile, &failure),
             json_output,
         );
         return;
@@ -1717,7 +1722,7 @@ fn run_latch_readiness_report(fpga: &mut Fpga, json_output: bool) {
                 format!("magic=0x{:04x}/0x{:04x}", status.magic_hi, status.magic_lo),
             );
             publish_latch_readiness_report(
-                &LatchReadinessReport::failed(kernel_release, &failure),
+                &LatchReadinessReport::failed_for_profile(kernel_release, profile, &failure),
                 json_output,
             );
             return;
@@ -1729,14 +1734,14 @@ fn run_latch_readiness_report(fpga: &mut Fpga, json_output: bool) {
                 error.to_string(),
             );
             publish_latch_readiness_report(
-                &LatchReadinessReport::failed(kernel_release, &failure),
+                &LatchReadinessReport::failed_for_profile(kernel_release, profile, &failure),
                 json_output,
             );
             return;
         }
     };
 
-    let mut report = LatchReadinessReport::ready(kernel_release);
+    let mut report = LatchReadinessReport::ready_for_profile(kernel_release, profile);
     report.scanout_abi_version = Some(layout.abi_version);
     report.scanout_slot_capacity_bytes = Some(layout.slot_capacity_bytes);
     report.latch_protocol_version = Some(caps.protocol_version);
@@ -3112,7 +3117,7 @@ mod tests {
     #[test]
     fn latch_readiness_tsv_is_compact_and_sanitized() {
         let mut report = mister_magik_fb::latch_readiness::LatchReadinessReport::ready(
-            "5.15.1-MiSTer".to_string(),
+            mister_magik_scanout_contract::LEGACY_KERNEL_RELEASE.to_string(),
         );
         report.detail = "live platform ready\tflip_count=4\npost_count=5 drop_count=0".to_string();
         assert_eq!(
