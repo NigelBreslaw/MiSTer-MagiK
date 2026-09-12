@@ -42,6 +42,7 @@ cp /inputs/vmlinux.symvers "$out/"
 cp /inputs/kernel.config "$out/"
 cd /provider
 sha256sum scanout-618/entry.c scanout-618/provider.c scanout-618/provider.h \
+    scanout-618/mister_magik_mapping_diagnostic_uapi.h \
     scanout-618/Makefile scanout-618/build-in-container.sh \
     main-window/mister_magik_main_window_layout.h \
     main-window/mister_magik_main_window_policy.h \
@@ -54,7 +55,7 @@ arm-none-linux-gnueabihf-nm -u "$out/$module" > "$out/imports.txt"
 [[ "$(modinfo -F mister_magik_source_license "$out/$module")" == GPL-2.0-only ]]
 [[ "$(modinfo -F vermagic "$out/$module")" == '6.18.38-MiSTer SMP mod_unload ARMv7 p2v8 ' ]]
 if [[ $trial == 1 ]]; then
-  [[ "$(modinfo -F mister_magik_development_trial "$out/$module")" == stock-6.18-latch-reuse-v1 ]]
+  [[ "$(modinfo -F mister_magik_development_trial "$out/$module")" == stock-6.18-latch-reuse-v2 ]]
 else
   [[ -z "$(modinfo -F mister_magik_development_trial "$out/$module")" ]]
 fi

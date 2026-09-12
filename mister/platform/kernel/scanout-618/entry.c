@@ -27,5 +27,5 @@ MODULE_DESCRIPTION("MiSTer MagiK unqualified fixed-window provider (activation d
 MODULE_LICENSE("GPL");
 MODULE_INFO(mister_magik_source_license, "GPL-2.0-only");
 #ifdef MISTER_MAGIK_DEVELOPMENT_TRIAL
-MODULE_INFO(mister_magik_development_trial, "stock-6.18-latch-reuse-v1");
+MODULE_INFO(mister_magik_development_trial, "stock-6.18-latch-reuse-v2");
 #endif

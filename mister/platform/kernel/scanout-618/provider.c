@@ -6,10 +6,13 @@
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/slab.h>
+#include <linux/spinlock.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <generated/utsrelease.h>
 #include "provider.h"
+#include "mister_magik_mapping_diagnostic_uapi.h"
 #include "../main-window/mister_magik_main_window_layout.h"
 #include "../scanout-slots/mister_magik_scanout_slots_uapi.h"
 
@@ -20,6 +23,10 @@
 
 static bool ready;
 static bool claimed;
+struct mapping_file_context {
+	spinlock_t lock;
+	struct mister_magik_mapping_diagnostic diagnostic;
+};
 static const struct mister_magik_main_window_layout main_layout =
 	MISTER_MAGIK_MAIN_WINDOW_LAYOUT_INITIALIZER;
 static const struct mister_magik_scanout_slots_layout slot_layout = {
@@ -33,15 +40,78 @@ static const struct mister_magik_scanout_slots_layout slot_layout = {
 
 static int window_open(struct inode *inode, struct file *file)
 {
+	struct mapping_file_context *context;
+
 	/* Neither node can be used during partial registration or rollback. */
-	return smp_load_acquire(&ready) ? 0 : -ENODEV;
+	if (!smp_load_acquire(&ready))
+		return -ENODEV;
+	context = kzalloc(sizeof(*context), GFP_KERNEL);
+	if (!context)
+		return -ENOMEM;
+	spin_lock_init(&context->lock);
+	context->diagnostic.abi_version = MISTER_MAGIK_MAPPING_DIAGNOSTIC_ABI_VERSION;
+	context->diagnostic.record_bytes = sizeof(context->diagnostic);
+	context->diagnostic.state = MISTER_MAGIK_MAPPING_DIAGNOSTIC_NOT_ATTEMPTED;
+	context->diagnostic.page_index = MISTER_MAGIK_MAPPING_DIAGNOSTIC_NO_PAGE;
+	file->private_data = context;
+	return 0;
 }
 
-static int verify_mapping(struct vm_area_struct *vma, unsigned long physical)
+static int window_release(struct inode *inode, struct file *file)
+{
+	kfree(file->private_data);
+	file->private_data = NULL;
+	return 0;
+}
+
+static void diagnostic_store(struct mapping_file_context *context,
+	const struct mister_magik_mapping_diagnostic *diagnostic)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&context->lock, flags);
+	context->diagnostic = *diagnostic;
+	spin_unlock_irqrestore(&context->lock, flags);
+}
+
+static struct mister_magik_mapping_diagnostic diagnostic_begin(
+	struct file *file, unsigned long physical, unsigned long map_bytes,
+	unsigned long protection_mask, unsigned long expected_protection)
+{
+	struct mister_magik_mapping_diagnostic diagnostic = {
+		.abi_version = MISTER_MAGIK_MAPPING_DIAGNOSTIC_ABI_VERSION,
+		.record_bytes = sizeof(diagnostic),
+		.state = MISTER_MAGIK_MAPPING_DIAGNOSTIC_IN_PROGRESS,
+		.page_index = MISTER_MAGIK_MAPPING_DIAGNOSTIC_NO_PAGE,
+		.protection_mask = protection_mask,
+		.expected_protection = expected_protection,
+		.physical_base = physical,
+		.map_bytes = map_bytes,
+	};
+
+	diagnostic_store(file->private_data, &diagnostic);
+	return diagnostic;
+}
+
+static long diagnostic_ioctl(struct file *file, unsigned long arg)
+{
+	struct mapping_file_context *context = file->private_data;
+	struct mister_magik_mapping_diagnostic diagnostic;
+	unsigned long flags;
+
+	spin_lock_irqsave(&context->lock, flags);
+	diagnostic = context->diagnostic;
+	spin_unlock_irqrestore(&context->lock, flags);
+	return copy_to_user((void __user *)arg, &diagnostic, sizeof(diagnostic)) ?
+		-EFAULT : 0;
+}
+
+static int verify_mapping(struct file *file, struct vm_area_struct *vma,
+	unsigned long physical, struct mister_magik_mapping_diagnostic diagnostic)
 {
 	unsigned long address;
 	const unsigned long mask = L_PTE_MT_MASK | L_PTE_SHARED | L_PTE_XN;
-	const unsigned long expected = pgprot_val(vma->vm_page_prot) & mask;
+	const unsigned long expected = pgprot_val(vma->vm_page_prot);
 
 	/* Called only during initial mmap, with the caller's mmap write lock
 	 * held. Inspect every installed Linux PTE through the supported API;
@@ -52,22 +122,64 @@ static int verify_mapping(struct vm_area_struct *vma, unsigned long physical)
 	for (address = vma->vm_start; address < vma->vm_end;
 	     address += PAGE_SIZE) {
 		struct follow_pfnmap_args args = { .vma = vma, .address = address };
-		bool valid;
+		unsigned long expected_pfn =
+			(physical + address - vma->vm_start) >> PAGE_SHIFT;
+		unsigned long observed_pfn;
+		unsigned long observed_protection;
+		unsigned int failures = 0;
+		bool writable;
 		int result = follow_pfnmap_start(&args);
-		if (result)
+		if (result) {
+			diagnostic.state = MISTER_MAGIK_MAPPING_DIAGNOSTIC_FAILED;
+			diagnostic.failure_flags = MISTER_MAGIK_MAPPING_FAILURE_LOOKUP;
+			diagnostic.page_index =
+				(address - vma->vm_start) >> PAGE_SHIFT;
+			diagnostic.expected_pfn = expected_pfn;
+			diagnostic.error_code = result;
+			diagnostic_store(file->private_data, &diagnostic);
 			return result;
-		valid = args.pfn == (physical + address - vma->vm_start) >> PAGE_SHIFT &&
-			args.writable && (pgprot_val(args.pgprot) & mask) == expected;
+		}
+		observed_pfn = args.pfn;
+		observed_protection = pgprot_val(args.pgprot);
+		writable = args.writable;
 		follow_pfnmap_end(&args);
-		if (!valid)
+		if (observed_pfn != expected_pfn)
+			failures |= MISTER_MAGIK_MAPPING_FAILURE_PFN;
+		if (!writable)
+			failures |= MISTER_MAGIK_MAPPING_FAILURE_WRITABLE;
+		if ((observed_protection & mask) != (expected & mask))
+			failures |= MISTER_MAGIK_MAPPING_FAILURE_PROTECTION;
+		if (failures) {
+			diagnostic.state = MISTER_MAGIK_MAPPING_DIAGNOSTIC_FAILED;
+			diagnostic.failure_flags = failures;
+			diagnostic.page_index =
+				(address - vma->vm_start) >> PAGE_SHIFT;
+			diagnostic.expected_pfn = expected_pfn;
+			diagnostic.observed_pfn = observed_pfn;
+			diagnostic.writable = writable;
+			diagnostic.observed_protection = observed_protection;
+			diagnostic.error_code = -EIO;
+			diagnostic_store(file->private_data, &diagnostic);
 			return -EIO;
+		}
 	}
+	diagnostic.state = MISTER_MAGIK_MAPPING_DIAGNOSTIC_PASSED;
+	diagnostic.page_index = MISTER_MAGIK_MAPPING_DIAGNOSTIC_NO_PAGE;
+	diagnostic_store(file->private_data, &diagnostic);
 	return 0;
 }
 
-static int map_fixed(struct vm_area_struct *vma, unsigned long physical)
+static int map_fixed(struct file *file, struct vm_area_struct *vma,
+	unsigned long physical)
 {
+	struct mister_magik_mapping_diagnostic diagnostic;
+	int result;
+
 	vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
+	diagnostic = diagnostic_begin(file, physical,
+		vma->vm_end - vma->vm_start,
+		L_PTE_MT_MASK | L_PTE_SHARED | L_PTE_XN,
+		pgprot_val(vma->vm_page_prot));
 	/* Only called from our initial mmap callbacks. In the pinned 6.18
 	 * __mmap_new_vma path, these run before vma_iter_store_new: the VMA is
 	 * not yet in the tree. vm_flags_init is the documented API for that
@@ -75,26 +187,35 @@ static int map_fixed(struct vm_area_struct *vma, unsigned long physical)
 	 */
 	vm_flags_init(vma, (vma->vm_flags & ~(VM_EXEC | VM_MAYEXEC)) |
 		VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP | VM_DONTCOPY);
-	if (remap_pfn_range(vma, vma->vm_start, physical >> PAGE_SHIFT,
-		vma->vm_end - vma->vm_start, vma->vm_page_prot))
+	result = remap_pfn_range(vma, vma->vm_start, physical >> PAGE_SHIFT,
+		vma->vm_end - vma->vm_start, vma->vm_page_prot);
+	if (result) {
+		diagnostic.state = MISTER_MAGIK_MAPPING_DIAGNOSTIC_FAILED;
+		diagnostic.failure_flags = MISTER_MAGIK_MAPPING_FAILURE_REMAP;
+		diagnostic.error_code = result;
+		diagnostic_store(file->private_data, &diagnostic);
 		return -EAGAIN;
+	}
 	/* On failure the mmap core tears down this unsuccessful mapping. */
-	return verify_mapping(vma, physical);
+	return verify_mapping(file, vma, physical, diagnostic);
 }
 
 static int main_mmap(struct file *file, struct vm_area_struct *vma)
 {
+	/* Invalid requests must not leave a previous mapping's evidence visible. */
+	diagnostic_begin(file, 0, 0, 0, 0);
 	if (!mister_magik_main_window_mapping_valid(vma->vm_pgoff,
 		vma->vm_end - vma->vm_start, PAGE_SIZE,
 		vma->vm_flags & VM_SHARED, vma->vm_flags & VM_READ,
 		vma->vm_flags & VM_WRITE, vma->vm_flags & VM_EXEC))
 		return -EINVAL;
-	return map_fixed(vma, MISTER_MAGIK_MAIN_WINDOW_BASE);
+	return map_fixed(file, vma, MISTER_MAGIK_MAIN_WINDOW_BASE);
 }
 
 static int slots_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	unsigned long physical;
+	diagnostic_begin(file, 0, 0, 0, 0);
 	if (vma->vm_end - vma->vm_start != SLOT_BYTES ||
 	    !(vma->vm_flags & VM_SHARED) || !(vma->vm_flags & VM_READ) ||
 	    !(vma->vm_flags & VM_WRITE) || (vma->vm_flags & VM_EXEC))
@@ -105,11 +226,13 @@ static int slots_mmap(struct file *file, struct vm_area_struct *vma)
 		physical = SLOT1_BASE;
 	else
 		return -EINVAL;
-	return map_fixed(vma, physical);
+	return map_fixed(file, vma, physical);
 }
 
 static long main_ioctl(struct file *file, unsigned int command, unsigned long arg)
 {
+	if (command == MISTER_MAGIK_MAPPING_GET_DIAGNOSTIC)
+		return diagnostic_ioctl(file, arg);
 	if (command != MISTER_MAGIK_MAIN_WINDOW_GET_LAYOUT)
 		return -ENOTTY;
 	return copy_to_user((void __user *)arg, &main_layout, sizeof(main_layout)) ? -EFAULT : 0;
@@ -117,6 +240,8 @@ static long main_ioctl(struct file *file, unsigned int command, unsigned long ar
 
 static long slots_ioctl(struct file *file, unsigned int command, unsigned long arg)
 {
+	if (command == MISTER_MAGIK_MAPPING_GET_DIAGNOSTIC)
+		return diagnostic_ioctl(file, arg);
 	if (command != MISTER_MAGIK_SCANOUT_SLOTS_GET_LAYOUT)
 		return -ENOTTY;
 	return copy_to_user((void __user *)arg, &slot_layout, sizeof(slot_layout)) ? -EFAULT : 0;
@@ -124,11 +249,11 @@ static long slots_ioctl(struct file *file, unsigned int command, unsigned long a
 
 static const struct file_operations main_fops = {
 	.owner = THIS_MODULE, .open = window_open,
-	.mmap = main_mmap, .unlocked_ioctl = main_ioctl,
+	.release = window_release, .mmap = main_mmap, .unlocked_ioctl = main_ioctl,
 };
 static const struct file_operations slots_fops = {
 	.owner = THIS_MODULE, .open = window_open,
-	.mmap = slots_mmap, .unlocked_ioctl = slots_ioctl,
+	.release = window_release, .mmap = slots_mmap, .unlocked_ioctl = slots_ioctl,
 };
 static struct miscdevice main_device = {
 	.minor = MISC_DYNAMIC_MINOR, .name = "mister-magik-main-window",
@@ -144,6 +269,7 @@ int mister_magik_window_provider_register(bool platform_qualified)
 	unsigned long physical;
 	int result;
 	BUILD_BUG_ON(sizeof(main_layout) != 64 || sizeof(slot_layout) != 64);
+	BUILD_BUG_ON(sizeof(struct mister_magik_mapping_diagnostic) != 64);
 	BUILD_BUG_ON(SLOT0_BASE < MISTER_MAGIK_MAIN_WINDOW_BASE);
 	BUILD_BUG_ON(SLOT0_BASE + SLOT_BYTES > SLOT1_BASE);
 	BUILD_BUG_ON(SLOT1_BASE + SLOT_BYTES > MISTER_MAGIK_MAIN_WINDOW_BASE + MISTER_MAGIK_MAIN_WINDOW_BYTES);

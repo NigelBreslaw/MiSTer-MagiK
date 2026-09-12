@@ -19,6 +19,8 @@ def test_provider_lifecycle_and_mapping(tmp_path):
         "mm",
         "module",
         "of",
+        "slab",
+        "spinlock",
         "string",
         "uaccess",
         "types",
@@ -38,9 +40,11 @@ def test_provider_lifecycle_and_mapping(tmp_path):
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 typedef uint32_t __u32;
+typedef int32_t __s32;
 #define _IOR(c,n,t) ((unsigned int)(sizeof(t)<<16)|(c<<8)|n)
 #define CONFIG_ARM 1
 #define CONFIG_ARM_LPAE 0
@@ -63,6 +67,7 @@ typedef uint32_t __u32;
 #define VM_DONTDUMP 256UL
 #define VM_DONTCOPY 512UL
 #define __user
+#define GFP_KERNEL 0
 #define THIS_MODULE ((void *)1)
 #define MISC_DYNAMIC_MINOR 255
 #define __init
@@ -76,11 +81,12 @@ typedef uint32_t __u32;
 #define smp_load_acquire(p) (*(p))
 #define smp_store_release(p,v) (*(p)=(v))
 struct inode { int unused; };
-struct file { int unused; };
+struct file { void *private_data; };
 struct vm_area_struct { unsigned long vm_start, vm_end, vm_pgoff, vm_flags, vm_page_prot; };
 struct file_operations {
     void *owner;
     int (*open)(struct inode *, struct file *);
+    int (*release)(struct inode *, struct file *);
     int (*mmap)(struct file *, struct vm_area_struct *);
     long (*unlocked_ioctl)(struct file *, unsigned int, unsigned long);
     void *llseek;
@@ -114,6 +120,7 @@ static int follow_pfnmap_start(struct follow_pfnmap_args *a) {
         if(lookup_fault==5) a->pgprot^=L_PTE_XN;
         if(lookup_fault==6) a->writable=false;
         if(lookup_fault==7) a->pgprot^=0x8000; /* unrelated PTE state */
+        if(lookup_fault==8) { a->pfn++; a->writable=false; a->pgprot^=L_PTE_SHARED; }
     }
     return 0;
 }
@@ -122,6 +129,12 @@ static void follow_pfnmap_end(struct follow_pfnmap_args *a) {
     memset(a,0,sizeof(*a)); /* results invalid after unlock */
 }
 static bool held;
+typedef int spinlock_t;
+static void spin_lock_init(spinlock_t *lock) { *lock=0; }
+#define spin_lock_irqsave(lock, flags) do { (void)(lock); (flags)=0; } while(0)
+#define spin_unlock_irqrestore(lock, flags) do { (void)(lock); (void)(flags); } while(0)
+static void *kzalloc(unsigned long n, int flags) { (void)flags; return calloc(1,n); }
+static void kfree(void *p) { free(p); }
 static int of_machine_is_compatible(const char *s) { assert(!strcmp(s,"altr,socfpga-cyclone5")); return board; }
 static int pfn_valid(unsigned long pfn) { assert(pfn>=0x22000 && pfn<0x237bb); return valid_ram; }
 static void *request_mem_region_exclusive(unsigned long p, unsigned long n, const char *s) {
@@ -179,47 +192,101 @@ int main(void) {
         mister_magik_window_provider_unregister(); assert(releases==1);
     }
     reset(); assert(mister_magik_window_provider_register(true)==0);
-    assert(claims==1 && registrations==2 && held && ready && window_open(0,0)==0);
+    struct file main_file={0}, slot_files[2]={{0},{0}};
+    assert(claims==1 && registrations==2 && held && ready);
+    assert(window_open(0,&main_file)==0);
+    assert(window_open(0,&slot_files[0])==0);
+    assert(window_open(0,&slot_files[1])==0);
+    struct mister_magik_mapping_diagnostic diagnostic;
+    assert(main_ioctl(&main_file,MISTER_MAGIK_MAPPING_GET_DIAGNOSTIC,
+        (unsigned long)&diagnostic)==0);
+    assert(diagnostic.abi_version==1 && diagnostic.record_bytes==64);
+    assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_NOT_ATTEMPTED);
+    assert(diagnostic.page_index==MISTER_MAGIK_MAPPING_DIAGNOSTIC_NO_PAGE);
+    assert(!diagnostic.reserved[0] && !diagnostic.reserved[1]);
     assert(mister_magik_window_provider_register(true)==-EBUSY && claims==1);
     for(unsigned int flags=0; flags<16; flags++) {
         struct vm_area_struct v={0x1000,0x1000+0x17bb000,0,flags|VM_MAYEXEC,0};
-        assert(main_mmap(0,&v)==(flags==7?0:-EINVAL));
+        assert(main_mmap(&main_file,&v)==(flags==7?0:-EINVAL));
     }
     assert(maps==1 && mapped_phys==0x22000000);
+    struct vm_area_struct successful={0x1000,0x1000+0x17bb000,0,7|VM_MAYEXEC,0};
+    assert(main_mmap(&main_file,&successful)==0);
+    assert(main_ioctl(&main_file,MISTER_MAGIK_MAPPING_GET_DIAGNOSTIC,
+        (unsigned long)&diagnostic)==0);
+    assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_PASSED);
+    assert(diagnostic.physical_base==0x22000000 && diagnostic.map_bytes==0x17bb000);
+    assert(diagnostic.protection_mask==0x63c && diagnostic.expected_protection==0x123);
     for(int slot=0; slot<2; slot++) {
         struct vm_area_struct v={0x1000,0x1000+SLOT_BYTES,slot?2025:0,7|VM_MAYEXEC,0};
-        assert(slots_mmap(0,&v)==0 && mapped_phys==(slot?SLOT1_BASE:SLOT0_BASE));
-        v.vm_pgoff=1; assert(slots_mmap(0,&v)==-EINVAL);
-        v.vm_pgoff=0; v.vm_end--; assert(slots_mmap(0,&v)==-EINVAL);
+        assert(slots_mmap(&slot_files[slot],&v)==0 && mapped_phys==(slot?SLOT1_BASE:SLOT0_BASE));
+        v.vm_pgoff=1; assert(slots_mmap(&slot_files[slot],&v)==-EINVAL);
+        v.vm_pgoff=0; v.vm_end--; assert(slots_mmap(&slot_files[slot],&v)==-EINVAL);
+        assert(slots_ioctl(&slot_files[slot],MISTER_MAGIK_MAPPING_GET_DIAGNOSTIC,
+            (unsigned long)&diagnostic)==0);
+        assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_IN_PROGRESS);
+        assert(!diagnostic.physical_base && !diagnostic.map_bytes);
+        v.vm_end++; v.vm_pgoff=slot?2025:0;
+        assert(slots_mmap(&slot_files[slot],&v)==0);
     }
     struct vm_area_struct v={0x1000,0x1000+0x17bb000,1,7,0};
-    assert(main_mmap(0,&v)==-EINVAL); v.vm_pgoff=0; map_fail=1;
-    assert(main_mmap(0,&v)==-EAGAIN);
+    assert(main_mmap(&main_file,&v)==-EINVAL); v.vm_pgoff=0; map_fail=1;
+    assert(main_mmap(&main_file,&v)==-EAGAIN);
+    assert(main_ioctl(&main_file,MISTER_MAGIK_MAPPING_GET_DIAGNOSTIC,
+        (unsigned long)&diagnostic)==0);
+    assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_FAILED);
+    assert(diagnostic.failure_flags==MISTER_MAGIK_MAPPING_FAILURE_REMAP);
+    assert(diagnostic.error_code==1 && diagnostic.page_index==MISTER_MAGIK_MAPPING_DIAGNOSTIC_NO_PAGE);
     map_fail=0;
     /* Each failure position must stop the walk and release every acquired
      * lookup, including first/last pages. No end follows a failed start.
      */
     for(unsigned long page=0; page<0x17bb000/PAGE_SIZE; page+=0x17bb000/PAGE_SIZE-1) {
         lookup_bad_page=page;
-        for(int fault=1; fault<=7; fault++) {
+        for(int fault=1; fault<=8; fault++) {
             lookup_fault=fault; lookups=lookup_ends=0;
-            assert(main_mmap(0,&v)==(fault==1?-ENOENT:fault==7?0:-EIO));
+            assert(main_mmap(&main_file,&v)==(fault==1?-ENOENT:fault==7?0:-EIO));
             assert(!lookup_held);
             assert(lookups==(fault==7?0x17bb000/PAGE_SIZE:page+1));
             assert(lookup_ends==lookups-(fault==1));
+            assert(main_ioctl(&main_file,MISTER_MAGIK_MAPPING_GET_DIAGNOSTIC,
+                (unsigned long)&diagnostic)==0);
+            assert(diagnostic.page_index==(fault==7?MISTER_MAGIK_MAPPING_DIAGNOSTIC_NO_PAGE:page));
+            if(fault==7) {
+                assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_PASSED);
+                continue;
+            }
+            unsigned int expected_flags = fault==1 ? MISTER_MAGIK_MAPPING_FAILURE_LOOKUP :
+                fault==2 ? MISTER_MAGIK_MAPPING_FAILURE_PFN :
+                (fault>=3 && fault<=5) ? MISTER_MAGIK_MAPPING_FAILURE_PROTECTION :
+                fault==6 ? MISTER_MAGIK_MAPPING_FAILURE_WRITABLE :
+                MISTER_MAGIK_MAPPING_FAILURE_PFN | MISTER_MAGIK_MAPPING_FAILURE_WRITABLE |
+                    MISTER_MAGIK_MAPPING_FAILURE_PROTECTION;
+            assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_FAILED);
+            assert(diagnostic.failure_flags==expected_flags);
+            assert(diagnostic.expected_pfn==0x22000+page);
+            assert(diagnostic.error_code==(fault==1?-ENOENT:-EIO));
         }
     }
+    /* A failure on one open file descriptor must not overwrite another. */
+    assert(slots_ioctl(&slot_files[0],MISTER_MAGIK_MAPPING_GET_DIAGNOSTIC,
+        (unsigned long)&diagnostic)==0);
+    assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_PASSED);
     lookup_fault=0;
     struct mister_magik_main_window_layout layout;
-    assert(main_ioctl(0,0,(unsigned long)&layout)==-ENOTTY);
-    assert(main_ioctl(0,MISTER_MAGIK_MAIN_WINDOW_GET_LAYOUT,(unsigned long)&layout)==0);
+    assert(main_ioctl(&main_file,0,(unsigned long)&layout)==-ENOTTY);
+    assert(main_ioctl(&main_file,MISTER_MAGIK_MAIN_WINDOW_GET_LAYOUT,(unsigned long)&layout)==0);
     assert(mister_magik_main_window_layout_valid(&layout));
     struct mister_magik_scanout_slots_layout slots;
-    assert(slots_ioctl(0,MISTER_MAGIK_MAIN_WINDOW_GET_LAYOUT,(unsigned long)&slots)==-ENOTTY);
-    assert(slots_ioctl(0,MISTER_MAGIK_SCANOUT_SLOTS_GET_LAYOUT,(unsigned long)&slots)==0);
+    assert(slots_ioctl(&slot_files[0],MISTER_MAGIK_MAIN_WINDOW_GET_LAYOUT,(unsigned long)&slots)==-ENOTTY);
+    assert(slots_ioctl(&slot_files[0],MISTER_MAGIK_SCANOUT_SLOTS_GET_LAYOUT,(unsigned long)&slots)==0);
     assert(slots.abi_version==3 && slots.slots[1].physical_address==SLOT1_BASE && slots.reserved[3]==0);
-    copy_fail=1; assert(main_ioctl(0,MISTER_MAGIK_MAIN_WINDOW_GET_LAYOUT,0)==-EFAULT);
-    assert(slots_ioctl(0,MISTER_MAGIK_SCANOUT_SLOTS_GET_LAYOUT,0)==-EFAULT);
+    copy_fail=1; assert(main_ioctl(&main_file,MISTER_MAGIK_MAIN_WINDOW_GET_LAYOUT,0)==-EFAULT);
+    assert(slots_ioctl(&slot_files[0],MISTER_MAGIK_SCANOUT_SLOTS_GET_LAYOUT,0)==-EFAULT);
+    assert(main_ioctl(&main_file,MISTER_MAGIK_MAPPING_GET_DIAGNOSTIC,0)==-EFAULT);
+    assert(window_release(0,&main_file)==0 && !main_file.private_data);
+    assert(window_release(0,&slot_files[0])==0 && !slot_files[0].private_data);
+    assert(window_release(0,&slot_files[1])==0 && !slot_files[1].private_data);
     mister_magik_window_provider_unregister();
     assert(!ready && !held && releases==1 && deregistrations==2);
     mister_magik_window_provider_unregister(); assert(releases==1);

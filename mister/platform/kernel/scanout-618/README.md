@@ -13,6 +13,7 @@ inputs or the native probe's artifact allowlist.
 - Prevention of later execute permission, VMA expansion, inheritance and dumps.
 - Inspection of every newly mapped page through `follow_pfnmap_start/end`,
   rejecting PFN, write permission, memory-type, shareability or XN mismatch.
+- A fixed, read-only, per-open 64-byte report for the first mapping failure.
 - Two root-only misc devices, with open refused until both registrations finish.
 - Reverse-order rollback after partial registration and normal resource cleanup.
 - Module ownership through file references, including VMA-held references after
@@ -23,7 +24,7 @@ The ordinary build passes false, so this module returns `EOPNOTSUPP` before
 reserving memory or registering devices. There is no module parameter or ioctl
 to bypass the gate. `build-in-container.sh --development-trial OUT` produces a
 separately named `mister_magik_scanout_slots.ko` carrying
-`mister_magik_development_trial=stock-6.18-latch-reuse-v1`. That object is only
+`mister_magik_development_trial=stock-6.18-latch-reuse-v2`. That object is only
 for the attended rollback-bound qualification campaign; it is excluded from
 release inputs and still enforces every exact platform, PFN, resource and
 mapping check in `provider.c`.
@@ -90,7 +91,10 @@ memory type, shareability, XN and writability, plus unrelated PTE-bit tolerance.
 This is deliberately not a hardware-attribute attestation: ARM's Linux PTE
 representation is not the raw hardware translation, and this check neither
 reads PRRR/NMRR nor inspects pre-existing aliases or later permission changes.
-It adds no diagnostic ioctl, arbitrary address access or activation bypass.
+Trial v2 adds one fixed read-only diagnostic ioctl. It reports only the first
+failed page for the mapping attempted on that open file descriptor, including
+expected/observed PFN, writability and protection evidence. It cannot select an
+address, alter a mapping or bypass validation.
 
 Independent builds 5 and 6 produce byte-identical modules and pass stock-kernel
 modpost with both GPL-only lookup imports and matching `GPL` / `GPL-2.0-only`
