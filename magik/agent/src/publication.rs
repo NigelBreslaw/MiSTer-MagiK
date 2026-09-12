@@ -322,6 +322,18 @@ fn restore(backup: &Path) -> Result<(), String> {
     }
 }
 
+fn restore_stage(root: &Path) -> Result<(), String> {
+    let backup = root.join("backup");
+    if backup
+        .join("transaction.json")
+        .try_exists()
+        .map_err(|e| e.to_string())?
+    {
+        restore(&backup)?;
+    }
+    fs::remove_dir_all(root).map_err(|e| e.to_string())
+}
+
 fn reload_healthy(previous: &Value, expected: &str) -> Result<(), String> {
     // Main accepts supervised reload only while its Dev launcher is active.
     crate::main_control::handoff("mister_magik_resume\n")?;
@@ -515,7 +527,7 @@ impl crate::Agent {
                         let restored = crate::main_control::handoff("mister_magik_resume\n");
                         return Err(format!("{error}; Main restoration: {restored:?}"));
                     }
-                    let restored = restore(&root.join("backup"));
+                    let restored = restore_stage(&root);
                     let resumed = crate::main_control::handoff("mister_magik_resume\n");
                     restored?;
                     resumed?;
@@ -796,6 +808,34 @@ mod tests {
             )
             .is_err()
         );
+        assert_eq!(fs::read(destination).unwrap(), b"old");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_restore_removes_completed_and_unapplied_stages() {
+        let root =
+            std::env::temp_dir().join(format!("magik-explicit-restore-{}", std::process::id()));
+        let applied = root.join("applied");
+        let destination = root.join("installed");
+        fs::create_dir_all(&applied).unwrap();
+        fs::write(applied.join("new"), b"new").unwrap();
+        fs::write(&destination, b"old").unwrap();
+        replace(
+            &[(applied.join("new"), destination.clone())],
+            &applied.join("backup"),
+            || Ok(()),
+        )
+        .unwrap();
+        restore_stage(&applied).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"old");
+        assert!(!applied.exists());
+
+        let unapplied = root.join("unapplied");
+        fs::create_dir_all(&unapplied).unwrap();
+        fs::write(unapplied.join("upload"), b"unused").unwrap();
+        restore_stage(&unapplied).unwrap();
+        assert!(!unapplied.exists());
         assert_eq!(fs::read(destination).unwrap(), b"old");
         fs::remove_dir_all(root).unwrap();
     }
