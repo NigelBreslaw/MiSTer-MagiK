@@ -111,6 +111,22 @@ class ComponentIdentityTests(unittest.TestCase):
         self.assertEqual(fpga_before, fpga_after)
         self.assertNotEqual(kernel_before, kernel_after)
 
+    def test_platform_contract_change_invalidates_fpga_and_kernel_identities(
+        self,
+    ) -> None:
+        fpga_before, _ = component_id.component_id(self.root, "fpga")
+        kernel_before, _ = component_id.component_id(self.root, "kernel")
+        contract = (
+            self.root
+            / "mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h"
+        )
+        contract.write_text("changed platform contract\n")
+        self.commit("platform contract")
+        fpga_after, _ = component_id.component_id(self.root, "fpga")
+        kernel_after, _ = component_id.component_id(self.root, "kernel")
+        self.assertNotEqual(fpga_before, fpga_after)
+        self.assertNotEqual(kernel_before, kernel_after)
+
     def test_fpga_manifest_change_leaves_kernel_identity_unchanged(self) -> None:
         fpga_before, _ = component_id.component_id(self.root, "fpga")
         synthesis_before, _ = component_id.component_id(self.root, "fpga-synthesis")
@@ -238,6 +254,9 @@ class ComponentIdentityTests(unittest.TestCase):
         self.commit("change compiler environment")
         self.assertNotEqual(
             before["kernel"], component_id.component_id(self.root, "kernel")[0]
+        )
+        self.assertEqual(
+            before["fpga"], component_id.component_id(self.root, "fpga")[0]
         )
         self.assertFalse(component_id.equivalent_inputs(self.root, "kernel", base))
 
