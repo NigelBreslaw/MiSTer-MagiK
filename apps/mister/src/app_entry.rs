@@ -3116,8 +3116,9 @@ mod tests {
 
     #[test]
     fn latch_readiness_tsv_is_compact_and_sanitized() {
-        let mut report = mister_magik_fb::latch_readiness::LatchReadinessReport::ready(
+        let mut report = mister_magik_fb::latch_readiness::LatchReadinessReport::ready_for_profile(
             mister_magik_scanout_contract::LEGACY_KERNEL_RELEASE.to_string(),
+            mister_magik_scanout_contract::LEGACY_PROFILE,
         );
         report.detail = "live platform ready\tflip_count=4\npost_count=5 drop_count=0".to_string();
         assert_eq!(

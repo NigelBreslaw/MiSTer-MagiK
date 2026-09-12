@@ -31,24 +31,6 @@ impl PlatformProfile {
             Self::Development618 => DEVELOPMENT_KERNEL_RELEASE,
         }
     }
-
-    pub const fn kernel_revision(self) -> Option<&'static str> {
-        match self {
-            Self::Legacy515 => None,
-            Self::Development618 => Some(DEVELOPMENT_KERNEL_REVISION),
-        }
-    }
-
-    pub const fn provider_identity(self) -> Option<&'static str> {
-        match self {
-            Self::Legacy515 => None,
-            Self::Development618 => Some(DEVELOPMENT_PROVIDER_IDENTITY),
-        }
-    }
-
-    pub const fn development_only(self) -> bool {
-        matches!(self, Self::Development618)
-    }
 }
 
 pub const LEGACY_PROFILE: PlatformProfile = PlatformProfile::Legacy515;

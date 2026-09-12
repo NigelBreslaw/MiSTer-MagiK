@@ -17,6 +17,9 @@ use std::fs;
 use std::path::Path;
 
 const DEVELOPMENT_VERMAGIC: &str = "6.18.38-MiSTer SMP mod_unload ARMv7 p2v8 ";
+const KERNEL_NOTES: &str = "/sys/kernel/notes";
+const MODULE_BUILD_ID_NOTE: &str =
+    "/sys/module/mister_magik_scanout_slots/notes/.note.gnu.build-id";
 
 pub fn current(kernel_release: &str) -> Result<PlatformProfile, String> {
     let paths = DevicePaths::current();
@@ -27,6 +30,22 @@ fn resolve_installed(
     kernel_release: &str,
     layout: Layout,
     paths: &DevicePaths,
+) -> Result<PlatformProfile, String> {
+    resolve_installed_with_runtime(
+        kernel_release,
+        layout,
+        paths,
+        Path::new(KERNEL_NOTES),
+        Path::new(MODULE_BUILD_ID_NOTE),
+    )
+}
+
+fn resolve_installed_with_runtime(
+    kernel_release: &str,
+    layout: Layout,
+    paths: &DevicePaths,
+    kernel_notes: &Path,
+    module_build_id_note: &Path,
 ) -> Result<PlatformProfile, String> {
     if kernel_release == LEGACY_KERNEL_RELEASE {
         let metadata = parse_metadata(&paths.scanout_metadata_path())?;
@@ -96,15 +115,87 @@ fn resolve_installed(
             .required("scanout_module_sha256")
             .map_err(|error| error.to_string())?,
     )?;
+    require_metadata(
+        &metadata,
+        "platform_contract_sha256",
+        manifest
+            .required("platform_contract_sha256")
+            .map_err(|error| error.to_string())?,
+    )?;
+    verify_runtime_identity(&metadata, kernel_notes, module_build_id_note)?;
 
-    resolve_profile(
-        kernel_release,
-        metadata.get("platform_profile").map(String::as_str),
-        metadata.get("provider_identity").map(String::as_str),
-        true,
-    )
-    .filter(|profile| *profile == DEVELOPMENT_PROFILE)
-    .ok_or_else(|| "development scanout profile identity mismatch".to_owned())
+    Ok(DEVELOPMENT_PROFILE)
+}
+
+fn verify_runtime_identity(
+    metadata: &BTreeMap<String, String>,
+    kernel_notes: &Path,
+    module_build_id_note: &Path,
+) -> Result<(), String> {
+    for (field, path) in [
+        ("kernel_build_id", kernel_notes),
+        ("module_build_id", module_build_id_note),
+    ] {
+        let expected = metadata
+            .get(field)
+            .ok_or_else(|| format!("scanout metadata missing {field}"))?;
+        let observed = gnu_build_id(path)?;
+        if &observed != expected {
+            return Err(format!(
+                "running {field} mismatch: observed={observed} expected={expected}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn gnu_build_id(path: &Path) -> Result<String, String> {
+    let notes = fs::read(path).map_err(|error| {
+        format!(
+            "runtime build ID unavailable at {}: {error}",
+            path.display()
+        )
+    })?;
+    if notes.len() > 64 * 1024 {
+        return Err(format!(
+            "runtime build ID notes too large: {}",
+            path.display()
+        ));
+    }
+    let mut offset = 0usize;
+    while offset < notes.len() {
+        let header = notes
+            .get(offset..offset + 12)
+            .ok_or_else(|| format!("malformed runtime notes: {}", path.display()))?;
+        let namesz = u32::from_le_bytes(header[0..4].try_into().unwrap()) as usize;
+        let descsz = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
+        let note_type = u32::from_le_bytes(header[8..12].try_into().unwrap());
+        let name_start = offset + 12;
+        let desc_start = name_start
+            .checked_add(namesz.next_multiple_of(4))
+            .ok_or_else(|| "runtime note offset overflow".to_owned())?;
+        let next = desc_start
+            .checked_add(descsz.next_multiple_of(4))
+            .ok_or_else(|| "runtime note offset overflow".to_owned())?;
+        let name = notes
+            .get(name_start..name_start + namesz)
+            .ok_or_else(|| format!("malformed runtime note name: {}", path.display()))?;
+        let descriptor = notes
+            .get(desc_start..desc_start + descsz)
+            .ok_or_else(|| format!("malformed runtime note value: {}", path.display()))?;
+        if note_type == 3 && name == b"GNU\0" && !descriptor.is_empty() {
+            let mut value = String::with_capacity(descriptor.len() * 2);
+            for byte in descriptor {
+                write!(&mut value, "{byte:02x}").expect("writing to a String cannot fail");
+            }
+            return Ok(value);
+        }
+        if next <= offset {
+            return Err("runtime note did not advance".to_owned());
+        }
+        offset = next;
+    }
+    Err(format!("GNU build ID missing from {}", path.display()))
 }
 
 fn verify_artifact(manifest: &ParsedManifest, hash_field: &str, path: &Path) -> Result<(), String> {
@@ -171,6 +262,26 @@ mod tests {
         digest
     }
 
+    fn build_id_note(byte: u8) -> Vec<u8> {
+        let mut note = Vec::new();
+        note.extend_from_slice(&4u32.to_le_bytes());
+        note.extend_from_slice(&20u32.to_le_bytes());
+        note.extend_from_slice(&3u32.to_le_bytes());
+        note.extend_from_slice(b"GNU\0");
+        note.extend_from_slice(&[byte; 20]);
+        note
+    }
+
+    fn resolve_development(root: &Path, paths: &DevicePaths) -> Result<PlatformProfile, String> {
+        resolve_installed_with_runtime(
+            DEVELOPMENT_KERNEL_RELEASE,
+            Layout::Development,
+            paths,
+            &root.join("kernel.notes"),
+            &root.join("module.note.gnu.build-id"),
+        )
+    }
+
     fn development_fixture(root: &Path) -> DevicePaths {
         let paths = DevicePaths::remapped(Layout::Development, root);
         fs::create_dir_all(paths.app_dir()).unwrap();
@@ -185,10 +296,16 @@ mod tests {
              development_only=1\n\
              platform_contract_sha256={}\n\
              module_sha256={module_hash}\n\
+             kernel_build_id={}\n\
+             module_build_id={}\n\
              vermagic={DEVELOPMENT_VERMAGIC}\n",
-            "a".repeat(64)
+            "a".repeat(64),
+            "11".repeat(20),
+            "22".repeat(20)
         );
         fs::write(paths.scanout_metadata_path(), &metadata).unwrap();
+        fs::write(root.join("kernel.notes"), build_id_note(0x11)).unwrap();
+        fs::write(root.join("module.note.gnu.build-id"), build_id_note(0x22)).unwrap();
 
         let mut values = BTreeMap::new();
         values.insert("format".to_owned(), "mister-magik-platform-v3".to_owned());
@@ -275,10 +392,7 @@ mod tests {
             std::process::id()
         ));
         let paths = development_fixture(&root);
-        assert_eq!(
-            resolve_installed(DEVELOPMENT_KERNEL_RELEASE, Layout::Development, &paths),
-            Ok(DEVELOPMENT_PROFILE)
-        );
+        assert_eq!(resolve_development(&root, &paths), Ok(DEVELOPMENT_PROFILE));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -295,9 +409,65 @@ mod tests {
             .replace(DEVELOPMENT_PROVIDER_IDENTITY, "different-provider");
         fs::write(&metadata_path, metadata).unwrap();
         assert!(
-            resolve_installed(DEVELOPMENT_KERNEL_RELEASE, Layout::Development, &paths)
+            resolve_development(&root, &paths)
                 .unwrap_err()
                 .contains("scanout_metadata_sha256 mismatch")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn development_tuple_rejects_inconsistent_contract_hash() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-scanout-contract-mixed-{}",
+            std::process::id()
+        ));
+        let paths = development_fixture(&root);
+        let manifest_path = paths.manifest_path();
+        let mut values = mister_magik_platform_manifest_contract::parse(
+            &fs::read_to_string(&manifest_path).unwrap(),
+            Layout::Development,
+            ValidationProfile::AgentStrict,
+        )
+        .unwrap()
+        .into_values();
+        values.insert("platform_contract_sha256".to_owned(), "9".repeat(64));
+        values.insert(
+            "qualification_candidate_id".to_owned(),
+            qualification_candidate_id(&values),
+        );
+        fs::write(
+            &manifest_path,
+            mister_magik_platform_manifest_contract::serialize(&values).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            resolve_development(&root, &paths)
+                .unwrap_err()
+                .contains("platform_contract_sha256 mismatch")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn development_tuple_requires_running_kernel_and_module_build_ids() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-scanout-runtime-mixed-{}",
+            std::process::id()
+        ));
+        let paths = development_fixture(&root);
+        fs::write(root.join("module.note.gnu.build-id"), build_id_note(0x33)).unwrap();
+        assert!(
+            resolve_development(&root, &paths)
+                .unwrap_err()
+                .contains("running module_build_id mismatch")
+        );
+        fs::write(root.join("module.note.gnu.build-id"), build_id_note(0x22)).unwrap();
+        fs::write(root.join("kernel.notes"), build_id_note(0x44)).unwrap();
+        assert!(
+            resolve_development(&root, &paths)
+                .unwrap_err()
+                .contains("running kernel_build_id mismatch")
         );
         fs::remove_dir_all(root).unwrap();
     }

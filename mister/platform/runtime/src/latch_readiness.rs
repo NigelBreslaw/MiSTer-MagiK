@@ -582,13 +582,6 @@ pub struct LatchReadinessReport {
 }
 
 impl LatchReadinessReport {
-    pub fn ready(kernel_release: String) -> Self {
-        Self::ready_for_profile(
-            kernel_release,
-            mister_magik_scanout_contract::LEGACY_PROFILE,
-        )
-    }
-
     pub fn ready_for_profile(
         kernel_release: String,
         profile: mister_magik_scanout_contract::PlatformProfile,
@@ -610,15 +603,6 @@ impl LatchReadinessReport {
             latch_max_height: None,
             latch_max_stride_bytes: None,
         }
-    }
-
-    pub fn failed(kernel_release: String, failure: &LatchFailure) -> Self {
-        let mut report = Self::ready(kernel_release);
-        report.state = failure.state;
-        report.stage = Some(failure.stage);
-        report.reason_code = Some(failure.reason_code().to_string());
-        report.detail.clone_from(&failure.detail);
-        report
     }
 
     pub fn failed_for_profile(
@@ -783,7 +767,10 @@ mod tests {
 
     #[test]
     fn ready_and_failed_reports_preserve_their_contracts() {
-        let ready = LatchReadinessReport::ready("kernel".to_string());
+        let ready = LatchReadinessReport::ready_for_profile(
+            "kernel".to_string(),
+            mister_magik_scanout_contract::LEGACY_PROFILE,
+        );
         assert_eq!(ready.state, LatchReadinessState::Ready);
         assert_eq!(ready.stage, None);
         assert_eq!(ready.reason_code, None);
@@ -794,7 +781,11 @@ mod tests {
             LatchFailureReason::ScanoutLayoutMismatch,
             "unexpected slot layout",
         );
-        let failed = LatchReadinessReport::failed("kernel".to_string(), &failure);
+        let failed = LatchReadinessReport::failed_for_profile(
+            "kernel".to_string(),
+            mister_magik_scanout_contract::LEGACY_PROFILE,
+            &failure,
+        );
         assert_eq!(failed.state, LatchReadinessState::PlatformIncompatible);
         assert_eq!(failed.stage, Some(LatchFailureStage::ModuleLayout));
         assert_eq!(
@@ -819,7 +810,11 @@ mod tests {
             LatchFailureReason::ScanoutLayoutMismatch,
             "unexpected slot layout",
         );
-        let report = LatchReadinessReport::failed("kernel".to_string(), &failure);
+        let report = LatchReadinessReport::failed_for_profile(
+            "kernel".to_string(),
+            mister_magik_scanout_contract::LEGACY_PROFILE,
+            &failure,
+        );
 
         report.write_atomic(&path).unwrap();
 
