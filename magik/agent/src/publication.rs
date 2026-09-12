@@ -630,11 +630,14 @@ impl crate::Agent {
                 return Err(format!("{error}; Main restoration: {restored:?}"));
             }
             let published = replace(&paths, &root.join("backup"), || {
-                if platform && !requires_reboot {
+                if requires_reboot {
+                    // Keep Main suspended until the host reboots. Resuming here would
+                    // preflight the newly installed application against the old loaded
+                    // module, even though both files form one valid post-boot tuple.
+                    Ok(())
+                } else if platform {
                     reload_healthy(&previous, expected_main.as_deref().unwrap())
                 } else {
-                    // Full platform activation includes the kernel module: the host
-                    // performs one explicit reboot, then confirms this transaction.
                     crate::main_control::handoff("mister_magik_resume\n")
                 }
             });
@@ -654,7 +657,7 @@ impl crate::Agent {
                 fs::remove_dir_all(&root).map_err(|e| e.to_string())?;
             }
             Ok(
-                json!({"kind":fields["kind"],"layout":fields["layout"],"files":paths.len(),"main_restored":true,"requires_reboot":requires_reboot}),
+                json!({"kind":fields["kind"],"layout":fields["layout"],"files":paths.len(),"main_restored":!requires_reboot,"requires_reboot":requires_reboot}),
             )
         })();
         let reply = match result {
