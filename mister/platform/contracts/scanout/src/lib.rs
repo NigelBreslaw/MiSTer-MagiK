@@ -3,8 +3,6 @@
 
 //! Checked userspace representation of the kernel UAPI and qualified platform.
 
-pub mod mapping_diagnostic;
-
 pub const DEVICE: &str = "/dev/mister-magik-scanout-slots";
 pub const QUALIFIED_KERNEL_RELEASE: &str = "5.15.1-MiSTer";
 pub const PLATFORM_CONTRACT_ID: &str = "mister-5.15.1-scanout-v3";

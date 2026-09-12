@@ -12,7 +12,6 @@ POLICY="$ROOT/mister/platform/kernel/scanout-slots/mister_magik_scanout_policy.h
 RUST="$ROOT/mister/platform/runtime/src/framebuffer/hidden_scanout.rs"
 RUST_CONTRACT="$ROOT/mister/platform/contracts/scanout/src/lib.rs"
 TRIAL_DIAGNOSTIC="$ROOT/mister/platform/kernel/scanout-618/mister_magik_mapping_diagnostic_uapi.h"
-RUST_DIAGNOSTIC="$ROOT/mister/platform/contracts/scanout/src/mapping_diagnostic.rs"
 DOC="$ROOT/documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
 KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
 DEPLOY="$ROOT/magik/agent/src/publication.rs"
@@ -31,7 +30,7 @@ require_text() {
   fi
 }
 
-for file in "$SOURCE" "$UAPI" "$PLATFORM" "$POLICY" "$RUST" "$RUST_CONTRACT" "$TRIAL_DIAGNOSTIC" "$RUST_DIAGNOSTIC" "$DEPLOY" "$PLATFORM_STAGE" "$DOC"; do
+for file in "$SOURCE" "$UAPI" "$PLATFORM" "$POLICY" "$RUST" "$RUST_CONTRACT" "$TRIAL_DIAGNOSTIC" "$DEPLOY" "$PLATFORM_STAGE" "$DOC"; do
   test -f "$file"
 done
 for text in \
@@ -59,11 +58,6 @@ if ! grep -Fq "UAPI_SHA256: &str = \"$uapi_sha256\"" "$RUST_CONTRACT"; then
   exit 1
 fi
 require_text "$RUST" mister_magik_scanout_contract
-trial_diagnostic_sha256="$(sha256sum "$TRIAL_DIAGNOSTIC" | awk '{print $1}')"
-require_text "$RUST_DIAGNOSTIC" "UAPI_SHA256: &str = \"$trial_diagnostic_sha256\""
-for text in 'ABI_VERSION: u32 = 2' 'GET_DIAGNOSTIC: usize = 0x8040_4d03' 'const _: [(); 64]'; do
-  require_text "$RUST_DIAGNOSTIC" "$text"
-done
 source_sha256="$(cd "$ROOT/mister/platform/kernel/scanout-slots" && sha256sum mister_magik_scanout_slots.c mister_magik_scanout_slots_uapi.h mister_magik_scanout_platform.h mister_magik_scanout_policy.h Makefile | sha256sum | awk '{print $1}')"
 [[ "$source_sha256" =~ ^[0-9a-f]{64}$ ]]
 policy_test="$(mktemp "${TMPDIR:-/tmp}/mister-magik-scanout-policy.XXXXXX")"

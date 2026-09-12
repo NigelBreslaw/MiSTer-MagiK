@@ -93,6 +93,15 @@ static struct mister_magik_mapping_diagnostic diagnostic_begin(
 	return diagnostic;
 }
 
+static int diagnostic_reject(struct file *file,
+	struct mister_magik_mapping_diagnostic diagnostic, int error)
+{
+	diagnostic.state = MISTER_MAGIK_MAPPING_DIAGNOSTIC_FAILED;
+	diagnostic.error_code = error;
+	diagnostic_store(file->private_data, &diagnostic);
+	return error;
+}
+
 static long diagnostic_ioctl(struct file *file, unsigned long arg)
 {
 	struct mapping_file_context *context = file->private_data;
@@ -238,30 +247,34 @@ static int map_fixed(struct file *file, struct vm_area_struct *vma,
 
 static int main_mmap(struct file *file, struct vm_area_struct *vma)
 {
+	struct mister_magik_mapping_diagnostic diagnostic;
+
 	/* Invalid requests must not leave a previous mapping's evidence visible. */
-	diagnostic_begin(file, 0, 0, 0, 0);
+	diagnostic = diagnostic_begin(file, 0, 0, 0, 0);
 	if (!mister_magik_main_window_mapping_valid(vma->vm_pgoff,
 		vma->vm_end - vma->vm_start, PAGE_SIZE,
 		vma->vm_flags & VM_SHARED, vma->vm_flags & VM_READ,
 		vma->vm_flags & VM_WRITE, vma->vm_flags & VM_EXEC))
-		return -EINVAL;
+		return diagnostic_reject(file, diagnostic, -EINVAL);
 	return map_fixed(file, vma, MISTER_MAGIK_MAIN_WINDOW_BASE);
 }
 
 static int slots_mmap(struct file *file, struct vm_area_struct *vma)
 {
+	struct mister_magik_mapping_diagnostic diagnostic;
 	unsigned long physical;
-	diagnostic_begin(file, 0, 0, 0, 0);
+
+	diagnostic = diagnostic_begin(file, 0, 0, 0, 0);
 	if (vma->vm_end - vma->vm_start != SLOT_BYTES ||
 	    !(vma->vm_flags & VM_SHARED) || !(vma->vm_flags & VM_READ) ||
 	    !(vma->vm_flags & VM_WRITE) || (vma->vm_flags & VM_EXEC))
-		return -EINVAL;
+		return diagnostic_reject(file, diagnostic, -EINVAL);
 	if (vma->vm_pgoff == 0)
 		physical = SLOT0_BASE;
 	else if (vma->vm_pgoff == SLOT1_OFFSET / PAGE_SIZE)
 		physical = SLOT1_BASE;
 	else
-		return -EINVAL;
+		return diagnostic_reject(file, diagnostic, -EINVAL);
 	return map_fixed(file, vma, physical);
 }
 

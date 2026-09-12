@@ -105,7 +105,7 @@ static unsigned long lookups, lookup_ends;
 static bool lookup_held;
 struct follow_pfnmap_args {
     struct vm_area_struct *vma;
-    unsigned long address, pfn, pgprot;
+    unsigned long address, pfn;
     bool writable;
 };
 static int follow_pfnmap_start(struct follow_pfnmap_args *a) {
@@ -115,16 +115,11 @@ static int follow_pfnmap_start(struct follow_pfnmap_args *a) {
     if(page==lookup_bad_page && lookup_fault==1) return -ENOENT;
     lookup_held=true;
     a->pfn=(mapped_phys>>PAGE_SHIFT)+page;
-    a->pgprot=a->vma->vm_page_prot;
     a->writable=true;
     if(page==lookup_bad_page) {
         if(lookup_fault==2) a->pfn++;
-        if(lookup_fault==3) a->pgprot^=4;
-        if(lookup_fault==4) a->pgprot^=L_PTE_SHARED;
-        if(lookup_fault==5) a->pgprot^=L_PTE_XN;
-        if(lookup_fault==6) a->writable=false;
-        if(lookup_fault==7) a->pgprot^=0x8000; /* unrelated PTE state */
-        if(lookup_fault==8) { a->pfn++; a->writable=false; a->pgprot^=L_PTE_SHARED; }
+        if(lookup_fault==3) a->writable=false;
+        if(lookup_fault==4) { a->pfn++; a->writable=false; }
     }
     return 0;
 }
@@ -230,6 +225,14 @@ int main(void) {
     for(unsigned int flags=0; flags<16; flags++) {
         struct vm_area_struct v={0x1000,0x1000+0x17bb000,0,flags|VM_MAYEXEC,0};
         assert(main_mmap(&main_file,&v)==(flags==7?0:-EINVAL));
+        assert(main_ioctl(&main_file,MISTER_MAGIK_MAPPING_GET_DIAGNOSTIC,
+            (unsigned long)&diagnostic)==0);
+        if(flags!=7) {
+            assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_FAILED);
+            assert(diagnostic.error_code==-EINVAL && !diagnostic.failure_flags);
+            assert(diagnostic.page_index==MISTER_MAGIK_MAPPING_DIAGNOSTIC_NO_PAGE);
+            assert(!diagnostic.physical_base && !diagnostic.map_bytes);
+        }
     }
     assert(maps==1 && mapped_phys==0x22000000);
     struct vm_area_struct successful={0x1000,0x1000+0x17bb000,0,7|VM_MAYEXEC,0};
@@ -245,16 +248,28 @@ int main(void) {
         struct vm_area_struct v={0x1000,0x1000+SLOT_BYTES,slot?2025:0,7|VM_MAYEXEC,0};
         assert(slots_mmap(&slot_files[slot],&v)==0 && mapped_phys==(slot?SLOT1_BASE:SLOT0_BASE));
         v.vm_pgoff=1; assert(slots_mmap(&slot_files[slot],&v)==-EINVAL);
+        assert(slots_ioctl(&slot_files[slot],MISTER_MAGIK_MAPPING_GET_DIAGNOSTIC,
+            (unsigned long)&diagnostic)==0);
+        assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_FAILED);
+        assert(diagnostic.error_code==-EINVAL && !diagnostic.failure_flags);
         v.vm_pgoff=0; v.vm_end--; assert(slots_mmap(&slot_files[slot],&v)==-EINVAL);
         assert(slots_ioctl(&slot_files[slot],MISTER_MAGIK_MAPPING_GET_DIAGNOSTIC,
             (unsigned long)&diagnostic)==0);
-        assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_IN_PROGRESS);
+        assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_FAILED);
+        assert(diagnostic.error_code==-EINVAL && !diagnostic.failure_flags);
+        assert(diagnostic.page_index==MISTER_MAGIK_MAPPING_DIAGNOSTIC_NO_PAGE);
         assert(!diagnostic.physical_base && !diagnostic.map_bytes);
         v.vm_end++; v.vm_pgoff=slot?2025:0;
         assert(slots_mmap(&slot_files[slot],&v)==0);
     }
     struct vm_area_struct v={0x1000,0x1000+0x17bb000,1,7,0};
-    assert(main_mmap(&main_file,&v)==-EINVAL); v.vm_pgoff=0; map_fail=1;
+    assert(main_mmap(&main_file,&v)==-EINVAL);
+    assert(main_ioctl(&main_file,MISTER_MAGIK_MAPPING_GET_DIAGNOSTIC,
+        (unsigned long)&diagnostic)==0);
+    assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_FAILED);
+    assert(diagnostic.error_code==-EINVAL && !diagnostic.failure_flags);
+    assert(diagnostic.page_index==MISTER_MAGIK_MAPPING_DIAGNOSTIC_NO_PAGE);
+    v.vm_pgoff=0; map_fail=1;
     assert(main_mmap(&main_file,&v)==-EAGAIN);
     assert(main_ioctl(&main_file,MISTER_MAGIK_MAPPING_GET_DIAGNOSTIC,
         (unsigned long)&diagnostic)==0);
@@ -267,23 +282,18 @@ int main(void) {
      */
     for(unsigned long page=0; page<0x17bb000/PAGE_SIZE; page+=0x17bb000/PAGE_SIZE-1) {
         lookup_bad_page=page;
-        for(int fault=1; fault<=8; fault++) {
+        for(int fault=1; fault<=4; fault++) {
             lookup_fault=fault; lookups=lookup_ends=0;
-            assert(main_mmap(&main_file,&v)==(fault==1?-ENOENT:
-                (fault==2||fault==6||fault==8)?-EIO:0));
+            assert(main_mmap(&main_file,&v)==(fault==1?-ENOENT:-EIO));
             assert(!lookup_held);
-            assert(lookups==((fault==1||fault==2||fault==6||fault==8)?page+1:0x17bb000/PAGE_SIZE));
+            assert(lookups==page+1);
             assert(lookup_ends==lookups-(fault==1));
             assert(main_ioctl(&main_file,MISTER_MAGIK_MAPPING_GET_DIAGNOSTIC,
                 (unsigned long)&diagnostic)==0);
-            assert(diagnostic.page_index==((fault==1||fault==2||fault==6||fault==8)?page:MISTER_MAGIK_MAPPING_DIAGNOSTIC_NO_PAGE));
-            if(fault==3 || fault==4 || fault==5 || fault==7) {
-                assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_PASSED);
-                continue;
-            }
+            assert(diagnostic.page_index==page);
             unsigned int expected_flags = fault==1 ? MISTER_MAGIK_MAPPING_FAILURE_LOOKUP :
                 fault==2 ? MISTER_MAGIK_MAPPING_FAILURE_PFN :
-                fault==6 ? MISTER_MAGIK_MAPPING_FAILURE_WRITABLE :
+                fault==3 ? MISTER_MAGIK_MAPPING_FAILURE_WRITABLE :
                 MISTER_MAGIK_MAPPING_FAILURE_PFN | MISTER_MAGIK_MAPPING_FAILURE_WRITABLE;
             assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_FAILED);
             assert(diagnostic.failure_flags==expected_flags);
