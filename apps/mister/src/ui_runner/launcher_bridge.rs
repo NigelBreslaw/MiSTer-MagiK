@@ -520,12 +520,6 @@ impl<'a> LauncherStatusPresenter<'a> {
         }
     }
 
-    pub(super) fn sync_catalog_scan_detail(&self, detail: impl Into<SharedString>) {
-        self.app
-            .global::<slint_ui::launcher::CatalogView>()
-            .set_detail(detail.into());
-    }
-
     pub(super) fn sync_media_progresses(
         &self,
         progresses: ModelRc<slint_ui::launcher::MediaPackRow>,

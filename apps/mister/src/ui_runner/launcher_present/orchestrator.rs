@@ -622,21 +622,6 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
         }
     }
 
-    pub(in crate::ui_runner) fn direct_hidden_framebuffer_slots_available(
-        &self,
-        ui: &UiDisplay,
-    ) -> bool {
-        if !presenter_state_uses_latch(&self.state) {
-            return false;
-        }
-        matches!(
-            &self.state,
-            LauncherPresenterState::Latch(latch)
-                if latch.exact_identity_geometry()
-                    && direct_hidden_framebuffer_geometry_available(ui)
-        )
-    }
-
     pub(in crate::ui_runner) fn startup_intro_native_hidden_slots_available(
         &self,
         ui: &UiDisplay,
@@ -706,10 +691,6 @@ impl<L> LauncherPresenter<L> {
             LauncherPresenterState::ExplicitFb0 => LauncherPresentBackend::Fb0Dirty,
             LauncherPresenterState::Frozen { .. } => LauncherPresentBackend::None,
         }
-    }
-
-    pub(in crate::ui_runner) fn needs_frame(&self) -> bool {
-        false
     }
 
     pub(in crate::ui_runner) fn latch_failure(&self) -> Option<&LatchFailure> {

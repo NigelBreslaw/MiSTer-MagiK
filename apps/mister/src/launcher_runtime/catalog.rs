@@ -4,7 +4,7 @@
 //! Fast-catalog registry startup and system-row projection.
 
 use crate::arcade_catalog::{self, ArcadeCatalog};
-use mister_magik_catalog::sharded_catalog::{CatalogGame, CatalogReader};
+use mister_magik_catalog::sharded_catalog::CatalogReader;
 use mister_magik_catalog::system_shard::SystemGame;
 use std::path::{Path, PathBuf};
 
@@ -27,15 +27,6 @@ impl std::fmt::Display for ShardedCatalogSeedLoadError {
 }
 
 impl std::error::Error for ShardedCatalogSeedLoadError {}
-
-pub fn load_sharded_registry_seed(
-    root: &str,
-) -> Result<ShardedCatalogSeed, ShardedCatalogSeedLoadError> {
-    load_sharded_registry_seed_at(
-        root,
-        &mister_magik_catalog::catalog_config::default_sharded_catalog_path(),
-    )
-}
 
 pub fn load_sharded_registry_seed_at(
     root: &str,
@@ -129,41 +120,6 @@ fn registry_only_catalog(
         systems,
         launch_plans,
         platform_kinds,
-    )
-}
-
-pub fn arcade_rows_from_shard(
-    system_id: &str,
-    games: &[CatalogGame],
-) -> (
-    Vec<arcade_catalog::ArcadeGameEntry>,
-    Vec<arcade_catalog::StructuredLaunchPlan>,
-) {
-    project_rows(
-        system_id,
-        games.iter().map(|game| ProjectedGame {
-            title: &game.title,
-            launch_ref: &game.launch_ref,
-            preview_archive_path: &game.preview_archive_path,
-            preview_asset_key: &game.preview_asset_key,
-            has_preview: game.has_preview,
-            year: game.year,
-            manufacturer: &game.manufacturer,
-            category: &game.category,
-            players: game.players,
-            control: &game.control,
-            is_new: game.is_new,
-            launch_plan: game.launch_plan.as_ref().map(|plan| ProjectedLaunchPlan {
-                launch_ref: &plan.launch_ref,
-                title: &plan.title,
-                system_id: &plan.system_id,
-                core_path: &plan.core_path,
-                payload_path: &plan.payload_path,
-                mount_kind: &plan.mount_kind,
-                mount_index: plan.mount_index,
-                delay_secs: plan.delay_secs,
-            }),
-        }),
     )
 }
 

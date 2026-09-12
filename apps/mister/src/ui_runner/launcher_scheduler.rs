@@ -1435,12 +1435,6 @@ impl LauncherScheduler {
         }
     }
 
-    pub(super) fn finish_media_worker(&self) {
-        if let MediaJobState::Running(handle) = &self.media {
-            handle.finish();
-        }
-    }
-
     pub(super) fn drop_media_worker(&mut self) {
         self.media = MediaJobState::Idle;
     }

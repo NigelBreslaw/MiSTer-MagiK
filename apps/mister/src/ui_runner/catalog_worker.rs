@@ -237,10 +237,6 @@ fn publish_registry_ready_at(
     publish_strict_registry_seed_at(tx, root, storage)
 }
 
-pub(super) fn catalog_refresh_available() -> bool {
-    true
-}
-
 pub(super) struct CatalogChildControl {
     child: Mutex<Option<Child>>,
     process_group: i32,
@@ -2555,10 +2551,6 @@ impl CatalogCacheState {
             Self::Missing => "missing",
         }
     }
-
-    fn has_usable_catalog(self) -> bool {
-        matches!(self, Self::Ready)
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2795,11 +2787,6 @@ mod tests {
             assert!(should_supervise_catalog_worker(request, false));
             assert!(!should_supervise_catalog_worker(request, true));
         }
-    }
-
-    #[test]
-    fn refresh_has_no_external_builder_lock() {
-        assert!(catalog_refresh_available());
     }
 
     #[test]

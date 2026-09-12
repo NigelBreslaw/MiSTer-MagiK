@@ -172,11 +172,6 @@ impl LauncherCatalogSession {
         self.catalog_seed_partial = true;
     }
 
-    pub(super) fn note_cached_catalog_ready(&mut self) {
-        self.summary_only = false;
-        self.catalog_seed_partial = false;
-    }
-
     pub(super) fn defer_catalog_worker(
         &mut self,
         root: String,
@@ -200,7 +195,6 @@ impl LauncherCatalogSession {
         background_work_allowed: bool,
         loop_start: Instant,
         delay: Duration,
-        catalog_builder_available: impl FnOnce() -> bool,
     ) -> Option<CatalogWorkerStart> {
         if self.refresh_done || worker_running {
             return None;
@@ -218,10 +212,6 @@ impl LauncherCatalogSession {
         if loop_start < start_after {
             return None;
         }
-        if deferred.request == CatalogWorkerRequest::CheckStamp && !catalog_builder_available() {
-            deferred.start_after = Some(loop_start + Duration::from_secs(1));
-            return None;
-        }
         let deferred = self.deferred_worker.take()?;
         Some(CatalogWorkerStart {
             root: deferred.root,
@@ -235,7 +225,6 @@ impl LauncherCatalogSession {
         &mut self,
         context: CatalogWorkerMessageContext,
         message: CatalogWorkerMessage,
-        _now: Instant,
     ) -> CatalogSessionEffects {
         let mut effects = CatalogSessionEffects::default();
         match message {
@@ -887,7 +876,6 @@ mod tests {
 
     #[test]
     fn completed_catalog_build_displays_elapsed_time() {
-        let now = Instant::now();
         let mut session = LauncherCatalogSession::new(true);
         let values = database_build_values(session.handle_worker_message(
             CatalogWorkerMessageContext {
@@ -897,7 +885,6 @@ mod tests {
             CatalogWorkerMessage::BuildCompleted {
                 elapsed_us: 119_000_000,
             },
-            now,
         ));
 
         assert_eq!(values, vec!["119 seconds"]);
@@ -905,7 +892,6 @@ mod tests {
 
     #[test]
     fn rebuild_progress_counts_unique_terminal_system_events() {
-        let now = Instant::now();
         let context = || CatalogWorkerMessageContext {
             catalog_ready: true,
             catalog_partial: false,
@@ -918,7 +904,6 @@ mod tests {
                 phase: "checking".into(),
                 work_units: 1,
             },
-            now,
         ));
         assert_eq!(checking[0].title(), "Checking library changes");
 
@@ -928,7 +913,6 @@ mod tests {
                 system_ids: vec!["neogeo".into(), "snes".into(), "zx-spectrum".into()],
                 all_published_systems: false,
             },
-            now,
         ));
         assert_eq!(planned[0].title(), "Updating systems 0/3");
 
@@ -938,7 +922,6 @@ mod tests {
                 phase: "systems".into(),
                 work_units: 2,
             },
-            now,
         ));
         assert_eq!(live_first[0].title(), "Updating systems 1/3");
 
@@ -948,7 +931,6 @@ mod tests {
                 phase: "systems".into(),
                 work_units: 3,
             },
-            now,
         ));
         assert_eq!(live_second[0].title(), "Updating systems 2/3");
 
@@ -958,7 +940,6 @@ mod tests {
                 phase: "systems".into(),
                 work_units: 4,
             },
-            now,
         ));
         assert_eq!(live_complete[0].title(), "Updating systems 3/3");
 
@@ -968,7 +949,6 @@ mod tests {
                 system_id: "snes".into(),
                 generation: 1,
             },
-            now,
         ));
         assert!(prepared.is_empty());
 
@@ -978,7 +958,6 @@ mod tests {
                 system_id: "snes".into(),
                 generation: 1,
             },
-            now,
         ));
         assert!(duplicate.is_empty());
 
@@ -988,11 +967,10 @@ mod tests {
                 system_id: "neogeo".into(),
                 error: "bad archive".into(),
             },
-            now,
         ));
         assert!(failed.is_empty());
 
-        let done = session.handle_worker_message(context(), CatalogWorkerMessage::Done, now);
+        let done = session.handle_worker_message(context(), CatalogWorkerMessage::Done);
         assert!(done.into_effects().into_iter().any(|effect| matches!(
             effect,
             CatalogSessionEffect::Ui(LauncherWorkerUiIntent::ClearCatalogScan)
@@ -1001,7 +979,6 @@ mod tests {
 
     #[test]
     fn rebuild_progress_terminal_fallback_counts_removed_and_failed_systems_once() {
-        let now = Instant::now();
         let context = || CatalogWorkerMessageContext {
             catalog_ready: true,
             catalog_partial: false,
@@ -1014,7 +991,6 @@ mod tests {
                 system_ids: vec!["neogeo".into(), "snes".into(), "zx-spectrum".into()],
                 all_published_systems: false,
             },
-            now,
         ));
         assert_eq!(planned[0].title(), "Updating systems 0/3");
 
@@ -1023,7 +999,6 @@ mod tests {
             CatalogWorkerMessage::SystemRemoved {
                 system_id: "neogeo".into(),
             },
-            now,
         ));
         assert_eq!(removed[0].title(), "Updating systems 1/3");
 
@@ -1033,7 +1008,6 @@ mod tests {
                 system_id: "snes".into(),
                 error: "bad archive".into(),
             },
-            now,
         ));
         assert_eq!(failed[0].title(), "Updating systems 2/3");
 
@@ -1043,7 +1017,6 @@ mod tests {
                 system_id: "zx-spectrum".into(),
                 generation: 1,
             },
-            now,
         ));
         assert_eq!(prepared[0].title(), "Updating systems 3/3");
 
@@ -1053,7 +1026,6 @@ mod tests {
                 CatalogWorkerMessage::SystemRemoved {
                     system_id: "neogeo".into(),
                 },
-                now,
             ))
             .is_empty()
         );
@@ -1064,7 +1036,6 @@ mod tests {
                     system_id: "snes".into(),
                     error: "bad archive".into(),
                 },
-                now,
             ))
             .is_empty()
         );
@@ -1081,7 +1052,6 @@ mod tests {
             CatalogWorkerMessage::SystemDiscovering {
                 title: "Super Nintendo".to_string(),
             },
-            Instant::now(),
         ));
 
         assert_eq!(statuses[0].title(), "Discovering Super Nintendo");
@@ -1107,7 +1077,6 @@ mod tests {
                 CatalogWorkerMessage::BuildStatus {
                     title: title.to_string(),
                 },
-                Instant::now(),
             ));
 
             assert_eq!(statuses[0].title(), title);
@@ -1117,7 +1086,6 @@ mod tests {
 
     #[test]
     fn update_and_hydration_failures_emit_distinct_state_effects() {
-        let now = Instant::now();
         let context = || CatalogWorkerMessageContext {
             catalog_ready: true,
             catalog_partial: false,
@@ -1131,7 +1099,6 @@ mod tests {
                     system_id: "snes".to_string(),
                     error: "update failed".to_string(),
                 },
-                now,
             )
             .into_effects()
             .into_iter()
@@ -1153,7 +1120,6 @@ mod tests {
                     system_id: "snes".to_string(),
                     error: "load failed".to_string(),
                 },
-                now,
             )
             .into_effects()
             .into_iter()
@@ -1171,7 +1137,6 @@ mod tests {
 
     #[test]
     fn ready_catalog_replaces_cache_and_syncs_bridge() {
-        let now = Instant::now();
         let mut session = LauncherCatalogSession::new(false);
         let effects = session.handle_worker_message(
             CatalogWorkerMessageContext {
@@ -1186,7 +1151,6 @@ mod tests {
                 generation_fingerprint: None,
                 publication_ack: None,
             },
-            now,
         );
 
         assert_eq!(
@@ -1208,18 +1172,17 @@ mod tests {
             CatalogWorkerMessage::HydrationDoneNeedsValidation {
                 root: "/media/fat".into(),
             },
-            now,
         );
 
         assert_eq!(effect_names(effects), vec!["event"]);
         assert!(!session.refresh_done());
         assert!(
             session
-                .maybe_start_deferred_worker(false, true, false, now, Duration::ZERO, || true)
+                .maybe_start_deferred_worker(false, true, false, now, Duration::ZERO)
                 .is_none()
         );
         let worker = session
-            .maybe_start_deferred_worker(false, true, true, now, Duration::ZERO, || true)
+            .maybe_start_deferred_worker(false, true, true, now, Duration::ZERO)
             .expect("validation worker after idle gate opens");
         assert_eq!(worker.root, "/media/fat");
         assert_eq!(worker.request, CatalogWorkerRequest::CheckStamp);
@@ -1244,7 +1207,6 @@ mod tests {
             CatalogWorkerMessage::PersistenceFailed {
                 error: "read launcher catalog row".to_string(),
             },
-            Instant::now(),
         ));
 
         assert_eq!(
@@ -1259,7 +1221,6 @@ mod tests {
 
     #[test]
     fn survivability_first_boot_persistence_failure_keeps_ram_catalog_and_reports_error() {
-        let now = Instant::now();
         let mut session = LauncherCatalogSession::new(true);
         let ready_effects = session.handle_worker_message(
             CatalogWorkerMessageContext {
@@ -1274,7 +1235,6 @@ mod tests {
                 generation_fingerprint: None,
                 publication_ack: None,
             },
-            now,
         );
 
         assert_eq!(
@@ -1291,7 +1251,6 @@ mod tests {
             CatalogWorkerMessage::PersistenceFailed {
                 error: "insert profile: UNIQUE constraint failed".to_string(),
             },
-            now,
         ));
 
         assert!(effects.contains(&"lifecycle"));
@@ -1302,7 +1261,6 @@ mod tests {
 
     #[test]
     fn persistence_failure_after_early_ready_keeps_session_catalog_available() {
-        let now = Instant::now();
         let mut session = LauncherCatalogSession::new(true);
         let _ = session.handle_worker_message(
             CatalogWorkerMessageContext {
@@ -1317,7 +1275,6 @@ mod tests {
                 generation_fingerprint: None,
                 publication_ack: None,
             },
-            now,
         );
         assert!(!session.refresh_done());
 
@@ -1329,7 +1286,6 @@ mod tests {
             CatalogWorkerMessage::PersistenceFailed {
                 error: "publish sqlite catalog".to_string(),
             },
-            now,
         ));
 
         assert_eq!(
@@ -1480,7 +1436,7 @@ mod tests {
 
         assert!(
             session
-                .maybe_start_deferred_worker(false, false, true, now + delay, delay, || true)
+                .maybe_start_deferred_worker(false, false, true, now + delay, delay)
                 .is_none()
         );
         assert!(
@@ -1491,20 +1447,12 @@ mod tests {
                     true,
                     now + Duration::from_millis(20),
                     delay,
-                    || true,
                 )
                 .is_none()
         );
 
         let worker = session
-            .maybe_start_deferred_worker(
-                false,
-                true,
-                true,
-                now + Duration::from_millis(70),
-                delay,
-                || true,
-            )
+            .maybe_start_deferred_worker(false, true, true, now + Duration::from_millis(70), delay)
             .expect("deferred worker");
 
         assert_eq!(worker.root, "/media/fat/_Arcade");
@@ -1525,7 +1473,6 @@ mod tests {
                     true,
                     now + Duration::from_millis(200),
                     delay,
-                    || true,
                 )
                 .is_none()
         );
@@ -1552,7 +1499,6 @@ mod tests {
                     false,
                     now + Duration::from_millis(70),
                     delay,
-                    || true,
                 )
                 .is_none()
         );
@@ -1564,20 +1510,12 @@ mod tests {
                     true,
                     now + Duration::from_millis(80),
                     delay,
-                    || true,
                 )
                 .is_none()
         );
 
         let worker = session
-            .maybe_start_deferred_worker(
-                false,
-                true,
-                true,
-                now + Duration::from_millis(140),
-                delay,
-                || true,
-            )
+            .maybe_start_deferred_worker(false, true, true, now + Duration::from_millis(140), delay)
             .expect("deferred worker");
 
         assert_eq!(worker.root, "/media/fat/_Arcade");
@@ -1594,66 +1532,9 @@ mod tests {
                     true,
                     now + Duration::from_millis(200),
                     delay,
-                    || true,
                 )
                 .is_none()
         );
-    }
-
-    #[test]
-    fn deferred_stamp_check_waits_while_standalone_builder_holds_lock() {
-        let mut session = LauncherCatalogSession::new(false);
-        let now = Instant::now();
-        let delay = Duration::from_millis(50);
-        session.defer_catalog_worker(
-            "/media/fat/_Arcade".to_string(),
-            CatalogWorkerRequest::CheckStamp,
-            CatalogWorkerInitialCache::AlreadyLoadedReady,
-            CatalogExecutionMode::BackgroundInteractive,
-        );
-
-        assert!(
-            session
-                .maybe_start_deferred_worker(false, true, true, now, delay, || {
-                    panic!("lock must not be probed before validation delay")
-                })
-                .is_none()
-        );
-        assert!(
-            session
-                .maybe_start_deferred_worker(
-                    false,
-                    true,
-                    true,
-                    now + Duration::from_millis(60),
-                    delay,
-                    || false,
-                )
-                .is_none()
-        );
-        assert!(
-            session
-                .maybe_start_deferred_worker(
-                    false,
-                    true,
-                    true,
-                    now + Duration::from_millis(900),
-                    delay,
-                    || panic!("lock must not be reprobed before retry deadline"),
-                )
-                .is_none()
-        );
-        let worker = session
-            .maybe_start_deferred_worker(
-                false,
-                true,
-                true,
-                now + Duration::from_millis(1100),
-                delay,
-                || true,
-            )
-            .expect("deferred check after builder exits");
-        assert_eq!(worker.request, CatalogWorkerRequest::CheckStamp);
     }
 
     #[test]
@@ -1666,7 +1547,6 @@ mod tests {
 
     #[test]
     fn authoritative_registry_replaces_arcade_bootstrap_before_duplicate_suppression() {
-        let now = Instant::now();
         let mut session = LauncherCatalogSession::new(false);
         let context = |catalog_ready| CatalogWorkerMessageContext {
             catalog_ready,
@@ -1683,7 +1563,6 @@ mod tests {
                 generation_fingerprint: None,
                 publication_ack: None,
             },
-            now,
         );
         assert!(bootstrap.into_effects().into_iter().any(|effect| matches!(
             effect,
@@ -1703,7 +1582,6 @@ mod tests {
                 generation_fingerprint: Some("generation-1".to_string()),
                 publication_ack: None,
             },
-            now,
         );
         assert!(registry.into_effects().into_iter().any(|effect| matches!(
             effect,
@@ -1723,7 +1601,6 @@ mod tests {
                 generation_fingerprint: Some("generation-1".to_string()),
                 publication_ack: None,
             },
-            now,
         );
         assert!(
             !duplicate
@@ -1744,7 +1621,6 @@ mod tests {
             CatalogWorkerMessage::LoadFailed {
                 error: "disconnected".to_string(),
             },
-            Instant::now(),
         );
 
         let mut discarded = false;

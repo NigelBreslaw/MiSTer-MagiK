@@ -61,7 +61,6 @@ use crate::ui_display::{
     CrtUiMetrics, ResolvedOutputRoute, RuntimeDisplayGeometry, ScreenOrientation, UiDisplay,
     UiDisplayPlan, UiLayoutGeometry, UiPixelSize,
 };
-use crate::visual_composition::{PreviewFrame, PreviewPixels};
 #[cfg(mister_experiments)]
 use mister_magik_fb::experiments::effects::framebuffer_effects::{
     EFFECT_SIZES, EffectKind, EffectSize,
@@ -135,8 +134,6 @@ mod catalog_worker;
 pub(crate) use catalog_worker::run_catalog_worker_child;
 #[cfg(not(mister_ui_scope_launcher))]
 mod controller_loop;
-#[cfg(test)]
-mod controller_setup_input_session;
 #[allow(dead_code)]
 mod crt_backdrop_controller;
 mod crt_trial_loop;
@@ -218,7 +215,7 @@ use launcher_input_latency_lab::*;
 use launcher_loop::*;
 use launcher_present::*;
 use launcher_scheduler::*;
-use launcher_screensaver::{LauncherScreensaver, LauncherScreensaverLoader};
+use launcher_screensaver::LauncherScreensaverLoader;
 use launcher_screensaver_pipeline::{RenderAheadPoll, ScreensaverRenderAhead};
 use launcher_startup_intro::*;
 use mister_magik_mister_runtime::framebuffer::latch_state::{

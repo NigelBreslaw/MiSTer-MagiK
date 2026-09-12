@@ -28,7 +28,6 @@ pub(super) enum ScreenshotMediaUpdateEffect {
     EnsureSystem {
         system_id: String,
     },
-    FinishWorker,
     DropWorker,
     MarkWorkerUnavailable,
     ClearPreviewFailures,
@@ -386,18 +385,6 @@ impl ScreenshotMediaUpdateSession {
         }
         effects
     }
-
-    pub(super) fn shutdown_for_reset(&mut self) -> ScreenshotMediaUpdateEffects {
-        let mut effects = ScreenshotMediaUpdateEffects::default();
-        effects.push(ScreenshotMediaUpdateEffect::FinishWorker);
-        effects.push(ScreenshotMediaUpdateEffect::MarkWorkerUnavailable);
-        effects.push(ScreenshotMediaUpdateEffect::DropWorker);
-        self.worker_episode_active = false;
-        self.dispatched_system_checks.clear();
-        self.progress_clear_at = None;
-        effects.ui(self.progress_display.clear_intent());
-        effects
-    }
 }
 
 #[cfg(test)]
@@ -413,7 +400,6 @@ mod tests {
                 ScreenshotMediaUpdateEffect::Ui(_) => "ui",
                 ScreenshotMediaUpdateEffect::EnsureWorker { .. } => "ensure-worker",
                 ScreenshotMediaUpdateEffect::EnsureSystem { .. } => "ensure-system",
-                ScreenshotMediaUpdateEffect::FinishWorker => "finish-worker",
                 ScreenshotMediaUpdateEffect::DropWorker => "drop-worker",
                 ScreenshotMediaUpdateEffect::MarkWorkerUnavailable => "mark-unavailable",
                 ScreenshotMediaUpdateEffect::ClearPreviewFailures => "clear-preview-failures",

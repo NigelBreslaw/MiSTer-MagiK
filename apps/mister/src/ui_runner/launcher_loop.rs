@@ -8,8 +8,6 @@ use super::launcher_frame_accounting::{
     LauncherFrameCpuTrace, LauncherFrameIdentity, LauncherFrameRenderData,
     LauncherFrameSnapshotBuilder, LauncherFrameStatusData, LauncherFrameTiming,
 };
-#[cfg(test)]
-use super::launcher_frame_pipeline::{LauncherFramePhase, LauncherFramePhaseObserver};
 use super::launcher_pacing::{
     FB0_LATE_FRAME_START_HEADROOM_US, FrameProductionClass, FrameProductionTrace,
     LauncherFramePacingInput, LauncherFramePacingPolicy, LauncherPacingTrace,
@@ -3811,7 +3809,6 @@ impl LauncherWakeReasons {
     const COMPOSITION_FORCES_FULL_PRESENT: Self = Self(1 << 21);
     const COMPOSITION_CLEARS_DIRECT_LAYERS: Self = Self(1 << 22);
     const HOME_HORIZONTAL_INPUT_HELD: Self = Self(1 << 23);
-    const FB0_ROUTE_RECOVERY_PENDING: Self = Self(1 << 24);
     const LATENCY_CRITICAL_INPUT: Self = Self(1 << 25);
     const CRT_BACKDROP_PREPARED: Self = Self(1 << 26);
 
@@ -3845,15 +3842,6 @@ impl LauncherRenderIntent {
     fn can_sleep(self) -> bool {
         self.first_visible_copy_done && self.startup_input_enabled && self.wake_reasons.is_empty()
     }
-}
-
-fn launcher_presentation_recovery_wake_reasons(presenter_needs_frame: bool) -> LauncherWakeReasons {
-    let mut reasons = LauncherWakeReasons::default();
-    reasons.insert_if(
-        LauncherWakeReasons::FB0_ROUTE_RECOVERY_PENDING,
-        presenter_needs_frame,
-    );
-    reasons
 }
 
 fn screensaver_pipeline_start_allowed(screensaver_active: bool, ram_pipeline_active: bool) -> bool {
@@ -3910,7 +3898,6 @@ fn cold_boot_profile_completion_ready(
 
 fn launcher_bridge_sync_plan(
     launching: bool,
-    _startup_input_enabled: bool,
     full_bridge_dirty: bool,
     light_bridge_dirty: bool,
 ) -> LauncherBridgeSyncPlan {
@@ -4522,10 +4509,6 @@ fn request_pending_launch_return_shard(
         format!("system={system_id}"),
     );
     true
-}
-
-fn catalog_hydration_execution_mode(_request: CatalogWorkerRequest) -> CatalogExecutionMode {
-    CatalogExecutionMode::BackgroundInteractive
 }
 
 fn startup_intro_catalog_worker_request(request: CatalogWorkerRequest) -> CatalogWorkerRequest {
@@ -5419,10 +5402,7 @@ pub(super) fn run_launcher_loop(
     let pacing_policy = LauncherFramePacingPolicy::default();
     let mut phase_alignment = LauncherPhaseAlignment::default();
     let present_timing = launcher_config.display_pacing().present_timing();
-    if preview_route.allows_preview_work()
-        && launcher_bench_scenario.is_some()
-        && !launcher_config.preview().archive_warm_skipped()
-    {
+    if launcher_bench_scenario.is_some() && !launcher_config.preview().archive_warm_skipped() {
         let warm_t = Instant::now();
         match preview_worker::warm_preview_archives_with_config(launcher_config.preview().worker())
         {
@@ -5441,17 +5421,14 @@ pub(super) fn run_launcher_loop(
                 std::process::exit(13);
             }
         }
-    } else if preview_route.allows_preview_work() && launcher_bench_scenario.is_some() {
+    } else if launcher_bench_scenario.is_some() {
         print_startup_event(start, "preview_archive_warm_skipped", "env=1");
     }
     let mut preview = PreviewState::new_with_config(start, launcher_config.preview().clone());
     let mut launcher_bench_waiting_for_initial_preview = launcher_bench_scenario
         .is_some_and(|scenario| scenario.starts_on_arcade() && !launcher_bench_after_input_script);
-    let mut preview_transition = if preview_route.allows_preview_work() {
-        PreviewTransitionDemo::from_config(launcher_config.preview_transition().clone())
-    } else {
-        PreviewTransitionDemo::disabled()
-    };
+    let mut preview_transition =
+        PreviewTransitionDemo::from_config(launcher_config.preview_transition().clone());
     let transition_picker_enabled = preview_transition.picker_enabled();
     let mut arcade_list_renderer = if crt_layout {
         ArcadeListRenderer::new_for_crt_display(crt_metrics, ui)
@@ -5697,7 +5674,7 @@ pub(super) fn run_launcher_loop(
             true,
         )
         .unwrap_or(CatalogWorkerRequest::LoadOnly);
-        let initial_cache = summary_seed_catalog_worker_initial_cache(request, true);
+        let initial_cache = CatalogWorkerInitialCache::AlreadyLoadedReady;
         print_startup_event(
             start,
             "return_catalog_capsule_ready",
@@ -5708,7 +5685,7 @@ pub(super) fn run_launcher_loop(
                 request.label()
             ),
         );
-        let execution_mode = catalog_hydration_execution_mode(request);
+        let execution_mode = CatalogExecutionMode::BackgroundInteractive;
         if catalog_publication_test.catalog_worker_allowed() {
             scheduler.start_catalog_worker(
                 arcade_root.clone(),
@@ -5736,7 +5713,7 @@ pub(super) fn run_launcher_loop(
                 return_catalog_hydration_needed,
             ) && catalog_publication_test.catalog_worker_allowed()
             {
-                let execution_mode = catalog_hydration_execution_mode(request);
+                let execution_mode = CatalogExecutionMode::BackgroundInteractive;
                 print_startup_event(start, "catalog_worker_start", &arcade_root);
                 scheduler.start_catalog_worker(
                     arcade_root.clone(),
@@ -5917,7 +5894,6 @@ pub(super) fn run_launcher_loop(
     LauncherStatusPresenter::new(&app).sync_catalog_scan(CatalogScanBridgeStatus::new(
         initial_catalog_scan_visible(
             catalog_ready,
-            arcade_catalog_required_at_start,
             catalog_worker_enabled,
             catalog_session.foreground_update(),
             warm_registry_hydration_pending,
@@ -6067,7 +6043,6 @@ pub(super) fn run_launcher_loop(
             catalog_publication_test.catalog_worker_allowed(),
             Instant::now(),
             Duration::ZERO,
-            catalog_refresh_available,
         )
     {
         print_startup_event(start, "catalog_worker_start", &worker.root);
@@ -6140,13 +6115,8 @@ pub(super) fn run_launcher_loop(
         .unwrap_or_default();
     let mut catalog_idle_candidate_since = None;
     let mut catalog_work_telemetry = CatalogWorkModeTelemetry::new(run_start);
-    #[cfg(test)]
-    let mut launcher_frame_phase_observer = LauncherFramePhaseObserver::default();
     macro_rules! record_launcher_frame_phase {
-        ($phase:expr) => {{
-            #[cfg(test)]
-            launcher_frame_phase_observer.record($phase);
-        }};
+        ($phase:expr) => {};
     }
     #[cfg(feature = "tooling")]
     let mut tooling = mister_magik_tooling_support::Session::from_environment();
@@ -6768,7 +6738,6 @@ pub(super) fn run_launcher_loop(
                 deferred_worker_policy.allowed && catalog_publication_test.catalog_worker_allowed(),
                 loop_start,
                 deferred_worker_policy.delay,
-                catalog_refresh_available,
             )
         {
             print_startup_event(start, "catalog_worker_start", &worker.root);
@@ -7027,8 +6996,6 @@ pub(super) fn run_launcher_loop(
                     let recovery_presented = Instant::now();
                     request_launcher_redraw!();
                     scheduler.finish_launch_failure_recovery(recovery_presented);
-                    lifecycle.recovery_frame_presented(recovery_presented, &mut lifecycle_effects);
-                    apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
                     record_launcher_frame_phase!(LauncherFramePhase::LaunchRecoveryApplied);
                     crate::ui_errln!("game launch failed: {error}");
                 }
@@ -8892,12 +8859,8 @@ pub(super) fn run_launcher_loop(
             navigation_transition.is_active(),
             source_was_arcade,
         );
-        let bridge_sync_plan = launcher_bridge_sync_plan(
-            launching,
-            lifecycle.startup_input_enabled(),
-            full_bridge_dirty,
-            light_bridge_dirty,
-        );
+        let bridge_sync_plan =
+            launcher_bridge_sync_plan(launching, full_bridge_dirty, light_bridge_dirty);
         let bridge_sync_started =
             (bridge_sync_plan != LauncherBridgeSyncPlan::None).then(Instant::now);
         let gui_bridge_phase = gui_bridge_profile_phase(
@@ -9144,7 +9107,6 @@ pub(super) fn run_launcher_loop(
             && preview_work_allowed
             && !preview_scheduled_this_loop
             && !launching
-            && preview_route.allows_preview_work()
             && nav.screen == Screen::Arcade
             && active_arcade_games_available
             && !arcade_search_active
@@ -9172,7 +9134,6 @@ pub(super) fn run_launcher_loop(
             && preview_work_allowed
             && !arcade_search_active
             && !memory_guard.active()
-            && preview_route.allows_preview_work()
         {
             let dirty = apply_ready_preview(
                 &app,
@@ -9236,8 +9197,7 @@ pub(super) fn run_launcher_loop(
             && should_draw_arcade_overlay(&nav, launching, active_arcade_games_available);
         let presentation_route = if preserve_navigation_source_preview {
             PreviewRoute::Occluded
-        } else if preview_route.allows_preview_work()
-            && nav.screen == Screen::Arcade
+        } else if nav.screen == Screen::Arcade
             && !memory_guard.active()
             && !screensaver.active
             && !confirm_visible
@@ -9553,8 +9513,6 @@ pub(super) fn run_launcher_loop(
             LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
             composition_decision.clear_direct_layers,
         );
-        wake_reasons = wake_reasons
-            | launcher_presentation_recovery_wake_reasons(launcher_presenter.needs_frame());
         let render_intent = LauncherRenderIntent {
             first_visible_copy_done: frame_accounting.first_visible_copy_done(),
             startup_input_enabled: startup_status.input_enabled,
@@ -12698,26 +12656,6 @@ fn should_desire_preview_direct_layer(
     )
 }
 
-fn preview_frame_from_raw<'a>(frame: &'a PreviewRawFrame<'a>) -> PreviewFrame<'a> {
-    PreviewFrame {
-        pixels: match frame.pixels {
-            PreviewRawPixels::Empty => PreviewPixels::Empty,
-            PreviewRawPixels::Rgb8(pixels) => PreviewPixels::Rgb8(pixels),
-            PreviewRawPixels::Rgb565 {
-                pixels,
-                stride_pixels,
-            } => PreviewPixels::Rgb565 {
-                pixels,
-                stride_pixels,
-            },
-        },
-        source_width: frame.source_w as usize,
-        source_height: frame.source_h as usize,
-        display_width: frame.display_w as usize,
-        display_height: frame.display_h as usize,
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PreviewRoutePolicy {
     kind: PreviewRouteKind,
@@ -12756,13 +12694,6 @@ impl PreviewRoutePolicy {
                 | ResolvedOutputRoute::Crt576p50 => PreviewRouteKind::CrtBackdrop,
             },
         }
-    }
-
-    const fn allows_preview_work(self) -> bool {
-        matches!(
-            self.kind,
-            PreviewRouteKind::Hdmi | PreviewRouteKind::CrtBackdrop
-        )
     }
 
     const fn allows_hdmi_preview(self) -> bool {
@@ -12901,7 +12832,6 @@ fn process_catalog_worker_message(
             catalog_partial: *return_capsule_active,
         },
         message,
-        loop_start,
     );
     apply_catalog_session_effects(
         effects,
@@ -14016,9 +13946,6 @@ fn apply_screenshot_media_update_effects(
             ScreenshotMediaUpdateEffect::EnsureSystem { system_id } => {
                 scheduler.ensure_media_system(&system_id);
             }
-            ScreenshotMediaUpdateEffect::FinishWorker => {
-                scheduler.finish_media_worker();
-            }
             ScreenshotMediaUpdateEffect::DropWorker => {
                 scheduler.drop_media_worker();
             }
@@ -14188,7 +14115,6 @@ fn library_changed_test_dialog_choice_from_value(
 
 fn initial_catalog_scan_visible(
     catalog_ready: bool,
-    _arcade_catalog_required_at_start: bool,
     catalog_worker_enabled: bool,
     foreground_update: bool,
     startup_waiting_for_initial_catalog: bool,
@@ -14294,13 +14220,6 @@ fn summary_seed_catalog_worker_starts_immediately(
     return_catalog_hydration_needed: bool,
 ) -> bool {
     request == CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS || return_catalog_hydration_needed
-}
-
-fn summary_seed_catalog_worker_initial_cache(
-    _request: CatalogWorkerRequest,
-    _return_catalog_hydration_needed: bool,
-) -> CatalogWorkerInitialCache {
-    CatalogWorkerInitialCache::AlreadyLoadedReady
 }
 
 fn launcher_bench_initial_preview_ready(
@@ -15975,7 +15894,6 @@ mod tests {
     #[test]
     fn crt_route_policy_is_fixed_to_the_supported_backdrop_matrix() {
         let hdmi = PreviewRoutePolicy::for_output_route(ResolvedOutputRoute::Hdmi);
-        assert!(hdmi.allows_preview_work());
         assert!(hdmi.allows_hdmi_preview());
         assert!(!hdmi.allows_crt_backdrop());
 
@@ -15986,7 +15904,6 @@ mod tests {
             ResolvedOutputRoute::Crt576p50,
         ] {
             let crt = PreviewRoutePolicy::for_output_route(route);
-            assert!(crt.allows_preview_work());
             assert!(!crt.allows_hdmi_preview());
             assert!(crt.allows_crt_backdrop());
         }
@@ -16100,7 +16017,6 @@ mod tests {
 
     #[test]
     fn media_stays_gated_through_ready_and_opens_after_completion() {
-        let now = Instant::now();
         let mut session = LauncherCatalogSession::new(false);
         let idle = MediaInteractionGate {
             active: false,
@@ -16120,7 +16036,6 @@ mod tests {
                 catalog_partial: false,
             },
             ready,
-            now,
         );
         let gated = catalog_build_media_gate(session.refresh_done(), idle);
         assert!(gated.active);
@@ -16132,7 +16047,6 @@ mod tests {
                 catalog_partial: false,
             },
             CatalogWorkerMessage::Done,
-            now,
         );
         assert_eq!(catalog_build_media_gate(session.refresh_done(), idle), idle);
     }
@@ -16194,7 +16108,6 @@ mod tests {
                 generation_fingerprint: None,
                 publication_ack: None,
             },
-            Instant::now(),
         );
         let mut use_catalog_seen = false;
         let mut full_bridge_dirty = false;
@@ -16214,7 +16127,7 @@ mod tests {
         assert!(use_catalog_seen);
         assert!(full_bridge_dirty);
         assert_eq!(
-            launcher_bridge_sync_plan(false, false, full_bridge_dirty, false),
+            launcher_bridge_sync_plan(false, full_bridge_dirty, false),
             LauncherBridgeSyncPlan::Full
         );
     }
@@ -17546,10 +17459,8 @@ mod tests {
 
     #[test]
     pub(super) fn home_boot_with_ready_catalog_hides_catalog_popup() {
-        assert!(!initial_catalog_scan_visible(
-            true, false, true, false, false
-        ));
-        assert!(initial_catalog_scan_visible(true, false, true, true, false));
+        assert!(!initial_catalog_scan_visible(true, true, false, false));
+        assert!(initial_catalog_scan_visible(true, true, true, false));
     }
 
     #[test]
@@ -17765,21 +17676,10 @@ mod tests {
 
     #[test]
     pub(super) fn missing_catalog_shows_catalog_popup_on_home_or_arcade_boot() {
-        assert!(initial_catalog_scan_visible(
-            false, false, true, false, false
-        ));
-        assert!(initial_catalog_scan_visible(
-            false, true, true, false, false
-        ));
-        assert!(!initial_catalog_scan_visible(
-            true, true, true, false, false
-        ));
-        assert!(!initial_catalog_scan_visible(
-            false, true, false, false, false
-        ));
-        assert!(!initial_catalog_scan_visible(
-            false, false, true, false, true
-        ));
+        assert!(initial_catalog_scan_visible(false, true, false, false));
+        assert!(!initial_catalog_scan_visible(true, true, false, false));
+        assert!(!initial_catalog_scan_visible(false, false, false, false));
+        assert!(!initial_catalog_scan_visible(false, true, false, true));
     }
 
     #[test]
@@ -17906,7 +17806,6 @@ mod tests {
             LauncherWakeReasons::CRT_BACKDROP_PREPARED,
             LauncherWakeReasons::COMPOSITION_FORCES_FULL_PRESENT,
             LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
-            LauncherWakeReasons::FB0_ROUTE_RECOVERY_PENDING,
             LauncherWakeReasons::LATENCY_CRITICAL_INPUT,
         ] {
             assert!(
@@ -17971,19 +17870,6 @@ mod tests {
                 "{screen:?}"
             );
         }
-    }
-
-    #[test]
-    pub(super) fn presenter_recovery_keeps_launcher_awake() {
-        let sleeping_intent = |wake_reasons| LauncherRenderIntent {
-            first_visible_copy_done: true,
-            startup_input_enabled: true,
-            wake_reasons,
-        };
-
-        assert!(sleeping_intent(launcher_presentation_recovery_wake_reasons(false)).can_sleep());
-        assert!(!sleeping_intent(launcher_presentation_recovery_wake_reasons(true)).can_sleep());
-        assert!(sleeping_intent(launcher_presentation_recovery_wake_reasons(false)).can_sleep());
     }
 
     #[test]
@@ -18344,25 +18230,6 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn summary_seed_worker_reuses_the_loaded_navigation_projection() {
-        assert_eq!(
-            summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::CheckStamp, false),
-            CatalogWorkerInitialCache::AlreadyLoadedReady
-        );
-        assert_eq!(
-            summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::LoadOnly, true),
-            CatalogWorkerInitialCache::AlreadyLoadedReady
-        );
-        assert_eq!(
-            summary_seed_catalog_worker_initial_cache(
-                CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
-                false,
-            ),
-            CatalogWorkerInitialCache::AlreadyLoadedReady
-        );
-    }
-
-    #[test]
     pub(super) fn cold_catalog_worker_starts_after_first_copy_without_delay() {
         let before_copy = deferred_catalog_worker_start_policy(
             false,
@@ -18447,18 +18314,6 @@ mod tests {
         assert!(!direct_preview_requested(Screen::Home, false, true));
         assert!(!direct_preview_requested(Screen::Arcade, true, true));
         assert!(!direct_preview_requested(Screen::Arcade, false, false));
-    }
-
-    #[test]
-    fn forced_hydration_with_a_usable_catalog_stays_background() {
-        assert_eq!(
-            catalog_hydration_execution_mode(CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS),
-            CatalogExecutionMode::BackgroundInteractive
-        );
-        assert_eq!(
-            catalog_hydration_execution_mode(CatalogWorkerRequest::LoadOnly),
-            CatalogExecutionMode::BackgroundInteractive
-        );
     }
 
     #[test]
@@ -18970,11 +18825,11 @@ mod tests {
             );
             assert!(
                 session
-                    .maybe_start_deferred_worker(false, false, true, now, Duration::ZERO, || false)
+                    .maybe_start_deferred_worker(false, false, true, now, Duration::ZERO)
                     .is_none()
             );
             let worker = session
-                .maybe_start_deferred_worker(false, true, true, now, Duration::ZERO, || false)
+                .maybe_start_deferred_worker(false, true, true, now, Duration::ZERO)
                 .expect("first visible copy starts the first build");
             assert_eq!(worker.request, CatalogWorkerRequest::FreshBuild);
             assert_eq!(
