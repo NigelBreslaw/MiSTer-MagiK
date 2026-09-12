@@ -103,12 +103,28 @@ class ComponentIdentityTests(unittest.TestCase):
     def test_kernel_input_change_only_invalidates_kernel_identity(self) -> None:
         fpga_before, _ = component_id.component_id(self.root, "fpga")
         kernel_before, _ = component_id.component_id(self.root, "kernel")
-        path = self.root / "mister/platform/kernel/scanout-slots/input.txt"
+        path = self.root / "mister/platform/kernel/scanout-618/input.txt"
         path.write_text("changed\n")
         self.commit("kernel")
         fpga_after, _ = component_id.component_id(self.root, "fpga")
         kernel_after, _ = component_id.component_id(self.root, "kernel")
         self.assertEqual(fpga_before, fpga_after)
+        self.assertNotEqual(kernel_before, kernel_after)
+
+    def test_platform_contract_change_invalidates_fpga_and_kernel_identities(
+        self,
+    ) -> None:
+        fpga_before, _ = component_id.component_id(self.root, "fpga")
+        kernel_before, _ = component_id.component_id(self.root, "kernel")
+        contract = (
+            self.root
+            / "mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h"
+        )
+        contract.write_text("changed platform contract\n")
+        self.commit("platform contract")
+        fpga_after, _ = component_id.component_id(self.root, "fpga")
+        kernel_after, _ = component_id.component_id(self.root, "kernel")
+        self.assertNotEqual(fpga_before, fpga_after)
         self.assertNotEqual(kernel_before, kernel_after)
 
     def test_fpga_manifest_change_leaves_kernel_identity_unchanged(self) -> None:
@@ -239,6 +255,9 @@ class ComponentIdentityTests(unittest.TestCase):
         self.assertNotEqual(
             before["kernel"], component_id.component_id(self.root, "kernel")[0]
         )
+        self.assertEqual(
+            before["fpga"], component_id.component_id(self.root, "fpga")[0]
+        )
         self.assertFalse(component_id.equivalent_inputs(self.root, "kernel", base))
 
     def test_host_contract_checks_do_not_invalidate_components(self) -> None:
@@ -274,7 +293,7 @@ class ComponentIdentityTests(unittest.TestCase):
         self.assertEqual(result["fpga_id"], "a" * 64)
         self.assertEqual(result["kernel_id"], "b" * 64)
         self.assertEqual(result["kernel_release_equivalent"], "true")
-        path = self.root / "mister/platform/kernel/scanout-slots/input.txt"
+        path = self.root / "mister/platform/kernel/scanout-618/input.txt"
         path.write_text("real module change\n")
         self.commit("change module")
         result = component_id.release_identities(self.root, manifest)
@@ -286,7 +305,7 @@ class ComponentIdentityTests(unittest.TestCase):
     def test_reuse_rejects_missing_revision_and_changed_file_set(self) -> None:
         base = self.head()
         self.assertFalse(component_id.equivalent_inputs(self.root, "kernel", "0" * 40))
-        path = self.root / "mister/platform/kernel/scanout-slots/new.c"
+        path = self.root / "mister/platform/kernel/scanout-618/new.c"
         path.write_text("new module source\n")
         self.commit("add source")
         self.assertFalse(component_id.equivalent_inputs(self.root, "kernel", base))
