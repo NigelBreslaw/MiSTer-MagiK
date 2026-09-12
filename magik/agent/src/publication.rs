@@ -472,12 +472,12 @@ impl crate::Agent {
                 return Err("publication control requires stage, action and attendance".into());
             }
             let root = stage(&self.install_root, &request.fields)?;
-            let pending: Value = serde_json::from_slice(
-                &fs::read(root.join("pending.json")).map_err(|e| e.to_string())?,
-            )
-            .map_err(|e| e.to_string())?;
             match request.fields.get("action").and_then(Value::as_str) {
                 Some("finish") => {
+                    let pending: Value = serde_json::from_slice(
+                        &fs::read(root.join("pending.json")).map_err(|e| e.to_string())?,
+                    )
+                    .map_err(|e| e.to_string())?;
                     if pending["kind"] == "databases" {
                         let layout = Layout::parse(
                             pending["layout"].as_str().ok_or("pending layout absent")?,
