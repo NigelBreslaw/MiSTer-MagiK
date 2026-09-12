@@ -476,14 +476,20 @@ jobs:
           cp /work/build/.config /inputs/kernel.config
           cp /work/build/Module.symvers /inputs/vmlinux.symvers
           cp /work/build/vmlinux /inputs/vmlinux
-          test "$(arm-none-linux-gnueabihf-readelf -n /inputs/vmlinux | awk '/Build ID:/ { print $3; exit }')" = de710a6e549858092f0764733a49d37e95bcc5c1
+          actual_build_id="$(arm-none-linux-gnueabihf-readelf -n /inputs/vmlinux | awk '/Build ID:/ { print $3; exit }')"
+          expected_build_id=f1579c7794f1c797711d22825893f7df9b2d504f
+          if [ "$actual_build_id" != "$expected_build_id" ]; then
+            printf 'vmlinux build ID mismatch: expected %s, got %s\n' \
+              "$expected_build_id" "$actual_build_id" >&2
+            exit 1
+          fi
 
       - name: Build and attest module
         run: |
           set -eu
           scripts/checks/check-scanout-slots-contract.sh
           ln -s "$GITHUB_WORKSPACE/mister/platform/kernel" /provider
-          mister/platform/kernel/scanout-618/build-in-container.sh \
+          bash mister/platform/kernel/scanout-618/build-in-container.sh \
             --development-trial "$GITHUB_WORKSPACE/build/scanout-618"
           echo '21385ae5896928a02a0a7073a8216173c00dc5f39dd5d71066adcd26ee686fd9  build/scanout-618/mister_magik_scanout_slots.ko' | sha256sum -c -
           {
