@@ -322,6 +322,18 @@ fn restore(backup: &Path) -> Result<(), String> {
     }
 }
 
+fn restore_stage(root: &Path) -> Result<(), String> {
+    let backup = root.join("backup");
+    if backup
+        .join("transaction.json")
+        .try_exists()
+        .map_err(|e| e.to_string())?
+    {
+        restore(&backup)?;
+    }
+    fs::remove_dir_all(root).map_err(|e| e.to_string())
+}
+
 fn reload_healthy(previous: &Value, expected: &str) -> Result<(), String> {
     // Main accepts supervised reload only while its Dev launcher is active.
     crate::main_control::handoff("mister_magik_resume\n")?;
@@ -460,12 +472,12 @@ impl crate::Agent {
                 return Err("publication control requires stage, action and attendance".into());
             }
             let root = stage(&self.install_root, &request.fields)?;
-            let pending: Value = serde_json::from_slice(
-                &fs::read(root.join("pending.json")).map_err(|e| e.to_string())?,
-            )
-            .map_err(|e| e.to_string())?;
             match request.fields.get("action").and_then(Value::as_str) {
                 Some("finish") => {
+                    let pending: Value = serde_json::from_slice(
+                        &fs::read(root.join("pending.json")).map_err(|e| e.to_string())?,
+                    )
+                    .map_err(|e| e.to_string())?;
                     if pending["kind"] == "databases" {
                         let layout = Layout::parse(
                             pending["layout"].as_str().ok_or("pending layout absent")?,
@@ -515,7 +527,7 @@ impl crate::Agent {
                         let restored = crate::main_control::handoff("mister_magik_resume\n");
                         return Err(format!("{error}; Main restoration: {restored:?}"));
                     }
-                    let restored = restore(&root.join("backup"));
+                    let restored = restore_stage(&root);
                     let resumed = crate::main_control::handoff("mister_magik_resume\n");
                     restored?;
                     resumed?;
@@ -630,11 +642,14 @@ impl crate::Agent {
                 return Err(format!("{error}; Main restoration: {restored:?}"));
             }
             let published = replace(&paths, &root.join("backup"), || {
-                if platform && !requires_reboot {
+                if requires_reboot {
+                    // Keep Main suspended until the host reboots. Resuming here would
+                    // preflight the newly installed application against the old loaded
+                    // module, even though both files form one valid post-boot tuple.
+                    Ok(())
+                } else if platform {
                     reload_healthy(&previous, expected_main.as_deref().unwrap())
                 } else {
-                    // Full platform activation includes the kernel module: the host
-                    // performs one explicit reboot, then confirms this transaction.
                     crate::main_control::handoff("mister_magik_resume\n")
                 }
             });
@@ -654,7 +669,7 @@ impl crate::Agent {
                 fs::remove_dir_all(&root).map_err(|e| e.to_string())?;
             }
             Ok(
-                json!({"kind":fields["kind"],"layout":fields["layout"],"files":paths.len(),"main_restored":true,"requires_reboot":requires_reboot}),
+                json!({"kind":fields["kind"],"layout":fields["layout"],"files":paths.len(),"main_restored":!requires_reboot,"requires_reboot":requires_reboot}),
             )
         })();
         let reply = match result {
@@ -793,6 +808,34 @@ mod tests {
             )
             .is_err()
         );
+        assert_eq!(fs::read(destination).unwrap(), b"old");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_restore_removes_completed_and_unapplied_stages() {
+        let root =
+            std::env::temp_dir().join(format!("magik-explicit-restore-{}", std::process::id()));
+        let applied = root.join("applied");
+        let destination = root.join("installed");
+        fs::create_dir_all(&applied).unwrap();
+        fs::write(applied.join("new"), b"new").unwrap();
+        fs::write(&destination, b"old").unwrap();
+        replace(
+            &[(applied.join("new"), destination.clone())],
+            &applied.join("backup"),
+            || Ok(()),
+        )
+        .unwrap();
+        restore_stage(&applied).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"old");
+        assert!(!applied.exists());
+
+        let unapplied = root.join("unapplied");
+        fs::create_dir_all(&unapplied).unwrap();
+        fs::write(unapplied.join("upload"), b"unused").unwrap();
+        restore_stage(&unapplied).unwrap();
+        assert!(!unapplied.exists());
         assert_eq!(fs::read(destination).unwrap(), b"old");
         fs::remove_dir_all(root).unwrap();
     }

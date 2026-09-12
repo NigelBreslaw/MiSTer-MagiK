@@ -7,6 +7,36 @@ import subprocess
 import pytest
 
 
+def test_development_build_emits_profile_bound_provenance(tmp_path):
+    root = Path(__file__).resolve().parents[3]
+    script = root / "mister/platform/kernel/scanout-618/build-in-container.sh"
+    output = tmp_path / "provenance.txt"
+    subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; write_provenance "$2" profile profile 1 contract module '
+            "'6.18.38-MiSTer SMP mod_unload ARMv7 p2v8 ' kernel-id module-id",
+            "test",
+            str(script),
+            str(output),
+        ],
+        check=True,
+    )
+    assert output.read_text().splitlines() == [
+        "kernel_release=6.18.38-MiSTer",
+        "kernel_revision=6a581bac47c32dfd2525f9874fd263cf08058610",
+        "platform_profile=profile",
+        "provider_identity=profile",
+        "development_only=1",
+        "platform_contract_sha256=contract",
+        "module_sha256=module",
+        "kernel_build_id=kernel-id",
+        "module_build_id=module-id",
+        "vermagic=6.18.38-MiSTer SMP mod_unload ARMv7 p2v8 ",
+    ]
+
+
 def test_provider_lifecycle_and_mapping(tmp_path):
     compiler = shutil.which("cc")
     if not compiler:

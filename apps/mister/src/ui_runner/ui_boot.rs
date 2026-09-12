@@ -28,51 +28,84 @@ impl UiBootFramebufferSession {
         if display_plan.fallback {
             boot_analytics::event("display_plan_fallback", display_plan.log_line());
         }
+        let kernel_release = std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .unwrap_or_else(|_| "unknown".to_owned());
+        let scanout_profile = crate::scanout_platform::current(kernel_release.trim())
+            .unwrap_or_else(|error| {
+                crate::ui_errln!("scanout platform profile rejected: {error}");
+                std::process::exit(1);
+            });
+        let anonymous_latch_source =
+            scanout_profile == mister_magik_scanout_contract::DEVELOPMENT_PROFILE;
         crate::ui_logln!(
-            "ui-fb-mode=temporary {}x{} format={} output={}x{} scan={}x{} restore=on-drop",
+            "ui-fb-mode={} {}x{} format={} output={}x{} scan={}x{} restore={}",
+            if anonymous_latch_source {
+                "anonymous-latch-source"
+            } else {
+                "temporary"
+            },
             display_plan.fb_w,
             display_plan.fb_h,
             production_label(),
             display_plan.output_w,
             display_plan.output_h,
             display_plan.scan_w,
-            display_plan.scan_h
+            display_plan.scan_h,
+            if anonymous_latch_source {
+                "not-applicable"
+            } else {
+                "on-drop"
+            }
         );
 
-        let current_fb = match MappedRgb565Framebuffer::current_info() {
-            Ok(info) => info,
-            Err(e) => {
-                crate::ui_errln!("failed to read current framebuffer mode for FPGA-scaled UI: {e}");
+        let (fb_mode_action, fb_mode_guard, mut disp) = if anonymous_latch_source {
+            crate::ui_logln!("fb_mode_action=none-latch-source");
+            boot_analytics::event("fb_mode_action", "none-latch-source");
+            crate::ui_logln!("display-open-path=anonymous-rgb565-to-scanout-slots");
+            let disp = MappedRgb565Framebuffer::open_anonymous_rgb565(
+                display_plan.fb_w,
+                display_plan.fb_h,
+            )
+            .unwrap_or_else(|error| {
+                crate::ui_errln!("failed to allocate latch composition surface: {error}");
                 std::process::exit(1);
-            }
-        };
-        let fb_mode_action = fb_mode_action(current_fb, display_plan.fb_w, display_plan.fb_h);
-        crate::ui_logln!("fb_mode_action={}", fb_mode_action.label());
-        boot_analytics::event("fb_mode_action", fb_mode_action.label());
-        let fb_mode_guard = match fb_mode_action {
-            FbModeAction::AdoptCurrent => None,
-            FbModeAction::WriteMode => {
-                match FbModeGuard::set_temporary(display_plan.fb_w, display_plan.fb_h) {
-                    Ok(guard) => Some(guard),
-                    Err(e) => {
-                        crate::ui_errln!(
-                            "failed to set temporary framebuffer mode for FPGA-scaled UI: {e}"
-                        );
-                        std::process::exit(1);
-                    }
-                }
-            }
-        };
-
-        crate::ui_logln!("display-open-path=temporary-fb-fpga-scale");
-        let mut disp =
-            match MappedRgb565Framebuffer::open_rgb565(display_plan.fb_w, display_plan.fb_h) {
-                Ok(d) => d,
-                Err(e) => {
-                    crate::ui_errln!("failed to open display (/dev/fb0): {e}");
+            });
+            (FbModeAction::AdoptCurrent, None, disp)
+        } else {
+            let current_fb = match MappedRgb565Framebuffer::current_info() {
+                Ok(info) => info,
+                Err(error) => {
+                    crate::ui_errln!(
+                        "failed to read current framebuffer mode for FPGA-scaled UI: {error}"
+                    );
                     std::process::exit(1);
                 }
             };
+            let action = fb_mode_action(current_fb, display_plan.fb_w, display_plan.fb_h);
+            crate::ui_logln!("fb_mode_action={}", action.label());
+            boot_analytics::event("fb_mode_action", action.label());
+            let guard = match action {
+                FbModeAction::AdoptCurrent => None,
+                FbModeAction::WriteMode => {
+                    match FbModeGuard::set_temporary(display_plan.fb_w, display_plan.fb_h) {
+                        Ok(guard) => Some(guard),
+                        Err(error) => {
+                            crate::ui_errln!(
+                                "failed to set temporary framebuffer mode for FPGA-scaled UI: {error}"
+                            );
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            };
+            crate::ui_logln!("display-open-path=temporary-fb-fpga-scale");
+            let disp = MappedRgb565Framebuffer::open_rgb565(display_plan.fb_w, display_plan.fb_h)
+                .unwrap_or_else(|error| {
+                    crate::ui_errln!("failed to open display (/dev/fb0): {error}");
+                    std::process::exit(1);
+                });
+            (action, guard, disp)
+        };
         let ui = UiDisplay::for_plan(display_plan)
             .with_crt_font_experiment(config.display_inputs().crt_font_experiment());
         crate::ui_logln!("{}", ui.log_line());

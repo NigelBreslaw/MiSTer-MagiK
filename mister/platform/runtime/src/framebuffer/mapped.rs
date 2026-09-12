@@ -553,6 +553,70 @@ fn validate_fix_screeninfo_for_map(
 }
 
 impl MappedRgb565Framebuffer {
+    /// Allocate a CPU-only RGB565 composition surface for fixed scanout slots.
+    /// `/dev/fb0` is not used as a pixel source or destination on this route.
+    pub fn open_anonymous_rgb565(w: usize, h: usize) -> io::Result<Self> {
+        if visible_pixels_exceed_limit(w, h) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("anonymous RGB565 size {w}x{h} exceeds MiSTer buffer"),
+            ));
+        }
+        let stride_bytes = rgb565_stride_bytes(w);
+        let stride_pixels = stride_bytes / std::mem::size_of::<Rgb565Pixel>();
+        let map_len = stride_bytes.checked_mul(h).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("anonymous RGB565 map length overflows for {w}x{h}"),
+            )
+        })?;
+        // SAFETY: map_len is non-zero and overflow-checked. MAP_ANONYMOUS does
+        // not use a file descriptor or expose physical framebuffer memory.
+        let mem = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                map_len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        if mem == libc::MAP_FAILED {
+            return Err(io::Error::last_os_error());
+        }
+        if mem.is_null() {
+            // SAFETY: mem/map_len came from the successful mmap above.
+            unsafe {
+                libc::munmap(mem, map_len);
+            }
+            return Err(io::Error::other("anonymous RGB565 mmap returned null"));
+        }
+        Ok(Self {
+            mem: mem.cast(),
+            map_len,
+            w,
+            h,
+            stride_pixels,
+            info: FbInfo {
+                visible_w: w,
+                visible_h: h,
+                virtual_w: w,
+                virtual_h: h,
+                stride_bytes,
+                bits_per_pixel: RGB565_BITS_PER_PIXEL,
+                red_offset: 11,
+                green_offset: 5,
+                blue_offset: 0,
+                transp_offset: 0,
+            },
+            fb0: OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open("/dev/null")?,
+        })
+    }
+
     pub fn write_mister_mode_rgb565(w: usize, h: usize, stride_bytes: usize) -> io::Result<()> {
         let expected = rgb565_stride_bytes(w);
         let stride_bytes = if stride_bytes == 0 {
@@ -1270,6 +1334,16 @@ mod tests {
     #[test]
     fn mode_line_preserves_non_rgb565_framebuffer_mode_numerically() {
         assert_eq!(fb_info(32, 3840).mode_line(), "32 1 960 540 3840");
+    }
+
+    #[test]
+    fn anonymous_rgb565_surface_has_exact_geometry_and_storage() {
+        let mut surface = MappedRgb565Framebuffer::open_anonymous_rgb565(961, 3).unwrap();
+        assert_eq!(surface.width(), 961);
+        assert_eq!(surface.height(), 3);
+        assert_eq!(surface.info().stride_bytes, 1936);
+        surface.clear_black();
+        assert!(surface.buffer_565().iter().all(|pixel| pixel.0 == 0));
     }
 
     #[test]

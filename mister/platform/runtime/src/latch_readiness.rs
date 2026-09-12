@@ -582,7 +582,10 @@ pub struct LatchReadinessReport {
 }
 
 impl LatchReadinessReport {
-    pub fn ready(kernel_release: String) -> Self {
+    pub fn ready_for_profile(
+        kernel_release: String,
+        profile: mister_magik_scanout_contract::PlatformProfile,
+    ) -> Self {
         Self {
             schema: "mister-magik-latch-readiness-v1",
             state: LatchReadinessState::Ready,
@@ -590,8 +593,8 @@ impl LatchReadinessReport {
             reason_code: None,
             detail: "live platform ready".to_string(),
             kernel_release,
-            expected_kernel_release: mister_magik_scanout_contract::QUALIFIED_KERNEL_RELEASE,
-            platform_contract_id: mister_magik_scanout_contract::PLATFORM_CONTRACT_ID,
+            expected_kernel_release: profile.kernel_release(),
+            platform_contract_id: profile.id(),
             scanout_abi_version: None,
             scanout_slot_capacity_bytes: None,
             latch_protocol_version: None,
@@ -602,8 +605,12 @@ impl LatchReadinessReport {
         }
     }
 
-    pub fn failed(kernel_release: String, failure: &LatchFailure) -> Self {
-        let mut report = Self::ready(kernel_release);
+    pub fn failed_for_profile(
+        kernel_release: String,
+        profile: mister_magik_scanout_contract::PlatformProfile,
+        failure: &LatchFailure,
+    ) -> Self {
+        let mut report = Self::ready_for_profile(kernel_release, profile);
         report.state = failure.state;
         report.stage = Some(failure.stage);
         report.reason_code = Some(failure.reason_code().to_string());
@@ -645,7 +652,7 @@ mod tests {
         let failure = LatchFailure::incompatible(
             LatchFailureStage::Kernel,
             LatchFailureReason::KernelReleaseUnsupported,
-            "got 6.1, expected 5.15.1-MiSTer",
+            "got unsupported kernel, expected legacy profile",
         );
         assert_eq!(failure.reason_code(), "kernel-release-unsupported");
         assert_eq!(
@@ -760,7 +767,10 @@ mod tests {
 
     #[test]
     fn ready_and_failed_reports_preserve_their_contracts() {
-        let ready = LatchReadinessReport::ready("kernel".to_string());
+        let ready = LatchReadinessReport::ready_for_profile(
+            "kernel".to_string(),
+            mister_magik_scanout_contract::LEGACY_PROFILE,
+        );
         assert_eq!(ready.state, LatchReadinessState::Ready);
         assert_eq!(ready.stage, None);
         assert_eq!(ready.reason_code, None);
@@ -771,7 +781,11 @@ mod tests {
             LatchFailureReason::ScanoutLayoutMismatch,
             "unexpected slot layout",
         );
-        let failed = LatchReadinessReport::failed("kernel".to_string(), &failure);
+        let failed = LatchReadinessReport::failed_for_profile(
+            "kernel".to_string(),
+            mister_magik_scanout_contract::LEGACY_PROFILE,
+            &failure,
+        );
         assert_eq!(failed.state, LatchReadinessState::PlatformIncompatible);
         assert_eq!(failed.stage, Some(LatchFailureStage::ModuleLayout));
         assert_eq!(
@@ -796,7 +810,11 @@ mod tests {
             LatchFailureReason::ScanoutLayoutMismatch,
             "unexpected slot layout",
         );
-        let report = LatchReadinessReport::failed("kernel".to_string(), &failure);
+        let report = LatchReadinessReport::failed_for_profile(
+            "kernel".to_string(),
+            mister_magik_scanout_contract::LEGACY_PROFILE,
+            &failure,
+        );
 
         report.write_atomic(&path).unwrap();
 
@@ -807,7 +825,7 @@ mod tests {
         assert_eq!(persisted["kernel_release"], "kernel");
         assert_eq!(
             persisted["expected_kernel_release"],
-            mister_magik_scanout_contract::QUALIFIED_KERNEL_RELEASE
+            mister_magik_scanout_contract::LEGACY_KERNEL_RELEASE
         );
         assert!(
             !root

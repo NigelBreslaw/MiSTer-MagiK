@@ -50,8 +50,8 @@ kernel/module build:
 - Vermagic: `6.18.38-MiSTer SMP mod_unload ARMv7 p2v8`.
 
 Mount those files at `/inputs` as `kernel.tar`, `kernel.config`,
-`vmlinux.symvers` and `toolchain.tar.xz`; mount this `kernel` directory at
-`/provider`. Build the usable development object with:
+`vmlinux.symvers`, `vmlinux` and `toolchain.tar.xz`; mount this `kernel`
+directory at `/provider`. Build the usable development object with:
 
 ```sh
 bash /provider/scanout-618/build-in-container.sh \
@@ -60,8 +60,13 @@ bash /provider/scanout-618/build-in-container.sh \
 
 Omitting `--development-trial` builds the activation-disabled review object.
 Each output directory contains the object, verified inputs, compiler and module
-metadata, imports, source checksums and `SHA256SUMS`. Generated objects are not
-committed.
+metadata, imports, source checksums, profile-bound `provenance.txt` and
+`SHA256SUMS`. The development provenance names the exact kernel release,
+revision, provider identity and development-only scope consumed by runtime
+preflight. The kernel build ID comes from the exact running `vmlinux`; the
+module build ID is extracted from the produced object. Runtime compares both
+against `/sys/kernel/notes` and the loaded module note before accepting the
+profile. Generated objects are not committed.
 
 ## Verification
 

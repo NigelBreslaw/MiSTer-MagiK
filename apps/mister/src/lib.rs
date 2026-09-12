@@ -75,6 +75,7 @@ pub mod display_config;
 pub mod fallible_log;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub(crate) mod media_diagnostics;
+pub mod scanout_platform;
 pub use mister_magik_core::{input_event, input_info, input_repeat, input_state};
 #[cfg(feature = "ui")]
 pub use mister_magik_mister_runtime::fpga;
