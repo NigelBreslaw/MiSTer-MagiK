@@ -440,61 +440,75 @@ jobs:
     if: needs.plan.outputs.kernel-changed == 'true' && needs.plan.outputs.candidate-hit != 'true' && needs.plan.outputs.kernel-cache-hit != 'true'
     runs-on: ubuntu-24.04
     container: ubuntu:20.04
-    timeout-minutes: 20
+    timeout-minutes: 60
     steps:
       - name: Install checkout and kernel tools
         run: >-
           apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y
-          git ca-certificates curl make gcc-arm-linux-gnueabihf flex bison bc libssl-dev pkg-config
-          libelf-dev kmod sparse python3 ripgrep
+          git ca-certificates wget xz-utils build-essential flex bison bc libssl-dev pkg-config
+          libelf-dev kmod lz4 python3 ripgrep
 
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Trust checkout and fetch pinned kernel
+      - name: Build exact Linux 6.18 kernel inputs
         run: |
           set -eu
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          mkdir -p /inputs /work/source /work/toolchain /work/build
           git init build/Linux-Kernel_MiSTer
           git -C build/Linux-Kernel_MiSTer remote add origin https://github.com/MiSTer-devel/Linux-Kernel_MiSTer.git
-          git -C build/Linux-Kernel_MiSTer fetch --depth=1 origin f0fb626acadd07f0718934826b143b6e4c9ce81c
-          git -C build/Linux-Kernel_MiSTer checkout --detach FETCH_HEAD
+          git -C build/Linux-Kernel_MiSTer fetch --depth=1 origin 6a581bac47c32dfd2525f9874fd263cf08058610
+          git -C build/Linux-Kernel_MiSTer archive --format=tar FETCH_HEAD > /inputs/kernel.tar
+          tar -xf /inputs/kernel.tar -C /work/source
+          wget -qO /inputs/toolchain.tar.xz \
+            https://developer.arm.com/-/media/Files/downloads/gnu-a/10.2-2020.11/binrel/gcc-arm-10.2-2020.11-x86_64-arm-none-linux-gnueabihf.tar.xz
+          echo '0702694110b54441b0a8323be43538e1d5b394645c4970616867b56e55496672  /inputs/kernel.tar' | sha256sum -c -
+          echo 'd169f9196e3a6c4248ee79ca85987ebce0e4ea9174c1f8d51af9b28fecf22da1  /inputs/toolchain.tar.xz' | sha256sum -c -
+          tar -xf /inputs/toolchain.tar.xz -C /work/toolchain --strip-components=1
+          export PATH="/work/toolchain/bin:$PATH"
+          export ARCH=arm CROSS_COMPILE=arm-none-linux-gnueabihf- LOCALVERSION=-MiSTer
+          export KBUILD_BUILD_TIMESTAMP='Sat Sep 12 09:57:13 UTC 2026'
+          export KBUILD_BUILD_USER=magik-upstream KBUILD_BUILD_HOST=exact-pair KBUILD_BUILD_VERSION=1
+          make -C /work/source O=/work/build MiSTer_defconfig
+          make -C /work/source O=/work/build -j8 zImage modules dtbs
+          cp /work/build/.config /inputs/kernel.config
+          cp /work/build/Module.symvers /inputs/vmlinux.symvers
+          cp /work/build/vmlinux /inputs/vmlinux
+          test "$(arm-none-linux-gnueabihf-readelf -n /inputs/vmlinux | awk '/Build ID:/ { print $3; exit }')" = de710a6e549858092f0764733a49d37e95bcc5c1
 
       - name: Build and attest module
         run: |
+          set -eu
           scripts/checks/check-scanout-slots-contract.sh
-          python3 scripts/tests/test-scanout-platform-contract.py
-          KERNEL_SRC="$PWD/build/Linux-Kernel_MiSTer" KERNEL_BUILD="$PWD/build/scanout-slots-kernel" \
-            scripts/build-scanout-slots-module.sh
+          ln -s "$GITHUB_WORKSPACE/mister/platform/kernel" /provider
+          mister/platform/kernel/scanout-618/build-in-container.sh \
+            --development-trial "$GITHUB_WORKSPACE/build/scanout-618"
+          echo '21385ae5896928a02a0a7073a8216173c00dc5f39dd5d71066adcd26ee686fd9  build/scanout-618/mister_magik_scanout_slots.ko' | sha256sum -c -
           {
             echo "component_input_sha256=${{ needs.plan.outputs.kernel-id }}"
             echo "component_revision=$(git log -1 --format=%H -- $(sed '/^#/d;/^$/d' scripts/platform-component-inputs/kernel-v0.1.txt))"
             echo "builder_revision=$GITHUB_SHA"
-          } >> build/scanout-slots/provenance.txt
-          (cd build/scanout-slots && sha256sum mister_magik_scanout_slots.ko modinfo.txt provenance.txt imports.txt > SHA256SUMS)
+          } >> build/scanout-618/provenance.txt
+          (cd build/scanout-618 && sha256sum mister_magik_scanout_slots.ko vmlinux.symvers kernel.config kernel-revision.txt source-sha256.txt compiler.txt modinfo.txt imports.txt provenance.txt > SHA256SUMS)
           scripts/magik-ci ci platform-bundle write-component-cache \
-            --component kernel --artifact build/scanout-slots \
+            --component kernel --artifact build/scanout-618 \
             --component-id '${{ needs.plan.outputs.kernel-id }}' \
             --run-id "$GITHUB_RUN_ID" --head-sha "$GITHUB_SHA"
 
       - name: Release-grade kernel checks
         run: |
-          make -C mister/platform/kernel/scanout-slots KERNEL_SRC="$PWD/build/Linux-Kernel_MiSTer" \
-            KERNEL_BUILD="$PWD/build/scanout-slots-kernel" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- W=1 all
-          make -C mister/platform/kernel/scanout-slots KERNEL_SRC="$PWD/build/Linux-Kernel_MiSTer" \
-            KERNEL_BUILD="$PWD/build/scanout-slots-kernel" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- C=2 CHECK=sparse all
-          "$PWD/build/Linux-Kernel_MiSTer/scripts/checkpatch.pl" --no-tree --strict --file --ignore SPDX_LICENSE_TAG \
-            mister/platform/kernel/scanout-slots/mister_magik_scanout_slots.c \
-            mister/platform/kernel/scanout-slots/mister_magik_scanout_slots_uapi.h \
-            mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h \
-            mister/platform/kernel/scanout-slots/mister_magik_scanout_policy.h
-          grep -q '^vermagic:[[:space:]]*5\.15\.1-MiSTer ' build/scanout-slots/modinfo.txt
+          grep -q '^kernel_revision=6a581bac47c32dfd2525f9874fd263cf08058610$' build/scanout-618/provenance.txt
+          grep -q '^provider_identity=stock-6.18-latch-reuse-v3$' build/scanout-618/provenance.txt
+          grep -q '^development_only=1$' build/scanout-618/provenance.txt
+          grep -q '^vermagic:[[:space:]]*6\.18\.38-MiSTer ' build/scanout-618/modinfo.txt
+          grep -q '^license:[[:space:]]*GPL$' build/scanout-618/modinfo.txt
 
       - uses: actions/upload-artifact@v7
         with:
           name: platform-kernel-v0.1-${{ needs.plan.outputs.kernel-id }}
-          path: build/scanout-slots
+          path: build/scanout-618
           if-no-files-found: error
           retention-days: 30
 

@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # MiSTer MagiK kernel component identity inputs, format v0.1.
-mister/platform/kernel/scanout-slots
-scripts/build-scanout-slots-module.sh
+mister/platform/kernel/scanout-618
+mister/platform/kernel/main-window/mister_magik_main_window_layout.h
+mister/platform/kernel/main-window/mister_magik_main_window_policy.h
+mister/platform/kernel/main-window/mister_magik_main_window_uapi.h
+mister/platform/kernel/scanout-slots/mister_magik_scanout_slots_uapi.h
 # Host integration checks run before reuse; they do not change the module.
 .github/workflows/platform-bundle.yml

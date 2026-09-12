@@ -103,7 +103,7 @@ class ComponentIdentityTests(unittest.TestCase):
     def test_kernel_input_change_only_invalidates_kernel_identity(self) -> None:
         fpga_before, _ = component_id.component_id(self.root, "fpga")
         kernel_before, _ = component_id.component_id(self.root, "kernel")
-        path = self.root / "mister/platform/kernel/scanout-slots/input.txt"
+        path = self.root / "mister/platform/kernel/scanout-618/input.txt"
         path.write_text("changed\n")
         self.commit("kernel")
         fpga_after, _ = component_id.component_id(self.root, "fpga")
@@ -274,7 +274,7 @@ class ComponentIdentityTests(unittest.TestCase):
         self.assertEqual(result["fpga_id"], "a" * 64)
         self.assertEqual(result["kernel_id"], "b" * 64)
         self.assertEqual(result["kernel_release_equivalent"], "true")
-        path = self.root / "mister/platform/kernel/scanout-slots/input.txt"
+        path = self.root / "mister/platform/kernel/scanout-618/input.txt"
         path.write_text("real module change\n")
         self.commit("change module")
         result = component_id.release_identities(self.root, manifest)
@@ -286,7 +286,7 @@ class ComponentIdentityTests(unittest.TestCase):
     def test_reuse_rejects_missing_revision_and_changed_file_set(self) -> None:
         base = self.head()
         self.assertFalse(component_id.equivalent_inputs(self.root, "kernel", "0" * 40))
-        path = self.root / "mister/platform/kernel/scanout-slots/new.c"
+        path = self.root / "mister/platform/kernel/scanout-618/new.c"
         path.write_text("new module source\n")
         self.commit("add source")
         self.assertFalse(component_id.equivalent_inputs(self.root, "kernel", base))
