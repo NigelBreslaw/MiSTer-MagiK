@@ -11,8 +11,9 @@ inputs or the native probe's artifact allowlist.
 - The unchanged two-slot ABI v3 and the separate Main-window ABI v1.
 - Shared, read/write, non-executable WC mappings with fixed selectors/lengths.
 - Prevention of later execute permission, VMA expansion, inheritance and dumps.
-- Inspection of every newly mapped page through `follow_pfnmap_start/end`,
-  rejecting PFN, write permission, memory-type, shareability or XN mismatch.
+- Construction of WC, writable, non-executable shared protection from the
+  finalized VMA flags, followed by inspection of every newly mapped page through
+  `follow_pfnmap_start/end` to reject PFN or write-permission mismatches.
 - A fixed, read-only, per-open 64-byte report for the first mapping failure.
 - Two root-only misc devices, with open refused until both registrations finish.
 - Reverse-order rollback after partial registration and normal resource cleanup.
@@ -79,14 +80,16 @@ The earlier build hashes above describe the pre-change artifact, not this source
 
 ## Remaining qualification gates
 
-The provider verifies its installed Linux PTE representation immediately after
-`remap_pfn_range`, inside initial mmap with the mmap write lock held. Every
-successful lookup is ended before returning or advancing; no result fields are
-read after unlock. Failed lookups propagate their error and mismatches return
-`EIO`. The pinned kernel's `mm/vma.c::__mmap_new_file_vma` calls `unmap_region`
-when the callback fails, undoing the unsuccessful mapping. No memory contents
-are read. The host fault tests cover first/last-page lookup failure, wrong PFN,
-memory type, shareability, XN and writability, plus unrelated PTE-bit tolerance.
+The provider constructs and validates the ARM WC, writable, non-executable
+shared protection before passing that exact value to `remap_pfn_range`. It then
+verifies every installed PFN and writable result inside initial mmap with the
+mmap write lock held. Every successful lookup is ended before returning or
+advancing; no result fields are read after unlock. Failed lookups propagate
+their error and mismatches return `EIO`. The pinned kernel's
+`mm/vma.c::__mmap_new_file_vma` calls `unmap_region` when the callback fails,
+undoing the unsuccessful mapping. No memory contents are read. The host fault
+tests cover protection construction and first/last-page lookup, PFN and
+writability failures.
 
 This is deliberately not a hardware-attribute attestation: ARM's Linux PTE
 representation is not the raw hardware translation, and this check neither
@@ -104,9 +107,10 @@ vermagic remains `6.18.38-MiSTer SMP mod_unload ARMv7 p2v8`. The focused host
 suite passes 58 tests. No provider has been loaded on the device.
 
 The running config disables `CONFIG_ARM_PTDUMP_DEBUGFS`. The supported
-`follow_pfnmap_start/end` helpers expose PFNs and mapping protections but are
-GPL-only, as are `get_task_mm` and relevant device-enumeration helpers. The
-approved GPLv2 provider can now use these supported exports.
+`follow_pfnmap_start/end` helpers expose PFNs and writability but ARM does not
+define `pte_pgprot`, so the generic implementation reports a zero protection.
+The GPL-only helpers remain sufficient for post-map PFN and writable checks;
+protection construction is validated before the mapping call.
 Source-predicted attributes and resource reservation do not satisfy the promised
 actual-target mapping verification.
 

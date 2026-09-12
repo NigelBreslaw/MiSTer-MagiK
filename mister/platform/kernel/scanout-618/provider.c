@@ -106,13 +106,19 @@ static long diagnostic_ioctl(struct file *file, unsigned long arg)
 		-EFAULT : 0;
 }
 
+static bool mapping_protection_valid(pgprot_t protection)
+{
+	const unsigned long value = pgprot_val(protection);
+
+	return (value & L_PTE_MT_MASK) == L_PTE_MT_BUFFERABLE &&
+		(value & L_PTE_XN) && !(value & L_PTE_RDONLY) &&
+		(value & L_PTE_SHARED);
+}
+
 static int verify_mapping(struct file *file, struct vm_area_struct *vma,
 	unsigned long physical, struct mister_magik_mapping_diagnostic diagnostic)
 {
 	unsigned long address;
-	const unsigned long mask = L_PTE_MT_MASK | L_PTE_SHARED | L_PTE_XN;
-	const unsigned long expected = pgprot_val(vma->vm_page_prot);
-
 	/* Called only during initial mmap, with the caller's mmap write lock
 	 * held. Inspect every installed Linux PTE through the supported API;
 	 * never touch the mapped memory or retain lookup fields after end().
@@ -125,7 +131,6 @@ static int verify_mapping(struct file *file, struct vm_area_struct *vma,
 		unsigned long expected_pfn =
 			(physical + address - vma->vm_start) >> PAGE_SHIFT;
 		unsigned long observed_pfn;
-		unsigned long observed_protection;
 		unsigned int failures = 0;
 		bool writable;
 		int result = follow_pfnmap_start(&args);
@@ -140,15 +145,12 @@ static int verify_mapping(struct file *file, struct vm_area_struct *vma,
 			return result;
 		}
 		observed_pfn = args.pfn;
-		observed_protection = pgprot_val(args.pgprot);
 		writable = args.writable;
 		follow_pfnmap_end(&args);
 		if (observed_pfn != expected_pfn)
 			failures |= MISTER_MAGIK_MAPPING_FAILURE_PFN;
 		if (!writable)
 			failures |= MISTER_MAGIK_MAPPING_FAILURE_WRITABLE;
-		if ((observed_protection & mask) != (expected & mask))
-			failures |= MISTER_MAGIK_MAPPING_FAILURE_PROTECTION;
 		if (failures) {
 			diagnostic.state = MISTER_MAGIK_MAPPING_DIAGNOSTIC_FAILED;
 			diagnostic.failure_flags = failures;
@@ -157,7 +159,6 @@ static int verify_mapping(struct file *file, struct vm_area_struct *vma,
 			diagnostic.expected_pfn = expected_pfn;
 			diagnostic.observed_pfn = observed_pfn;
 			diagnostic.writable = writable;
-			diagnostic.observed_protection = observed_protection;
 			diagnostic.error_code = -EIO;
 			diagnostic_store(file->private_data, &diagnostic);
 			return -EIO;
@@ -173,22 +174,33 @@ static int map_fixed(struct file *file, struct vm_area_struct *vma,
 	unsigned long physical)
 {
 	struct mister_magik_mapping_diagnostic diagnostic;
+	vm_flags_t mapping_flags;
+	pgprot_t protection;
 	int result;
 
-	vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
+	mapping_flags = (vma->vm_flags & ~(VM_EXEC | VM_MAYEXEC)) |
+		VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP | VM_DONTCOPY;
+	/* The pinned 6.18 __mmap_new_file_vma path invokes this callback before
+	 * inserting the VMA into the tree. vm_flags_init() is the supported API
+	 * for that state. Generate the protection from the finalized flags, add
+	 * ARM write-combining, and pass this exact value to remap_pfn_range().
+	 */
+	vm_flags_init(vma, mapping_flags);
+	protection = pgprot_writecombine(vm_get_page_prot(mapping_flags));
+	vma->vm_page_prot = protection;
 	diagnostic = diagnostic_begin(file, physical,
 		vma->vm_end - vma->vm_start,
 		L_PTE_MT_MASK | L_PTE_SHARED | L_PTE_XN,
-		pgprot_val(vma->vm_page_prot));
-	/* Only called from our initial mmap callbacks. In the pinned 6.18
-	 * __mmap_new_vma path, these run before vma_iter_store_new: the VMA is
-	 * not yet in the tree. vm_flags_init is the documented API for that
-	 * state. Do not reuse this helper to modify an existing VMA.
-	 */
-	vm_flags_init(vma, (vma->vm_flags & ~(VM_EXEC | VM_MAYEXEC)) |
-		VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP | VM_DONTCOPY);
+		pgprot_val(protection));
+	if (!mapping_protection_valid(protection)) {
+		diagnostic.state = MISTER_MAGIK_MAPPING_DIAGNOSTIC_FAILED;
+		diagnostic.failure_flags = MISTER_MAGIK_MAPPING_FAILURE_PROTECTION;
+		diagnostic.error_code = -EIO;
+		diagnostic_store(file->private_data, &diagnostic);
+		return -EIO;
+	}
 	result = remap_pfn_range(vma, vma->vm_start, physical >> PAGE_SHIFT,
-		vma->vm_end - vma->vm_start, vma->vm_page_prot);
+		vma->vm_end - vma->vm_start, protection);
 	if (result) {
 		diagnostic.state = MISTER_MAGIK_MAPPING_DIAGNOSTIC_FAILED;
 		diagnostic.failure_flags = MISTER_MAGIK_MAPPING_FAILURE_REMAP;

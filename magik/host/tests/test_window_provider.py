@@ -53,9 +53,13 @@ typedef int32_t __s32;
 #define PAGE_SIZE 4096UL
 #define PAGE_SHIFT 12
 #define L_PTE_MT_MASK 0x3cUL
+#define L_PTE_MT_BUFFERABLE 0x04UL
 #define L_PTE_SHARED 0x400UL
 #define L_PTE_XN 0x200UL
+#define L_PTE_RDONLY 0x80UL
 #define pgprot_val(p) (p)
+typedef unsigned long pgprot_t;
+typedef unsigned long vm_flags_t;
 #define VM_SHARED 1UL
 #define VM_READ 2UL
 #define VM_WRITE 4UL
@@ -148,10 +152,15 @@ static int misc_register(struct miscdevice *d) {
     registrations++; return registrations==register_fail ? -EIO : 0;
 }
 static void misc_deregister(struct miscdevice *d) { assert(held); assert(d->fops->open(0,0)==-ENODEV); deregistrations++; }
-static unsigned long pgprot_writecombine(unsigned long p) { (void)p; return 0x123; }
+static unsigned long vm_get_page_prot(unsigned long flags) {
+    assert((flags&(VM_READ|VM_WRITE|VM_SHARED))==(VM_READ|VM_WRITE|VM_SHARED));
+    assert(!(flags&VM_EXEC));
+    return 0x703;
+}
+static unsigned long pgprot_writecombine(unsigned long p) { return (p&~L_PTE_MT_MASK)|L_PTE_MT_BUFFERABLE; }
 static void vm_flags_init(struct vm_area_struct *v, unsigned long f) { v->vm_flags = f; }
 static int remap_pfn_range(struct vm_area_struct *v, unsigned long start, unsigned long pfn, unsigned long size, unsigned long prot) {
-    assert(start==v->vm_start && size==v->vm_end-v->vm_start && prot==0x123);
+    assert(start==v->vm_start && size==v->vm_end-v->vm_start && prot==0x707);
     assert(!(v->vm_flags&(VM_EXEC|VM_MAYEXEC)));
     assert((v->vm_flags&(VM_IO|VM_PFNMAP|VM_DONTEXPAND|VM_DONTDUMP|VM_DONTCOPY))==992);
     maps++; mapped_phys=pfn<<12; return map_fail;
@@ -173,6 +182,11 @@ static void reset(void) {
 }
 int main(void) {
     reset();
+    assert(mapping_protection_valid(0x707));
+    assert(!mapping_protection_valid(0x703)); /* no WC */
+    assert(!mapping_protection_valid(0x507)); /* no XN */
+    assert(!mapping_protection_valid(0x787)); /* read-only */
+    assert(!mapping_protection_valid(0x307)); /* not shared */
 #ifdef MISTER_MAGIK_DEVELOPMENT_TRIAL
     assert(window_provider_init()==0 && claims==1 && ready);
     window_provider_exit(); assert(releases==1 && !ready);
@@ -216,7 +230,7 @@ int main(void) {
         (unsigned long)&diagnostic)==0);
     assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_PASSED);
     assert(diagnostic.physical_base==0x22000000 && diagnostic.map_bytes==0x17bb000);
-    assert(diagnostic.protection_mask==0x63c && diagnostic.expected_protection==0x123);
+    assert(diagnostic.protection_mask==0x63c && diagnostic.expected_protection==0x707);
     for(int slot=0; slot<2; slot++) {
         struct vm_area_struct v={0x1000,0x1000+SLOT_BYTES,slot?2025:0,7|VM_MAYEXEC,0};
         assert(slots_mmap(&slot_files[slot],&v)==0 && mapped_phys==(slot?SLOT1_BASE:SLOT0_BASE));
@@ -245,23 +259,22 @@ int main(void) {
         lookup_bad_page=page;
         for(int fault=1; fault<=8; fault++) {
             lookup_fault=fault; lookups=lookup_ends=0;
-            assert(main_mmap(&main_file,&v)==(fault==1?-ENOENT:fault==7?0:-EIO));
+            assert(main_mmap(&main_file,&v)==(fault==1?-ENOENT:
+                (fault==2||fault==6||fault==8)?-EIO:0));
             assert(!lookup_held);
-            assert(lookups==(fault==7?0x17bb000/PAGE_SIZE:page+1));
+            assert(lookups==((fault==1||fault==2||fault==6||fault==8)?page+1:0x17bb000/PAGE_SIZE));
             assert(lookup_ends==lookups-(fault==1));
             assert(main_ioctl(&main_file,MISTER_MAGIK_MAPPING_GET_DIAGNOSTIC,
                 (unsigned long)&diagnostic)==0);
-            assert(diagnostic.page_index==(fault==7?MISTER_MAGIK_MAPPING_DIAGNOSTIC_NO_PAGE:page));
-            if(fault==7) {
+            assert(diagnostic.page_index==((fault==1||fault==2||fault==6||fault==8)?page:MISTER_MAGIK_MAPPING_DIAGNOSTIC_NO_PAGE));
+            if(fault==3 || fault==4 || fault==5 || fault==7) {
                 assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_PASSED);
                 continue;
             }
             unsigned int expected_flags = fault==1 ? MISTER_MAGIK_MAPPING_FAILURE_LOOKUP :
                 fault==2 ? MISTER_MAGIK_MAPPING_FAILURE_PFN :
-                (fault>=3 && fault<=5) ? MISTER_MAGIK_MAPPING_FAILURE_PROTECTION :
                 fault==6 ? MISTER_MAGIK_MAPPING_FAILURE_WRITABLE :
-                MISTER_MAGIK_MAPPING_FAILURE_PFN | MISTER_MAGIK_MAPPING_FAILURE_WRITABLE |
-                    MISTER_MAGIK_MAPPING_FAILURE_PROTECTION;
+                MISTER_MAGIK_MAPPING_FAILURE_PFN | MISTER_MAGIK_MAPPING_FAILURE_WRITABLE;
             assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_FAILED);
             assert(diagnostic.failure_flags==expected_flags);
             assert(diagnostic.expected_pfn==0x22000+page);
