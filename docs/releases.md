@@ -106,30 +106,3 @@ Use `scripts/magik deploy` for development applications and
 delivery checks artifact integrity, activation and bounded startup health.
 Physical qualification is requested separately; there is no aggregate certificate
 or mandatory stress matrix. Distribution publication does not authorize device work.
-
-## Isolated Linux 6.18 development platform
-
-The self-built `6.18.38-MiSTer` platform is intentionally outside the numbered
-production update stream. Its workflow reuses the qualified latch RBF
-byte-for-byte, builds the latest `Main_MiSTer/mister-magik` revision, and builds
-the fixed-window provider against the exact pinned upstream kernel revision.
-It publishes only a prerelease tag of this form:
-
-```text
-platform-development-618-v0.VERSION-BUNDLEPREFIX
-```
-
-Normal `scripts/magik update` release selection does not recognize that tag.
-Install one reviewed tag only on an attended device already configured for the
-Dev layout:
-
-```sh
-scripts/magik-platform development-618 \
-  --tag platform-development-618-v0.VERSION-BUNDLEPREFIX \
-  --attended --activate-fpga
-```
-
-The command verifies the exact tag, prerelease state, bundle checksums, bundle
-ID prefix, development marker, kernel revision and profile. It does not update
-the normal desired-release queue. Publication remains transactional and uses
-the existing Dev rollback behavior.

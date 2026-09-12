@@ -77,11 +77,6 @@ class ComponentIdentityTests(unittest.TestCase):
             "  build-fpga:\n    env:\n      QUARTUS_VERSION: '17.0'\n"
             "  publish:\n    name: Publish\n"
         )
-        (self.root / ".github/workflows/platform-development-618.yml").write_text(
-            "jobs:\n  plan:\n    name: Plan\n"
-            "  build-kernel:\n    container: ubuntu:20.04\n"
-            "  publish:\n    name: Publish\n"
-        )
         run_git(self.root, "config", "user.email", "test@example.invalid")
         run_git(self.root, "config", "user.name", "Test")
         run_git(self.root, "add", ".")
@@ -115,21 +110,6 @@ class ComponentIdentityTests(unittest.TestCase):
         kernel_after, _ = component_id.component_id(self.root, "kernel")
         self.assertEqual(fpga_before, fpga_after)
         self.assertNotEqual(kernel_before, kernel_after)
-
-    def test_development_kernel_inputs_have_an_independent_identity(self) -> None:
-        production_before, _ = component_id.component_id(self.root, "kernel")
-        development_before, _ = component_id.component_id(
-            self.root, "kernel-development-618"
-        )
-        path = self.root / "mister/platform/kernel/scanout-618/input.txt"
-        path.write_text("changed development provider\n")
-        self.commit("development provider")
-        production_after, _ = component_id.component_id(self.root, "kernel")
-        development_after, _ = component_id.component_id(
-            self.root, "kernel-development-618"
-        )
-        self.assertEqual(production_before, production_after)
-        self.assertNotEqual(development_before, development_after)
 
     def test_fpga_manifest_change_leaves_kernel_identity_unchanged(self) -> None:
         fpga_before, _ = component_id.component_id(self.root, "fpga")

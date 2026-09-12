@@ -664,21 +664,9 @@ fn verify_platform(paths: &Paths) -> Result<()> {
     {
         return Err("latch metadata protocol identity mismatch".into());
     }
-    let kernel_release = module_metadata.get("kernel_release").map_or(
-        mister_magik_scanout_contract::LEGACY_KERNEL_RELEASE,
-        String::as_str,
-    );
-    let profile = mister_magik_scanout_contract::resolve_profile(
-        kernel_release,
-        module_metadata.get("platform_profile").map(String::as_str),
-        module_metadata.get("provider_identity").map(String::as_str),
-        false,
-    )
-    .ok_or("scanout module profile is incompatible with a public installation")?;
-    let expected_vermagic = format!("{} ", profile.kernel_release());
     if !module_metadata
         .get("vermagic")
-        .is_some_and(|value| value.starts_with(&expected_vermagic))
+        .is_some_and(|value| value.starts_with("5.15.1-MiSTer "))
     {
         return Err("scanout module vermagic is incompatible".into());
     }
@@ -1150,8 +1138,7 @@ mod tests {
         fs::write(
             app.join("mister_magik_scanout_slots.metadata.txt"),
             format!(
-                "module_sha256={module_sha}\nplatform_contract_sha256={contract}\nvermagic={} SMP\n",
-                mister_magik_scanout_contract::LEGACY_KERNEL_RELEASE
+                "module_sha256={module_sha}\nplatform_contract_sha256={contract}\nvermagic=5.15.1-MiSTer SMP\n"
             ),
         )
         .unwrap();

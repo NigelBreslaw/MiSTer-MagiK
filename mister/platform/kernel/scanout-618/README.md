@@ -1,9 +1,8 @@
 # Linux 6.18 fixed-window provider
 
 This directory contains the short-term out-of-tree provider for the self-built
-MiSTer Linux `6.18.38-MiSTer` development platform. It is excluded from normal
-MagiK platform releases and is an input only to the separately approved
-development-platform workflow.
+MiSTer Linux `6.18.38-MiSTer` development platform. It is not part of MagiK's
+release inputs.
 
 The ordinary object is intentionally activation-disabled and returns
 `EOPNOTSUPP` before reserving memory or creating a device. The explicitly
@@ -65,13 +64,6 @@ metadata, imports, source checksums, profile-bound `provenance.txt` and
 `SHA256SUMS`. The development provenance names the exact kernel release,
 revision, provider identity and development-only scope consumed by runtime
 preflight. Generated objects are not committed.
-
-For an isolated published candidate, the repository workflow builds the same
-provider directly against the pinned source and output trees with
-`scripts/build-scanout-618-development-module.sh`. It records the exact config,
-symbol table, compiler, vermagic, source revision and module digest. That
-artifact can only be selected by an exact development tag and the explicit
-attended command documented in `docs/releases.md`.
 
 ## Verification
 

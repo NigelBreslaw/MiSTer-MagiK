@@ -23,7 +23,6 @@ path = "src/main.rs"
 libc = "0.2"
 mister-magik-ini = { path = "../../../crates/mister-ini" }
 mister-magik-platform-manifest-contract = { path = "../../platform/contracts/manifest" }
-mister-magik-scanout-contract = { path = "../../platform/contracts/scanout" }
 
 [profile.release]
 opt-level = "s"

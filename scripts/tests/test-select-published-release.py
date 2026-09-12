@@ -89,9 +89,6 @@ class PublishedReleaseSelectionTests(unittest.TestCase):
         self.assertEqual(selector.platform_version("platform-v0.12"), 12)
         self.assertEqual(selector.platform_version("platform-v0.1-" + "f" * 64), 1)
         self.assertIsNone(selector.platform_version("platform-v1.2"))
-        self.assertIsNone(
-            selector.platform_version("platform-development-618-v0.12-0123456789abcdef")
-        )
 
     def test_cli_flattens_paginated_github_payload(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
