@@ -8,8 +8,6 @@ use super::launcher_frame_accounting::{
     LauncherFrameCpuTrace, LauncherFrameIdentity, LauncherFrameRenderData,
     LauncherFrameSnapshotBuilder, LauncherFrameStatusData, LauncherFrameTiming,
 };
-#[cfg(test)]
-use super::launcher_frame_pipeline::{LauncherFramePhase, LauncherFramePhaseObserver};
 use super::launcher_pacing::{
     FB0_LATE_FRAME_START_HEADROOM_US, FrameProductionClass, FrameProductionTrace,
     LauncherFramePacingInput, LauncherFramePacingPolicy, LauncherPacingTrace,
@@ -6117,13 +6115,8 @@ pub(super) fn run_launcher_loop(
         .unwrap_or_default();
     let mut catalog_idle_candidate_since = None;
     let mut catalog_work_telemetry = CatalogWorkModeTelemetry::new(run_start);
-    #[cfg(test)]
-    let mut launcher_frame_phase_observer = LauncherFramePhaseObserver::default();
     macro_rules! record_launcher_frame_phase {
-        ($phase:expr) => {{
-            #[cfg(test)]
-            launcher_frame_phase_observer.record($phase);
-        }};
+        ($phase:expr) => {};
     }
     #[cfg(feature = "tooling")]
     let mut tooling = mister_magik_tooling_support::Session::from_environment();
