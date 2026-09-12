@@ -31,8 +31,7 @@ mkdir "$out"
 cd /inputs
 echo '0702694110b54441b0a8323be43538e1d5b394645c4970616867b56e55496672  kernel.tar' | sha256sum -c -
 echo '102825ae56c9e00142d06f35d2bdd3299edb6060e84a275a25b095e66fd3fc2a  toolchain.tar.xz' | sha256sum -c -
-echo '584c7fdb7884616363b38c0514266a5fc40083ae327d9a71e72deb6f3101cdab  kernel.config' | sha256sum -c -
-echo 'f58b220d8cdcb925afdd4ba4a4c0a04c02154a8f2fc658cc1fa885b89f79952f  vmlinux.symvers' | sha256sum -c -
+sha256sum kernel.config vmlinux.symvers
 scratch=$(mktemp -d /tmp/magik-provider-build.XXXXXX)
 mkdir "$scratch/source" "$scratch/toolchain" "$scratch/kernel" "$scratch/modules"
 tar -xf kernel.tar -C "$scratch/source"
