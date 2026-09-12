@@ -22,6 +22,7 @@ COMPONENT_INPUT_MANIFESTS = {
     "fpga": "scripts/platform-component-inputs/fpga-v0.1.txt",
     "fpga-synthesis": "scripts/platform-component-inputs/fpga-synthesis-v0.1.txt",
     "kernel": "scripts/platform-component-inputs/kernel-v0.1.txt",
+    "kernel-development-618": "scripts/platform-component-inputs/kernel-618-development-v0.1.txt",
 }
 IDENTITY_IMPLEMENTATION = "scripts/release/platform/platform-component-id.py"
 
@@ -141,9 +142,17 @@ def component_id(root: Path, component: str) -> tuple[str, str]:
 
 def identity_bytes(component: str, relative: str, data: bytes) -> bytes:
     """Build jobs are inputs; unrelated planning/publication jobs are not."""
-    if relative != ".github/workflows/platform-bundle.yml":
+    workflow_jobs = {
+        "fpga": (".github/workflows/platform-bundle.yml", "build-fpga"),
+        "kernel": (".github/workflows/platform-bundle.yml", "build-kernel"),
+        "kernel-development-618": (
+            ".github/workflows/platform-development-618.yml",
+            "build-kernel",
+        ),
+    }
+    workflow, job = workflow_jobs.get(component, ("", ""))
+    if relative != workflow:
         return data
-    job = {"fpga": "build-fpga", "kernel": "build-kernel"}[component]
     matches = re.findall(
         rf"^  {job}:\n.*?(?=^  [\w-]+:|\Z)",
         data.decode(),

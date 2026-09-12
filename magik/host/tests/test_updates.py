@@ -60,6 +60,69 @@ def test_numbered_release_selection_includes_prereleases():
     assert selector.select_game_databases(releases)["tag_name"] == "game-databases-v12"
 
 
+def test_development_platform_tag_is_explicit_and_never_queued():
+    selector = updates.selectors()
+    release = {
+        "tag_name": "platform-development-618-v0.12-0123456789abcdef",
+        "published_at": "2026",
+        "prerelease": True,
+    }
+    assert selector.platform_version(release["tag_name"]) is None
+    assert selector.durable_platforms([release]) == []
+
+
+def test_development_platform_rejects_ambiguous_tag(monkeypatch):
+    called = Mock()
+    monkeypatch.setattr(updates.subprocess, "run", called)
+    with pytest.raises(ValueError, match="invalid Linux 6.18"):
+        updates.development_platform_618("latest")
+    called.assert_not_called()
+
+
+def test_development_platform_requires_exact_cached_identity(tmp_path, monkeypatch):
+    monkeypatch.setenv("MISTER_MAGIK2_STATE", str(tmp_path))
+    tag = "platform-development-618-v0.12-0123456789abcdef"
+    directory = updates.root() / "development-releases" / updates.REPOSITORY / tag
+    directory.mkdir(parents=True)
+    (directory / "DEVELOPMENT-ONLY.txt").write_text(
+        "profile=stock-6.18-latch-reuse-v3\n"
+        "kernel_revision=6a581bac47c32dfd2525f9874fd263cf08058610\n"
+    )
+    monkeypatch.setattr(
+        updates.subprocess,
+        "run",
+        Mock(
+            return_value=SimpleNamespace(
+                stdout=json.dumps(
+                    {
+                        "tagName": tag,
+                        "isDraft": False,
+                        "isPrerelease": True,
+                        "publishedAt": "2026",
+                    }
+                )
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        updates, "verify", Mock(return_value={"bundle_id": "0123456789abcdef00"})
+    )
+    assert updates.development_platform_618(tag)["directory"] == str(
+        directory.resolve()
+    )
+
+
+def test_development_platform_rejects_tag_bundle_mismatch(tmp_path):
+    (tmp_path / "DEVELOPMENT-ONLY.txt").write_text(
+        "profile=stock-6.18-latch-reuse-v3\n"
+        "kernel_revision=6a581bac47c32dfd2525f9874fd263cf08058610\n"
+    )
+    with pytest.raises(ValueError, match="identity does not match"):
+        updates.verify_development_platform_618(
+            tmp_path, {"bundle_id": "fedcba9876543210"}, "0123456789abcdef"
+        )
+
+
 def test_update_failure_preserves_previous_pair(tmp_path, monkeypatch):
     monkeypatch.setenv("MISTER_MAGIK2_STATE", str(tmp_path))
     updates.atomic_json(updates.root() / "desired.json", {"old": True})

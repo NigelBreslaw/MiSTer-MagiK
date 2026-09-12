@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import re
 import tempfile
 import zipfile
 
@@ -18,6 +19,9 @@ from .apps import repository
 from .token_store import state_root
 
 REPOSITORY = "NigelBreslaw/MiSTer-MagiK"
+DEVELOPMENT_618_TAG = re.compile(
+    r"platform-development-618-v0\.([1-9][0-9]*)-([0-9a-f]{16})"
+)
 
 
 @contextmanager
@@ -198,3 +202,91 @@ def update(*, return_pair=False):
         if not return_pair:
             print("Next: scripts/magik deploy --attended")
     return pair if return_pair else 0
+
+
+def development_platform_618(tag):
+    """Download one explicitly named, isolated Linux 6.18 development release."""
+    match = DEVELOPMENT_618_TAG.fullmatch(tag)
+    if match is None:
+        raise ValueError("invalid Linux 6.18 development platform tag")
+    version = int(match.group(1))
+    with lock(root() / "download.lock"):
+        result = subprocess.run(
+            [
+                "gh",
+                "release",
+                "view",
+                tag,
+                "--repo",
+                REPOSITORY,
+                "--json",
+                "tagName,isDraft,isPrerelease,publishedAt",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        release = json.loads(result.stdout)
+        if (
+            release.get("tagName") != tag
+            or release.get("isDraft") is not False
+            or release.get("isPrerelease") is not True
+            or not release.get("publishedAt")
+        ):
+            raise ValueError("development platform must be a published prerelease")
+        directory = root() / "development-releases" / REPOSITORY / tag
+        entry = {
+            "tag": tag,
+            "version": version,
+            "directory": str(directory.resolve()),
+        }
+        if directory.exists():
+            payload = verify("platform", entry)
+        else:
+            from .preflight import require_space
+
+            require_space(directory, 2 * 1024**3, "development release download")
+            directory.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(
+                dir=directory.parent, prefix="download-"
+            ) as temporary:
+                args = [
+                    "gh",
+                    "release",
+                    "download",
+                    tag,
+                    "--repo",
+                    REPOSITORY,
+                    "--dir",
+                    temporary,
+                ]
+                for name in (*names("platform", version), "SHA256SUMS", "DEVELOPMENT-ONLY.txt"):
+                    args.extend(["--pattern", name])
+                subprocess.run(args, check=True, timeout=600)
+                payload = verify("platform", {**entry, "directory": temporary})
+                verify_development_platform_618(
+                    Path(temporary), payload, match.group(2)
+                )
+                os.rename(temporary, directory)
+        verify_development_platform_618(directory, payload, match.group(2))
+        print(f"{tag}: verified development platform: {directory.resolve()}", flush=True)
+        return entry
+
+
+def verify_development_platform_618(directory, payload, tag_bundle_prefix):
+    marker = directory / "DEVELOPMENT-ONLY.txt"
+    values = dict(
+        line.split("=", 1)
+        for line in marker.read_text().splitlines()
+        if "=" in line
+    )
+    if (
+        values.get("profile") != "stock-6.18-latch-reuse-v3"
+        or values.get("kernel_revision")
+        != "6a581bac47c32dfd2525f9874fd263cf08058610"
+        or not str(payload.get("bundle_id", "")).startswith(tag_bundle_prefix)
+    ):
+        raise ValueError(
+            "development platform identity does not match its supported profile and tag"
+        )

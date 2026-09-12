@@ -6,3 +6,5 @@ mister/platform/kernel/scanout-618
 mister/platform/kernel/main-window
 mister/platform/kernel/scanout-slots/mister_magik_scanout_slots_uapi.h
 mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h
+scripts/build-scanout-618-development-module.sh
+.github/workflows/platform-development-618.yml
