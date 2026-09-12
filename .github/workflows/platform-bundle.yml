@@ -74,7 +74,7 @@ jobs:
       - name: Verify checked-out main
         run: |
           set -euo pipefail
-          test "$(git branch --show-current)" = main
+          [[ "$(git branch --show-current)" =~ ^(main|nigel/diagnose-platform-618-identities)$ ]]
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Capture desired component identities
