@@ -5,6 +5,11 @@ This refines [ownership ordering](kernel-scanout-ownership-protocol.md), not the
 currently qualified [5.15 module contract](kernel-scanout-plugin-assurance.md).
 No kernel fork, replacement latch, or `/dev/fb0` rendering path is introduced.
 
+The isolated `stock-6.18-latch-reuse-v3` development profile now packages the
+exact provider/kernel/Main tuple for attended Dev use. That packaging and the
+successful live launcher evidence do not promote it into the normal production
+release stream or close the remaining proof obligations below.
+
 ## Evidence boundary
 
 The explicitly approved corrected probe succeeded on `6.18.38-MiSTer`, boot
