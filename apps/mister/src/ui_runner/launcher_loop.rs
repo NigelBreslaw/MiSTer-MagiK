@@ -4524,10 +4524,6 @@ fn request_pending_launch_return_shard(
     true
 }
 
-fn catalog_hydration_execution_mode(_request: CatalogWorkerRequest) -> CatalogExecutionMode {
-    CatalogExecutionMode::BackgroundInteractive
-}
-
 fn startup_intro_catalog_worker_request(request: CatalogWorkerRequest) -> CatalogWorkerRequest {
     if request == CatalogWorkerRequest::FreshBuild {
         CatalogWorkerRequest::FreshBuild
@@ -5697,7 +5693,7 @@ pub(super) fn run_launcher_loop(
             true,
         )
         .unwrap_or(CatalogWorkerRequest::LoadOnly);
-        let initial_cache = summary_seed_catalog_worker_initial_cache(request, true);
+        let initial_cache = CatalogWorkerInitialCache::AlreadyLoadedReady;
         print_startup_event(
             start,
             "return_catalog_capsule_ready",
@@ -5708,7 +5704,7 @@ pub(super) fn run_launcher_loop(
                 request.label()
             ),
         );
-        let execution_mode = catalog_hydration_execution_mode(request);
+        let execution_mode = CatalogExecutionMode::BackgroundInteractive;
         if catalog_publication_test.catalog_worker_allowed() {
             scheduler.start_catalog_worker(
                 arcade_root.clone(),
@@ -5736,7 +5732,7 @@ pub(super) fn run_launcher_loop(
                 return_catalog_hydration_needed,
             ) && catalog_publication_test.catalog_worker_allowed()
             {
-                let execution_mode = catalog_hydration_execution_mode(request);
+                let execution_mode = CatalogExecutionMode::BackgroundInteractive;
                 print_startup_event(start, "catalog_worker_start", &arcade_root);
                 scheduler.start_catalog_worker(
                     arcade_root.clone(),
@@ -5917,7 +5913,6 @@ pub(super) fn run_launcher_loop(
     LauncherStatusPresenter::new(&app).sync_catalog_scan(CatalogScanBridgeStatus::new(
         initial_catalog_scan_visible(
             catalog_ready,
-            arcade_catalog_required_at_start,
             catalog_worker_enabled,
             catalog_session.foreground_update(),
             warm_registry_hydration_pending,
@@ -6067,7 +6062,6 @@ pub(super) fn run_launcher_loop(
             catalog_publication_test.catalog_worker_allowed(),
             Instant::now(),
             Duration::ZERO,
-            catalog_refresh_available,
         )
     {
         print_startup_event(start, "catalog_worker_start", &worker.root);
@@ -6768,7 +6762,6 @@ pub(super) fn run_launcher_loop(
                 deferred_worker_policy.allowed && catalog_publication_test.catalog_worker_allowed(),
                 loop_start,
                 deferred_worker_policy.delay,
-                catalog_refresh_available,
             )
         {
             print_startup_event(start, "catalog_worker_start", &worker.root);
@@ -12881,7 +12874,6 @@ fn process_catalog_worker_message(
             catalog_partial: *return_capsule_active,
         },
         message,
-        loop_start,
     );
     apply_catalog_session_effects(
         effects,
@@ -14165,7 +14157,6 @@ fn library_changed_test_dialog_choice_from_value(
 
 fn initial_catalog_scan_visible(
     catalog_ready: bool,
-    _arcade_catalog_required_at_start: bool,
     catalog_worker_enabled: bool,
     foreground_update: bool,
     startup_waiting_for_initial_catalog: bool,
@@ -14271,13 +14262,6 @@ fn summary_seed_catalog_worker_starts_immediately(
     return_catalog_hydration_needed: bool,
 ) -> bool {
     request == CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS || return_catalog_hydration_needed
-}
-
-fn summary_seed_catalog_worker_initial_cache(
-    _request: CatalogWorkerRequest,
-    _return_catalog_hydration_needed: bool,
-) -> CatalogWorkerInitialCache {
-    CatalogWorkerInitialCache::AlreadyLoadedReady
 }
 
 fn launcher_bench_initial_preview_ready(
@@ -16077,7 +16061,6 @@ mod tests {
 
     #[test]
     fn media_stays_gated_through_ready_and_opens_after_completion() {
-        let now = Instant::now();
         let mut session = LauncherCatalogSession::new(false);
         let idle = MediaInteractionGate {
             active: false,
@@ -16097,7 +16080,6 @@ mod tests {
                 catalog_partial: false,
             },
             ready,
-            now,
         );
         let gated = catalog_build_media_gate(session.refresh_done(), idle);
         assert!(gated.active);
@@ -16109,7 +16091,6 @@ mod tests {
                 catalog_partial: false,
             },
             CatalogWorkerMessage::Done,
-            now,
         );
         assert_eq!(catalog_build_media_gate(session.refresh_done(), idle), idle);
     }
@@ -16171,7 +16152,6 @@ mod tests {
                 generation_fingerprint: None,
                 publication_ack: None,
             },
-            Instant::now(),
         );
         let mut use_catalog_seen = false;
         let mut full_bridge_dirty = false;
@@ -17523,10 +17503,8 @@ mod tests {
 
     #[test]
     pub(super) fn home_boot_with_ready_catalog_hides_catalog_popup() {
-        assert!(!initial_catalog_scan_visible(
-            true, false, true, false, false
-        ));
-        assert!(initial_catalog_scan_visible(true, false, true, true, false));
+        assert!(!initial_catalog_scan_visible(true, true, false, false));
+        assert!(initial_catalog_scan_visible(true, true, true, false));
     }
 
     #[test]
@@ -17742,21 +17720,10 @@ mod tests {
 
     #[test]
     pub(super) fn missing_catalog_shows_catalog_popup_on_home_or_arcade_boot() {
-        assert!(initial_catalog_scan_visible(
-            false, false, true, false, false
-        ));
-        assert!(initial_catalog_scan_visible(
-            false, true, true, false, false
-        ));
-        assert!(!initial_catalog_scan_visible(
-            true, true, true, false, false
-        ));
-        assert!(!initial_catalog_scan_visible(
-            false, true, false, false, false
-        ));
-        assert!(!initial_catalog_scan_visible(
-            false, false, true, false, true
-        ));
+        assert!(initial_catalog_scan_visible(false, true, false, false));
+        assert!(!initial_catalog_scan_visible(true, true, false, false));
+        assert!(!initial_catalog_scan_visible(false, false, false, false));
+        assert!(!initial_catalog_scan_visible(false, true, false, true));
     }
 
     #[test]
@@ -18321,25 +18288,6 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn summary_seed_worker_reuses_the_loaded_navigation_projection() {
-        assert_eq!(
-            summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::CheckStamp, false),
-            CatalogWorkerInitialCache::AlreadyLoadedReady
-        );
-        assert_eq!(
-            summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::LoadOnly, true),
-            CatalogWorkerInitialCache::AlreadyLoadedReady
-        );
-        assert_eq!(
-            summary_seed_catalog_worker_initial_cache(
-                CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
-                false,
-            ),
-            CatalogWorkerInitialCache::AlreadyLoadedReady
-        );
-    }
-
-    #[test]
     pub(super) fn cold_catalog_worker_starts_after_first_copy_without_delay() {
         let before_copy = deferred_catalog_worker_start_policy(
             false,
@@ -18424,18 +18372,6 @@ mod tests {
         assert!(!direct_preview_requested(Screen::Home, false, true));
         assert!(!direct_preview_requested(Screen::Arcade, true, true));
         assert!(!direct_preview_requested(Screen::Arcade, false, false));
-    }
-
-    #[test]
-    fn forced_hydration_with_a_usable_catalog_stays_background() {
-        assert_eq!(
-            catalog_hydration_execution_mode(CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS),
-            CatalogExecutionMode::BackgroundInteractive
-        );
-        assert_eq!(
-            catalog_hydration_execution_mode(CatalogWorkerRequest::LoadOnly),
-            CatalogExecutionMode::BackgroundInteractive
-        );
     }
 
     #[test]
@@ -18947,11 +18883,11 @@ mod tests {
             );
             assert!(
                 session
-                    .maybe_start_deferred_worker(false, false, true, now, Duration::ZERO, || false)
+                    .maybe_start_deferred_worker(false, false, true, now, Duration::ZERO)
                     .is_none()
             );
             let worker = session
-                .maybe_start_deferred_worker(false, true, true, now, Duration::ZERO, || false)
+                .maybe_start_deferred_worker(false, true, true, now, Duration::ZERO)
                 .expect("first visible copy starts the first build");
             assert_eq!(worker.request, CatalogWorkerRequest::FreshBuild);
             assert_eq!(
