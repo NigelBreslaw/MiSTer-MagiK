@@ -292,12 +292,6 @@ pub enum BridgeSyncPlan {
     Full,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LauncherInputMode {
-    Normal,
-    Launching,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LauncherEffect {
     StartupEvent {
@@ -812,15 +806,6 @@ impl LauncherLifecycle {
             }
         }
         self.step(BridgeSyncPlan::Full)
-    }
-
-    pub fn input_mode(&self) -> LauncherInputMode {
-        match self.state {
-            LauncherLifecycleState::Launching { .. } | LauncherLifecycleState::Handoff { .. } => {
-                LauncherInputMode::Launching
-            }
-            _ => LauncherInputMode::Normal,
-        }
     }
 
     pub fn handle(

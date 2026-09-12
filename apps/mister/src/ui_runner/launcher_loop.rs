@@ -12698,26 +12698,6 @@ fn should_desire_preview_direct_layer(
     )
 }
 
-fn preview_frame_from_raw<'a>(frame: &'a PreviewRawFrame<'a>) -> PreviewFrame<'a> {
-    PreviewFrame {
-        pixels: match frame.pixels {
-            PreviewRawPixels::Empty => PreviewPixels::Empty,
-            PreviewRawPixels::Rgb8(pixels) => PreviewPixels::Rgb8(pixels),
-            PreviewRawPixels::Rgb565 {
-                pixels,
-                stride_pixels,
-            } => PreviewPixels::Rgb565 {
-                pixels,
-                stride_pixels,
-            },
-        },
-        source_width: frame.source_w as usize,
-        source_height: frame.source_h as usize,
-        display_width: frame.display_w as usize,
-        display_height: frame.display_h as usize,
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PreviewRoutePolicy {
     kind: PreviewRouteKind,

@@ -172,11 +172,6 @@ impl LauncherCatalogSession {
         self.catalog_seed_partial = true;
     }
 
-    pub(super) fn note_cached_catalog_ready(&mut self) {
-        self.summary_only = false;
-        self.catalog_seed_partial = false;
-    }
-
     pub(super) fn defer_catalog_worker(
         &mut self,
         root: String,

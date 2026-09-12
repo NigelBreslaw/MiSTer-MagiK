@@ -70,17 +70,6 @@ impl MediaWorkerHandle {
     }
 }
 
-pub fn start_screenshot_media_worker() -> Option<MediaWorkerHandle> {
-    let paths = mister_magik_catalog::device_layout::CatalogPaths::capture_process();
-    start_screenshot_media_worker_with_paths(&paths)
-}
-
-pub fn start_screenshot_media_worker_with_paths(
-    paths: &mister_magik_catalog::device_layout::CatalogPaths,
-) -> Option<MediaWorkerHandle> {
-    start_screenshot_media_worker_with_captured(MediaWorkerConfig::capture_process(paths))
-}
-
 pub fn start_screenshot_media_worker_with_captured(
     captured: Result<MediaWorkerConfig, String>,
 ) -> Option<MediaWorkerHandle> {

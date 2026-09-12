@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use super::launcher_screensaver::ScreensaverRenderTrace;
 use super::*;
 use mister_magik_framebuffer_scenes::OutputRotation;
 
@@ -191,87 +190,12 @@ impl<'a> LayerTarget<'a> {
         rect
     }
 
-    pub(super) fn render_screensaver(
-        &mut self,
-        saver: &mut LauncherScreensaver,
-    ) -> (DirtyRect, ScreensaverRenderTrace) {
-        let width = self.layout.logical_w();
-        let height = self.layout.logical_h();
-        let trace = saver.render(self.target.cached_565_mut(), width, height);
-        (
-            DirtyRect {
-                x0: 0,
-                y0: 0,
-                x1: width,
-                y1: height,
-            },
-            trace,
-        )
-    }
-
-    pub(super) fn render_screensaver_fade(
-        &mut self,
-        launcher_frame: &[Rgb565Pixel],
-        alpha: u8,
-    ) -> DirtyRect {
-        let cached = self.target.cached_565_mut();
-        if cached.len() == launcher_frame.len() {
-            let black = Rgb565Pixel(0);
-            for (pixel, source) in cached.iter_mut().zip(launcher_frame) {
-                *pixel = blend_565(*source, black, alpha);
-            }
-        } else {
-            cached.fill(Rgb565Pixel(0));
-        }
-        DirtyRect {
-            x0: 0,
-            y0: 0,
-            x1: self.layout.logical_w(),
-            y1: self.layout.logical_h(),
-        }
-    }
-
-    pub(super) fn render_screensaver_crossfade(
-        &mut self,
-        saver: &mut LauncherScreensaver,
-        launcher_frame: &[Rgb565Pixel],
-        alpha: u8,
-    ) -> (DirtyRect, ScreensaverRenderTrace) {
-        let width = self.layout.logical_w();
-        let height = self.layout.logical_h();
-        let trace = saver.render(self.target.cached_565_mut(), width, height);
-        let cached = self.target.cached_565_mut();
-        if cached.len() == launcher_frame.len() {
-            for (pixel, source) in cached.iter_mut().zip(launcher_frame) {
-                *pixel = blend_565(*source, *pixel, alpha);
-            }
-        }
-        (
-            DirtyRect {
-                x0: 0,
-                y0: 0,
-                x1: width,
-                y1: height,
-            },
-            trace,
-        )
-    }
-
-    pub(super) fn snapshot_cached(&self) -> Vec<Rgb565Pixel> {
-        snapshot_cached_565(self.target)
-    }
-
     pub(super) fn restore_cached(&mut self, snapshot: &[Rgb565Pixel]) -> bool {
         restore_cached_565(self.target, snapshot)
     }
 
     pub(super) fn restore_presentation_cached(&mut self, snapshot: &[Rgb565Pixel]) -> bool {
         restore_cached_565(self.target, snapshot)
-    }
-
-    pub(super) fn swap_cached(&mut self, replacement: &mut Vec<Rgb565Pixel>) -> bool {
-        let width = self.layout.logical_w();
-        self.target.swap_cached_565(replacement, width)
     }
 
     pub(super) fn swap_presentation_cached(&mut self, replacement: &mut Vec<Rgb565Pixel>) -> bool {
@@ -888,10 +812,6 @@ impl<'a> LayerTarget<'a> {
     }
 }
 
-fn snapshot_cached_565(target: &UiFrameTarget) -> Vec<Rgb565Pixel> {
-    target.cached_565().to_vec()
-}
-
 fn restore_cached_565(target: &mut UiFrameTarget, snapshot: &[Rgb565Pixel]) -> bool {
     let cached = target.cached_565_mut();
     if cached.len() != snapshot.len() {
@@ -1008,7 +928,7 @@ mod tests {
             .collect::<Vec<_>>();
         target.cached_565_mut().copy_from_slice(&launcher_frame);
 
-        let snapshot = snapshot_cached_565(&target);
+        let snapshot = target.cached_565().to_vec();
         target.cached_565_mut().fill(Rgb565Pixel(0x0001));
 
         assert!(restore_cached_565(&mut target, &snapshot));

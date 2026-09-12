@@ -1455,10 +1455,6 @@ impl LauncherNav {
         }
     }
 
-    pub fn launcher_taxonomy_token(&self) -> LauncherTaxonomyToken {
-        self.taxonomy_token
-    }
-
     pub fn current_menu_id(&self) -> &str {
         self.menu_path
             .last()
@@ -1508,13 +1504,6 @@ impl LauncherNav {
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     pub fn home_scroll_max(&self) -> i32 {
         home_max_scroll(self.current_menu_count())
-    }
-
-    pub fn current_menu_game_count(&self) -> usize {
-        self.taxonomy
-            .menu(self.current_menu_id())
-            .map(|menu| menu.count)
-            .unwrap_or(0)
     }
 
     pub fn catalog_build_started(&mut self) {
@@ -3558,10 +3547,6 @@ impl LauncherNav {
         self.rebuild_user_list_indexes(catalog);
     }
 
-    pub fn is_favourite_launch_ref(&self, launch_ref: &str) -> bool {
-        self.favourite_launch_refs.contains(launch_ref)
-    }
-
     pub fn favourite_launch_refs(&self) -> impl Iterator<Item = &str> {
         self.favourite_launch_refs.iter().map(String::as_str)
     }
@@ -4609,10 +4594,6 @@ impl SystemLauncherPersistence {
             ))),
         }
     }
-
-    fn library_rebuild_pending(&self) -> bool {
-        library_rebuild_on_next_boot_path().exists()
-    }
 }
 
 impl LauncherPersistence for SystemLauncherPersistence {
@@ -5007,12 +4988,6 @@ fn parse_display_state_response(response: &str) -> Result<DisplayCommandState, S
 pub fn apply_display_resolution(id: &str) -> Result<(), String> {
     mister_magik_mister_runtime::display_control::MainDisplayControl
         .apply(id)
-        .map_err(|failure| failure.detail().to_string())
-}
-
-pub fn confirm_display_resolution() -> Result<(), String> {
-    mister_magik_mister_runtime::display_control::MainDisplayControl
-        .confirm()
         .map_err(|failure| failure.detail().to_string())
 }
 
@@ -5742,10 +5717,6 @@ fn delete_screenshot_packs_at_with_fault_control(
 
 fn screenshot_reset_deletes_file(name: &str) -> bool {
     screenshot_reset_deletes_filename(name)
-}
-
-pub fn library_rebuild_on_next_boot_pending() -> bool {
-    SystemLauncherPersistence.library_rebuild_pending()
 }
 
 pub fn request_library_rebuild_on_next_boot() -> Result<(), String> {

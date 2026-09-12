@@ -2555,10 +2555,6 @@ impl CatalogCacheState {
             Self::Missing => "missing",
         }
     }
-
-    fn has_usable_catalog(self) -> bool {
-        matches!(self, Self::Ready)
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

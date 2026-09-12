@@ -449,13 +449,6 @@ pub(super) fn frame_rect(rect: DirtyRect) -> FrameRect {
     }
 }
 
-pub(super) fn configure_window(ui: &UiDisplay, window: &Rc<MisterSoftwareWindow>) {
-    configure_window_layout(
-        &UiLayoutGeometry::for_display(ui, ScreenOrientation::Normal),
-        window,
-    );
-}
-
 pub(super) fn configure_window_layout(
     layout: &UiLayoutGeometry,
     window: &Rc<MisterSoftwareWindow>,

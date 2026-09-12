@@ -249,10 +249,6 @@ impl LauncherScreensaver {
         trace
     }
 
-    pub fn has_rendered_card(&self) -> bool {
-        self.parade.as_ref().is_some_and(ScreenshotParade::is_ready)
-    }
-
     pub fn is_loading_archive(&self) -> bool {
         false
     }
@@ -474,7 +470,6 @@ mod tests {
         let trace = screensaver.render_at(&mut frame, 320, 180, Duration::from_secs(2));
 
         assert_eq!(trace.renderer, "parade");
-        assert!(!screensaver.is_loading_archive());
         let _ = std::fs::remove_file(path);
     }
 
