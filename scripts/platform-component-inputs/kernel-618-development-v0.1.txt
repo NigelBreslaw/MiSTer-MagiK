@@ -1,0 +1,8 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Development Linux 6.18 scanout component identity inputs, format v0.1.
+mister/platform/kernel/scanout-618
+mister/platform/kernel/main-window
+mister/platform/kernel/scanout-slots/mister_magik_scanout_slots_uapi.h
+mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h

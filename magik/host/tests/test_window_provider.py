@@ -7,6 +7,26 @@ import subprocess
 import pytest
 
 
+def test_development_build_emits_profile_bound_provenance():
+    root = Path(__file__).resolve().parents[3]
+    script = (
+        root / "mister/platform/kernel/scanout-618/build-in-container.sh"
+    ).read_text()
+    for field in (
+        "kernel_release=6.18.38-MiSTer",
+        "kernel_revision=$kernel_revision",
+        "platform_profile=$platform_profile",
+        "provider_identity=$provider_identity",
+        "development_only=$development_only",
+        "platform_contract_sha256=$platform_contract_sha256",
+        "module_sha256=$module_sha256",
+        "vermagic=$vermagic",
+    ):
+        assert field in script
+    assert "stock-6.18-latch-reuse-v3" in script
+    assert "provenance.txt > SHA256SUMS" in script
+
+
 def test_provider_lifecycle_and_mapping(tmp_path):
     compiler = shutil.which("cc")
     if not compiler:

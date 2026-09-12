@@ -60,8 +60,10 @@ bash /provider/scanout-618/build-in-container.sh \
 
 Omitting `--development-trial` builds the activation-disabled review object.
 Each output directory contains the object, verified inputs, compiler and module
-metadata, imports, source checksums and `SHA256SUMS`. Generated objects are not
-committed.
+metadata, imports, source checksums, profile-bound `provenance.txt` and
+`SHA256SUMS`. The development provenance names the exact kernel release,
+revision, provider identity and development-only scope consumed by runtime
+preflight. Generated objects are not committed.
 
 ## Verification
 

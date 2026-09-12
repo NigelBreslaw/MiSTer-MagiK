@@ -52,6 +52,29 @@ sha256sum scanout-618/entry.c scanout-618/provider.c scanout-618/provider.h \
     scanout-slots/mister_magik_scanout_slots_uapi.h > "$out/source-sha256.txt"
 modinfo "$out/$module" > "$out/modinfo.txt"
 arm-none-linux-gnueabihf-nm -u "$out/$module" > "$out/imports.txt"
+module_sha256=$(sha256sum "$out/$module" | awk '{print $1}')
+platform_contract_sha256=$(sha256sum \
+    /provider/scanout-slots/mister_magik_scanout_platform.h | awk '{print $1}')
+vermagic=$(modinfo -F vermagic "$out/$module")
+if [[ $trial == 1 ]]; then
+  provider_identity=stock-6.18-latch-reuse-v3
+  platform_profile=stock-6.18-latch-reuse-v3
+  development_only=1
+else
+  provider_identity=activation-disabled
+  platform_profile=unsupported
+  development_only=0
+fi
+cat > "$out/provenance.txt" <<EOF
+kernel_release=6.18.38-MiSTer
+kernel_revision=$kernel_revision
+platform_profile=$platform_profile
+provider_identity=$provider_identity
+development_only=$development_only
+platform_contract_sha256=$platform_contract_sha256
+module_sha256=$module_sha256
+vermagic=$vermagic
+EOF
 [[ -z "$(modinfo -F depends "$out/$module")" ]]
 [[ "$(modinfo -F license "$out/$module")" == GPL ]]
 [[ "$(modinfo -F mister_magik_source_license "$out/$module")" == GPL-2.0-only ]]
@@ -63,7 +86,7 @@ else
 fi
 cd "$out"
 sha256sum "$module" vmlinux.symvers kernel.config kernel-revision.txt \
-    source-sha256.txt compiler.txt modinfo.txt imports.txt > SHA256SUMS
+    source-sha256.txt compiler.txt modinfo.txt imports.txt provenance.txt > SHA256SUMS
 if [[ $trial == 1 ]]; then
   echo 'Development trial provider builds; never use as a release artifact.'
 else
