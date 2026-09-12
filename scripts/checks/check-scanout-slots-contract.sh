@@ -11,6 +11,7 @@ PLATFORM="$ROOT/mister/platform/kernel/scanout-slots/mister_magik_scanout_platfo
 POLICY="$ROOT/mister/platform/kernel/scanout-slots/mister_magik_scanout_policy.h"
 RUST="$ROOT/mister/platform/runtime/src/framebuffer/hidden_scanout.rs"
 RUST_CONTRACT="$ROOT/mister/platform/contracts/scanout/src/lib.rs"
+TRIAL_DIAGNOSTIC="$ROOT/mister/platform/kernel/scanout-618/mister_magik_mapping_diagnostic_uapi.h"
 DOC="$ROOT/documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
 KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
 DEPLOY="$ROOT/magik/agent/src/publication.rs"
@@ -29,7 +30,7 @@ require_text() {
   fi
 }
 
-for file in "$SOURCE" "$UAPI" "$PLATFORM" "$POLICY" "$RUST" "$RUST_CONTRACT" "$DEPLOY" "$PLATFORM_STAGE" "$DOC"; do
+for file in "$SOURCE" "$UAPI" "$PLATFORM" "$POLICY" "$RUST" "$RUST_CONTRACT" "$TRIAL_DIAGNOSTIC" "$DEPLOY" "$PLATFORM_STAGE" "$DOC"; do
   test -f "$file"
 done
 for text in \

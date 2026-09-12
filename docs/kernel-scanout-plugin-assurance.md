@@ -3,6 +3,10 @@
 Status: implementation contract. Passing the host and device checks does not
 constitute a safety certification.
 
+This document describes the currently qualified 5.15 profile. The proposed
+[stock-6.18 production mapping contract](kernel-scanout-618-production-contract.md)
+defines a separate gated extension; it does not relax this profile's checks.
+
 ## Sole responsibility
 
 On the pinned `5.15.1-MiSTer` platform, `mister_magik_scanout_slots` exposes
