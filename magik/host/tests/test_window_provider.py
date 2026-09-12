@@ -181,12 +181,20 @@ static void reset(void) {
     assert(!held && !claimed && !ready);
 }
 int main(void) {
-    reset();
-    assert(mapping_protection_valid(0x707));
-    assert(!mapping_protection_valid(0x703)); /* no WC */
-    assert(!mapping_protection_valid(0x507)); /* no XN */
-    assert(!mapping_protection_valid(0x787)); /* read-only */
-    assert(!mapping_protection_valid(0x307)); /* not shared */
+	unsigned int verification;
+	reset();
+	verification=0; assert(mapping_protection_failures(0x707,&verification)==0);
+	assert(verification==(MISTER_MAGIK_MAPPING_VERIFIED_WC |
+		MISTER_MAGIK_MAPPING_VERIFIED_XN |
+		MISTER_MAGIK_MAPPING_VERIFIED_WRITABLE_PROTECTION |
+		MISTER_MAGIK_MAPPING_VERIFIED_SHARED));
+	verification=0; assert(mapping_protection_failures(0x703,&verification)==MISTER_MAGIK_MAPPING_FAILURE_WC);
+	verification=0; assert(mapping_protection_failures(0x507,&verification)==MISTER_MAGIK_MAPPING_FAILURE_XN);
+	verification=0; assert(mapping_protection_failures(0x787,&verification)==MISTER_MAGIK_MAPPING_FAILURE_READONLY);
+	verification=0; assert(mapping_protection_failures(0x307,&verification)==MISTER_MAGIK_MAPPING_FAILURE_SHARED);
+	verification=0; assert(mapping_protection_failures(0x183,&verification)==
+		(MISTER_MAGIK_MAPPING_FAILURE_WC | MISTER_MAGIK_MAPPING_FAILURE_XN |
+		 MISTER_MAGIK_MAPPING_FAILURE_READONLY | MISTER_MAGIK_MAPPING_FAILURE_SHARED));
 #ifdef MISTER_MAGIK_DEVELOPMENT_TRIAL
     assert(window_provider_init()==0 && claims==1 && ready);
     window_provider_exit(); assert(releases==1 && !ready);
@@ -214,10 +222,10 @@ int main(void) {
     struct mister_magik_mapping_diagnostic diagnostic;
     assert(main_ioctl(&main_file,MISTER_MAGIK_MAPPING_GET_DIAGNOSTIC,
         (unsigned long)&diagnostic)==0);
-    assert(diagnostic.abi_version==1 && diagnostic.record_bytes==64);
+	assert(diagnostic.abi_version==2 && diagnostic.record_bytes==64);
     assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_NOT_ATTEMPTED);
     assert(diagnostic.page_index==MISTER_MAGIK_MAPPING_DIAGNOSTIC_NO_PAGE);
-    assert(!diagnostic.reserved[0] && !diagnostic.reserved[1]);
+	assert(!diagnostic.verification_flags && !diagnostic.reserved);
     assert(mister_magik_window_provider_register(true)==-EBUSY && claims==1);
     for(unsigned int flags=0; flags<16; flags++) {
         struct vm_area_struct v={0x1000,0x1000+0x17bb000,0,flags|VM_MAYEXEC,0};
@@ -230,7 +238,9 @@ int main(void) {
         (unsigned long)&diagnostic)==0);
     assert(diagnostic.state==MISTER_MAGIK_MAPPING_DIAGNOSTIC_PASSED);
     assert(diagnostic.physical_base==0x22000000 && diagnostic.map_bytes==0x17bb000);
-    assert(diagnostic.protection_mask==0x63c && diagnostic.expected_protection==0x707);
+	assert(diagnostic.protection_mask==0x63c && diagnostic.expected_protection==0x707);
+	assert(diagnostic.observed_protection==0);
+	assert(diagnostic.verification_flags==0x1ff);
     for(int slot=0; slot<2; slot++) {
         struct vm_area_struct v={0x1000,0x1000+SLOT_BYTES,slot?2025:0,7|VM_MAYEXEC,0};
         assert(slots_mmap(&slot_files[slot],&v)==0 && mapped_phys==(slot?SLOT1_BASE:SLOT0_BASE));

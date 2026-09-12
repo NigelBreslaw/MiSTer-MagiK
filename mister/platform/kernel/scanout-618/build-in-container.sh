@@ -2,16 +2,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Nigel Breslaw
 set -euo pipefail
+kernel_revision=6a581bac47c32dfd2525f9874fd263cf08058610
 [[ $# == 1 || ($# == 2 && "$1" == --development-trial) ]] || exit 2
 trial=0
 if [[ $# == 2 ]]; then trial=1; shift; fi
 out="$1"
 mkdir "$out"
 cd /inputs
-echo '1b85088193ab48dff58698c183b08eb6a8dc808c013fa57891d5f53ef7536fbd  kernel.tar' | sha256sum -c -
+echo '0702694110b54441b0a8323be43538e1d5b394645c4970616867b56e55496672  kernel.tar' | sha256sum -c -
 echo 'd169f9196e3a6c4248ee79ca85987ebce0e4ea9174c1f8d51af9b28fecf22da1  toolchain.tar.xz' | sha256sum -c -
-echo '29389f52958f87f42f08ca29684f7704044cb1e2102a7c6135bda3253cc9c24a  kernel.config' | sha256sum -c -
-echo 'fd2e67a4f798eb41c5fdd1416275233ca3a2472a0c817f598963ab1a8ba7c4c3  vmlinux.symvers' | sha256sum -c -
+echo '584c7fdb7884616363b38c0514266a5fc40083ae327d9a71e72deb6f3101cdab  kernel.config' | sha256sum -c -
+echo 'f58b220d8cdcb925afdd4ba4a4c0a04c02154a8f2fc658cc1fa885b89f79952f  vmlinux.symvers' | sha256sum -c -
 scratch=$(mktemp -d /tmp/magik-provider-build.XXXXXX)
 mkdir "$scratch/source" "$scratch/toolchain" "$scratch/kernel" "$scratch/modules"
 tar -xf kernel.tar -C "$scratch/source"
@@ -20,7 +21,7 @@ cp -R /provider/scanout-618 /provider/main-window /provider/scanout-slots "$scra
 cp kernel.config "$scratch/kernel/.config"
 export PATH="$scratch/toolchain/bin:$PATH"
 export ARCH=arm CROSS_COMPILE=arm-none-linux-gnueabihf- LOCALVERSION=-MiSTer
-export KBUILD_BUILD_TIMESTAMP='Mon Sep 7 17:23:26 CST 2026'
+export KBUILD_BUILD_TIMESTAMP='Sat Sep 12 09:57:13 UTC 2026'
 export KBUILD_BUILD_USER=magik-provider KBUILD_BUILD_HOST=isolated-build KBUILD_BUILD_VERSION=1
 export KCFLAGS="-fdebug-prefix-map=$scratch=/magik-provider-build -fmacro-prefix-map=$scratch=/magik-provider-build"
 arm-none-linux-gnueabihf-gcc --version > "$out/compiler.txt"
@@ -40,6 +41,7 @@ make -C "$scratch/source" O="$scratch/kernel" M="$scratch/modules/scanout-618" "
 cp "$scratch/modules/scanout-618/$module" "$out/"
 cp /inputs/vmlinux.symvers "$out/"
 cp /inputs/kernel.config "$out/"
+printf '%s\n' "$kernel_revision" > "$out/kernel-revision.txt"
 cd /provider
 sha256sum scanout-618/entry.c scanout-618/provider.c scanout-618/provider.h \
     scanout-618/mister_magik_mapping_diagnostic_uapi.h \
@@ -55,12 +57,13 @@ arm-none-linux-gnueabihf-nm -u "$out/$module" > "$out/imports.txt"
 [[ "$(modinfo -F mister_magik_source_license "$out/$module")" == GPL-2.0-only ]]
 [[ "$(modinfo -F vermagic "$out/$module")" == '6.18.38-MiSTer SMP mod_unload ARMv7 p2v8 ' ]]
 if [[ $trial == 1 ]]; then
-  [[ "$(modinfo -F mister_magik_development_trial "$out/$module")" == stock-6.18-latch-reuse-v2 ]]
+  [[ "$(modinfo -F mister_magik_development_trial "$out/$module")" == stock-6.18-latch-reuse-v3 ]]
 else
   [[ -z "$(modinfo -F mister_magik_development_trial "$out/$module")" ]]
 fi
 cd "$out"
-sha256sum "$module" vmlinux.symvers kernel.config source-sha256.txt compiler.txt modinfo.txt imports.txt > SHA256SUMS
+sha256sum "$module" vmlinux.symvers kernel.config kernel-revision.txt \
+    source-sha256.txt compiler.txt modinfo.txt imports.txt > SHA256SUMS
 if [[ $trial == 1 ]]; then
   echo 'Development trial provider builds; never use as a release artifact.'
 else

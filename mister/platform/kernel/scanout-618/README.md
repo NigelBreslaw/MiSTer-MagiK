@@ -1,126 +1,92 @@
-# Stock-6.18 provider core (activation disabled)
+# Linux 6.18 fixed-window provider
 
-This implements the fixed-window mechanism from
-`docs/kernel-scanout-618-production-contract.md`, not a qualified replacement for
-the existing 5.15 production module. It is not in the production build/release
-inputs or the native probe's artifact allowlist.
+This directory contains the short-term out-of-tree provider for the self-built
+MiSTer Linux `6.18.38-MiSTer` development platform. It is not part of MagiK's
+release inputs.
 
-`provider.c` implements:
+The ordinary object is intentionally activation-disabled and returns
+`EOPNOTSUPP` before reserving memory or creating a device. The explicitly
+requested development build produces `mister_magik_scanout_slots.ko` with
+`mister_magik_development_trial=stock-6.18-latch-reuse-v3`.
 
-- One full-window exclusive resource claim with per-page RAM-PFN rejection.
-- The unchanged two-slot ABI v3 and the separate Main-window ABI v1.
-- Shared, read/write, non-executable WC mappings with fixed selectors/lengths.
-- Prevention of later execute permission, VMA expansion, inheritance and dumps.
-- Construction of WC, writable, non-executable shared protection from the
-  finalized VMA flags, followed by inspection of every newly mapped page through
-  `follow_pfnmap_start/end` to reject PFN or write-permission mismatches.
-- A fixed, read-only, per-open 64-byte report for the first mapping failure.
-- Two root-only misc devices, with open refused until both registrations finish.
-- Reverse-order rollback after partial registration and normal resource cleanup.
-- Module ownership through file references, including VMA-held references after
-  fd closure. Actual kernel lifetime/mprotect tests remain unperformed.
+## Fixed interfaces
 
-The internal registration routine requires platform qualification.
-The ordinary build passes false, so this module returns `EOPNOTSUPP` before
-reserving memory or registering devices. There is no module parameter or ioctl
-to bypass the gate. `build-in-container.sh --development-trial OUT` produces a
-separately named `mister_magik_scanout_slots.ko` carrying
-`mister_magik_development_trial=stock-6.18-latch-reuse-v2`. That object is only
-for the attended rollback-bound qualification campaign; it is excluded from
-release inputs and still enforces every exact platform, PFN, resource and
-mapping check in `provider.c`.
+The module publishes two root-only misc devices after all preflight checks pass:
 
-## Kernel APIs and build evidence
+- `/dev/mister-magik-main-window`: one exact mapping of the complete fixed
+  physical window.
+- `/dev/mister-magik-scanout-slots`: the unchanged two-slot ABI v3.
 
-Linux 6.18 removed `no_llseek`; omitting the callback disables seeking through
-the VFS open path. Do not replace it with `noop_llseek`, which allows seeking.
+It claims the complete window exclusively, rejects System RAM PFNs, and accepts
+only the fixed selectors and lengths. Mappings must be shared, writable,
+non-executable and write-combined. Every installed page is checked with
+`follow_pfnmap_start/end`; PFN and writability mismatches fail with `EIO`.
 
-With `CONFIG_PER_VMA_LOCK=y`, `vm_flags_set/clear` introduce the GPL-only
-`__vma_start_write` import. The provider instead uses the documented
-`vm_flags_init()` API **only in its initial mmap callbacks**. In this pinned
-kernel's `mm/vma.c::__mmap_new_vma`, the legacy file mmap callback runs before
-`vma_iter_store_new`, so the VMA is not yet published. This is not valid for
-editing an existing VMA and must not be reused in later permission callbacks.
-No raw private-field mutation or export bypass is used.
+The trial-only read-only diagnostic ioctl returns one fixed 64-byte, per-open
+record. ABI v2 reports the first mapping failure and records which VMA,
+write-combine, execute-never, writable, shared, supplied-protection, PFN and
+writability checks completed. It cannot select an address, modify a mapping or
+bypass validation.
 
-The build script uses the same pinned source/config/compiler archives as the
-successful probe. It reuses the SHA-256-verified `vmlinux.symvers` from the two
-completed unmodified-kernel builds, whose export tables match exactly. It does
-not fabricate symbols or use warning-only modpost. Inputs are mounted at
-`/inputs`, this parent kernel directory at `/provider`, and a fresh output path
-is passed to `bash /provider/scanout-618/build-in-container.sh` in the existing
-Apple builder image (digest
-`sha256:821fcb389464fb019f76bfa25eb8614ba92536072ab408066b3100a00dcfa1e7`).
+The provider keeps module ownership through file and VMA references, registers
+both devices atomically, and unwinds registrations and the resource claim in
+reverse order.
 
-Independent builds `build/window-provider-build-3` and `-4` produced identical
-unstripped `.ko` files:
-`9efe5df884aede9d3ca475773ac55364bc8ceb8cc7987937108bf30efb9098c6`.
-Vermagic is `6.18.38-MiSTer SMP mod_unload ARMv7 p2v8`, no dependencies, and
-all twelve imports passed modpost as ordinary exports. Build 4 retains source,
-config, compiler, import and binary checksums. No provider has been device-loaded.
+## Exact development kernel
 
-The host test includes the actual provider and entry-point C with mocked kernel
-effects. It exercises the closed entry point, board/RAM rejection, claim failure,
-both registration failures, open-before-publication rejection, rollback,
-duplicate registration, mapping permissions/selectors, copy/remap failures,
-both layout queries and idempotent cleanup. It does not prove kernel VMA lifetime
-or target page-table attributes. The 58 focused host tests pass.
+`build-in-container.sh` accepts only the inputs used for the working paired
+kernel/module build:
 
-## Component licensing
+- Kernel source: MiSTer `MiSTer-v6.18` revision
+  `6a581bac47c32dfd2525f9874fd263cf08058610`.
+- Kernel archive SHA-256:
+  `0702694110b54441b0a8323be43538e1d5b394645c4970616867b56e55496672`.
+- Final `.config` SHA-256:
+  `584c7fdb7884616363b38c0514266a5fc40083ae327d9a71e72deb6f3101cdab`.
+- Final `Module.symvers` SHA-256:
+  `f58b220d8cdcb925afdd4ba4a4c0a04c02154a8f2fc658cc1fa885b89f79952f`.
+- Arm GNU toolchain archive SHA-256:
+  `d169f9196e3a6c4248ee79ca85987ebce0e4ea9174c1f8d51af9b28fecf22da1`.
+- Vermagic: `6.18.38-MiSTer SMP mod_unload ARMv7 p2v8`.
 
-The provider C sources and internal header are GPL-2.0-only, with
-`MODULE_LICENSE("GPL")` and matching source-license metadata. The license text
-is in `LICENSES/GPL-2.0-only.txt`. Nigel approved this component-specific grant;
-the application, host tools and existing 5.15 module retain their licenses.
-The three Main-window headers and slot UAPI header offer
-`GPL-2.0-only OR GPL-3.0-or-later`, so the module and userspace can each select
-the appropriate grant. Their ABI and implementations are unchanged. These
-first-party files carry Nigel's copyright; no kernel implementation was copied.
-The earlier build hashes above describe the pre-change artifact, not this source.
+Mount those files at `/inputs` as `kernel.tar`, `kernel.config`,
+`vmlinux.symvers` and `toolchain.tar.xz`; mount this `kernel` directory at
+`/provider`. Build the usable development object with:
 
-## Remaining qualification gates
+```sh
+bash /provider/scanout-618/build-in-container.sh \
+    --development-trial /outputs/trial
+```
 
-The provider constructs and validates the ARM WC, writable, non-executable
-shared protection before passing that exact value to `remap_pfn_range`. It then
-verifies every installed PFN and writable result inside initial mmap with the
-mmap write lock held. Every successful lookup is ended before returning or
-advancing; no result fields are read after unlock. Failed lookups propagate
-their error and mismatches return `EIO`. The pinned kernel's
-`mm/vma.c::__mmap_new_file_vma` calls `unmap_region` when the callback fails,
-undoing the unsuccessful mapping. No memory contents are read. The host fault
-tests cover protection construction and first/last-page lookup, PFN and
-writability failures.
+Omitting `--development-trial` builds the activation-disabled review object.
+Each output directory contains the object, verified inputs, compiler and module
+metadata, imports, source checksums and `SHA256SUMS`. Generated objects are not
+committed.
 
-This is deliberately not a hardware-attribute attestation: ARM's Linux PTE
-representation is not the raw hardware translation, and this check neither
-reads PRRR/NMRR nor inspects pre-existing aliases or later permission changes.
-Trial v2 adds one fixed read-only diagnostic ioctl. It reports only the first
-failed page for the mapping attempted on that open file descriptor, including
-expected/observed PFN, writability and protection evidence. It cannot select an
-address, alter a mapping or bypass validation.
+## Verification
 
-Independent builds 5 and 6 produce byte-identical modules and pass stock-kernel
-modpost with both GPL-only lookup imports and matching `GPL` / `GPL-2.0-only`
-module metadata. Their SHA-256 is
-`d797b0532def95d6e89af4dc2b468a954703dd432049179e01c769cb5ac3f36c`;
-vermagic remains `6.18.38-MiSTer SMP mod_unload ARMv7 p2v8`. The focused host
-suite passes 58 tests. No provider has been loaded on the device.
+The focused host tests include the actual C implementation with mocked kernel
+effects. They cover the disabled ordinary entry point, exact trial gate,
+platform/RAM/resource rejection, partial registration rollback, per-open
+diagnostics, fixed mappings and selectors, all mapping failure categories, and
+normal teardown.
 
-The running config disables `CONFIG_ARM_PTDUMP_DEBUGFS`. The supported
-`follow_pfnmap_start/end` helpers expose PFNs and writability but ARM does not
-define `pte_pgprot`, so the generic implementation reports a zero protection.
-The GPL-only helpers remain sufficient for post-map PFN and writable checks;
-protection construction is validated before the mapping call.
-Source-predicted attributes and resource reservation do not satisfy the promised
-actual-target mapping verification.
+Both objects build without modpost warnings against the exact self-built kernel.
+The PR-source trial object has SHA-256
+`d69534405c3869a17ea88ef57a291cd26877599916b695453c7bc8275fa5650f`.
+After removing debug information and the build-ID note, it is byte-identical to
+the module used in the successful device run; both reduce to SHA-256
+`33633b174d0ef331ec3e339910c8ae6eda463984d4c1f5ac31ce92f7d4acc2ee`.
+The device run successfully created both fixed mappings on the paired kernel and
+completed MagiK presentations without module, mapping or ownership failures.
 
-No separately licensed diagnostic project or kernel fork is required. Inspection
-still needs bounded operations, tests and separate approval before any device
-load. PFN-mapping inspection does not automatically establish the stock driver's
-alias attributes or prevent console/VT/mode writes.
+## Scope and licensing
 
-Until the remaining platform checks are resolved, leave the
-entry point closed. The stock config enables framebuffer console/VT, and the
-driver's mode path clears the whole aperture. Main's admission gate alone cannot
-exclude all those accesses. No unsafe activation or claim of completed migration
-is justified by this provider build.
+The provider C files are `GPL-2.0-only` and declare `MODULE_LICENSE("GPL")`.
+Shared UAPI headers offer `GPL-2.0-only OR GPL-3.0-or-later`, allowing the module
+and existing GPLv3 userspace to choose their compatible grant independently.
+
+This development provider is not a generic physical-memory mapper, allocator,
+presentation engine or writer lease. It does not prove FPGA DDR-read quiescence
+or promote the Linux 6.18 path to production. Production activation remains a
+separate qualification and packaging decision.

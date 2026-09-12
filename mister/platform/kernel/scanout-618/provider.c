@@ -106,13 +106,30 @@ static long diagnostic_ioctl(struct file *file, unsigned long arg)
 		-EFAULT : 0;
 }
 
-static bool mapping_protection_valid(pgprot_t protection)
+static unsigned int mapping_protection_failures(pgprot_t protection,
+	unsigned int *verification_flags)
 {
 	const unsigned long value = pgprot_val(protection);
+	unsigned int failures = 0;
 
-	return (value & L_PTE_MT_MASK) == L_PTE_MT_BUFFERABLE &&
-		(value & L_PTE_XN) && !(value & L_PTE_RDONLY) &&
-		(value & L_PTE_SHARED);
+	if ((value & L_PTE_MT_MASK) == L_PTE_MT_BUFFERABLE)
+		*verification_flags |= MISTER_MAGIK_MAPPING_VERIFIED_WC;
+	else
+		failures |= MISTER_MAGIK_MAPPING_FAILURE_WC;
+	if (value & L_PTE_XN)
+		*verification_flags |= MISTER_MAGIK_MAPPING_VERIFIED_XN;
+	else
+		failures |= MISTER_MAGIK_MAPPING_FAILURE_XN;
+	if (!(value & L_PTE_RDONLY))
+		*verification_flags |=
+			MISTER_MAGIK_MAPPING_VERIFIED_WRITABLE_PROTECTION;
+	else
+		failures |= MISTER_MAGIK_MAPPING_FAILURE_READONLY;
+	if (value & L_PTE_SHARED)
+		*verification_flags |= MISTER_MAGIK_MAPPING_VERIFIED_SHARED;
+	else
+		failures |= MISTER_MAGIK_MAPPING_FAILURE_SHARED;
+	return failures;
 }
 
 static int verify_mapping(struct file *file, struct vm_area_struct *vma,
@@ -166,6 +183,8 @@ static int verify_mapping(struct file *file, struct vm_area_struct *vma,
 	}
 	diagnostic.state = MISTER_MAGIK_MAPPING_DIAGNOSTIC_PASSED;
 	diagnostic.page_index = MISTER_MAGIK_MAPPING_DIAGNOSTIC_NO_PAGE;
+	diagnostic.verification_flags |= MISTER_MAGIK_MAPPING_VERIFIED_PFNS |
+		MISTER_MAGIK_MAPPING_VERIFIED_WRITABILITY;
 	diagnostic_store(file->private_data, &diagnostic);
 	return 0;
 }
@@ -192,13 +211,18 @@ static int map_fixed(struct file *file, struct vm_area_struct *vma,
 		vma->vm_end - vma->vm_start,
 		L_PTE_MT_MASK | L_PTE_SHARED | L_PTE_XN,
 		pgprot_val(protection));
-	if (!mapping_protection_valid(protection)) {
+	diagnostic.verification_flags = MISTER_MAGIK_MAPPING_VERIFIED_VMA_FLAGS |
+		MISTER_MAGIK_MAPPING_PROTECTION_READBACK_UNAVAILABLE;
+	diagnostic.failure_flags = mapping_protection_failures(protection,
+		&diagnostic.verification_flags);
+	if (diagnostic.failure_flags) {
 		diagnostic.state = MISTER_MAGIK_MAPPING_DIAGNOSTIC_FAILED;
-		diagnostic.failure_flags = MISTER_MAGIK_MAPPING_FAILURE_PROTECTION;
 		diagnostic.error_code = -EIO;
 		diagnostic_store(file->private_data, &diagnostic);
 		return -EIO;
 	}
+	diagnostic.verification_flags |=
+		MISTER_MAGIK_MAPPING_VERIFIED_PROTECTION_SUPPLIED;
 	result = remap_pfn_range(vma, vma->vm_start, physical >> PAGE_SHIFT,
 		vma->vm_end - vma->vm_start, protection);
 	if (result) {
