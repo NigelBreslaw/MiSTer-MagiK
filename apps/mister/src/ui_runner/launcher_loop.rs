@@ -3910,7 +3910,6 @@ fn cold_boot_profile_completion_ready(
 
 fn launcher_bridge_sync_plan(
     launching: bool,
-    _startup_input_enabled: bool,
     full_bridge_dirty: bool,
     light_bridge_dirty: bool,
 ) -> LauncherBridgeSyncPlan {
@@ -5415,10 +5414,7 @@ pub(super) fn run_launcher_loop(
     let pacing_policy = LauncherFramePacingPolicy::default();
     let mut phase_alignment = LauncherPhaseAlignment::default();
     let present_timing = launcher_config.display_pacing().present_timing();
-    if preview_route.allows_preview_work()
-        && launcher_bench_scenario.is_some()
-        && !launcher_config.preview().archive_warm_skipped()
-    {
+    if launcher_bench_scenario.is_some() && !launcher_config.preview().archive_warm_skipped() {
         let warm_t = Instant::now();
         match preview_worker::warm_preview_archives_with_config(launcher_config.preview().worker())
         {
@@ -5437,17 +5433,14 @@ pub(super) fn run_launcher_loop(
                 std::process::exit(13);
             }
         }
-    } else if preview_route.allows_preview_work() && launcher_bench_scenario.is_some() {
+    } else if launcher_bench_scenario.is_some() {
         print_startup_event(start, "preview_archive_warm_skipped", "env=1");
     }
     let mut preview = PreviewState::new_with_config(start, launcher_config.preview().clone());
     let mut launcher_bench_waiting_for_initial_preview = launcher_bench_scenario
         .is_some_and(|scenario| scenario.starts_on_arcade() && !launcher_bench_after_input_script);
-    let mut preview_transition = if preview_route.allows_preview_work() {
-        PreviewTransitionDemo::from_config(launcher_config.preview_transition().clone())
-    } else {
-        PreviewTransitionDemo::disabled()
-    };
+    let mut preview_transition =
+        PreviewTransitionDemo::from_config(launcher_config.preview_transition().clone());
     let transition_picker_enabled = preview_transition.picker_enabled();
     let mut arcade_list_renderer = if crt_layout {
         ArcadeListRenderer::new_for_crt_display(crt_metrics, ui)
@@ -8885,12 +8878,8 @@ pub(super) fn run_launcher_loop(
             navigation_transition.is_active(),
             source_was_arcade,
         );
-        let bridge_sync_plan = launcher_bridge_sync_plan(
-            launching,
-            lifecycle.startup_input_enabled(),
-            full_bridge_dirty,
-            light_bridge_dirty,
-        );
+        let bridge_sync_plan =
+            launcher_bridge_sync_plan(launching, full_bridge_dirty, light_bridge_dirty);
         let bridge_sync_started =
             (bridge_sync_plan != LauncherBridgeSyncPlan::None).then(Instant::now);
         let gui_bridge_phase = gui_bridge_profile_phase(
@@ -9137,7 +9126,6 @@ pub(super) fn run_launcher_loop(
             && preview_work_allowed
             && !preview_scheduled_this_loop
             && !launching
-            && preview_route.allows_preview_work()
             && nav.screen == Screen::Arcade
             && active_arcade_games_available
             && !arcade_search_active
@@ -9165,7 +9153,6 @@ pub(super) fn run_launcher_loop(
             && preview_work_allowed
             && !arcade_search_active
             && !memory_guard.active()
-            && preview_route.allows_preview_work()
         {
             let dirty = apply_ready_preview(
                 &app,
@@ -9229,8 +9216,7 @@ pub(super) fn run_launcher_loop(
             && should_draw_arcade_overlay(&nav, launching, active_arcade_games_available);
         let presentation_route = if preserve_navigation_source_preview {
             PreviewRoute::Occluded
-        } else if preview_route.allows_preview_work()
-            && nav.screen == Screen::Arcade
+        } else if nav.screen == Screen::Arcade
             && !memory_guard.active()
             && !screensaver.active
             && !confirm_visible
@@ -12731,13 +12717,6 @@ impl PreviewRoutePolicy {
         }
     }
 
-    const fn allows_preview_work(self) -> bool {
-        matches!(
-            self.kind,
-            PreviewRouteKind::Hdmi | PreviewRouteKind::CrtBackdrop
-        )
-    }
-
     const fn allows_hdmi_preview(self) -> bool {
         matches!(self.kind, PreviewRouteKind::Hdmi)
     }
@@ -15936,7 +15915,6 @@ mod tests {
     #[test]
     fn crt_route_policy_is_fixed_to_the_supported_backdrop_matrix() {
         let hdmi = PreviewRoutePolicy::for_output_route(ResolvedOutputRoute::Hdmi);
-        assert!(hdmi.allows_preview_work());
         assert!(hdmi.allows_hdmi_preview());
         assert!(!hdmi.allows_crt_backdrop());
 
@@ -15947,7 +15925,6 @@ mod tests {
             ResolvedOutputRoute::Crt576p50,
         ] {
             let crt = PreviewRoutePolicy::for_output_route(route);
-            assert!(crt.allows_preview_work());
             assert!(!crt.allows_hdmi_preview());
             assert!(crt.allows_crt_backdrop());
         }
@@ -16171,7 +16148,7 @@ mod tests {
         assert!(use_catalog_seen);
         assert!(full_bridge_dirty);
         assert_eq!(
-            launcher_bridge_sync_plan(false, false, full_bridge_dirty, false),
+            launcher_bridge_sync_plan(false, full_bridge_dirty, false),
             LauncherBridgeSyncPlan::Full
         );
     }
