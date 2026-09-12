@@ -319,22 +319,24 @@ int main(void) {
     )
     binary = tmp_path / "provider-test"
     command = [
-            compiler,
-            "-std=c11",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-Wno-unused-parameter",
-            "-I",
-            str(tmp_path),
-            str(source),
-            "-o",
-            str(binary),
-        ]
+        compiler,
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-unused-parameter",
+        "-I",
+        str(tmp_path),
+        str(source),
+        "-o",
+        str(binary),
+    ]
     subprocess.run(command, check=True)
     subprocess.run([str(binary)], check=True)
     subprocess.run(
-        command[:1] + ["-DMISTER_MAGIK_DEVELOPMENT_TRIAL"] + command[1:-1]
+        command[:1]
+        + ["-DMISTER_MAGIK_DEVELOPMENT_TRIAL"]
+        + command[1:-1]
         + [str(binary) + "-trial"],
         check=True,
     )
