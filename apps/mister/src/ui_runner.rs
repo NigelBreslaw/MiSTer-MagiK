@@ -134,8 +134,6 @@ mod catalog_worker;
 pub(crate) use catalog_worker::run_catalog_worker_child;
 #[cfg(not(mister_ui_scope_launcher))]
 mod controller_loop;
-#[cfg(test)]
-mod controller_setup_input_session;
 #[allow(dead_code)]
 mod crt_backdrop_controller;
 mod crt_trial_loop;
