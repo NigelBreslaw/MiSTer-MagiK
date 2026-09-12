@@ -82,7 +82,8 @@ def main(argv=None):
 def install_development_618(arguments, run):
     """Install one verified prerelease without changing the normal update queue."""
     from .cli import connect_agent
-    from .update_deploy import ensure_service_boot, prepare
+    from .client import AgentError
+    from .update_deploy import ensure_service_boot, prepare, state
     from .updates import development_platform_618
     import json
     import tempfile
@@ -93,6 +94,15 @@ def install_development_618(arguments, run):
         agent, _ = connect_agent(
             run, {"publication-v1", "platform-publication-v1", "service-boot-v1"}
         )
+        current = state(agent)
+        if (
+            current["configured_main"] != "MiSTer_MagiKDev"
+            or current["running"].get("executable_path")
+            != "/media/fat/MiSTer_MagiKDev"
+        ):
+            raise AgentError(
+                "Linux 6.18 development installation requires running and selected Dev mode"
+            )
         ensure_service_boot(agent)
         print(
             json.dumps(
