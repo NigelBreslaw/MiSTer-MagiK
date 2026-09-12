@@ -13996,9 +13996,6 @@ fn apply_screenshot_media_update_effects(
             ScreenshotMediaUpdateEffect::EnsureSystem { system_id } => {
                 scheduler.ensure_media_system(&system_id);
             }
-            ScreenshotMediaUpdateEffect::FinishWorker => {
-                scheduler.finish_media_worker();
-            }
             ScreenshotMediaUpdateEffect::DropWorker => {
                 scheduler.drop_media_worker();
             }
