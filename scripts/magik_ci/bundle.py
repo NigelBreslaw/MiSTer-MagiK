@@ -16,7 +16,7 @@ FORMAT = "mister-magik-platform-bundle-v0.2"
 MANIFEST = "platform-bundle-v0.2.json"
 ORIGIN = "platform-component-origin-v1.json"
 CHECKSUMS = "platform-component-SHA256SUMS"
-ASSEMBLY_REVISION = 1
+ASSEMBLY_REVISION = 2
 PATCHED_DIAGNOSTIC_ARCHITECTURE = "scaler-off-domain-scheduler-terminal-v6"
 HISTORICAL_DIAGNOSTIC_ARCHITECTURES = frozenset(
     {
@@ -41,7 +41,7 @@ def bundle_id(
     for value in (main, fpga, kernel):
         if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
             raise ValueError("invalid component identity")
-    if assembly_revision not in (0, ASSEMBLY_REVISION):
+    if assembly_revision < 0 or assembly_revision > ASSEMBLY_REVISION:
         raise ValueError("unsupported platform assembly revision")
     revision = f"assembly_revision={assembly_revision}\n" if assembly_revision else ""
     return sha256_bytes(
@@ -365,6 +365,10 @@ def write_component_cache(
         artifact / ORIGIN,
         (json.dumps(origin, indent=2, sort_keys=True) + "\n").encode(),
     )
+    _write_component_checksums(artifact)
+
+
+def _write_component_checksums(artifact: Path) -> None:
     lines = []
     for path in sorted(artifact.rglob("*")):
         if (
@@ -402,5 +406,13 @@ def compact_component(
     verify_component(component, artifact, component_id)
     if component != "fpga":
         raise ValueError("component_compaction_unsupported")
-    shutil.copytree(artifact, output)
+    shutil.copytree(
+        artifact,
+        output,
+        ignore=lambda _directory, names: [
+            name for name in names if name == "Menu-work"
+        ],
+    )
+    _write_component_checksums(output)
+    verify_component(component, output, component_id)
     return output
