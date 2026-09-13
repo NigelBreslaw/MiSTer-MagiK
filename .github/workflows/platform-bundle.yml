@@ -876,7 +876,10 @@ jobs:
           manifest="build/platform-current/platform-bundle-v0.2.json"
           test -n "$archive" && test -f "$manifest"
           [ "$MAIN_CHANGED" = true ] || scripts/magik-ci ci platform-bundle extract-component "$archive" --manifest "$manifest" --component main --component-id "$MAIN_ID" --output build/platform-input/main --historical-baseline
-          [ "$FPGA_CHANGED" = true ] || scripts/magik-ci ci platform-bundle extract-component "$archive" --manifest "$manifest" --component fpga --component-id "$FPGA_ID" --output build/platform-input/fpga --historical-baseline
+          if [ "$FPGA_CHANGED" != true ]; then
+            scripts/magik-ci ci platform-bundle extract-component "$archive" --manifest "$manifest" --component fpga --component-id "$FPGA_ID" --output build/platform-input/fpga-source --historical-baseline
+            scripts/magik-ci ci platform-bundle compact-component --component fpga --artifact build/platform-input/fpga-source --component-id "$FPGA_ID" --output build/platform-input/fpga
+          fi
           [ "$KERNEL_CHANGED" = true ] || scripts/magik-ci ci platform-bundle extract-component "$archive" --manifest "$manifest" --component kernel --component-id "$KERNEL_ID" --output build/platform-input/scanout --historical-baseline
 
       - name: Assemble and verify candidate

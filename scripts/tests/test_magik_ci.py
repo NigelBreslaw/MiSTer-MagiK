@@ -635,6 +635,25 @@ with tempfile.TemporaryDirectory() as directory:
         self.assertFalse(plan["fpga_changed"])
         self.assertFalse(plan["kernel_changed"])
 
+    def test_previous_bundle_assembly_is_rebuilt_without_component_changes(
+        self,
+    ) -> None:
+        values = ("a" * 64, "b" * 64, "c" * 64)
+        current: dict[str, object] = {
+            "assembly_revision": 1,
+            "main_input_sha256": values[0],
+            "fpga_input_sha256": values[1],
+            "kernel_input_sha256": values[2],
+            "bundle_id": bundle_id(*values, assembly_revision=1),
+        }
+
+        plan = update_plan(current, 41, *values)
+
+        self.assertTrue(plan["update_needed"])
+        self.assertFalse(plan["main_changed"])
+        self.assertFalse(plan["fpga_changed"])
+        self.assertFalse(plan["kernel_changed"])
+
     def test_updater_mra_inspection_tolerates_case_variant_rom_closing_tags(
         self,
     ) -> None:
@@ -833,7 +852,7 @@ with tempfile.TemporaryDirectory() as directory:
             )
             payload = verify(archive)
             self.assertEqual(payload["release_version"], 1)
-            self.assertEqual(payload["assembly_revision"], 1)
+            self.assertEqual(payload["assembly_revision"], 2)
             self.assertEqual(payload["latch_rbf_sha256"], "2" * 64)
             self.assertEqual(payload["latch_protocol_sha256"], "3" * 64)
             self.assertEqual(payload["latch_protocol_version"], 5)
@@ -841,6 +860,30 @@ with tempfile.TemporaryDirectory() as directory:
                 payload["diagnostic_architecture"],
                 "scaler-off-domain-scheduler-terminal-v6",
             )
+
+    def test_fpga_component_compaction_removes_quartus_workspaces(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            (source / "patched").mkdir()
+            (source / "patched" / "menu.rbf").write_bytes(b"rbf")
+            for flavour in ("stock", "pre-observer", "patched"):
+                workspace = source / flavour / "Menu-work" / "db"
+                workspace.mkdir(parents=True)
+                (workspace / "menu.cmp.cdb").write_bytes(flavour.encode())
+            component_id = "b" * 64
+            bundle.write_component_cache("fpga", source, component_id, "123", "d" * 40)
+
+            output = bundle.compact_component(
+                "fpga", source, root / "output", component_id
+            )
+
+            self.assertEqual((output / "patched" / "menu.rbf").read_bytes(), b"rbf")
+            self.assertFalse(any(output.rglob("Menu-work")))
+            checksums = (output / bundle.CHECKSUMS).read_text(encoding="utf-8")
+            self.assertNotIn("Menu-work", checksums)
+            bundle.verify_component("fpga", output, component_id)
 
     def test_platform_bundle_historical_baseline_architectures_are_bounded(
         self,
@@ -968,6 +1011,12 @@ with tempfile.TemporaryDirectory() as directory:
         self.assertEqual(len(extraction_lines), 3)
         self.assertTrue(
             all("--historical-baseline" in line for line in extraction_lines)
+        )
+        self.assertIn("--output build/platform-input/fpga-source", workflow)
+        self.assertIn(
+            '--artifact build/platform-input/fpga-source --component-id "$FPGA_ID" '
+            "--output build/platform-input/fpga",
+            workflow,
         )
 
     def test_database_round_trip(self) -> None:
