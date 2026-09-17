@@ -16,6 +16,7 @@
 [submodule "private/lspi"]
 	path = private/lspi
 	url = git@github.com:NigelBreslaw/lspi.git
+	ignore = dirty
 [submodule "private/magik-assets"]
 	path = private/magik-assets
 	url = git@github.com:NigelBreslaw/mister-magik-private-assets.git
