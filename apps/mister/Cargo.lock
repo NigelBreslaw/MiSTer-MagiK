@@ -1964,8 +1964,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 [[package]]
 name = "hotpath"
 version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "366c5db5a8e4643bdde121a1d6f35cfa035e7850b8b8ea94c6960a139d44e93a"
+source = "git+https://github.com/NigelBreslaw/hotpath-rs?rev=c9731bd18f0030595b53040fc57889855699cad1#c9731bd18f0030595b53040fc57889855699cad1"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1990,8 +1989,7 @@ dependencies = [
 [[package]]
 name = "hotpath-macros"
 version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "846bde0d9600d98434e1aac376977d7718bfe3d2f5312a041b7c59a6a466c51a"
+source = "git+https://github.com/NigelBreslaw/hotpath-rs?rev=c9731bd18f0030595b53040fc57889855699cad1#c9731bd18f0030595b53040fc57889855699cad1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4620,9 +4618,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "1.8.0"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d1f571c72940a19d9532fe52dbea8bc9912bf1d766c2970bb824056b86f3f59"
+checksum = "14db48ee17a9ba61810ab1a9c1beb7d06d8136ae39ac25a1137f10d357af01af"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -4651,9 +4649,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "1.8.0"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1aad0035b69380782d78ea95b508327e6deaa2235909053e596eea8f27b5e1d5"
+checksum = "783d787bf21813b285f13019adc49e11af501c658890c1e519f31f937c68b7e3"
 dependencies = [
  "darling",
  "proc-macro2",
