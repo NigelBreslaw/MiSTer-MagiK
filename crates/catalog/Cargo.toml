@@ -27,7 +27,7 @@ warnings = "deny"
 all = "deny"
 
 [dependencies]
-hotpath = "0.25"
+hotpath = { git = "https://github.com/NigelBreslaw/hotpath-rs", rev = "c9731bd18f0030595b53040fc57889855699cad1" }
 libc = "0.2"
 lz4_flex = "0.14.0"
 memmap2 = "0.9.11"

@@ -46,7 +46,7 @@ mister-magik-tooling-support = { path = "../../crates/tooling-support", optional
 bytemuck = "1"
 crc32fast = "1"
 flate2 = "1"
-hotpath = { version = "0.25", optional = true }
+hotpath = { git = "https://github.com/NigelBreslaw/hotpath-rs", rev = "c9731bd18f0030595b53040fc57889855699cad1", optional = true }
 libc = "0.2"
 lz4_flex = "0.14.0"
 mister-magik-core = { path = "../../crates/magik-core" }
