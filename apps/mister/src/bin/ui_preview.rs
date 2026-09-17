@@ -121,7 +121,7 @@ mod macos {
     const PARTICLE_SCENE_SEED: u64 = 0x4d61_6769_4b;
     const SCREENSHOT_TILE_SEED: u64 = 0x4d61_6769_4b54_696c;
     const CAPTURE_PROVENANCE_SCHEMA: &str = "mister-magik-launcher-capture-v1";
-    const PINNED_SLINT_VERSION: &str = "1.18.0 (master 72cf7430)";
+    const PINNED_SLINT_VERSION: &str = "1.18.0";
     const RGB565_CONVERSION_VERSION: &str = "rgb565-le-expand-v1";
     const PREVIEW_RENDERER_ID: &str = "slint-software-rgb565-reused-buffer";
     const PNG_ENCODER_ID: &str = "png-rgb8-filter-none-zlib-best-v1";
@@ -4123,7 +4123,7 @@ mod macos {
             "",
             "GNU General Public License, version 3",
             "",
-            "Slint 1.18.0 (master 72cf7430)",
+            "Slint 1.18.0",
             "FFmpeg 8.1",
             "Rust third-party license inventory",
         ]);
@@ -5479,8 +5479,8 @@ mod macos {
         #[test]
         fn provenance_writer_refuses_overwrite_and_slint_version_is_pinned() {
             let manifest = include_str!("../../Cargo.toml");
-            assert!(manifest.contains("git = \"https://github.com/slint-ui/slint\""));
-            assert!(manifest.contains("rev = \"72cf74306784e7d15374639ef110c1bb85c21cb0\""));
+            assert!(manifest.contains(&format!("version = \"={PINNED_SLINT_VERSION}\"")));
+            assert!(!manifest.contains("github.com/slint-ui/slint"));
             let options =
                 PreviewOptions::parse(["--output", "/tmp/capture.png"].map(String::from)).unwrap();
             let provenance =

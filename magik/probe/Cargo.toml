@@ -17,18 +17,18 @@ name = "mini-magik"
 path = "src/main.rs"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-slint = { git = "https://github.com/slint-ui/slint", rev = "72cf74306784e7d15374639ef110c1bb85c21cb0", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std", "system-testing"] }
+slint = { version = "=1.18.0", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std", "system-testing"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 fontique = { version = "0.11.1", default-features = false, features = ["fontconfig-dlopen"] }
-slint = { git = "https://github.com/slint-ui/slint", rev = "72cf74306784e7d15374639ef110c1bb85c21cb0", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std", "system-testing"] }
+slint = { version = "=1.18.0", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std", "system-testing"] }
 
 [dependencies]
 mister-magik-tooling-support = { path = "../../crates/tooling-support" }
 mister-magik-mister-runtime = { path = "../../mister/platform/runtime", default-features = false, features = ["cached-rgb565-presenter", "framebuffer-lab"] }
 
 [build-dependencies]
-slint-build = { git = "https://github.com/slint-ui/slint", rev = "72cf74306784e7d15374639ef110c1bb85c21cb0" }
+slint-build = { version = "=1.18.0" }
 
 [profile.release]
 opt-level = 2
