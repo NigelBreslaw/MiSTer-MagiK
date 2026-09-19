@@ -251,6 +251,87 @@ pub struct LatchPostReceipt {
     pub receipt_crc: u16,
 }
 
+/// Identity of one caller-rendered frame targeting an inactive hidden slot.
+///
+/// The grant carries no framebuffer ownership by itself. Presenters remain
+/// responsible for proving that the slot is writable before issuing it and
+/// revalidating that fact before posting the completed frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HiddenSlotRenderGrant {
+    pub slot_index: u8,
+    pub generation: u64,
+    pub width: usize,
+    pub height: usize,
+    pub stride_pixels: usize,
+}
+
+/// Shared single-outstanding-frame lifecycle for direct hidden-slot renders.
+#[derive(Debug, Default)]
+pub struct DirectHiddenFrameState {
+    generation: u64,
+    outstanding: Option<HiddenSlotRenderGrant>,
+}
+
+impl DirectHiddenFrameState {
+    #[must_use]
+    pub const fn outstanding(&self) -> Option<HiddenSlotRenderGrant> {
+        self.outstanding
+    }
+
+    #[must_use]
+    pub const fn has_outstanding(&self) -> bool {
+        self.outstanding.is_some()
+    }
+
+    /// Issues one grant, returning `None` while an earlier grant is live.
+    pub fn issue(
+        &mut self,
+        slot_index: u8,
+        width: usize,
+        height: usize,
+        stride_pixels: usize,
+    ) -> Option<HiddenSlotRenderGrant> {
+        if self.outstanding.is_some() {
+            return None;
+        }
+        self.generation = self.generation.wrapping_add(1).max(1);
+        let grant = HiddenSlotRenderGrant {
+            slot_index,
+            generation: self.generation,
+            width,
+            height,
+            stride_pixels,
+        };
+        self.outstanding = Some(grant);
+        Some(grant)
+    }
+
+    #[must_use]
+    pub fn recognizes(&self, grant: HiddenSlotRenderGrant) -> bool {
+        matches!(self.outstanding, Some(expected) if expected == grant)
+    }
+
+    /// Completes exactly the live grant. Stale or mismatched grants leave the
+    /// current operation untouched so its owner can still finish or cancel it.
+    pub fn complete(&mut self, grant: HiddenSlotRenderGrant) -> bool {
+        if !self.recognizes(grant) {
+            return false;
+        }
+        self.outstanding = None;
+        true
+    }
+
+    pub fn cancel(&mut self, grant: HiddenSlotRenderGrant) -> bool {
+        self.complete(grant)
+    }
+
+    /// Invalidates every issued grant, including one currently outstanding.
+    pub fn invalidate(&mut self) {
+        self.generation = self.generation.wrapping_add(1).max(1);
+        self.outstanding = None;
+    }
+}
+
 pub struct LogicalStatusReadBudget {
     reads: u8,
 }
@@ -623,5 +704,38 @@ mod tests {
         assert_eq!(budget.consume(), Ok(()));
         assert_eq!(budget.consume(), Err(LogicalStatusReadBudgetExhausted));
         assert!(budget.exhausted());
+    }
+
+    #[test]
+    fn direct_hidden_frame_allows_only_one_matching_completion() {
+        let mut state = DirectHiddenFrameState::default();
+        let grant = state.issue(2, 960, 540, 960).expect("first grant");
+        assert!(state.has_outstanding());
+        assert_eq!(state.outstanding(), Some(grant));
+        assert!(state.issue(1, 960, 540, 960).is_none());
+
+        let stale = HiddenSlotRenderGrant {
+            generation: grant.generation.wrapping_add(1),
+            ..grant
+        };
+        assert!(!state.complete(stale));
+        assert_eq!(state.outstanding(), Some(grant));
+        assert!(state.complete(grant));
+        assert!(!state.complete(grant));
+        assert!(!state.has_outstanding());
+    }
+
+    #[test]
+    fn direct_hidden_frame_cancel_and_invalidate_make_grants_stale() {
+        let mut state = DirectHiddenFrameState::default();
+        let cancelled = state.issue(1, 320, 240, 320).expect("cancelled grant");
+        assert!(state.cancel(cancelled));
+        let invalidated = state.issue(2, 320, 240, 320).expect("invalidated grant");
+        state.invalidate();
+        assert!(!state.recognizes(invalidated));
+
+        let replacement = state.issue(1, 320, 240, 320).expect("replacement grant");
+        assert_ne!(replacement.generation, invalidated.generation);
+        assert!(state.recognizes(replacement));
     }
 }
