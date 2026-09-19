@@ -14,10 +14,11 @@
 use super::super::*;
 use crate::ui_runner::launcher_readiness::SourceFrameEvidence;
 use mister_magik_fb::framebuffer::downsample::Rgb565FrameView;
+pub(crate) use mister_magik_fb::framebuffer::full_frame_latch::HiddenSlotRenderGrant;
 use mister_magik_fb::framebuffer::full_frame_latch::{
-    LatchCompletion, LatchCopyResult, LatchPostRequest, LogicalStatusReadBudget,
-    latch_status_read_failure, post_confirm_prepared_frame, read_status_sample,
-    rejected_wire_diagnostics,
+    DirectHiddenFrameState, LatchCompletion, LatchCopyResult, LatchPostRequest,
+    LogicalStatusReadBudget, latch_status_read_failure, post_confirm_prepared_frame,
+    read_status_sample, rejected_wire_diagnostics,
 };
 #[cfg(test)]
 use mister_magik_fb::framebuffer::full_frame_latch::{
@@ -31,15 +32,6 @@ use mister_magik_fb::latch_readiness::{
 use std::io;
 
 const TRANSIENT_PENDING_SETTLE_TIMEOUT: Duration = Duration::from_millis(100);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct HiddenSlotRenderGrant {
-    pub(crate) slot_index: u8,
-    pub(crate) generation: u64,
-    pub(crate) width: usize,
-    pub(crate) height: usize,
-    pub(crate) stride_pixels: usize,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CompletedHiddenFrame {
@@ -231,8 +223,7 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresenter<B = PluginLatchFr
     last_committed_buffer: Option<u8>,
     latch_state: TwoBufferLatchState,
     arcade_slot_mirrors: [PhysicalLayerSlotMirror; 2],
-    direct_generation: u64,
-    outstanding_direct_grant: Option<HiddenSlotRenderGrant>,
+    direct_frames: DirectHiddenFrameState,
 }
 
 #[derive(Default)]
@@ -357,7 +348,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         };
         let buffer = self.buffers.buffer_mut(grant.slot_index);
         if !render(grant, B::pixels_mut(buffer)) {
-            self.outstanding_direct_grant = None;
+            assert!(self.direct_frames.cancel(grant));
             return Ok(None);
         }
         B::publish_writes(buffer);
@@ -398,8 +389,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             last_committed_buffer: None,
             latch_state: TwoBufferLatchState::new(render_width, render_height),
             arcade_slot_mirrors: std::array::from_fn(|_| PhysicalLayerSlotMirror::default()),
-            direct_generation: 0,
-            outstanding_direct_grant: None,
+            direct_frames: DirectHiddenFrameState::default(),
         }
     }
 
@@ -435,7 +425,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
     ) -> Result<Option<HiddenSlotRenderGrant>, LatchFailure> {
         if self.disabled
             || (require_identity_geometry && !self.exact_identity_geometry())
-            || self.outstanding_direct_grant.is_some()
+            || self.direct_frames.has_outstanding()
         {
             return Ok(None);
         }
@@ -448,16 +438,9 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let Some(slot_index) = self.latch_state.writable_slot_index() else {
             return Ok(None);
         };
-        self.direct_generation = self.direct_generation.wrapping_add(1).max(1);
-        let grant = HiddenSlotRenderGrant {
-            slot_index,
-            generation: self.direct_generation,
-            width: self.width,
-            height: self.height,
-            stride_pixels: self.width,
-        };
-        self.outstanding_direct_grant = Some(grant);
-        Ok(Some(grant))
+        Ok(self
+            .direct_frames
+            .issue(slot_index, self.width, self.height, self.width))
     }
 
     pub(in crate::ui_runner) fn present_completed_hidden_frame<H: LatchHardware>(
@@ -468,13 +451,15 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         profile_latch_phases: bool,
     ) -> Result<FpgaVblankLatchHiddenPresentStats, LatchFailure> {
         let grant = completed.grant;
-        if self.outstanding_direct_grant != Some(grant) {
+        if !self.direct_frames.recognizes(grant) {
             return Err(LatchFailure::runtime(
                 LatchFailureStage::PostVerification,
                 LatchFailureReason::PostedSequenceUnverified,
                 format!(
                     "stale external hidden frame slot={} generation={} expected={:?}",
-                    grant.slot_index, grant.generation, self.outstanding_direct_grant
+                    grant.slot_index,
+                    grant.generation,
+                    self.direct_frames.outstanding()
                 ),
             ));
         }
@@ -516,7 +501,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let set_vga_fb_us = 0;
         let after_status = receipt.status;
         status_us = status_us.saturating_add(receipt.status_us);
-        self.outstanding_direct_grant = None;
+        assert!(self.direct_frames.complete(grant));
         self.last_committed_buffer = Some(grant.slot_index);
         self.invalidate_layer_coherency();
         self.hidden_active_verified = true;
@@ -549,8 +534,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
     }
 
     pub(in crate::ui_runner) fn invalidate_external_mode(&mut self) {
-        self.direct_generation = self.direct_generation.wrapping_add(1).max(1);
-        self.outstanding_direct_grant = None;
+        self.direct_frames.invalidate();
         self.last_committed_buffer = None;
         self.invalidate_layer_coherency();
     }
