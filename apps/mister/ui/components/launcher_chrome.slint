@@ -196,50 +196,6 @@ export component LauncherTile inherits Rectangle {
     }
 }
 
-component CogIcon inherits Rectangle {
-    in property <bool> focused;
-
-    background: transparent;
-    opacity: focused ? 1.0 : 0.5;
-
-    if NavigationView.settings-artwork-available : Image {
-        width: root.width;
-        height: root.height;
-        source: NavigationView.settings-artwork;
-        image-fit: contain;
-    }
-
-    if !NavigationView.settings-artwork-available : Spleen5x8 {
-        width: root.width;
-        height: root.height;
-        text: "SET";
-        size: Spleen5x8Size.px8;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-}
-
-export component SettingsButton inherits Rectangle {
-    in property <bool> focused;
-    in property <bool> acknowledged;
-
-    accessible-role: button;
-    accessible-label: "Settings";
-    accessible-item-selected: root.focused;
-
-    width: 56px;
-    height: 56px;
-    background: focused ? #2a2236 : #1e1828;
-    border-width: focused ? 2px : 1px;
-    border-color: focused ? white : acknowledged ? #4e8f80 : #5c4a72;
-
-    CogIcon {
-        width: 24px;
-        height: 24px;
-        focused: parent.focused;
-    }
-}
-
 export component OsdSideLabel inherits Rectangle {
 
     width: 56px;

@@ -307,7 +307,6 @@ pub(super) fn launcher_bench_step(
                 return false;
             }
             nav.screen = Screen::Home;
-            nav.settings_focused = false;
             let selected = state.step % count;
             if selected < nav.selected {
                 nav.scroll_x = 0;
@@ -322,7 +321,6 @@ pub(super) fn launcher_bench_step(
                 return false;
             }
             nav.screen = Screen::Home;
-            nav.settings_focused = false;
             if nav.selected >= count {
                 nav.selected = count - 1;
                 keep_bench_home_visible(&mut nav.scroll_x, nav.selected, count);
@@ -353,7 +351,6 @@ pub(super) fn launcher_bench_step(
                 nav.scroll_x = 0;
             }
             nav.selected = selected;
-            nav.settings_focused = false;
             if state.step % 2 == 0 {
                 nav.screen = Screen::Home;
                 keep_bench_home_visible(&mut nav.scroll_x, nav.selected, count);

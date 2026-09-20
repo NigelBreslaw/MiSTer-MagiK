@@ -1325,7 +1325,6 @@ impl LauncherFrameAccounting {
             nav.settings_selected as u64,
             nav.display_selected as u64,
             nav.screensaver_selected as u64,
-            u64::from(nav.settings_focused),
             u64::from(nav.arcade_filter.drawer_open),
             u64::from(nav.arcade_search.is_active(&nav.arcade_filter.active)),
             u64::from(confirm_visible),

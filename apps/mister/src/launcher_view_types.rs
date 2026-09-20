@@ -75,14 +75,6 @@ pub const fn system_hub_section(index: usize) -> view::SystemHubSection {
     }
 }
 
-pub const fn home_focus(settings_focused: bool) -> view::HomeFocus {
-    if settings_focused {
-        view::HomeFocus::Settings
-    } else {
-        view::HomeFocus::Menu
-    }
-}
-
 pub const fn menu_hierarchy(root: bool) -> view::MenuHierarchy {
     if root {
         view::MenuHierarchy::Root

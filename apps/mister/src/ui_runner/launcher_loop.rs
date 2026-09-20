@@ -7435,7 +7435,7 @@ pub(super) fn run_launcher_loop(
                 ));
                 if let Some(event) = settings_navigation_benchmark.event_for(
                     nav.screen,
-                    nav.settings_focused,
+                    nav.selected,
                     nav.settings_selected,
                     full_screen_transition.state() == FullScreenTransitionState::Live,
                     frame_now

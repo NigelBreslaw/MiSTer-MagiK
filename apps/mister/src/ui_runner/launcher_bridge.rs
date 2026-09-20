@@ -50,42 +50,6 @@ fn load_snes_artwork_image() -> Option<slint::Image> {
     Some(slint_image_from_rgb565a(&artwork))
 }
 
-fn load_settings_artwork_image() -> Option<slint::Image> {
-    let active = mister_magik_catalog::device_layout::current_app_path(
-        mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_RELATIVE_PATH,
-    );
-    let artwork = mister_magik_fb::snes_artwork::Rgb565aImage::load_exact(
-        &active,
-        mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_WIDTH,
-        mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_HEIGHT,
-    )
-    .or_else(|active_error| {
-        #[cfg(feature = "ui-preview")]
-        {
-            let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join(mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_RELATIVE_PATH);
-            return mister_magik_fb::snes_artwork::Rgb565aImage::load_exact(
-                &repository,
-                mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_WIDTH,
-                mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_HEIGHT,
-            )
-            .map_err(|repository_error| {
-                crate::ui_errln!(
-                    "settings artwork unavailable: active={active_error}; repository={repository_error}"
-                );
-                repository_error
-            });
-        }
-        #[cfg(not(feature = "ui-preview"))]
-        {
-            crate::ui_errln!("settings artwork unavailable: {active_error}");
-            Err(active_error)
-        }
-    })
-    .ok()?;
-    Some(slint_image_from_rgb565a(&artwork))
-}
-
 fn slint_image_from_rgb565a(artwork: &mister_magik_fb::snes_artwork::Rgb565aImage) -> slint::Image {
     let pixels = artwork.rgba8_bytes();
     let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
@@ -112,12 +76,6 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
         navigation.set_system_artwork_available(true);
     } else {
         navigation.set_system_artwork_available(false);
-    }
-    if let Some(image) = load_settings_artwork_image() {
-        navigation.set_settings_artwork(image);
-        navigation.set_settings_artwork_available(true);
-    } else {
-        navigation.set_settings_artwork_available(false);
     }
     let build_label = SharedString::from(build_label());
     navigation.set_build_label(build_label.clone());
@@ -1045,7 +1003,6 @@ pub(super) struct LauncherProjectionKey {
     scroll_x: i32,
     home_scroll_repeat_active: bool,
     home_scroll_held: bool,
-    settings_focused: bool,
     licenses_selected: usize,
     licenses_expanded: bool,
     licenses_scroll_y: i32,
@@ -1075,7 +1032,6 @@ impl LauncherProjectionKey {
             scroll_x: nav.scroll_x,
             home_scroll_repeat_active: nav.home_horizontal_repeat_active(),
             home_scroll_held: nav.home_horizontal_held(),
-            settings_focused: nav.settings_focused,
             licenses_selected: nav.licenses_selected,
             licenses_expanded: nav.licenses_expanded,
             licenses_scroll_y: nav.licenses_scroll_y(),
