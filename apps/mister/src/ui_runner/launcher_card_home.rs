@@ -181,6 +181,14 @@ impl LauncherCardHomeSession {
         self.active && (self.frame.phase != BrowsePhase::Settled || self.frame.outgoing.is_some())
     }
 
+    pub(super) const fn settled_selection(&self) -> Option<usize> {
+        if matches!(self.frame.phase, BrowsePhase::Settled) {
+            Some(self.frame.selected)
+        } else {
+            None
+        }
+    }
+
     pub(super) fn needs_render(&self) -> bool {
         self.active && (self.content_dirty || self.is_animating())
     }
@@ -254,6 +262,7 @@ mod tests {
         session.update(960, 540, snapshot(), 0, None, "21:37", 0);
         session.update(960, 540, snapshot(), 1, None, "21:37", 10);
         assert!(session.is_animating());
+        assert_eq!(session.settled_selection(), None);
         assert_eq!(session.render().len(), 960 * 540);
     }
 }

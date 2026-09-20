@@ -179,13 +179,19 @@ def _settings_open(application):
     )
 
 
-def launcher_navigation(application, screenshot_path):
-    """One bounded UI journey; response times include host RPC and polling."""
+def _open_settings_card(application):
     _press_key(application, "\uf729")  # Slint Key.Home
     _wait(lambda: not _settings_open(application), "Home did not close Settings")
-    started = time.monotonic()
-    _press_key(application, "\uf700")  # Slint Key.UpArrow: focus Settings
+    for _ in range(5):
+        _press_key(application, "\uf703")  # Slint Key.RightArrow
+        time.sleep(0.7)  # Each card transition is intentionally allowed to finish.
     _press_key(application, "\n")  # Slint Key.Return
+
+
+def launcher_navigation(application, screenshot_path):
+    """One bounded UI journey; response times include host RPC and polling."""
+    started = time.monotonic()
+    _open_settings_card(application)
     try:
         _wait(lambda: _settings_open(application), "Settings did not open")
         opened_ms = round((time.monotonic() - started) * 1000, 2)
@@ -361,9 +367,7 @@ def launcher_catalog(application, screenshot_path):
 
 def launcher_setting(application, screenshot_path):
     """Change one reversible Dev setting and verify restoration even on failure."""
-    _press_key(application, "\uf729")
-    _press_key(application, "\uf700")
-    _press_key(application, "\n")
+    _open_settings_card(application)
     original = None
     try:
         _wait(lambda: _settings_open(application), "Settings did not open")

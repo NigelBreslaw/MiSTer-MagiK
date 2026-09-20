@@ -56,13 +56,20 @@ impl LauncherHomeSnapshot {
                 .find(|item| item.id == id)
                 .map_or(0, |item| saturating_u32(item.count))
         };
+        let arcade = menu_count(MENU_ARCADE_SYSTEM_ID);
+        let consoles = menu_count(CONSOLES_MENU_ID);
+        let computers = menu_count(COMPUTERS_MENU_ID);
+        let handhelds = menu_count(HANDHELDS_MENU_ID);
         Self::from_counts(LauncherHomeCounts {
-            arcade: menu_count(MENU_ARCADE_SYSTEM_ID),
-            consoles: menu_count(CONSOLES_MENU_ID),
-            computers: menu_count(COMPUTERS_MENU_ID),
-            handhelds: menu_count(HANDHELDS_MENU_ID),
+            arcade,
+            consoles,
+            computers,
+            handhelds,
             favourites: saturating_u32(nav.favourite_count()),
-            library_games: saturating_u32(catalog.games.len()),
+            library_games: arcade
+                .saturating_add(consoles)
+                .saturating_add(computers)
+                .saturating_add(handhelds),
             collections: saturating_u32(catalog.systems.len()),
         })
     }

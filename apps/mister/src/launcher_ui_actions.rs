@@ -106,11 +106,11 @@ impl LauncherUiActionsAdapter {
 }
 
 impl LauncherUiAction {
-    pub fn input_event(
+    pub fn input_pulse(
         &self,
         sequence: u64,
         captured_at_us: u64,
-    ) -> Option<crate::input_event::InputEvent> {
+    ) -> Option<[crate::input_event::InputEvent; 2]> {
         let action = match self {
             Self::Navigate(slint_ui::launcher::NavigationDirection::Up) => LogicalAction::Up,
             Self::Navigate(slint_ui::launcher::NavigationDirection::Down) => LogicalAction::Down,
@@ -121,7 +121,7 @@ impl LauncherUiAction {
             Self::Home => LogicalAction::Home,
             _ => return None,
         };
-        Some(crate::input_event::InputEvent {
+        let pressed = crate::input_event::InputEvent {
             source: crate::input_event::InputSourceId {
                 kind: InputSourceKind::Ui,
                 instance: 0,
@@ -132,7 +132,14 @@ impl LauncherUiAction {
             captured_at_us,
             action,
             phase: InputPhase::Pressed,
-        })
+        };
+        Some([
+            pressed,
+            crate::input_event::InputEvent {
+                phase: InputPhase::Released,
+                ..pressed
+            },
+        ])
     }
 }
 
@@ -651,11 +658,13 @@ mod tests {
 
         actions.invoke_navigate(slint_ui::launcher::NavigationDirection::Left);
         let action = adapter.pop_routable(true).expect("routable UI action");
-        let event = action.input_event(7, 11).expect("navigation input event");
-        assert_eq!(event.source.kind, InputSourceKind::Ui);
-        assert_eq!(event.sequence, 7);
-        assert_eq!(event.captured_at_us, 11);
-        assert_eq!(event.action, LogicalAction::Left);
-        assert_eq!(event.phase, InputPhase::Pressed);
+        let [pressed, released] = action.input_pulse(7, 11).expect("navigation input pulse");
+        assert_eq!(pressed.source.kind, InputSourceKind::Ui);
+        assert_eq!(pressed.sequence, 7);
+        assert_eq!(pressed.captured_at_us, 11);
+        assert_eq!(pressed.action, LogicalAction::Left);
+        assert_eq!(pressed.phase, InputPhase::Pressed);
+        assert_eq!(released.press_id, pressed.press_id);
+        assert_eq!(released.phase, InputPhase::Released);
     }
 }

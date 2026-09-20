@@ -7620,7 +7620,7 @@ pub(super) fn run_launcher_loop(
                         .pop_routable(focus.target.kind != InputContextKind::Transition)
                     {
                         ui_action_sequence = ui_action_sequence.saturating_add(1);
-                        if let Some(event) = action.input_event(
+                        if let Some([event, released]) = action.input_pulse(
                             ui_action_sequence,
                             frame_now
                                 .saturating_duration_since(start)
@@ -7628,6 +7628,7 @@ pub(super) fn run_launcher_loop(
                                 .min(u64::MAX as u128) as u64,
                         ) {
                             latency_critical_input_pending = true;
+                            incoming_input_events.push_front(released);
                             Some(event)
                         } else {
                             latency_critical_input_pending = true;
@@ -9412,6 +9413,7 @@ pub(super) fn run_launcher_loop(
         let custom_home_active = launcher_card_home.is_some()
             && nav.screen == Screen::Home
             && nav.current_menu_id() == crate::launcher_taxonomy::ROOT_MENU_ID;
+        let mut settled_home_selection = None;
         app.global::<slint_ui::launcher::MisterUi>()
             .set_custom_home_base(custom_home_active);
         if custom_home_active {
@@ -9425,6 +9427,7 @@ pub(super) fn run_launcher_loop(
                     &last_clock_text,
                     loop_start.duration_since(run_start).as_millis() as u64,
                 );
+                settled_home_selection = session.settled_selection();
             }
         } else if let Some(session) = launcher_card_home.as_mut() {
             session.set_inactive();
@@ -10422,6 +10425,9 @@ pub(super) fn run_launcher_loop(
             None
         };
         let arcade_list_update_us = arcade_list_update_start.elapsed().as_micros();
+        if let Some(selected) = settled_home_selection {
+            nav.selected = selected;
+        }
         let mut portrait_arcade_list_pixels = 0_u64;
         let mut portrait_arcade_list_bytes = 0_u64;
         let preview_blit_start = Instant::now();

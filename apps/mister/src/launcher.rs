@@ -1511,7 +1511,7 @@ impl LauncherNav {
         self.current_menu_items().len()
     }
 
-    fn home_navigation_count(&self) -> usize {
+    pub(crate) fn home_navigation_count(&self) -> usize {
         if self.current_menu_id() == ROOT_MENU_ID {
             ROOT_HOME_CARD_COUNT
         } else {
@@ -2272,13 +2272,26 @@ impl LauncherNav {
             }
             return None;
         }
-        let held = PadState::default();
+        let discrete_home_direction = event.source.kind == crate::input_event::InputSourceKind::Ui
+            && self.screen == Screen::Home
+            && matches!(
+                event.action,
+                crate::input_event::LogicalAction::Up
+                    | crate::input_event::LogicalAction::Down
+                    | crate::input_event::LogicalAction::Left
+                    | crate::input_event::LogicalAction::Right
+            );
+        let held = if discrete_home_direction && event.phase == InputPhase::Pressed {
+            pressed.clone()
+        } else {
+            PadState::default()
+        };
         self.handle_input_internal(
             NavigationInput {
                 pressed: &pressed,
                 released: &released,
                 held: &held,
-                tick_continuous: false,
+                tick_continuous: discrete_home_direction,
                 frame_now,
             },
             catalog,
@@ -6368,6 +6381,30 @@ mod tests {
             );
         }
         assert_eq!(nav.settings_selected, 2);
+    }
+
+    #[test]
+    fn ordered_home_ui_taps_move_one_card_each() {
+        use crate::input_event::{InputSourceKind, LogicalAction};
+
+        let catalog = image_less_amiga_catalog();
+        let mut nav = LauncherNav::new();
+        let now = Instant::now();
+        for tap in 0..5 {
+            let mut event = ordered_event(
+                tap * 2 + 1,
+                tap + 1,
+                LogicalAction::Right,
+                InputPhase::Pressed,
+            );
+            event.source.kind = InputSourceKind::Ui;
+            nav.handle_action_with_navigation_intents(&event, now, &catalog);
+            event.sequence += 1;
+            event.phase = InputPhase::Released;
+            nav.handle_action_with_navigation_intents(&event, now, &catalog);
+        }
+
+        assert_eq!(nav.root_home_card(), Some(LauncherCardId::Settings));
     }
 
     fn release(nav: &mut LauncherNav, catalog: &ArcadeCatalog, t: Instant, ms: u64) {
