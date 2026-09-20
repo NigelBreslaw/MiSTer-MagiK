@@ -2,11 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import mdx from '@astrojs/mdx';
+import { satteri } from '@astrojs/markdown-satteri';
 import starlight from '@astrojs/starlight';
 import mermaid from 'astro-mermaid';
 import { defineConfig } from 'astro/config';
 
 export default defineConfig({
+  markdown: {
+    processor: satteri({ features: { rawHtml: true } }),
+  },
   integrations: [
     mermaid(),
     starlight({
