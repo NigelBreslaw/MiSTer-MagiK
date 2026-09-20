@@ -103,7 +103,7 @@ export { MenuItem, MenuItemKind, MenuItemPresentation } from "launcher_menu.slin
 
 export component Launcher inherits MisterWindow {
     title: "MiSTer MagiK Launcher";
-    background: black;
+    background: MisterUi.custom-home-base ? transparent : black;
     accessible-role: main;
     accessible-label: "MiSTer MagiK Launcher";
     accessible-enabled: true;

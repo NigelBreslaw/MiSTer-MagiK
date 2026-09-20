@@ -1271,6 +1271,16 @@ impl LauncherNav {
         self.screen == Screen::Home && !self.portrait_layout && self.home_scroll.active
     }
 
+    pub fn home_horizontal_direction(
+        &self,
+    ) -> Option<mister_magik_framebuffer_scenes::launcher_navigation::BrowseDirection> {
+        match self.home_scroll.held_dir {
+            -1 => Some(mister_magik_framebuffer_scenes::launcher_navigation::BrowseDirection::Left),
+            1 => Some(mister_magik_framebuffer_scenes::launcher_navigation::BrowseDirection::Right),
+            _ => None,
+        }
+    }
+
     pub fn arcade_uses_menu_repeat(&self) -> bool {
         self.screen == Screen::Arcade
             && self.arcade_search.is_active(&self.arcade_filter.active)

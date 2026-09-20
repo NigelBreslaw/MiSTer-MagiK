@@ -24,7 +24,7 @@ import {
 } from "crt_overlays.slint";
 
 export component CrtLauncherUi inherits Rectangle {
-    background: CrtTheme.background;
+    background: MisterUi.custom-home-base ? transparent : CrtTheme.background;
 
     content := Rectangle {
         x: MisterUi.content-x;
@@ -34,7 +34,7 @@ export component CrtLauncherUi inherits Rectangle {
         background: transparent;
         clip: true;
 
-        if NavigationView.screen == LauncherScreen.home : HomeGrid { }
+        if NavigationView.screen == LauncherScreen.home && !MisterUi.custom-home-base : HomeGrid { }
         if NavigationView.screen == LauncherScreen.controller : CrtControllerPanel { width: 100%; height: 100%; }
         if NavigationView.screen == LauncherScreen.arcade : ArcadeListScreen { }
         if NavigationView.screen == LauncherScreen.settings : SettingsScreen { }

@@ -10,6 +10,7 @@ export global MisterUi {
     in-out property <int> window-width: 960;
     in-out property <int> window-height: 540;
     in-out property <bool> crt-layout: false;
+    in-out property <bool> custom-home-base: false;
     in-out property <ScreenOrientation> screen-orientation: ScreenOrientation.normal;
     out property <bool> portrait-layout: screen-orientation != ScreenOrientation.normal;
     out property <bool> compact-layout: crt-layout || portrait-layout;
