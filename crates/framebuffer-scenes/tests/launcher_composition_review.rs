@@ -106,6 +106,34 @@ fn first_display_frame_is_identical_to_fully_prepared_resting_frame() {
 }
 
 #[test]
+fn collection_index_is_absent_from_static_and_animated_frames() {
+    let scene = LauncherScene::new(960, 540);
+    let mut prepared = scene.prepare(data(0));
+    for frame in [
+        BrowseFrame {
+            selected: 0,
+            target: 0,
+            phase: BrowsePhase::Settled,
+            direction: None,
+            progress_millis: 0,
+            duration_millis: 0,
+            outgoing: None,
+        },
+        moving(0, BrowseDirection::Right, 90),
+    ] {
+        prepared.render_frame(frame);
+        for y in 95..111 {
+            assert!(
+                prepared.pixels()[y * 960 + 880..y * 960 + 934]
+                    .iter()
+                    .all(|pixel| *pixel == Rgb565Pixel(0)),
+                "collection index region was not blank on row {y}: {frame:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn prepared_animation_performs_no_heap_allocations() {
     let mut prepared = LauncherScene::new(960, 540).prepare(data(0));
     assert!(
