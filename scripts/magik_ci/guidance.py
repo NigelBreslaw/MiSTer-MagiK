@@ -10,6 +10,7 @@ import json
 import sys
 import tomllib
 from pathlib import Path
+from typing import cast
 
 DEVICE_ROOTS = (Path("/media/fat"), Path("/tmp/mister-magik"))
 
@@ -182,7 +183,7 @@ def instruction_chain(repository: Path, target: Path) -> list[str]:
         for n in fallbacks
     ):
         raise ValueError("guidance_invalid_fallback_filenames")
-    names = ["AGENTS.override.md", "AGENTS.md", *fallbacks]
+    names = ["AGENTS.override.md", "AGENTS.md", *cast(list[str], fallbacks)]
     directory = target if (repository / target).is_dir() else target.parent
     chain = []
     for parent in [*reversed(directory.parents), directory]:

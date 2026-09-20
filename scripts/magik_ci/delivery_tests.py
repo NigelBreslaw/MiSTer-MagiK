@@ -15,7 +15,7 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 from urllib.parse import urlsplit
 
 from . import distribution as dist
@@ -87,6 +87,7 @@ def downloader_test(
             if data is not None:
                 self.wfile.write(data)
 
+        @override
         def log_message(self, format, *args):
             pass
 
@@ -106,12 +107,12 @@ def downloader_test(
             previous["files"][dist.LEGACY_HELPER] = {
                 "url": base + "/legacy-helper",
                 "size": len(legacy),
-                "hash": hashlib.md5(legacy).hexdigest(),
+                "hash": hashlib.md5(legacy, usedforsecurity=False).hexdigest(),
             }
             previous["files"][dist.LAUNCHER] = {
                 "url": base + "/old-launcher",
                 "size": len(old_launcher),
-                "hash": hashlib.md5(old_launcher).hexdigest(),
+                "hash": hashlib.md5(old_launcher, usedforsecurity=False).hexdigest(),
             }
             for case in CASES:
                 with tempfile.TemporaryDirectory(

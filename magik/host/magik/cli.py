@@ -167,7 +167,7 @@ def main() -> int:
         append_event(
             run, {"phase": "command", "outcome": "failed", "error": "interrupted"}
         )
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - command boundary records all failures
         append_event(
             run, {"phase": "command", "outcome": "failed", "error": str(error)}
         )

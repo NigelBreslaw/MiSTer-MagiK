@@ -25,7 +25,10 @@ class ManifestTest(unittest.TestCase):
         rbf.write_bytes(b"release-rbf")
         report.write_bytes(b"fit-report")
         delta.write_bytes(b"quartus_delta_signoff_tsv\tvalid=1\n")
-        sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+
+        def sha(path: Path) -> str:
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+
         metadata = root / "release.metadata.txt"
         metadata.write_text(
             "\n".join(

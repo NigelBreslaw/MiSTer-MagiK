@@ -289,7 +289,8 @@ def _focus_label(application, label, key, limit):
             return
         _press_key(application, key)
         _wait(
-            lambda: _selected_labels(application) != before, "menu focus did not move"
+            lambda before=before: _selected_labels(application) != before,
+            "menu focus did not move",
         )
     if label not in _selected_labels(application):
         raise AssertionError(f"{label!r} was not selectable within {limit} steps")

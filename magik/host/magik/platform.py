@@ -66,7 +66,7 @@ def main(argv=None):
             result = platform(args, run)
         finalize(run, 0, int((time.monotonic() - started) * 1000))
         return result
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - platform boundary retains evidence
         finalize(run, 2, int((time.monotonic() - started) * 1000))
         print(f"{error}; evidence: {run}")
         return 2

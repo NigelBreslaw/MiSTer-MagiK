@@ -90,7 +90,7 @@ def retain_diagnostics(directory: Path, agent) -> None:
                 + "\n"
             )
         append_event(directory, {"phase": "diagnostics", "outcome": "retained"})
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - diagnostics must not hide primary failure
         append_event(
             directory,
             {"phase": "diagnostics", "outcome": "unavailable", "error": str(error)},

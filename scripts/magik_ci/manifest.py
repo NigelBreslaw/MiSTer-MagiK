@@ -21,7 +21,7 @@ SCHEMA_PATH = (
 )
 with SCHEMA_PATH.open("rb") as stream:
     _SCHEMA = tomllib.load(stream)
-FIELDS: tuple[str, ...] = tuple(_SCHEMA["fields"])
+FIELDS: tuple[str, ...] = tuple(str(field) for field in _SCHEMA["fields"])
 FORMAT = str(_SCHEMA["manifest_format"])
 LATCH_PROTOCOL_VERSION = str(_SCHEMA["latch_protocol_version"])
 LATCH_CAPABILITY_MASK = str(_SCHEMA["latch_capability_mask"])

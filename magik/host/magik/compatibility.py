@@ -13,7 +13,7 @@ class AgentStatus:
     fields: Mapping[str, object]
 
     @classmethod
-    def from_response(cls, response: Mapping[str, object]) -> "AgentStatus":
+    def from_response(cls, response: Mapping[str, object]) -> AgentStatus:
         capabilities = response.get("capabilities", [])
         if not isinstance(capabilities, list) or not all(
             isinstance(item, str) for item in capabilities

@@ -9,6 +9,8 @@ import subprocess
 from pathlib import Path
 from typing import Final
 
+PYTHON_PATHS: Final[tuple[str, ...]] = ("scripts", "magik/host", "magik/scenarios")
+
 QUALITY_COMMANDS: Final[dict[str, tuple[str, ...]]] = {
     "format": (
         "uv",
@@ -16,9 +18,9 @@ QUALITY_COMMANDS: Final[dict[str, tuple[str, ...]]] = {
         "ruff",
         "format",
         "--check",
-        "scripts",
+        *PYTHON_PATHS,
     ),
-    "lint": ("uv", "run", "ruff", "check", "scripts"),
+    "lint": ("uv", "run", "ruff", "check", *PYTHON_PATHS),
     "typecheck": ("uv", "run", "ty", "check"),
 }
 

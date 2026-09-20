@@ -42,7 +42,7 @@ def _environment(
         environment["CFLAGS_armv7_unknown_linux_gnueabihf"] = "-fno-omit-frame-pointer"
     environment["RUSTFLAGS"] = rustflags
 
-    if runner == "cross" and intent in {"runtime-ci", "runtime-device"}:
+    if intent in {"runtime-ci", "runtime-device"}:
         # Cross mounts configured host volumes at their canonical host paths.
         # The FFmpeg preparation container uses /project, but Cross cannot see
         # that mount point when MISTER_REPO_ROOT enables volume mounting.

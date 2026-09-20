@@ -58,7 +58,7 @@ class GitHub:
         return self.optional(f"releases/tags/{tag}")
 
     def revision(self, tag: str) -> str:
-        return self.api(f"commits/{tag}")["sha"]
+        return str(self.api(f"commits/{tag}")["sha"])
 
     def create(self, tag: str, revision: str) -> None:
         self.command(

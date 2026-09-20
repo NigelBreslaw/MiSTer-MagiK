@@ -612,7 +612,7 @@ def sample_points(
     texture_coordinates: list[tuple[float, float] | None] | None = None,
     textures: list[TextureImage | None] | None = None,
 ) -> list[Point]:
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # noqa: S311 - deterministic sampling, not security
     features, seams = edge_sets(vertices, triangles)
     edge_count = min(count, round(count * 0.20))
     seam_count = min(count - edge_count, round(count * 0.08)) if seams else 0

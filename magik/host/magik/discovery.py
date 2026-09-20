@@ -211,7 +211,7 @@ def resolve_device(
             for future in completed:
                 try:
                     device = future.result()
-                except Exception as error:
+                except Exception as error:  # noqa: BLE001 - retain every probe failure
                     errors.append(error)
                     continue
                 if device:

@@ -299,7 +299,7 @@ def verify(
             raise ValueError(f"platform_checksum:{name}")
     if manifest is not None and manifest.read_bytes() != files[MANIFEST]:
         raise ValueError("platform_release_manifest_mismatch")
-    return payload
+    return cast(dict[str, object], payload)
 
 
 def _metadata_text_value(text: str, key: str) -> str:

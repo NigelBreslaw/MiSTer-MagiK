@@ -68,7 +68,7 @@ def _function(source: str) -> dict[str, object] | None:
             if opened and depth <= 0:
                 break
         if opened and (best is None or end - index + 1 > best[1]):
-            best = (match.group(1), end - index + 1)
+            best = (str(match.group(1)), end - index + 1)
     return None if best is None else {"name": best[0], "lines": best[1]}
 
 

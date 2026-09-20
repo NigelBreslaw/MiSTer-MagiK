@@ -104,11 +104,11 @@ jobs:
         id: format
         continue-on-error: true
         run: scripts/magik-ci quality format
-      - name: Lint maintained scripts
+      - name: Lint Python tooling
         id: lint
         continue-on-error: true
         run: scripts/magik-ci quality lint
-      - name: Type-check migrated tooling
+      - name: Type-check Python tooling
         id: typecheck
         continue-on-error: true
         run: scripts/magik-ci quality typecheck

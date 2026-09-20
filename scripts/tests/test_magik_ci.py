@@ -589,11 +589,21 @@ with tempfile.TemporaryDirectory() as directory:
                 "format",
                 "--check",
                 "scripts",
+                "magik/host",
+                "magik/scenarios",
             ),
         )
         self.assertEqual(
             QUALITY_COMMANDS["lint"],
-            ("uv", "run", "ruff", "check", "scripts"),
+            (
+                "uv",
+                "run",
+                "ruff",
+                "check",
+                "scripts",
+                "magik/host",
+                "magik/scenarios",
+            ),
         )
         self.assertEqual(QUALITY_COMMANDS["typecheck"], ("uv", "run", "ty", "check"))
 

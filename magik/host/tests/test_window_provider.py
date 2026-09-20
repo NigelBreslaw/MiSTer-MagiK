@@ -16,7 +16,7 @@ def test_development_build_emits_profile_bound_provenance(tmp_path):
             "bash",
             "-c",
             'source "$1"; write_provenance "$2" profile profile 1 contract module '
-            "'6.18.38-MiSTer SMP mod_unload ARMv7 p2v8 ' kernel-id module-id",
+            + "'6.18.38-MiSTer SMP mod_unload ARMv7 p2v8 ' kernel-id module-id",
             "test",
             str(script),
             str(output),

@@ -19,17 +19,50 @@ package = false
 # in sandboxed agent sessions and avoids falling back to a protected user cache.
 cache-dir = ".uv-cache"
 
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+preview = true
+# Keep syntax/runtime checks, then add Ruff's high-signal semantic and security
+# groups. The subprocess rules are intentionally excluded because this is an
+# orchestration repository: commands are passed as argv and shell=False is the
+# default, while executable lookup through PATH is required on every platform.
+select = ["E4", "E7", "E9", "F", "correctness", "suspicious", "security"]
+ignore = ["S404", "S603", "S607"]
+
 [tool.ruff.lint.per-file-ignores]
+"magik/host/magik/bootstrap.py" = ["S108", "S507"]
+"magik/host/tests/test_compatibility_flow.py" = ["S105"]
 "scripts/codex-context-report.py" = ["N999"]
+"scripts/checks/pre-commit.py" = ["E402"]
+"scripts/checks/pre-push.py" = ["E402"]
+"scripts/magik_ci/databases.py" = ["S314", "S405"]
+"scripts/magik_ci/guidance.py" = ["S108"]
+"scripts/magik_ci/maintenance.py" = ["S608"]
+"scripts/media/generate-0mhz-release-manifest.py" = ["S314", "S405"]
 "scripts/prepare-fpga-menu-signoff.py" = ["N999"]
+"scripts/tests/test-codex-context-report.py" = ["S105"]
+"scripts/tests/test_guidance.py" = ["S108"]
 
 [tool.pytest.ini_options]
 testpaths = ["scripts/tests"]
 python_files = ["test_*.py", "test-*.py"]
 pythonpath = ["."]
+addopts = ["--strict-config", "--strict-markers"]
+filterwarnings = ["error"]
+xfail_strict = true
 
 [tool.ty.src]
 include = [
     "scripts/magik_ci",
+    "scripts/tests/test_architecture.py",
+    "scripts/tests/test_delivery_evidence.py",
+    "scripts/tests/test_distribution_workflow.py",
     "scripts/tests/test_magik_ci.py",
+    "scripts/tests/test_magik_ci_ffmpeg.py",
+    "scripts/tests/test_maintenance.py",
 ]
+
+[tool.ty.rules]
+all = "error"
