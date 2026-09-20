@@ -17,32 +17,12 @@ pub struct LauncherHomeCounts {
     pub computers: u32,
     pub handhelds: u32,
     pub favourites: u32,
-    pub library_games: u32,
     pub collections: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct LauncherHomeCard {
-    pub id: LauncherCardId,
-    pub label: &'static str,
-    pub games: Option<u32>,
-    pub colour: u16,
-}
-
-impl LauncherHomeCard {
-    pub const fn borrowed(&self) -> LauncherCard<'_> {
-        LauncherCard {
-            id: self.id,
-            name: self.label,
-            games: self.games,
-            colour: self.colour,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LauncherHomeSnapshot {
-    pub cards: [LauncherHomeCard; CARD_COUNT],
+    pub cards: [LauncherCard<'static>; CARD_COUNT],
     pub library_games: u32,
     pub collections: u32,
     pub favourites: u32,
@@ -66,10 +46,6 @@ impl LauncherHomeSnapshot {
             computers,
             handhelds,
             favourites: saturating_u32(nav.favourite_count()),
-            library_games: arcade
-                .saturating_add(consoles)
-                .saturating_add(computers)
-                .saturating_add(handhelds),
             collections: saturating_u32(catalog.systems.len()),
         })
     }
@@ -109,7 +85,11 @@ impl LauncherHomeSnapshot {
                 ),
                 card(LauncherCardId::Settings, "SETTINGS", None, 0x8b7f),
             ],
-            library_games: counts.library_games,
+            library_games: counts
+                .arcade
+                .saturating_add(counts.consoles)
+                .saturating_add(counts.computers)
+                .saturating_add(counts.handhelds),
             collections: counts.collections,
             favourites: counts.favourites,
         }
@@ -121,10 +101,10 @@ const fn card(
     label: &'static str,
     games: Option<u32>,
     colour: u16,
-) -> LauncherHomeCard {
-    LauncherHomeCard {
+) -> LauncherCard<'static> {
+    LauncherCard {
         id,
-        label,
+        name: label,
         games,
         colour,
     }
@@ -146,7 +126,6 @@ mod tests {
             computers: 3,
             handhelds: 4,
             favourites: 5,
-            library_games: 15,
             collections: 4,
         });
         assert_eq!(

@@ -7,7 +7,7 @@ use crate::bitmap_font_resource::{
     jersey_25_console_bitmap_font, launcher_bitmap_font, nocive_15_console_bitmap_font,
     spleen_6x12_native_console_bitmap_font, xerxes_10_console_bitmap_font,
 };
-use crate::launcher_home::{CARD_COUNT, LauncherHomeCard, LauncherHomeSnapshot};
+use crate::launcher_home::{CARD_COUNT, LauncherHomeSnapshot};
 use mister_magik_framebuffer_scenes::Rgb565Pixel;
 use mister_magik_framebuffer_scenes::bitmap_text::BitmapFont;
 use mister_magik_framebuffer_scenes::launcher::{
@@ -65,7 +65,6 @@ pub(super) struct LauncherCardHomeSession {
     fonts: LauncherFonts,
     prepared: PreparedLauncher,
     browser: LauncherBrowser,
-    desired_selection: usize,
     held_direction: Option<BrowseDirection>,
     frame: BrowseFrame,
     active: bool,
@@ -95,7 +94,6 @@ impl LauncherCardHomeSession {
             fonts,
             prepared,
             browser,
-            desired_selection: selected,
             held_direction: None,
             frame,
             active: false,
@@ -122,7 +120,6 @@ impl LauncherCardHomeSession {
         if !self.active {
             self.browser = LauncherBrowser::new(CARD_COUNT, selected);
             self.browser.neutral();
-            self.desired_selection = selected;
             self.held_direction = None;
             self.active = true;
             self.content_dirty = true;
@@ -138,13 +135,12 @@ impl LauncherCardHomeSession {
             self.held_direction = held_direction;
         }
 
-        self.desired_selection = selected;
         self.frame = self.browser.frame(now_ms);
         if held_direction.is_none()
             && self.frame.phase == BrowsePhase::Settled
-            && self.frame.selected != self.desired_selection
+            && self.frame.selected != selected
         {
-            let direction = if self.frame.selected < self.desired_selection {
+            let direction = if self.frame.selected < selected {
                 BrowseDirection::Right
             } else {
                 BrowseDirection::Left
@@ -209,16 +205,12 @@ fn prepare(
     artwork: &[Vec<Rgb565Pixel>; CARD_COUNT],
     fonts: &LauncherFonts,
 ) -> PreparedLauncher {
-    let cards = snapshot
-        .cards
-        .iter()
-        .map(LauncherHomeCard::borrowed)
-        .collect::<Vec<_>>();
-    let artwork = artwork.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let artwork: [&[Rgb565Pixel]; CARD_COUNT] =
+        std::array::from_fn(|index| artwork[index].as_slice());
     LauncherScene::new(width, height)
         .prepare_initial_with_artwork_and_typography(
             LauncherData {
-                cards: &cards,
+                cards: &snapshot.cards,
                 selected,
                 library_games: snapshot.library_games,
                 collections: snapshot.collections,
@@ -251,7 +243,6 @@ mod tests {
             computers: 3,
             handhelds: 4,
             favourites: 5,
-            library_games: 15,
             collections: 4,
         })
     }

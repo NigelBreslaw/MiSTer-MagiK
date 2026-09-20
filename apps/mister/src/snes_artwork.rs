@@ -12,9 +12,6 @@ const HEADER_LEN: usize = 24;
 pub const SNES_ARTWORK_WIDTH: usize = 185;
 pub const SNES_ARTWORK_HEIGHT: usize = 82;
 pub const SNES_ARTWORK_RELATIVE_PATH: &str = "assets/snes/snes-small-v1.rgb565a";
-pub const SETTINGS_ARTWORK_WIDTH: usize = 24;
-pub const SETTINGS_ARTWORK_HEIGHT: usize = 24;
-pub const SETTINGS_ARTWORK_RELATIVE_PATH: &str = "assets/ui/settings-v1.rgb565a";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rgb565aImage {
@@ -235,11 +232,6 @@ mod tests {
             .expect("repository SNES artwork")
     }
 
-    fn repository_settings_asset() -> Vec<u8> {
-        fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join(SETTINGS_ARTWORK_RELATIVE_PATH))
-            .expect("repository settings artwork")
-    }
-
     #[test]
     fn decodes_authoritative_native_pixel_asset() {
         let artwork = Rgb565aImage::decode(&repository_asset())
@@ -266,24 +258,11 @@ mod tests {
     }
 
     #[test]
-    fn settings_artwork_has_exact_runtime_dimensions() {
-        let artwork = Rgb565aImage::decode(&repository_settings_asset())
-            .unwrap()
-            .require_dimensions(SETTINGS_ARTWORK_WIDTH, SETTINGS_ARTWORK_HEIGHT)
-            .unwrap();
-        assert_eq!((artwork.width, artwork.height), (24, 24));
-        assert_eq!(artwork.colours.len(), 24 * 24);
-        assert_eq!(artwork.alpha.len(), 24 * 24);
-        assert!(artwork.alpha.contains(&0));
-        assert!(artwork.alpha.contains(&255));
-    }
-
-    #[test]
     fn exact_loader_rejects_wrong_artwork_dimensions() {
         assert!(matches!(
-            Rgb565aImage::decode(&repository_settings_asset())
+            Rgb565aImage::decode(&repository_asset())
                 .unwrap()
-                .require_dimensions(SNES_ARTWORK_WIDTH, SNES_ARTWORK_HEIGHT),
+                .require_dimensions(24, 24),
             Err(Rgb565aError::UnexpectedDimensions { .. })
         ));
     }

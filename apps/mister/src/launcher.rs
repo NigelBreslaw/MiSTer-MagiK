@@ -46,17 +46,20 @@ use std::time::{Duration, Instant};
 const HOME_SCROLL_HOLD_DELAY: Duration = Duration::from_millis(200);
 const HOME_SCROLL_SPEED_PX_PER_SECOND: f64 = 1440.0;
 const HOME_SCROLL_ACCELERATION_PX_PER_SECOND_SQUARED: f64 = 6000.0;
-const ROOT_HOME_CARD_COUNT: usize = 6;
+const ROOT_HOME_CARDS: [(LauncherCardId, &str); 6] = [
+    (LauncherCardId::Arcade, "arcade"),
+    (LauncherCardId::Consoles, "menu:consoles"),
+    (LauncherCardId::Computers, "menu:computers"),
+    (LauncherCardId::Handhelds, "menu:handhelds"),
+    (LauncherCardId::Favourites, "__favourites"),
+    (LauncherCardId::Settings, "__settings"),
+];
 
 const fn root_home_card_key(index: usize) -> &'static str {
-    match index {
-        0 => "arcade",
-        1 => "menu:consoles",
-        2 => "menu:computers",
-        3 => "menu:handhelds",
-        4 => "__favourites",
-        5 => "__settings",
-        _ => "",
+    if index < ROOT_HOME_CARDS.len() {
+        ROOT_HOME_CARDS[index].1
+    } else {
+        ""
     }
 }
 
@@ -1513,7 +1516,7 @@ impl LauncherNav {
 
     pub(crate) fn home_navigation_count(&self) -> usize {
         if self.current_menu_id() == ROOT_MENU_ID {
-            ROOT_HOME_CARD_COUNT
+            ROOT_HOME_CARDS.len()
         } else {
             self.current_menu_count()
         }
@@ -2144,8 +2147,9 @@ impl LauncherNav {
                 .as_deref()
                 .and_then(|selected_id| {
                     if self.current_menu_id() == ROOT_MENU_ID {
-                        (0..ROOT_HOME_CARD_COUNT)
-                            .position(|index| root_home_card_key(index) == selected_id)
+                        ROOT_HOME_CARDS
+                            .iter()
+                            .position(|(_, key)| *key == selected_id)
                     } else {
                         self.current_menu_items()
                             .iter()
@@ -2668,15 +2672,7 @@ impl LauncherNav {
         if self.current_menu_id() != ROOT_MENU_ID {
             return None;
         }
-        match self.selected {
-            0 => Some(LauncherCardId::Arcade),
-            1 => Some(LauncherCardId::Consoles),
-            2 => Some(LauncherCardId::Computers),
-            3 => Some(LauncherCardId::Handhelds),
-            4 => Some(LauncherCardId::Favourites),
-            5 => Some(LauncherCardId::Settings),
-            _ => None,
-        }
+        ROOT_HOME_CARDS.get(self.selected).map(|(id, _)| *id)
     }
 
     fn update_home_scroll(&mut self, held: &PadState, frame_now: Instant, count: usize) {
@@ -7840,7 +7836,7 @@ mod tests {
                 .is_none()
         );
 
-        assert_eq!(nav.selected, ROOT_HOME_CARD_COUNT - 1);
+        assert_eq!(nav.selected, ROOT_HOME_CARDS.len() - 1);
         assert_eq!(nav.root_home_card(), Some(LauncherCardId::Settings));
     }
 

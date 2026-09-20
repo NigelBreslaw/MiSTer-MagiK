@@ -1278,10 +1278,11 @@ mod macos {
                 } else if let Some(action) = self.launcher_ui_actions.pop_front() {
                     self.launcher_input_sequence =
                         self.launcher_input_sequence.saturating_add(1).max(1);
-                    if let Some(event) = action.input_event(
+                    if let Some([event, released]) = action.input_pulse(
                         self.launcher_input_sequence,
                         self.fixed_time.get().as_micros().min(u64::MAX as u128) as u64,
                     ) {
+                        self.launcher_input_events.push_front(released);
                         Some(event)
                     } else {
                         direct_ui_action = Some(action);
