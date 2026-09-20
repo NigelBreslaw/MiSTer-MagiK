@@ -8,6 +8,7 @@
 //! design with nearest-neighbour letterboxing.
 
 use crate::Rgb565Pixel;
+use crate::bitmap_text::BitmapFont;
 use std::sync::Arc;
 mod artwork;
 use crate::launcher_navigation::{BrowseDirection, BrowseFrame};
@@ -41,6 +42,39 @@ pub struct LauncherData<'a> {
     pub collections: u32,
     pub favourites: u32,
     pub clock: &'a str,
+}
+
+#[derive(Clone, Copy)]
+pub struct LauncherTypography<'a> {
+    pub heading: &'a BitmapFont,
+    pub number: &'a BitmapFont,
+    pub metadata: &'a BitmapFont,
+    pub fallback: &'a BitmapFont,
+}
+
+impl LauncherTypography<'_> {
+    fn font_for(&self, role: TextRole, text: &str) -> &BitmapFont {
+        let primary = match role {
+            TextRole::Heading => self.heading,
+            TextRole::Number => self.number,
+            TextRole::Metadata => self.metadata,
+        };
+        if text
+            .chars()
+            .all(|character| primary.glyph(character).is_some())
+        {
+            primary
+        } else {
+            self.fallback
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TextRole {
+    Heading,
+    Number,
+    Metadata,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -90,7 +124,7 @@ impl LauncherScene {
     /// `finish` retains the runtime's staged-entry contract; prepared textures
     /// and scratch buffers now cover all fractional sizes without a scale bank.
     pub fn prepare_initial(self, data: LauncherData<'_>) -> InitialLauncher {
-        let mut prepared = PreparedLauncher::new(self, data, None);
+        let mut prepared = PreparedLauncher::new(self, data, None, None);
         prepared.render_frame(BrowseFrame {
             selected: data.selected,
             target: data.selected,
@@ -111,7 +145,28 @@ impl LauncherScene {
         data: LauncherData<'_>,
         artwork: &[&[Rgb565Pixel]],
     ) -> InitialLauncher {
-        let mut prepared = PreparedLauncher::new(self, data, Some(artwork));
+        let mut prepared = PreparedLauncher::new(self, data, Some(artwork), None);
+        prepared.render_frame(BrowseFrame {
+            selected: data.selected,
+            target: data.selected,
+            phase: crate::launcher_navigation::BrowsePhase::Settled,
+            direction: None,
+            progress_millis: 0,
+            duration_millis: 0,
+            outgoing: None,
+        });
+        InitialLauncher { prepared }
+    }
+
+    /// Prepare production chrome and card faces with the application's bitmap
+    /// fonts. The fonts are consumed during preparation and are not retained.
+    pub fn prepare_initial_with_artwork_and_typography(
+        self,
+        data: LauncherData<'_>,
+        artwork: &[&[Rgb565Pixel]],
+        typography: LauncherTypography<'_>,
+    ) -> InitialLauncher {
+        let mut prepared = PreparedLauncher::new(self, data, Some(artwork), Some(typography));
         prepared.render_frame(BrowseFrame {
             selected: data.selected,
             target: data.selected,
@@ -144,6 +199,7 @@ pub struct PreparedLauncher {
     logical: Vec<Rgb565Pixel>,
     fitted: Vec<Rgb565Pixel>,
     collection_labels: Vec<String>,
+    metadata_font: Option<Arc<BitmapFont>>,
     faces: Arc<Vec<CardFaces>>,
     flip_columns: Vec<crate::launcher_flip::Scratch>,
 }
@@ -199,6 +255,7 @@ impl PreparedLauncherFrame {
 pub struct LauncherFramePreparer {
     faces: Arc<Vec<CardFaces>>,
     labels: Arc<Vec<String>>,
+    metadata_font: Option<Arc<BitmapFont>>,
 }
 
 impl LauncherFramePreparer {
@@ -296,7 +353,15 @@ impl LauncherFramePreparer {
         const BOTTOM: usize = 495;
         draw_rect(destination, 880, 95, 54, 16, BACKGROUND);
         if let Some(label) = self.labels.get(request.frame.selected) {
-            draw_text(destination, 888, 101, label, MUTED, 1);
+            draw_scene_text(
+                destination,
+                self.metadata_font.as_deref(),
+                888,
+                101,
+                label,
+                MUTED,
+                1,
+            );
         }
         if !self.faces.is_empty() {
             let plan = build_carousel_plan(&self.faces, request.frame);
@@ -342,7 +407,15 @@ impl LauncherFramePreparer {
         }
         draw_rect(pixels, 880, 95, 54, 16, BACKGROUND);
         if let Some(label) = self.labels.get(request.frame.selected) {
-            draw_text(pixels, 888, 101, label, MUTED, 1);
+            draw_scene_text(
+                pixels,
+                self.metadata_font.as_deref(),
+                888,
+                101,
+                label,
+                MUTED,
+                1,
+            );
         }
         if !self.faces.is_empty() {
             let plan = build_carousel_plan(&self.faces, request.frame);
@@ -380,8 +453,9 @@ fn bake_face(
     width: usize,
     selected: bool,
     saturation: u16,
+    typography: Option<LauncherTypography<'_>>,
 ) -> crate::launcher_flip::Face {
-    artwork::face(card, width, selected, saturation)
+    artwork::face(card, width, selected, saturation, typography)
 }
 
 struct PreparedCard {
@@ -410,7 +484,15 @@ impl PreparedLauncher {
         }
         draw_rect(&mut self.logical, 880, 95, 54, 16, BACKGROUND);
         if let Some(label) = self.collection_labels.get(frame.selected) {
-            draw_text(&mut self.logical, 888, 101, label, MUTED, 1);
+            draw_scene_text(
+                &mut self.logical,
+                self.metadata_font.as_deref(),
+                888,
+                101,
+                label,
+                MUTED,
+                1,
+            );
         }
         self.fit_output();
     }
@@ -418,6 +500,7 @@ impl PreparedLauncher {
         LauncherFramePreparer {
             faces: self.faces.clone(),
             labels: Arc::new(self.collection_labels.clone()),
+            metadata_font: self.metadata_font.clone(),
         }
     }
     /// Owned raster-buffer capacity, excluding strings and small metadata.
@@ -446,6 +529,7 @@ impl PreparedLauncher {
         scene: LauncherScene,
         data: LauncherData<'_>,
         artwork: Option<&[&[Rgb565Pixel]]>,
+        typography: Option<LauncherTypography<'_>>,
     ) -> Self {
         let cards: Vec<_> = data
             .cards
@@ -487,16 +571,16 @@ impl PreparedLauncher {
             clock: data.clock,
         };
         let mut chrome = vec![Rgb565Pixel(BACKGROUND); LOGICAL_WIDTH * LOGICAL_HEIGHT];
-        render_logical(&mut chrome, source);
+        render_logical(&mut chrome, source, typography);
         draw_rect(&mut chrome, 296, 120, 638, 495 - 120, BACKGROUND);
         draw_rect(&mut chrome, 880, 95, 54, 16, BACKGROUND);
         let faces: Vec<_> = cards
             .iter()
             .map(|card| CardFaces {
                 compact: std::array::from_fn(|level| {
-                    bake_face(card, 180, false, COMPACT_EDGE_SATURATION[level])
+                    bake_face(card, 180, false, COMPACT_EDGE_SATURATION[level], typography)
                 }),
-                detail: bake_face(card, 180, true, 256),
+                detail: bake_face(card, 180, true, 256, typography),
             })
             .collect();
         Self {
@@ -508,6 +592,7 @@ impl PreparedLauncher {
                 vec![Rgb565Pixel(BACKGROUND); scene.width * scene.height]
             },
             collection_labels,
+            metadata_font: typography.map(|fonts| Arc::new(fonts.metadata.clone())),
             faces: Arc::new(faces),
             flip_columns: (0..6)
                 .map(|_| crate::launcher_flip::Scratch::new())
@@ -641,21 +726,79 @@ const fn rgb(red: u16, green: u16, blue: u16) -> u16 {
     ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
 }
 
-fn render_logical(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>) {
+fn render_logical(
+    pixels: &mut [Rgb565Pixel],
+    data: LauncherData<'_>,
+    typography: Option<LauncherTypography<'_>>,
+) {
     draw_rect(pixels, 0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT, BACKGROUND);
-    draw_text(pixels, 26, 20, "MISTER MAGIK", CREAM, 3);
-    draw_text(pixels, 875, 22, data.clock, CREAM, 2);
+    draw_role_text(
+        pixels,
+        typography,
+        TextRole::Heading,
+        26,
+        20,
+        "MISTER MAGIK",
+        CREAM,
+        3,
+    );
+    draw_role_text(
+        pixels,
+        typography,
+        TextRole::Heading,
+        875,
+        22,
+        data.clock,
+        CREAM,
+        2,
+    );
     draw_line(pixels, 26, 76, 934, 76, RULE);
 
     draw_line(pixels, 265, 95, 265, 478, RULE);
-    draw_text(pixels, 29, 101, "YOUR LIBRARY", MUTED, 1);
-    draw_number(pixels, 28, 142, data.library_games, CREAM, 5);
-    draw_text(pixels, 29, 205, "GAMES READY TO PLAY", MUTED, 1);
+    draw_role_text(
+        pixels,
+        typography,
+        TextRole::Metadata,
+        29,
+        101,
+        "YOUR LIBRARY",
+        MUTED,
+        1,
+    );
+    draw_role_number(pixels, typography, 28, 142, data.library_games, CREAM, 5);
+    draw_role_text(
+        pixels,
+        typography,
+        TextRole::Metadata,
+        29,
+        205,
+        "GAMES READY TO PLAY",
+        MUTED,
+        1,
+    );
     draw_line(pixels, 28, 239, 240, 239, RULE);
-    draw_number(pixels, 30, 265, data.collections, CREAM, 3);
-    draw_number(pixels, 150, 265, data.favourites, CREAM, 3);
-    draw_text(pixels, 30, 310, "COLLECTIONS", MUTED, 1);
-    draw_text(pixels, 150, 310, "FAVOURITES", MUTED, 1);
+    draw_role_number(pixels, typography, 30, 265, data.collections, CREAM, 3);
+    draw_role_number(pixels, typography, 150, 265, data.favourites, CREAM, 3);
+    draw_role_text(
+        pixels,
+        typography,
+        TextRole::Metadata,
+        30,
+        310,
+        "COLLECTIONS",
+        MUTED,
+        1,
+    );
+    draw_role_text(
+        pixels,
+        typography,
+        TextRole::Metadata,
+        150,
+        310,
+        "FAVOURITES",
+        MUTED,
+        1,
+    );
     draw_line(pixels, 28, 340, 240, 340, RULE);
     for (index, colour) in [
         rgb(226, 52, 67),
@@ -669,14 +812,25 @@ fn render_logical(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>) {
         draw_rect(pixels, 29 + index * 54, 436, 48, 7, *colour);
     }
 
-    draw_text(pixels, 296, 101, "COLLECTIONS", MUTED, 1);
+    draw_role_text(
+        pixels,
+        typography,
+        TextRole::Metadata,
+        296,
+        101,
+        "COLLECTIONS",
+        MUTED,
+        1,
+    );
     let selected = if data.cards.is_empty() {
         0
     } else {
         data.selected % data.cards.len()
     };
-    draw_text(
+    draw_role_text(
         pixels,
+        typography,
+        TextRole::Metadata,
         888,
         101,
         &format!("{:02} / {:02}", selected + 1, data.cards.len()),
@@ -684,9 +838,36 @@ fn render_logical(pixels: &mut [Rgb565Pixel], data: LauncherData<'_>) {
         1,
     );
     draw_line(pixels, 26, 500, 934, 500, RULE);
-    draw_text(pixels, 30, 516, "A  OPEN", CREAM, 1);
-    draw_text(pixels, 130, 516, "B  BACK", CREAM, 1);
-    draw_text(pixels, 586, 516, "←  →   BROWSE CARDS", CREAM, 1);
+    draw_role_text(
+        pixels,
+        typography,
+        TextRole::Metadata,
+        30,
+        516,
+        "A  OPEN",
+        CREAM,
+        1,
+    );
+    draw_role_text(
+        pixels,
+        typography,
+        TextRole::Metadata,
+        130,
+        516,
+        "B  BACK",
+        CREAM,
+        1,
+    );
+    draw_role_text(
+        pixels,
+        typography,
+        TextRole::Metadata,
+        586,
+        516,
+        "←  →   BROWSE CARDS",
+        CREAM,
+        1,
+    );
 }
 
 const GEOMETRY_ONE: i64 = 65536;
@@ -1076,6 +1257,74 @@ fn draw_number(
     draw_text(pixels, x, y, &value.to_string(), colour, scale);
 }
 
+fn draw_scene_text(
+    pixels: &mut [Rgb565Pixel],
+    font: Option<&BitmapFont>,
+    x: usize,
+    y: usize,
+    text: &str,
+    colour: u16,
+    legacy_scale: usize,
+) {
+    if let Some(font) = font {
+        font.draw(
+            pixels,
+            LOGICAL_WIDTH,
+            LOGICAL_HEIGHT,
+            x as i32,
+            y as i32,
+            text,
+            colour,
+        );
+    } else {
+        draw_text(pixels, x, y, text, colour, legacy_scale);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_role_text(
+    pixels: &mut [Rgb565Pixel],
+    typography: Option<LauncherTypography<'_>>,
+    role: TextRole,
+    x: usize,
+    y: usize,
+    text: &str,
+    colour: u16,
+    legacy_scale: usize,
+) {
+    if let Some(fonts) = typography {
+        draw_scene_text(
+            pixels,
+            Some(fonts.font_for(role, text)),
+            x,
+            y,
+            text,
+            colour,
+            legacy_scale,
+        );
+    } else {
+        draw_scene_text(pixels, None, x, y, text, colour, legacy_scale);
+    }
+}
+
+fn draw_role_number(
+    pixels: &mut [Rgb565Pixel],
+    typography: Option<LauncherTypography<'_>>,
+    x: usize,
+    y: usize,
+    value: u32,
+    colour: u16,
+    legacy_scale: usize,
+) {
+    let text = value.to_string();
+    if let Some(fonts) = typography {
+        let font = fonts.font_for(TextRole::Number, &text);
+        draw_scene_text(pixels, Some(font), x, y, &text, colour, legacy_scale);
+    } else {
+        draw_number(pixels, x, y, value, colour, legacy_scale);
+    }
+}
+
 fn draw_text(
     pixels: &mut [Rgb565Pixel],
     x: usize,
@@ -1222,7 +1471,7 @@ mod tests {
     fn borrowed_native_frame_and_fitted_frame_match_reference() {
         for (width, height) in [(960, 540), (640, 480)] {
             let scene = LauncherScene::new(width, height);
-            let mut prepared = PreparedLauncher::new(scene, data(), None);
+            let mut prepared = PreparedLauncher::new(scene, data(), None, None);
             let frame = crate::launcher_navigation::LauncherBrowser::new(5, 0).frame(0);
             prepared.render_frame(frame);
             assert_eq!(prepared.pixels(), scene.render(data()));
@@ -1237,8 +1486,8 @@ mod tests {
     fn retained_damage_matches_full_clear_across_wraps_and_directions() {
         for (width, height) in [(960, 540), (640, 480)] {
             let scene = LauncherScene::new(width, height);
-            let mut incremental = PreparedLauncher::new(scene, data(), None);
-            let mut reference = PreparedLauncher::new(scene, data(), None);
+            let mut incremental = PreparedLauncher::new(scene, data(), None, None);
+            let mut reference = PreparedLauncher::new(scene, data(), None, None);
             let chrome = reference.logical.clone();
             for rect in PreparedLauncher::logical_damage() {
                 for y in rect.y0..rect.y1 {

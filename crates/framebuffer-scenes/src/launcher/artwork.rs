@@ -16,6 +16,7 @@ pub(super) fn face(
     width: usize,
     detail: bool,
     saturation: u16,
+    typography: Option<LauncherTypography<'_>>,
 ) -> crate::launcher_flip::Face {
     let height = card_height(width);
     let mut canvas = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
@@ -87,26 +88,50 @@ pub(super) fn face(
             draw_mask_scaled_centered(&mut canvas, 0, height / 4, width, &initial, ink, 8 * 256);
         }
     }
-    let title_scale = ((width - 24) / (card.name_mask.len().max(1) * 6)).clamp(1, 3) * 256;
-    draw_mask_scaled_centered(
-        &mut canvas,
-        0,
-        height * 73 / 100,
-        width,
-        &card.name_mask,
-        ink,
-        title_scale,
-    );
-    if detail && card.games.is_some() {
+    if let Some(fonts) = typography {
+        fonts.font_for(TextRole::Heading, &card.name).draw_centered(
+            &mut canvas,
+            LOGICAL_WIDTH,
+            LOGICAL_HEIGHT,
+            (width / 2) as i32,
+            (height * 73 / 100) as i32,
+            &card.name,
+            ink,
+        );
+        if detail && card.games.is_some() {
+            let games = format_games(card.games.expect("checked game count"));
+            fonts.font_for(TextRole::Metadata, &games).draw_centered(
+                &mut canvas,
+                LOGICAL_WIDTH,
+                LOGICAL_HEIGHT,
+                (width / 2) as i32,
+                (height * 86 / 100) as i32,
+                &games,
+                ink,
+            );
+        }
+    } else {
+        let title_scale = ((width - 24) / (card.name_mask.len().max(1) * 6)).clamp(1, 3) * 256;
         draw_mask_scaled_centered(
             &mut canvas,
             0,
-            height * 86 / 100,
+            height * 73 / 100,
             width,
-            &card.games_mask,
+            &card.name_mask,
             ink,
-            ((width - 24) / (card.games_mask.len().max(1) * 6)).clamp(1, 2) * 256,
+            title_scale,
         );
+        if detail && card.games.is_some() {
+            draw_mask_scaled_centered(
+                &mut canvas,
+                0,
+                height * 86 / 100,
+                width,
+                &card.games_mask,
+                ink,
+                ((width - 24) / (card.games_mask.len().max(1) * 6)).clamp(1, 2) * 256,
+            );
+        }
     }
     let pixels = (0..height)
         .flat_map(|y| {
@@ -385,7 +410,7 @@ mod tests {
     fn faces_have_no_ordinal_dots_or_top_dash() {
         let card = test_card(0x2c92);
         for detail in [false, true] {
-            let face = face(&card, 180, detail, 256);
+            let face = face(&card, 180, detail, 256, None);
             let base = if detail {
                 card.colour
             } else {
@@ -414,8 +439,8 @@ mod tests {
         let source = rgb(220, 34, 78);
         let mut card = test_card(rgb(32, 112, 238));
         card.artwork = Some(vec![Rgb565Pixel(source); 180 * 252]);
-        let compact = face(&card, 180, false, 160);
-        let detail = face(&card, 180, true, 256);
+        let compact = face(&card, 180, false, 160, None);
+        let detail = face(&card, 180, true, 256, None);
         let centre = 100 * 180 + 90;
         let rim = 12 * 180;
         let tinted_trim = mix_colour(BACKGROUND, card.colour, 92);

@@ -312,6 +312,34 @@ pub fn jersey_15_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
     console_bitmap_font(JERSEY_15_RESOURCE)
 }
 
+pub fn jersey_25_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
+    console_bitmap_font(JERSEY_25_RESOURCE)
+}
+
+pub fn launcher_bitmap_font(
+    font: ConsoleBitmapFont,
+) -> mister_magik_framebuffer_scenes::bitmap_text::BitmapFont {
+    mister_magik_framebuffer_scenes::bitmap_text::BitmapFont {
+        ascent: font.ascent.round() as i32,
+        descent: font.descent.round() as i32,
+        glyphs: font
+            .glyphs
+            .into_iter()
+            .map(
+                |glyph| mister_magik_framebuffer_scenes::bitmap_text::BitmapGlyph {
+                    code_point: glyph.code_point,
+                    left: glyph.left,
+                    top: glyph.top,
+                    width: glyph.width,
+                    height: glyph.height,
+                    advance: glyph.advance,
+                    alpha: glyph.data,
+                },
+            )
+            .collect(),
+    }
+}
+
 pub fn terminus_8x14_normal_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
     console_bitmap_font(TERMINUS_8X14_NORMAL_RESOURCE)
 }
