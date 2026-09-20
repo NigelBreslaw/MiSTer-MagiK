@@ -44,6 +44,7 @@ CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {
 }
 WATCH_AGENT_CAPABILITIES = {"status", "metrics-v1", "watch-v1"}
 PROFILE_AGENT_CAPABILITIES = CHECK_AGENT_CAPABILITIES | {"artifacts-v1"}
+CHECK_SCENARIOS = ("smoke", "motion", "idle")
 
 
 def agent_binary_path() -> Path:
@@ -93,7 +94,7 @@ def main() -> int:
     )
     check_command = subcommands.add_parser("check")
     check_command.add_argument(
-        "scenario", choices=("smoke", "motion", "idle"), nargs="?", default="smoke"
+        "scenario", choices=CHECK_SCENARIOS, nargs="?", default="smoke"
     )
     check_command.add_argument("--profile", action="store_true")
     subcommands.add_parser("watch")
