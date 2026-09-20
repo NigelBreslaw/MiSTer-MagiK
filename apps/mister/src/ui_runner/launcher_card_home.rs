@@ -69,6 +69,8 @@ pub(super) struct LauncherCardHomeSession {
     frame: BrowseFrame,
     active: bool,
     content_dirty: bool,
+    content_generation: u64,
+    compositor_stale: bool,
 }
 
 impl LauncherCardHomeSession {
@@ -98,6 +100,8 @@ impl LauncherCardHomeSession {
             frame,
             active: false,
             content_dirty: true,
+            content_generation: 1,
+            compositor_stale: false,
         })
     }
 
@@ -169,6 +173,7 @@ impl LauncherCardHomeSession {
                 &self.artwork,
                 &self.fonts,
             );
+            self.content_generation = self.content_generation.wrapping_add(1).max(1);
             self.content_dirty = true;
         }
     }
@@ -192,7 +197,20 @@ impl LauncherCardHomeSession {
     pub(super) fn render(&mut self) -> &[Rgb565Pixel] {
         self.prepared.render_frame(self.frame);
         self.content_dirty = false;
+        self.compositor_stale = false;
         self.prepared.pixels()
+    }
+
+    pub(super) const fn content_generation(&self) -> u64 {
+        self.content_generation
+    }
+
+    pub(super) const fn compositor_stale(&self) -> bool {
+        self.compositor_stale
+    }
+
+    pub(super) fn note_direct_presented(&mut self) {
+        self.compositor_stale = true;
     }
 }
 
@@ -255,5 +273,17 @@ mod tests {
         assert!(session.is_animating());
         assert_eq!(session.settled_selection(), None);
         assert_eq!(session.render().len(), 960 * 540);
+    }
+
+    #[test]
+    fn direct_publication_requires_one_compositor_reconciliation() {
+        let mut session = LauncherCardHomeSession::new(960, 540, snapshot(), 0, "21:37").unwrap();
+        session.update(960, 540, snapshot(), 0, None, "21:37", 0);
+        session.render();
+        session.note_direct_presented();
+        assert!(session.compositor_stale());
+
+        session.render();
+        assert!(!session.compositor_stale());
     }
 }
