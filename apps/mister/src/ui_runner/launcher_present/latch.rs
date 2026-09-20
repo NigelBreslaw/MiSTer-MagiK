@@ -47,6 +47,12 @@ pub(crate) struct CompletedHiddenFrame {
     pub(crate) source_evidence: Option<SourceFrameEvidence>,
 }
 
+pub(crate) struct DirectHiddenFrameCopy {
+    pub(crate) completed: CompletedHiddenFrame,
+    pub(crate) copy: LatchCopyResult,
+    pub(crate) copy_us: u64,
+}
+
 pub(in crate::ui_runner) struct PluginLatchFrameBuffers {
     buffer1: ScanoutSlotsRgb565Framebuffer,
     buffer2: ScanoutSlotsRgb565Framebuffer,
@@ -233,6 +239,7 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresenter<B = PluginLatchFr
     arcade_slot_mirrors: [PhysicalLayerSlotMirror; 2],
     direct_generation: u64,
     outstanding_direct_grant: Option<HiddenSlotRenderGrant>,
+    direct_slot_content_generation: [Option<u64>; 2],
 }
 
 #[derive(Default)]
@@ -323,6 +330,52 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         self.try_render_hidden_frame(hardware, display_session, true, render)
     }
 
+    pub(in crate::ui_runner) fn try_copy_direct_hidden_frame<H: LatchHardware>(
+        &mut self,
+        hardware: &mut H,
+        display_session: &mut LauncherDisplaySession,
+        source: CachedFrameView<'_>,
+        content_generation: u64,
+        damage: DirtyRect,
+    ) -> Result<Option<DirectHiddenFrameCopy>, LatchFailure> {
+        let Some(grant) =
+            self.try_issue_external_hidden_slot_render_grant(hardware, display_session, true)?
+        else {
+            return Ok(None);
+        };
+        let sampling = self.vertical_sampling;
+        let slot = physical_slot_mirror_index(grant.slot_index);
+        let rect = if self.direct_slot_content_generation[slot] == Some(content_generation) {
+            damage
+        } else {
+            self.full_rect()
+        };
+        let buffer = self.buffers.buffer_mut(grant.slot_index);
+        let started = Instant::now();
+        let copy = match B::copy_rect(buffer, source, rect, sampling) {
+            Ok(copy) => copy,
+            Err(error) => {
+                self.direct_slot_content_generation[slot] = None;
+                self.outstanding_direct_grant = None;
+                return Err(LatchFailure::runtime(
+                    LatchFailureStage::FrameCopy,
+                    LatchFailureReason::FrameCopyFailed,
+                    error,
+                ));
+            }
+        };
+        B::publish_writes(buffer);
+        self.direct_slot_content_generation[slot] = Some(content_generation);
+        Ok(Some(DirectHiddenFrameCopy {
+            completed: CompletedHiddenFrame {
+                grant,
+                source_evidence: None,
+            },
+            copy,
+            copy_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+        }))
+    }
+
     pub(in crate::ui_runner) fn try_render_startup_intro_hidden_frame<H, R>(
         &mut self,
         hardware: &mut H,
@@ -400,6 +453,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             arcade_slot_mirrors: std::array::from_fn(|_| PhysicalLayerSlotMirror::default()),
             direct_generation: 0,
             outstanding_direct_grant: None,
+            direct_slot_content_generation: [None; 2],
         }
     }
 
@@ -552,7 +606,12 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         self.direct_generation = self.direct_generation.wrapping_add(1).max(1);
         self.outstanding_direct_grant = None;
         self.last_committed_buffer = None;
+        self.invalidate_direct_slot_coherency();
         self.invalidate_layer_coherency();
+    }
+
+    fn invalidate_direct_slot_coherency(&mut self) {
+        self.direct_slot_content_generation = [None; 2];
     }
 
     fn invalidate_layer_coherency(&mut self) {
@@ -622,6 +681,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             &mut PhysicalLayerSlotMirror,
         ) -> Result<(), String>,
     {
+        self.invalidate_direct_slot_coherency();
         if self.disabled {
             return Err(LatchFailure::incompatible(
                 LatchFailureStage::FpgaStatus,
@@ -1747,6 +1807,106 @@ mod tests {
             presenter.buffers.buffer_mut(2).pixels[0],
             Rgb565Pixel(0x5aa5)
         );
+    }
+
+    #[test]
+    fn direct_hidden_copy_seeds_an_unknown_slot_with_the_complete_frame() {
+        let events = EventLog::default();
+        let mut presenter = presenter_with_events(events.clone());
+        let mut hardware = FakeHardware {
+            statuses: vec![
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE2, 0x0001)),
+            ],
+            events: Some(events.clone()),
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+        let mut pixels = cached_pixels();
+        pixels[0] = Rgb565Pixel(0x1234);
+        pixels[WIDTH * HEIGHT - 1] = Rgb565Pixel(0xabcd);
+
+        let copied = presenter
+            .try_copy_direct_hidden_frame(
+                &mut hardware,
+                &mut display,
+                CachedFrameView::new(&pixels, WIDTH, HEIGHT),
+                7,
+                DirtyRect {
+                    x0: 296,
+                    y0: 120,
+                    x1: 934,
+                    y1: 495,
+                },
+            )
+            .unwrap()
+            .expect("inactive slot copy");
+        assert_eq!(copied.copy.bytes, WIDTH * HEIGHT * 2);
+        assert_eq!(copied.copy.path, LatchCopyPath::IdentityFull);
+        assert_eq!(
+            presenter.buffers.buffer_mut(2).pixels[0],
+            Rgb565Pixel(0x1234)
+        );
+        assert_eq!(
+            presenter.buffers.buffer_mut(2).pixels[WIDTH * HEIGHT - 1],
+            Rgb565Pixel(0xabcd)
+        );
+        assert_eq!(
+            *events.borrow(),
+            [TestEvent::ReadStatus, TestEvent::Copy, TestEvent::Publish]
+        );
+
+        let stats = presenter
+            .present_completed_hidden_frame(copied.completed, &mut hardware, &mut display, false)
+            .unwrap();
+        assert_eq!(stats.copy_path, LatchCopyPath::ExternalDirect);
+        assert_eq!(hardware.post_bases, vec![BASE2]);
+    }
+
+    #[test]
+    fn coherent_direct_slot_copies_only_requested_damage_and_invalidates_on_exit() {
+        let events = EventLog::default();
+        let mut presenter = presenter_with_events(events);
+        presenter.direct_slot_content_generation[1] = Some(7);
+        let mut hardware = FakeHardware {
+            statuses: vec![Ok(status(BASE1, 0x0001))],
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+        let pixels = vec![Rgb565Pixel(0x1234); WIDTH * HEIGHT];
+        let damage = DirtyRect {
+            x0: 1,
+            y0: 1,
+            x1: 3,
+            y1: 2,
+        };
+
+        let copied = presenter
+            .try_copy_direct_hidden_frame(
+                &mut hardware,
+                &mut display,
+                CachedFrameView::new(&pixels, WIDTH, HEIGHT),
+                7,
+                damage,
+            )
+            .unwrap()
+            .expect("coherent inactive slot copy");
+
+        assert_eq!(
+            copied.copy.bytes,
+            damage.width() * damage.rows() as usize * 2
+        );
+        assert_eq!(copied.copy.path, LatchCopyPath::VerticalPartial);
+        assert_eq!(
+            presenter.buffers.buffer_mut(2).pixels[WIDTH + 1],
+            Rgb565Pixel(0x1234)
+        );
+        assert_eq!(presenter.buffers.buffer_mut(2).pixels[0], Rgb565Pixel(0));
+
+        presenter.invalidate_external_mode();
+        assert_eq!(presenter.direct_slot_content_generation, [None; 2]);
     }
 
     #[test]

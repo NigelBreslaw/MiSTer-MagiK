@@ -660,6 +660,26 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
         }
     }
 
+    pub(in crate::ui_runner) fn try_copy_direct_hidden_frame(
+        &mut self,
+        hardware: &mut Fpga,
+        display: &mut LauncherDisplaySession,
+        source: CachedFrameView<'_>,
+        content_generation: u64,
+        damage: DirtyRect,
+    ) -> Result<Option<DirectHiddenFrameCopy>, LatchFailure> {
+        match &mut self.state {
+            LauncherPresenterState::Latch(latch) => latch.try_copy_direct_hidden_frame(
+                hardware,
+                display,
+                source,
+                content_generation,
+                damage,
+            ),
+            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Frozen { .. } => Ok(None),
+        }
+    }
+
     pub(in crate::ui_runner) fn try_render_startup_intro_hidden_frame<R>(
         &mut self,
         hardware: &mut Fpga,
