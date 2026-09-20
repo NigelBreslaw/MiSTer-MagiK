@@ -106,6 +106,71 @@ fn first_display_frame_is_identical_to_fully_prepared_resting_frame() {
 }
 
 #[test]
+fn collection_index_is_absent_from_static_and_animated_frames() {
+    let scene = LauncherScene::new(960, 540);
+    let mut prepared = scene.prepare(data(0));
+    for frame in [
+        BrowseFrame {
+            selected: 0,
+            target: 0,
+            phase: BrowsePhase::Settled,
+            direction: None,
+            progress_millis: 0,
+            duration_millis: 0,
+            outgoing: None,
+        },
+        moving(0, BrowseDirection::Right, 90),
+    ] {
+        prepared.render_frame(frame);
+        for y in 95..111 {
+            assert!(
+                prepared.pixels()[y * 960 + 880..y * 960 + 934]
+                    .iter()
+                    .all(|pixel| *pixel == Rgb565Pixel(0)),
+                "collection index region was not blank on row {y}: {frame:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn direct_damage_render_matches_retained_frame_and_preserves_static_pixels() {
+    let scene = LauncherScene::new(960, 540);
+    let mut direct = scene.prepare(data(0));
+    let mut reference = scene.prepare(data(0));
+    let initial = BrowseFrame {
+        selected: 0,
+        target: 0,
+        phase: BrowsePhase::Settled,
+        direction: None,
+        progress_millis: 0,
+        duration_millis: 0,
+        outgoing: None,
+    };
+    direct.render_frame(initial);
+    let mut destination = direct.pixels().to_vec();
+
+    for frame in [
+        moving(0, BrowseDirection::Right, 1),
+        moving(0, BrowseDirection::Right, 90),
+        moving(0, BrowseDirection::Right, 180),
+        moving(0, BrowseDirection::Left, 90),
+    ] {
+        let before = destination.clone();
+        assert!(direct.render_frame_damage_into(frame, &mut destination));
+        reference.render_frame(frame);
+        assert_eq!(destination, reference.pixels());
+        for y in 0..540 {
+            for x in 0..960 {
+                if !(296..934).contains(&x) || !(120..495).contains(&y) {
+                    assert_eq!(destination[y * 960 + x], before[y * 960 + x]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn prepared_animation_performs_no_heap_allocations() {
     let mut prepared = LauncherScene::new(960, 540).prepare(data(0));
     assert!(

@@ -198,8 +198,6 @@ pub struct PreparedLauncher {
     scene: LauncherScene,
     logical: Vec<Rgb565Pixel>,
     fitted: Vec<Rgb565Pixel>,
-    collection_labels: Vec<String>,
-    metadata_font: Option<Arc<BitmapFont>>,
     faces: Arc<Vec<CardFaces>>,
     flip_columns: Vec<crate::launcher_flip::Scratch>,
 }
@@ -254,8 +252,6 @@ impl PreparedLauncherFrame {
 #[derive(Clone)]
 pub struct LauncherFramePreparer {
     faces: Arc<Vec<CardFaces>>,
-    labels: Arc<Vec<String>>,
-    metadata_font: Option<Arc<BitmapFont>>,
 }
 
 impl LauncherFramePreparer {
@@ -296,10 +292,6 @@ impl LauncherFramePreparer {
                 buffer.pixels[y * 960 + clip.0..y * 960 + clip.1]
                     .copy_from_slice(&destination[y * 960 + clip.0..y * 960 + clip.1]);
             }
-            for y in 95..111 {
-                buffer.pixels[y * 960 + 880..y * 960 + 934]
-                    .copy_from_slice(&destination[y * 960 + 880..y * 960 + 934]);
-            }
         }
     }
 
@@ -333,11 +325,6 @@ impl LauncherFramePreparer {
                         &destination[y * LOGICAL_WIDTH + clip.0..y * LOGICAL_WIDTH + clip.1],
                     );
             }
-            for y in 95..111 {
-                buffer.pixels[y * LOGICAL_WIDTH + 880..y * LOGICAL_WIDTH + 934].copy_from_slice(
-                    &destination[y * LOGICAL_WIDTH + 880..y * LOGICAL_WIDTH + 934],
-                );
-            }
         }
     }
 
@@ -351,18 +338,6 @@ impl LauncherFramePreparer {
     ) {
         const TOP: usize = 120;
         const BOTTOM: usize = 495;
-        draw_rect(destination, 880, 95, 54, 16, BACKGROUND);
-        if let Some(label) = self.labels.get(request.frame.selected) {
-            draw_scene_text(
-                destination,
-                self.metadata_font.as_deref(),
-                888,
-                101,
-                label,
-                MUTED,
-                1,
-            );
-        }
         if !self.faces.is_empty() {
             let plan = build_carousel_plan(&self.faces, request.frame);
             let width = crate::launcher_flip::STRIP_WIDTH;
@@ -404,18 +379,6 @@ impl LauncherFramePreparer {
         assert!(clip.0 >= 296 && clip.0 <= clip.1 && clip.1 <= 934);
         for y in 120..495 {
             pixels[y * 960 + clip.0..y * 960 + clip.1].fill(Rgb565Pixel(0));
-        }
-        draw_rect(pixels, 880, 95, 54, 16, BACKGROUND);
-        if let Some(label) = self.labels.get(request.frame.selected) {
-            draw_scene_text(
-                pixels,
-                self.metadata_font.as_deref(),
-                888,
-                101,
-                label,
-                MUTED,
-                1,
-            );
         }
         if !self.faces.is_empty() {
             let plan = build_carousel_plan(&self.faces, request.frame);
@@ -475,32 +438,18 @@ impl PreparedLauncher {
         assert_eq!(left.clip.1, right.clip.0);
         assert_eq!(right.clip.1, 934);
         let split = left.clip.1;
-        let frame = left.request.expect("rendered tile").frame;
+        left.request.expect("rendered tile");
         for y in 120..495 {
             self.logical[y * 960 + 296..y * 960 + split]
                 .copy_from_slice(&left.pixels[y * 960 + 296..y * 960 + split]);
             self.logical[y * 960 + split..y * 960 + 934]
                 .copy_from_slice(&right.pixels[y * 960 + split..y * 960 + 934]);
         }
-        draw_rect(&mut self.logical, 880, 95, 54, 16, BACKGROUND);
-        if let Some(label) = self.collection_labels.get(frame.selected) {
-            draw_scene_text(
-                &mut self.logical,
-                self.metadata_font.as_deref(),
-                888,
-                101,
-                label,
-                MUTED,
-                1,
-            );
-        }
         self.fit_output();
     }
     pub fn frame_preparer(&self) -> LauncherFramePreparer {
         LauncherFramePreparer {
             faces: self.faces.clone(),
-            labels: Arc::new(self.collection_labels.clone()),
-            metadata_font: self.metadata_font.clone(),
         }
     }
     /// Owned raster-buffer capacity, excluding strings and small metadata.
@@ -550,9 +499,6 @@ impl PreparedLauncher {
                     .map(|pixels| pixels.to_vec()),
             })
             .collect();
-        let collection_labels = (0..cards.len())
-            .map(|index| format!("{:02} / {:02}", index + 1, cards.len()))
-            .collect();
         let borrowed: Vec<_> = cards
             .iter()
             .map(|card| LauncherCard {
@@ -573,7 +519,6 @@ impl PreparedLauncher {
         let mut chrome = vec![Rgb565Pixel(BACKGROUND); LOGICAL_WIDTH * LOGICAL_HEIGHT];
         render_logical(&mut chrome, source, typography);
         draw_rect(&mut chrome, 296, 120, 638, 495 - 120, BACKGROUND);
-        draw_rect(&mut chrome, 880, 95, 54, 16, BACKGROUND);
         let faces: Vec<_> = cards
             .iter()
             .map(|card| CardFaces {
@@ -591,8 +536,6 @@ impl PreparedLauncher {
             } else {
                 vec![Rgb565Pixel(BACKGROUND); scene.width * scene.height]
             },
-            collection_labels,
-            metadata_font: typography.map(|fonts| Arc::new(fonts.metadata.clone())),
             faces: Arc::new(faces),
             flip_columns: (0..6)
                 .map(|_| crate::launcher_flip::Scratch::new())
@@ -608,6 +551,40 @@ impl PreparedLauncher {
     /// Compose into the retained buffer. Native-size consumers can borrow it
     /// directly rather than copying through an intermediate fitted surface.
     pub fn render_frame(&mut self, frame: BrowseFrame) {
+        Self::render_logical_frame_into(
+            &self.faces,
+            &mut self.flip_columns,
+            &mut self.logical,
+            frame,
+        );
+        self.fit_output();
+    }
+
+    /// Update only the animated region of an already initialized native frame.
+    ///
+    /// The destination must first be seeded from [`Self::pixels`] after a normal
+    /// [`Self::render_frame`] call. Static chrome is deliberately left untouched.
+    pub fn render_frame_damage_into(
+        &mut self,
+        frame: BrowseFrame,
+        output: &mut [Rgb565Pixel],
+    ) -> bool {
+        if self.scene.width != LOGICAL_WIDTH
+            || self.scene.height != LOGICAL_HEIGHT
+            || output.len() != LOGICAL_WIDTH * LOGICAL_HEIGHT
+        {
+            return false;
+        }
+        Self::render_logical_frame_into(&self.faces, &mut self.flip_columns, output, frame);
+        true
+    }
+
+    fn render_logical_frame_into(
+        faces: &[CardFaces],
+        flip_columns: &mut [crate::launcher_flip::Scratch],
+        pixels: &mut [Rgb565Pixel],
+        frame: BrowseFrame,
+    ) {
         #[cfg(feature = "launcher-profile")]
         let clear_profile = crate::launcher_profile::span("scene.clear");
         // All animation, including projected edges and reflections, is clipped
@@ -615,34 +592,29 @@ impl PreparedLauncher {
         for rect in Self::logical_damage() {
             for y in rect.y0..rect.y1 {
                 let range = y * LOGICAL_WIDTH + rect.x0..y * LOGICAL_WIDTH + rect.x1;
-                // Both damage regions contain only the pure-black background
-                // in chrome. Avoid reading a second framebuffer just to clear.
-                self.logical[range].fill(Rgb565Pixel(BACKGROUND));
+                // The damage region contains only the pure-black background in
+                // chrome. Avoid reading a second framebuffer just to clear.
+                pixels[range].fill(Rgb565Pixel(BACKGROUND));
             }
-        }
-        if let Some(label) = self.collection_labels.get(frame.selected) {
-            draw_text(&mut self.logical, 888, 101, label, MUTED, 1);
         }
         #[cfg(feature = "launcher-profile")]
         drop(clear_profile);
-        if self.faces.is_empty() {
-            self.fit_output();
+        if faces.is_empty() {
             return;
         }
-        let plan = build_carousel_plan(&self.faces, frame);
+        let plan = build_carousel_plan(faces, frame);
         for left in (296..934).step_by(crate::launcher_flip::STRIP_WIDTH) {
             draw_carousel_plan(
-                &mut self.logical,
+                pixels,
                 LOGICAL_WIDTH,
                 (0, 0),
                 &plan,
-                &mut self.flip_columns,
+                flip_columns,
                 (left, (left + crate::launcher_flip::STRIP_WIDTH).min(934)),
             );
         }
         // The projected card rasterizer clips its writes to the
         // carousel. Static margins therefore need no restoration pass.
-        self.fit_output();
     }
 
     fn fit_output(&mut self) {
@@ -664,26 +636,18 @@ impl PreparedLauncher {
         }
     }
 
-    const fn logical_damage() -> [crate::Rgb565Rect; 2] {
-        [
-            crate::Rgb565Rect {
-                x0: 296,
-                y0: 120,
-                x1: 934,
-                y1: 495,
-            },
-            crate::Rgb565Rect {
-                x0: 880,
-                y0: 95,
-                x1: 934,
-                y1: 111,
-            },
-        ]
+    const fn logical_damage() -> [crate::Rgb565Rect; 1] {
+        [crate::Rgb565Rect {
+            x0: 296,
+            y0: 120,
+            x1: 934,
+            y1: 495,
+        }]
     }
 
     /// Conservative union of every previous/current card pose and reflection.
     /// At other output sizes, fitting still invalidates the complete surface.
-    pub fn damage(&self) -> [crate::Rgb565Rect; 2] {
+    pub fn damage(&self) -> [crate::Rgb565Rect; 1] {
         if self.scene.width == LOGICAL_WIDTH && self.scene.height == LOGICAL_HEIGHT {
             Self::logical_damage()
         } else {
@@ -692,7 +656,7 @@ impl PreparedLauncher {
                 y0: 0,
                 x1: self.scene.width,
                 y1: self.scene.height,
-            }; 2]
+            }]
         }
     }
 }
@@ -819,21 +783,6 @@ fn render_logical(
         296,
         101,
         "COLLECTIONS",
-        MUTED,
-        1,
-    );
-    let selected = if data.cards.is_empty() {
-        0
-    } else {
-        data.selected % data.cards.len()
-    };
-    draw_role_text(
-        pixels,
-        typography,
-        TextRole::Metadata,
-        888,
-        101,
-        &format!("{:02} / {:02}", selected + 1, data.cards.len()),
         MUTED,
         1,
     );
