@@ -80,7 +80,7 @@ def generate(
                 f"release asset is absent or has wrong size: {entry['asset']}"
             )
         source_bytes = source.read_bytes()
-        if hashlib.md5(source_bytes).hexdigest() != entry["md5"]:
+        if hashlib.md5(source_bytes, usedforsecurity=False).hexdigest() != entry["md5"]:
             raise ValueError(
                 f"release asset MD5 disagrees with receipt: {entry['asset']}"
             )

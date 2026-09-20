@@ -322,7 +322,8 @@ def verify(
         if (
             source.stat().st_size != entry["size"]
             or sha256_file(source) != entry["sha256"]
-            or hashlib.md5(source.read_bytes()).hexdigest() != entry["md5"]
+            or hashlib.md5(source.read_bytes(), usedforsecurity=False).hexdigest()
+            != entry["md5"]
         ):
             raise ValueError(f"release asset receipt mismatch: {name}")
         hashes[name] = entry["sha256"]

@@ -329,9 +329,11 @@ def test_legacy_journal_recovery_requires_board_and_stage(
     monkeypatch.setattr(
         update_deploy.Path,
         "glob",
-        lambda path, pattern: iter([malformed, legacy])
-        if path == legacy.parent and pattern == "*-pending.json"
-        else original_glob(path, pattern),
+        lambda path, pattern: (
+            iter([malformed, legacy])
+            if path == legacy.parent and pattern == "*-pending.json"
+            else original_glob(path, pattern)
+        ),
     )
     current["stages"] = [
         {

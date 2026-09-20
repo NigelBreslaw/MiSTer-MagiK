@@ -119,6 +119,8 @@ mcp_capture.connect_agent = connect
 mcp_capture.main()
 """
 
+    pythonpath = str(Path(__file__).resolve().parents[1])
+
     async def run():
         params = StdioServerParameters(
             command=sys.executable,
@@ -127,7 +129,7 @@ mcp_capture.main()
                 **os.environ,
                 "MISTER_IP": "fixture",
                 "MISTER_MAGIK2_RESULTS": str(tmp_path),
-                "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+                "PYTHONPATH": pythonpath,
             },
         )
         with anyio.fail_after(10):

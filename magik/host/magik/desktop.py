@@ -42,7 +42,7 @@ def prepare(run: Path) -> int:
         profile = DeviceProfile.load()
         if profile is None or status.fields.get("device_identity") != profile.identity:
             raise RuntimeError("Prepared service did not confirm the selected identity")
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - desktop command reports structured errors
         print(json.dumps({"outcome": "error", "detail": str(error)}))
         return 2
     print(

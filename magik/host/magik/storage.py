@@ -345,7 +345,7 @@ class Storage:
                                     repository, recipe_key(repository)
                                 ):
                                     self.touch(entry)
-                    except Exception as error:
+                    except Exception as error:  # noqa: BLE001 - cleanup is best effort
                         self.warn(error)
         finally:
             # Include failure/interrupt paths, after releasing the build lease.
@@ -360,7 +360,7 @@ class Storage:
             result = self.inspect(repository, apply=True, measure=False)
             for error in result["errors"]:
                 self.warn(error)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - cleanup is best effort
             self.warn(error)
 
     def delete_container(self, entry: dict) -> None:
@@ -470,7 +470,7 @@ class Storage:
                         continue
                     row.update(activity="idle", reason="retained for reuse")
                     idle.append((row, entry))
-                except Exception as error:
+                except Exception as error:  # noqa: BLE001 - inventory retains errors
                     row.update(activity="unknown", reason=str(error))
                     result["errors"].append(f"{entry['id']}: {error}")
             idle.sort(key=lambda pair: (pair[0]["last_used"], pair[0]["id"]))
@@ -513,7 +513,7 @@ class Storage:
                             )
                         self.delete_container(fresh)
                         row["removed"] = True
-                    except Exception as error:
+                    except Exception as error:  # noqa: BLE001 - cleanup retains errors
                         result["errors"].append(f"{entry['id']}: {error}")
             # Re-inventory after deletions; even unknown containers protect their images.
             planned_removals = {row["id"] for row, _ in idle if row["eligible"]}
@@ -526,7 +526,7 @@ class Storage:
                 self.inspect_images(
                     repository, current, result, apply=apply, checkout_locks=locked
                 )
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - inspection retains errors
                 result["errors"].append(f"image inspection: {error}")
             if measure:
                 try:
@@ -535,7 +535,7 @@ class Storage:
                     )
                     result["accounting_path"] = str(self.data_root)
                     result["allocation"] = allocation(self.data_root)
-                except Exception as error:
+                except Exception as error:  # noqa: BLE001 - accounting retains errors
                     result["errors"].append(f"disk accounting: {error}")
         if measure:
             result["free_bytes_before"] = before
@@ -634,7 +634,7 @@ class Storage:
                         raise RuntimeError("image still present after deletion")
                     row["removed"] = True
                     path.unlink()
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - prune retains errors
                 result["errors"].append(f"{path.name}: {error}")
 
 
@@ -645,7 +645,7 @@ def run_storage(arguments, repository: Path) -> int:
             apply=getattr(arguments, "apply", False),
             all_idle=getattr(arguments, "all_idle", False),
         )
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - CLI emits a complete result
         result = {"containers": [], "images": [], "errors": [str(error)]}
     if getattr(arguments, "json", False):
         print(json.dumps(result, indent=2))

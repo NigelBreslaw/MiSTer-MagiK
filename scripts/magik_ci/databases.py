@@ -273,7 +273,7 @@ def verify(
             # so the next promotion can publish a fully populated manifest.
             if updater_manifest.get("sha256") != sha256_bytes(files[INDEX]):
                 raise ValueError("invalid_database_manifest: Arcade updater checksum")
-            return payload
+            return cast(dict[str, object], payload)
         if updater_manifest.get("format") != updater_index["format"]:
             raise ValueError("invalid_database_manifest: Arcade updater format")
         if updater_manifest.get("sources") != updater_index["sources"]:
@@ -287,7 +287,7 @@ def verify(
             raise ValueError(
                 "invalid_database_manifest: Arcade updater catalog metadata rows"
             )
-    return payload
+    return cast(dict[str, object], payload)
 
 
 def _verify_compact_metadata(data: bytes) -> None:
@@ -363,7 +363,7 @@ def extract_release(release: Path, output: Path) -> dict[str, object]:
             destination = output / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(stream.read(name))
-    return payload
+    return cast(dict[str, object], payload)
 
 
 def create(

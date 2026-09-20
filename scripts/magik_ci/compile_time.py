@@ -12,6 +12,7 @@ import subprocess
 import time
 from contextlib import ExitStack
 from pathlib import Path
+from typing import Any
 
 TARGETS = {
     "magik-full-app-macos": ("dev", "ui-preview", "launcher"),
@@ -192,7 +193,7 @@ def measure(root: Path, target: str, target_dir: Path, output: Path, kind: str):
     return report
 
 
-def compare(baseline: dict, candidate: dict):
+def compare(baseline: dict[str, Any], candidate: dict[str, Any]):
     for key in (
         "schema",
         "target",

@@ -16,7 +16,9 @@ def test_profile_selects_only_profile_and_default_keeps_shared_workload():
     profiled = Item(True)
     for profile, expected in [(False, ordinary), (True, [profiled])]:
         config = SimpleNamespace(
-            getoption=lambda key: "mini-magik" if key == "--magik-app" else profile,
+            getoption=lambda key, profile=profile: (
+                "mini-magik" if key == "--magik-app" else profile
+            ),
             hook=SimpleNamespace(pytest_deselected=lambda **_: None),
         )
         items = [*ordinary, profiled]

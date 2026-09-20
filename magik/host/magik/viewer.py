@@ -76,7 +76,7 @@ def serve(agent: NativeAgent) -> tuple[ThreadingHTTPServer, str]:
     consumer.start()
 
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802
+        def do_GET(self) -> None:
             if self.path == "/":
                 self._send(
                     HTTPStatus.OK,

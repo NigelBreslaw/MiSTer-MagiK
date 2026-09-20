@@ -13,6 +13,9 @@ def test_closing_viewer_unblocks_a_native_read():
     def read():
         try:
             local.recv(1)
+        except OSError:
+            # Closing the socket is the behavior under test.
+            pass
         finally:
             finished.set()
 

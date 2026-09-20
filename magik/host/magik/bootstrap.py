@@ -24,7 +24,7 @@ class SshBootstrap:
         self.password = password
 
     @classmethod
-    def from_environment(cls) -> "SshBootstrap":
+    def from_environment(cls) -> SshBootstrap:
         from .discovery import resolve_device
 
         device = resolve_device()
@@ -101,7 +101,7 @@ class SshBootstrap:
                 f"MISTER_MAGIK2_TOKEN={shlex.quote(token)} MISTER_MAGIK2_INSTALL_ROOT={self.install_root} MISTER_MAGIK2_STATE_ROOT={self.state_root} "
                 f"nohup {self.install_root}/mister-magik-service </dev/null >{self.state_root}/agent.log 2>&1 &"
             )
-            _, stdout, stderr = client.exec_command(command, timeout=15)
+            _, stdout, _stderr = client.exec_command(command, timeout=15)
             if stdout.channel.recv_exit_status() != 0:
                 raise BootstrapError("device rejected native-agent bootstrap")
             return token

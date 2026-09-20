@@ -23,3 +23,6 @@ dev = ["pytest>=8"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = ["--strict-config", "--strict-markers"]
+filterwarnings = ["error"]
+xfail_strict = true

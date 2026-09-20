@@ -38,7 +38,9 @@ class DownloaderDatabaseTests(unittest.TestCase):
                         "path": "Scripts/MiSTer-MagiK.sh",
                         "asset": asset.name,
                         "size": asset.stat().st_size,
-                        "md5": hashlib.md5(asset.read_bytes()).hexdigest(),
+                        "md5": hashlib.md5(
+                            asset.read_bytes(), usedforsecurity=False
+                        ).hexdigest(),
                         "sha256": hashlib.sha256(asset.read_bytes()).hexdigest(),
                     }
                 ],

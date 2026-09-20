@@ -166,7 +166,7 @@ def test_retired_namespace_is_reported_without_adoption_or_cleanup(setup):
 
 
 def add(setup, name="other", *, age=0, managed=True, recipe=None):
-    manager, host, repository, now = setup
+    manager, host, repository, _now = setup
     owner = repository.parent / name
     owner.mkdir(exist_ok=True)
     item = entry(owner, recipe or recipe_key(repository), managed=managed)
@@ -215,7 +215,7 @@ def test_stopped_container_restarts_and_busy_guest_blocks_reuse(setup):
 
 
 def test_expiry_missing_checkout_and_lru(setup):
-    manager, host, repo, now = setup
+    manager, host, repo, _now = setup
     expired = add(setup, "expired", age=IDLE_SECONDS)
     missing = add(setup, "missing")
     Path(missing["configuration"]["labels"][LABEL + "checkout"]).rmdir()
@@ -329,13 +329,19 @@ def test_failed_and_interrupted_builds_touch_and_run_final_cleanup(setup, monkey
     for error in (RuntimeError("compile failed"), KeyboardInterrupt()):
         cleanup = []
         monkeypatch.setattr(
-            manager, "automatic_cleanup", lambda _: cleanup.append(True)
+            manager,
+            "automatic_cleanup",
+            lambda _, cleanup=cleanup: cleanup.append(True),
         )
-        with pytest.raises(type(error)):
+
+        def fail_build(error=error):
             with manager.build_session(repo):
                 manager.prepare(repo)
                 now[0] += 10
                 raise error
+
+        with pytest.raises(type(error)):
+            fail_build()
         assert len(cleanup) == 2
         assert manager.last_used(host.entries[0]) == now[0]
 

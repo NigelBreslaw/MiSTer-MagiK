@@ -141,11 +141,11 @@ def managed_session(agent, run, profile_id, scenario):
                         **complete,
                     },
                 )
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - cleanup aggregates all failures
                 errors.append(f"profile: {error}")
         try:
             agent.start(expected_sha256=agent.expected_sha256)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - cleanup aggregates all failures
             errors.append(f"persistent restore: {error}")
         append_event(
             run,
