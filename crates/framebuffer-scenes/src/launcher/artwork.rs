@@ -98,8 +98,8 @@ pub(super) fn face(
             &card.name,
             ink,
         );
-        if detail && card.games.is_some() {
-            let games = format_games(card.games.expect("checked game count"));
+        if detail && let Some(game_count) = card.games {
+            let games = format_games(game_count);
             fonts.font_for(TextRole::Metadata, &games).draw_centered(
                 &mut canvas,
                 LOGICAL_WIDTH,

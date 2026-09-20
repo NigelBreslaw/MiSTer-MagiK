@@ -4,7 +4,7 @@
 //! Coordinator checks against the accepted static composition, not new snapshots.
 use mister_magik_framebuffer_scenes::Rgb565Pixel;
 use mister_magik_framebuffer_scenes::launcher::{
-    LauncherCard, LauncherData, LauncherFrameRequest, LauncherScene,
+    LauncherCard, LauncherCardId, LauncherData, LauncherFrameRequest, LauncherScene,
 };
 use mister_magik_framebuffer_scenes::launcher_navigation::{
     BrowseDirection, BrowseFrame, BrowsePhase,

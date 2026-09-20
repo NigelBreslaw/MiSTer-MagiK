@@ -40,6 +40,7 @@ impl BitmapFont {
             .sum()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &self,
         output: &mut [Rgb565Pixel],
@@ -77,6 +78,7 @@ impl BitmapFont {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_centered(
         &self,
         output: &mut [Rgb565Pixel],
