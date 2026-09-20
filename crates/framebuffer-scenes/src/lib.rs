@@ -9,8 +9,16 @@ use std::mem::{MaybeUninit, align_of, size_of};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+pub mod launcher;
+mod launcher_flip;
+pub mod launcher_navigation;
+#[cfg(feature = "launcher-profile")]
+pub mod launcher_profile;
+mod launcher_texture;
 pub mod navigation;
 pub mod orientation;
+pub mod packed_copy;
+pub mod spring_animation;
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
