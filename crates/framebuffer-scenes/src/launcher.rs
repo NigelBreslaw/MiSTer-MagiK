@@ -518,7 +518,6 @@ impl PreparedLauncher {
         };
         let mut chrome = vec![Rgb565Pixel(BACKGROUND); LOGICAL_WIDTH * LOGICAL_HEIGHT];
         render_logical(&mut chrome, source, typography);
-        draw_rect(&mut chrome, 296, 120, 638, 495 - 120, BACKGROUND);
         let faces: Vec<_> = cards
             .iter()
             .map(|card| CardFaces {
@@ -551,40 +550,6 @@ impl PreparedLauncher {
     /// Compose into the retained buffer. Native-size consumers can borrow it
     /// directly rather than copying through an intermediate fitted surface.
     pub fn render_frame(&mut self, frame: BrowseFrame) {
-        Self::render_logical_frame_into(
-            &self.faces,
-            &mut self.flip_columns,
-            &mut self.logical,
-            frame,
-        );
-        self.fit_output();
-    }
-
-    /// Update only the animated region of an already initialized native frame.
-    ///
-    /// The destination must first be seeded from [`Self::pixels`] after a normal
-    /// [`Self::render_frame`] call. Static chrome is deliberately left untouched.
-    pub fn render_frame_damage_into(
-        &mut self,
-        frame: BrowseFrame,
-        output: &mut [Rgb565Pixel],
-    ) -> bool {
-        if self.scene.width != LOGICAL_WIDTH
-            || self.scene.height != LOGICAL_HEIGHT
-            || output.len() != LOGICAL_WIDTH * LOGICAL_HEIGHT
-        {
-            return false;
-        }
-        Self::render_logical_frame_into(&self.faces, &mut self.flip_columns, output, frame);
-        true
-    }
-
-    fn render_logical_frame_into(
-        faces: &[CardFaces],
-        flip_columns: &mut [crate::launcher_flip::Scratch],
-        pixels: &mut [Rgb565Pixel],
-        frame: BrowseFrame,
-    ) {
         #[cfg(feature = "launcher-profile")]
         let clear_profile = crate::launcher_profile::span("scene.clear");
         // All animation, including projected edges and reflections, is clipped
@@ -594,27 +559,29 @@ impl PreparedLauncher {
                 let range = y * LOGICAL_WIDTH + rect.x0..y * LOGICAL_WIDTH + rect.x1;
                 // The damage region contains only the pure-black background in
                 // chrome. Avoid reading a second framebuffer just to clear.
-                pixels[range].fill(Rgb565Pixel(BACKGROUND));
+                self.logical[range].fill(Rgb565Pixel(BACKGROUND));
             }
         }
         #[cfg(feature = "launcher-profile")]
         drop(clear_profile);
-        if faces.is_empty() {
+        if self.faces.is_empty() {
+            self.fit_output();
             return;
         }
-        let plan = build_carousel_plan(faces, frame);
+        let plan = build_carousel_plan(&self.faces, frame);
         for left in (296..934).step_by(crate::launcher_flip::STRIP_WIDTH) {
             draw_carousel_plan(
-                pixels,
+                &mut self.logical,
                 LOGICAL_WIDTH,
                 (0, 0),
                 &plan,
-                flip_columns,
+                &mut self.flip_columns,
                 (left, (left + crate::launcher_flip::STRIP_WIDTH).min(934)),
             );
         }
         // The projected card rasterizer clips its writes to the
         // carousel. Static margins therefore need no restoration pass.
+        self.fit_output();
     }
 
     fn fit_output(&mut self) {
