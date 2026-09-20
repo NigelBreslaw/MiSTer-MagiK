@@ -43,21 +43,11 @@ impl RenderedCardFrame {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) struct CardRenderAheadStats {
-    pub(super) submitted: u64,
-    pub(super) coalesced: u64,
-    pub(super) completed: u64,
-    pub(super) ready_replaced: u64,
-    pub(super) stale_discarded: u64,
-}
-
 struct PipelineState {
     pending: Option<CardFrameRequest>,
     ready: Option<RenderedCardFrame>,
     free: Vec<Vec<Rgb565Pixel>>,
     shutdown: bool,
-    stats: CardRenderAheadStats,
 }
 
 struct SharedPipeline {
@@ -84,7 +74,6 @@ impl LauncherCardRenderAhead {
                 ready: None,
                 free: vec![static_frame.to_vec(), static_frame.to_vec()],
                 shutdown: false,
-                stats: CardRenderAheadStats::default(),
             }),
             wake: Condvar::new(),
         });
@@ -101,10 +90,7 @@ impl LauncherCardRenderAhead {
 
     pub(super) fn submit(&self, request: CardFrameRequest) {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.stats.submitted = state.stats.submitted.saturating_add(1);
-        if state.pending.replace(request).is_some() {
-            state.stats.coalesced = state.stats.coalesced.saturating_add(1);
-        }
+        state.pending = Some(request);
         self.shared.wake.notify_one();
     }
 
@@ -122,7 +108,6 @@ impl LauncherCardRenderAhead {
             || request.navigation_generation != navigation_generation
             || now_us.saturating_sub(request.render.timestamp_us) > maximum_age_us;
         if stale {
-            state.stats.stale_discarded = state.stats.stale_discarded.saturating_add(1);
             state.free.push(frame.pixels);
             self.shared.wake.notify_one();
             None
@@ -137,12 +122,29 @@ impl LauncherCardRenderAhead {
         self.shared.wake.notify_one();
     }
 
-    pub(super) fn stats(&self) -> CardRenderAheadStats {
+    pub(super) fn return_ready(&self, frame: RenderedCardFrame) {
+        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        match state.ready.take() {
+            Some(newer) if newer.request.render.generation > frame.request.render.generation => {
+                state.ready = Some(newer);
+                state.free.push(frame.pixels);
+            }
+            Some(older) => {
+                state.free.push(older.pixels);
+                state.ready = Some(frame);
+            }
+            None => state.ready = Some(frame),
+        }
+        self.shared.wake.notify_one();
+    }
+
+    pub(super) fn has_ready(&self) -> bool {
         self.shared
             .state
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .stats
+            .ready
+            .is_some()
     }
 }
 
@@ -206,12 +208,10 @@ fn run_coordinator(shared: Arc<SharedPipeline>, preparer: LauncherFramePreparer)
         right = Some(right_buffer);
 
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.stats.completed = state.stats.completed.saturating_add(1);
         if let Some(old) = state.ready.replace(RenderedCardFrame {
             request,
             pixels: output,
         }) {
-            state.stats.ready_replaced = state.stats.ready_replaced.saturating_add(1);
             state.free.push(old.pixels);
         }
         shared.wake.notify_one();
@@ -344,7 +344,6 @@ mod tests {
         }
         let frame = wait_for(&pipeline, 8);
         assert_eq!(frame.request().render.generation, 8);
-        assert!(pipeline.stats().coalesced > 0 || pipeline.stats().ready_replaced > 0);
         pipeline.recycle(frame);
     }
 
@@ -354,11 +353,24 @@ mod tests {
         let pipeline = LauncherCardRenderAhead::start(serial.frame_preparer(), serial.pixels());
         pipeline.submit(request(1, 900_000, 90));
         let deadline = Instant::now() + Duration::from_secs(2);
-        while pipeline.stats().completed == 0 {
+        while !pipeline.has_ready() {
             assert!(Instant::now() < deadline, "render-ahead worker timed out");
             std::thread::yield_now();
         }
         assert!(pipeline.try_take(4, 8, 1_000_000, 1_000_000).is_none());
-        assert_eq!(pipeline.stats().stale_discarded, 1);
+    }
+
+    #[test]
+    fn unposted_frame_returns_to_the_ready_slot() {
+        let serial = prepared();
+        let pipeline = LauncherCardRenderAhead::start(serial.frame_preparer(), serial.pixels());
+        pipeline.submit(request(1, 900_000, 90));
+        let frame = wait_for(&pipeline, 1);
+        pipeline.return_ready(frame);
+        let frame = pipeline
+            .try_take(4, 7, 1_000_000, 1_000_000)
+            .expect("returned frame remains ready");
+        assert_eq!(frame.request().render.generation, 1);
+        pipeline.recycle(frame);
     }
 }

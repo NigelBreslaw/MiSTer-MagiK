@@ -899,18 +899,15 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
         let arcade_list_renderer = &mut *self.targets.arcade_list_renderer;
         if self.direct_hidden_mode {
             let Some(completed) = self.completed_hidden_frame.take() else {
+                let (_, frame_t3, cpu_t3, pacing_trace) =
+                    self.pace_before_fb0(PresentPacingRequirement::Always);
                 return Ok(LauncherPresentCycle {
                     presentation: direct_hidden_waiting_present_result(),
                     frame_t3,
                     frame_t4: Instant::now(),
                     cpu_t3,
                     cpu_t4: FrameAnalyticsCpuStamp::capture(self.frame_analytics_mode),
-                    pacing_trace: LauncherPacingTrace::from_pace_with_present_phase(
-                        None,
-                        self.frame_start_phase_us,
-                        self.targets.pacer.period_us(),
-                        present_phase_us,
-                    ),
+                    pacing_trace,
                 });
             };
             let source_evidence = completed.source_evidence.clone();

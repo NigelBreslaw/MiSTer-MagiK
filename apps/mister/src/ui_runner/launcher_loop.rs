@@ -47,6 +47,7 @@ const SYSTEM_ENTRY_BENCHMARK_SETTLE_MS: u64 = 2_000;
 const SETTINGS_NAVIGATION_STATUS_DRAIN_MIN: Duration = Duration::from_millis(500);
 const SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
+const CARD_DIRECT_MAXIMUM_FRAME_AGE_US: u64 = 50_000;
 const CARD_DIRECT_DAMAGE: DirtyRect = DirtyRect {
     x0: 296,
     y0: 120,
@@ -58,6 +59,7 @@ const CARD_DIRECT_DAMAGE: DirtyRect = DirtyRect {
 struct CardDirectEligibility {
     custom_home_active: bool,
     custom_home_needs_render: bool,
+    native_geometry: bool,
     portrait: bool,
     full_frame_present: bool,
     launching: bool,
@@ -78,6 +80,7 @@ struct CardDirectEligibility {
 fn card_direct_hidden_eligible(input: CardDirectEligibility) -> bool {
     input.custom_home_active
         && input.custom_home_needs_render
+        && input.native_geometry
         && !input.portrait
         && !input.full_frame_present
         && !input.launching
@@ -9900,9 +9903,10 @@ pub(super) fn run_launcher_loop(
         let mut startup_intro_failure = None;
         let mut navigation_capture_source_carrier_rendered = false;
         let mut orientation_capture_source_carrier_rendered = false;
-        if card_direct_hidden_eligible(CardDirectEligibility {
+        let card_direct_path_eligible = card_direct_hidden_eligible(CardDirectEligibility {
             custom_home_active,
             custom_home_needs_render,
+            native_geometry: layout.logical_w() == 960 && layout.logical_h() == 540,
             portrait: layout.is_portrait(),
             full_frame_present,
             launching,
@@ -9918,39 +9922,70 @@ pub(super) fn run_launcher_loop(
             force_full_slint_raster: composition_decision.force_full_slint_raster,
             force_full_slint_present: composition_decision.force_full_slint_present,
             transition_state: full_screen_transition.state(),
-        }) && let Some(session) = launcher_card_home.as_mut()
-        {
-            let content_generation = session.content_generation();
-            let direct_render_started = Instant::now();
-            let source =
-                card_cached_frame_view(session.render(), layout.logical_w(), layout.logical_h());
-            match launcher_presenter.try_copy_direct_hidden_frame(
-                f,
-                display_session,
-                source,
-                content_generation,
-                CARD_DIRECT_DAMAGE,
-            ) {
-                Ok(Some(copy)) => {
-                    let completed_at = Instant::now();
-                    frame_production_trace.class = FrameProductionClass::SynchronousAnimation;
-                    frame_production_trace.sequence = copy.completed.grant.generation;
-                    frame_production_trace.render_start_phase_us =
-                        pacer.age_since_last_hit_us(direct_render_started);
-                    frame_production_trace.render_wall_us = completed_at
-                        .saturating_duration_since(direct_render_started)
-                        .as_micros()
-                        .try_into()
-                        .unwrap_or(u64::MAX);
-                    frame_production_completed_at = Some(completed_at);
-                    completed_hidden_frame_for_present = Some(copy.completed);
-                    card_direct_frame_rendered = true;
-                    session.note_direct_presented();
+        });
+        if card_direct_path_eligible && let Some(session) = launcher_card_home.as_mut() {
+            let now_us = loop_start.duration_since(run_start).as_micros() as u64;
+            if let Some(frame) =
+                session.try_take_render_ahead(now_us, CARD_DIRECT_MAXIMUM_FRAME_AGE_US)
+            {
+                let request = frame.request();
+                let source =
+                    card_cached_frame_view(frame.pixels(), layout.logical_w(), layout.logical_h());
+                match launcher_presenter.try_copy_direct_hidden_frame(
+                    f,
+                    display_session,
+                    source,
+                    session.content_generation(),
+                    CARD_DIRECT_DAMAGE,
+                ) {
+                    Ok(Some(copy)) => {
+                        frame_production_trace.class = FrameProductionClass::Prepared;
+                        frame_production_trace.sequence = request.render.generation;
+                        frame_production_trace.render_wall_us = copy.copy_us;
+                        frame_production_completed_at = Some(Instant::now());
+                        completed_hidden_frame_for_present = Some(copy.completed);
+                        card_direct_frame_rendered = true;
+                        session.note_direct_presented(frame);
+                    }
+                    Ok(None) => session.return_render_ahead(frame),
+                    Err(failure) => {
+                        session.recycle_render_ahead(frame);
+                        launcher_presenter.fail_latch_completion(failure);
+                    }
                 }
-                Ok(None) => {}
-                Err(failure) => launcher_presenter.fail_latch_completion(failure),
+            }
+            if !card_direct_frame_rendered
+                && session.compositor_stale()
+                && let Some(frame) = session.presented_render_ahead()
+            {
+                let request = frame.request();
+                let source =
+                    card_cached_frame_view(frame.pixels(), layout.logical_w(), layout.logical_h());
+                match launcher_presenter.try_copy_direct_hidden_frame(
+                    f,
+                    display_session,
+                    source,
+                    session.content_generation(),
+                    CARD_DIRECT_DAMAGE,
+                ) {
+                    Ok(Some(copy)) => {
+                        frame_production_trace.class = FrameProductionClass::Prepared;
+                        frame_production_trace.sequence = request.render.generation;
+                        frame_production_trace.render_wall_us = copy.copy_us;
+                        frame_production_completed_at = Some(Instant::now());
+                        completed_hidden_frame_for_present = Some(copy.completed);
+                        card_direct_frame_rendered = true;
+                    }
+                    Ok(None) => {}
+                    Err(failure) => launcher_presenter.fail_latch_completion(failure),
+                }
             }
         }
+        let card_direct_waiting_on_prepared_frame = card_direct_path_eligible
+            && !card_direct_frame_rendered
+            && launcher_card_home
+                .as_ref()
+                .is_some_and(super::launcher_card_home::LauncherCardHomeSession::compositor_stale);
         if navigation_capture_source_carrier_required(
             full_screen_transition_policy_before_render,
             full_screen_transition.owner(),
@@ -10239,7 +10274,10 @@ pub(super) fn run_launcher_loop(
                 }
             }};
         }
-        let this_rect = if card_direct_frame_rendered {
+        let this_rect = if card_direct_frame_rendered || card_direct_waiting_on_prepared_frame {
+            if card_direct_waiting_on_prepared_frame {
+                request_launcher_redraw!();
+            }
             None
         } else if screensaver.active && screensaver_frame_visible {
             if accepted_screensaver_frame {
@@ -11500,8 +11538,9 @@ pub(super) fn run_launcher_loop(
         let stream_motion_active = stream_motion_before_render
             || preview_transition_trace.active
             || navigation_transition_composition_active;
-        let direct_hidden_present_mode =
-            startup_intro.is_some() || completed_hidden_frame_for_present.is_some();
+        let direct_hidden_present_mode = startup_intro.is_some()
+            || completed_hidden_frame_for_present.is_some()
+            || card_direct_waiting_on_prepared_frame;
         drop(frame_plan_pmu);
         let hidden_present_pmu = launcher_response_trace.input_pmu_span(
             latency_critical_input_pending,
@@ -14494,6 +14533,7 @@ mod tests {
         CardDirectEligibility {
             custom_home_active: true,
             custom_home_needs_render: true,
+            native_geometry: true,
             portrait: false,
             full_frame_present: false,
             launching: false,

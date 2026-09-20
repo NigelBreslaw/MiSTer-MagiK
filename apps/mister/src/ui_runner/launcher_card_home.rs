@@ -8,10 +8,13 @@ use crate::bitmap_font_resource::{
     spleen_6x12_native_console_bitmap_font, xerxes_10_console_bitmap_font,
 };
 use crate::launcher_home::{CARD_COUNT, LauncherHomeSnapshot};
+use crate::ui_runner::launcher_card_pipeline::{
+    CardFrameRequest, LauncherCardRenderAhead, RenderedCardFrame,
+};
 use mister_magik_framebuffer_scenes::Rgb565Pixel;
 use mister_magik_framebuffer_scenes::bitmap_text::BitmapFont;
 use mister_magik_framebuffer_scenes::launcher::{
-    LauncherData, LauncherScene, LauncherTypography, PreparedLauncher,
+    LauncherData, LauncherFrameRequest, LauncherScene, LauncherTypography, PreparedLauncher,
 };
 use mister_magik_framebuffer_scenes::launcher_navigation::{
     BrowseDirection, BrowseFrame, BrowsePhase, LauncherBrowser,
@@ -64,6 +67,11 @@ pub(super) struct LauncherCardHomeSession {
     artwork: [Vec<Rgb565Pixel>; CARD_COUNT],
     fonts: LauncherFonts,
     prepared: PreparedLauncher,
+    render_ahead: Option<LauncherCardRenderAhead>,
+    presented_frame: Option<RenderedCardFrame>,
+    navigation_generation: u64,
+    request_sequence: u64,
+    frame_timestamp_us: u64,
     browser: LauncherBrowser,
     held_direction: Option<BrowseDirection>,
     frame: BrowseFrame,
@@ -84,6 +92,7 @@ impl LauncherCardHomeSession {
         let artwork = CARD_ASSETS.map(decode_card_asset);
         let fonts = LauncherFonts::load()?;
         let prepared = prepare(width, height, &snapshot, selected, clock, &artwork, &fonts);
+        let render_ahead = native_render_ahead(width, height, &prepared);
         let mut browser = LauncherBrowser::new(CARD_COUNT, selected);
         browser.neutral();
         let frame = browser.frame(0);
@@ -95,6 +104,11 @@ impl LauncherCardHomeSession {
             artwork,
             fonts,
             prepared,
+            render_ahead,
+            presented_frame: None,
+            navigation_generation: 1,
+            request_sequence: 0,
+            frame_timestamp_us: 0,
             browser,
             held_direction: None,
             frame,
@@ -108,6 +122,7 @@ impl LauncherCardHomeSession {
     pub(super) fn set_inactive(&mut self) {
         self.active = false;
         self.held_direction = None;
+        self.release_presented_frame();
     }
 
     pub(super) fn update(
@@ -121,12 +136,14 @@ impl LauncherCardHomeSession {
         now_ms: u64,
     ) {
         let selected = selected.min(CARD_COUNT - 1);
+        let previous_frame = self.frame;
         if !self.active {
             self.browser = LauncherBrowser::new(CARD_COUNT, selected);
             self.browser.neutral();
             self.held_direction = None;
             self.active = true;
             self.content_dirty = true;
+            self.bump_navigation_generation();
         }
 
         if self.held_direction != held_direction {
@@ -137,9 +154,11 @@ impl LauncherCardHomeSession {
                 self.browser.press(direction, now_ms);
             }
             self.held_direction = held_direction;
+            self.bump_navigation_generation();
         }
 
         self.frame = self.browser.frame(now_ms);
+        self.frame_timestamp_us = now_ms.saturating_mul(1_000);
         if held_direction.is_none()
             && self.frame.phase == BrowsePhase::Settled
             && self.frame.selected != selected
@@ -152,6 +171,10 @@ impl LauncherCardHomeSession {
             self.browser.press(direction, now_ms);
             self.browser.release_at(direction, now_ms);
             self.frame = self.browser.frame(now_ms);
+        }
+        if navigation_identity_changed(previous_frame, self.frame) {
+            self.bump_navigation_generation();
+            self.content_dirty = true;
         }
 
         if self.width != width
@@ -174,7 +197,12 @@ impl LauncherCardHomeSession {
                 &self.fonts,
             );
             self.content_generation = self.content_generation.wrapping_add(1).max(1);
+            self.presented_frame = None;
+            self.render_ahead = native_render_ahead(width, height, &self.prepared);
             self.content_dirty = true;
+        }
+        if self.active && (self.content_dirty || self.is_animating()) {
+            self.submit_render_ahead();
         }
     }
 
@@ -191,10 +219,17 @@ impl LauncherCardHomeSession {
     }
 
     pub(super) fn needs_render(&self) -> bool {
-        self.active && (self.content_dirty || self.is_animating())
+        self.active
+            && (self.content_dirty
+                || self.is_animating()
+                || self
+                    .render_ahead
+                    .as_ref()
+                    .is_some_and(LauncherCardRenderAhead::has_ready))
     }
 
     pub(super) fn render(&mut self) -> &[Rgb565Pixel] {
+        self.release_presented_frame();
         self.prepared.render_frame(self.frame);
         self.content_dirty = false;
         self.compositor_stale = false;
@@ -209,9 +244,95 @@ impl LauncherCardHomeSession {
         self.compositor_stale
     }
 
-    pub(super) fn note_direct_presented(&mut self) {
+    pub(super) fn note_direct_presented(&mut self, frame: RenderedCardFrame) {
+        let previous = self.presented_frame.replace(frame);
+        if let (Some(render_ahead), Some(previous)) = (self.render_ahead.as_ref(), previous) {
+            render_ahead.recycle(previous);
+        }
+        self.content_dirty = false;
         self.compositor_stale = true;
     }
+
+    pub(super) fn presented_render_ahead(&self) -> Option<&RenderedCardFrame> {
+        self.presented_frame.as_ref()
+    }
+
+    pub(super) fn try_take_render_ahead(
+        &self,
+        now_us: u64,
+        maximum_age_us: u64,
+    ) -> Option<RenderedCardFrame> {
+        self.render_ahead.as_ref()?.try_take(
+            self.content_generation,
+            self.navigation_generation,
+            now_us,
+            maximum_age_us,
+        )
+    }
+
+    pub(super) fn recycle_render_ahead(&self, frame: RenderedCardFrame) {
+        if let Some(render_ahead) = self.render_ahead.as_ref() {
+            render_ahead.recycle(frame);
+        }
+    }
+
+    pub(super) fn return_render_ahead(&self, frame: RenderedCardFrame) {
+        if let Some(render_ahead) = self.render_ahead.as_ref() {
+            render_ahead.return_ready(frame);
+        }
+    }
+
+    fn submit_render_ahead(&mut self) {
+        let Some(render_ahead) = self.render_ahead.as_ref() else {
+            return;
+        };
+        self.request_sequence = self.request_sequence.wrapping_add(1).max(1);
+        render_ahead.submit(CardFrameRequest {
+            render: LauncherFrameRequest {
+                frame: self.frame,
+                timestamp_us: self.frame_timestamp_us,
+                generation: self.request_sequence,
+            },
+            content_generation: self.content_generation,
+            navigation_generation: self.navigation_generation,
+        });
+    }
+
+    fn bump_navigation_generation(&mut self) {
+        self.navigation_generation = self.navigation_generation.wrapping_add(1).max(1);
+    }
+
+    fn release_presented_frame(&mut self) {
+        let Some(frame) = self.presented_frame.take() else {
+            return;
+        };
+        if let Some(render_ahead) = self.render_ahead.as_ref() {
+            render_ahead.recycle(frame);
+        }
+    }
+}
+
+fn native_render_ahead(
+    width: usize,
+    height: usize,
+    prepared: &PreparedLauncher,
+) -> Option<LauncherCardRenderAhead> {
+    (width == 960 && height == 540)
+        .then(|| LauncherCardRenderAhead::start(prepared.frame_preparer(), prepared.pixels()))
+}
+
+fn navigation_identity_changed(previous: BrowseFrame, current: BrowseFrame) -> bool {
+    previous.selected != current.selected
+        || previous.target != current.target
+        || previous.phase != current.phase
+        || previous.direction != current.direction
+        || outgoing_identity(previous) != outgoing_identity(current)
+}
+
+fn outgoing_identity(frame: BrowseFrame) -> Option<(usize, BrowseDirection)> {
+    frame
+        .outgoing
+        .map(|outgoing| (outgoing.card, outgoing.direction))
 }
 
 fn prepare(
@@ -253,6 +374,7 @@ fn decode_card_asset(bytes: &[u8]) -> Vec<Rgb565Pixel> {
 mod tests {
     use super::*;
     use crate::launcher_home::LauncherHomeCounts;
+    use std::time::{Duration, Instant};
 
     fn snapshot() -> LauncherHomeSnapshot {
         LauncherHomeSnapshot::from_counts(LauncherHomeCounts {
@@ -280,10 +402,32 @@ mod tests {
         let mut session = LauncherCardHomeSession::new(960, 540, snapshot(), 0, "21:37").unwrap();
         session.update(960, 540, snapshot(), 0, None, "21:37", 0);
         session.render();
-        session.note_direct_presented();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let frame = loop {
+            if let Some(frame) = session.try_take_render_ahead(0, u64::MAX) {
+                break frame;
+            }
+            assert!(Instant::now() < deadline, "render-ahead worker timed out");
+            std::thread::yield_now();
+        };
+        session.note_direct_presented(frame);
         assert!(session.compositor_stale());
 
         session.render();
         assert!(!session.compositor_stale());
+    }
+
+    #[test]
+    fn settled_clean_home_does_not_sustain_render_ahead_work() {
+        let snapshot = snapshot();
+        let mut session =
+            LauncherCardHomeSession::new(960, 540, snapshot.clone(), 0, "21:37").unwrap();
+        session.update(960, 540, snapshot.clone(), 0, None, "21:37", 0);
+        session.render();
+        let submitted_sequence = session.request_sequence;
+
+        session.update(960, 540, snapshot, 0, None, "21:37", 16);
+
+        assert_eq!(session.request_sequence, submitted_sequence);
     }
 }
