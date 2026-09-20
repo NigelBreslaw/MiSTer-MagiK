@@ -5,10 +5,27 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/lib/shared-worktree-cache.sh"
 export PYTHONPATH="$ROOT/magik/host${PYTHONPATH:+:$PYTHONPATH}"
 UV_ARGS=(--frozen --no-dev)
 case "${1:-}" in
-    check) UV_ARGS+=(--extra testing) ;;
+    check)
+        UV_ARGS+=(--extra testing)
+        if [[ -z "${UV_PROJECT_ENVIRONMENT:-}" ]]; then
+            shared_environment="$(
+                shared_project_environment \
+                    "$ROOT" \
+                    magik/host \
+                    pyproject.toml \
+                    uv.lock
+            )" || shared_environment=""
+            if [[ -n "$shared_environment" ]] \
+                && "$shared_environment/bin/python" \
+                    -c 'import pytest, slint_testing' >/dev/null 2>&1; then
+                export UV_PROJECT_ENVIRONMENT="$shared_environment"
+            fi
+        fi
+        ;;
     mcp) UV_ARGS+=(--extra mcp) ;;
 esac
 exec uv run "${UV_ARGS[@]}" --project "$ROOT/magik/host" python -u -m magik.cli "$@"
