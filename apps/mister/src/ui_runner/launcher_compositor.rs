@@ -153,6 +153,29 @@ impl<'a> LayerTarget<'a> {
         (slint_dirty, slint_damage, rendered)
     }
 
+    pub(super) fn render_custom_home(
+        &mut self,
+        window: &MisterSoftwareWindow,
+        pixels: &[mister_magik_framebuffer_scenes::Rgb565Pixel],
+        full_slint_raster: bool,
+    ) -> (Option<DirtyRect>, DirtyRectList, bool) {
+        let Some(base_dirty) = self.replace_logical_frame(pixels) else {
+            return (None, DirtyRectList::new(), false);
+        };
+        let (slint_dirty, mut damage, rendered) = if full_slint_raster {
+            self.render_slint_full(window)
+        } else {
+            let (dirty, damage) = self.render_slint_base(window);
+            (dirty, damage, dirty.is_some())
+        };
+        damage.push(base_dirty);
+        (
+            Some(slint_dirty.map_or(base_dirty, |dirty| dirty.union(base_dirty))),
+            damage,
+            rendered,
+        )
+    }
+
     pub(super) fn render_black(&mut self) -> DirtyRect {
         self.target.cached_565_mut().fill(Rgb565Pixel(0));
         DirtyRect {
@@ -161,6 +184,41 @@ impl<'a> LayerTarget<'a> {
             x1: self.layout.logical_w(),
             y1: self.layout.logical_h(),
         }
+    }
+
+    pub(super) fn replace_logical_frame(
+        &mut self,
+        pixels: &[mister_magik_framebuffer_scenes::Rgb565Pixel],
+    ) -> Option<DirtyRect> {
+        if pixels.len()
+            != self
+                .layout
+                .logical_w()
+                .saturating_mul(self.layout.logical_h())
+        {
+            return None;
+        }
+        let composition_width = self.layout.composition_w();
+        let cached = self.target.cached_565_mut();
+        if !self.layout.is_portrait() {
+            for (destination, source) in cached.iter_mut().zip(pixels) {
+                destination.0 = source.0;
+            }
+        } else {
+            for y in 0..self.layout.logical_h() {
+                for x in 0..self.layout.logical_w() {
+                    let (physical_x, physical_y) = self.layout.logical_pixel_to_composition(x, y);
+                    cached[physical_y * composition_width + physical_x].0 =
+                        pixels[y * self.layout.logical_w() + x].0;
+                }
+            }
+        }
+        Some(DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: self.layout.composition_w(),
+            y1: self.layout.composition_h(),
+        })
     }
 
     pub(super) fn clear_cached_preview(&mut self) -> DirtyRect {

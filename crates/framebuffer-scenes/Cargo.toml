@@ -12,6 +12,13 @@ license = "GPL-3.0-or-later"
 [build-dependencies]
 cc = "1.4.2"
 
+[features]
+launcher-profile = ["dep:mister-magik-perf-events", "dep:serde"]
+
+[dependencies]
+mister-magik-perf-events = { path = "../perf-events", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+
 [lints.rust]
 warnings = "deny"
 

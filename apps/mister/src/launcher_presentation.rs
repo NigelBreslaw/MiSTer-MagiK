@@ -11,8 +11,8 @@ use crate::launcher::{CatalogMenuItemStatus, DisplayTransactionPhase, LauncherNa
 use crate::launcher_taxonomy::{LauncherMenuItemKind, ROOT_MENU_ID};
 use crate::launcher_view_types::{
     about_section, active_display_choice, arcade_list_mode, arcade_search_pane,
-    arcade_search_status, display_transaction_state, home_focus, home_scroll_phase,
-    launcher_screen, menu_hierarchy, orientation_at, screen_orientation, screensaver_setting,
+    arcade_search_status, display_transaction_state, home_scroll_phase, launcher_screen,
+    menu_hierarchy, orientation_at, screen_orientation, screensaver_setting,
     selected_display_choice, settings_display_choice, settings_popup, settings_section,
     system_hub_section,
 };
@@ -45,11 +45,7 @@ impl SelectionFeedbackTarget {
         (nav.screen == Screen::Home)
             .then(|| Self {
                 surface: nav.current_menu_id().to_string(),
-                item: if nav.settings_focused {
-                    "__settings".to_string()
-                } else {
-                    nav.current_menu_selected_item_id().to_string()
-                },
+                item: nav.current_menu_selected_item_id().to_string(),
             })
             .filter(|target| !target.item.is_empty())
     }
@@ -450,12 +446,6 @@ impl LauncherViewPresenters {
             get_menu_hierarchy,
             set_menu_hierarchy,
             menu_hierarchy(nav.current_menu_id() == ROOT_MENU_ID)
-        );
-        set_if_changed!(
-            navigation,
-            get_home_focus,
-            set_home_focus,
-            home_focus(nav.settings_focused)
         );
         set_if_changed!(
             navigation,

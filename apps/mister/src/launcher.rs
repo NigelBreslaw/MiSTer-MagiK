@@ -15,8 +15,8 @@ use crate::input_event::{InputEvent, InputPhase};
 use crate::input_repeat::RepeatNav;
 use crate::input_state::PadState;
 use crate::launcher_taxonomy::{
-    LauncherCollection, LauncherMenuItem, LauncherMenuItemKind, LauncherTaxonomy,
-    LauncherTaxonomyToken, ROOT_MENU_ID,
+    COMPUTERS_MENU_ID, CONSOLES_MENU_ID, HANDHELDS_MENU_ID, LauncherCollection, LauncherMenuItem,
+    LauncherMenuItemKind, LauncherTaxonomy, LauncherTaxonomyToken, ROOT_MENU_ID,
 };
 use crate::settings::{MagikSettings, ScreenOrientation};
 use crate::spring_animation::{SpringAnimation, SpringConfiguration};
@@ -28,6 +28,7 @@ use mister_magik_core::launcher_effects::{
     LauncherEffectFailure, LauncherEffectFailureKind, LauncherPersistence, RuntimeState,
     StructuredLaunchSelection as EffectStructuredLaunchSelection,
 };
+use mister_magik_framebuffer_scenes::launcher::LauncherCardId;
 use mister_magik_mister_runtime::display_resolution::{DISPLAY_RESOLUTIONS, DisplayResolution};
 use mister_magik_mister_runtime::main_command::{self, MainCommand};
 use mister_magik_mister_runtime::runtime_state::SystemRuntimeState;
@@ -45,6 +46,22 @@ use std::time::{Duration, Instant};
 const HOME_SCROLL_HOLD_DELAY: Duration = Duration::from_millis(200);
 const HOME_SCROLL_SPEED_PX_PER_SECOND: f64 = 1440.0;
 const HOME_SCROLL_ACCELERATION_PX_PER_SECOND_SQUARED: f64 = 6000.0;
+const ROOT_HOME_CARDS: [(LauncherCardId, &str); 6] = [
+    (LauncherCardId::Arcade, "arcade"),
+    (LauncherCardId::Consoles, "menu:consoles"),
+    (LauncherCardId::Computers, "menu:computers"),
+    (LauncherCardId::Handhelds, "menu:handhelds"),
+    (LauncherCardId::Favourites, "__favourites"),
+    (LauncherCardId::Settings, "__settings"),
+];
+
+const fn root_home_card_key(index: usize) -> &'static str {
+    if index < ROOT_HOME_CARDS.len() {
+        ROOT_HOME_CARDS[index].1
+    } else {
+        ""
+    }
+}
 
 const INPUT_POLICY_MARKER_PATH: &str = "/tmp/mister-magik/input-policy";
 
@@ -855,7 +872,6 @@ pub struct LauncherNav {
     pub selected: usize,
     pub system_hub_selected: usize,
     pub scroll_x: i32,
-    pub settings_focused: bool,
     pub settings_selected: usize,
     pub about_selected: usize,
     pub display_combo_open: bool,
@@ -953,7 +969,6 @@ pub struct NavigationTransitionState {
     selected: usize,
     system_hub_selected: usize,
     scroll_x: i32,
-    settings_focused: bool,
     settings_selected: usize,
     about_selected: usize,
     display_combo_open: bool,
@@ -1235,7 +1250,6 @@ impl LauncherNav {
 
     pub fn set_portrait_layout(&mut self, portrait_layout: bool) {
         self.portrait_layout = portrait_layout;
-        self.settings_focused = false;
         self.home_scroll = HomeScrollState::default();
         self.home_scroll_animation.snap_to(self.scroll_x as f64);
     }
@@ -1253,17 +1267,21 @@ impl LauncherNav {
     }
 
     pub fn home_horizontal_held(&self) -> bool {
-        self.screen == Screen::Home
-            && !self.portrait_layout
-            && !self.settings_focused
-            && self.home_scroll.held_dir != 0
+        self.screen == Screen::Home && !self.portrait_layout && self.home_scroll.held_dir != 0
     }
 
     pub fn home_horizontal_repeat_active(&self) -> bool {
-        self.screen == Screen::Home
-            && !self.portrait_layout
-            && !self.settings_focused
-            && self.home_scroll.active
+        self.screen == Screen::Home && !self.portrait_layout && self.home_scroll.active
+    }
+
+    pub fn home_horizontal_direction(
+        &self,
+    ) -> Option<mister_magik_framebuffer_scenes::launcher_navigation::BrowseDirection> {
+        match self.home_scroll.held_dir {
+            -1 => Some(mister_magik_framebuffer_scenes::launcher_navigation::BrowseDirection::Left),
+            1 => Some(mister_magik_framebuffer_scenes::launcher_navigation::BrowseDirection::Right),
+            _ => None,
+        }
     }
 
     pub fn arcade_uses_menu_repeat(&self) -> bool {
@@ -1280,7 +1298,6 @@ impl LauncherNav {
             selected: 0,
             system_hub_selected: 0,
             scroll_x: 0,
-            settings_focused: false,
             settings_selected: 0,
             about_selected: 0,
             display_combo_open: false,
@@ -1399,7 +1416,10 @@ impl LauncherNav {
             self.menu_path = destination.menu_path.clone();
         }
 
-        if self.screen == Screen::Arcade && self.active_collection_id.is_none() {
+        if self.screen == Screen::Arcade
+            && self.active_collection_id.is_none()
+            && self.arcade_user_list_mode == ArcadeUserListMode::Games
+        {
             if had_active_collection {
                 self.screen = Screen::Home;
                 self.restore_current_menu_view();
@@ -1494,7 +1514,18 @@ impl LauncherNav {
         self.current_menu_items().len()
     }
 
+    pub(crate) fn home_navigation_count(&self) -> usize {
+        if self.current_menu_id() == ROOT_MENU_ID {
+            ROOT_HOME_CARDS.len()
+        } else {
+            self.current_menu_count()
+        }
+    }
+
     pub fn current_menu_selected_item_id(&self) -> &str {
+        if self.current_menu_id() == ROOT_MENU_ID {
+            return root_home_card_key(self.selected);
+        }
         self.current_menu_items()
             .get(self.selected)
             .map(|item| item.id.as_str())
@@ -1503,7 +1534,7 @@ impl LauncherNav {
 
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     pub fn home_scroll_max(&self) -> i32 {
-        home_max_scroll(self.current_menu_count())
+        home_max_scroll(self.home_navigation_count())
     }
 
     pub fn catalog_build_started(&mut self) {
@@ -1824,7 +1855,6 @@ impl LauncherNav {
         self.menu_path = path;
         self.active_collection_id = None;
         self.screen = Screen::Home;
-        self.settings_focused = false;
         self.restore_current_menu_view();
         true
     }
@@ -1847,7 +1877,6 @@ impl LauncherNav {
         self.menu_path.push(ROOT_MENU_ID.to_string());
         self.active_collection_id = None;
         self.screen = Screen::Home;
-        self.settings_focused = false;
         self.restore_current_menu_view();
     }
 
@@ -1972,10 +2001,8 @@ impl LauncherNav {
 
     fn remember_current_menu_view(&mut self) {
         let menu_id = self.current_menu_id().to_string();
-        let selected_item_id = self
-            .current_menu_items()
-            .get(self.selected)
-            .map(|item| item.id.clone());
+        let selected_item_id = (!self.current_menu_selected_item_id().is_empty())
+            .then(|| self.current_menu_selected_item_id().to_string());
         self.menu_memory.insert(
             menu_id,
             MenuViewportMemory {
@@ -2000,7 +2027,6 @@ impl LauncherNav {
             selected: self.selected,
             system_hub_selected: self.system_hub_selected,
             scroll_x: self.scroll_x,
-            settings_focused: self.settings_focused,
             settings_selected: self.settings_selected,
             about_selected: self.about_selected,
             display_combo_open: self.display_combo_open,
@@ -2050,7 +2076,6 @@ impl LauncherNav {
         self.selected = state.selected;
         self.system_hub_selected = state.system_hub_selected;
         self.scroll_x = state.scroll_x;
-        self.settings_focused = state.settings_focused;
         self.settings_selected = state.settings_selected;
         self.about_selected = state.about_selected;
         self.display_combo_open = state.display_combo_open;
@@ -2106,13 +2131,12 @@ impl LauncherNav {
         self.active_collection_id = None;
         self.active_collection_source = None;
         self.screen = Screen::Home;
-        self.settings_focused = false;
         self.restore_home_view_state(source);
     }
 
     fn restore_current_menu_view(&mut self) {
         let menu_id = self.current_menu_id().to_string();
-        let count = self.current_menu_count();
+        let count = self.home_navigation_count();
         let memory = self.menu_memory.get(&menu_id).cloned().unwrap_or_default();
         if count == 0 {
             self.selected = 0;
@@ -2122,9 +2146,15 @@ impl LauncherNav {
                 .selected_item_id
                 .as_deref()
                 .and_then(|selected_id| {
-                    self.current_menu_items()
-                        .iter()
-                        .position(|item| item.id == selected_id)
+                    if self.current_menu_id() == ROOT_MENU_ID {
+                        ROOT_HOME_CARDS
+                            .iter()
+                            .position(|(_, key)| *key == selected_id)
+                    } else {
+                        self.current_menu_items()
+                            .iter()
+                            .position(|item| item.id == selected_id)
+                    }
                 })
                 .unwrap_or(memory.selected.min(count - 1));
             self.scroll_x = memory.scroll_x;
@@ -2142,7 +2172,6 @@ impl LauncherNav {
         self.remember_current_menu_view();
         self.menu_path.pop();
         self.active_collection_id = None;
-        self.settings_focused = false;
         self.restore_current_menu_view();
         true
     }
@@ -2165,7 +2194,6 @@ impl LauncherNav {
             self.go_root();
         } else {
             self.screen = Screen::Home;
-            self.settings_focused = false;
             self.restore_current_menu_view();
         }
     }
@@ -2173,7 +2201,6 @@ impl LauncherNav {
     pub fn recover_empty_collection_to_home(&mut self) {
         self.active_collection_id = None;
         self.screen = Screen::Home;
-        self.settings_focused = false;
         if let Some(source) = self.active_collection_source.take() {
             self.restore_home_view_state(source);
         } else {
@@ -2249,13 +2276,26 @@ impl LauncherNav {
             }
             return None;
         }
-        let held = PadState::default();
+        let discrete_home_direction = event.source.kind == crate::input_event::InputSourceKind::Ui
+            && self.screen == Screen::Home
+            && matches!(
+                event.action,
+                crate::input_event::LogicalAction::Up
+                    | crate::input_event::LogicalAction::Down
+                    | crate::input_event::LogicalAction::Left
+                    | crate::input_event::LogicalAction::Right
+            );
+        let held = if discrete_home_direction && event.phase == InputPhase::Pressed {
+            pressed.clone()
+        } else {
+            PadState::default()
+        };
         self.handle_input_internal(
             NavigationInput {
                 pressed: &pressed,
                 released: &released,
                 held: &held,
-                tick_continuous: false,
+                tick_continuous: discrete_home_direction,
                 frame_now,
             },
             catalog,
@@ -2443,7 +2483,6 @@ impl LauncherNav {
         if pressed.btn_b {
             self.active_collection_id = None;
             self.screen = Screen::Home;
-            self.settings_focused = false;
             if let Some(source) = self.active_collection_source.take() {
                 self.restore_home_view_state(source);
             } else {
@@ -2491,12 +2530,7 @@ impl LauncherNav {
             ..
         } = input;
         if pressed.btn_home {
-            if (self.crt_layout || self.portrait_layout) && self.current_menu_id() == ROOT_MENU_ID {
-                self.remember_current_menu_view();
-                self.settings_selected = 0;
-                self.settings_focused = false;
-                self.screen = Screen::Settings;
-            } else if emit_navigation_intents && self.menu_path.len() > 1 {
+            if emit_navigation_intents && self.menu_path.len() > 1 {
                 return Some(LauncherEvent {
                     action: LauncherAction::NavigateHome,
                     path: None,
@@ -2519,25 +2553,7 @@ impl LauncherNav {
             return None;
         }
 
-        let item_count = self.current_menu_count();
-        if !self.crt_layout && !self.portrait_layout {
-            if pressed.dpad_up {
-                self.settings_focused = true;
-            }
-            if pressed.dpad_down {
-                self.settings_focused = false;
-            }
-            if self.settings_focused {
-                self.home_scroll = HomeScrollState::default();
-                self.home_scroll_animation.snap_to(self.scroll_x as f64);
-                if pressed.btn_a {
-                    self.remember_current_menu_view();
-                    self.settings_selected = 0;
-                    self.screen = Screen::Settings;
-                }
-                return None;
-            }
-        }
+        let item_count = self.home_navigation_count();
         if item_count == 0 {
             self.home_scroll = HomeScrollState::default();
             self.scroll_x = 0;
@@ -2556,6 +2572,13 @@ impl LauncherNav {
         }
 
         if pressed.btn_a {
+            if self.current_menu_id() == ROOT_MENU_ID {
+                return self.activate_root_home_card(
+                    catalog,
+                    emit_collection_intents,
+                    emit_navigation_intents,
+                );
+            }
             let item = self.current_menu_items().get(self.selected).cloned();
             if let Some(item) = item {
                 match item.kind {
@@ -2589,6 +2612,67 @@ impl LauncherNav {
         }
 
         None
+    }
+
+    fn activate_root_home_card(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        emit_collection_intents: bool,
+        emit_navigation_intents: bool,
+    ) -> Option<LauncherEvent> {
+        let id = match self.selected {
+            0 => crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID,
+            1 => CONSOLES_MENU_ID,
+            2 => COMPUTERS_MENU_ID,
+            3 => HANDHELDS_MENU_ID,
+            4 => {
+                self.active_collection_source = Some(self.home_view_state());
+                self.remember_current_menu_view();
+                self.active_collection_id = None;
+                self.set_arcade_user_list_mode(catalog, ArcadeUserListMode::Favourites);
+                self.screen = Screen::Arcade;
+                return None;
+            }
+            5 => {
+                self.remember_current_menu_view();
+                self.settings_selected = 0;
+                self.screen = Screen::Settings;
+                return None;
+            }
+            _ => return None,
+        };
+        let item = self
+            .current_menu_items()
+            .iter()
+            .find(|item| item.id == id)
+            .cloned()?;
+        match item.kind {
+            LauncherMenuItemKind::Menu if emit_navigation_intents => Some(LauncherEvent {
+                action: LauncherAction::OpenMenu,
+                path: Some(item.id),
+                settings: None,
+            }),
+            LauncherMenuItemKind::Menu => {
+                self.open_menu(&item.id);
+                None
+            }
+            LauncherMenuItemKind::Collection if emit_collection_intents => Some(LauncherEvent {
+                action: LauncherAction::OpenCollection,
+                path: Some(item.id),
+                settings: None,
+            }),
+            LauncherMenuItemKind::Collection => {
+                self.activate_collection(catalog, &item.id);
+                None
+            }
+        }
+    }
+
+    pub fn root_home_card(&self) -> Option<LauncherCardId> {
+        if self.current_menu_id() != ROOT_MENU_ID {
+            return None;
+        }
+        ROOT_HOME_CARDS.get(self.selected).map(|(id, _)| *id)
     }
 
     fn update_home_scroll(&mut self, held: &PadState, frame_now: Instant, count: usize) {
@@ -2734,14 +2818,20 @@ impl LauncherNav {
             tick_continuous,
             frame_now,
         } = input;
-        let collection_id = self.active_collection_scope_id(catalog).to_string();
+        let global_user_list = self.arcade_user_list_mode != ArcadeUserListMode::Games
+            && self.active_collection_id().is_none();
+        let collection_id = if global_user_list {
+            String::new()
+        } else {
+            self.active_collection_scope_id(catalog).to_string()
+        };
         let count = self.active_arcade_game_count(catalog, &collection_id);
 
-        if self.arcade_filter.drawer_open {
+        if !global_user_list && self.arcade_filter.drawer_open {
             return self.handle_arcade_filter(input, catalog, &collection_id);
         }
 
-        if self.arcade_search.is_active(&self.arcade_filter.active) {
+        if !global_user_list && self.arcade_search.is_active(&self.arcade_filter.active) {
             return self.handle_arcade_search(
                 pressed,
                 held,
@@ -2779,22 +2869,15 @@ impl LauncherNav {
         }
         // A genuinely empty library has no game actions. Back and Home above
         // remain available, including while its shard is loading or failed.
-        if catalog.system_game_count(&collection_id) == 0 {
+        if count == 0 {
             return None;
         }
-        if pressed.btn_y {
+        if !global_user_list && pressed.btn_y {
             self.enter_arcade_search(catalog, &collection_id);
             return None;
         }
 
-        if count == 0 {
-            if pressed.dpad_left {
-                self.open_arcade_filter(catalog, &collection_id);
-            }
-            return None;
-        }
-
-        if pressed.dpad_left {
+        if !global_user_list && pressed.dpad_left {
             self.open_arcade_alphabet(catalog, &collection_id);
             return None;
         }
@@ -3495,26 +3578,51 @@ impl LauncherNav {
     }
 
     fn rebuild_user_list_indexes(&mut self, catalog: &ArcadeCatalog) {
-        let snes_games = catalog.system_game_view("snes");
-        let refs: Vec<&str> = match self.arcade_user_list_mode {
-            ArcadeUserListMode::Games => Vec::new(),
-            ArcadeUserListMode::Recent => {
-                self.recent_launch_refs.iter().map(String::as_str).collect()
-            }
-            ArcadeUserListMode::Favourites => snes_games
+        let active_collection = self.active_collection_id().map(str::to_owned);
+        self.user_list_indexes = match (self.arcade_user_list_mode, active_collection.as_deref()) {
+            (ArcadeUserListMode::Games, _) => Vec::new(),
+            (ArcadeUserListMode::Favourites, Some(collection_id)) => catalog
+                .system_game_view(collection_id)
                 .iter()
-                .map(|game| game.mra_path.as_ref())
-                .filter(|launch_ref| self.favourite_launch_refs.contains(*launch_ref))
+                .enumerate()
+                .filter_map(|(index, game)| {
+                    self.favourite_launch_refs
+                        .contains(game.mra_path.as_ref())
+                        .then_some(index)
+                })
+                .collect(),
+            (ArcadeUserListMode::Favourites, None) => catalog
+                .games
+                .iter()
+                .enumerate()
+                .filter_map(|(index, game)| {
+                    self.favourite_launch_refs
+                        .contains(game.mra_path.as_ref())
+                        .then_some(index)
+                })
+                .collect(),
+            (ArcadeUserListMode::Recent, Some(collection_id)) => {
+                let games = catalog.system_game_view(collection_id);
+                self.recent_launch_refs
+                    .iter()
+                    .filter_map(|launch_ref| {
+                        games
+                            .iter()
+                            .position(|game| game.mra_path.as_ref() == launch_ref)
+                    })
+                    .collect()
+            }
+            (ArcadeUserListMode::Recent, None) => self
+                .recent_launch_refs
+                .iter()
+                .filter_map(|launch_ref| {
+                    catalog
+                        .games
+                        .iter()
+                        .position(|game| game.mra_path.as_ref() == launch_ref)
+                })
                 .collect(),
         };
-        self.user_list_indexes = refs
-            .into_iter()
-            .filter_map(|launch_ref| {
-                snes_games
-                    .iter()
-                    .position(|game| game.mra_path.as_ref() == launch_ref)
-            })
-            .collect();
     }
 
     pub fn favourite_count(&self) -> usize {
@@ -3566,7 +3674,17 @@ impl LauncherNav {
         system_id: &str,
     ) -> crate::arcade_catalog::ArcadeGameView<'a> {
         if self.arcade_user_list_mode != ArcadeUserListMode::Games {
-            return catalog.indexed_system_game_view("snes", &self.user_list_indexes);
+            return self.active_collection_id().map_or_else(
+                || {
+                    crate::arcade_catalog::ArcadeGameView::indexed(
+                        &catalog.games,
+                        &self.user_list_indexes,
+                    )
+                },
+                |collection_id| {
+                    catalog.indexed_system_game_view(collection_id, &self.user_list_indexes)
+                },
+            );
         }
         let system_id = self.effective_collection_id(system_id);
         if self.arcade_search.is_active(&self.arcade_filter.active)
@@ -6261,6 +6379,30 @@ mod tests {
         assert_eq!(nav.settings_selected, 2);
     }
 
+    #[test]
+    fn ordered_home_ui_taps_move_one_card_each() {
+        use crate::input_event::{InputSourceKind, LogicalAction};
+
+        let catalog = image_less_amiga_catalog();
+        let mut nav = LauncherNav::new();
+        let now = Instant::now();
+        for tap in 0..5 {
+            let mut event = ordered_event(
+                tap * 2 + 1,
+                tap + 1,
+                LogicalAction::Right,
+                InputPhase::Pressed,
+            );
+            event.source.kind = InputSourceKind::Ui;
+            nav.handle_action_with_navigation_intents(&event, now, &catalog);
+            event.sequence += 1;
+            event.phase = InputPhase::Released;
+            nav.handle_action_with_navigation_intents(&event, now, &catalog);
+        }
+
+        assert_eq!(nav.root_home_card(), Some(LauncherCardId::Settings));
+    }
+
     fn release(nav: &mut LauncherNav, catalog: &ArcadeCatalog, t: Instant, ms: u64) {
         let _ = nav.handle_input(&PadState::default(), t + Duration::from_millis(ms), catalog);
     }
@@ -7694,8 +7836,8 @@ mod tests {
                 .is_none()
         );
 
-        assert_eq!(nav.selected, nav.current_menu_count() - 1);
-        assert_eq!(nav.scroll_x, 0);
+        assert_eq!(nav.selected, ROOT_HOME_CARDS.len() - 1);
+        assert_eq!(nav.root_home_card(), Some(LauncherCardId::Settings));
     }
 
     #[test]
@@ -7981,7 +8123,7 @@ mod tests {
     }
 
     #[test]
-    fn home_returns_to_root_then_opens_settings_and_b_returns_root() {
+    fn home_returns_to_root_and_settings_card_opens_settings() {
         let catalog = hierarchy_catalog();
         let mut nav = LauncherNav::for_crt_layout(true);
         let t0 = Instant::now();
@@ -7993,8 +8135,9 @@ mod tests {
         assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
         release(&mut nav, &catalog, t0, 16);
 
+        nav.selected = 5;
         let _ = nav.handle_input(
-            &pad_with(|pad| pad.btn_home = true),
+            &pad_with(|pad| pad.btn_a = true),
             t0 + Duration::from_millis(32),
             &catalog,
         );
@@ -8072,7 +8215,7 @@ mod tests {
     }
 
     #[test]
-    fn hdmi_home_keeps_the_previous_settings_focus_navigation() {
+    fn hdmi_home_has_no_separate_settings_focus() {
         let catalog = hierarchy_catalog();
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
@@ -8088,9 +8231,9 @@ mod tests {
             t0 + Duration::from_millis(32),
             &catalog,
         );
-        assert!(nav.settings_focused);
         release(&mut nav, &catalog, t0, 48);
 
+        nav.selected = 5;
         let _ = nav.handle_input(
             &pad_with(|pad| pad.btn_a = true),
             t0 + Duration::from_millis(64),
@@ -10229,6 +10372,31 @@ mod tests {
         let favourites = nav.active_arcade_game_view(&catalog, "snes");
         assert_eq!(favourites.len(), 1);
         assert_eq!(favourites.get(0).unwrap().title.as_ref(), "F-Zero");
+    }
+
+    #[test]
+    fn root_favourites_card_opens_favourites_across_systems() {
+        let first = "/media/fat/_Arcade/1942.mra";
+        let second = "magik-plan:amiga-agony";
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        nav.set_user_game_refs(
+            &catalog,
+            [first.to_string(), second.to_string()],
+            Vec::new(),
+        );
+        nav.selected = 4;
+
+        let _ = nav.handle_input(&pad_with(|pad| pad.btn_a = true), Instant::now(), &catalog);
+
+        assert_eq!(nav.screen, Screen::Arcade);
+        assert_eq!(nav.active_collection_id(), None);
+        assert_eq!(nav.arcade_user_list_mode(), ArcadeUserListMode::Favourites);
+        let favourites = nav.active_arcade_game_view(&catalog, "");
+        assert_eq!(favourites.len(), 2);
+        assert_eq!(favourites.get(0).unwrap().mra_path.as_ref(), first);
+        assert_eq!(favourites.get(1).unwrap().mra_path.as_ref(), second);
     }
 
     #[test]

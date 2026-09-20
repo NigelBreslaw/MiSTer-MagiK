@@ -80,14 +80,13 @@ mod macos {
         AboutSection, ArcadeGame, ArcadeLoadState, ArcadeSearchMode,
         ArcadeSearchPane as ViewArcadeSearchPane, ArcadeSearchStatus as ViewArcadeSearchStatus,
         ArcadeView, CatalogActivity, CatalogView, ChoiceOption, ConfirmationKind, DialogChoice,
-        HomeFocus, HomeScrollPhase, InformationView, InputAvailability, InputView, Launcher,
-        LauncherLayout, LauncherScreen, LayoutRect, LoadingState, MediaPackRow, MediaPackState,
-        MediaView, MenuHierarchy, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus,
-        MisterUi, NavigationTransitionState as ViewNavigationTransitionState, NavigationView,
-        OverlayView, PreviewState as ViewPreviewState, ProgressMode,
-        ScreenOrientation as ViewScreenOrientation, ScreensaverSetting, SettingsPopup,
-        SettingsSection, SettingsView, SetupEntry, SetupField, SetupPhase as ViewSetupPhase,
-        SetupView, SystemHubSection,
+        HomeScrollPhase, InformationView, InputAvailability, InputView, Launcher, LauncherLayout,
+        LauncherScreen, LayoutRect, LoadingState, MediaPackRow, MediaPackState, MediaView,
+        MenuHierarchy, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterUi,
+        NavigationTransitionState as ViewNavigationTransitionState, NavigationView, OverlayView,
+        PreviewState as ViewPreviewState, ProgressMode, ScreenOrientation as ViewScreenOrientation,
+        ScreensaverSetting, SettingsPopup, SettingsSection, SettingsView, SetupEntry, SetupField,
+        SetupPhase as ViewSetupPhase, SetupView, SystemHubSection,
     };
     use sha2::{Digest, Sha256};
     use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel};
@@ -437,7 +436,6 @@ mod macos {
         xrgb8888: Vec<u32>,
         scenario: Scenario,
         selection: usize,
-        settings_focused: bool,
         launcher_nav: LauncherNav,
         launcher_pad: PadState,
         input_router: InputRouter,
@@ -600,24 +598,6 @@ mod macos {
                 navigation.set_system_artwork(image);
                 navigation.set_system_artwork_available(true);
             }
-            if let Ok(artwork) = mister_magik_fb::snes_artwork::Rgb565aImage::load_exact(
-                &Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join(mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_RELATIVE_PATH),
-                mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_WIDTH,
-                mister_magik_fb::snes_artwork::SETTINGS_ARTWORK_HEIGHT,
-            ) {
-                let pixels = artwork.rgba8_bytes();
-                let image = slint::Image::from_rgba8(
-                    slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                        &pixels,
-                        artwork.width as u32,
-                        artwork.height as u32,
-                    ),
-                );
-                let navigation = launcher.global::<NavigationView>();
-                navigation.set_settings_artwork(image);
-                navigation.set_settings_artwork_available(true);
-            }
             let view_orientation = match orientation {
                 ScreenOrientation::Normal => ViewScreenOrientation::Normal,
                 ScreenOrientation::MonitorClockwise => ViewScreenOrientation::MonitorClockwise,
@@ -685,7 +665,6 @@ mod macos {
                 xrgb8888: Vec::new(),
                 scenario,
                 selection: 0,
-                settings_focused: false,
                 launcher_nav,
                 launcher_pad: PadState::default(),
                 input_router: InputRouter::new(FocusRequest {
@@ -832,7 +811,6 @@ mod macos {
             }
             self.scenario = scenario;
             self.selection = 0;
-            self.settings_focused = false;
             if scenario != Scenario::OrientationChoice {
                 self.launcher_nav.orientation_combo_open = false;
             }
@@ -968,11 +946,6 @@ mod macos {
             let navigation = self.launcher.global::<NavigationView>();
             let overlay = self.launcher.global::<OverlayView>();
             navigation.set_home_selected_index(self.selection as i32);
-            navigation.set_home_focus(if self.settings_focused {
-                HomeFocus::Settings
-            } else {
-                HomeFocus::Menu
-            });
             if self.scenario == Scenario::SystemHub {
                 navigation.set_system_hub_section(match self.selection {
                     0 => SystemHubSection::Games,
@@ -1032,11 +1005,6 @@ mod macos {
             self.slint_window.request_redraw();
         }
 
-        fn set_settings_focused(&mut self, focused: bool) {
-            self.settings_focused = focused;
-            self.update_selection();
-        }
-
         fn activate_selection(&mut self) {
             if self.scenario == Scenario::Settings && self.selection == 0 {
                 let settings = self.launcher.global::<SettingsView>();
@@ -1049,9 +1017,7 @@ mod macos {
                 self.slint_window.request_redraw();
                 return;
             }
-            if let Some(scenario) =
-                activated_scenario(self.scenario, self.selection, self.settings_focused)
-            {
+            if let Some(scenario) = activated_scenario(self.scenario, self.selection) {
                 self.select_scenario(scenario);
             }
         }
@@ -1089,12 +1055,8 @@ mod macos {
             }
             if self.scenario == Scenario::Home {
                 match code {
-                    KeyCode::ArrowUp => self.set_settings_focused(true),
-                    KeyCode::ArrowDown if self.settings_focused => {
-                        self.set_settings_focused(false);
-                    }
-                    KeyCode::ArrowLeft if !self.settings_focused => self.move_selection(-1),
-                    KeyCode::ArrowRight if !self.settings_focused => self.move_selection(1),
+                    KeyCode::ArrowLeft => self.move_selection(-1),
+                    KeyCode::ArrowRight => self.move_selection(1),
                     KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
                         self.activate_selection();
                     }
@@ -1316,10 +1278,11 @@ mod macos {
                 } else if let Some(action) = self.launcher_ui_actions.pop_front() {
                     self.launcher_input_sequence =
                         self.launcher_input_sequence.saturating_add(1).max(1);
-                    if let Some(event) = action.input_event(
+                    if let Some([event, released]) = action.input_pulse(
                         self.launcher_input_sequence,
                         self.fixed_time.get().as_micros().min(u64::MAX as u128) as u64,
                     ) {
+                        self.launcher_input_events.push_front(released);
                         Some(event)
                     } else {
                         direct_ui_action = Some(action);
@@ -2899,18 +2862,14 @@ mod macos {
         }
     }
 
-    fn activated_scenario(
-        scenario: Scenario,
-        selection: usize,
-        settings_focused: bool,
-    ) -> Option<Scenario> {
-        match (scenario, selection, settings_focused) {
-            (Scenario::Home, _, true) => Some(Scenario::Settings),
-            (Scenario::Home, 0, false) => Some(Scenario::Arcade),
-            (Scenario::Settings, 1, _) => Some(Scenario::ScreensaverSettings),
-            (Scenario::Settings, 5, _) => Some(Scenario::About),
-            (Scenario::About, 0, _) => Some(Scenario::Info),
-            (Scenario::About, 1, _) => Some(Scenario::Licenses),
+    fn activated_scenario(scenario: Scenario, selection: usize) -> Option<Scenario> {
+        match (scenario, selection) {
+            (Scenario::Home, 0) => Some(Scenario::Arcade),
+            (Scenario::Home, 5) => Some(Scenario::Settings),
+            (Scenario::Settings, 1) => Some(Scenario::ScreensaverSettings),
+            (Scenario::Settings, 5) => Some(Scenario::About),
+            (Scenario::About, 0) => Some(Scenario::Info),
+            (Scenario::About, 1) => Some(Scenario::Licenses),
             _ => None,
         }
     }
@@ -4176,7 +4135,6 @@ mod macos {
             navigation.set_menu_items(menu_items);
         }
         navigation.set_home_selected_index(0);
-        navigation.set_home_focus(HomeFocus::Menu);
         navigation.set_home_scroll_phase(HomeScrollPhase::Idle);
         navigation.set_home_scroll_x(0);
         navigation.set_transition_state(ViewNavigationTransitionState::Idle);

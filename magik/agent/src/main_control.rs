@@ -6,6 +6,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Exchange one fixed-purpose command; callers validate their own completion state.
 pub fn request(command: &str) -> Result<String, String> {
     exchange(
@@ -13,7 +15,7 @@ pub fn request(command: &str) -> Result<String, String> {
         Path::new("/dev/MiSTer_cmd"),
         Path::new("/dev/MiSTer_cmd_reply"),
         Path::new("/tmp/mister-magik/command-operation.lock"),
-        Duration::from_secs(5),
+        COMMAND_TIMEOUT,
     )
 }
 
@@ -23,7 +25,7 @@ pub fn handoff(command: &str) -> Result<(), String> {
         Path::new("/dev/MiSTer_cmd"),
         Path::new("/dev/MiSTer_cmd_reply"),
         Path::new("/tmp/mister-magik/command-operation.lock"),
-        Duration::from_secs(5),
+        COMMAND_TIMEOUT,
     )?;
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {

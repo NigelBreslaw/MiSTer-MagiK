@@ -19,6 +19,7 @@ const HOME_SELECTED_INDEX: &str = "MISTER_HOME_SELECTED_INDEX";
 const AUTO_LAUNCH_SELECTED: &str = "MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED";
 const ORIENTATION_PMU_COMPLETE: &str = "MISTER_ORIENTATION_PMU_COMPLETE";
 const LAUNCH_RETURN_PMU_HANDOFF_OUT: &str = "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT";
+const HOME_REPEAT_LEFT_HOLD: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Debug)]
 pub struct LauncherBenchmarkConfig {
@@ -266,14 +267,14 @@ fn launcher_screen_from_value(value: Option<&str>) -> Option<Screen> {
 #[derive(Clone, Debug)]
 pub(super) struct LauncherBenchState {
     step: usize,
-    home_repeat_dir: i32,
+    home_repeat_started_at: Option<Instant>,
 }
 
 impl Default for LauncherBenchState {
     fn default() -> Self {
         Self {
             step: 0,
-            home_repeat_dir: 1,
+            home_repeat_started_at: None,
         }
     }
 }
@@ -307,7 +308,6 @@ pub(super) fn launcher_bench_step(
                 return false;
             }
             nav.screen = Screen::Home;
-            nav.settings_focused = false;
             let selected = state.step % count;
             if selected < nav.selected {
                 nav.scroll_x = 0;
@@ -317,24 +317,19 @@ pub(super) fn launcher_bench_step(
             true
         }
         LauncherBenchScenario::HomeRepeatHold => {
-            let count = nav.current_menu_count();
+            let count = nav.home_navigation_count();
             if count == 0 {
                 return false;
             }
             nav.screen = Screen::Home;
-            nav.settings_focused = false;
             if nav.selected >= count {
                 nav.selected = count - 1;
                 keep_bench_home_visible(&mut nav.scroll_x, nav.selected, count);
             }
 
-            if nav.selected == 0 {
-                state.home_repeat_dir = 1;
-            } else if nav.selected + 1 >= count {
-                state.home_repeat_dir = -1;
-            }
+            let started_at = *state.home_repeat_started_at.get_or_insert(now);
             let mut input = PadState::default();
-            if state.home_repeat_dir < 0 {
+            if now.saturating_duration_since(started_at) < HOME_REPEAT_LEFT_HOLD {
                 input.dpad_left = true;
             } else {
                 input.dpad_right = true;
@@ -353,7 +348,6 @@ pub(super) fn launcher_bench_step(
                 nav.scroll_x = 0;
             }
             nav.selected = selected;
-            nav.settings_focused = false;
             if state.step % 2 == 0 {
                 nav.screen = Screen::Home;
                 keep_bench_home_visible(&mut nav.scroll_x, nav.selected, count);
@@ -827,13 +821,14 @@ mod tests {
     }
 
     #[test]
-    fn home_repeat_hold_reverses_only_at_list_edges() {
+    fn home_repeat_hold_runs_left_for_twenty_seconds_then_right() {
         let catalog = ArcadeCatalog::new(
             PathBuf::from("/media/fat/_Arcade"),
             Vec::new(),
             vec![system("arcade"), system("neogeo"), system("amiga")],
         );
         let mut nav = LauncherNav::new();
+        nav.selected = 3;
         let mut state = LauncherBenchState::default();
         let t0 = Instant::now();
 
@@ -847,35 +842,25 @@ mod tests {
             t0,
         );
         state.advance_if(ran);
-        assert_eq!(nav.selected, 1);
-        assert_eq!(state.home_repeat_dir, 1);
+        assert_eq!(
+            nav.home_horizontal_direction(),
+            Some(mister_magik_framebuffer_scenes::launcher_navigation::BrowseDirection::Left)
+        );
 
-        let mut saw_right_edge = false;
-        let mut saw_left_reversal = false;
-        for frame in 1..100 {
-            let previous_dir = state.home_repeat_dir;
-            let previous_selected = nav.selected;
-            let ran = launcher_bench_step(
-                LauncherBenchScenario::HomeRepeatHold,
-                &LauncherBenchmarkConfig::default(),
-                &mut nav,
-                &catalog,
-                None,
-                &mut state,
-                t0 + Duration::from_millis(frame * 16),
-            );
-            state.advance_if(ran);
-            if previous_dir > 0 && state.home_repeat_dir < 0 {
-                assert_eq!(previous_selected, nav.current_menu_count() - 1);
-                saw_right_edge = true;
-            }
-            if previous_dir < 0 && state.home_repeat_dir > 0 {
-                assert_eq!(previous_selected, 0);
-                saw_left_reversal = true;
-            }
-        }
-        assert!(saw_right_edge);
-        assert!(saw_left_reversal);
+        let ran = launcher_bench_step(
+            LauncherBenchScenario::HomeRepeatHold,
+            &LauncherBenchmarkConfig::default(),
+            &mut nav,
+            &catalog,
+            None,
+            &mut state,
+            t0 + Duration::from_secs(20),
+        );
+        state.advance_if(ran);
+        assert_eq!(
+            nav.home_horizontal_direction(),
+            Some(mister_magik_framebuffer_scenes::launcher_navigation::BrowseDirection::Right)
+        );
     }
 
     #[test]

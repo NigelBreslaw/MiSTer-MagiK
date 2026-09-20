@@ -11,7 +11,6 @@ import { MenuItem, MenuItemPresentation } from "launcher_menu.slint";
 export enum LauncherScreen { home, system-hub, controller, arcade, settings, screensaver-settings, about, licenses, info }
 export enum MenuHierarchy { root, nested }
 export enum SystemHubSection { games, recent, favourites, information }
-export enum HomeFocus { menu, settings }
 export enum HomeScrollPhase { idle, held, repeating }
 export enum NavigationTransitionState { idle, active }
 export enum SettingsSection { display, orientation, screensaver, reduce-motion, exit, refresh, about }
@@ -76,9 +75,6 @@ export global NavigationView {
     in property <int> system-hub-favourites-count;
     in property <image> system-artwork;
     in property <bool> system-artwork-available;
-    in property <image> settings-artwork;
-    in property <bool> settings-artwork-available;
-    in property <HomeFocus> home-focus;
     in property <int> home-selected-index;
     in property <HomeScrollPhase> home-scroll-phase;
     in property <int> home-scroll-x;

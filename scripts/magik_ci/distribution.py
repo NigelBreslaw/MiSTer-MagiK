@@ -31,7 +31,6 @@ LAUNCHER = "Scripts/MiSTer-MagiK.sh"
 LEGACY_HELPER = "Scripts/MiSTer-MagiK.platform-v3.constants.sh"
 ARTWORK = {
     f"{APP}/assets/snes/snes-small-v1.rgb565a": "7a76993e7e1b0063832b94e9d2ad588549587cf09a14ac2ced72d349ed12f766",
-    f"{APP}/assets/ui/settings-v1.rgb565a": "44d657ff706a49fd8c8999b7c02ea4cdb7e4a8488a54dc68e0b79235dc40e8ec",
 }
 REQUIRED = {
     LAUNCHER,

@@ -5836,6 +5836,21 @@ pub(super) fn run_launcher_loop(
     }
     nav.set_arcade_exit_locked(return_capsule_active);
     apply_home_selected(&mut nav, &catalog, benchmark_config.home_selected(), start);
+    let initial_home_snapshot =
+        crate::launcher_home::LauncherHomeSnapshot::from_runtime(&nav, &catalog);
+    let mut launcher_card_home = match super::launcher_card_home::LauncherCardHomeSession::new(
+        layout.logical_w(),
+        layout.logical_h(),
+        initial_home_snapshot,
+        nav.selected,
+        &last_clock_text,
+    ) {
+        Ok(session) => Some(session),
+        Err(error) => {
+            crate::ui_errln!("launcher card home initialization failed: {error}");
+            None
+        }
+    };
     let bridge_systems_t = Instant::now();
     let mut arcade_screen_pending = (start_screen == Screen::Arcade
         || lock_screen == Some(Screen::Arcade))
@@ -7435,7 +7450,7 @@ pub(super) fn run_launcher_loop(
                 ));
                 if let Some(event) = settings_navigation_benchmark.event_for(
                     nav.screen,
-                    nav.settings_focused,
+                    nav.selected,
                     nav.settings_selected,
                     full_screen_transition.state() == FullScreenTransitionState::Live,
                     frame_now
@@ -7605,7 +7620,7 @@ pub(super) fn run_launcher_loop(
                         .pop_routable(focus.target.kind != InputContextKind::Transition)
                     {
                         ui_action_sequence = ui_action_sequence.saturating_add(1);
-                        if let Some(event) = action.input_event(
+                        if let Some([event, released]) = action.input_pulse(
                             ui_action_sequence,
                             frame_now
                                 .saturating_duration_since(start)
@@ -7613,6 +7628,7 @@ pub(super) fn run_launcher_loop(
                                 .min(u64::MAX as u128) as u64,
                         ) {
                             latency_critical_input_pending = true;
+                            incoming_input_events.push_front(released);
                             Some(event)
                         } else {
                             latency_critical_input_pending = true;
@@ -9394,13 +9410,41 @@ pub(super) fn run_launcher_loop(
         } else {
             AutomationFrameStamp::default()
         };
+        let custom_home_active = launcher_card_home.is_some()
+            && nav.screen == Screen::Home
+            && nav.current_menu_id() == crate::launcher_taxonomy::ROOT_MENU_ID;
+        let mut settled_home_selection = None;
+        app.global::<slint_ui::launcher::MisterUi>()
+            .set_custom_home_base(custom_home_active);
+        if custom_home_active {
+            if let Some(session) = launcher_card_home.as_mut() {
+                session.update(
+                    layout.logical_w(),
+                    layout.logical_h(),
+                    crate::launcher_home::LauncherHomeSnapshot::from_runtime(&nav, &catalog),
+                    nav.selected,
+                    nav.home_horizontal_direction(),
+                    &last_clock_text,
+                    loop_start.duration_since(run_start).as_millis() as u64,
+                );
+                settled_home_selection = session.settled_selection();
+            }
+        } else if let Some(session) = launcher_card_home.as_mut() {
+            session.set_inactive();
+        }
+        let custom_home_needs_render = launcher_card_home
+            .as_ref()
+            .is_some_and(super::launcher_card_home::LauncherCardHomeSession::needs_render);
+        let custom_home_motion_active = launcher_card_home
+            .as_ref()
+            .is_some_and(super::launcher_card_home::LauncherCardHomeSession::is_animating);
         let home_pan_present_active = update_home_pan_present_window(
             nav.screen,
             nav.scroll_x,
             &mut last_home_pan_scroll_x,
             &mut home_pan_present_until,
             loop_start,
-        );
+        ) || custom_home_motion_active;
         let home_repeat_bench_active = home_repeat_benchmark_active(launcher_bench_scenario);
         let home_horizontal_input_held = nav.screen == Screen::Home
             && (pad_state_home_horizontal_held(pad.state()) || home_repeat_bench_active);
@@ -9408,7 +9452,8 @@ pub(super) fn run_launcher_loop(
             nav.screen,
             home_pan_present_active,
             home_horizontal_input_held,
-        ) {
+        ) || custom_home_needs_render
+        {
             request_launcher_redraw!();
         }
         if nav.licenses_scroll_active() {
@@ -10054,6 +10099,21 @@ pub(super) fn run_launcher_loop(
             latency_critical_input_pending,
             "launcher-response.slint-raster",
         );
+        macro_rules! render_launcher_base {
+            ($full_slint_raster:expr) => {{
+                if custom_home_active
+                    && custom_home_needs_render
+                    && let Some(session) = launcher_card_home.as_mut()
+                {
+                    layer_target.render_custom_home(&window, session.render(), $full_slint_raster)
+                } else if $full_slint_raster {
+                    layer_target.render_slint_full(&window)
+                } else {
+                    let (dirty, damage) = layer_target.render_slint_base(&window);
+                    (dirty, damage, dirty.is_some())
+                }
+            }};
+        }
         let this_rect = if screensaver.active && screensaver_frame_visible {
             if accepted_screensaver_frame {
                 if screensaver_fade_alpha.is_some_and(|alpha| alpha < 255) {
@@ -10090,7 +10150,7 @@ pub(super) fn run_launcher_loop(
         } else if full_screen_transition_policy_before_render.force_live_raster {
             gui_raster_phase = gui_raster_profile_phase(true, true);
             let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
-            let (dirty, damage, rendered) = layer_target.render_slint_full(&window);
+            let (dirty, damage, rendered) = render_launcher_base!(true);
             drop(gui_raster_pmu);
             slint_damage = damage;
             full_screen_transition_release_raster_rendered = rendered;
@@ -10114,7 +10174,7 @@ pub(super) fn run_launcher_loop(
                 gui_raster_phase = gui_raster_profile_phase(true, true);
                 let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
                 let controlled_raster_started = Instant::now();
-                let (dirty, damage, rendered) = layer_target.render_slint_full(&window);
+                let (dirty, damage, rendered) = render_launcher_base!(true);
                 drop(gui_raster_pmu);
                 if full_screen_transition.owner() == Some(FullScreenTransitionOwner::Orientation) {
                     orientation_controlled_slint_raster_us =
@@ -10154,21 +10214,21 @@ pub(super) fn run_launcher_loop(
         } else if composition_decision.force_full_slint_raster || crt_backdrop_leaving {
             gui_raster_phase = gui_raster_profile_phase(true, true);
             let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
-            let (dirty, damage, _) = layer_target.render_slint_full(&window);
+            let (dirty, damage, _) = render_launcher_base!(true);
             drop(gui_raster_pmu);
             slint_damage = damage;
             dirty
         } else if startup_intro_prepare_live_launcher {
             gui_raster_phase = gui_raster_profile_phase(true, false);
             let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
-            let (dirty, damage) = layer_target.render_slint_base(&window);
+            let (dirty, damage, _) = render_launcher_base!(false);
             drop(gui_raster_pmu);
             slint_damage = damage;
             dirty
         } else {
             gui_raster_phase = gui_raster_profile_phase(true, false);
             let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
-            let (dirty, damage) = layer_target.render_slint_base(&window);
+            let (dirty, damage, _) = render_launcher_base!(false);
             drop(gui_raster_pmu);
             let expanded = if layout.is_portrait() {
                 dirty
@@ -10365,6 +10425,9 @@ pub(super) fn run_launcher_loop(
             None
         };
         let arcade_list_update_us = arcade_list_update_start.elapsed().as_micros();
+        if let Some(selected) = settled_home_selection {
+            nav.selected = selected;
+        }
         let mut portrait_arcade_list_pixels = 0_u64;
         let mut portrait_arcade_list_bytes = 0_u64;
         let preview_blit_start = Instant::now();
@@ -17617,8 +17680,8 @@ mod tests {
         let start = Instant::now();
         let catalog = empty_arcade_catalog("/tmp");
         let mut nav = LauncherNav::new();
-        let mut driver =
-            LauncherInputScriptDriver::from_script("up,a,down,down,a,down,down,a", start);
+        nav.selected = 5;
+        let mut driver = LauncherInputScriptDriver::from_script("a,down,down,a,down,down,a", start);
         driver.wait_frames = 0;
         let mut action = None;
         let mut frame = 0_u64;

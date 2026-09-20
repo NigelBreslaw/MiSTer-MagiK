@@ -109,11 +109,26 @@ def test_navigation_returns_from_settings_when_capture_fails(monkeypatch, tmp_pa
 
     monkeypatch.setattr(actions, "_press_key", press)
     monkeypatch.setattr(actions, "_settings_open", lambda _: state["open"])
+    monkeypatch.setattr(actions, "_open_settings_card", lambda app: press(app, "\n"))
     monkeypatch.setattr(actions, "screenshot", capture)
     with pytest.raises(RuntimeError, match="capture failed"):
         actions.launcher_navigation(object(), tmp_path / "settings.png")
     assert not state["open"]
     assert keys[-1] == "\x1b"
+
+
+def test_settings_is_opened_from_the_sixth_home_card(monkeypatch):
+    keys = []
+
+    def press(_, key):
+        keys.append(key)
+
+    monkeypatch.setattr(actions, "_press_key", press)
+    monkeypatch.setattr(actions, "_settings_open", lambda _: False)
+    monkeypatch.setattr(actions.time, "sleep", lambda _: None)
+    actions._open_settings_card(object())
+
+    assert keys == ["\uf729", *("\uf703" for _ in range(5)), "\n"]
 
 
 def test_settings_button_is_not_mistaken_for_the_open_screen():

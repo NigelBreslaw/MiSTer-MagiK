@@ -8,6 +8,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=MISTER_RGB565_NEON");
     println!("cargo:rerun-if-changed=src/rgb565_neon.c");
     println!("cargo:rerun-if-changed=src/orientation_neon.c");
+    println!("cargo:rerun-if-changed=src/launcher_texture_neon.c");
     println!("cargo:rerun-if-changed=../../mister/platform/runtime/c_build_support.rs");
     if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() != Ok("arm") {
         return;
@@ -17,6 +18,7 @@ fn main() {
         .inherit_rustflags(false)
         .file("src/rgb565_neon.c")
         .file("src/orientation_neon.c")
+        .file("src/launcher_texture_neon.c")
         .flag("-std=c11")
         .flag("-O3")
         .flag("-mtune=cortex-a9")

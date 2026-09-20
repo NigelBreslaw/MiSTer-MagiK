@@ -4,14 +4,11 @@
 //! Portable RGB565 navigation-transition geometry, buffers, and rasterization.
 
 use crate::Rgb565Pixel;
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
-
-const SMOOTH_CURVE_INTERVALS: usize = 256;
-static SMOOTH_CURVE_Q16: OnceLock<[u16; SMOOTH_CURVE_INTERVALS + 1]> = OnceLock::new();
+use crate::spring_animation::smooth_spring_q16;
+use std::time::Instant;
 
 pub fn warm_navigation_transition_rasterizer() {
-    let _ = SMOOTH_CURVE_Q16.get_or_init(build_smooth_curve_q16);
+    let _ = smooth_spring_q16(0);
 }
 
 pub const PROGRESS_MAX: u16 = u16::MAX;
@@ -2310,44 +2307,6 @@ fn window_q16(progress_q16: u16, start_q16: u16, end_q16: u16) -> u16 {
 
 fn spring_ease_q16(progress_q16: u16) -> u16 {
     smooth_spring_q16(progress_q16)
-}
-
-fn smooth_spring_q16(progress_q16: u16) -> u16 {
-    let curve = SMOOTH_CURVE_Q16.get_or_init(build_smooth_curve_q16);
-    if progress_q16 == u16::MAX {
-        return u16::MAX;
-    }
-    let scaled = progress_q16 as u32 * SMOOTH_CURVE_INTERVALS as u32;
-    let index = (scaled / u16::MAX as u32) as usize;
-    let remainder = scaled % u16::MAX as u32;
-    let from = curve[index] as u32;
-    let to = curve[index + 1] as u32;
-    (from + (to - from) * remainder / u16::MAX as u32) as u16
-}
-
-fn build_smooth_curve_q16() -> [u16; SMOOTH_CURVE_INTERVALS + 1] {
-    let mut raw = [0.0; SMOOTH_CURVE_INTERVALS + 1];
-    let omega = std::f64::consts::TAU / Duration::from_millis(500).as_secs_f64();
-    for (index, value) in raw.iter_mut().enumerate() {
-        let time =
-            Duration::from_micros(500_000_u64 * index as u64 / SMOOTH_CURVE_INTERVALS as u64)
-                .as_secs_f64();
-        let y = -1.0;
-        let velocity = 0.0;
-        let b = velocity + omega * y;
-        let decay = (-omega * time).exp();
-        *value = 1.0 + (y + b * time) * decay;
-    }
-    let final_value = raw[SMOOTH_CURVE_INTERVALS];
-    let mut curve = [0_u16; SMOOTH_CURVE_INTERVALS + 1];
-    for (index, value) in raw.into_iter().enumerate() {
-        curve[index] = ((value / final_value) * u16::MAX as f64)
-            .round()
-            .clamp(0.0, u16::MAX as f64) as u16;
-    }
-    curve[0] = 0;
-    curve[SMOOTH_CURVE_INTERVALS] = u16::MAX;
-    curve
 }
 
 fn background_outside_rect(

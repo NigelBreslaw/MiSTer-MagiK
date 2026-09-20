@@ -5,9 +5,9 @@ import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
 import { Xerxes10, Xerxes10Size } from "../../components/xerxes_10.slint";
 import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 
-import { FeedbackView, HomeFocus, MenuHierarchy, NavigationView } from "../../api.slint";
+import { FeedbackView, MenuHierarchy, NavigationView } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
-import { LauncherTile, SettingsButton } from "../../components/launcher_chrome.slint";
+import { LauncherTile } from "../../components/launcher_chrome.slint";
 
 component HomeFooter inherits Rectangle {
     in property <bool> portrait-layout;
@@ -22,7 +22,7 @@ component HomeFooter inherits Rectangle {
         text: root.portrait-layout
             ? root.root-menu ? "UP/DOWN Move    A Select    HOME Settings"
                 : "UP/DOWN Move    A Open    B Back    HOME Launcher"
-            : root.root-menu ? "LEFT/RIGHT Move    A Select    UP Settings"
+            : root.root-menu ? "LEFT/RIGHT Move    A Select"
                 : "LEFT/RIGHT Move    A Open    B Back    HOME Launcher";
         color: #8ca4b5;
         size: Xerxes10Size.px10;
@@ -115,13 +115,6 @@ export component HomeGrid inherits Rectangle {
                         vertical-alignment: center;
                     }
 
-                    SettingsButton {
-                        width: 34px;
-                        height: 34px;
-                        focused: NavigationView.home-focus == HomeFocus.settings;
-                        acknowledged: FeedbackView.acknowledged(
-                            "", "__settings", FeedbackView.revision);
-                    }
                 }
             }
 
@@ -148,7 +141,7 @@ export component HomeGrid inherits Rectangle {
                         label: NavigationView.menu-items[index].label;
                         subtitle: NavigationView.menu-items[index].subtitle;
                         status: NavigationView.menu-items[index].status;
-                        focused: NavigationView.home-focus == HomeFocus.menu && state.selected;
+                        focused: state.selected;
                         acknowledged: state.acknowledged && !state.selected;
                         flat-focus-style: true;
                     }
@@ -201,13 +194,6 @@ export component HomeGrid inherits Rectangle {
                     color: #d7eef8;
                     size: Xerxes10Size.px10;
                     horizontal-alignment: right;
-                }
-                SettingsButton {
-                    width: 36px;
-                    height: 36px;
-                    focused: false;
-                    acknowledged: FeedbackView.acknowledged(
-                        "", "__settings", FeedbackView.revision);
                 }
             }
         }

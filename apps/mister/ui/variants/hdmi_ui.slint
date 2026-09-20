@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { MisterUi } from "../mister_window.slint";
 import { CatalogActivity, CatalogView, ConfirmationKind, LauncherScreen, LoadingState, MediaView, NavigationView, OverlayView, SettingsPopup, SettingsView, SetupPhase, SetupView } from "../api.slint";
 import { ControllerPanel } from "../controller_panel.slint";
 import { SetupOverlay } from "hdmi_setup.slint";
@@ -23,7 +24,7 @@ import {
 
 export component HdmiLauncherUi inherits Rectangle {
 
-    if NavigationView.screen == LauncherScreen.home : HomeGrid { }
+    if NavigationView.screen == LauncherScreen.home && !MisterUi.custom-home-base : HomeGrid { }
     if NavigationView.screen == LauncherScreen.controller : ControllerPanel { width: 100%; height: 100%; }
     if NavigationView.screen == LauncherScreen.arcade : ArcadeListScreen { }
     if NavigationView.screen == LauncherScreen.settings : SettingsScreen { }

@@ -70,21 +70,19 @@ pub const SETTINGS_NAVIGATION_ORIENTATIONS: [ScreenOrientation; 2] = [
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BenchmarkButton {
-    Up,
     Down,
+    Right,
     A,
     B,
-    Home,
 }
 
 impl BenchmarkButton {
     const fn action(self) -> LogicalAction {
         match self {
-            Self::Up => LogicalAction::Up,
             Self::Down => LogicalAction::Down,
+            Self::Right => LogicalAction::Right,
             Self::A => LogicalAction::Activate,
             Self::B => LogicalAction::Back,
-            Self::Home => LogicalAction::Home,
         }
     }
 }
@@ -182,7 +180,7 @@ impl SettingsNavigationBenchmark {
     pub fn event_for(
         &mut self,
         screen: Screen,
-        settings_focused: bool,
+        home_selected: usize,
         settings_selected: usize,
         full_screen_live: bool,
         captured_at_us: u64,
@@ -207,14 +205,13 @@ impl SettingsNavigationBenchmark {
         }
         let leg_index = self.records.len() % SETTINGS_NAVIGATION_ROUTE.len();
         let button = match (leg_index, screen) {
-            (0, Screen::Home) if self.orientation() == ScreenOrientation::Normal => {
-                if settings_focused {
+            (0, Screen::Home) => {
+                if home_selected == 5 {
                     BenchmarkButton::A
                 } else {
-                    BenchmarkButton::Up
+                    BenchmarkButton::Right
                 }
             }
-            (0, Screen::Home) => BenchmarkButton::Home,
             (1, Screen::Settings) => {
                 if settings_selected < 6 {
                     BenchmarkButton::Down
@@ -432,6 +429,7 @@ mod tests {
         match event.action {
             LogicalAction::Up => "up",
             LogicalAction::Down => "down",
+            LogicalAction::Right => "right",
             LogicalAction::Activate => "a",
             LogicalAction::Back => "b",
             LogicalAction::Home => "home",
@@ -440,37 +438,29 @@ mod tests {
     }
 
     #[test]
-    fn landscape_enters_settings_through_focus_and_activate() {
+    fn landscape_enters_settings_through_card_selection_and_activate() {
         let mut benchmark = SettingsNavigationBenchmark::new(true);
         assert_eq!(
-            pressed(
-                &benchmark
-                    .event_for(Screen::Home, false, 0, true, 1)
-                    .unwrap()
-            ),
-            "up"
+            pressed(&benchmark.event_for(Screen::Home, 0, 0, true, 1).unwrap()),
+            "right"
         );
         assert_eq!(
-            pressed(&benchmark.event_for(Screen::Home, true, 0, true, 2).unwrap()),
+            pressed(&benchmark.event_for(Screen::Home, 1, 0, true, 2).unwrap()),
             "released"
         );
         assert_eq!(
-            pressed(&benchmark.event_for(Screen::Home, true, 0, true, 3).unwrap()),
+            pressed(&benchmark.event_for(Screen::Home, 5, 0, true, 3).unwrap()),
             "a"
         );
     }
 
     #[test]
-    fn portrait_enters_settings_with_home() {
+    fn portrait_enters_settings_through_the_same_card() {
         let mut benchmark = SettingsNavigationBenchmark::new(true);
         benchmark.orientation_index = 1;
         assert_eq!(
-            pressed(
-                &benchmark
-                    .event_for(Screen::Home, false, 0, true, 1)
-                    .unwrap()
-            ),
-            "home"
+            pressed(&benchmark.event_for(Screen::Home, 0, 0, true, 1).unwrap()),
+            "right"
         );
     }
 
@@ -497,11 +487,7 @@ mod tests {
             );
         }
 
-        assert!(
-            benchmark
-                .event_for(Screen::Home, true, 0, true, 1)
-                .is_none()
-        );
+        assert!(benchmark.event_for(Screen::Home, 5, 0, true, 1).is_none());
         assert_eq!(
             benchmark.take_orientation_change(Screen::Home, true),
             Some(ScreenOrientation::MonitorCounterclockwise)
@@ -597,19 +583,11 @@ mod tests {
             benchmark.take_orientation_change(Screen::Home, true),
             Some(ScreenOrientation::MonitorCounterclockwise)
         );
-        assert!(
-            benchmark
-                .event_for(Screen::Home, false, 60, true, 1)
-                .is_none()
-        );
+        assert!(benchmark.event_for(Screen::Home, 0, 60, true, 1).is_none());
         benchmark.note_orientation_presented(ScreenOrientation::MonitorCounterclockwise);
         assert_eq!(
-            pressed(
-                &benchmark
-                    .event_for(Screen::Home, false, 61, true, 2)
-                    .unwrap()
-            ),
-            "home"
+            pressed(&benchmark.event_for(Screen::Home, 0, 61, true, 2).unwrap()),
+            "right"
         );
         for (offset, leg) in SETTINGS_NAVIGATION_ROUTE.into_iter().enumerate() {
             let index = offset + SETTINGS_NAVIGATION_ROUTE.len();

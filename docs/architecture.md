@@ -234,8 +234,8 @@ conversion:
   slots and diagnostic `/dev/fb0` use the same route plan. Native scanout
   geometry is the authoritative framebuffer capture geometry.
 - CRT and HDMI routes use registered bitmap fonts through font-specific Slint
-  components, and the custom Rust games renderer uses the same bitmap resource
-  set. Press Start 2P remains only as a development-time source for the fixed
+  components, and the custom Rust games and root-card renderers use the same
+  bitmap resource set. Press Start 2P remains only as a development-time source for the fixed
   `MiSTer` and `MagiK` particle masks; its TTF is not linked into the runtime.
 - First-party MiSTer Slint uses separate font-specific text components; raw `Text` is confined to those primitives.
   Spleen 6×12 provides the typed 8, 16, 24, and 32 layout sizes. Nocive 15 is
@@ -876,9 +876,16 @@ root stamp semantics, SQLite publish model, and benchmark gates.
 
 ## Launcher Navigation Model
 
-The Home launcher is a dynamic hierarchy rather than a flat catalog-system
-row. Its root order is `Arcade`, `Consoles`, `Handhelds`, then `Computers`;
-empty leaves and their empty parent groups are removed. Console,
+The Home launcher presents six cyclic cards in this order: `Arcade`,
+`Consoles`, `Computers`, `Handhelds`, `Favourites`, and `Settings`. The first
+four cards enter the dynamic catalog hierarchy, Favourites opens the global
+favourites list, and Settings opens the settings screen; Settings is not a
+separate title-bar control. The root cards are composed directly into RGB565 by
+the Rust renderer using the production bitmap fonts and card backgrounds, while
+Slint continues to own nested screens and overlays.
+
+The catalog portion is a dynamic hierarchy rather than a flat catalog-system
+row. Empty leaves and their empty parent groups are removed. Console,
 handheld, and computer levels group installed systems by manufacturer or
 family, with an `Other` node retaining every catalogable system that has no
 explicit mapping. The catalog's normalized platform kind supplies that
@@ -902,7 +909,7 @@ vendor branches with one installed collection are flattened into their parent:
 
 | Level | Ordered children / owned system IDs |
 | --- | --- |
-| Root | Arcade; Consoles; Handhelds; Computers |
+| Root catalog hierarchy | Arcade; Consoles; Computers; Handhelds |
 | Consoles | Atari (`atari2600`, `atari5200`, `atari7800`, `jaguar`); Sega (`sg1000`, `sms`, `megadrive`, `megacd`, `s32x`, `saturn`); Sony (`psx`); Nintendo (`nes`, `fds`, `snes`, `satellaview`, `n64`); NEC (`tgfx16`, `tgfx16-cd`, `supergrafx`); SNK NeoGeo; Other |
 | Consoles / SNK NeoGeo | NeoGeo (`neogeo`, `neo-geo`, `snk-neo-geo`); NeoGeo CD (`neogeo-cd`) |
 | Handhelds | Nintendo (`gb`, `gameboy`, `gameboy2p`, `gbc`, `gba`, `gba2p`, `sgb`, `sgb2`, `pokemonmini`); Sega (`gamegear`); Atari (`atarilynx`); SNK (`neogeopocket`, `ngpc`); Bandai (`wonderswan`, `wonderswancolor`); Other |
