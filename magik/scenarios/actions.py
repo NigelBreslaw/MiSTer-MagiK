@@ -242,6 +242,57 @@ def launcher_idle(application, agent, *, instrumented=False):
     }
 
 
+def launcher_motion(
+    application,
+    agent,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+):
+    """Measure continuous card-carousel navigation on the real launcher."""
+    if application.first_window is None:
+        raise AssertionError("real launcher window is unavailable")
+    _press_key(application, "\uf729")  # Slint Key.Home
+    _wait(lambda: not _settings_open(application), "Home did not close Settings")
+
+    previous = agent.metrics().get("window")
+    agent._successful("measure")
+    seconds = 5
+    interval_seconds = 0.25
+    deadline = time.monotonic() + 2 + seconds + 0.4
+    input_events = 0
+    while time.monotonic() < deadline:
+        direction = "\uf703" if (input_events // 5) % 2 == 0 else "\uf702"
+        _press_key(application, direction)
+        input_events += 1
+        sleep(interval_seconds)
+
+    metrics = agent.metrics()
+    if metrics.get("sha256") != agent.expected_sha256:
+        raise AssertionError("metrics belong to another application")
+    window = metrics.get("window")
+    if not isinstance(window, dict) or window.get("instrumented") is not False:
+        raise AssertionError("real launcher returned no matching measurement window")
+    if not seconds * 1000 <= window.get("elapsed_ms", 0) <= (seconds + 1) * 1000:
+        raise AssertionError("real launcher measurement duration is invalid")
+    if isinstance(previous, dict) and window.get("start_ms", -1) <= previous.get(
+        "end_ms", -1
+    ):
+        raise AssertionError("measurement returned a previous window")
+    if window.get("evidence_error"):
+        raise AssertionError(window["evidence_error"])
+    if window.get("presentations", 0) <= 0:
+        raise AssertionError("card navigation produced no measured presentations")
+    return {
+        **window,
+        "workload": "launcher-card-motion",
+        "sha256": agent.expected_sha256,
+        "pid": metrics.get("pid"),
+        "warmup_seconds": 2,
+        "input_events": input_events,
+        "input_interval_ms": int(interval_seconds * 1000),
+    }
+
+
 def validate_development_paths(context):
     if not isinstance(context, dict):
         raise AssertionError("application did not report its runtime paths")

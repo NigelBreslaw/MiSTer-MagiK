@@ -146,6 +146,7 @@ pub(crate) mod launcher_bench;
 #[allow(dead_code)]
 mod launcher_bridge;
 mod launcher_card_home;
+mod launcher_card_pipeline;
 mod launcher_catalog_publication_test;
 #[allow(dead_code)]
 mod launcher_catalog_session;

@@ -10,6 +10,7 @@ import pytest
 from actions import (
     launcher_smoke,
     launcher_idle,
+    launcher_motion,
     launcher_navigation,
     launcher_catalog,
     launcher_setting,
@@ -104,6 +105,16 @@ def test_idle(application_session, repetition):
     append_event(
         run,
         {"phase": "idle", "outcome": "measured", "repetition": repetition, **result},
+    )
+
+
+@pytest.mark.parametrize("repetition", range(3))
+def test_motion(application_session, repetition):
+    app, agent, run, _ = application_session
+    result = launcher_motion(app, agent)
+    append_event(
+        run,
+        {"phase": "motion", "outcome": "measured", "repetition": repetition, **result},
     )
 
 

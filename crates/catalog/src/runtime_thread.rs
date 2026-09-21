@@ -15,6 +15,8 @@ thread_local! {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeThreadRole {
     LauncherUi,
+    LauncherCardRenderer,
+    LauncherCardRendererSecondary,
     InputReader,
     InputDiscovery,
     CatalogWorker,
@@ -47,6 +49,8 @@ impl RuntimeThreadRole {
     pub fn label(self) -> &'static str {
         match self {
             Self::LauncherUi => "launcher-ui",
+            Self::LauncherCardRenderer => "launcher-card-renderer",
+            Self::LauncherCardRendererSecondary => "launcher-card-renderer-secondary",
             Self::InputReader => "input-reader",
             Self::InputDiscovery => "input-discovery",
             Self::CatalogWorker => "catalog-worker",
@@ -85,6 +89,16 @@ impl RuntimeThreadRole {
             // of ordinary CPU1 work.
             Self::LauncherUi => RuntimeThreadPolicy::new(-10, ThreadAffinity::Cpu1)
                 .with_scheduler(ThreadScheduler::RoundRobin { priority: 10 }),
+            // The custom Home renderer splits one bounded frame across both
+            // Cortex-A9 cores. Keep its helper on CPU0 while the UI/latch
+            // owner remains isolated on CPU1.
+            Self::LauncherCardRenderer => RuntimeThreadPolicy::new(-5, ThreadAffinity::Cpu0),
+            // The UI owns CPU1 at round-robin priority. This ordinary-policy
+            // helper uses otherwise idle CPU1 time to prepare the other tile
+            // without delaying input or latch publication.
+            Self::LauncherCardRendererSecondary => {
+                RuntimeThreadPolicy::new(-5, ThreadAffinity::Cpu1)
+            }
             // The input proxy IRQ/wake path can leave a runnable CPU0 reader
             // behind tens of milliseconds of kernel/catalog work.  Keep the
             // reader with the latency-critical launcher work on CPU1; the
@@ -723,6 +737,16 @@ mod tests {
     fn every_role_has_the_expected_production_policy() {
         let expected = [
             (RuntimeThreadRole::LauncherUi, -10, ThreadAffinity::Cpu1),
+            (
+                RuntimeThreadRole::LauncherCardRenderer,
+                -5,
+                ThreadAffinity::Cpu0,
+            ),
+            (
+                RuntimeThreadRole::LauncherCardRendererSecondary,
+                -5,
+                ThreadAffinity::Cpu1,
+            ),
             (RuntimeThreadRole::InputReader, -15, ThreadAffinity::Cpu1),
             (RuntimeThreadRole::InputDiscovery, 10, ThreadAffinity::Cpu0),
             (RuntimeThreadRole::CatalogWorker, 5, ThreadAffinity::Cpu0),

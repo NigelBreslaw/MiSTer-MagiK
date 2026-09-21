@@ -47,6 +47,79 @@ const SYSTEM_ENTRY_BENCHMARK_SETTLE_MS: u64 = 2_000;
 const SETTINGS_NAVIGATION_STATUS_DRAIN_MIN: Duration = Duration::from_millis(500);
 const SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
+const CARD_DIRECT_MAXIMUM_FRAME_AGE_US: u64 = 50_000;
+const CARD_DIRECT_DAMAGE: DirtyRect = DirtyRect {
+    x0: 296,
+    y0: 120,
+    x1: 934,
+    y1: 495,
+};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CardDirectEligibility {
+    custom_home_active: bool,
+    custom_home_needs_render: bool,
+    native_geometry: bool,
+    portrait: bool,
+    full_frame_present: bool,
+    launching: bool,
+    screensaver_active: bool,
+    startup_intro_active: bool,
+    startup_reveal_suppressed: bool,
+    startup_intro_suppressed: bool,
+    confirm_visible: bool,
+    catalog_scan_visible: bool,
+    navigation_transition_active: bool,
+    orientation_transition_active: bool,
+    composition_state: UiCompositionState,
+    force_full_slint_raster: bool,
+    force_full_slint_present: bool,
+    transition_state: FullScreenTransitionState,
+}
+
+fn card_direct_hidden_eligible(input: CardDirectEligibility) -> bool {
+    input.custom_home_active
+        && input.custom_home_needs_render
+        && input.native_geometry
+        && !input.portrait
+        && !input.full_frame_present
+        && !input.launching
+        && !input.screensaver_active
+        && !input.startup_intro_active
+        && !input.startup_reveal_suppressed
+        && !input.startup_intro_suppressed
+        && !input.confirm_visible
+        && !input.catalog_scan_visible
+        && !input.navigation_transition_active
+        && !input.orientation_transition_active
+        && input.composition_state == UiCompositionState::FullSlint
+        && !input.force_full_slint_raster
+        && !input.force_full_slint_present
+        && input.transition_state == FullScreenTransitionState::Live
+}
+
+fn card_cached_frame_view(
+    pixels: &[mister_magik_framebuffer_scenes::Rgb565Pixel],
+    width: usize,
+    height: usize,
+) -> CachedFrameView<'_> {
+    assert_eq!(pixels.len(), width.saturating_mul(height));
+    const {
+        assert!(
+            std::mem::size_of::<mister_magik_framebuffer_scenes::Rgb565Pixel>()
+                == std::mem::size_of::<Rgb565Pixel>()
+        );
+        assert!(
+            std::mem::align_of::<mister_magik_framebuffer_scenes::Rgb565Pixel>()
+                == std::mem::align_of::<Rgb565Pixel>()
+        );
+    }
+    // SAFETY: both RGB565 pixel types are transparent `u16` wrappers, have
+    // compile-time-checked layout, and accept every `u16` bit pattern.
+    let pixels =
+        unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<Rgb565Pixel>(), pixels.len()) };
+    CachedFrameView::new(pixels, width, height)
+}
 
 fn custom_damage_invalidation_comparison(
     bounding_rect: Option<DirtyRect>,
@@ -9825,10 +9898,94 @@ pub(super) fn run_launcher_loop(
         let mut accepted_screensaver_frame = false;
         let mut screensaver_buffer_to_recycle_after_present = None;
         let mut completed_hidden_frame_for_present = None;
+        let mut card_direct_frame_rendered = false;
         let mut accepted_startup_intro_frame = false;
         let mut startup_intro_failure = None;
         let mut navigation_capture_source_carrier_rendered = false;
         let mut orientation_capture_source_carrier_rendered = false;
+        let card_direct_path_eligible = card_direct_hidden_eligible(CardDirectEligibility {
+            custom_home_active,
+            custom_home_needs_render,
+            native_geometry: layout.logical_w() == 960 && layout.logical_h() == 540,
+            portrait: layout.is_portrait(),
+            full_frame_present,
+            launching,
+            screensaver_active: screensaver.active,
+            startup_intro_active: startup_intro.is_some(),
+            startup_reveal_suppressed: startup_reveal_suppress_launcher_ui,
+            startup_intro_suppressed: startup_intro_suppress_launcher_ui,
+            confirm_visible,
+            catalog_scan_visible,
+            navigation_transition_active: navigation_transition.is_active(),
+            orientation_transition_active: orientation_transition.is_active(),
+            composition_state: composition_decision.state,
+            force_full_slint_raster: composition_decision.force_full_slint_raster,
+            force_full_slint_present: composition_decision.force_full_slint_present,
+            transition_state: full_screen_transition.state(),
+        });
+        if card_direct_path_eligible && let Some(session) = launcher_card_home.as_mut() {
+            let now_us = loop_start.duration_since(run_start).as_micros() as u64;
+            if let Some(frame) =
+                session.try_take_render_ahead(now_us, CARD_DIRECT_MAXIMUM_FRAME_AGE_US)
+            {
+                let request = frame.request();
+                let source =
+                    card_cached_frame_view(frame.pixels(), layout.logical_w(), layout.logical_h());
+                match launcher_presenter.try_copy_direct_hidden_frame(
+                    f,
+                    display_session,
+                    source,
+                    session.content_generation(),
+                    CARD_DIRECT_DAMAGE,
+                ) {
+                    Ok(Some(copy)) => {
+                        frame_production_trace.class = FrameProductionClass::Prepared;
+                        frame_production_trace.sequence = request.render.generation;
+                        frame_production_trace.render_wall_us = copy.copy_us;
+                        frame_production_completed_at = Some(Instant::now());
+                        completed_hidden_frame_for_present = Some(copy.completed);
+                        card_direct_frame_rendered = true;
+                        session.note_direct_presented(frame);
+                    }
+                    Ok(None) => session.return_render_ahead(frame),
+                    Err(failure) => {
+                        session.recycle_render_ahead(frame);
+                        launcher_presenter.fail_latch_completion(failure);
+                    }
+                }
+            }
+            if !card_direct_frame_rendered
+                && session.compositor_stale()
+                && let Some(frame) = session.presented_render_ahead()
+            {
+                let request = frame.request();
+                let source =
+                    card_cached_frame_view(frame.pixels(), layout.logical_w(), layout.logical_h());
+                match launcher_presenter.try_copy_direct_hidden_frame(
+                    f,
+                    display_session,
+                    source,
+                    session.content_generation(),
+                    CARD_DIRECT_DAMAGE,
+                ) {
+                    Ok(Some(copy)) => {
+                        frame_production_trace.class = FrameProductionClass::Prepared;
+                        frame_production_trace.sequence = request.render.generation;
+                        frame_production_trace.render_wall_us = copy.copy_us;
+                        frame_production_completed_at = Some(Instant::now());
+                        completed_hidden_frame_for_present = Some(copy.completed);
+                        card_direct_frame_rendered = true;
+                    }
+                    Ok(None) => {}
+                    Err(failure) => launcher_presenter.fail_latch_completion(failure),
+                }
+            }
+        }
+        let card_direct_waiting_on_prepared_frame = card_direct_path_eligible
+            && !card_direct_frame_rendered
+            && launcher_card_home
+                .as_ref()
+                .is_some_and(super::launcher_card_home::LauncherCardHomeSession::compositor_stale);
         if navigation_capture_source_carrier_required(
             full_screen_transition_policy_before_render,
             full_screen_transition.owner(),
@@ -10102,7 +10259,10 @@ pub(super) fn run_launcher_loop(
         macro_rules! render_launcher_base {
             ($full_slint_raster:expr) => {{
                 if custom_home_active
-                    && custom_home_needs_render
+                    && (custom_home_needs_render
+                        || launcher_card_home.as_ref().is_some_and(
+                            super::launcher_card_home::LauncherCardHomeSession::compositor_stale,
+                        ))
                     && let Some(session) = launcher_card_home.as_mut()
                 {
                     layer_target.render_custom_home(&window, session.render(), $full_slint_raster)
@@ -10114,7 +10274,12 @@ pub(super) fn run_launcher_loop(
                 }
             }};
         }
-        let this_rect = if screensaver.active && screensaver_frame_visible {
+        let this_rect = if card_direct_frame_rendered || card_direct_waiting_on_prepared_frame {
+            if card_direct_waiting_on_prepared_frame {
+                request_launcher_redraw!();
+            }
+            None
+        } else if screensaver.active && screensaver_frame_visible {
             if accepted_screensaver_frame {
                 if screensaver_fade_alpha.is_some_and(|alpha| alpha < 255) {
                     Some(
@@ -11373,8 +11538,9 @@ pub(super) fn run_launcher_loop(
         let stream_motion_active = stream_motion_before_render
             || preview_transition_trace.active
             || navigation_transition_composition_active;
-        let direct_hidden_present_mode =
-            startup_intro.is_some() || completed_hidden_frame_for_present.is_some();
+        let direct_hidden_present_mode = startup_intro.is_some()
+            || completed_hidden_frame_for_present.is_some()
+            || card_direct_waiting_on_prepared_frame;
         drop(frame_plan_pmu);
         let hidden_present_pmu = launcher_response_trace.input_pmu_span(
             latency_critical_input_pending,
@@ -14362,6 +14528,70 @@ fn apply_home_selected(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn eligible_card_direct_input() -> CardDirectEligibility {
+        CardDirectEligibility {
+            custom_home_active: true,
+            custom_home_needs_render: true,
+            native_geometry: true,
+            portrait: false,
+            full_frame_present: false,
+            launching: false,
+            screensaver_active: false,
+            startup_intro_active: false,
+            startup_reveal_suppressed: false,
+            startup_intro_suppressed: false,
+            confirm_visible: false,
+            catalog_scan_visible: false,
+            navigation_transition_active: false,
+            orientation_transition_active: false,
+            composition_state: UiCompositionState::FullSlint,
+            force_full_slint_raster: false,
+            force_full_slint_present: false,
+            transition_state: FullScreenTransitionState::Live,
+        }
+    }
+
+    #[test]
+    fn card_direct_hidden_requires_unobstructed_native_home() {
+        assert!(card_direct_hidden_eligible(eligible_card_direct_input()));
+        for blocked in [
+            CardDirectEligibility {
+                confirm_visible: true,
+                ..eligible_card_direct_input()
+            },
+            CardDirectEligibility {
+                catalog_scan_visible: true,
+                ..eligible_card_direct_input()
+            },
+            CardDirectEligibility {
+                navigation_transition_active: true,
+                ..eligible_card_direct_input()
+            },
+            CardDirectEligibility {
+                orientation_transition_active: true,
+                ..eligible_card_direct_input()
+            },
+            CardDirectEligibility {
+                portrait: true,
+                ..eligible_card_direct_input()
+            },
+            CardDirectEligibility {
+                full_frame_present: true,
+                ..eligible_card_direct_input()
+            },
+            CardDirectEligibility {
+                composition_state: UiCompositionState::Recovering,
+                ..eligible_card_direct_input()
+            },
+            CardDirectEligibility {
+                force_full_slint_raster: true,
+                ..eligible_card_direct_input()
+            },
+        ] {
+            assert!(!card_direct_hidden_eligible(blocked));
+        }
+    }
 
     #[cfg(feature = "ui-device-tests")]
     #[test]
