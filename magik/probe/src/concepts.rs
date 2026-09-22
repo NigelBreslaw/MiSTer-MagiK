@@ -68,7 +68,7 @@ impl Concepts {
                 "pixel-dissolve" => (1300, 3200),
                 "starfield-comets" => (4096, 8192),
                 "palette-aurora" => (6144, 12288),
-                "texture-tunnel" => (7680, 15360),
+                "texture-tunnel" => (4000, 8000),
                 "raster-waves" => (1024, 2048),
                 "wireframe-terrain" => (64000, 128000),
                 _ => (100, 7680),

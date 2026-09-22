@@ -73,7 +73,7 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 | pixel-dissolve | Eight-pixel tiles | 16-pixel tiles | 3.2 s, including endpoint holds |
 | starfield-comets | 256 stars, 24-pixel trails | 128 stars, 12-pixel trails | 8.192 s |
 | palette-aurora | 240×135 working image | 120×67 working image | 12.288 s |
-| texture-tunnel | 240×135, 256×256 texture | 120×67, same texture | 15.36 s |
+| texture-tunnel | 480×270, 64 curved 3D coordinate maps, 256×256 texture | 120×67, 32 maps, same texture | 8 s forward flight, distance shading |
 | raster-waves | Eight-pixel displacement | Four-pixel displacement | 2.048 s |
 | wireframe-terrain | 48×32 grid | 24×16 grid | 128 s |
 
@@ -81,7 +81,10 @@ Working dimensions above describe the observed 960×540 render surface. Fixture
 letterboxing is also tested at 960×600. Procedural backgrounds fill the surface.
 Depth stores only the carousel rectangle, shares forward poses with reverse
 playback, and blends adjacent poses. Reduced depth crops the outer two cards.
-Dissolve prepares ordered tile thresholds and copies row spans. Preparation and
+Dissolve prepares ordered tile thresholds and copies row spans. Tunnel preparation
+projects a curved tube from a moving, banking camera with near-plane clipping
+and perspective-correct texture coordinates; playback interpolates the prepared
+maps, with distance shading and forward texture travel. Preparation and
 preset changes occur outside measured windows. Presets never adapt automatically.
 
 ## Iteration and evidence
