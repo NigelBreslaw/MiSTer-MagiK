@@ -12,7 +12,7 @@ Observed mode: HDMI 1920×1080p60; resolved RGB565 rendering: 960×540. No displ
 | depth-parallax | 60.000 / 59.998 | 1800 / 1800 | 0 / 0 | 100.17 / 100.26 | 76.6 | Pass |
 | light-sweep | 60.000 / 59.998 | 1800 / 1800 | 0 / 0 | 100.16 / 100.23 | 34.2 | Pass |
 | pixel-dissolve | 59.998 / 59.998 | 1800 / 1800 | 0 / 0 | 100.15 / 100.23 | 65.3 | Pass |
-| starfield-comets | 60.000 / 59.998 | 1800 / 1800 | 0 / 0 | 100.13 / 100.12 | 65.3 | Pass |
+| starfield | 59.998 / 60.000 | 1800 / 1800 | 0 / 0 | 100.13 / 100.13 | 34.2 | Pass |
 | palette-aurora | 60.000 / 59.998 | 1800 / 1800 | 0 / 0 | 100.16 / 100.16 | 34.2 | Pass |
 | texture-tunnel | 59.998 / 59.898 | 1800 / 1797 | 0 / 3 | 100.28 / 100.20 | 56.5 | Fail |
 | raster-waves | 60.000 / 60.000 | 1800 / 1800 | 0 / 0 | 100.17 / 100.23 | 34.0 | Pass |
@@ -30,7 +30,7 @@ Times below are the larger average of the two windows, in milliseconds. Frame-to
 | depth-parallax | 6.625 | 0.968 | 16.559 | 12.020 | `build/magik-results/20260922T140155Z-5ab664002564` |
 | light-sweep | 5.260 | 0.334 | 16.559 | 5.749 | `build/magik-results/20260922T154045Z-b66b51873e03` |
 | pixel-dissolve | 2.513 | 1.000 | 16.559 | 4.170 | `build/magik-results/20260922T141810Z-ed8a86efb7af` |
-| starfield-comets | 0.219 | 1.331 | 16.550 | 0.314 | `build/magik-results/20260922T142022Z-43e6529ca020` |
+| starfield | 1.311 | 1.382 | 16.550 | 1.460 | `build/magik-results/20260922T155324Z-8b0a2f56e128` |
 | palette-aurora | 4.780 | 1.809 | 16.547 | 5.005 | `build/magik-results/20260922T152157Z-1c6c29439ae2` |
 | texture-tunnel | 11.785 | 1.694 | 16.573 | 12.126 | `build/magik-results/20260922T144613Z-0b65f9898c32` |
 | raster-waves | 3.230 | 0.968 | 16.558 | 3.436 | `build/magik-results/20260922T151400Z-a253d837819c` |
@@ -58,7 +58,7 @@ See [the iteration guide](visual-concepts.md) for controls and final preset budg
 - depth-parallax: `e61b5202dc54ec494e636e6641e431be5d0806f6d65188069f4d97dc53232d27`
 - light-sweep: `8077260ff118b860718f43b291daf09bd72d4f2bb1bc3ae28737c1db0cf6ddd8`
 - pixel-dissolve: `b1f0033b281e9a16a9dfae73f02a562bedd585274271b8754fa3caa82f5dc126`
-- starfield-comets: `b1f0033b281e9a16a9dfae73f02a562bedd585274271b8754fa3caa82f5dc126`
+- starfield: `f34d6e0c445b47dba164dc7e0af40cfc67b642f9aedb98f76725a7631d46b1f9`
 - palette-aurora: `f8fa5c209d63d3b10012a20a41ca084c1cc04f3401cc5776b704d103b6db12b9`
 - texture-tunnel: `8276ca840ff967cf79d6fff8df02f82e46379724f9a30191f7d066550b75b00f`
 - raster-waves: `f8fa5c209d63d3b10012a20a41ca084c1cc04f3401cc5776b704d103b6db12b9`
@@ -79,3 +79,14 @@ standalone renderer and selection controls are no longer included.
 
 Pixel dissolve was accepted as shown during live HDMI review on 22 September
 2026, after mirror floor was removed.
+
+## Starfield sampling revision
+
+Comets were removed at user request. Star positions now retain fractional time
+and perspective coordinates, use compact cubic filtering, fade through depth
+recycling, and add overlapping light before RGB565 conversion. Five focused
+sampling tests, the retained-frame/reset oracle, Clippy, and 17 host tests passed.
+Both unprofiled device windows passed. The user accepted the live HDMI result
+on 22 September 2026. Superseded standalone starfield captures and results were
+removed at the user request. See
+[the diagnosis, research and quantified limits](starfield-research.md).

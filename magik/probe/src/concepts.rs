@@ -65,7 +65,7 @@ impl Concepts {
                 "depth-parallax" => (320, 16000),
                 "light-sweep" => (1500, 3000),
                 "pixel-dissolve" => (1300, 3200),
-                "starfield-comets" => (4096, 8192),
+                "starfield" => (4096, 8192),
                 "palette-aurora" => (6144, 12288),
                 "texture-tunnel" => (4000, 8000),
                 "raster-waves" => (1024, 2048),

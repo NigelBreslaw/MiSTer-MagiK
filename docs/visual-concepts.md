@@ -35,7 +35,7 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 - [x] Satin light sweep
 - [x] Mirror floor removed after user review
 - [x] Pixel dissolve
-- [x] Starfield and comets
+- [x] Starfield
 - [x] Palette aurora
 - [x] Texture tunnel
 - [x] Raster waves
@@ -52,7 +52,8 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 
 `pixel-dissolve`: independently selectable; default and reduced presets.
 
-`starfield-comets`: independently selectable; default and reduced presets.
+`starfield`: filtered stars with no comets; see the
+[sampling diagnosis and research](starfield-research.md).
 
 `palette-aurora`: independently selectable; default and reduced presets.
 
@@ -70,7 +71,7 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 | depth-parallax | Five cards, 25 cached poses per transition | Three-card crop, 13 poses | 16 s, forward then reverse |
 | light-sweep | Quarter-pixel sheen profile, 6.25% peak | Half-pixel profile, same strength and speed | 3 s |
 | pixel-dissolve | Eight-pixel tiles | 16-pixel tiles | 3.2 s, including endpoint holds |
-| starfield-comets | 256 stars, 24-pixel trails | 128 stars, 12-pixel trails | 8.192 s |
+| starfield | 256 filtered stars, no trails | 128 filtered stars, no trails | 8.192 s |
 | palette-aurora | 240×135 working image | 120×67 working image | 12.288 s |
 | texture-tunnel | 480×270, 64 curved 3D coordinate maps, 256×256 texture | 120×67, 32 maps, same texture | 8 s forward flight, distance shading |
 | raster-waves | Eight-pixel displacement | Four-pixel displacement | 2.048 s |
