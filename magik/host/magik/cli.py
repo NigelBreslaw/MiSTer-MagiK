@@ -44,7 +44,7 @@ CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {
 }
 WATCH_AGENT_CAPABILITIES = {"status", "metrics-v1", "watch-v1"}
 PROFILE_AGENT_CAPABILITIES = CHECK_AGENT_CAPABILITIES | {"artifacts-v1"}
-CHECK_SCENARIOS = ("smoke", "motion", "motion-rollover", "motion-fallback", "idle")
+CHECK_SCENARIOS = ("concept", "smoke", "motion", "motion-rollover", "motion-fallback", "idle")
 
 
 def agent_binary_path() -> Path:
@@ -97,6 +97,11 @@ def main() -> int:
         "scenario", choices=CHECK_SCENARIOS, nargs="?", default="smoke"
     )
     check_command.add_argument("--profile", action="store_true")
+    check_command.add_argument("--concept")
+    check_command.add_argument("--preset", choices=("default", "reduced"), default="default")
+    concept = subcommands.add_parser("concept", help="interactive Mini RGB565 concept")
+    concept.add_argument("effect")
+    concept.add_argument("--preset", choices=("default", "reduced"), default="default")
     check_command.add_argument(
         "--installed-sha256",
         help="Verify and benchmark this running hash without building or deploying",
@@ -105,7 +110,7 @@ def main() -> int:
     subcommands.add_parser("status")
     subcommands.add_parser("stop")
     for name, command in subcommands.choices.items():
-        command.set_defaults(app="mini-magik" if name == "bench" else "magik")
+        command.set_defaults(app="mini-magik" if name in {"bench", "concept"} else "magik")
         if name not in {"build", "deploy", "check", "watch"}:
             continue
         command.add_argument("--app", choices=tuple(APPLICATIONS), default="magik")
@@ -193,6 +198,9 @@ def main() -> int:
 
 
 def dispatch(arguments, run) -> int:
+    if arguments.command == "concept" or (arguments.command == "check" and arguments.scenario == "concept"):
+        from .concepts import run_concept
+        return run_concept(arguments, run)
     if arguments.command == "desktop-prepare":
         from .desktop import prepare
 
