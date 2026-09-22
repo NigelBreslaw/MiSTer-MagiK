@@ -162,9 +162,7 @@ def verify_root(root: Path) -> dict[str, str]:
     # Receipt comparison in verify() hashes every payload. This pass needs only
     # names; keep the independent artwork/manifest/manager checks below.
     names = {
-        path.relative_to(root).as_posix()
-        for path in root.rglob("*")
-        if path.is_file()
+        path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()
     }
     missing = REQUIRED - names
     if missing:
