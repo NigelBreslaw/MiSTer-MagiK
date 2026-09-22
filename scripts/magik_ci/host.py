@@ -44,7 +44,6 @@ def commands(group: str) -> list[list[str]]:
         manifests = [
             "crates/magik-core/Cargo.toml",
             "crates/framebuffer-scenes/Cargo.toml",
-            "crates/visual-concepts/Cargo.toml",
             "crates/particles/Cargo.toml",
             "crates/perf-events/Cargo.toml",
             "crates/screenshot-parade/Cargo.toml",

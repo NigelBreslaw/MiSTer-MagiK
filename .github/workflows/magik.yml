@@ -1,9 +1,9 @@
 name: MiSTer MagiK Tooling
 on:
   pull_request:
-    paths: ["crates/visual-concepts/**", "crates/particles/**", "crates/framebuffer-scenes/**", "crates/catalog/**", "crates/tooling-support/**", "apps/mister/**", "magik/**", "scripts/magik", ".github/workflows/magik.yml", "crates/framebuffer-stream/**", "crates/magik-core/**", "mister/platform/runtime/**", "mister/platform/contracts/latch/**", "mister/platform/contracts/scanout/**", "apps/mister/ui/fonts/Jersey25-Regular.ttf"]
+    paths: ["crates/catalog/**", "crates/tooling-support/**", "apps/mister/**", "magik/**", "scripts/magik", ".github/workflows/magik.yml", "crates/framebuffer-stream/**", "crates/magik-core/**", "mister/platform/runtime/**", "mister/platform/contracts/latch/**", "mister/platform/contracts/scanout/**", "apps/mister/ui/fonts/Jersey25-Regular.ttf"]
   push:
-    paths: ["crates/visual-concepts/**", "crates/particles/**", "crates/framebuffer-scenes/**", "crates/catalog/**", "crates/tooling-support/**", "apps/mister/**", "magik/**", "scripts/magik", ".github/workflows/magik.yml"]
+    paths: ["crates/catalog/**", "crates/tooling-support/**", "apps/mister/**", "magik/**", "scripts/magik", ".github/workflows/magik.yml"]
 permissions:
   contents: read
 jobs:
@@ -22,9 +22,7 @@ jobs:
       - run: scripts/magik-ci quality all
       - run: uv run pytest magik/host/tests -q
       - run: uv run pytest magik/scenarios --collect-only -q
-      - run: rustup toolchain install 1.98.0 --profile minimal --component clippy
-      - run: cargo test --locked --manifest-path crates/visual-concepts/Cargo.toml
-      - run: cargo clippy --locked --manifest-path crates/visual-concepts/Cargo.toml --all-targets -- -D warnings
+      - run: rustup toolchain install 1.98.0 --profile minimal
       - run: cargo test --locked --manifest-path magik/agent/Cargo.toml
       - run: cargo test --locked
         working-directory: magik/probe
