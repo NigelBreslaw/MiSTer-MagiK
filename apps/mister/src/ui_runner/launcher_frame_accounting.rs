@@ -2835,12 +2835,12 @@ fn cpu_thread_us() -> Option<u64> {
 }
 
 #[cfg(target_os = "linux")]
-fn cpu_process_us() -> Option<u64> {
+pub(super) fn cpu_process_us() -> Option<u64> {
     clock_us(libc::CLOCK_PROCESS_CPUTIME_ID)
 }
 
 #[cfg(not(target_os = "linux"))]
-fn cpu_process_us() -> Option<u64> {
+pub(super) fn cpu_process_us() -> Option<u64> {
     None
 }
 

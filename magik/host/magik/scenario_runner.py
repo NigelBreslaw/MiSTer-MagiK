@@ -33,6 +33,7 @@ def pytest_addoption(parser):
         help="Run only the separate instrumented profile case",
     )
     group.addoption("--magik-run", help="Existing result directory for this invocation")
+    group.addoption("--magik-installed-sha256")
 
 
 def pytest_configure(config):
@@ -88,13 +89,37 @@ def application_session(request, magik_run):
     agent, status = connect_agent(
         magik_run,
         (PROFILE_AGENT_CAPABILITIES if profiled else CHECK_AGENT_CAPABILITIES)
-        | {"measurement"}
+        | {"measurement", "measurement-clock-v1"}
         | application(request.config.getoption("--magik-app")).agent_capabilities,
     )
     try:
-        ensure_application(
-            agent, status, magik_run, request.config.getoption("--magik-app")
-        )
+        installed = request.config.getoption("--magik-installed-sha256")
+        if installed:
+            app_name = request.config.getoption("--magik-app")
+            if len(installed) != 64 or any(
+                c not in "0123456789abcdef" for c in installed
+            ):
+                raise ValueError(
+                    "installed SHA-256 must be 64 lowercase hexadecimal characters"
+                )
+            if not (
+                status.fields.get("running")
+                and status.fields.get("ready")
+                and status.fields.get("artifact") == app_name
+                and status.fields.get("running_sha256") == installed
+            ):
+                raise AssertionError(
+                    "running development artifact does not match requested SHA-256"
+                )
+            agent.artifact = app_name
+            agent.expected_sha256 = installed
+            append_event(
+                magik_run, {"phase": "artifact", "sha256": installed, "installed": True}
+            )
+        else:
+            ensure_application(
+                agent, status, magik_run, request.config.getoption("--magik-app")
+            )
     except Exception:
         retain_diagnostics(magik_run, agent)
         raise

@@ -118,6 +118,27 @@ def test_motion(application_session, repetition):
     )
 
 
+@pytest.mark.parametrize("repetition", range(3))
+def test_motion_rollover(application_session, repetition):
+    app, agent, run, _ = application_session
+    result = launcher_motion(app, agent, align_rollover=True)
+    append_event(
+        run,
+        {
+            "phase": "motion-rollover",
+            "outcome": "measured",
+            "repetition": repetition,
+            **result,
+        },
+    )
+
+
+def test_motion_fallback(application_session):
+    app, agent, run, _ = application_session
+    result = launcher_motion(app, agent, force_fallback=True)
+    append_event(run, {"phase": "motion-fallback", "outcome": "measured", **result})
+
+
 @pytest.mark.magik_profile
 def test_idle_profile(application_session):
     app, agent, run, profile_id = application_session
@@ -125,6 +146,31 @@ def test_idle_profile(application_session):
     append_event(
         run,
         {"phase": "idle", "outcome": "measured", "profile_id": profile_id, **result},
+    )
+
+
+@pytest.mark.magik_profile
+def test_motion_profile(application_session):
+    app, agent, run, profile_id = application_session
+    result = launcher_motion(app, agent, instrumented=True)
+    append_event(
+        run,
+        {"phase": "motion", "outcome": "measured", "profile_id": profile_id, **result},
+    )
+
+
+@pytest.mark.magik_profile
+def test_motion_rollover_profile(application_session):
+    app, agent, run, profile_id = application_session
+    result = launcher_motion(app, agent, instrumented=True, align_rollover=True)
+    append_event(
+        run,
+        {
+            "phase": "motion-rollover",
+            "outcome": "measured",
+            "profile_id": profile_id,
+            **result,
+        },
     )
 
 

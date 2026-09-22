@@ -44,7 +44,7 @@ CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {
 }
 WATCH_AGENT_CAPABILITIES = {"status", "metrics-v1", "watch-v1"}
 PROFILE_AGENT_CAPABILITIES = CHECK_AGENT_CAPABILITIES | {"artifacts-v1"}
-CHECK_SCENARIOS = ("smoke", "motion", "idle")
+CHECK_SCENARIOS = ("smoke", "motion", "motion-rollover", "motion-fallback", "idle")
 
 
 def agent_binary_path() -> Path:
@@ -97,6 +97,10 @@ def main() -> int:
         "scenario", choices=CHECK_SCENARIOS, nargs="?", default="smoke"
     )
     check_command.add_argument("--profile", action="store_true")
+    check_command.add_argument(
+        "--installed-sha256",
+        help="Verify and benchmark this running hash without building or deploying",
+    )
     subcommands.add_parser("watch")
     subcommands.add_parser("status")
     subcommands.add_parser("stop")
@@ -341,11 +345,15 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
     import pytest
 
     scenarios = Path(__file__).resolve().parents[2] / "scenarios"
+    scenario_file = scenarios / (
+        "test_magik.py" if arguments.app == "magik" else "test_probe.py"
+    )
+    selection = str(scenario_file)
+    if arguments.scenario:
+        profile_suffix = "_profile" if arguments.profile else ""
+        selection += f"::test_{arguments.scenario.replace('-', '_')}{profile_suffix}"
     options = [
-        str(
-            scenarios
-            / ("test_magik.py" if arguments.app == "magik" else "test_probe.py")
-        ),
+        selection,
         "-q",
         "--maxfail=1",
         "-p",
@@ -356,21 +364,25 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
         "--magik-app",
         arguments.app,
     ]
-    if arguments.scenario:
-        options += ["-k", arguments.scenario]
     if arguments.profile:
-        measurement = "idle" if arguments.app == "magik" else "motion"
-        if arguments.scenario != measurement:
+        measurements = (
+            {"idle", "motion", "motion-rollover"}
+            if arguments.app == "magik"
+            else {"motion"}
+        )
+        if arguments.scenario not in measurements:
             append_event(
                 run,
                 {
                     "phase": "check",
                     "outcome": "failed",
-                    "error": f"--profile requires {measurement}",
+                    "error": f"--profile requires one of {sorted(measurements)}",
                 },
             )
             return 2
         options += ["--magik-profile"]
+    if getattr(arguments, "installed_sha256", None):
+        options += ["--magik-installed-sha256", arguments.installed_sha256]
     result = int(pytest.main(options))
     append_event(
         run,

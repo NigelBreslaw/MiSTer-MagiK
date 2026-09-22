@@ -246,6 +246,9 @@ def launcher_motion(
     application,
     agent,
     *,
+    instrumented: bool = False,
+    align_rollover: bool = False,
+    force_fallback: bool = False,
     sleep: Callable[[float], None] = time.sleep,
 ):
     """Measure continuous card-carousel navigation on the real launcher."""
@@ -255,8 +258,14 @@ def launcher_motion(
     _wait(lambda: not _settings_open(application), "Home did not close Settings")
 
     previous = agent.metrics().get("window")
-    agent._successful("measure")
-    seconds = 5
+    agent._successful(
+        "measure",
+        {
+            "launcher_clock": "rollover" if align_rollover else "fixed",
+            "launcher_fallback": force_fallback,
+        },
+    )
+    seconds = 10 if instrumented else 5
     interval_seconds = 0.25
     deadline = time.monotonic() + 2 + seconds + 0.4
     input_events = 0
@@ -270,7 +279,7 @@ def launcher_motion(
     if metrics.get("sha256") != agent.expected_sha256:
         raise AssertionError("metrics belong to another application")
     window = metrics.get("window")
-    if not isinstance(window, dict) or window.get("instrumented") is not False:
+    if not isinstance(window, dict) or window.get("instrumented") is not instrumented:
         raise AssertionError("real launcher returned no matching measurement window")
     if not seconds * 1000 <= window.get("elapsed_ms", 0) <= (seconds + 1) * 1000:
         raise AssertionError("real launcher measurement duration is invalid")
@@ -282,9 +291,35 @@ def launcher_motion(
         raise AssertionError(window["evidence_error"])
     if window.get("presentations", 0) <= 0:
         raise AssertionError("card navigation produced no measured presentations")
+    if window.get("forced_clock_changes") != int(align_rollover):
+        raise AssertionError(
+            "measurement did not observe the requested synthetic clock change"
+        )
+    if instrumented:
+        unique = window.get("card_unique_presentations", 0)
+        redisplayed = window.get("card_redisplayed_presentations", 0)
+        if (
+            unique + redisplayed + window.get("card_synchronous_presentations", 0)
+            != window["presentations"]
+        ):
+            raise AssertionError(
+                "card unique and redisplayed counts do not cover physical presentations"
+            )
+        if window.get("card_producer_total_us", 0) <= 0:
+            raise AssertionError("instrumented card motion recorded no producer work")
+        if window.get("card_hidden_copy_us", 0) <= 0:
+            raise AssertionError(
+                "instrumented card motion recorded no hidden-slot copy work"
+            )
+    if force_fallback and window.get("card_fallback_copies", 0) == 0:
+        raise AssertionError("forced fallback did not execute")
     return {
         **window,
-        "workload": "launcher-card-motion",
+        "workload": (
+            "launcher-card-motion-rollover"
+            if align_rollover
+            else "launcher-card-motion"
+        ),
         "sha256": agent.expected_sha256,
         "pid": metrics.get("pid"),
         "warmup_seconds": 2,

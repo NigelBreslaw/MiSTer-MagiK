@@ -158,9 +158,11 @@ impl<'a> LayerTarget<'a> {
         window: &MisterSoftwareWindow,
         pixels: &[mister_magik_framebuffer_scenes::Rgb565Pixel],
         full_slint_raster: bool,
-    ) -> (Option<DirtyRect>, DirtyRectList, bool) {
-        let Some(base_dirty) = self.replace_logical_frame(pixels) else {
-            return (None, DirtyRectList::new(), false);
+        copy_damage: Option<DirtyRect>,
+    ) -> (Option<DirtyRect>, DirtyRectList, bool, Option<DirtyRect>) {
+        let copy_damage = if full_slint_raster { None } else { copy_damage };
+        let Some(base_dirty) = self.replace_logical_frame_damage(pixels, copy_damage) else {
+            return (None, DirtyRectList::new(), false, None);
         };
         let (slint_dirty, mut damage, rendered) = if full_slint_raster {
             self.render_slint_full(window)
@@ -173,7 +175,39 @@ impl<'a> LayerTarget<'a> {
             Some(slint_dirty.map_or(base_dirty, |dirty| dirty.union(base_dirty))),
             damage,
             rendered,
+            Some(base_dirty),
         )
+    }
+
+    /// Retained motion is safe only in the native landscape cache. All other
+    /// geometry, full-raster requests and unseeded caches use the full copy.
+    fn replace_logical_frame_damage(
+        &mut self,
+        pixels: &[mister_magik_framebuffer_scenes::Rgb565Pixel],
+        damage: Option<DirtyRect>,
+    ) -> Option<DirtyRect> {
+        let Some(rect) = damage.filter(|rect| {
+            !self.layout.is_portrait()
+                && self.layout.logical_w() == 960
+                && self.layout.logical_h() == 540
+                && rect.x0 < rect.x1
+                && rect.y0 < rect.y1
+                && rect.x1 <= 960
+                && rect.y1 <= 540
+        }) else {
+            return self.replace_logical_frame(pixels);
+        };
+        if pixels.len() != 960 * 540 {
+            return None;
+        }
+        let cached = self.target.cached_565_mut();
+        for y in rect.y0..rect.y1 {
+            let range = y * 960 + rect.x0..y * 960 + rect.x1;
+            for (destination, source) in cached[range.clone()].iter_mut().zip(&pixels[range]) {
+                destination.0 = source.0;
+            }
+        }
+        Some(rect)
     }
 
     pub(super) fn render_black(&mut self) -> DirtyRect {
@@ -922,6 +956,84 @@ pub(super) struct LauncherPresentResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_carousel_copy_matches_full_reference_and_reports_exact_damage() {
+        let ui = UiDisplay::for_framebuffer(960, 540);
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(960, 540));
+        let mut pixels = vec![mister_magik_framebuffer_scenes::Rgb565Pixel(0x1234); 960 * 540];
+        let rect = DirtyRect {
+            x0: 296,
+            y0: 120,
+            x1: 934,
+            y1: 495,
+        };
+        assert_eq!(
+            LayerTarget::new(&mut target, &ui).replace_logical_frame_damage(&pixels, None),
+            Some(DirtyRect {
+                x0: 0,
+                y0: 0,
+                x1: 960,
+                y1: 540
+            })
+        );
+        for step in 0..4u16 {
+            for y in rect.y0..rect.y1 {
+                for x in rect.x0..rect.x1 {
+                    pixels[y * 960 + x].0 = (x as u16).wrapping_mul(y as u16).wrapping_add(step);
+                }
+            }
+            assert_eq!(
+                LayerTarget::new(&mut target, &ui)
+                    .replace_logical_frame_damage(&pixels, Some(rect)),
+                Some(rect)
+            );
+            assert!(
+                target
+                    .cached_565()
+                    .iter()
+                    .zip(&pixels)
+                    .all(|(a, b)| a.0 == b.0)
+            );
+        }
+        let before = target.cached_565().to_vec();
+        assert_eq!(
+            LayerTarget::new(&mut target, &ui)
+                .replace_logical_frame_damage(&pixels[..100], Some(rect)),
+            None
+        );
+        assert_eq!(target.cached_565(), before);
+    }
+
+    #[test]
+    fn portrait_damage_request_uses_full_rotated_copy() {
+        let ui = UiDisplay::for_framebuffer(960, 540);
+        for orientation in [
+            ScreenOrientation::MonitorClockwise,
+            ScreenOrientation::MonitorCounterclockwise,
+        ] {
+            let layout = UiLayoutGeometry::for_display(&ui, orientation);
+            let pixels: Vec<_> = (0..960 * 540)
+                .map(|i| mister_magik_framebuffer_scenes::Rgb565Pixel(i as u16))
+                .collect();
+            let mut actual = UiFrameTarget::cached(FramebufferTargetGeometry::new(960, 540));
+            let mut reference = UiFrameTarget::cached(FramebufferTargetGeometry::new(960, 540));
+            let copied = LayerTarget::new_oriented(&mut actual, layout)
+                .replace_logical_frame_damage(
+                    &pixels,
+                    Some(DirtyRect {
+                        x0: 296,
+                        y0: 120,
+                        x1: 934,
+                        y1: 495,
+                    }),
+                );
+            let full =
+                LayerTarget::new_oriented(&mut reference, layout).replace_logical_frame(&pixels);
+            assert_eq!(copied, full);
+            assert_eq!(actual.cached_565(), reference.cached_565());
+        }
+    }
 
     #[test]
     fn clearing_cached_preview_blacks_only_the_dynamic_preview_rect() {

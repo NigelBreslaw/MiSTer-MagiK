@@ -198,6 +198,7 @@ impl Agent {
             "main-input-proxy",
             "main-managed-magik",
             "measurement",
+            "measurement-clock-v1",
             "diagnostics",
             "upload-v1",
             "lifecycle-v1",
@@ -556,7 +557,10 @@ impl Agent {
             "start" => self.start(&request),
             "stop" => self.stop(&request),
             "metrics" => self.metrics(&request),
-            "measure" => match fs::write(self.state_root.join("measure-request"), b"start") {
+            "measure" => match fs::write(
+                self.state_root.join("measure-request"),
+                serde_json::to_vec(&request.fields).unwrap_or_default(),
+            ) {
                 Ok(()) => response(&request.id, "measurement-requested", serde_json::json!({})),
                 Err(error) => response(
                     &request.id,

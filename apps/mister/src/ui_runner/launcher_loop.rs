@@ -48,12 +48,20 @@ const SETTINGS_NAVIGATION_STATUS_DRAIN_MIN: Duration = Duration::from_millis(500
 const SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
 const CARD_DIRECT_MAXIMUM_FRAME_AGE_US: u64 = 50_000;
-const CARD_DIRECT_DAMAGE: DirtyRect = DirtyRect {
-    x0: 296,
-    y0: 120,
-    x1: 934,
-    y1: 495,
-};
+const CARD_DIRECT_TILE_DAMAGE: [DirtyRect; 2] = [
+    DirtyRect {
+        x0: 296,
+        y0: 120,
+        x1: 615,
+        y1: 495,
+    },
+    DirtyRect {
+        x0: 615,
+        y0: 120,
+        x1: 934,
+        y1: 495,
+    },
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CardDirectEligibility {
@@ -6209,6 +6217,8 @@ pub(super) fn run_launcher_loop(
     #[cfg(feature = "tooling")]
     let mut tooling = mister_magik_tooling_support::Session::from_environment();
     #[cfg(feature = "tooling")]
+    let card_profile_measurement_enabled = std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some();
+    #[cfg(feature = "tooling")]
     if let Some(session) = tooling.as_mut() {
         let paths = launcher_config.device_paths();
         let catalog = launcher_config.catalog_paths();
@@ -6240,6 +6250,19 @@ pub(super) fn run_launcher_loop(
                 && arcade.get_selected_game_index() != nav.arcade.selected as i32
             {
                 arcade.set_selected_game_index(nav.arcade.selected as i32);
+            }
+            if let Some((faces_rebuilt, worker_restarted, duration_us)) = launcher_card_home
+                .as_mut().and_then(super::launcher_card_home::LauncherCardHomeSession::take_preparation_measurement)
+            {
+                let metrics = &mut session.metrics;
+                metrics.counters.card_face_rebuilds += u64::from(faces_rebuilt);
+                metrics.counters.card_worker_restarts += u64::from(worker_restarted);
+                metrics.counters.card_chrome_refreshes += u64::from(!faces_rebuilt);
+                metrics.counters.card_prepare_us += duration_us;
+                metrics.card_prepare_max_us = metrics.card_prepare_max_us.max(duration_us);
+            }
+            if card_profile_measurement_enabled {
+                session.metrics.process_cpu_us = cpu_process_us();
             }
             if let Err(error) = session.tick(ui.render_w(), ui.render_h()) {
                 session.metrics.error = Some(error);
@@ -6731,21 +6754,31 @@ pub(super) fn run_launcher_loop(
         let defer_selected_preview =
             catalog_contention_quiet_previews && preview.trace_cache_state() == "exact";
         let mut preview_scheduled_this_loop = false;
-        let clock_update_due =
-            background_work_allowed && last_clock_update.elapsed() >= Duration::from_secs(1);
+        #[cfg(feature = "tooling")]
+        let forced_clock = tooling
+            .as_mut()
+            .and_then(|session| session.launcher_clock());
+        #[cfg(not(feature = "tooling"))]
+        let forced_clock: Option<&str> = None;
+        let clock_update_due = forced_clock.is_some_and(|clock| clock != last_clock_text)
+            || background_work_allowed && last_clock_update.elapsed() >= Duration::from_secs(1);
         let clock_update_start = clock_update_due.then(Instant::now);
         if clock_update_due {
             if startup_intro.is_some() {
                 startup_intro_bridge_dirty_pending = true;
             } else if dirty_opt {
-                let clock_text = launcher_clock_text();
+                let clock_text = forced_clock
+                    .map(str::to_owned)
+                    .unwrap_or_else(launcher_clock_text);
                 if clock_text != last_clock_text {
                     set_launcher_clock_text(&app, &clock_text);
                     last_clock_text = clock_text;
                     light_bridge_dirty = true;
                 }
             } else {
-                let clock_text = launcher_clock_text();
+                let clock_text = forced_clock
+                    .map(str::to_owned)
+                    .unwrap_or_else(launcher_clock_text);
                 set_launcher_clock_text(&app, &clock_text);
                 last_clock_text = clock_text;
                 full_bridge_dirty = true;
@@ -9899,11 +9932,17 @@ pub(super) fn run_launcher_loop(
         let mut screensaver_buffer_to_recycle_after_present = None;
         let mut completed_hidden_frame_for_present = None;
         let mut card_direct_frame_rendered = false;
+        #[cfg(feature = "tooling")]
+        let mut card_direct_measurement = None;
         let mut accepted_startup_intro_frame = false;
         let mut startup_intro_failure = None;
         let mut navigation_capture_source_carrier_rendered = false;
         let mut orientation_capture_source_carrier_rendered = false;
-        let card_direct_path_eligible = card_direct_hidden_eligible(CardDirectEligibility {
+        #[cfg(feature = "tooling")]
+        let force_card_fallback = tooling.as_ref().is_some_and(|s| s.card_fallback_forced());
+        #[cfg(not(feature = "tooling"))]
+        let force_card_fallback = false;
+        let card_motion_only = card_direct_hidden_eligible(CardDirectEligibility {
             custom_home_active,
             custom_home_needs_render,
             native_geometry: layout.logical_w() == 960 && layout.logical_h() == 540,
@@ -9923,26 +9962,46 @@ pub(super) fn run_launcher_loop(
             force_full_slint_present: composition_decision.force_full_slint_present,
             transition_state: full_screen_transition.state(),
         });
+        if !card_motion_only && let Some(session) = launcher_card_home.as_mut() {
+            session.invalidate_compositor();
+        }
+        let card_direct_path_eligible = !force_card_fallback && card_motion_only;
         if card_direct_path_eligible && let Some(session) = launcher_card_home.as_mut() {
             let now_us = loop_start.duration_since(run_start).as_micros() as u64;
             if let Some(frame) =
                 session.try_take_render_ahead(now_us, CARD_DIRECT_MAXIMUM_FRAME_AGE_US)
             {
                 let request = frame.request();
-                let source =
-                    card_cached_frame_view(frame.pixels(), layout.logical_w(), layout.logical_h());
-                match launcher_presenter.try_copy_direct_hidden_frame(
+                let chrome = card_cached_frame_view(
+                    session.chrome_pixels(),
+                    layout.logical_w(),
+                    layout.logical_h(),
+                );
+                let tiles = frame.tiles().map(|pixels| {
+                    card_cached_frame_view(pixels, layout.logical_w(), layout.logical_h())
+                });
+                match launcher_presenter.try_copy_direct_hidden_tiles(
                     f,
                     display_session,
-                    source,
+                    chrome,
+                    tiles,
+                    CARD_DIRECT_TILE_DAMAGE,
                     session.content_generation(),
-                    CARD_DIRECT_DAMAGE,
                 ) {
                     Ok(Some(copy)) => {
                         frame_production_trace.class = FrameProductionClass::Prepared;
                         frame_production_trace.sequence = request.render.generation;
-                        frame_production_trace.render_wall_us = copy.copy_us;
+                        frame_production_trace.render_wall_us = frame.producer_total_us();
                         frame_production_completed_at = Some(Instant::now());
+                        #[cfg(feature = "tooling")]
+                        if card_profile_measurement_enabled {
+                            card_direct_measurement = Some((
+                                copy.copy_us,
+                                request.render.timestamp_us,
+                                request.render.generation,
+                                now_us.saturating_sub(request.render.timestamp_us),
+                            ));
+                        }
                         completed_hidden_frame_for_present = Some(copy.completed);
                         card_direct_frame_rendered = true;
                         session.note_direct_presented(frame);
@@ -9959,20 +10018,36 @@ pub(super) fn run_launcher_loop(
                 && let Some(frame) = session.presented_render_ahead()
             {
                 let request = frame.request();
-                let source =
-                    card_cached_frame_view(frame.pixels(), layout.logical_w(), layout.logical_h());
-                match launcher_presenter.try_copy_direct_hidden_frame(
+                let chrome = card_cached_frame_view(
+                    session.chrome_pixels(),
+                    layout.logical_w(),
+                    layout.logical_h(),
+                );
+                let tiles = frame.tiles().map(|pixels| {
+                    card_cached_frame_view(pixels, layout.logical_w(), layout.logical_h())
+                });
+                match launcher_presenter.try_copy_direct_hidden_tiles(
                     f,
                     display_session,
-                    source,
+                    chrome,
+                    tiles,
+                    CARD_DIRECT_TILE_DAMAGE,
                     session.content_generation(),
-                    CARD_DIRECT_DAMAGE,
                 ) {
                     Ok(Some(copy)) => {
                         frame_production_trace.class = FrameProductionClass::Prepared;
                         frame_production_trace.sequence = request.render.generation;
-                        frame_production_trace.render_wall_us = copy.copy_us;
+                        frame_production_trace.render_wall_us = 0;
                         frame_production_completed_at = Some(Instant::now());
+                        #[cfg(feature = "tooling")]
+                        if card_profile_measurement_enabled {
+                            card_direct_measurement = Some((
+                                copy.copy_us,
+                                request.render.timestamp_us,
+                                request.render.generation,
+                                now_us.saturating_sub(request.render.timestamp_us),
+                            ));
+                        }
                         completed_hidden_frame_for_present = Some(copy.completed);
                         card_direct_frame_rendered = true;
                     }
@@ -10265,7 +10340,24 @@ pub(super) fn run_launcher_loop(
                         ))
                     && let Some(session) = launcher_card_home.as_mut()
                 {
-                    layer_target.render_custom_home(&window, session.render(), $full_slint_raster)
+                    let retain_cache = card_motion_only && !$full_slint_raster;
+                    let copy_damage = session.compositor_copy_damage(retain_cache);
+                    let (dirty, damage, rendered, copied) = layer_target.render_custom_home(
+                        &window,
+                        session.render(),
+                        $full_slint_raster,
+                        copy_damage,
+                    );
+                    session.note_compositor_copied(retain_cache && copied.is_some());
+                    #[cfg(feature = "tooling")]
+                    if let Some(copied) = copied
+                        && let Some(tooling) = tooling.as_mut()
+                    {
+                        tooling.metrics.counters.card_fallback_copies += 1;
+                        tooling.metrics.counters.card_fallback_copy_pixels +=
+                            ((copied.x1 - copied.x0) * (copied.y1 - copied.y0)) as u64;
+                    }
+                    (dirty, damage, rendered)
                 } else if $full_slint_raster {
                     layer_target.render_slint_full(&window)
                 } else {
@@ -12250,6 +12342,45 @@ pub(super) fn run_launcher_loop(
                         .saturating_duration_since(frame_t1)
                         .as_micros()
                         as u64;
+                    if let Some((copy_us, source_timestamp_us, source_generation, age_us)) =
+                        card_direct_measurement.take()
+                    {
+                        metrics.counters.card_hidden_copy_us =
+                            metrics.counters.card_hidden_copy_us.saturating_add(copy_us);
+                        metrics.counters.card_source_age_us =
+                            metrics.counters.card_source_age_us.saturating_add(age_us);
+                        metrics.last_card_source_timestamp_us = source_timestamp_us;
+                        if metrics.last_card_source_generation != source_generation {
+                            metrics.counters.card_unique_presentations =
+                                metrics.counters.card_unique_presentations.saturating_add(1);
+                        } else {
+                            metrics.counters.card_redisplayed_presentations += 1;
+                        }
+                        metrics.last_card_source_generation = source_generation;
+                        if let Some(card_session) = launcher_card_home.as_mut() {
+                            let delta = card_session.pipeline_counter_delta();
+                            metrics.counters.card_producer_total_us += delta.producer_total_us;
+                            metrics.counters.card_primary_tile_us += delta.primary_tile_us;
+                            metrics.counters.card_secondary_tile_us += delta.secondary_tile_us;
+                            metrics.counters.card_secondary_wait_us += delta.secondary_wait_us;
+                            metrics.counters.card_submitted = metrics
+                                .counters
+                                .card_submitted
+                                .saturating_add(delta.submitted);
+                            metrics.counters.card_completed = metrics
+                                .counters
+                                .card_completed
+                                .saturating_add(delta.completed);
+                            metrics.counters.card_superseded = metrics
+                                .counters
+                                .card_superseded
+                                .saturating_add(delta.superseded);
+                            metrics.counters.card_stale =
+                                metrics.counters.card_stale.saturating_add(delta.stale);
+                        }
+                    } else if card_profile_measurement_enabled {
+                        metrics.counters.card_synchronous_presentations += 1;
+                    }
                     match f.read_magik_presentation_telemetry() {
                         Ok(telemetry) => {
                             if let Some(previous) = tooling_drop_baseline {
