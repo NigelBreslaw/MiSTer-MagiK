@@ -3,6 +3,7 @@
 
 //! Production owner for the custom RGB565 root launcher.
 
+use super::DirtyRect;
 use crate::bitmap_font_resource::{
     jersey_25_console_bitmap_font, launcher_bitmap_font, nocive_15_console_bitmap_font,
     spleen_6x12_native_console_bitmap_font, xerxes_10_console_bitmap_font,
@@ -79,6 +80,7 @@ pub(super) struct LauncherCardHomeSession {
     content_dirty: bool,
     content_generation: u64,
     compositor_stale: bool,
+    compositor_content_generation: Option<u64>,
     retired_pipeline_counters: CardPipelineCounters,
     reported_pipeline_counters: CardPipelineCounters,
     measure_preparation: bool,
@@ -120,6 +122,7 @@ impl LauncherCardHomeSession {
             content_dirty: true,
             content_generation: 1,
             compositor_stale: false,
+            compositor_content_generation: None,
             retired_pipeline_counters: CardPipelineCounters::default(),
             reported_pipeline_counters: CardPipelineCounters::default(),
             measure_preparation: std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some(),
@@ -128,6 +131,7 @@ impl LauncherCardHomeSession {
     }
 
     pub(super) fn set_inactive(&mut self) {
+        self.invalidate_compositor();
         self.active = false;
         self.held_direction = None;
         self.release_presented_frame();
@@ -283,7 +287,26 @@ impl LauncherCardHomeSession {
         self.compositor_stale
     }
 
+    pub(super) fn invalidate_compositor(&mut self) {
+        self.compositor_content_generation = None;
+    }
+
+    pub(super) fn compositor_copy_damage(&self, motion_only: bool) -> Option<DirtyRect> {
+        (motion_only && self.compositor_content_generation == Some(self.content_generation))
+            .then_some(DirtyRect {
+                x0: 296,
+                y0: 120,
+                x1: 934,
+                y1: 495,
+            })
+    }
+
+    pub(super) fn note_compositor_copied(&mut self, motion_only: bool) {
+        self.compositor_content_generation = motion_only.then_some(self.content_generation);
+    }
+
     pub(super) fn note_direct_presented(&mut self, frame: RenderedCardFrame) {
+        self.invalidate_compositor();
         let previous = self.presented_frame.replace(frame);
         if let (Some(render_ahead), Some(previous)) = (self.render_ahead.as_ref(), previous) {
             render_ahead.recycle(previous);
@@ -461,6 +484,8 @@ mod tests {
         let mut session = LauncherCardHomeSession::new(960, 540, snapshot(), 0, "21:37").unwrap();
         session.update(960, 540, snapshot(), 0, None, "21:37", 0);
         session.render();
+        session.note_compositor_copied(true);
+        assert!(session.compositor_copy_damage(true).is_some());
         let deadline = Instant::now() + Duration::from_secs(2);
         let frame = loop {
             if let Some(frame) = session.try_take_render_ahead(0, u64::MAX) {
@@ -471,9 +496,32 @@ mod tests {
         };
         session.note_direct_presented(frame);
         assert!(session.compositor_stale());
+        assert_eq!(session.compositor_copy_damage(true), None);
 
         session.render();
         assert!(!session.compositor_stale());
+    }
+
+    #[test]
+    fn compositor_cache_requires_seed_after_content_overlay_or_home_reentry() {
+        let mut session = LauncherCardHomeSession::new(960, 540, snapshot(), 0, "12:34").unwrap();
+        session.update(960, 540, snapshot(), 0, None, "12:34", 0);
+        assert_eq!(session.compositor_copy_damage(true), None);
+        session.render();
+        session.note_compositor_copied(true);
+        let rect = session.compositor_copy_damage(true).unwrap();
+        assert_eq!((rect.x1 - rect.x0) * (rect.y1 - rect.y0), 239250);
+        session.update(960, 540, snapshot(), 1, None, "12:34", 16);
+        assert_eq!(session.compositor_copy_damage(true), Some(rect));
+        session.update(960, 540, snapshot(), 1, None, "12:35", 32);
+        assert_eq!(session.compositor_copy_damage(true), None);
+        session.note_compositor_copied(true);
+        assert_eq!(session.compositor_copy_damage(false), None);
+        session.note_compositor_copied(false); // overlay/full-raster poisons retained content
+        assert_eq!(session.compositor_copy_damage(true), None);
+        session.note_compositor_copied(true);
+        session.set_inactive();
+        assert_eq!(session.compositor_copy_damage(true), None);
     }
 
     #[test]

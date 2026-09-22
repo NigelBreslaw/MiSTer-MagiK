@@ -9942,27 +9942,30 @@ pub(super) fn run_launcher_loop(
         let force_card_fallback = tooling.as_ref().is_some_and(|s| s.card_fallback_forced());
         #[cfg(not(feature = "tooling"))]
         let force_card_fallback = false;
-        let card_direct_path_eligible = !force_card_fallback
-            && card_direct_hidden_eligible(CardDirectEligibility {
-                custom_home_active,
-                custom_home_needs_render,
-                native_geometry: layout.logical_w() == 960 && layout.logical_h() == 540,
-                portrait: layout.is_portrait(),
-                full_frame_present,
-                launching,
-                screensaver_active: screensaver.active,
-                startup_intro_active: startup_intro.is_some(),
-                startup_reveal_suppressed: startup_reveal_suppress_launcher_ui,
-                startup_intro_suppressed: startup_intro_suppress_launcher_ui,
-                confirm_visible,
-                catalog_scan_visible,
-                navigation_transition_active: navigation_transition.is_active(),
-                orientation_transition_active: orientation_transition.is_active(),
-                composition_state: composition_decision.state,
-                force_full_slint_raster: composition_decision.force_full_slint_raster,
-                force_full_slint_present: composition_decision.force_full_slint_present,
-                transition_state: full_screen_transition.state(),
-            });
+        let card_motion_only = card_direct_hidden_eligible(CardDirectEligibility {
+            custom_home_active,
+            custom_home_needs_render,
+            native_geometry: layout.logical_w() == 960 && layout.logical_h() == 540,
+            portrait: layout.is_portrait(),
+            full_frame_present,
+            launching,
+            screensaver_active: screensaver.active,
+            startup_intro_active: startup_intro.is_some(),
+            startup_reveal_suppressed: startup_reveal_suppress_launcher_ui,
+            startup_intro_suppressed: startup_intro_suppress_launcher_ui,
+            confirm_visible,
+            catalog_scan_visible,
+            navigation_transition_active: navigation_transition.is_active(),
+            orientation_transition_active: orientation_transition.is_active(),
+            composition_state: composition_decision.state,
+            force_full_slint_raster: composition_decision.force_full_slint_raster,
+            force_full_slint_present: composition_decision.force_full_slint_present,
+            transition_state: full_screen_transition.state(),
+        });
+        if !card_motion_only && let Some(session) = launcher_card_home.as_mut() {
+            session.invalidate_compositor();
+        }
+        let card_direct_path_eligible = !force_card_fallback && card_motion_only;
         if card_direct_path_eligible && let Some(session) = launcher_card_home.as_mut() {
             let now_us = loop_start.duration_since(run_start).as_micros() as u64;
             if let Some(frame) =
@@ -10340,20 +10343,24 @@ pub(super) fn run_launcher_loop(
                         ))
                     && let Some(session) = launcher_card_home.as_mut()
                 {
-                    let result = layer_target.render_custom_home(
+                    let retain_cache = card_motion_only && !$full_slint_raster;
+                    let copy_damage = session.compositor_copy_damage(retain_cache);
+                    let (dirty, damage, rendered, copied) = layer_target.render_custom_home(
                         &window,
                         session.render(),
                         $full_slint_raster,
+                        copy_damage,
                     );
+                    session.note_compositor_copied(retain_cache && copied.is_some());
                     #[cfg(feature = "tooling")]
-                    if result.0.is_some()
+                    if let Some(copied) = copied
                         && let Some(tooling) = tooling.as_mut()
                     {
                         tooling.metrics.counters.card_fallback_copies += 1;
                         tooling.metrics.counters.card_fallback_copy_pixels +=
-                            (layout.logical_w() * layout.logical_h()) as u64;
+                            ((copied.x1 - copied.x0) * (copied.y1 - copied.y0)) as u64;
                     }
-                    result
+                    (dirty, damage, rendered)
                 } else if $full_slint_raster {
                     layer_target.render_slint_full(&window)
                 } else {
