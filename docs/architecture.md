@@ -41,9 +41,7 @@ without compiling Slint or `apps/mister`. It selects MagiK, cabinet, or generate
 navigation fixtures through an explicit enum rather than a registry. Mutable
 particle recipe watching exists only in the focused lab and the structurally
 gated Dev launcher. See `docs/startup-particles.md` for the shared-scene
-workflow, schemas, reload protocol, assets, and runtime boundaries. The separate
-36-demo `apps/framebuffer-lab` showcase is unchanged experimental code, not
-another production authority.
+workflow, schemas, reload protocol, assets, and runtime boundaries.
 
 ## Tooling Shape
 

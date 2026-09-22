@@ -46,11 +46,6 @@ CRATE_FORMATTERS = (
         "apps/framebuffer-scene-lab/Cargo.toml",
     ),
     (
-        "framebuffer-lab.format",
-        "apps/framebuffer-lab",
-        "apps/framebuffer-lab/Cargo.toml",
-    ),
-    (
         "framebuffer-stream.format",
         "crates/framebuffer-stream",
         "crates/framebuffer-stream/Cargo.toml",

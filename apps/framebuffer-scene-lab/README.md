@@ -16,8 +16,6 @@ navigation-transition rasterization, the procedural card flip, and the
 production screenshot parade. The command
 line selects one concrete scene; there is deliberately no demo registry or
 recipe-family abstraction.
-The separate 36-demo `apps/framebuffer-lab` remains unchanged and is not a
-dependency of this app.
 
 No compatibility command aliases remain. The underlying lab sources are retained.
 The focused lab accepts the MagiK and cabinet schemas or one of the generated

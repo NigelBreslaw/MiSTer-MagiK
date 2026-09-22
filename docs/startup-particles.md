@@ -23,11 +23,6 @@ drawing commands, and ARM MagiK NEON kernels. Hosts own Slint snapshots,
 navigation/input policy, thread placement, PMU reporting, framebuffer/latch
 lifecycle, Main coordination, catalog access, and presentation.
 
-The older `apps/framebuffer-lab` showcase remains a separate 36-demo experiment
-surface. Its registry, recipe-family maps, and copy of the cabinet experiment
-are not part of this production workflow and must not be folded into the shared
-engine.
-
 ## First-run launcher intro
 
 The production launcher uses the embedded `intro-v1` scene only for

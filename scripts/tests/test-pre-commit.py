@@ -319,7 +319,6 @@ class PreCommitTests(unittest.TestCase):
 
     def test_formatter_selection_matches_affected_packages(self) -> None:
         paths = [
-            "apps/framebuffer-lab/src/main.rs",
             "apps/framebuffer-scene-lab/src/main.rs",
             "apps/mister/src/main.rs",
             "apps/mister/src/other.rs",
@@ -335,7 +334,6 @@ class PreCommitTests(unittest.TestCase):
             [
                 ("app.format", "apps/mister/Cargo.toml"),
                 ("catalog.format", "crates/catalog/Cargo.toml"),
-                ("framebuffer-lab.format", "apps/framebuffer-lab/Cargo.toml"),
                 (
                     "framebuffer-scene-lab.format",
                     "apps/framebuffer-scene-lab/Cargo.toml",
