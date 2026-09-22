@@ -19,10 +19,7 @@ pub(super) struct CatalogWorkerStart {
 }
 
 struct DeferredCatalogWorker {
-    root: String,
-    request: CatalogWorkerRequest,
-    initial_cache: CatalogWorkerInitialCache,
-    execution_mode: CatalogExecutionMode,
+    start: CatalogWorkerStart,
     start_after: Option<Instant>,
 }
 
@@ -180,10 +177,12 @@ impl LauncherCatalogSession {
         execution_mode: CatalogExecutionMode,
     ) {
         self.deferred_worker = Some(DeferredCatalogWorker {
-            root,
-            request,
-            initial_cache,
-            execution_mode,
+            start: CatalogWorkerStart {
+                root,
+                request,
+                initial_cache,
+                execution_mode,
+            },
             start_after: None,
         });
     }
@@ -212,13 +211,7 @@ impl LauncherCatalogSession {
         if loop_start < start_after {
             return None;
         }
-        let deferred = self.deferred_worker.take()?;
-        Some(CatalogWorkerStart {
-            root: deferred.root,
-            request: deferred.request,
-            initial_cache: deferred.initial_cache,
-            execution_mode: deferred.execution_mode,
-        })
+        self.deferred_worker.take().map(|deferred| deferred.start)
     }
 
     pub(super) fn handle_worker_message(
