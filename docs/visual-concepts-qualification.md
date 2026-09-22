@@ -76,3 +76,6 @@ See [research, sources and explicit design choices](light-sweep-research.md).
 
 Mirror floor was removed after live user review on 22 September 2026. Its
 standalone renderer and selection controls are no longer included.
+
+Pixel dissolve was accepted as shown during live HDMI review on 22 September
+2026, after mirror floor was removed.
