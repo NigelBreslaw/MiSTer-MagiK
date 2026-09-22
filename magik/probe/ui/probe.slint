@@ -20,6 +20,14 @@ export component Probe inherits Window {
     in-out property <bool> motion-running: false;
     in-out property <bool> motion-complete: false;
     in property <string> build-label: "Mini-MagiK";
+    in-out property <string> concept-name;
+    in-out property <string> concept-error;
+    in-out property <bool> concept-paused;
+    in-out property <bool> concept-measuring;
+    in-out property <int> concept-frame;
+    in-out property <int> concept-generation;
+    callback concept-select(string,string);
+    callback concept-action(string);
     callback increment();
     callback reset();
     callback toggle-details();
@@ -56,5 +64,25 @@ export component Probe inherits Window {
             background: Math.mod(i, 2) == 0 ? #22d3ee : #a78bfa;
         }
         start-motion-button := Rectangle { x: parent.width - 138px; y: 10px; width: 124px; height: 30px; background: #0f766e; border-radius: 5px; accessible-role: button; accessible-label: "start-motion"; accessible-action-default => { root.start-motion(); } Text { x: 13px; y: 6px; text: "Start motion"; color: white; } TouchArea { clicked => { root.start-motion(); } } }
+    }
+    // Accessible controls remain in the test tree; custom RGB565 owns concept pixels.
+    VerticalLayout {
+        x: 1px; y: 1px; width: 1px; height: 120px;
+        Text { accessible-role: text; accessible-label: "concept-generation"; accessible-value: "" + root.concept-generation; }
+        Text { accessible-role: text; text: root.concept-name; accessible-label: "concept-name"; accessible-value: root.concept-name; }
+        Text { accessible-role: text; text: root.concept-error; accessible-label: "concept-error"; accessible-value: root.concept-error; }
+        Text { accessible-role: text; accessible-label: "concept-frame"; accessible-value: "" + root.concept-frame; }
+        Text { accessible-role: text; accessible-label: "concept-paused"; accessible-value: root.concept-paused ? "true" : "false"; }
+        Text { accessible-role: text; accessible-label: "concept-measuring"; accessible-value: root.concept-measuring ? "true" : "false"; }
+        for action in ["pause","resume","step","restart","measure","capture-initial","capture-midpoint","capture-boundary"] : Rectangle {
+            accessible-role: button; accessible-label: "concept-" + action;
+            accessible-action-default => {root.concept-action(action);}
+        }
+        for name in ["raster-waves","texture-tunnel","starfield","pixel-dissolve","light-sweep","diagnostic"] : VerticalLayout {
+            for preset in ["default","reduced"] : Rectangle {
+                accessible-role: button; accessible-label: "concept-select-" + name + "-" + preset;
+                accessible-action-default => {root.concept-select(name,preset);}
+            }
+        }
     }
 }

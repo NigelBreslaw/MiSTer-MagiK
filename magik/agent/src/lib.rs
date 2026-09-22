@@ -1,4 +1,5 @@
 //! Bounded native control framing for the independently owned MagiK agent.
+mod mini_display;
 
 mod benchmark;
 mod capture;
@@ -199,6 +200,8 @@ impl Agent {
             "main-managed-magik",
             "measurement",
             "measurement-clock-v1",
+            "mini-display-plan-v1",
+            "mini-concepts-v3",
             "diagnostics",
             "upload-v1",
             "lifecycle-v1",
@@ -755,6 +758,16 @@ impl Agent {
             );
         }
         self.observation.clear_frame();
+        let mini_display = match mini_display::snapshot() {
+            Ok(value) => value,
+            Err(error) => {
+                return response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"mini-display-plan","detail":error}),
+                );
+            }
+        };
         if let Err(error) = main_handoff("mister_magik_suspend\n") {
             return response(
                 &request.id,
@@ -765,6 +778,7 @@ impl Agent {
         let _ = fs::remove_file(self.state_root.join("measure-request"));
         let mut command = Command::new(executable);
         command
+            .env("MISTER_MAGIK_MINI_DISPLAY_PLAN", mini_display)
             .env("MISTER_MAGIK2_STATE_ROOT", &self.state_root)
             .env(
                 "MISTER_MAGIK2_ARTIFACT_SHA256",
@@ -772,6 +786,15 @@ impl Agent {
             )
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(stderr));
+        if test_server.is_none()
+            && request
+                .fields
+                .get("concept_session")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        {
+            command.env("MISTER_MAGIK_MINI_RESUME_CONCEPT", "1");
+        }
         if let Some(test_server) = test_server {
             command.env("SLINT_TEST_SERVER", test_server);
         }
@@ -1135,9 +1158,35 @@ impl Agent {
             return Ok(());
         }
 
+        let is_mini = self.running_identity().is_some_and(|record| {
+            Path::new(&record.executable)
+                .file_name()
+                .is_some_and(|name| name == "mini-magik")
+        });
         let mut process = self.process.lock().expect("agent process state poisoned");
         if let Some(child) = process.as_mut() {
             if child.try_wait().map_err(|e| e.to_string())?.is_none() {
+                if is_mini {
+                    // SIGTERM lets Mini finish its current latch/SPI transaction.
+                    // SAFETY: this is our unreaped child, so its PID cannot be reused.
+                    if unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) } != 0 {
+                        return Err(format!(
+                            "cannot terminate Mini: {}",
+                            io::Error::last_os_error()
+                        ));
+                    }
+                    let deadline = Instant::now() + Duration::from_secs(2);
+                    while child.try_wait().map_err(|e| e.to_string())?.is_none()
+                        && Instant::now() < deadline
+                    {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+                        *process = None;
+                        self.clear_owned_process();
+                        return Ok(());
+                    }
+                }
                 child
                     .kill()
                     .map_err(|e| format!("cannot stop owned child: {e}"))?;
@@ -1199,7 +1248,34 @@ impl Agent {
                 &[],
             );
         }
-        let deadline = Instant::now() + TEST_SESSION_DEADLINE;
+        let concept_session = request
+            .fields
+            .get("concept_session")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if concept_session
+            && request
+                .fields
+                .get("artifact")
+                .and_then(serde_json::Value::as_str)
+                != Some("mini-magik")
+        {
+            return write_frame(
+                stream,
+                &response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"concept-session-requires-mini"}),
+                ),
+                &[],
+            );
+        }
+        let deadline = Instant::now()
+            + if concept_session {
+                Duration::from_secs(600)
+            } else {
+                TEST_SESSION_DEADLINE
+            };
         let listener = TcpListener::bind("127.0.0.1:0").map_err(FrameError::from)?;
         let endpoint = listener.local_addr().map_err(FrameError::from)?.to_string();
         let started = self.start_with_test_server(request, Some(endpoint));
@@ -1322,7 +1398,19 @@ impl Agent {
         mut child: Child,
         expected_hash: &str,
     ) -> Envelope {
-        let deadline = Instant::now() + Duration::from_secs(20);
+        // Retained Mini concepts prepare their assets before first-frame
+        // readiness. The full tunnel sequence takes about 32 seconds on A9.
+        let concept = request
+            .fields
+            .get("artifact")
+            .and_then(serde_json::Value::as_str)
+            == Some("mini-magik")
+            && request
+                .fields
+                .get("concept_session")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true);
+        let deadline = Instant::now() + Duration::from_secs(if concept { 60 } else { 20 });
         loop {
             if self.ready_for(child.id(), expected_hash) {
                 // Hash the actual executable once after readiness, not on every

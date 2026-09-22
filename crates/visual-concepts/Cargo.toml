@@ -1,0 +1,13 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+[package]
+name = "mister-magik-visual-concepts"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+[dependencies]
+mister-magik-framebuffer-scenes = { path = "../framebuffer-scenes" }
+[lints.rust]
+warnings = "deny"
+[lints.clippy]
+all = "deny"

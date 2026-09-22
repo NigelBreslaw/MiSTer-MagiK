@@ -9,7 +9,7 @@ source "$ROOT/scripts/lib/shared-worktree-cache.sh"
 export PYTHONPATH="$ROOT/magik/host${PYTHONPATH:+:$PYTHONPATH}"
 UV_ARGS=(--frozen --no-dev)
 case "${1:-}" in
-    check)
+    check|concept)
         UV_ARGS+=(--extra testing)
         if [[ -z "${UV_PROJECT_ENVIRONMENT:-}" ]]; then
             shared_environment="$(

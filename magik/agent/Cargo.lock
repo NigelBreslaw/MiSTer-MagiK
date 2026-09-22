@@ -472,6 +472,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "mister-magik-catalog",
+ "mister-magik-core",
  "mister-magik-framebuffer-stream",
  "mister-magik-ini",
  "mister-magik-media-contract",

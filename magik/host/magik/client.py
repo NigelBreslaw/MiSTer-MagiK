@@ -122,8 +122,12 @@ class NativeAgent:
             raise AgentError("agent returned an unexpected artifact response")
         return body
 
-    def open_test_tunnel(self, profile_id: str | None = None) -> socket.socket:
+    def open_test_tunnel(
+        self, profile_id: str | None = None, *, concept_session: bool = False
+    ) -> socket.socket:
         fields = {"artifact": self.artifact}
+        if concept_session:
+            fields["concept_session"] = True
         if profile_id is not None:
             fields["profile_id"] = profile_id
         if self.expected_sha256 is not None:

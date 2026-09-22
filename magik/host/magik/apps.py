@@ -15,7 +15,12 @@ class Application:
 
 
 APPLICATIONS = {
-    "mini-magik": Application("mini-magik", "magik/probe", "mini-magik"),
+    "mini-magik": Application(
+        "mini-magik",
+        "magik/probe",
+        "mini-magik",
+        agent_capabilities=frozenset({"mini-display-plan-v1"}),
+    ),
     "magik": Application(
         "magik",
         "apps/mister",

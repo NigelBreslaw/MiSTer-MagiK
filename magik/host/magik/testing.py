@@ -26,7 +26,10 @@ def _application_factory() -> Any:
 
 @contextlib.contextmanager
 def fresh_session(
-    agent: NativeAgent, timeout: float = 20, profile_id: str | None = None
+    agent: NativeAgent,
+    timeout: float = 20,
+    profile_id: str | None = None,
+    concept_session: bool = False,
 ) -> Iterator[Any]:
     """Attach a fresh Slint test session over the native agent only."""
     environment = {
@@ -46,6 +49,8 @@ def fresh_session(
         environment["MISTER_MAGIK2_EXPECTED_SHA256"] = agent.expected_sha256
     factory = _application_factory()
     bridge = [sys.executable, "-m", "magik.test_bridge"]
+    if concept_session:
+        bridge.append("--concept-session")
     if profile_id is not None:
         bridge.extend(["--profile-id", profile_id])
     with factory(
@@ -62,7 +67,19 @@ def one_element(application: Any, label: str) -> Any:
         raise AssertionError("probe exposed no Slint window")
     type_name = (
         "Text"
-        if label in {"build-label", "counter", "details-panel", "motion-state"}
+        if label
+        in {
+            "build-label",
+            "counter",
+            "details-panel",
+            "motion-state",
+            "concept-generation",
+            "concept-name",
+            "concept-error",
+            "concept-frame",
+            "concept-paused",
+            "concept-measuring",
+        }
         else "Rectangle"
     )
     matches = [

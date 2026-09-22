@@ -2538,8 +2538,13 @@ name = "mini-magik"
 version = "0.1.0"
 dependencies = [
  "fontique",
+ "libc",
+ "mister-magik-core",
+ "mister-magik-latch-contract",
  "mister-magik-mister-runtime",
  "mister-magik-tooling-support",
+ "mister-magik-visual-concepts",
+ "serde_json",
  "slint",
  "slint-build",
 ]
@@ -2575,6 +2580,13 @@ name = "mister-magik-core"
 version = "0.1.0"
 
 [[package]]
+name = "mister-magik-framebuffer-scenes"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "mister-magik-framebuffer-stream"
 version = "0.1.0"
 
@@ -2607,6 +2619,13 @@ dependencies = [
  "pprof",
  "serde_json",
  "slint",
+]
+
+[[package]]
+name = "mister-magik-visual-concepts"
+version = "0.1.0"
+dependencies = [
+ "mister-magik-framebuffer-scenes",
 ]
 
 [[package]]
