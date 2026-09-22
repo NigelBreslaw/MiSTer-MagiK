@@ -273,7 +273,7 @@ def run_concept(arguments, run: Path):
         CHECK_AGENT_CAPABILITIES
         | {
             "mini-display-plan-v1",
-            "mini-concepts-v2",
+            "mini-concepts-v3",
             "capture-framebuffer",
             "device-control-v1",
             "artifacts-v1",

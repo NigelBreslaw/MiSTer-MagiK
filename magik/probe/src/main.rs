@@ -147,7 +147,22 @@ impl Platform for ProbePlatform {
     }
 }
 
+static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
+extern "C" fn stop_after_frame(_signal: libc::c_int) {
+    STOP_REQUESTED.store(true, Ordering::Relaxed);
+}
+
 fn main() -> Result<(), String> {
+    // A signal only sets a lock-free flag. Finish any SPI transaction and exit
+    // at the next frame boundary so a replacement never inherits asserted CS.
+    for signal in [libc::SIGTERM, libc::SIGINT] {
+        // SAFETY: the handler has C ABI and only stores to a lock-free atomic.
+        if unsafe { libc::signal(signal, stop_after_frame as *const () as libc::sighandler_t) }
+            == libc::SIG_ERR
+        {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+    }
     let display = std::env::var("MISTER_MAGIK_MINI_DISPLAY_PLAN")
         .map_err(|_| "native service lacks mini-display-plan-v1")?;
     let fields = display.split(',').collect::<Vec<_>>();
@@ -267,7 +282,9 @@ fn main() -> Result<(), String> {
     let mut cached = vec![Rgb565Pixel(0); width * height];
     loop {
         window.event_loop.process_pending_callbacks();
-        if window.event_loop.terminated.load(Ordering::Acquire) {
+        if STOP_REQUESTED.load(Ordering::Relaxed)
+            || window.event_loop.terminated.load(Ordering::Acquire)
+        {
             return Ok(());
         }
         slint::platform::update_timers_and_animations();

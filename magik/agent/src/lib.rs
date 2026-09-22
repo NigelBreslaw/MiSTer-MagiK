@@ -201,7 +201,7 @@ impl Agent {
             "measurement",
             "measurement-clock-v1",
             "mini-display-plan-v1",
-            "mini-concepts-v2",
+            "mini-concepts-v3",
             "diagnostics",
             "upload-v1",
             "lifecycle-v1",
@@ -1158,9 +1158,35 @@ impl Agent {
             return Ok(());
         }
 
+        let is_mini = self.running_identity().is_some_and(|record| {
+            Path::new(&record.executable)
+                .file_name()
+                .is_some_and(|name| name == "mini-magik")
+        });
         let mut process = self.process.lock().expect("agent process state poisoned");
         if let Some(child) = process.as_mut() {
             if child.try_wait().map_err(|e| e.to_string())?.is_none() {
+                if is_mini {
+                    // SIGTERM lets Mini finish its current latch/SPI transaction.
+                    // SAFETY: this is our unreaped child, so its PID cannot be reused.
+                    if unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) } != 0 {
+                        return Err(format!(
+                            "cannot terminate Mini: {}",
+                            io::Error::last_os_error()
+                        ));
+                    }
+                    let deadline = Instant::now() + Duration::from_secs(2);
+                    while child.try_wait().map_err(|e| e.to_string())?.is_none()
+                        && Instant::now() < deadline
+                    {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+                        *process = None;
+                        self.clear_owned_process();
+                        return Ok(());
+                    }
+                }
                 child
                     .kill()
                     .map_err(|e| format!("cannot stop owned child: {e}"))?;
