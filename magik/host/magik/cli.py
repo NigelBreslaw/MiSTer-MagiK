@@ -44,7 +44,7 @@ CHECK_AGENT_CAPABILITIES = REQUIRED_AGENT_CAPABILITIES | {
 }
 WATCH_AGENT_CAPABILITIES = {"status", "metrics-v1", "watch-v1"}
 PROFILE_AGENT_CAPABILITIES = CHECK_AGENT_CAPABILITIES | {"artifacts-v1"}
-CHECK_SCENARIOS = ("smoke", "motion", "motion-rollover", "idle")
+CHECK_SCENARIOS = ("smoke", "motion", "motion-rollover", "motion-fallback", "idle")
 
 
 def agent_binary_path() -> Path:

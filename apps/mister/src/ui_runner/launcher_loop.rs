@@ -6261,6 +6261,9 @@ pub(super) fn run_launcher_loop(
                 metrics.counters.card_prepare_us += duration_us;
                 metrics.card_prepare_max_us = metrics.card_prepare_max_us.max(duration_us);
             }
+            if card_profile_measurement_enabled {
+                session.metrics.process_cpu_us = cpu_process_us();
+            }
             if let Err(error) = session.tick(ui.render_w(), ui.render_h()) {
                 session.metrics.error = Some(error);
             }
@@ -9935,26 +9938,31 @@ pub(super) fn run_launcher_loop(
         let mut startup_intro_failure = None;
         let mut navigation_capture_source_carrier_rendered = false;
         let mut orientation_capture_source_carrier_rendered = false;
-        let card_direct_path_eligible = card_direct_hidden_eligible(CardDirectEligibility {
-            custom_home_active,
-            custom_home_needs_render,
-            native_geometry: layout.logical_w() == 960 && layout.logical_h() == 540,
-            portrait: layout.is_portrait(),
-            full_frame_present,
-            launching,
-            screensaver_active: screensaver.active,
-            startup_intro_active: startup_intro.is_some(),
-            startup_reveal_suppressed: startup_reveal_suppress_launcher_ui,
-            startup_intro_suppressed: startup_intro_suppress_launcher_ui,
-            confirm_visible,
-            catalog_scan_visible,
-            navigation_transition_active: navigation_transition.is_active(),
-            orientation_transition_active: orientation_transition.is_active(),
-            composition_state: composition_decision.state,
-            force_full_slint_raster: composition_decision.force_full_slint_raster,
-            force_full_slint_present: composition_decision.force_full_slint_present,
-            transition_state: full_screen_transition.state(),
-        });
+        #[cfg(feature = "tooling")]
+        let force_card_fallback = tooling.as_ref().is_some_and(|s| s.card_fallback_forced());
+        #[cfg(not(feature = "tooling"))]
+        let force_card_fallback = false;
+        let card_direct_path_eligible = !force_card_fallback
+            && card_direct_hidden_eligible(CardDirectEligibility {
+                custom_home_active,
+                custom_home_needs_render,
+                native_geometry: layout.logical_w() == 960 && layout.logical_h() == 540,
+                portrait: layout.is_portrait(),
+                full_frame_present,
+                launching,
+                screensaver_active: screensaver.active,
+                startup_intro_active: startup_intro.is_some(),
+                startup_reveal_suppressed: startup_reveal_suppress_launcher_ui,
+                startup_intro_suppressed: startup_intro_suppress_launcher_ui,
+                confirm_visible,
+                catalog_scan_visible,
+                navigation_transition_active: navigation_transition.is_active(),
+                orientation_transition_active: orientation_transition.is_active(),
+                composition_state: composition_decision.state,
+                force_full_slint_raster: composition_decision.force_full_slint_raster,
+                force_full_slint_present: composition_decision.force_full_slint_present,
+                transition_state: full_screen_transition.state(),
+            });
         if card_direct_path_eligible && let Some(session) = launcher_card_home.as_mut() {
             let now_us = loop_start.duration_since(run_start).as_micros() as u64;
             if let Some(frame) =
@@ -10332,7 +10340,20 @@ pub(super) fn run_launcher_loop(
                         ))
                     && let Some(session) = launcher_card_home.as_mut()
                 {
-                    layer_target.render_custom_home(&window, session.render(), $full_slint_raster)
+                    let result = layer_target.render_custom_home(
+                        &window,
+                        session.render(),
+                        $full_slint_raster,
+                    );
+                    #[cfg(feature = "tooling")]
+                    if result.0.is_some()
+                        && let Some(tooling) = tooling.as_mut()
+                    {
+                        tooling.metrics.counters.card_fallback_copies += 1;
+                        tooling.metrics.counters.card_fallback_copy_pixels +=
+                            (layout.logical_w() * layout.logical_h()) as u64;
+                    }
+                    result
                 } else if $full_slint_raster {
                     layer_target.render_slint_full(&window)
                 } else {

@@ -29,9 +29,13 @@ pub struct Counters {
     pub card_worker_restarts: u64,
     pub card_chrome_refreshes: u64,
     pub card_prepare_us: u64,
+    pub card_fallback_copies: u64,
+    pub card_fallback_copy_pixels: u64,
 }
 #[derive(Default)]
 pub struct PresentationMetrics {
+    pub process_cpu_us: Option<u64>,
+    pub window_cpu_start_us: Option<u64>,
     pub forced_clock_changes: u64,
     pub card_prepare_max_us: u64,
     pub context: Value,
@@ -49,6 +53,10 @@ impl PresentationMetrics {
     pub fn finish_window(&mut self, end_ms: u64, width: usize, height: usize, instrumented: bool) {
         let (start_ms, baseline) = self.window_start.as_ref().expect("measurement started");
         let c = &self.counters;
+        let cpu_us = self
+            .process_cpu_us
+            .zip(self.window_cpu_start_us)
+            .map(|(end, start)| end.saturating_sub(start));
         self.window = Some(
             json!({"start_ms":start_ms,"end_ms":end_ms,"elapsed_ms":end_ms-start_ms,
             "width":width,"height":height,"instrumented":instrumented,
@@ -82,6 +90,14 @@ impl PresentationMetrics {
             "last_card_source_generation":self.last_card_source_generation,
             "evidence_error":self.error,"drop_baseline_available":self.last_physical_drop_count.is_some()}),
         );
+        let window = self.window.as_mut().unwrap();
+        window["process_cpu_us"] = json!(cpu_us);
+        window["process_cpu_percent"] =
+            json!(cpu_us.map(|us| us as f64 / ((end_ms - start_ms).max(1) as f64 * 10.0)));
+        window["card_fallback_copies"] =
+            json!(c.card_fallback_copies - baseline.card_fallback_copies);
+        window["card_fallback_copy_pixels"] =
+            json!(c.card_fallback_copy_pixels - baseline.card_fallback_copy_pixels);
     }
     pub fn json(&self, width: usize, height: usize, elapsed_ms: u64) -> Value {
         json!({"context":self.context,"width":width,"height":height,"elapsed_ms":elapsed_ms,"pid":std::process::id(),
@@ -109,6 +125,23 @@ impl PresentationMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cpu_window_reports_process_delta_and_preserves_unavailable() {
+        let mut metrics = PresentationMetrics::default();
+        metrics.window_start = Some((2000, Counters::default()));
+        metrics.finish_window(7000, 960, 540, true);
+        assert!(metrics.window.as_ref().unwrap()["process_cpu_us"].is_null());
+        metrics.window_cpu_start_us = Some(1_000_000);
+        metrics.process_cpu_us = Some(7_000_000);
+        metrics.counters.card_fallback_copies = 300;
+        metrics.counters.card_fallback_copy_pixels = 300 * 518_400;
+        metrics.finish_window(7000, 960, 540, true);
+        let window = metrics.window.unwrap();
+        assert_eq!(window["process_cpu_us"], 6_000_000);
+        assert_eq!(window["process_cpu_percent"], 120.0);
+        assert_eq!(window["card_fallback_copy_pixels"], 155_520_000);
+    }
+
     #[test]
     fn window_excludes_warmup_and_keeps_drop_and_rejection_evidence() {
         let mut metrics = PresentationMetrics::default();

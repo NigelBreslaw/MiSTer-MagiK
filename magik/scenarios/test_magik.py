@@ -133,6 +133,12 @@ def test_motion_rollover(application_session, repetition):
     )
 
 
+def test_motion_fallback(application_session):
+    app, agent, run, _ = application_session
+    result = launcher_motion(app, agent, force_fallback=True)
+    append_event(run, {"phase": "motion-fallback", "outcome": "measured", **result})
+
+
 @pytest.mark.magik_profile
 def test_idle_profile(application_session):
     app, agent, run, profile_id = application_session

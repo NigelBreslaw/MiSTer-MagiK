@@ -23,6 +23,7 @@ pub struct Session {
     ready: bool,
     clock_mode: Option<bool>,
     clock_advanced: bool,
+    force_card_fallback: bool,
 }
 impl Session {
     pub fn from_environment() -> Option<Self> {
@@ -38,6 +39,7 @@ impl Session {
             ready: false,
             clock_mode: None,
             clock_advanced: false,
+            force_card_fallback: false,
         })
     }
     pub fn begin(&mut self) {
@@ -68,6 +70,10 @@ impl Session {
             "12:34"
         })
     }
+
+    pub fn card_fallback_forced(&self) -> bool {
+        self.force_card_fallback
+    }
     /// Device-clock warmup and measurement boundaries, independent of host polling.
     pub fn tick(&mut self, width: usize, height: usize) -> Result<bool, String> {
         if self.last_request.elapsed() >= Duration::from_millis(100) {
@@ -82,6 +88,7 @@ impl Session {
                     Some("rollover") => Some(true),
                     _ => None,
                 };
+                self.force_card_fallback = value["launcher_fallback"].as_bool().unwrap_or(false);
                 std::fs::remove_file(request).map_err(|e| e.to_string())?;
                 self.begin();
             }
@@ -99,6 +106,7 @@ impl Session {
             {
                 self.metrics.window_start = Some((now, self.metrics.counters.clone()));
                 self.metrics.card_prepare_max_us = 0;
+                self.metrics.window_cpu_start_us = self.metrics.process_cpu_us;
                 self.profile = CpuProfile::start()?;
             }
             if self
@@ -164,6 +172,7 @@ mod tests {
             ready: false,
             clock_mode: None,
             clock_advanced: false,
+            force_card_fallback: false,
         };
         session.tick(16, 8).unwrap();
         assert!(!root.join("probe-ready.json").exists());

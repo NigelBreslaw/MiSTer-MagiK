@@ -248,6 +248,7 @@ def launcher_motion(
     *,
     instrumented: bool = False,
     align_rollover: bool = False,
+    force_fallback: bool = False,
     sleep: Callable[[float], None] = time.sleep,
 ):
     """Measure continuous card-carousel navigation on the real launcher."""
@@ -258,7 +259,11 @@ def launcher_motion(
 
     previous = agent.metrics().get("window")
     agent._successful(
-        "measure", {"launcher_clock": "rollover" if align_rollover else "fixed"}
+        "measure",
+        {
+            "launcher_clock": "rollover" if align_rollover else "fixed",
+            "launcher_fallback": force_fallback,
+        },
     )
     seconds = 10 if instrumented else 5
     interval_seconds = 0.25
@@ -306,6 +311,8 @@ def launcher_motion(
             raise AssertionError(
                 "instrumented card motion recorded no hidden-slot copy work"
             )
+    if force_fallback and window.get("card_fallback_copies", 0) == 0:
+        raise AssertionError("forced fallback did not execute")
     return {
         **window,
         "workload": (
