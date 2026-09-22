@@ -660,6 +660,28 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
         }
     }
 
+    pub(in crate::ui_runner) fn try_copy_direct_hidden_tiles(
+        &mut self,
+        hardware: &mut Fpga,
+        display: &mut LauncherDisplaySession,
+        chrome: CachedFrameView<'_>,
+        tiles: [CachedFrameView<'_>; 2],
+        damage: [DirtyRect; 2],
+        content_generation: u64,
+    ) -> Result<Option<DirectHiddenFrameCopy>, LatchFailure> {
+        match &mut self.state {
+            LauncherPresenterState::Latch(latch) => latch.try_copy_direct_hidden_tiles(
+                hardware,
+                display,
+                chrome,
+                tiles,
+                damage,
+                content_generation,
+            ),
+            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Frozen { .. } => Ok(None),
+        }
+    }
+
     pub(in crate::ui_runner) fn try_copy_direct_hidden_frame(
         &mut self,
         hardware: &mut Fpga,

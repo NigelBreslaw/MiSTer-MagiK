@@ -15,8 +15,6 @@ use std::time::Instant;
 
 const WIDTH: usize = 960;
 const HEIGHT: usize = 540;
-const CAROUSEL_TOP: usize = 120;
-const CAROUSEL_BOTTOM: usize = 495;
 const CAROUSEL_LEFT: usize = 296;
 const CAROUSEL_SPLIT: usize = 615;
 const CAROUSEL_RIGHT: usize = 934;
@@ -28,10 +26,9 @@ pub(super) struct CardFrameRequest {
     pub(super) navigation_generation: u64,
 }
 
-#[derive(Debug)]
 pub(super) struct RenderedCardFrame {
     request: CardFrameRequest,
-    pixels: Vec<Rgb565Pixel>,
+    tiles: TilePair,
     timing: CardProducerTiming,
 }
 
@@ -40,8 +37,8 @@ impl RenderedCardFrame {
         self.request
     }
 
-    pub(super) fn pixels(&self) -> &[Rgb565Pixel] {
-        &self.pixels
+    pub(super) fn tiles(&self) -> [&[Rgb565Pixel]; 2] {
+        [self.tiles.left.pixels(), self.tiles.right.pixels()]
     }
 
     pub(super) const fn timing(&self) -> CardProducerTiming {
@@ -69,6 +66,8 @@ pub(super) struct CardPipelineCounters {
     pub(super) secondary_tile_us: u64,
     pub(super) secondary_wait_us: u64,
     pub(super) composition_us: u64,
+    pub(super) composition_calls: u64,
+    pub(super) composition_bytes: u64,
 }
 
 impl CardPipelineCounters {
@@ -88,6 +87,8 @@ impl CardPipelineCounters {
             .secondary_wait_us
             .saturating_add(other.secondary_wait_us);
         self.composition_us = self.composition_us.saturating_add(other.composition_us);
+        self.composition_calls += other.composition_calls;
+        self.composition_bytes += other.composition_bytes;
     }
 
     pub(super) fn delta(self, previous: Self) -> Self {
@@ -109,6 +110,12 @@ impl CardPipelineCounters {
                 .secondary_wait_us
                 .saturating_sub(previous.secondary_wait_us),
             composition_us: self.composition_us.saturating_sub(previous.composition_us),
+            composition_calls: self
+                .composition_calls
+                .saturating_sub(previous.composition_calls),
+            composition_bytes: self
+                .composition_bytes
+                .saturating_sub(previous.composition_bytes),
         }
     }
 }
@@ -116,8 +123,7 @@ impl CardPipelineCounters {
 struct PipelineState {
     pending: Option<CardFrameRequest>,
     ready: Option<RenderedCardFrame>,
-    free: Vec<RecycledFrame>,
-    static_frame: Vec<Rgb565Pixel>,
+    free: Vec<TilePair>,
     content_generation: u64,
     counters: CardPipelineCounters,
     shutdown: bool,
@@ -125,17 +131,14 @@ struct PipelineState {
     hold_completion: bool,
 }
 
-struct RecycledFrame {
-    pixels: Vec<Rgb565Pixel>,
-    content_generation: u64,
+struct TilePair {
+    left: PreparedLauncherFrame,
+    right: PreparedLauncherFrame,
 }
 
 impl RenderedCardFrame {
-    fn recycle(self) -> RecycledFrame {
-        RecycledFrame {
-            pixels: self.pixels,
-            content_generation: self.request.content_generation,
-        }
+    fn recycle(self) -> TilePair {
+        self.tiles
     }
 }
 
@@ -172,12 +175,11 @@ impl LauncherCardRenderAhead {
                 pending: None,
                 ready: None,
                 free: (0..2)
-                    .map(|_| RecycledFrame {
-                        pixels: static_frame.to_vec(),
-                        content_generation: 0,
+                    .map(|_| TilePair {
+                        left: preparer.new_tile_buffer(),
+                        right: preparer.new_tile_buffer(),
                     })
                     .collect(),
-                static_frame: static_frame.to_vec(),
                 content_generation: 0,
                 counters: CardPipelineCounters::default(),
                 shutdown: false,
@@ -203,9 +205,6 @@ impl LauncherCardRenderAhead {
         // The initial generation is supplied by the owning session's first request.
         if state.content_generation == 0 {
             state.content_generation = request.content_generation;
-            for free in &mut state.free {
-                free.content_generation = request.content_generation;
-            }
         }
         if self.measure_metrics {
             state.counters.submitted = state.counters.submitted.saturating_add(1);
@@ -287,8 +286,8 @@ impl LauncherCardRenderAhead {
     }
 
     pub(super) fn refresh_chrome(&self, generation: u64, pixels: &[Rgb565Pixel]) {
+        assert_eq!(pixels.len(), WIDTH * HEIGHT);
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.static_frame.copy_from_slice(pixels);
         state.content_generation = generation;
         if let Some(old) = state.ready.take() {
             state.free.push(old.recycle());
@@ -356,11 +355,9 @@ fn run_coordinator(
             )
         })
         .expect("failed to start secondary launcher card renderer");
-    let mut left = preparer.new_tile_buffer();
-    let mut right = Some(preparer.new_tile_buffer());
 
     loop {
-        let (request, mut output) = {
+        let (request, TilePair { mut left, right }) = {
             let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
             while !state.shutdown && (state.pending.is_none() || state.free.is_empty()) {
                 state = shared.wake.wait(state).unwrap_or_else(|e| e.into_inner());
@@ -369,20 +366,13 @@ fn run_coordinator(
                 break;
             }
             let request = state.pending.take().expect("pending request checked");
-            let mut output = state.free.pop().expect("free frame checked");
-            if output.content_generation != state.content_generation {
-                output.pixels.copy_from_slice(&state.static_frame);
-                output.content_generation = state.content_generation;
-            }
+            let output = state.free.pop().expect("free frame checked");
             (request, output)
         };
         let total_started = measure_timing.then(Instant::now);
 
-        let Some(right_buffer) = right.take() else {
-            break;
-        };
         if tile_request_tx
-            .send(TileRequest::Render(request.render, right_buffer))
+            .send(TileRequest::Render(request.render, right))
             .is_err()
         {
             break;
@@ -395,20 +385,16 @@ fn run_coordinator(
             break;
         };
         let secondary_wait_us = elapsed_us(wait_started);
-        let composition_started = measure_timing.then(Instant::now);
-        compose_tiles(
-            &mut output.pixels,
-            left.pixels(),
-            completed_right.buffer.pixels(),
-        );
-        let composition_us = elapsed_us(composition_started);
-        right = Some(completed_right.buffer);
+        let tiles = TilePair {
+            left,
+            right: completed_right.buffer,
+        };
         let timing = CardProducerTiming {
             total_us: elapsed_us(total_started),
             primary_tile_us,
             secondary_tile_us: completed_right.render_us,
             secondary_wait_us,
-            composition_us,
+            composition_us: 0,
         };
 
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -425,7 +411,7 @@ fn run_coordinator(
             state = shared.wake.wait(state).unwrap_or_else(|e| e.into_inner());
         }
         if request.content_generation != state.content_generation {
-            state.free.push(output);
+            state.free.push(tiles);
             if measure_timing {
                 state.counters.stale += 1;
             }
@@ -434,7 +420,7 @@ fn run_coordinator(
         }
         if let Some(old) = state.ready.replace(RenderedCardFrame {
             request,
-            pixels: output.pixels,
+            tiles,
             timing,
         }) {
             state.free.push(old.recycle());
@@ -477,8 +463,9 @@ fn elapsed_us(started: Option<Instant>) -> u64 {
     })
 }
 
+#[cfg(test)]
 fn compose_tiles(output: &mut [Rgb565Pixel], left: &[Rgb565Pixel], right: &[Rgb565Pixel]) {
-    for y in CAROUSEL_TOP..CAROUSEL_BOTTOM {
+    for y in 120..495 {
         output[y * WIDTH + CAROUSEL_LEFT..y * WIDTH + CAROUSEL_SPLIT]
             .copy_from_slice(&left[y * WIDTH + CAROUSEL_LEFT..y * WIDTH + CAROUSEL_SPLIT]);
         output[y * WIDTH + CAROUSEL_SPLIT..y * WIDTH + CAROUSEL_RIGHT]
@@ -561,12 +548,32 @@ mod tests {
         let mut serial = prepared();
         let pipeline =
             LauncherCardRenderAhead::start(serial.frame_preparer(), serial.pixels(), true);
-        let request = request(1, 900_000, 90);
-        pipeline.submit(request);
-        let frame = wait_for(&pipeline, 1);
-        serial.render_frame(request.render.frame);
-        assert_eq!(frame.pixels(), serial.pixels());
-        pipeline.recycle(frame);
+        for (index, progress) in [0, 1, 47, 90, 179, 180].into_iter().enumerate() {
+            let mut req = request(index as u64 + 1, 900_000, progress);
+            if index == 0 {
+                req.render.frame.phase = BrowsePhase::Settled;
+                req.render.frame.target = 0;
+            } else if index % 2 == 0 {
+                req.render.frame.direction = Some(BrowseDirection::Left);
+                req.render.frame.outgoing = Some(
+                    mister_magik_framebuffer_scenes::launcher_navigation::OutgoingFlip {
+                        card: 1,
+                        direction: BrowseDirection::Right,
+                        progress_millis: progress,
+                    },
+                );
+            }
+            pipeline.submit(req);
+            let frame = wait_for(&pipeline, req.render.generation);
+            let mut assembled = serial.pixels().to_vec();
+            compose_tiles(&mut assembled, frame.tiles()[0], frame.tiles()[1]);
+            serial.render_frame(req.render.frame);
+            assert_eq!(assembled, serial.pixels());
+            assert_eq!(frame.timing().composition_us, 0);
+            pipeline.recycle(frame);
+        }
+        assert_eq!(pipeline.counters().composition_calls, 0);
+        assert_eq!(pipeline.counters().composition_bytes, 0);
     }
 
     #[test]
@@ -656,7 +663,9 @@ mod tests {
             serial.render_frame(req.render.frame);
             let mut expected = serial.pixels().to_vec();
             expected[20 * WIDTH + 880] = Rgb565Pixel(0x1234);
-            assert_eq!(frame.pixels(), expected);
+            let mut assembled = chrome.clone();
+            compose_tiles(&mut assembled, frame.tiles()[0], frame.tiles()[1]);
+            assert_eq!(assembled, expected);
             assert_eq!(frame.request.content_generation, 5);
             pipeline.recycle(frame);
         }

@@ -48,12 +48,20 @@ const SETTINGS_NAVIGATION_STATUS_DRAIN_MIN: Duration = Duration::from_millis(500
 const SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
 const CARD_DIRECT_MAXIMUM_FRAME_AGE_US: u64 = 50_000;
-const CARD_DIRECT_DAMAGE: DirtyRect = DirtyRect {
-    x0: 296,
-    y0: 120,
-    x1: 934,
-    y1: 495,
-};
+const CARD_DIRECT_TILE_DAMAGE: [DirtyRect; 2] = [
+    DirtyRect {
+        x0: 296,
+        y0: 120,
+        x1: 615,
+        y1: 495,
+    },
+    DirtyRect {
+        x0: 615,
+        y0: 120,
+        x1: 934,
+        y1: 495,
+    },
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CardDirectEligibility {
@@ -9953,14 +9961,21 @@ pub(super) fn run_launcher_loop(
                 session.try_take_render_ahead(now_us, CARD_DIRECT_MAXIMUM_FRAME_AGE_US)
             {
                 let request = frame.request();
-                let source =
-                    card_cached_frame_view(frame.pixels(), layout.logical_w(), layout.logical_h());
-                match launcher_presenter.try_copy_direct_hidden_frame(
+                let chrome = card_cached_frame_view(
+                    session.chrome_pixels(),
+                    layout.logical_w(),
+                    layout.logical_h(),
+                );
+                let tiles = frame.tiles().map(|pixels| {
+                    card_cached_frame_view(pixels, layout.logical_w(), layout.logical_h())
+                });
+                match launcher_presenter.try_copy_direct_hidden_tiles(
                     f,
                     display_session,
-                    source,
+                    chrome,
+                    tiles,
+                    CARD_DIRECT_TILE_DAMAGE,
                     session.content_generation(),
-                    CARD_DIRECT_DAMAGE,
                 ) {
                     Ok(Some(copy)) => {
                         let timing = frame.timing();
@@ -9994,14 +10009,21 @@ pub(super) fn run_launcher_loop(
                 && let Some(frame) = session.presented_render_ahead()
             {
                 let request = frame.request();
-                let source =
-                    card_cached_frame_view(frame.pixels(), layout.logical_w(), layout.logical_h());
-                match launcher_presenter.try_copy_direct_hidden_frame(
+                let chrome = card_cached_frame_view(
+                    session.chrome_pixels(),
+                    layout.logical_w(),
+                    layout.logical_h(),
+                );
+                let tiles = frame.tiles().map(|pixels| {
+                    card_cached_frame_view(pixels, layout.logical_w(), layout.logical_h())
+                });
+                match launcher_presenter.try_copy_direct_hidden_tiles(
                     f,
                     display_session,
-                    source,
+                    chrome,
+                    tiles,
+                    CARD_DIRECT_TILE_DAMAGE,
                     session.content_generation(),
-                    CARD_DIRECT_DAMAGE,
                 ) {
                     Ok(Some(copy)) => {
                         frame_production_trace.class = FrameProductionClass::Prepared;
@@ -12322,6 +12344,8 @@ pub(super) fn run_launcher_loop(
                             metrics.counters.card_secondary_tile_us += delta.secondary_tile_us;
                             metrics.counters.card_secondary_wait_us += delta.secondary_wait_us;
                             metrics.counters.card_composition_us += delta.composition_us;
+                            metrics.counters.card_composition_calls += delta.composition_calls;
+                            metrics.counters.card_composition_bytes += delta.composition_bytes;
                             metrics.counters.card_submitted = metrics
                                 .counters
                                 .card_submitted

@@ -330,6 +330,71 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         self.try_render_hidden_frame(hardware, display_session, true, render)
     }
 
+    pub(in crate::ui_runner) fn try_copy_direct_hidden_tiles<H: LatchHardware>(
+        &mut self,
+        hardware: &mut H,
+        display_session: &mut LauncherDisplaySession,
+        chrome: CachedFrameView<'_>,
+        tiles: [CachedFrameView<'_>; 2],
+        damage: [DirtyRect; 2],
+        content_generation: u64,
+    ) -> Result<Option<DirectHiddenFrameCopy>, LatchFailure> {
+        if chrome.width() != self.render_width
+            || chrome.height() != self.render_height
+            || tiles
+                .iter()
+                .any(|tile| tile.width() != chrome.width() || tile.height() != chrome.height())
+        {
+            return Ok(None);
+        }
+        let Some(grant) =
+            self.try_issue_external_hidden_slot_render_grant(hardware, display_session, true)?
+        else {
+            return Ok(None);
+        };
+        let slot = physical_slot_mirror_index(grant.slot_index);
+        let seed = self.direct_slot_content_generation[slot] != Some(content_generation);
+        let full = self.full_rect();
+        // A partial/failed write cannot leave a slot marked coherent.
+        self.direct_slot_content_generation[slot] = None;
+        let buffer = self.buffers.buffer_mut(grant.slot_index);
+        let started = Instant::now();
+        let result = (|| {
+            let mut bytes = 0;
+            if seed {
+                bytes += B::copy_rect(buffer, chrome, full, self.vertical_sampling)?.bytes;
+            }
+            for (source, rect) in tiles.into_iter().zip(damage) {
+                bytes += B::copy_rect(buffer, source, rect, self.vertical_sampling)?.bytes;
+            }
+            Ok::<_, String>(LatchCopyResult {
+                bytes,
+                path: LatchCopyPath::ExternalDirect,
+            })
+        })();
+        let copy = match result {
+            Ok(copy) => copy,
+            Err(error) => {
+                self.outstanding_direct_grant = None;
+                return Err(LatchFailure::runtime(
+                    LatchFailureStage::FrameCopy,
+                    LatchFailureReason::FrameCopyFailed,
+                    error,
+                ));
+            }
+        };
+        B::publish_writes(buffer);
+        self.direct_slot_content_generation[slot] = Some(content_generation);
+        Ok(Some(DirectHiddenFrameCopy {
+            completed: CompletedHiddenFrame {
+                grant,
+                source_evidence: None,
+            },
+            copy,
+            copy_us: started.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+        }))
+    }
+
     pub(in crate::ui_runner) fn try_copy_direct_hidden_frame<H: LatchHardware>(
         &mut self,
         hardware: &mut H,
@@ -1397,6 +1462,7 @@ mod tests {
 
     struct FakeBuffer {
         copy_count: usize,
+        fail_on_copy: Option<usize>,
         events: EventLog,
         pixels: Vec<Rgb565Pixel>,
     }
@@ -1405,6 +1471,7 @@ mod tests {
         fn new(events: EventLog) -> Self {
             Self {
                 copy_count: 0,
+                fail_on_copy: None,
                 events,
                 pixels: vec![Rgb565Pixel(0); WIDTH * HEIGHT],
             }
@@ -1455,6 +1522,9 @@ mod tests {
         ) -> Result<LatchCopyResult, String> {
             buffer.events.borrow_mut().push(TestEvent::Copy);
             buffer.copy_count += 1;
+            if buffer.fail_on_copy == Some(buffer.copy_count) {
+                return Err("controlled tile copy failure".into());
+            }
             for y in rect.y0..rect.y1 {
                 let start = y * WIDTH + rect.x0;
                 let end = y * WIDTH + rect.x1;
@@ -1807,6 +1877,126 @@ mod tests {
             presenter.buffers.buffer_mut(2).pixels[0],
             Rgb565Pixel(0x5aa5)
         );
+    }
+
+    #[test]
+    fn failed_second_tile_is_not_published_or_marked_coherent() {
+        let events = EventLog::default();
+        let mut presenter = presenter_with_events(events.clone());
+        presenter.buffers.buffer_mut(2).fail_on_copy = Some(3);
+        let mut hardware = FakeHardware {
+            statuses: vec![Ok(status(BASE1, 0x0001))],
+            events: Some(events.clone()),
+            ..Default::default()
+        };
+        let mut display = display_session();
+        let pixels = cached_pixels();
+        let result = presenter.try_copy_direct_hidden_tiles(
+            &mut hardware,
+            &mut display,
+            CachedFrameView::new(&pixels, WIDTH, HEIGHT),
+            [CachedFrameView::new(&pixels, WIDTH, HEIGHT); 2],
+            [
+                DirtyRect {
+                    x0: 0,
+                    x1: 2,
+                    y0: 1,
+                    y1: 2,
+                },
+                DirtyRect {
+                    x0: 2,
+                    x1: 4,
+                    y0: 1,
+                    y1: 2,
+                },
+            ],
+            7,
+        );
+        assert!(result.is_err());
+        assert_eq!(presenter.direct_slot_content_generation[1], None);
+        assert!(presenter.outstanding_direct_grant.is_none());
+        assert!(!events.borrow().contains(&TestEvent::Publish));
+    }
+
+    #[test]
+    fn tile_pair_seeds_once_and_publishes_only_after_both_copies() {
+        for coherent in [false, true] {
+            let events = EventLog::default();
+            let mut presenter = presenter_with_events(events.clone());
+            if coherent {
+                presenter.direct_slot_content_generation[1] = Some(7);
+            }
+            let mut hardware = FakeHardware {
+                statuses: vec![Ok(status(BASE1, 0x0001))],
+                events: Some(events.clone()),
+                ..Default::default()
+            };
+            let mut display = display_session();
+            let chrome = vec![Rgb565Pixel(7); WIDTH * HEIGHT];
+            let left = vec![Rgb565Pixel(11); WIDTH * HEIGHT];
+            let right = vec![Rgb565Pixel(13); WIDTH * HEIGHT];
+            let damage = [
+                DirtyRect {
+                    x0: 0,
+                    x1: 2,
+                    y0: 1,
+                    y1: 2,
+                },
+                DirtyRect {
+                    x0: 2,
+                    x1: 4,
+                    y0: 1,
+                    y1: 2,
+                },
+            ];
+            let copy = presenter
+                .try_copy_direct_hidden_tiles(
+                    &mut hardware,
+                    &mut display,
+                    CachedFrameView::new(&chrome, WIDTH, HEIGHT),
+                    [
+                        CachedFrameView::new(&left, WIDTH, HEIGHT),
+                        CachedFrameView::new(&right, WIDTH, HEIGHT),
+                    ],
+                    damage,
+                    7,
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                copy.copy.bytes,
+                8 + if coherent { 0 } else { WIDTH * HEIGHT * 2 }
+            );
+            let pixels = &presenter.buffers.buffer_mut(2).pixels;
+            assert_eq!(
+                &pixels[4..8],
+                &[
+                    Rgb565Pixel(11),
+                    Rgb565Pixel(11),
+                    Rgb565Pixel(13),
+                    Rgb565Pixel(13)
+                ]
+            );
+            assert_eq!(pixels[0], Rgb565Pixel(if coherent { 0 } else { 7 }));
+            let expected = if coherent {
+                vec![
+                    TestEvent::ReadStatus,
+                    TestEvent::Copy,
+                    TestEvent::Copy,
+                    TestEvent::Publish,
+                ]
+            } else {
+                vec![
+                    TestEvent::ReadStatus,
+                    TestEvent::Copy,
+                    TestEvent::Copy,
+                    TestEvent::Copy,
+                    TestEvent::Publish,
+                ]
+            };
+            assert_eq!(*events.borrow(), expected);
+            assert_eq!(presenter.direct_slot_content_generation[1], Some(7));
+        }
     }
 
     #[test]

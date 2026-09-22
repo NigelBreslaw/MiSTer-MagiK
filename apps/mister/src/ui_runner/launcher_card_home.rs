@@ -275,6 +275,10 @@ impl LauncherCardHomeSession {
         self.content_generation
     }
 
+    pub(super) fn chrome_pixels(&self) -> &[Rgb565Pixel] {
+        self.prepared.pixels()
+    }
+
     pub(super) const fn compositor_stale(&self) -> bool {
         self.compositor_stale
     }
