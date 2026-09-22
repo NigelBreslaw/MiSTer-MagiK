@@ -116,7 +116,7 @@ documentation = { summary = "Controls arcade entry trace behavior", accepted_val
 
 [[control]]
 name = "MISTER_ARCADE_ROOT"
-owner = "apps/mister/src/ui_runner/experiments/effects/effect_loop_support.rs"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
 classification = "production"
 value_shape = "path or path list"
 default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
@@ -270,90 +270,6 @@ aliases = []
 documentation = { summary = "Controls boot frame profile frames behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_CAMERA_EFFECTS"
-owner = "apps/mister/src/ui_runner/experiments/effects/camera_effects_loop.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls camera effects behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_CAMERA_EFFECTS_AUTO"
-owner = "apps/mister/src/ui_runner/experiments/effects/camera_effects_loop.rs"
-classification = "production"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "internal runtime"
-parser = "bool"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls camera effects auto behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_CAMERA_EFFECTS_CACHE_CAP"
-owner = "apps/mister/src/ui_runner/experiments/effects/camera_effects_loop.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls camera effects cache cap behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_CAMERA_EFFECTS_HUD"
-owner = "apps/mister/src/ui_runner/experiments/effects/camera_effects_loop.rs"
-classification = "production"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "internal runtime"
-parser = "bool"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls camera effects hud behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_CAMERA_EFFECTS_SEGMENT_SECS"
-owner = "apps/mister/src/ui_runner/experiments/effects/camera_effects_loop.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls camera effects segment secs behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_CAMERA_EFFECTS_TRACE"
-owner = "apps/mister/src/ui_runner/experiments/effects/camera_effects_loop.rs"
-classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls camera effects trace behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_CATALOG_ARTIFACT_COPY"
 owner = "crates/catalog/src/shard_registry.rs"
 classification = "benchmark"
@@ -411,20 +327,6 @@ aliases = []
 documentation = { summary = "Controls catalog diagnostics dir behavior", accepted_values = [], value_policy = "redact" }
 
 [[control]]
-name = "MISTER_CATALOG_DURABLE_RESUME"
-owner = "crates/catalog/src/library_indexer.rs"
-classification = "production"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "internal runtime"
-parser = "bool"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls catalog durable resume behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_CATALOG_FTS_INTEGRITY"
 owner = "crates/catalog/src/persisted_search.rs"
 classification = "benchmark"
@@ -469,20 +371,6 @@ aliases = []
 documentation = { summary = "Routes catalog protocol output away from standard output", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_CATALOG_READY_SNAPSHOT"
-owner = "crates/catalog/src/sqlite_catalog.rs"
-classification = "production"
-value_shape = "path"
-default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
-visibility = "internal runtime"
-parser = "path"
-scope = "command"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Controls catalog ready snapshot behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_CATALOG_REFRESH"
 owner = "apps/mister/src/ui_runner/ui_frame_target.rs"
 classification = "production"
@@ -495,20 +383,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Selects catalog startup policy; force is an explicit diagnostic/stress override and off disables the worker", accepted_values = ["default", "force", "off", "load-only"], value_policy = "document" }
-
-[[control]]
-name = "MISTER_CATALOG_TRACE"
-owner = "crates/catalog/src/catalog_checkpoint.rs"
-classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls catalog trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_C64_PREVIEW_ARCHIVE"
@@ -945,20 +819,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Selects the fixed GUI frame profiling route", accepted_values = ["arcade-velocity", "settled-composition", "bridge-churn"], value_policy = "document" }
-
-[[control]]
-name = "MISTER_HBMAME_SQLITE"
-owner = "crates/catalog/src/catalog_config.rs"
-classification = "production"
-value_shape = "path or path list"
-default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
-visibility = "internal runtime"
-parser = "path"
-scope = "command"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Controls hbmame sqlite behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_HOME_SELECTED_INDEX"
@@ -1532,34 +1392,6 @@ aliases = []
 documentation = { summary = "Controls library roots behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_LIBRARY_TARGET_ALLOWLIST"
-owner = "crates/catalog/src/library_indexer.rs"
-classification = "diagnostic"
-value_shape = "path or path list"
-default_behavior = "does not restrict planned catalog targets when unset"
-visibility = "internal runtime"
-parser = "path"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Restricts catalog walker targets for bounded diagnostics", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_LIBRARY_SOFTWARE_HASH"
-owner = "crates/catalog/src/software_identity.rs"
-classification = "production"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "internal runtime"
-parser = "bool"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls library software hash behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_LIBRARY_SQLITE"
 owner = "crates/catalog/src/device_layout.rs"
 classification = "production"
@@ -1698,20 +1530,6 @@ conflicts = []
 sensitivity = "path"
 aliases = []
 documentation = { summary = "Controls magik downloader ini behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_MAGIK_HOT_JOURNAL_DB"
-owner = "crates/catalog/src/sqlite_catalog.rs"
-classification = "production"
-value_shape = "path"
-default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
-visibility = "internal runtime"
-parser = "path"
-scope = "command"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Controls magik hot journal db behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_MAGIK_INPUT_PROXY"
@@ -2050,20 +1868,6 @@ aliases = []
 documentation = { summary = "Product version embedded into the executable", accepted_values = ["non-empty string"], value_policy = "document" }
 
 [[control]]
-name = "MISTER_MAME_SQLITE"
-owner = "crates/catalog/src/catalog_config.rs"
-classification = "production"
-value_shape = "path or path list"
-default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
-visibility = "internal runtime"
-parser = "path"
-scope = "command"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Controls mame sqlite behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_MEDIA_ASSET_DIR"
 owner = "apps/mister/src/launcher.rs"
 classification = "production"
@@ -2160,20 +1964,6 @@ conflicts = []
 sensitivity = "path"
 aliases = []
 documentation = { summary = "Controls n64 preview archive behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_NAMESPACE_BACKEND"
-owner = "crates/catalog/src/library_indexer.rs"
-classification = "production"
-value_shape = "enum token"
-default_behavior = "uses the owner-defined mode when unset or unrecognized"
-visibility = "internal runtime"
-parser = "enum"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls namespace backend behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_NEOGEO_PREVIEW_ARCHIVE"
@@ -2538,34 +2328,6 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls pprof warmup secs behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_PREPARED_BUNDLE_CAPTURE_DIR"
-owner = "crates/catalog/src/library_indexer.rs"
-classification = "diagnostic"
-value_shape = "path or path list"
-default_behavior = "prepared helper capture is disabled when unset"
-visibility = "developer diagnostic"
-parser = "path"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Output directory for capturing prepared collection helper fixtures", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_PREPARED_BUNDLE_HELPER_DIR"
-owner = "crates/catalog/src/library_indexer.rs"
-classification = "production"
-value_shape = "path or path list"
-default_behavior = "prepared collection acceleration is disabled when unset"
-visibility = "internal runtime"
-parser = "path"
-scope = "command"
-conflicts = []
-sensitivity = "path"
-aliases = []
-documentation = { summary = "Directory containing receipt-guarded prepared collection helpers", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PRESENT_BACKEND"
@@ -3044,90 +2806,6 @@ aliases = []
 documentation = { summary = "Controls profile slow us behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_RASTER_EFFECTS"
-owner = "apps/mister/src/ui_runner/experiments/effects/raster_effects_loop.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls raster effects behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_RASTER_EFFECTS_AUTO"
-owner = "apps/mister/src/ui_runner/experiments/effects/raster_effects_loop.rs"
-classification = "production"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "internal runtime"
-parser = "bool"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls raster effects auto behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_RASTER_EFFECTS_CACHE_CAP"
-owner = "apps/mister/src/ui_runner/experiments/effects/raster_effects_loop.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls raster effects cache cap behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_RASTER_EFFECTS_HUD"
-owner = "apps/mister/src/ui_runner/experiments/effects/raster_effects_loop.rs"
-classification = "production"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "internal runtime"
-parser = "bool"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls raster effects hud behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_RASTER_EFFECTS_SEGMENT_SECS"
-owner = "apps/mister/src/ui_runner/experiments/effects/raster_effects_loop.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls raster effects segment secs behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_RASTER_EFFECTS_TRACE"
-owner = "apps/mister/src/ui_runner/experiments/effects/raster_effects_loop.rs"
-classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls raster effects trace behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_RGB565_NEON"
 owner = "mister/platform/runtime/src/framebuffer/scanout_slots.rs"
 classification = "production"
@@ -3296,90 +2974,6 @@ aliases = []
 documentation = { summary = "Controls snes preview archive behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_SPRITE_EFFECTS"
-owner = "apps/mister/src/ui_runner/experiments/effects/sprite_effects_loop.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls sprite effects behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_SPRITE_EFFECTS_AUTO"
-owner = "apps/mister/src/ui_runner/experiments/effects/sprite_effects_loop.rs"
-classification = "production"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "internal runtime"
-parser = "bool"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls sprite effects auto behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_SPRITE_EFFECTS_CACHE_CAP"
-owner = "apps/mister/src/ui_runner/experiments/effects/sprite_effects_loop.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls sprite effects cache cap behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_SPRITE_EFFECTS_HUD"
-owner = "apps/mister/src/ui_runner/experiments/effects/sprite_effects_loop.rs"
-classification = "production"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "internal runtime"
-parser = "bool"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls sprite effects hud behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_SPRITE_EFFECTS_SEGMENT_SECS"
-owner = "apps/mister/src/ui_runner/experiments/effects/sprite_effects_loop.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls sprite effects segment secs behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_SPRITE_EFFECTS_TRACE"
-owner = "apps/mister/src/ui_runner/experiments/effects/sprite_effects_loop.rs"
-classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls sprite effects trace behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_STREAM_SCALAR_BENCH_SAMPLES"
 owner = "mister/platform/runtime/src/framebuffer/downsample.rs"
 classification = "benchmark"
@@ -3450,104 +3044,6 @@ aliases = []
 documentation = { summary = "Controls system entry trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_TEST_EFFECTS_UNSET"
-owner = "apps/mister/src/ui_runner/experiments/effects/effect_loop_support.rs"
-classification = "test"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "test only"
-parser = "bool"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls test effects unset behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_TEXT_EFFECTS"
-owner = "apps/mister/src/ui_runner/experiments/effects/text_effects_loop.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls text effects behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_TEXT_EFFECTS_AUTO"
-owner = "apps/mister/src/ui_runner/experiments/effects/text_effects_loop.rs"
-classification = "production"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "internal runtime"
-parser = "bool"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls text effects auto behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_TEXT_EFFECTS_CACHE_CAP"
-owner = "apps/mister/src/ui_runner/experiments/effects/text_effects_loop.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls text effects cache cap behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_TEXT_EFFECTS_HUD"
-owner = "apps/mister/src/ui_runner/experiments/effects/text_effects_loop.rs"
-classification = "production"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "internal runtime"
-parser = "bool"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls text effects hud behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_TEXT_EFFECTS_SEGMENT_SECS"
-owner = "apps/mister/src/ui_runner/experiments/effects/text_effects_loop.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls text effects segment secs behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_TEXT_EFFECTS_TRACE"
-owner = "apps/mister/src/ui_runner/experiments/effects/text_effects_loop.rs"
-classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls text effects trace behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_THREAD_POLICY"
 owner = "crates/catalog/src/runtime_thread.rs"
 classification = "production"
@@ -3574,90 +3070,6 @@ conflicts = []
 sensitivity = "path"
 aliases = []
 documentation = { summary = "Controls trace file behavior", accepted_values = [], value_policy = "redact" }
-
-[[control]]
-name = "MISTER_TRANSITION_EFFECTS"
-owner = "apps/mister/src/ui_runner/experiments/effects/transition_effects_loop.rs"
-classification = "production"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
-parser = "string"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls transition effects behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_TRANSITION_EFFECTS_AUTO"
-owner = "apps/mister/src/ui_runner/experiments/effects/transition_effects_loop.rs"
-classification = "production"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "internal runtime"
-parser = "bool"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls transition effects auto behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_TRANSITION_EFFECTS_CACHE_CAP"
-owner = "apps/mister/src/ui_runner/experiments/effects/transition_effects_loop.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls transition effects cache cap behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_TRANSITION_EFFECTS_HUD"
-owner = "apps/mister/src/ui_runner/experiments/effects/transition_effects_loop.rs"
-classification = "production"
-value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "internal runtime"
-parser = "bool"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls transition effects hud behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_TRANSITION_EFFECTS_SEGMENT_SECS"
-owner = "apps/mister/src/ui_runner/experiments/effects/transition_effects_loop.rs"
-classification = "production"
-value_shape = "bounded integer"
-default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
-parser = "u64"
-scope = "command"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls transition effects segment secs behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
-name = "MISTER_TRANSITION_EFFECTS_TRACE"
-owner = "apps/mister/src/ui_runner/experiments/effects/transition_effects_loop.rs"
-classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls transition effects trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_UI_FB_SIZE"

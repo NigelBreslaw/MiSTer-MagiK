@@ -4,6 +4,7 @@
 
 import argparse
 import json
+import re
 import sys
 import tomllib
 from pathlib import Path
@@ -46,7 +47,8 @@ def render(registry: dict) -> str:
         "<!-- Generated from apps/mister/config/runtime-environment.toml. Do not edit. -->",
         "",
         (
-            f"Registry format: `{registry['format']}`. Baseline: "
+            f"Registry format: `{registry['format']}`. Current controls: "
+            f"{len(registry['control'])}. Historical baseline: "
             f"{baseline['literal_occurrences']} literal occurrences, "
             f"{baseline['unique_names']} owned names, "
             f"{baseline['external_build_names']} external/build-time names."
@@ -77,6 +79,20 @@ def render(registry: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def validate(registry: dict, root: Path) -> list[str]:
+    names = set()
+    for source_root in registry["source_roots"]:
+        for source in (root / source_root).rglob("*.rs"):
+            names.update(re.findall(r"\bMISTER_[A-Z0-9_]+\b", source.read_text()))
+    errors = []
+    for control in registry["control"]:
+        if not (root / control["owner"]).is_file():
+            errors.append(f"{control['name']}: missing owner {control['owner']}")
+        if control["name"] not in names:
+            errors.append(f"{control['name']}: no source reference")
+    return errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
@@ -86,7 +102,12 @@ def main() -> int:
     mode.add_argument("--stdout", action="store_true")
     args = parser.parse_args()
 
-    reference = render(tomllib.loads(args.registry.read_text(encoding="utf-8")))
+    registry = tomllib.loads(args.registry.read_text(encoding="utf-8"))
+    errors = validate(registry, ROOT)
+    if errors:
+        print("\n".join(errors), file=sys.stderr)
+        return 1
+    reference = render(registry)
     if args.stdout:
         sys.stdout.write(reference)
         return 0
