@@ -31,7 +31,7 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 - [x] Satin light sweep
 - [x] Mirror floor
 - [x] Pixel dissolve
-- [ ] Starfield and comets
+- [x] Starfield and comets
 - [ ] Palette aurora
 - [ ] Texture tunnel
 - [ ] Raster waves
@@ -47,3 +47,5 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 `mirror-floor`: independently selectable; default and reduced presets.
 
 `pixel-dissolve`: independently selectable; default and reduced presets.
+
+`starfield-comets`: independently selectable; default and reduced presets.

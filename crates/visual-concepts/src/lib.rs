@@ -9,8 +9,10 @@ pub mod fixture;
 mod light;
 mod mirror;
 mod point_cloud;
+mod stars;
 
 pub const EFFECTS: &[&str] = &[
+    "starfield-comets",
     "pixel-dissolve",
     "mirror-floor",
     "light-sweep",
@@ -62,6 +64,7 @@ impl Scene {
             return Err("unsupported concept geometry".into());
         }
         let effect: Box<dyn Effect> = match name {
+            "starfield-comets" => Box::new(stars::new(preset, width, height)?),
             "pixel-dissolve" => Box::new(dissolve::new(preset, width, height)?),
             "mirror-floor" => Box::new(mirror::new(preset, width, height)?),
             "light-sweep" => Box::new(light::new(preset, width, height)?),
