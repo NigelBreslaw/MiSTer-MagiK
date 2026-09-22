@@ -125,13 +125,6 @@ pub fn is_launcher_boot(arg: &str) -> bool {
     arg.ends_with("menu.rbf") || arg.ends_with("/menu.rbf")
 }
 
-pub fn should_handoff_to_mister(arg: &str) -> bool {
-    if is_known_command(arg) || is_launcher_boot(arg) {
-        return false;
-    }
-    false
-}
-
 pub fn is_launchable_arg(arg: &str) -> bool {
     let arg = arg.to_ascii_lowercase();
     arg.ends_with(".rbf")
@@ -201,7 +194,6 @@ mod tests {
                 resolve_command(&args(&["mister-magik-fb", command])),
                 command
             );
-            assert!(!should_handoff_to_mister(command));
         }
     }
 
@@ -409,24 +401,6 @@ mod tests {
         ] {
             assert!(is_launchable_arg(path), "{path}");
         }
-    }
-
-    #[test]
-    fn launchable_files_are_not_handed_off_by_slint() {
-        for path in [
-            "/media/fat/_Arcade/foo.mra",
-            "/media/fat/games/foo.rbf",
-            "/media/fat/games/foo.mgl",
-            "/media/fat/games/foo.zip",
-        ] {
-            assert!(!should_handoff_to_mister(path), "{path}");
-        }
-    }
-
-    #[test]
-    fn keeps_menu_boot_in_launcher() {
-        assert!(!should_handoff_to_mister("menu.rbf"));
-        assert!(!should_handoff_to_mister("/media/fat/menu.rbf"));
     }
 
     fn assert_command_kind(command: &str, kind: CommandKind) {

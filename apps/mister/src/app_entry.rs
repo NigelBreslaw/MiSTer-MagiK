@@ -58,7 +58,6 @@
 //! See docs/architecture.md for display routing and boot handoff; see
 //! apps/mister/BUILD.md for toolchain details.
 
-use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 #[cfg(feature = "diagnostics")]
@@ -145,9 +144,6 @@ pub fn run() {
     );
 
     if args.len() >= 2 {
-        if command_args::should_handoff_to_mister(&args[1]) {
-            exec_mister(&args);
-        }
         if command_args::is_launchable_arg(&args[1]) {
             reject_direct_launch_arg(&args[1]);
         }
@@ -2672,30 +2668,6 @@ fn run_direct_vsync_probe(frames: u64, work_us: u64) {
     if errors > 0 {
         std::process::exit(1);
     }
-}
-
-fn exec_mister(args: &[String]) {
-    let mister_bin = mister_magik_catalog::device_layout::DeviceLayout::current().main_path();
-    crate::ui_logln!("core handoff → {mister_bin} {}", args[1..].join(" "));
-    let c_path = CString::new(mister_bin).expect("CString");
-    let c_args: Vec<CString> = std::iter::once(c_path.clone())
-        .chain(
-            args[1..]
-                .iter()
-                .map(|s| CString::new(s.as_str()).expect("CString")),
-        )
-        .collect();
-    let ptrs: Vec<*const libc::c_char> = c_args
-        .iter()
-        .map(|s| s.as_ptr())
-        .chain([std::ptr::null()])
-        .collect();
-    // SAFETY: c_path and every argv pointer are NUL-terminated CStrings kept
-    // alive across the call, and ptrs is terminated by a null pointer. On
-    // success execv does not return; on failure we only inspect errno.
-    let err = unsafe { libc::execv(c_path.as_ptr(), ptrs.as_ptr()) };
-    crate::ui_errln!("execv({mister_bin}) failed: {err}");
-    std::process::exit(1);
 }
 
 fn early_black_route(f: &mut Fpga) {
