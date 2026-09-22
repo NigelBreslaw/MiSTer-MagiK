@@ -8,7 +8,6 @@ on:
     paths:
       - "mister/platform/fpga/menu-vblank-latch/**"
       - "mister/platform/contracts/latch/**"
-      - "mister/platform/contracts/video-diagnostics/**"
       - "scripts/*fpga*latch*"
       - "scripts/build-fpga-vblank-latch-core.sh"
       - "scripts/prepare-fpga-menu-signoff.py"
@@ -35,7 +34,6 @@ on:
     paths:
       - "mister/platform/fpga/menu-vblank-latch/**"
       - "mister/platform/contracts/latch/**"
-      - "mister/platform/contracts/video-diagnostics/**"
       - "scripts/*fpga*latch*"
       - "scripts/build-fpga-vblank-latch-core.sh"
       - "scripts/prepare-fpga-menu-signoff.py"

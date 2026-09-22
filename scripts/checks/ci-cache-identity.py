@@ -76,8 +76,6 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "crates/framebuffer-stream/Cargo.lock",
         "crates/framebuffer-stream/Cargo.toml",
         "crates/framebuffer-stream/src/**/*.rs",
-        "mister/platform/contracts/video-diagnostics/Cargo.toml",
-        "mister/platform/contracts/video-diagnostics/src/**/*.rs",
         "mister/platform/runtime/Cargo.toml",
         "mister/platform/runtime/build.rs",
         "mister/platform/runtime/src/**/*.rs",

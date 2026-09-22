@@ -53,7 +53,6 @@ def commands(group: str) -> list[list[str]]:
             "mister/platform/runtime/Cargo.toml",
             "mister/platform/contracts/latch/Cargo.toml",
             "mister/platform/contracts/scanout/Cargo.toml",
-            "mister/platform/contracts/video-diagnostics/Cargo.toml",
             "mister/platform/contracts/manifest/Cargo.toml",
         ]
         result = [

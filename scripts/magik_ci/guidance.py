@@ -52,9 +52,7 @@ def authority(path: str) -> tuple[str, str]:
             "checked-in generated platform-v3 consumer; never hand-edit",
             "python3 scripts/checks/generate-platform-v3-consumers.py",
         )
-    if path.endswith(
-        ("generated_hdmi_evidence.rs", "mister_magik_video_diagnostics_protocol.svh")
-    ):
+    if path.endswith("mister_magik_video_diagnostics_protocol.svh"):
         return (
             "checked-in generated HDMI diagnostics consumer",
             "python3 scripts/checks/generate-hdmi-evidence-protocol.py followed by generate-video-diagnostics-protocol.py",
