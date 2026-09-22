@@ -29,21 +29,22 @@ pub fn new(preset: Preset, width: usize, height: usize) -> Result<Light, String>
             (q * q * (3.0 - 2.0 * q) * f32::from(PEAK)).round() as u16
         })
         .collect();
-    let face = f.rect(527, 166, 693, 334);
-    let feather = (r.width() * 6 / 100).max(1);
+    // Cover the complete rounded card, including its labels and keyline.
+    // Only the silhouette gets a one-pixel antialias feather.
+    let corner = (r.width() as f32 * 8.0 / 180.0).max(1.0);
     let mut coverage = vec![0; r.width() * r.height()];
-    for y in face.y0..face.y1 {
-        for x in face.x0..face.x1 {
-            let edge = (x - face.x0)
-                .min(face.x1 - 1 - x)
-                .min(y - face.y0)
-                .min(face.y1 - 1 - y);
-            let q = (edge as f32 / feather as f32).min(1.0);
-            coverage[(y - r.y0) * r.width() + x - r.x0] =
-                (q * q * (3.0 - 2.0 * q) * 256.0).round() as u16;
+    for y in 0..r.height() {
+        for x in 0..r.width() {
+            let dx =
+                (x as f32 + 0.5 - r.width() as f32 * 0.5).abs() - (r.width() as f32 * 0.5 - corner);
+            let dy = (y as f32 + 0.5 - r.height() as f32 * 0.5).abs()
+                - (r.height() as f32 * 0.5 - corner);
+            let outside = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt();
+            let distance = outside + dx.max(dy).min(0.0) - corner;
+            coverage[y * r.width() + x] = ((-distance).clamp(0.0, 1.0) * 256.0) as u16;
         }
     }
-    let gradient = vec![0; r.width() * units + r.height() * units / 4 + 1];
+    let gradient = vec![0; (r.width() + r.height()) * units + 1];
     Ok(Light {
         f,
         profile,
@@ -87,7 +88,7 @@ impl Effect for Light {
         let r = self.f.card;
         for y in 0..r.height() {
             for x in 0..r.width() {
-                let alpha = ((u32::from(self.gradient[x * self.units + y * self.units / 4])
+                let alpha = ((u32::from(self.gradient[(x + y) * self.units])
                     * u32::from(self.coverage[y * r.width() + x]))
                     >> 8) as u16;
                 if alpha != 0 {
@@ -108,7 +109,7 @@ impl Effect for Light {
 mod tests {
     use super::*;
     #[test]
-    fn sheen_preserves_chrome_text_and_loop_endpoints() {
+    fn sheen_preserves_surroundings_and_loop_endpoints() {
         for h in [540, 600] {
             for preset in [Preset::Default, Preset::Reduced] {
                 let mut e = new(preset, 960, h).unwrap();
@@ -118,7 +119,7 @@ mod tests {
                 e.render(Duration::from_millis(1500), &mut p).unwrap();
                 let first = p.clone();
                 assert_ne!(p, e.f.base);
-                let face = e.f.rect(527, 166, 693, 334);
+                let face = e.f.card;
                 for y in 0..h {
                     for x in 0..960 {
                         if x < face.x0 || x >= face.x1 || y < face.y0 || y >= face.y1 {
@@ -132,6 +133,37 @@ mod tests {
                 e.render(Duration::from_secs(3), &mut p).unwrap();
                 assert_eq!(p, e.f.base);
             }
+        }
+    }
+    #[test]
+    fn diagonal_sheen_reaches_the_whole_card_including_labels_and_border() {
+        for h in [540, 600] {
+            let mut e = new(Preset::Default, 960, h).unwrap();
+            let r = e.f.card;
+            // Uniform dark pixels isolate the sheen from the artwork's own lighting.
+            e.f.base.fill(Pixel(0));
+            let mut p = vec![Pixel(0); 960 * h];
+            for (x, y) in [
+                (12, 12),
+                (r.width() - 13, 12),
+                (12, r.height() - 13),
+                (r.width() - 13, r.height() - 13),
+                (r.width() / 2, r.height() - 32), // library count/label area
+                (3, r.height() / 2),              // frame
+            ] {
+                let travel = e.gradient.len() + e.radius * 2;
+                let time = ((x + y) * e.units + e.radius) as u128 * PERIOD_NS / travel as u128;
+                e.render(Duration::from_nanos(time as u64), &mut p).unwrap();
+                assert_ne!(p[(r.y0 + y) * 960 + r.x0 + x], Pixel(0), "missed {x},{y}");
+            }
+            e.render(Duration::from_millis(1500), &mut p).unwrap();
+            // Equal x+y positions lie on the same 45-degree highlight, with
+            // equal fixed dither thresholds because both offsets are /4.
+            assert_eq!(
+                p[(r.y0 + 120) * 960 + r.x0 + 92],
+                p[(r.y0 + 160) * 960 + r.x0 + 52]
+            );
+            assert_ne!(p[(r.y0 + 120) * 960 + r.x0 + 92], Pixel(0));
         }
     }
     #[test]

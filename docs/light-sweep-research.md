@@ -34,12 +34,15 @@ opacity, width, slope, cycle duration, or whether this design looks good.
 - Peak white contribution: 6.25%, down from the old 37.5% stripe peak. Blending is
   performed in the existing encoded RGB565 channel space as a UI overlay.
 - A single smooth cubic lobe, with half-width 28% of the card width, and a diagonal
-  coordinate `x + y/4`. Its slope is zero at both its center and outer edges.
+  coordinate `x + y`, producing a 45-degree band. The intensity profile has zero
+  slope at both its center and outer edges.
 - Constant travel over three seconds. It starts and ends completely outside the
   card, so restarting the loop does not introduce a visible jump.
-- Feathered coverage on the artwork area. The frame, labels, statistics and other
-  cards remain byte-identical. This represents a restrained coating on the card
-  face, not moving lights on the depicted cabinet.
+- Coverage over the entire rounded card, including its labels and frame, with
+  a one-pixel antialias feather at the silhouette. Other cards and surrounding UI
+  remain byte-identical. The user rejected the first revision because its shallow
+  diagonal and artwork-only mask did not sweep the whole card. This correction
+  treats the entire card as one coated surface.
 - Default profile sampling: quarter-pixel intervals; reduced: half-pixel
   intervals. Both interpolate position every frame and retain the same strength,
   speed and shape. There are no cached animation-phase images.
@@ -52,7 +55,8 @@ prove that it was the only cause of the perceived unevenness on HDMI.
 
 ## Verification and acceptance
 
-Focused tests cover both presets at 960×540 and 960×600: preserved text/chrome,
+Focused tests cover both presets at 960×540 and 960×600: preserved surrounding
+UI, whole-card and 45-degree coverage,
 exact initial and loop-boundary images, adjacent active frames changing,
 translated-profile intensity stability, and bounded RGB565 channel changes.
 The retained-frame oracle checks stale-pixel removal and deterministic reset.
@@ -60,5 +64,5 @@ Preparation and all allocations remain outside frame rendering.
 
 Device results and binary identity are recorded in
 [the qualification report](visual-concepts-qualification.md). Hardware cadence
-and live visual approval are separate. Keep light sweep on HDMI and ask the user
-whether to keep or adjust it before showing another effect.
+and live visual approval are separate. The user accepted the corrected whole-card
+sheen on HDMI on 22 September 2026, then requested the next effect.
