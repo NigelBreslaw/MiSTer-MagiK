@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! A translated soft sheen on the card face. Research and deliberately chosen
-//! visual parameters are recorded in docs/light-sweep-research.md.
+//! A translated soft sheen across the complete card face.
 use crate::{Effect, Pixel, Preset, Rect, fixture::Fixture};
 use std::time::Duration;
 

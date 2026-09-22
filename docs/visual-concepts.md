@@ -49,9 +49,6 @@ has its own geometry-correct image. Its default cache occupies 59.3 MiB and take
 approximately 32 seconds to prepare on the A9. Mini concept startup allows 60
 seconds; ordinary startup retains its 20-second limit.
 
-Research and implementation decisions: [light sheen](light-sweep-research.md),
-[starfield sampling](starfield-research.md), [tunnel motion](tunnel-research.md).
-
 ## Measurement and review
 
 Checks run two unprofiled 30-second windows, each following two seconds of warmup

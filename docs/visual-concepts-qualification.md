@@ -30,7 +30,7 @@ Times below are the larger average of the two windows, in milliseconds. Frame-to
 
 ## Validation and limitations
 
-- The five retained effects were accepted by the user on HDMI on 22 September 2026. The tunnel was accepted after correcting its motion glitch; see [the diagnosis and research](tunnel-research.md).
+- The five retained effects were accepted by the user on HDMI on 22 September 2026. The tunnel was accepted after correcting its motion glitch.
 - Cleanup validation: 17 portable unit tests, two retained-frame/reset tests, three Mini tests, six tooling tests, 247 host tests, focused Clippy and repository Python quality checks passed. All 120 sampled before/after RGB565 hashes matched across both presets and both geometries. The cleanup binary passed both light-sweep device windows, captures and playback checks.
 - Portable tests cover deterministic reset, clipping, dissolve endpoints, filtered stars, the tunnel's tight bend and retained damage at 960×540 and 960×600. Existing hidden-slot ledger tests cover alternating slots and initialization.
 - Earlier device smoke and motion checks passed (`20260922T152047Z-4c2deae9ae72`, `20260922T152113Z-7e4a673f6a74`). Normal exit, interruption and controlled failure retained the advancing Mini concept (`20260922T142918Z-f2d647547cb2/retention-results.json`). The later tunnel cache requires the documented 60-second concept startup allowance.
@@ -57,5 +57,4 @@ by their existing consumers.
 
 The deletion review removes unused fixture helpers, unnecessary game-list buffers
 from sheen/waves, a no-op effect reset callback, retained tunnel source-texture
-storage and a misleading host cleanup log. Research notes remain alongside the
-accepted implementations. Raw evidence and captures remain ignored.
+storage and a misleading host cleanup log. Raw evidence and captures remain ignored.
