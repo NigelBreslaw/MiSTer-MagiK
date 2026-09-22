@@ -61,7 +61,6 @@ impl Concepts {
     pub fn action(&mut self, action: &str) {
         if let Some(bookmark) = action.strip_prefix("capture-") {
             let (midpoint, boundary) = match self.name.as_str() {
-                "depth-parallax" => (320, 16000),
                 "light-sweep" => (1500, 3000),
                 "pixel-dissolve" => (1300, 3200),
                 "starfield" => (4096, 8192),

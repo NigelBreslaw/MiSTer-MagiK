@@ -31,7 +31,7 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 - [x] Host controls and explicit concept checks
 - [x] Shared fixtures
 - [x] Point-cloud morph removed after user review
-- [x] Depth and parallax
+- [x] Depth and parallax removed after user review
 - [x] Satin light sweep
 - [x] Mirror floor removed after user review
 - [x] Pixel dissolve
@@ -40,10 +40,9 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 - [x] Texture tunnel
 - [x] Raster waves
 - [x] Wireframe terrain removed after user review
-- [ ] Physical qualification and visual review
+- [x] Retained effects: recorded physical qualification and live visual review
 
 
-`depth-parallax`: independently selectable; default and reduced presets.
 
 `light-sweep`: a subtle card sheen with continuous translation; see the
 [research and visual choices](light-sweep-research.md).
@@ -65,7 +64,6 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 
 | Concept | Default | Reduced | Loop |
 |---|---|---|---|
-| depth-parallax | Five cards, 25 cached poses per transition | Three-card crop, 13 poses | 16 s, forward then reverse |
 | light-sweep | Quarter-pixel sheen profile, 6.25% peak | Half-pixel profile, same strength and speed | 3 s |
 | pixel-dissolve | Eight-pixel tiles | 16-pixel tiles | 3.2 s, including endpoint holds |
 | starfield | 256 filtered stars, no trails | 128 filtered stars, no trails | 8.192 s |
@@ -74,8 +72,6 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 
 Working dimensions above describe the observed 960×540 render surface. Fixture
 letterboxing is also tested at 960×600. Procedural backgrounds fill the surface.
-Depth stores only the carousel rectangle, shares forward poses with reverse
-playback, and blends adjacent poses. Reduced depth crops the outer two cards.
 Dissolve prepares ordered tile thresholds and copies row spans. Tunnel preparation
 projects a curved tube from a moving, banking camera with near-plane clipping
 and perspective-correct texture coordinates. Each nominal display interval has

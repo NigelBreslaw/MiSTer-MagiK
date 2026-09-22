@@ -1,6 +1,6 @@
 # Mini visual concepts — device qualification
 
-Status: implementation available; the retained concepts have passing recorded device windows. Live HDMI review remains incomplete. Light sweep, pixel dissolve, starfield, the corrected curved tunnel and raster waves have been accepted by the user.
+Status: live HDMI review is complete. Five effects are retained: light sweep, pixel dissolve, starfield, the corrected curved tunnel and raster waves. Each has user acceptance and passing recorded device windows at the executable identities below. The other five concepts were removed after review.
 
 These are the latest completed measurements for each concept, across the explicitly identified development binaries below. A prior binary pass does not qualify a changed renderer.
 
@@ -8,7 +8,6 @@ Observed mode: HDMI 1920×1080p60; resolved RGB565 rendering: 960×540. No displ
 
 | Concept | FPS W1 / W2 | Samples W1 / W2 | Repeats W1 / W2 | CPU % W1 / W2 | Peak RSS MiB | Device gate |
 |---|---:|---:|---:|---:|---:|---|
-| depth-parallax | 60.000 / 59.998 | 1800 / 1800 | 0 / 0 | 100.17 / 100.26 | 76.6 | Pass |
 | light-sweep | 60.000 / 59.998 | 1800 / 1800 | 0 / 0 | 100.16 / 100.23 | 34.2 | Pass |
 | pixel-dissolve | 59.998 / 59.998 | 1800 / 1800 | 0 / 0 | 100.15 / 100.23 | 65.3 | Pass |
 | starfield | 59.998 / 60.000 | 1800 / 1800 | 0 / 0 | 100.13 / 100.13 | 34.2 | Pass |
@@ -23,7 +22,6 @@ Times below are the larger average of the two windows, in milliseconds. Frame-to
 
 | Concept | Render avg | Transfer avg | Frame-to-present avg | Render p99 | Ignored evidence directory |
 |---|---:|---:|---:|---:|---|
-| depth-parallax | 6.625 | 0.968 | 16.559 | 12.020 | `build/magik-results/20260922T140155Z-5ab664002564` |
 | light-sweep | 5.260 | 0.334 | 16.559 | 5.749 | `build/magik-results/20260922T154045Z-b66b51873e03` |
 | pixel-dissolve | 2.513 | 1.000 | 16.559 | 4.170 | `build/magik-results/20260922T141810Z-ed8a86efb7af` |
 | starfield | 1.311 | 1.382 | 16.550 | 1.460 | `build/magik-results/20260922T155324Z-8b0a2f56e128` |
@@ -33,7 +31,7 @@ Times below are the larger average of the two windows, in milliseconds. Frame-to
 ## Validation and limitations
 
 - Portable renderer tests cover deterministic reset, clipping, exact dissolve endpoints, fixed seed behavior and retained damage against full frames at 960×540 and 960×600. The existing two-slot damage ledger tests cover alternating slots, initialization and suppressed presentation.
-- Latest portable suite: 18 unit tests and two retained-frame tests passed at both geometries. Mini smoke and both motion checks passed on device (`20260922T152047Z-4c2deae9ae72`, `20260922T152113Z-7e4a673f6a74`).
+- Latest portable suite: 17 unit tests and two retained-frame tests passed at both geometries. Mini smoke and both motion checks passed on device (`20260922T152047Z-4c2deae9ae72`, `20260922T152113Z-7e4a673f6a74`).
 - Separate terrain profiling completed with 905 samples and matching artifact identity (`20260922T152008Z-bb103693141e`). Its four physical repeats are instrumented evidence and do not qualify cadence.
 - All listed unprofiled runs reported zero latch drops and rejections, including the failed curved tunnel run.
 - Host regression suite: 247 passed. Native service: 47 passed. Mini session: three passed. Tooling measurement/session: six passed. Focused Clippy, Python formatting/lint/type checks and ARM builds passed.
@@ -48,7 +46,6 @@ See [the iteration guide](visual-concepts.md) for controls and final preset budg
 
 ## Measured executable identities
 
-- depth-parallax: `e61b5202dc54ec494e636e6641e431be5d0806f6d65188069f4d97dc53232d27`
 - light-sweep: `8077260ff118b860718f43b291daf09bd72d4f2bb1bc3ae28737c1db0cf6ddd8`
 - pixel-dissolve: `b1f0033b281e9a16a9dfae73f02a562bedd585274271b8754fa3caa82f5dc126`
 - starfield: `f34d6e0c445b47dba164dc7e0af40cfc67b642f9aedb98f76725a7631d46b1f9`
@@ -92,3 +89,7 @@ Its renderer and selection controls are no longer included.
 
 Point-cloud morph was removed after live user review on 22 September 2026.
 Its standalone renderer, selection controls and direct particles dependency are removed.
+
+Depth and parallax was removed after live user review and an authoritative
+framebuffer capture on 22 September 2026. Its renderer and selection controls
+are removed. No further effects remain awaiting a visual decision.

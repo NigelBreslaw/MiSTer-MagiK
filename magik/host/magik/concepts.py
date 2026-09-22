@@ -18,7 +18,6 @@ EFFECTS = (
     "starfield",
     "pixel-dissolve",
     "light-sweep",
-    "depth-parallax",
     "diagnostic",
 )
 PRESETS = ("default", "reduced")
@@ -161,7 +160,6 @@ def measure(application, agent, run, effect, preset, profile):
 
 # Device timeline bookmarks, in milliseconds. Captures happen after measurement.
 BOOKMARKS = {
-    "depth-parallax": (320, 16000),
     "light-sweep": (1500, 3000),
     "pixel-dissolve": (1300, 3200),
     "starfield": (4096, 8192),

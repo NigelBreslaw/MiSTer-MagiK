@@ -3,7 +3,6 @@
 //! Deterministic, bounded RGB565 concepts. No device or application dependencies.
 pub use mister_magik_framebuffer_scenes::{Rgb565Pixel as Pixel, Rgb565Rect as Rect};
 use std::time::Duration;
-mod depth;
 mod dissolve;
 pub mod fixture;
 mod light;
@@ -18,7 +17,6 @@ pub const EFFECTS: &[&str] = &[
     "starfield",
     "pixel-dissolve",
     "light-sweep",
-    "depth-parallax",
     "diagnostic",
 ];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,7 +71,6 @@ impl Scene {
             "starfield" => Box::new(stars::new(preset, width, height)?),
             "pixel-dissolve" => Box::new(dissolve::new(preset, width, height)?),
             "light-sweep" => Box::new(light::new(preset, width, height)?),
-            "depth-parallax" => Box::new(depth::new(preset, width, height)?),
             "diagnostic" => Box::new(Diagnostic { width, height }),
             _ => return Err(format!("unknown concept: {name}")),
         };
