@@ -3,6 +3,7 @@
 //! Deterministic, bounded RGB565 concepts. No device or application dependencies.
 pub use mister_magik_framebuffer_scenes::{Rgb565Pixel as Pixel, Rgb565Rect as Rect};
 use std::time::Duration;
+mod aurora;
 mod depth;
 mod dissolve;
 pub mod fixture;
@@ -12,6 +13,7 @@ mod point_cloud;
 mod stars;
 
 pub const EFFECTS: &[&str] = &[
+    "palette-aurora",
     "starfield-comets",
     "pixel-dissolve",
     "mirror-floor",
@@ -64,6 +66,7 @@ impl Scene {
             return Err("unsupported concept geometry".into());
         }
         let effect: Box<dyn Effect> = match name {
+            "palette-aurora" => Box::new(aurora::new(preset, width, height)?),
             "starfield-comets" => Box::new(stars::new(preset, width, height)?),
             "pixel-dissolve" => Box::new(dissolve::new(preset, width, height)?),
             "mirror-floor" => Box::new(mirror::new(preset, width, height)?),

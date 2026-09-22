@@ -32,7 +32,7 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 - [x] Mirror floor
 - [x] Pixel dissolve
 - [x] Starfield and comets
-- [ ] Palette aurora
+- [x] Palette aurora
 - [ ] Texture tunnel
 - [ ] Raster waves
 - [ ] Wireframe terrain
@@ -49,3 +49,5 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 `pixel-dissolve`: independently selectable; default and reduced presets.
 
 `starfield-comets`: independently selectable; default and reduced presets.
+
+`palette-aurora`: independently selectable; default and reduced presets.
