@@ -3,10 +3,11 @@
 //! Deterministic, bounded RGB565 concepts. No device or application dependencies.
 pub use mister_magik_framebuffer_scenes::{Rgb565Pixel as Pixel, Rgb565Rect as Rect};
 use std::time::Duration;
+mod depth;
 pub mod fixture;
 mod point_cloud;
 
-pub const EFFECTS: &[&str] = &["point-cloud-morph", "diagnostic"];
+pub const EFFECTS: &[&str] = &["depth-parallax", "point-cloud-morph", "diagnostic"];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Preset {
     Default,
@@ -51,6 +52,7 @@ impl Scene {
             return Err("unsupported concept geometry".into());
         }
         let effect: Box<dyn Effect> = match name {
+            "depth-parallax" => Box::new(depth::new(preset, width, height)?),
             "point-cloud-morph" => Box::new(point_cloud::new(preset, width, height)?),
             "diagnostic" => Box::new(Diagnostic { width, height }),
             _ => return Err(format!("unknown concept: {name}")),

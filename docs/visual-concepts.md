@@ -27,7 +27,7 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 - [x] Host controls and explicit concept checks
 - [x] Shared fixtures
 - [x] Point-cloud morph
-- [ ] Depth and parallax
+- [x] Depth and parallax
 - [ ] Satin light sweep
 - [ ] Mirror floor
 - [ ] Pixel dissolve
@@ -39,3 +39,5 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 - [ ] Physical qualification and visual review
 
 `point-cloud-morph`: independently selectable; default and reduced presets.
+
+`depth-parallax`: independently selectable; default and reduced presets.
