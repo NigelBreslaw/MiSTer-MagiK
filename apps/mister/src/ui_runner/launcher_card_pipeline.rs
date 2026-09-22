@@ -13,7 +13,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
+#[cfg(test)]
 const WIDTH: usize = 960;
+#[cfg(test)]
 const HEIGHT: usize = 540;
 const CAROUSEL_LEFT: usize = 296;
 const CAROUSEL_SPLIT: usize = 615;
@@ -76,6 +78,7 @@ impl CardPipelineCounters {
             .saturating_add(other.secondary_wait_us);
     }
 
+    #[cfg(any(feature = "tooling", test))]
     pub(super) fn delta(self, previous: Self) -> Self {
         Self {
             submitted: self.submitted.saturating_sub(previous.submitted),

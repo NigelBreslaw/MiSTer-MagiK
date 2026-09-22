@@ -82,6 +82,7 @@ pub(super) struct LauncherCardHomeSession {
     compositor_stale: bool,
     compositor_content_generation: Option<u64>,
     retired_pipeline_counters: CardPipelineCounters,
+    #[cfg(feature = "tooling")]
     reported_pipeline_counters: CardPipelineCounters,
     measure_preparation: bool,
     preparation_measurement: Option<(bool, bool, u64)>,
@@ -124,6 +125,7 @@ impl LauncherCardHomeSession {
             compositor_stale: false,
             compositor_content_generation: None,
             retired_pipeline_counters: CardPipelineCounters::default(),
+            #[cfg(feature = "tooling")]
             reported_pipeline_counters: CardPipelineCounters::default(),
             measure_preparation: std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some(),
             preparation_measurement: None,
@@ -344,6 +346,7 @@ impl LauncherCardHomeSession {
         }
     }
 
+    #[cfg(feature = "tooling")]
     pub(super) fn pipeline_counter_delta(&mut self) -> CardPipelineCounters {
         let mut current = self.retired_pipeline_counters;
         if let Some(render_ahead) = self.render_ahead.as_ref() {
