@@ -69,8 +69,18 @@ The completed changes pass the 308-test no-default-feature app suite, app
 Clippy with warnings denied, Rust formatting, focused Rust LSP diagnostics,
 registry checks, architecture/CLI tests, 17 pre-commit fixtures, repository and
 launcher contracts, and the focused tests listed above. Logs are local artifacts,
-not committed evidence. Broad ARM, full CI, and physical device qualification
-have not been run. No push, deployment, or Desktop modification was performed.
+not committed evidence.
+
+The broader UI-feature suite completed with **1,352 passed, 10 failed, and one
+ignored**. Every failure reports `The Slint platform was initialized in another
+thread` in launcher actions, preview state, or launcher bridge tests. A baseline
+comparison on `main` and an isolated rerun were attempted, but compilation failed
+with `No space left on device` in the shared Cargo target. These failures have
+therefore **not** been established as pre-existing. The volume had only 116 MiB
+available at the final check; shared caches were not deleted.
+
+Broad ARM, full CI, and physical device qualification have not been run. No push,
+deployment, or Desktop modification was performed.
 
 Deleted files remain recoverable from the base commit above. The original main
 checkout is unchanged by implementation work.
