@@ -41,7 +41,9 @@ Use `scripts/magik deploy`, `scripts/magik check`, and `scripts/magik watch`.
 These target the real development app and `/media/fat/mister-magik-dev` data.
 Use `--app mini-magik` for the fast experiment. The default check is one smoke
 journey; benchmarks and profiles are explicit. See [development setup and
-commands](magik/README.md). Production installation above is a separate workflow.
+commands](magik/README.md). Standalone RGB565 effects use
+`scripts/magik concept EFFECT`; see the [Mini concept iteration guide](docs/visual-concepts.md).
+Production installation above is a separate workflow.
 
 ## Built With Slint
 

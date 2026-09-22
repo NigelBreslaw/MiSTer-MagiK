@@ -108,3 +108,6 @@ The live HDMI animation review is performed by the user. The USB capture adapter
 was unavailable during this implementation. Physical cadence comes from settled
 protocol-v5 counters; framebuffer captures establish RGB565 appearance but do not
 substitute for the live animation review.
+
+See [recorded device qualification](visual-concepts-qualification.md) for measured
+revisions, evidence directories, failed gates and remaining visual acceptance.
