@@ -25,7 +25,7 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 - [x] Physical cadence and CPU measurements
 - [x] Portable contract and cached Mini session
 - [x] Host controls and explicit concept checks
-- [ ] Shared fixtures
+- [x] Shared fixtures
 - [ ] Point-cloud morph
 - [ ] Depth and parallax
 - [ ] Satin light sweep

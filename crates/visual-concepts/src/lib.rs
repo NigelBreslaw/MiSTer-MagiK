@@ -3,6 +3,7 @@
 //! Deterministic, bounded RGB565 concepts. No device or application dependencies.
 pub use mister_magik_framebuffer_scenes::{Rgb565Pixel as Pixel, Rgb565Rect as Rect};
 use std::time::Duration;
+pub mod fixture;
 
 pub const EFFECTS: &[&str] = &["diagnostic"];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
