@@ -4,12 +4,14 @@
 pub use mister_magik_framebuffer_scenes::{Rgb565Pixel as Pixel, Rgb565Rect as Rect};
 use std::time::Duration;
 mod depth;
+mod dissolve;
 pub mod fixture;
 mod light;
 mod mirror;
 mod point_cloud;
 
 pub const EFFECTS: &[&str] = &[
+    "pixel-dissolve",
     "mirror-floor",
     "light-sweep",
     "depth-parallax",
@@ -60,6 +62,7 @@ impl Scene {
             return Err("unsupported concept geometry".into());
         }
         let effect: Box<dyn Effect> = match name {
+            "pixel-dissolve" => Box::new(dissolve::new(preset, width, height)?),
             "mirror-floor" => Box::new(mirror::new(preset, width, height)?),
             "light-sweep" => Box::new(light::new(preset, width, height)?),
             "depth-parallax" => Box::new(depth::new(preset, width, height)?),
