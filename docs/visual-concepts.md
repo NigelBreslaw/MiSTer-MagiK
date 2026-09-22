@@ -35,7 +35,7 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 - [x] Palette aurora
 - [x] Texture tunnel
 - [x] Raster waves
-- [ ] Wireframe terrain
+- [x] Wireframe terrain
 - [ ] Physical qualification and visual review
 
 `point-cloud-morph`: independently selectable; default and reduced presets.
@@ -55,3 +55,5 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 `texture-tunnel`: independently selectable; default and reduced presets.
 
 `raster-waves`: independently selectable; default and reduced presets.
+
+`wireframe-terrain`: independently selectable; default and reduced presets.

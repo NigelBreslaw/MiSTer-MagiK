@@ -11,10 +11,12 @@ mod light;
 mod mirror;
 mod point_cloud;
 mod stars;
+mod terrain;
 mod tunnel;
 mod waves;
 
 pub const EFFECTS: &[&str] = &[
+    "wireframe-terrain",
     "raster-waves",
     "texture-tunnel",
     "palette-aurora",
@@ -70,6 +72,7 @@ impl Scene {
             return Err("unsupported concept geometry".into());
         }
         let effect: Box<dyn Effect> = match name {
+            "wireframe-terrain" => Box::new(terrain::new(preset, width, height)?),
             "raster-waves" => Box::new(waves::new(preset, width, height)?),
             "texture-tunnel" => Box::new(tunnel::new(preset, width, height)?),
             "palette-aurora" => Box::new(aurora::new(preset, width, height)?),
