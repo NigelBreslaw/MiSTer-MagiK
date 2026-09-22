@@ -11,8 +11,10 @@ mod light;
 mod mirror;
 mod point_cloud;
 mod stars;
+mod tunnel;
 
 pub const EFFECTS: &[&str] = &[
+    "texture-tunnel",
     "palette-aurora",
     "starfield-comets",
     "pixel-dissolve",
@@ -66,6 +68,7 @@ impl Scene {
             return Err("unsupported concept geometry".into());
         }
         let effect: Box<dyn Effect> = match name {
+            "texture-tunnel" => Box::new(tunnel::new(preset, width, height)?),
             "palette-aurora" => Box::new(aurora::new(preset, width, height)?),
             "starfield-comets" => Box::new(stars::new(preset, width, height)?),
             "pixel-dissolve" => Box::new(dissolve::new(preset, width, height)?),
