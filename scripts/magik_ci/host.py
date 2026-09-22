@@ -104,6 +104,11 @@ def commands(group: str) -> list[list[str]]:
         manifest = "apps/mister/Cargo.toml"
         return [
             [
+                "python3",
+                "scripts/checks/generate-runtime-environment-reference.py",
+                "--check",
+            ],
+            [
                 "cargo",
                 "check",
                 "--locked",

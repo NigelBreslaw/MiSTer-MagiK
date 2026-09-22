@@ -48,7 +48,9 @@ def _concentration_source(path: str) -> bool:
     parts = Path(path).parts
     return not (
         parts[0] in {"history", "reference", "private", "build"}
-        or any(part in {"target", "vendor", "generated", "ui-generated"} for part in parts)
+        or any(
+            part in {"target", "vendor", "generated", "ui-generated"} for part in parts
+        )
         or Path(path).name.startswith("generated")
         or path.endswith(".svh")
     )

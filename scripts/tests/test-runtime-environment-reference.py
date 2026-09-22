@@ -3,6 +3,7 @@
 
 import importlib.util
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -17,6 +18,13 @@ SPEC.loader.exec_module(REFERENCE)
 
 
 class RuntimeEnvironmentReferenceTests(unittest.TestCase):
+    def test_checked_in_registry_and_reference_are_current(self):
+        registry = tomllib.loads(REFERENCE.DEFAULT_REGISTRY.read_text())
+        self.assertEqual(REFERENCE.validate(registry, REFERENCE.ROOT), [])
+        self.assertEqual(
+            REFERENCE.render(registry), REFERENCE.DEFAULT_OUTPUT.read_text()
+        )
+
     def test_owner_and_exact_source_name_are_required(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

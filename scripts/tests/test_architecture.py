@@ -13,11 +13,16 @@ from scripts.magik_ci.architecture import _concentration_source, report
 class ArchitectureTests(unittest.TestCase):
     def test_concentration_excludes_generated_and_archived_sources(self):
         for path in (
-            "history/log.tsv", "reference/Main/main.cpp", "private/assets/data.json",
-            "build/output.rs", "apps/mister/target/output.rs",
+            "history/log.tsv",
+            "reference/Main/main.cpp",
+            "private/assets/data.json",
+            "build/output.rs",
+            "apps/mister/target/output.rs",
             "mister/platform/contracts/generated/source.rs",
-            "apps/mister/ui-generated/src/lib.rs", "crates/wire/src/generated.rs",
-            "mister/platform/fpga/protocol.svh", "vendor/dependency/lib.rs",
+            "apps/mister/ui-generated/src/lib.rs",
+            "crates/wire/src/generated.rs",
+            "mister/platform/fpga/protocol.svh",
+            "vendor/dependency/lib.rs",
         ):
             with self.subTest(path=path):
                 self.assertFalse(_concentration_source(path))
