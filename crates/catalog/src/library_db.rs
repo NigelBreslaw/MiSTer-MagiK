@@ -2,9 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Shared archive records and source normalization. No catalog database or builder.
-pub use crate::catalog_config::{
-    default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
-};
 use crate::launch_profiles::PayloadRule;
 pub(crate) use crate::sqlite_support::{
     open_sqlite_read_only, sqlite_column_exists, sqlite_table_exists,

@@ -81,8 +81,6 @@ enum CatalogProgressDetail {
     Owned(String),
     GamesFound(usize),
     IndexSummary { games: usize, archives: usize },
-    SqliteImport { written: usize, total: usize },
-    SqlitePublish { done: u64, total: u64 },
 }
 
 impl CatalogProgress {
@@ -130,34 +128,6 @@ impl CatalogProgress {
         }
     }
 
-    pub fn saving_sqlite_import(written: usize, total: usize) -> Self {
-        Self {
-            phase: CatalogProgressPhase::SavingLibrary,
-            detail: CatalogProgressDetail::SqliteImport { written, total },
-        }
-    }
-
-    pub fn saving_sqlite_publish(done: u64, total: u64) -> Self {
-        Self {
-            phase: CatalogProgressPhase::SavingLibrary,
-            detail: CatalogProgressDetail::SqlitePublish { done, total },
-        }
-    }
-
-    pub fn saving_finalizing() -> Self {
-        Self {
-            phase: CatalogProgressPhase::SavingLibrary,
-            detail: CatalogProgressDetail::Static("Finalizing catalog views and search indexes..."),
-        }
-    }
-
-    pub fn loading_sqlite_catalog() -> Self {
-        Self {
-            phase: CatalogProgressPhase::LoadingLibrary,
-            detail: CatalogProgressDetail::Static("Opening SQLite catalog..."),
-        }
-    }
-
     pub fn library_scan_failed(error: impl Into<String>) -> Self {
         Self {
             phase: CatalogProgressPhase::LibraryScanFailed,
@@ -183,12 +153,6 @@ impl CatalogProgress {
             CatalogProgressDetail::GamesFound(count) => Cow::Owned(format!("Games found: {count}")),
             CatalogProgressDetail::IndexSummary { games, archives } => {
                 Cow::Owned(format!("Writing {games} games, {archives} archives..."))
-            }
-            CatalogProgressDetail::SqliteImport { written, total } => {
-                Cow::Owned(format!("Writing {written} of {total} games into SQLite..."))
-            }
-            CatalogProgressDetail::SqlitePublish { done, total } => {
-                Cow::Owned(format!("Saving {done} of {total} bytes to disk..."))
             }
         };
         CatalogProgressDisplay {
@@ -291,12 +255,6 @@ mod tests {
         assert_eq!(display.title(), "Indexing library");
         assert_eq!(display.detail(), "Writing 10 games, 2 archives...");
         assert_eq!(display.percent(), 90);
-
-        let progress = CatalogProgress::saving_sqlite_import(50, 100);
-        let display = progress.display();
-        assert_eq!(display.title(), "Saving library");
-        assert_eq!(display.detail(), "Writing 50 of 100 games into SQLite...");
-        assert_eq!(display.percent(), 94);
     }
 
     #[test]
@@ -354,20 +312,6 @@ mod tests {
                 "Saving library",
                 "Writing catalog database before opening launcher...",
                 90,
-            ),
-            (
-                CatalogProgress::saving_finalizing(),
-                CatalogProgressPhase::SavingLibrary,
-                "Saving library",
-                "Finalizing catalog views and search indexes...",
-                99,
-            ),
-            (
-                CatalogProgress::loading_sqlite_catalog(),
-                CatalogProgressPhase::LoadingLibrary,
-                "Loading library",
-                "Opening SQLite catalog...",
-                100,
             ),
             (
                 CatalogProgress::library_scan_failed("scan failed"),
