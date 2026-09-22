@@ -1398,7 +1398,19 @@ impl Agent {
         mut child: Child,
         expected_hash: &str,
     ) -> Envelope {
-        let deadline = Instant::now() + Duration::from_secs(20);
+        // Retained Mini concepts prepare their assets before first-frame
+        // readiness. The full tunnel sequence takes about 32 seconds on A9.
+        let concept = request
+            .fields
+            .get("artifact")
+            .and_then(serde_json::Value::as_str)
+            == Some("mini-magik")
+            && request
+                .fields
+                .get("concept_session")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true);
+        let deadline = Instant::now() + Duration::from_secs(if concept { 60 } else { 20 });
         loop {
             if self.ready_for(child.id(), expected_hash) {
                 // Hash the actual executable once after readiness, not on every

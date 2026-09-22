@@ -1,6 +1,6 @@
 # Mini visual concepts — device qualification
 
-Status: implementation available; qualification is incomplete. The curved tunnel missed its physical cadence gate; the user deferred further tunnel tuning. Live HDMI visual acceptance remains with the user.
+Status: implementation available; the retained concepts have passing recorded device windows. Live HDMI review remains incomplete. Light sweep, pixel dissolve, starfield, the corrected curved tunnel and raster waves have been accepted by the user.
 
 These are the latest completed measurements for each concept, across the explicitly identified development binaries below. A prior binary pass does not qualify a changed renderer.
 
@@ -13,7 +13,7 @@ Observed mode: HDMI 1920×1080p60; resolved RGB565 rendering: 960×540. No displ
 | light-sweep | 60.000 / 59.998 | 1800 / 1800 | 0 / 0 | 100.16 / 100.23 | 34.2 | Pass |
 | pixel-dissolve | 59.998 / 59.998 | 1800 / 1800 | 0 / 0 | 100.15 / 100.23 | 65.3 | Pass |
 | starfield | 59.998 / 60.000 | 1800 / 1800 | 0 / 0 | 100.13 / 100.13 | 34.2 | Pass |
-| texture-tunnel | 59.998 / 59.898 | 1800 / 1797 | 0 / 3 | 100.28 / 100.20 | 56.5 | Fail |
+| texture-tunnel | 59.998 / 59.998 | 1800 / 1800 | 0 / 0 | 100.24 / 100.18 | 68.4 | Pass |
 | raster-waves | 60.000 / 60.000 | 1800 / 1800 | 0 / 0 | 100.17 / 100.23 | 34.0 | Pass |
 | wireframe-terrain | 60.000 / 59.998 | 1800 / 1800 | 0 / 0 | 100.17 / 100.17 | 34.0 | Pass |
 
@@ -30,14 +30,14 @@ Times below are the larger average of the two windows, in milliseconds. Frame-to
 | light-sweep | 5.260 | 0.334 | 16.559 | 5.749 | `build/magik-results/20260922T154045Z-b66b51873e03` |
 | pixel-dissolve | 2.513 | 1.000 | 16.559 | 4.170 | `build/magik-results/20260922T141810Z-ed8a86efb7af` |
 | starfield | 1.311 | 1.382 | 16.550 | 1.460 | `build/magik-results/20260922T155324Z-8b0a2f56e128` |
-| texture-tunnel | 11.785 | 1.694 | 16.573 | 12.126 | `build/magik-results/20260922T144613Z-0b65f9898c32` |
+| texture-tunnel | 3.924 | 1.651 | 16.561 | 4.116 | `build/magik-results/20260922T161109Z-bdb96d29b2ba` |
 | raster-waves | 3.230 | 0.968 | 16.558 | 3.436 | `build/magik-results/20260922T151400Z-a253d837819c` |
 | wireframe-terrain | 3.820 | 1.563 | 16.552 | 4.066 | `build/magik-results/20260922T151609Z-dd5df7a60aaa` |
 
 ## Validation and limitations
 
 - Portable renderer tests cover deterministic reset, clipping, exact dissolve endpoints, fixed seed behavior and retained damage against full frames at 960×540 and 960×600. The existing two-slot damage ledger tests cover alternating slots, initialization and suppressed presentation.
-- Latest portable suite: 15 unit tests and two retained-frame tests passed at both geometries. Mini smoke and both motion checks passed on device (`20260922T152047Z-4c2deae9ae72`, `20260922T152113Z-7e4a673f6a74`).
+- Latest portable suite: 20 unit tests and two retained-frame tests passed at both geometries. Mini smoke and both motion checks passed on device (`20260922T152047Z-4c2deae9ae72`, `20260922T152113Z-7e4a673f6a74`).
 - Separate terrain profiling completed with 905 samples and matching artifact identity (`20260922T152008Z-bb103693141e`). Its four physical repeats are instrumented evidence and do not qualify cadence.
 - All listed unprofiled runs reported zero latch drops and rejections, including the failed curved tunnel run.
 - Host regression suite: 247 passed. Native service: 47 passed. Mini session: three passed. Tooling measurement/session: six passed. Focused Clippy, Python formatting/lint/type checks and ARM builds passed.
@@ -46,7 +46,7 @@ Times below are the larger average of the two windows, in milliseconds. Frame-to
 - The USB HDMI capture adapter was unavailable. The user elected to review the live display. Current capture controls produce exact initial, midpoint and loop-boundary evidence, plus a cabinet capture for point-cloud morph. Point-cloud and depth captures were repeated using exact device bookmarks on executable f8fa5c209d63 (`20260922T152403Z-3d836f5c6f86` and `20260922T152507Z-fc685dcb40fb`); their cadence rows retain the earlier measured binary identities. Static captures do not replace the remaining live visual signoff.
 - Reduced presets are functional options, not substitutes for default-preset qualification. CRT, desktop preview, combined effects, a controller gallery and full-app integration are outside this milestone.
 
-The original flat tunnel passed cadence but was rejected visually and replaced by a curved 3D tube. Its replacement missed three refreshes in the second window. The subsequent check was interrupted and is not qualification evidence.
+The original flat tunnel was rejected visually. The first curved tube missed three refreshes and later showed a motion glitch at its tight bend. The current version prepares each nominal frame from actual geometry; both windows pass and the user confirmed that the glitch was fixed on 22 September 2026. See [the diagnosis and research](tunnel-research.md). Preparation takes approximately 32 seconds on the device; Mini concept startup allows 60 seconds for this work before first-frame readiness, while ordinary startup retains its 20-second limit.
 
 See [the iteration guide](visual-concepts.md) for controls and final preset budgets. The current Mini concept stays on HDMI when the host session ends.
 
@@ -57,7 +57,7 @@ See [the iteration guide](visual-concepts.md) for controls and final preset budg
 - light-sweep: `8077260ff118b860718f43b291daf09bd72d4f2bb1bc3ae28737c1db0cf6ddd8`
 - pixel-dissolve: `b1f0033b281e9a16a9dfae73f02a562bedd585274271b8754fa3caa82f5dc126`
 - starfield: `f34d6e0c445b47dba164dc7e0af40cfc67b642f9aedb98f76725a7631d46b1f9`
-- texture-tunnel: `8276ca840ff967cf79d6fff8df02f82e46379724f9a30191f7d066550b75b00f`
+- texture-tunnel: `4360d72127c87ef39846a68d6ef9ab39661caa16a7b61778e1f1d165df0e5b79`
 - raster-waves: `f8fa5c209d63d3b10012a20a41ca084c1cc04f3401cc5776b704d103b6db12b9`
 - wireframe-terrain: `f8fa5c209d63d3b10012a20a41ca084c1cc04f3401cc5776b704d103b6db12b9`
 
@@ -90,3 +90,5 @@ removed at the user request. See
 
 Palette aurora was removed after live user review on 22 September 2026. Its
 renderer and selection controls are removed; the tunnel retains its RGB565 scaling helper.
+
+Raster waves was accepted as shown during live HDMI review on 22 September 2026.

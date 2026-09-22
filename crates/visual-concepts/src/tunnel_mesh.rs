@@ -57,50 +57,45 @@ impl Vertex {
         }
     }
 }
-pub(super) fn prepare(w: usize, h: usize, phases: usize) -> Vec<Vec<Sample>> {
-    let mut views = Vec::with_capacity(phases);
-    for phase in 0..phases {
-        let time = phase as f32 * TAU / phases as f32;
-        let camera = centre(time);
-        let (cx, cy, cz) = axes(time);
-        let roll = 0.30 * time.sin();
-        let rx = cx.scale(roll.cos()).add(cy.scale(roll.sin()));
-        let ry = cy.scale(roll.cos()).sub(cx.scale(roll.sin()));
-        const SIDES: usize = 32;
-        const RINGS: usize = 52;
-        let mut vertices = Vec::with_capacity((SIDES + 1) * RINGS);
-        for ring in 0..RINGS {
-            let at = time - 0.14 + ring as f32 * 0.06;
-            let c = centre(at);
-            let (x, y, _) = axes(at);
-            for side in 0..=SIDES {
-                let angle = side as f32 * TAU / SIDES as f32;
-                let world = c
-                    .add(x.scale(angle.cos() * 1.8))
-                    .add(y.scale(angle.sin() * 1.8));
-                let relative = world.sub(camera);
-                vertices.push(Vertex {
-                    p: V(relative.dot(rx), relative.dot(ry), relative.dot(cz)),
-                    u: side as f32 * 256.0 / SIDES as f32,
-                    v: at * 2304.0 / TAU,
-                });
-            }
+pub(super) fn view(w: usize, h: usize, time: f32) -> Vec<Sample> {
+    let camera = centre(time);
+    let (cx, cy, cz) = axes(time);
+    let roll = 0.30 * time.sin();
+    let rx = cx.scale(roll.cos()).add(cy.scale(roll.sin()));
+    let ry = cy.scale(roll.cos()).sub(cx.scale(roll.sin()));
+    const SIDES: usize = 32;
+    const RINGS: usize = 52;
+    let mut vertices = Vec::with_capacity((SIDES + 1) * RINGS);
+    for ring in 0..RINGS {
+        let at = time - 0.14 + ring as f32 * 0.06;
+        let c = centre(at);
+        let (x, y, _) = axes(at);
+        for side in 0..=SIDES {
+            let angle = side as f32 * TAU / SIDES as f32;
+            let world = c
+                .add(x.scale(angle.cos() * 1.8))
+                .add(y.scale(angle.sin() * 1.8));
+            let relative = world.sub(camera);
+            vertices.push(Vertex {
+                p: V(relative.dot(rx), relative.dot(ry), relative.dot(cz)),
+                u: side as f32 * 256.0 / SIDES as f32,
+                v: at * 2304.0 / TAU,
+            });
         }
-        let mut map = vec![Sample::default(); w * h];
-        let mut depth = vec![f32::INFINITY; w * h];
-        for ring in 0..RINGS - 1 {
-            for side in 0..SIDES {
-                let a = vertices[ring * (SIDES + 1) + side];
-                let b = vertices[ring * (SIDES + 1) + side + 1];
-                let c = vertices[(ring + 1) * (SIDES + 1) + side];
-                let d = vertices[(ring + 1) * (SIDES + 1) + side + 1];
-                clip([a, c, b], w, h, &mut map, &mut depth);
-                clip([b, c, d], w, h, &mut map, &mut depth);
-            }
-        }
-        views.push(map);
     }
-    views
+    let mut map = vec![Sample::default(); w * h];
+    let mut depth = vec![f32::INFINITY; w * h];
+    for ring in 0..RINGS - 1 {
+        for side in 0..SIDES {
+            let a = vertices[ring * (SIDES + 1) + side];
+            let b = vertices[ring * (SIDES + 1) + side + 1];
+            let c = vertices[(ring + 1) * (SIDES + 1) + side];
+            let d = vertices[(ring + 1) * (SIDES + 1) + side + 1];
+            clip([a, c, b], w, h, &mut map, &mut depth);
+            clip([b, c, d], w, h, &mut map, &mut depth);
+        }
+    }
+    map
 }
 fn clip(triangle: [Vertex; 3], w: usize, h: usize, map: &mut [Sample], depth: &mut [f32]) {
     const NEAR: f32 = 0.12;
@@ -144,6 +139,7 @@ fn raster(triangle: [Vertex; 3], w: usize, h: usize, map: &mut [Sample], depth: 
     if area.abs() < 0.0001 {
         return;
     }
+    let inverse_area = 1.0 / area;
     let x0 = p
         .iter()
         .map(|p| p[0])
@@ -172,8 +168,8 @@ fn raster(triangle: [Vertex; 3], w: usize, h: usize, map: &mut [Sample], depth: 
         .min(h);
     for y in y0..y1 {
         for x in x0..x1 {
-            let a = edge(p[1], p[2], x as f32 + 0.5, y as f32 + 0.5) / area;
-            let b = edge(p[2], p[0], x as f32 + 0.5, y as f32 + 0.5) / area;
+            let a = edge(p[1], p[2], x as f32 + 0.5, y as f32 + 0.5) * inverse_area;
+            let b = edge(p[2], p[0], x as f32 + 0.5, y as f32 + 0.5) * inverse_area;
             let c = 1.0 - a - b;
             if a < -0.00001 || b < -0.00001 || c < -0.00001 {
                 continue;

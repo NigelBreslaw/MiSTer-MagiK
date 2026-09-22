@@ -56,7 +56,8 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 [sampling diagnosis and research](starfield-research.md).
 
 
-`texture-tunnel`: independently selectable; default and reduced presets.
+`texture-tunnel`: curved tube with a moving, banking camera; see the
+[motion diagnosis and research](tunnel-research.md).
 
 `raster-waves`: independently selectable; default and reduced presets.
 
@@ -71,7 +72,7 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 | light-sweep | Quarter-pixel sheen profile, 6.25% peak | Half-pixel profile, same strength and speed | 3 s |
 | pixel-dissolve | Eight-pixel tiles | 16-pixel tiles | 3.2 s, including endpoint holds |
 | starfield | 256 filtered stars, no trails | 128 filtered stars, no trails | 8.192 s |
-| texture-tunnel | 480×270, 64 curved 3D coordinate maps, 256×256 texture | 120×67, 32 maps, same texture | 8 s forward flight, distance shading |
+| texture-tunnel | 480×270, 480 palette-index frames, 256×256 texture | 120×67, 480 frames, same texture | 8 s forward flight, distance shading |
 | raster-waves | Eight-pixel displacement | Four-pixel displacement | 2.048 s |
 | wireframe-terrain | 48×32 grid | 24×16 grid | 128 s |
 
@@ -81,8 +82,10 @@ Depth stores only the carousel rectangle, shares forward poses with reverse
 playback, and blends adjacent poses. Reduced depth crops the outer two cards.
 Dissolve prepares ordered tile thresholds and copies row spans. Tunnel preparation
 projects a curved tube from a moving, banking camera with near-plane clipping
-and perspective-correct texture coordinates; playback interpolates the prepared
-maps, with distance shading and forward texture travel. Preparation and
+and perspective-correct texture coordinates. Each nominal display interval has
+its own projected frame, stored as palette indices (59.3 MiB at the default
+working dimensions). Playback converts those indices to RGB565 without blending
+coordinates across changing wall visibility. Preparation and
 preset changes occur outside measured windows. Presets never adapt automatically.
 
 ## Iteration and evidence
