@@ -6243,6 +6243,16 @@ pub(super) fn run_launcher_loop(
             {
                 arcade.set_selected_game_index(nav.arcade.selected as i32);
             }
+            if let Some((faces_rebuilt, worker_restarted, duration_us)) = launcher_card_home
+                .as_mut().and_then(super::launcher_card_home::LauncherCardHomeSession::take_preparation_measurement)
+            {
+                let metrics = &mut session.metrics;
+                metrics.counters.card_face_rebuilds += u64::from(faces_rebuilt);
+                metrics.counters.card_worker_restarts += u64::from(worker_restarted);
+                metrics.counters.card_chrome_refreshes += u64::from(!faces_rebuilt);
+                metrics.counters.card_prepare_us += duration_us;
+                metrics.card_prepare_max_us = metrics.card_prepare_max_us.max(duration_us);
+            }
             if let Err(error) = session.tick(ui.render_w(), ui.render_h()) {
                 session.metrics.error = Some(error);
             }

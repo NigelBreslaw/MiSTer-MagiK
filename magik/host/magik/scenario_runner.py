@@ -96,15 +96,26 @@ def application_session(request, magik_run):
         installed = request.config.getoption("--magik-installed-sha256")
         if installed:
             app_name = request.config.getoption("--magik-app")
-            if len(installed) != 64 or any(c not in "0123456789abcdef" for c in installed):
-                raise ValueError("installed SHA-256 must be 64 lowercase hexadecimal characters")
-            if not (status.fields.get("running") and status.fields.get("ready")
-                    and status.fields.get("artifact") == app_name
-                    and status.fields.get("running_sha256") == installed):
-                raise AssertionError("running development artifact does not match requested SHA-256")
+            if len(installed) != 64 or any(
+                c not in "0123456789abcdef" for c in installed
+            ):
+                raise ValueError(
+                    "installed SHA-256 must be 64 lowercase hexadecimal characters"
+                )
+            if not (
+                status.fields.get("running")
+                and status.fields.get("ready")
+                and status.fields.get("artifact") == app_name
+                and status.fields.get("running_sha256") == installed
+            ):
+                raise AssertionError(
+                    "running development artifact does not match requested SHA-256"
+                )
             agent.artifact = app_name
             agent.expected_sha256 = installed
-            append_event(magik_run, {"phase": "artifact", "sha256": installed, "installed": True})
+            append_event(
+                magik_run, {"phase": "artifact", "sha256": installed, "installed": True}
+            )
         else:
             ensure_application(
                 agent, status, magik_run, request.config.getoption("--magik-app")

@@ -116,9 +116,27 @@ impl CardPipelineCounters {
 struct PipelineState {
     pending: Option<CardFrameRequest>,
     ready: Option<RenderedCardFrame>,
-    free: Vec<Vec<Rgb565Pixel>>,
+    free: Vec<RecycledFrame>,
+    static_frame: Vec<Rgb565Pixel>,
+    content_generation: u64,
     counters: CardPipelineCounters,
     shutdown: bool,
+    #[cfg(test)]
+    hold_completion: bool,
+}
+
+struct RecycledFrame {
+    pixels: Vec<Rgb565Pixel>,
+    content_generation: u64,
+}
+
+impl RenderedCardFrame {
+    fn recycle(self) -> RecycledFrame {
+        RecycledFrame {
+            pixels: self.pixels,
+            content_generation: self.request.content_generation,
+        }
+    }
 }
 
 struct SharedPipeline {
@@ -153,9 +171,18 @@ impl LauncherCardRenderAhead {
             state: Mutex::new(PipelineState {
                 pending: None,
                 ready: None,
-                free: vec![static_frame.to_vec(), static_frame.to_vec()],
+                free: (0..2)
+                    .map(|_| RecycledFrame {
+                        pixels: static_frame.to_vec(),
+                        content_generation: 0,
+                    })
+                    .collect(),
+                static_frame: static_frame.to_vec(),
+                content_generation: 0,
                 counters: CardPipelineCounters::default(),
                 shutdown: false,
+                #[cfg(test)]
+                hold_completion: false,
             }),
             wake: Condvar::new(),
         });
@@ -173,6 +200,13 @@ impl LauncherCardRenderAhead {
 
     pub(super) fn submit(&self, request: CardFrameRequest) {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        // The initial generation is supplied by the owning session's first request.
+        if state.content_generation == 0 {
+            state.content_generation = request.content_generation;
+            for free in &mut state.free {
+                free.content_generation = request.content_generation;
+            }
+        }
         if self.measure_metrics {
             state.counters.submitted = state.counters.submitted.saturating_add(1);
         }
@@ -199,7 +233,7 @@ impl LauncherCardRenderAhead {
             if self.measure_metrics {
                 state.counters.stale = state.counters.stale.saturating_add(1);
             }
-            state.free.push(frame.pixels);
+            state.free.push(frame.recycle());
             self.shared.wake.notify_one();
             None
         } else {
@@ -209,22 +243,30 @@ impl LauncherCardRenderAhead {
 
     pub(super) fn recycle(&self, frame: RenderedCardFrame) {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.free.push(frame.pixels);
+        state.free.push(frame.recycle());
         self.shared.wake.notify_one();
     }
 
     pub(super) fn return_ready(&self, frame: RenderedCardFrame) {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if frame.request.content_generation != state.content_generation {
+            state.free.push(frame.recycle());
+            if self.measure_metrics {
+                state.counters.stale += 1;
+            }
+            self.shared.wake.notify_one();
+            return;
+        }
         match state.ready.take() {
             Some(newer) if newer.request.render.generation > frame.request.render.generation => {
                 state.ready = Some(newer);
-                state.free.push(frame.pixels);
+                state.free.push(frame.recycle());
                 if self.measure_metrics {
                     state.counters.superseded = state.counters.superseded.saturating_add(1);
                 }
             }
             Some(older) => {
-                state.free.push(older.pixels);
+                state.free.push(older.recycle());
                 state.ready = Some(frame);
                 if self.measure_metrics {
                     state.counters.superseded = state.counters.superseded.saturating_add(1);
@@ -244,6 +286,22 @@ impl LauncherCardRenderAhead {
             .is_some()
     }
 
+    pub(super) fn refresh_chrome(&self, generation: u64, pixels: &[Rgb565Pixel]) {
+        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.static_frame.copy_from_slice(pixels);
+        state.content_generation = generation;
+        if let Some(old) = state.ready.take() {
+            state.free.push(old.recycle());
+            if self.measure_metrics {
+                state.counters.stale += 1;
+            }
+        }
+        if state.pending.take().is_some() && self.measure_metrics {
+            state.counters.stale += 1;
+        }
+        self.shared.wake.notify_one();
+    }
+
     pub(super) fn counters(&self) -> CardPipelineCounters {
         self.shared
             .state
@@ -251,10 +309,15 @@ impl LauncherCardRenderAhead {
             .unwrap_or_else(|e| e.into_inner())
             .counters
     }
+
+    #[cfg(test)]
+    pub(super) fn worker_identity(&self) -> std::thread::ThreadId {
+        self.coordinator.as_ref().unwrap().thread().id()
+    }
 }
 
-impl Drop for LauncherCardRenderAhead {
-    fn drop(&mut self) {
+impl LauncherCardRenderAhead {
+    pub(super) fn stop(&mut self) {
         {
             let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
             state.shutdown = true;
@@ -264,6 +327,12 @@ impl Drop for LauncherCardRenderAhead {
         if let Some(coordinator) = self.coordinator.take() {
             let _ = coordinator.join();
         }
+    }
+}
+
+impl Drop for LauncherCardRenderAhead {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -299,10 +368,13 @@ fn run_coordinator(
             if state.shutdown {
                 break;
             }
-            (
-                state.pending.take().expect("pending request checked"),
-                state.free.pop().expect("free frame checked"),
-            )
+            let request = state.pending.take().expect("pending request checked");
+            let mut output = state.free.pop().expect("free frame checked");
+            if output.content_generation != state.content_generation {
+                output.pixels.copy_from_slice(&state.static_frame);
+                output.content_generation = state.content_generation;
+            }
+            (request, output)
         };
         let total_started = measure_timing.then(Instant::now);
 
@@ -324,7 +396,11 @@ fn run_coordinator(
         };
         let secondary_wait_us = elapsed_us(wait_started);
         let composition_started = measure_timing.then(Instant::now);
-        compose_tiles(&mut output, left.pixels(), completed_right.buffer.pixels());
+        compose_tiles(
+            &mut output.pixels,
+            left.pixels(),
+            completed_right.buffer.pixels(),
+        );
         let composition_us = elapsed_us(composition_started);
         right = Some(completed_right.buffer);
         let timing = CardProducerTiming {
@@ -344,12 +420,24 @@ fn run_coordinator(
             state.counters.secondary_wait_us += timing.secondary_wait_us;
             state.counters.composition_us += timing.composition_us;
         }
+        #[cfg(test)]
+        while state.hold_completion && !state.shutdown {
+            state = shared.wake.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+        if request.content_generation != state.content_generation {
+            state.free.push(output);
+            if measure_timing {
+                state.counters.stale += 1;
+            }
+            shared.wake.notify_one();
+            continue;
+        }
         if let Some(old) = state.ready.replace(RenderedCardFrame {
             request,
-            pixels: output,
+            pixels: output.pixels,
             timing,
         }) {
-            state.free.push(old.pixels);
+            state.free.push(old.recycle());
             if measure_timing {
                 state.counters.superseded = state.counters.superseded.saturating_add(1);
             }
@@ -530,6 +618,50 @@ mod tests {
         assert_eq!(frame.request().render.generation, 1);
         assert!(frame.timing().total_us > 0);
         pipeline.recycle(frame);
+    }
+
+    #[test]
+    fn chrome_refresh_rejects_in_flight_work_and_reseeds_recycled_frames() {
+        let mut serial = prepared();
+        let pipeline =
+            LauncherCardRenderAhead::start(serial.frame_preparer(), serial.pixels(), true);
+        pipeline.shared.state.lock().unwrap().hold_completion = true;
+        pipeline.submit(request(1, 900_000, 90));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while pipeline.counters().completed == 0 {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        // A chrome pixel outside the carousel must survive tile composition.
+        let mut chrome = serial.pixels().to_vec();
+        chrome[20 * WIDTH + 880] = Rgb565Pixel(0x1234);
+        pipeline.refresh_chrome(5, &chrome);
+        {
+            let mut state = pipeline.shared.state.lock().unwrap();
+            state.hold_completion = false;
+            pipeline.shared.wake.notify_one();
+        }
+        for sequence in 2..=4 {
+            let mut req = request(sequence, 900_000, 90);
+            req.content_generation = 5;
+            pipeline.submit(req);
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let frame = loop {
+                if let Some(frame) = pipeline.try_take(5, 7, 1_000_000, 1_000_000) {
+                    break frame;
+                }
+                assert!(Instant::now() < deadline);
+                std::thread::yield_now();
+            };
+            serial.render_frame(req.render.frame);
+            let mut expected = serial.pixels().to_vec();
+            expected[20 * WIDTH + 880] = Rgb565Pixel(0x1234);
+            assert_eq!(frame.pixels(), expected);
+            assert_eq!(frame.request.content_generation, 5);
+            pipeline.recycle(frame);
+        }
+        assert_eq!(pipeline.counters().stale, 1);
+        assert_eq!(pipeline.shared.state.lock().unwrap().free.len(), 2);
     }
 
     #[test]

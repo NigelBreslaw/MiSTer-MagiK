@@ -432,6 +432,17 @@ struct PreparedCard {
 }
 
 impl PreparedLauncher {
+    /// Refresh only static chrome. Callers must rebuild for changed card data,
+    /// artwork, output geometry, or typography. Faces and scratch stay resident.
+    pub fn refresh_chrome(
+        &mut self,
+        data: LauncherData<'_>,
+        typography: Option<LauncherTypography<'_>>,
+    ) {
+        render_logical(&mut self.logical, data, typography);
+        self.fit_output();
+    }
+
     pub fn compose_tiles(&mut self, left: &PreparedLauncherFrame, right: &PreparedLauncherFrame) {
         assert_eq!(left.request, right.request);
         assert_eq!(left.clip.0, 296);
@@ -1605,6 +1616,65 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn chrome_refresh_keeps_faces_and_scratch_and_matches_fresh_frame() {
+        for (width, height) in [(960, 540), (540, 960)] {
+            let scene = LauncherScene::new(width, height);
+            let mut prepared = scene.prepare(data());
+            let faces = prepared.faces.clone();
+            let scratch = prepared.flip_columns.as_ptr();
+            let mut updated = data();
+            updated.clock = "22:00";
+            updated.library_games += 123;
+            updated.collections += 5;
+            updated.favourites += 1;
+            prepared.refresh_chrome(updated, None);
+            assert!(Arc::ptr_eq(&prepared.faces, &faces));
+            assert_eq!(prepared.flip_columns.as_ptr(), scratch);
+            let frame = BrowseFrame {
+                selected: 0,
+                target: 1,
+                phase: crate::launcher_navigation::BrowsePhase::Flipping,
+                direction: Some(crate::launcher_navigation::BrowseDirection::Right),
+                progress_millis: 91,
+                duration_millis: 180,
+                outgoing: None,
+            };
+            prepared.render_frame(frame);
+            let mut reference = scene.prepare(updated);
+            reference.render_frame(frame);
+            assert_eq!(prepared.pixels(), reference.pixels());
+        }
+    }
+
+    #[test]
+    #[ignore = "host microbenchmark; run explicitly with --release --ignored --nocapture"]
+    fn chrome_refresh_benchmark() {
+        use std::hint::black_box;
+        use std::time::Instant;
+        let scene = LauncherScene::new(960, 540);
+        let mut prepared = scene.prepare(data());
+        let faces = prepared.faces.clone();
+        for sample in 0..3 {
+            let mut updated = data();
+            updated.clock = if sample % 2 == 0 { "21:38" } else { "21:37" };
+            let full_started = Instant::now();
+            let reference = black_box(scene.prepare(black_box(updated)));
+            let full_us = full_started.elapsed().as_micros();
+            let chrome_started = Instant::now();
+            prepared.refresh_chrome(black_box(updated), None);
+            black_box(prepared.pixels());
+            let chrome_us = chrome_started.elapsed().as_micros();
+            assert!(Arc::ptr_eq(&faces, &prepared.faces));
+            let frame = crate::launcher_navigation::LauncherBrowser::new(CARDS.len(), 0).frame(0);
+            prepared.render_frame(frame);
+            assert_eq!(prepared.pixels(), reference.pixels());
+            println!(
+                "{{\"benchmark\":\"host-chrome-refresh\",\"sample\":{sample},\"full_prepare_us\":{full_us},\"chrome_refresh_us\":{chrome_us},\"rgb565_exact\":true}}"
+            );
         }
     }
 

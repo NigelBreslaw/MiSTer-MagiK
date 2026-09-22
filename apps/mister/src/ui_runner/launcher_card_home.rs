@@ -81,6 +81,8 @@ pub(super) struct LauncherCardHomeSession {
     compositor_stale: bool,
     retired_pipeline_counters: CardPipelineCounters,
     reported_pipeline_counters: CardPipelineCounters,
+    measure_preparation: bool,
+    preparation_measurement: Option<(bool, bool, u64)>,
 }
 
 impl LauncherCardHomeSession {
@@ -120,6 +122,8 @@ impl LauncherCardHomeSession {
             compositor_stale: false,
             retired_pipeline_counters: CardPipelineCounters::default(),
             reported_pipeline_counters: CardPipelineCounters::default(),
+            measure_preparation: std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some(),
+            preparation_measurement: None,
         })
     }
 
@@ -181,33 +185,56 @@ impl LauncherCardHomeSession {
             self.content_dirty = true;
         }
 
-        if self.width != width
-            || self.height != height
-            || self.snapshot != snapshot
-            || self.clock != clock
-        {
-            if let Some(render_ahead) = self.render_ahead.as_ref() {
-                self.retired_pipeline_counters
-                    .add_assign(render_ahead.counters());
-            }
+        let faces_changed =
+            self.width != width || self.height != height || self.snapshot.cards != snapshot.cards;
+        if faces_changed || self.snapshot != snapshot || self.clock != clock {
+            let preparation_started = self.measure_preparation.then(std::time::Instant::now);
+            self.release_presented_frame();
             self.width = width;
             self.height = height;
             self.snapshot = snapshot;
             self.clock.clear();
             self.clock.push_str(clock);
-            self.prepared = prepare(
-                width,
-                height,
-                &self.snapshot,
-                self.frame.selected,
-                &self.clock,
-                &self.artwork,
-                &self.fonts,
-            );
             self.content_generation = self.content_generation.wrapping_add(1).max(1);
-            self.presented_frame = None;
-            self.render_ahead = native_render_ahead(width, height, &self.prepared);
+            if faces_changed {
+                if let Some(mut old) = self.render_ahead.take() {
+                    old.stop();
+                    self.retired_pipeline_counters.add_assign(old.counters());
+                }
+                self.prepared = prepare(
+                    width,
+                    height,
+                    &self.snapshot,
+                    self.frame.selected,
+                    &self.clock,
+                    &self.artwork,
+                    &self.fonts,
+                );
+                self.render_ahead = native_render_ahead(width, height, &self.prepared);
+            } else {
+                self.prepared.refresh_chrome(
+                    LauncherData {
+                        cards: &self.snapshot.cards,
+                        selected: self.frame.selected,
+                        library_games: self.snapshot.library_games,
+                        collections: self.snapshot.collections,
+                        favourites: self.snapshot.favourites,
+                        clock: &self.clock,
+                    },
+                    Some(self.fonts.typography()),
+                );
+            }
+            if let Some(pipeline) = self.render_ahead.as_ref() {
+                pipeline.refresh_chrome(self.content_generation, self.prepared.pixels());
+            }
             self.content_dirty = true;
+            self.preparation_measurement = preparation_started.map(|start| {
+                (
+                    faces_changed,
+                    faces_changed && self.render_ahead.is_some(),
+                    start.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+                )
+            });
         }
         if self.active && (self.content_dirty || self.is_animating()) {
             self.submit_render_ahead();
@@ -298,6 +325,11 @@ impl LauncherCardHomeSession {
         let delta = current.delta(self.reported_pipeline_counters);
         self.reported_pipeline_counters = current;
         delta
+    }
+
+    #[cfg(feature = "tooling")]
+    pub(super) fn take_preparation_measurement(&mut self) -> Option<(bool, bool, u64)> {
+        self.preparation_measurement.take()
     }
 
     fn submit_render_ahead(&mut self) {
@@ -438,6 +470,34 @@ mod tests {
 
         session.render();
         assert!(!session.compositor_stale());
+    }
+
+    #[test]
+    fn clock_and_sidebar_refresh_preserve_worker_and_match_fresh_preparation() {
+        let mut data = snapshot();
+        let mut session = LauncherCardHomeSession::new(960, 540, data.clone(), 0, "21:37").unwrap();
+        session.update(960, 540, data.clone(), 0, None, "21:37", 0);
+        let worker = session.render_ahead.as_ref().unwrap().worker_identity();
+        for clock in ["21:38", "22:00"] {
+            data.collections += 1;
+            data.library_games += 123;
+            session.update(960, 540, data.clone(), 0, None, clock, 16);
+            assert_eq!(
+                session.render_ahead.as_ref().unwrap().worker_identity(),
+                worker
+            );
+            assert!(session.presented_frame.is_none());
+            let mut reference =
+                prepare(960, 540, &data, 0, clock, &session.artwork, &session.fonts);
+            reference.render_frame(session.frame);
+            assert_eq!(session.render(), reference.pixels());
+        }
+        data.cards[0].games = Some(999);
+        session.update(960, 540, data, 0, None, "22:00", 32);
+        assert_ne!(
+            session.render_ahead.as_ref().unwrap().worker_identity(),
+            worker
+        );
     }
 
     #[test]

@@ -257,7 +257,9 @@ def launcher_motion(
     _wait(lambda: not _settings_open(application), "Home did not close Settings")
 
     previous = agent.metrics().get("window")
-    agent._successful("measure", {"launcher_clock": "rollover" if align_rollover else "fixed"})
+    agent._successful(
+        "measure", {"launcher_clock": "rollover" if align_rollover else "fixed"}
+    )
     seconds = 10 if instrumented else 5
     interval_seconds = 0.25
     deadline = time.monotonic() + 2 + seconds + 0.4
@@ -285,18 +287,25 @@ def launcher_motion(
     if window.get("presentations", 0) <= 0:
         raise AssertionError("card navigation produced no measured presentations")
     if window.get("forced_clock_changes") != int(align_rollover):
-        raise AssertionError("measurement did not observe the requested synthetic clock change")
+        raise AssertionError(
+            "measurement did not observe the requested synthetic clock change"
+        )
     if instrumented:
         unique = window.get("card_unique_presentations", 0)
         redisplayed = window.get("card_redisplayed_presentations", 0)
-        if unique + redisplayed + window.get("card_synchronous_presentations", 0) != window["presentations"]:
+        if (
+            unique + redisplayed + window.get("card_synchronous_presentations", 0)
+            != window["presentations"]
+        ):
             raise AssertionError(
                 "card unique and redisplayed counts do not cover physical presentations"
             )
         if window.get("card_producer_total_us", 0) <= 0:
             raise AssertionError("instrumented card motion recorded no producer work")
         if window.get("card_hidden_copy_us", 0) <= 0:
-            raise AssertionError("instrumented card motion recorded no hidden-slot copy work")
+            raise AssertionError(
+                "instrumented card motion recorded no hidden-slot copy work"
+            )
     return {
         **window,
         "workload": (

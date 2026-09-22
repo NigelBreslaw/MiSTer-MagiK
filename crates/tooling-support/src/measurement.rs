@@ -23,10 +23,15 @@ pub struct Counters {
     pub card_composition_us: u64,
     pub card_hidden_copy_us: u64,
     pub card_source_age_us: u64,
+    pub card_face_rebuilds: u64,
+    pub card_worker_restarts: u64,
+    pub card_chrome_refreshes: u64,
+    pub card_prepare_us: u64,
 }
 #[derive(Default)]
 pub struct PresentationMetrics {
     pub forced_clock_changes: u64,
+    pub card_prepare_max_us: u64,
     pub context: Value,
     pub counters: Counters,
     pub last_render_us: u64,
@@ -46,6 +51,11 @@ impl PresentationMetrics {
             json!({"start_ms":start_ms,"end_ms":end_ms,"elapsed_ms":end_ms-start_ms,
             "width":width,"height":height,"instrumented":instrumented,
             "forced_clock_changes":self.forced_clock_changes,
+            "card_face_rebuilds":c.card_face_rebuilds-baseline.card_face_rebuilds,
+            "card_worker_restarts":c.card_worker_restarts-baseline.card_worker_restarts,
+            "card_chrome_refreshes":c.card_chrome_refreshes-baseline.card_chrome_refreshes,
+            "card_prepare_us":c.card_prepare_us-baseline.card_prepare_us,
+            "card_prepare_max_us":self.card_prepare_max_us,
             "presentations":c.presentations-baseline.presentations,"render_us_total":c.render_us-baseline.render_us,
             "render_to_present_us_total":c.render_to_present_us-baseline.render_to_present_us,
             "physical_latch_posts":c.posts-baseline.posts,"physical_latch_flips":c.flips-baseline.flips,

@@ -98,6 +98,7 @@ impl Session {
                     .is_some_and(|start| now - start >= 2000)
             {
                 self.metrics.window_start = Some((now, self.metrics.counters.clone()));
+                self.metrics.card_prepare_max_us = 0;
                 self.profile = CpuProfile::start()?;
             }
             if self

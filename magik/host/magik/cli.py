@@ -97,7 +97,10 @@ def main() -> int:
         "scenario", choices=CHECK_SCENARIOS, nargs="?", default="smoke"
     )
     check_command.add_argument("--profile", action="store_true")
-    check_command.add_argument("--installed-sha256", help="Verify and benchmark this running hash without building or deploying")
+    check_command.add_argument(
+        "--installed-sha256",
+        help="Verify and benchmark this running hash without building or deploying",
+    )
     subcommands.add_parser("watch")
     subcommands.add_parser("status")
     subcommands.add_parser("stop")
@@ -348,9 +351,7 @@ def check(arguments: argparse.Namespace, run: Path) -> int:
     selection = str(scenario_file)
     if arguments.scenario:
         profile_suffix = "_profile" if arguments.profile else ""
-        selection += (
-            f"::test_{arguments.scenario.replace('-', '_')}{profile_suffix}"
-        )
+        selection += f"::test_{arguments.scenario.replace('-', '_')}{profile_suffix}"
     options = [
         selection,
         "-q",
