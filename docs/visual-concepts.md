@@ -28,7 +28,7 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 - [x] Shared fixtures
 - [x] Point-cloud morph
 - [x] Depth and parallax
-- [ ] Satin light sweep
+- [x] Satin light sweep
 - [ ] Mirror floor
 - [ ] Pixel dissolve
 - [ ] Starfield and comets
@@ -41,3 +41,5 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 `point-cloud-morph`: independently selectable; default and reduced presets.
 
 `depth-parallax`: independently selectable; default and reduced presets.
+
+`light-sweep`: independently selectable; default and reduced presets.
