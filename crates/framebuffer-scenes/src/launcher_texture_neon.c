@@ -40,25 +40,16 @@ static inline uint32_t scalar(uint32_t a, uint32_t b, uint32_t w) {
   return rb | (ga << 8);
 }
 
-void magik_launcher_shade_rgba(uint32_t *pixels, size_t n, uint32_t light) {
-  size_t i = 0;
-  // The Rust boundary skips full brightness; all remaining factors fit u8.
+static inline uint32x4_t shade(uint32x4_t original, uint32_t light) {
+  if (light == 256)
+    return original;
   const uint8x8_t factor = vdup_n_u8((uint8_t)light);
   const uint32x4_t alpha = vdupq_n_u32(0xff000000);
-  for (; i + 4 <= n; i += 4) {
-    const uint32x4_t original = vld1q_u32(pixels + i);
-    const uint8x16_t bytes = vreinterpretq_u8_u32(original);
-    const uint8x16_t shaded = vcombine_u8(
-        vshrn_n_u16(vmull_u8(vget_low_u8(bytes), factor), 8),
-        vshrn_n_u16(vmull_u8(vget_high_u8(bytes), factor), 8));
-    vst1q_u32(pixels + i, vbslq_u32(alpha, original, vreinterpretq_u32_u8(shaded)));
-  }
-  for (; i < n; ++i) {
-    const uint32_t p = pixels[i];
-    const uint32_t rb = (((p & 0x00ff00ff) * light) >> 8) & 0x00ff00ff;
-    const uint32_t g = (((p >> 8) & 255) * light >> 8) << 8;
-    pixels[i] = (p & 0xff000000) | rb | g;
-  }
+  const uint8x16_t bytes = vreinterpretq_u8_u32(original);
+  const uint8x16_t shaded = vcombine_u8(
+      vshrn_n_u16(vmull_u8(vget_low_u8(bytes), factor), 8),
+      vshrn_n_u16(vmull_u8(vget_high_u8(bytes), factor), 8));
+  return vbslq_u32(alpha, original, vreinterpretq_u32_u8(shaded));
 }
 
 static inline uint16x4_t reflect_channel(uint16x4_t a, uint16x4_t b,
@@ -171,20 +162,42 @@ void magik_launcher_reflect_column(uint16_t *out, size_t pitch,
     }
   }
 }
-void magik_launcher_filter_column(uint32_t *out, const uint32_t *a0,
+void magik_launcher_filter_lit_column(uint32_t *out, const uint32_t *a0,
                                   const uint32_t *a1, const uint32_t *b0,
                                   const uint32_t *b1, size_t n, uint32_t wx,
-                                  uint32_t wx2, uint32_t lod) {
+                                  uint32_t wx2, uint32_t lod, uint32_t light,
+                                  const uint32_t *other, uint32_t weight) {
   size_t i = 0;
+  // Hoist the common unblended, single-mip decision out of the vector loop.
+  // Otherwise GCC keeps the optional-face and LOD tests (and stack reloads)
+  // in every four-pixel iteration, cancelling the saved column traffic.
+  if (!other && !lod) {
+    if (!wx) {
+      for (; i + 4 <= n; i += 4)
+        vst1q_u32(out + i, shade(vld1q_u32(a0 + i), light));
+    } else {
+      for (; i + 4 <= n; i += 4)
+        vst1q_u32(out + i,
+                  shade(blend(vld1q_u32(a0 + i), vld1q_u32(a1 + i), wx), light));
+    }
+  }
   for (; i + 4 <= n; i += 4) {
     uint32x4_t a = blend(vld1q_u32(a0 + i), vld1q_u32(a1 + i), wx);
     if (lod)
       a = blend(a, blend(vld1q_u32(b0 + i), vld1q_u32(b1 + i), wx2), lod);
-    vst1q_u32(out + i, a);
+    if (other)
+      a = blend(a, vld1q_u32(other + i), weight);
+    vst1q_u32(out + i, shade(a, light));
   }
   for (; i < n; ++i) {
     uint32_t a = scalar(a0[i], a1[i], wx);
-    out[i] = lod ? scalar(a, scalar(b0[i], b1[i], wx2), lod) : a;
+    if (lod)
+      a = scalar(a, scalar(b0[i], b1[i], wx2), lod);
+    if (other)
+      a = scalar(a, other[i], weight);
+    const uint32_t rb = (((a & 0x00ff00ff) * light) >> 8) & 0x00ff00ff;
+    const uint32_t g = (((a >> 8) & 255) * light >> 8) << 8;
+    out[i] = (a & 0xff000000) | rb | g;
   }
 }
 
@@ -422,13 +435,6 @@ void magik_launcher_flat(uint16_t *out, size_t pitch, const uint32_t *src,
       out[y * pitch + x] = over_pixel(scalar(a, b, w), out[y * pitch + x]);
     }
   }
-}
-
-void magik_launcher_mix_rgba(uint32_t *a, const uint32_t *b, size_t n, uint32_t w) {
-  size_t i = 0;
-  for (; i + 4 <= n; i += 4)
-    vst1q_u32(a + i, blend(vld1q_u32(a + i), vld1q_u32(b + i), w));
-  for (; i < n; ++i) a[i] = scalar(a[i], b[i], w);
 }
 
 void magik_launcher_flat_rgba(uint32_t *out, size_t pitch, const uint32_t *src,
