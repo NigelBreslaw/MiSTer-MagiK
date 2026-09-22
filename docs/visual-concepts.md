@@ -33,7 +33,7 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 - [x] Point-cloud morph
 - [x] Depth and parallax
 - [x] Satin light sweep
-- [x] Mirror floor
+- [x] Mirror floor removed after user review
 - [x] Pixel dissolve
 - [x] Starfield and comets
 - [x] Palette aurora
@@ -49,7 +49,6 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 `light-sweep`: a subtle card sheen with continuous translation; see the
 [research and visual choices](light-sweep-research.md).
 
-`mirror-floor`: independently selectable; default and reduced presets.
 
 `pixel-dissolve`: independently selectable; default and reduced presets.
 
@@ -70,7 +69,6 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 | point-cloud-morph | 8,192 points | 4,096 points | 20 s cabinet and logo |
 | depth-parallax | Five cards, 25 cached poses per transition | Three-card crop, 13 poses | 16 s, forward then reverse |
 | light-sweep | Quarter-pixel sheen profile, 6.25% peak | Half-pixel profile, same strength and speed | 3 s |
-| mirror-floor | 64 rows, three-pixel shift | 32 rows, one-pixel shift | 4.096 s |
 | pixel-dissolve | Eight-pixel tiles | 16-pixel tiles | 3.2 s, including endpoint holds |
 | starfield-comets | 256 stars, 24-pixel trails | 128 stars, 12-pixel trails | 8.192 s |
 | palette-aurora | 240×135 working image | 120×67 working image | 12.288 s |

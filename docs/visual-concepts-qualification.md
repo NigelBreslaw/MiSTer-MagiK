@@ -11,7 +11,6 @@ Observed mode: HDMI 1920×1080p60; resolved RGB565 rendering: 960×540. No displ
 | point-cloud-morph | 59.998 / 60.000 | 1800 / 1800 | 0 / 0 | 102.58 / 102.58 | 34.3 | Pass |
 | depth-parallax | 60.000 / 59.998 | 1800 / 1800 | 0 / 0 | 100.17 / 100.26 | 76.6 | Pass |
 | light-sweep | 60.000 / 59.998 | 1800 / 1800 | 0 / 0 | 100.16 / 100.23 | 34.2 | Pass |
-| mirror-floor | 60.000 / 60.000 | 1800 / 1800 | 0 / 0 | 100.17 / 100.17 | 65.3 | Pass |
 | pixel-dissolve | 59.998 / 59.998 | 1800 / 1800 | 0 / 0 | 100.15 / 100.23 | 65.3 | Pass |
 | starfield-comets | 60.000 / 59.998 | 1800 / 1800 | 0 / 0 | 100.13 / 100.12 | 65.3 | Pass |
 | palette-aurora | 60.000 / 59.998 | 1800 / 1800 | 0 / 0 | 100.16 / 100.16 | 34.2 | Pass |
@@ -30,7 +29,6 @@ Times below are the larger average of the two windows, in milliseconds. Frame-to
 | point-cloud-morph | 1.555 | 1.459 | 16.548 | 2.917 | `build/magik-results/20260922T140623Z-4592d6922fd3` |
 | depth-parallax | 6.625 | 0.968 | 16.559 | 12.020 | `build/magik-results/20260922T140155Z-5ab664002564` |
 | light-sweep | 5.260 | 0.334 | 16.559 | 5.749 | `build/magik-results/20260922T154045Z-b66b51873e03` |
-| mirror-floor | 4.549 | 0.141 | 16.542 | 4.790 | `build/magik-results/20260922T141304Z-bb3a4ca7a9c3` |
 | pixel-dissolve | 2.513 | 1.000 | 16.559 | 4.170 | `build/magik-results/20260922T141810Z-ed8a86efb7af` |
 | starfield-comets | 0.219 | 1.331 | 16.550 | 0.314 | `build/magik-results/20260922T142022Z-43e6529ca020` |
 | palette-aurora | 4.780 | 1.809 | 16.547 | 5.005 | `build/magik-results/20260922T152157Z-1c6c29439ae2` |
@@ -59,7 +57,6 @@ See [the iteration guide](visual-concepts.md) for controls and final preset budg
 - point-cloud-morph: `540a8707326681e174958bf066d15678c103f08e23fb2a0bfed67104fb44dff5`
 - depth-parallax: `e61b5202dc54ec494e636e6641e431be5d0806f6d65188069f4d97dc53232d27`
 - light-sweep: `8077260ff118b860718f43b291daf09bd72d4f2bb1bc3ae28737c1db0cf6ddd8`
-- mirror-floor: `a6d78fbc1e43a5aa08534e0bedd62460d1272ea980e71482cf3b446e26495a0d`
 - pixel-dissolve: `b1f0033b281e9a16a9dfae73f02a562bedd585274271b8754fa3caa82f5dc126`
 - starfield-comets: `b1f0033b281e9a16a9dfae73f02a562bedd585274271b8754fa3caa82f5dc126`
 - palette-aurora: `f8fa5c209d63d3b10012a20a41ca084c1cc04f3401cc5776b704d103b6db12b9`
@@ -76,3 +73,6 @@ passed on the revision above. The user accepted its live HDMI appearance on
 passed after the whole-card correction. Superseded local light-sweep captures
 and results were removed at the user request; only this implementation is selectable.
 See [research, sources and explicit design choices](light-sweep-research.md).
+
+Mirror floor was removed after live user review on 22 September 2026. Its
+standalone renderer and selection controls are no longer included.

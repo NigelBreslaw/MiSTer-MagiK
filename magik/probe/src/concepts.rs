@@ -64,7 +64,6 @@ impl Concepts {
                 "point-cloud-morph" => (12500, 20000),
                 "depth-parallax" => (320, 16000),
                 "light-sweep" => (1500, 3000),
-                "mirror-floor" => (2048, 4096),
                 "pixel-dissolve" => (1300, 3200),
                 "starfield-comets" => (4096, 8192),
                 "palette-aurora" => (6144, 12288),

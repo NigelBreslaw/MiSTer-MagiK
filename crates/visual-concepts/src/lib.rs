@@ -8,7 +8,6 @@ mod depth;
 mod dissolve;
 pub mod fixture;
 mod light;
-mod mirror;
 mod point_cloud;
 mod stars;
 mod terrain;
@@ -22,7 +21,6 @@ pub const EFFECTS: &[&str] = &[
     "palette-aurora",
     "starfield-comets",
     "pixel-dissolve",
-    "mirror-floor",
     "light-sweep",
     "depth-parallax",
     "point-cloud-morph",
@@ -81,7 +79,6 @@ impl Scene {
             "palette-aurora" => Box::new(aurora::new(preset, width, height)?),
             "starfield-comets" => Box::new(stars::new(preset, width, height)?),
             "pixel-dissolve" => Box::new(dissolve::new(preset, width, height)?),
-            "mirror-floor" => Box::new(mirror::new(preset, width, height)?),
             "light-sweep" => Box::new(light::new(preset, width, height)?),
             "depth-parallax" => Box::new(depth::new(preset, width, height)?),
             "point-cloud-morph" => Box::new(point_cloud::new(preset, width, height)?),
