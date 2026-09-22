@@ -3,9 +3,11 @@
 
 //! Deliberately small consumer application for Tooling.
 
-use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
-use mister_magik_mister_runtime::framebuffer::mapped::MappedRgb565Framebuffer;
+use mister_magik_core::display::{DisplayGeometry, ResolvedDisplayPlan};
+use mister_magik_mister_runtime::framebuffer::damage::{DirtyRect, DirtyRectList};
+use mister_magik_mister_runtime::framebuffer::hidden_latch::CachedHiddenLatchPresenter;
 use mister_magik_mister_runtime::framebuffer::rgb565::Rgb565;
+use mister_magik_visual_concepts::Preset;
 use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel, SoftwareRenderer};
 use slint::platform::{EventLoopProxy, Platform, WindowAdapter};
 use slint::{EventLoopError, PhysicalSize, Window};
@@ -18,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use mister_magik_tooling_support::Session;
 
+mod concepts;
 mod measurement;
 
 slint::include_modules!();
@@ -85,16 +88,6 @@ impl ProbeWindow {
         })
     }
 
-    fn draw_if_needed(&self, render: impl FnOnce(&SoftwareRenderer)) -> bool {
-        self.event_loop.process_pending_callbacks();
-        if self.redraw_pending.replace(false) {
-            render(&self.renderer);
-            true
-        } else {
-            false
-        }
-    }
-
     fn set_size(&self, size: PhysicalSize) {
         self.window.set_size(size);
     }
@@ -155,16 +148,21 @@ impl Platform for ProbePlatform {
 }
 
 fn main() -> Result<(), String> {
-    let direct_framebuffer =
-        MappedRgb565Framebuffer::open_current_rgb565().map_err(|error| error.to_string())?;
-    let width = direct_framebuffer.width();
-    let height = direct_framebuffer.height();
-    drop(direct_framebuffer);
-    let mut framebuffer = HiddenLatchPresenter::open(
-        u16::try_from(width).map_err(|error: std::num::TryFromIntError| error.to_string())?,
-        u16::try_from(height).map_err(|error: std::num::TryFromIntError| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
+    let display = std::env::var("MISTER_MAGIK_MINI_DISPLAY_PLAN")
+        .map_err(|_| "native service lacks mini-display-plan-v1")?;
+    let fields = display.split(',').collect::<Vec<_>>();
+    if fields.len() != 3 {
+        return Err("invalid Mini display plan".into());
+    }
+    let geometry = DisplayGeometry::new(
+        fields[1].parse().map_err(|_| "invalid output width")?,
+        fields[2].parse().map_err(|_| "invalid output height")?,
+    );
+    let plan = ResolvedDisplayPlan::from_mode_or_detected(fields[0], Some(geometry))
+        .ok_or("invalid Main display plan")?;
+    let width = plan.render_w;
+    let height = plan.render_h;
+    let mut framebuffer = CachedHiddenLatchPresenter::open(plan).map_err(|e| e.to_string())?;
     let window = ProbeWindow::new();
     slint::platform::set_platform(Box::new(ProbePlatform {
         window: window.clone(),
@@ -235,52 +233,120 @@ fn main() -> Result<(), String> {
         );
     });
 
+    let concepts = Rc::new(RefCell::new(concepts::Concepts::new(width, height)));
+    let control = concepts.clone();
+    probe.on_concept_select(move |name, preset| {
+        let mut c = control.borrow_mut();
+        if plan.output_route.is_crt() {
+            c.error = Some("concepts require HDMI".into());
+            return;
+        }
+        match Preset::parse(&preset) {
+            Ok(p) => c.select(&name, p),
+            Err(e) => c.error = Some(e),
+        }
+    });
+    let control = concepts.clone();
+    probe.on_concept_action(move |action| control.borrow_mut().action(&action));
     let mut evidence = measurement::Evidence::default();
     let mut cached = vec![Rgb565Pixel(0); width * height];
     loop {
+        window.event_loop.process_pending_callbacks();
+        if window.event_loop.terminated.load(Ordering::Acquire) {
+            return Ok(());
+        }
         slint::platform::update_timers_and_animations();
+        {
+            let mut c = concepts.borrow_mut();
+            probe.set_concept_name(c.name.clone().into());
+            probe.set_concept_error(c.error.clone().unwrap_or_default().into());
+            probe.set_concept_paused(c.paused);
+            if c.measure {
+                c.measure = false;
+                session.borrow_mut().set_measurement_duration(Some(30_000));
+                session.borrow_mut().begin();
+                probe.set_concept_measuring(true);
+            }
+        }
+
         measurement::resources(&mut session.borrow_mut().metrics);
         if session.borrow_mut().tick(width, height)? {
+            concepts.borrow_mut().paused = true;
+            probe.set_concept_measuring(false);
             motion_timer.stop();
             probe.set_motion_running(false);
             probe.set_motion_complete(true);
         }
-        let session_for_frame = session.clone();
-        let rendered = window.draw_if_needed(|renderer| {
-            let render_start = Instant::now();
-            renderer.render(&mut cached, width);
-            let render_us = render_start.elapsed().as_micros() as u64;
-            for (destination, source) in framebuffer.pixels_mut().iter_mut().zip(&cached) {
-                *destination = Rgb565(source.0);
-            }
-            let mut session = session_for_frame.borrow_mut();
+        let mut c = concepts.borrow_mut();
+        let is_concept = c.scene.is_some();
+        let should_render = if is_concept {
+            !c.paused || c.dirty
+        } else {
+            window.redraw_pending.replace(false)
+        };
+        let rendered = should_render;
+        if should_render {
+            let started = Instant::now();
+            let damage = if is_concept {
+                c.dirty = false;
+                let scene = c.scene.as_mut().unwrap();
+                let d = scene.render()?;
+                for (a, b) in cached.iter_mut().zip(scene.pixels()) {
+                    *a = Rgb565Pixel(b.0);
+                }
+                probe.set_concept_frame((scene.elapsed().as_millis().min(i32::MAX as u128)) as i32);
+                session.borrow_mut().metrics.context = serde_json::json!({"concept":c.name,"preset":c.preset.name(),"route":plan.output_route.label(),"storage_bytes":c.scene.as_ref().unwrap().storage_bytes()});
+                DirtyRectList::from_one(DirtyRect {
+                    x0: d.x0,
+                    y0: d.y0,
+                    x1: d.x1,
+                    y1: d.y1,
+                })
+            } else {
+                window.renderer.render(&mut cached, width);
+                DirtyRectList::from_one(DirtyRect {
+                    x0: 0,
+                    y0: 0,
+                    x1: width,
+                    y1: height,
+                })
+            };
+            let render_us = started.elapsed().as_micros() as u64;
+            // SAFETY: both pixel wrappers are repr(transparent) u16; neither owns resources.
+            let pixels = unsafe {
+                std::slice::from_raw_parts(cached.as_ptr().cast::<Rgb565>(), cached.len())
+            };
+            let transfer = Instant::now();
+            framebuffer
+                .prepare_cached(pixels, &damage)
+                .map_err(|e| e.to_string())?;
+            let transfer_us = transfer.elapsed().as_micros() as u64;
+            framebuffer.post_prepared().map_err(|e| e.to_string())?;
+            let presented = framebuffer
+                .settle_pending()
+                .map_err(|e| e.to_string())?
+                .ok_or("latch did not settle")?;
+            let mut session = session.borrow_mut();
             let metrics = &mut session.metrics;
-            match framebuffer.post() {
-                Ok(_) => metrics.counters.posts += 1,
-                Err(error) => {
-                    metrics.counters.rejections += 1;
-                    metrics.error = Some(error.to_string());
-                    return;
-                }
-            }
-            match framebuffer.settle_pending() {
-                Ok(Some(presented)) => {
-                    metrics.counters.flips += 1;
-                    match framebuffer.presentation_telemetry() {
-                        Ok(sample) => evidence.observe(sample, presented.drop_count, metrics),
-                        Err(error) => metrics.error = Some(error.to_string()),
-                    }
-                }
-                _ => {
-                    metrics.error = Some("physical latch did not settle".into());
-                    return;
-                }
+            metrics.counters.posts += 1;
+            metrics.counters.flips += 1;
+            match framebuffer.presentation_telemetry() {
+                Ok(sample) => evidence.observe(sample, presented.drop_count, metrics),
+                Err(error) => metrics.error = Some(error.to_string()),
             }
             metrics.counters.presentations += 1;
             metrics.last_render_us = render_us;
             metrics.counters.render_us += render_us;
-            metrics.counters.render_to_present_us += render_start.elapsed().as_micros() as u64;
-        });
+            metrics.counters.transfer_us += transfer_us;
+            metrics.counters.render_to_present_us += started.elapsed().as_micros() as u64;
+            if is_concept && !c.paused {
+                c.scene
+                    .as_mut()
+                    .unwrap()
+                    .advance(Duration::from_nanos(16_666_667));
+            }
+        }
+        drop(c);
         session.borrow_mut().preview(&cached, width, height);
         if !rendered {
             std::thread::sleep(Duration::from_millis(2));

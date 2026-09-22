@@ -22,6 +22,7 @@ pub struct Session {
     last_request: Instant,
     ready: bool,
     clock_mode: Option<bool>,
+    measurement_duration_ms: Option<u64>,
     clock_advanced: bool,
     force_card_fallback: bool,
 }
@@ -38,9 +39,13 @@ impl Session {
             last_request: Instant::now(),
             ready: false,
             clock_mode: None,
+            measurement_duration_ms: None,
             clock_advanced: false,
             force_card_fallback: false,
         })
+    }
+    pub fn set_measurement_duration(&mut self, milliseconds: Option<u64>) {
+        self.measurement_duration_ms = milliseconds;
     }
     pub fn begin(&mut self) {
         self.metrics.motion_started_ms = Some(self.start.elapsed().as_millis() as u64);
@@ -95,7 +100,7 @@ impl Session {
         }
         let now = self.start.elapsed().as_millis() as u64;
         let instrumented = std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some();
-        let duration = if instrumented { 10_000 } else { 5_000 };
+        let duration = if instrumented { 10_000 } else { self.measurement_duration_ms.unwrap_or(5_000) };
         let mut completed = false;
         if self.metrics.window.is_none() {
             if self.metrics.window_start.is_none()
@@ -171,6 +176,7 @@ mod tests {
             last_request: Instant::now(),
             ready: false,
             clock_mode: None,
+            measurement_duration_ms: None,
             clock_advanced: false,
             force_card_fallback: false,
         };

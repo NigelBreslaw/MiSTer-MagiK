@@ -1,4 +1,5 @@
 //! Bounded native control framing for the independently owned MagiK agent.
+mod mini_display;
 
 mod benchmark;
 mod capture;
@@ -199,6 +200,7 @@ impl Agent {
             "main-managed-magik",
             "measurement",
             "measurement-clock-v1",
+            "mini-display-plan-v1",
             "diagnostics",
             "upload-v1",
             "lifecycle-v1",
@@ -755,6 +757,16 @@ impl Agent {
             );
         }
         self.observation.clear_frame();
+        let mini_display = match mini_display::snapshot() {
+            Ok(value) => value,
+            Err(error) => {
+                return response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"mini-display-plan","detail":error}),
+                );
+            }
+        };
         if let Err(error) = main_handoff("mister_magik_suspend\n") {
             return response(
                 &request.id,
@@ -765,6 +777,7 @@ impl Agent {
         let _ = fs::remove_file(self.state_root.join("measure-request"));
         let mut command = Command::new(executable);
         command
+            .env("MISTER_MAGIK_MINI_DISPLAY_PLAN", mini_display)
             .env("MISTER_MAGIK2_STATE_ROOT", &self.state_root)
             .env(
                 "MISTER_MAGIK2_ARTIFACT_SHA256",
