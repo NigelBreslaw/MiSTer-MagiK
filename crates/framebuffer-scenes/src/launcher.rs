@@ -841,9 +841,8 @@ fn smooth_progress(progress: u32, duration: u32) -> i64 {
     }
 }
 
-fn flip_spin(right: bool, outgoing: bool) -> i64 {
-    let incoming = if right { -1_i64 } else { 1 };
-    if outgoing { -incoming } else { incoming }
+fn flip_spin(right: bool) -> i64 {
+    if right { -1 } else { 1 }
 }
 
 fn compact_edge_saturation_level(relative: isize, destination: isize, progress: i64) -> usize {
@@ -950,7 +949,7 @@ fn build_carousel_plan<'a>(faces: &'a [CardFaces], mut motion: BrowseFrame) -> C
         {
             let (spin, rotation, outgoing) = if let Some(outgoing) = outgoing {
                 (
-                    flip_spin(outgoing.direction == BrowseDirection::Right, true),
+                    flip_spin(outgoing.direction == BrowseDirection::Right),
                     smooth_progress(
                         outgoing.progress_millis,
                         crate::launcher_navigation::OUTGOING_FLIP_MS as u32,
@@ -959,7 +958,7 @@ fn build_carousel_plan<'a>(faces: &'a [CardFaces], mut motion: BrowseFrame) -> C
                 )
             } else if let Some(incoming) = paired_incoming {
                 (
-                    flip_spin(incoming.direction == BrowseDirection::Right, false),
+                    flip_spin(incoming.direction == BrowseDirection::Right),
                     smooth_progress(
                         incoming.progress_millis,
                         crate::launcher_navigation::CARD_FLIP_MS as u32,
@@ -967,7 +966,7 @@ fn build_carousel_plan<'a>(faces: &'a [CardFaces], mut motion: BrowseFrame) -> C
                     false,
                 )
             } else {
-                (flip_spin(right, false), progress, false)
+                (flip_spin(right), progress, false)
             };
             let angle = pose.angle + spin * rotation;
             let (_, cos) = crate::launcher_flip::sin_cos(angle);
@@ -1750,11 +1749,28 @@ mod tests {
     }
 
     #[test]
-    fn outgoing_card_always_spins_opposite_to_incoming_card() {
-        for right in [false, true] {
-            let incoming = flip_spin(right, false);
-            let outgoing = flip_spin(right, true);
-            assert_eq!(outgoing, -incoming);
+    fn outgoing_top_card_rotates_in_the_browse_direction() {
+        let prepared = LauncherScene::new(960, 540).prepare(data());
+        for (direction, target, expected_sign) in [
+            (BrowseDirection::Right, 1, -1),
+            (BrowseDirection::Left, CARDS.len() - 1, 1),
+        ] {
+            let motion = BrowseFrame {
+                selected: 0,
+                target,
+                phase: crate::launcher_navigation::BrowsePhase::Flipping,
+                direction: Some(direction),
+                progress_millis: 100,
+                duration_millis: crate::launcher_navigation::CARD_FLIP_MS as u32,
+                outgoing: Some(crate::launcher_navigation::OutgoingFlip {
+                    card: 0,
+                    direction,
+                    progress_millis: 100,
+                }),
+            };
+            let plan = build_carousel_plan(&prepared.faces, motion);
+            let top_card = plan.items[5].expect("outgoing top card");
+            assert!(top_card.pose.angle * expected_sign > 0);
         }
     }
 
