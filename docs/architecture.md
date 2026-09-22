@@ -54,14 +54,16 @@ host-only CI and release work. Main owns the application launch and FPGA handoff
 ### Advisory architecture trends
 
 `scripts/magik-ci architecture report --base COMMIT --head COMMIT` compares two
-explicit repository trees without contacting the MiSTer. Its stable JSON
-schema reports file and largest-function size, mutable bindings, direct
+explicit repository trees without contacting the MiSTer. Its versioned JSON
+schema reports file and subsystem size, mutable bindings, direct
 environment reads, public modules, and changed-line concentration for named
 owner hotspots. `--format markdown` produces the review summary, and
 `--output PATH` writes either format to an explicit artifact path.
 
-Generated code, history, reference clones, vendored sources, and build output
-are excluded from concentration totals. The report is informational: a lower
+Generated directories, `generated*` files, `.svh` includes, history, reference
+clones, private submodules, vendored sources, and build output are excluded from
+concentration totals. Version 2 removes the retired monolithic SQLite hotspot
+and the unreliable brace-counting function-size estimate. The report is informational: a lower
 line count without clearer ownership or dependency direction is not success.
 Stable owner IDs keep moved or temporarily absent hotspot paths visible rather
 than silently treating them as resolved.
