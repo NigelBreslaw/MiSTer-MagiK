@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 
 use mister_magik_tooling_support::Session;
 
+mod measurement;
+
 slint::include_modules!();
 
 type EventLoopCallback = Box<dyn FnOnce() + Send + 'static>;
@@ -233,9 +235,11 @@ fn main() -> Result<(), String> {
         );
     });
 
+    let mut evidence = measurement::Evidence::default();
     let mut cached = vec![Rgb565Pixel(0); width * height];
     loop {
         slint::platform::update_timers_and_animations();
+        measurement::resources(&mut session.borrow_mut().metrics);
         if session.borrow_mut().tick(width, height)? {
             motion_timer.stop();
             probe.set_motion_running(false);
@@ -262,11 +266,10 @@ fn main() -> Result<(), String> {
             match framebuffer.settle_pending() {
                 Ok(Some(presented)) => {
                     metrics.counters.flips += 1;
-                    metrics.counters.drops +=
-                        metrics.last_physical_drop_count.map_or(0, |previous| {
-                            u64::from(presented.drop_count.wrapping_sub(previous))
-                        });
-                    metrics.last_physical_drop_count = Some(presented.drop_count);
+                    match framebuffer.presentation_telemetry() {
+                        Ok(sample) => evidence.observe(sample, presented.drop_count, metrics),
+                        Err(error) => metrics.error = Some(error.to_string()),
+                    }
                 }
                 _ => {
                     metrics.error = Some("physical latch did not settle".into());

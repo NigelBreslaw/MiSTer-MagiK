@@ -2538,6 +2538,8 @@ name = "mini-magik"
 version = "0.1.0"
 dependencies = [
  "fontique",
+ "libc",
+ "mister-magik-latch-contract",
  "mister-magik-mister-runtime",
  "mister-magik-tooling-support",
  "slint",

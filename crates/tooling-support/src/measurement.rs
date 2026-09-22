@@ -2,6 +2,10 @@
 use serde_json::{Value, json};
 #[derive(Default, Clone)]
 pub struct Counters {
+    pub owned_vblanks: u64,
+    pub presented_vblanks: u64,
+    pub latch_drops: u64,
+    pub transfer_us: u64,
     pub presentations: u64,
     pub render_us: u64,
     pub render_to_present_us: u64,
@@ -31,6 +35,7 @@ pub struct Counters {
 }
 #[derive(Default)]
 pub struct PresentationMetrics {
+    pub peak_rss_bytes: Option<u64>,
     pub process_cpu_us: Option<u64>,
     pub window_cpu_start_us: Option<u64>,
     pub forced_clock_changes: u64,
@@ -91,6 +96,13 @@ impl PresentationMetrics {
         );
         let window = self.window.as_mut().unwrap();
         window["process_cpu_us"] = json!(cpu_us);
+        window["context"] = self.context.clone();
+        window["peak_rss_bytes"] = json!(self.peak_rss_bytes);
+        window["latch_drops"] = json!(c.latch_drops - baseline.latch_drops);
+        window["transfer_us_total"] = json!(c.transfer_us - baseline.transfer_us);
+        window["owned_vblanks"] = json!(c.owned_vblanks - baseline.owned_vblanks);
+        window["presented_vblanks"] = json!(c.presented_vblanks - baseline.presented_vblanks);
+        window["refresh_hz"] = json!((c.owned_vblanks - baseline.owned_vblanks) as f64 * 1000.0 / (end_ms - start_ms).max(1) as f64);
         window["process_cpu_percent"] =
             json!(cpu_us.map(|us| us as f64 / ((end_ms - start_ms).max(1) as f64 * 10.0)));
         window["card_fallback_copies"] =
