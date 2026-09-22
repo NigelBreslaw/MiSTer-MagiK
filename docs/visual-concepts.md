@@ -46,7 +46,8 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 
 `depth-parallax`: independently selectable; default and reduced presets.
 
-`light-sweep`: independently selectable; default and reduced presets.
+`light-sweep`: a subtle card sheen with continuous translation; see the
+[research and visual choices](light-sweep-research.md).
 
 `mirror-floor`: independently selectable; default and reduced presets.
 
@@ -68,7 +69,7 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 |---|---|---|---|
 | point-cloud-morph | 8,192 points | 4,096 points | 20 s cabinet and logo |
 | depth-parallax | Five cards, 25 cached poses per transition | Three-card crop, 13 poses | 16 s, forward then reverse |
-| light-sweep | 16 lighting phases | Eight phases | 3 s |
+| light-sweep | Quarter-pixel sheen profile, 6.25% peak | Half-pixel profile, same strength and speed | 3 s |
 | mirror-floor | 64 rows, three-pixel shift | 32 rows, one-pixel shift | 4.096 s |
 | pixel-dissolve | Eight-pixel tiles | 16-pixel tiles | 3.2 s, including endpoint holds |
 | starfield-comets | 256 stars, 24-pixel trails | 128 stars, 12-pixel trails | 8.192 s |
