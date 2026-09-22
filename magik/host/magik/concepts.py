@@ -10,7 +10,7 @@ from .testing import fresh_session, one_element
 from .results import append_event
 from .capture import capture_png
 
-EFFECTS = ("diagnostic",)
+EFFECTS = ("point-cloud-morph","diagnostic",)
 PRESETS = ("default", "reduced")
 
 def value(application, name):

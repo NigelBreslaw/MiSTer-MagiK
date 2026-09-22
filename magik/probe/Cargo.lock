@@ -2608,6 +2608,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mister-magik-particles"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "libc",
+ "mister-magik-framebuffer-scenes",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mister-magik-scanout-contract"
 version = "0.1.0"
 
@@ -2626,6 +2637,7 @@ name = "mister-magik-visual-concepts"
 version = "0.1.0"
 dependencies = [
  "mister-magik-framebuffer-scenes",
+ "mister-magik-particles",
 ]
 
 [[package]]
