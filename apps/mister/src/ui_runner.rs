@@ -61,10 +61,6 @@ use crate::ui_display::{
     CrtUiMetrics, ResolvedOutputRoute, RuntimeDisplayGeometry, ScreenOrientation, UiDisplay,
     UiDisplayPlan, UiLayoutGeometry, UiPixelSize,
 };
-#[cfg(mister_experiments)]
-use mister_magik_fb::experiments::effects::framebuffer_effects::{
-    EFFECT_SIZES, EffectKind, EffectSize,
-};
 use mister_magik_fb::framebuffer::damage::subtract_dirty_rects;
 use mister_magik_fb::framebuffer::full_frame_latch::{
     LatchCopyPath, LatchFrameBuffers, LatchHardware, wait_for_latch_completion,
@@ -304,23 +300,6 @@ pub fn print_scenes() {
     crate::ui_logln!("Slint UI scenes (runtime framebuffer sized):");
     for s in UI_SCENES {
         crate::ui_logln!("  {s}");
-    }
-}
-
-#[cfg(mister_experiments)]
-pub fn print_effects() {
-    crate::ui_logln!("Framebuffer effects:");
-    for &kind in EffectKind::all() {
-        crate::ui_logln!("  {}", kind.name());
-    }
-    crate::ui_logln!("Supported internal sizes:");
-    for &(w, h) in EFFECT_SIZES {
-        let scale = EffectSize { w, h }.scale_to_1080p().unwrap_or(0);
-        if scale > 0 {
-            crate::ui_logln!("  {w}x{h} ({scale}x to 1920x1080)");
-        } else {
-            crate::ui_logln!("  {w}x{h}");
-        }
     }
 }
 

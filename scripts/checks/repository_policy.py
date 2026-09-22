@@ -12,7 +12,6 @@ CLASSIFIED_PREFIXES = (
     ".githooks",
     "LICENSES",
     "apps/desktop",
-    "apps/framebuffer-lab",
     "apps/framebuffer-scene-lab",
     "apps/mister",
     "crates",

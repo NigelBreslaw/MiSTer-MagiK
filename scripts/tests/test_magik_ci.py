@@ -409,7 +409,7 @@ with tempfile.TemporaryDirectory() as directory:
                 for command in commands("app")
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             any("ui,bench-scenes" in command for command in commands("app"))
         )
         self.assertFalse(

@@ -111,35 +111,12 @@ pub const DEFAULT_ROOTS: &[&str] = &[
     "/media/fat/_LLAPI",
 ];
 
-pub const DEFAULT_HBMAME_SQLITE_PATH: &str = "/media/fat/mister-magik/hbmame.sqlite3";
 pub const DEFAULT_USER_STATE_PATH: &str = "/media/fat/mister-magik/user-state.sqlite3";
 
 pub const SCHEMA_VERSION: u32 = 67;
 pub const CATALOG_BUILD_VERSION: u32 = 18;
 
-pub fn default_sqlite_path() -> PathBuf {
-    configured_path(
-        std::env::var("MISTER_LIBRARY_SQLITE").ok().as_deref(),
-        "library.sqlite3",
-    )
-}
-
-pub fn default_mame_sqlite_path() -> PathBuf {
-    configured_path(
-        std::env::var("MISTER_MAME_SQLITE").ok().as_deref(),
-        "mame.sqlite3",
-    )
-}
-
-pub fn default_hbmame_sqlite_path() -> PathBuf {
-    configured_path(
-        std::env::var("MISTER_HBMAME_SQLITE").ok().as_deref(),
-        "hbmame.sqlite3",
-    )
-}
-
-/// Location of the compact runtime metadata container. Legacy SQLite paths
-/// remain available only to builders and migration/parity checks.
+/// Location of the compact runtime metadata container.
 pub fn default_runtime_metadata_path() -> PathBuf {
     configured_path(
         std::env::var("MISTER_MAGIK_METADATA").ok().as_deref(),
@@ -265,16 +242,8 @@ mod tests {
     #[test]
     fn catalog_paths_use_env_overrides_and_defaults() {
         assert_eq!(
-            configured_path(Some("/tmp/library.sqlite3"), "library.sqlite3"),
-            PathBuf::from("/tmp/library.sqlite3")
-        );
-        assert_eq!(
-            configured_path(Some("/tmp/mame.sqlite3"), "mame.sqlite3"),
-            PathBuf::from("/tmp/mame.sqlite3")
-        );
-        assert_eq!(
-            configured_path(None, "hbmame.sqlite3"),
-            PathBuf::from(DEFAULT_HBMAME_SQLITE_PATH)
+            configured_path(Some("/tmp/user-state.sqlite3"), "user-state.sqlite3"),
+            PathBuf::from("/tmp/user-state.sqlite3")
         );
         assert_eq!(
             configured_path(None, "user-state.sqlite3"),

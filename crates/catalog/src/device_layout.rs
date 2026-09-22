@@ -14,8 +14,6 @@ pub const PUBLIC_MAIN: &str = PUBLIC_PATHS.main;
 pub const DEV_MAIN: &str = DEVELOPMENT_PATHS.main;
 
 const LIBRARY_SQLITE_ENV: &str = "MISTER_LIBRARY_SQLITE";
-const MAME_SQLITE_ENV: &str = "MISTER_MAME_SQLITE";
-const HBMAME_SQLITE_ENV: &str = "MISTER_HBMAME_SQLITE";
 const RUNTIME_METADATA_ENV: &str = "MISTER_MAGIK_METADATA";
 const PREVIEW_CACHE_DIR_ENV: &str = "MISTER_PREVIEW_CACHE_DIR";
 const MEDIA_ASSET_DIR_ENV: &str = "MISTER_MEDIA_ASSET_DIR";
@@ -136,8 +134,6 @@ impl DevicePaths {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CatalogPathOverrides {
     library_sqlite: Option<PathBuf>,
-    mame_sqlite: Option<PathBuf>,
-    hbmame_sqlite: Option<PathBuf>,
     runtime_metadata: Option<PathBuf>,
     preview_cache_dir: Option<PathBuf>,
     media_asset_dir: Option<PathBuf>,
@@ -150,8 +146,6 @@ impl CatalogPathOverrides {
     pub fn capture_process() -> Self {
         Self {
             library_sqlite: std::env::var_os(LIBRARY_SQLITE_ENV).map(PathBuf::from),
-            mame_sqlite: std::env::var_os(MAME_SQLITE_ENV).map(PathBuf::from),
-            hbmame_sqlite: std::env::var_os(HBMAME_SQLITE_ENV).map(PathBuf::from),
             runtime_metadata: std::env::var_os(RUNTIME_METADATA_ENV).map(PathBuf::from),
             preview_cache_dir: std::env::var_os(PREVIEW_CACHE_DIR_ENV).map(PathBuf::from),
             media_asset_dir: std::env::var_os(MEDIA_ASSET_DIR_ENV).map(PathBuf::from),
@@ -165,8 +159,6 @@ impl CatalogPathOverrides {
     pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a Path>) -> Self {
         Self {
             library_sqlite: get(LIBRARY_SQLITE_ENV).map(Path::to_path_buf),
-            mame_sqlite: get(MAME_SQLITE_ENV).map(Path::to_path_buf),
-            hbmame_sqlite: get(HBMAME_SQLITE_ENV).map(Path::to_path_buf),
             runtime_metadata: get(RUNTIME_METADATA_ENV).map(Path::to_path_buf),
             preview_cache_dir: get(PREVIEW_CACHE_DIR_ENV).map(Path::to_path_buf),
             media_asset_dir: get(MEDIA_ASSET_DIR_ENV).map(Path::to_path_buf),
@@ -180,8 +172,6 @@ impl CatalogPathOverrides {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogPaths {
     library_sqlite: PathBuf,
-    mame_sqlite: PathBuf,
-    hbmame_sqlite: PathBuf,
     runtime_metadata: PathBuf,
     arcade_updater_index: PathBuf,
     preview_cache_dir: PathBuf,
@@ -205,12 +195,6 @@ impl CatalogPaths {
             library_sqlite: overrides
                 .library_sqlite
                 .unwrap_or_else(|| device.app_path("library.sqlite3")),
-            mame_sqlite: overrides
-                .mame_sqlite
-                .unwrap_or_else(|| device.app_path("mame.sqlite3")),
-            hbmame_sqlite: overrides
-                .hbmame_sqlite
-                .unwrap_or_else(|| device.app_path("hbmame.sqlite3")),
             runtime_metadata: overrides
                 .runtime_metadata
                 .unwrap_or_else(|| device.app_path(crate::runtime_metadata::FILE_NAME)),
@@ -235,14 +219,6 @@ impl CatalogPaths {
 
     pub fn library_sqlite(&self) -> &Path {
         &self.library_sqlite
-    }
-
-    pub fn mame_sqlite(&self) -> &Path {
-        &self.mame_sqlite
-    }
-
-    pub fn hbmame_sqlite(&self) -> &Path {
-        &self.hbmame_sqlite
     }
 
     pub fn runtime_metadata(&self) -> &Path {
@@ -415,10 +391,6 @@ mod tests {
         let device = DevicePaths::remapped(InstalledLayout::Public, "/tmp/card");
         let defaults = CatalogPaths::derive(&device, CatalogPathOverrides::default());
         assert_eq!(
-            defaults.mame_sqlite(),
-            Path::new("/tmp/card/mister-magik/mame.sqlite3")
-        );
-        assert_eq!(
             defaults.arcade_updater_index(),
             Path::new("/tmp/card/mister-magik/arcade-updater-index-v1.lz4b")
         );
@@ -435,11 +407,6 @@ mod tests {
             (
                 LIBRARY_SQLITE_ENV,
                 PathBuf::from("/tmp/override/library.sqlite3"),
-            ),
-            (MAME_SQLITE_ENV, PathBuf::from("/tmp/override/mame.sqlite3")),
-            (
-                HBMAME_SQLITE_ENV,
-                PathBuf::from("/tmp/override/hbmame.sqlite3"),
             ),
             (PREVIEW_CACHE_DIR_ENV, PathBuf::from("preview-assets")),
             (MEDIA_ASSET_DIR_ENV, PathBuf::from("relative-assets")),
@@ -463,11 +430,6 @@ mod tests {
         assert_eq!(
             paths.library_sqlite(),
             Path::new("/tmp/override/library.sqlite3")
-        );
-        assert_eq!(paths.mame_sqlite(), Path::new("/tmp/override/mame.sqlite3"));
-        assert_eq!(
-            paths.hbmame_sqlite(),
-            Path::new("/tmp/override/hbmame.sqlite3")
         );
         assert_eq!(paths.preview_cache_dir(), Path::new("preview-assets"));
         assert_eq!(paths.media_asset_dir(), Path::new("relative-assets"));

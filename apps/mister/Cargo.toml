@@ -108,10 +108,9 @@ ui-device-tests = [
     "dep:i-slint-common",
     "i-slint-common/fontconfig-dlopen",
 ]
-ui-preview = ["dep:slint", "dep:i-slint-core", "dep:mister-magik-ui", "dep:softbuffer", "dep:winit", "mister-magik-mister-runtime/ui", "experiments"]
+ui-preview = ["dep:slint", "dep:i-slint-core", "dep:mister-magik-ui", "dep:softbuffer", "dep:winit", "mister-magik-mister-runtime/ui", "bench-scenes"]
 bench-tools = ["mister-magik-mister-runtime/bench-tools"]
-bench-scenes = ["mister-magik-ui?/bench-scenes", "mister-magik-mister-runtime/bench-scenes"]
-experiments = ["bench-scenes"]
+bench-scenes = ["mister-magik-mister-runtime/bench-scenes"]
 diagnostics = ["mister-magik-mister-runtime/diagnostics"]
 signed-media-manifests = ["mister-magik-media-contract/signed-media-manifests"]
 

@@ -187,9 +187,6 @@ pub mod test_support;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[allow(dead_code)]
 pub mod ui_display;
-#[cfg(all(feature = "ui", mister_experiments))]
-#[doc(hidden)]
-pub mod ui_effect_bench;
 #[cfg(all(feature = "ui-preview", target_os = "macos"))]
 pub mod ui_preview_fixtures;
 #[cfg(feature = "ui")]
@@ -203,23 +200,16 @@ pub mod ui_preview_fixtures;
 )]
 #[doc(hidden)]
 pub mod ui_runner;
-#[cfg(any(feature = "ui", feature = "ui-preview"))]
-pub mod visual_composition;
-#[cfg(any(feature = "ui", feature = "ui-preview"))]
-pub mod visual_platform;
-#[cfg(mister_experiments)]
-pub mod experiments {
-    pub mod effects;
-    #[cfg(feature = "ui")]
-    #[doc(hidden)]
-    pub mod preview_transitions;
-}
 #[cfg(any(feature = "ui", feature = "ui-preview", test))]
 #[doc(hidden)]
 pub mod video_i420;
 #[cfg(all(feature = "ui", target_os = "linux", target_arch = "arm"))]
 #[doc(hidden)]
 pub mod video_player;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+pub mod visual_composition;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+pub mod visual_platform;
 #[cfg(feature = "ui")]
 pub use mister_magik_mister_runtime::vt;
 

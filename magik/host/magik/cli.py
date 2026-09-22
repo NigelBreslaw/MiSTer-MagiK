@@ -527,6 +527,18 @@ def wait_for_agent(
     raise AgentError(f"native agent did not become ready: {last}")
 
 
+def record_agent(run: Path, status: AgentStatus) -> None:
+    append_event(
+        run,
+        {
+            "phase": "agent",
+            "identity": status.identity,
+            "sha256": status.fields.get("agent_sha256"),
+            "capabilities": sorted(status.capabilities),
+        },
+    )
+
+
 def connect_agent(
     run: Path, required: set[str] = REQUIRED_AGENT_CAPABILITIES
 ) -> tuple[NativeAgent, AgentStatus]:
@@ -554,15 +566,7 @@ def connect_agent(
             pass
     repair = os.environ.get("MISTER_MAGIK2_REPAIR") == "1"
     if status is not None and status.supports(required) and not repair:
-        append_event(
-            run,
-            {
-                "phase": "agent",
-                "identity": status.identity,
-                "capabilities": sorted(status.capabilities),
-                "sha256": status.fields.get("agent_sha256"),
-            },
-        )
+        record_agent(run, status)
         return agent, status
     binary = (
         agent_binary_path()
@@ -572,9 +576,9 @@ def connect_agent(
         payload = binary.read_bytes()
         try:
             agent.upgrade_agent(payload)
+        except AgentError:
+            raise
         except (OSError, RuntimeError) as error:
-            if isinstance(error, AgentError):
-                raise
             append_event(
                 run,
                 {
@@ -591,15 +595,7 @@ def connect_agent(
         agent = NativeAgent(device, token)
         status = wait_for_agent(agent, required)
         append_event(run, {"phase": "bootstrap", "outcome": "passed"})
-    append_event(
-        run,
-        {
-            "phase": "agent",
-            "identity": status.identity,
-            "sha256": status.fields.get("agent_sha256"),
-            "capabilities": sorted(status.capabilities),
-        },
-    )
+    record_agent(run, status)
     return agent, status
 
 

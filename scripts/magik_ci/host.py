@@ -53,7 +53,6 @@ def commands(group: str) -> list[list[str]]:
             "mister/platform/runtime/Cargo.toml",
             "mister/platform/contracts/latch/Cargo.toml",
             "mister/platform/contracts/scanout/Cargo.toml",
-            "mister/platform/contracts/video-diagnostics/Cargo.toml",
             "mister/platform/contracts/manifest/Cargo.toml",
         ]
         result = [
@@ -104,6 +103,11 @@ def commands(group: str) -> list[list[str]]:
     if group == "app":
         manifest = "apps/mister/Cargo.toml"
         return [
+            [
+                "python3",
+                "scripts/checks/generate-runtime-environment-reference.py",
+                "--check",
+            ],
             [
                 "cargo",
                 "check",
@@ -179,7 +183,7 @@ def commands(group: str) -> list[list[str]]:
                 "--lib",
                 "--no-default-features",
                 "--features",
-                "ui,experiments",
+                "ui,bench-scenes",
                 "--",
                 "--test-threads=1",
             ],

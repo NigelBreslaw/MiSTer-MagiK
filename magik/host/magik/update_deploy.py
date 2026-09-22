@@ -221,6 +221,45 @@ def report_verification(current):
     )
 
 
+def find_pending_deployment(directory, identity, stages):
+    """Read matching legacy evidence; never adopt or mutate it here."""
+    stage_ids = {stage["stage"] for stage in stages}
+    # Older hosts incorrectly keyed journals by service version. Adopt only
+    # evidence whose parent deployment names this physical board; do not
+    # delete the shared legacy journal or trust its filename.
+    matches = []
+    for candidate in directory.glob("*-pending.json"):
+        try:
+            saved = json.loads(candidate.read_text())
+            evidence = Path(saved["run"]) / "run.json"
+            if (
+                json.loads(evidence.read_text())["source"]["device_identity"]
+                != identity
+            ):
+                continue
+            # Old receipts may survive a finished deployment. Only adopt
+            # one referring to an actual unfinished stage on this board.
+            for kind in ("platform", "databases"):
+                journal = evidence.parent / kind / "publication.json"
+                if not journal.is_file():
+                    continue
+                decoded = json.loads(journal.read_text())
+                if not isinstance(decoded, dict):
+                    continue
+                if decoded.get("stage") in stage_ids:
+                    matches.append(saved)
+                    break
+        except (OSError, ValueError, KeyError, TypeError):
+            # Unrelated/partial host evidence is not authority to mutate.
+            # Unmatched native stages still fail closed below.
+            continue
+    if len(matches) > 1:
+        raise AgentError(
+            "multiple pending deployments for this board; reconcile explicitly"
+        )
+    return matches[0] if matches else {}
+
+
 def apply_updates(agent, identity, pair, run, attended, *, already_locked=False):
     device_key = hashlib.sha256(identity.encode()).hexdigest()
     with nullcontext() if already_locked else device_lock(identity):
@@ -234,43 +273,10 @@ def apply_updates(agent, identity, pair, run, attended, *, already_locked=False)
         )
         current = state(agent)
         if not previous and current["stages"]:
-            # Older hosts incorrectly keyed journals by service version. Adopt only
-            # evidence whose parent deployment names this physical board; do not
-            # delete the shared legacy journal or trust its filename.
-            matches = []
-            for candidate in pending_path.parent.glob("*-pending.json"):
-                try:
-                    saved = json.loads(candidate.read_text())
-                    evidence = Path(saved["run"]) / "run.json"
-                    if (
-                        json.loads(evidence.read_text())["source"]["device_identity"]
-                        != identity
-                    ):
-                        continue
-                    # Old receipts may survive a finished deployment. Only adopt
-                    # one referring to an actual unfinished stage on this board.
-                    for kind in ("platform", "databases"):
-                        journal = evidence.parent / kind / "publication.json"
-                        if not journal.is_file():
-                            continue
-                        decoded = json.loads(journal.read_text())
-                        if not isinstance(decoded, dict):
-                            continue
-                        if decoded.get("stage") in {
-                            stage["stage"] for stage in current["stages"]
-                        }:
-                            matches.append(saved)
-                            break
-                except (OSError, ValueError, KeyError, TypeError):
-                    # Unrelated/partial host evidence is not authority to mutate.
-                    # Unmatched native stages still fail closed below.
-                    continue
-            if len(matches) > 1:
-                raise AgentError(
-                    "multiple pending deployments for this board; reconcile explicitly"
-                )
-            if matches:
-                previous = matches[0]
+            previous = find_pending_deployment(
+                pending_path.parent, identity, current["stages"]
+            )
+            if previous:
                 atomic_json(pending_path, previous)
         # A confirmed reboot may have completed while the previous host lost its reply.
         for stage in current["stages"]:

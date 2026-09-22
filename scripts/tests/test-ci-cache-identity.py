@@ -154,10 +154,6 @@ def main() -> int:
                 ("host_target", "arm_target"),
             ),
             ("mister/platform/runtime/src/**/*.rs", ("host_target", "arm_target")),
-            (
-                "mister/platform/contracts/video-diagnostics/src/**/*.rs",
-                ("host_target",),
-            ),
         )
         previous = changed_stream_source
         for pattern, changed_groups in source_expectations:

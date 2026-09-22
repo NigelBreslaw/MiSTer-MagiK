@@ -35,14 +35,6 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("ui", CommandKind::Fpga),
     #[cfg(mister_bench_scenes)]
     CommandSpec::new("scenes", CommandKind::Fpga),
-    #[cfg(mister_experiments)]
-    CommandSpec::new("experiment-capabilities", CommandKind::ListOnly),
-    #[cfg(mister_experiments)]
-    CommandSpec::new("preview-transitions", CommandKind::ListOnly),
-    #[cfg(mister_experiments)]
-    CommandSpec::new("effects", CommandKind::Fpga),
-    #[cfg(mister_experiments)]
-    CommandSpec::new("effect-bench", CommandKind::Fpga),
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("vsync-probe", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
@@ -125,13 +117,6 @@ pub fn is_launcher_boot(arg: &str) -> bool {
     arg.ends_with("menu.rbf") || arg.ends_with("/menu.rbf")
 }
 
-pub fn should_handoff_to_mister(arg: &str) -> bool {
-    if is_known_command(arg) || is_launcher_boot(arg) {
-        return false;
-    }
-    false
-}
-
 pub fn is_launchable_arg(arg: &str) -> bool {
     let arg = arg.to_ascii_lowercase();
     arg.ends_with(".rbf")
@@ -145,7 +130,7 @@ pub fn is_launchable_arg(arg: &str) -> bool {
 }
 
 pub fn requires_display_owner(command: &str) -> bool {
-    matches!(command, "early-black" | "ui" | "effect-bench")
+    matches!(command, "early-black" | "ui")
 }
 
 pub fn requires_process_exclusive(command: &str) -> bool {
@@ -153,7 +138,6 @@ pub fn requires_process_exclusive(command: &str) -> bool {
         command,
         "early-black"
             | "ui"
-            | "effect-bench"
             | "library-refresh"
             | "request-library-rebuild"
             | "toggle-simple-joystick-setting"
@@ -201,7 +185,6 @@ mod tests {
                 resolve_command(&args(&["mister-magik-fb", command])),
                 command
             );
-            assert!(!should_handoff_to_mister(command));
         }
     }
 
@@ -220,7 +203,7 @@ mod tests {
     fn display_owner_guard_is_scoped_to_framebuffer_renderers() {
         assert!(requires_display_owner("ui"));
         assert!(requires_display_owner("early-black"));
-        assert!(requires_display_owner("effect-bench"));
+        assert!(!requires_display_owner("effect-bench"));
         assert!(!requires_display_owner("library-refresh"));
         assert!(!requires_display_owner("catalog-inspect"));
         assert!(!requires_display_owner("catalog-registry-report"));
@@ -350,7 +333,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(mister_experiments))]
     fn production_command_list_hides_experiments() {
         for command in [
             "preview-transitions",
@@ -364,23 +346,6 @@ mod tests {
         assert!(!is_known_command("scenes"), "scenes");
         #[cfg(mister_bench_scenes)]
         assert!(is_known_command("scenes"), "scenes");
-    }
-
-    #[test]
-    #[cfg(mister_experiments)]
-    fn experiment_command_list_exposes_experiments() {
-        for command in [
-            "preview-transitions",
-            "effects",
-            "effect-bench",
-            "experiment-capabilities",
-        ] {
-            assert!(is_known_command(command), "{command}");
-        }
-        assert_command_kind("experiment-capabilities", CommandKind::ListOnly);
-        assert_command_kind("preview-transitions", CommandKind::ListOnly);
-        assert_command_kind("effects", CommandKind::Fpga);
-        assert_command_kind("effect-bench", CommandKind::Fpga);
     }
 
     #[test]
@@ -409,24 +374,6 @@ mod tests {
         ] {
             assert!(is_launchable_arg(path), "{path}");
         }
-    }
-
-    #[test]
-    fn launchable_files_are_not_handed_off_by_slint() {
-        for path in [
-            "/media/fat/_Arcade/foo.mra",
-            "/media/fat/games/foo.rbf",
-            "/media/fat/games/foo.mgl",
-            "/media/fat/games/foo.zip",
-        ] {
-            assert!(!should_handoff_to_mister(path), "{path}");
-        }
-    }
-
-    #[test]
-    fn keeps_menu_boot_in_launcher() {
-        assert!(!should_handoff_to_mister("menu.rbf"));
-        assert!(!should_handoff_to_mister("/media/fat/menu.rbf"));
     }
 
     fn assert_command_kind(command: &str, kind: CommandKind) {

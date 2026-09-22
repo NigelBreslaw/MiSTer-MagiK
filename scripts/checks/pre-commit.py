@@ -46,11 +46,6 @@ CRATE_FORMATTERS = (
         "apps/framebuffer-scene-lab/Cargo.toml",
     ),
     (
-        "framebuffer-lab.format",
-        "apps/framebuffer-lab",
-        "apps/framebuffer-lab/Cargo.toml",
-    ),
-    (
         "framebuffer-stream.format",
         "crates/framebuffer-stream",
         "crates/framebuffer-stream/Cargo.toml",
@@ -69,11 +64,6 @@ CRATE_FORMATTERS = (
         "latch-contract.format",
         "mister/platform/contracts/latch",
         "mister/platform/contracts/latch/Cargo.toml",
-    ),
-    (
-        "video-diagnostics-contract.format",
-        "mister/platform/contracts/video-diagnostics",
-        "mister/platform/contracts/video-diagnostics/Cargo.toml",
     ),
     ("magik-core.format", "crates/magik-core", "crates/magik-core/Cargo.toml"),
     (

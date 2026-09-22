@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import re
 from argparse import Namespace
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -12,7 +11,7 @@ from typing import Any, cast
 
 from .common import git
 
-SCHEMA = "mister-magik-architecture-report-v1"
+SCHEMA = "mister-magik-architecture-report-v2"
 
 
 @dataclass(frozen=True)
@@ -37,12 +36,6 @@ HOTSPOTS = (
         ("apps/desktop/src/",),
     ),
     Hotspot(
-        "catalog-persistence",
-        "crates/catalog/src/sqlite_catalog.rs",
-        "P2-B characterization then P3 persistence split",
-        ("crates/catalog/src/sqlite_catalog.rs", "crates/catalog/src/sqlite_catalog/"),
-    ),
-    Hotspot(
         "launcher-state",
         "apps/mister/src/launcher.rs",
         "navigation policies and platform effects",
@@ -51,25 +44,16 @@ HOTSPOTS = (
 )
 
 
-def _function(source: str) -> dict[str, object] | None:
-    lines = source.splitlines()
-    best: tuple[str, int] | None = None
-    for index, line in enumerate(lines):
-        match = re.search(r"(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)", line)
-        if not match:
-            continue
-        depth = 0
-        opened = False
-        end = index
-        for offset, candidate in enumerate(lines[index:]):
-            depth += candidate.count("{") - candidate.count("}")
-            opened |= "{" in candidate
-            end = index + offset
-            if opened and depth <= 0:
-                break
-        if opened and (best is None or end - index + 1 > best[1]):
-            best = (str(match.group(1)), end - index + 1)
-    return None if best is None else {"name": best[0], "lines": best[1]}
+def _concentration_source(path: str) -> bool:
+    parts = Path(path).parts
+    return not (
+        parts[0] in {"history", "reference", "private", "build"}
+        or any(
+            part in {"target", "vendor", "generated", "ui-generated"} for part in parts
+        )
+        or Path(path).name.startswith("generated")
+        or path.endswith(".svh")
+    )
 
 
 def report(repository: Path, base: str, head: str) -> dict[str, object]:
@@ -80,7 +64,12 @@ def report(repository: Path, base: str, head: str) -> dict[str, object]:
     total = 0
     for line in diff.splitlines():
         parts = line.split("\t")
-        if len(parts) == 3 and parts[0].isdigit():
+        if (
+            len(parts) == 3
+            and parts[0].isdigit()
+            and parts[1].isdigit()
+            and _concentration_source(parts[2])
+        ):
             changed[parts[2]] = int(parts[0]) + int(parts[1])
             total += changed[parts[2]]
     paths = git(repository, "ls-tree", "-r", "--name-only", head).splitlines()
@@ -98,9 +87,6 @@ def report(repository: Path, base: str, head: str) -> dict[str, object]:
             )
         ]
         sources = {path: git(repository, "show", f"{head}:{path}") for path in members}
-        largest = [(path, _function(text)) for path, text in sources.items()]
-        largest = [(path, item) for path, item in largest if item is not None]
-        largest.sort(key=lambda pair: int(cast(int, pair[1]["lines"])), reverse=True)
         family_changed = sum(changed.get(path, 0) for path in members)
         hotspots.append(
             {
@@ -113,9 +99,6 @@ def report(repository: Path, base: str, head: str) -> dict[str, object]:
                     "largest_file_lines": max(
                         (len(text.splitlines()) for text in sources.values()), default=0
                     ),
-                    "largest_function": {"path": largest[0][0], **largest[0][1]}
-                    if largest
-                    else None,
                     "mutable_binding_count": sum(
                         text.count("let mut ") for text in sources.values()
                     ),
@@ -126,7 +109,6 @@ def report(repository: Path, base: str, head: str) -> dict[str, object]:
                     "changed_lines": family_changed,
                 },
                 "file_lines": len(source.splitlines()),
-                "largest_function": _function(source),
                 "mutable_binding_count": source.count("let mut "),
                 "direct_environment_read_count": source.count("env::var(")
                 + source.count("env::var_os("),

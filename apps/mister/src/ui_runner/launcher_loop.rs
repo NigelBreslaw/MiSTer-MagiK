@@ -2948,9 +2948,24 @@ impl LauncherResponseTrace {
     }
 
     fn snapshot(&self) -> LauncherResponseTraceSnapshot {
+        self.snapshot_with_records(
+            self.complete,
+            self.feedback_records.clone(),
+            self.complete
+                .then(|| self.lab_records.clone())
+                .unwrap_or_default(),
+        )
+    }
+
+    fn snapshot_with_records(
+        &self,
+        complete: bool,
+        feedback_records: Vec<LauncherResponseFeedbackRecord>,
+        lab_records: Vec<serde_json::Value>,
+    ) -> LauncherResponseTraceSnapshot {
         LauncherResponseTraceSnapshot {
             records: self.records.clone(),
-            feedback_records: self.feedback_records.clone(),
+            feedback_records,
             refresh_period_us: self.refresh_period_us,
             presentation_start: self.presentation_start,
             presentation_end: self.presentation_end,
@@ -2960,21 +2975,16 @@ impl LauncherResponseTrace {
             hidden_feedback_count: self.hidden_feedback_count,
             cancelled_feedback_count: self.cancelled_feedback_count,
             outstanding_feedback_count: self.outstanding_feedback.len(),
-            complete: self.complete,
+            complete,
             execution_enabled: self.execution_enabled,
             queue_high_water: self.queue_high_water,
-            catalog_phases: self
-                .complete
+            catalog_phases: complete
                 .then(|| self.catalog_phases.clone())
                 .unwrap_or_default(),
-            scheduler_phases: self
-                .complete
+            scheduler_phases: complete
                 .then(|| self.scheduler_phases.clone())
                 .unwrap_or_default(),
-            lab_records: self
-                .complete
-                .then(|| self.lab_records.clone())
-                .unwrap_or_default(),
+            lab_records,
             input_reader_policy: self.input_reader_policy.clone(),
         }
     }
@@ -2985,32 +2995,12 @@ impl LauncherResponseTrace {
             .iter()
             .filter(|record| record.disposition == "confirmed")
             .count();
-        let records = self.records.clone();
         let feedback_count = self.feedback_records.len();
         let feedback_records = self.feedback_records[self.partial_feedback_sent..].to_vec();
         let lab_count = self.lab_records.len();
         let lab_records = self.lab_records[self.partial_lab_sent..].to_vec();
         (
-            LauncherResponseTraceSnapshot {
-                records,
-                feedback_records,
-                refresh_period_us: self.refresh_period_us,
-                presentation_start: self.presentation_start,
-                presentation_end: self.presentation_end,
-                run_id: self.run_id.clone(),
-                expected_confirmed: self.expected_confirmed,
-                expected_feedback_hidden: self.expected_feedback_hidden,
-                hidden_feedback_count: self.hidden_feedback_count,
-                cancelled_feedback_count: self.cancelled_feedback_count,
-                outstanding_feedback_count: self.outstanding_feedback.len(),
-                complete: false,
-                execution_enabled: self.execution_enabled,
-                queue_high_water: self.queue_high_water,
-                catalog_phases: Vec::new(),
-                scheduler_phases: Vec::new(),
-                lab_records,
-                input_reader_policy: self.input_reader_policy.clone(),
-            },
+            self.snapshot_with_records(false, feedback_records, lab_records),
             confirmed_count,
             feedback_count,
             lab_count,
@@ -15575,6 +15565,10 @@ mod tests {
         assert_eq!(complete.catalog_phases.len(), 1);
         assert_eq!(complete.scheduler_phases.len(), 1);
         assert_eq!(complete.lab_records.len(), 2);
+        let (partial_after_completion, _, _, _) = trace.partial_snapshot();
+        assert!(!partial_after_completion.complete);
+        assert!(partial_after_completion.catalog_phases.is_empty());
+        assert!(partial_after_completion.scheduler_phases.is_empty());
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&complete.payload())
                 .expect("complete response trace payload")["completion"]["state"],
@@ -16285,10 +16279,6 @@ mod tests {
     }
 
     use crate::test_support::{arcade_catalog, arcade_game, arcade_system};
-    #[cfg(mister_experiments)]
-    use crate::ui_effect_bench::{EffectFill, EffectTarget};
-    #[cfg(mister_experiments)]
-    use mister_magik_fb::experiments::effects::framebuffer_effects::EffectSize;
 
     #[test]
     fn crt_profile_terminal_tracks_the_composed_backdrop_not_hdmi_layer_state() {
@@ -16565,20 +16555,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
-    }
-
-    #[cfg(mister_experiments)]
-    #[test]
-    pub(super) fn effect_half_target_allows_640x448_at_native_scale() {
-        let ui = UiDisplay::for_framebuffer(1920, 1080);
-        let target = EffectTarget::new(EffectFill::Half, EffectSize { w: 640, h: 448 }, &ui)
-            .expect("640x448 should fit in half-fill benchmark mode");
-
-        assert_eq!(target.physical_w, 640);
-        assert_eq!(target.physical_h, 448);
-        assert_eq!(target.render_w, 640);
-        assert_eq!(target.render_h, 448);
-        assert_eq!(target.scale, 1);
     }
 
     fn catalog_for_media_systems(system_ids: &[&str]) -> ArcadeCatalog {

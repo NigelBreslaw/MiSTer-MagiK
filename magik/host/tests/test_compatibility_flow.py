@@ -28,6 +28,28 @@ def status(identity: str, capabilities: set[str]) -> AgentStatus:
     )
 
 
+def test_agent_event_keeps_identity_hash_and_sorted_capabilities(monkeypatch, tmp_path):
+    events = []
+    monkeypatch.setattr(
+        cli, "append_event", lambda run, event: events.append((run, event))
+    )
+    current = AgentStatus.from_response(
+        {"identity": "fixture", "capabilities": ["z", "a"], "agent_sha256": "digest"}
+    )
+    cli.record_agent(tmp_path, current)
+    assert events == [
+        (
+            tmp_path,
+            {
+                "phase": "agent",
+                "identity": "fixture",
+                "sha256": "digest",
+                "capabilities": ["a", "z"],
+            },
+        )
+    ]
+
+
 def configure_native(
     monkeypatch: pytest.MonkeyPatch, tmp_path, responses: list[AgentStatus | Exception]
 ) -> list[str]:

@@ -7,10 +7,27 @@ import unittest
 from pathlib import Path
 from typing import Any, cast
 
-from scripts.magik_ci.architecture import report
+from scripts.magik_ci.architecture import _concentration_source, report
 
 
 class ArchitectureTests(unittest.TestCase):
+    def test_concentration_excludes_generated_and_archived_sources(self):
+        for path in (
+            "history/log.tsv",
+            "reference/Main/main.cpp",
+            "private/assets/data.json",
+            "build/output.rs",
+            "apps/mister/target/output.rs",
+            "mister/platform/contracts/generated/source.rs",
+            "apps/mister/ui-generated/src/lib.rs",
+            "crates/wire/src/generated.rs",
+            "mister/platform/fpga/protocol.svh",
+            "vendor/dependency/lib.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(_concentration_source(path))
+        self.assertTrue(_concentration_source("apps/mister/src/ui_runner.rs"))
+
     def test_extraction_keeps_complete_family_visible(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -47,11 +64,9 @@ class ArchitectureTests(unittest.TestCase):
             self.assertEqual(new["file_lines"], 1)
             self.assertEqual(new["subsystem"]["lines"], old["subsystem"]["lines"] + 1)
             self.assertEqual(new["subsystem"]["mutable_binding_count"], 1)
-            self.assertEqual(
-                new["subsystem"]["largest_function"]["path"],
-                "apps/desktop/src/delivery.rs",
-            )
-            self.assertEqual(len(after["hotspots"]), 4)
+            self.assertNotIn("largest_function", new["subsystem"])
+            self.assertEqual(len(after["hotspots"]), 3)
+            self.assertEqual(after["schema"], "mister-magik-architecture-report-v2")
             missing = next(
                 item
                 for item in after["hotspots"]

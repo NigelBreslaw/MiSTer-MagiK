@@ -4,9 +4,6 @@
 fn main() {
     println!("cargo:rerun-if-env-changed=MISTER_UI_BUILD_SCOPE");
     println!("cargo:rustc-check-cfg=cfg(mister_ui_scope_launcher)");
-    println!("cargo:rustc-check-cfg=cfg(mister_bench_scenes)");
-
-    let bench_scenes = std::env::var_os("CARGO_FEATURE_BENCH_SCENES").is_some();
     let scope = std::env::var("MISTER_UI_BUILD_SCOPE").unwrap_or_else(|_| "production".into());
     let launcher_only = match scope.as_str() {
         "" | "all" => false,
@@ -26,10 +23,6 @@ fn main() {
             "../ui/bench/tear_pattern.slint",
             "../ui/bench/video_playback.slint",
         ]);
-    }
-    if bench_scenes {
-        println!("cargo:rustc-cfg=mister_bench_scenes");
-        sources.push("../ui/experiments/effect_hud.slint");
     }
 
     for path in sources {

@@ -4,7 +4,6 @@
 # MiSTer MagiK FPGA component identity inputs, format v0.1.
 mister/platform/fpga/menu-vblank-latch
 mister/platform/contracts/latch
-mister/platform/contracts/video-diagnostics
 mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h
 scripts/build-fpga-vblank-latch-core.sh
 scripts/prepare-fpga-menu-signoff.py

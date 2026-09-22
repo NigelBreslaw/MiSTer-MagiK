@@ -74,6 +74,37 @@ class DistributionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "nonexecutable|missing"):
             dist.verify(self.fixture.package(), channel="beta", write_receipt=True)
 
+    def test_layout_inventory_does_not_rehash_every_payload(self):
+        with patch.object(dist, "sha256_file", wraps=dist.sha256_file) as digest:
+            dist.verify_root(self.fixture.stage)
+        self.assertEqual(
+            [
+                call.args[0].relative_to(self.fixture.stage).as_posix()
+                for call in digest.call_args_list
+            ],
+            list(dist.ARTWORK),
+        )
+        self.contract.assert_called_once()
+        self.manager.assert_called_once()
+
+    def test_same_name_zip_corruption_fails_even_with_updated_transport_hash(self):
+        candidate = self.fixture.package()
+        receipt = dist.read_json(candidate / "release-assets.json")
+        archive = candidate / receipt["archive"]
+        with zipfile.ZipFile(archive) as source:
+            members = [(entry, source.read(entry)) for entry in source.infolist()]
+        with zipfile.ZipFile(archive, "w") as output:
+            for entry, data in members:
+                output.writestr(
+                    entry, b"corrupt" if entry.filename == dist.LAUNCHER else data
+                )
+        receipt["archive_sha256"] = dist.sha256_file(archive)
+        (candidate / "release-assets.json").write_bytes(dist.canonical_json(receipt))
+        dist.write_checksums(candidate)
+        with self.assertRaisesRegex(ValueError, "ZIP/receipt payload mismatch"):
+            dist.verify(candidate, channel="beta", write_receipt=True)
+        self.assertFalse((candidate / dist.RECEIPT).exists())
+
     def test_extra_helper_is_rejected(self):
         (self.fixture.stage / dist.LEGACY_HELPER).write_text("exit 99")
         with self.assertRaisesRegex(ValueError, "exactly one"):

@@ -5,8 +5,6 @@
 
 use std::time::Duration;
 
-#[cfg(mister_experiments)]
-use crate::experiments::preview_transitions as experiment_preview_transitions;
 use crate::preview_state::PreviewRawTransitionFrame;
 use mister_magik_fb::preview_transition::{PreviewTransitionController, transition_duration_ratio};
 
@@ -15,112 +13,26 @@ const DEFAULT_PREVIEW_TRANSITION_MS: u64 = 130;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PreviewTransitionEffect {
     Fade,
-    #[cfg(mister_experiments)]
-    Wipe,
-    #[cfg(mister_experiments)]
-    Slide,
-    #[cfg(mister_experiments)]
-    Zoom,
-    #[cfg(mister_experiments)]
-    Scanline,
-    #[cfg(mister_experiments)]
-    Checker,
-    #[cfg(mister_experiments)]
-    Dissolve,
-    #[cfg(mister_experiments)]
-    CrtBeamWipe,
-    #[cfg(mister_experiments)]
-    MosaicResolve,
-    #[cfg(mister_experiments)]
-    CopperBars,
-    #[cfg(mister_experiments)]
-    VenetianBlinds,
-    #[cfg(mister_experiments)]
-    BarnDoor,
-    #[cfg(mister_experiments)]
-    Iris,
-    #[cfg(mister_experiments)]
-    ClockWipe,
-    #[cfg(mister_experiments)]
-    SpriteStrips,
-    #[cfg(mister_experiments)]
-    StarfieldWarp,
-    #[cfg(mister_experiments)]
-    VectorRedraw,
-    #[cfg(mister_experiments)]
-    PaletteCycle,
-    #[cfg(mister_experiments)]
-    RasterTear,
-    #[cfg(mister_experiments)]
-    TileLoader,
-    #[cfg(mister_experiments)]
-    VenetianCopper,
-    #[cfg(mister_experiments)]
-    AttributeFlash,
-    #[cfg(mister_experiments)]
-    TecTec,
-    #[cfg(mister_experiments)]
-    Linecrunch,
-    #[cfg(mister_experiments)]
-    RacingBeam,
-    #[cfg(mister_experiments)]
-    SpriteMultiplex,
-    #[cfg(mister_experiments)]
-    RowScrollParallax,
-    #[cfg(mister_experiments)]
-    SuperScalerPop,
-    #[cfg(mister_experiments)]
-    MaskBlit,
-    #[cfg(mister_experiments)]
-    PhosphorDecay,
-    #[cfg(mister_experiments)]
-    PlasmaMask,
-    #[cfg(mister_experiments)]
-    MoireRings,
-    #[cfg(mister_experiments)]
-    KefrensCurtain,
 }
 
 impl PreviewTransitionEffect {
-    #[cfg(not(mister_experiments))]
     pub const PRODUCTION: [Self; 1] = [Self::Fade];
 
     pub fn all() -> &'static [Self] {
-        #[cfg(mister_experiments)]
-        {
-            experiment_preview_transitions::all()
-        }
-        #[cfg(not(mister_experiments))]
-        {
-            &Self::PRODUCTION
-        }
+        &Self::PRODUCTION
     }
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Fade => "fade",
-            #[cfg(mister_experiments)]
-            other => experiment_preview_transitions::label(other),
         }
     }
 
     pub fn parse(value: &str) -> Option<Self> {
         match value.to_ascii_lowercase().replace('_', "-").as_str() {
             "fade" | "crossfade" | "cross-fade" => Some(Self::Fade),
-            #[cfg(mister_experiments)]
-            other => experiment_preview_transitions::parse(other),
-            #[cfg(not(mister_experiments))]
             _ => None,
         }
-    }
-
-    #[cfg_attr(not(mister_experiments), allow(dead_code))]
-    pub fn labels() -> String {
-        Self::all()
-            .iter()
-            .map(|effect| effect.label())
-            .collect::<Vec<_>>()
-            .join("\n")
     }
 }
 
@@ -263,11 +175,6 @@ impl PreviewTransitionDemo {
         let picker_enabled = config.picker_enabled;
         let label_overlay = picker_enabled || !trimmed.is_empty();
         let use_all = picker_enabled && trimmed.is_empty();
-        #[cfg(mister_experiments)]
-        let use_all = use_all
-            || trimmed.eq_ignore_ascii_case("mega")
-            || trimmed.eq_ignore_ascii_case("all")
-            || trimmed.eq_ignore_ascii_case("demo");
         if use_all {
             effects.extend(PreviewTransitionEffect::all());
         } else if !trimmed.is_empty() {
@@ -280,7 +187,7 @@ impl PreviewTransitionDemo {
                     effects.push(effect);
                 } else {
                     crate::ui_errln!(
-                        "ui: unknown MISTER_PREVIEW_TRANSITION effect {part:?}; use `mister-magik-fb preview-transitions` for labels"
+                        "ui: unknown MISTER_PREVIEW_TRANSITION effect {part:?}; supported effect: fade"
                     );
                 }
             }
@@ -507,10 +414,9 @@ mod tests {
         assert_eq!(normal_retarget.progress, 0.75);
     }
 
-    #[cfg(not(mister_experiments))]
     #[test]
     fn production_transitions_are_fade_only() {
-        assert_eq!(PreviewTransitionEffect::labels(), "fade");
+        assert_eq!(PreviewTransitionEffect::Fade.label(), "fade");
         assert_eq!(
             PreviewTransitionEffect::all(),
             &[PreviewTransitionEffect::Fade]
@@ -526,7 +432,6 @@ mod tests {
         assert!(!transition.label_overlay_enabled());
     }
 
-    #[cfg(not(mister_experiments))]
     #[test]
     fn production_parser_rejects_bench_only_effects() {
         assert_eq!(PreviewTransitionEffect::parse("cut"), None);
@@ -553,16 +458,5 @@ mod tests {
             transition_duration_ratio(Duration::from_millis(130), 0, 0),
             Duration::from_millis(130)
         );
-    }
-
-    #[cfg(mister_experiments)]
-    #[test]
-    fn bench_transitions_keep_experimental_effects() {
-        assert!(PreviewTransitionEffect::all().contains(&PreviewTransitionEffect::Wipe));
-        assert_eq!(
-            PreviewTransitionEffect::parse("wipe"),
-            Some(PreviewTransitionEffect::Wipe)
-        );
-        assert!(PreviewTransitionEffect::labels().contains("kefrens-curtain"));
     }
 }

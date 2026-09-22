@@ -20,7 +20,6 @@ fn main() {
     println!("cargo:rerun-if-changed=../../.git/HEAD");
     println!("cargo:rustc-check-cfg=cfg(mister_ui_scope_launcher)");
     println!("cargo:rustc-check-cfg=cfg(mister_bench_scenes)");
-    println!("cargo:rustc-check-cfg=cfg(mister_experiments)");
     let build_number = git_commit_count();
     let version = release_version(&build_number);
     let source_revision = source_revision();
@@ -48,10 +47,6 @@ fn main() {
     let bench_scenes = std::env::var_os("CARGO_FEATURE_BENCH_SCENES").is_some();
     if bench_scenes {
         println!("cargo:rustc-cfg=mister_bench_scenes");
-    }
-    let experiments = std::env::var_os("CARGO_FEATURE_EXPERIMENTS").is_some();
-    if experiments {
-        println!("cargo:rustc-cfg=mister_experiments");
     }
     if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("arm") {
         let mut particle_neon = c_build();
