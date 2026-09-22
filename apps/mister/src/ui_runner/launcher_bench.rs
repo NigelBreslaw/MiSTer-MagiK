@@ -42,23 +42,7 @@ pub struct LauncherBenchmarkConfig {
 
 impl Default for LauncherBenchmarkConfig {
     fn default() -> Self {
-        Self {
-            scenario: None,
-            start_screen: None,
-            start_system: None,
-            system_entry_system: None,
-            start_menu: None,
-            lock_screen: None,
-            after_input_script: false,
-            preview_step_hold_frames: 300,
-            human_turbo_idle_frames: 30,
-            human_turbo_normal_frames: 30,
-            human_turbo_pause_frames: 30,
-            home_selected: None,
-            auto_launch_selected: false,
-            orientation_pmu_completion: None,
-            launch_return_pmu_handoff_out: None,
-        }
+        Self::capture_with(|_| None)
     }
 }
 
@@ -734,6 +718,26 @@ pub(super) fn sync_device_info_controller(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn benchmark_defaults_preserve_unarmed_configuration_and_timing() {
+        let config = LauncherBenchmarkConfig::default();
+        assert!(config.scenario.is_none());
+        assert!(config.start_screen.is_none());
+        assert!(config.start_system.is_none());
+        assert!(config.system_entry_system.is_none());
+        assert!(config.start_menu.is_none());
+        assert!(config.lock_screen.is_none());
+        assert!(!config.after_input_script);
+        assert_eq!(config.preview_step_hold_frames, 300);
+        assert_eq!(config.human_turbo_idle_frames, 30);
+        assert_eq!(config.human_turbo_normal_frames, 30);
+        assert_eq!(config.human_turbo_pause_frames, 30);
+        assert!(config.home_selected.is_none());
+        assert!(!config.auto_launch_selected);
+        assert!(config.orientation_pmu_completion.is_none());
+        assert!(config.launch_return_pmu_handoff_out.is_none());
+    }
 
     #[test]
     fn benchmark_config_captures_start_state_and_bounded_timing() {
