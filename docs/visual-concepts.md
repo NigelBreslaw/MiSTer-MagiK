@@ -39,7 +39,7 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 - [x] Palette aurora removed after user review
 - [x] Texture tunnel
 - [x] Raster waves
-- [x] Wireframe terrain
+- [x] Wireframe terrain removed after user review
 - [ ] Physical qualification and visual review
 
 `point-cloud-morph`: independently selectable; default and reduced presets.
@@ -61,7 +61,6 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 
 `raster-waves`: independently selectable; default and reduced presets.
 
-`wireframe-terrain`: independently selectable; default and reduced presets.
 
 ## Presets and preparation
 
@@ -74,7 +73,6 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 | starfield | 256 filtered stars, no trails | 128 filtered stars, no trails | 8.192 s |
 | texture-tunnel | 480×270, 480 palette-index frames, 256×256 texture | 120×67, 480 frames, same texture | 8 s forward flight, distance shading |
 | raster-waves | Eight-pixel displacement | Four-pixel displacement | 2.048 s |
-| wireframe-terrain | 48×32 grid | 24×16 grid | 128 s |
 
 Working dimensions above describe the observed 960×540 render surface. Fixture
 letterboxing is also tested at 960×600. Procedural backgrounds fill the surface.

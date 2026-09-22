@@ -15,7 +15,6 @@ Observed mode: HDMI 1920×1080p60; resolved RGB565 rendering: 960×540. No displ
 | starfield | 59.998 / 60.000 | 1800 / 1800 | 0 / 0 | 100.13 / 100.13 | 34.2 | Pass |
 | texture-tunnel | 59.998 / 59.998 | 1800 / 1800 | 0 / 0 | 100.24 / 100.18 | 68.4 | Pass |
 | raster-waves | 60.000 / 60.000 | 1800 / 1800 | 0 / 0 | 100.17 / 100.23 | 34.0 | Pass |
-| wireframe-terrain | 60.000 / 59.998 | 1800 / 1800 | 0 / 0 | 100.17 / 100.17 | 34.0 | Pass |
 
 Required gates: zero protocol-v5 physical repeats, zero latch drops/rejections, valid ownership, one advanced timeline frame per presentation, CPU below 150% in each window, process peak RSS at most 128 MiB. Actual refresh comes from owned-vblank deltas rather than assuming exactly 60 Hz.
 
@@ -32,12 +31,11 @@ Times below are the larger average of the two windows, in milliseconds. Frame-to
 | starfield | 1.311 | 1.382 | 16.550 | 1.460 | `build/magik-results/20260922T155324Z-8b0a2f56e128` |
 | texture-tunnel | 3.924 | 1.651 | 16.561 | 4.116 | `build/magik-results/20260922T161109Z-bdb96d29b2ba` |
 | raster-waves | 3.230 | 0.968 | 16.558 | 3.436 | `build/magik-results/20260922T151400Z-a253d837819c` |
-| wireframe-terrain | 3.820 | 1.563 | 16.552 | 4.066 | `build/magik-results/20260922T151609Z-dd5df7a60aaa` |
 
 ## Validation and limitations
 
 - Portable renderer tests cover deterministic reset, clipping, exact dissolve endpoints, fixed seed behavior and retained damage against full frames at 960×540 and 960×600. The existing two-slot damage ledger tests cover alternating slots, initialization and suppressed presentation.
-- Latest portable suite: 20 unit tests and two retained-frame tests passed at both geometries. Mini smoke and both motion checks passed on device (`20260922T152047Z-4c2deae9ae72`, `20260922T152113Z-7e4a673f6a74`).
+- Latest portable suite: 19 unit tests and two retained-frame tests passed at both geometries. Mini smoke and both motion checks passed on device (`20260922T152047Z-4c2deae9ae72`, `20260922T152113Z-7e4a673f6a74`).
 - Separate terrain profiling completed with 905 samples and matching artifact identity (`20260922T152008Z-bb103693141e`). Its four physical repeats are instrumented evidence and do not qualify cadence.
 - All listed unprofiled runs reported zero latch drops and rejections, including the failed curved tunnel run.
 - Host regression suite: 247 passed. Native service: 47 passed. Mini session: three passed. Tooling measurement/session: six passed. Focused Clippy, Python formatting/lint/type checks and ARM builds passed.
@@ -59,7 +57,6 @@ See [the iteration guide](visual-concepts.md) for controls and final preset budg
 - starfield: `f34d6e0c445b47dba164dc7e0af40cfc67b642f9aedb98f76725a7631d46b1f9`
 - texture-tunnel: `4360d72127c87ef39846a68d6ef9ab39661caa16a7b61778e1f1d165df0e5b79`
 - raster-waves: `f8fa5c209d63d3b10012a20a41ca084c1cc04f3401cc5776b704d103b6db12b9`
-- wireframe-terrain: `f8fa5c209d63d3b10012a20a41ca084c1cc04f3401cc5776b704d103b6db12b9`
 
 ## Accepted light sweep revision
 
@@ -92,3 +89,6 @@ Palette aurora was removed after live user review on 22 September 2026. Its
 renderer and selection controls are removed; the tunnel retains its RGB565 scaling helper.
 
 Raster waves was accepted as shown during live HDMI review on 22 September 2026.
+
+Wireframe terrain was removed after live user review on 22 September 2026.
+Its renderer and selection controls are no longer included.

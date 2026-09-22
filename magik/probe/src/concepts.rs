@@ -68,7 +68,6 @@ impl Concepts {
                 "starfield" => (4096, 8192),
                 "texture-tunnel" => (4000, 8000),
                 "raster-waves" => (1024, 2048),
-                "wireframe-terrain" => (64000, 128000),
                 _ => (100, 7680),
             };
             let target = Duration::from_millis(match bookmark {
