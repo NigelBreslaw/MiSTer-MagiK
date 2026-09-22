@@ -1,39 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
-use crate::{Effect, Pixel, Preset, Rect, full, rgb};
-use std::time::Duration;
-pub struct Aurora {
-    width: usize,
-    height: usize,
-    lw: usize,
-    lh: usize,
-    low: Vec<Pixel>,
-    sine: [i16; 1024],
-    palette: [Pixel; 256],
-}
-pub fn new(preset: Preset, width: usize, height: usize) -> Result<Aurora, String> {
-    let divisor = preset.choose(4, 8);
-    let lw = (width / divisor).max(1);
-    let lh = (height / divisor).max(1);
-    Ok(Aurora {
-        width,
-        height,
-        lw,
-        lh,
-        low: vec![Pixel(0); lw * lh],
-        sine: std::array::from_fn(|i| {
-            ((i as f32 * std::f32::consts::TAU / 1024.0).sin() * 127.0) as i16
-        }),
-        palette: std::array::from_fn(|i| {
-            let t = i as u8;
-            rgb(
-                t.saturating_sub(90).saturating_mul(2),
-                t / 2,
-                t.saturating_add(20),
-            )
-        }),
-    })
-}
+use crate::Pixel;
+
 pub fn expand(low: &[Pixel], lw: usize, lh: usize, p: &mut [Pixel], w: usize, h: usize) {
     let sx = w / lw;
     let sy = h / lh;
@@ -77,32 +45,6 @@ pub fn expand(low: &[Pixel], lw: usize, lh: usize, p: &mut [Pixel], w: usize, h:
 fn expand_row<const SCALE: usize>(source: &[Pixel], row: &mut [Pixel]) {
     for (span, &pixel) in row.as_chunks_mut::<SCALE>().0.iter_mut().zip(source) {
         span.copy_from_slice(&[pixel; SCALE]);
-    }
-}
-impl Effect for Aurora {
-    fn render(&mut self, t: Duration, p: &mut [Pixel]) -> Result<Rect, String> {
-        let phase = (t.as_millis() / 12) as usize;
-        for y in 0..self.lh {
-            for x in 0..self.lw {
-                let wave = (i32::from(self.sine[(x * 5 + phase) % 1024])
-                    + i32::from(self.sine[(x * 3 + phase * 2) % 1024]))
-                    / 4;
-                let center = self.lh as i32 / 2 + wave * self.lh as i32 / 256;
-                let distance = (y as i32 - center).unsigned_abs() as usize;
-                let intensity = 255usize.saturating_sub(distance * 180 / self.lh.max(1) * 8);
-                let dither = [0, 2, 3, 1][(y % 2) * 2 + x % 2];
-                self.low[y * self.lw + x] = if intensity < 8 {
-                    Pixel(0)
-                } else {
-                    self.palette[(intensity + dither).min(255)]
-                };
-            }
-        }
-        expand(&self.low, self.lw, self.lh, p, self.width, self.height);
-        Ok(full(self.width, self.height))
-    }
-    fn storage_bytes(&self) -> usize {
-        self.low.capacity() * 2 + 2560
     }
 }
 #[cfg(test)]

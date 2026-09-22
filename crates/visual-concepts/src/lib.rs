@@ -3,12 +3,12 @@
 //! Deterministic, bounded RGB565 concepts. No device or application dependencies.
 pub use mister_magik_framebuffer_scenes::{Rgb565Pixel as Pixel, Rgb565Rect as Rect};
 use std::time::Duration;
-mod aurora;
 mod depth;
 mod dissolve;
 pub mod fixture;
 mod light;
 mod point_cloud;
+mod scale;
 mod stars;
 mod terrain;
 mod tunnel;
@@ -18,7 +18,6 @@ pub const EFFECTS: &[&str] = &[
     "wireframe-terrain",
     "raster-waves",
     "texture-tunnel",
-    "palette-aurora",
     "starfield",
     "pixel-dissolve",
     "light-sweep",
@@ -76,7 +75,6 @@ impl Scene {
             "wireframe-terrain" => Box::new(terrain::new(preset, width, height)?),
             "raster-waves" => Box::new(waves::new(preset, width, height)?),
             "texture-tunnel" => Box::new(tunnel::new(preset, width, height)?),
-            "palette-aurora" => Box::new(aurora::new(preset, width, height)?),
             "starfield" => Box::new(stars::new(preset, width, height)?),
             "pixel-dissolve" => Box::new(dissolve::new(preset, width, height)?),
             "light-sweep" => Box::new(light::new(preset, width, height)?),

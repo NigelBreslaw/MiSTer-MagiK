@@ -36,7 +36,7 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 - [x] Mirror floor removed after user review
 - [x] Pixel dissolve
 - [x] Starfield
-- [x] Palette aurora
+- [x] Palette aurora removed after user review
 - [x] Texture tunnel
 - [x] Raster waves
 - [x] Wireframe terrain
@@ -55,7 +55,6 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 `starfield`: filtered stars with no comets; see the
 [sampling diagnosis and research](starfield-research.md).
 
-`palette-aurora`: independently selectable; default and reduced presets.
 
 `texture-tunnel`: independently selectable; default and reduced presets.
 
@@ -72,7 +71,6 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 | light-sweep | Quarter-pixel sheen profile, 6.25% peak | Half-pixel profile, same strength and speed | 3 s |
 | pixel-dissolve | Eight-pixel tiles | 16-pixel tiles | 3.2 s, including endpoint holds |
 | starfield | 256 filtered stars, no trails | 128 filtered stars, no trails | 8.192 s |
-| palette-aurora | 240×135 working image | 120×67 working image | 12.288 s |
 | texture-tunnel | 480×270, 64 curved 3D coordinate maps, 256×256 texture | 120×67, 32 maps, same texture | 8 s forward flight, distance shading |
 | raster-waves | Eight-pixel displacement | Four-pixel displacement | 2.048 s |
 | wireframe-terrain | 48×32 grid | 24×16 grid | 128 s |

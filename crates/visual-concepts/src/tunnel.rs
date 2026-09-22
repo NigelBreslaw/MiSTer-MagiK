@@ -1,6 +1,6 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
-use crate::{Effect, Pixel, Preset, Rect, aurora::expand, full, rgb};
+use crate::{Effect, Pixel, Preset, Rect, full, rgb, scale::expand};
 use std::time::Duration;
 #[path = "tunnel_mesh.rs"]
 mod mesh;
