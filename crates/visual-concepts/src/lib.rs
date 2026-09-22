@@ -6,9 +6,11 @@ use std::time::Duration;
 mod depth;
 pub mod fixture;
 mod light;
+mod mirror;
 mod point_cloud;
 
 pub const EFFECTS: &[&str] = &[
+    "mirror-floor",
     "light-sweep",
     "depth-parallax",
     "point-cloud-morph",
@@ -58,6 +60,7 @@ impl Scene {
             return Err("unsupported concept geometry".into());
         }
         let effect: Box<dyn Effect> = match name {
+            "mirror-floor" => Box::new(mirror::new(preset, width, height)?),
             "light-sweep" => Box::new(light::new(preset, width, height)?),
             "depth-parallax" => Box::new(depth::new(preset, width, height)?),
             "point-cloud-morph" => Box::new(point_cloud::new(preset, width, height)?),

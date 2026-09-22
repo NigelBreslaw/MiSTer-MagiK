@@ -29,7 +29,7 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 - [x] Point-cloud morph
 - [x] Depth and parallax
 - [x] Satin light sweep
-- [ ] Mirror floor
+- [x] Mirror floor
 - [ ] Pixel dissolve
 - [ ] Starfield and comets
 - [ ] Palette aurora
@@ -43,3 +43,5 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 `depth-parallax`: independently selectable; default and reduced presets.
 
 `light-sweep`: independently selectable; default and reduced presets.
+
+`mirror-floor`: independently selectable; default and reduced presets.
