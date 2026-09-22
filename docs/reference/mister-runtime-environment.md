@@ -2,7 +2,7 @@
 
 <!-- Generated from apps/mister/config/runtime-environment.toml. Do not edit. -->
 
-Registry format: `mister-magik-runtime-environment-v2`. Current controls: 258. Historical baseline: 402 literal occurrences, 283 owned names, 7 external/build-time names.
+Registry format: `mister-magik-runtime-environment-v2`. Current controls: 257. Historical baseline: 402 literal occurrences, 283 owned names, 7 external/build-time names.
 
 | Name | Classification | Shape | Default behavior | Parser | Typed default | Scope | Conflicts | Sensitivity | Aliases | Documentation | Visibility | Owner |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -57,7 +57,6 @@ Registry format: `mister-magik-runtime-environment-v2`. Current controls: 258. H
 | `MISTER_CRT_TRIAL_CONTENT_BOUNDS` | production | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | command | — | public | — | Controls crt trial content bounds behavior; value policy: document | internal runtime | `apps/mister/src/ui_runner/crt_trial_loop.rs` |
 | `MISTER_DIRTY_RECT_BROAD_PCT` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls dirty rect broad pct behavior; value policy: document | internal runtime | `mister/platform/runtime/src/framebuffer/target.rs` |
 | `MISTER_DISPLAY_OWNER_LOCK` | production | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | command | — | public | — | Controls display owner lock behavior; value policy: document | internal runtime | `mister/platform/runtime/src/framebuffer/ownership.rs` |
-| `MISTER_EFFECT_BENCH_LABEL` | benchmark | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | instrumentation | — | public | — | Controls effect bench label behavior; value policy: document | benchmark only | `apps/mister/src/ui_effect_bench.rs` |
 | `MISTER_FB_DIAGNOSTIC_RECT` | diagnostic | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | instrumentation | — | public | — | Controls fb diagnostic rect behavior; value policy: document | developer diagnostic | `mister/platform/runtime/src/fpga.rs` |
 | `MISTER_FB_MAP_BANDWIDTH_FRAMES` | production | bounded integer | uses the owner-defined bounded numeric default when unset or invalid | u64 | — | command | — | public | — | Controls fb map bandwidth frames behavior; value policy: document | internal runtime | `apps/mister/src/app_entry.rs` |
 | `MISTER_FB_MAP_BANDWIDTH_H` | production | bounded integer | uses the owner-defined bounded numeric default when unset or invalid | u64 | — | command | — | public | — | Controls fb map bandwidth h behavior; value policy: document | internal runtime | `apps/mister/src/app_entry.rs` |

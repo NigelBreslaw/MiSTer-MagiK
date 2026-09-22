@@ -98,10 +98,6 @@ use mister_magik_fb::input;
 use mister_magik_fb::media_bench_save;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 use mister_magik_fb::preview_pack_bench;
-#[cfg(mister_experiments)]
-use mister_magik_fb::screenshot_transitions;
-#[cfg(mister_experiments)]
-use mister_magik_fb::ui_effect_bench;
 pub use mister_magik_fb::{
     arcade_button_overrides, arcade_catalog, command_args, controller_db, framebuffer, input_event,
     input_repeat, input_state, launcher, launcher_presentation, launcher_taxonomy, licenses,
@@ -398,10 +394,6 @@ fn dispatch_pre_fpga(
                 std::process::exit(1);
             }
         }
-        #[cfg(mister_experiments)]
-        "experiment-capabilities" => print_experiment_capabilities(),
-        #[cfg(mister_experiments)]
-        "preview-transitions" => print_preview_transitions(),
         other => unknown_command(other),
     }
 }
@@ -810,10 +802,6 @@ fn dispatch_fpga(
         ),
         #[cfg(mister_bench_scenes)]
         "scenes" => ui_runner::print_scenes(),
-        #[cfg(mister_experiments)]
-        "effects" => ui_runner::print_effects(),
-        #[cfg(mister_experiments)]
-        "effect-bench" => ui_effect_bench::run_effect_bench(f),
         #[cfg(feature = "diagnostics")]
         "input" => run_input(),
         "fpga-latch-report" => run_fpga_latch_report(),
@@ -841,28 +829,6 @@ fn reject_direct_launch_arg(arg: &str) -> ! {
         "direct launch argument '{arg}' is unsupported; launch games through MiSTer_MagiK supervision"
     );
     std::process::exit(2);
-}
-
-#[cfg(mister_experiments)]
-fn print_preview_transitions() {
-    crate::ui_logln!(
-        "{}",
-        screenshot_transitions::PreviewTransitionEffect::labels()
-    );
-}
-
-#[cfg(mister_experiments)]
-fn print_experiment_capabilities() {
-    #[cfg(mister_experiments)]
-    {
-        crate::ui_logln!("experiments=1");
-        crate::ui_logln!("commands=effects,effect-bench");
-    }
-    #[cfg(not(mister_experiments))]
-    {
-        crate::ui_logln!("experiments=0");
-        crate::ui_logln!("commands=");
-    }
 }
 
 fn run_library_refresh(paths: &mister_magik_catalog::device_layout::CatalogPaths) {

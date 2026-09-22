@@ -498,20 +498,6 @@ aliases = []
 documentation = { summary = "Controls display owner lock behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
-name = "MISTER_EFFECT_BENCH_LABEL"
-owner = "apps/mister/src/ui_effect_bench.rs"
-classification = "benchmark"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "benchmark only"
-parser = "string"
-scope = "instrumentation"
-conflicts = []
-sensitivity = "public"
-aliases = []
-documentation = { summary = "Controls effect bench label behavior", accepted_values = [], value_policy = "document" }
-
-[[control]]
 name = "MISTER_FB_DIAGNOSTIC_RECT"
 owner = "mister/platform/runtime/src/fpga.rs"
 classification = "diagnostic"

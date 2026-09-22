@@ -22,20 +22,19 @@ SHARED_TARGET = ROOT / "apps/mister/target"
 REQUIRED_BUILD_SCRIPT_FRAGMENTS = (
     "cargo:rerun-if-env-changed=MISTER_UI_BUILD_SCOPE",
     'unwrap_or_else(|_| "production".into())',
-    'std::env::var_os("CARGO_FEATURE_BENCH_SCENES")',
     '"launcher" | "arcade" | "production" => true',
     "cargo:rustc-cfg=mister_ui_scope_launcher",
-    "cargo:rustc-cfg=mister_bench_scenes",
     '"../ui/controller_test.slint"',
     '"../ui/launcher.slint"',
     '"../ui/bench/tear_pattern.slint"',
     '"../ui/bench/video_playback.slint"',
-    '"../ui/experiments/effect_hud.slint"',
     "slint_build::EmbedResourcesKind::EmbedFiles",
     "slint_build::compile_with_config(path, config)",
 )
 
 FORBIDDEN_BUILD_SCRIPT_FRAGMENTS = (
+    "CARGO_FEATURE_BENCH_SCENES",
+    "effect_hud.slint",
     '"../ui/mockups/',
     "GENERATOR_CACHE_REVISION",
     "let mut inputs",

@@ -183,7 +183,7 @@ def commands(group: str) -> list[list[str]]:
                 "--lib",
                 "--no-default-features",
                 "--features",
-                "ui,experiments",
+                "ui,bench-scenes",
                 "--",
                 "--test-threads=1",
             ],

@@ -43,7 +43,7 @@ if [ "$watch" = 1 ]; then
   if [ "$release" = 1 ]; then
     command="$command --release"
   fi
-  command="$command --manifest-path $MISTER_DIR/Cargo.toml --bin mister-magik-ui-preview --features ui-preview,experiments"
+  command="$command --manifest-path $MISTER_DIR/Cargo.toml --bin mister-magik-ui-preview --features ui-preview"
   if [ "$#" -gt 0 ]; then
     printf -v arguments ' %q' "$@"
     command="$command --$arguments"
@@ -59,5 +59,5 @@ exec cargo run \
   "${profile_args[@]}" \
   --manifest-path "$MISTER_DIR/Cargo.toml" \
   --bin mister-magik-ui-preview \
-  --features ui-preview,experiments \
+  --features ui-preview \
   -- "$@"

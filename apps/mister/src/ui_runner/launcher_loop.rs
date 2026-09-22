@@ -16285,10 +16285,6 @@ mod tests {
     }
 
     use crate::test_support::{arcade_catalog, arcade_game, arcade_system};
-    #[cfg(mister_experiments)]
-    use crate::ui_effect_bench::{EffectFill, EffectTarget};
-    #[cfg(mister_experiments)]
-    use mister_magik_fb::experiments::effects::framebuffer_effects::EffectSize;
 
     #[test]
     fn crt_profile_terminal_tracks_the_composed_backdrop_not_hdmi_layer_state() {
@@ -16565,20 +16561,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
-    }
-
-    #[cfg(mister_experiments)]
-    #[test]
-    pub(super) fn effect_half_target_allows_640x448_at_native_scale() {
-        let ui = UiDisplay::for_framebuffer(1920, 1080);
-        let target = EffectTarget::new(EffectFill::Half, EffectSize { w: 640, h: 448 }, &ui)
-            .expect("640x448 should fit in half-fill benchmark mode");
-
-        assert_eq!(target.physical_w, 640);
-        assert_eq!(target.physical_h, 448);
-        assert_eq!(target.render_w, 640);
-        assert_eq!(target.render_h, 448);
-        assert_eq!(target.scale, 1);
     }
 
     fn catalog_for_media_systems(system_ids: &[&str]) -> ArcadeCatalog {
