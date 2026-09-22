@@ -9,7 +9,7 @@ use crate::bitmap_font_resource::{
 };
 use crate::launcher_home::{CARD_COUNT, LauncherHomeSnapshot};
 use crate::ui_runner::launcher_card_pipeline::{
-    CardFrameRequest, LauncherCardRenderAhead, RenderedCardFrame,
+    CardFrameRequest, CardPipelineCounters, LauncherCardRenderAhead, RenderedCardFrame,
 };
 use mister_magik_framebuffer_scenes::Rgb565Pixel;
 use mister_magik_framebuffer_scenes::bitmap_text::BitmapFont;
@@ -79,6 +79,8 @@ pub(super) struct LauncherCardHomeSession {
     content_dirty: bool,
     content_generation: u64,
     compositor_stale: bool,
+    retired_pipeline_counters: CardPipelineCounters,
+    reported_pipeline_counters: CardPipelineCounters,
 }
 
 impl LauncherCardHomeSession {
@@ -116,6 +118,8 @@ impl LauncherCardHomeSession {
             content_dirty: true,
             content_generation: 1,
             compositor_stale: false,
+            retired_pipeline_counters: CardPipelineCounters::default(),
+            reported_pipeline_counters: CardPipelineCounters::default(),
         })
     }
 
@@ -182,6 +186,10 @@ impl LauncherCardHomeSession {
             || self.snapshot != snapshot
             || self.clock != clock
         {
+            if let Some(render_ahead) = self.render_ahead.as_ref() {
+                self.retired_pipeline_counters
+                    .add_assign(render_ahead.counters());
+            }
             self.width = width;
             self.height = height;
             self.snapshot = snapshot;
@@ -282,6 +290,16 @@ impl LauncherCardHomeSession {
         }
     }
 
+    pub(super) fn pipeline_counter_delta(&mut self) -> CardPipelineCounters {
+        let mut current = self.retired_pipeline_counters;
+        if let Some(render_ahead) = self.render_ahead.as_ref() {
+            current.add_assign(render_ahead.counters());
+        }
+        let delta = current.delta(self.reported_pipeline_counters);
+        self.reported_pipeline_counters = current;
+        delta
+    }
+
     fn submit_render_ahead(&mut self) {
         let Some(render_ahead) = self.render_ahead.as_ref() else {
             return;
@@ -317,8 +335,13 @@ fn native_render_ahead(
     height: usize,
     prepared: &PreparedLauncher,
 ) -> Option<LauncherCardRenderAhead> {
-    (width == 960 && height == 540)
-        .then(|| LauncherCardRenderAhead::start(prepared.frame_preparer(), prepared.pixels()))
+    (width == 960 && height == 540).then(|| {
+        LauncherCardRenderAhead::start(
+            prepared.frame_preparer(),
+            prepared.pixels(),
+            std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some(),
+        )
+    })
 }
 
 fn navigation_identity_changed(previous: BrowseFrame, current: BrowseFrame) -> bool {

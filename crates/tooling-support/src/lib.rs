@@ -21,6 +21,8 @@ pub struct Session {
     last_write: Instant,
     last_request: Instant,
     ready: bool,
+    clock_mode: Option<bool>,
+    clock_advanced: bool,
 }
 impl Session {
     pub fn from_environment() -> Option<Self> {
@@ -34,12 +36,37 @@ impl Session {
             last_write: Instant::now() - Duration::from_secs(1),
             last_request: Instant::now(),
             ready: false,
+            clock_mode: None,
+            clock_advanced: false,
         })
     }
     pub fn begin(&mut self) {
         self.metrics.motion_started_ms = Some(self.start.elapsed().as_millis() as u64);
         self.metrics.window_start = None;
         self.metrics.window = None;
+        self.clock_advanced = false;
+        self.metrics.forced_clock_changes = 0;
+    }
+    /// Test-only display clock; elapsed device time triggers exactly one update.
+    /// The host and OS wall clocks never participate in this workload.
+    pub fn launcher_clock(&mut self) -> Option<&'static str> {
+        let rollover = self.clock_mode?;
+        if rollover
+            && !self.clock_advanced
+            && self
+                .metrics
+                .window_start
+                .as_ref()
+                .is_some_and(|(start, _)| self.start.elapsed().as_millis() as u64 >= start + 2_500)
+        {
+            self.clock_advanced = true;
+            self.metrics.forced_clock_changes += 1;
+        }
+        Some(if self.clock_advanced {
+            "12:35"
+        } else {
+            "12:34"
+        })
     }
     /// Device-clock warmup and measurement boundaries, independent of host polling.
     pub fn tick(&mut self, width: usize, height: usize) -> Result<bool, String> {
@@ -47,6 +74,14 @@ impl Session {
             self.last_request = Instant::now();
             let request = self.root.join("measure-request");
             if request.exists() {
+                let value: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&request).map_err(|e| e.to_string())?)
+                        .unwrap_or_default();
+                self.clock_mode = match value["launcher_clock"].as_str() {
+                    Some("fixed") => Some(false),
+                    Some("rollover") => Some(true),
+                    _ => None,
+                };
                 std::fs::remove_file(request).map_err(|e| e.to_string())?;
                 self.begin();
             }
@@ -126,6 +161,8 @@ mod tests {
             last_write: Instant::now(),
             last_request: Instant::now(),
             ready: false,
+            clock_mode: None,
+            clock_advanced: false,
         };
         session.tick(16, 8).unwrap();
         assert!(!root.join("probe-ready.json").exists());
@@ -142,6 +179,24 @@ mod tests {
                 .unwrap();
         assert_eq!(saved["window"]["presentations"], 20);
         assert_eq!(saved["window"]["instrumented"], false);
+        session.clock_mode = Some(true);
+        session.begin();
+        assert_eq!(session.launcher_clock(), Some("12:34"));
+        session.metrics.window_start = Some((
+            session.start.elapsed().as_millis() as u64,
+            session.metrics.counters.clone(),
+        ));
+        session.start -= Duration::from_millis(2501);
+        assert_eq!(session.launcher_clock(), Some("12:35"));
+        assert_eq!(session.launcher_clock(), Some("12:35"));
+        assert_eq!(session.metrics.forced_clock_changes, 1);
+        session.begin();
+        assert_eq!(session.launcher_clock(), Some("12:34"));
+        assert_eq!(session.metrics.forced_clock_changes, 0);
+        session.clock_mode = Some(false);
+        session.metrics.window_start = Some((0, session.metrics.counters.clone()));
+        assert_eq!(session.launcher_clock(), Some("12:34"));
+        assert_eq!(session.metrics.forced_clock_changes, 0);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

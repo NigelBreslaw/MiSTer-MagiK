@@ -11,6 +11,7 @@ use mister_magik_framebuffer_scenes::launcher::{
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 const WIDTH: usize = 960;
 const HEIGHT: usize = 540;
@@ -31,6 +32,7 @@ pub(super) struct CardFrameRequest {
 pub(super) struct RenderedCardFrame {
     request: CardFrameRequest,
     pixels: Vec<Rgb565Pixel>,
+    timing: CardProducerTiming,
 }
 
 impl RenderedCardFrame {
@@ -41,12 +43,81 @@ impl RenderedCardFrame {
     pub(super) fn pixels(&self) -> &[Rgb565Pixel] {
         &self.pixels
     }
+
+    pub(super) const fn timing(&self) -> CardProducerTiming {
+        self.timing
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct CardProducerTiming {
+    pub(super) total_us: u64,
+    pub(super) primary_tile_us: u64,
+    pub(super) secondary_tile_us: u64,
+    pub(super) secondary_wait_us: u64,
+    pub(super) composition_us: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct CardPipelineCounters {
+    pub(super) submitted: u64,
+    pub(super) completed: u64,
+    pub(super) superseded: u64,
+    pub(super) stale: u64,
+    pub(super) producer_total_us: u64,
+    pub(super) primary_tile_us: u64,
+    pub(super) secondary_tile_us: u64,
+    pub(super) secondary_wait_us: u64,
+    pub(super) composition_us: u64,
+}
+
+impl CardPipelineCounters {
+    pub(super) fn add_assign(&mut self, other: Self) {
+        self.submitted = self.submitted.saturating_add(other.submitted);
+        self.completed = self.completed.saturating_add(other.completed);
+        self.superseded = self.superseded.saturating_add(other.superseded);
+        self.stale = self.stale.saturating_add(other.stale);
+        self.producer_total_us = self
+            .producer_total_us
+            .saturating_add(other.producer_total_us);
+        self.primary_tile_us = self.primary_tile_us.saturating_add(other.primary_tile_us);
+        self.secondary_tile_us = self
+            .secondary_tile_us
+            .saturating_add(other.secondary_tile_us);
+        self.secondary_wait_us = self
+            .secondary_wait_us
+            .saturating_add(other.secondary_wait_us);
+        self.composition_us = self.composition_us.saturating_add(other.composition_us);
+    }
+
+    pub(super) fn delta(self, previous: Self) -> Self {
+        Self {
+            submitted: self.submitted.saturating_sub(previous.submitted),
+            completed: self.completed.saturating_sub(previous.completed),
+            superseded: self.superseded.saturating_sub(previous.superseded),
+            stale: self.stale.saturating_sub(previous.stale),
+            producer_total_us: self
+                .producer_total_us
+                .saturating_sub(previous.producer_total_us),
+            primary_tile_us: self
+                .primary_tile_us
+                .saturating_sub(previous.primary_tile_us),
+            secondary_tile_us: self
+                .secondary_tile_us
+                .saturating_sub(previous.secondary_tile_us),
+            secondary_wait_us: self
+                .secondary_wait_us
+                .saturating_sub(previous.secondary_wait_us),
+            composition_us: self.composition_us.saturating_sub(previous.composition_us),
+        }
+    }
 }
 
 struct PipelineState {
     pending: Option<CardFrameRequest>,
     ready: Option<RenderedCardFrame>,
     free: Vec<Vec<Rgb565Pixel>>,
+    counters: CardPipelineCounters,
     shutdown: bool,
 }
 
@@ -60,19 +131,30 @@ enum TileRequest {
     Stop,
 }
 
+struct CompletedTile {
+    buffer: PreparedLauncherFrame,
+    render_us: u64,
+}
+
 pub(super) struct LauncherCardRenderAhead {
     shared: Arc<SharedPipeline>,
     coordinator: Option<JoinHandle<()>>,
+    measure_metrics: bool,
 }
 
 impl LauncherCardRenderAhead {
-    pub(super) fn start(preparer: LauncherFramePreparer, static_frame: &[Rgb565Pixel]) -> Self {
+    pub(super) fn start(
+        preparer: LauncherFramePreparer,
+        static_frame: &[Rgb565Pixel],
+        measure_timing: bool,
+    ) -> Self {
         assert_eq!(static_frame.len(), WIDTH * HEIGHT);
         let shared = Arc::new(SharedPipeline {
             state: Mutex::new(PipelineState {
                 pending: None,
                 ready: None,
                 free: vec![static_frame.to_vec(), static_frame.to_vec()],
+                counters: CardPipelineCounters::default(),
                 shutdown: false,
             }),
             wake: Condvar::new(),
@@ -80,17 +162,23 @@ impl LauncherCardRenderAhead {
         let worker_shared = shared.clone();
         let coordinator = std::thread::Builder::new()
             .name("launcher-card-ahead".into())
-            .spawn(move || run_coordinator(worker_shared, preparer))
+            .spawn(move || run_coordinator(worker_shared, preparer, measure_timing))
             .expect("failed to start launcher card render-ahead worker");
         Self {
             shared,
             coordinator: Some(coordinator),
+            measure_metrics: measure_timing,
         }
     }
 
     pub(super) fn submit(&self, request: CardFrameRequest) {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.pending = Some(request);
+        if self.measure_metrics {
+            state.counters.submitted = state.counters.submitted.saturating_add(1);
+        }
+        if state.pending.replace(request).is_some() && self.measure_metrics {
+            state.counters.superseded = state.counters.superseded.saturating_add(1);
+        }
         self.shared.wake.notify_one();
     }
 
@@ -108,6 +196,9 @@ impl LauncherCardRenderAhead {
             || request.navigation_generation != navigation_generation
             || now_us.saturating_sub(request.render.timestamp_us) > maximum_age_us;
         if stale {
+            if self.measure_metrics {
+                state.counters.stale = state.counters.stale.saturating_add(1);
+            }
             state.free.push(frame.pixels);
             self.shared.wake.notify_one();
             None
@@ -128,10 +219,16 @@ impl LauncherCardRenderAhead {
             Some(newer) if newer.request.render.generation > frame.request.render.generation => {
                 state.ready = Some(newer);
                 state.free.push(frame.pixels);
+                if self.measure_metrics {
+                    state.counters.superseded = state.counters.superseded.saturating_add(1);
+                }
             }
             Some(older) => {
                 state.free.push(older.pixels);
                 state.ready = Some(frame);
+                if self.measure_metrics {
+                    state.counters.superseded = state.counters.superseded.saturating_add(1);
+                }
             }
             None => state.ready = Some(frame),
         }
@@ -145,6 +242,14 @@ impl LauncherCardRenderAhead {
             .unwrap_or_else(|e| e.into_inner())
             .ready
             .is_some()
+    }
+
+    pub(super) fn counters(&self) -> CardPipelineCounters {
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .counters
     }
 }
 
@@ -162,7 +267,11 @@ impl Drop for LauncherCardRenderAhead {
     }
 }
 
-fn run_coordinator(shared: Arc<SharedPipeline>, preparer: LauncherFramePreparer) {
+fn run_coordinator(
+    shared: Arc<SharedPipeline>,
+    preparer: LauncherFramePreparer,
+    measure_timing: bool,
+) {
     apply_runtime_thread_policy(RuntimeThreadRole::LauncherCardRenderer);
     let (tile_request_tx, tile_request_rx) = sync_channel(1);
     let (tile_completed_tx, tile_completed_rx) = sync_channel(1);
@@ -170,7 +279,12 @@ fn run_coordinator(shared: Arc<SharedPipeline>, preparer: LauncherFramePreparer)
     let secondary = std::thread::Builder::new()
         .name("launcher-card-tile".into())
         .spawn(move || {
-            run_secondary_tile_worker(secondary_preparer, tile_request_rx, tile_completed_tx)
+            run_secondary_tile_worker(
+                secondary_preparer,
+                tile_request_rx,
+                tile_completed_tx,
+                measure_timing,
+            )
         })
         .expect("failed to start secondary launcher card renderer");
     let mut left = preparer.new_tile_buffer();
@@ -190,6 +304,7 @@ fn run_coordinator(shared: Arc<SharedPipeline>, preparer: LauncherFramePreparer)
                 state.free.pop().expect("free frame checked"),
             )
         };
+        let total_started = measure_timing.then(Instant::now);
 
         let Some(right_buffer) = right.take() else {
             break;
@@ -200,19 +315,44 @@ fn run_coordinator(shared: Arc<SharedPipeline>, preparer: LauncherFramePreparer)
         {
             break;
         }
+        let primary_started = measure_timing.then(Instant::now);
         preparer.render_tile(request.render, &mut left, (CAROUSEL_LEFT, CAROUSEL_SPLIT));
-        let Ok(right_buffer) = tile_completed_rx.recv() else {
+        let primary_tile_us = elapsed_us(primary_started);
+        let wait_started = measure_timing.then(Instant::now);
+        let Ok(completed_right) = tile_completed_rx.recv() else {
             break;
         };
-        compose_tiles(&mut output, left.pixels(), right_buffer.pixels());
-        right = Some(right_buffer);
+        let secondary_wait_us = elapsed_us(wait_started);
+        let composition_started = measure_timing.then(Instant::now);
+        compose_tiles(&mut output, left.pixels(), completed_right.buffer.pixels());
+        let composition_us = elapsed_us(composition_started);
+        right = Some(completed_right.buffer);
+        let timing = CardProducerTiming {
+            total_us: elapsed_us(total_started),
+            primary_tile_us,
+            secondary_tile_us: completed_right.render_us,
+            secondary_wait_us,
+            composition_us,
+        };
 
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if measure_timing {
+            state.counters.completed = state.counters.completed.saturating_add(1);
+            state.counters.producer_total_us += timing.total_us;
+            state.counters.primary_tile_us += timing.primary_tile_us;
+            state.counters.secondary_tile_us += timing.secondary_tile_us;
+            state.counters.secondary_wait_us += timing.secondary_wait_us;
+            state.counters.composition_us += timing.composition_us;
+        }
         if let Some(old) = state.ready.replace(RenderedCardFrame {
             request,
             pixels: output,
+            timing,
         }) {
             state.free.push(old.pixels);
+            if measure_timing {
+                state.counters.superseded = state.counters.superseded.saturating_add(1);
+            }
         }
         shared.wake.notify_one();
     }
@@ -224,20 +364,29 @@ fn run_coordinator(shared: Arc<SharedPipeline>, preparer: LauncherFramePreparer)
 fn run_secondary_tile_worker(
     preparer: LauncherFramePreparer,
     requests: Receiver<TileRequest>,
-    completed: SyncSender<PreparedLauncherFrame>,
+    completed: SyncSender<CompletedTile>,
+    measure_timing: bool,
 ) {
     apply_runtime_thread_policy(RuntimeThreadRole::LauncherCardRendererSecondary);
     while let Ok(request) = requests.recv() {
         match request {
             TileRequest::Render(request, mut buffer) => {
+                let started = measure_timing.then(Instant::now);
                 preparer.render_tile(request, &mut buffer, (CAROUSEL_SPLIT, CAROUSEL_RIGHT));
-                if completed.send(buffer).is_err() {
+                let render_us = elapsed_us(started);
+                if completed.send(CompletedTile { buffer, render_us }).is_err() {
                     break;
                 }
             }
             TileRequest::Stop => break,
         }
     }
+}
+
+fn elapsed_us(started: Option<Instant>) -> u64 {
+    started.map_or(0, |started| {
+        started.elapsed().as_micros().try_into().unwrap_or(u64::MAX)
+    })
 }
 
 fn compose_tiles(output: &mut [Rgb565Pixel], left: &[Rgb565Pixel], right: &[Rgb565Pixel]) {
@@ -322,7 +471,8 @@ mod tests {
     #[test]
     fn completed_frame_matches_serial_renderer() {
         let mut serial = prepared();
-        let pipeline = LauncherCardRenderAhead::start(serial.frame_preparer(), serial.pixels());
+        let pipeline =
+            LauncherCardRenderAhead::start(serial.frame_preparer(), serial.pixels(), true);
         let request = request(1, 900_000, 90);
         pipeline.submit(request);
         let frame = wait_for(&pipeline, 1);
@@ -334,7 +484,8 @@ mod tests {
     #[test]
     fn latest_pending_and_ready_frames_win() {
         let serial = prepared();
-        let pipeline = LauncherCardRenderAhead::start(serial.frame_preparer(), serial.pixels());
+        let pipeline =
+            LauncherCardRenderAhead::start(serial.frame_preparer(), serial.pixels(), true);
         for sequence in 1..=8 {
             pipeline.submit(request(
                 sequence,
@@ -350,7 +501,8 @@ mod tests {
     #[test]
     fn stale_generation_is_discarded_and_recycled() {
         let serial = prepared();
-        let pipeline = LauncherCardRenderAhead::start(serial.frame_preparer(), serial.pixels());
+        let pipeline =
+            LauncherCardRenderAhead::start(serial.frame_preparer(), serial.pixels(), true);
         pipeline.submit(request(1, 900_000, 90));
         let deadline = Instant::now() + Duration::from_secs(2);
         while !pipeline.has_ready() {
@@ -358,12 +510,17 @@ mod tests {
             std::thread::yield_now();
         }
         assert!(pipeline.try_take(4, 8, 1_000_000, 1_000_000).is_none());
+        let counters = pipeline.counters();
+        assert_eq!(counters.submitted, 1);
+        assert_eq!(counters.completed, 1);
+        assert_eq!(counters.stale, 1);
     }
 
     #[test]
     fn unposted_frame_returns_to_the_ready_slot() {
         let serial = prepared();
-        let pipeline = LauncherCardRenderAhead::start(serial.frame_preparer(), serial.pixels());
+        let pipeline =
+            LauncherCardRenderAhead::start(serial.frame_preparer(), serial.pixels(), true);
         pipeline.submit(request(1, 900_000, 90));
         let frame = wait_for(&pipeline, 1);
         pipeline.return_ready(frame);
@@ -371,6 +528,35 @@ mod tests {
             .try_take(4, 7, 1_000_000, 1_000_000)
             .expect("returned frame remains ready");
         assert_eq!(frame.request().render.generation, 1);
+        assert!(frame.timing().total_us > 0);
         pipeline.recycle(frame);
+    }
+
+    #[test]
+    fn counter_delta_is_saturating_and_field_specific() {
+        let previous = CardPipelineCounters {
+            submitted: 4,
+            completed: 3,
+            superseded: 2,
+            stale: 1,
+            ..Default::default()
+        };
+        let current = CardPipelineCounters {
+            submitted: 7,
+            completed: 5,
+            superseded: 6,
+            stale: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            current.delta(previous),
+            CardPipelineCounters {
+                submitted: 3,
+                completed: 2,
+                superseded: 4,
+                stale: 0,
+                ..Default::default()
+            }
+        );
     }
 }

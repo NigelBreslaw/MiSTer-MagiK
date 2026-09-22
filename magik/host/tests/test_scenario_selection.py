@@ -40,4 +40,5 @@ def test_every_advertised_magik_check_scenario_selects_a_test():
         and node.name.startswith("test_")
     }
     for scenario in CHECK_SCENARIOS:
-        assert any(scenario in name for name in tests), scenario
+        selector = scenario.replace("-", "_")
+        assert any(selector in name for name in tests), scenario
