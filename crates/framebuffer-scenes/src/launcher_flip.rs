@@ -418,25 +418,29 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
             } else {
                 0
             };
-            let other_column = if let Some((other, weight)) = blend {
-                other.texture.prepare_lit_column_rows(
-                    column.filter,
-                    start,
-                    &mut scratch.blend[start..face.height],
-                    256,
-                    None,
-                );
-                Some((&scratch.blend[start..face.height], weight))
-            } else {
-                None
-            };
-            face.texture.prepare_lit_column_rows(
+            face.texture.prepare_column_rows(
                 column.filter,
                 start,
                 &mut texels
                     [(x - left) * COLUMN_HEIGHT + start..(x - left) * COLUMN_HEIGHT + face.height],
+            );
+            if let Some((other, weight)) = blend {
+                other.texture.prepare_column_rows(
+                    column.filter,
+                    start,
+                    &mut scratch.blend[start..face.height],
+                );
+                crate::launcher_texture::mix_rgba(
+                    &mut texels[(x - left) * COLUMN_HEIGHT + start
+                        ..(x - left) * COLUMN_HEIGHT + face.height],
+                    &scratch.blend[start..face.height],
+                    weight,
+                );
+            }
+            crate::launcher_texture::shade_rgba(
+                &mut texels
+                    [(x - left) * COLUMN_HEIGHT + start..(x - left) * COLUMN_HEIGHT + face.height],
                 light,
-                other_column,
             );
         }
     }
@@ -728,74 +732,6 @@ fn reflected_texel(body: &[u32], row: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn fused_filter_pose_corpus_is_exact_rgb565_including_reflections_and_occlusion() {
-        let front = Face::new(
-            (0..188 * 268)
-                .map(|i| Rgb565Pixel((i * 997) as u16))
-                .collect(),
-            188,
-            268,
-        );
-        let back = Face::new(
-            (0..188 * 268)
-                .map(|i| Rgb565Pixel((i * 313 + 31) as u16))
-                .collect(),
-            188,
-            268,
-        );
-        for angle in [0, 12000, -12000, 32700, 46000, -46000, 65536] {
-            for (width, phase, body_clip) in [
-                (188, 0, (296, 934)),
-                (155, ONE / 3, (545, 620)),
-                (83, ONE / 7, (296, 934)),
-            ] {
-                let pose = Pose {
-                    x: 514 * ONE + phase,
-                    top: 150 * ONE + phase,
-                    width: width * ONE,
-                    height: 268 * ONE,
-                    angle,
-                    clip: (296, 934),
-                    body_clip,
-                };
-                for (face, other) in [(&front, None), (&back, None), (&front, Some((&back, 117)))] {
-                    let render = |reference| {
-                        crate::launcher_texture::REFERENCE_FILTERING.set(reference);
-                        let mut pixels = vec![Rgb565Pixel(0x18c3); 960 * 540];
-                        let mut scratch = Scratch::new();
-                        draw(
-                            &mut pixels,
-                            face,
-                            pose,
-                            &mut scratch,
-                            |p, _, _| p,
-                            false,
-                            other,
-                        );
-                        draw(
-                            &mut pixels,
-                            face,
-                            pose,
-                            &mut scratch,
-                            |p, _, _| p,
-                            true,
-                            other,
-                        );
-                        crate::launcher_texture::REFERENCE_FILTERING.set(false);
-                        pixels
-                    };
-                    assert_eq!(
-                        render(false),
-                        render(true),
-                        "angle={angle}, width={width}, phase={phase}"
-                    );
-                }
-            }
-        }
-    }
-
     #[test]
     fn light_tracks_angle_symmetrically_without_a_face_swap_flash() {
         assert_eq!(diffuse_light(sin_cos(0).1), 256);

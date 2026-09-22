@@ -5,11 +5,6 @@
 //! coverage before filtering, so transparent rounded corners cannot halo.
 use crate::Rgb565Pixel;
 
-#[cfg(test)]
-std::thread_local! {
-    pub(super) static REFERENCE_FILTERING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
 pub(super) struct Texture {
     levels: Vec<Level>,
 }
@@ -290,12 +285,20 @@ pub(super) fn over_row(destination: &mut [Rgb565Pixel], source: &[u32]) {
 
 /// Uniform diffuse light on premultiplied RGB, preserving silhouette coverage.
 /// Runs on the prepared column, shared by body and reflection, before RGB565.
-#[cfg(test)]
 pub(super) fn shade_rgba(pixels: &mut [u32], light: u32) {
     assert!(light <= 256);
     if light == 256 {
         return;
     }
+    #[cfg(target_arch = "arm")]
+    {
+        unsafe extern "C" {
+            fn magik_launcher_shade_rgba(pixels: *mut u32, n: usize, light: u32);
+        }
+        // SAFETY: exclusive live slice; kernel bounds every vector and tail.
+        unsafe { magik_launcher_shade_rgba(pixels.as_mut_ptr(), pixels.len(), light) };
+    }
+    #[cfg(not(target_arch = "arm"))]
     for p in pixels {
         let rb = (((*p & 0x00ff00ff) * light) >> 8) & 0x00ff00ff;
         let g = ((((*p >> 8) & 255) * light) >> 8) << 8;
@@ -303,10 +306,20 @@ pub(super) fn shade_rgba(pixels: &mut [u32], light: u32) {
     }
 }
 
-#[cfg(test)]
 pub(super) fn mix_rgba(a: &mut [u32], b: &[u32], weight: u32) {
     assert_eq!(a.len(), b.len());
     assert!(weight <= 256);
+    #[cfg(target_arch = "arm")]
+    {
+        unsafe extern "C" {
+            fn magik_launcher_mix_rgba(a: *mut u32, b: *const u32, n: usize, weight: u32);
+        }
+        // SAFETY: equal-length live slices, disjoint safe Rust borrows.
+        unsafe {
+            magik_launcher_mix_rgba(a.as_mut_ptr(), b.as_ptr(), a.len(), weight);
+        }
+    }
+    #[cfg(not(target_arch = "arm"))]
     for (a, &b) in a.iter_mut().zip(b) {
         *a = mix(*a, b, weight);
     }
@@ -616,38 +629,7 @@ impl Texture {
         self.prepare_column_rows(filter, 0, output);
     }
 
-    #[cfg(test)]
     pub fn prepare_column_rows(&self, filter: Filter, start: usize, output: &mut [u32]) {
-        assert!(start + output.len() <= self.levels[filter.level].height);
-        for (y, pixel) in output.iter_mut().enumerate() {
-            *pixel = self.sample(filter, ((start + y) as i32) * 65536);
-        }
-    }
-
-    /// Filter, optionally blend the other face, then shade before the single
-    /// column store. The operation order preserves each original integer floor.
-    pub fn prepare_lit_column_rows(
-        &self,
-        filter: Filter,
-        start: usize,
-        output: &mut [u32],
-        light: u32,
-        other: Option<(&[u32], u32)>,
-    ) {
-        assert!(light <= 256);
-        if let Some((pixels, weight)) = other {
-            assert_eq!(pixels.len(), output.len());
-            assert!(weight <= 256);
-        }
-        #[cfg(test)]
-        if REFERENCE_FILTERING.get() {
-            self.prepare_column_rows(filter, start, output);
-            if let Some((pixels, weight)) = other {
-                mix_rgba(output, pixels, weight);
-            }
-            shade_rgba(output, light);
-            return;
-        }
         let x = ((i64::from(filter.x) + 32768) >> filter.level) - 32768;
         let first = &self.levels[filter.level];
         let second = &self.levels[(filter.level + 1).min(self.levels.len() - 1)];
@@ -663,7 +645,7 @@ impl Texture {
         #[cfg(target_arch = "arm")]
         {
             unsafe extern "C" {
-                fn magik_launcher_filter_lit_column(
+                fn magik_launcher_filter_column(
                     out: *mut u32,
                     a0: *const u32,
                     a1: *const u32,
@@ -673,15 +655,12 @@ impl Texture {
                     wx: u32,
                     wx2: u32,
                     lod: u32,
-                    light: u32,
-                    other: *const u32,
-                    weight: u32,
                 );
             }
             // All columns have the asserted output height; the C kernel uses
             // unaligned loads and handles the final zero to three elements.
             unsafe {
-                magik_launcher_filter_lit_column(
+                magik_launcher_filter_column(
                     output.as_mut_ptr(),
                     a0.as_ptr(),
                     a1.as_ptr(),
@@ -691,26 +670,17 @@ impl Texture {
                     wx,
                     wx2,
                     filter.mix,
-                    light,
-                    other.map_or(std::ptr::null(), |(pixels, _)| pixels.as_ptr()),
-                    other.map_or(0, |(_, weight)| weight),
                 );
             }
         }
         #[cfg(not(target_arch = "arm"))]
         for (y, pixel) in output.iter_mut().enumerate() {
             let a = mix(a0[y], a1[y], wx);
-            let mut filtered = if filter.mix == 0 {
+            *pixel = if filter.mix == 0 {
                 a
             } else {
                 mix(a, mix(b0[y], b1[y], wx2), filter.mix)
             };
-            if let Some((pixels, weight)) = other {
-                filtered = mix(filtered, pixels[y], weight);
-            }
-            let rb = (((filtered & 0x00ff00ff) * light) >> 8) & 0x00ff00ff;
-            let g = ((((filtered >> 8) & 255) * light) >> 8) << 8;
-            *pixel = (filtered & 0xff000000) | rb | g;
         }
     }
 
@@ -800,49 +770,6 @@ pub(super) fn over(sample: u32, destination: Rgb565Pixel) -> Rgb565Pixel {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn fused_filter_light_matches_reference_at_mips_tails_and_face_blends() {
-        let pixels: Vec<_> = (0..65 * 67)
-            .map(|i| Rgb565Pixel((i * 997) as u16))
-            .collect();
-        let texture = Texture::new(&pixels, 65, 67);
-        let other: Vec<_> = (0..67)
-            .map(|i| (i as u32).wrapping_mul(0x792fe357))
-            .collect();
-        for footprint in [65536, 98304, 131071, 131072, 262143, 8 * 65536] {
-            for x in [-32768, 0, 235929, 32 * 65536 + 49152, 64 * 65536] {
-                let filter = texture.filter(x, footprint);
-                for start in [0, 1, 50, 64, 65, 66, 67] {
-                    let n = 67 - start;
-                    let mut filtered = vec![0; n];
-                    texture.prepare_column_rows(filter, start, &mut filtered);
-                    for light in 0..=256 {
-                        for weight in [None, Some(0), Some(1), Some(127), Some(255), Some(256)] {
-                            let mut actual = vec![0xdeadbeef; n + 2];
-                            let mut reference = filtered.clone();
-                            let blend = weight.map(|weight| (&other[start..], weight));
-                            if let Some((other, weight)) = blend {
-                                mix_rgba(&mut reference, other, weight);
-                            }
-                            shade_rgba(&mut reference, light);
-                            texture.prepare_lit_column_rows(
-                                filter,
-                                start,
-                                &mut actual[1..n + 1],
-                                light,
-                                blend,
-                            );
-                            assert_eq!(&actual[1..n + 1], reference);
-                            assert_eq!(actual[0], 0xdeadbeef);
-                            assert_eq!(actual[n + 1], 0xdeadbeef);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     #[test]
     fn light_preserves_alpha_and_matches_each_channel_at_all_tails() {
         for n in 0..=33 {
