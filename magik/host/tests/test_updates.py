@@ -366,6 +366,23 @@ def test_legacy_journal_recovery_requires_board_and_stage(
     assert legacy.exists()
 
 
+def test_legacy_journal_search_rejects_two_matching_deployments_without_adoption(
+    tmp_path,
+):
+    directory = tmp_path / "devices"
+    for name in ("first", "second"):
+        evidence = tmp_path / name
+        updates.atomic_json(
+            evidence / "run.json", {"source": {"device_identity": "one"}}
+        )
+        updates.atomic_json(evidence / "platform/publication.json", {"stage": "active"})
+        updates.atomic_json(directory / f"{name}-pending.json", {"run": str(evidence)})
+    before = {path: path.read_bytes() for path in directory.iterdir()}
+    with pytest.raises(RuntimeError, match="multiple pending deployments"):
+        update_deploy.find_pending_deployment(directory, "one", [{"stage": "active"}])
+    assert {path: path.read_bytes() for path in directory.iterdir()} == before
+
+
 def test_missing_attendance_prevents_all_publication(deploy_case, tmp_path):
     pair, current, publish = deploy_case
     current["platform"]["version"] = 1
