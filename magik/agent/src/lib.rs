@@ -201,6 +201,7 @@ impl Agent {
             "measurement",
             "measurement-clock-v1",
             "mini-display-plan-v1",
+            "mini-concepts-v2",
             "diagnostics",
             "upload-v1",
             "lifecycle-v1",
@@ -785,6 +786,15 @@ impl Agent {
             )
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(stderr));
+        if test_server.is_none()
+            && request
+                .fields
+                .get("concept_session")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        {
+            command.env("MISTER_MAGIK_MINI_RESUME_CONCEPT", "1");
+        }
         if let Some(test_server) = test_server {
             command.env("SLINT_TEST_SERVER", test_server);
         }
@@ -1212,7 +1222,34 @@ impl Agent {
                 &[],
             );
         }
-        let deadline = Instant::now() + TEST_SESSION_DEADLINE;
+        let concept_session = request
+            .fields
+            .get("concept_session")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if concept_session
+            && request
+                .fields
+                .get("artifact")
+                .and_then(serde_json::Value::as_str)
+                != Some("mini-magik")
+        {
+            return write_frame(
+                stream,
+                &response(
+                    &request.id,
+                    "error",
+                    serde_json::json!({"code":"concept-session-requires-mini"}),
+                ),
+                &[],
+            );
+        }
+        let deadline = Instant::now()
+            + if concept_session {
+                Duration::from_secs(600)
+            } else {
+                TEST_SESSION_DEADLINE
+            };
         let listener = TcpListener::bind("127.0.0.1:0").map_err(FrameError::from)?;
         let endpoint = listener.local_addr().map_err(FrameError::from)?.to_string();
         let started = self.start_with_test_server(request, Some(endpoint));

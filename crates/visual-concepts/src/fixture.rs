@@ -110,7 +110,9 @@ pub fn prepare(width: usize, height: usize) -> PreparedLauncher {
     ];
     let art = ART.map(|bytes| {
         bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| Pixel(u16::from_le_bytes([p[0], p[1]])))
             .collect::<Vec<_>>()
     });
@@ -219,10 +221,12 @@ pub fn blend(a: Pixel, b: Pixel, t: u16) -> Pixel {
     Pixel((r | g | blue) as u16)
 }
 pub fn put(pixels: &mut [Pixel], width: usize, x: i32, y: i32, colour: Pixel) {
-    if x >= 0 && y >= 0 && (x as usize) < width {
-        if let Some(p) = pixels.get_mut(y as usize * width + x as usize) {
-            *p = colour;
-        }
+    if x >= 0
+        && y >= 0
+        && (x as usize) < width
+        && let Some(p) = pixels.get_mut(y as usize * width + x as usize)
+    {
+        *p = colour;
     }
 }
 #[cfg(test)]

@@ -11,8 +11,12 @@ scripts/magik check concept --app mini-magik --concept diagnostic
 
 The interactive session accepts `select NAME`, `preset default|reduced`, `pause`,
 `resume`, `step`, `restart`, `capture`, and `quit`. Code changes require an
-incremental rebuild; selection and presets do not. Ctrl-C and EOF restore Main.
-Test sessions retain the native service's bounded lifetime.
+incremental rebuild; selection and presets do not. On `quit`, Ctrl-C, EOF or
+connection loss, the native service restarts Mini with the last selected concept
+and preset, playing from the beginning. This keeps the current work on HDMI,
+following the requested iteration workflow. `scripts/magik stop` explicitly
+returns to the ordinary launcher. Test control connections have a ten-minute
+limit; the retained concept continues independently afterward.
 
 Checks use two 30-second windows with two seconds of device-clock warmup each.
 Separate `--profile` uses one ten-second attribution window. Streams and captures
@@ -57,3 +61,47 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 `raster-waves`: independently selectable; default and reduced presets.
 
 `wireframe-terrain`: independently selectable; default and reduced presets.
+
+## Presets and preparation
+
+| Concept | Default | Reduced | Loop |
+|---|---|---|---|
+| point-cloud-morph | 8,192 points | 4,096 points | 20 s cabinet and logo |
+| depth-parallax | Five cards, 25 cached poses per transition | Three-card crop, 13 poses | 16 s, forward then reverse |
+| light-sweep | 16 lighting phases | Eight phases | 3 s |
+| mirror-floor | 64 rows, three-pixel shift | 32 rows, one-pixel shift | 4.096 s |
+| pixel-dissolve | Eight-pixel tiles | 16-pixel tiles | 3.2 s, including endpoint holds |
+| starfield-comets | 256 stars, 24-pixel trails | 128 stars, 12-pixel trails | 8.192 s |
+| palette-aurora | 240×135 working image | 120×67 working image | 12.288 s |
+| texture-tunnel | 240×135, 256×256 texture | 120×67, same texture | 15.36 s |
+| raster-waves | Eight-pixel displacement | Four-pixel displacement | 2.048 s |
+| wireframe-terrain | 48×32 grid | 24×16 grid | 128 s |
+
+Working dimensions above describe the observed 960×540 render surface. Fixture
+letterboxing is also tested at 960×600. Procedural backgrounds fill the surface.
+Depth stores only the carousel rectangle, shares forward poses with reverse
+playback, and blends adjacent poses. Reduced depth crops the outer two cards.
+Dissolve prepares ordered tile thresholds and copies row spans. Preparation and
+preset changes occur outside measured windows. Presets never adapt automatically.
+
+## Iteration and evidence
+
+Run one named concept at a time. Checks perform two independent 30-second
+windows after two-second warmups, then exercise both presets, switching, pause,
+single-step and restart. Exact device timeline bookmarks stop rendering before
+native scanout captures. Host command latency cannot move the captured timeline.
+The point-cloud capture includes both cabinet and logo phases. The profile
+command records a separate ten-second window and validates profile identity;
+profiled runs cannot qualify cadence.
+
+Results live under ignored `build/magik-results/<run-id>/`: raw measurement JSON,
+`concept-results.json`, initial/midpoint/boundary PNGs with capture metadata,
+events, logs and optional profile artifacts. Every measured result identifies
+its binary SHA-256, preset, actual refresh and dimensions, samples, physical
+repeats, latch failures, CPU, peak RSS, and render/transfer/presentation timings.
+Streaming publication is disabled while a concept measurement is active.
+
+The live HDMI animation review is performed by the user. The USB capture adapter
+was unavailable during this implementation. Physical cadence comes from settled
+protocol-v5 counters; framebuffer captures establish RGB565 appearance but do not
+substitute for the live animation review.

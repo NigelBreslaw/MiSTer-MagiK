@@ -10,6 +10,7 @@ use mister_magik_particles::{
 };
 use std::time::Duration;
 pub struct Morph {
+    preset: Preset,
     cabinet: ArcadeCabinetFormation,
     logo: MagikScene,
     width: usize,
@@ -34,6 +35,7 @@ pub fn new(preset: Preset, width: usize, height: usize) -> Result<Morph, String>
     logo.timing.disperse_ms = 1500;
     logo.timing.cycle_ms = 10000;
     Ok(Morph {
+        preset,
         cabinet: ArcadeCabinetFormation::new(width, height, cabinet)?,
         logo: MagikScene::from_magik_recipe(width, height, ParticlePreset::Visual, logo)?,
         width,
@@ -43,6 +45,10 @@ pub fn new(preset: Preset, width: usize, height: usize) -> Result<Morph, String>
     })
 }
 impl Effect for Morph {
+    fn reset(&mut self) -> Result<(), String> {
+        *self = new(self.preset, self.width, self.height)?;
+        Ok(())
+    }
     fn render(&mut self, elapsed: Duration, pixels: &mut [Pixel]) -> Result<Rect, String> {
         let ms = elapsed.as_millis() as u64 % 20000;
         let logo = ms >= 10000;
@@ -52,7 +58,7 @@ impl Effect for Morph {
             self.logo.invalidate(id);
         }
         if logo {
-            let at = Duration::from_millis(ms - 10000);
+            let at = Duration::from_millis(elapsed.as_millis() as u64 / 20000 * 10000 + ms - 10000);
             let stats = self.logo.render_with_lookahead(
                 pixels,
                 id,

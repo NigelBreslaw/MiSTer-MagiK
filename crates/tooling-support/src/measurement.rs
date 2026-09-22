@@ -35,6 +35,7 @@ pub struct Counters {
 }
 #[derive(Default)]
 pub struct PresentationMetrics {
+    pub frame_timings_us: Vec<[u64; 3]>,
     pub peak_rss_bytes: Option<u64>,
     pub process_cpu_us: Option<u64>,
     pub window_cpu_start_us: Option<u64>,
@@ -96,13 +97,35 @@ impl PresentationMetrics {
         );
         let window = self.window.as_mut().unwrap();
         window["process_cpu_us"] = json!(cpu_us);
+        for (index, name) in ["render", "transfer", "frame_to_present"]
+            .into_iter()
+            .enumerate()
+        {
+            let mut samples = self
+                .frame_timings_us
+                .iter()
+                .map(|s| s[index])
+                .collect::<Vec<_>>();
+            samples.sort_unstable();
+            if !samples.is_empty() {
+                window[format!("{name}_average_us")] =
+                    json!(samples.iter().sum::<u64>() as f64 / samples.len() as f64);
+                window[format!("{name}_p99_us")] =
+                    json!(samples[(samples.len() * 99 / 100).min(samples.len() - 1)]);
+                window[format!("{name}_max_us")] = json!(samples.last());
+            }
+        }
+
         window["context"] = self.context.clone();
         window["peak_rss_bytes"] = json!(self.peak_rss_bytes);
         window["latch_drops"] = json!(c.latch_drops - baseline.latch_drops);
         window["transfer_us_total"] = json!(c.transfer_us - baseline.transfer_us);
         window["owned_vblanks"] = json!(c.owned_vblanks - baseline.owned_vblanks);
         window["presented_vblanks"] = json!(c.presented_vblanks - baseline.presented_vblanks);
-        window["refresh_hz"] = json!((c.owned_vblanks - baseline.owned_vblanks) as f64 * 1000.0 / (end_ms - start_ms).max(1) as f64);
+        window["refresh_hz"] = json!(
+            (c.owned_vblanks - baseline.owned_vblanks) as f64 * 1000.0
+                / (end_ms - start_ms).max(1) as f64
+        );
         window["process_cpu_percent"] =
             json!(cpu_us.map(|us| us as f64 / ((end_ms - start_ms).max(1) as f64 * 10.0)));
         window["card_fallback_copies"] =
@@ -138,8 +161,10 @@ mod tests {
     use super::*;
     #[test]
     fn cpu_window_reports_process_delta_and_preserves_unavailable() {
-        let mut metrics = PresentationMetrics::default();
-        metrics.window_start = Some((2000, Counters::default()));
+        let mut metrics = PresentationMetrics {
+            window_start: Some((2000, Counters::default())),
+            ..Default::default()
+        };
         metrics.finish_window(7000, 960, 540, true);
         assert!(metrics.window.as_ref().unwrap()["process_cpu_us"].is_null());
         metrics.window_cpu_start_us = Some(1_000_000);

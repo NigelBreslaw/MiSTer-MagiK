@@ -234,6 +234,21 @@ fn main() -> Result<(), String> {
     });
 
     let concepts = Rc::new(RefCell::new(concepts::Concepts::new(width, height)));
+    if std::env::var_os("MISTER_MAGIK_MINI_RESUME_CONCEPT").is_some() {
+        let root =
+            std::env::var_os("MISTER_MAGIK2_STATE_ROOT").ok_or("missing concept state root")?;
+        let bytes = std::fs::read(std::path::PathBuf::from(root).join("mini-concept.json"))
+            .map_err(|e| e.to_string())?;
+        let state: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        let name = state["name"]
+            .as_str()
+            .ok_or("missing retained concept name")?;
+        let preset = Preset::parse(state["preset"].as_str().ok_or("missing retained preset")?)?;
+        concepts.borrow_mut().select(name, preset);
+        if let Some(error) = &concepts.borrow().error {
+            return Err(error.clone());
+        }
+    }
     let control = concepts.clone();
     probe.on_concept_select(move |name, preset| {
         let mut c = control.borrow_mut();
@@ -259,6 +274,7 @@ fn main() -> Result<(), String> {
         {
             let mut c = concepts.borrow_mut();
             probe.set_concept_name(c.name.clone().into());
+            probe.set_concept_generation(c.generation);
             probe.set_concept_error(c.error.clone().unwrap_or_default().into());
             probe.set_concept_paused(c.paused);
             if c.measure {
@@ -286,14 +302,17 @@ fn main() -> Result<(), String> {
         };
         let rendered = should_render;
         if should_render {
+            if is_concept && !c.paused && c.advance_next {
+                c.scene
+                    .as_mut()
+                    .unwrap()
+                    .advance(Duration::from_nanos(16_666_667));
+            }
             let started = Instant::now();
             let damage = if is_concept {
                 c.dirty = false;
                 let scene = c.scene.as_mut().unwrap();
                 let d = scene.render()?;
-                for (a, b) in cached.iter_mut().zip(scene.pixels()) {
-                    *a = Rgb565Pixel(b.0);
-                }
                 probe.set_concept_frame((scene.elapsed().as_millis().min(i32::MAX as u128)) as i32);
                 session.borrow_mut().metrics.context = serde_json::json!({"concept":c.name,"preset":c.preset.name(),"route":plan.output_route.label(),"storage_bytes":c.scene.as_ref().unwrap().storage_bytes()});
                 DirtyRectList::from_one(DirtyRect {
@@ -313,8 +332,18 @@ fn main() -> Result<(), String> {
             };
             let render_us = started.elapsed().as_micros() as u64;
             // SAFETY: both pixel wrappers are repr(transparent) u16; neither owns resources.
-            let pixels = unsafe {
-                std::slice::from_raw_parts(cached.as_ptr().cast::<Rgb565>(), cached.len())
+            let pixels = if let Some(scene) = &c.scene {
+                // SAFETY: the portable RGB565 pixel is also repr(transparent) u16.
+                unsafe {
+                    std::slice::from_raw_parts(
+                        scene.pixels().as_ptr().cast::<Rgb565>(),
+                        scene.pixels().len(),
+                    )
+                }
+            } else {
+                unsafe {
+                    std::slice::from_raw_parts(cached.as_ptr().cast::<Rgb565>(), cached.len())
+                }
             };
             let transfer = Instant::now();
             framebuffer
@@ -339,15 +368,40 @@ fn main() -> Result<(), String> {
             metrics.counters.render_us += render_us;
             metrics.counters.transfer_us += transfer_us;
             metrics.counters.render_to_present_us += started.elapsed().as_micros() as u64;
-            if is_concept && !c.paused {
-                c.scene
-                    .as_mut()
-                    .unwrap()
-                    .advance(Duration::from_nanos(16_666_667));
+            if metrics.window_start.is_some() && metrics.window.is_none() {
+                metrics.frame_timings_us.push([
+                    render_us,
+                    transfer_us,
+                    started.elapsed().as_micros() as u64,
+                ]);
+            }
+            if is_concept {
+                c.advance_next = true;
+                if c.stop_at
+                    .is_some_and(|at| c.scene.as_ref().unwrap().elapsed() >= at)
+                {
+                    c.stop_at = None;
+                    c.paused = true;
+                }
+            }
+        }
+        // Qualification never publishes previews. Interactive watch borrows the
+        // retained concept buffer rather than allocating a Slint image.
+        if !probe.get_concept_measuring() {
+            if let Some(scene) = &c.scene {
+                // SAFETY: these transparent wrappers have identical layout.
+                let pixels = unsafe {
+                    std::slice::from_raw_parts(
+                        scene.pixels().as_ptr().cast::<Rgb565Pixel>(),
+                        scene.pixels().len(),
+                    )
+                };
+                session.borrow_mut().preview(pixels, width, height);
+            } else {
+                session.borrow_mut().preview(&cached, width, height);
             }
         }
         drop(c);
-        session.borrow_mut().preview(&cached, width, height);
         if !rendered {
             std::thread::sleep(Duration::from_millis(2));
         }

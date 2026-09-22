@@ -55,6 +55,9 @@ impl Preset {
     }
 }
 pub trait Effect {
+    fn reset(&mut self) -> Result<(), String> {
+        Ok(())
+    }
     fn render(&mut self, elapsed: Duration, pixels: &mut [Pixel]) -> Result<Rect, String>;
     fn storage_bytes(&self) -> usize;
 }
@@ -98,9 +101,12 @@ impl Scene {
     pub fn advance(&mut self, interval: Duration) {
         self.elapsed += interval;
     }
-    pub fn reset(&mut self) {
+    pub fn reset(&mut self) -> Result<(), String> {
+        self.effect.reset()?;
+        self.pixels.fill(Pixel(0));
         self.elapsed = Duration::ZERO;
         self.first = true;
+        Ok(())
     }
     pub fn render(&mut self) -> Result<Rect, String> {
         let damage = self.effect.render(self.elapsed, &mut self.pixels)?;
@@ -161,7 +167,7 @@ mod tests {
             scene.advance(Duration::from_millis(100));
             scene.render().unwrap();
             assert_ne!(scene.pixels(), initial);
-            scene.reset();
+            scene.reset().unwrap();
             scene.render().unwrap();
             assert_eq!(scene.pixels(), initial);
         }

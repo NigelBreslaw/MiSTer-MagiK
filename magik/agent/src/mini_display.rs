@@ -7,7 +7,20 @@ pub fn snapshot() -> Result<String, String> {
         return Err("display transaction pending".into());
     }
     let mode = field("active=").ok_or("missing active display mode")?;
-    let detected = detected_geometry()?;
+    let detected = if matches!(mode, "auto" | "custom") {
+        if !crate::device::status()?
+            .get("launcher_active")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Err(
+                "auto/custom display geometry requires active Main before suspension".into(),
+            );
+        }
+        detected_geometry()?
+    } else {
+        None
+    };
     let plan = ResolvedDisplayPlan::from_mode_or_detected(mode, detected)
         .ok_or("cannot resolve Main display plan")?;
     Ok(format!("{mode},{},{}", plan.output_w, plan.output_h))

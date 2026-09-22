@@ -4,13 +4,34 @@ use crate::{Effect, Pixel, Preset, Rect, fixture::Fixture};
 use std::time::Duration;
 pub struct Dissolve {
     f: Fixture,
-    tile: usize,
+    tiles: Vec<(Rect, usize)>,
 }
 pub fn new(preset: Preset, w: usize, h: usize) -> Result<Dissolve, String> {
-    Ok(Dissolve {
-        f: Fixture::new(w, h),
-        tile: preset.choose(8, 16),
-    })
+    let f = Fixture::new(w, h);
+    let tile = preset.choose(8, 16);
+    let r = f.content;
+    let mut tiles = Vec::new();
+    for y in (r.y0..r.y1).step_by(tile) {
+        for x in (r.x0..r.x1).step_by(tile) {
+            let a = (x - r.x0) / tile;
+            let b = (y - r.y0) / tile;
+            let mut threshold = 0;
+            for bit in 0..3 {
+                threshold |= (((a >> bit) ^ (b >> bit)) & 1) << (5 - bit * 2);
+                threshold |= ((b >> bit) & 1) << (4 - bit * 2);
+            }
+            tiles.push((
+                Rect {
+                    x0: x,
+                    y0: y,
+                    x1: (x + tile).min(r.x1),
+                    y1: (y + tile).min(r.y1),
+                },
+                threshold,
+            ));
+        }
+    }
+    Ok(Dissolve { f, tiles })
 }
 impl Effect for Dissolve {
     fn render(&mut self, t: Duration, p: &mut [Pixel]) -> Result<Rect, String> {
@@ -25,25 +46,25 @@ impl Effect for Dissolve {
             64 - (ms - 2600) * 64 / 600
         };
         let r = self.f.content;
-        p.copy_from_slice(&self.f.base);
-        for y in r.y0..r.y1 {
-            for x in r.x0..r.x1 {
-                let a = (x - r.x0) / self.tile;
-                let b = (y - r.y0) / self.tile;
-                let mut threshold = 0;
-                for bit in 0..3 {
-                    threshold |= (((a >> bit) ^ (b >> bit)) & 1) << (5 - bit * 2);
-                    threshold |= ((b >> bit) & 1) << (4 - bit * 2);
-                }
-                if threshold < progress {
-                    p[y * self.f.width + x] = self.f.list[y * self.f.width + x];
+        if progress == 64 {
+            p.copy_from_slice(&self.f.list);
+        } else {
+            p.copy_from_slice(&self.f.base);
+            if progress > 0 {
+                for &(tile, threshold) in &self.tiles {
+                    if threshold < progress {
+                        for y in tile.y0..tile.y1 {
+                            let row = y * self.f.width + tile.x0..y * self.f.width + tile.x1;
+                            p[row.clone()].copy_from_slice(&self.f.list[row]);
+                        }
+                    }
                 }
             }
         }
         Ok(r)
     }
     fn storage_bytes(&self) -> usize {
-        self.f.storage_bytes()
+        self.f.storage_bytes() + self.tiles.capacity() * std::mem::size_of::<(Rect, usize)>()
     }
 }
 #[cfg(test)]

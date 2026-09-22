@@ -48,6 +48,8 @@ impl Session {
         self.measurement_duration_ms = milliseconds;
     }
     pub fn begin(&mut self) {
+        self.metrics.frame_timings_us.clear();
+        self.metrics.frame_timings_us.reserve(3601);
         self.metrics.motion_started_ms = Some(self.start.elapsed().as_millis() as u64);
         self.metrics.window_start = None;
         self.metrics.window = None;
@@ -100,7 +102,11 @@ impl Session {
         }
         let now = self.start.elapsed().as_millis() as u64;
         let instrumented = std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some();
-        let duration = if instrumented { 10_000 } else { self.measurement_duration_ms.unwrap_or(5_000) };
+        let duration = if instrumented {
+            10_000
+        } else {
+            self.measurement_duration_ms.unwrap_or(5_000)
+        };
         let mut completed = false;
         if self.metrics.window.is_none() {
             if self.metrics.window_start.is_none()

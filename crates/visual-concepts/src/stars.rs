@@ -52,9 +52,12 @@ impl Effect for Stars {
                 rgb(brightness / 2, brightness, brightness)
             };
             let count = if i < 3 { self.trail } else { 1 };
+            let dx = px - self.width as i32 / 2;
+            let dy = py - self.height as i32 / 2;
+            let length = ((dx as f64).hypot(dy as f64).ceil() as i32).max(1);
             for n in 0..count {
-                let tx = px - (px - self.width as i32 / 2) * n as i32 / 128;
-                let ty = py - (py - self.height as i32 / 2) * n as i32 / 128;
+                let tx = px - dx * n as i32 / length;
+                let ty = py - dy * n as i32 / length;
                 if tx >= 0 && ty >= 0 && (tx as usize) < self.width && (ty as usize) < self.height {
                     let offset = ty as usize * self.width + tx as usize;
                     p[offset] = colour;

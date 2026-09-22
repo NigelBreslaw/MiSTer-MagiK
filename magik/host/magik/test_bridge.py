@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import socket
 import threading
 import argparse
@@ -21,6 +22,7 @@ def _test_server() -> tuple[str, int]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--profile-id")
+    parser.add_argument("--concept-session", action="store_true")
     arguments = parser.parse_args()
     host, port = _test_server()
     token = os.environ.get("MISTER_MAGIK2_TOKEN")
@@ -33,7 +35,9 @@ def main() -> int:
     agent = NativeAgent(device, token, native_port)
     agent.artifact = os.environ.get("MISTER_MAGIK2_APP", "mini-magik")
     agent.expected_sha256 = os.environ.get("MISTER_MAGIK2_EXPECTED_SHA256")
-    with agent.open_test_tunnel(arguments.profile_id) as device_connection:
+    with agent.open_test_tunnel(
+        arguments.profile_id, concept_session=arguments.concept_session
+    ) as device_connection:
         with socket.create_connection((host, port), timeout=10) as testing_connection:
             device_connection.settimeout(None)
             testing_connection.settimeout(None)
@@ -63,5 +67,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (AgentError, OSError, RuntimeError) as error:
-        print(f"magik test bridge: {error}", file=os.sys.stderr)
+        print(f"magik test bridge: {error}", file=sys.stderr)
         raise SystemExit(2) from error

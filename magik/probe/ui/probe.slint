@@ -25,6 +25,7 @@ export component Probe inherits Window {
     in-out property <bool> concept-paused;
     in-out property <bool> concept-measuring;
     in-out property <int> concept-frame;
+    in-out property <int> concept-generation;
     callback concept-select(string,string);
     callback concept-action(string);
     callback increment();
@@ -66,12 +67,14 @@ export component Probe inherits Window {
     }
     // Accessible controls remain in the test tree; custom RGB565 owns concept pixels.
     VerticalLayout {
-        Text { text: root.concept-name; accessible-label: "concept-name"; accessible-value: root.concept-name; }
-        Text { text: root.concept-error; accessible-label: "concept-error"; accessible-value: root.concept-error; }
-        Text { accessible-label: "concept-frame"; accessible-value: "" + root.concept-frame; }
-        Text { accessible-label: "concept-paused"; accessible-value: root.concept-paused ? "true" : "false"; }
-        Text { accessible-label: "concept-measuring"; accessible-value: root.concept-measuring ? "true" : "false"; }
-        for action in ["pause","resume","step","restart","measure"] : Rectangle {
+        x: 1px; y: 1px; width: 1px; height: 120px;
+        Text { accessible-role: text; accessible-label: "concept-generation"; accessible-value: "" + root.concept-generation; }
+        Text { accessible-role: text; text: root.concept-name; accessible-label: "concept-name"; accessible-value: root.concept-name; }
+        Text { accessible-role: text; text: root.concept-error; accessible-label: "concept-error"; accessible-value: root.concept-error; }
+        Text { accessible-role: text; accessible-label: "concept-frame"; accessible-value: "" + root.concept-frame; }
+        Text { accessible-role: text; accessible-label: "concept-paused"; accessible-value: root.concept-paused ? "true" : "false"; }
+        Text { accessible-role: text; accessible-label: "concept-measuring"; accessible-value: root.concept-measuring ? "true" : "false"; }
+        for action in ["pause","resume","step","restart","measure","capture-initial","capture-midpoint","capture-boundary","capture-cabinet"] : Rectangle {
             accessible-role: button; accessible-label: "concept-" + action;
             accessible-action-default => {root.concept-action(action);}
         }
