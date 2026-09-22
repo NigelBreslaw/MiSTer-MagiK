@@ -19,7 +19,6 @@ EFFECTS = (
     "pixel-dissolve",
     "light-sweep",
     "depth-parallax",
-    "point-cloud-morph",
     "diagnostic",
 )
 PRESETS = ("default", "reduced")
@@ -162,7 +161,6 @@ def measure(application, agent, run, effect, preset, profile):
 
 # Device timeline bookmarks, in milliseconds. Captures happen after measurement.
 BOOKMARKS = {
-    "point-cloud-morph": (5000, 12500, 20000),
     "depth-parallax": (320, 16000),
     "light-sweep": (1500, 3000),
     "pixel-dissolve": (1300, 3200),
@@ -191,8 +189,6 @@ def review(application, agent, run, effect, preset):
     wait_for(lambda: value(application, "frame") == "0", "restart failed")
     select(application, effect, preset)
     bookmarks = [("initial", 0)]
-    if effect == "point-cloud-morph":
-        bookmarks.append(("cabinet", 5000))
     bookmarks += [
         ("midpoint", BOOKMARKS[effect][-2]),
         ("boundary", BOOKMARKS[effect][-1]),

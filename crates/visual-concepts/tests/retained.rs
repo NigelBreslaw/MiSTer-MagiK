@@ -38,11 +38,7 @@ fn every_concept_resets_to_the_same_seed_and_timeline() {
         let mut first = Vec::new();
         for pass in 0..2 {
             scene.reset().unwrap();
-            let frames = if effect == "point-cloud-morph" {
-                720
-            } else {
-                70
-            };
+            let frames = 70;
             for step in 0..frames {
                 scene.render().unwrap();
                 if step == frames - 1 {

@@ -7,7 +7,6 @@ mod depth;
 mod dissolve;
 pub mod fixture;
 mod light;
-mod point_cloud;
 mod scale;
 mod stars;
 mod tunnel;
@@ -20,7 +19,6 @@ pub const EFFECTS: &[&str] = &[
     "pixel-dissolve",
     "light-sweep",
     "depth-parallax",
-    "point-cloud-morph",
     "diagnostic",
 ];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,7 +74,6 @@ impl Scene {
             "pixel-dissolve" => Box::new(dissolve::new(preset, width, height)?),
             "light-sweep" => Box::new(light::new(preset, width, height)?),
             "depth-parallax" => Box::new(depth::new(preset, width, height)?),
-            "point-cloud-morph" => Box::new(point_cloud::new(preset, width, height)?),
             "diagnostic" => Box::new(Diagnostic { width, height }),
             _ => return Err(format!("unknown concept: {name}")),
         };

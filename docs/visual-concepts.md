@@ -30,7 +30,7 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 - [x] Portable contract and cached Mini session
 - [x] Host controls and explicit concept checks
 - [x] Shared fixtures
-- [x] Point-cloud morph
+- [x] Point-cloud morph removed after user review
 - [x] Depth and parallax
 - [x] Satin light sweep
 - [x] Mirror floor removed after user review
@@ -42,7 +42,6 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 - [x] Wireframe terrain removed after user review
 - [ ] Physical qualification and visual review
 
-`point-cloud-morph`: independently selectable; default and reduced presets.
 
 `depth-parallax`: independently selectable; default and reduced presets.
 
@@ -66,7 +65,6 @@ failures, nominal 60 Hz, CPU below 150%, RSS at most 128 MiB.
 
 | Concept | Default | Reduced | Loop |
 |---|---|---|---|
-| point-cloud-morph | 8,192 points | 4,096 points | 20 s cabinet and logo |
 | depth-parallax | Five cards, 25 cached poses per transition | Three-card crop, 13 poses | 16 s, forward then reverse |
 | light-sweep | Quarter-pixel sheen profile, 6.25% peak | Half-pixel profile, same strength and speed | 3 s |
 | pixel-dissolve | Eight-pixel tiles | 16-pixel tiles | 3.2 s, including endpoint holds |
@@ -92,7 +90,7 @@ Run one named concept at a time. Checks perform two independent 30-second
 windows after two-second warmups, then exercise both presets, switching, pause,
 single-step and restart. Exact device timeline bookmarks stop rendering before
 native scanout captures. Host command latency cannot move the captured timeline.
-The point-cloud capture includes both cabinet and logo phases. The profile
+The profile
 command records a separate ten-second window and validates profile identity;
 profiled runs cannot qualify cadence.
 

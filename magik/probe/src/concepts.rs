@@ -61,7 +61,6 @@ impl Concepts {
     pub fn action(&mut self, action: &str) {
         if let Some(bookmark) = action.strip_prefix("capture-") {
             let (midpoint, boundary) = match self.name.as_str() {
-                "point-cloud-morph" => (12500, 20000),
                 "depth-parallax" => (320, 16000),
                 "light-sweep" => (1500, 3000),
                 "pixel-dissolve" => (1300, 3200),
@@ -74,7 +73,6 @@ impl Concepts {
                 "initial" => 0,
                 "midpoint" => midpoint,
                 "boundary" => boundary,
-                "cabinet" => 5000,
                 _ => {
                     self.error = Some("unknown capture bookmark".into());
                     return;

@@ -74,11 +74,11 @@ export component Probe inherits Window {
         Text { accessible-role: text; accessible-label: "concept-frame"; accessible-value: "" + root.concept-frame; }
         Text { accessible-role: text; accessible-label: "concept-paused"; accessible-value: root.concept-paused ? "true" : "false"; }
         Text { accessible-role: text; accessible-label: "concept-measuring"; accessible-value: root.concept-measuring ? "true" : "false"; }
-        for action in ["pause","resume","step","restart","measure","capture-initial","capture-midpoint","capture-boundary","capture-cabinet"] : Rectangle {
+        for action in ["pause","resume","step","restart","measure","capture-initial","capture-midpoint","capture-boundary"] : Rectangle {
             accessible-role: button; accessible-label: "concept-" + action;
             accessible-action-default => {root.concept-action(action);}
         }
-        for name in ["raster-waves","texture-tunnel","starfield","pixel-dissolve","light-sweep","depth-parallax","point-cloud-morph","diagnostic"] : VerticalLayout {
+        for name in ["raster-waves","texture-tunnel","starfield","pixel-dissolve","light-sweep","depth-parallax","diagnostic"] : VerticalLayout {
             for preset in ["default","reduced"] : Rectangle {
                 accessible-role: button; accessible-label: "concept-select-" + name + "-" + preset;
                 accessible-action-default => {root.concept-select(name,preset);}

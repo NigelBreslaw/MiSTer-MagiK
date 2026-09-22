@@ -6,7 +6,6 @@ version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 [dependencies]
-mister-magik-particles = { path = "../particles" }
 mister-magik-framebuffer-scenes = { path = "../framebuffer-scenes" }
 [lints.rust]
 warnings = "deny"
