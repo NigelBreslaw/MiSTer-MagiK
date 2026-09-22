@@ -229,7 +229,7 @@ impl LauncherCardHomeSession {
                 );
             }
             if let Some(pipeline) = self.render_ahead.as_ref() {
-                pipeline.refresh_chrome(self.content_generation, self.prepared.pixels());
+                pipeline.invalidate_content_generation(self.content_generation);
             }
             self.content_dirty = true;
             self.preparation_measurement = preparation_started.map(|start| {
@@ -397,7 +397,6 @@ fn native_render_ahead(
     (width == 960 && height == 540).then(|| {
         LauncherCardRenderAhead::start(
             prepared.frame_preparer(),
-            prepared.pixels(),
             std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some(),
         )
     })

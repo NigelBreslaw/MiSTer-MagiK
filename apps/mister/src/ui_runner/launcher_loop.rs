@@ -9989,15 +9989,13 @@ pub(super) fn run_launcher_loop(
                     session.content_generation(),
                 ) {
                     Ok(Some(copy)) => {
-                        let timing = frame.timing();
                         frame_production_trace.class = FrameProductionClass::Prepared;
                         frame_production_trace.sequence = request.render.generation;
-                        frame_production_trace.render_wall_us = timing.total_us;
+                        frame_production_trace.render_wall_us = frame.producer_total_us();
                         frame_production_completed_at = Some(Instant::now());
                         #[cfg(feature = "tooling")]
                         if card_profile_measurement_enabled {
                             card_direct_measurement = Some((
-                                Some(timing),
                                 copy.copy_us,
                                 request.render.timestamp_us,
                                 request.render.generation,
@@ -10044,7 +10042,6 @@ pub(super) fn run_launcher_loop(
                         #[cfg(feature = "tooling")]
                         if card_profile_measurement_enabled {
                             card_direct_measurement = Some((
-                                None,
                                 copy.copy_us,
                                 request.render.timestamp_us,
                                 request.render.generation,
@@ -12345,13 +12342,8 @@ pub(super) fn run_launcher_loop(
                         .saturating_duration_since(frame_t1)
                         .as_micros()
                         as u64;
-                    if let Some((
-                        _timing,
-                        copy_us,
-                        source_timestamp_us,
-                        source_generation,
-                        age_us,
-                    )) = card_direct_measurement.take()
+                    if let Some((copy_us, source_timestamp_us, source_generation, age_us)) =
+                        card_direct_measurement.take()
                     {
                         metrics.counters.card_hidden_copy_us =
                             metrics.counters.card_hidden_copy_us.saturating_add(copy_us);
@@ -12371,9 +12363,6 @@ pub(super) fn run_launcher_loop(
                             metrics.counters.card_primary_tile_us += delta.primary_tile_us;
                             metrics.counters.card_secondary_tile_us += delta.secondary_tile_us;
                             metrics.counters.card_secondary_wait_us += delta.secondary_wait_us;
-                            metrics.counters.card_composition_us += delta.composition_us;
-                            metrics.counters.card_composition_calls += delta.composition_calls;
-                            metrics.counters.card_composition_bytes += delta.composition_bytes;
                             metrics.counters.card_submitted = metrics
                                 .counters
                                 .card_submitted
