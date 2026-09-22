@@ -4,7 +4,7 @@
 pub use mister_magik_framebuffer_scenes::{Rgb565Pixel as Pixel, Rgb565Rect as Rect};
 use std::time::Duration;
 mod dissolve;
-pub mod fixture;
+mod fixture;
 mod light;
 mod scale;
 mod stars;
@@ -45,10 +45,7 @@ impl Preset {
         }
     }
 }
-pub trait Effect {
-    fn reset(&mut self) -> Result<(), String> {
-        Ok(())
-    }
+trait Effect {
     fn render(&mut self, elapsed: Duration, pixels: &mut [Pixel]) -> Result<Rect, String>;
     fn storage_bytes(&self) -> usize;
 }
@@ -74,7 +71,6 @@ impl Scene {
             "diagnostic" => Box::new(Diagnostic { width, height }),
             _ => return Err(format!("unknown concept: {name}")),
         };
-        let _ = preset;
         Ok(Self {
             effect,
             pixels: vec![Pixel(0); width * height],
@@ -87,12 +83,10 @@ impl Scene {
     pub fn advance(&mut self, interval: Duration) {
         self.elapsed += interval;
     }
-    pub fn reset(&mut self) -> Result<(), String> {
-        self.effect.reset()?;
+    pub fn reset(&mut self) {
         self.pixels.fill(Pixel(0));
         self.elapsed = Duration::ZERO;
         self.first = true;
-        Ok(())
     }
     pub fn render(&mut self) -> Result<Rect, String> {
         let damage = self.effect.render(self.elapsed, &mut self.pixels)?;
@@ -113,7 +107,7 @@ impl Scene {
         self.pixels.capacity() * 2 + self.effect.storage_bytes()
     }
 }
-pub const fn full(width: usize, height: usize) -> Rect {
+const fn full(width: usize, height: usize) -> Rect {
     Rect {
         x0: 0,
         y0: 0,
@@ -121,7 +115,7 @@ pub const fn full(width: usize, height: usize) -> Rect {
         y1: height,
     }
 }
-pub const fn rgb(r: u8, g: u8, b: u8) -> Pixel {
+const fn rgb(r: u8, g: u8, b: u8) -> Pixel {
     Pixel(((r as u16 >> 3) << 11) | ((g as u16 >> 2) << 5) | (b as u16 >> 3))
 }
 struct Diagnostic {
@@ -153,7 +147,7 @@ mod tests {
             scene.advance(Duration::from_millis(100));
             scene.render().unwrap();
             assert_ne!(scene.pixels(), initial);
-            scene.reset().unwrap();
+            scene.reset();
             scene.render().unwrap();
             assert_eq!(scene.pixels(), initial);
         }

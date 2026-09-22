@@ -36,7 +36,7 @@ impl Concepts {
     pub fn select(&mut self, name: &str, preset: Preset) {
         self.stop_at = None;
         self.generation = self.generation.wrapping_add(1);
-        // Release old caches and workers before preparing a replacement.
+        // Release old caches before preparing a replacement.
         self.scene = None;
         match Scene::new(name, preset, self.width, self.height) {
             Ok(scene) => {
@@ -79,10 +79,7 @@ impl Concepts {
             });
             if let Some(scene) = &mut self.scene {
                 if target <= scene.elapsed() {
-                    if let Err(error) = scene.reset() {
-                        self.error = Some(error);
-                        return;
-                    }
+                    scene.reset();
                     self.advance_next = false;
                 }
                 self.stop_at = Some(target);
@@ -97,10 +94,7 @@ impl Concepts {
             "resume" => self.paused = false,
             "restart" | "measure" => {
                 if let Some(s) = &mut self.scene {
-                    if let Err(error) = s.reset() {
-                        self.error = Some(error);
-                        return;
-                    }
+                    s.reset();
                     self.advance_next = false;
                     self.dirty = true;
                 }

@@ -4,6 +4,7 @@ use crate::{Effect, Pixel, Preset, Rect, fixture::Fixture};
 use std::time::Duration;
 pub struct Dissolve {
     f: Fixture,
+    list: Vec<Pixel>,
     tiles: Vec<(Rect, usize)>,
 }
 pub fn new(preset: Preset, w: usize, h: usize) -> Result<Dissolve, String> {
@@ -31,7 +32,11 @@ pub fn new(preset: Preset, w: usize, h: usize) -> Result<Dissolve, String> {
             ));
         }
     }
-    Ok(Dissolve { f, tiles })
+    Ok(Dissolve {
+        list: f.list(),
+        f,
+        tiles,
+    })
 }
 impl Effect for Dissolve {
     fn render(&mut self, t: Duration, p: &mut [Pixel]) -> Result<Rect, String> {
@@ -47,7 +52,7 @@ impl Effect for Dissolve {
         };
         let r = self.f.content;
         if progress == 64 {
-            p.copy_from_slice(&self.f.list);
+            p.copy_from_slice(&self.list);
         } else {
             p.copy_from_slice(&self.f.base);
             if progress > 0 {
@@ -55,7 +60,7 @@ impl Effect for Dissolve {
                     if threshold < progress {
                         for y in tile.y0..tile.y1 {
                             let row = y * self.f.width + tile.x0..y * self.f.width + tile.x1;
-                            p[row.clone()].copy_from_slice(&self.f.list[row]);
+                            p[row.clone()].copy_from_slice(&self.list[row]);
                         }
                     }
                 }
@@ -64,7 +69,9 @@ impl Effect for Dissolve {
         Ok(r)
     }
     fn storage_bytes(&self) -> usize {
-        self.f.storage_bytes() + self.tiles.capacity() * std::mem::size_of::<(Rect, usize)>()
+        self.f.storage_bytes()
+            + self.list.capacity() * 2
+            + self.tiles.capacity() * std::mem::size_of::<(Rect, usize)>()
     }
 }
 #[cfg(test)]
@@ -80,7 +87,7 @@ mod tests {
         }
         for ms in [1600, 2500] {
             e.render(Duration::from_millis(ms), &mut p).unwrap();
-            assert_eq!(p, e.f.list);
+            assert_eq!(p, e.list);
         }
     }
 }

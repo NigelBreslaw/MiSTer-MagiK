@@ -37,7 +37,7 @@ fn every_concept_resets_to_the_same_seed_and_timeline() {
         let mut scene = Scene::new(effect, Preset::Reduced, 320, 180).unwrap();
         let mut first = Vec::new();
         for pass in 0..2 {
-            scene.reset().unwrap();
+            scene.reset();
             let frames = 70;
             for step in 0..frames {
                 scene.render().unwrap();

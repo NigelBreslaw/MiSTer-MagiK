@@ -186,10 +186,10 @@ def review(application, agent, run, effect, preset):
     action(application, "restart")
     wait_for(lambda: value(application, "frame") == "0", "restart failed")
     select(application, effect, preset)
-    bookmarks = [("initial", 0)]
-    bookmarks += [
-        ("midpoint", BOOKMARKS[effect][-2]),
-        ("boundary", BOOKMARKS[effect][-1]),
+    bookmarks = [
+        ("initial", 0),
+        ("midpoint", BOOKMARKS[effect][0]),
+        ("boundary", BOOKMARKS[effect][1]),
     ]
     for label, target in bookmarks:
         action(application, "capture-" + label)
@@ -295,7 +295,3 @@ def run_concept(arguments, run: Path):
     except Exception as error:
         append_event(run, {"phase": "concept-error", "error": str(error)})
         raise
-    finally:
-        # The native session restarts Mini with its last selected concept and
-        # preset. Leave the active work on HDMI, as requested for iteration.
-        append_event(run, {"phase": "concept-cleanup", "retained_concept": effect})

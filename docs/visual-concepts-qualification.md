@@ -8,7 +8,7 @@ Observed mode: HDMI 1920×1080p60; resolved RGB565 rendering: 960×540. No displ
 
 | Concept | FPS W1 / W2 | Samples W1 / W2 | Repeats W1 / W2 | CPU % W1 / W2 | Peak RSS MiB | Device gate |
 |---|---:|---:|---:|---:|---:|---|
-| light-sweep | 60.000 / 59.998 | 1800 / 1800 | 0 / 0 | 100.16 / 100.23 | 34.2 | Pass |
+| light-sweep | 60.000 / 60.000 | 1800 / 1800 | 0 / 0 | 100.18 / 100.16 | 34.3 | Pass |
 | pixel-dissolve | 59.998 / 59.998 | 1800 / 1800 | 0 / 0 | 100.15 / 100.23 | 65.3 | Pass |
 | starfield | 59.998 / 60.000 | 1800 / 1800 | 0 / 0 | 100.13 / 100.13 | 34.2 | Pass |
 | texture-tunnel | 59.998 / 59.998 | 1800 / 1800 | 0 / 0 | 100.24 / 100.18 | 68.4 | Pass |
@@ -22,7 +22,7 @@ Times below are the larger average of the two windows, in milliseconds. Frame-to
 
 | Concept | Render avg | Transfer avg | Frame-to-present avg | Render p99 | Ignored evidence directory |
 |---|---:|---:|---:|---:|---|
-| light-sweep | 5.260 | 0.334 | 16.559 | 5.749 | `build/magik-results/20260922T154045Z-b66b51873e03` |
+| light-sweep | 5.274 | 0.331 | 16.551 | 5.811 | `build/magik-results/20260922T163217Z-575a01f0d75d` |
 | pixel-dissolve | 2.513 | 1.000 | 16.559 | 4.170 | `build/magik-results/20260922T141810Z-ed8a86efb7af` |
 | starfield | 1.311 | 1.382 | 16.550 | 1.460 | `build/magik-results/20260922T155324Z-8b0a2f56e128` |
 | texture-tunnel | 3.924 | 1.651 | 16.561 | 4.116 | `build/magik-results/20260922T161109Z-bdb96d29b2ba` |
@@ -30,66 +30,32 @@ Times below are the larger average of the two windows, in milliseconds. Frame-to
 
 ## Validation and limitations
 
-- Portable renderer tests cover deterministic reset, clipping, exact dissolve endpoints, fixed seed behavior and retained damage against full frames at 960×540 and 960×600. The existing two-slot damage ledger tests cover alternating slots, initialization and suppressed presentation.
-- Latest portable suite: 17 unit tests and two retained-frame tests passed at both geometries. Mini smoke and both motion checks passed on device (`20260922T152047Z-4c2deae9ae72`, `20260922T152113Z-7e4a673f6a74`).
-- Separate terrain profiling completed with 905 samples and matching artifact identity (`20260922T152008Z-bb103693141e`). Its four physical repeats are instrumented evidence and do not qualify cadence.
-- All listed unprofiled runs reported zero latch drops and rejections, including the failed curved tunnel run.
-- Host regression suite: 247 passed. Native service: 47 passed. Mini session: three passed. Tooling measurement/session: six passed. Focused Clippy, Python formatting/lint/type checks and ARM builds passed.
-- Normal exit, interruption and controlled failure retained the selected, advancing Mini concept in `build/magik-results/20260922T142918Z-f2d647547cb2/retention-results.json`. Mini now handles termination after completing its frame; the service gives it a bounded graceful-stop interval.
-- Depth initially measured 30 FPS; bounded prepared perspective poses fixed that without reducing the five-card default. Dissolve initially measured 30 FPS; prepared tile thresholds and row-span copies fixed that without changing tile size or timing. Initial failed runs are retained in ignored results.
-- The USB HDMI capture adapter was unavailable. The user elected to review the live display. Current capture controls produce exact initial, midpoint and loop-boundary evidence, plus a cabinet capture for point-cloud morph. Point-cloud and depth captures were repeated using exact device bookmarks on executable f8fa5c209d63 (`20260922T152403Z-3d836f5c6f86` and `20260922T152507Z-fc685dcb40fb`); their cadence rows retain the earlier measured binary identities. Static captures do not replace the remaining live visual signoff.
-- Reduced presets are functional options, not substitutes for default-preset qualification. CRT, desktop preview, combined effects, a controller gallery and full-app integration are outside this milestone.
+- The five retained effects were accepted by the user on HDMI on 22 September 2026. The tunnel was accepted after correcting its motion glitch; see [the diagnosis and research](tunnel-research.md).
+- Cleanup validation: 17 portable unit tests, two retained-frame/reset tests, three Mini tests, six tooling tests, 247 host tests, focused Clippy and repository Python quality checks passed. All 120 sampled before/after RGB565 hashes matched across both presets and both geometries. The cleanup binary passed both light-sweep device windows, captures and playback checks.
+- Portable tests cover deterministic reset, clipping, dissolve endpoints, filtered stars, the tunnel's tight bend and retained damage at 960×540 and 960×600. Existing hidden-slot ledger tests cover alternating slots and initialization.
+- Earlier device smoke and motion checks passed (`20260922T152047Z-4c2deae9ae72`, `20260922T152113Z-7e4a673f6a74`). Normal exit, interruption and controlled failure retained the advancing Mini concept (`20260922T142918Z-f2d647547cb2/retention-results.json`). The later tunnel cache requires the documented 60-second concept startup allowance.
+- The user reviewed animation directly on HDMI; captures came from FPGA-latched scanout slots. Profiling is separate from cadence qualification. Reduced presets do not substitute for default qualification.
+- Results above belong to the stated binaries, not a repeated full-suite qualification of every later cleanup build. Before/after portable RGB565 comparisons guard accepted appearance during deletion cleanup.
 
-The original flat tunnel was rejected visually. The first curved tube missed three refreshes and later showed a motion glitch at its tight bend. The current version prepares each nominal frame from actual geometry; both windows pass and the user confirmed that the glitch was fixed on 22 September 2026. See [the diagnosis and research](tunnel-research.md). Preparation takes approximately 32 seconds on the device; Mini concept startup allows 60 seconds for this work before first-frame readiness, while ordinary startup retains its 20-second limit.
-
-See [the iteration guide](visual-concepts.md) for controls and final preset budgets. The current Mini concept stays on HDMI when the host session ends.
+See [the iteration guide](visual-concepts.md) for controls, preparation costs and scope.
 
 ## Measured executable identities
 
-- light-sweep: `8077260ff118b860718f43b291daf09bd72d4f2bb1bc3ae28737c1db0cf6ddd8`
+- light-sweep: `4b54accf48f115c24a4e7eb134624970f7898bb8555e5246309b9b64ea9ea0f7`
 - pixel-dissolve: `b1f0033b281e9a16a9dfae73f02a562bedd585274271b8754fa3caa82f5dc126`
 - starfield: `f34d6e0c445b47dba164dc7e0af40cfc67b642f9aedb98f76725a7631d46b1f9`
 - texture-tunnel: `4360d72127c87ef39846a68d6ef9ab39661caa16a7b61778e1f1d165df0e5b79`
 - raster-waves: `f8fa5c209d63d3b10012a20a41ca084c1cc04f3401cc5776b704d103b6db12b9`
 
-## Accepted light sweep revision
+## Review decisions
 
-The sheen travels at 45 degrees across the entire rounded card, including labels
-and frame, with a 6.25% peak white contribution. Both default measurement windows
-passed on the revision above. The user accepted its live HDMI appearance on
-22 September 2026. Four focused sheen tests and the retained-frame/reset checks
-passed after the whole-card correction. Superseded local light-sweep captures
-and results were removed at the user request; only this implementation is selectable.
-See [research, sources and explicit design choices](light-sweep-research.md).
+Kept: light sheen, pixel dissolve, starfield without comets, corrected curved tunnel,
+and raster waves. Removed: mirror floor, palette aurora, wireframe terrain,
+point-cloud morph, and depth/parallax. Removed effects have no renderer or selection
+controls. The production particle crate and shared card reflections remain owned
+by their existing consumers.
 
-Mirror floor was removed after live user review on 22 September 2026. Its
-standalone renderer and selection controls are no longer included.
-
-Pixel dissolve was accepted as shown during live HDMI review on 22 September
-2026, after mirror floor was removed.
-
-## Starfield sampling revision
-
-Comets were removed at user request. Star positions now retain fractional time
-and perspective coordinates, use compact cubic filtering, fade through depth
-recycling, and add overlapping light before RGB565 conversion. Five focused
-sampling tests, the retained-frame/reset oracle, Clippy, and 17 host tests passed.
-Both unprofiled device windows passed. The user accepted the live HDMI result
-on 22 September 2026. Superseded standalone starfield captures and results were
-removed at the user request. See
-[the diagnosis, research and quantified limits](starfield-research.md).
-
-Palette aurora was removed after live user review on 22 September 2026. Its
-renderer and selection controls are removed; the tunnel retains its RGB565 scaling helper.
-
-Raster waves was accepted as shown during live HDMI review on 22 September 2026.
-
-Wireframe terrain was removed after live user review on 22 September 2026.
-Its renderer and selection controls are no longer included.
-
-Point-cloud morph was removed after live user review on 22 September 2026.
-Its standalone renderer, selection controls and direct particles dependency are removed.
-
-Depth and parallax was removed after live user review and an authoritative
-framebuffer capture on 22 September 2026. Its renderer and selection controls
-are removed. No further effects remain awaiting a visual decision.
+The deletion review removes unused fixture helpers, unnecessary game-list buffers
+from sheen/waves, a no-op effect reset callback, retained tunnel source-texture
+storage and a misleading host cleanup log. Research notes remain alongside the
+accepted implementations. Raw evidence and captures remain ignored.

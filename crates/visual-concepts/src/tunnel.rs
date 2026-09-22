@@ -12,7 +12,6 @@ pub struct Tunnel {
     lh: usize,
     // One geometry-correct palette-index image per nominal display frame.
     frames: Vec<u8>,
-    texture: Vec<u8>,
     palette: [Pixel; 256],
     low: Vec<Pixel>,
 }
@@ -22,21 +21,7 @@ pub fn new(preset: Preset, w: usize, h: usize) -> Result<Tunnel, String> {
     let lh = (h / d).max(1);
     // Thirty-two wall panels with black checker gaps. A few cream bevels break
     // up the cyan/magenta panels without flattening them into a spoke grid.
-    let texture: Vec<u8> = (0..65536)
-        .map(|i| {
-            let u = i % 256;
-            let v = i / 256;
-            if (u / 8 + v / 32) % 2 == 0 {
-                0
-            } else if v % 32 == 0 && u / 8 % 4 == 0 {
-                3
-            } else if u / 8 % 4 < 2 {
-                1
-            } else {
-                2
-            }
-        })
-        .collect();
+    let texture = texture();
     let palette = std::array::from_fn(|i| {
         let shade = (i / 4) as u16;
         let (r, g, b) = match i % 4 {
@@ -68,10 +53,26 @@ pub fn new(preset: Preset, w: usize, h: usize) -> Result<Tunnel, String> {
         lw,
         lh,
         frames,
-        texture,
         palette,
         low: vec![Pixel(0); lw * lh],
     })
+}
+fn texture() -> Vec<u8> {
+    (0..65536)
+        .map(|i| {
+            let u = i % 256;
+            let v = i / 256;
+            if (u / 8 + v / 32) % 2 == 0 {
+                0
+            } else if v % 32 == 0 && u / 8 % 4 == 0 {
+                3
+            } else if u / 8 % 4 < 2 {
+                1
+            } else {
+                2
+            }
+        })
+        .collect()
 }
 impl Effect for Tunnel {
     fn render(&mut self, t: Duration, p: &mut [Pixel]) -> Result<Rect, String> {
@@ -84,7 +85,7 @@ impl Effect for Tunnel {
         Ok(full(self.w, self.h))
     }
     fn storage_bytes(&self) -> usize {
-        self.frames.capacity() + self.low.capacity() * 2 + self.texture.capacity() + 512
+        self.frames.capacity() + self.low.capacity() * 2 + 512
     }
 }
 #[cfg(test)]
@@ -97,12 +98,13 @@ mod tests {
         e.render(Duration::from_nanos(71 * 16_666_667), &mut p)
             .unwrap();
         let exact = mesh::view(e.lw, e.lh, 71.0 * std::f32::consts::TAU / 480.0);
+        let texture = texture();
         let wrong = e
             .low
             .iter()
             .zip(exact)
             .filter(|(pixel, s)| {
-                let material = e.texture[usize::from(s.v >> 8) * 256 + usize::from(s.u >> 8)];
+                let material = texture[usize::from(s.v >> 8) * 256 + usize::from(s.u >> 8)];
                 **pixel != e.palette[usize::from(s.shade) * 4 + usize::from(material)]
             })
             .count();

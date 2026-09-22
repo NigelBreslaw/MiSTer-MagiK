@@ -317,7 +317,6 @@ fn main() -> Result<(), String> {
         } else {
             window.redraw_pending.replace(false)
         };
-        let rendered = should_render;
         if should_render {
             if is_concept && !c.paused && c.advance_next {
                 c.scene
@@ -419,7 +418,7 @@ fn main() -> Result<(), String> {
             }
         }
         drop(c);
-        if !rendered {
+        if !should_render {
             std::thread::sleep(Duration::from_millis(2));
         }
     }
