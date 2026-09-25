@@ -3,9 +3,9 @@
 
 use super::arcade_drawer::{ArcadeDrawerViewCache, arcade_filter_cache_token};
 use super::crt_backdrop_controller::CrtBackdropController;
-#[cfg(test)]
-use super::launcher_confirmation::arm_orientation_confirmation;
-use super::launcher_confirmation::{DisplayConfirmation, OrientationConfirmation};
+use super::launcher_confirmation::{
+    DisplayConfirmation, OrientationConfirmation, display_confirmation_ui_enabled,
+};
 use super::launcher_frame_accounting::{
     FrameAnalyticsCpuStamp, FrameAnalyticsMode, LauncherCustomDrawTrace, LauncherFrameAccounting,
     LauncherFrameCpuTrace, LauncherFrameIdentity, LauncherFrameRenderData,
@@ -5357,14 +5357,14 @@ pub(super) fn run_launcher_loop(
                 nav.confirm_selected = 0;
             }
         }
-        display_confirmation.set_startup_deadline(apply_startup_pending_display(
+        display_confirmation.adopt_startup_pending(
             &mut nav,
             &state,
             display_confirmation_ui_enabled(
                 std::env::var_os("MISTER_MAGIK_DISPLAY_CONFIRM_UI").as_deref(),
             ),
             Instant::now(),
-        ));
+        );
     }
     let mut setup = SetupNav::new();
     let mut input_router = InputRouter::new(launcher_input_focus(
@@ -6392,9 +6392,9 @@ pub(super) fn run_launcher_loop(
         }
         display_confirmation.update_remaining(&mut nav, loop_start);
         if orientation_confirmation.update_remaining(&mut nav, loop_start) {
-            if let Some(previous) = orientation_confirmation.take_previous() {
+            if let Some(previous) = orientation_confirmation.finish_expired(&mut nav) {
                 let from = nav.settings.screen_orientation;
-                let animated = begin_orientation_transition(
+                begin_orientation_transition(
                     &app,
                     window,
                     ui,
@@ -6414,9 +6414,7 @@ pub(super) fn run_launcher_loop(
                     &mut orientation_preparation_trace,
                     OrientationTransitionIntent::Rollback,
                 );
-                let _ = animated;
             }
-            orientation_confirmation.finish_expired(&mut nav);
             orientation_full_redraw_pending = true;
             full_bridge_dirty = true;
         }
@@ -8472,10 +8470,10 @@ pub(super) fn run_launcher_loop(
                                     }
                                     LauncherAction::CancelScreenOrientation => {
                                         if let Some(previous) =
-                                            orientation_confirmation.take_previous()
+                                            orientation_confirmation.finish_cancel(&mut nav)
                                         {
                                             let from = nav.settings.screen_orientation;
-                                            let animated = begin_orientation_transition(
+                                            begin_orientation_transition(
                                                 &app,
                                                 window,
                                                 ui,
@@ -8495,9 +8493,7 @@ pub(super) fn run_launcher_loop(
                                                 &mut orientation_preparation_trace,
                                                 OrientationTransitionIntent::Rollback,
                                             );
-                                            let _ = animated;
                                         }
-                                        orientation_confirmation.finish_cancel(&mut nav);
                                         orientation_full_redraw_pending = true;
                                         full_bridge_dirty = true;
                                     }
@@ -12810,27 +12806,6 @@ pub(super) fn run_launcher_loop(
     }
 }
 
-fn display_confirmation_ui_enabled(value: Option<&std::ffi::OsStr>) -> bool {
-    value != Some(std::ffi::OsStr::new("0"))
-}
-
-fn apply_startup_pending_display(
-    nav: &mut LauncherNav,
-    state: &launcher::DisplayCommandState,
-    confirmation_ui_enabled: bool,
-    now: Instant,
-) -> Option<Instant> {
-    if state.pending.is_none() || !confirmation_ui_enabled {
-        return None;
-    }
-    nav.screen = Screen::Settings;
-    nav.settings_selected = 0;
-    nav.confirm_action = Some(launcher::ConfirmAction::DisplayResolution);
-    nav.confirm_selected = 0;
-    nav.display_confirm_remaining = state.remaining.max(1);
-    Some(now + Duration::from_secs(u64::from(state.remaining.max(1))))
-}
-
 fn should_desire_direct_layer(wants_layer: bool, composition_allows_layer: bool) -> bool {
     wants_layer && composition_allows_layer
 }
@@ -15615,23 +15590,6 @@ mod tests {
 
         assert!(!selected.matches_presented(&before, &stationary));
         assert!(selected.matches_presented(&before, &moved));
-    }
-
-    #[test]
-    fn arming_orientation_confirmation_sets_destination_dialog_state() {
-        let mut nav = LauncherNav::new();
-
-        arm_orientation_confirmation(&mut nav);
-
-        assert_eq!(
-            nav.confirm_action,
-            Some(launcher::ConfirmAction::ScreenOrientation)
-        );
-        assert_eq!(nav.confirm_selected, 0);
-        assert_eq!(
-            nav.orientation_confirm_remaining,
-            launcher::DISPLAY_CONFIRM_SECONDS
-        );
     }
 
     #[test]
@@ -18698,42 +18656,6 @@ mod tests {
         assert!(!should_start_preview_compositor(
             true, true, true, true, false
         ));
-    }
-
-    #[test]
-    fn startup_pending_display_only_enters_confirmation_for_the_ui_route() {
-        let state = launcher::DisplayCommandState {
-            active: "hdmi-1920x1080p60".to_string(),
-            pending: Some("hdmi-1280x720p60".to_string()),
-            remaining: launcher::DISPLAY_CONFIRM_SECONDS,
-            phase: launcher::DisplayTransactionPhase::Provisional,
-            error: None,
-            return_to_settings: false,
-        };
-        let now = Instant::now();
-        let mut ui_nav = LauncherNav::new();
-        let deadline = apply_startup_pending_display(&mut ui_nav, &state, true, now);
-        assert_eq!(ui_nav.screen, Screen::Settings);
-        assert_eq!(
-            ui_nav.confirm_action,
-            Some(launcher::ConfirmAction::DisplayResolution)
-        );
-        assert_eq!(
-            ui_nav.display_confirm_remaining,
-            launcher::DISPLAY_CONFIRM_SECONDS
-        );
-        assert_eq!(
-            deadline,
-            Some(now + Duration::from_secs(u64::from(launcher::DISPLAY_CONFIRM_SECONDS)))
-        );
-
-        let mut headless_nav = LauncherNav::new();
-        assert_eq!(
-            apply_startup_pending_display(&mut headless_nav, &state, false, now),
-            None
-        );
-        assert_eq!(headless_nav.screen, Screen::Home);
-        assert_eq!(headless_nav.confirm_action, None);
     }
 
     #[test]

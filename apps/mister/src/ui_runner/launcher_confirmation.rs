@@ -5,7 +5,7 @@
 //! changes. Persistence runs on short-lived worker threads; the launcher loop
 //! drains their results once per frame and owns any orientation transition.
 
-use crate::launcher::{self, LauncherNav};
+use crate::launcher::{self, LauncherNav, Screen};
 use crate::ui_display::ScreenOrientation;
 use mister_magik_fb::launcher_runtime::settings::ConfirmedOrientationStore;
 use std::sync::mpsc;
@@ -14,10 +14,8 @@ use std::time::{Duration, Instant};
 type DisplayConfirmResult = Result<launcher::DisplayCommandState, String>;
 type OrientationConfirmResult = Result<(), String>;
 
-pub(super) fn arm_orientation_confirmation(nav: &mut LauncherNav) {
-    nav.confirm_action = Some(launcher::ConfirmAction::ScreenOrientation);
-    nav.confirm_selected = 0;
-    nav.orientation_confirm_remaining = launcher::DISPLAY_CONFIRM_SECONDS;
+pub(super) fn display_confirmation_ui_enabled(value: Option<&std::ffi::OsStr>) -> bool {
+    value != Some(std::ffi::OsStr::new("0"))
 }
 
 fn confirm_deadline_after(now: Instant, seconds: u8) -> Instant {
@@ -49,8 +47,27 @@ impl DisplayConfirmation {
     }
 
     /// Adopts a pending resolution reported by Main at launcher start.
-    pub(super) fn set_startup_deadline(&mut self, deadline: Option<Instant>) {
-        self.deadline = deadline;
+    pub(super) fn adopt_startup_pending(
+        &mut self,
+        nav: &mut LauncherNav,
+        state: &launcher::DisplayCommandState,
+        confirmation_ui_enabled: bool,
+        now: Instant,
+    ) {
+        if state.pending.is_none() || !confirmation_ui_enabled {
+            return;
+        }
+        nav.screen = Screen::Settings;
+        nav.settings_selected = 0;
+        self.arm(nav, state.remaining, now);
+    }
+
+    fn arm(&mut self, nav: &mut LauncherNav, remaining: u8, now: Instant) {
+        let remaining = remaining.max(1);
+        nav.confirm_action = Some(launcher::ConfirmAction::DisplayResolution);
+        nav.confirm_selected = 0;
+        nav.display_confirm_remaining = remaining;
+        self.deadline = Some(confirm_deadline_after(now, remaining));
     }
 
     pub(super) fn update_remaining(&self, nav: &mut LauncherNav, now: Instant) {
@@ -84,15 +101,12 @@ impl DisplayConfirmation {
         match result {
             Ok(state) => {
                 if state.phase == launcher::DisplayTransactionPhase::Failed {
-                    nav.confirm_action = Some(launcher::ConfirmAction::DisplayResolution);
-                    nav.confirm_selected = 0;
                     nav.display_error = Some(
                         state
                             .error
                             .unwrap_or_else(|| "display persistence failed".to_string()),
                     );
-                    nav.display_confirm_remaining = state.remaining.max(1);
-                    self.deadline = Some(confirm_deadline_after(now, state.remaining.max(1)));
+                    self.arm(nav, state.remaining, now);
                 } else {
                     nav.confirm_action = None;
                     nav.display_error = None;
@@ -138,8 +152,7 @@ impl OrientationConfirmation {
     }
 
     /// Updates the countdown. Returns true once the countdown has expired on
-    /// the orientation dialog; the caller then rolls back to `take_previous`
-    /// and calls `finish_expired`.
+    /// the orientation dialog; the caller then calls `finish_expired`.
     pub(super) fn update_remaining(&self, nav: &mut LauncherNav, now: Instant) -> bool {
         let Some(deadline) = self.deadline else {
             return false;
@@ -148,14 +161,12 @@ impl OrientationConfirmation {
         now >= deadline && nav.confirm_action == Some(launcher::ConfirmAction::ScreenOrientation)
     }
 
-    pub(super) fn finish_expired(&mut self, nav: &mut LauncherNav) {
+    /// Closes the expired dialog and returns the orientation to roll back to.
+    pub(super) fn finish_expired(&mut self, nav: &mut LauncherNav) -> Option<ScreenOrientation> {
         self.deadline = None;
         nav.confirm_action = None;
         nav.confirm_selected = 0;
         nav.orientation_confirm_remaining = 0;
-    }
-
-    pub(super) fn take_previous(&mut self) -> Option<ScreenOrientation> {
         self.previous.take()
     }
 
@@ -165,7 +176,9 @@ impl OrientationConfirmation {
         self.previous = Some(previous);
         nav.orientation_confirm_busy = false;
         nav.orientation_error = None;
-        arm_orientation_confirmation(nav);
+        nav.confirm_action = Some(launcher::ConfirmAction::ScreenOrientation);
+        nav.confirm_selected = 0;
+        nav.orientation_confirm_remaining = launcher::DISPLAY_CONFIRM_SECONDS;
         self.deadline = None;
     }
 
@@ -196,12 +209,13 @@ impl OrientationConfirmation {
         });
     }
 
-    /// Clears the dialog after a cancel; the caller rolls back first.
-    pub(super) fn finish_cancel(&mut self, nav: &mut LauncherNav) {
+    /// Clears the cancelled dialog and returns the orientation to roll back to.
+    pub(super) fn finish_cancel(&mut self, nav: &mut LauncherNav) -> Option<ScreenOrientation> {
         self.deadline = None;
         nav.orientation_confirm_remaining = 0;
         nav.orientation_confirm_busy = false;
         nav.orientation_error = None;
+        self.previous.take()
     }
 
     pub(super) fn try_recv(&self) -> Option<OrientationConfirmResult> {
@@ -294,6 +308,11 @@ mod tests {
         let mut nav = LauncherNav::default();
         let mut confirmation = OrientationConfirmation::new(test_store());
         confirmation.begin_apply(&mut nav, ScreenOrientation::MonitorClockwise);
+        assert_eq!(
+            nav.confirm_action,
+            Some(launcher::ConfirmAction::ScreenOrientation)
+        );
+        assert_eq!(nav.confirm_selected, 0);
         assert!(!confirmation.update_remaining(&mut nav, now + Duration::from_secs(60)));
 
         confirmation.start_countdown(now);
@@ -309,10 +328,9 @@ mod tests {
         nav.confirm_action = Some(launcher::ConfirmAction::ScreenOrientation);
         assert!(confirmation.update_remaining(&mut nav, expired));
         assert_eq!(
-            confirmation.take_previous(),
+            confirmation.finish_expired(&mut nav),
             Some(ScreenOrientation::MonitorClockwise)
         );
-        confirmation.finish_expired(&mut nav);
         assert_eq!(nav.confirm_action, None);
         assert!(!confirmation.update_remaining(&mut nav, expired));
     }
@@ -329,6 +347,46 @@ mod tests {
         confirmation.apply_result(&mut nav, Ok(()));
         assert_eq!(nav.confirm_action, None);
         assert_eq!(nav.orientation_error, None);
-        assert_eq!(confirmation.take_previous(), None);
+        assert_eq!(confirmation.finish_cancel(&mut nav), None);
+    }
+
+    #[test]
+    fn startup_pending_display_only_enters_confirmation_for_the_ui_route() {
+        let state = launcher::DisplayCommandState {
+            active: "hdmi-1920x1080p60".to_string(),
+            pending: Some("hdmi-1280x720p60".to_string()),
+            remaining: launcher::DISPLAY_CONFIRM_SECONDS,
+            phase: launcher::DisplayTransactionPhase::Provisional,
+            error: None,
+            return_to_settings: false,
+        };
+        let now = Instant::now();
+        let mut ui_nav = LauncherNav::new();
+        let mut confirmation = DisplayConfirmation::new();
+        confirmation.adopt_startup_pending(&mut ui_nav, &state, true, now);
+        assert_eq!(ui_nav.screen, Screen::Settings);
+        assert_eq!(
+            ui_nav.confirm_action,
+            Some(launcher::ConfirmAction::DisplayResolution)
+        );
+        assert_eq!(
+            ui_nav.display_confirm_remaining,
+            launcher::DISPLAY_CONFIRM_SECONDS
+        );
+        assert_eq!(
+            confirmation.deadline,
+            Some(now + Duration::from_secs(u64::from(launcher::DISPLAY_CONFIRM_SECONDS)))
+        );
+
+        let mut headless_nav = LauncherNav::new();
+        let mut headless = DisplayConfirmation::new();
+        headless.adopt_startup_pending(&mut headless_nav, &state, false, now);
+        assert_eq!(headless.deadline, None);
+        assert_eq!(headless_nav.screen, Screen::Home);
+        assert_eq!(headless_nav.confirm_action, None);
+        assert!(!display_confirmation_ui_enabled(Some(
+            std::ffi::OsStr::new("0")
+        )));
+        assert!(display_confirmation_ui_enabled(None));
     }
 }
