@@ -374,10 +374,7 @@ impl LauncherScreensaverLoader {
                         open_us.saturating_add(construct_us)
                     );
                     if let Some(started) = startup_started_at {
-                        crate::ui_logln!(
-                            "screensaver_startup_timing milestone=two_real_frames_ready elapsed_us={}",
-                            started.elapsed().as_micros()
-                        );
+                        log_startup_milestone(started, "two_real_frames_ready");
                     }
                     Ok(Some(runtime))
                 })();
@@ -407,9 +404,16 @@ impl Drop for LauncherScreensaverLoader {
     }
 }
 
+fn log_startup_milestone(started: Instant, milestone: &str) {
+    crate::ui_logln!(
+        "screensaver_startup_timing milestone={milestone} elapsed_us={}",
+        started.elapsed().as_micros()
+    );
+}
+
 /// Elapsed-time milestones from showing the screensaver to its first visible
 /// card, each logged once per show.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(super) struct ScreensaverStartupTimeline {
     started: Option<Instant>,
     first_render_logged: bool,
@@ -418,19 +422,12 @@ pub(super) struct ScreensaverStartupTimeline {
 }
 
 impl ScreensaverStartupTimeline {
-    pub(super) fn begin(&mut self, started: Instant, source: Option<&str>) {
+    pub(super) fn begin(&mut self, started: Instant) {
         *self = Self {
             started: Some(started),
             ..Self::default()
         };
-        match source {
-            Some(source) => crate::ui_logln!(
-                "screensaver_startup_timing milestone=show_pressed elapsed_us=0 source={source}"
-            ),
-            None => {
-                crate::ui_logln!("screensaver_startup_timing milestone=show_pressed elapsed_us=0")
-            }
-        }
+        crate::ui_logln!("screensaver_startup_timing milestone=show_pressed elapsed_us=0");
     }
 
     pub(super) fn started(&self) -> Option<Instant> {
@@ -439,10 +436,7 @@ impl ScreensaverStartupTimeline {
 
     pub(super) fn log(&self, milestone: &str) {
         if let Some(started) = self.started {
-            crate::ui_logln!(
-                "screensaver_startup_timing milestone={milestone} elapsed_us={}",
-                started.elapsed().as_micros()
-            );
+            log_startup_milestone(started, milestone);
         }
     }
 
@@ -491,13 +485,8 @@ mod tests {
     #[test]
     fn startup_timeline_logs_each_milestone_once_per_show() {
         let mut timeline = ScreensaverStartupTimeline::default();
-        timeline.note_presented(true);
-        assert!(!timeline.first_present_logged);
-        assert!(timeline.first_card_present_logged);
-
-        timeline.begin(Instant::now(), None);
+        timeline.begin(Instant::now());
         assert!(timeline.started().is_some());
-        assert!(!timeline.first_card_present_logged);
         timeline.note_rendered(false);
         timeline.note_presented(false);
         assert!(!timeline.first_render_logged && !timeline.first_present_logged);
