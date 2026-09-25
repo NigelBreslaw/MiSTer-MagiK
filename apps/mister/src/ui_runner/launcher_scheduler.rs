@@ -33,20 +33,24 @@ fn system_entry_thread_snapshot() -> SystemEntryThreadSnapshot {
     let cpu = unsafe { libc::sched_getcpu() };
     SystemEntryThreadSnapshot {
         cpu,
-        thread_cpu_us: cpu_time_available
-            .then(|| {
-                u64::try_from(cpu_time.tv_sec)
-                    .unwrap_or(0)
-                    .saturating_mul(1_000_000)
-                    .saturating_add(u64::try_from(cpu_time.tv_nsec).unwrap_or(0) / 1_000)
-            })
-            .unwrap_or(0),
-        minor_page_faults: usage_available
-            .then(|| u64::try_from(usage.ru_minflt).unwrap_or(0))
-            .unwrap_or(0),
-        major_page_faults: usage_available
-            .then(|| u64::try_from(usage.ru_majflt).unwrap_or(0))
-            .unwrap_or(0),
+        thread_cpu_us: if cpu_time_available {
+            u64::try_from(cpu_time.tv_sec)
+                .unwrap_or(0)
+                .saturating_mul(1_000_000)
+                .saturating_add(u64::try_from(cpu_time.tv_nsec).unwrap_or(0) / 1_000)
+        } else {
+            0
+        },
+        minor_page_faults: if usage_available {
+            u64::try_from(usage.ru_minflt).unwrap_or(0)
+        } else {
+            0
+        },
+        major_page_faults: if usage_available {
+            u64::try_from(usage.ru_majflt).unwrap_or(0)
+        } else {
+            0
+        },
     }
 }
 

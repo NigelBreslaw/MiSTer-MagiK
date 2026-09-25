@@ -319,12 +319,16 @@ fn thread_execution_snapshot() -> ThreadExecutionSnapshot {
     let cpu = unsafe { libc::sched_getcpu() };
     ThreadExecutionSnapshot {
         cpu: u64::try_from(cpu).unwrap_or(u64::MAX),
-        voluntary_context_switches: usage_available
-            .then(|| u64::try_from(usage.ru_nvcsw).unwrap_or(0))
-            .unwrap_or(0),
-        involuntary_context_switches: usage_available
-            .then(|| u64::try_from(usage.ru_nivcsw).unwrap_or(0))
-            .unwrap_or(0),
+        voluntary_context_switches: if usage_available {
+            u64::try_from(usage.ru_nvcsw).unwrap_or(0)
+        } else {
+            0
+        },
+        involuntary_context_switches: if usage_available {
+            u64::try_from(usage.ru_nivcsw).unwrap_or(0)
+        } else {
+            0
+        },
     }
 }
 
