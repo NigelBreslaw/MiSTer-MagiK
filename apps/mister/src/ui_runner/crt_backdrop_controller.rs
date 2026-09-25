@@ -308,7 +308,6 @@ impl CrtBackdropController {
         let prepared = PreparedCrtBackdrop {
             pixels: Arc::clone(&entry.pixels),
             row_repeats: Arc::clone(&entry.row_repeats),
-            is_plain: false,
         };
         self.cache.push_back(entry);
         Some(prepared)
@@ -360,7 +359,7 @@ impl CrtBackdropController {
                 self.request_prepare(source, layout);
                 if let Some(prepared) = self.prepared_target(source, layout) {
                     self.state
-                        .retarget_prepared(Some(prepared), now, instant_transition);
+                        .retarget_prepared(prepared, now, instant_transition);
                     backdrop_state_changed = true;
                 }
             } else {

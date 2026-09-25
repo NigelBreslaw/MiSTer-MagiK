@@ -26,7 +26,6 @@ use std::time::{Duration, Instant};
 pub(crate) struct PreparedCrtBackdrop {
     pub(crate) pixels: std::sync::Arc<[Rgb565Pixel]>,
     pub(crate) row_repeats: std::sync::Arc<[bool]>,
-    pub(crate) is_plain: bool,
 }
 
 /// Immutable decoded screenshot data handed from the preview cache to the
@@ -79,7 +78,10 @@ pub struct CrtBackdropState {
     source_row_repeats: Vec<bool>,
     target_row_repeats: std::sync::Arc<[bool]>,
     retarget_row_repeats: Vec<bool>,
-    target_is_plain: bool,
+    // Shared plain targets: clearing the backdrop reuses these instead of
+    // allocating and copying a whole frame on the UI thread.
+    plain_target: std::sync::Arc<[Rgb565Pixel]>,
+    plain_target_row_repeats: std::sync::Arc<[bool]>,
     retarget_is_plain: bool,
     transition_started: Option<Duration>,
     pending_prepare_us: u64,
@@ -117,21 +119,26 @@ impl CrtBackdropState {
     ) -> Self {
         let len = width.saturating_mul(physical_height);
         let logical_len = width.saturating_mul(height);
+        let plain_target: std::sync::Arc<[Rgb565Pixel]> =
+            std::sync::Arc::from(vec![CRT_BACKDROP_BACKGROUND; len]);
+        let plain_target_row_repeats: std::sync::Arc<[bool]> =
+            std::sync::Arc::from(plain_row_repeats(physical_height));
         Self {
             width,
             height,
             physical_height,
             reference_height,
             source: vec![CRT_BACKDROP_BACKGROUND; len],
-            target: std::sync::Arc::from(vec![CRT_BACKDROP_BACKGROUND; len]),
+            target: std::sync::Arc::clone(&plain_target),
             retarget: vec![CRT_BACKDROP_BACKGROUND; len],
             logical_retarget: vec![CRT_BACKDROP_BACKGROUND; logical_len],
             x_map: vec![0; width],
             y_map: vec![0; physical_height],
             source_row_repeats: plain_row_repeats(physical_height),
-            target_row_repeats: std::sync::Arc::from(plain_row_repeats(physical_height)),
+            target_row_repeats: std::sync::Arc::clone(&plain_target_row_repeats),
             retarget_row_repeats: plain_row_repeats(physical_height),
-            target_is_plain: true,
+            plain_target,
+            plain_target_row_repeats,
             retarget_is_plain: true,
             transition_started: None,
             pending_prepare_us: 0,
@@ -163,6 +170,10 @@ impl CrtBackdropState {
         }
     }
 
+    fn target_is_plain(&self) -> bool {
+        std::sync::Arc::ptr_eq(&self.target, &self.plain_target)
+    }
+
     pub fn is_transitioning(&self) -> bool {
         self.transition_started.is_some()
     }
@@ -172,21 +183,20 @@ impl CrtBackdropState {
     }
 
     pub fn clear_plain(&mut self) {
-        if self.transition_started.is_none() && self.target_is_plain && self.retarget_is_plain {
+        if self.transition_started.is_none() && self.target_is_plain() && self.retarget_is_plain {
             self.pending_prepare_us = 0;
             self.pending_prepare_pixels = 0;
             return;
         }
+        // `source` is only read during a fade, and every fade first copies
+        // `retarget` into it, so a cut to plain leaves it untouched.
         let prepare_start = Instant::now();
-        self.source.fill(CRT_BACKDROP_BACKGROUND);
-        self.target = std::sync::Arc::from(vec![CRT_BACKDROP_BACKGROUND; self.target.len()]);
+        self.target = std::sync::Arc::clone(&self.plain_target);
+        self.target_row_repeats = std::sync::Arc::clone(&self.plain_target_row_repeats);
         self.retarget.fill(CRT_BACKDROP_BACKGROUND);
-        self.logical_retarget.fill(CRT_BACKDROP_BACKGROUND);
-        self.source_row_repeats.fill(true);
-        self.target_row_repeats = std::sync::Arc::from(vec![true; self.physical_height]);
         self.retarget_row_repeats.fill(true);
-        self.target_is_plain = true;
         self.retarget_is_plain = true;
+        self.expand_to_logical();
         self.transition_started = None;
         self.pending_prepare_us = duration_us(prepare_start.elapsed());
         self.pending_prepare_pixels = self.retarget.len().min(u32::MAX as usize) as u32;
@@ -201,25 +211,25 @@ impl CrtBackdropState {
         let prepare_start = Instant::now();
         let mut prepared = vec![CRT_BACKDROP_BACKGROUND; self.target.len()];
         let mut prepared_rows = vec![true; self.physical_height];
-        self.target_is_plain = match frame {
-            Some(frame)
-                if scale_dimmed_center_crop_mapped_with_logical_height(
-                    &mut prepared,
-                    self.width,
-                    self.physical_height,
-                    self.reference_height,
-                    frame,
-                    &mut self.x_map,
-                    &mut self.y_map,
-                    &mut prepared_rows,
-                ) =>
-            {
-                false
-            }
-            _ => true,
-        };
-        self.target = std::sync::Arc::from(prepared);
-        self.target_row_repeats = std::sync::Arc::from(prepared_rows);
+        let scaled = frame.is_some_and(|frame| {
+            scale_dimmed_center_crop_mapped_with_logical_height(
+                &mut prepared,
+                self.width,
+                self.physical_height,
+                self.reference_height,
+                frame,
+                &mut self.x_map,
+                &mut self.y_map,
+                &mut prepared_rows,
+            )
+        });
+        if scaled {
+            self.target = std::sync::Arc::from(prepared);
+            self.target_row_repeats = std::sync::Arc::from(prepared_rows);
+        } else {
+            self.target = std::sync::Arc::clone(&self.plain_target);
+            self.target_row_repeats = std::sync::Arc::clone(&self.plain_target_row_repeats);
+        }
         self.pending_prepare_us = duration_us(prepare_start.elapsed());
         self.pending_prepare_pixels = self.target.len().min(u32::MAX as usize) as u32;
         self.transition_started = (self.source.as_slice() != self.target.as_ref()).then_some(now);
@@ -227,7 +237,7 @@ impl CrtBackdropState {
             self.retarget.copy_from_slice(&self.target);
             self.retarget_row_repeats
                 .copy_from_slice(&self.target_row_repeats);
-            self.retarget_is_plain = self.target_is_plain;
+            self.retarget_is_plain = self.target_is_plain();
             self.expand_to_logical();
         }
     }
@@ -238,7 +248,7 @@ impl CrtBackdropState {
     #[cfg(feature = "ui")]
     pub(crate) fn retarget_prepared(
         &mut self,
-        prepared: Option<PreparedCrtBackdrop>,
+        prepared: PreparedCrtBackdrop,
         now: Duration,
         instant: bool,
     ) {
@@ -248,23 +258,8 @@ impl CrtBackdropState {
             self.source_row_repeats
                 .copy_from_slice(&self.retarget_row_repeats);
         }
-        let Some(prepared) = prepared else {
-            self.target = std::sync::Arc::from(vec![CRT_BACKDROP_BACKGROUND; self.target.len()]);
-            self.target_row_repeats = std::sync::Arc::from(vec![true; self.physical_height]);
-            self.target_is_plain = true;
-            self.pending_prepare_us = 0;
-            self.pending_prepare_pixels = 0;
-            if instant {
-                self.snap_to_target();
-                return;
-            }
-            self.transition_started =
-                (self.source.as_slice() != self.target.as_ref()).then_some(now);
-            return;
-        };
         self.target = prepared.pixels;
         self.target_row_repeats = prepared.row_repeats;
-        self.target_is_plain = prepared.is_plain;
         self.pending_prepare_us = 0;
         self.pending_prepare_pixels = 0;
         if instant {
@@ -276,7 +271,7 @@ impl CrtBackdropState {
             self.retarget.copy_from_slice(&self.target);
             self.retarget_row_repeats
                 .copy_from_slice(&self.target_row_repeats);
-            self.retarget_is_plain = self.target_is_plain;
+            self.retarget_is_plain = self.target_is_plain();
             self.expand_to_logical();
         }
     }
@@ -318,19 +313,20 @@ impl CrtBackdropState {
                 &mut y_map,
             )
         });
-        let (pixels, row_repeats, is_plain) = prepared.map_or_else(
+        (self.target, self.target_row_repeats) = prepared.map_or_else(
             || {
                 (
-                    vec![CRT_BACKDROP_BACKGROUND; self.target.len()],
-                    vec![true; self.physical_height],
-                    true,
+                    std::sync::Arc::clone(&self.plain_target),
+                    std::sync::Arc::clone(&self.plain_target_row_repeats),
                 )
             },
-            |(pixels, row_repeats)| (pixels, row_repeats, false),
+            |(pixels, row_repeats)| {
+                (
+                    std::sync::Arc::from(pixels),
+                    std::sync::Arc::from(row_repeats),
+                )
+            },
         );
-        self.target = std::sync::Arc::from(pixels);
-        self.target_row_repeats = std::sync::Arc::from(row_repeats);
-        self.target_is_plain = is_plain;
         self.pending_prepare_us = duration_us(prepare_start.elapsed());
         self.pending_prepare_pixels = self.target.len().min(u32::MAX as usize) as u32;
         self.transition_started = (self.source != self.target.as_ref()).then_some(now);
@@ -338,7 +334,7 @@ impl CrtBackdropState {
             self.retarget.copy_from_slice(&self.target);
             self.retarget_row_repeats
                 .copy_from_slice(&self.target_row_repeats);
-            self.retarget_is_plain = self.target_is_plain;
+            self.retarget_is_plain = self.target_is_plain();
             self.expand_to_logical();
         }
     }
@@ -533,7 +529,7 @@ impl CrtBackdropState {
         trace.active = alpha_bucket < 32;
         if !trace.active {
             self.transition_started = None;
-            self.retarget_is_plain = self.target_is_plain;
+            self.retarget_is_plain = self.target_is_plain();
         } else {
             self.retarget_is_plain = false;
         }
@@ -627,7 +623,7 @@ impl CrtBackdropState {
         self.retarget.copy_from_slice(&self.target);
         self.retarget_row_repeats
             .copy_from_slice(&self.target_row_repeats);
-        self.retarget_is_plain = self.target_is_plain;
+        self.retarget_is_plain = self.target_is_plain();
         self.transition_started = None;
         self.expand_to_logical();
     }
@@ -1703,7 +1699,7 @@ mod tests {
                 for compose_at in [Duration::from_millis(65), CRT_BACKDROP_FADE_DURATION] {
                     let mut backdrop = CrtBackdropState::for_display(&display).unwrap();
                     backdrop.retarget_prepared(
-                        Some(PreparedCrtBackdrop {
+                        PreparedCrtBackdrop {
                             pixels: std::sync::Arc::from(vec![
                                 Rgb565Pixel(0xffff);
                                 layout.output_layout().len()
@@ -1714,8 +1710,7 @@ mod tests {
                                     .output_layout()
                                     .physical_height()
                             ]),
-                            is_plain: false,
-                        }),
+                        },
                         Duration::ZERO,
                         false,
                     );
@@ -2074,6 +2069,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn clearing_an_image_reuses_the_shared_plain_target() {
+        let white = [Rgb565Pixel(0xffff); 4];
+        let mut backdrop = CrtBackdropState::new(2, 2);
+        assert!(std::sync::Arc::ptr_eq(
+            &backdrop.target,
+            &backdrop.plain_target
+        ));
+
+        backdrop.retarget(Some(frame(&white, 2, 2)), Duration::ZERO);
+        backdrop.compose(CRT_BACKDROP_FADE_DURATION);
+        assert!(!std::sync::Arc::ptr_eq(
+            &backdrop.target,
+            &backdrop.plain_target
+        ));
+
+        backdrop.clear_plain();
+        assert!(std::sync::Arc::ptr_eq(
+            &backdrop.target,
+            &backdrop.plain_target
+        ));
+        assert!(std::sync::Arc::ptr_eq(
+            &backdrop.target_row_repeats,
+            &backdrop.plain_target_row_repeats
+        ));
+        assert!(!backdrop.is_transitioning());
+        assert!(
+            backdrop
+                .pixels()
+                .iter()
+                .all(|pixel| *pixel == CRT_BACKDROP_BACKGROUND)
+        );
+    }
+
     #[cfg(feature = "ui")]
     #[test]
     fn prepared_targets_can_cut_directly_to_an_image_or_blank() {
@@ -2083,11 +2112,10 @@ mod tests {
         backdrop.source.fill(unused_source);
         backdrop.retarget.fill(Rgb565Pixel(0x001f));
         backdrop.retarget_prepared(
-            Some(PreparedCrtBackdrop {
+            PreparedCrtBackdrop {
                 pixels: std::sync::Arc::from(vec![target; 4]),
                 row_repeats: std::sync::Arc::from(vec![false; 2]),
-                is_plain: false,
-            }),
+            },
             Duration::ZERO,
             true,
         );
@@ -2097,7 +2125,7 @@ mod tests {
         assert!(backdrop.source.iter().all(|pixel| *pixel == unused_source));
         assert!(!backdrop.compose(Duration::ZERO).active);
 
-        backdrop.retarget_prepared(None, Duration::from_millis(1), true);
+        backdrop.clear_plain();
 
         assert!(!backdrop.is_transitioning());
         assert!(
