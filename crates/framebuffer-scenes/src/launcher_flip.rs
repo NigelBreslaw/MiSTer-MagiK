@@ -297,6 +297,20 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
     // Rotate about the card centre. A longer camera distance keeps the
     // growing face inside the existing carousel clip without a door hinge.
     let (sine, cosine) = sin_cos(pose.angle);
+    // A paper-thin plane disappears exactly side-on. Keep a two-pixel
+    // projected spine so the card remains visible through the face swap.
+    let minimum_cosine = (2 * ONE * ONE / pose.width).max(1);
+    let projected_cosine = if cosine.abs() < minimum_cosine {
+        if cosine < 0 {
+            -minimum_cosine
+        } else {
+            minimum_cosine
+        }
+    } else {
+        cosine
+    };
+    let projected_face_width = pose.width * cosine.abs() / ONE;
+    let spine_weight = ((20 * ONE - projected_face_width) * 256 / (16 * ONE)).clamp(0, 256) as u32;
     let light = diffuse_light(cosine);
     let half = pose.width / 2;
     let centre_x = pose.x + half;
@@ -331,7 +345,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
         let _profile = crate::launcher_profile::span("flip.geometry-filter");
         for (x, column) in columns.iter_mut().enumerate().take(right).skip(left) {
             let offset = x as i64 * ONE + ONE / 2 - centre_x;
-            let denominator = camera * cosine / ONE - offset * sine / ONE;
+            let denominator = camera * projected_cosine / ONE - offset * sine / ONE;
             if denominator.abs() < 4 {
                 continue;
             }
@@ -353,7 +367,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
             }
             let sxq = (local + half) * face.width as i64 * ONE / pose.width - ONE / 2;
             let next_offset = offset + ONE;
-            let next_denominator = camera * cosine / ONE - next_offset * sine / ONE;
+            let next_denominator = camera * projected_cosine / ONE - next_offset * sine / ONE;
             let next_local = if flat {
                 next_offset
             } else if next_denominator.abs() >= 4 {
@@ -435,6 +449,21 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                         ..(x - left) * COLUMN_HEIGHT + face.height],
                     &scratch.blend[start..face.height],
                     weight,
+                );
+            }
+            if spine_weight > 0 {
+                // The visible two-pixel side uses the existing coloured rim
+                // rather than an average of the dark face artwork.
+                face.texture.prepare_column_rows(
+                    face.texture.filter(4 * ONE as i32, ONE as u32),
+                    start,
+                    &mut scratch.blend[start..face.height],
+                );
+                crate::launcher_texture::mix_rgba(
+                    &mut texels[(x - left) * COLUMN_HEIGHT + start
+                        ..(x - left) * COLUMN_HEIGHT + face.height],
+                    &scratch.blend[start..face.height],
+                    spine_weight,
                 );
             }
             crate::launcher_texture::shade_rgba(
@@ -956,6 +985,46 @@ mod tests {
         let (a, b) = sin_cos(-ONE / 4);
         let (c, d) = sin_cos(ONE - ONE / 4);
         assert_eq!((a, b), (-c, -d));
+    }
+
+    #[test]
+    fn edge_on_card_retains_a_two_pixel_spine() {
+        let face = Face::new(
+            (0..180 * 252)
+                .map(|index| Rgb565Pixel(if index % 180 <= 6 { 0xf800 } else { 0x001f }))
+                .collect(),
+            180,
+            252,
+        );
+        for angle in [-ONE / 2, ONE / 2] {
+            let pose = Pose {
+                x: 500 * ONE,
+                top: 140 * ONE,
+                width: 180 * ONE,
+                height: 252 * ONE,
+                angle,
+                clip: (296, 934),
+                body_clip: (296, 934),
+            };
+            let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
+            draw(
+                &mut pixels,
+                &face,
+                pose,
+                &mut Scratch::new(),
+                |pixel, _, _| pixel,
+                false,
+                None,
+            );
+            let visible = (500..680).filter(|&x| pixels[266 * 960 + x].0 != 0).count();
+            assert_eq!(visible, 2, "edge-on angle {angle}");
+            for pixel in pixels[266 * 960 + 500..266 * 960 + 680]
+                .iter()
+                .filter(|pixel| pixel.0 != 0)
+            {
+                assert!(pixel.0 >> 11 > pixel.0 & 31, "spine must use coloured rim");
+            }
+        }
     }
 
     #[test]

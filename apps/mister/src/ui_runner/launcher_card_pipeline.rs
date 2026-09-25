@@ -487,7 +487,6 @@ mod tests {
                     direction: Some(BrowseDirection::Right),
                     progress_millis,
                     duration_millis: 180,
-                    outgoing: None,
                 },
                 timestamp_us,
                 generation: sequence,
@@ -521,14 +520,9 @@ mod tests {
                 req.render.frame.phase = BrowsePhase::Settled;
                 req.render.frame.target = 0;
             } else if index % 2 == 0 {
+                req.render.frame.selected = 1;
+                req.render.frame.target = 0;
                 req.render.frame.direction = Some(BrowseDirection::Left);
-                req.render.frame.outgoing = Some(
-                    mister_magik_framebuffer_scenes::launcher_navigation::OutgoingFlip {
-                        card: 1,
-                        direction: BrowseDirection::Right,
-                        progress_millis: progress,
-                    },
-                );
             }
             pipeline.submit(req);
             let frame = wait_for(&pipeline, req.render.generation);

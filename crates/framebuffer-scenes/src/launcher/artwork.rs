@@ -15,7 +15,6 @@ pub(super) fn face(
     card: &PreparedCard,
     width: usize,
     detail: bool,
-    saturation: u16,
     typography: Option<LauncherTypography<'_>>,
 ) -> crate::launcher_flip::Face {
     let height = card_height(width);
@@ -29,16 +28,8 @@ pub(super) fn face(
     } else {
         mix_colour(rgb(12, 22, 30), card.colour, 44)
     };
-    let trim = if detail {
-        card.colour
-    } else {
-        desaturate(mix_colour(BACKGROUND, card.colour, 92), saturation)
-    };
-    let ink = if detail && is_light_card(base) {
-        DARK_TEXT
-    } else {
-        CREAM
-    };
+    let trim = card.colour;
+    let ink = CREAM;
     for y in 0..height {
         for x in 0..width {
             if !rounded_contains(x, y, width, height) {
@@ -210,7 +201,7 @@ fn framed_sample(
         mix_colour(trim, CREAM, 76)
     } else if !inside_inset(x, y, width, height, 6) {
         // Discrete inks create the original luminous shoulder without an
-        // RGB565 gradient. Compact faces supply a desaturated trim colour.
+        // RGB565 gradient. Compact faces retain the card's trim hue.
         mix_colour(
             source,
             trim,
@@ -225,18 +216,6 @@ fn framed_sample(
     } else {
         source
     }
-}
-
-fn monochrome(colour: u16) -> u16 {
-    let red = u32::from((colour >> 11) & 31) * 255 / 31;
-    let green = u32::from((colour >> 5) & 63) * 255 / 63;
-    let blue = u32::from(colour & 31) * 255 / 31;
-    let luminance = ((red * 54 + green * 183 + blue * 19) >> 8) as u16;
-    rgb(luminance, luminance, luminance)
-}
-
-fn desaturate(colour: u16, saturation: u16) -> u16 {
-    mix_colour(monochrome(colour), colour, usize::from(saturation.min(256)))
 }
 
 #[cfg(test)]
@@ -410,17 +389,13 @@ mod tests {
     fn faces_have_no_ordinal_dots_or_top_dash() {
         let card = test_card(0x2c92);
         for detail in [false, true] {
-            let face = face(&card, 180, detail, 256, None);
+            let face = face(&card, 180, detail, None);
             let base = if detail {
                 card.colour
             } else {
                 mix_colour(rgb(12, 22, 30), card.colour, 44)
             };
-            let trim = if detail {
-                card.colour
-            } else {
-                desaturate(mix_colour(BACKGROUND, card.colour, 92), 256)
-            };
+            let trim = card.colour;
             for (xs, ys) in [(12..30, 14..22), (70..112, 230..235), (80..100, 0..8)] {
                 for y in ys {
                     for x in xs.clone() {
@@ -435,22 +410,37 @@ mod tests {
     }
 
     #[test]
-    fn compact_artwork_stays_full_colour_while_its_keyline_is_desaturated() {
+    fn compact_artwork_and_keyline_keep_their_colours() {
         let source = rgb(220, 34, 78);
         let mut card = test_card(rgb(32, 112, 238));
         card.artwork = Some(vec![Rgb565Pixel(source); 180 * 252]);
-        let compact = face(&card, 180, false, 160, None);
-        let detail = face(&card, 180, true, 256, None);
+        let compact = face(&card, 180, false, None);
+        let detail = face(&card, 180, true, None);
         let centre = 100 * 180 + 90;
         let rim = 12 * 180;
-        let tinted_trim = mix_colour(BACKGROUND, card.colour, 92);
-        let compact_trim = desaturate(tinted_trim, 160);
-
         assert_eq!(compact.pixels[centre].0, source);
         assert_eq!(detail.pixels[centre].0, source);
-        assert_eq!(compact.pixels[rim].0, mix_colour(compact_trim, CREAM, 76));
+        assert_eq!(compact.pixels[rim].0, mix_colour(card.colour, CREAM, 76));
         assert_eq!(detail.pixels[rim].0, mix_colour(card.colour, CREAM, 76));
-        assert_ne!(compact.pixels[rim], detail.pixels[rim]);
+        assert_eq!(compact.pixels[rim], detail.pixels[rim]);
+    }
+
+    #[test]
+    fn settings_heading_stays_light_across_compact_and_detail_faces() {
+        let card = PreparedCard {
+            id: LauncherCardId::Settings,
+            name: "SETTINGS".into(),
+            games: None,
+            colour: 0x8b7f,
+            name_mask: text_mask("SETTINGS"),
+            games_mask: Vec::new(),
+            artwork: None,
+        };
+        let heading_pixel = 183 * 180 + 21;
+        for detail in [false, true] {
+            let face = face(&card, 180, detail, None);
+            assert_eq!(face.pixels[heading_pixel].0, CREAM);
+        }
     }
 
     #[test]

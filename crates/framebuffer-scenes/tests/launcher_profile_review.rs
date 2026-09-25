@@ -30,7 +30,6 @@ fn explicit_profiling_preserves_pixels_and_drains_at_window_boundaries() {
             direction: Some(BrowseDirection::Right),
             progress_millis: progress,
             duration_millis: 460,
-            outgoing: None,
         })
         .collect();
     let reference: Vec<_> = frames
