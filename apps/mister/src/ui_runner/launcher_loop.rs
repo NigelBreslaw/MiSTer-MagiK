@@ -16,7 +16,7 @@ use super::launcher_pacing::{
     LauncherFramePacingInput, LauncherFramePacingPolicy, LauncherPacingTrace,
     LauncherPhaseAlignment,
 };
-use super::launcher_screensaver::ScreensaverRenderTrace;
+use super::launcher_screensaver::{ScreensaverRenderTrace, ScreensaverStartupTimeline};
 use super::launcher_worker_intents::reset_media_progress_bridge;
 use super::launcher_worker_intents::{
     LauncherWorkerUiIntent, apply_launcher_worker_ui_intent, catalog_scan_message,
@@ -4731,6 +4731,7 @@ struct ScreensaverControl {
     restore_full_frame: bool,
     preview_fade_started: Option<Instant>,
     reactivation_suppressed: bool,
+    timeline: ScreensaverStartupTimeline,
 }
 
 impl ScreensaverControl {
@@ -4744,6 +4745,7 @@ impl ScreensaverControl {
             restore_full_frame: false,
             preview_fade_started: None,
             reactivation_suppressed: false,
+            timeline: ScreensaverStartupTimeline::default(),
         }
     }
 
@@ -4817,6 +4819,7 @@ impl ScreensaverControl {
         self.last_activity = now;
         self.preview_fade_started = Some(now);
         self.reactivation_suppressed = false;
+        self.timeline.begin(now);
     }
 
     fn is_preview(&self) -> bool {
@@ -5087,10 +5090,6 @@ pub(super) fn run_launcher_loop(
     let mut screensaver_active_cards = 0usize;
     let mut screensaver_render_sequence = 0u64;
     let mut screensaver_starvation_count = 0u64;
-    let mut screensaver_show_started: Option<Instant> = None;
-    let mut screensaver_first_render_logged = false;
-    let mut screensaver_first_present_logged = false;
-    let mut screensaver_first_card_present_logged = false;
     let present_backend =
         LauncherPresentBackend::from_config(launcher_config.presentation_backend());
     present_backend.log_if_experimental();
@@ -7370,7 +7369,6 @@ pub(super) fn run_launcher_loop(
             latch_v5_qualification.stress_class() == LatchV5StressClass::Particles,
         );
         let restore_before = screensaver.restore_full_frame;
-        let preview_was_active = screensaver.is_preview();
         screensaver.update(
             Instant::now(),
             nav.settings.screensaver_enabled,
@@ -7382,16 +7380,6 @@ pub(super) fn run_launcher_loop(
                 frame_accounting.frame_analytics_mode(),
             ),
         );
-        if !preview_was_active && screensaver.is_preview() {
-            let started = Instant::now();
-            screensaver_show_started = Some(started);
-            screensaver_first_render_logged = false;
-            screensaver_first_present_logged = false;
-            screensaver_first_card_present_logged = false;
-            crate::ui_logln!(
-                "screensaver_startup_timing milestone=show_pressed elapsed_us=0 source=start-preview"
-            );
-        }
         if !restore_before && screensaver.restore_full_frame {
             request_launcher_redraw!();
         }
@@ -8496,13 +8484,6 @@ pub(super) fn run_launcher_loop(
                                     LauncherAction::PreviewScreensaver => {
                                         if !screensaver.preview_active {
                                             screensaver.preview(frame_now);
-                                            screensaver_show_started = Some(frame_now);
-                                            screensaver_first_render_logged = false;
-                                            screensaver_first_present_logged = false;
-                                            screensaver_first_card_present_logged = false;
-                                            crate::ui_logln!(
-                                                "screensaver_startup_timing milestone=show_pressed elapsed_us=0"
-                                            );
                                         }
                                         request_launcher_redraw!();
                                         continue 'launcher;
@@ -9749,15 +9730,10 @@ pub(super) fn run_launcher_loop(
         }
         if screensaver_pipeline_start_allowed(screensaver.active, screensaver_pipeline.is_some()) {
             if screensaver_loader.is_none() {
-                if let Some(started) = screensaver_show_started {
-                    crate::ui_logln!(
-                        "screensaver_startup_timing milestone=loader_started elapsed_us={}",
-                        started.elapsed().as_micros()
-                    );
-                }
+                screensaver.timeline.log("loader_started");
                 screensaver_loader = Some(LauncherScreensaverLoader::start(
                     layout.output_layout(),
-                    screensaver_show_started,
+                    screensaver.timeline.started(),
                     launcher_config
                         .catalog_paths()
                         .media_asset_dir()
@@ -9767,12 +9743,7 @@ pub(super) fn run_launcher_loop(
             }
             let loader = screensaver_loader.as_ref().expect("created above");
             if let Some(ready) = loader.try_ready() {
-                if let Some(started) = screensaver_show_started {
-                    crate::ui_logln!(
-                        "screensaver_startup_timing milestone=renderer_ready elapsed_us={}",
-                        started.elapsed().as_micros()
-                    );
-                }
+                screensaver.timeline.log("renderer_ready");
                 screensaver_pipeline = Some(ScreensaverRenderAhead::start(ready));
                 screensaver_render_sequence = 0;
                 screensaver_starvation_count = 0;
@@ -10451,15 +10422,9 @@ pub(super) fn run_launcher_loop(
                 format!("games={} systems={}", catalog.len(), catalog.systems.len()),
             );
         }
-        if accepted_screensaver_frame && !screensaver_first_render_logged {
-            screensaver_first_render_logged = true;
-            if let Some(started) = screensaver_show_started {
-                crate::ui_logln!(
-                    "screensaver_startup_timing milestone=first_saver_render elapsed_us={}",
-                    started.elapsed().as_micros()
-                );
-            }
-        }
+        screensaver
+            .timeline
+            .note_rendered(accepted_screensaver_frame);
         let cpu_t2 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t2 = Instant::now();
         let cpu_custom_draw_start = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
@@ -11640,24 +11605,9 @@ pub(super) fn run_launcher_loop(
             // Profile only completed screensaver output. Starting when Preview is pressed
             // includes loader/render-worker startup frames that have no presentation evidence.
             screensaver_cpu_profile.begin_screensaver(frames.saturating_add(1));
-            if screensaver_first_render_logged && !screensaver_first_present_logged {
-                screensaver_first_present_logged = true;
-                if let Some(started) = screensaver_show_started {
-                    crate::ui_logln!(
-                        "screensaver_startup_timing milestone=first_saver_present elapsed_us={}",
-                        started.elapsed().as_micros()
-                    );
-                }
-            }
-            if !screensaver_first_card_present_logged && accepted_screensaver_frame {
-                screensaver_first_card_present_logged = true;
-                if let Some(started) = screensaver_show_started {
-                    crate::ui_logln!(
-                        "screensaver_startup_timing milestone=first_card_visible elapsed_us={}",
-                        started.elapsed().as_micros()
-                    );
-                }
-            }
+            screensaver
+                .timeline
+                .note_presented(accepted_screensaver_frame);
         }
         if visible_frame_presented && startup_intro.is_none() {
             if !first_launcher_frame_logged
