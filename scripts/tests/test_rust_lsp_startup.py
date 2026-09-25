@@ -39,6 +39,14 @@ class RustLspStartupTests(unittest.TestCase):
         self.repo.mkdir()
         self.git(self.repo, "init", "-q")
         self.git(self.repo, "submodule", "add", str(self.source), "private/lspi")
+        self.git(
+            self.repo,
+            "config",
+            "-f",
+            ".gitmodules",
+            "submodule.private/lspi.update",
+            "none",
+        )
         (self.repo / "scripts").mkdir()
         shutil.copy2(LAUNCHER, self.repo / "scripts/rust-lsp")
         cargo = self.repo / "scripts/cargo"
@@ -104,6 +112,18 @@ class RustLspStartupTests(unittest.TestCase):
         self.assertEqual((linked / "private/lspi/runtime").read_text(), "pinned")
         self.assertIn(str(linked / "private/lspi/Cargo.toml"), result.stdout)
         self.assertIn(str(linked / ".codex/lspi.toml"), result.stdout)
+
+    def test_recursive_clone_skips_opt_in_runtime(self):
+        clone = self.root / "dependabot"
+        result = subprocess.run(
+            ["git", "clone", "--recurse-submodules", str(self.repo), str(clone)],
+            check=False,
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((clone / "private/lspi/.git").exists())
 
 
 if __name__ == "__main__":
