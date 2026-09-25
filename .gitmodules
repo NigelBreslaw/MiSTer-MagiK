@@ -20,3 +20,4 @@
 [submodule "private/magik-assets"]
 	path = private/magik-assets
 	url = git@github.com:NigelBreslaw/mister-magik-private-assets.git
+	update = none

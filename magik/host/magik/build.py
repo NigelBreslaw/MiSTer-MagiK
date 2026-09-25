@@ -87,6 +87,7 @@ def _ensure_arm_package(
                 "submodule",
                 "update",
                 "--init",
+                "--checkout",
                 "--",
                 "private/magik-assets",
             ],
