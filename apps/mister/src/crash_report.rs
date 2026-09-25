@@ -5,7 +5,7 @@
 
 use serde_json::{Value, json};
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -199,30 +199,13 @@ fn read_text_value(path: &str) -> Value {
 }
 
 fn tail_text_value(path: &str, n: usize) -> Value {
-    let Ok(bytes) = read_tail_bytes(path, MAX_TAIL_BYTES) else {
+    let Ok(bytes) = crate::runtime_status::read_tail_lines(Path::new(path), MAX_TAIL_BYTES) else {
         return Value::Null;
     };
     let text = String::from_utf8_lossy(&bytes);
     let lines: Vec<_> = text.lines().collect();
     let start = lines.len().saturating_sub(n);
     Value::String(lines[start..].join("\n"))
-}
-
-/// Reads at most `limit` trailing bytes, dropping a partial leading line.
-fn read_tail_bytes(path: &str, limit: u64) -> io::Result<Vec<u8>> {
-    let mut file = fs::File::open(path)?;
-    let start = file.metadata()?.len().saturating_sub(limit);
-    file.seek(SeekFrom::Start(start))?;
-    let mut bytes = Vec::new();
-    file.take(limit).read_to_end(&mut bytes)?;
-    if start > 0 {
-        let first_line = bytes
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map_or(bytes.len(), |newline| newline + 1);
-        bytes.drain(..first_line);
-    }
-    Ok(bytes)
 }
 
 fn backtrace_enabled() -> bool {
@@ -342,26 +325,6 @@ mod tests {
                 "crash_report.latest.after_temp_sync",
                 "crash_report.latest.after_rename",
             ]
-        );
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn tail_text_value_reads_only_whole_trailing_lines() {
-        let dir = unique_temp_dir("mister-magik-crash-bounded-tail");
-        let path = dir.join("events.jsonl");
-        let text = (0..10_000)
-            .map(|index| format!("row-{index}\n"))
-            .collect::<String>();
-        fs::write(&path, text).expect("write events");
-
-        let tail = read_tail_bytes(path.to_str().expect("utf8"), 64).expect("read tail");
-        assert!(tail.len() <= 64);
-        assert!(tail.starts_with(b"row-"));
-        assert!(tail.ends_with(b"row-9999\n"));
-        assert_eq!(
-            tail_text_value(path.to_str().expect("utf8"), 2),
-            Value::String("row-9998\nrow-9999".to_string())
         );
         let _ = fs::remove_dir_all(dir);
     }

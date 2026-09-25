@@ -612,18 +612,13 @@ fn append_event_row_bounded(path: &Path, row: &Value, max_bytes: u64, retain_byt
     let mut line = row.to_string();
     line.push('\n');
     let open = || OpenOptions::new().create(true).append(true).open(path);
-    let mut file = match open() {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            if let Some(parent) = path.parent() {
-                let _ = fs::create_dir_all(parent);
-            }
-            match open() {
-                Ok(file) => file,
-                Err(_) => return,
-            }
+    let Ok(mut file) = open().or_else(|_| {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
         }
-        Err(_) => return,
+        open()
+    }) else {
+        return;
     };
     if file.write_all(line.as_bytes()).is_err() {
         return;
@@ -636,27 +631,30 @@ fn append_event_row_bounded(path: &Path, row: &Value, max_bytes: u64, retain_byt
     }
 }
 
+/// Reads at most `limit` trailing bytes of a text file, dropping a partial
+/// leading line so every returned line is whole.
+pub fn read_tail_lines(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
+    let mut file = File::open(path)?;
+    let start = file.metadata()?.len().saturating_sub(limit);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    file.take(limit).read_to_end(&mut bytes)?;
+    if start > 0 {
+        let first_line = bytes
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(bytes.len(), |newline| newline + 1);
+        bytes.drain(..first_line);
+    }
+    Ok(bytes)
+}
+
 /// Keeps the newest whole rows. A row appended by another process between the
 /// tail read and the rename can be lost; that is rare and bounded to one row.
 fn compact_event_log(path: &Path, retain_bytes: u64) -> io::Result<()> {
-    let mut file = File::open(path)?;
-    let length = file.metadata()?.len();
-    let start = length.saturating_sub(retain_bytes);
-    file.seek(SeekFrom::Start(start))?;
-    let mut tail = Vec::new();
-    file.take(retain_bytes).read_to_end(&mut tail)?;
-    let first_row = if start == 0 {
-        0
-    } else {
-        tail.iter()
-            .position(|byte| *byte == b'\n')
-            .map_or(tail.len(), |newline| newline + 1)
-    };
-    let mut temporary = path.as_os_str().to_owned();
-    temporary.push(format!(".{}.tmp", std::process::id()));
-    let temporary = PathBuf::from(temporary);
-    let result =
-        fs::write(&temporary, &tail[first_row..]).and_then(|()| fs::rename(&temporary, path));
+    let tail = read_tail_lines(path, retain_bytes)?;
+    let temporary = PathBuf::from(format!("{}.{}.tmp", path.display(), std::process::id()));
+    let result = fs::write(&temporary, tail).and_then(|()| fs::rename(&temporary, path));
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
@@ -2334,6 +2332,23 @@ mod tests {
         let text = fs::read_to_string(&path).expect("event directory should be created");
         let _ = fs::remove_dir_all(root);
         assert_eq!(text, "{\"event\":\"first\"}\n");
+    }
+
+    #[test]
+    fn tail_read_is_bounded_and_keeps_only_whole_lines() {
+        let path = std::env::temp_dir().join(format!("{}.log", unique_name("runtime-tail")));
+        let text = (0..1_000)
+            .map(|index| format!("row-{index}\n"))
+            .collect::<String>();
+        fs::write(&path, &text).unwrap();
+
+        let tail = read_tail_lines(&path, 64).unwrap();
+        let whole = read_tail_lines(&path, 1 << 20).unwrap();
+        let _ = fs::remove_file(&path);
+        assert!(tail.len() <= 64);
+        assert!(tail.starts_with(b"row-"));
+        assert!(tail.ends_with(b"row-999\n"));
+        assert_eq!(whole, text.as_bytes());
     }
 
     #[test]
