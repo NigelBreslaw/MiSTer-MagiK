@@ -11,7 +11,7 @@ dependencies = ["lz4>=4.3"]
 [dependency-groups]
 # Keep the quality tool versions aligned with gb-slint so local and CI
 # diagnostics are reproducible.
-dev = ["ruff==0.16.8", "ty==0.0.81", "pytest>=8"]
+dev = ["ruff==0.16.8", "ty==0.0.83", "pytest>=8"]
 
 [tool.uv]
 package = false
