@@ -4206,8 +4206,8 @@ impl LauncherNav {
             self.clear_arcade_search_results(system_id);
             return;
         }
-        let force_persisted_search =
-            crate::process_config::lab_env_var("MISTER_BENCH_CATALOG_SEARCH_FORCE_PERSISTED")
+        let force_persisted_search = crate::process_config::LAB_HOOKS_ENABLED
+            && std::env::var_os("MISTER_BENCH_CATALOG_SEARCH_FORCE_PERSISTED")
                 .is_some_and(|value| value != "0" && value != "off" && value != "false");
         let Some(results) = (!force_persisted_search)
             .then(|| catalog.try_search_game_indexes(system_id, &self.arcade_search.query))

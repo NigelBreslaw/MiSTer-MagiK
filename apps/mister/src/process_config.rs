@@ -60,6 +60,8 @@ const SYSTEM_ENTRY_TRACE: &str = "MISTER_SYSTEM_ENTRY_TRACE";
 const ARCADE_ENTRY_TRACE: &str = "MISTER_ARCADE_ENTRY_TRACE";
 const SYSTEM_ENTRY_PROFILE_OUT: &str = "MISTER_SYSTEM_ENTRY_PROFILE_OUT";
 const INPUT_INTEGRITY_STALL_MS: &str = "MISTER_INPUT_INTEGRITY_STALL_MS";
+const INPUT_LATENCY_LAB_ARM: &str = "MISTER_INPUT_LATENCY_LAB_ARM";
+const INPUT_LATENCY_LAB_SESSION: &str = "MISTER_INPUT_LATENCY_LAB_SESSION";
 const INPUT_INTEGRITY_TRACE: &str = "MISTER_INPUT_INTEGRITY_TRACE";
 #[cfg(any(feature = "bench-tools", test))]
 const LAUNCHER_INPUT_SCRIPT: &str = "MISTER_LAUNCHER_INPUT_SCRIPT";
@@ -89,23 +91,8 @@ const MODAL_TEST_PATH_INPUTS: &[&str] = &[
 /// Benchmarks, qualification runs, launcher test drivers and fault injection
 /// are development tooling. Release builds ignore their switches, so none of
 /// them can be armed on a shipped launcher.
-pub const LAB_HOOKS_ENABLED: bool =
-    cfg!(any(feature = "tooling", feature = "ui-device-tests", test));
-
-/// Reads a lab switch from the process environment; always absent in release.
-pub fn lab_env_var(name: &str) -> Option<String> {
-    LAB_HOOKS_ENABLED
-        .then(|| std::env::var(name).ok())
-        .flatten()
-}
-
-/// A lab on/off switch, accepting the same spellings as other launcher flags.
-pub fn lab_env_flag(name: &str) -> bool {
-    matches!(
-        lab_env_var(name).as_deref(),
-        Some("1" | "on" | "true" | "yes")
-    )
-}
+/// `tooling` (dev delivery) enables `ui-device-tests`.
+pub const LAB_HOOKS_ENABLED: bool = cfg!(any(feature = "ui-device-tests", test));
 
 #[derive(Clone, Default)]
 pub struct EnvironmentSnapshot {
@@ -592,14 +579,35 @@ pub struct InputProcessConfig {
     integrity_trace: bool,
     integrity_stall_ms: Option<u64>,
     scripted: ScriptedInputConfig,
+    latency_lab: InputLatencyLabConfig,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct InputLatencyLabConfig {
+    arm: Option<String>,
+    session: Option<String>,
+}
+
+impl InputLatencyLabConfig {
+    pub fn arm(&self) -> Option<&str> {
+        self.arm.as_deref()
+    }
+
+    pub fn session(&self) -> Option<&str> {
+        self.session.as_deref()
+    }
 }
 
 impl InputProcessConfig {
-    fn capture(environment: &EnvironmentSnapshot) -> Self {
+    /// The integrity trace only observes; the stall, scripted input and the
+    /// latency lab alter input handling and come from the lab environment.
+    fn capture(environment: &EnvironmentSnapshot, lab_environment: &EnvironmentSnapshot) -> Self {
         #[cfg(feature = "bench-tools")]
         let scripted = ScriptedInputConfig {
-            script: environment.get(LAUNCHER_INPUT_SCRIPT).map(str::to_owned),
-            wait_frames: environment
+            script: lab_environment
+                .get(LAUNCHER_INPUT_SCRIPT)
+                .map(str::to_owned),
+            wait_frames: lab_environment
                 .get(LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES)
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(60)
@@ -609,11 +617,19 @@ impl InputProcessConfig {
         let scripted = ScriptedInputConfig::default();
         Self {
             integrity_trace: environment_flag(environment, INPUT_INTEGRITY_TRACE),
-            integrity_stall_ms: environment
+            integrity_stall_ms: lab_environment
                 .get(INPUT_INTEGRITY_STALL_MS)
                 .and_then(|value| value.parse::<u64>().ok())
                 .filter(|value| (1..=1_000).contains(value)),
             scripted,
+            latency_lab: InputLatencyLabConfig {
+                arm: lab_environment
+                    .get(INPUT_LATENCY_LAB_ARM)
+                    .map(str::to_owned),
+                session: lab_environment
+                    .get(INPUT_LATENCY_LAB_SESSION)
+                    .map(str::to_owned),
+            },
         }
     }
 
@@ -627,6 +643,10 @@ impl InputProcessConfig {
 
     pub fn scripted(&self) -> &ScriptedInputConfig {
         &self.scripted
+    }
+
+    pub fn latency_lab(&self) -> &InputLatencyLabConfig {
+        &self.latency_lab
     }
 }
 
@@ -895,7 +915,7 @@ impl ProcessConfig {
                 environment.get(name)
             }),
             screensaver: ScreensaverProcessConfig::capture(environment),
-            input: InputProcessConfig::capture(lab_environment),
+            input: InputProcessConfig::capture(environment, lab_environment),
             #[cfg(feature = "ui")]
             display_pacing: DisplayPacingConfig::capture(environment),
             #[cfg(feature = "ui")]
@@ -1254,7 +1274,9 @@ mod tests {
     #[test]
     fn release_capture_ignores_every_lab_switch() {
         let environment = EnvironmentSnapshot::from_values([
+            (INPUT_INTEGRITY_TRACE, "on"),
             (INPUT_INTEGRITY_STALL_MS, "50"),
+            (INPUT_LATENCY_LAB_ARM, "baseline"),
             (TEST_CATALOG_RECOVERY_DIALOG, "retry"),
             ("MISTER_LAUNCHER_BENCH_SCENARIO", "arcade-scroll"),
             ("MISTER_LAUNCHER_START_SCREEN", "arcade"),
@@ -1285,18 +1307,24 @@ mod tests {
 
         let lab_launcher = lab.launcher().unwrap();
         assert_eq!(lab_launcher.input().integrity_stall_ms(), Some(50));
+        assert_eq!(lab_launcher.input().latency_lab().arm(), Some("baseline"));
         assert!(lab_launcher.tests().catalog_recovery_dialog().is_some());
         assert!(lab.fault().is_some());
 
         let release_launcher = release.launcher().unwrap();
+        assert!(release_launcher.input().integrity_trace());
         assert_eq!(release_launcher.input().integrity_stall_ms(), None);
+        assert_eq!(
+            release_launcher.input().latency_lab(),
+            &InputLatencyLabConfig::default()
+        );
         assert_eq!(release_launcher.tests(), &LauncherTestConfig::default());
         assert!(release.fault().is_none());
         #[cfg(feature = "ui")]
         {
-            let unset = format!("{:?}", LauncherBenchmarkConfig::default());
-            assert_ne!(format!("{:?}", lab_launcher.benchmark()), unset);
-            assert_eq!(format!("{:?}", release_launcher.benchmark()), unset);
+            let unset = LauncherBenchmarkConfig::default();
+            assert_ne!(lab_launcher.benchmark(), &unset);
+            assert_eq!(release_launcher.benchmark(), &unset);
             assert_ne!(lab_launcher.qualification(), QualificationConfig::default());
             assert_eq!(
                 release_launcher.qualification(),
