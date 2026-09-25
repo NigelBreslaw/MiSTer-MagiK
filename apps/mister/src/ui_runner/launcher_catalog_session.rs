@@ -28,6 +28,8 @@ pub(super) struct CatalogSessionEvent {
     pub(super) detail: String,
 }
 
+// Long-lived state or a low-rate message; boxing would only add an allocation.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum CatalogSessionEffect {
     StartupEvent(CatalogSessionEvent),
     UseCatalog {
@@ -574,6 +576,7 @@ impl LauncherCatalogSession {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_ready(
         &mut self,
         catalog_ready: bool,

@@ -81,6 +81,7 @@ impl ArcadeVisualLayer {
         Some(rect)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn compose_over_backdrop(
         &mut self,
         target: &mut UiFrameTarget,

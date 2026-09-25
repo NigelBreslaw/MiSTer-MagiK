@@ -702,6 +702,7 @@ impl GuiProfilingController {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn observe_route_presentation(
         &mut self,
         frame: u64,
@@ -1103,6 +1104,7 @@ impl GuiProfilingController {
         record["completion_poll_cpu_us"] = json!(timing.completion_poll_cpu_us);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn record_latch(
         &mut self,
         frame: u64,

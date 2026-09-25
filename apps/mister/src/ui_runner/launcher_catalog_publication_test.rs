@@ -31,10 +31,8 @@ impl CatalogPublicationTestDriver {
         let session = config.catalog_publication_session();
         let armed = ready_gate.is_some()
             && first_frame_release_gate.is_some()
-            && session
-                .as_deref()
-                .is_some_and(|path| Path::new(path).exists());
-        if let Some(path) = session.as_deref().filter(|_| armed) {
+            && session.is_some_and(|path| Path::new(path).exists());
+        if let Some(path) = session.filter(|_| armed) {
             let _ = std::fs::remove_file(path);
         }
         if armed {

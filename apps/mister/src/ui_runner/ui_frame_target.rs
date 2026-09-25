@@ -243,6 +243,7 @@ impl RawPreviewPresent {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn blit_raw_preview_if_needed(
     target: &mut UiFrameTarget,
     ui: &UiDisplay,

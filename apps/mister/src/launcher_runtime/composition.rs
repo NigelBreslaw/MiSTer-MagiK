@@ -157,7 +157,7 @@ impl DirectLayerObligations {
     const ARCADE_AND_PREVIEW: u8 = Self::ARCADE | Self::PREVIEW;
 
     pub const fn new(arcade: bool, preview: bool) -> Self {
-        Self((arcade as u8) * Self::ARCADE | (preview as u8) * Self::PREVIEW)
+        Self(((arcade as u8) * Self::ARCADE) | ((preview as u8) * Self::PREVIEW))
     }
 
     const fn without(self, other: Self) -> Self {
@@ -252,6 +252,12 @@ pub struct UiCompositionController {
     retirement: Option<DirectLayerRetirement>,
     last_retirement_generation: Option<u64>,
     last_retirement_receipt: Option<DirectLayerPresentationReceipt>,
+}
+
+impl Default for UiCompositionController {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl UiCompositionController {
@@ -553,7 +559,7 @@ mod tests {
     fn receipt(sequence: u16, carrier: DirectLayerCarrier) -> DirectLayerPresentationReceipt {
         DirectLayerPresentationReceipt {
             sequence,
-            slot: if sequence % 2 == 0 { 2 } else { 1 },
+            slot: if sequence.is_multiple_of(2) { 2 } else { 1 },
             route_epoch: sequence,
             carrier,
         }

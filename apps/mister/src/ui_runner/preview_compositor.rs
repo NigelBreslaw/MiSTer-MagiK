@@ -380,7 +380,11 @@ fn compose_request(
             key: request.key,
             rect,
             pixels: std::mem::take(physical),
-            fade: report_cut.then_some(cut_trace).unwrap_or_default(),
+            fade: if report_cut {
+                cut_trace
+            } else {
+                Default::default()
+            },
             age_us: request
                 .submitted_at
                 .elapsed()

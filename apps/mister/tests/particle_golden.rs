@@ -14,7 +14,7 @@ use std::time::Duration;
 
 const WIDTH: usize = 960;
 const HEIGHT: usize = 540;
-const MAGIK_SEED: u64 = 0x4d61_6769_4b;
+const MAGIK_SEED: u64 = 0x4d_61_67_69_4b;
 
 fn frame_signature(words: impl IntoIterator<Item = u16>) -> u64 {
     words.into_iter().fold(0xcbf2_9ce4_8422_2325, |hash, word| {

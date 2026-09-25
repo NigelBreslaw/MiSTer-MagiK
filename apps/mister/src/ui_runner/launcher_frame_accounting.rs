@@ -1944,6 +1944,7 @@ impl LauncherFrameAccounting {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn push_frame_analytics_sample(
         &mut self,
         frame: &LauncherPresentedFrame,
@@ -2231,6 +2232,7 @@ impl LauncherFrameAccounting {
             });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn push_slow_frame_sample(
         &mut self,
         frame: &LauncherPresentedFrame,

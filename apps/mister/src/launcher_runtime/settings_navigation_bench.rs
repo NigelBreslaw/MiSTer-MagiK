@@ -332,9 +332,7 @@ impl SettingsNavigationBenchmark {
         if !self.enabled || self.failed() {
             return None;
         }
-        let Some(mut active) = self.active.take() else {
-            return None;
-        };
+        let mut active = self.active.take()?;
         if screen != active.leg.destination
             || active.rendered_endpoint_frame == 0
             || frame < active.rendered_endpoint_frame

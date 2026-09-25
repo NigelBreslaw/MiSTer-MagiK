@@ -484,7 +484,6 @@ fn copy_published_arcade_with_mirror(
             compared_pixels: if mirror_valid { dense_pixels as u64 } else { 0 },
             mirror_refresh_pixels: dense_pixels as u64,
             changed_rows: rows,
-            ..PhysicalLayerCopyTrace::default()
         },
     ))
 }
@@ -1203,6 +1202,7 @@ fn frozen_present_result() -> LauncherPresentResult {
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 fn latch_present_result(
     stats: FpgaVblankLatchHiddenPresentStats,
     source_evidence: Option<SourceFrameEvidence>,
@@ -1572,11 +1572,13 @@ mod tests {
             LauncherPresenterState::Frozen { failure } => Some(failure.clone()),
             LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Latch(_) => None,
         };
-        let mut recovery = LatchRecoveryController::default();
-        recovery.first_failure = failure.clone();
-        recovery.latest_failure = failure.clone();
-        recovery.failure_history = failure.into_iter().collect();
-        recovery.state = "output-frozen";
+        let recovery = LatchRecoveryController {
+            first_failure: failure.clone(),
+            latest_failure: failure.clone(),
+            failure_history: failure.into_iter().collect(),
+            state: "output-frozen",
+            ..LatchRecoveryController::default()
+        };
         LauncherPresenter { state, recovery }
     }
 

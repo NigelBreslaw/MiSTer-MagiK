@@ -139,10 +139,8 @@ pub fn run() {
         format!("args={} {}", args.join(" "), build_identity.log_detail()),
     );
 
-    if args.len() >= 2 {
-        if command_args::is_launchable_arg(&args[1]) {
-            reject_direct_launch_arg(&args[1]);
-        }
+    if args.len() >= 2 && command_args::is_launchable_arg(&args[1]) {
+        reject_direct_launch_arg(&args[1]);
     }
     if command_args::needs_explicit_command(&args) {
         crate::ui_errln!("missing command (use: {})", command_args::command_usage());

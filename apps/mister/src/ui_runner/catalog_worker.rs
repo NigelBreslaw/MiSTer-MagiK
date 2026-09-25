@@ -119,6 +119,9 @@ impl RegistrySeedTransport {
     }
 }
 
+// statvfs field widths differ between macOS, 64-bit Linux and 32-bit ARM, so
+// a cast that is a no-op on one target is required on another.
+#[allow(clippy::unnecessary_cast)]
 fn filesystem_available_bytes(path: &str) -> Option<u64> {
     let path = CString::new(path).ok()?;
     let mut stats = std::mem::MaybeUninit::<libc::statvfs>::zeroed();
@@ -363,6 +366,7 @@ struct CatalogWorkerWireEvent {
     collection_checksum: String,
 }
 
+#[derive(Default)]
 struct CatalogWorkerProtocolState {
     run_id: String,
     sequence: u64,
@@ -385,24 +389,6 @@ struct CatalogWorkerCollectionAssembly {
     items: Vec<String>,
     generation: u64,
     all_published_systems: bool,
-}
-
-impl Default for CatalogWorkerProtocolState {
-    fn default() -> Self {
-        Self {
-            run_id: String::new(),
-            sequence: 0,
-            heartbeat_phase: String::new(),
-            progress_epoch: 0,
-            work_units: 0,
-            plan: None,
-            manifest_rebuilt: None,
-            manifest_removed: None,
-            manifest_rebuilt_items: None,
-            manifest_removed_items: None,
-            manifest_generation: None,
-        }
-    }
 }
 
 fn catalog_worker_collection_checksum(items: &[String]) -> String {
@@ -789,7 +775,7 @@ fn write_catalog_worker_snapshot_at(
         let _ = std::fs::remove_file(&path);
         return Err(format!("sync catalog worker snapshot root: {error}"));
     }
-    Ok((path.to_string_lossy().into_owned(), snapshot_sha256(&bytes)))
+    Ok((path.to_string_lossy().into_owned(), snapshot_sha256(bytes)))
 }
 
 fn load_arcade_system_snapshot_at(
@@ -1152,6 +1138,8 @@ fn blank_worker_wire_event(kind: &str) -> CatalogWorkerWireEvent {
     }
 }
 
+// Long-lived state or a low-rate message; boxing would only add an allocation.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum CatalogWorkerReceiver {
     Direct(mpsc::Receiver<CatalogWorkerMessage>),
     Process {
@@ -1249,7 +1237,7 @@ fn prepare_catalog_worker_protocol_output() -> Result<Box<dyn Write + Send>, Str
             ));
         }
         let output = unsafe { std::fs::File::from_raw_fd(protocol_fd) };
-        return Ok(Box::new(output));
+        Ok(Box::new(output))
     }
     #[cfg(not(unix))]
     {
@@ -2613,6 +2601,8 @@ fn catalog_worker_plan(
     }
 }
 
+// Long-lived state or a low-rate message; boxing would only add an allocation.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum CatalogWorkerMessage {
     Progress {
         phase: String,
@@ -2992,8 +2982,8 @@ mod tests {
         let events = worker_wire_events(&message).unwrap();
         assert!(events.len() > 1);
         assert!(events.iter().all(|event| {
-            serde_json::to_vec(event).unwrap().len() + CATALOG_WORKER_PROTOCOL_PREFIX.len() + 1
-                <= MAX_CATALOG_WORKER_PROTOCOL_LINE_BYTES as usize
+            serde_json::to_vec(event).unwrap().len() + CATALOG_WORKER_PROTOCOL_PREFIX.len()
+                < MAX_CATALOG_WORKER_PROTOCOL_LINE_BYTES as usize
         }));
 
         let mut state = CatalogWorkerProtocolState::default();

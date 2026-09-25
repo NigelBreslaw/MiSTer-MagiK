@@ -471,6 +471,7 @@ impl ConsoleFont {
         self.gradient_glyphs.get(&key)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_text_clipped(
         &mut self,
         dst: &mut [Pixel],
@@ -498,6 +499,7 @@ impl ConsoleFont {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_text_clipped_gradient(
         &mut self,
         dst: &mut [Pixel],

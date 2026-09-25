@@ -128,6 +128,8 @@ struct SharedPipeline {
     wake: Condvar,
 }
 
+// Long-lived state or a low-rate message; boxing would only add an allocation.
+#[allow(clippy::large_enum_variant)]
 enum TileRequest {
     Render(LauncherFrameRequest, PreparedLauncherFrame),
     Stop,

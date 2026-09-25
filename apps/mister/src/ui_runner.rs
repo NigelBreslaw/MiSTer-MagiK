@@ -2,14 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Shared vsync render loop and Slint bench scene dispatch.
-#![cfg_attr(
-    any(
-        test,
-        mister_ui_scope_launcher,
-        not(all(target_os = "linux", target_arch = "arm"))
-    ),
-    allow(dead_code)
-)]
 
 use crate::fpga::Fpga;
 use crate::vt::VtGraphicsGuard;
@@ -105,9 +97,7 @@ fn launcher_startup_orientation(
 ) -> ScreenOrientation {
     if let Some(orientation) = benchmark_override {
         orientation
-    } else if orientation_benchmark {
-        ScreenOrientation::Normal
-    } else if settings_navigation_benchmark {
+    } else if orientation_benchmark || settings_navigation_benchmark {
         ScreenOrientation::Normal
     } else {
         persisted
@@ -159,7 +149,6 @@ mod launcher_present;
 mod launcher_readiness;
 #[allow(dead_code)]
 mod launcher_scheduler;
-#[allow(dead_code)]
 mod launcher_screensaver;
 #[allow(dead_code)]
 mod launcher_screensaver_pipeline;

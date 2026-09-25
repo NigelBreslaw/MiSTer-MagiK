@@ -500,6 +500,7 @@ impl NavigationTransitionRuntime {
         Ok(started)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn begin_physical(
         &mut self,
         edge: NavigationTransitionEdge,
@@ -558,6 +559,7 @@ impl NavigationTransitionRuntime {
         Ok(started)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn begin_settings_page_physical(
         &mut self,
         route: NavigationTransitionRoute,

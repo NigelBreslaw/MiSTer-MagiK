@@ -768,7 +768,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let copied_rows = if self.render_height == self.height {
             plan.restore_rects
                 .iter()
-                .map(|rect| rect.rows() as u32)
+                .map(|rect| rect.rows())
                 .sum::<u32>()
         } else {
             let vertical_transform =

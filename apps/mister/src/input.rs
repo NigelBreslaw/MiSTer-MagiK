@@ -9,7 +9,7 @@ use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::sync::{
     OnceLock,
-    mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel},
+    mpsc::{Receiver, SyncSender, TrySendError, sync_channel},
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -111,10 +111,7 @@ impl DeviceDiscovery {
     }
 
     fn completed(&self) -> impl Iterator<Item = DeviceScan> + '_ {
-        std::iter::from_fn(|| match self.result_rx.try_recv() {
-            Ok(scan) => Some(scan),
-            Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
-        })
+        std::iter::from_fn(|| self.result_rx.try_recv().ok())
     }
 }
 
@@ -190,6 +187,10 @@ impl PadPool {
 
     pub fn len(&self) -> usize {
         self.pads.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pads.is_empty()
     }
 
     pub fn state(&self) -> &PadState {
@@ -508,9 +509,12 @@ impl PadPool {
             .as_ref()
             .map(|discovery| discovery.completed().collect::<Vec<_>>())
             .unwrap_or_default();
-        scans.into_iter().fold(false, |changed, scan| {
-            self.apply_device_scan(scan) || changed
-        })
+        // Apply every completed scan, not only up to the first change.
+        let mut changed = false;
+        for scan in scans {
+            changed |= self.apply_device_scan(scan);
+        }
+        changed
     }
 
     fn apply_device_scan(&mut self, scan: DeviceScan) -> bool {
@@ -1466,7 +1470,8 @@ pub fn calibrate(path: Option<&str>) -> io::Result<()> {
         "calibrate on {} — press each control when prompted (10s timeout each)",
         reader.path
     );
-    let prompts: &[(&str, fn(&PadState) -> bool)] = &[
+    type CalibrationPrompt = (&'static str, fn(&PadState) -> bool);
+    let prompts: &[CalibrationPrompt] = &[
         ("A", |s| s.btn_a),
         ("B", |s| s.btn_b),
         ("X", |s| s.btn_x),
@@ -1549,6 +1554,7 @@ mod tests {
     use super::*;
     use crate::input_state::{JS_EVENT_AXIS, JS_EVENT_BUTTON};
     use std::io::Cursor;
+    use std::sync::mpsc::TryRecvError;
 
     fn js_event_bytes(event_type: u8, number: u8, value: i16) -> [u8; JS_EVENT_SIZE] {
         let mut buf = [0u8; JS_EVENT_SIZE];

@@ -1041,8 +1041,8 @@ mod tests {
         assert_eq!(trace.entries[0].kind, "particle-intro");
         assert_eq!(trace.entries[0].frame, 4);
         assert_eq!(trace.entries[2].frame, 7);
-        assert_eq!(trace.entries[2].catalog_ready, true);
-        assert_eq!(trace.entries[2].input_enabled, true);
+        assert!(trace.entries[2].catalog_ready);
+        assert!(trace.entries[2].input_enabled);
         assert_eq!(trace.first_launcher_frame, Some(7));
         assert_eq!(trace.first_input_enabled_frame, Some(8));
         assert!(!trace.truncated);

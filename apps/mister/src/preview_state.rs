@@ -688,6 +688,12 @@ fn raw_frame_stride_len_is_valid(len: usize, stride_pixels: usize, source_h: usi
         .is_some_and(|needed| len >= needed)
 }
 
+impl Default for PreviewState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PreviewState {
     pub fn new() -> Self {
         Self::new_with_trace_start(Instant::now())
@@ -1270,10 +1276,10 @@ fn preview_window_keys(games: ArcadeGameView<'_>, selected: usize, radius: usize
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for idx in preview_window_indices(games.len(), selected, radius) {
-        if let Some(key) = games.get(idx).and_then(game_preview_key) {
-            if seen.insert(key.clone()) {
-                out.push(key);
-            }
+        if let Some(key) = games.get(idx).and_then(game_preview_key)
+            && seen.insert(key.clone())
+        {
+            out.push(key);
         }
     }
     out
@@ -1372,7 +1378,8 @@ fn first_available_preview_candidate<'a>(
     cache: &mut PreviewImageCache,
 ) -> Option<PreviewCandidate<'a>> {
     let selected_game = games.get(selected)?;
-    if let Some(preview_key) = game_preview_key(selected_game) {
+    {
+        let preview_key = game_preview_key(selected_game)?;
         if !cache.contains_failed(&preview_key) {
             return Some(PreviewCandidate {
                 index: selected,
@@ -1380,8 +1387,6 @@ fn first_available_preview_candidate<'a>(
                 preview_key,
             });
         }
-    } else {
-        return None;
     }
 
     preview_window_indices(games.len(), selected, radius)
@@ -1539,12 +1544,12 @@ fn next_ready_result_index(
         return None;
     }
 
-    if !selected_processed {
-        if let Some(idx) = backlog.iter().position(|result| {
+    if !selected_processed
+        && let Some(idx) = backlog.iter().position(|result| {
             is_current_selected_result(result, current_generation, selected_preview_key)
-        }) {
-            return Some(idx);
-        }
+        })
+    {
+        return Some(idx);
     }
 
     let result = backlog.front()?;
@@ -1610,29 +1615,11 @@ pub fn request_arcade_preview_window(
         if preview.window_shape != Some(window_shape) {
             refresh_preview_window(games, selected, prefetch_radius, preview);
         }
-        if let Some(path) = preview.selected_preview_key.clone() {
-            if preview.visible_preview_key != path {
-                if let Some(image) = preview.cache.get(&path) {
-                    if defer_selected_application {
-                        request_preview_prefetches_if_allowed(
-                            games,
-                            selected,
-                            preview,
-                            scroll_active,
-                            turbo_active,
-                        );
-                        return false;
-                    }
-                    if let Some(candidate) = candidate.as_ref() {
-                        bridge.set_preview_title(candidate.game.title.as_ref().into());
-                    }
-                    preview.current_generation = 0;
-                    preview.has_visible_preview = true;
-                    preview.begin_raw_transition_to(&path, preview_transition_mode(turbo_active));
-                    preview.visible_preview_key = path;
-                    preview.visible_preview_load_source = "decoded_cache";
-                    preview.raw_dirty = true;
-                    apply_preview_image_bridge(bridge, &image);
+        if let Some(path) = preview.selected_preview_key.clone()
+            && preview.visible_preview_key != path
+        {
+            if let Some(image) = preview.cache.get(&path) {
+                if defer_selected_application {
                     request_preview_prefetches_if_allowed(
                         games,
                         selected,
@@ -1640,39 +1627,57 @@ pub fn request_arcade_preview_window(
                         scroll_active,
                         turbo_active,
                     );
-                    trace_preview_coverage_sample(
-                        preview,
-                        selected,
-                        selected_game,
-                        candidate.as_ref(),
-                        turbo_active,
-                    );
-                    return true;
+                    return false;
                 }
-                if preview.cache.contains_failed(&path) {
-                    crate::media_diagnostics::record(
-                        "preview_failed_cache_suppressed",
-                        format!("generation={} key={path}", preview.current_generation),
-                        false,
-                    );
-                    preview.select_empty_preview(preview_transition_mode(turbo_active));
-                    bridge.set_preview_state(ViewPreviewState::Empty);
-                    request_preview_prefetches_if_allowed(
-                        games,
-                        selected,
-                        preview,
-                        scroll_active,
-                        turbo_active,
-                    );
-                    trace_preview_coverage_sample(
-                        preview,
-                        selected,
-                        selected_game,
-                        candidate.as_ref(),
-                        turbo_active,
-                    );
-                    return true;
+                if let Some(candidate) = candidate.as_ref() {
+                    bridge.set_preview_title(candidate.game.title.as_ref().into());
                 }
+                preview.current_generation = 0;
+                preview.has_visible_preview = true;
+                preview.begin_raw_transition_to(&path, preview_transition_mode(turbo_active));
+                preview.visible_preview_key = path;
+                preview.visible_preview_load_source = "decoded_cache";
+                preview.raw_dirty = true;
+                apply_preview_image_bridge(bridge, &image);
+                request_preview_prefetches_if_allowed(
+                    games,
+                    selected,
+                    preview,
+                    scroll_active,
+                    turbo_active,
+                );
+                trace_preview_coverage_sample(
+                    preview,
+                    selected,
+                    selected_game,
+                    candidate.as_ref(),
+                    turbo_active,
+                );
+                return true;
+            }
+            if preview.cache.contains_failed(&path) {
+                crate::media_diagnostics::record(
+                    "preview_failed_cache_suppressed",
+                    format!("generation={} key={path}", preview.current_generation),
+                    false,
+                );
+                preview.select_empty_preview(preview_transition_mode(turbo_active));
+                bridge.set_preview_state(ViewPreviewState::Empty);
+                request_preview_prefetches_if_allowed(
+                    games,
+                    selected,
+                    preview,
+                    scroll_active,
+                    turbo_active,
+                );
+                trace_preview_coverage_sample(
+                    preview,
+                    selected,
+                    selected_game,
+                    candidate.as_ref(),
+                    turbo_active,
+                );
+                return true;
             }
         }
         request_preview_prefetches_if_allowed(
@@ -1842,75 +1847,75 @@ pub fn request_arcade_preview_window(
             candidate_game.preview_asset_key
         );
     }
-    if turbo_active {
-        if let Some(loaded) = preview.worker.load_decoded_cache_asset(
+    if turbo_active
+        && let Some(loaded) = preview.worker.load_decoded_cache_asset(
             candidate_game.preview_archive_path.as_ref(),
             candidate_game.preview_asset_key.as_ref(),
-        ) {
-            let completed_at_ms = preview.trace_elapsed_ms();
-            let load_source = loaded.load_source;
-            let total_us = loaded.total_us;
-            let read_us = loaded.read_us;
-            let decode_us = loaded.decode_us;
-            let raw565_parse_us = loaded.raw565_parse_us;
-            let age_us = completed_at_ms.saturating_sub(requested_at_ms) * 1000;
-            if preview_startup_trace_enabled() {
-                crate::ui_errln!(
-                    "startup_timing\tpreview_selected_decoded\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\traw565_parse_us={}\tage_us={}",
-                    completed_at_ms,
-                    candidate_game.system_id,
-                    candidate_game.title,
-                    candidate_game.preview_asset_key,
-                    load_source.label(),
-                    total_us,
-                    read_us,
-                    decode_us,
-                    raw565_parse_us,
-                    age_us
-                );
-            }
-            let loaded_image = Arc::new(preview_image_from_pixels(
-                loaded.pixels,
-                preview.config.visual_pct,
-            ));
-            preview.frame_cache_evictions += preview.cache.insert(
-                preview_key.clone(),
-                Arc::clone(&loaded_image),
-                &preview.window_preview_keys,
-                Some(&preview.visible_preview_key),
+        )
+    {
+        let completed_at_ms = preview.trace_elapsed_ms();
+        let load_source = loaded.load_source;
+        let total_us = loaded.total_us;
+        let read_us = loaded.read_us;
+        let decode_us = loaded.decode_us;
+        let raw565_parse_us = loaded.raw565_parse_us;
+        let age_us = completed_at_ms.saturating_sub(requested_at_ms) * 1000;
+        if preview_startup_trace_enabled() {
+            crate::ui_errln!(
+                "startup_timing\tpreview_selected_decoded\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\traw565_parse_us={}\tage_us={}",
+                completed_at_ms,
+                candidate_game.system_id,
+                candidate_game.title,
+                candidate_game.preview_asset_key,
+                load_source.label(),
+                total_us,
+                read_us,
+                decode_us,
+                raw565_parse_us,
+                age_us
             );
-            preview.current_generation = 0;
-            preview.selected_preview_key = Some(preview_key.clone());
-            preview.has_visible_preview = true;
-            preview.visible_preview_load_source = load_source.label();
-            preview.begin_raw_transition_to(&preview_key, preview_transition_mode(turbo_active));
-            preview.visible_preview_key = preview_key;
-            preview.raw_dirty = true;
-            apply_preview_image_bridge(bridge, &loaded_image);
-            if preview_startup_trace_enabled() {
-                crate::ui_errln!(
-                    "startup_timing\tpreview_selected_applied\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\tage_us={}",
-                    preview.trace_elapsed_ms(),
-                    candidate_game.system_id,
-                    selected,
-                    candidate_game.title,
-                    candidate_game.preview_asset_key,
-                    load_source.label(),
-                    total_us,
-                    read_us,
-                    decode_us,
-                    age_us
-                );
-            }
-            trace_preview_coverage_sample(
-                preview,
-                selected,
-                selected_game,
-                Some(&candidate),
-                turbo_active,
-            );
-            return true;
         }
+        let loaded_image = Arc::new(preview_image_from_pixels(
+            loaded.pixels,
+            preview.config.visual_pct,
+        ));
+        preview.frame_cache_evictions += preview.cache.insert(
+            preview_key.clone(),
+            Arc::clone(&loaded_image),
+            &preview.window_preview_keys,
+            Some(&preview.visible_preview_key),
+        );
+        preview.current_generation = 0;
+        preview.selected_preview_key = Some(preview_key.clone());
+        preview.has_visible_preview = true;
+        preview.visible_preview_load_source = load_source.label();
+        preview.begin_raw_transition_to(&preview_key, preview_transition_mode(turbo_active));
+        preview.visible_preview_key = preview_key;
+        preview.raw_dirty = true;
+        apply_preview_image_bridge(bridge, &loaded_image);
+        if preview_startup_trace_enabled() {
+            crate::ui_errln!(
+                "startup_timing\tpreview_selected_applied\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\tage_us={}",
+                preview.trace_elapsed_ms(),
+                candidate_game.system_id,
+                selected,
+                candidate_game.title,
+                candidate_game.preview_asset_key,
+                load_source.label(),
+                total_us,
+                read_us,
+                decode_us,
+                age_us
+            );
+        }
+        trace_preview_coverage_sample(
+            preview,
+            selected,
+            selected_game,
+            Some(&candidate),
+            turbo_active,
+        );
+        return true;
     }
     request_selected_preview_async(preview, selected, selected_game, &candidate);
     trace_preview_coverage_sample(
@@ -2299,10 +2304,8 @@ pub fn apply_ready_preview(
     let bridge = app.global::<slint_ui::launcher::ArcadeView>();
     let mut dirty = false;
     let mut ready_backlog = VecDeque::new();
-    if !defer_selected_result {
-        if let Some(result) = preview.deferred_selected_result.take() {
-            ready_backlog.push_front(result);
-        }
+    if !defer_selected_result && let Some(result) = preview.deferred_selected_result.take() {
+        ready_backlog.push_front(result);
     }
     if let Some(result) = preview.worker.take_latest_selected_result() {
         preview.last_apply_trace.worker_drained += 1;

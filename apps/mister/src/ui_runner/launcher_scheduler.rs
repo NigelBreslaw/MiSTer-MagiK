@@ -33,20 +33,24 @@ fn system_entry_thread_snapshot() -> SystemEntryThreadSnapshot {
     let cpu = unsafe { libc::sched_getcpu() };
     SystemEntryThreadSnapshot {
         cpu,
-        thread_cpu_us: cpu_time_available
-            .then(|| {
-                u64::try_from(cpu_time.tv_sec)
-                    .unwrap_or(0)
-                    .saturating_mul(1_000_000)
-                    .saturating_add(u64::try_from(cpu_time.tv_nsec).unwrap_or(0) / 1_000)
-            })
-            .unwrap_or(0),
-        minor_page_faults: usage_available
-            .then(|| u64::try_from(usage.ru_minflt).unwrap_or(0))
-            .unwrap_or(0),
-        major_page_faults: usage_available
-            .then(|| u64::try_from(usage.ru_majflt).unwrap_or(0))
-            .unwrap_or(0),
+        thread_cpu_us: if cpu_time_available {
+            u64::try_from(cpu_time.tv_sec)
+                .unwrap_or(0)
+                .saturating_mul(1_000_000)
+                .saturating_add(u64::try_from(cpu_time.tv_nsec).unwrap_or(0) / 1_000)
+        } else {
+            0
+        },
+        minor_page_faults: if usage_available {
+            u64::try_from(usage.ru_minflt).unwrap_or(0)
+        } else {
+            0
+        },
+        major_page_faults: if usage_available {
+            u64::try_from(usage.ru_majflt).unwrap_or(0)
+        } else {
+            0
+        },
     }
 }
 
@@ -145,6 +149,8 @@ impl MediaJobEventBuf {
     }
 }
 
+// Long-lived state or a low-rate message; boxing would only add an allocation.
+#[allow(clippy::large_enum_variant)]
 enum CatalogJobState {
     Idle,
     Running(CatalogWorkerReceiver),
@@ -184,6 +190,8 @@ struct SystemEntryPrepareRequest {
     request: SystemShardRequest,
 }
 
+// Long-lived state or a low-rate message; boxing would only add an allocation.
+#[allow(clippy::large_enum_variant)]
 enum SystemEntryPrepareCommand {
     Prepare(SystemEntryPrepareRequest),
     RetireOutcome(SystemEntryPrepareOutcome),
@@ -213,6 +221,8 @@ struct FailedSystemEntry {
     error: String,
 }
 
+// Long-lived state or a low-rate message; boxing would only add an allocation.
+#[allow(clippy::large_enum_variant)]
 enum SystemEntryPrepareOutcome {
     Prepared(PreparedSystemEntry),
     Failed(FailedSystemEntry),
@@ -866,13 +876,12 @@ impl LauncherScheduler {
     }
 
     pub(super) fn retire_catalog(&self, catalog: ArcadeCatalog) {
-        if let Some(worker) = &self.system_entry_prepare {
-            if let Err(error) = worker
+        if let Some(worker) = &self.system_entry_prepare
+            && let Err(error) = worker
                 .requests
                 .send(SystemEntryPrepareCommand::RetireCatalog(catalog))
-            {
-                drop(error.0);
-            }
+        {
+            drop(error.0);
         }
     }
 
@@ -1142,23 +1151,22 @@ impl LauncherScheduler {
             .catalog_progress
             .active_stalled(self.catalog_worker_running(), background_work_allowed)
             && !self.catalog_stop_requested
+            && let Some(control) = self.catalog_child_control.as_ref()
         {
-            if let Some(control) = self.catalog_child_control.as_ref() {
-                control.fail_and_terminate(
+            control.fail_and_terminate(
                     "catalog worker watchdog terminated a job after 120 seconds without validated progress",
                 );
-                self.catalog_stop_requested = true;
-                self.catalog_progress.note_stall_cause(
-                    "watchdog terminated the child after 120 seconds without validated progress",
-                );
-                self.note_catalog_progress(
-                    "watchdog-stop",
-                    "stalled",
-                    "child terminated after 120 seconds without validated progress",
-                    -1,
-                    now,
-                );
-            }
+            self.catalog_stop_requested = true;
+            self.catalog_progress.note_stall_cause(
+                "watchdog terminated the child after 120 seconds without validated progress",
+            );
+            self.note_catalog_progress(
+                "watchdog-stop",
+                "stalled",
+                "child terminated after 120 seconds without validated progress",
+                -1,
+                now,
+            );
         }
     }
 
