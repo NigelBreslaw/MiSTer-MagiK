@@ -5,17 +5,20 @@
 
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::fs::{OpenOptions, create_dir_all};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const DIR: &str = "/tmp/mister-magik";
 const STATUS_PATH: &str = "/tmp/mister-magik/status.json";
 const EVENTS_PATH: &str = "/tmp/mister-magik/events.jsonl";
+// The event log lives on tmpfs for the whole boot, so it is compacted to its
+// newest rows instead of growing without limit.
+const EVENTS_MAX_BYTES: u64 = 256 * 1024;
+const EVENTS_RETAIN_BYTES: u64 = 128 * 1024;
 
 macro_rules! launcher_status_types {
     (
@@ -588,7 +591,6 @@ impl Drop for RuntimeStatusPublisher {
 }
 
 pub fn event(name: &str, detail: impl std::fmt::Display) {
-    let _ = create_dir_all(DIR);
     let row = event_value(
         name,
         &detail.to_string(),
@@ -600,9 +602,63 @@ pub fn event(name: &str, detail: impl std::fmt::Display) {
 }
 
 fn append_event_row(path: &Path, row: &Value) {
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "{row}");
+    append_event_row_bounded(path, row, EVENTS_MAX_BYTES, EVENTS_RETAIN_BYTES);
+}
+
+/// Appends one row with a single `O_APPEND` write, so rows stay whole next to
+/// Main's own appends. Writers reopen the path for every row, which lets
+/// compaction replace the file without stranding another process's handle.
+fn append_event_row_bounded(path: &Path, row: &Value, max_bytes: u64, retain_bytes: u64) {
+    let mut line = row.to_string();
+    line.push('\n');
+    let open = || OpenOptions::new().create(true).append(true).open(path);
+    let Ok(mut file) = open().or_else(|_| {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        open()
+    }) else {
+        return;
+    };
+    if file.write_all(line.as_bytes()).is_err() {
+        return;
     }
+    if file
+        .metadata()
+        .is_ok_and(|metadata| metadata.len() > max_bytes)
+    {
+        let _ = compact_event_log(path, retain_bytes);
+    }
+}
+
+/// Reads at most `limit` trailing bytes of a text file, dropping a partial
+/// leading line so every returned line is whole.
+pub fn read_tail_lines(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
+    let mut file = File::open(path)?;
+    let start = file.metadata()?.len().saturating_sub(limit);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    file.take(limit).read_to_end(&mut bytes)?;
+    if start > 0 {
+        let first_line = bytes
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(bytes.len(), |newline| newline + 1);
+        bytes.drain(..first_line);
+    }
+    Ok(bytes)
+}
+
+/// Keeps the newest whole rows. A row appended by another process between the
+/// tail read and the rename can be lost; that is rare and bounded to one row.
+fn compact_event_log(path: &Path, retain_bytes: u64) -> io::Result<()> {
+    let tail = read_tail_lines(path, retain_bytes)?;
+    let temporary = PathBuf::from(format!("{}.{}.tmp", path.display(), std::process::id()));
+    let result = fs::write(&temporary, tail).and_then(|()| fs::rename(&temporary, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 fn write_owned_launcher_status(
@@ -623,7 +679,7 @@ fn write_owned_launcher_status(
         )
         .map_err(std::io::Error::other)?;
         if let Some(parent) = path.parent() {
-            create_dir_all(parent)?;
+            fs::create_dir_all(parent)?;
         }
         let tmp = PathBuf::from(format!("{}.tmp", path.display()));
         std::fs::write(&tmp, json_buffer.as_slice())?;
@@ -1731,7 +1787,6 @@ fn unix_ms() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_name(prefix: &str) -> String {
@@ -2266,6 +2321,56 @@ mod tests {
         assert!(row["ts_unix_ms"].as_u64().is_some());
         assert!(row["ts_boot_ms"].as_u64().is_some());
         assert!(row["pid"].as_i64().is_some());
+    }
+
+    #[test]
+    fn event_append_creates_a_missing_event_directory() {
+        let root = std::env::temp_dir().join(unique_name("runtime-events-dir"));
+        let path = root.join("events.jsonl");
+        append_event_row(&path, &json!({"event": "first"}));
+
+        let text = fs::read_to_string(&path).expect("event directory should be created");
+        let _ = fs::remove_dir_all(root);
+        assert_eq!(text, "{\"event\":\"first\"}\n");
+    }
+
+    #[test]
+    fn tail_read_is_bounded_and_keeps_only_whole_lines() {
+        let path = std::env::temp_dir().join(format!("{}.log", unique_name("runtime-tail")));
+        let text = (0..1_000)
+            .map(|index| format!("row-{index}\n"))
+            .collect::<String>();
+        fs::write(&path, &text).unwrap();
+
+        let tail = read_tail_lines(&path, 64).unwrap();
+        let whole = read_tail_lines(&path, 1 << 20).unwrap();
+        let _ = fs::remove_file(&path);
+        assert!(tail.len() <= 64);
+        assert!(tail.starts_with(b"row-"));
+        assert!(tail.ends_with(b"row-999\n"));
+        assert_eq!(whole, text.as_bytes());
+    }
+
+    #[test]
+    fn event_log_compacts_to_newest_whole_rows() {
+        let path =
+            std::env::temp_dir().join(format!("{}.jsonl", unique_name("runtime-events-cap")));
+        for index in 0..200 {
+            append_event_row_bounded(&path, &json!({"event": "row", "index": index}), 1024, 512);
+            let length = fs::metadata(&path).unwrap().len();
+            assert!(length <= 1024, "event log grew to {length} bytes");
+        }
+
+        let text = fs::read_to_string(&path).unwrap();
+        let _ = fs::remove_file(&path);
+        let indices = text
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("every retained row is whole"))
+            .map(|row| row["index"].as_u64().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(indices.last(), Some(&199));
+        assert!(indices.windows(2).all(|pair| pair[1] == pair[0] + 1));
+        assert!(indices.len() > 10);
     }
 
     fn publisher_status(

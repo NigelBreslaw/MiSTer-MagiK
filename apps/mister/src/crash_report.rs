@@ -12,6 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const STATUS_PATH: &str = "/tmp/mister-magik/status.json";
 const EVENTS_PATH: &str = "/tmp/mister-magik/events.jsonl";
 const SLINT_LOG_PATH: &str = "/tmp/mister-magik-slint.log";
+// Enough for the requested line counts without reading a whole log in the hook.
+const MAX_TAIL_BYTES: u64 = 64 * 1024;
 
 pub fn install_panic_hook(args: Vec<String>) {
     let crash_dir = mister_magik_catalog::device_layout::current_app_path("crashes");
@@ -197,9 +199,10 @@ fn read_text_value(path: &str) -> Value {
 }
 
 fn tail_text_value(path: &str, n: usize) -> Value {
-    let Ok(text) = fs::read_to_string(path) else {
+    let Ok(bytes) = crate::runtime_status::read_tail_lines(Path::new(path), MAX_TAIL_BYTES) else {
         return Value::Null;
     };
+    let text = String::from_utf8_lossy(&bytes);
     let lines: Vec<_> = text.lines().collect();
     let start = lines.len().saturating_sub(n);
     Value::String(lines[start..].join("\n"))
