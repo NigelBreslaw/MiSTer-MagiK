@@ -436,7 +436,6 @@ pub struct ArcadeNav {
     pub visual_index: f32,
     row_height: i32,
     step_rows: usize,
-    cyclic: bool,
     input_policy: ScrollInputPolicy,
     scroll: ArcadeScrollState,
     scroll_animation: SpringAnimation,
@@ -455,7 +454,6 @@ struct ArcadeScrollState {
     intent_queue: i32,
     held_dir: i32,
     hold_started_at: Option<Instant>,
-    root_press_admitted: bool,
     last_quick_tap_dir: i32,
     last_quick_tap_released_at: Option<Instant>,
     turbo_candidate: bool,
@@ -478,7 +476,6 @@ impl ArcadeNav {
 
     fn new_cyclic() -> Self {
         let mut nav = Self::new();
-        nav.cyclic = true;
         nav.input_policy = ScrollInputPolicy::RootCards;
         let spring = SpringConfiguration::smooth_with_response(ROOT_CARD_SPRING_RESPONSE);
         nav.scroll_animation = SpringAnimation::new(0.0, spring);
@@ -497,7 +494,6 @@ impl ArcadeNav {
             visual_index: 0.0,
             row_height: row_height.max(1),
             step_rows: step_rows.max(1),
-            cyclic: false,
             input_policy: ScrollInputPolicy::Arcade,
             scroll: ArcadeScrollState::default(),
             scroll_animation: SpringAnimation::new(0.0, SpringConfiguration::smooth()),
@@ -537,7 +533,7 @@ impl ArcadeNav {
     }
 
     pub fn is_settled_at_selected(&self) -> bool {
-        if self.cyclic {
+        if self.input_policy == ScrollInputPolicy::RootCards {
             return self.is_settled() && !self.is_scroll_active();
         }
         self.scroll_y == self.selected as i32 * self.row_height
@@ -602,7 +598,6 @@ impl ArcadeNav {
         if previous_dir != dir {
             self.begin_press(dir, now);
             if self.input_policy == ScrollInputPolicy::RootCards && reversing_hold {
-                self.scroll.root_press_admitted = true;
                 self.scroll.hold_started_at =
                     now.checked_sub(ROOT_CARD_HOLD_DELAY + Duration::from_millis(1));
                 return;
@@ -612,7 +607,6 @@ impl ArcadeNav {
                     self.scroll.hold_started_at = None;
                     return;
                 }
-                self.scroll.root_press_admitted = true;
                 // The rendered card is already at its resting pixel. Remove
                 // the invisible spring tail before targeting the next slot.
                 self.scroll_animation
@@ -659,7 +653,6 @@ impl ArcadeNav {
             ARCADE_QUICK_TAP_MAX
         };
         let continuous_active = self.scroll.held_dir != 0
-            && (self.input_policy == ScrollInputPolicy::Arcade || self.scroll.root_press_admitted)
             && self
                 .scroll
                 .hold_started_at
@@ -694,7 +687,7 @@ impl ArcadeNav {
                 .set_target(self.scroll.held_dir as f64 * target_speed);
             let velocity = self.scroll_velocity_animation.advance(motion_delta);
             let value = self.scroll_animation.value() + velocity * motion_delta.as_secs_f64();
-            let value = if self.cyclic {
+            let value = if self.input_policy == ScrollInputPolicy::RootCards {
                 value
             } else {
                 value.clamp(0.0, self.max_scroll_y(count) as f64)
@@ -707,7 +700,7 @@ impl ArcadeNav {
             } else {
                 (value / self.row_height as f64).floor()
             };
-            let row = if self.cyclic {
+            let row = if self.input_policy == ScrollInputPolicy::RootCards {
                 row as i64
             } else {
                 row.clamp(0.0, count.saturating_sub(1) as f64) as i64
@@ -788,7 +781,6 @@ impl ArcadeNav {
     fn begin_press(&mut self, dir: i32, now: Instant) {
         self.scroll.held_dir = dir;
         self.scroll.hold_started_at = Some(now);
-        self.scroll.root_press_admitted = false;
         self.scroll.turbo_candidate = self.input_policy == ScrollInputPolicy::Arcade
             && self.scroll.last_quick_tap_dir == dir
             && self
@@ -834,7 +826,6 @@ impl ArcadeNav {
         }
         self.scroll.held_dir = 0;
         self.scroll.hold_started_at = None;
-        self.scroll.root_press_admitted = false;
         self.scroll.turbo_candidate = false;
         self.scroll.turbo_active = false;
         if self.scroll.continuous_active {
@@ -860,7 +851,11 @@ impl ArcadeNav {
                 directional_row_spring_target(
                     self.scroll_animation.value(),
                     self.scroll_animation.velocity(),
-                    if self.cyclic { None } else { Some(count) },
+                    if self.input_policy == ScrollInputPolicy::RootCards {
+                        None
+                    } else {
+                        Some(count)
+                    },
                     dir,
                     self.row_height,
                     self.scroll_animation.configuration().angular_frequency(),
@@ -902,7 +897,7 @@ impl ArcadeNav {
         if count == 0 || dir == 0 {
             return;
         }
-        let next = if self.cyclic {
+        let next = if self.input_policy == ScrollInputPolicy::RootCards {
             let current = (self.scroll_animation.target() / self.row_height as f64).round() as i64;
             current + i64::from(dir.signum()) * self.step_rows as i64
         } else if dir > 0 {
@@ -913,7 +908,9 @@ impl ArcadeNav {
         } else {
             self.scroll.target_index.saturating_sub(self.step_rows) as i64
         };
-        if !self.cyclic && next as usize == self.scroll.target_index {
+        if self.input_policy != ScrollInputPolicy::RootCards
+            && next as usize == self.scroll.target_index
+        {
             return;
         }
         self.selected = next.rem_euclid(count as i64) as usize;

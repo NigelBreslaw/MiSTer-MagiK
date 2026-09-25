@@ -224,7 +224,7 @@ impl LauncherCardHomeSession {
     }
 
     pub(super) fn is_animating(&self) -> bool {
-        self.active && (self.frame.phase != BrowsePhase::Settled || self.frame.outgoing.is_some())
+        self.active && self.frame.phase != BrowsePhase::Settled
     }
 
     pub(super) fn needs_render(&self) -> bool {
@@ -388,7 +388,6 @@ fn settled_frame(selected: usize) -> BrowseFrame {
         direction: None,
         progress_millis: 0,
         duration_millis: SPRING_POSITION_UNITS,
-        outgoing: None,
     }
 }
 
@@ -441,7 +440,6 @@ fn browse_frame_from_position(
             .round()
             .clamp(1.0, (SPRING_POSITION_UNITS - 1) as f32) as u32,
         duration_millis: SPRING_POSITION_UNITS,
-        outgoing: None,
     }
 }
 

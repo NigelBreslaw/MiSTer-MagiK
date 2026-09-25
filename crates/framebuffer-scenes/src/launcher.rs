@@ -107,7 +107,6 @@ impl LauncherScene {
             direction: None,
             progress_millis: 0,
             duration_millis: 0,
-            outgoing: None,
         });
         let mut output = vec![Rgb565Pixel(BACKGROUND); self.width.saturating_mul(self.height)];
         let mut prepared = self.prepare(data);
@@ -132,7 +131,6 @@ impl LauncherScene {
             direction: None,
             progress_millis: 0,
             duration_millis: 0,
-            outgoing: None,
         });
         InitialLauncher { prepared }
     }
@@ -153,7 +151,6 @@ impl LauncherScene {
             direction: None,
             progress_millis: 0,
             duration_millis: 0,
-            outgoing: None,
         });
         InitialLauncher { prepared }
     }
@@ -174,7 +171,6 @@ impl LauncherScene {
             direction: None,
             progress_millis: 0,
             duration_millis: 0,
-            outgoing: None,
         });
         InitialLauncher { prepared }
     }
@@ -893,11 +889,7 @@ fn build_carousel_plan<'a>(faces: &'a [CardFaces], mut motion: BrowseFrame) -> C
         };
         let mut pose = continuous_geometry(*relative, destination, progress);
         let side = relative.signum();
-        if side != 0
-            && destination.signum() == side
-            && motion.outgoing.is_none()
-            && (settled || motion.phase != crate::launcher_navigation::BrowsePhase::Flipping)
-        {
+        if side != 0 && destination.signum() == side && settled {
             let cover = continuous_geometry(relative - side, destination - side, progress);
             let (sin, cos) = crate::launcher_flip::sin_cos(cover.angle);
             let local = side as i64 * cover.width / 2;
@@ -917,43 +909,13 @@ fn build_carousel_plan<'a>(faces: &'a [CardFaces], mut motion: BrowseFrame) -> C
             0
         };
         let incoming = destination == 0 && *relative != 0;
-        let outgoing = motion.outgoing.filter(|flip| flip.card == index);
-        let paired_incoming = motion.outgoing.filter(|flip| {
-            let offset = if flip.direction == BrowseDirection::Right {
-                1
-            } else {
-                -1
-            };
-            (flip.card as isize + offset).rem_euclid(faces.len() as isize) as usize == index
-        });
-        let fallback_flip = motion.outgoing.is_none()
-            && (incoming || *relative == 0)
+        let flipping_card = (incoming || *relative == 0)
             && progress > 0
             && progress < GEOMETRY_ONE
             && motion.phase == crate::launcher_navigation::BrowsePhase::Flipping;
-        let (face, blend) = if fallback_flip || outgoing.is_some() || paired_incoming.is_some() {
-            let (spin, rotation, outgoing) = if let Some(outgoing) = outgoing {
-                (
-                    flip_spin(outgoing.direction == BrowseDirection::Right),
-                    smooth_progress(
-                        outgoing.progress_millis,
-                        crate::launcher_navigation::OUTGOING_FLIP_MS as u32,
-                    ),
-                    true,
-                )
-            } else if let Some(incoming) = paired_incoming {
-                (
-                    flip_spin(incoming.direction == BrowseDirection::Right),
-                    smooth_progress(
-                        incoming.progress_millis,
-                        crate::launcher_navigation::CARD_FLIP_MS as u32,
-                    ),
-                    false,
-                )
-            } else {
-                (flip_spin(right), progress, *relative == 0)
-            };
-            let angle = pose.angle + spin * ease_in_out_sine(rotation);
+        let (face, blend) = if flipping_card {
+            let outgoing = *relative == 0;
+            let angle = pose.angle + flip_spin(right) * ease_in_out_sine(progress);
             let (_, cos) = crate::launcher_flip::sin_cos(angle);
             pose.angle = angle;
             (
@@ -1371,12 +1333,23 @@ mod tests {
         }
     }
 
+    fn settled_frame(selected: usize) -> BrowseFrame {
+        BrowseFrame {
+            selected,
+            target: selected,
+            phase: crate::launcher_navigation::BrowsePhase::Settled,
+            direction: None,
+            progress_millis: 0,
+            duration_millis: 0,
+        }
+    }
+
     #[test]
     fn borrowed_native_frame_and_fitted_frame_match_reference() {
         for (width, height) in [(960, 540), (640, 480)] {
             let scene = LauncherScene::new(width, height);
             let mut prepared = PreparedLauncher::new(scene, data(), None, None);
-            let frame = crate::launcher_navigation::LauncherBrowser::new(5, 0).frame(0);
+            let frame = settled_frame(0);
             prepared.render_frame(frame);
             assert_eq!(prepared.pixels(), scene.render(data()));
             if width == LOGICAL_WIDTH {
@@ -1418,7 +1391,6 @@ mod tests {
                             direction: Some(direction),
                             phase: crate::launcher_navigation::BrowsePhase::Flipping,
                             progress_millis,
-                            outgoing: None,
                             duration_millis: 460,
                         };
                         reference.logical.copy_from_slice(&chrome);
@@ -1603,7 +1575,6 @@ mod tests {
                 direction: Some(crate::launcher_navigation::BrowseDirection::Right),
                 progress_millis: 91,
                 duration_millis: 180,
-                outgoing: None,
             };
             prepared.render_frame(frame);
             let mut reference = scene.prepare(updated);
@@ -1631,7 +1602,7 @@ mod tests {
             black_box(prepared.pixels());
             let chrome_us = chrome_started.elapsed().as_micros();
             assert!(Arc::ptr_eq(&faces, &prepared.faces));
-            let frame = crate::launcher_navigation::LauncherBrowser::new(CARDS.len(), 0).frame(0);
+            let frame = settled_frame(0);
             prepared.render_frame(frame);
             assert_eq!(prepared.pixels(), reference.pixels());
             println!(
@@ -1652,7 +1623,6 @@ mod tests {
             direction: None,
             progress_millis: 0,
             duration_millis: 180,
-            outgoing: None,
         };
         prepared.render_into(frame, &mut output);
         assert_eq!(output, scene.render(data()));
@@ -1671,7 +1641,6 @@ mod tests {
             direction: Some(BrowseDirection::Right),
             progress_millis,
             duration_millis: 180,
-            outgoing: None,
         };
         prepared.render_into(frame(0), &mut start);
         prepared.render_into(frame(90), &mut middle);
@@ -1689,7 +1658,6 @@ mod tests {
             direction: Some(BrowseDirection::Right),
             progress_millis: 90,
             duration_millis: 180,
-            outgoing: None,
         };
         let cold = scene.render_browse(data(), Some(frame));
         let mut prepared = scene.prepare(data());
@@ -1709,46 +1677,6 @@ mod tests {
             assert_eq!(smooth_progress(t, 180), expected);
         }
         assert_eq!(smooth_progress(180, 180), GEOMETRY_ONE);
-    }
-
-    #[test]
-    fn outgoing_top_card_uses_in_out_sine_rotation() {
-        let prepared = LauncherScene::new(960, 540).prepare(data());
-        let rotation = ease_in_out_sine(smooth_progress(
-            100,
-            crate::launcher_navigation::OUTGOING_FLIP_MS as u32,
-        ));
-        for (direction, target) in [
-            (BrowseDirection::Right, 1),
-            (BrowseDirection::Left, CARDS.len() - 1),
-        ] {
-            let motion = BrowseFrame {
-                selected: 0,
-                target,
-                phase: crate::launcher_navigation::BrowsePhase::Flipping,
-                direction: Some(direction),
-                progress_millis: 100,
-                duration_millis: crate::launcher_navigation::CARD_FLIP_MS as u32,
-                outgoing: Some(crate::launcher_navigation::OutgoingFlip {
-                    card: 0,
-                    direction,
-                    progress_millis: 100,
-                }),
-            };
-            let plan = build_carousel_plan(&prepared.faces, motion);
-            let top_card = plan.items[5].expect("outgoing top card");
-            let destination = if direction == BrowseDirection::Right {
-                -1
-            } else {
-                1
-            };
-            assert_eq!(
-                top_card.pose.angle,
-                continuous_geometry(0, destination, smooth_progress(100, motion.duration_millis))
-                    .angle
-                    + flip_spin(direction == BrowseDirection::Right) * rotation
-            );
-        }
     }
 
     #[test]
@@ -1772,7 +1700,6 @@ mod tests {
                     direction: Some(direction),
                     progress_millis: step,
                     duration_millis: units,
-                    outgoing: None,
                 };
                 let plan = build_carousel_plan(&prepared.faces, motion);
                 let (outgoing_slot, incoming_slot) = if step > units / 2 { (4, 5) } else { (5, 4) };
@@ -1801,7 +1728,6 @@ mod tests {
                     direction: Some(direction),
                     progress_millis: units,
                     duration_millis: units,
-                    outgoing: None,
                 },
             );
             assert_eq!(settled.items[4].expect("settled top card").pose.angle, 0);
@@ -1831,7 +1757,6 @@ mod tests {
             direction: None,
             progress_millis: 0,
             duration_millis: 180,
-            outgoing: None,
         };
         let moving = |progress_millis| BrowseFrame {
             selected: 0,
@@ -1840,7 +1765,6 @@ mod tests {
             direction: Some(BrowseDirection::Right),
             progress_millis,
             duration_millis: 180,
-            outgoing: None,
         };
         prepared.render_into(settled(0), &mut old);
         prepared.render_into(moving(0), &mut start);

@@ -98,7 +98,6 @@ fn first_display_frame_is_identical_to_fully_prepared_resting_frame() {
             direction: None,
             progress_millis: 0,
             duration_millis: 0,
-            outgoing: None,
         });
         assert_eq!(first, complete.pixels());
         assert_eq!(first, scene.render(data(selected)));
@@ -117,7 +116,6 @@ fn collection_index_is_absent_from_static_and_animated_frames() {
             direction: None,
             progress_millis: 0,
             duration_millis: 0,
-            outgoing: None,
         },
         moving(0, BrowseDirection::Right, 90),
     ] {
@@ -299,7 +297,6 @@ fn moving(selected: usize, direction: BrowseDirection, progress: u32) -> BrowseF
         direction: Some(direction),
         progress_millis: progress,
         duration_millis: 180,
-        outgoing: None,
     }
 }
 

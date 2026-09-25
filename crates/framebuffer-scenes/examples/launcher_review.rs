@@ -75,7 +75,6 @@ fn main() -> std::io::Result<()> {
             direction: Some(BrowseDirection::Right),
             progress_millis: progress,
             duration_millis: 460,
-            outgoing: None,
         });
         let mut file =
             std::io::BufWriter::new(std::fs::File::create(format!("{directory}/{name}.ppm"))?);
