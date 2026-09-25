@@ -203,11 +203,9 @@ pub struct PreparedLauncher {
 }
 
 struct CardFaces {
-    compact: [crate::launcher_flip::Face; COMPACT_EDGE_SATURATION.len()],
+    compact: crate::launcher_flip::Face,
     detail: crate::launcher_flip::Face,
 }
-
-const COMPACT_EDGE_SATURATION: [u16; 2] = [80, 176];
 
 /// Exact state represented by a prepared buffer. Consumers own the clock and
 /// generation; preparing a frame never advances navigation or reads input.
@@ -415,10 +413,9 @@ fn bake_face(
     card: &PreparedCard,
     width: usize,
     selected: bool,
-    saturation: u16,
     typography: Option<LauncherTypography<'_>>,
 ) -> crate::launcher_flip::Face {
-    artwork::face(card, width, selected, saturation, typography)
+    artwork::face(card, width, selected, typography)
 }
 
 struct PreparedCard {
@@ -470,13 +467,7 @@ impl PreparedLauncher {
             + self
                 .faces
                 .iter()
-                .map(|f| {
-                    f.compact
-                        .iter()
-                        .map(crate::launcher_flip::Face::storage_bytes)
-                        .sum::<usize>()
-                        + f.detail.storage_bytes()
-                })
+                .map(|f| f.compact.storage_bytes() + f.detail.storage_bytes())
                 .sum::<usize>()
             + self
                 .flip_columns
@@ -532,10 +523,8 @@ impl PreparedLauncher {
         let faces: Vec<_> = cards
             .iter()
             .map(|card| CardFaces {
-                compact: std::array::from_fn(|level| {
-                    bake_face(card, 180, false, COMPACT_EDGE_SATURATION[level], typography)
-                }),
-                detail: bake_face(card, 180, true, 256, typography),
+                compact: bake_face(card, 180, false, typography),
+                detail: bake_face(card, 180, true, typography),
             })
             .collect();
         Self {
@@ -643,7 +632,6 @@ const BACKGROUND: u16 = rgb(0, 0, 0);
 const CREAM: u16 = rgb(238, 232, 213);
 const MUTED: u16 = rgb(143, 151, 150);
 const RULE: u16 = rgb(48, 61, 63);
-const DARK_TEXT: u16 = rgb(10, 20, 24);
 
 pub(super) const fn card_height(width: usize) -> usize {
     width * 7 / 5
@@ -841,14 +829,13 @@ fn smooth_progress(progress: u32, duration: u32) -> i64 {
     }
 }
 
-fn flip_spin(right: bool) -> i64 {
-    if right { -1 } else { 1 }
+fn ease_in_out_sine(progress: i64) -> i64 {
+    let (_, cosine) = crate::launcher_flip::sin_cos(progress.clamp(0, GEOMETRY_ONE));
+    (GEOMETRY_ONE - cosine) / 2
 }
 
-fn compact_edge_saturation_level(relative: isize, destination: isize, progress: i64) -> usize {
-    let position = relative as i64 * GEOMETRY_ONE + (destination - relative) as i64 * progress;
-    let nearness = (2 * GEOMETRY_ONE - position.abs()).clamp(0, GEOMETRY_ONE);
-    (nearness * (COMPACT_EDGE_SATURATION.len() - 1) as i64 / GEOMETRY_ONE) as usize
+fn flip_spin(right: bool) -> i64 {
+    if right { -1 } else { 1 }
 }
 
 #[derive(Clone, Copy)]
@@ -905,7 +892,6 @@ fn build_carousel_plan<'a>(faces: &'a [CardFaces], mut motion: BrowseFrame) -> C
             *relative + 1
         };
         let mut pose = continuous_geometry(*relative, destination, progress);
-        let compact_level = compact_edge_saturation_level(*relative, destination, progress);
         let side = relative.signum();
         if side != 0
             && destination.signum() == side
@@ -940,13 +926,12 @@ fn build_carousel_plan<'a>(faces: &'a [CardFaces], mut motion: BrowseFrame) -> C
             };
             (flip.card as isize + offset).rem_euclid(faces.len() as isize) as usize == index
         });
-        let fallback_incoming = motion.outgoing.is_none()
-            && incoming
+        let fallback_flip = motion.outgoing.is_none()
+            && (incoming || *relative == 0)
             && progress > 0
             && progress < GEOMETRY_ONE
             && motion.phase == crate::launcher_navigation::BrowsePhase::Flipping;
-        let (face, blend) = if fallback_incoming || outgoing.is_some() || paired_incoming.is_some()
-        {
+        let (face, blend) = if fallback_flip || outgoing.is_some() || paired_incoming.is_some() {
             let (spin, rotation, outgoing) = if let Some(outgoing) = outgoing {
                 (
                     flip_spin(outgoing.direction == BrowseDirection::Right),
@@ -966,14 +951,14 @@ fn build_carousel_plan<'a>(faces: &'a [CardFaces], mut motion: BrowseFrame) -> C
                     false,
                 )
             } else {
-                (flip_spin(right), progress, false)
+                (flip_spin(right), progress, *relative == 0)
             };
-            let angle = pose.angle + spin * rotation;
+            let angle = pose.angle + spin * ease_in_out_sine(rotation);
             let (_, cos) = crate::launcher_flip::sin_cos(angle);
             pose.angle = angle;
             (
                 if (cos < 0) == outgoing {
-                    &faces[index].compact[COMPACT_EDGE_SATURATION.len() - 1]
+                    &faces[index].compact
                 } else {
                     &faces[index].detail
                 },
@@ -983,7 +968,7 @@ fn build_carousel_plan<'a>(faces: &'a [CardFaces], mut motion: BrowseFrame) -> C
             let face = if prominence == 256 {
                 &faces[index].detail
             } else {
-                &faces[index].compact[compact_level]
+                &faces[index].compact
             };
             (
                 face,
@@ -1051,13 +1036,6 @@ fn draw_carousel_plan(
             &occlusion[slot],
         );
     }
-}
-
-fn is_light_card(colour: u16) -> bool {
-    let red = ((colour >> 11) & 31) * 255 / 31;
-    let green = ((colour >> 5) & 63) * 255 / 63;
-    let blue = (colour & 31) * 255 / 31;
-    red + green + blue > 480
 }
 
 pub(super) fn mix_colour(background: u16, foreground: u16, amount: usize) -> u16 {
@@ -1557,21 +1535,6 @@ mod tests {
     }
 
     #[test]
-    fn background_edge_saturation_falls_with_carousel_depth() {
-        assert_eq!(compact_edge_saturation_level(0, 0, 0), 1);
-        assert_eq!(compact_edge_saturation_level(1, 1, 0), 1);
-        assert_eq!(compact_edge_saturation_level(2, 2, 0), 0);
-        assert_eq!(compact_edge_saturation_level(3, 3, 0), 0);
-
-        let outward: Vec<_> = (0..=8)
-            .map(|step| compact_edge_saturation_level(1, 2, step * GEOMETRY_ONE / 8))
-            .collect();
-        assert!(outward.windows(2).all(|levels| levels[0] >= levels[1]));
-        assert_eq!(outward.first(), Some(&1));
-        assert_eq!(outward.last(), Some(&0));
-    }
-
-    #[test]
     fn one_aspect_ratio_and_shared_progress_at_every_depth() {
         for direction in [-1, 1] {
             for relative in -2..=2 {
@@ -1749,11 +1712,15 @@ mod tests {
     }
 
     #[test]
-    fn outgoing_top_card_rotates_in_the_browse_direction() {
+    fn outgoing_top_card_uses_in_out_sine_rotation() {
         let prepared = LauncherScene::new(960, 540).prepare(data());
-        for (direction, target, expected_sign) in [
-            (BrowseDirection::Right, 1, -1),
-            (BrowseDirection::Left, CARDS.len() - 1, 1),
+        let rotation = ease_in_out_sine(smooth_progress(
+            100,
+            crate::launcher_navigation::OUTGOING_FLIP_MS as u32,
+        ));
+        for (direction, target) in [
+            (BrowseDirection::Right, 1),
+            (BrowseDirection::Left, CARDS.len() - 1),
         ] {
             let motion = BrowseFrame {
                 selected: 0,
@@ -1770,7 +1737,74 @@ mod tests {
             };
             let plan = build_carousel_plan(&prepared.faces, motion);
             let top_card = plan.items[5].expect("outgoing top card");
-            assert!(top_card.pose.angle * expected_sign > 0);
+            let destination = if direction == BrowseDirection::Right {
+                -1
+            } else {
+                1
+            };
+            assert_eq!(
+                top_card.pose.angle,
+                continuous_geometry(0, destination, smooth_progress(100, motion.duration_millis))
+                    .angle
+                    + flip_spin(direction == BrowseDirection::Right) * rotation
+            );
+        }
+    }
+
+    #[test]
+    fn position_driven_motion_eases_both_card_flips() {
+        let prepared = LauncherScene::new(960, 540).prepare(data());
+        let units = crate::launcher_navigation::SPRING_POSITION_UNITS;
+        assert_eq!(ease_in_out_sine(0), 0);
+        assert_eq!(ease_in_out_sine(GEOMETRY_ONE / 2), GEOMETRY_ONE / 2);
+        assert_eq!(ease_in_out_sine(GEOMETRY_ONE), GEOMETRY_ONE);
+        assert!(ease_in_out_sine(GEOMETRY_ONE / 4) < GEOMETRY_ONE / 4);
+        assert!(ease_in_out_sine(3 * GEOMETRY_ONE / 4) > 3 * GEOMETRY_ONE / 4);
+        for (direction, selected, target, relative) in [
+            (BrowseDirection::Right, CARDS.len() - 1, 0, 1),
+            (BrowseDirection::Left, 0, CARDS.len() - 1, -1),
+        ] {
+            for step in [1, units / 4, units / 2, 3 * units / 4, units - 1] {
+                let motion = BrowseFrame {
+                    selected,
+                    target,
+                    phase: crate::launcher_navigation::BrowsePhase::Flipping,
+                    direction: Some(direction),
+                    progress_millis: step,
+                    duration_millis: units,
+                    outgoing: None,
+                };
+                let plan = build_carousel_plan(&prepared.faces, motion);
+                let (outgoing_slot, incoming_slot) = if step > units / 2 { (4, 5) } else { (5, 4) };
+                let outgoing = plan.items[outgoing_slot].expect("outgoing card");
+                let incoming = plan.items[incoming_slot].expect("incoming card");
+                let progress = i64::from(step);
+                let spin = flip_spin(direction == BrowseDirection::Right);
+                let rotation = ease_in_out_sine(progress);
+                assert_eq!(
+                    outgoing.pose.angle,
+                    continuous_geometry(0, -relative, progress).angle + spin * rotation,
+                    "outgoing step {step} {direction:?}"
+                );
+                assert_eq!(
+                    incoming.pose.angle,
+                    continuous_geometry(relative, 0, progress).angle + spin * rotation,
+                    "incoming step {step} {direction:?}"
+                );
+            }
+            let settled = build_carousel_plan(
+                &prepared.faces,
+                BrowseFrame {
+                    selected,
+                    target,
+                    phase: crate::launcher_navigation::BrowsePhase::Flipping,
+                    direction: Some(direction),
+                    progress_millis: units,
+                    duration_millis: units,
+                    outgoing: None,
+                },
+            );
+            assert_eq!(settled.items[4].expect("settled top card").pose.angle, 0);
         }
     }
 

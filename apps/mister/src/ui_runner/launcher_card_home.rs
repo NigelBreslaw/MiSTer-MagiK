@@ -18,7 +18,7 @@ use mister_magik_framebuffer_scenes::launcher::{
     LauncherData, LauncherFrameRequest, LauncherScene, LauncherTypography, PreparedLauncher,
 };
 use mister_magik_framebuffer_scenes::launcher_navigation::{
-    BrowseDirection, BrowseFrame, BrowsePhase, LauncherBrowser,
+    BrowseDirection, BrowseFrame, BrowsePhase, SPRING_POSITION_UNITS,
 };
 
 const CARD_WIDTH: usize = 180;
@@ -73,8 +73,7 @@ pub(super) struct LauncherCardHomeSession {
     navigation_generation: u64,
     request_sequence: u64,
     frame_timestamp_us: u64,
-    browser: LauncherBrowser,
-    held_direction: Option<BrowseDirection>,
+    last_visual_index: f32,
     frame: BrowseFrame,
     active: bool,
     content_dirty: bool,
@@ -100,9 +99,7 @@ impl LauncherCardHomeSession {
         let fonts = LauncherFonts::load()?;
         let prepared = prepare(width, height, &snapshot, selected, clock, &artwork, &fonts);
         let render_ahead = native_render_ahead(width, height, &prepared);
-        let mut browser = LauncherBrowser::new(CARD_COUNT, selected);
-        browser.neutral();
-        let frame = browser.frame(0);
+        let frame = settled_frame(selected);
         Ok(Self {
             width,
             height,
@@ -116,8 +113,7 @@ impl LauncherCardHomeSession {
             navigation_generation: 1,
             request_sequence: 0,
             frame_timestamp_us: 0,
-            browser,
-            held_direction: None,
+            last_visual_index: selected as f32,
             frame,
             active: false,
             content_dirty: true,
@@ -135,7 +131,6 @@ impl LauncherCardHomeSession {
     pub(super) fn set_inactive(&mut self) {
         self.invalidate_compositor();
         self.active = false;
-        self.held_direction = None;
         self.release_presented_frame();
     }
 
@@ -145,47 +140,28 @@ impl LauncherCardHomeSession {
         height: usize,
         snapshot: LauncherHomeSnapshot,
         selected: usize,
-        held_direction: Option<BrowseDirection>,
+        visual_index: f32,
         clock: &str,
         now_ms: u64,
     ) {
         let selected = selected.min(CARD_COUNT - 1);
-        let previous_frame = self.frame;
+        let mut previous_frame = self.frame;
         if !self.active {
-            self.browser = LauncherBrowser::new(CARD_COUNT, selected);
-            self.browser.neutral();
-            self.held_direction = None;
+            self.last_visual_index = selected as f32;
+            previous_frame = settled_frame(selected);
             self.active = true;
             self.content_dirty = true;
             self.bump_navigation_generation();
         }
 
-        if self.held_direction != held_direction {
-            if let Some(direction) = self.held_direction {
-                self.browser.release_at(direction, now_ms);
-            }
-            if let Some(direction) = held_direction {
-                self.browser.press(direction, now_ms);
-            }
-            self.held_direction = held_direction;
-            self.bump_navigation_generation();
-        }
-
-        self.frame = self.browser.frame(now_ms);
+        self.frame = browse_frame_from_position(
+            selected,
+            visual_index,
+            self.last_visual_index,
+            previous_frame,
+        );
+        self.last_visual_index = visual_index;
         self.frame_timestamp_us = now_ms.saturating_mul(1_000);
-        if held_direction.is_none()
-            && self.frame.phase == BrowsePhase::Settled
-            && self.frame.selected != selected
-        {
-            let direction = if self.frame.selected < selected {
-                BrowseDirection::Right
-            } else {
-                BrowseDirection::Left
-            };
-            self.browser.press(direction, now_ms);
-            self.browser.release_at(direction, now_ms);
-            self.frame = self.browser.frame(now_ms);
-        }
         if navigation_identity_changed(previous_frame, self.frame) {
             self.bump_navigation_generation();
             self.content_dirty = true;
@@ -249,14 +225,6 @@ impl LauncherCardHomeSession {
 
     pub(super) fn is_animating(&self) -> bool {
         self.active && (self.frame.phase != BrowsePhase::Settled || self.frame.outgoing.is_some())
-    }
-
-    pub(super) const fn settled_selection(&self) -> Option<usize> {
-        if matches!(self.frame.phase, BrowsePhase::Settled) {
-            Some(self.frame.selected)
-        } else {
-            None
-        }
     }
 
     pub(super) fn needs_render(&self) -> bool {
@@ -410,13 +378,71 @@ fn navigation_identity_changed(previous: BrowseFrame, current: BrowseFrame) -> b
         || previous.target != current.target
         || previous.phase != current.phase
         || previous.direction != current.direction
-        || outgoing_identity(previous) != outgoing_identity(current)
 }
 
-fn outgoing_identity(frame: BrowseFrame) -> Option<(usize, BrowseDirection)> {
-    frame
-        .outgoing
-        .map(|outgoing| (outgoing.card, outgoing.direction))
+fn settled_frame(selected: usize) -> BrowseFrame {
+    BrowseFrame {
+        selected,
+        target: selected,
+        phase: BrowsePhase::Settled,
+        direction: None,
+        progress_millis: 0,
+        duration_millis: SPRING_POSITION_UNITS,
+        outgoing: None,
+    }
+}
+
+fn browse_frame_from_position(
+    selected: usize,
+    visual_index: f32,
+    previous: f32,
+    previous_frame: BrowseFrame,
+) -> BrowseFrame {
+    let position = if visual_index.is_finite() {
+        visual_index
+    } else {
+        selected as f32
+    };
+    let card_at = |index: i64| index.rem_euclid(CARD_COUNT as i64) as usize;
+    if position == position.round() {
+        return settled_frame(card_at(position as i64));
+    }
+
+    let base = position.floor() as i64;
+    let movement = position - previous;
+    // Preserve the same flip through a reversal within a pair of card slots.
+    // Changing its direction halfway through would swap the outgoing card and
+    // restart both rotations even though the cards have not changed position.
+    let right = if previous_frame.phase == BrowsePhase::Flipping && previous.floor() as i64 == base
+    {
+        previous_frame.direction == Some(BrowseDirection::Right)
+    } else if movement.abs() > f32::EPSILON {
+        movement > 0.0
+    } else {
+        selected == card_at(base + 1)
+    };
+    let (from, to, progress) = if right {
+        (base, base + 1, position - base as f32)
+    } else {
+        (base + 1, base, (base + 1) as f32 - position)
+    };
+    BrowseFrame {
+        selected: card_at(from),
+        target: card_at(to),
+        phase: BrowsePhase::Flipping,
+        direction: Some(if right {
+            BrowseDirection::Right
+        } else {
+            BrowseDirection::Left
+        }),
+        // Any nonzero movement starts the rotation on this frame. Keep the
+        // final moving frame below one; the exact slot endpoint is settled.
+        progress_millis: (progress * SPRING_POSITION_UNITS as f32)
+            .round()
+            .clamp(1.0, (SPRING_POSITION_UNITS - 1) as f32) as u32,
+        duration_millis: SPRING_POSITION_UNITS,
+        outgoing: None,
+    }
 }
 
 fn prepare(
@@ -472,19 +498,60 @@ mod tests {
     }
 
     #[test]
+    fn card_frames_follow_unbounded_position_through_both_wraps() {
+        let settled = settled_frame(0);
+        assert_eq!(
+            browse_frame_from_position(0, 0.0, 0.0, settled).phase,
+            BrowsePhase::Settled
+        );
+        let right = browse_frame_from_position(0, 5.25, 5.1, settled_frame(5));
+        assert_eq!((right.selected, right.target), (5, 0));
+        assert_eq!(right.direction, Some(BrowseDirection::Right));
+        assert_eq!(right.progress_millis, SPRING_POSITION_UNITS / 4);
+        let next = browse_frame_from_position(1, 6.25, 6.1, settled);
+        assert_eq!((next.selected, next.target), (0, 1));
+        let left = browse_frame_from_position(5, -0.25, -0.1, settled);
+        assert_eq!((left.selected, left.target), (0, 5));
+        assert_eq!(left.direction, Some(BrowseDirection::Left));
+        assert_eq!(left.progress_millis, SPRING_POSITION_UNITS / 4);
+        assert_eq!(
+            browse_frame_from_position(5, -1.0, -0.9, left).phase,
+            BrowsePhase::Settled
+        );
+    }
+
+    #[test]
+    fn reversal_unwinds_the_same_two_card_rotations() {
+        let forward = browse_frame_from_position(2, 1.30, 1.20, settled_frame(1));
+        let reverse = browse_frame_from_position(1, 1.25, 1.30, forward);
+        assert_eq!((forward.selected, forward.target), (1, 2));
+        assert_eq!((reverse.selected, reverse.target), (1, 2));
+        assert_eq!(reverse.direction, Some(BrowseDirection::Right));
+        assert!(reverse.progress_millis < forward.progress_millis);
+
+        let moving = browse_frame_from_position(1, 1.000_001, 1.01, reverse);
+        assert_eq!(moving.progress_millis, 1);
+        assert_eq!(
+            browse_frame_from_position(1, 1.0, 1.000_001, moving).phase,
+            BrowsePhase::Settled
+        );
+    }
+
+    #[test]
     fn root_session_renders_exact_geometry_and_animates_toward_navigation() {
         let mut session = LauncherCardHomeSession::new(960, 540, snapshot(), 0, "21:37").unwrap();
-        session.update(960, 540, snapshot(), 0, None, "21:37", 0);
-        session.update(960, 540, snapshot(), 1, None, "21:37", 10);
+        session.update(960, 540, snapshot(), 0, 0.0, "21:37", 0);
+        session.update(960, 540, snapshot(), 1, 0.2, "21:37", 10);
         assert!(session.is_animating());
-        assert_eq!(session.settled_selection(), None);
+        assert_eq!(session.frame.selected, 0);
+        assert_eq!(session.frame.target, 1);
         assert_eq!(session.render().len(), 960 * 540);
     }
 
     #[test]
     fn direct_publication_requires_one_compositor_reconciliation() {
         let mut session = LauncherCardHomeSession::new(960, 540, snapshot(), 0, "21:37").unwrap();
-        session.update(960, 540, snapshot(), 0, None, "21:37", 0);
+        session.update(960, 540, snapshot(), 0, 0.0, "21:37", 0);
         session.render();
         session.note_compositor_copied(true);
         assert!(session.compositor_copy_damage(true).is_some());
@@ -507,15 +574,15 @@ mod tests {
     #[test]
     fn compositor_cache_requires_seed_after_content_overlay_or_home_reentry() {
         let mut session = LauncherCardHomeSession::new(960, 540, snapshot(), 0, "12:34").unwrap();
-        session.update(960, 540, snapshot(), 0, None, "12:34", 0);
+        session.update(960, 540, snapshot(), 0, 0.0, "12:34", 0);
         assert_eq!(session.compositor_copy_damage(true), None);
         session.render();
         session.note_compositor_copied(true);
         let rect = session.compositor_copy_damage(true).unwrap();
         assert_eq!((rect.x1 - rect.x0) * (rect.y1 - rect.y0), 239250);
-        session.update(960, 540, snapshot(), 1, None, "12:34", 16);
+        session.update(960, 540, snapshot(), 1, 1.0, "12:34", 16);
         assert_eq!(session.compositor_copy_damage(true), Some(rect));
-        session.update(960, 540, snapshot(), 1, None, "12:35", 32);
+        session.update(960, 540, snapshot(), 1, 1.0, "12:35", 32);
         assert_eq!(session.compositor_copy_damage(true), None);
         session.note_compositor_copied(true);
         assert_eq!(session.compositor_copy_damage(false), None);
@@ -530,12 +597,12 @@ mod tests {
     fn clock_and_sidebar_refresh_preserve_worker_and_match_fresh_preparation() {
         let mut data = snapshot();
         let mut session = LauncherCardHomeSession::new(960, 540, data.clone(), 0, "21:37").unwrap();
-        session.update(960, 540, data.clone(), 0, None, "21:37", 0);
+        session.update(960, 540, data.clone(), 0, 0.0, "21:37", 0);
         let worker = session.render_ahead.as_ref().unwrap().worker_identity();
         for clock in ["21:38", "22:00"] {
             data.collections += 1;
             data.library_games += 123;
-            session.update(960, 540, data.clone(), 0, None, clock, 16);
+            session.update(960, 540, data.clone(), 0, 0.0, clock, 16);
             assert_eq!(
                 session.render_ahead.as_ref().unwrap().worker_identity(),
                 worker
@@ -547,7 +614,7 @@ mod tests {
             assert_eq!(session.render(), reference.pixels());
         }
         data.cards[0].games = Some(999);
-        session.update(960, 540, data, 0, None, "22:00", 32);
+        session.update(960, 540, data, 0, 0.0, "22:00", 32);
         assert_ne!(
             session.render_ahead.as_ref().unwrap().worker_identity(),
             worker
@@ -559,11 +626,11 @@ mod tests {
         let snapshot = snapshot();
         let mut session =
             LauncherCardHomeSession::new(960, 540, snapshot.clone(), 0, "21:37").unwrap();
-        session.update(960, 540, snapshot.clone(), 0, None, "21:37", 0);
+        session.update(960, 540, snapshot.clone(), 0, 0.0, "21:37", 0);
         session.render();
         let submitted_sequence = session.request_sequence;
 
-        session.update(960, 540, snapshot, 0, None, "21:37", 16);
+        session.update(960, 540, snapshot, 0, 0.0, "21:37", 16);
 
         assert_eq!(session.request_sequence, submitted_sequence);
     }

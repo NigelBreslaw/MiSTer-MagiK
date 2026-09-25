@@ -1709,13 +1709,13 @@ mod tests {
         assert!(!pressed.home_scroll_repeat_active);
         nav.handle_held_tick_with_navigation_intents(
             &held,
-            start + Duration::from_millis(199),
+            start + Duration::from_millis(499),
             &catalog,
         );
         assert!(!LauncherProjectionKey::from_nav(&nav).home_scroll_repeat_active);
         nav.handle_held_tick_with_navigation_intents(
             &held,
-            start + Duration::from_millis(200),
+            start + Duration::from_millis(501),
             &catalog,
         );
 
@@ -1725,7 +1725,7 @@ mod tests {
 
         nav.handle_held_tick_with_navigation_intents(
             &PadState::default(),
-            start + Duration::from_millis(201),
+            start + Duration::from_millis(502),
             &catalog,
         );
         let released = LauncherProjectionKey::from_nav(&nav);

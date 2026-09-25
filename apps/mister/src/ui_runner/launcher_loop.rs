@@ -466,6 +466,18 @@ fn launcher_input_focus(
     }
 }
 
+fn main_proxy_event_instant(
+    frame_now: Instant,
+    frame_clock_us: u64,
+    captured_at_us: u64,
+) -> Instant {
+    frame_now
+        .checked_sub(Duration::from_micros(
+            frame_clock_us.saturating_sub(captured_at_us),
+        ))
+        .unwrap_or(frame_now)
+}
+
 fn orientation_transition_benchmark_evidence_dir() -> Option<std::path::PathBuf> {
     std::env::var_os(ORIENTATION_TRANSITION_BENCHMARK_EVIDENCE_ENV)
         .filter(|value| !value.is_empty())
@@ -7432,6 +7444,7 @@ pub(super) fn run_launcher_loop(
                 .take()
                 .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
             let frame_now = Instant::now();
+            let frame_clock_us = crate::input_hub::monotonic_us();
             let mut incoming_input_events = VecDeque::new();
             let mut screensaver_wake = false;
             let input_batch_result =
@@ -7582,9 +7595,6 @@ pub(super) fn run_launcher_loop(
                 }
                 let active_device = pad.active_device();
                 let info = pad.info().clone();
-                let proxy_latest_captured_at_us =
-                    input_batch.events.last().map(|event| event.captured_at_us);
-
                 loop {
                     let lifecycle_view = lifecycle.view();
                     let focus = launcher_input_focus(
@@ -7606,14 +7616,12 @@ pub(super) fn run_launcher_loop(
                     let routed_event_this_loop = if let Some(event) =
                         incoming_input_events.pop_front()
                     {
-                        if event.source.kind == InputSourceKind::MainProxy
-                            && let Some(latest) = proxy_latest_captured_at_us
-                        {
-                            input_dispatch_now = frame_now
-                                .checked_sub(Duration::from_micros(
-                                    latest.saturating_sub(event.captured_at_us),
-                                ))
-                                .unwrap_or(frame_now);
+                        if event.source.kind == InputSourceKind::MainProxy {
+                            input_dispatch_now = main_proxy_event_instant(
+                                frame_now,
+                                frame_clock_us,
+                                event.captured_at_us,
+                            );
                         }
                         let outcome = input_router.route_event(event, focus, frame_now);
                         input_integrity_trace.record_outcome(outcome);
@@ -9391,7 +9399,6 @@ pub(super) fn run_launcher_loop(
         let custom_home_active = launcher_card_home.is_some()
             && nav.screen == Screen::Home
             && nav.current_menu_id() == crate::launcher_taxonomy::ROOT_MENU_ID;
-        let mut settled_home_selection = None;
         app.global::<slint_ui::launcher::MisterUi>()
             .set_custom_home_base(custom_home_active);
         if custom_home_active {
@@ -9401,11 +9408,10 @@ pub(super) fn run_launcher_loop(
                     layout.logical_h(),
                     crate::launcher_home::LauncherHomeSnapshot::from_runtime(&nav, &catalog),
                     nav.selected,
-                    nav.home_horizontal_direction(),
+                    nav.home_card_visual_index(),
                     &last_clock_text,
                     loop_start.duration_since(run_start).as_millis() as u64,
                 );
-                settled_home_selection = session.settled_selection();
             }
         } else if let Some(session) = launcher_card_home.as_mut() {
             session.set_inactive();
@@ -10554,9 +10560,6 @@ pub(super) fn run_launcher_loop(
             None
         };
         let arcade_list_update_us = arcade_list_update_start.elapsed().as_micros();
-        if let Some(selected) = settled_home_selection {
-            nav.selected = selected;
-        }
         let mut portrait_arcade_list_pixels = 0_u64;
         let mut portrait_arcade_list_bytes = 0_u64;
         let preview_blit_start = Instant::now();
@@ -15826,6 +15829,66 @@ mod tests {
             .expect("fresh A should reach the selected Arcade tile");
         assert_eq!(event.action, LauncherAction::OpenCollection);
         assert_eq!(event.path.as_deref(), Some("menu:arcade"));
+    }
+
+    #[test]
+    fn main_proxy_event_time_preserves_short_press_across_delayed_frames() {
+        let first_frame = Instant::now();
+        let press = main_proxy_event_instant(first_frame, 1_000_000, 900_000);
+        let later_frame = first_frame + Duration::from_millis(300);
+        let release = main_proxy_event_instant(later_frame, 1_300_000, 1_050_000);
+
+        assert_eq!(release.duration_since(press), Duration::from_millis(150));
+    }
+
+    #[test]
+    fn main_proxy_press_moves_root_card_after_idle() {
+        let catalog = empty_arcade_catalog("/tmp");
+        let mut nav = LauncherNav::new();
+        let focus = launcher_screen_input_focus(&nav);
+        let mut router = InputRouter::new(focus);
+        let start = Instant::now();
+        let press_at = start + Duration::from_secs(2);
+        nav.handle_held_tick_with_navigation_intents(&PadState::default(), start, &catalog);
+        nav.handle_held_tick_with_navigation_intents(
+            &PadState::default(),
+            press_at - Duration::from_millis(16),
+            &catalog,
+        );
+
+        let mut press = normalized_test_press(LogicalAction::Right);
+        press.source.kind = InputSourceKind::MainProxy;
+        let InputOutcome::Dispatch { event, .. } = router.route_event(press, focus, press_at)
+        else {
+            panic!("root card press should dispatch");
+        };
+        nav.handle_action_with_navigation_intents(&event, press_at, &catalog);
+        let mut held = PadState::default();
+        held.set_logical_action(
+            LogicalAction::Right,
+            router.action_held(LogicalAction::Right),
+        );
+        nav.handle_held_tick_with_navigation_intents(&held, press_at, &catalog);
+        assert_eq!(nav.selected, 1);
+
+        let release_at = press_at + Duration::from_millis(80);
+        let mut release = press;
+        release.sequence += 1;
+        release.phase = InputPhase::Released;
+        assert!(matches!(
+            router.route_event(release, focus, release_at),
+            InputOutcome::Released { .. }
+        ));
+        nav.handle_action_with_navigation_intents(&release, release_at, &catalog);
+        nav.handle_held_tick_with_navigation_intents(&PadState::default(), release_at, &catalog);
+        for frame in 1..=120 {
+            nav.handle_held_tick_with_navigation_intents(
+                &PadState::default(),
+                release_at + Duration::from_millis(frame * 16),
+                &catalog,
+            );
+        }
+        assert_eq!(nav.selected, 1);
     }
 
     #[test]
