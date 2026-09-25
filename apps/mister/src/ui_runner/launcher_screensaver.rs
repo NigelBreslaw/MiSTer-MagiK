@@ -407,6 +407,64 @@ impl Drop for LauncherScreensaverLoader {
     }
 }
 
+/// Elapsed-time milestones from showing the screensaver to its first visible
+/// card, each logged once per show.
+#[derive(Default)]
+pub(super) struct ScreensaverStartupTimeline {
+    started: Option<Instant>,
+    first_render_logged: bool,
+    first_present_logged: bool,
+    first_card_present_logged: bool,
+}
+
+impl ScreensaverStartupTimeline {
+    pub(super) fn begin(&mut self, started: Instant, source: Option<&str>) {
+        *self = Self {
+            started: Some(started),
+            ..Self::default()
+        };
+        match source {
+            Some(source) => crate::ui_logln!(
+                "screensaver_startup_timing milestone=show_pressed elapsed_us=0 source={source}"
+            ),
+            None => {
+                crate::ui_logln!("screensaver_startup_timing milestone=show_pressed elapsed_us=0")
+            }
+        }
+    }
+
+    pub(super) fn started(&self) -> Option<Instant> {
+        self.started
+    }
+
+    pub(super) fn log(&self, milestone: &str) {
+        if let Some(started) = self.started {
+            crate::ui_logln!(
+                "screensaver_startup_timing milestone={milestone} elapsed_us={}",
+                started.elapsed().as_micros()
+            );
+        }
+    }
+
+    pub(super) fn note_rendered(&mut self, accepted_frame: bool) {
+        if accepted_frame && !self.first_render_logged {
+            self.first_render_logged = true;
+            self.log("first_saver_render");
+        }
+    }
+
+    pub(super) fn note_presented(&mut self, accepted_frame: bool) {
+        if self.first_render_logged && !self.first_present_logged {
+            self.first_present_logged = true;
+            self.log("first_saver_present");
+        }
+        if accepted_frame && !self.first_card_present_logged {
+            self.first_card_present_logged = true;
+            self.log("first_card_visible");
+        }
+    }
+}
+
 #[cfg(test)]
 fn screensaver_archive_path(asset_dir: Option<&OsStr>, layout: DeviceLayout) -> PathBuf {
     asset_dir
@@ -429,6 +487,28 @@ fn random_seed(configured: Option<u64>) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_timeline_logs_each_milestone_once_per_show() {
+        let mut timeline = ScreensaverStartupTimeline::default();
+        timeline.note_presented(true);
+        assert!(!timeline.first_present_logged);
+        assert!(timeline.first_card_present_logged);
+
+        timeline.begin(Instant::now(), None);
+        assert!(timeline.started().is_some());
+        assert!(!timeline.first_card_present_logged);
+        timeline.note_rendered(false);
+        timeline.note_presented(false);
+        assert!(!timeline.first_render_logged && !timeline.first_present_logged);
+
+        timeline.note_rendered(true);
+        timeline.note_presented(false);
+        assert!(timeline.first_render_logged && timeline.first_present_logged);
+        assert!(!timeline.first_card_present_logged);
+        timeline.note_presented(true);
+        assert!(timeline.first_card_present_logged);
+    }
 
     #[test]
     fn screensaver_archive_path_uses_public_layout_by_default() {
