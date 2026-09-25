@@ -425,6 +425,7 @@ struct ActiveDownload {
     rx: mpsc::Receiver<Result<(), String>>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn start_ready_downloads(
     config: &MediaWorkerConfig,
     packs_by_system: &BTreeMap<String, MediaPack>,
@@ -1042,6 +1043,7 @@ fn stream_variant_to_stage_file(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stream_index_to_publish_temp(
     index: &MediaIndex,
     pack: &MediaPack,
@@ -1122,6 +1124,7 @@ fn join_silent_index_download(
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stream_media_object_to_path(
     url: &str,
     expected_bytes: u64,
@@ -1386,6 +1389,7 @@ fn install_streamed_index_silent(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn install_streamed_object(
     publish: &crate::artifact_publish::ArtifactPublishPlan,
     streamed: &StreamedPackDownload,
@@ -2061,7 +2065,6 @@ fn parse_http_headers(text: &str, effective_url: &str, source: &str) -> HttpCach
             .get("content-encoding")
             .unwrap_or_default()
             .to_string(),
-        ..Default::default()
     };
     if let Some(location) = headers.get("location") {
         metadata.effective_url = location.to_string();

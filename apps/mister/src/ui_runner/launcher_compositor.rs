@@ -800,6 +800,7 @@ impl<'a> LayerTarget<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn compose_arcade_list_over_backdrop(
         &mut self,
         renderer: &mut ArcadeListRenderer,

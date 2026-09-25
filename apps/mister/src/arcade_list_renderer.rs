@@ -779,6 +779,12 @@ struct ArcadeFilterListDrawKey {
 
 pub use mister_magik_mister_runtime::framebuffer::latch_state::PhysicalLayerUpdate as ArcadeListUpdate;
 
+impl Default for ArcadeListRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArcadeListRenderer {
     pub fn new() -> Self {
         Self::new_with_style(ArcadeListStyle::hdmi(), None)
@@ -1486,11 +1492,11 @@ impl ArcadeListRenderer {
 
     fn arcade_cached_game_hash(&mut self, idx: usize, game: &ArcadeGameEntry) -> u64 {
         let last_used = self.next_row_fingerprint_epoch();
-        if let Some(cached) = self.row_fingerprint_cache.get_mut(&idx) {
-            if cached.matches(game) {
-                cached.last_used = last_used;
-                return cached.hash;
-            }
+        if let Some(cached) = self.row_fingerprint_cache.get_mut(&idx)
+            && cached.matches(game)
+        {
+            cached.last_used = last_used;
+            return cached.hash;
         }
         if self.row_fingerprint_cache.len() >= ARCADE_ROW_FINGERPRINT_CACHE_MAX {
             prune_arcade_row_fingerprint_cache(&mut self.row_fingerprint_cache);
@@ -1568,9 +1574,11 @@ impl ArcadeListRenderer {
         let output_layout = target.output_layout();
         self.oriented_viewport_layout = Some(output_layout);
         (self.width.saturating_mul(self.visible_height) as u64).saturating_add(
-            redraw_selection_frame
-                .then(|| self.selection_frame_write_pixels())
-                .unwrap_or(0),
+            if redraw_selection_frame {
+                self.selection_frame_write_pixels()
+            } else {
+                0
+            },
         )
     }
 
@@ -1626,7 +1634,7 @@ impl ArcadeListRenderer {
             Some(PersistentArcadeRebuildReason::MissingSelectionCapture)
         } else if delta_y == 0 {
             Some(PersistentArcadeRebuildReason::ZeroDelta)
-        } else if delta_y.unsigned_abs() as usize >= self.visible_height {
+        } else if delta_y.unsigned_abs() >= self.visible_height {
             Some(PersistentArcadeRebuildReason::LargeDelta)
         } else {
             None
@@ -1664,7 +1672,7 @@ impl ArcadeListRenderer {
                 written,
             );
         }
-        let exposed = delta_y.unsigned_abs() as usize;
+        let exposed = delta_y.unsigned_abs();
         let exposed_y = if delta_y < 0 {
             self.visible_height.saturating_sub(exposed)
         } else {
@@ -3236,6 +3244,7 @@ pub fn for_each_arcade_list_present_segment(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn for_each_arcade_list_present_segment_with_geometry(
     width: usize,
     viewport_y: usize,
@@ -3302,6 +3311,7 @@ pub fn arcade_list_present_pixels(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn arcade_list_present_pixels_with_geometry(
     update: &ArcadeListUpdate,
     width: usize,
@@ -5394,7 +5404,7 @@ mod tests {
             let text_rows = row
                 .chunks(renderer.width)
                 .enumerate()
-                .filter(|(_, row)| row.iter().any(|pixel| *pixel == badge_text))
+                .filter(|(_, row)| row.contains(&badge_text))
                 .map(|(y, _)| y)
                 .collect::<Vec<_>>();
             let text_top = *text_rows.first().expect("badge text top");

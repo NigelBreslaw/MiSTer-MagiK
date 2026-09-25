@@ -185,7 +185,7 @@ mod tests {
         period_us: u64,
         late_frame_start_headroom_us: u64,
     ) -> bool {
-        LauncherFramePacingPolicy::default()
+        LauncherFramePacingPolicy
             .decide(LauncherFramePacingInput {
                 first_visible_copy_done,
                 frame_start_phase_us,

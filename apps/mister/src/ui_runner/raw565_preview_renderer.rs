@@ -449,11 +449,11 @@ fn blit_transition_565_fade(
         return finish(FadeWorkStats::new(PreviewFadePath::Empty, screen));
     }
     if alpha == 0 {
-        if let Some(previous) = frame.previous.as_ref() {
-            if blit_preview_frame_565_cut(cached, ui, screen, surface, previous).is_some() {
-                let rect = raw_preview_scaled_rect(ui, previous).unwrap_or(screen);
-                return finish(FadeWorkStats::new(PreviewFadePath::Cut, rect));
-            }
+        if let Some(previous) = frame.previous.as_ref()
+            && blit_preview_frame_565_cut(cached, ui, screen, surface, previous).is_some()
+        {
+            let rect = raw_preview_scaled_rect(ui, previous).unwrap_or(screen);
+            return finish(FadeWorkStats::new(PreviewFadePath::Cut, rect));
         }
         clear_preview_screen(cached, ui, screen, surface);
         return finish(FadeWorkStats::new(PreviewFadePath::Cut, screen));
@@ -466,8 +466,8 @@ fn blit_transition_565_fade(
         let rect = raw_preview_scaled_rect(ui, &frame.current).unwrap_or(screen);
         return finish(FadeWorkStats::new(PreviewFadePath::Cut, rect));
     }
-    if preview_fade_fast_path_enabled() {
-        if let Some(stats) = blit_transition_565_fade_same_geometry(
+    if preview_fade_fast_path_enabled()
+        && let Some(stats) = blit_transition_565_fade_same_geometry(
             cached,
             ui,
             screen,
@@ -475,12 +475,12 @@ fn blit_transition_565_fade(
             previous.as_ref(),
             current.as_ref(),
             alpha,
-        ) {
-            return finish(stats);
-        }
+        )
+    {
+        return finish(stats);
     }
-    if preview_fade_fast_path_enabled() {
-        if let Some(stats) = blit_transition_565_fade_single_geometry(
+    if preview_fade_fast_path_enabled()
+        && let Some(stats) = blit_transition_565_fade_single_geometry(
             cached,
             ui,
             screen,
@@ -488,9 +488,9 @@ fn blit_transition_565_fade(
             previous.as_ref(),
             current.as_ref(),
             alpha,
-        ) {
-            return finish(stats);
-        }
+        )
+    {
+        return finish(stats);
     }
     let stats = blit_transition_565_fade_rows(
         cached,
@@ -638,8 +638,8 @@ fn blit_transition_565_fade_rows(
                 }
                 (Some(previous_row), None) => {
                     let previous_start = seg_x0 - previous_row.x0;
-                    for x in 0..dst.len() {
-                        dst[x] = blend_565_bucket(
+                    for (x, out) in dst.iter_mut().enumerate() {
+                        *out = blend_565_bucket(
                             previous_row.row[previous_start + x],
                             black,
                             alpha_bucket,
@@ -648,8 +648,8 @@ fn blit_transition_565_fade_rows(
                 }
                 (None, Some(current_row)) => {
                     let current_start = seg_x0 - current_row.x0;
-                    for x in 0..dst.len() {
-                        dst[x] = blend_565_bucket(
+                    for (x, out) in dst.iter_mut().enumerate() {
+                        *out = blend_565_bucket(
                             black,
                             current_row.row[current_start + x],
                             alpha_bucket,
@@ -666,29 +666,29 @@ fn blit_transition_565_fade_rows(
                             stats.path = PreviewFadePath::ScaledSample;
                             let previous = previous.expect("previous bounds require view");
                             let current = current.expect("current bounds require view");
-                            for x in 0..dst.len() {
+                            for (x, out) in dst.iter_mut().enumerate() {
                                 let screen_x = seg_x0 + x;
                                 let prev = sample_raw565(previous, screen_x, y).unwrap_or(black);
                                 let curr = sample_raw565(current, screen_x, y).unwrap_or(black);
-                                dst[x] = blend_565_bucket(prev, curr, alpha_bucket);
+                                *out = blend_565_bucket(prev, curr, alpha_bucket);
                             }
                         }
                         (true, false) => {
                             stats.path = PreviewFadePath::ScaledSample;
                             let previous = previous.expect("previous bounds require view");
-                            for x in 0..dst.len() {
+                            for (x, out) in dst.iter_mut().enumerate() {
                                 let screen_x = seg_x0 + x;
                                 let prev = sample_raw565(previous, screen_x, y).unwrap_or(black);
-                                dst[x] = blend_565_bucket(prev, black, alpha_bucket);
+                                *out = blend_565_bucket(prev, black, alpha_bucket);
                             }
                         }
                         (false, true) => {
                             stats.path = PreviewFadePath::ScaledSample;
                             let current = current.expect("current bounds require view");
-                            for x in 0..dst.len() {
+                            for (x, out) in dst.iter_mut().enumerate() {
                                 let screen_x = seg_x0 + x;
                                 let curr = sample_raw565(current, screen_x, y).unwrap_or(black);
-                                dst[x] = blend_565_bucket(black, curr, alpha_bucket);
+                                *out = blend_565_bucket(black, curr, alpha_bucket);
                             }
                         }
                         (false, false) => dst.fill(black),

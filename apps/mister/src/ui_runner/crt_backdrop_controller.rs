@@ -313,6 +313,7 @@ impl CrtBackdropController {
         Some(prepared)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn compose(
         &mut self,
         eligible: bool,

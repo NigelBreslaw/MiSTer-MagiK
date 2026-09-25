@@ -865,7 +865,7 @@ fn render_crt_probe_pattern(
                 0xffff
             } else if shifted_x % 32 < 2 {
                 0x8410
-            } else if shifted_x % 8 == 0 {
+            } else if shifted_x.is_multiple_of(8) {
                 0x4208
             } else {
                 0x0841

@@ -89,7 +89,7 @@ impl PersistentOrientedArcadeLayer {
             x1: physical.x1,
             y1: physical.y1,
         };
-        let changed = self.key.map_or(true, |current| {
+        let changed = self.key.is_none_or(|current| {
             current.geometry != key.geometry
                 || current.visible_height != key.visible_height
                 || current.output != key.output

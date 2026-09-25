@@ -142,18 +142,18 @@ fn encode_diff_png(expected: &DecodedPng, actual: &DecodedPng) -> Result<Vec<u8>
     let (width, height) = (actual.width, actual.height);
     let mut pixels = vec![0u8; width.saturating_mul(height).saturating_mul(3)];
     if expected.width != actual.width || expected.height != actual.height {
-        for pixel in pixels.chunks_exact_mut(3) {
-            pixel.copy_from_slice(&[255, 0, 255]);
-        }
+        pixels.as_chunks_mut::<3>().0.fill([255, 0, 255]);
     } else {
         for ((expected, actual), diff) in expected
             .pixels
-            .chunks_exact(3)
-            .zip(actual.pixels.chunks_exact(3))
-            .zip(pixels.chunks_exact_mut(3))
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(actual.pixels.as_chunks::<3>().0)
+            .zip(pixels.as_chunks_mut::<3>().0)
         {
             if expected != actual {
-                diff.copy_from_slice(&[255, 0, 255]);
+                *diff = [255, 0, 255];
             }
         }
     }

@@ -1097,7 +1097,8 @@ fn route_lifecycle_dialog_input(
     recovery_dialog_visible: bool,
 ) -> Option<LauncherLifecycleInput> {
     let event = event.filter(|event| event.phase == crate::input_event::InputPhase::Pressed)?;
-    let input = if launch_failure_visible {
+
+    if launch_failure_visible {
         matches!(
             event.action,
             crate::input_event::LogicalAction::Activate
@@ -1123,8 +1124,7 @@ fn route_lifecycle_dialog_input(
         }
     } else {
         None
-    };
-    input
+    }
 }
 
 fn lifecycle_dialog_ui_inputs(
@@ -2469,6 +2469,7 @@ impl LauncherResponseTrace {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn frame_stamp(
         &self,
         nav: &LauncherNav,
@@ -2483,7 +2484,7 @@ impl LauncherResponseTrace {
             return None;
         }
         let state = LauncherResponseState::capture(nav);
-        let Some(position) = self.pending_confirmations.iter().rposition(|index| {
+        let position = self.pending_confirmations.iter().rposition(|index| {
             let record = &self.records[*index];
             record
                 .state_applied_at_us
@@ -2492,9 +2493,7 @@ impl LauncherResponseTrace {
                     .after
                     .as_ref()
                     .is_some_and(|after| after.matches_presented(&record.before, &state))
-        }) else {
-            return None;
-        };
+        })?;
         Some(LauncherResponseFrameStamp {
             record_index: self.pending_confirmations[position],
             selected: state,
@@ -2954,9 +2953,11 @@ impl LauncherResponseTrace {
         self.snapshot_with_records(
             self.complete,
             self.feedback_records.clone(),
-            self.complete
-                .then(|| self.lab_records.clone())
-                .unwrap_or_default(),
+            if self.complete {
+                self.lab_records.clone()
+            } else {
+                Default::default()
+            },
         )
     }
 
@@ -2981,12 +2982,16 @@ impl LauncherResponseTrace {
             complete,
             execution_enabled: self.execution_enabled,
             queue_high_water: self.queue_high_water,
-            catalog_phases: complete
-                .then(|| self.catalog_phases.clone())
-                .unwrap_or_default(),
-            scheduler_phases: complete
-                .then(|| self.scheduler_phases.clone())
-                .unwrap_or_default(),
+            catalog_phases: if complete {
+                self.catalog_phases.clone()
+            } else {
+                Default::default()
+            },
+            scheduler_phases: if complete {
+                self.scheduler_phases.clone()
+            } else {
+                Default::default()
+            },
             lab_records,
             input_reader_policy: self.input_reader_policy.clone(),
         }
@@ -3362,10 +3367,11 @@ fn spawn_launcher_response_trace_writer(
                 )
                 .and_then(|()| std::fs::rename(&temporary_path, trace_path))
                 .is_ok();
-                if wrote && complete {
-                    if let Some(path) = write_completion_path.or_else(|| completion_path.clone()) {
-                        let _ = std::fs::write(path, b"complete\n");
-                    }
+                if wrote
+                    && complete
+                    && let Some(path) = write_completion_path.or_else(|| completion_path.clone())
+                {
+                    let _ = std::fs::write(path, b"complete\n");
                 }
             }
         });
@@ -4189,6 +4195,7 @@ impl CatalogScanBlink {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn can_preempt_home_latch_wait(
     screen: Screen,
     response_frame_stamped: bool,
@@ -4209,6 +4216,7 @@ fn can_preempt_home_latch_wait(
         && !startup_intro_frame_posted
 }
 
+#[allow(clippy::too_many_arguments)]
 fn can_preempt_disposable_home_raster(
     screen: Screen,
     current_batch_empty: bool,
@@ -4910,6 +4918,7 @@ fn replace_layout(
     true
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_orientation_layout(
     app: &slint_ui::launcher::Launcher,
     window: &Rc<MisterSoftwareWindow>,
@@ -5048,6 +5057,7 @@ fn render_immediate_launcher_frame(
     damage.iter().reduce(DirtyRect::union)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn run_launcher_loop(
     secs: u64,
     ui: &UiDisplay,
@@ -5434,18 +5444,17 @@ pub(super) fn run_launcher_loop(
             "active=1 benchmark_interaction_gate=disabled",
         );
     }
-    if AUTO_CONTROLLER_SETUP_ENABLED {
-        if let Some(device) = pad.device_needing_setup()
-            && let Some(info) = pad.info_for_device(&device)
-        {
-            let status = pad.db().registry_status(info);
-            crate::ui_errln!(
-                "controller setup: {} generation {} needs setup ({status:?}) - showing prompt",
-                device.plug_id,
-                device.generation
-            );
-            setup.open_for(status, device);
-        }
+    if AUTO_CONTROLLER_SETUP_ENABLED
+        && let Some(device) = pad.device_needing_setup()
+        && let Some(info) = pad.info_for_device(&device)
+    {
+        let status = pad.db().registry_status(info);
+        crate::ui_errln!(
+            "controller setup: {} generation {} needs setup ({status:?}) - showing prompt",
+            device.plug_id,
+            device.generation
+        );
+        setup.open_for(status, device);
     }
     let mut pacer = ui
         .output_route()
@@ -5457,7 +5466,7 @@ pub(super) fn run_launcher_loop(
             )
         })
         .unwrap_or_else(|| VsyncPacer::from_config(launcher_config.display_pacing().vsync()));
-    let pacing_policy = LauncherFramePacingPolicy::default();
+    let pacing_policy = LauncherFramePacingPolicy;
     let mut phase_alignment = LauncherPhaseAlignment::default();
     let present_timing = launcher_config.display_pacing().present_timing();
     if launcher_bench_scenario.is_some() && !launcher_config.preview().archive_warm_skipped() {
@@ -6432,8 +6441,10 @@ pub(super) fn run_launcher_loop(
         let arcade_filter_visual_index_at_loop_start = nav.arcade_filter.visual_index;
         let prepare_trace_enabled =
             frame_accounting.preview_scroll_trace_enabled() || frame_analytics_mode.records_wall();
-        let mut prepare_trace = LauncherPrepareTrace::default();
-        prepare_trace.slint_timer_dispatch_us = slint_timer_dispatch_us;
+        let mut prepare_trace = LauncherPrepareTrace {
+            slint_timer_dispatch_us,
+            ..LauncherPrepareTrace::default()
+        };
         let bridge_churn_frame_start = crate::launcher_presentation::bridge_churn_snapshot();
         if background_work_allowed
             && catalog_ready
@@ -6493,7 +6504,7 @@ pub(super) fn run_launcher_loop(
         if launcher_presenter.retry_latch_automatically(ui) {
             runtime_status::event(
                 "launcher_latch_recovery",
-                &format!(
+                format!(
                     "action=automatic-retry attempt={}",
                     launcher_presenter.retry_attempts()
                 ),
@@ -6508,7 +6519,7 @@ pub(super) fn run_launcher_loop(
                 ),
                 Err(error) => runtime_status::event(
                     "launcher_latch_recovery",
-                    &format!("action=supervised-restart-failed error={error}"),
+                    format!("action=supervised-restart-failed error={error}"),
                 ),
             }
         }
@@ -6613,31 +6624,32 @@ pub(super) fn run_launcher_loop(
             };
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-raw-device-poll", scheduler_phase);
-        if background_work_allowed && let Some(sample) = memory_guard.tick(loop_start) {
-            if sample.changed {
-                runtime_status::event(
-                    "memory_pressure",
-                    &format!(
-                        "active={} available_kib={} threshold_kib={}",
-                        u8::from(sample.active),
-                        sample.available_kib,
-                        sample.threshold_kib
-                    ),
+        if background_work_allowed
+            && let Some(sample) = memory_guard.tick(loop_start)
+            && sample.changed
+        {
+            runtime_status::event(
+                "memory_pressure",
+                format!(
+                    "active={} available_kib={} threshold_kib={}",
+                    u8::from(sample.active),
+                    sample.available_kib,
+                    sample.threshold_kib
+                ),
+            );
+            if sample.active {
+                let bridge = app.global::<slint_ui::launcher::ArcadeView>();
+                preview.clear(&bridge);
+                apply_screenshot_media_update_effects(
+                    media_session.pause_for_low_memory(media_benchmark_contention),
+                    &app,
+                    &mut catalog,
+                    &mut scheduler,
+                    Some(&mut preview),
+                    &mut full_bridge_dirty,
+                    start,
                 );
-                if sample.active {
-                    let bridge = app.global::<slint_ui::launcher::ArcadeView>();
-                    preview.clear(&bridge);
-                    apply_screenshot_media_update_effects(
-                        media_session.pause_for_low_memory(media_benchmark_contention),
-                        &app,
-                        &mut catalog,
-                        &mut scheduler,
-                        Some(&mut preview),
-                        &mut full_bridge_dirty,
-                        start,
-                    );
-                    full_bridge_dirty = true;
-                }
+                full_bridge_dirty = true;
             }
         }
         if background_work_allowed {
@@ -6694,12 +6706,13 @@ pub(super) fn run_launcher_loop(
         let clock_update_us = clock_update_start
             .map(|started| started.elapsed().as_micros())
             .unwrap_or(0);
-        if background_work_allowed && let Some(available) = update_check.try_recv() {
-            if available {
-                set_launcher_update_available(&app, true);
-                light_bridge_dirty = true;
-                runtime_status::event("update_available", "source=downloader_mister_magik");
-            }
+        if background_work_allowed
+            && let Some(available) = update_check.try_recv()
+            && available
+        {
+            set_launcher_update_available(&app, true);
+            light_bridge_dirty = true;
+            runtime_status::event("update_available", "source=downloader_mister_magik");
         }
 
         if input_observation_probe
@@ -6990,12 +7003,12 @@ pub(super) fn run_launcher_loop(
                         &mut lifecycle_effects,
                     );
                     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-                    if scheduler.stop_spawned_mister_for_recovery() {
-                        if let Err(e) = display_session.recover_after_launch_failure(frames, f) {
-                            crate::ui_errln!(
-                                "failed to recover Slint framebuffer route after launch failure: {e}"
-                            );
-                        }
+                    if scheduler.stop_spawned_mister_for_recovery()
+                        && let Err(e) = display_session.recover_after_launch_failure(frames, f)
+                    {
+                        crate::ui_errln!(
+                            "failed to recover Slint framebuffer route after launch failure: {e}"
+                        );
                     }
                     sync_bridge_launcher(
                         &app,
@@ -7761,7 +7774,7 @@ pub(super) fn run_launcher_loop(
                             {
                                 apply_orientation_layout(
                                     &app,
-                                    &window,
+                                    window,
                                     ui,
                                     orientation,
                                     &mut nav,
@@ -7808,9 +7821,8 @@ pub(super) fn run_launcher_loop(
                             let event = if orientation_transition.is_active()
                                 || full_screen_transition.owner()
                                     == Some(FullScreenTransitionOwner::Orientation)
+                                || navigation_transition.is_active()
                             {
-                                None
-                            } else if navigation_transition.is_active() {
                                 None
                             } else if launch_failure_visible || recovery_dialog_visible {
                                 let ui_inputs =
@@ -8021,14 +8033,13 @@ pub(super) fn run_launcher_loop(
                                         if transition_spec.is_some()
                                             && nav.screen == Screen::Arcade
                                             && !crt_layout
+                                            && !layout.is_portrait()
                                         {
-                                            if !layout.is_portrait() {
-                                                arcade_list_renderer
-                                                    .compose_layer_to_cached(target, true);
-                                                let _ = target.compose_direct_preview_rect(
-                                                    preview_screen_rect(ui),
-                                                );
-                                            }
+                                            arcade_list_renderer
+                                                .compose_layer_to_cached(target, true);
+                                            let _ = target.compose_direct_preview_rect(
+                                                preview_screen_rect(ui),
+                                            );
                                         }
                                         let navigation_runtime_started = transition_spec
                                             .is_some_and(|(edge, direction)| {
@@ -8164,7 +8175,7 @@ pub(super) fn run_launcher_loop(
                                         } else if navigation_runtime_started {
                                             navigation_transition.settle_at_destination();
                                             let _ = navigation_transition.complete();
-                                        } else if collection_id.is_none()
+                                        } else if (collection_id.is_none()
                                             || collection_id.as_deref().is_some_and(
                                                 |collection_id| {
                                                     collection_id
@@ -8174,25 +8185,21 @@ pub(super) fn run_launcher_loop(
                                                             collection_id,
                                                         )
                                                 },
-                                            )
+                                            ))
+                                            && nav.commit_navigation_intent(&event, &catalog)
                                         {
-                                            if nav.commit_navigation_intent(&event, &catalog) {
-                                                if let Some(collection_id) =
-                                                    collection_id.as_deref()
-                                                {
-                                                    print_startup_event(
-                                                        start,
-                                                        "catalog_system_entry_immediate",
-                                                        format!(
-                                                            "system={collection_id} resident_rows={}",
-                                                            catalog
-                                                                .system_game_count(collection_id)
-                                                        ),
-                                                    );
-                                                }
-                                                full_bridge_dirty = true;
-                                                request_launcher_redraw!();
+                                            if let Some(collection_id) = collection_id.as_deref() {
+                                                print_startup_event(
+                                                    start,
+                                                    "catalog_system_entry_immediate",
+                                                    format!(
+                                                        "system={collection_id} resident_rows={}",
+                                                        catalog.system_game_count(collection_id)
+                                                    ),
+                                                );
                                             }
+                                            full_bridge_dirty = true;
+                                            request_launcher_redraw!();
                                         }
                                     }
                                     LauncherAction::ExitToMister => {
@@ -8652,9 +8659,7 @@ pub(super) fn run_launcher_loop(
                                     Instant::now(),
                                 );
                             }
-                            if pad_changed && nav.screen == Screen::Controller {
-                                full_bridge_dirty = true;
-                            } else if pad_changed && !dirty_opt {
+                            if pad_changed && (nav.screen == Screen::Controller || !dirty_opt) {
                                 full_bridge_dirty = true;
                             }
                             if nav_before != nav_after {
@@ -8664,14 +8669,13 @@ pub(super) fn run_launcher_loop(
                                     arcade_entry_latency.record_enter_input(
                                         start, frame_now, &lifecycle, &catalog, &nav,
                                     );
-                                    if !active_system_games_loading(&catalog, &nav) {
-                                        if let Some(system) = active_system(&catalog, &nav) {
-                                            if catalog.system_game_count(&system.id) > 0 {
-                                                arcade_entry_latency.record_rows_ready(
-                                                    start, frame_now, &lifecycle, &catalog, &nav,
-                                                );
-                                            }
-                                        }
+                                    if !active_system_games_loading(&catalog, &nav)
+                                        && let Some(system) = active_system(&catalog, &nav)
+                                        && catalog.system_game_count(&system.id) > 0
+                                    {
+                                        arcade_entry_latency.record_rows_ready(
+                                            start, frame_now, &lifecycle, &catalog, &nav,
+                                        );
                                     }
                                 } else if nav_before.screen == Screen::Arcade
                                     && nav_after.screen == Screen::Arcade
@@ -8729,14 +8733,13 @@ pub(super) fn run_launcher_loop(
                                 &mut lifecycle_effects,
                             );
                             apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-                            if scheduler.stop_spawned_mister_for_recovery() {
-                                if let Err(e) =
+                            if scheduler.stop_spawned_mister_for_recovery()
+                                && let Err(e) =
                                     display_session.recover_after_launch_failure(frames, f)
-                                {
-                                    crate::ui_errln!(
-                                        "failed to recover Slint framebuffer route after launch timeout: {e}"
-                                    );
-                                }
+                            {
+                                crate::ui_errln!(
+                                    "failed to recover Slint framebuffer route after launch timeout: {e}"
+                                );
                             }
                             std::process::exit(1);
                         }
@@ -9022,46 +9025,47 @@ pub(super) fn run_launcher_loop(
             crate::launcher_presentation::active_games_load_state(&catalog, &nav)
                 != slint_ui::launcher::ArcadeLoadState::Ready;
         let arcade_search_active = nav.arcade_search.is_active(&nav.arcade_filter.active);
-        if !launching && nav.screen == Screen::Arcade {
-            if let Some(system) = active_system(&catalog, &nav) {
-                let trace_system_id = &system.legacy_system_id;
-                if preview_systems_entered.insert(trace_system_id.clone()) {
+        if !launching
+            && nav.screen == Screen::Arcade
+            && let Some(system) = active_system(&catalog, &nav)
+        {
+            let trace_system_id = &system.legacy_system_id;
+            if preview_systems_entered.insert(trace_system_id.clone()) {
+                crate::ui_logln!(
+                    "startup_timing\tpreview_system_entered\t{}ms\tsystem={}\tselected_index={}",
+                    start.elapsed().as_millis(),
+                    trace_system_id,
+                    nav.arcade.selected
+                );
+            }
+            if active_arcade_games_available
+                && preview_initial_lists_ready.insert(trace_system_id.clone())
+            {
+                arcade_entry_latency.record_rows_ready(
+                    start,
+                    Instant::now(),
+                    &lifecycle,
+                    &catalog,
+                    &nav,
+                );
+                let selected = nav.arcade.selected.min(active_arcade_games.len() - 1);
+                if let Some(game) = active_arcade_games.get(selected) {
                     crate::ui_logln!(
-                        "startup_timing\tpreview_system_entered\t{}ms\tsystem={}\tselected_index={}",
+                        "startup_timing\tpreview_initial_list_ready\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview={}\tasset_key={}",
                         start.elapsed().as_millis(),
                         trace_system_id,
-                        nav.arcade.selected
+                        selected,
+                        game.title,
+                        if game.has_preview { 1 } else { 0 },
+                        game.preview_asset_key
                     );
-                }
-                if active_arcade_games_available
-                    && preview_initial_lists_ready.insert(trace_system_id.clone())
-                {
-                    arcade_entry_latency.record_rows_ready(
-                        start,
-                        Instant::now(),
-                        &lifecycle,
-                        &catalog,
-                        &nav,
+                } else {
+                    crate::ui_logln!(
+                        "startup_timing\tpreview_initial_list_ready\t{}ms\tsystem={}\tselected_index={}\ttitle=\thas_preview=0\tasset_key=",
+                        start.elapsed().as_millis(),
+                        trace_system_id,
+                        selected
                     );
-                    let selected = nav.arcade.selected.min(active_arcade_games.len() - 1);
-                    if let Some(game) = active_arcade_games.get(selected) {
-                        crate::ui_logln!(
-                            "startup_timing\tpreview_initial_list_ready\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview={}\tasset_key={}",
-                            start.elapsed().as_millis(),
-                            trace_system_id,
-                            selected,
-                            game.title,
-                            if game.has_preview { 1 } else { 0 },
-                            game.preview_asset_key
-                        );
-                    } else {
-                        crate::ui_logln!(
-                            "startup_timing\tpreview_initial_list_ready\t{}ms\tsystem={}\tselected_index={}\ttitle=\thas_preview=0\tasset_key=",
-                            start.elapsed().as_millis(),
-                            trace_system_id,
-                            selected
-                        );
-                    }
                 }
             }
         }
@@ -9710,14 +9714,14 @@ pub(super) fn run_launcher_loop(
         let frame_t1 = Instant::now();
         retiring_screensaver_pipelines.retain_mut(|pipeline| !pipeline.poll_stopped());
         if screensaver.take_restore_full_frame() {
-            if let Some(mut snapshot) = screensaver_launcher_frame.take() {
-                if !layer_target.swap_presentation_cached(&mut snapshot) {
-                    crate::ui_errln!(
-                        "screensaver: launcher frame restore size mismatch snapshot={} cached={}",
-                        snapshot.len(),
-                        layer_target.cached_frame_view().pixels().len()
-                    );
-                }
+            if let Some(mut snapshot) = screensaver_launcher_frame.take()
+                && !layer_target.swap_presentation_cached(&mut snapshot)
+            {
+                crate::ui_errln!(
+                    "screensaver: launcher frame restore size mismatch snapshot={} cached={}",
+                    snapshot.len(),
+                    layer_target.cached_frame_view().pixels().len()
+                );
             }
             if let Some(pipeline) = screensaver_pipeline.take() {
                 pipeline.cancel();
@@ -10232,11 +10236,10 @@ pub(super) fn run_launcher_loop(
             } else {
                 None
             }
-        } else if screensaver.active {
-            None
-        } else if startup_reveal_suppress_launcher_ui {
-            None
-        } else if startup_intro_suppress_launcher_ui {
+        } else if screensaver.active
+            || startup_reveal_suppress_launcher_ui
+            || startup_intro_suppress_launcher_ui
+        {
             None
         } else if full_screen_transition_policy_before_render.snapshot_locked {
             if let Some(generation) = full_screen_transition.generation() {
@@ -10815,14 +10818,12 @@ pub(super) fn run_launcher_loop(
                             now_us,
                         )
                         .is_err()
+                        || navigation_transition_generation.is_some_and(|generation| {
+                            full_screen_transition
+                                .capture_completed(generation)
+                                .is_err()
+                        })
                     {
-                        navigation_transition.settle_at_destination();
-                        render_transition_frame = false;
-                    } else if navigation_transition_generation.is_some_and(|generation| {
-                        full_screen_transition
-                            .capture_completed(generation)
-                            .is_err()
-                    }) {
                         navigation_transition.settle_at_destination();
                         render_transition_frame = false;
                     }
@@ -11008,9 +11009,11 @@ pub(super) fn run_launcher_loop(
             navigation_transition_route,
             navigation_transition_direction,
             navigation_transition_renderer,
-            navigation_transition_orientation: navigation_transition_frame_active
-                .then(|| nav.settings.screen_orientation.id())
-                .unwrap_or(""),
+            navigation_transition_orientation: if navigation_transition_frame_active {
+                nav.settings.screen_orientation.id()
+            } else {
+                ""
+            },
             settings_navigation_benchmark_leg: settings_navigation_benchmark.active_leg(),
             navigation_snapshot_locked: navigation_snapshot_locked_before_render,
             navigation_slint_render_called: !screensaver.active
@@ -11135,13 +11138,13 @@ pub(super) fn run_launcher_loop(
                 None
             })
         } else if crt_layout {
-            arcade_list_rect.and_then(|update| {
+            arcade_list_rect.map(|update| {
                 let rect = arcade_update_dirty_rect(&update);
                 let composition =
                     layer_target.compose_arcade_list_update(&mut arcade_list_renderer, update);
                 portrait_arcade_list_bytes = composition.bytes as u64;
                 portrait_arcade_list_pixels = composition.bytes.saturating_div(2) as u64;
-                Some(rect)
+                rect
             })
         } else {
             None
@@ -11812,10 +11815,11 @@ pub(super) fn run_launcher_loop(
         let mut confirmed_direct_layer_receipt = None;
         let mut selection_feedback_confirmed_at =
             (!latch_trace_flush_deferred && visible_frame_presented).then_some(frame_t4);
-        let runtime_status_sequence_before_frame = settings_navigation_benchmark
-            .enabled()
-            .then(|| frame_accounting.runtime_status_submitted_sequence())
-            .unwrap_or_default();
+        let runtime_status_sequence_before_frame = if settings_navigation_benchmark.enabled() {
+            frame_accounting.runtime_status_submitted_sequence()
+        } else {
+            Default::default()
+        };
         if latch_trace_flush_deferred {
             let finish_timing = frame_accounting.finish_frame_before_trace(
                 &presented_frame,
@@ -13315,6 +13319,7 @@ fn apply_pending_launch_return_state(
     pending.apply(nav, catalog, source)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_or_request_pending_launch_return_state(
     nav: &mut LauncherNav,
     catalog: &ArcadeCatalog,
@@ -18479,9 +18484,11 @@ mod tests {
 
     #[test]
     pub(super) fn catalog_interaction_idle_ignores_resting_stick_noise() {
-        let mut resting = PadState::default();
-        resting.left_x = 0.5;
-        resting.right_y = -1.0;
+        let mut resting = PadState {
+            left_x: 0.5,
+            right_y: -1.0,
+            ..PadState::default()
+        };
         assert!(!pad_state_has_active_input(&resting));
 
         resting.dpad_right = true;
@@ -18732,8 +18739,10 @@ mod tests {
     fn settings_screensaver_preview_waits_for_activation_release_then_consumes_next_input() {
         let start = Instant::now();
         let mut saver = ScreensaverControl::new(start, ScreensaverStartMode::Inactive);
-        let mut physical_input = PadState::default();
-        physical_input.btn_a = true;
+        let mut physical_input = PadState {
+            btn_a: true,
+            ..PadState::default()
+        };
         assert!(!saver.input_held_for_control(false, true));
 
         saver.preview(start);

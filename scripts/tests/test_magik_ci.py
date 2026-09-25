@@ -439,6 +439,23 @@ with tempfile.TemporaryDirectory() as directory:
             commands("app"),
         )
         self.assertIn(["python3", SLOW_TEST], commands("app"))
+        self.assertIn(
+            [
+                "cargo",
+                "clippy",
+                "--manifest-path",
+                "apps/mister/Cargo.toml",
+                "--lib",
+                "--tests",
+                "--no-default-features",
+                "--features",
+                "ui",
+                "--",
+                "-D",
+                "warnings",
+            ],
+            commands("app"),
+        )
 
     def test_tools_assurance_runs_the_local_installer_after_manager_build(self) -> None:
         tools_commands = commands("tools")

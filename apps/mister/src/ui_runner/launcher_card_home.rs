@@ -139,6 +139,7 @@ impl LauncherCardHomeSession {
         self.release_presented_frame();
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn update(
         &mut self,
         width: usize,
@@ -449,8 +450,10 @@ fn prepare(
 fn decode_card_asset(bytes: &[u8]) -> Vec<Rgb565Pixel> {
     assert_eq!(bytes.len(), CARD_WIDTH * CARD_HEIGHT * 2);
     bytes
-        .chunks_exact(2)
-        .map(|pair| Rgb565Pixel(u16::from_le_bytes([pair[0], pair[1]])))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| Rgb565Pixel(u16::from_le_bytes(*pair)))
         .collect()
 }
 

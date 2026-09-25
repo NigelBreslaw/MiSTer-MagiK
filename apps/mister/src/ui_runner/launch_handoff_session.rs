@@ -168,14 +168,13 @@ impl LaunchHandoffBenchConfig {
             u8::from(recovery),
         );
         crate::ui_logln!("{line}");
-        if let Some(path) = self.trace_path.as_deref() {
-            if let Ok(mut file) = std::fs::OpenOptions::new()
+        if let Some(path) = self.trace_path.as_deref()
+            && let Ok(mut file) = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(path)
-            {
-                let _ = writeln!(file, "{line}");
-            }
+        {
+            let _ = writeln!(file, "{line}");
         }
     }
 }

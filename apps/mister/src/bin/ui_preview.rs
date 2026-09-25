@@ -117,7 +117,7 @@ mod macos {
     const MAX_AUTO_REFRESH_HZ: u32 = 120;
     const PREVIEW_TRANSITION_DURATION: Duration = Duration::from_millis(200);
     const ARCADE_MEDIA_SYSTEM_ID: &str = "arcade";
-    const PARTICLE_SCENE_SEED: u64 = 0x4d61_6769_4b;
+    const PARTICLE_SCENE_SEED: u64 = 0x4d_61_67_69_4b;
     const SCREENSHOT_TILE_SEED: u64 = 0x4d61_6769_4b54_696c;
     const CAPTURE_PROVENANCE_SCHEMA: &str = "mister-magik-launcher-capture-v1";
     const PINNED_SLINT_VERSION: &str = "1.18.0";
@@ -546,6 +546,7 @@ mod macos {
     }
 
     impl PreviewApplication {
+        #[allow(clippy::too_many_arguments)]
         fn new(
             launcher: Launcher,
             slint_window: Rc<MisterSoftwareWindow>,
@@ -1829,13 +1830,13 @@ mod macos {
             let Some(intro) = self.startup_intro.as_mut() else {
                 return;
             };
-            if self.startup_intro_catalog_ready && intro.snapshot_capture_needed() {
-                if let Err(error) =
+            if self.startup_intro_catalog_ready
+                && intro.snapshot_capture_needed()
+                && let Err(error) =
                     intro.begin_launcher_snapshot_preparation(self.frame_target.cached_565())
-                {
-                    self.fail_startup_intro(error);
-                    return;
-                }
+            {
+                self.fail_startup_intro(error);
+                return;
             }
             if let Err(error) = intro.poll_launcher_snapshot_preparation() {
                 self.fail_startup_intro(error);

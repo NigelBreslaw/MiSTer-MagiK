@@ -283,19 +283,10 @@ fn launcher_screen_from_value(value: Option<&str>) -> Option<Screen> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct LauncherBenchState {
     step: usize,
     home_repeat_started_at: Option<Instant>,
-}
-
-impl Default for LauncherBenchState {
-    fn default() -> Self {
-        Self {
-            step: 0,
-            home_repeat_started_at: None,
-        }
-    }
 }
 
 impl LauncherBenchState {
@@ -367,7 +358,7 @@ pub(super) fn launcher_bench_step(
                 nav.scroll_x = 0;
             }
             nav.selected = selected;
-            if state.step % 2 == 0 {
+            if state.step.is_multiple_of(2) {
                 nav.screen = Screen::Home;
                 keep_bench_home_visible(&mut nav.scroll_x, nav.selected, count);
             } else {
@@ -443,7 +434,7 @@ pub(super) fn launcher_bench_step(
                 return false;
             }
             nav.screen = Screen::Arcade;
-            if state.step % config.preview_step_hold_frames == 0 {
+            if state.step.is_multiple_of(config.preview_step_hold_frames) {
                 nav.arcade.handle_direction_input(1, 0, now, count);
             }
             nav.arcade.tick(count, now);
@@ -477,7 +468,11 @@ pub(super) fn launcher_bench_step(
             }
             nav.screen = Screen::Arcade;
             let (dir, previous_dir) = if state.step < 10 {
-                if state.step % 2 == 0 { (1, 0) } else { (0, 1) }
+                if state.step.is_multiple_of(2) {
+                    (1, 0)
+                } else {
+                    (0, 1)
+                }
             } else {
                 (0, 0)
             };

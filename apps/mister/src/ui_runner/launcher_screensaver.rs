@@ -1,7 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#![cfg_attr(target_os = "macos", allow(dead_code))]
+// Also mounted as `production_launcher_screensaver` for the preview binary,
+// which uses only part of it.
+#![allow(dead_code)]
 
 #[cfg(not(target_os = "macos"))]
 use super::*;
@@ -218,14 +220,14 @@ impl LauncherScreensaver {
             };
             match render_result {
                 Ok(stats) => {
-                    if parade.is_ready() {
-                        if let Some(started) = self.startup_started_at.take() {
-                            crate::ui_logln!(
-                                "screensaver_startup_timing milestone=first_card_ready elapsed_us={} layer={}",
-                                started.elapsed().as_micros(),
-                                parade.first_ready_layer().unwrap_or_default()
-                            );
-                        }
+                    if parade.is_ready()
+                        && let Some(started) = self.startup_started_at.take()
+                    {
+                        crate::ui_logln!(
+                            "screensaver_startup_timing milestone=first_card_ready elapsed_us={} layer={}",
+                            started.elapsed().as_micros(),
+                            parade.first_ready_layer().unwrap_or_default()
+                        );
                     }
                     shared_parade_trace(stats)
                 }
@@ -240,10 +242,11 @@ impl LauncherScreensaver {
             ScreensaverRenderTrace::default()
         };
         trace.renderer = "parade";
-        if self.frame > 0 && self.frame % 600 == 0 {
-            if let Some(parade) = self.parade.as_ref() {
-                log_shared_parade_stats(parade);
-            }
+        if self.frame > 0
+            && self.frame.is_multiple_of(600)
+            && let Some(parade) = self.parade.as_ref()
+        {
+            log_shared_parade_stats(parade);
         }
         self.frame = self.frame.wrapping_add(1);
         trace

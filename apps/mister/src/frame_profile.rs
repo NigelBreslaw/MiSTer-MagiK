@@ -122,10 +122,10 @@ impl FrameSample {
             .max(self.vsync_us)
             .max(self.fb_present_us);
         let video_dominant = self.video.dominant_phase();
-        if let Some((phase, value)) = video_dominant {
-            if value > m {
-                return phase;
-            }
+        if let Some((phase, value)) = video_dominant
+            && value > m
+        {
+            return phase;
         }
         if m == self.fb_present_us {
             "fb-present"

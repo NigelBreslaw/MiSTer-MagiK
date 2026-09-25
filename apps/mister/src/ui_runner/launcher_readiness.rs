@@ -72,8 +72,13 @@ impl SourceFrameEvidence {
         let row_byte_len = width.checked_mul(std::mem::size_of::<u16>())?;
         let mut row_bytes = vec![0u8; row_byte_len];
         for row in pixels.chunks_exact(stride_pixels).take(height) {
-            for (bytes, pixel) in row_bytes.chunks_exact_mut(2).zip(&row[..width]) {
-                bytes.copy_from_slice(&pixel.0.to_le_bytes());
+            for (bytes, pixel) in row_bytes
+                .as_chunks_mut::<2>()
+                .0
+                .iter_mut()
+                .zip(&row[..width])
+            {
+                *bytes = pixel.0.to_le_bytes();
                 nonzero_pixels = nonzero_pixels.saturating_add(u32::from(pixel.0 != 0));
             }
             digest.update(&row_bytes);

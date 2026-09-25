@@ -23,7 +23,7 @@ fn load_snes_artwork_image() -> Option<slint::Image> {
         mister_magik_fb::snes_artwork::SNES_ARTWORK_WIDTH,
         mister_magik_fb::snes_artwork::SNES_ARTWORK_HEIGHT,
     )
-    .or_else(|active_error| {
+    .map_err(|active_error| {
         #[cfg(feature = "ui-preview")]
         {
             let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -43,7 +43,7 @@ fn load_snes_artwork_image() -> Option<slint::Image> {
         #[cfg(not(feature = "ui-preview"))]
         {
             crate::ui_errln!("SNES artwork unavailable: {active_error}");
-            Err(active_error)
+            active_error
         }
     })
     .ok()?;
@@ -653,15 +653,15 @@ fn sync_launcher_confirm_bridge(
             );
             set_bridge_string_if_changed!(bridge, get_confirm_label, set_confirm_label, "Retry");
         }
-    } else if nav.confirm_action == Some(launcher::ConfirmAction::DisplayResolutionError) {
-        if let Some(error) = nav.display_error.as_deref() {
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirmation_message,
-                set_confirmation_message,
-                error
-            );
-        }
+    } else if nav.confirm_action == Some(launcher::ConfirmAction::DisplayResolutionError)
+        && let Some(error) = nav.display_error.as_deref()
+    {
+        set_bridge_string_if_changed!(
+            bridge,
+            get_confirmation_message,
+            set_confirmation_message,
+            error
+        );
     }
 }
 
@@ -755,6 +755,7 @@ pub(super) struct LauncherBridgeSyncTiming {
     pub(super) model_projection_us: u128,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn sync_bridge_launcher(
     app: &slint_ui::launcher::Launcher,
     pad: &PadPool,
@@ -817,6 +818,7 @@ pub(super) fn sync_bridge_launcher(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn sync_bridge_launcher_light(
     app: &slint_ui::launcher::Launcher,
     nav: &LauncherNav,
@@ -1700,8 +1702,10 @@ mod tests {
             ],
         );
         let mut nav = LauncherNav::new();
-        let mut held = PadState::default();
-        held.dpad_right = true;
+        let held = PadState {
+            dpad_right: true,
+            ..PadState::default()
+        };
         let start = Instant::now();
         nav.handle_held_tick_with_navigation_intents(&held, start, &catalog);
         let pressed = LauncherProjectionKey::from_nav(&nav);

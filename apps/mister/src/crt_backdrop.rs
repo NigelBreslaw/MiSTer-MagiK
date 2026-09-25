@@ -672,6 +672,7 @@ fn scale_dimmed_center_crop_mapped(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn scale_dimmed_center_crop_mapped_with_logical_height(
     destination: &mut [Rgb565Pixel],
     destination_width: usize,
@@ -695,6 +696,7 @@ fn scale_dimmed_center_crop_mapped_with_logical_height(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn scale_dimmed_center_crop_mapped_with_logical_size(
     destination: &mut [Rgb565Pixel],
     destination_width: usize,
@@ -771,14 +773,14 @@ fn scale_dimmed_center_crop_mapped_with_logical_size(
 
         let scaled_logical_height = frame.source_height.saturating_mul(integer_scale);
         let image_y = (reference_destination_height as isize - scaled_logical_height as isize) / 2;
-        for destination_y in 0..destination_height {
+        for (destination_y, source_y) in y_map[..destination_height].iter_mut().enumerate() {
             let logical_y = destination_y
                 .saturating_mul(2)
                 .saturating_add(1)
                 .saturating_mul(reference_destination_height)
                 / destination_height.saturating_mul(2).max(1);
             let local_y = logical_y as isize - image_y;
-            y_map[destination_y] = if local_y >= 0 && local_y < scaled_logical_height as isize {
+            *source_y = if local_y >= 0 && local_y < scaled_logical_height as isize {
                 local_y as usize / integer_scale
             } else {
                 usize::MAX
@@ -796,8 +798,8 @@ fn scale_dimmed_center_crop_mapped_with_logical_size(
                 + (destination_x.saturating_mul(crop_width) / destination_width)
                     .min(crop_width - 1);
         }
-        for destination_y in 0..destination_height {
-            y_map[destination_y] = crop_y
+        for (destination_y, source_y) in y_map[..destination_height].iter_mut().enumerate() {
+            *source_y = crop_y
                 + (destination_y.saturating_mul(crop_height) / destination_height)
                     .min(crop_height - 1);
         }
@@ -856,6 +858,7 @@ fn scale_dimmed_center_crop_mapped_with_logical_size(
 /// requests. The destination remains request-owned because it is handed to
 /// the backdrop cache, while the maps are pure scratch state.
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_dimmed_rgb565_target_with_maps(
     source: &[Rgb565Pixel],
     source_width: usize,
@@ -905,6 +908,7 @@ pub(crate) fn prepare_dimmed_rgb565_target_with_maps(
 }
 
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_dimmed_rgb565_target_for_output_with_maps(
     source: &[Rgb565Pixel],
     source_width: usize,
@@ -983,10 +987,10 @@ pub(crate) fn prepare_dimmed_rgb565_target_for_output_with_maps(
         return None;
     }
     let mut row_repeats = vec![false; output.physical_height()];
-    for row in 1..output.physical_height() {
+    for (row, repeats) in row_repeats.iter_mut().enumerate().skip(1) {
         let previous = (row - 1) * output.physical_stride();
         let current = row * output.physical_stride();
-        row_repeats[row] = physical[previous..previous + output.physical_width()]
+        *repeats = physical[previous..previous + output.physical_width()]
             == physical[current..current + output.physical_width()];
     }
     Some((physical, row_repeats))
@@ -1555,11 +1559,11 @@ mod tests {
                 )
                 .unwrap();
                 assert_eq!(prepared, expected, "{logical_width} {rotation:?}");
-                for row in 1..output.physical_height() {
+                for (row, &repeats) in row_repeats.iter().enumerate().skip(1) {
                     let previous = (row - 1) * output.physical_stride();
                     let current = row * output.physical_stride();
                     assert_eq!(
-                        row_repeats[row],
+                        repeats,
                         expected[previous..previous + output.physical_width()]
                             == expected[current..current + output.physical_width()],
                         "row {row} for {logical_width} {rotation:?}"
