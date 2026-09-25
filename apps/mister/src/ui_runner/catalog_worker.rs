@@ -127,7 +127,10 @@ fn filesystem_available_bytes(path: &str) -> Option<u64> {
         return None;
     }
     let stats = unsafe { stats.assume_init() };
-    (stats.f_bavail as u64).checked_mul(stats.f_frsize)
+    // `f_frsize` is `u32` on 32-bit ARM and `u64` on 64-bit hosts.
+    #[allow(clippy::unnecessary_cast)]
+    let block_size = stats.f_frsize as u64;
+    (stats.f_bavail as u64).checked_mul(block_size)
 }
 
 fn report_catalog_filesystem_headroom(tx: &mpsc::Sender<CatalogWorkerMessage>, phase: &str) {
