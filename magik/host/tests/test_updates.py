@@ -571,6 +571,42 @@ def test_manager_build_uses_repository_root_and_manager_binary(tmp_path):
     assert commands[0][commands[0].index("--bin") + 1] == "mister-magik-manager"
 
 
+def test_magik_build_explicitly_initializes_private_assets(tmp_path):
+    from magik.build import ensure_arm_package
+
+    package = tmp_path / "apps/mister"
+    package.mkdir(parents=True)
+    commands = []
+
+    class InitializationObserved(Exception):
+        pass
+
+    def runner(command, **_kwargs):
+        commands.append(command)
+        raise InitializationObserved
+
+    with pytest.raises(InitializationObserved):
+        ensure_arm_package(
+            package,
+            runner=runner,
+            prepare=lambda _repo, _runner: "builder",
+        )
+
+    assert commands == [
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "submodule",
+            "update",
+            "--init",
+            "--checkout",
+            "--",
+            "private/magik-assets",
+        ]
+    ]
+
+
 def test_unhealthy_installed_platform_is_not_rebooted(deploy_case, tmp_path):
     pair, current, publish = deploy_case
     current["platform"]["active"] = False
