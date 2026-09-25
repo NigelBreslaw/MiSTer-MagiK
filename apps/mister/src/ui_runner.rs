@@ -148,6 +148,7 @@ mod launcher_catalog_publication_test;
 mod launcher_catalog_session;
 #[allow(dead_code)]
 mod launcher_compositor;
+mod launcher_confirmation;
 #[doc(hidden)]
 #[allow(dead_code)]
 pub mod launcher_display_session;

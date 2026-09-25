@@ -3,6 +3,9 @@
 
 use super::arcade_drawer::{ArcadeDrawerViewCache, arcade_filter_cache_token};
 use super::crt_backdrop_controller::CrtBackdropController;
+use super::launcher_confirmation::{
+    DisplayConfirmation, OrientationConfirmation, display_confirmation_ui_enabled,
+};
 use super::launcher_frame_accounting::{
     FrameAnalyticsCpuStamp, FrameAnalyticsMode, LauncherCustomDrawTrace, LauncherFrameAccounting,
     LauncherFrameCpuTrace, LauncherFrameIdentity, LauncherFrameRenderData,
@@ -4954,12 +4957,6 @@ fn apply_orientation_layout(
     window.request_redraw();
 }
 
-fn arm_orientation_confirmation(nav: &mut LauncherNav) {
-    nav.confirm_action = Some(launcher::ConfirmAction::ScreenOrientation);
-    nav.confirm_selected = 0;
-    nav.orientation_confirm_remaining = launcher::DISPLAY_CONFIRM_SECONDS;
-}
-
 #[allow(clippy::too_many_arguments)]
 fn begin_orientation_transition(
     app: &slint_ui::launcher::Launcher,
@@ -5328,51 +5325,46 @@ pub(super) fn run_launcher_loop(
     if orientation_benchmark.enabled() {
         nav.settings_selected = 1;
     }
-    let mut display_confirm_deadline = None;
-    let mut orientation_confirm_deadline = None;
-    let mut orientation_previous = None;
+    let mut display_confirmation = DisplayConfirmation::new();
+    let mut orientation_confirmation = OrientationConfirmation::new(orientation_store);
     let mut orientation_full_redraw_pending = layout.is_portrait();
     let mut orientation_transition =
         OrientationTransitionRuntime::new(ui.render_w(), ui.render_h());
     let mut orientation_transition_intent = None;
     let mut orientation_transition_generation = None;
     let mut orientation_preparation_trace = OrientationPreparationTrace::default();
-    let (display_confirm_tx, display_confirm_rx) =
-        mpsc::channel::<Result<launcher::DisplayCommandState, String>>();
-    let (orientation_confirm_tx, orientation_confirm_rx) = mpsc::channel::<Result<(), String>>();
     // Main owns the active display mode; the launcher only mirrors its reported state.
-    if std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
-        if let Ok(state) = launcher::try_display_state() {
-            let selected_id = state.pending.as_deref().unwrap_or(&state.active);
-            if let Some(index) =
-                mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
-                    .iter()
-                    .position(|mode| mode.id == selected_id)
-            {
-                nav.display_selected = index;
-                nav.display_highlighted =
-                    launcher::settings_display_selection_index(index).unwrap_or(0);
-            }
-            if state.return_to_settings {
-                nav.screen = Screen::Settings;
-                nav.settings_selected = 0;
-                if let Some(error) = state.error.as_deref() {
-                    nav.display_error = Some(format!(
-                        "The previous resolution was restored after a display failure: {error}"
-                    ));
-                    nav.confirm_action = Some(launcher::ConfirmAction::DisplayResolutionError);
-                    nav.confirm_selected = 0;
-                }
-            }
-            display_confirm_deadline = apply_startup_pending_display(
-                &mut nav,
-                &state,
-                display_confirmation_ui_enabled(
-                    std::env::var_os("MISTER_MAGIK_DISPLAY_CONFIRM_UI").as_deref(),
-                ),
-                Instant::now(),
-            );
+    if std::env::var_os("MISTER_MAGIK_PARENT").is_some()
+        && let Ok(state) = launcher::try_display_state()
+    {
+        let selected_id = state.pending.as_deref().unwrap_or(&state.active);
+        if let Some(index) = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
+            .iter()
+            .position(|mode| mode.id == selected_id)
+        {
+            nav.display_selected = index;
+            nav.display_highlighted =
+                launcher::settings_display_selection_index(index).unwrap_or(0);
         }
+        if state.return_to_settings {
+            nav.screen = Screen::Settings;
+            nav.settings_selected = 0;
+            if let Some(error) = state.error.as_deref() {
+                nav.display_error = Some(format!(
+                    "The previous resolution was restored after a display failure: {error}"
+                ));
+                nav.confirm_action = Some(launcher::ConfirmAction::DisplayResolutionError);
+                nav.confirm_selected = 0;
+            }
+        }
+        display_confirmation.adopt_startup_pending(
+            &mut nav,
+            &state,
+            display_confirmation_ui_enabled(
+                std::env::var_os("MISTER_MAGIK_DISPLAY_CONFIRM_UI").as_deref(),
+            ),
+            Instant::now(),
+        );
     }
     let mut setup = SetupNav::new();
     let mut input_router = InputRouter::new(launcher_input_focus(
@@ -6398,113 +6390,42 @@ pub(super) fn run_launcher_loop(
             nav.catalog_system_hydration_finished(&collection_id);
             full_bridge_dirty = true;
         }
-        if let Some(deadline) = display_confirm_deadline {
-            nav.display_confirm_remaining = if loop_start >= deadline {
-                0
-            } else {
-                ((deadline - loop_start).as_millis().div_ceil(1000) as u8)
-                    .min(launcher::DISPLAY_CONFIRM_SECONDS)
-            };
-        }
-        if let Some(deadline) = orientation_confirm_deadline {
-            nav.orientation_confirm_remaining = if loop_start >= deadline {
-                0
-            } else {
-                ((deadline - loop_start).as_millis().div_ceil(1000) as u8)
-                    .min(launcher::DISPLAY_CONFIRM_SECONDS)
-            };
-            if loop_start >= deadline
-                && nav.confirm_action == Some(launcher::ConfirmAction::ScreenOrientation)
-            {
-                if let Some(previous) = orientation_previous.take() {
-                    let from = nav.settings.screen_orientation;
-                    let animated = begin_orientation_transition(
-                        &app,
-                        window,
-                        ui,
-                        target,
-                        from,
-                        previous,
-                        loop_start,
-                        nav.settings.reduce_motion,
-                        &mut nav,
-                        &mut layout,
-                        &mut layout_epoch,
-                        &mut navigation_transition,
-                        &mut full_screen_transition,
-                        &mut orientation_transition_generation,
-                        &mut orientation_transition,
-                        &mut orientation_transition_intent,
-                        &mut orientation_preparation_trace,
-                        OrientationTransitionIntent::Rollback,
-                    );
-                    let _ = animated;
-                }
-                orientation_confirm_deadline = None;
-                nav.confirm_action = None;
-                nav.confirm_selected = 0;
-                nav.orientation_confirm_remaining = 0;
-                orientation_full_redraw_pending = true;
-                full_bridge_dirty = true;
+        display_confirmation.update_remaining(&mut nav, loop_start);
+        if orientation_confirmation.update_remaining(&mut nav, loop_start) {
+            if let Some(previous) = orientation_confirmation.finish_expired(&mut nav) {
+                let from = nav.settings.screen_orientation;
+                begin_orientation_transition(
+                    &app,
+                    window,
+                    ui,
+                    target,
+                    from,
+                    previous,
+                    loop_start,
+                    nav.settings.reduce_motion,
+                    &mut nav,
+                    &mut layout,
+                    &mut layout_epoch,
+                    &mut navigation_transition,
+                    &mut full_screen_transition,
+                    &mut orientation_transition_generation,
+                    &mut orientation_transition,
+                    &mut orientation_transition_intent,
+                    &mut orientation_preparation_trace,
+                    OrientationTransitionIntent::Rollback,
+                );
             }
+            orientation_full_redraw_pending = true;
+            full_bridge_dirty = true;
         }
-        while let Ok(result) = orientation_confirm_rx.try_recv() {
-            nav.orientation_confirm_busy = false;
-            match result {
-                Ok(()) => {
-                    orientation_previous = None;
-                    nav.confirm_action = None;
-                    nav.confirm_selected = 0;
-                    nav.orientation_error = None;
-                    nav.orientation_confirm_remaining = 0;
-                }
-                Err(error) => {
-                    nav.confirm_action = Some(launcher::ConfirmAction::ScreenOrientation);
-                    nav.confirm_selected = 1;
-                    nav.orientation_error = Some(error);
-                }
-            }
+        while let Some(result) = orientation_confirmation.try_recv() {
+            orientation_confirmation.apply_result(&mut nav, result);
             full_bridge_dirty = true;
             request_launcher_redraw!();
         }
-        while let Ok(result) = display_confirm_rx.try_recv() {
+        while let Some(result) = display_confirmation.try_recv() {
             pacer.rearm_after_display_mode_change();
-            nav.display_confirm_busy = false;
-            match result {
-                Ok(state) => {
-                    if state.phase == launcher::DisplayTransactionPhase::Failed {
-                        nav.confirm_action = Some(launcher::ConfirmAction::DisplayResolution);
-                        nav.confirm_selected = 0;
-                        nav.display_error = Some(
-                            state
-                                .error
-                                .unwrap_or_else(|| "display persistence failed".to_string()),
-                        );
-                        nav.display_confirm_remaining = state.remaining.max(1);
-                        display_confirm_deadline = Some(
-                            Instant::now() + Duration::from_secs(u64::from(state.remaining.max(1))),
-                        );
-                    } else {
-                        nav.confirm_action = None;
-                        nav.display_error = None;
-                        display_confirm_deadline = None;
-                        if let Some(index) =
-                            mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
-                                .iter()
-                                .position(|mode| mode.id == state.active)
-                        {
-                            nav.display_selected = index;
-                            nav.display_highlighted =
-                                launcher::settings_display_selection_index(index).unwrap_or(0);
-                        }
-                    }
-                }
-                Err(error) => {
-                    nav.confirm_action = Some(launcher::ConfirmAction::DisplayResolution);
-                    nav.confirm_selected = 0;
-                    nav.display_error = Some(error);
-                }
-            }
+            display_confirmation.apply_result(&mut nav, result, Instant::now());
             full_bridge_dirty = true;
             request_launcher_redraw!();
         }
@@ -8491,18 +8412,7 @@ pub(super) fn run_launcher_loop(
                                         }
                                     }
                                     LauncherAction::ConfirmDisplayResolution => {
-                                        nav.display_confirm_busy = true;
-                                        nav.display_error = None;
-                                        nav.confirm_action =
-                                            Some(launcher::ConfirmAction::DisplayResolution);
-                                        let result_tx = display_confirm_tx.clone();
-                                        std::thread::spawn(move || {
-                                            let result =
-                                                launcher::confirm_display_resolution_and_wait(
-                                                    Duration::from_secs(12),
-                                                );
-                                            let _ = result_tx.send(result);
-                                        });
+                                        display_confirmation.begin_confirm(&mut nav);
                                     }
                                     LauncherAction::CancelDisplayResolution => {
                                         let result = launcher::cancel_display_resolution();
@@ -8524,11 +8434,8 @@ pub(super) fn run_launcher_loop(
                                             && orientation != nav.settings.screen_orientation
                                         {
                                             let previous = nav.settings.screen_orientation;
-                                            orientation_previous = Some(previous);
-                                            nav.orientation_confirm_busy = false;
-                                            nav.orientation_error = None;
-                                            arm_orientation_confirmation(&mut nav);
-                                            orientation_confirm_deadline = None;
+                                            orientation_confirmation
+                                                .begin_apply(&mut nav, previous);
                                             let animated = begin_orientation_transition(
                                                 &app,
                                                 window,
@@ -8551,42 +8458,22 @@ pub(super) fn run_launcher_loop(
                                             );
                                             if !animated {
                                                 let _ = orientation_transition.take_completion();
-                                                orientation_confirm_deadline = Some(
-                                                    Instant::now()
-                                                        + Duration::from_secs(u64::from(
-                                                            launcher::DISPLAY_CONFIRM_SECONDS,
-                                                        )),
-                                                );
+                                                orientation_confirmation
+                                                    .start_countdown(Instant::now());
                                             }
                                             orientation_full_redraw_pending = true;
                                             full_bridge_dirty = true;
                                         }
                                     }
                                     LauncherAction::ConfirmScreenOrientation => {
-                                        orientation_confirm_deadline = None;
-                                        nav.orientation_confirm_remaining = 0;
-                                        nav.orientation_confirm_busy = true;
-                                        nav.orientation_error = None;
-                                        nav.confirm_action =
-                                            Some(launcher::ConfirmAction::ScreenOrientation);
-                                        nav.confirm_selected = 1;
-                                        let confirmed = nav.settings.clone();
-                                        let mut previous = confirmed.clone();
-                                        previous.screen_orientation = orientation_previous
-                                            .unwrap_or(confirmed.screen_orientation);
-                                        let result_tx = orientation_confirm_tx.clone();
-                                        let store = orientation_store.clone();
-                                        std::thread::spawn(move || {
-                                            let result = store
-                                                .save_confirmed(&previous, &confirmed)
-                                                .map_err(|error| error.to_string());
-                                            let _ = result_tx.send(result);
-                                        });
+                                        orientation_confirmation.begin_confirm(&mut nav);
                                     }
                                     LauncherAction::CancelScreenOrientation => {
-                                        if let Some(previous) = orientation_previous.take() {
+                                        if let Some(previous) =
+                                            orientation_confirmation.finish_cancel(&mut nav)
+                                        {
                                             let from = nav.settings.screen_orientation;
-                                            let animated = begin_orientation_transition(
+                                            begin_orientation_transition(
                                                 &app,
                                                 window,
                                                 ui,
@@ -8606,12 +8493,7 @@ pub(super) fn run_launcher_loop(
                                                 &mut orientation_preparation_trace,
                                                 OrientationTransitionIntent::Rollback,
                                             );
-                                            let _ = animated;
                                         }
-                                        orientation_confirm_deadline = None;
-                                        nav.orientation_confirm_remaining = 0;
-                                        nav.orientation_confirm_busy = false;
-                                        nav.orientation_error = None;
                                         orientation_full_redraw_pending = true;
                                         full_bridge_dirty = true;
                                     }
@@ -11532,12 +11414,7 @@ pub(super) fn run_launcher_loop(
                     );
                     match orientation_transition_intent.take() {
                         Some(OrientationTransitionIntent::Confirm) => {
-                            orientation_confirm_deadline = Some(
-                                Instant::now()
-                                    + Duration::from_secs(u64::from(
-                                        launcher::DISPLAY_CONFIRM_SECONDS,
-                                    )),
-                            );
+                            orientation_confirmation.start_countdown(Instant::now());
                         }
                         Some(OrientationTransitionIntent::Benchmark) => {
                             orientation_benchmark.note_rendered_endpoint(frames);
@@ -12927,27 +12804,6 @@ pub(super) fn run_launcher_loop(
     if let Err(e) = cpu_profile::finish(cpu.take()) {
         crate::ui_errln!("{e}");
     }
-}
-
-fn display_confirmation_ui_enabled(value: Option<&std::ffi::OsStr>) -> bool {
-    value != Some(std::ffi::OsStr::new("0"))
-}
-
-fn apply_startup_pending_display(
-    nav: &mut LauncherNav,
-    state: &launcher::DisplayCommandState,
-    confirmation_ui_enabled: bool,
-    now: Instant,
-) -> Option<Instant> {
-    if state.pending.is_none() || !confirmation_ui_enabled {
-        return None;
-    }
-    nav.screen = Screen::Settings;
-    nav.settings_selected = 0;
-    nav.confirm_action = Some(launcher::ConfirmAction::DisplayResolution);
-    nav.confirm_selected = 0;
-    nav.display_confirm_remaining = state.remaining.max(1);
-    Some(now + Duration::from_secs(u64::from(state.remaining.max(1))))
 }
 
 fn should_desire_direct_layer(wants_layer: bool, composition_allows_layer: bool) -> bool {
@@ -15734,23 +15590,6 @@ mod tests {
 
         assert!(!selected.matches_presented(&before, &stationary));
         assert!(selected.matches_presented(&before, &moved));
-    }
-
-    #[test]
-    fn arming_orientation_confirmation_sets_destination_dialog_state() {
-        let mut nav = LauncherNav::new();
-
-        arm_orientation_confirmation(&mut nav);
-
-        assert_eq!(
-            nav.confirm_action,
-            Some(launcher::ConfirmAction::ScreenOrientation)
-        );
-        assert_eq!(nav.confirm_selected, 0);
-        assert_eq!(
-            nav.orientation_confirm_remaining,
-            launcher::DISPLAY_CONFIRM_SECONDS
-        );
     }
 
     #[test]
@@ -18817,42 +18656,6 @@ mod tests {
         assert!(!should_start_preview_compositor(
             true, true, true, true, false
         ));
-    }
-
-    #[test]
-    fn startup_pending_display_only_enters_confirmation_for_the_ui_route() {
-        let state = launcher::DisplayCommandState {
-            active: "hdmi-1920x1080p60".to_string(),
-            pending: Some("hdmi-1280x720p60".to_string()),
-            remaining: launcher::DISPLAY_CONFIRM_SECONDS,
-            phase: launcher::DisplayTransactionPhase::Provisional,
-            error: None,
-            return_to_settings: false,
-        };
-        let now = Instant::now();
-        let mut ui_nav = LauncherNav::new();
-        let deadline = apply_startup_pending_display(&mut ui_nav, &state, true, now);
-        assert_eq!(ui_nav.screen, Screen::Settings);
-        assert_eq!(
-            ui_nav.confirm_action,
-            Some(launcher::ConfirmAction::DisplayResolution)
-        );
-        assert_eq!(
-            ui_nav.display_confirm_remaining,
-            launcher::DISPLAY_CONFIRM_SECONDS
-        );
-        assert_eq!(
-            deadline,
-            Some(now + Duration::from_secs(u64::from(launcher::DISPLAY_CONFIRM_SECONDS)))
-        );
-
-        let mut headless_nav = LauncherNav::new();
-        assert_eq!(
-            apply_startup_pending_display(&mut headless_nav, &state, false, now),
-            None
-        );
-        assert_eq!(headless_nav.screen, Screen::Home);
-        assert_eq!(headless_nav.confirm_action, None);
     }
 
     #[test]
