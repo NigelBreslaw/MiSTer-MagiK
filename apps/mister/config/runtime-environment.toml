@@ -74,7 +74,7 @@ documentation = { summary = "Controls animation clock behavior", accepted_values
 
 [[control]]
 name = "MISTER_ARCADE_BENCHMARK_ORIENTATION"
-owner = "apps/mister/src/ui_runner.rs"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
 classification = "benchmark"
 value_shape = "enum token"
 default_behavior = "uses persisted launcher orientation when unset or invalid"
@@ -809,10 +809,10 @@ documentation = { summary = "Selects the fixed GUI frame profiling route", accep
 [[control]]
 name = "MISTER_HOME_SELECTED_INDEX"
 owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "production"
+classification = "benchmark"
 value_shape = "bounded integer"
 default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
+visibility = "benchmark only"
 parser = "u64"
 scope = "command"
 conflicts = []
@@ -823,10 +823,10 @@ documentation = { summary = "Controls home selected index behavior", accepted_va
 [[control]]
 name = "MISTER_HUMAN_TURBO_IDLE_FRAMES"
 owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "production"
+classification = "benchmark"
 value_shape = "bounded integer"
 default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
+visibility = "benchmark only"
 parser = "u64"
 scope = "command"
 conflicts = []
@@ -837,10 +837,10 @@ documentation = { summary = "Controls human turbo idle frames behavior", accepte
 [[control]]
 name = "MISTER_HUMAN_TURBO_NORMAL_FRAMES"
 owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "production"
+classification = "benchmark"
 value_shape = "bounded integer"
 default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
+visibility = "benchmark only"
 parser = "u64"
 scope = "command"
 conflicts = []
@@ -851,10 +851,10 @@ documentation = { summary = "Controls human turbo normal frames behavior", accep
 [[control]]
 name = "MISTER_HUMAN_TURBO_PAUSE_FRAMES"
 owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "production"
+classification = "benchmark"
 value_shape = "bounded integer"
 default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
+visibility = "benchmark only"
 parser = "u64"
 scope = "command"
 conflicts = []
@@ -865,10 +865,10 @@ documentation = { summary = "Controls human turbo pause frames behavior", accept
 [[control]]
 name = "MISTER_INPUT_INTEGRITY_STALL_MS"
 owner = "apps/mister/src/process_config.rs"
-classification = "diagnostic"
+classification = "test"
 value_shape = "bounded integer"
 default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "developer diagnostic"
+visibility = "test only"
 parser = "u64"
 scope = "instrumentation"
 conflicts = []
@@ -892,11 +892,11 @@ documentation = { summary = "Controls input integrity trace behavior", accepted_
 
 [[control]]
 name = "MISTER_INPUT_LATENCY_LAB_ARM"
-owner = "apps/mister/src/ui_runner/launcher_input_latency_lab.rs"
-classification = "diagnostic"
+owner = "apps/mister/src/process_config.rs"
+classification = "benchmark"
 value_shape = "boolean token"
 default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "developer diagnostic"
+visibility = "benchmark only"
 parser = "bool"
 scope = "instrumentation"
 conflicts = []
@@ -934,11 +934,11 @@ documentation = { summary = "Controls input latency lab reader schedstat behavio
 
 [[control]]
 name = "MISTER_INPUT_LATENCY_LAB_SESSION"
-owner = "apps/mister/src/input_hub.rs"
-classification = "diagnostic"
+owner = "apps/mister/src/process_config.rs"
+classification = "benchmark"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
+visibility = "benchmark only"
 parser = "string"
 scope = "instrumentation"
 conflicts = []
@@ -949,10 +949,10 @@ documentation = { summary = "Controls input latency lab session behavior", accep
 [[control]]
 name = "MISTER_LATCH_V5_QUALIFICATION"
 owner = "apps/mister/src/ui_runner/latch_v5_qualification.rs"
-classification = "production"
+classification = "benchmark"
 value_shape = "boolean token"
 default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "internal runtime"
+visibility = "benchmark only"
 parser = "bool"
 scope = "command"
 conflicts = []
@@ -963,10 +963,10 @@ documentation = { summary = "Controls latch v5 qualification behavior", accepted
 [[control]]
 name = "MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED"
 owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "production"
+classification = "benchmark"
 value_shape = "boolean token"
 default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "internal runtime"
+visibility = "benchmark only"
 parser = "bool"
 scope = "command"
 conflicts = []
@@ -1047,10 +1047,10 @@ documentation = { summary = "Controls launcher input script wait frames behavior
 [[control]]
 name = "MISTER_LAUNCHER_LOCK_SCREEN"
 owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "production"
+classification = "benchmark"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
+visibility = "benchmark only"
 parser = "string"
 scope = "command"
 conflicts = []
@@ -1187,10 +1187,10 @@ documentation = { summary = "Controls launcher response trace behavior", accepte
 [[control]]
 name = "MISTER_LAUNCHER_START_MENU"
 owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "production"
+classification = "benchmark"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
+visibility = "benchmark only"
 parser = "string"
 scope = "command"
 conflicts = []
@@ -1201,10 +1201,10 @@ documentation = { summary = "Controls launcher start menu behavior", accepted_va
 [[control]]
 name = "MISTER_LAUNCHER_START_SCREEN"
 owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "production"
+classification = "benchmark"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
+visibility = "benchmark only"
 parser = "string"
 scope = "command"
 conflicts = []
@@ -1215,10 +1215,10 @@ documentation = { summary = "Controls launcher start screen behavior", accepted_
 [[control]]
 name = "MISTER_LAUNCHER_START_SYSTEM"
 owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "production"
+classification = "benchmark"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
+visibility = "benchmark only"
 parser = "string"
 scope = "command"
 conflicts = []
@@ -1305,10 +1305,10 @@ documentation = { summary = "Controls launch handoff trace behavior", accepted_v
 [[control]]
 name = "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT"
 owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "diagnostic"
+classification = "benchmark"
 value_shape = "path or path list"
 default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
-visibility = "developer diagnostic"
+visibility = "benchmark only"
 parser = "path"
 scope = "instrumentation"
 conflicts = []
@@ -1982,10 +1982,10 @@ documentation = { summary = "Controls nes preview archive behavior", accepted_va
 [[control]]
 name = "MISTER_ORIENTATION_PMU_COMPLETE"
 owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "diagnostic"
+classification = "benchmark"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "developer diagnostic"
+visibility = "benchmark only"
 parser = "string"
 scope = "instrumentation"
 conflicts = []
@@ -2009,7 +2009,7 @@ documentation = { summary = "Controls orientation simd behavior", accepted_value
 
 [[control]]
 name = "MISTER_ORIENTATION_TRANSITIONS_BENCHMARK"
-owner = "apps/mister/src/ui_runner.rs"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
 classification = "benchmark"
 value_shape = "boolean token"
 default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
@@ -2037,11 +2037,11 @@ documentation = { summary = "Controls orientation transitions evidence dir behav
 
 [[control]]
 name = "MISTER_ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
-classification = "production"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
+classification = "benchmark"
 value_shape = "boolean token"
 default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
-visibility = "internal runtime"
+visibility = "benchmark only"
 parser = "bool"
 scope = "command"
 conflicts = []
@@ -2051,11 +2051,11 @@ documentation = { summary = "Controls orientation transitions require analytics 
 
 [[control]]
 name = "MISTER_ORIENTATION_TRANSITION_EFFECT"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
-classification = "production"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
+classification = "benchmark"
 value_shape = "enum token"
 default_behavior = "uses the owner-defined mode when unset or unrecognized"
-visibility = "internal runtime"
+visibility = "benchmark only"
 parser = "enum"
 scope = "command"
 conflicts = []
@@ -2626,10 +2626,10 @@ documentation = { summary = "Controls preview scroll trace secs behavior", accep
 [[control]]
 name = "MISTER_PREVIEW_STEP_HOLD_SECS"
 owner = "apps/mister/src/ui_runner/launcher_bench.rs"
-classification = "production"
+classification = "benchmark"
 value_shape = "bounded integer"
 default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
+visibility = "benchmark only"
 parser = "u64"
 scope = "command"
 conflicts = []
@@ -2891,7 +2891,7 @@ documentation = { summary = "Controls screensaver start preview when ready behav
 
 [[control]]
 name = "MISTER_SETTINGS_NAVIGATION_BENCHMARK"
-owner = "apps/mister/src/ui_runner.rs"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
 classification = "benchmark"
 value_shape = "boolean token"
 default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"

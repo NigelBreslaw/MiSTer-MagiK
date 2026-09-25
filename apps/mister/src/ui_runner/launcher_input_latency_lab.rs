@@ -5,14 +5,13 @@
 
 use crate::input_hub::{InputObservation, InputObservationProbe, monotonic_us};
 use crate::launcher::{LauncherNav, Screen};
+use crate::process_config::InputLatencyLabConfig;
 use serde_json::{Value, json};
 use std::path::Path;
 use std::time::Duration;
 
 pub(super) const INPUT_LATENCY_LAB_READY_PATH: &str =
     "/tmp/mister-magik/input-latency-lab-ready.json";
-const SESSION_ENV: &str = "MISTER_INPUT_LATENCY_LAB_SESSION";
-const ARM_ENV: &str = "MISTER_INPUT_LATENCY_LAB_ARM";
 const MOVE_COUNT: usize = 64;
 const MOVE_INTERVAL_US: u64 = 600_000;
 const OBSTRUCTION_LEAD_US: u64 = 8_000;
@@ -102,12 +101,14 @@ enum DueWork {
 }
 
 impl InputLatencyLab {
-    pub(super) fn from_env(input_probe: Option<InputObservationProbe>) -> Self {
-        let arm = std::env::var(ARM_ENV)
-            .ok()
-            .and_then(|value| InputLatencyLabArm::parse(&value));
-        let session = std::env::var(SESSION_ENV)
-            .ok()
+    pub(super) fn from_config(
+        config: &InputLatencyLabConfig,
+        input_probe: Option<InputObservationProbe>,
+    ) -> Self {
+        let arm = config.arm().and_then(InputLatencyLabArm::parse);
+        let session = config
+            .session()
+            .map(str::to_owned)
             .filter(|path| is_volatile_path(path) && Path::new(path).is_file());
         let armed = arm.is_some() && session.is_some();
         if let Some(path) = session.as_deref().filter(|_| armed) {

@@ -60,6 +60,8 @@ const SYSTEM_ENTRY_TRACE: &str = "MISTER_SYSTEM_ENTRY_TRACE";
 const ARCADE_ENTRY_TRACE: &str = "MISTER_ARCADE_ENTRY_TRACE";
 const SYSTEM_ENTRY_PROFILE_OUT: &str = "MISTER_SYSTEM_ENTRY_PROFILE_OUT";
 const INPUT_INTEGRITY_STALL_MS: &str = "MISTER_INPUT_INTEGRITY_STALL_MS";
+const INPUT_LATENCY_LAB_ARM: &str = "MISTER_INPUT_LATENCY_LAB_ARM";
+const INPUT_LATENCY_LAB_SESSION: &str = "MISTER_INPUT_LATENCY_LAB_SESSION";
 const INPUT_INTEGRITY_TRACE: &str = "MISTER_INPUT_INTEGRITY_TRACE";
 #[cfg(any(feature = "bench-tools", test))]
 const LAUNCHER_INPUT_SCRIPT: &str = "MISTER_LAUNCHER_INPUT_SCRIPT";
@@ -85,6 +87,12 @@ const MODAL_TEST_PATH_INPUTS: &[&str] = &[
     "MISTER_LIBRARY_REFRESH_LOCK",
     "MISTER_CATALOG_DIAGNOSTICS_DIR",
 ];
+
+/// Benchmarks, qualification runs, launcher test drivers and fault injection
+/// are development tooling. Release builds ignore their switches, so none of
+/// them can be armed on a shipped launcher.
+/// `tooling` (dev delivery) enables `ui-device-tests`.
+pub const LAB_HOOKS_ENABLED: bool = cfg!(any(feature = "ui-device-tests", test));
 
 #[derive(Clone, Default)]
 pub struct EnvironmentSnapshot {
@@ -571,14 +579,35 @@ pub struct InputProcessConfig {
     integrity_trace: bool,
     integrity_stall_ms: Option<u64>,
     scripted: ScriptedInputConfig,
+    latency_lab: InputLatencyLabConfig,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct InputLatencyLabConfig {
+    arm: Option<String>,
+    session: Option<String>,
+}
+
+impl InputLatencyLabConfig {
+    pub fn arm(&self) -> Option<&str> {
+        self.arm.as_deref()
+    }
+
+    pub fn session(&self) -> Option<&str> {
+        self.session.as_deref()
+    }
 }
 
 impl InputProcessConfig {
-    fn capture(environment: &EnvironmentSnapshot) -> Self {
+    /// The integrity trace only observes; the stall, scripted input and the
+    /// latency lab alter input handling and come from the lab environment.
+    fn capture(environment: &EnvironmentSnapshot, lab_environment: &EnvironmentSnapshot) -> Self {
         #[cfg(feature = "bench-tools")]
         let scripted = ScriptedInputConfig {
-            script: environment.get(LAUNCHER_INPUT_SCRIPT).map(str::to_owned),
-            wait_frames: environment
+            script: lab_environment
+                .get(LAUNCHER_INPUT_SCRIPT)
+                .map(str::to_owned),
+            wait_frames: lab_environment
                 .get(LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES)
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(60)
@@ -588,11 +617,19 @@ impl InputProcessConfig {
         let scripted = ScriptedInputConfig::default();
         Self {
             integrity_trace: environment_flag(environment, INPUT_INTEGRITY_TRACE),
-            integrity_stall_ms: environment
+            integrity_stall_ms: lab_environment
                 .get(INPUT_INTEGRITY_STALL_MS)
                 .and_then(|value| value.parse::<u64>().ok())
                 .filter(|value| (1..=1_000).contains(value)),
             scripted,
+            latency_lab: InputLatencyLabConfig {
+                arm: lab_environment
+                    .get(INPUT_LATENCY_LAB_ARM)
+                    .map(str::to_owned),
+                session: lab_environment
+                    .get(INPUT_LATENCY_LAB_SESSION)
+                    .map(str::to_owned),
+            },
         }
     }
 
@@ -606,6 +643,10 @@ impl InputProcessConfig {
 
     pub fn scripted(&self) -> &ScriptedInputConfig {
         &self.scripted
+    }
+
+    pub fn latency_lab(&self) -> &InputLatencyLabConfig {
+        &self.latency_lab
     }
 }
 
@@ -816,7 +857,13 @@ impl ProcessConfig {
     pub fn capture(args: &[String], command: &str) -> Self {
         let device_paths = DevicePaths::current();
         let environment = EnvironmentSnapshot::capture_process();
-        Self::from_snapshot_with_device_paths(args, command, &environment, device_paths)
+        Self::from_snapshot_with_device_paths(
+            args,
+            command,
+            &environment,
+            device_paths,
+            LAB_HOOKS_ENABLED,
+        )
     }
 
     #[cfg(test)]
@@ -826,6 +873,7 @@ impl ProcessConfig {
             command,
             environment,
             DevicePaths::for_layout(mister_magik_platform_manifest_contract::Layout::Public),
+            true,
         )
     }
 
@@ -834,6 +882,7 @@ impl ProcessConfig {
         command: &str,
         environment: &EnvironmentSnapshot,
         device_paths: DevicePaths,
+        lab_hooks: bool,
     ) -> Self {
         let command = CommandMode::from_name(command);
         let instrumentation = InstrumentationModifiers::from_args(&command, args);
@@ -846,6 +895,12 @@ impl ProcessConfig {
             |name| environment.get_path(name),
             |name| environment.get(name),
         );
+        let no_lab_environment = EnvironmentSnapshot::default();
+        let lab_environment = if lab_hooks {
+            environment
+        } else {
+            &no_lab_environment
+        };
         let launcher = command.captures_launcher().then(|| LauncherProcessConfig {
             readiness: LauncherReadinessConfig::from_snapshot(environment),
             device_paths: device_paths.clone(),
@@ -860,19 +915,19 @@ impl ProcessConfig {
                 environment.get(name)
             }),
             screensaver: ScreensaverProcessConfig::capture(environment),
-            input: InputProcessConfig::capture(environment),
+            input: InputProcessConfig::capture(environment, lab_environment),
             #[cfg(feature = "ui")]
             display_pacing: DisplayPacingConfig::capture(environment),
             #[cfg(feature = "ui")]
             profiles: ProfileProcessConfig::capture(environment),
             #[cfg(feature = "ui")]
-            benchmark: LauncherBenchmarkConfig::capture_with(|name| environment.get(name)),
+            benchmark: LauncherBenchmarkConfig::capture_with(|name| lab_environment.get(name)),
             #[cfg(feature = "ui")]
-            qualification: QualificationConfig::capture_with(|name| environment.get(name)),
-            tests: LauncherTestConfig::capture(environment),
+            qualification: QualificationConfig::capture_with(|name| lab_environment.get(name)),
+            tests: LauncherTestConfig::capture(lab_environment),
             presentation_backend: PresentBackendConfig::capture(environment),
         });
-        let fault = FaultProcessConfig::capture(environment);
+        let fault = FaultProcessConfig::capture(lab_environment);
         Self {
             command,
             device_paths,
@@ -1079,6 +1134,7 @@ mod tests {
                 "ui",
                 &EnvironmentSnapshot::default(),
                 DevicePaths::remapped(layout, root),
+                true,
             );
             let launcher = config
                 .launcher()
@@ -1109,6 +1165,7 @@ mod tests {
                 mister_magik_platform_manifest_contract::Layout::Development,
                 "/tmp/card",
             ),
+            true,
         );
 
         assert_eq!(
@@ -1212,6 +1269,68 @@ mod tests {
             .scripted();
 
         assert_eq!(scripted, &ScriptedInputConfig::default());
+    }
+
+    #[test]
+    fn release_capture_ignores_every_lab_switch() {
+        let environment = EnvironmentSnapshot::from_values([
+            (INPUT_INTEGRITY_TRACE, "on"),
+            (INPUT_INTEGRITY_STALL_MS, "50"),
+            (INPUT_LATENCY_LAB_ARM, "baseline"),
+            (TEST_CATALOG_RECOVERY_DIALOG, "retry"),
+            ("MISTER_LAUNCHER_BENCH_SCENARIO", "arcade-scroll"),
+            ("MISTER_LAUNCHER_START_SCREEN", "arcade"),
+            ("MISTER_LATCH_V5_QUALIFICATION", "1"),
+            ("MISTER_FS_FAULT_POINT", "settings.after_rename"),
+            (
+                "MISTER_FS_FAULT_SESSION",
+                "/tmp/mister-magik/fs-fault-session",
+            ),
+        ]);
+        let args = ["mister-magik-fb".into(), "ui".into()];
+        let paths =
+            || DevicePaths::for_layout(mister_magik_platform_manifest_contract::Layout::Public);
+        let lab = ProcessConfig::from_snapshot_with_device_paths(
+            &args,
+            "ui",
+            &environment,
+            paths(),
+            true,
+        );
+        let release = ProcessConfig::from_snapshot_with_device_paths(
+            &args,
+            "ui",
+            &environment,
+            paths(),
+            false,
+        );
+
+        let lab_launcher = lab.launcher().unwrap();
+        assert_eq!(lab_launcher.input().integrity_stall_ms(), Some(50));
+        assert_eq!(lab_launcher.input().latency_lab().arm(), Some("baseline"));
+        assert!(lab_launcher.tests().catalog_recovery_dialog().is_some());
+        assert!(lab.fault().is_some());
+
+        let release_launcher = release.launcher().unwrap();
+        assert!(release_launcher.input().integrity_trace());
+        assert_eq!(release_launcher.input().integrity_stall_ms(), None);
+        assert_eq!(
+            release_launcher.input().latency_lab(),
+            &InputLatencyLabConfig::default()
+        );
+        assert_eq!(release_launcher.tests(), &LauncherTestConfig::default());
+        assert!(release.fault().is_none());
+        #[cfg(feature = "ui")]
+        {
+            let unset = LauncherBenchmarkConfig::default();
+            assert_ne!(lab_launcher.benchmark(), &unset);
+            assert_eq!(release_launcher.benchmark(), &unset);
+            assert_ne!(lab_launcher.qualification(), QualificationConfig::default());
+            assert_eq!(
+                release_launcher.qualification(),
+                QualificationConfig::default()
+            );
+        }
     }
 
     #[test]

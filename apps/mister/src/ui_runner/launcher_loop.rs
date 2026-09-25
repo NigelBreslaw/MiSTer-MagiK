@@ -5099,18 +5099,13 @@ pub(super) fn run_launcher_loop(
         launcher_config.readiness().clone(),
     );
     let launcher_bench_scenario = benchmark_config.scenario();
-    let orientation_benchmark_enabled =
-        launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_BENCHMARK");
-    let settings_navigation_benchmark_enabled =
-        launcher_env_flag("MISTER_SETTINGS_NAVIGATION_BENCHMARK");
+    let orientation_benchmark_enabled = benchmark_config.orientation_transitions();
+    let settings_navigation_benchmark_enabled = benchmark_config.settings_navigation();
     let mut settings_navigation_benchmark =
         SettingsNavigationBenchmark::new(settings_navigation_benchmark_enabled);
     let mut settings_navigation_benchmark_completed_at = None;
     let mut settings_navigation_status_baseline = None;
-    let orientation_benchmark_effect = std::env::var("MISTER_ORIENTATION_TRANSITION_EFFECT")
-        .ok()
-        .as_deref()
-        .and_then(OrientationTransitionEffect::from_id);
+    let orientation_benchmark_effect = benchmark_config.orientation_transition_effect();
     let mut orientation_benchmark = OrientationTransitionBenchmark::new(
         orientation_benchmark_enabled,
         orientation_benchmark_effect.unwrap_or(OrientationTransitionEffect::BrightnessFade),
@@ -5121,7 +5116,7 @@ pub(super) fn run_launcher_loop(
     let mut orientation_benchmark_completed_at = None;
     let mut orientation_benchmark_terminal_status_requested = false;
     let orientation_benchmark_requires_analytics =
-        launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS");
+        benchmark_config.orientation_requires_analytics();
     let mut latch_v5_qualification =
         LatchV5Qualification::from_config(start, launcher_config.qualification());
     let mut latch_v5_bench_state = LauncherBenchState::default();
@@ -5288,9 +5283,7 @@ pub(super) fn run_launcher_loop(
     if let Err(error) = orientation_store.reconcile_osd_rotation(nav.settings.screen_orientation) {
         crate::ui_errln!("settings: failed to reconcile MiSTer OSD rotation: {error}");
     }
-    let arcade_benchmark_orientation = std::env::var("MISTER_ARCADE_BENCHMARK_ORIENTATION")
-        .ok()
-        .and_then(|value| ScreenOrientation::parse(&value));
+    let arcade_benchmark_orientation = benchmark_config.arcade_orientation();
     if let Some(orientation) = arcade_benchmark_orientation {
         nav.settings.screen_orientation = orientation;
     } else if orientation_benchmark.enabled() {
@@ -5385,7 +5378,10 @@ pub(super) fn run_launcher_loop(
     let mut gui_profiling = GuiProfilingController::from_config(profile_config.gui().clone());
     reset_media_progress_bridge();
     let mut bridge_churn_playback = BridgeChurnPlayback::new(gui_profiling.bridge_churn_route());
-    let mut input_latency_lab = InputLatencyLab::from_env(input_observation_probe.clone());
+    let mut input_latency_lab = InputLatencyLab::from_config(
+        launcher_config.input().latency_lab(),
+        input_observation_probe.clone(),
+    );
     let mut loading_title = String::new();
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
     let mut last_clock_text = launcher_clock_text();

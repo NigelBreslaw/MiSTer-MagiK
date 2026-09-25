@@ -19,9 +19,15 @@ const HOME_SELECTED_INDEX: &str = "MISTER_HOME_SELECTED_INDEX";
 const AUTO_LAUNCH_SELECTED: &str = "MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED";
 const ORIENTATION_PMU_COMPLETE: &str = "MISTER_ORIENTATION_PMU_COMPLETE";
 const LAUNCH_RETURN_PMU_HANDOFF_OUT: &str = "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT";
+const ORIENTATION_TRANSITIONS_BENCHMARK: &str = "MISTER_ORIENTATION_TRANSITIONS_BENCHMARK";
+const ORIENTATION_TRANSITION_EFFECT: &str = "MISTER_ORIENTATION_TRANSITION_EFFECT";
+const ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS: &str =
+    "MISTER_ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS";
+const SETTINGS_NAVIGATION_BENCHMARK: &str = "MISTER_SETTINGS_NAVIGATION_BENCHMARK";
+const ARCADE_BENCHMARK_ORIENTATION: &str = "MISTER_ARCADE_BENCHMARK_ORIENTATION";
 const HOME_REPEAT_LEFT_HOLD: Duration = Duration::from_secs(20);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LauncherBenchmarkConfig {
     scenario: Option<LauncherBenchScenario>,
     start_screen: Option<Screen>,
@@ -38,6 +44,11 @@ pub struct LauncherBenchmarkConfig {
     auto_launch_selected: bool,
     orientation_pmu_completion: Option<String>,
     launch_return_pmu_handoff_out: Option<String>,
+    orientation_transitions: bool,
+    orientation_transition_effect: Option<OrientationTransitionEffect>,
+    orientation_requires_analytics: bool,
+    settings_navigation: bool,
+    arcade_orientation: Option<ScreenOrientation>,
 }
 
 impl Default for LauncherBenchmarkConfig {
@@ -77,6 +88,15 @@ impl LauncherBenchmarkConfig {
             auto_launch_selected: get(AUTO_LAUNCH_SELECTED).is_some_and(benchmark_flag),
             orientation_pmu_completion: get(ORIENTATION_PMU_COMPLETE).map(str::to_owned),
             launch_return_pmu_handoff_out: get(LAUNCH_RETURN_PMU_HANDOFF_OUT).map(str::to_owned),
+            orientation_transitions: get(ORIENTATION_TRANSITIONS_BENCHMARK)
+                .is_some_and(benchmark_flag),
+            orientation_transition_effect: get(ORIENTATION_TRANSITION_EFFECT)
+                .and_then(OrientationTransitionEffect::from_id),
+            orientation_requires_analytics: get(ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS)
+                .is_some_and(benchmark_flag),
+            settings_navigation: get(SETTINGS_NAVIGATION_BENCHMARK).is_some_and(benchmark_flag),
+            arcade_orientation: get(ARCADE_BENCHMARK_ORIENTATION)
+                .and_then(ScreenOrientation::parse),
         }
     }
 
@@ -112,6 +132,21 @@ impl LauncherBenchmarkConfig {
     }
     pub(super) fn launch_return_pmu_handoff_out(&self) -> Option<&str> {
         self.launch_return_pmu_handoff_out.as_deref()
+    }
+    pub(super) fn orientation_transitions(&self) -> bool {
+        self.orientation_transitions
+    }
+    pub(super) fn orientation_transition_effect(&self) -> Option<OrientationTransitionEffect> {
+        self.orientation_transition_effect
+    }
+    pub(super) fn orientation_requires_analytics(&self) -> bool {
+        self.orientation_requires_analytics
+    }
+    pub(super) fn settings_navigation(&self) -> bool {
+        self.settings_navigation
+    }
+    pub(super) fn arcade_orientation(&self) -> Option<ScreenOrientation> {
+        self.arcade_orientation
     }
 }
 
