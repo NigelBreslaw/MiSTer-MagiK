@@ -5099,16 +5099,14 @@ pub(super) fn run_launcher_loop(
         launcher_config.readiness().clone(),
     );
     let launcher_bench_scenario = benchmark_config.scenario();
-    let orientation_benchmark_enabled =
-        launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_BENCHMARK");
+    let orientation_benchmark_enabled = lab_env_flag("MISTER_ORIENTATION_TRANSITIONS_BENCHMARK");
     let settings_navigation_benchmark_enabled =
-        launcher_env_flag("MISTER_SETTINGS_NAVIGATION_BENCHMARK");
+        lab_env_flag("MISTER_SETTINGS_NAVIGATION_BENCHMARK");
     let mut settings_navigation_benchmark =
         SettingsNavigationBenchmark::new(settings_navigation_benchmark_enabled);
     let mut settings_navigation_benchmark_completed_at = None;
     let mut settings_navigation_status_baseline = None;
-    let orientation_benchmark_effect = std::env::var("MISTER_ORIENTATION_TRANSITION_EFFECT")
-        .ok()
+    let orientation_benchmark_effect = lab_env_var("MISTER_ORIENTATION_TRANSITION_EFFECT")
         .as_deref()
         .and_then(OrientationTransitionEffect::from_id);
     let mut orientation_benchmark = OrientationTransitionBenchmark::new(
@@ -5121,7 +5119,7 @@ pub(super) fn run_launcher_loop(
     let mut orientation_benchmark_completed_at = None;
     let mut orientation_benchmark_terminal_status_requested = false;
     let orientation_benchmark_requires_analytics =
-        launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS");
+        lab_env_flag("MISTER_ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS");
     let mut latch_v5_qualification =
         LatchV5Qualification::from_config(start, launcher_config.qualification());
     let mut latch_v5_bench_state = LauncherBenchState::default();
@@ -5288,8 +5286,7 @@ pub(super) fn run_launcher_loop(
     if let Err(error) = orientation_store.reconcile_osd_rotation(nav.settings.screen_orientation) {
         crate::ui_errln!("settings: failed to reconcile MiSTer OSD rotation: {error}");
     }
-    let arcade_benchmark_orientation = std::env::var("MISTER_ARCADE_BENCHMARK_ORIENTATION")
-        .ok()
+    let arcade_benchmark_orientation = lab_env_var("MISTER_ARCADE_BENCHMARK_ORIENTATION")
         .and_then(|value| ScreenOrientation::parse(&value));
     if let Some(orientation) = arcade_benchmark_orientation {
         nav.settings.screen_orientation = orientation;

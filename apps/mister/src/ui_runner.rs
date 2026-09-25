@@ -94,15 +94,9 @@ use mister_magik_fb::launcher_runtime::settings::{
     ConfirmedOrientationStore, FileSettingsStore, SettingsStore,
 };
 use mister_magik_fb::launcher_runtime::settings_navigation_bench::*;
+use mister_magik_fb::process_config::{lab_env_flag, lab_env_var};
 use std::path::PathBuf;
 use std::sync::{OnceLock, mpsc};
-
-fn launcher_env_flag(name: &str) -> bool {
-    matches!(
-        std::env::var(name).ok().as_deref(),
-        Some("1" | "on" | "true" | "yes")
-    )
-}
 
 fn launcher_startup_orientation(
     persisted: ScreenOrientation,
@@ -469,13 +463,12 @@ pub fn run_ui(
         "launcher" => {
             let launcher_settings = crate::settings::MagikSettings::load();
             let settings_navigation_benchmark =
-                launcher_env_flag("MISTER_SETTINGS_NAVIGATION_BENCHMARK");
+                lab_env_flag("MISTER_SETTINGS_NAVIGATION_BENCHMARK");
             let launcher_orientation = launcher_startup_orientation(
                 launcher_settings.screen_orientation,
-                std::env::var("MISTER_ARCADE_BENCHMARK_ORIENTATION")
-                    .ok()
+                lab_env_var("MISTER_ARCADE_BENCHMARK_ORIENTATION")
                     .and_then(|value| ScreenOrientation::parse(&value)),
-                launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_BENCHMARK"),
+                lab_env_flag("MISTER_ORIENTATION_TRANSITIONS_BENCHMARK"),
                 settings_navigation_benchmark,
             );
             let launcher_layout = UiLayoutGeometry::for_display(&ui, launcher_orientation);

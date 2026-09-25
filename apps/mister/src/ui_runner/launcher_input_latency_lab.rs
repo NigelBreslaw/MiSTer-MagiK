@@ -5,6 +5,7 @@
 
 use crate::input_hub::{InputObservation, InputObservationProbe, monotonic_us};
 use crate::launcher::{LauncherNav, Screen};
+use crate::process_config::lab_env_var;
 use serde_json::{Value, json};
 use std::path::Path;
 use std::time::Duration;
@@ -103,11 +104,8 @@ enum DueWork {
 
 impl InputLatencyLab {
     pub(super) fn from_env(input_probe: Option<InputObservationProbe>) -> Self {
-        let arm = std::env::var(ARM_ENV)
-            .ok()
-            .and_then(|value| InputLatencyLabArm::parse(&value));
-        let session = std::env::var(SESSION_ENV)
-            .ok()
+        let arm = lab_env_var(ARM_ENV).and_then(|value| InputLatencyLabArm::parse(&value));
+        let session = lab_env_var(SESSION_ENV)
             .filter(|path| is_volatile_path(path) && Path::new(path).is_file());
         let armed = arm.is_some() && session.is_some();
         if let Some(path) = session.as_deref().filter(|_| armed) {

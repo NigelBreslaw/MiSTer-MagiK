@@ -86,6 +86,27 @@ const MODAL_TEST_PATH_INPUTS: &[&str] = &[
     "MISTER_CATALOG_DIAGNOSTICS_DIR",
 ];
 
+/// Benchmarks, qualification runs, launcher test drivers and fault injection
+/// are development tooling. Release builds ignore their switches, so none of
+/// them can be armed on a shipped launcher.
+pub const LAB_HOOKS_ENABLED: bool =
+    cfg!(any(feature = "tooling", feature = "ui-device-tests", test));
+
+/// Reads a lab switch from the process environment; always absent in release.
+pub fn lab_env_var(name: &str) -> Option<String> {
+    LAB_HOOKS_ENABLED
+        .then(|| std::env::var(name).ok())
+        .flatten()
+}
+
+/// A lab on/off switch, accepting the same spellings as other launcher flags.
+pub fn lab_env_flag(name: &str) -> bool {
+    matches!(
+        lab_env_var(name).as_deref(),
+        Some("1" | "on" | "true" | "yes")
+    )
+}
+
 #[derive(Clone, Default)]
 pub struct EnvironmentSnapshot {
     values: BTreeMap<OsString, OsString>,
@@ -816,7 +837,13 @@ impl ProcessConfig {
     pub fn capture(args: &[String], command: &str) -> Self {
         let device_paths = DevicePaths::current();
         let environment = EnvironmentSnapshot::capture_process();
-        Self::from_snapshot_with_device_paths(args, command, &environment, device_paths)
+        Self::from_snapshot_with_device_paths(
+            args,
+            command,
+            &environment,
+            device_paths,
+            LAB_HOOKS_ENABLED,
+        )
     }
 
     #[cfg(test)]
@@ -826,6 +853,7 @@ impl ProcessConfig {
             command,
             environment,
             DevicePaths::for_layout(mister_magik_platform_manifest_contract::Layout::Public),
+            true,
         )
     }
 
@@ -834,6 +862,7 @@ impl ProcessConfig {
         command: &str,
         environment: &EnvironmentSnapshot,
         device_paths: DevicePaths,
+        lab_hooks: bool,
     ) -> Self {
         let command = CommandMode::from_name(command);
         let instrumentation = InstrumentationModifiers::from_args(&command, args);
@@ -846,6 +875,12 @@ impl ProcessConfig {
             |name| environment.get_path(name),
             |name| environment.get(name),
         );
+        let no_lab_environment = EnvironmentSnapshot::default();
+        let lab_environment = if lab_hooks {
+            environment
+        } else {
+            &no_lab_environment
+        };
         let launcher = command.captures_launcher().then(|| LauncherProcessConfig {
             readiness: LauncherReadinessConfig::from_snapshot(environment),
             device_paths: device_paths.clone(),
@@ -860,19 +895,19 @@ impl ProcessConfig {
                 environment.get(name)
             }),
             screensaver: ScreensaverProcessConfig::capture(environment),
-            input: InputProcessConfig::capture(environment),
+            input: InputProcessConfig::capture(lab_environment),
             #[cfg(feature = "ui")]
             display_pacing: DisplayPacingConfig::capture(environment),
             #[cfg(feature = "ui")]
             profiles: ProfileProcessConfig::capture(environment),
             #[cfg(feature = "ui")]
-            benchmark: LauncherBenchmarkConfig::capture_with(|name| environment.get(name)),
+            benchmark: LauncherBenchmarkConfig::capture_with(|name| lab_environment.get(name)),
             #[cfg(feature = "ui")]
-            qualification: QualificationConfig::capture_with(|name| environment.get(name)),
-            tests: LauncherTestConfig::capture(environment),
+            qualification: QualificationConfig::capture_with(|name| lab_environment.get(name)),
+            tests: LauncherTestConfig::capture(lab_environment),
             presentation_backend: PresentBackendConfig::capture(environment),
         });
-        let fault = FaultProcessConfig::capture(environment);
+        let fault = FaultProcessConfig::capture(lab_environment);
         Self {
             command,
             device_paths,
@@ -1079,6 +1114,7 @@ mod tests {
                 "ui",
                 &EnvironmentSnapshot::default(),
                 DevicePaths::remapped(layout, root),
+                true,
             );
             let launcher = config
                 .launcher()
@@ -1109,6 +1145,7 @@ mod tests {
                 mister_magik_platform_manifest_contract::Layout::Development,
                 "/tmp/card",
             ),
+            true,
         );
 
         assert_eq!(
@@ -1212,6 +1249,60 @@ mod tests {
             .scripted();
 
         assert_eq!(scripted, &ScriptedInputConfig::default());
+    }
+
+    #[test]
+    fn release_capture_ignores_every_lab_switch() {
+        let environment = EnvironmentSnapshot::from_values([
+            (INPUT_INTEGRITY_STALL_MS, "50"),
+            (TEST_CATALOG_RECOVERY_DIALOG, "retry"),
+            ("MISTER_LAUNCHER_BENCH_SCENARIO", "arcade-scroll"),
+            ("MISTER_LAUNCHER_START_SCREEN", "arcade"),
+            ("MISTER_LATCH_V5_QUALIFICATION", "1"),
+            ("MISTER_FS_FAULT_POINT", "settings.after_rename"),
+            (
+                "MISTER_FS_FAULT_SESSION",
+                "/tmp/mister-magik/fs-fault-session",
+            ),
+        ]);
+        let args = ["mister-magik-fb".into(), "ui".into()];
+        let paths =
+            || DevicePaths::for_layout(mister_magik_platform_manifest_contract::Layout::Public);
+        let lab = ProcessConfig::from_snapshot_with_device_paths(
+            &args,
+            "ui",
+            &environment,
+            paths(),
+            true,
+        );
+        let release = ProcessConfig::from_snapshot_with_device_paths(
+            &args,
+            "ui",
+            &environment,
+            paths(),
+            false,
+        );
+
+        let lab_launcher = lab.launcher().unwrap();
+        assert_eq!(lab_launcher.input().integrity_stall_ms(), Some(50));
+        assert!(lab_launcher.tests().catalog_recovery_dialog().is_some());
+        assert!(lab.fault().is_some());
+
+        let release_launcher = release.launcher().unwrap();
+        assert_eq!(release_launcher.input().integrity_stall_ms(), None);
+        assert_eq!(release_launcher.tests(), &LauncherTestConfig::default());
+        assert!(release.fault().is_none());
+        #[cfg(feature = "ui")]
+        {
+            let unset = format!("{:?}", LauncherBenchmarkConfig::default());
+            assert_ne!(format!("{:?}", lab_launcher.benchmark()), unset);
+            assert_eq!(format!("{:?}", release_launcher.benchmark()), unset);
+            assert_ne!(lab_launcher.qualification(), QualificationConfig::default());
+            assert_eq!(
+                release_launcher.qualification(),
+                QualificationConfig::default()
+            );
+        }
     }
 
     #[test]
