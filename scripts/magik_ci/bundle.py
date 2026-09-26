@@ -17,7 +17,7 @@ MANIFEST = "platform-bundle-v0.2.json"
 ORIGIN = "platform-component-origin-v1.json"
 CHECKSUMS = "platform-component-SHA256SUMS"
 ASSEMBLY_REVISION = 2
-PATCHED_DIAGNOSTIC_ARCHITECTURE = "scaler-off-domain-scheduler-terminal-v6"
+PATCHED_DIAGNOSTIC_ARCHITECTURE = "scaler-memory-boundary-v1"
 HISTORICAL_DIAGNOSTIC_ARCHITECTURES = frozenset(
     {
         "scaler-fetch-no-request-gates-v1",
@@ -27,6 +27,7 @@ HISTORICAL_DIAGNOSTIC_ARCHITECTURES = frozenset(
         "scaler-off-domain-scheduler-snapshot-v2",
         "scaler-off-domain-scheduler-terminal-v3",
         "scaler-off-domain-scheduler-terminal-v4",
+        "scaler-off-domain-scheduler-terminal-v6",
         PATCHED_DIAGNOSTIC_ARCHITECTURE,
     }
 )

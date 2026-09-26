@@ -27,6 +27,14 @@ from scripts.magik_ci.python_tests import commands as python_test_commands
 from scripts.magik_ci.quality import QUALITY_COMMANDS, execute
 
 
+ARCHITECTURE = json.loads(
+    (
+        Path(__file__).resolve().parents[2]
+        / "mister/platform/fpga/menu-vblank-latch/hdmi-evidence-protocol.json"
+    ).read_text()
+)["causal_boundary_state"]["architecture"]
+
+
 class MagikCiTests(unittest.TestCase):
     def test_build_mame_ingests_software_lists_and_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -856,7 +864,7 @@ with tempfile.TemporaryDirectory() as directory:
                 + "\nlatch_protocol_sha256="
                 + "3" * 64
                 + "\nlatch_protocol_version=5"
-                + "\ndiagnostic_architecture=scaler-off-domain-scheduler-terminal-v6\n"
+                + f"\ndiagnostic_architecture={ARCHITECTURE}\n"
             )
             archive = create(
                 main=root / "main",
@@ -885,7 +893,7 @@ with tempfile.TemporaryDirectory() as directory:
             self.assertEqual(payload["latch_protocol_version"], 5)
             self.assertEqual(
                 payload["diagnostic_architecture"],
-                "scaler-off-domain-scheduler-terminal-v6",
+                ARCHITECTURE,
             )
 
     def test_fpga_component_compaction_removes_quartus_workspaces(self) -> None:
@@ -931,9 +939,20 @@ with tempfile.TemporaryDirectory() as directory:
                 "scaler-off-domain-scheduler-snapshot-v2",
                 "scaler-off-domain-scheduler-terminal-v3",
                 "scaler-off-domain-scheduler-terminal-v4",
+                "scaler-off-domain-scheduler-terminal-v6",
                 PATCHED_DIAGNOSTIC_ARCHITECTURE,
             },
         )
+        self.assertEqual(PATCHED_DIAGNOSTIC_ARCHITECTURE, ARCHITECTURE)
+        _validate_diagnostic_architecture(
+            ARCHITECTURE, ARCHITECTURE, historical_baseline=False
+        )
+        previous = "scaler-off-domain-scheduler-terminal-v6"
+        _validate_diagnostic_architecture(previous, previous, historical_baseline=True)
+        with self.assertRaisesRegex(ValueError, "fpga_diagnostic_architecture"):
+            _validate_diagnostic_architecture(
+                previous, previous, historical_baseline=False
+            )
         arguments = parser().parse_args(
             [
                 "ci",

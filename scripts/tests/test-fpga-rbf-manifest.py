@@ -8,12 +8,19 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parents[1] / "checks/verify-fpga-rbf-manifest.py"
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = ROOT / "scripts/checks/verify-fpga-rbf-manifest.py"
+ARCHITECTURE = json.loads(
+    (
+        ROOT / "mister/platform/fpga/menu-vblank-latch/hdmi-evidence-protocol.json"
+    ).read_text()
+)["causal_boundary_state"]["architecture"]
 
 
 class ManifestTest(unittest.TestCase):
@@ -60,9 +67,7 @@ class ManifestTest(unittest.TestCase):
                     *(
                         ()
                         if historical_v2
-                        else (
-                            "diagnostic_architecture=scaler-off-domain-scheduler-terminal-v6",
-                        )
+                        else (f"diagnostic_architecture={ARCHITECTURE}",)
                     ),
                     "quartus_seed=" + ("1" if historical_v2 else "2"),
                     "quartus_version=17.0.0 Build 595",

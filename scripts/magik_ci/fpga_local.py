@@ -226,6 +226,13 @@ def signoff(
     proofs.mkdir()
     gates = [
         (
+            "release-contract",
+            [
+                sys.executable,
+                str(candidate / "scripts/checks/check-fpga-release-contract.py"),
+            ],
+        ),
+        (
             "integration",
             [
                 sys.executable,
