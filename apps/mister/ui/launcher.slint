@@ -127,6 +127,22 @@ export component Launcher inherits MisterWindow {
         }
     }
 
+    if MisterUi.custom-home-base : Rectangle {
+        background: transparent;
+        accessible-role: list;
+        accessible-label: "Collections";
+        for label[index] in ["Arcade", "Consoles", "Computers", "Handhelds", "Favourites", "Settings"] : Rectangle {
+            background: transparent;
+            accessible-role: list-item;
+            accessible-label: label;
+            accessible-description: index < NavigationView.menu-items.length
+                ? NavigationView.menu-items[index].subtitle : "";
+            accessible-item-selected: index == NavigationView.home-selected-index;
+            accessible-enabled: index >= NavigationView.menu-items.length
+                || NavigationView.menu-items[index].available;
+        }
+    }
+
     if MisterUi.crt-layout : CrtLauncherUi { }
     if !MisterUi.crt-layout : HdmiLauncherUi { }
 

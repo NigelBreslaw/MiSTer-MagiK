@@ -84,7 +84,7 @@ static inline uint16x8_t reflection_fade(uint16x8_t channel,
 }
 
 void magik_launcher_prepare_reflection(uint16_t *out, const uint32_t *body,
-                                       size_t height, size_t x) {
+                                       size_t height, size_t x, size_t fade_rows) {
   const size_t visible = height / 4 < 64 ? height / 4 : 64;
   size_t row = 0;
   for (; row + 8 <= visible; row += 8) {
@@ -108,7 +108,7 @@ void magik_launcher_prepare_reflection(uint16_t *out, const uint32_t *body,
         3);
     uint16_t alpha_values[8], threshold_values[8];
     for (size_t lane = 0; lane < 8; ++lane) {
-      const size_t reflected_row = row + lane;
+      const size_t reflected_row = (row + lane) * 63 / (fade_rows - 1);
       const uint32_t left = 63 - reflected_row;
       alpha_values[lane] = (uint16_t)(150 * left * left / (63 * 63));
       threshold_values[lane] =
@@ -126,9 +126,10 @@ void magik_launcher_prepare_reflection(uint16_t *out, const uint32_t *body,
   }
   for (; row < 64; ++row) {
     const uint32_t pixel = row < visible ? body[height - 1 - row] : 0;
-    const uint32_t left = 63 - row;
+    const size_t fade_row = row * 63 / (fade_rows - 1);
+    const uint32_t left = fade_row < 63 ? 63 - fade_row : 0;
     const uint32_t alpha = 150 * left * left / (63 * 63);
-    const uint32_t threshold = reflection_bayer[row & 3][x & 3] * 16 + 8;
+    const uint32_t threshold = reflection_bayer[fade_row & 3][x & 3] * 16 + 8;
     const uint32_t red = (pixel & 255) >> 3;
     const uint32_t green = ((pixel >> 8) & 255) >> 2;
     const uint32_t blue = ((pixel >> 16) & 255) >> 3;

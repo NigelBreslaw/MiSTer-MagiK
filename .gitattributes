@@ -2,3 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 *.patch whitespace=-blank-at-eol,-space-before-tab
+
+# Raw native launcher preparation textures must not be diffed as text.
+*.rgb888 binary

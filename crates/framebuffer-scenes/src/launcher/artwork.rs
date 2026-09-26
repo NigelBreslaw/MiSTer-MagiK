@@ -17,6 +17,20 @@ pub(super) fn face(
     detail: bool,
     typography: Option<LauncherTypography<'_>>,
 ) -> crate::launcher_flip::Face {
+    crate::launcher_flip::Face::new(
+        surface(card, width, detail, typography, true),
+        width,
+        card_height(width),
+    )
+}
+
+pub(super) fn surface(
+    card: &PreparedCard,
+    width: usize,
+    detail: bool,
+    typography: Option<LauncherTypography<'_>>,
+    labels: bool,
+) -> Vec<Rgb565Pixel> {
     let height = card_height(width);
     let mut canvas = vec![Rgb565Pixel(0); LOGICAL_WIDTH * LOGICAL_HEIGHT];
     let base = if detail {
@@ -79,7 +93,9 @@ pub(super) fn face(
             draw_mask_scaled_centered(&mut canvas, 0, height / 4, width, &initial, ink, 8 * 256);
         }
     }
-    if let Some(fonts) = typography {
+    if !labels {
+        // Responsive faces add native-size bitmap labels after artwork resampling.
+    } else if let Some(fonts) = typography {
         fonts.font_for(TextRole::Heading, &card.name).draw_centered(
             &mut canvas,
             LOGICAL_WIDTH,
@@ -124,14 +140,13 @@ pub(super) fn face(
             );
         }
     }
-    let pixels = (0..height)
+    (0..height)
         .flat_map(|y| {
             canvas[y * LOGICAL_WIDTH..y * LOGICAL_WIDTH + width]
                 .iter()
                 .copied()
         })
-        .collect();
-    crate::launcher_flip::Face::new(pixels, width, height)
+        .collect()
 }
 
 // Eighth-pixel coordinates for preparation-only 4x4 coverage sampling.
@@ -325,6 +340,141 @@ fn surface_sample(base: u16, width: usize, x: usize, y: usize) -> u16 {
     }
 }
 
+/// Native face preparation uses one destination-space silhouette for both
+/// colour and alpha. Never rescale a baked black/rounded edge and mask it again.
+pub(super) fn native_surface(
+    card: &PreparedCard,
+    width: usize,
+    height: usize,
+) -> (Vec<Rgb565Pixel>, Vec<u8>) {
+    let fallback;
+    let (source_w, source_h, rgb888, rgb565) = if let Some(rgb) = &card.rgb888 {
+        (360, 504, Some(rgb.as_slice()), None)
+    } else {
+        fallback = if let Some(rgb) = &card.artwork {
+            rgb.clone()
+        } else {
+            surface(card, 180, true, None, false)
+        };
+        (180, 252, None, Some(fallback.as_slice()))
+    };
+    // Decode before the area filter; retain fractional sRGB until final 565
+    // quantisation. A fixed spatial threshold avoids temporal sparkle.
+    let linear: [u32; 256] = std::array::from_fn(|i| {
+        let s = i as f64 / 255.0;
+        ((if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }) * 65535.0)
+            .round() as u32
+    });
+    let to_srgb = |value: u64| -> u32 {
+        let hi = linear.partition_point(|&v| u64::from(v) < value).min(255);
+        if hi == 0 {
+            return 0;
+        }
+        let lo = hi - 1;
+        (lo * 256) as u32
+            + ((value - u64::from(linear[lo])) * 256 / u64::from(linear[hi] - linear[lo])) as u32
+    };
+    let mut pixels = vec![Rgb565Pixel(0); width * height];
+    let mut alpha = vec![0; width * height];
+    let rx = (width * 5 / 100).max(4);
+    let ry = (rx * height * 5 / (width * 7)).max(2);
+    let bx = (width / 40).max(2);
+    let by = (bx * height * 5).div_ceil(width * 7).max(1);
+    for y in 0..height {
+        for x in 0..width {
+            let mut sum = [0u64; 3];
+            for sy in y * source_h / height..((y + 1) * source_h).div_ceil(height) {
+                let wy =
+                    ((y + 1) * source_h).min((sy + 1) * height) - (y * source_h).max(sy * height);
+                for sx in x * source_w / width..((x + 1) * source_w).div_ceil(width) {
+                    let wx =
+                        ((x + 1) * source_w).min((sx + 1) * width) - (x * source_w).max(sx * width);
+                    let channels = if let Some(rgb) = rgb888 {
+                        let i = (sy * source_w + sx) * 3;
+                        [rgb[i], rgb[i + 1], rgb[i + 2]]
+                    } else {
+                        let p = rgb565.unwrap()[sy * source_w + sx].0;
+                        let (r, g, b) = ((p >> 11) as u8, ((p >> 5) & 63) as u8, (p & 31) as u8);
+                        [
+                            (r << 3) | (r >> 2),
+                            (g << 2) | (g >> 4),
+                            (b << 3) | (b >> 2),
+                        ]
+                    };
+                    for c in 0..3 {
+                        sum[c] += u64::from(linear[usize::from(channels[c])]) * (wx * wy) as u64;
+                    }
+                }
+            }
+            let channels = sum.map(|v| to_srgb(v / (source_w * source_h) as u64));
+            let mut colour = quantise_native(channels, x, y);
+            let outer = ellipse_coverage(x, y, width, height, rx, ry, 0, 0);
+            let inner = ellipse_coverage(x, y, width, height, rx, ry, bx, by);
+            let keyline = ellipse_coverage(x, y, width, height, rx, ry, bx + 1, by + 1);
+            if let Some(weight) = (inner * 256).checked_div(outer) {
+                let border = mix_colour(card.colour, CREAM, 48);
+                colour = mix_colour(
+                    border,
+                    mix_colour(BACKGROUND, colour, (keyline * 256 / inner.max(1)) as usize),
+                    weight as usize,
+                );
+            } else {
+                colour = card.colour;
+            }
+            pixels[y * width + x] = Rgb565Pixel(colour);
+            alpha[y * width + x] = (outer * 255 / 16) as u8;
+        }
+    }
+    (pixels, alpha)
+}
+
+fn quantise_native(channels: [u32; 3], x: usize, y: usize) -> u16 {
+    const BAYER: [[u32; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+    let threshold = BAYER[y % 4][x % 4] * 16 + 8;
+    let channel = |value: u32, levels: u32| {
+        let scaled = value * levels;
+        let denominator = 255 * 256;
+        (scaled / denominator + u32::from((scaled % denominator) * 256 / denominator > threshold))
+            .min(levels) as u16
+    };
+    (channel(channels[0], 31) << 11) | (channel(channels[1], 63) << 5) | channel(channels[2], 31)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ellipse_coverage(
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    rx: usize,
+    ry: usize,
+    ix: usize,
+    iy: usize,
+) -> u32 {
+    let rx = rx.saturating_sub(ix).max(1) as i64 * 8;
+    let ry = ry.saturating_sub(iy).max(1) as i64 * 8;
+    let mut count = 0;
+    for sy in 0..4 {
+        for sx in 0..4 {
+            let px = (x * 8 + sx * 2 + 1) as i64;
+            let py = (y * 8 + sy * 2 + 1) as i64;
+            let dx = px.min(w as i64 * 8 - px) - ix as i64 * 8;
+            let dy = py.min(h as i64 * 8 - py) - iy as i64 * 8;
+            if dx < 0 || dy < 0 {
+                continue;
+            }
+            let a = (rx - dx).max(0);
+            let b = (ry - dy).max(0);
+            count += u32::from(a * a * ry * ry + b * b * rx * rx <= rx * rx * ry * ry);
+        }
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,7 +505,54 @@ mod tests {
             name_mask: text_mask("HANDHELDS"),
             games_mask: text_mask("126 GAMES"),
             artwork: None,
+            rgb888: None,
         }
+    }
+
+    #[test]
+    fn native_corners_share_symmetric_coverage_and_full_colour_edges() {
+        let mut card = test_card(0xf800);
+        card.rgb888 = Some(vec![128; 360 * 504 * 3]);
+        for (w, h) in [(160, 112), (72, 200), (160, 134)] {
+            let (pixels, alpha) = native_surface(&card, w, h);
+            assert_eq!(alpha[0], 0);
+            assert_eq!(alpha[w / 2], 255);
+            assert_eq!(pixels[w / 2].0, mix_colour(card.colour, CREAM, 48));
+            assert!(alpha.iter().any(|&a| a > 0 && a < 255));
+            for y in 0..h {
+                for x in 0..w {
+                    assert_eq!(alpha[y * w + x], alpha[y * w + w - 1 - x]);
+                    assert_eq!(alpha[y * w + x], alpha[(h - 1 - y) * w + x]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_quantisation_preserves_sublevel_gradients_without_bias() {
+        let mut previous = 0;
+        for value in 0..=255 {
+            let mut red = 0u32;
+            let mut green = 0u32;
+            for y in 0..4 {
+                for x in 0..4 {
+                    let pixel = quantise_native([value * 256; 3], x, y);
+                    red += u32::from(pixel >> 11);
+                    green += u32::from((pixel >> 5) & 63);
+                }
+            }
+            assert!(red >= previous);
+            assert!((i64::from(red * 255) - i64::from(value * 31 * 16)).abs() <= 255);
+            assert!((i64::from(green * 255) - i64::from(value * 63 * 16)).abs() <= 255);
+            previous = red;
+        }
+        // A dark change smaller than one 5-bit step survives spatial averaging.
+        let sum = |value| {
+            (0..16)
+                .map(|i| u32::from(quantise_native([value; 3], i % 4, i / 4) >> 11))
+                .sum::<u32>()
+        };
+        assert!(sum(12 * 256) < sum(14 * 256));
     }
 
     #[test]
@@ -435,6 +632,7 @@ mod tests {
             name_mask: text_mask("SETTINGS"),
             games_mask: Vec::new(),
             artwork: None,
+            rgb888: None,
         };
         let heading_pixel = 183 * 180 + 21;
         for detail in [false, true] {

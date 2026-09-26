@@ -33,6 +33,34 @@ const CARD_ASSETS: [&[u8]; CARD_COUNT] = [
     include_bytes!("../../assets/ui/launcher-cards/06_settings.rgb565"),
 ];
 
+const CARD_RGB888: [&[u8]; CARD_COUNT] = [
+    include_bytes!("../../assets/ui/launcher-cards/01_arcade.rgb888"),
+    include_bytes!("../../assets/ui/launcher-cards/02_consoles.rgb888"),
+    include_bytes!("../../assets/ui/launcher-cards/03_computers.rgb888"),
+    include_bytes!("../../assets/ui/launcher-cards/04_handhelds.rgb888"),
+    include_bytes!("../../assets/ui/launcher-cards/05_favourites.rgb888"),
+    include_bytes!("../../assets/ui/launcher-cards/06_settings.rgb888"),
+];
+
+pub(super) fn scene_for_display(
+    ui: &crate::ui_display::UiDisplay,
+    layout: crate::ui_display::UiLayoutGeometry,
+) -> LauncherScene {
+    if ui.output_route().is_crt() {
+        let content = layout.content_rect();
+        LauncherScene::crt(layout.logical_w(), layout.logical_h()).with_safe_content(
+            mister_magik_framebuffer_scenes::Rgb565Rect {
+                x0: content.x,
+                y0: content.y,
+                x1: content.x + content.width,
+                y1: content.y + content.height,
+            },
+        )
+    } else {
+        LauncherScene::new(layout.logical_w(), layout.logical_h())
+    }
+}
+
 struct LauncherFonts {
     heading: BitmapFont,
     number: BitmapFont,
@@ -61,8 +89,7 @@ impl LauncherFonts {
 }
 
 pub(super) struct LauncherCardHomeSession {
-    width: usize,
-    height: usize,
+    scene: LauncherScene,
     snapshot: LauncherHomeSnapshot,
     clock: String,
     artwork: [Vec<Rgb565Pixel>; CARD_COUNT],
@@ -89,20 +116,18 @@ pub(super) struct LauncherCardHomeSession {
 
 impl LauncherCardHomeSession {
     pub(super) fn new(
-        width: usize,
-        height: usize,
+        scene: LauncherScene,
         snapshot: LauncherHomeSnapshot,
         selected: usize,
         clock: &str,
     ) -> Result<Self, String> {
         let artwork = CARD_ASSETS.map(decode_card_asset);
         let fonts = LauncherFonts::load()?;
-        let prepared = prepare(width, height, &snapshot, selected, clock, &artwork, &fonts);
-        let render_ahead = native_render_ahead(width, height, &prepared);
+        let prepared = prepare(scene, &snapshot, selected, clock, &artwork, &fonts);
+        let render_ahead = native_render_ahead(scene, &prepared);
         let frame = settled_frame(selected);
         Ok(Self {
-            width,
-            height,
+            scene,
             snapshot,
             clock: clock.to_owned(),
             artwork,
@@ -137,8 +162,7 @@ impl LauncherCardHomeSession {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn update(
         &mut self,
-        width: usize,
-        height: usize,
+        scene: LauncherScene,
         snapshot: LauncherHomeSnapshot,
         selected: usize,
         visual_index: f32,
@@ -168,13 +192,11 @@ impl LauncherCardHomeSession {
             self.content_dirty = true;
         }
 
-        let faces_changed =
-            self.width != width || self.height != height || self.snapshot.cards != snapshot.cards;
+        let faces_changed = self.scene != scene || self.snapshot.cards != snapshot.cards;
         if faces_changed || self.snapshot != snapshot || self.clock != clock {
             let preparation_started = self.measure_preparation.then(std::time::Instant::now);
             self.release_presented_frame();
-            self.width = width;
-            self.height = height;
+            self.scene = scene;
             self.snapshot = snapshot;
             self.clock.clear();
             self.clock.push_str(clock);
@@ -185,15 +207,14 @@ impl LauncherCardHomeSession {
                     self.retired_pipeline_counters.add_assign(old.counters());
                 }
                 self.prepared = prepare(
-                    width,
-                    height,
+                    scene,
                     &self.snapshot,
                     self.frame.selected,
                     &self.clock,
                     &self.artwork,
                     &self.fonts,
                 );
-                self.render_ahead = native_render_ahead(width, height, &self.prepared);
+                self.render_ahead = native_render_ahead(scene, &self.prepared);
             } else {
                 self.prepared.refresh_chrome(
                     LauncherData {
@@ -263,13 +284,15 @@ impl LauncherCardHomeSession {
     }
 
     pub(super) fn compositor_copy_damage(&self, motion_only: bool) -> Option<DirtyRect> {
-        (motion_only && self.compositor_content_generation == Some(self.content_generation))
-            .then_some(DirtyRect {
-                x0: 296,
-                y0: 120,
-                x1: 934,
-                y1: 495,
-            })
+        (motion_only
+            && self.scene == LauncherScene::new(960, 540)
+            && self.compositor_content_generation == Some(self.content_generation))
+        .then_some(DirtyRect {
+            x0: 296,
+            y0: 120,
+            x1: 934,
+            y1: 495,
+        })
     }
 
     pub(super) fn note_compositor_copied(&mut self, motion_only: bool) {
@@ -362,11 +385,10 @@ impl LauncherCardHomeSession {
 }
 
 fn native_render_ahead(
-    width: usize,
-    height: usize,
+    scene: LauncherScene,
     prepared: &PreparedLauncher,
 ) -> Option<LauncherCardRenderAhead> {
-    (width == 960 && height == 540).then(|| {
+    (scene == LauncherScene::new(960, 540)).then(|| {
         LauncherCardRenderAhead::start(
             prepared.frame_preparer(),
             std::env::var_os("MISTER_MAGIK2_PROFILE_DIR").is_some(),
@@ -445,8 +467,7 @@ fn browse_frame_from_position(
 }
 
 fn prepare(
-    width: usize,
-    height: usize,
+    scene: LauncherScene,
     snapshot: &LauncherHomeSnapshot,
     selected: usize,
     clock: &str,
@@ -455,20 +476,27 @@ fn prepare(
 ) -> PreparedLauncher {
     let artwork: [&[Rgb565Pixel]; CARD_COUNT] =
         std::array::from_fn(|index| artwork[index].as_slice());
-    LauncherScene::new(width, height)
-        .prepare_initial_with_artwork_and_typography(
-            LauncherData {
-                cards: &snapshot.cards,
-                selected,
-                library_games: snapshot.library_games,
-                collections: snapshot.collections,
-                favourites: snapshot.favourites,
-                clock,
-            },
-            &artwork,
-            fonts.typography(),
-        )
-        .finish()
+    let data = LauncherData {
+        cards: &snapshot.cards,
+        selected,
+        library_games: snapshot.library_games,
+        collections: snapshot.collections,
+        favourites: snapshot.favourites,
+        clock,
+    };
+    if scene.uses_responsive_layout() {
+        scene
+            .prepare_initial_with_rgb888_artwork_and_typography(
+                data,
+                &CARD_RGB888,
+                fonts.typography(),
+            )
+            .finish()
+    } else {
+        scene
+            .prepare_initial_with_artwork_and_typography(data, &artwork, fonts.typography())
+            .finish()
+    }
 }
 
 fn decode_card_asset(bytes: &[u8]) -> Vec<Rgb565Pixel> {
@@ -496,6 +524,44 @@ mod tests {
             favourites: 5,
             collections: 4,
         })
+    }
+
+    #[test]
+    fn route_changes_rebuild_faces_and_drop_native_tile_damage() {
+        let mut session =
+            LauncherCardHomeSession::new(LauncherScene::new(960, 540), snapshot(), 0, "07:28")
+                .unwrap();
+        let mut generation = session.content_generation();
+        for scene in [
+            LauncherScene::new(540, 960),
+            LauncherScene::crt(640, 240),
+            LauncherScene::crt(240, 640),
+            LauncherScene::new(960, 540),
+        ] {
+            session.update(scene, snapshot(), 0, 0.0, "07:28", 16);
+            assert!(session.content_generation() > generation);
+            generation = session.content_generation();
+            assert_eq!(session.render().len(), scene.width * scene.height);
+            session.note_compositor_copied(true);
+            assert_eq!(
+                session.compositor_copy_damage(true).is_some(),
+                scene == LauncherScene::new(960, 540)
+            );
+            assert_eq!(
+                session.render_ahead.is_some(),
+                scene == LauncherScene::new(960, 540)
+            );
+            session.update(scene, snapshot(), 0, 0.0, "07:29", 32);
+            let expected = prepare(
+                scene,
+                &snapshot(),
+                0,
+                "07:29",
+                &session.artwork,
+                &session.fonts,
+            );
+            assert_eq!(session.render(), expected.pixels());
+        }
     }
 
     #[test]
@@ -540,9 +606,18 @@ mod tests {
 
     #[test]
     fn root_session_renders_exact_geometry_and_animates_toward_navigation() {
-        let mut session = LauncherCardHomeSession::new(960, 540, snapshot(), 0, "21:37").unwrap();
-        session.update(960, 540, snapshot(), 0, 0.0, "21:37", 0);
-        session.update(960, 540, snapshot(), 1, 0.2, "21:37", 10);
+        let mut session =
+            LauncherCardHomeSession::new(LauncherScene::new(960, 540), snapshot(), 0, "21:37")
+                .unwrap();
+        session.update(LauncherScene::new(960, 540), snapshot(), 0, 0.0, "21:37", 0);
+        session.update(
+            LauncherScene::new(960, 540),
+            snapshot(),
+            1,
+            0.2,
+            "21:37",
+            10,
+        );
         assert!(session.is_animating());
         assert_eq!(session.frame.selected, 0);
         assert_eq!(session.frame.target, 1);
@@ -551,8 +626,10 @@ mod tests {
 
     #[test]
     fn direct_publication_requires_one_compositor_reconciliation() {
-        let mut session = LauncherCardHomeSession::new(960, 540, snapshot(), 0, "21:37").unwrap();
-        session.update(960, 540, snapshot(), 0, 0.0, "21:37", 0);
+        let mut session =
+            LauncherCardHomeSession::new(LauncherScene::new(960, 540), snapshot(), 0, "21:37")
+                .unwrap();
+        session.update(LauncherScene::new(960, 540), snapshot(), 0, 0.0, "21:37", 0);
         session.render();
         session.note_compositor_copied(true);
         assert!(session.compositor_copy_damage(true).is_some());
@@ -574,16 +651,32 @@ mod tests {
 
     #[test]
     fn compositor_cache_requires_seed_after_content_overlay_or_home_reentry() {
-        let mut session = LauncherCardHomeSession::new(960, 540, snapshot(), 0, "12:34").unwrap();
-        session.update(960, 540, snapshot(), 0, 0.0, "12:34", 0);
+        let mut session =
+            LauncherCardHomeSession::new(LauncherScene::new(960, 540), snapshot(), 0, "12:34")
+                .unwrap();
+        session.update(LauncherScene::new(960, 540), snapshot(), 0, 0.0, "12:34", 0);
         assert_eq!(session.compositor_copy_damage(true), None);
         session.render();
         session.note_compositor_copied(true);
         let rect = session.compositor_copy_damage(true).unwrap();
         assert_eq!((rect.x1 - rect.x0) * (rect.y1 - rect.y0), 239250);
-        session.update(960, 540, snapshot(), 1, 1.0, "12:34", 16);
+        session.update(
+            LauncherScene::new(960, 540),
+            snapshot(),
+            1,
+            1.0,
+            "12:34",
+            16,
+        );
         assert_eq!(session.compositor_copy_damage(true), Some(rect));
-        session.update(960, 540, snapshot(), 1, 1.0, "12:35", 32);
+        session.update(
+            LauncherScene::new(960, 540),
+            snapshot(),
+            1,
+            1.0,
+            "12:35",
+            32,
+        );
         assert_eq!(session.compositor_copy_damage(true), None);
         session.note_compositor_copied(true);
         assert_eq!(session.compositor_copy_damage(false), None);
@@ -597,25 +690,47 @@ mod tests {
     #[test]
     fn clock_and_sidebar_refresh_preserve_worker_and_match_fresh_preparation() {
         let mut data = snapshot();
-        let mut session = LauncherCardHomeSession::new(960, 540, data.clone(), 0, "21:37").unwrap();
-        session.update(960, 540, data.clone(), 0, 0.0, "21:37", 0);
+        let mut session =
+            LauncherCardHomeSession::new(LauncherScene::new(960, 540), data.clone(), 0, "21:37")
+                .unwrap();
+        session.update(
+            LauncherScene::new(960, 540),
+            data.clone(),
+            0,
+            0.0,
+            "21:37",
+            0,
+        );
         let worker = session.render_ahead.as_ref().unwrap().worker_identity();
         for clock in ["21:38", "22:00"] {
             data.collections += 1;
             data.library_games += 123;
-            session.update(960, 540, data.clone(), 0, 0.0, clock, 16);
+            session.update(
+                LauncherScene::new(960, 540),
+                data.clone(),
+                0,
+                0.0,
+                clock,
+                16,
+            );
             assert_eq!(
                 session.render_ahead.as_ref().unwrap().worker_identity(),
                 worker
             );
             assert!(session.presented_frame.is_none());
-            let mut reference =
-                prepare(960, 540, &data, 0, clock, &session.artwork, &session.fonts);
+            let mut reference = prepare(
+                LauncherScene::new(960, 540),
+                &data,
+                0,
+                clock,
+                &session.artwork,
+                &session.fonts,
+            );
             reference.render_frame(session.frame);
             assert_eq!(session.render(), reference.pixels());
         }
         data.cards[0].games = Some(999);
-        session.update(960, 540, data, 0, 0.0, "22:00", 32);
+        session.update(LauncherScene::new(960, 540), data, 0, 0.0, "22:00", 32);
         assert_ne!(
             session.render_ahead.as_ref().unwrap().worker_identity(),
             worker
@@ -625,13 +740,25 @@ mod tests {
     #[test]
     fn settled_clean_home_does_not_sustain_render_ahead_work() {
         let snapshot = snapshot();
-        let mut session =
-            LauncherCardHomeSession::new(960, 540, snapshot.clone(), 0, "21:37").unwrap();
-        session.update(960, 540, snapshot.clone(), 0, 0.0, "21:37", 0);
+        let mut session = LauncherCardHomeSession::new(
+            LauncherScene::new(960, 540),
+            snapshot.clone(),
+            0,
+            "21:37",
+        )
+        .unwrap();
+        session.update(
+            LauncherScene::new(960, 540),
+            snapshot.clone(),
+            0,
+            0.0,
+            "21:37",
+            0,
+        );
         session.render();
         let submitted_sequence = session.request_sequence;
 
-        session.update(960, 540, snapshot, 0, 0.0, "21:37", 16);
+        session.update(LauncherScene::new(960, 540), snapshot, 0, 0.0, "21:37", 16);
 
         assert_eq!(session.request_sequence, submitted_sequence);
     }

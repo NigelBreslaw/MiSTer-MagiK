@@ -884,6 +884,35 @@ separate title-bar control. The root cards are composed directly into RGB565 by
 the Rust renderer using the production bitmap fonts and card backgrounds, while
 Slint continues to own nested screens and overlays.
 
+The root launcher has three layout contracts. HDMI landscape retains the
+960×540 library/sidebar composition. HDMI portrait renders at the rotated
+logical size, with the carousel above the full-width library information.
+CRT renders a carousel-only composition in both orientations, with route-owned
+safe insets and no library sidebar. CRT selection is explicit from the output
+route, not inferred from a monitor aspect ratio.
+
+`launcher/responsive.rs` prepares artwork at the selected card's native raster
+size from the 360×504 RGB888 preparation assets, filtering in linear light and
+quantising once with fixed spatial RGB565 dithering. One destination-space
+rounded outline supplies both border colour and alpha. Reflection fading spans
+the actual native reflection height and ends at black. The renderer then adds
+the existing Spleen 6×12 bitmap labels. Native 240p/288p output
+uses horizontal pixel doubling; portrait swaps that doubling to the vertical
+axis. Even card dimensions and integer resting positions keep the selected
+title/count pixel-exact. Moving/receding cards still use the shared filtered
+projection, flip, occlusion and reflection renderer. Chrome remains resident;
+no fonts, artwork or frame buffers are allocated during browsing. Route changes
+rebuild the faces and invalidate the previous compositor generation. The
+960×540 render-ahead/direct-slot path remains exclusive to HDMI landscape.
+
+For an offline review using production artwork and fonts, run
+`scripts/cargo run --manifest-path apps/mister/Cargo.toml --example launcher_layout_review -- /tmp/launcher-review`.
+It emits PPM frames for settled selections and motion at HDMI portrait,
+240p/288p, 480-line and 5:4 CRT sizes in both orientations. Inspect raw rasters
+and nearest-scanline display views separately; these are renderer evidence,
+not physical CRT captures. The renderer tests also verify native text pixels,
+label fit, route margins, persistent chrome and allocation-free motion.
+
 The catalog portion is a dynamic hierarchy rather than a flat catalog-system
 row. Empty leaves and their empty parent groups are removed. Console,
 handheld, and computer levels group installed systems by manufacturer or

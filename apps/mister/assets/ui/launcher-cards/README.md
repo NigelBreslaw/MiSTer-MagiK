@@ -27,3 +27,20 @@ ffmpeg -hide_banner -loglevel error -i /tmp/card.png \
 Decode the packed result back to PNG and inspect it at 180x252 before
 committing. A clean high-resolution source does not prove that its RGB565 form
 is free of banding.
+
+## Native portrait and CRT preparation
+
+The `.rgb888` siblings retain 360×504 8-bit RGB from the same accepted source
+renders. They are preparation assets only: renderer textures and scanout remain
+RGB565. The original `.rgb565` files continue to serve HDMI landscape unchanged.
+Generate each RGB888 sibling with the command above using `-resize 360x504`,
+then write `-depth 8 RGB:DESTINATION.rgb888` instead of packing to RGB565.
+Source numbering 03/04 and 05/06 must be mapped to the runtime filenames above.
+
+Native layouts area-filter the high-precision image in linear light and apply
+fixed spatial RGB565 quantisation once at the destination size. Borders and
+corner coverage share a destination-space ellipse, corrected for CRT pixel
+aspect. Text is drawn afterwards on the native pixel grid. This prevents
+re-quantisation bands, mismatched rounded masks and dithering of text. Keep
+checking real 240p/288p output: neither a high-resolution render nor dithering
+alone establishes acceptable CRT quality.

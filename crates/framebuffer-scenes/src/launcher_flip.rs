@@ -9,6 +9,7 @@ const COLUMN_HEIGHT: usize = 272;
 pub(super) const STRIP_WIDTH: usize = 32;
 
 pub(super) struct Scratch {
+    column_height: usize,
     columns: Vec<Column>,
     texels: Vec<u32>,
     projected: Vec<u32>,
@@ -31,12 +32,21 @@ impl Scratch {
         Self::with_width(STRIP_WIDTH)
     }
     fn with_width(width: usize) -> Self {
+        Self::sized(width, 960, COLUMN_HEIGHT, 320)
+    }
+    pub fn sized(
+        width: usize,
+        screen_width: usize,
+        column_height: usize,
+        screen_height: usize,
+    ) -> Self {
         Self {
-            columns: vec![Column::default(); 960],
-            texels: vec![0; width * COLUMN_HEIGHT],
-            projected: vec![0; ((width.min(638).div_ceil(8) | 1) * 8) * 320],
+            column_height,
+            columns: vec![Column::default(); screen_width],
+            texels: vec![0; width * column_height],
+            projected: vec![0; ((width.min(638).div_ceil(8) | 1) * 8) * screen_height],
             key: None,
-            blend: vec![0; COLUMN_HEIGHT],
+            blend: vec![0; column_height],
             reflection_pixels: vec![0; width * 64],
         }
     }
@@ -58,6 +68,7 @@ pub(super) struct Face {
     pub pixels: Vec<Rgb565Pixel>,
     pub width: usize,
     pub height: usize,
+    reflection_fade_rows: usize,
     pub(super) texture: crate::launcher_texture::Texture,
 }
 
@@ -65,6 +76,18 @@ impl Face {
     pub fn storage_bytes(&self) -> usize {
         self.texture.storage_bytes()
     }
+    pub fn with_alpha(pixels: Vec<Rgb565Pixel>, alpha: &[u8], width: usize, height: usize) -> Self {
+        let texture = crate::launcher_texture::Texture::with_alpha(&pixels, alpha, width, height);
+        Self {
+            #[cfg(test)]
+            pixels,
+            width,
+            height,
+            reflection_fade_rows: (height / 4).clamp(2, 64),
+            texture,
+        }
+    }
+
     pub fn new(pixels: Vec<Rgb565Pixel>, width: usize, height: usize) -> Self {
         let texture = crate::launcher_texture::Texture::new(&pixels, width, height);
         Self {
@@ -72,6 +95,7 @@ impl Face {
             pixels,
             width,
             height,
+            reflection_fade_rows: 64,
             texture,
         }
     }
@@ -88,6 +112,8 @@ pub(super) struct Pose {
     pub angle: i64,
     pub clip: (usize, usize),
     pub body_clip: (usize, usize),
+    /// Top, exclusive body bottom, exclusive reflection bottom.
+    pub vertical_clip: (usize, usize, usize),
 }
 
 #[derive(Clone, Copy, Default)]
@@ -283,6 +309,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
     prepare_only: bool,
     occlusion: Option<&BodyOcclusion>,
 ) {
+    let (clip_top, body_bottom, reflection_bottom) = pose.vertical_clip;
     let destination_index = |x: usize, y: usize| {
         debug_assert!(x >= destination_origin.0 && y >= destination_origin.1);
         (y - destination_origin.1) * destination_pitch + x - destination_origin.0
@@ -316,7 +343,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
     let centre_x = pose.x + half;
     let centre_y = pose.top + pose.height / 2;
     let camera = pose.width * 4;
-    assert!(face.height <= COLUMN_HEIGHT);
+    assert!(face.height <= scratch.column_height);
     let key = (
         std::ptr::from_ref(&face.texture).addr(),
         blend.map_or(0, |(f, _)| std::ptr::from_ref(&f.texture).addr()),
@@ -331,11 +358,13 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
     let flat = pose.angle == 0;
     let flat_step = ONE * face.height as i64 * ONE / pose.height;
     let flat_zero = (face.height - 1) as i64 * ONE / 2 - (centre_y - ONE / 2) * flat_step / ONE;
-    let flat_top = ((-ONE - flat_zero + flat_step - 1) / flat_step).clamp(120, 438) as usize;
-    let flat_bottom = ((face.height as i64 * ONE - flat_zero) / flat_step).clamp(120, 437) as usize;
+    let flat_top = ((-ONE - flat_zero + flat_step - 1) / flat_step)
+        .clamp(clip_top as i64, body_bottom as i64) as usize;
+    let flat_bottom = ((face.height as i64 * ONE - flat_zero) / flat_step)
+        .clamp(clip_top as i64, body_bottom as i64 - 1) as usize;
     let flat_reflection =
         ((face.height as i64 * ONE - ONE / 2 - flat_zero) * ONE / flat_step + ONE / 2 + 3 * ONE)
-            .clamp(120 * ONE, 495 * ONE);
+            .clamp(clip_top as i64 * ONE, reflection_bottom as i64 * ONE);
     let flat_footprint = (ONE * face.width as i64 * ONE / pose.width).max(ONE) as u32;
     if rebuild {
         // Only this clipped span is read below; stale columns outside it are
@@ -401,12 +430,14 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
             let top = if flat {
                 flat_top
             } else {
-                ((-ONE - zero + step - 1) / step).clamp(120, 438) as usize
+                ((-ONE - zero + step - 1) / step).clamp(clip_top as i64, body_bottom as i64)
+                    as usize
             };
             let bottom = if flat {
                 flat_bottom
             } else {
-                ((face.height as i64 * ONE - zero) / step).clamp(120, 437) as usize
+                ((face.height as i64 * ONE - zero) / step)
+                    .clamp(clip_top as i64, body_bottom as i64 - 1) as usize
             };
             if top > bottom {
                 continue;
@@ -414,7 +445,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
             *column = Column {
                 valid: true,
                 filter: face.texture.filter(sxq as i32, footprint),
-                source_y: (zero + 120 * step) as i32,
+                source_y: (zero + clip_top as i64 * step) as i32,
                 step: step as i32,
                 top,
                 bottom,
@@ -424,7 +455,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                     flat_reflection
                 } else {
                     ((face.height as i64 * ONE - ONE / 2 - zero) * ONE / step + ONE / 2 + 3 * ONE)
-                        .clamp(120 * ONE, 495 * ONE)
+                        .clamp(clip_top as i64 * ONE, reflection_bottom as i64 * ONE)
                 },
             };
             let start = if !prepare_only && (x < pose.body_clip.0 || x >= pose.body_clip.1) {
@@ -435,8 +466,8 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
             face.texture.prepare_column_rows(
                 column.filter,
                 start,
-                &mut texels
-                    [(x - left) * COLUMN_HEIGHT + start..(x - left) * COLUMN_HEIGHT + face.height],
+                &mut texels[(x - left) * scratch.column_height + start
+                    ..(x - left) * scratch.column_height + face.height],
             );
             if let Some((other, weight)) = blend {
                 other.texture.prepare_column_rows(
@@ -445,8 +476,8 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                     &mut scratch.blend[start..face.height],
                 );
                 crate::launcher_texture::mix_rgba(
-                    &mut texels[(x - left) * COLUMN_HEIGHT + start
-                        ..(x - left) * COLUMN_HEIGHT + face.height],
+                    &mut texels[(x - left) * scratch.column_height + start
+                        ..(x - left) * scratch.column_height + face.height],
                     &scratch.blend[start..face.height],
                     weight,
                 );
@@ -460,15 +491,15 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                     &mut scratch.blend[start..face.height],
                 );
                 crate::launcher_texture::mix_rgba(
-                    &mut texels[(x - left) * COLUMN_HEIGHT + start
-                        ..(x - left) * COLUMN_HEIGHT + face.height],
+                    &mut texels[(x - left) * scratch.column_height + start
+                        ..(x - left) * scratch.column_height + face.height],
                     &scratch.blend[start..face.height],
                     spine_weight,
                 );
             }
             crate::launcher_texture::shade_rgba(
-                &mut texels
-                    [(x - left) * COLUMN_HEIGHT + start..(x - left) * COLUMN_HEIGHT + face.height],
+                &mut texels[(x - left) * scratch.column_height + start
+                    ..(x - left) * scratch.column_height + face.height],
                 light,
             );
         }
@@ -484,7 +515,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
             .filter(|c| c.valid)
             .map(|c| c.top)
             .min()
-            .unwrap_or(120);
+            .unwrap_or(clip_top);
         let active_bottom = columns[active_left..active_right]
             .iter()
             .filter(|c| c.valid)
@@ -504,9 +535,9 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                 crate::launcher_texture::project_flat_rgba(
                     &mut scratch.projected,
                     pitch,
-                    &texels[(active_left - left) * COLUMN_HEIGHT
-                        ..(active_right - left) * COLUMN_HEIGHT],
-                    COLUMN_HEIGHT,
+                    &texels[(active_left - left) * scratch.column_height
+                        ..(active_right - left) * scratch.column_height],
+                    scratch.column_height,
                     face.height,
                     active_width,
                     active_bottom - active_top,
@@ -526,13 +557,16 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                         continue;
                     }
                     crate::launcher_texture::project_column(
-                        &texels
-                            [(x - left) * COLUMN_HEIGHT..(x - left) * COLUMN_HEIGHT + face.height],
+                        &texels[(x - left) * scratch.column_height
+                            ..(x - left) * scratch.column_height + face.height],
                         &mut scratch.projected,
                         pitch,
                         x - active_left,
                         c.top - active_top..c.bottom + 1 - active_top,
-                        (c.source_y + (c.top as i32 - 120) * c.step, c.step),
+                        (
+                            c.source_y + (c.top as i32 - clip_top as i32) * c.step,
+                            c.step,
+                        ),
                     );
                 }
             }
@@ -544,9 +578,9 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                 crate::launcher_texture::project_flat(
                     &mut destination[destination_index(active_left, active_top)..],
                     destination_pitch,
-                    &texels[(active_left - left) * COLUMN_HEIGHT
-                        ..(active_right - left) * COLUMN_HEIGHT],
-                    COLUMN_HEIGHT,
+                    &texels[(active_left - left) * scratch.column_height
+                        ..(active_right - left) * scratch.column_height],
+                    scratch.column_height,
                     face.height,
                     active_width,
                     active_bottom - active_top,
@@ -565,8 +599,8 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                     if !c.valid || x < pose.body_clip.0 || x >= pose.body_clip.1 {
                         continue;
                     }
-                    let source = &texels
-                        [(x - left) * COLUMN_HEIGHT..(x - left) * COLUMN_HEIGHT + face.height];
+                    let source = &texels[(x - left) * scratch.column_height
+                        ..(x - left) * scratch.column_height + face.height];
                     let mut project = |top: usize, bottom: usize| {
                         if top < bottom {
                             crate::launcher_texture::project_card_over_column(
@@ -574,7 +608,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                                 &mut destination[destination_index(x, top)..],
                                 destination_pitch,
                                 bottom - top,
-                                (c.source_y + (top as i32 - 120) * c.step, c.step),
+                                (c.source_y + (top as i32 - clip_top as i32) * c.step, c.step),
                             );
                         }
                     };
@@ -619,10 +653,11 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                             body: *const u32,
                             height: usize,
                             x: usize,
+                            fade_rows: usize,
                         );
                     }
-                    let body = &texels
-                        [(x - left) * COLUMN_HEIGHT..(x - left) * COLUMN_HEIGHT + face.height];
+                    let body = &texels[(x - left) * scratch.column_height
+                        ..(x - left) * scratch.column_height + face.height];
                     let output =
                         &mut scratch.reflection_pixels[(x - left) * 64..(x - left + 1) * 64];
                     // SAFETY: the body slice contains `face.height` prepared
@@ -633,6 +668,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                             body.as_ptr(),
                             body.len(),
                             x,
+                            face.reflection_fade_rows,
                         );
                     }
                 }
@@ -641,15 +677,15 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                     scratch.reflection_pixels[(x - left) * 64 + row] = _reflection(
                         crate::launcher_texture::over(
                             reflected_texel(
-                                &texels[(x - left) * COLUMN_HEIGHT
-                                    ..(x - left) * COLUMN_HEIGHT + face.height],
+                                &texels[(x - left) * scratch.column_height
+                                    ..(x - left) * scratch.column_height + face.height],
                                 row,
                             ),
                             Rgb565Pixel(0),
                         )
                         .0,
                         x,
-                        row,
+                        (row * 63 / (face.reflection_fade_rows - 1)).min(63),
                     );
                 }
             }
@@ -664,7 +700,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                 continue;
             }
             let origin = c.reflection_y.div_euclid(ONE);
-            for y in (origin - 3).max(120)..(origin + 1).min(495) {
+            for y in (origin - 3).max(clip_top as i64)..(origin + 1).min(reflection_bottom as i64) {
                 let q = y * ONE - (c.reflection_y - 3 * ONE);
                 let row = q.div_euclid(ONE);
                 let weight = q.rem_euclid(ONE) / 256;
@@ -682,7 +718,10 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                     alpha as usize,
                 ));
             }
-            let first_y = origin.max(120);
+            let first_y = origin.max(clip_top as i64);
+            if first_y >= reflection_bottom as i64 {
+                continue;
+            }
             // Reuse the body's source-texels-per-screen-pixel step. The
             // mirrored quarter shrinks and grows with the card, not the strip.
             let step = i64::from(c.step);
@@ -696,7 +735,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                 &mut destination[destination_index(x, first_y as usize)..],
                 destination_pitch,
                 &scratch.reflection_pixels[(x - left) * 64..(x - left + 1) * 64],
-                (end.min(495) - first_y).max(0) as usize,
+                (end.min(reflection_bottom as i64) - first_y).max(0) as usize,
                 (i32::try_from(q).expect("bounded reflection origin"), c.step),
             );
         }
@@ -716,6 +755,7 @@ pub(super) fn add_opaque_coverage(
     if left == right || face.height <= 16 {
         return;
     }
+    let clip_top = pose.vertical_clip.0 as i64;
     let source_top = 8_i64;
     let source_bottom = face.height as i64 - 8;
     for x in left.max(pose.body_clip.0)..right.min(pose.body_clip.1) {
@@ -723,8 +763,8 @@ pub(super) fn add_opaque_coverage(
         if !column.valid {
             continue;
         }
-        let source =
-            &scratch.texels[(x - left) * COLUMN_HEIGHT..(x - left) * COLUMN_HEIGHT + face.height];
+        let source = &scratch.texels
+            [(x - left) * scratch.column_height..(x - left) * scratch.column_height + face.height];
         if source[source_top as usize] >> 24 != 255
             || source[source_bottom as usize - 1] >> 24 != 255
         {
@@ -737,8 +777,8 @@ pub(super) fn add_opaque_coverage(
         };
         // Both vertical bilinear inputs must stay inside the known opaque
         // source interior. This deliberately excludes its two boundary rows.
-        let top = 120 + ceil_div(source_top * ONE - i64::from(column.source_y));
-        let bottom = 120 + ceil_div((source_bottom - 1) * ONE - i64::from(column.source_y));
+        let top = clip_top + ceil_div(source_top * ONE - i64::from(column.source_y));
+        let bottom = clip_top + ceil_div((source_bottom - 1) * ONE - i64::from(column.source_y));
         coverage.add(
             x,
             top.clamp(column.top as i64, column.bottom as i64 + 1) as usize,
@@ -833,6 +873,7 @@ mod tests {
                 angle: 0,
                 clip: (296, 934),
                 body_clip: (296, 934),
+                vertical_clip: (120, 438, 495),
             };
             draw(
                 &mut frame,
@@ -847,6 +888,51 @@ mod tests {
                 assert!(frame != previous, "phase {phase} snapped");
             }
             previous.copy_from_slice(&frame);
+        }
+    }
+
+    #[test]
+    fn native_reflection_reaches_black_at_its_visible_end() {
+        for height in [112, 134, 200, 252, 280] {
+            let face = Face::with_alpha(
+                vec![Rgb565Pixel(0xffff); 160 * height],
+                &vec![255; 160 * height],
+                160,
+                height,
+            );
+            let mut scratch = Scratch::sized(960, 960, height, 540);
+            let mut frame = vec![Rgb565Pixel(0); 960 * 540];
+            let rows = std::cell::RefCell::new(Vec::new());
+            draw(
+                &mut frame,
+                &face,
+                Pose {
+                    x: 520 * ONE,
+                    top: 128 * ONE,
+                    width: 160 * ONE,
+                    height: height as i64 * ONE,
+                    angle: 0,
+                    clip: (296, 934),
+                    body_clip: (296, 934),
+                    vertical_clip: (120, 438, 495),
+                },
+                &mut scratch,
+                |_, _, row| {
+                    rows.borrow_mut().push(row);
+                    (63 - row) as u16
+                },
+                true,
+                None,
+            );
+            let rows = rows.into_inner();
+            assert!(!rows.is_empty());
+            let (columns, remainder) = rows.as_chunks::<64>();
+            assert!(remainder.is_empty());
+            for column in columns {
+                assert_eq!(column[0], 0);
+                assert_eq!(column[(height / 4).min(64) - 1], 63);
+                assert!(column.windows(2).all(|pair| pair[0] <= pair[1]));
+            }
         }
     }
 
@@ -867,6 +953,7 @@ mod tests {
                 angle: 0,
                 clip: (296, 934),
                 body_clip: (296, 934),
+                vertical_clip: (120, 438, 495),
             };
             frame.fill(Rgb565Pixel(0));
             draw(
@@ -910,6 +997,7 @@ mod tests {
                 angle,
                 clip: (296, 934),
                 body_clip: (296, 934),
+                vertical_clip: (120, 438, 495),
             };
             let mut body = vec![Rgb565Pixel(0); 960 * 540];
             let mut reflected = vec![Rgb565Pixel(0xffff); 960 * 540];
@@ -1005,6 +1093,7 @@ mod tests {
                 angle,
                 clip: (296, 934),
                 body_clip: (296, 934),
+                vertical_clip: (120, 438, 495),
             };
             let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
             draw(
@@ -1047,6 +1136,7 @@ mod tests {
                     angle: -9000,
                     clip,
                     body_clip: clip,
+                    vertical_clip: (120, 438, 495),
                 };
                 let foreground = Pose {
                     x: 514 * ONE,

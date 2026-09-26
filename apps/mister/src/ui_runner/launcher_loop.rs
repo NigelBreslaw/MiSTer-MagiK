@@ -5918,8 +5918,7 @@ pub(super) fn run_launcher_loop(
     let initial_home_snapshot =
         crate::launcher_home::LauncherHomeSnapshot::from_runtime(&nav, &catalog);
     let mut launcher_card_home = match super::launcher_card_home::LauncherCardHomeSession::new(
-        layout.logical_w(),
-        layout.logical_h(),
+        super::launcher_card_home::scene_for_display(ui, layout),
         initial_home_snapshot,
         nav.selected,
         &last_clock_text,
@@ -9385,8 +9384,7 @@ pub(super) fn run_launcher_loop(
         if custom_home_active {
             if let Some(session) = launcher_card_home.as_mut() {
                 session.update(
-                    layout.logical_w(),
-                    layout.logical_h(),
+                    super::launcher_card_home::scene_for_display(ui, layout),
                     crate::launcher_home::LauncherHomeSnapshot::from_runtime(&nav, &catalog),
                     nav.selected,
                     nav.home_card_visual_index(),

@@ -4,13 +4,14 @@
 //! Static text-and-colour launcher scene used by the Mini-MagiK visual probe.
 //!
 //! The scene deliberately has no Slint or runtime dependency. It renders a
-//! packed RGB565 frame at the requested output size, using a 960x540 logical
-//! design with nearest-neighbour letterboxing.
+//! packed RGB565 frame with native portrait/CRT layouts and the original
+//! 960x540 landscape composition.
 
 use crate::Rgb565Pixel;
 use crate::bitmap_text::BitmapFont;
 use std::sync::Arc;
 mod artwork;
+mod responsive;
 use crate::launcher_navigation::{BrowseDirection, BrowseFrame};
 
 pub const LOGICAL_WIDTH: usize = 960;
@@ -81,12 +82,45 @@ enum TextRole {
 pub struct LauncherScene {
     pub width: usize,
     pub height: usize,
+    crt: bool,
+    safe_insets: (usize, usize),
 }
 
 impl LauncherScene {
     #[must_use]
     pub const fn new(width: usize, height: usize) -> Self {
-        Self { width, height }
+        Self {
+            width,
+            height,
+            crt: false,
+            safe_insets: (0, 0),
+        }
+    }
+
+    #[must_use]
+    pub const fn uses_responsive_layout(self) -> bool {
+        self.crt || self.height > self.width
+    }
+
+    /// CRT uses native bitmap text and a carousel-only composition in either orientation.
+    #[must_use]
+    pub const fn crt(width: usize, height: usize) -> Self {
+        Self {
+            width,
+            height,
+            crt: true,
+            safe_insets: (0, 0),
+        }
+    }
+
+    /// Keep route-owned PAL/overscan content insets, including after rotation.
+    #[must_use]
+    pub fn with_safe_content(mut self, content: crate::Rgb565Rect) -> Self {
+        self.safe_insets = (
+            content.x0.max(self.width.saturating_sub(content.x1)),
+            content.y0.max(self.height.saturating_sub(content.y1)),
+        );
+        self
     }
 
     #[must_use]
@@ -143,7 +177,7 @@ impl LauncherScene {
         data: LauncherData<'_>,
         artwork: &[&[Rgb565Pixel]],
     ) -> InitialLauncher {
-        let mut prepared = PreparedLauncher::new(self, data, Some(artwork), None);
+        let mut prepared = PreparedLauncher::new(self, data, Some(Artwork::Rgb565(artwork)), None);
         prepared.render_frame(BrowseFrame {
             selected: data.selected,
             target: data.selected,
@@ -163,7 +197,8 @@ impl LauncherScene {
         artwork: &[&[Rgb565Pixel]],
         typography: LauncherTypography<'_>,
     ) -> InitialLauncher {
-        let mut prepared = PreparedLauncher::new(self, data, Some(artwork), Some(typography));
+        let mut prepared =
+            PreparedLauncher::new(self, data, Some(Artwork::Rgb565(artwork)), Some(typography));
         prepared.render_frame(BrowseFrame {
             selected: data.selected,
             target: data.selected,
@@ -174,6 +209,32 @@ impl LauncherScene {
         });
         InitialLauncher { prepared }
     }
+    /// Prepare native responsive faces from 360x504 RGB888 source artwork.
+    /// Quantise only after destination-size filtering; scanout remains RGB565.
+    pub fn prepare_initial_with_rgb888_artwork_and_typography(
+        self,
+        data: LauncherData<'_>,
+        artwork: &[&[u8]],
+        typography: LauncherTypography<'_>,
+    ) -> InitialLauncher {
+        let mut prepared =
+            PreparedLauncher::new(self, data, Some(Artwork::Rgb888(artwork)), Some(typography));
+        prepared.render_frame(BrowseFrame {
+            selected: data.selected,
+            target: data.selected,
+            phase: crate::launcher_navigation::BrowsePhase::Settled,
+            direction: None,
+            progress_millis: 0,
+            duration_millis: 0,
+        });
+        InitialLauncher { prepared }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Artwork<'a> {
+    Rgb565(&'a [&'a [Rgb565Pixel]]),
+    Rgb888(&'a [&'a [u8]]),
 }
 
 pub struct InitialLauncher {
@@ -192,6 +253,7 @@ impl InitialLauncher {
 /// created during preparation; `render_into` is allocation-free.
 pub struct PreparedLauncher {
     scene: LauncherScene,
+    responsive: Option<responsive::Layout>,
     logical: Vec<Rgb565Pixel>,
     fitted: Vec<Rgb565Pixel>,
     faces: Arc<Vec<CardFaces>>,
@@ -422,6 +484,7 @@ struct PreparedCard {
     name_mask: Vec<[u8; 7]>,
     games_mask: Vec<[u8; 7]>,
     artwork: Option<Vec<Rgb565Pixel>>,
+    rgb888: Option<Vec<u8>>,
 }
 
 impl PreparedLauncher {
@@ -432,7 +495,11 @@ impl PreparedLauncher {
         data: LauncherData<'_>,
         typography: Option<LauncherTypography<'_>>,
     ) {
-        render_logical(&mut self.logical, data, typography);
+        if let Some(layout) = &self.responsive {
+            layout.chrome(&mut self.logical, data, typography);
+        } else {
+            render_logical(&mut self.logical, data, typography);
+        }
         self.fit_output();
     }
 
@@ -475,7 +542,7 @@ impl PreparedLauncher {
     fn new(
         scene: LauncherScene,
         data: LauncherData<'_>,
-        artwork: Option<&[&[Rgb565Pixel]]>,
+        artwork: Option<Artwork<'_>>,
         typography: Option<LauncherTypography<'_>>,
     ) -> Self {
         let cards: Vec<_> = data
@@ -492,8 +559,18 @@ impl PreparedLauncher {
                     .games
                     .map_or_else(Vec::new, |games| text_mask(&format_games(games))),
                 artwork: artwork
-                    .and_then(|items| items.get(index))
+                    .and_then(|items| match items {
+                        Artwork::Rgb565(items) => items.get(index),
+                        Artwork::Rgb888(_) => None,
+                    })
                     .filter(|pixels| pixels.len() == 180 * card_height(180))
+                    .map(|pixels| pixels.to_vec()),
+                rgb888: artwork
+                    .and_then(|items| match items {
+                        Artwork::Rgb888(items) => items.get(index),
+                        Artwork::Rgb565(_) => None,
+                    })
+                    .filter(|pixels| pixels.len() == 360 * 504 * 3)
                     .map(|pixels| pixels.to_vec()),
             })
             .collect();
@@ -514,26 +591,59 @@ impl PreparedLauncher {
             favourites: data.favourites,
             clock: data.clock,
         };
-        let mut chrome = vec![Rgb565Pixel(BACKGROUND); LOGICAL_WIDTH * LOGICAL_HEIGHT];
-        render_logical(&mut chrome, source, typography);
+        let responsive = responsive::Layout::for_scene(scene);
+        let pixel_count = if responsive.is_some() {
+            scene.width * scene.height
+        } else {
+            LOGICAL_WIDTH * LOGICAL_HEIGHT
+        };
+        let mut chrome = vec![Rgb565Pixel(BACKGROUND); pixel_count];
+        if let Some(layout) = &responsive {
+            layout.chrome(&mut chrome, source, typography);
+        } else {
+            render_logical(&mut chrome, source, typography);
+        }
         let faces: Vec<_> = cards
             .iter()
-            .map(|card| CardFaces {
-                compact: bake_face(card, 180, false, typography),
-                detail: bake_face(card, 180, true, typography),
+            .map(|card| {
+                if let Some(layout) = &responsive {
+                    CardFaces {
+                        compact: layout.face(card, false, typography),
+                        detail: layout.face(card, true, typography),
+                    }
+                } else {
+                    CardFaces {
+                        compact: bake_face(card, 180, false, typography),
+                        detail: bake_face(card, 180, true, typography),
+                    }
+                }
             })
             .collect();
         Self {
             scene,
+            responsive,
             logical: chrome,
-            fitted: if scene.width == LOGICAL_WIDTH && scene.height == LOGICAL_HEIGHT {
+            fitted: if responsive.is_some()
+                || (scene.width == LOGICAL_WIDTH && scene.height == LOGICAL_HEIGHT)
+            {
                 Vec::new()
             } else {
                 vec![Rgb565Pixel(BACKGROUND); scene.width * scene.height]
             },
             faces: Arc::new(faces),
             flip_columns: (0..6)
-                .map(|_| crate::launcher_flip::Scratch::new())
+                .map(|_| {
+                    if let Some(layout) = responsive {
+                        crate::launcher_flip::Scratch::sized(
+                            crate::launcher_flip::STRIP_WIDTH,
+                            scene.width,
+                            layout.card_h,
+                            scene.height,
+                        )
+                    } else {
+                        crate::launcher_flip::Scratch::new()
+                    }
+                })
                 .collect(),
         }
     }
@@ -546,6 +656,15 @@ impl PreparedLauncher {
     /// Compose into the retained buffer. Native-size consumers can borrow it
     /// directly rather than copying through an intermediate fitted surface.
     pub fn render_frame(&mut self, frame: BrowseFrame) {
+        if let Some(layout) = self.responsive {
+            layout.render(
+                &mut self.logical,
+                &self.faces,
+                frame,
+                &mut self.flip_columns,
+            );
+            return;
+        }
         #[cfg(feature = "launcher-profile")]
         let clear_profile = crate::launcher_profile::span("scene.clear");
         // All animation, including projected edges and reflections, is clipped
@@ -581,7 +700,9 @@ impl PreparedLauncher {
     }
 
     fn fit_output(&mut self) {
-        if self.scene.width != LOGICAL_WIDTH || self.scene.height != LOGICAL_HEIGHT {
+        if self.responsive.is_none()
+            && (self.scene.width != LOGICAL_WIDTH || self.scene.height != LOGICAL_HEIGHT)
+        {
             scale_into(
                 &self.logical,
                 self.scene.width,
@@ -592,7 +713,9 @@ impl PreparedLauncher {
     }
 
     pub fn pixels(&self) -> &[Rgb565Pixel] {
-        if self.scene.width == LOGICAL_WIDTH && self.scene.height == LOGICAL_HEIGHT {
+        if self.responsive.is_some()
+            || (self.scene.width == LOGICAL_WIDTH && self.scene.height == LOGICAL_HEIGHT)
+        {
             &self.logical
         } else {
             &self.fitted
@@ -809,6 +932,7 @@ fn continuous_geometry(
             + (slot_angle(destination) - slot_angle(relative)) * progress / GEOMETRY_ONE,
         clip: (296, 934),
         body_clip: (296, 934),
+        vertical_clip: (120, 438, 495),
     }
 }
 
