@@ -7,6 +7,7 @@ mod catalog_operations;
 mod desktop;
 mod device;
 mod device_identity;
+mod input_probe;
 mod main_control;
 mod managed_launcher;
 mod media;
@@ -188,6 +189,9 @@ impl Agent {
             "status",
             "device-identity-v1",
             "device-control-v1",
+            "input-probe-v1",
+            "input-probe-runtime-v1",
+            "input-probe-passive-v1",
             "catalog-operations-v1",
             "publication-v1",
             "platform-publication-v1",

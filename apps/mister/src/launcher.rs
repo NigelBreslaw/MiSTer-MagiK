@@ -604,7 +604,7 @@ impl ArcadeNav {
             }
             if self.input_policy == ScrollInputPolicy::RootCards {
                 if !self.root_card_press_ready() {
-                    self.scroll.hold_started_at = None;
+                    // Reject the step, but retain ownership of the physical hold.
                     return;
                 }
                 // The rendered card is already at its resting pixel. Remove
@@ -6730,6 +6730,42 @@ mod tests {
         }
         assert_eq!(nav.selected, 1);
         assert_eq!(nav.visual_index, 1.0);
+    }
+
+    #[test]
+    fn root_card_rejected_step_preserves_hold_until_release() {
+        let mut nav = ArcadeNav::new_cyclic();
+        let start = Instant::now();
+        let count = ROOT_HOME_CARDS.len();
+        nav.handle_direction_input(1, 0, start, count);
+        nav.tick(count, start);
+        nav.handle_direction_input(0, 1, start + Duration::from_millis(16), count);
+        nav.tick(count, start + Duration::from_millis(16));
+
+        let press = start + Duration::from_millis(96);
+        assert!(!nav.root_card_press_ready());
+        nav.handle_direction_input(1, 0, press, count);
+        assert_eq!(nav.selected, 1);
+        assert_eq!(nav.scroll.hold_started_at, Some(press));
+        for frame in 0..=40 {
+            let now = press + Duration::from_millis(frame * 16);
+            nav.handle_direction_input(1, 1, now, count);
+            nav.tick(count, now);
+            if now.duration_since(press) < ROOT_CARD_HOLD_DELAY {
+                assert!(!nav.scroll.continuous_active);
+                assert_eq!(nav.selected, 1, "rejected steps must not be buffered");
+            }
+        }
+        assert!(nav.scroll.continuous_active);
+        assert!(!nav.is_turbo_active());
+        let release = press + Duration::from_millis(656);
+        nav.handle_direction_input(0, 1, release, count);
+        assert_eq!(nav.scroll.hold_started_at, None);
+        for frame in 0..=120 {
+            nav.tick(count, release + Duration::from_millis(frame * 16));
+        }
+        assert!(!nav.scroll.continuous_active);
+        assert!(nav.is_settled());
     }
 
     #[test]

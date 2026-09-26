@@ -82,20 +82,15 @@ impl RuntimeThreadRole {
 
     pub fn default_policy(self) -> RuntimeThreadPolicy {
         match self {
-            // The latch confirmation read runs immediately after vblank. A
-            // normal-policy deschedule here can consume most of the following
-            // refresh even though the read itself needs only hundreds of CPU
-            // microseconds, so keep the bounded, vblank-waiting UI loop ahead
-            // of ordinary CPU1 work.
-            Self::LauncherUi => RuntimeThreadPolicy::new(-10, ThreadAffinity::Cpu1)
-                .with_scheduler(ThreadScheduler::RoundRobin { priority: 10 }),
+            // Main's ordinary-policy input loop also runs on CPU1. Real-time
+            // launcher work can starve it and distort physical press durations.
+            Self::LauncherUi => RuntimeThreadPolicy::new(-10, ThreadAffinity::Cpu1),
             // The custom Home renderer splits one bounded frame across both
             // Cortex-A9 cores. Keep its helper on CPU0 while the UI/latch
             // owner remains isolated on CPU1.
             Self::LauncherCardRenderer => RuntimeThreadPolicy::new(-5, ThreadAffinity::Cpu0),
-            // The UI owns CPU1 at round-robin priority. This ordinary-policy
-            // helper uses otherwise idle CPU1 time to prepare the other tile
-            // without delaying input or latch publication.
+            // Keep the second tile helper below the UI's ordinary-policy nice
+            // priority while allowing Main's input loop to receive CPU time.
             Self::LauncherCardRendererSecondary => {
                 RuntimeThreadPolicy::new(-5, ThreadAffinity::Cpu1)
             }
@@ -342,7 +337,7 @@ fn apply_runtime_thread_policy_with(
         scheduler_status,
     };
     crate::catalog_logln!(
-        "thread_policy_tsv\tthread={thread_name}\trole={}\tintended_nice={}\tactual_nice={}\taffinity={}\tallowed_cpus={}\tprocessor={}\tscheduler={}\tscheduler_priority={}\tnice_status={nice_status}\taffinity_status={affinity_status}\tscheduler_status={scheduler_status}",
+        "thread_policy_tsv\tthread={thread_name}\trole={}\tintended_nice={}\tactual_nice={}\taffinity={}\tallowed_cpus={}\tprocessor={}\tintended_scheduler={}\tactual_scheduler_policy={}\tscheduler_priority={}\tnice_status={nice_status}\taffinity_status={affinity_status}\tscheduler_status={scheduler_status}",
         role.label(),
         policy.nice,
         actual_nice.map_or_else(|| "unknown".to_string(), |nice| nice.to_string()),
@@ -350,6 +345,9 @@ fn apply_runtime_thread_policy_with(
         report.allowed_cpus,
         processor.map_or_else(|| "unknown".to_string(), |cpu| cpu.to_string()),
         policy.scheduler.label(),
+        report
+            .scheduler_policy
+            .map_or_else(|| "unknown".to_string(), |policy| policy.to_string()),
         report
             .scheduler_priority
             .map_or_else(|| "unknown".to_string(), |priority| priority.to_string())
@@ -359,21 +357,20 @@ fn apply_runtime_thread_policy_with(
 
 #[cfg(target_os = "linux")]
 fn apply_scheduler(scheduler: ThreadScheduler) -> &'static str {
-    match scheduler {
-        ThreadScheduler::Other => "skipped",
-        ThreadScheduler::RoundRobin { priority } => {
-            // SAFETY: sched_setscheduler updates only the current thread using
-            // the fully initialized sched_param. Failure remains explicit in
-            // the benchmark policy report.
-            let parameter = libc::sched_param {
-                sched_priority: priority,
-            };
-            if unsafe { libc::sched_setscheduler(0, libc::SCHED_RR, &parameter) } == 0 {
-                "ok"
-            } else {
-                "failed"
-            }
-        }
+    let (policy, priority) = match scheduler {
+        ThreadScheduler::Other => (libc::SCHED_OTHER, 0),
+        ThreadScheduler::RoundRobin { priority } => (libc::SCHED_RR, priority),
+    };
+    // Workers inherit their creator's scheduler. Other must actively clear an
+    // inherited real-time policy, rather than merely leave it unchanged.
+    // SAFETY: this changes only the calling thread using an initialized parameter.
+    let parameter = libc::sched_param {
+        sched_priority: priority,
+    };
+    if unsafe { libc::sched_setscheduler(0, policy, &parameter) } == 0 {
+        "ok"
+    } else {
+        "failed"
     }
 }
 
@@ -635,12 +632,35 @@ mod tests {
     }
 
     #[test]
-    fn launcher_ui_runs_above_default_interactive_priority() {
+    fn launcher_ui_uses_ordinary_scheduling_with_interactive_nice() {
         assert_eq!(
             RuntimeThreadRole::LauncherUi.default_policy(),
             RuntimeThreadPolicy::new(-10, ThreadAffinity::Cpu1)
-                .with_scheduler(ThreadScheduler::RoundRobin { priority: 10 })
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ordinary_scheduler_clears_a_workers_inherited_class() {
+        // BATCH is an unprivileged way to exercise scheduler inheritance in CI.
+        // Real-time inheritance is checked by the device thread-policy capture.
+        std::thread::spawn(|| {
+            let parameter = libc::sched_param { sched_priority: 0 };
+            assert_eq!(
+                unsafe { libc::sched_setscheduler(0, libc::SCHED_BATCH, &parameter) },
+                0
+            );
+            std::thread::spawn(|| {
+                assert_eq!(current_scheduler_policy(), Some(libc::SCHED_BATCH));
+                assert_eq!(apply_scheduler(ThreadScheduler::Other), "ok");
+                assert_eq!(current_scheduler_policy(), Some(libc::SCHED_OTHER));
+                assert_eq!(current_scheduler_priority(), Some(0));
+            })
+            .join()
+            .unwrap();
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
@@ -826,11 +846,6 @@ mod tests {
         ];
         for (role, nice, affinity) in expected {
             let expected_policy = RuntimeThreadPolicy::new(nice, affinity);
-            let expected_policy = if role == RuntimeThreadRole::LauncherUi {
-                expected_policy.with_scheduler(ThreadScheduler::RoundRobin { priority: 10 })
-            } else {
-                expected_policy
-            };
             assert_eq!(role.default_policy(), expected_policy);
         }
     }

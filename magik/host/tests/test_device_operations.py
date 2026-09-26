@@ -18,6 +18,8 @@ def parser():
     "command",
     [
         "status",
+        "input-probe",
+        "input-probe --seconds 20 --event event0",
         "diagnostics",
         "logs",
         "launcher status",
@@ -46,6 +48,8 @@ def test_native_command_surface(command):
     "command",
     [
         "display set crt-240p60",
+        "input-probe --ordinary-launcher",
+        "input-probe --seconds 31",
         "mode set public",
         "catalog purge",
         "catalog query --database registry",
@@ -60,6 +64,22 @@ def test_native_command_surface(command):
 def test_mutation_and_query_inputs_are_explicit(command):
     with pytest.raises(SystemExit):
         parser().parse_args(command.split())
+
+
+def test_input_probe_requests_only_passive_fields(monkeypatch, tmp_path):
+    agent = Mock()
+    agent.device_operation.return_value = {"schema": "input-probe-v1"}
+    connect = Mock(return_value=(agent, None))
+    monkeypatch.setattr("magik.cli.connect_agent", connect)
+    device.run_device(
+        parser().parse_args("input-probe --seconds 20 --event event0".split()), tmp_path
+    )
+    connect.assert_called_once_with(
+        tmp_path, {"input-probe-runtime-v1", "input-probe-passive-v1"}
+    )
+    agent.device_operation.assert_called_once_with(
+        "input-probe", {"seconds": 20, "events": ["event0"]}
+    )
 
 
 def test_publication_failure_retains_stage_and_does_not_retry(tmp_path):

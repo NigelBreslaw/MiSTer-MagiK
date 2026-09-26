@@ -64,3 +64,29 @@ Controller setup continues to use raw diagnostic input, but all setup reads and
 writes target a stable physical-plug ID plus a connection generation. A
 disconnect invalidates that exact target and cancels setup; reconnecting requires
 a fresh press and cannot apply a stale write to a reordered `jsN` node.
+
+The launcher and its workers use ordinary (`SCHED_OTHER`) scheduling. Applying
+an ordinary policy explicitly resets inherited scheduler class and priority;
+nice values and affinity remain role-specific. Main's ordinary-policy input
+thread must receive CPU time even during launcher rendering. Real-time policies
+are reserved for explicitly armed diagnostic experiments.
+
+## Independent input capture
+
+`scripts/magik device input-probe` inventories the live Linux input nodes.
+`scripts/magik device input-probe --seconds 20 --event event0` passively records
+that physical node plus `MiSTer virtual input` through the native service. Select
+the physical node from the current inventory; event numbers can change on reconnect.
+The recorder has no launcher, Slint, mapping, repeat, or hold-classification code.
+It retains kernel and reader timestamps, event type/code/value, and device identity
+in the command's `device-operation.json` artifact. Captures stop after at most
+30 seconds or 256 records; a full record buffer is explicitly marked truncated.
+
+Compare physical press/release (or axis deflection/neutral) intervals with Main's
+virtual key intervals before interpreting launcher behavior. An exclusive device
+grab by Main can hide physical events from this passive reader. No raw events
+therefore does not establish a hardware fault. The recorder never grabs devices
+or changes input ownership.
+
+The report includes Main's manifest revision and running binary hash match, plus
+before/after thread scheduling snapshots. This operation never changes scheduling.
