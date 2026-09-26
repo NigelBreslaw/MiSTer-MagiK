@@ -1,116 +1,213 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
 import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
+import { Xerxes10, Xerxes10Size } from "../../components/xerxes_10.slint";
+import { LandscapePageChrome, PageTheme, PortraitPageChrome, PageRule } from "../../components/page_chrome.slint";
+import { MisterUi } from "../../mister_window.slint";
 
 import { FeedbackView, ScreenOrientation, SettingsSection, SettingsView } from "../../api.slint";
 
+enum SettingsRowTrailing { value, link, toggle }
+
+// One list row. The label is presentation-only upper case; accessibility keeps
+// the established mixed-case label and description used by device scenarios.
 component SettingsRow inherits Rectangle {
     in property <string> label;
+    in property <string> accessible-name;
     in property <string> detail;
+    in property <string> value;
+    in property <SettingsRowTrailing> trailing: SettingsRowTrailing.value;
+    in property <bool> toggle-on;
     in property <bool> focused;
     in property <bool> acknowledged;
+    in property <bool> separator: true;
 
     accessible-role: list-item;
-    accessible-label: root.label;
+    accessible-label: root.accessible-name;
     accessible-description: root.detail;
     accessible-item-selected: root.focused;
     accessible-enabled: true;
 
-    height: 52px;
-    background: focused ? #2a2236 : #1e1828;
-    border-width: focused ? 2px : 1px;
-    border-color: focused ? #06d6a0 : acknowledged ? #4e8f80 : #5c4a72;
+    height: 36px;
 
-    VerticalLayout {
-        padding: 10px;
-        spacing: 4px;
+    if root.focused : Rectangle {
+        background: @linear-gradient(90deg, PageTheme.settings-focus-start 0%, PageTheme.settings-focus-end 60%, PageTheme.background 100%);
+        Rectangle { x: 0px; width: 4px; background: PageTheme.settings-accent; }
+    }
 
-        Nocive15 {
-            text: label;
-            color: focused ? #06d6a0 : #e8e0f0;
-            size: Nocive15Size.px15;
+    // Nocive caps start 4px below the text origin and Xerxes caps 5px below:
+    // label caps occupy rows 11-25 and every trailing element shares row 25
+    // as its baseline.
+    Nocive15 {
+        x: 12px;
+        y: 7px;
+        text: root.label;
+        color: root.focused ? PageTheme.settings-accent
+            : root.acknowledged ? PageTheme.settings-accent-deep : PageTheme.cream;
+    }
+
+    chevron := Xerxes10 {
+        x: root.width - 14px - self.preferred-width;
+        y: 11px;
+        visible: root.trailing == SettingsRowTrailing.link;
+        text: ">";
+        color: root.focused ? PageTheme.settings-accent : PageTheme.muted;
+    }
+
+    if root.trailing != SettingsRowTrailing.toggle : Xerxes10 {
+        x: root.width - 14px - self.preferred-width
+            - (root.trailing == SettingsRowTrailing.link ? chevron.preferred-width + 8px : 0px);
+        y: 11px;
+        text: root.value;
+        color: root.focused ? PageTheme.cream : PageTheme.muted;
+    }
+
+    if root.trailing == SettingsRowTrailing.toggle : Rectangle {
+        x: root.width - 14px - self.width;
+        y: 12px;
+        height: 18px;
+        width: pill-text.preferred-width + 14px;
+        border-width: 1px;
+        border-color: root.toggle-on ? PageTheme.settings-accent
+            : root.focused ? PageTheme.cream : PageTheme.muted;
+        background: root.toggle-on ? PageTheme.settings-focus-start : transparent;
+
+        pill-text := Xerxes10 {
+            x: 7px;
+            y: -1px;
+            text: root.toggle-on ? "ON" : "OFF";
+            color: root.toggle-on ? PageTheme.settings-accent
+                : root.focused ? PageTheme.cream : PageTheme.muted;
         }
+    }
 
-        Spleen6x12 {
-            text: detail;
-            color: #9080a8;
-            size: Spleen6x12Size.px8;
-        }
+    if root.separator && !root.focused : PageRule {
+        x: 12px;
+        y: root.height - 1px;
+        width: root.width - 12px;
     }
 }
 
-export component SettingsScreen inherits Rectangle {
+component SettingsGroupLabel inherits Xerxes10 {
+    color: PageTheme.muted;
+}
 
-    accessible-role: main;
+// Rows are always listed in navigation order; groups only add headings.
+component SettingsList inherits Rectangle {
+    property <string> orientation-value: SettingsView.active-orientation == ScreenOrientation.normal ? "NORMAL"
+        : SettingsView.active-orientation == ScreenOrientation.monitor-clockwise ? "MONITOR RIGHT" : "MONITOR LEFT";
+    property <string> orientation-detail: SettingsView.active-orientation == ScreenOrientation.normal ? "Normal"
+        : SettingsView.active-orientation == ScreenOrientation.monitor-clockwise
+        ? "Monitor right (clockwise)" : "Monitor left (counterclockwise)";
+
+    accessible-role: list;
     accessible-label: "Settings";
 
-    HorizontalLayout {
+    SettingsGroupLabel { x: 12px; y: 0px; text: "DISPLAY"; }
+    SettingsRow {
+        y: 20px; width: root.width;
+        label: "DISPLAY RESOLUTION";
+        accessible-name: "Display resolution";
+        detail: SettingsView.active-display.label;
+        value: SettingsView.active-display.label.to-uppercase();
+        focused: SettingsView.section == SettingsSection.display;
+        acknowledged: FeedbackView.acknowledged("settings", "display", FeedbackView.revision);
+    }
+    SettingsRow {
+        y: 56px; width: root.width;
+        label: "SCREEN ORIENTATION";
+        accessible-name: "Screen orientation";
+        detail: root.orientation-detail;
+        value: root.orientation-value;
+        focused: SettingsView.section == SettingsSection.orientation;
+        acknowledged: FeedbackView.acknowledged("settings", "orientation", FeedbackView.revision);
+    }
+    SettingsRow {
+        y: 92px; width: root.width;
+        label: "SCREENSAVER";
+        accessible-name: "Screensaver";
+        detail: "Configure the idle display";
+        value: "CONFIGURE";
+        trailing: SettingsRowTrailing.link;
+        focused: SettingsView.section == SettingsSection.screensaver;
+        acknowledged: FeedbackView.acknowledged("settings", "screensaver", FeedbackView.revision);
+    }
+    SettingsRow {
+        y: 128px; width: root.width;
+        label: "REDUCE MOTION";
+        accessible-name: "Reduce motion";
+        detail: SettingsView.reduce-motion ? "On" : "Off";
+        trailing: SettingsRowTrailing.toggle;
+        toggle-on: SettingsView.reduce-motion;
+        separator: false;
+        focused: SettingsView.section == SettingsSection.reduce-motion;
+        acknowledged: FeedbackView.acknowledged("settings", "reduce-motion", FeedbackView.revision);
+    }
 
-        VerticalLayout {
-            padding: 20px;
-            spacing: 8px;
+    SettingsGroupLabel { x: 12px; y: 182px; text: "SYSTEM"; }
+    SettingsRow {
+        y: 202px; width: root.width;
+        label: "EXIT TO MISTER";
+        accessible-name: "Exit to MiSTer";
+        detail: "Use the stock MiSTer menu until reboot";
+        value: "UNTIL REBOOT";
+        focused: SettingsView.section == SettingsSection.exit;
+        acknowledged: FeedbackView.acknowledged("settings", "exit", FeedbackView.revision);
+    }
+    SettingsRow {
+        y: 238px; width: root.width;
+        label: "REFRESH DATABASE";
+        accessible-name: "Refresh Database";
+        detail: "Refresh changed library systems";
+        value: "CHANGED SYSTEMS";
+        focused: SettingsView.section == SettingsSection.refresh;
+        acknowledged: FeedbackView.acknowledged("settings", "refresh", FeedbackView.revision);
+    }
+    SettingsRow {
+        y: 274px; width: root.width;
+        label: "ABOUT";
+        accessible-name: "About";
+        detail: "MiSTer MagiK and Slint";
+        value: "MAGIK AND SLINT";
+        trailing: SettingsRowTrailing.link;
+        separator: false;
+        focused: SettingsView.section == SettingsSection.about;
+        acknowledged: FeedbackView.acknowledged("settings", "about", FeedbackView.revision);
+    }
+}
 
-            Spleen6x12 {
-                text: "MiSTer MagiK";
-                color: #e8e0f0;
-                size: Spleen6x12Size.px24;
-                horizontal-alignment: center;
-            }
+// Backdrop cog: an RGB565 render presented 1:1 at an integer position.
+component CogBackdrop inherits Image {
+    source: SettingsView.cog-backdrop;
+    width: 412px;
+    height: 374px;
+    image-rendering: pixelated;
+    accessible-role: none;
+}
 
-            SettingsRow {
-                label: "Display resolution";
-                detail: SettingsView.active-display.label;
-                focused: SettingsView.section == SettingsSection.display;
-                acknowledged: FeedbackView.acknowledged("settings", "display", FeedbackView.revision);
-            }
+export component SettingsScreen inherits Rectangle {
+    accessible-role: main;
+    accessible-label: "Settings";
+    background: PageTheme.background;
 
-            SettingsRow {
-                label: "Screen orientation";
-                detail: SettingsView.active-orientation == ScreenOrientation.normal ? "Normal"
-                    : SettingsView.active-orientation == ScreenOrientation.monitor-clockwise
-                    ? "Monitor right (clockwise)" : "Monitor left (counterclockwise)";
-                focused: SettingsView.section == SettingsSection.orientation;
-                acknowledged: FeedbackView.acknowledged("settings", "orientation", FeedbackView.revision);
-            }
-
-            SettingsRow {
-                label: "Screensaver";
-                detail: "Configure the idle display";
-                focused: SettingsView.section == SettingsSection.screensaver;
-                acknowledged: FeedbackView.acknowledged("settings", "screensaver", FeedbackView.revision);
-            }
-
-            SettingsRow {
-                label: "Reduce motion";
-                detail: SettingsView.reduce-motion ? "On" : "Off";
-                focused: SettingsView.section == SettingsSection.reduce-motion;
-                acknowledged: FeedbackView.acknowledged("settings", "reduce-motion", FeedbackView.revision);
-            }
-
-            SettingsRow {
-                label: "Exit to MiSTer";
-                detail: "Use the stock MiSTer menu until reboot";
-                focused: SettingsView.section == SettingsSection.exit;
-                acknowledged: FeedbackView.acknowledged("settings", "exit", FeedbackView.revision);
-            }
-
-            SettingsRow {
-                label: "Refresh Database";
-                detail: "Refresh changed library systems";
-                focused: SettingsView.section == SettingsSection.refresh;
-                acknowledged: FeedbackView.acknowledged("settings", "refresh", FeedbackView.revision);
-            }
-
-            SettingsRow {
-                label: "About";
-                detail: "MiSTer MagiK and Slint";
-                focused: SettingsView.section == SettingsSection.about;
-                acknowledged: FeedbackView.acknowledged("settings", "about", FeedbackView.revision);
-            }
-
-            Rectangle { vertical-stretch: 1; background: transparent; }
+    if !MisterUi.portrait-layout : Rectangle {
+        CogBackdrop { x: -18px; y: 97px; }
+        LandscapePageChrome {
+            hint-a: "A  CHANGE";
+            hint-b: "B  BACK";
+            hint-right: "UP  DOWN   MOVE";
         }
+        SettingsList { x: 400px; y: 104px; width: 534px; height: 310px; }
+    }
+
+    if MisterUi.portrait-layout : Rectangle {
+        CogBackdrop { x: (root.width - 412px) / 2; y: 120px; }
+        PortraitPageChrome {
+            section: "SETTINGS";
+            hint-a: "A CHANGE";
+            hint-b: "B BACK";
+        }
+        SettingsList { x: 32px; y: 506px; width: root.width - 64px; height: 310px; }
     }
 }

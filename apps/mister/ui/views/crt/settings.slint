@@ -1,36 +1,166 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { MisterUi } from "../../mister_window.slint";
 import { FeedbackView, ScreenOrientation, SettingsSection, SettingsView } from "../../api.slint";
-import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
+import { PageTheme } from "../../components/page_chrome.slint";
+import { CrtLauncherText, CrtPageChrome, CrtPageMetrics } from "../../components/crt_page_chrome.slint";
+import { MisterUi } from "../../mister_window.slint";
+
+// One CRT list row, laid out on the launcher's per-axis route scale.
+component CrtSettingsRow inherits Rectangle {
+    in property <string> label;
+    in property <string> accessible-name;
+    in property <string> detail;
+    in property <string> value;
+    in property <bool> value-accent;
+    in property <bool> focused;
+    in property <bool> acknowledged;
+    in property <bool> separator: true;
+
+    accessible-role: list-item;
+    accessible-label: root.accessible-name;
+    accessible-description: root.detail;
+    accessible-item-selected: root.focused;
+    accessible-enabled: true;
+
+    height: CrtPageMetrics.len-y(16);
+
+    if root.focused : Rectangle {
+        background: @linear-gradient(90deg, PageTheme.settings-focus-start 0%, PageTheme.settings-focus-end 60%, PageTheme.background 100%);
+        Rectangle { x: 0px; width: CrtPageMetrics.len-x(2); background: PageTheme.settings-accent; }
+    }
+
+    label-text := CrtLauncherText {
+        x: CrtPageMetrics.len-x(6);
+        y: CrtPageMetrics.len-y(2);
+        text: root.label;
+        text-color: root.focused ? PageTheme.settings-accent
+            : root.acknowledged ? PageTheme.settings-accent-deep : PageTheme.cream;
+    }
+
+    CrtLauncherText {
+        x: Math.max(root.width - CrtPageMetrics.len-x(6) - self.preferred-width,
+            label-text.x + label-text.preferred-width + CrtPageMetrics.len-x(12));
+        y: CrtPageMetrics.len-y(2);
+        width: root.width - CrtPageMetrics.len-x(6) - self.x;
+        text: root.value;
+        text-color: root.value-accent ? PageTheme.settings-accent
+            : root.focused ? PageTheme.cream : PageTheme.muted;
+    }
+
+    if root.separator && !root.focused : Rectangle {
+        x: CrtPageMetrics.len-x(6);
+        y: root.height - 1px;
+        width: root.width - self.x;
+        height: 1px;
+        background: PageTheme.rule;
+    }
+}
+
+component CrtGroupLabel inherits CrtLauncherText {
+    x: CrtPageMetrics.len-x(6);
+    text-color: PageTheme.muted;
+}
 
 export component SettingsScreen inherits Rectangle {
     accessible-role: main;
     accessible-label: "Settings";
-    background: CrtTheme.background;
+    background: PageTheme.background;
 
-    VerticalLayout {
-        padding-left: MisterUi.grid-x * 2;
-        padding-right: MisterUi.grid-x * 2;
-        padding-top: MisterUi.grid-y * 2;
-        padding-bottom: MisterUi.grid-y * 2;
-        spacing: MisterUi.grid-y;
+    // Rows follow navigation order; headings only group them.
+    property <int> left: CrtPageMetrics.margin-x;
+    property <int> top: CrtPageMetrics.header-bottom + 26 * CrtPageMetrics.sy;
+    property <int> row-h: 16 * CrtPageMetrics.sy;
+    property <int> heading-h: 14 * CrtPageMetrics.sy;
+    property <int> second-group: root.top + root.heading-h + 4 * root.row-h + 4 * CrtPageMetrics.sy;
+    property <length> list-x: CrtPageMetrics.px-x(root.left);
+    property <length> list-width: (MisterUi.window-width - 2 * root.left) * 1px;
 
-        CrtHeader { title: "Settings"; subtitle: ""; status: ""; }
+    CrtPageChrome {
+        section: "SETTINGS";
+        hint-a: "A CHANGE";
+        hint-b: "B BACK";
+    }
 
-        VerticalLayout {
-            vertical-stretch: 1;
-            spacing: 0px;
-            CrtMenuRow { vertical-stretch: 1; label: "Resolution"; detail: SettingsView.active-display.label; focused: SettingsView.section == SettingsSection.display; acknowledged: FeedbackView.acknowledged("settings", "display", FeedbackView.revision); }
-            CrtMenuRow { vertical-stretch: 1; label: "Orientation"; detail: SettingsView.active-orientation == ScreenOrientation.normal ? "Normal" : SettingsView.active-orientation == ScreenOrientation.monitor-clockwise ? "Monitor right" : "Monitor left"; focused: SettingsView.section == SettingsSection.orientation; acknowledged: FeedbackView.acknowledged("settings", "orientation", FeedbackView.revision); }
-            CrtMenuRow { vertical-stretch: 1; label: "Screensaver"; detail: "Configure"; focused: SettingsView.section == SettingsSection.screensaver; acknowledged: FeedbackView.acknowledged("settings", "screensaver", FeedbackView.revision); }
-            CrtMenuRow { vertical-stretch: 1; label: "Reduce motion"; detail: SettingsView.reduce-motion ? "On" : "Off"; focused: SettingsView.section == SettingsSection.reduce-motion; acknowledged: FeedbackView.acknowledged("settings", "reduce-motion", FeedbackView.revision); }
-            CrtMenuRow { vertical-stretch: 1; label: "Exit to MiSTer"; detail: "Until reboot"; focused: SettingsView.section == SettingsSection.exit; acknowledged: FeedbackView.acknowledged("settings", "exit", FeedbackView.revision); }
-            CrtMenuRow { vertical-stretch: 1; label: "Refresh Database"; detail: "Refresh changed systems"; focused: SettingsView.section == SettingsSection.refresh; acknowledged: FeedbackView.acknowledged("settings", "refresh", FeedbackView.revision); }
-            CrtMenuRow { vertical-stretch: 1; label: "About"; detail: "MiSTer MagiK"; focused: SettingsView.section == SettingsSection.about; acknowledged: FeedbackView.acknowledged("settings", "about", FeedbackView.revision); }
+    Rectangle {
+        x: root.list-x;
+        y: CrtPageMetrics.px-y(root.top);
+        width: root.list-width;
+        height: CrtPageMetrics.px-y(root.second-group + root.heading-h + 3 * root.row-h) - self.y;
+        accessible-role: list;
+        accessible-label: "Settings";
+
+        CrtGroupLabel { y: 0px; text: "DISPLAY"; }
+        CrtSettingsRow {
+            y: root.heading-h * 1px; width: parent.width;
+            label: "DISPLAY RESOLUTION";
+            accessible-name: "Display resolution";
+            detail: SettingsView.active-display.label;
+            value: SettingsView.active-display.label.to-uppercase();
+            focused: SettingsView.section == SettingsSection.display;
+            acknowledged: FeedbackView.acknowledged("settings", "display", FeedbackView.revision);
+        }
+        CrtSettingsRow {
+            y: (root.heading-h + root.row-h) * 1px; width: parent.width;
+            label: "SCREEN ORIENTATION";
+            accessible-name: "Screen orientation";
+            detail: SettingsView.active-orientation == ScreenOrientation.normal ? "Normal"
+                : SettingsView.active-orientation == ScreenOrientation.monitor-clockwise
+                ? "Monitor right (clockwise)" : "Monitor left (counterclockwise)";
+            value: SettingsView.active-orientation == ScreenOrientation.normal ? "NORMAL"
+                : SettingsView.active-orientation == ScreenOrientation.monitor-clockwise ? "MONITOR RIGHT" : "MONITOR LEFT";
+            focused: SettingsView.section == SettingsSection.orientation;
+            acknowledged: FeedbackView.acknowledged("settings", "orientation", FeedbackView.revision);
+        }
+        CrtSettingsRow {
+            y: (root.heading-h + 2 * root.row-h) * 1px; width: parent.width;
+            label: "SCREENSAVER";
+            accessible-name: "Screensaver";
+            detail: "Configure the idle display";
+            value: "CONFIGURE >";
+            focused: SettingsView.section == SettingsSection.screensaver;
+            acknowledged: FeedbackView.acknowledged("settings", "screensaver", FeedbackView.revision);
+        }
+        CrtSettingsRow {
+            y: (root.heading-h + 3 * root.row-h) * 1px; width: parent.width;
+            label: "REDUCE MOTION";
+            accessible-name: "Reduce motion";
+            detail: SettingsView.reduce-motion ? "On" : "Off";
+            value: SettingsView.reduce-motion ? "ON" : "OFF";
+            value-accent: SettingsView.reduce-motion;
+            separator: false;
+            focused: SettingsView.section == SettingsSection.reduce-motion;
+            acknowledged: FeedbackView.acknowledged("settings", "reduce-motion", FeedbackView.revision);
         }
 
-        CrtFooter { left-hint: "A Change"; right-hint: "B Back"; }
+        CrtGroupLabel { y: (root.second-group - root.top) * 1px; text: "SYSTEM"; }
+        CrtSettingsRow {
+            y: (root.second-group - root.top + root.heading-h) * 1px; width: parent.width;
+            label: "EXIT TO MISTER";
+            accessible-name: "Exit to MiSTer";
+            detail: "Use the stock MiSTer menu until reboot";
+            value: "UNTIL REBOOT";
+            focused: SettingsView.section == SettingsSection.exit;
+            acknowledged: FeedbackView.acknowledged("settings", "exit", FeedbackView.revision);
+        }
+        CrtSettingsRow {
+            y: (root.second-group - root.top + root.heading-h + root.row-h) * 1px; width: parent.width;
+            label: "REFRESH DATABASE";
+            accessible-name: "Refresh Database";
+            detail: "Refresh changed library systems";
+            value: "CHANGED SYSTEMS";
+            focused: SettingsView.section == SettingsSection.refresh;
+            acknowledged: FeedbackView.acknowledged("settings", "refresh", FeedbackView.revision);
+        }
+        CrtSettingsRow {
+            y: (root.second-group - root.top + root.heading-h + 2 * root.row-h) * 1px; width: parent.width;
+            label: "ABOUT";
+            accessible-name: "About";
+            detail: "MiSTer MagiK and Slint";
+            value: "MAGIK >";
+            separator: false;
+            focused: SettingsView.section == SettingsSection.about;
+            acknowledged: FeedbackView.acknowledged("settings", "about", FeedbackView.revision);
+        }
     }
 }

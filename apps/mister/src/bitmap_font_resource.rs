@@ -382,6 +382,53 @@ fn console_bitmap_font(resource: &[u8]) -> Result<ConsoleBitmapFont, String> {
     })
 }
 
+/// Nearest-neighbour integer stretch of a monochrome font into a new family.
+///
+/// Native 15 kHz CRT routes double one axis of the launcher's Spleen 6x12
+/// text (12x12 on 240p/288p landscape, 6x24 in portrait). Slint cannot scale
+/// a bitmap font per axis, so the same doubling is registered as separate
+/// families. A vertical stretch doubles the matched pixel size, which scales
+/// the family's line metrics exactly like the 2x resource.
+fn stretch_font(base: &DecodedFont, family_name: &str, sx: i16, sy: i16) -> DecodedFont {
+    let glyphs = base
+        .glyphs
+        .iter()
+        .map(|glyph| {
+            let source = unpack_glyph(glyph);
+            let (width, height) = (
+                usize::try_from(glyph.width).unwrap_or_default(),
+                usize::try_from(glyph.height).unwrap_or_default(),
+            );
+            let (out_width, out_height) = (width * sx as usize, height * sy as usize);
+            let stride = out_width.div_ceil(8);
+            let mut packed = vec![0; stride * out_height];
+            for y in 0..out_height {
+                for x in 0..out_width {
+                    if source[(y / sy as usize) * width + x / sx as usize] != 0 {
+                        packed[y * stride + x / 8] |= 0x80 >> (x & 7);
+                    }
+                }
+            }
+            DecodedGlyph {
+                code_point: glyph.code_point,
+                x: glyph.x * sx,
+                y: glyph.y * sy,
+                width: out_width as i16,
+                height: out_height as i16,
+                x_advance: glyph.x_advance * sx,
+                stride: stride as u16,
+                packed,
+            }
+        })
+        .collect();
+    DecodedFont {
+        family_name: family_name.into(),
+        pixel_size: base.pixel_size * sy,
+        glyphs,
+        ..base.clone()
+    }
+}
+
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 fn leak_font(decoded: DecodedFont) -> &'static i_slint_core::graphics::BitmapFont {
     leak_font_family(vec![decoded])
@@ -479,13 +526,17 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
     use std::cell::Cell;
     use std::sync::OnceLock;
 
-    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 6]> = OnceLock::new();
+    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 8]> = OnceLock::new();
     thread_local! {
         static REGISTERED: Cell<bool> = const { Cell::new(false) };
     }
 
     let fonts = FONTS.get_or_init(|| {
+        let spleen_6x12 = decode_resource(SPLEEN_6X12_NATIVE_RESOURCE)
+            .expect("valid native Spleen 6x12 bitmap font");
         [
+            leak_font(stretch_font(&spleen_6x12, "Spleen 6x12 Wide", 2, 1)),
+            leak_font(stretch_font(&spleen_6x12, "Spleen 6x12 Tall", 1, 2)),
             leak_font(decode_resource(XERXES_10_RESOURCE).expect("valid Xerxes 10 bitmap font")),
             leak_font(decode_resource(NOCIVE_15_RESOURCE).expect("valid Nocive 15 bitmap font")),
             leak_font(decode_resource(JERSEY_15_RESOURCE).expect("valid Jersey 15 bitmap font")),
@@ -1193,6 +1244,30 @@ mod tests {
             assert_eq!(glyph(&bacteria_12_native, code_point).height, 12);
             assert_eq!(glyph(&jersey_15, code_point).height, 15);
             assert_eq!(glyph(&jersey_25, code_point).height, 25);
+        }
+    }
+
+    #[test]
+    fn crt_stretched_spleen_doubles_each_axis_exactly() {
+        let base = decode_resource(SPLEEN_6X12_NATIVE_RESOURCE).unwrap();
+        for (family, sx, sy) in [("Spleen 6x12 Wide", 2, 1), ("Spleen 6x12 Tall", 1, 2)] {
+            let stretched = stretch_font(&base, family, sx, sy);
+            assert_eq!(stretched.family_name, family);
+            assert_eq!(stretched.pixel_size, base.pixel_size * sy);
+            assert_eq!(stretched.ascent, base.ascent);
+            for (glyph, wide) in base.glyphs.iter().zip(&stretched.glyphs) {
+                assert_eq!(wide.code_point, glyph.code_point);
+                assert_eq!((wide.x, wide.y), (glyph.x * sx, glyph.y * sy));
+                assert_eq!(wide.x_advance, glyph.x_advance * sx);
+                let (source, output) = (unpack_glyph(glyph), unpack_glyph(wide));
+                let (width, out_width) = (glyph.width as usize, wide.width as usize);
+                assert_eq!(out_width, width * sx as usize);
+                assert_eq!(wide.height, glyph.height * sy);
+                for (index, alpha) in output.iter().enumerate() {
+                    let (x, y) = (index % out_width, index / out_width);
+                    assert_eq!(*alpha, source[(y / sy as usize) * width + x / sx as usize]);
+                }
+            }
         }
     }
 

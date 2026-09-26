@@ -119,6 +119,8 @@ export global SettingsView {
     in property <bool> license-expanded;
     in property <int> license-scroll-y;
     in property <[string]> license-lines;
+    // Settings backdrop cog, installed once by Rust and always drawn 1:1.
+    in property <image> cog-backdrop;
 }
 
 export global InformationView {

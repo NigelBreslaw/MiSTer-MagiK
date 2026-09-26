@@ -16,7 +16,7 @@
     "slint_version": "1.18.0 (master 72cf7430)",
     "png_encoder": "png-rgb8-filter-none-zlib-best-v1",
     "fixture_sha256": "9998b71830e02db4348dfa4c53684251bc9a25a39b2a094d46e851c70783c37a",
-    "asset_bundle_sha256": "a215cf99a3f03f325061bcd570dd9bd4bb51405748d87583a23bfd942a1a1548",
+    "asset_bundle_sha256": "afb1f22403fa67e922dcfd6b6c4604a2994f3d0d775b757036c01ffa5da13417",
     "font_bundle_sha256": "672448be6f763d1415cc4d7028e68508ef8dd3789617f9df3b44925e7b779957"
   },
   "scenes": [
@@ -77,8 +77,8 @@
     },
     {
       "id": "crt-240p-settings",
-      "rgb565_hash": "8f71c0211c28c085",
-      "provenance_sha256": "5358af5c6541298032afc3c3e7e929fb939f004b10a96b6b7654f3ae37233931",
+      "rgb565_hash": "f6b83c0b768e85ed",
+      "provenance_sha256": "db09b80b6a30e39d0ea6a216306e6fb26dbe85ee53500d82a15d027dbf6e2342",
       "scenario": "settings",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -143,8 +143,8 @@
     },
     {
       "id": "crt-settings",
-      "rgb565_hash": "1f4144275355cf8a",
-      "provenance_sha256": "304a105a6caaaaaada38e39215930b23bb94de24f796df98a86644dc47ab7124",
+      "rgb565_hash": "92c380a381efe82d",
+      "provenance_sha256": "8bf47eb08a3f73ba4ef44bd43e0089a33e8ab4c3a9c31439367660c044eaca1e",
       "scenario": "settings",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -209,8 +209,8 @@
     },
     {
       "id": "hdmi-settings",
-      "rgb565_hash": "5c144dcd97f9d6fb",
-      "provenance_sha256": "823bfea675ca919f6c8e0b2ba0709838a580aef8613c8fe03920d282ff84cb36",
+      "rgb565_hash": "21f156238b2b7d74",
+      "provenance_sha256": "0050731a9feac7f8413f685cb278cb69a8365f7ce175fd113a26bf3c360b930d",
       "scenario": "settings",
       "frame": 0,
       "fixed_time_us": 16666,
