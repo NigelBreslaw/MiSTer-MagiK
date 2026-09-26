@@ -19,6 +19,7 @@ mod launcher_texture;
 pub mod navigation;
 pub mod orientation;
 pub mod packed_copy;
+pub mod settings_cog;
 pub mod spring_animation;
 
 #[repr(transparent)]

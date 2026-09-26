@@ -573,14 +573,40 @@ impl NavigationTransitionRuntime {
         if !route.is_settings_page() {
             return Ok(false);
         }
+        let request = NavigationTransitionRequest::settings_page_on_axis(direction, axis);
+        self.begin_settings_physical(route, request, width, height, source, now_us)
+    }
+
+    /// Home <-> Settings card zoom. Only valid for the 960x540 landscape card
+    /// launcher, where logical and physical geometry are identical.
+    pub fn begin_settings_cog_physical(
+        &mut self,
+        direction: NavigationTransitionDirection,
+        width: usize,
+        height: usize,
+        source: &[Rgb565Pixel],
+        cog: &'static [SharedRgb565Pixel],
+        now_us: u64,
+    ) -> Result<bool, NavigationTransitionFailure> {
+        self.buffers.set_settings_cog_asset(cog);
+        let request = NavigationTransitionRequest::settings_cog(direction);
+        let route = NavigationTransitionRoute::HomeToSettings;
+        self.begin_settings_physical(route, request, width, height, source, now_us)
+    }
+
+    fn begin_settings_physical(
+        &mut self,
+        route: NavigationTransitionRoute,
+        request: NavigationTransitionRequest,
+        width: usize,
+        height: usize,
+        source: &[Rgb565Pixel],
+        now_us: u64,
+    ) -> Result<bool, NavigationTransitionFailure> {
         if self.enabled && !self.is_active() {
             self.buffers.resize(width, height);
         }
-        let started = match self.begin_settings_page_request(
-            NavigationTransitionRequest::settings_page_on_axis(direction, axis),
-            source,
-            now_us,
-        ) {
+        let started = match self.begin_settings_page_request(request, source, now_us) {
             Ok(started) => started,
             Err(failure) => {
                 self.buffers.resize(self.logical_width, self.logical_height);

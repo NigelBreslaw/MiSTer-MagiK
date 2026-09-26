@@ -109,14 +109,6 @@ CONTRACTS = (
         "Spleen 6x12 Wide",
         "12px",
     ),
-    PrimitiveContract(
-        UI_ROOT / "components/spleen_6x12_tall.slint",
-        "Spleen6x12Tall",
-        "Spleen6x12TallSize",
-        ("px24",),
-        "Spleen 6x12 Tall",
-        "24px",
-    ),
 )
 CONTRACT_BY_PATH = {contract.path: contract for contract in CONTRACTS}
 

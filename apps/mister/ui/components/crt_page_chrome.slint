@@ -11,7 +11,6 @@ import { NavigationView } from "../api.slint";
 import { PageTheme } from "page_chrome.slint";
 import { Spleen6x12, Spleen6x12Size } from "spleen_6x12.slint";
 import { Spleen6x12Wide } from "spleen_6x12_wide.slint";
-import { Spleen6x12Tall } from "spleen_6x12_tall.slint";
 
 export global CrtPageMetrics {
     property <int> w: MisterUi.window-width;
@@ -33,25 +32,25 @@ export global CrtPageMetrics {
     pure public function len-y(value: int) -> length { return value * sy * 1px; }
 }
 
-// Spleen 6x12 with the launcher's per-axis doubling on this route. Spleen is
+// Spleen 6x12 with the launcher's doubling on this route: 12x12 cells on
+// 240p/288p landscape, the 2x resource when both axes double, and native
+// cells otherwise (portrait 15 kHz uses the 2x resource). Spleen is
 // monospaced, so the preferred size follows from the character count.
 export component CrtLauncherText inherits Rectangle {
     in property <string> text;
     in property <color> text-color: PageTheme.cream;
 
-    preferred-width: root.text.character-count * CrtPageMetrics.len-x(6);
+    property <bool> wide: CrtPageMetrics.sx == 2 && CrtPageMetrics.sy == 1;
+    preferred-width: root.text.character-count * (CrtPageMetrics.sx == 2 || CrtPageMetrics.sy == 2 ? 12px : 6px);
     preferred-height: CrtPageMetrics.len-y(12);
     width: self.preferred-width;
     height: self.preferred-height;
     clip: true;
 
-    if CrtPageMetrics.sx == 2 && CrtPageMetrics.sy == 1 : Spleen6x12Wide {
+    if root.wide : Spleen6x12Wide {
         x: 0px; y: 0px; text: root.text; color: root.text-color;
     }
-    if CrtPageMetrics.sx == 1 && CrtPageMetrics.sy == 2 : Spleen6x12Tall {
-        x: 0px; y: 0px; text: root.text; color: root.text-color;
-    }
-    if CrtPageMetrics.sx == CrtPageMetrics.sy : Spleen6x12 {
+    if !root.wide : Spleen6x12 {
         x: 0px; y: 0px; text: root.text; color: root.text-color;
         size: CrtPageMetrics.sy == 2 ? Spleen6x12Size.px24 : Spleen6x12Size.px8;
     }

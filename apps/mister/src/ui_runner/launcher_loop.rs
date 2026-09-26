@@ -24,7 +24,7 @@ use super::launcher_worker_intents::{
 use super::*;
 use crate::input_event::{InputPhase, InputSourceKind, LogicalAction};
 use crate::input_state::PadState;
-use crate::launcher_presentation::SelectionFeedbackTarget;
+use crate::launcher_presentation::{SelectionFeedbackTarget, settings_cog_backdrop_rgb565};
 use crate::launcher_ui_actions::{
     LauncherUiAction, LauncherUiActionsAdapter, apply_navigation_action,
 };
@@ -7956,15 +7956,36 @@ pub(super) fn run_launcher_loop(
                                         SettingsPageTransitionAxis::VerticalReversed
                                     }
                                 };
-                                let started = navigation_transition.begin_settings_page_physical(
-                                    route,
-                                    direction,
-                                    axis,
-                                    ui.render_w(),
-                                    ui.render_h(),
-                                    source,
-                                    now_us,
-                                );
+                                // The card zoom exists only for the native
+                                // 960x540 landscape card launcher; Reduce
+                                // motion and every other route keep the slide.
+                                let card_zoom = route == NavigationTransitionRoute::HomeToSettings
+                                    && launcher_card_home.is_some()
+                                    && !layout.is_portrait()
+                                    && ui.render_w() == 960
+                                    && ui.render_h() == 540
+                                    && !nav.settings.reduce_motion;
+                                let started = if card_zoom {
+                                    let cog = settings_cog_backdrop_rgb565();
+                                    navigation_transition.begin_settings_cog_physical(
+                                        direction,
+                                        ui.render_w(),
+                                        ui.render_h(),
+                                        source,
+                                        cog,
+                                        now_us,
+                                    )
+                                } else {
+                                    navigation_transition.begin_settings_page_physical(
+                                        route,
+                                        direction,
+                                        axis,
+                                        ui.render_w(),
+                                        ui.render_h(),
+                                        source,
+                                        now_us,
+                                    )
+                                };
                                 let started = started.unwrap_or(false);
                                 if started
                                     && begin_navigation_full_screen_transition(
@@ -10808,6 +10829,16 @@ pub(super) fn run_launcher_loop(
                             waited.as_micros().min(u64::MAX as u128) as u64,
                             timed_out,
                         );
+                    }
+                    // A Home destination is the Rust card launcher under a
+                    // transparent Slint home. The controlled raster only
+                    // recomposes it when the card session looks dirty, which
+                    // it no longer does after returning from Settings, so the
+                    // snapshot (and the settled frame after it) was black.
+                    // Always compose the card home into the destination.
+                    if custom_home_active && let Some(session) = launcher_card_home.as_mut() {
+                        let _ =
+                            layer_target.render_custom_home(window, session.render(), true, None);
                     }
                     if navigation_transition
                         .capture_destination(

@@ -76,6 +76,7 @@ enum NavigationTransitionRenderer {
     #[default]
     SuperScaler,
     SettingsPage,
+    SettingsCog,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -594,9 +595,23 @@ impl NavigationTransitionRequest {
         }
     }
 
+    /// Home <-> Settings card zoom on the 960x540 landscape card launcher.
+    /// The buffers must carry the cog asset (`set_settings_cog_asset`).
+    pub fn settings_cog(direction: NavigationTransitionDirection) -> Self {
+        Self {
+            duration_us: u64::from(crate::settings_cog::SETTINGS_COG_DURATION_MS) * 1_000,
+            renderer: NavigationTransitionRenderer::SettingsCog,
+            ..Self::settings_page(direction)
+        }
+    }
+
     #[must_use]
     pub const fn is_super_scaler(self) -> bool {
         matches!(self.renderer, NavigationTransitionRenderer::SuperScaler)
+    }
+
+    const fn is_settings_cog(self) -> bool {
+        matches!(self.renderer, NavigationTransitionRenderer::SettingsCog)
     }
 }
 
@@ -676,7 +691,9 @@ impl Default for NavigationTransitionFrame {
 pub const fn request_cover_progress_q16(request: NavigationTransitionRequest) -> u16 {
     let forward_cover = match request.renderer {
         NavigationTransitionRenderer::SuperScaler => SUPER_SCALER_COVER_PROGRESS,
-        NavigationTransitionRenderer::SettingsPage => PROGRESS_MAX / 2,
+        NavigationTransitionRenderer::SettingsPage | NavigationTransitionRenderer::SettingsCog => {
+            PROGRESS_MAX / 2
+        }
     };
     match request.direction {
         NavigationTransitionDirection::Forward => forward_cover,
@@ -720,6 +737,7 @@ pub struct NavigationTransitionBuffers {
     scale_dither_x: Vec<bool>,
     source_ready: bool,
     destination_ready: bool,
+    settings_cog_asset: Option<&'static [Rgb565Pixel]>,
 }
 
 impl NavigationTransitionBuffers {
@@ -808,6 +826,11 @@ impl NavigationTransitionBuffers {
         self.working.as_slice()
     }
 
+    /// The 412x374 RGB565 Settings cog used by `settings_cog` requests.
+    pub fn set_settings_cog_asset(&mut self, asset: &'static [Rgb565Pixel]) {
+        self.settings_cog_asset = Some(asset);
+    }
+
     pub fn copy_source_to_working(&mut self) -> Result<usize, NavigationTransitionFailure> {
         if !self.source_ready || self.working.len() != self.source.len() {
             return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
@@ -878,6 +901,12 @@ pub fn render_navigation_transition(
         }
         NavigationTransitionRenderer::SettingsPage => {
             render_settings_page_push(buffers, request, frame)?
+        }
+        NavigationTransitionRenderer::SettingsCog => {
+            let mut working = std::mem::take(&mut buffers.working);
+            let result = render_settings_cog_into(buffers, request, frame, &mut working);
+            buffers.working = working;
+            result?
         }
     };
     stats.render_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
@@ -1270,6 +1299,9 @@ pub fn render_settings_page_transition_into(
     {
         return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
     }
+    if request.is_settings_cog() {
+        return render_settings_cog_into(buffers, request, frame, output);
+    }
     let source = buffers.source.as_slice();
     let destination = buffers
         .destination_ready
@@ -1320,6 +1352,48 @@ pub fn render_settings_page_transition_into(
         request.settings_axis,
     );
     stats.settings_blit_us = elapsed_us(blit_started);
+    Ok(stats)
+}
+
+/// The card zoom runs one timeline: Forward plays it from the launcher
+/// (source) to Settings (destination); Reverse plays it backwards from the
+/// Settings source to the launcher destination.
+fn render_settings_cog_into(
+    buffers: &NavigationTransitionBuffers,
+    request: NavigationTransitionRequest,
+    frame: NavigationTransitionFrame,
+    output: &mut [Rgb565Pixel],
+) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
+    let source = buffers.source.as_slice();
+    let mut stats = NavigationTransitionRenderStats::default();
+    if !buffers.source_ready || output.len() != source.len() {
+        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+    }
+    let (Some(destination), Some(cog)) = (
+        buffers
+            .destination_ready
+            .then_some(buffers.destination.as_slice()),
+        buffers.settings_cog_asset,
+    ) else {
+        output.copy_from_slice(source);
+        stats.copied_pixels = source.len() as u64;
+        return Ok(stats);
+    };
+    let duration = crate::settings_cog::SETTINGS_COG_DURATION_MS;
+    let elapsed =
+        (u64::from(frame.progress_q16) * u64::from(duration) / PROGRESS_MAX as u64) as u32;
+    let (launcher, settings, t_ms) = match request.direction {
+        NavigationTransitionDirection::Forward => (source, destination, elapsed),
+        NavigationTransitionDirection::Reverse => (destination, source, duration - elapsed),
+    };
+    let started = Instant::now();
+    if !crate::settings_cog::render_settings_cog_transition_into(
+        launcher, settings, cog, t_ms, output,
+    ) {
+        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+    }
+    stats.card_scale_us = elapsed_us(started);
+    stats.copied_pixels = output.len() as u64;
     Ok(stats)
 }
 

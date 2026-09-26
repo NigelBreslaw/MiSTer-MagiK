@@ -16,6 +16,8 @@ use crate::launcher_view_types::{
     selected_display_choice, settings_display_choice, settings_popup, settings_section,
     system_hub_section,
 };
+use mister_magik_framebuffer_scenes::Rgb565Pixel;
+use mister_magik_framebuffer_scenes::settings_cog::{COG_ASSET_HEIGHT, COG_ASSET_WIDTH};
 use mister_magik_ui::launcher::{
     ArcadeLoadState, ArcadeSearchMode, ArcadeView, ChoiceOption, FeedbackView, Launcher, MenuItem,
     MenuItemKind, MenuItemPresentation, MenuItemStatus, NavigationView, SettingsView,
@@ -415,22 +417,32 @@ struct SettingsViewPresenter {
 
 /// Settings backdrop: 412x374 little-endian RGB565, dithered once at its
 /// displayed size and always presented 1:1. See `assets/ui/settings/README.md`.
-const SETTINGS_COG_BACKDROP: &[u8] =
-    include_bytes!("../assets/ui/settings/cog-backdrop-412x374.rgb565");
-pub const SETTINGS_COG_BACKDROP_SIZE: (u32, u32) = (412, 374);
+/// Decoded once; shared by the Settings screen and the card zoom.
+pub fn settings_cog_backdrop_rgb565() -> &'static [Rgb565Pixel] {
+    static PIXELS: std::sync::OnceLock<Vec<Rgb565Pixel>> = std::sync::OnceLock::new();
+    PIXELS.get_or_init(|| {
+        include_bytes!("../assets/ui/settings/cog-backdrop-412x374.rgb565")
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|packed| Rgb565Pixel(u16::from_le_bytes(*packed)))
+            .collect()
+    })
+}
 
 /// Slint 1.18 images have no RGB565 format. Bit replication makes the RGB565
 /// software renderer's truncation return exactly the stored pixels.
-pub fn settings_cog_backdrop_image() -> slint::Image {
-    let (width, height) = SETTINGS_COG_BACKDROP_SIZE;
-    let mut buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(width, height);
+fn settings_cog_backdrop_image() -> slint::Image {
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(
+        COG_ASSET_WIDTH as u32,
+        COG_ASSET_HEIGHT as u32,
+    );
     for (pixel, packed) in buffer
         .make_mut_slice()
         .iter_mut()
-        .zip(SETTINGS_COG_BACKDROP.as_chunks::<2>().0)
+        .zip(settings_cog_backdrop_rgb565())
     {
-        let value = u16::from_le_bytes(*packed);
-        let (r, g, b) = ((value >> 11) & 0x1f, (value >> 5) & 0x3f, value & 0x1f);
+        let (r, g, b) = (packed.0 >> 11, (packed.0 >> 5) & 0x3f, packed.0 & 0x1f);
         *pixel = slint::Rgb8Pixel {
             r: ((r << 3) | (r >> 2)) as u8,
             g: ((g << 2) | (g >> 4)) as u8,
