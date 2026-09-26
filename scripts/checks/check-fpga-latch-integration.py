@@ -732,6 +732,8 @@ def main() -> None:
         if "assign waitrequest_slave   = waitrequest_master;" not in patched_terminator:
             fail("physical acceptance must use the unchanged common waitrequest")
         causal_text = causal_control.read_text()
+        if "(* preserve, dont_replicate *) reg [15:0] crc_work = 0;" not in causal_text:
+            fail("causal CRC mailbox must preserve its exact constrained register bank")
         ports = causal_text.split(");", 1)[0]
         if re.findall(r"output\s+(?:wire|reg)\s+(?:\[[^]]+\]\s*)?(\w+)", ports) != [
             "response_valid",

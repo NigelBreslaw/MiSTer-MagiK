@@ -96,7 +96,8 @@ module mister_magik_scaler_causal_state (
   end
  end
  (* preserve, dont_replicate *) reg [31:0] snapshot = 0;
- reg [15:0] crc_work = 0;
+ // This held CDC payload must remain the same 16 constrained registers.
+ (* preserve, dont_replicate *) reg [15:0] crc_work = 0;
  reg [6:0] crc_phase = 0;
  reg crc_busy = 0;
  reg output_requested = 0;
