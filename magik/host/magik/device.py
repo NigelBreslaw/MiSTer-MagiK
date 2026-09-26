@@ -131,9 +131,7 @@ def run_device(arguments, run):
     else:
         operation = "device-evidence"
     required = (
-        {"input-probe-passive-v1"}
-        if group == "input-probe"
-        else {"device-control-v1"}
+        {"input-probe-passive-v1"} if group == "input-probe" else {"device-control-v1"}
     )
     agent, _ = connect_agent(run, required)
     report = agent.device_operation(operation, fields)
