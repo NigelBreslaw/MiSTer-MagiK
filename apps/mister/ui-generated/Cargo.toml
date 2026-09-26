@@ -16,7 +16,7 @@ warnings = "deny"
 all = "deny"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-slint = { version = "=1.18.0", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std"] }
+slint = { version = "=1.18.1", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 slint = { version = "=1.18.0", default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
