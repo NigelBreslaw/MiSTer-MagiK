@@ -1,0 +1,104 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// CRT page chrome matching the native CRT card launcher
+// (crates/framebuffer-scenes/src/launcher/responsive.rs). Metrics are in
+// window pixels; pages sit inside the route's content rectangle, so the
+// component offsets everything by the content origin.
+
+import { MisterUi } from "../mister_window.slint";
+import { NavigationView } from "../api.slint";
+import { PageTheme } from "page_chrome.slint";
+import { Spleen6x12, Spleen6x12Size } from "spleen_6x12.slint";
+import { Spleen6x12Wide } from "spleen_6x12_wide.slint";
+
+export global CrtPageMetrics {
+    property <int> w: MisterUi.window-width;
+    property <int> h: MisterUi.window-height;
+    property <int> narrow: Math.min(w, h);
+    // Native 15 kHz rasters double one axis; 400+ line routes double both.
+    out property <int> sx: narrow <= 288 && Math.max(w, h) >= 640 ? (w > h ? 2 : 1) : narrow >= 400 ? 2 : 1;
+    out property <int> sy: narrow <= 288 && Math.max(w, h) >= 640 ? (w > h ? 1 : 2) : narrow >= 400 ? 2 : 1;
+    property <int> safe-x: Math.max(MisterUi.crt-content-x, w - MisterUi.crt-content-x - MisterUi.crt-content-width);
+    property <int> safe-y: Math.max(MisterUi.crt-content-y, h - MisterUi.crt-content-y - MisterUi.crt-content-height);
+    out property <int> margin-x: Math.max(Math.floor(w * 6 / 100), 8 * sx, safe-x);
+    out property <int> margin-y: Math.max(Math.floor(h * 5 / 100), 6 * sy, safe-y);
+    out property <int> header-bottom: margin-y + 18 * sy;
+    out property <int> footer-rule: h - (margin-y + 20 * sy);
+    // Window pixel to page-local length.
+    pure public function px-x(value: int) -> length { return (value - MisterUi.crt-content-x) * 1px; }
+    pure public function px-y(value: int) -> length { return (value - MisterUi.crt-content-y) * 1px; }
+    pure public function len-x(value: int) -> length { return value * sx * 1px; }
+    pure public function len-y(value: int) -> length { return value * sy * 1px; }
+}
+
+// Spleen 6x12 with the launcher's doubling on this route: 12x12 cells on
+// 240p/288p landscape, the 2x resource when both axes double, and native
+// cells otherwise (portrait 15 kHz uses the 2x resource). Spleen is
+// monospaced, so the preferred size follows from the character count.
+export component CrtLauncherText inherits Rectangle {
+    in property <string> text;
+    in property <color> text-color: PageTheme.cream;
+
+    property <bool> wide: CrtPageMetrics.sx == 2 && CrtPageMetrics.sy == 1;
+    preferred-width: root.text.character-count * (CrtPageMetrics.sx == 2 || CrtPageMetrics.sy == 2 ? 12px : 6px);
+    preferred-height: CrtPageMetrics.len-y(12);
+    width: self.preferred-width;
+    height: self.preferred-height;
+    clip: true;
+
+    if root.wide : Spleen6x12Wide {
+        x: 0px; y: 0px; text: root.text; color: root.text-color;
+    }
+    if !root.wide : Spleen6x12 {
+        x: 0px; y: 0px; text: root.text; color: root.text-color;
+        size: CrtPageMetrics.sy == 2 ? Spleen6x12Size.px24 : Spleen6x12Size.px8;
+    }
+}
+
+component CrtRule inherits Rectangle {
+    height: 1px;
+    background: PageTheme.rule;
+}
+
+export component CrtPageChrome inherits Rectangle {
+    in property <string> section;
+    in property <string> hint-a;
+    in property <string> hint-b;
+
+    property <int> left: CrtPageMetrics.margin-x;
+    property <int> right: MisterUi.window-width - CrtPageMetrics.margin-x;
+
+    CrtLauncherText { x: CrtPageMetrics.px-x(root.left); y: CrtPageMetrics.px-y(CrtPageMetrics.margin-y); text: "MISTER MAGIK"; }
+    CrtLauncherText {
+        x: CrtPageMetrics.px-x(root.right) - self.preferred-width;
+        y: CrtPageMetrics.px-y(CrtPageMetrics.margin-y);
+        text: NavigationView.clock-text;
+    }
+    CrtRule {
+        x: CrtPageMetrics.px-x(root.left);
+        y: CrtPageMetrics.px-y(CrtPageMetrics.header-bottom);
+        width: (root.right - root.left) * 1px;
+    }
+    CrtLauncherText {
+        x: CrtPageMetrics.px-x(root.left);
+        y: CrtPageMetrics.px-y(CrtPageMetrics.header-bottom + 8 * CrtPageMetrics.sy);
+        text: root.section;
+        text-color: PageTheme.muted;
+    }
+    CrtRule {
+        x: CrtPageMetrics.px-x(root.left);
+        y: CrtPageMetrics.px-y(CrtPageMetrics.footer-rule);
+        width: (root.right - root.left) * 1px;
+    }
+    footer-a := CrtLauncherText {
+        x: CrtPageMetrics.px-x(root.left);
+        y: CrtPageMetrics.px-y(CrtPageMetrics.footer-rule + 5 * CrtPageMetrics.sy);
+        text: root.hint-a;
+    }
+    CrtLauncherText {
+        x: footer-a.x + footer-a.preferred-width + CrtPageMetrics.len-x(18);
+        y: footer-a.y;
+        text: root.hint-b;
+    }
+}

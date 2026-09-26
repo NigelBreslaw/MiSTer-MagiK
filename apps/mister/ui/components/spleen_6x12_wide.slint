@@ -1,0 +1,18 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Spleen 6x12 with each column doubled (12x12 cells), registered at runtime
+// for native 240p/288p landscape CRT text that matches the card launcher.
+export enum Spleen6x12WideSize {
+    px12,
+}
+
+export component Spleen6x12Wide inherits Text {
+    in property <Spleen6x12WideSize> size: Spleen6x12WideSize.px12;
+    color: white;
+    font-family: "Spleen 6x12 Wide";
+    font-size: 12px;
+    horizontal-alignment: start;
+    vertical-alignment: top;
+    overflow: clip;
+}

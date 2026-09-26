@@ -97,6 +97,7 @@ pub struct SettingsNavigationPresentationCapture {
 pub struct SettingsNavigationRecord {
     pub orientation: ScreenOrientation,
     pub leg: SettingsNavigationLeg,
+    pub renderer: &'static str,
     pub start_frame: u64,
     pub rendered_endpoint_frame: u64,
     pub presented_endpoint_frame: u64,
@@ -256,6 +257,7 @@ impl SettingsNavigationBenchmark {
         &mut self,
         route: NavigationTransitionRoute,
         direction: NavigationTransitionDirection,
+        renderer: &'static str,
         source: Screen,
         destination: Screen,
         frame: u64,
@@ -282,6 +284,7 @@ impl SettingsNavigationBenchmark {
         self.active = Some(SettingsNavigationRecord {
             orientation: self.orientation(),
             leg: expected,
+            renderer,
             start_frame: frame,
             rendered_endpoint_frame: 0,
             presented_endpoint_frame: 0,
@@ -469,6 +472,7 @@ mod tests {
             benchmark.note_started(
                 leg.route,
                 leg.direction,
+                "settings-page",
                 leg.source,
                 leg.destination,
                 index as u64,
@@ -496,7 +500,14 @@ mod tests {
     fn route_requires_ordered_rendered_and_presented_endpoints() {
         let mut benchmark = SettingsNavigationBenchmark::new(true);
         let leg = SETTINGS_NAVIGATION_ROUTE[0];
-        benchmark.note_started(leg.route, leg.direction, leg.source, leg.destination, 10);
+        benchmark.note_started(
+            leg.route,
+            leg.direction,
+            "settings-cog",
+            leg.source,
+            leg.destination,
+            10,
+        );
         let started_at = Instant::now();
         benchmark.capture_presentation_start(started_at, Ok(presentation_telemetry(10)));
         assert_eq!(benchmark.active_leg(), 1);
@@ -511,6 +522,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(record.presented_sequence, 7);
+        assert_eq!(record.renderer, "settings-cog");
         assert_eq!(record.presentation_elapsed_us, Some(300_000));
         assert!(record.presentation_error.is_none());
         assert_eq!(benchmark.records().len(), 1);
@@ -521,7 +533,14 @@ mod tests {
     fn animation_window_keeps_the_first_confirmed_source_carrier() {
         let mut benchmark = SettingsNavigationBenchmark::new(true);
         let leg = SETTINGS_NAVIGATION_ROUTE[0];
-        benchmark.note_started(leg.route, leg.direction, leg.source, leg.destination, 10);
+        benchmark.note_started(
+            leg.route,
+            leg.direction,
+            "settings-page",
+            leg.source,
+            leg.destination,
+            10,
+        );
         let first = Instant::now();
         benchmark.capture_presentation_start(first, Ok(presentation_telemetry(10)));
         benchmark.capture_presentation_start(
@@ -543,6 +562,7 @@ mod tests {
         benchmark.note_started(
             NavigationTransitionRoute::SettingsToAbout,
             NavigationTransitionDirection::Forward,
+            "settings-page",
             Screen::Home,
             Screen::Settings,
             10,
@@ -558,6 +578,7 @@ mod tests {
             benchmark.note_started(
                 leg.route,
                 leg.direction,
+                "settings-page",
                 leg.source,
                 leg.destination,
                 index as u64 * 10,
@@ -592,6 +613,7 @@ mod tests {
             benchmark.note_started(
                 leg.route,
                 leg.direction,
+                "settings-page",
                 leg.source,
                 leg.destination,
                 index as u64 * 10,

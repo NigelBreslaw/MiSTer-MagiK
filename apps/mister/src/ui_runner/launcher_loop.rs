@@ -24,7 +24,7 @@ use super::launcher_worker_intents::{
 use super::*;
 use crate::input_event::{InputPhase, InputSourceKind, LogicalAction};
 use crate::input_state::PadState;
-use crate::launcher_presentation::SelectionFeedbackTarget;
+use crate::launcher_presentation::{SelectionFeedbackTarget, settings_cog_backdrop_rgb565};
 use crate::launcher_ui_actions::{
     LauncherUiAction, LauncherUiActionsAdapter, apply_navigation_action,
 };
@@ -543,7 +543,7 @@ fn write_settings_navigation_benchmark_completion(
                 "leg": index + 1,
                 "orientation": record.orientation.id(),
                 "route": record.leg.route.label(),
-                "renderer": record.leg.route.renderer(),
+                "renderer": record.renderer,
                 "direction": record.leg.direction.label(),
                 "source": screen_label(record.leg.source),
                 "destination": screen_label(record.leg.destination),
@@ -1069,6 +1069,22 @@ fn settings_page_transition(
             NavigationTransitionDirection::Reverse
         },
     ))
+}
+
+fn settings_cog_transition_eligible(
+    route: NavigationTransitionRoute,
+    card_home_settled: bool,
+    portrait: bool,
+    render_width: usize,
+    render_height: usize,
+    reduce_motion: bool,
+) -> bool {
+    route == NavigationTransitionRoute::HomeToSettings
+        && card_home_settled
+        && !portrait
+        && render_width == 960
+        && render_height == 540
+        && !reduce_motion
 }
 
 const fn settings_page_depth(screen: Screen) -> Option<u8> {
@@ -7956,15 +7972,41 @@ pub(super) fn run_launcher_loop(
                                         SettingsPageTransitionAxis::VerticalReversed
                                     }
                                 };
-                                let started = navigation_transition.begin_settings_page_physical(
+                                // The card zoom exists only for the native
+                                // 960x540 landscape card launcher; Reduce
+                                // motion and every other route keep the slide.
+                                let card_home_settled = launcher_card_home
+                                    .as_ref()
+                                    .is_some_and(|session| !session.is_animating());
+                                let card_zoom = settings_cog_transition_eligible(
                                     route,
-                                    direction,
-                                    axis,
+                                    card_home_settled,
+                                    layout.is_portrait(),
                                     ui.render_w(),
                                     ui.render_h(),
-                                    source,
-                                    now_us,
+                                    nav.settings.reduce_motion,
                                 );
+                                let started = if card_zoom {
+                                    let cog = settings_cog_backdrop_rgb565();
+                                    navigation_transition.begin_settings_cog_physical(
+                                        direction,
+                                        ui.render_w(),
+                                        ui.render_h(),
+                                        source,
+                                        cog,
+                                        now_us,
+                                    )
+                                } else {
+                                    navigation_transition.begin_settings_page_physical(
+                                        route,
+                                        direction,
+                                        axis,
+                                        ui.render_w(),
+                                        ui.render_h(),
+                                        source,
+                                        now_us,
+                                    )
+                                };
                                 let started = started.unwrap_or(false);
                                 if started
                                     && begin_navigation_full_screen_transition(
@@ -7975,6 +8017,10 @@ pub(super) fn run_launcher_loop(
                                     settings_navigation_benchmark.note_started(
                                         route,
                                         direction,
+                                        navigation_transition.request().map_or(
+                                            "",
+                                            NavigationTransitionRequest::renderer_label,
+                                        ),
                                         source_screen,
                                         nav.screen,
                                         frames,
@@ -10678,7 +10724,11 @@ pub(super) fn run_launcher_loop(
                 .route()
                 .zip(navigation_transition.request())
                 .map_or(("", "", ""), |(route, request)| {
-                    (route.label(), request.direction.label(), route.renderer())
+                    (
+                        route.label(),
+                        request.direction.label(),
+                        request.renderer_label(),
+                    )
                 })
         } else {
             ("", "", "")
@@ -10808,6 +10858,16 @@ pub(super) fn run_launcher_loop(
                             waited.as_micros().min(u64::MAX as u128) as u64,
                             timed_out,
                         );
+                    }
+                    // A Home destination is the Rust card launcher under a
+                    // transparent Slint home. The controlled raster only
+                    // recomposes it when the card session looks dirty, which
+                    // it no longer does after returning from Settings, so the
+                    // snapshot (and the settled frame after it) was black.
+                    // Always compose the card home into the destination.
+                    if custom_home_active && let Some(session) = launcher_card_home.as_mut() {
+                        let _ =
+                            layer_target.render_custom_home(window, session.render(), true, None);
                     }
                     if navigation_transition
                         .capture_destination(
@@ -14457,6 +14517,26 @@ fn apply_home_selected(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_cog_zoom_requires_a_settled_native_landscape_card() {
+        assert!(settings_cog_transition_eligible(
+            NavigationTransitionRoute::HomeToSettings,
+            true,
+            false,
+            960,
+            540,
+            false,
+        ));
+        assert!(!settings_cog_transition_eligible(
+            NavigationTransitionRoute::HomeToSettings,
+            false,
+            false,
+            960,
+            540,
+            false,
+        ));
+    }
 
     fn eligible_card_direct_input() -> CardDirectEligibility {
         CardDirectEligibility {

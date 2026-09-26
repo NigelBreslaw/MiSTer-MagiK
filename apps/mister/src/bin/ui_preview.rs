@@ -3754,6 +3754,10 @@ mod macos {
                         "jersey25-41px.mmbf",
                         include_bytes!("../../assets/fonts/jersey25-41px.mmbf"),
                     ),
+                    (
+                        "cog-backdrop-412x374.rgb565",
+                        include_bytes!("../../assets/ui/settings/cog-backdrop-412x374.rgb565"),
+                    ),
                 ]),
                 font_bundle_sha256: bundle_sha256(&[
                     (

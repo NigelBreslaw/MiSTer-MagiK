@@ -1,0 +1,72 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Persistent chrome shared by the card launcher and HDMI pages. Coordinates
+// mirror crates/framebuffer-scenes/src/launcher.rs (landscape) and
+// launcher/responsive.rs (portrait) so the header, rules and footer stay on
+// the same pixels when navigating between Rust and Slint screens.
+
+import { Nocive15, Nocive15Size } from "nocive_15.slint";
+import { Xerxes10, Xerxes10Size } from "xerxes_10.slint";
+import { NavigationView } from "../api.slint";
+
+export global PageTheme {
+    out property <color> background: #000000;
+    out property <color> cream: #eee8d5;
+    out property <color> muted: #8f9796;
+    out property <color> rule: #303d3f;
+    out property <color> settings-accent: #9c86e7;
+    out property <color> settings-accent-deep: #735dbd;
+    out property <color> settings-focus-start: #221843;
+    out property <color> settings-focus-end: #120d24;
+}
+
+export component PageRule inherits Rectangle {
+    height: 1px;
+    background: PageTheme.rule;
+}
+
+// 960x540 landscape chrome.
+export component LandscapePageChrome inherits Rectangle {
+    in property <string> hint-a;
+    in property <string> hint-b;
+    in property <string> hint-right;
+
+    Nocive15 { x: 26px; y: 20px; text: "MISTER MAGIK"; color: PageTheme.cream; }
+    Nocive15 { x: 875px; y: 22px; text: NavigationView.clock-text; color: PageTheme.cream; }
+    PageRule { x: 26px; y: 76px; width: 909px; }
+    PageRule { x: 26px; y: 500px; width: 909px; }
+    Xerxes10 { x: 30px; y: 516px; text: root.hint-a; color: PageTheme.cream; }
+    Xerxes10 { x: 150px; y: 516px; text: root.hint-b; color: PageTheme.cream; }
+    Xerxes10 { x: 586px; y: 516px; text: root.hint-right; color: PageTheme.cream; }
+}
+
+// 540x960 portrait chrome: margins are 6% and 5% of the canvas, as in the
+// native portrait launcher layout.
+export component PortraitPageChrome inherits Rectangle {
+    in property <string> section;
+    in property <string> hint-a;
+    in property <string> hint-b;
+    out property <length> margin-x: 32px;
+    out property <length> margin-y: 48px;
+    out property <length> header-bottom: root.margin-y + 46px;
+    out property <length> footer-rule: root.height - root.margin-y - 20px;
+
+    Nocive15 { x: root.margin-x; y: root.margin-y; text: "MISTER MAGIK"; color: PageTheme.cream; }
+    Nocive15 {
+        x: root.width - root.margin-x - self.preferred-width;
+        y: root.margin-y;
+        text: NavigationView.clock-text;
+        color: PageTheme.cream;
+    }
+    PageRule { x: root.margin-x; y: root.header-bottom; width: root.width - 2 * root.margin-x; }
+    Xerxes10 { x: root.margin-x; y: root.header-bottom + 8px; text: root.section; color: PageTheme.muted; }
+    PageRule { x: root.margin-x; y: root.footer-rule; width: root.width - 2 * root.margin-x; }
+    footer-a := Xerxes10 { x: root.margin-x; y: root.footer-rule + 5px; text: root.hint-a; color: PageTheme.cream; }
+    Xerxes10 {
+        x: root.margin-x + footer-a.preferred-width + 18px;
+        y: root.footer-rule + 5px;
+        text: root.hint-b;
+        color: PageTheme.cream;
+    }
+}
