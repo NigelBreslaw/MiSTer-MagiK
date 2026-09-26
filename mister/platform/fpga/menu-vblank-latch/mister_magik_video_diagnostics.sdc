@@ -65,9 +65,8 @@ set magik_causal_selector [magik_require_registers causal_selector \
 set magik_causal_crc [magik_require_registers causal_crc \
  {*mister_magik_scaler_causal_state:magik_scaler_causal_state|crc_work*} 16]
 set magik_causal_uio [magik_require_registers causal_uio {io_dout_sys*} 16]
-set_net_delay -max 10.0 -from $magik_causal_selector -to $magik_causal_bank
-set_net_delay -max 10.0 -from $magik_causal_bank -to $magik_causal_uio
-set_net_delay -max 10.0 -from $magik_causal_output -to $magik_causal_uio
-set_net_delay -max 10.0 -from $magik_causal_output -to $magik_causal_crc
-set_net_delay -max 10.0 -from $magik_causal_crc -to $magik_causal_uio
+# Payloads include combinational selection/CRC logic. Quartus 17 set_net_delay
+# cannot constrain those complete paths. report_causal_payload.tcl enumerates
+# every connected register pair in all corners; signoff enforces the same
+# 10 ns bound on the full path, independently of asynchronous clock groups.
 post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail causal_snapshot_request_response_data reset_observed"

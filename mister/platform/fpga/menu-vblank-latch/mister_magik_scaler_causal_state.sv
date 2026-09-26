@@ -119,7 +119,7 @@ module mister_magik_scaler_causal_state (
   output_response_meta <= output_response;
   output_response_sync <= output_response_meta;
   if (!capture_busy && capture_sync != response_toggle) begin
-   snapshot[31:0] <= select_first ? (first_valid ? first_source : 32'd0) : live_source;
+   snapshot[31:0] <= select_first ? first_source : live_source;
    snapshot[13] <= select_first;
    snapshot[14] <= 0;
    capture_busy <= 1;
@@ -201,6 +201,7 @@ module mister_magik_scaler_causal_state (
  always @(posedge clk_100m) begin
   f_past<=1;
   assert(depth != 0 || phase == 0);
+  assert(first_valid || first_source == 0);
   assert(!crc_busy || capture_busy);
   assert(!crc_busy || crc_phase <= 47);
   if(f_past) begin

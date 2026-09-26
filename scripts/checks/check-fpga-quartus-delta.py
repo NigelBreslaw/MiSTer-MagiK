@@ -267,28 +267,6 @@ EXPERIMENTAL_CAUSAL_NET_DELAY_PATHS = {
         r"output_response\s*;[^\n]*output_response_meta\s*;", re.IGNORECASE
     ),
     "causal_reset": re.compile(r"reset_req\s*;[^\n]*reset_meta\s*;", re.IGNORECASE),
-    "causal_selector_data": re.compile(
-        r"select_first\s*;[^\n]*snapshot\[", re.IGNORECASE
-    ),
-    "causal_bank_data": re.compile(
-        r"snapshot\[\d+\]\s*;[^\n]*io_dout_sys\[", re.IGNORECASE
-    ),
-    "causal_output_data": re.compile(
-        r"output_hold\[\d+\]\s*;[^\n]*io_dout_sys\[", re.IGNORECASE
-    ),
-    "causal_crc_data": re.compile(
-        r"crc_work\[\d+\]\s*;[^\n]*io_dout_sys\[", re.IGNORECASE
-    ),
-    "causal_output_crc": re.compile(
-        r"output_hold\[\d+\]\s*;[^\n]*crc_work\[", re.IGNORECASE
-    ),
-}
-CAUSAL_PATH_COUNTS = {
-    "causal_selector_data": 31,
-    "causal_bank_data": 16,
-    "causal_output_data": 16,
-    "causal_output_crc": 3,
-    "causal_crc_data": 16,
 }
 
 
@@ -337,7 +315,10 @@ def read_inputs(paths: Iterable[Path]) -> tuple[str, str | None, dict[str, str]]
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError as error:
             raise ValueError(f"cannot read {path}: {error}") from error
-        if path.name in DIAGNOSTIC_REPORT_NAMES:
+        if (
+            path.name in DIAGNOSTIC_REPORT_NAMES
+            or path.name == "menu.magik-causal-payload.rpt"
+        ):
             if path.name in diagnostic_reports:
                 raise ValueError(f"duplicate diagnostic timing report: {path.name}")
             diagnostic_reports[path.name] = text
@@ -596,6 +577,108 @@ def estimated_calculable_chains(
     return math.floor(total * (1.0 - uncalculated_fraction) + 0.5)
 
 
+def causal_payload_pairs():
+    prefix = "mister_magik_scaler_causal_state:magik_scaler_causal_state|"
+
+    def reg(name, bit):
+        return prefix + f"{name}[{bit}]"
+
+    def output(bit):
+        return f"io_dout_sys[{bit}]"
+
+    return {
+        "selector": (
+            1,
+            32,
+            {
+                (prefix + "select_first", reg("snapshot", n))
+                for n in range(32)
+                if n != 14
+            },
+        ),
+        "bank": (
+            32,
+            16,
+            {(reg("snapshot", n), output(n % 16)) for n in range(32)}
+            | {(reg("snapshot", 14), output(n)) for n in range(16)},
+        ),
+        "output": (16, 16, {(reg("output_hold", n), output(n)) for n in range(16)}),
+        "output_crc": (
+            16,
+            16,
+            {
+                (reg("output_hold", n), reg("crc_work", b))
+                for n in range(16)
+                for b in (0, 5, 12)
+            },
+        ),
+        "crc": (16, 16, {(reg("crc_work", n), output(n)) for n in range(16)}),
+    }
+
+
+def validate_causal_payload(text):
+    expected = causal_payload_pairs()
+    corners, groups, paths = {}, {}, {}
+    reasons = []
+    total = None
+    try:
+        lines = text.splitlines()
+        if not lines or lines[0] != "MagiK causal payload delay bound 10.000 ns":
+            raise ValueError("header")
+        for line in lines[1:]:
+            fields = line.split()
+            if fields[0] == "CORNER" and len(fields) == 5:
+                _, number, model, voltage, temperature = fields
+                if number in corners:
+                    raise ValueError("duplicate corner")
+                corners[number] = (model, int(voltage), int(temperature))
+            elif fields[0] == "GROUP" and len(fields) == 6:
+                _, number, label, source_count, destination_count, count = fields
+                key = (number, label)
+                if key in groups:
+                    raise ValueError("duplicate group")
+                groups[key] = (int(source_count), int(destination_count), int(count))
+            elif fields[0] == "PATH" and len(fields) == 6:
+                _, number, label, delay, source, destination = fields
+                key = (number, label)
+                pair = (source, destination)
+                delay_value = finite_number(delay)
+                if delay_value is None or delay_value < 0 or delay_value > 10.0:
+                    reasons.append("causal_payload_delay")
+                if pair in paths.setdefault(key, {}):
+                    raise ValueError("duplicate pair")
+                paths[key][pair] = delay_value
+            elif fields[0] == "CORNERS" and len(fields) == 2 and total is None:
+                total = int(fields[1])
+            else:
+                raise ValueError("invalid row")
+        required_corners = {
+            (model, 1100, temperature)
+            for model in ("slow", "fast")
+            for temperature in (-40, 100)
+        }
+        if total != 4 or len(corners) != 4 or set(corners.values()) != required_corners:
+            raise ValueError("corners")
+        expected_groups = {(number, label) for number in corners for label in expected}
+        if set(groups) != expected_groups or set(paths) != expected_groups:
+            raise ValueError("groups")
+        for (number, label), counts in groups.items():
+            sources, destinations, pairs = expected[label]
+            if (
+                counts != (sources, destinations, len(pairs))
+                or set(paths[(number, label)]) != pairs
+            ):
+                raise ValueError("path identities")
+    except (ValueError, IndexError, KeyError):
+        reasons.append("causal_payload_coverage")
+    delays = [v for pairs in paths.values() for v in pairs.values() if v is not None]
+    return sorted(set(reasons)), {
+        "corners": corners,
+        "path_count": len(delays),
+        "maximum_delay_ns": max(delays, default=None),
+    }
+
+
 def validate_diagnostic_reports(
     reports: dict[str, str],
     analysis_labels: Counter[str],
@@ -604,8 +687,11 @@ def validate_diagnostic_reports(
     experimental_scaler_causal: bool = False,
 ) -> tuple[list[str], dict[str, object]]:
     reasons: list[str] = []
-    missing_reports = sorted(DIAGNOSTIC_REPORT_NAMES - reports.keys())
-    unexpected_reports = sorted(reports.keys() - DIAGNOSTIC_REPORT_NAMES)
+    required_reports = set(DIAGNOSTIC_REPORT_NAMES)
+    if experimental_scaler_causal:
+        required_reports.add("menu.magik-causal-payload.rpt")
+    missing_reports = sorted(required_reports - reports.keys())
+    unexpected_reports = sorted(reports.keys() - required_reports)
     if missing_reports or unexpected_reports:
         reasons.append("diagnostic_cdc_report_missing")
 
@@ -632,7 +718,7 @@ def validate_diagnostic_reports(
     if experimental_scaler_causal:
         expected_report_analyses["menu.magik-diagnostic-cdc-net-delay.rpt"] = (
             "set_net_delay",
-            12,
+            7,
         )
     for name, (command, expected_count) in expected_report_analyses.items():
         text = reports.get(name, "")
@@ -673,9 +759,7 @@ def validate_diagnostic_reports(
             if experimental_scaler_causal:
                 expected_net_delay_paths.update(EXPERIMENTAL_CAUSAL_NET_DELAY_PATHS)
             expected_identity_counts = {
-                label: CAUSAL_PATH_COUNTS.get(
-                    label, 9 if label == "scheduler_snapshot_data" else 1
-                )
+                label: 9 if label == "scheduler_snapshot_data" else 1
                 for label in expected_net_delay_paths
             }
             if len(detailed_rows) != sum(expected_identity_counts.values()):
@@ -698,6 +782,12 @@ def validate_diagnostic_reports(
             if any(value is not None and value < 0 for value in detailed_slacks):
                 reasons.append("diagnostic_cdc_slack_negative")
 
+    payload_details = {}
+    if experimental_scaler_causal:
+        payload_reasons, payload_details = validate_causal_payload(
+            reports.get("menu.magik-causal-payload.rpt", "")
+        )
+        reasons.extend(payload_reasons)
     metastability = reports.get("menu.magik-diagnostic-metastability.rpt", "")
     expected_metastability_chains = dict(EXPECTED_METASTABILITY_CHAINS)
     if experimental_diagnostic:
@@ -747,6 +837,7 @@ def validate_diagnostic_reports(
 
     return sorted(set(reasons)), {
         "diagnostic_cdc_reports": sorted(reports),
+        "causal_payload": payload_details,
         "diagnostic_cdc_analysis_labels": dict(sorted(analysis_labels.items())),
         "diagnostic_cdc_analysis_counts": analysis_counts,
         "diagnostic_cdc_detailed_path_counts": detailed_path_counts,

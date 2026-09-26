@@ -560,17 +560,27 @@ def main() -> None:
     )
     if timing_report_text.count(diagnostic_net_delay_report) != 1:
         fail("completion net-delay report is missing or ambiguous")
+    payload_report = (timing_report.parent / "report_causal_payload.tcl").read_text()
+    for fragment in (
+        "get_available_operating_conditions",
+        "get_path -from $sources -to $destinations -pairs_only -npaths 0",
+        "get_path_info -arrival_time $path",
+        "get_operating_conditions_info $op -temperature",
+        "10.000 ns",
+    ):
+        if fragment not in payload_report:
+            fail("full causal payload analysis is incomplete: " + fragment)
+    if "source mister_magik_report_causal_payload.tcl" not in timing_report_text:
+        fail("full payload analysis is not included in fitted timing reports")
     if "-nworst 50" in timing_report_text:
         fail("diagnostic net-delay report retains the truncated schema-4 depth")
     timing_commands = re.findall(
         r"(?m)^\s*(set_[A-Za-z0-9_]+\b[^\n]*)$", diagnostics_sdc_text
     )
-    if len(timing_commands) != 12 or any(
+    if len(timing_commands) != 7 or any(
         not line.startswith("set_net_delay -max 10.0 ") for line in timing_commands
     ):
-        fail(
-            "diagnostic SDC must contain completion, terminal-record, and snapshot bounds"
-        )
+        fail("diagnostic SDC must contain the seven direct control-net bounds")
     for fragment in (
         "{*ascal:ascal|avl_readdataack} 1",
         "{*ascal:ascal|o_readdataack_sync} 1",

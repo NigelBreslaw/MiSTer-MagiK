@@ -29,11 +29,28 @@ creates a unique run under `runs/` and preserves incomplete stages. Use `--reuse
 and baseline builds after their source inputs, toolchain, seed/date, driver and
 every saved file hash have been verified. The new run links the original evidence
 and records its provenance; it never rewrites old metadata. The diagnostic
-candidate is always rebuilt. Without that option all three builds are fresh.
+candidate is always rebuilt. Changed comparison driver or source inputs trigger
+a fresh comparison build; damaged evidence is rejected. Without that option all
+three builds are fresh.
 
 Signoff builds `refs/heads/main^{commit}`. Commit the frozen candidate and move
 local `main` before synthesis. Preserve the root commit and patched-source,
 RBF, metadata, and delta-report SHA-256 values as one identity.
+
+For read-only toolchain diagnosis, `fpga tool-help` prints the installed timing
+command reference. `fpga inspect-cdc --variant /absolute/completed/variant`
+measures a disposable copy of a completed fit, verifies its RBF hash, and writes
+separate inspection evidence. Neither command synthesizes or modifies saved builds.
+
+The causal observer's seven control crossings use direct 10 ns net-delay
+constraints. Its five payload crossings contain combinational logic, which
+Quartus 17 cannot constrain with `set_net_delay`. The post-fit report uses
+`get_path -pairs_only -npaths 0` to measure the longest path for every connected
+register pair at all four device timing corners. Signoff requires exact endpoint
+coverage (632 paths in total) and a maximum complete-path delay of 10 ns; clock
+cuts do not suppress this analysis. Missing/duplicate paths, wrong corners,
+non-finite delays, or an exceeded bound fail signoff. This adds no false paths,
+changes no fitter settings, and retains the original numerical payload bound.
 
 ## Development sequence
 

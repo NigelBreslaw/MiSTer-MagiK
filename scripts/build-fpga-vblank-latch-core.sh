@@ -151,6 +151,7 @@ rsync -a --delete \
   "$MENU_ABS"/ "$WORK_DIR"/
 git -C "$WORK_DIR" init -q
 cp "$TIMING_REPORT_TCL" "$WORK_DIR/mister_magik_report_top_timing.tcl"
+cp "$ROOT/mister/platform/fpga/menu-vblank-latch/report_causal_payload.tcl" "$WORK_DIR/mister_magik_report_causal_payload.tcl"
 
 case "$APPLY_PATCH" in
   0|false|False|FALSE|no|No|NO)

@@ -91,6 +91,10 @@ numerical gates (0.350 ns setup, 0.200 ns hold, at most 0.30 ns degradation,
 MTBF at least 10^12 device-hours). It adds exact observer CDC identities.
 The final fitted reports must establish those identities and counts; fixture
 reports and structural estimates are not a Quartus pass.
+Full combinational payload paths are checked independently of clock exceptions:
+all 632 connected register pairs across slow/fast 1100 mV at -40/100 C must be
+present and no complete path may exceed 10 ns. Direct control-net constraints
+remain separate. The CRC mailbox is preserved against router duplication.
 
 ## Previous moving-band campaign: schema 23
 

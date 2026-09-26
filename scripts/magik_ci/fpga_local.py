@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -100,6 +101,10 @@ def clone_at(source, destination, revision, cwd):
     run(["git", "checkout", "--detach", revision], cwd=destination)
 
 
+class ComparisonInputsChanged(ValueError):
+    """Completed evidence is valid but no longer matches these build inputs."""
+
+
 def verify_comparison(
     previous: Path, variant: str, frozen, source: Path, driver: Path
 ) -> Path:
@@ -122,7 +127,7 @@ def verify_comparison(
         if manifest["inputs"][key] != frozen[key]:
             raise ValueError("comparison input mismatch: " + key)
     if manifest["driver_sha256"] != sha(driver):
-        raise ValueError("comparison driver mismatch")
+        raise ComparisonInputsChanged("comparison driver mismatch")
     if variant == "stock":
         # Stock omits all diagnostic RTL and SDC. These are the candidate-owned
         # files it reads for synthesis, reporting, and platform/protocol identity.
@@ -138,7 +143,7 @@ def verify_comparison(
             )
             new = run(["git", "rev-parse", frozen["commit"] + ":" + name], cwd=source)
             if old != new:
-                raise ValueError("stock synthesis input changed: " + name)
+                raise ComparisonInputsChanged("stock synthesis input changed: " + name)
     files = manifest["files"]
     if (
         "menu-magik-vblank-latch.rbf" not in files
@@ -330,30 +335,39 @@ def signoff(
             )
             driver = adapter
         if reuse_comparisons and variant in {"stock", "baseline"}:
-            previous = verify_comparison(
-                reuse_comparisons, variant, frozen, source, driver
-            )
-            completed = output / variant
-            completed.symlink_to(previous, target_is_directory=True)
-            (output / (variant + "-reuse.json")).write_text(
-                json.dumps(
-                    {
-                        "original_directory": str(previous),
-                        "original_manifest_sha256": sha(previous / "completed.json"),
-                        "reason": "identical comparison synthesis inputs; original metadata preserved",
-                    },
-                    indent=2,
+            try:
+                previous = verify_comparison(
+                    reuse_comparisons, variant, frozen, source, driver
                 )
-                + "\n"
-            )
-            reports[variant] = sorted(
-                p
-                for folder in (completed, completed / "reports")
-                for p in folder.glob("*")
-                if p.is_file() and p.suffix in {".log", ".rpt", ".summary"}
-            )
-            print(f"Verified and reused {variant}: {previous}", flush=True)
-            continue
+            except ComparisonInputsChanged as error:
+                print(f"Rebuilding {variant}: {error}", flush=True)
+                previous = None
+            if previous is not None:
+                completed = output / variant
+                completed.symlink_to(previous, target_is_directory=True)
+                (output / (variant + "-reuse.json")).write_text(
+                    json.dumps(
+                        {
+                            "original_directory": str(previous),
+                            "original_manifest_sha256": sha(
+                                previous / "completed.json"
+                            ),
+                            "reason": "identical comparison synthesis inputs; original metadata preserved",
+                        },
+                        indent=2,
+                    )
+                    + "\n"
+                )
+                reports[variant] = sorted(
+                    p
+                    for folder in (completed, completed / "reports")
+                    for p in folder.glob("*")
+                    if p.is_file()
+                    and p.name != "driver.log"
+                    and p.suffix in {".log", ".rpt", ".summary"}
+                )
+                print(f"Verified and reused {variant}: {previous}", flush=True)
+                continue
         stage.mkdir()
         variant_env = dict(
             env,
@@ -394,7 +408,9 @@ def signoff(
             p
             for folder in (completed, completed / "reports")
             for p in folder.glob("*")
-            if p.is_file() and p.suffix in {".log", ".rpt", ".summary"}
+            if p.is_file()
+            and p.name != "driver.log"
+            and p.suffix in {".log", ".rpt", ".summary"}
         )
     command = [
         sys.executable,
@@ -419,3 +435,97 @@ def signoff(
     (output / "signoff.json").write_text(json.dumps(certificate, indent=2) + "\n")
     print(output / "signoff.json")
     return 0
+
+
+def tool_help(root: Path, cache: Path) -> int:
+    """Read the installed timing command reference without opening a design."""
+    install = cache / "quartus-lite-17.0/apple-intelFPGA_lite"
+    image = os.environ.get(
+        "QUARTUS_APPLE_IMAGE", "mister-magik-quartus17-apple:ubuntu18-amd64"
+    )
+    return subprocess.run(
+        [
+            "container",
+            "run",
+            "--arch",
+            "amd64",
+            "--rm",
+            "--mount",
+            f"type=bind,source={install},target=/opt/intelFPGA_lite,readonly",
+            "--mount",
+            f"type=bind,source={root / 'scripts/quartus'},target=/reference,readonly",
+            image,
+            "quartus_sta",
+            "-t",
+            "/reference/timing-tool-help.tcl",
+        ],
+        cwd=root,
+        check=False,
+    ).returncode
+
+
+def inspect_cdc(root: Path, cache: Path, variant: Path) -> int:
+    """Analyze a copy of a completed fit; preserve original evidence unchanged."""
+    variant = variant.resolve()
+    manifest = json.loads((variant / "completed.json").read_text())
+    if (
+        sha(variant / "menu-magik-vblank-latch.rbf")
+        != manifest["files"]["menu-magik-vblank-latch.rbf"]
+    ):
+        raise ValueError("completed RBF hash mismatch")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    output = cache / "inspections" / stamp
+    work = output / "Menu-work"
+    shutil.copytree(variant / "Menu-work", work, ignore=shutil.ignore_patterns(".git"))
+    (output / "inputs.json").write_text(
+        json.dumps(
+            {
+                "variant": str(variant),
+                "manifest_sha256": sha(variant / "completed.json"),
+                "script_sha256": sha(
+                    root / "scripts/quartus/inspect-causal-payload.tcl"
+                ),
+                "payload_script_sha256": sha(
+                    root
+                    / "mister/platform/fpga/menu-vblank-latch/report_causal_payload.tcl"
+                ),
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    print(output, flush=True)
+    analyze_payload(root, cache, work, output)
+    return 0
+
+
+def analyze_payload(root: Path, cache: Path, work: Path, output: Path) -> None:
+    output.mkdir(parents=True, exist_ok=True)
+    install = cache / "quartus-lite-17.0/apple-intelFPGA_lite"
+    image = os.environ.get(
+        "QUARTUS_APPLE_IMAGE", "mister-magik-quartus17-apple:ubuntu18-amd64"
+    )
+    command = [
+        "container",
+        "run",
+        "--arch",
+        "amd64",
+        "--rm",
+        "--cpus",
+        "4",
+        "--memory",
+        "12g",
+        "--mount",
+        f"type=bind,source={install},target=/opt/intelFPGA_lite,readonly",
+        "--mount",
+        f"type=bind,source={root},target=/reference,readonly",
+        "--mount",
+        f"type=bind,source={work},target=/work",
+        "--workdir",
+        "/work",
+        image,
+        "quartus_sta",
+        "-t",
+        "/reference/scripts/quartus/inspect-causal-payload.tcl",
+    ]
+    run(command, cwd=root, log=output / "inspection.log")

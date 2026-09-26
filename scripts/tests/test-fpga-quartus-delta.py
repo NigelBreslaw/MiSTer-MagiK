@@ -298,31 +298,50 @@ def causal_reports():
         meta, sync = (CAUSAL_HIERARCHY + "|" + name for name in (meta, sync))
         delay += summary + net_delay_detail(source, meta)
         metastability += metastability_chain(index, source, meta, (meta, sync))
-    for sources, targets in [
-        (["select_first"] * 31, [f"snapshot[{n}]" for n in range(32) if n != 14]),
-        (
-            [f"snapshot[{n}]" for n in range(16)],
-            [f"io_dout_sys[{n}]" for n in range(16)],
+    payload = ["MagiK causal payload delay bound 10.000 ns"]
+    pairs = {
+        "selector": (
+            1,
+            32,
+            [("select_first", f"snapshot[{n}]") for n in range(32) if n != 14],
         ),
-        (
-            [f"output_hold[{n}]" for n in range(16)],
-            [f"io_dout_sys[{n}]" for n in range(16)],
+        "bank": (
+            32,
+            16,
+            [(f"snapshot[{n}]", f"io_dout_sys[{n % 16}]") for n in range(32)]
+            + [("snapshot[14]", f"io_dout_sys[{n}]") for n in range(16) if n != 14],
         ),
-        (
-            [f"crc_work[{n}]" for n in range(16)],
-            [f"io_dout_sys[{n}]" for n in range(16)],
+        "output": (
+            16,
+            16,
+            [(f"output_hold[{n}]", f"io_dout_sys[{n}]") for n in range(16)],
         ),
-        (["output_hold[0]"] * 3, [f"crc_work[{n}]" for n in (0, 5, 12)]),
-    ]:
-        delay += summary + "".join(
-            net_delay_detail(
-                CAUSAL_HIERARCHY + "|" + source,
-                target
-                if target.startswith("io_dout")
-                else CAUSAL_HIERARCHY + "|" + target,
+        "output_crc": (
+            16,
+            16,
+            [
+                (f"output_hold[{n}]", f"crc_work[{b}]")
+                for n in range(16)
+                for b in (0, 5, 12)
+            ],
+        ),
+        "crc": (16, 16, [(f"crc_work[{n}]", f"io_dout_sys[{n}]") for n in range(16)]),
+    }
+    for corner, (model, temperature) in enumerate(
+        (("slow", 100), ("slow", -40), ("fast", 100), ("fast", -40))
+    ):
+        payload.append(f"CORNER {corner} {model} 1100 {temperature}")
+        for label, (sources, destinations, connections) in pairs.items():
+            payload.append(
+                f"GROUP {corner} {label} {sources} {destinations} {len(connections)}"
             )
-            for source, target in zip(sources, targets)
-        )
+            for source, target in connections:
+                source = CAUSAL_HIERARCHY + "|" + source
+                if not target.startswith("io_dout"):
+                    target = CAUSAL_HIERARCHY + "|" + target
+                payload.append(f"PATH {corner} {label} 7.000 {source} {target}")
+    payload.append("CORNERS 4")
+    result["menu.magik-causal-payload.rpt"] = "\n".join(payload) + "\n"
     result["menu.magik-diagnostic-cdc-net-delay.rpt"] = delay
     result["menu.magik-diagnostic-metastability.rpt"] = metastability
     return result
@@ -431,6 +450,44 @@ class QuartusDeltaTest(unittest.TestCase):
                     experimental_scaler_causal=True,
                 )
                 self.assertEqual(result.returncode, 1, payload)
+
+    def test_causal_payload_rejects_missing_corner_path_duplicate_and_delay(self):
+        for before, after in (
+            ("CORNERS 4", "CORNERS 3"),
+            (" 1100 -40", " 1100 0"),
+            ("PATH 0 bank 7.000", "PATH 0 bank 10.001"),
+            ("PATH 0 crc 7.000", "PATH 0 crc nan"),
+        ):
+            with self.subTest(change=after):
+                reports = causal_reports()
+                reports["menu.magik-causal-payload.rpt"] = reports[
+                    "menu.magik-causal-payload.rpt"
+                ].replace(before, after)
+                result, payload = self.run_check(
+                    BASE,
+                    BASE + CAUSAL_SYNC,
+                    diagnostic_reports=reports,
+                    experimental_scaler_causal=True,
+                )
+                self.assertEqual(result.returncode, 1, payload)
+                self.assertIn("causal_payload", payload["invalid_reason"])
+        for duplicate in (False, True):
+            reports = causal_reports()
+            lines = reports["menu.magik-causal-payload.rpt"].splitlines()
+            path = next(line for line in lines if line.startswith("PATH"))
+            if duplicate:
+                lines.append(path)
+            else:
+                lines.remove(path)
+            reports["menu.magik-causal-payload.rpt"] = "\n".join(lines)
+            result, payload = self.run_check(
+                BASE,
+                BASE + CAUSAL_SYNC,
+                diagnostic_reports=reports,
+                experimental_scaler_causal=True,
+            )
+            self.assertEqual(result.returncode, 1, payload)
+            self.assertIn("causal_payload_coverage", payload["invalid_reason"])
 
     def test_causal_profile_preserves_numeric_timing_gate(self):
         patched = (BASE + CAUSAL_SYNC).replace(
@@ -1112,7 +1169,7 @@ class QuartusDeltaTest(unittest.TestCase):
             / "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics.sdc"
         ).read_text(encoding="utf-8")
         self.assertIn("get_registers -nowarn -no_duplicates", sdc)
-        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 12)
+        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 7)
         self.assertNotIn("set_max_skew", sdc)
         self.assertNotIn("set_false_path", sdc)
 

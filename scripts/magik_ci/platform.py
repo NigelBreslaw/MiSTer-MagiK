@@ -15,6 +15,11 @@ def main(root: Path, argv: list[str]) -> int:
     commands = parser.add_subparsers(dest="action", required=True)
     setup = commands.add_parser("setup")
     setup.add_argument("--local-root", type=Path)
+    help_command = commands.add_parser("tool-help")
+    help_command.add_argument("--local-root", type=Path)
+    inspect = commands.add_parser("inspect-cdc")
+    inspect.add_argument("--local-root", type=Path)
+    inspect.add_argument("--variant", type=Path, required=True)
     signoff = commands.add_parser("signoff")
     signoff.add_argument("--local-root", type=Path)
     signoff.add_argument("--menu-source", type=Path)
@@ -22,6 +27,12 @@ def main(root: Path, argv: list[str]) -> int:
     for variant in ("stock", "baseline", "patched"):
         signoff.add_argument("--" + variant, type=Path, action="append")
     args = parser.parse_args(argv)
+    if args.action == "inspect-cdc":
+        return fpga_local.inspect_cdc(
+            root, fpga_local.local_root(root, args.local_root), args.variant
+        )
+    if args.action == "tool-help":
+        return fpga_local.tool_help(root, fpga_local.local_root(root, args.local_root))
     if args.action == "setup":
         environment = dict(
             os.environ,
