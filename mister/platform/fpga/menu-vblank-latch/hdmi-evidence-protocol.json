@@ -305,5 +305,100 @@
         }
       }
     }
+  },
+  "causal_boundary_state": {
+    "schema": 24,
+    "architecture": "scaler-memory-boundary-v1",
+    "select_first_command": 104,
+    "select_live_command": 105,
+    "read_command": 106,
+    "read_magic": 19802,
+    "words": [
+      "schema",
+      "flags",
+      "phases",
+      "output_state",
+      "crc"
+    ],
+    "flags": {
+      "production_credits_start": 0,
+      "production_credits_bits": 2,
+      "accepted_guard": 2,
+      "return_drain": 3,
+      "completion_pending": 4,
+      "completion_unacknowledged": 5,
+      "core_reset": 6,
+      "terminator_reset": 7,
+      "cause_start": 8,
+      "cause_bits": 4,
+      "ledger_valid": 12,
+      "first_selected": 13,
+      "output_snapshot_valid": 14,
+      "record_valid": 15
+    },
+    "causes": {
+      "0": "none",
+      "1": "upstream_only_acceptance",
+      "2": "downstream_only_acceptance",
+      "3": "command_divergence",
+      "4": "production_ledger_divergence",
+      "5": "outstanding_limit",
+      "6": "orphan_return",
+      "7": "bad_burst",
+      "8": "ledger_overflow",
+      "9": "return_path_divergence"
+    },
+    "crc": {
+      "polynomial": 4129,
+      "initial": 65535,
+      "header": [
+        106,
+        24,
+        4
+      ],
+      "word_byte_order": "high-low"
+    },
+    "semantics": {
+      "source_record": "pre-edge snapshot; first source event immutable until FPGA reconfiguration",
+      "output_record": "later coherent output-domain snapshot, not simultaneous with source event",
+      "timing": "host monotonic capture interval; first-seen fault interval from archived polling",
+      "ledger": "Independent physical depth (0..3) and oldest burst phase (0..127), retained across core reset. A fourth burst, malformed burst or orphan invalidates rather than wraps the ledger.",
+      "first_record_read": "selection snapshots evidence only; never clears it",
+      "output_timeout_source_cycles": 64
+    },
+    "phases": {
+      "physical_phase_start": 0,
+      "physical_phase_bits": 7,
+      "physical_depth_start": 7,
+      "physical_depth_bits": 2,
+      "production_phase_start": 9,
+      "production_phase_bits": 7
+    },
+    "output_state": {
+      "read_level": [
+        0,
+        1
+      ],
+      "copy_level": [
+        2,
+        3
+      ],
+      "request_meta": 4,
+      "request_sync": 5,
+      "completion_pulse": 6,
+      "clock_enable": 7,
+      "run": 8,
+      "copy_valid": 9,
+      "address_ready": 10,
+      "read_request_unacknowledged": 11,
+      "display_state": [
+        12,
+        13
+      ],
+      "copy_state": [
+        14,
+        15
+      ]
+    }
   }
 }

@@ -38,45 +38,36 @@ set_net_delay -max 10.0 \
 	-from $magik_scaler_completion_ack_route \
 	-to $magik_scaler_completion_ack_meta
 
-set magik_fetch_record_ready [magik_require_registers fetch_record_ready \
-	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|record_ready} 1]
-set magik_fetch_record_ready_meta [magik_require_registers fetch_record_ready_meta \
-	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|record_ready_meta} 1]
-set_net_delay -max 10.0 \
-	-from $magik_fetch_record_ready \
-	-to $magik_fetch_record_ready_meta
-
-set magik_scheduler_snapshot_request [magik_require_registers scheduler_snapshot_request \
-	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_request_toggle} 1]
-set magik_scheduler_snapshot_request_meta [magik_require_registers scheduler_snapshot_request_meta \
-	{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_meta} 1]
-set_net_delay -max 10.0 \
-	-from $magik_scheduler_snapshot_request \
-	-to $magik_scheduler_snapshot_request_meta
-
-set magik_scheduler_snapshot_response [magik_require_registers scheduler_snapshot_response \
-	{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|response_handoff_bit} 1]
-set magik_scheduler_snapshot_response_meta [magik_require_registers scheduler_snapshot_response_meta \
-	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_meta} 1]
-set_net_delay -max 10.0 \
-	-from $magik_scheduler_snapshot_response \
-	-to $magik_scheduler_snapshot_response_meta
-
-# semantic_evidence[8:0] is a closed-loop multi-cycle path: it is written before
-# the response handoff and remains immutable until a later request. Six one-hot
-# outcomes plus three sidebands capture bit-for-bit into a destination bank
-# with no other data source. The two-stage response synchronizer supplies more
-# than one destination period of settling for every payload bit.
-set magik_scheduler_snapshot_data [magik_require_registers scheduler_snapshot_data \
-	{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|semantic_evidence*} 9]
-set magik_scheduler_snapshot_destination [magik_require_registers scheduler_snapshot_destination \
-	{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_capture*} 9]
-if {[get_collection_size $magik_scheduler_snapshot_destination] != 9} {
-	post_message -type error "MagiK scheduler snapshot destination collection mismatch"
-	error "MagiK scheduler snapshot destination collection mismatch"
-}
-set_net_delay -max 10.0 \
-	-from $magik_scheduler_snapshot_data \
-	-to $magik_scheduler_snapshot_destination
-
-post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_terminal_record scheduler_snapshot_request_response_data reset_observed"
+# Causal observer: four closed-loop mailbox crossings and observed reset.
+# Payloads are held until the next explicit capture request. Response traverses
+# two stages only after CRC completion; reads cannot see a bank while it rotates.
+set magik_causal_capture_source [magik_require_registers causal_capture_source {*mister_magik_scaler_causal_state:magik_scaler_causal_state|capture_request} 1]
+set magik_causal_capture_destination [magik_require_registers causal_capture_destination {*mister_magik_scaler_causal_state:magik_scaler_causal_state|capture_meta} 1]
+set_net_delay -max 10.0 -from $magik_causal_capture_source -to $magik_causal_capture_destination
+set magik_causal_response_source [magik_require_registers causal_response_source {*mister_magik_scaler_causal_state:magik_scaler_causal_state|response_toggle} 1]
+set magik_causal_response_destination [magik_require_registers causal_response_destination {*mister_magik_scaler_causal_state:magik_scaler_causal_state|response_meta} 1]
+set_net_delay -max 10.0 -from $magik_causal_response_source -to $magik_causal_response_destination
+set magik_causal_output_request_source [magik_require_registers causal_output_request_source {*mister_magik_scaler_causal_state:magik_scaler_causal_state|output_request} 1]
+set magik_causal_output_request_destination [magik_require_registers causal_output_request_destination {*mister_magik_scaler_causal_state:magik_scaler_causal_state|output_request_meta} 1]
+set_net_delay -max 10.0 -from $magik_causal_output_request_source -to $magik_causal_output_request_destination
+set magik_causal_output_response_source [magik_require_registers causal_output_response_source {*mister_magik_scaler_causal_state:magik_scaler_causal_state|output_response} 1]
+set magik_causal_output_response_destination [magik_require_registers causal_output_response_destination {*mister_magik_scaler_causal_state:magik_scaler_causal_state|output_response_meta} 1]
+set_net_delay -max 10.0 -from $magik_causal_output_response_source -to $magik_causal_output_response_destination
+set magik_causal_reset_source [magik_require_registers causal_reset_source {*|reset_req} 1]
+set magik_causal_reset_destination [magik_require_registers causal_reset_destination {*mister_magik_scaler_causal_state:magik_scaler_causal_state|reset_meta} 1]
+set_net_delay -max 10.0 -from $magik_causal_reset_source -to $magik_causal_reset_destination
+set magik_causal_bank [magik_require_registers causal_bank \
+ {*mister_magik_scaler_causal_state:magik_scaler_causal_state|snapshot*} 32]
+set magik_causal_output [magik_require_registers causal_output \
+ {*mister_magik_scaler_causal_state:magik_scaler_causal_state|output_hold*} 16]
+set magik_causal_selector [magik_require_registers causal_selector \
+ {*mister_magik_scaler_causal_state:magik_scaler_causal_state|select_first} 1]
+set magik_causal_crc [magik_require_registers causal_crc \
+ {*mister_magik_scaler_causal_state:magik_scaler_causal_state|crc_work*} 16]
+set magik_causal_uio [magik_require_registers causal_uio {*|io_dout_sys*} 16]
+set_net_delay -max 10.0 -from $magik_causal_selector -to $magik_causal_bank
+set_net_delay -max 10.0 -from $magik_causal_bank -to $magik_causal_uio
+set_net_delay -max 10.0 -from $magik_causal_output -to $magik_causal_uio
+set_net_delay -max 10.0 -from $magik_causal_output -to $magik_causal_crc
+set_net_delay -max 10.0 -from $magik_causal_crc -to $magik_causal_uio
+post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail causal_snapshot_request_response_data reset_observed"

@@ -1,5 +1,5 @@
 diff --git a/sys/ascal.vhd b/sys/ascal.vhd
-index a735e6b..b1d403c 100644
+index a735e6b..ad28a0d 100644
 --- a/sys/ascal.vhd
 +++ b/sys/ascal.vhd
 @@ -75,6 +75,248 @@ LIBRARY ieee;
@@ -251,14 +251,17 @@ index a735e6b..b1d403c 100644
  -- MODE[2:0]
  -- 000 : Nearest
  -- 001 : Bilinear
-@@ -254,5 +496,6 @@ ENTITY ascal IS
+@@ -251,6 +493,9 @@ ENTITY ascal IS
+ 		avl_write          : OUT   std_logic;
  		avl_read           : OUT   std_logic;
  		avl_byteenable     : OUT   std_logic_vector(N_DW/8-1 DOWNTO 0);
 +		magik_fetch_state  : OUT   std_logic_vector(15 DOWNTO 0);
++		magik_return_state : OUT std_logic_vector(15 DOWNTO 0);
++		magik_copy_state : OUT std_logic_vector(15 DOWNTO 0);
  
  		------------------------------------
  		reset_na           : IN    std_logic
-@@ -335,6 +578,8 @@ ARCHITECTURE rtl OF ascal IS
+@@ -335,6 +580,8 @@ ARCHITECTURE rtl OF ascal IS
  	TYPE arr_pix IS ARRAY (natural RANGE <>) OF type_pix;
  	TYPE arr_pixq IS ARRAY(natural RANGE <>) OF arr_pix(0 TO 3);
  	ATTRIBUTE ramstyle : string;
@@ -267,7 +270,7 @@ index a735e6b..b1d403c 100644
  
  	SUBTYPE uint12 IS natural RANGE 0 TO 4095;
  	SUBTYPE uint13 IS natural RANGE 0 TO 8191;
-@@ -418,14 +662,24 @@ ARCHITECTURE rtl OF ascal IS
+@@ -418,14 +665,25 @@ ARCHITECTURE rtl OF ascal IS
  	SIGNAL avl_walt,avl_wline,avl_rline : std_logic;
  	SIGNAL avl_dw,avl_dr : unsigned(N_DW-1 DOWNTO 0);
  	SIGNAL avl_wr : std_logic;
@@ -295,7 +298,7 @@ index a735e6b..b1d403c 100644
  	FUNCTION buf_next(a,b : natural RANGE 0 TO 2; freeze : std_logic := '0') RETURN natural IS
  	BEGIN
  		IF (freeze='1') THEN RETURN a; END IF;
-@@ -481,6 +735,11 @@ ARCHITECTURE rtl OF ascal IS
+@@ -481,6 +739,11 @@ ARCHITECTURE rtl OF ascal IS
  	SIGNAL o_pshift : natural RANGE 0 TO 15;
  	SIGNAL o_readack,o_readack_sync,o_readack_sync2 : std_logic;
  	SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;
@@ -307,7 +310,7 @@ index a735e6b..b1d403c 100644
  	SIGNAL o_copyv : unsigned(0 TO 14);
  	SIGNAL o_adrs : unsigned(31 DOWNTO 0); -- Avalon address
  	SIGNAL o_adrs_pre : natural RANGE 0 TO 2**24-1;
-@@ -557,7 +815,6 @@ ARCHITECTURE rtl OF ascal IS
+@@ -557,7 +820,6 @@ ARCHITECTURE rtl OF ascal IS
  	SIGNAL o_hacpt,o_vacpt : unsigned(11 DOWNTO 0);
  	SIGNAL o_vacptl : unsigned(1 DOWNTO 0);
  	signal o_newres : integer range 0 to 3;
@@ -315,7 +318,7 @@ index a735e6b..b1d403c 100644
  	-----------------------------------------------------------------------------
  	FUNCTION shift_ishift(shift : unsigned(0 TO 119);
  												pix   : type_pix;
-@@ -681,20 +938,7 @@ ARCHITECTURE rtl OF ascal IS
+@@ -681,20 +943,7 @@ ARCHITECTURE rtl OF ascal IS
  	FUNCTION shift_onext (acpt   : natural RANGE 0 TO 15;
  								 format : unsigned(5 DOWNTO 0)) RETURN boolean IS
  	BEGIN
@@ -337,7 +340,7 @@ index a735e6b..b1d403c 100644
  	END FUNCTION;
  
  	FUNCTION shift_opix (shift  : unsigned(0 TO N_DW+15);
-@@ -1159,6 +1403,41 @@ BEGIN
+@@ -1159,6 +1408,41 @@ BEGIN
  	i_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(i_clk);
  	o_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(o_clk);
  	avl_reset_na<='0' WHEN reset_na='0' ELSE '1' WHEN rising_edge(avl_clk);
@@ -379,7 +382,7 @@ index a735e6b..b1d403c 100644
  
  	-----------------------------------------------------------------------------
  	-- Input pixels FIFO and shreg
-@@ -1672,15 +1951,24 @@ BEGIN
+@@ -1672,15 +1956,25 @@ BEGIN
  	-- AVALON interface
  	Avaloir:PROCESS(avl_clk,avl_reset_na) IS
  		VARIABLE adr_v : unsigned(31 DOWNTO 0);
@@ -405,7 +408,7 @@ index a735e6b..b1d403c 100644
  			----------------------------------
  			avl_write_sync<=i_write; -- <ASYNC>
  			avl_write_sync2<=avl_write_sync;
-@@ -1774,34 +2064,73 @@ BEGIN
+@@ -1774,34 +2068,107 @@ BEGIN
  					END IF;
  					avl_address<=std_logic_vector(adr_v(N_AW+NB_LA-1 DOWNTO NB_LA));
  
@@ -439,14 +442,12 @@ index a735e6b..b1d403c 100644
  			END IF;
  
 -			IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN
--				avl_wad<=2*BLEN-1;
--			END IF;
 +			IF (avl_o_vs_sync='0' AND avl_o_vs='1' AND
 +				return_drain_ready(avl_return_credits,avl_return_phase)) OR
 +				(avl_return_drain='1' AND avl_return_release_pending='1') THEN
-+				avl_wad<=2*BLEN-1;
-+			END IF;
-+
+ 				avl_wad<=2*BLEN-1;
+ 			END IF;
+ 
 +			IF avl_return_drain='1' THEN
 +				IF avl_return_release_pending='1' THEN
 +					avl_return_drain<='0';
@@ -456,7 +457,7 @@ index a735e6b..b1d403c 100644
 +					avl_return_release_pending<='1';
 +				END IF;
 +			END IF;
- 
++
 +			completion_state_v:=completion_queue_next(
 +				avl_readdataack,
 +				avl_completion_pending,
@@ -480,6 +481,26 @@ index a735e6b..b1d403c 100644
 -	avl_read<=avl_read_i;
 +	avl_read<=avl_read_i AND NOT avl_read_accepted
 +		WHEN avl_reset_na='0' OR avl_state=sREAD ELSE '0';
++	-- Passive diagnostic taps only; no observer signal returns to production.
++	magik_return_state <= "00" & avl_completion_ack_sync & avl_readdataack &
++		avl_completion_pending & avl_return_drain & avl_read_accepted &
++		std_logic_vector(to_unsigned(avl_return_credits,2)) &
++		std_logic_vector(to_unsigned(avl_return_phase,7));
++	magik_copy_state(1 DOWNTO 0)<=std_logic_vector(to_unsigned(o_readlev,2));
++	magik_copy_state(3 DOWNTO 2)<=std_logic_vector(to_unsigned(o_copylev,2));
++	magik_copy_state(4)<=o_readdataack_sync;
++	magik_copy_state(5)<=o_readdataack_sync2;
++	magik_copy_state(6)<=o_readdataack;
++	magik_copy_state(7)<=o_ce;
++	magik_copy_state(8)<=o_run;
++	magik_copy_state(9)<=o_copyv(0);
++	magik_copy_state(10)<=o_adrsb;
++	magik_copy_state(11)<=o_read_pre XOR o_readack_sync2;
++	WITH o_state SELECT magik_copy_state(13 DOWNTO 12)<=
++		"00" WHEN sDISP, "01" WHEN sHSYNC, "10" WHEN sREAD, "11" WHEN sWAITREAD;
++	WITH o_copy SELECT magik_copy_state(15 DOWNTO 14)<=
++		"00" WHEN sWAIT, "01" WHEN sSHIFT, "10" WHEN sCOPY;
++
 +	-- Live registered scheduler gates only. Temporal evidence is accumulated by
 +	-- an external o_clk observer and crosses domains only after a closed-loop ack.
 +	WITH o_state SELECT magik_fetch_state(1 DOWNTO 0) <=
@@ -504,12 +525,7 @@ index a735e6b..b1d403c 100644
  	avl_write<=avl_write_i;
  	avl_writedata<=std_logic_vector(swap(avl_dr));
  	avl_burstcount<=std_logic_vector(to_unsigned(BLEN,8));
-@@ -1864,18 +2154,26 @@ BEGIN
- 	Scalaire:PROCESS (o_clk,o_reset_na) IS
- 		VARIABLE lev_inc_v,lev_dec_v : std_logic;
- 		VARIABLE prim_v,last_v,bib_v : std_logic;
- 		VARIABLE shift_v : unsigned(0 TO N_DW+15);
- 		VARIABLE hpix_v : type_pix;
+@@ -1869,6 +2236,7 @@ BEGIN
  		VARIABLE hcarry_v,vcarry_v : boolean;
  		VARIABLE dif_v : natural RANGE 0 TO 8*OHRESH-1;
  		VARIABLE off_v : natural RANGE 0 TO 15;
@@ -517,8 +533,7 @@ index a735e6b..b1d403c 100644
  	BEGIN
  		IF o_reset_na='0' THEN
  			o_copy<=sWAIT;
- 			o_state<=sDISP;
- 			o_read_pre<='0';
+@@ -1877,6 +2245,13 @@ BEGIN
  			o_readlev<=0;
  			o_copylev<=0;
  			o_hsp<='0';
@@ -529,10 +544,12 @@ index a735e6b..b1d403c 100644
 +			o_last1<='0';
 +			o_last2<='0';
 +			-- No diagnostic state is reset or retained inside Scalaire.
-
+ 
  		ELSIF rising_edge(o_clk) THEN
  			------------------------------------------------------
-@@ -2028,6 +2326,17 @@ BEGIN
+@@ -2026,6 +2401,13 @@ BEGIN
+ 			o_readdataack_sync<=avl_readdataack; -- <ASYNC>
+ 			o_readdataack_sync2<=o_readdataack_sync;
  			o_readdataack<=o_readdataack_sync XOR o_readdataack_sync2;
 +			-- Temporal evidence is collected in the external o_clk observer.
 +			-- Its closed-loop mailbox holds the completed word across the CDC.
@@ -544,41 +561,39 @@ index a735e6b..b1d403c 100644
  
  			------------------------------------------------------
  			lev_inc_v:='0';
- 			lev_dec_v:='0';
-@@ -2038,6 +2347,7 @@ BEGIN
+@@ -2036,6 +2418,7 @@ BEGIN
+ 
+ 			-- Force preload 2 lines at top of screen
  			IF o_hsv(0)='1' AND o_hsv(1)='0' THEN
 +				-- Horizontal-edge evidence is exported live on bit 3.
  				IF o_vcpt_pre3=o_vmin THEN
  					o_fload<=2;
  					o_bibu<='0';
- 				END IF;
- 				o_hsp<='1';
-@@ -2060,6 +2370,7 @@ BEGIN
+@@ -2059,6 +2442,7 @@ BEGIN
+ 					--------------------------------------------------
  				WHEN sDISP =>
  					IF o_hsp='1' THEN
 +						-- Horizontal-start evidence is inferred off-process.
  						o_state<=sHSYNC;
  						o_hsp<='0';
  					END IF;
- 					o_prim<=true;
-@@ -2069,6 +2380,7 @@ BEGIN
+@@ -2067,6 +2451,7 @@ BEGIN
+ 
+ 					--------------------------------------------------
  				WHEN sHSYNC =>
 +					-- The output-state encoding identifies sHSYNC live.
  					dif_v :=(o_vacc_next - 2*o_vsize + 16384) MOD 16384;
  					IF o_prim THEN
  						IF dif_v>=8192 THEN
- 							o_vacc     <=o_vacc_next;
- 						ELSE
-@@ -2094,6 +2406,9 @@ BEGIN
+@@ -2092,6 +2477,7 @@ BEGIN
+ 					END IF;
+ 
  					IF vcarry_v THEN
 +						-- Repeated sHSYNC cycles identify vertical iteration.
  						o_vacpt<=o_vacpt+1;
  					END IF;
  					IF vcarry_v AND o_prim THEN
- 						o_vacptl<=o_vacptl+1;
- 					END IF;
-@@ -2101,12 +2416,26 @@ BEGIN
- 					o_prim <= false;
+@@ -2102,16 +2488,30 @@ BEGIN
  					o_hbcpt<=0; -- Clear burst counter on line
  					o_divstart<=to_std_logic(NOT vcarry_v);
  					IF NOT vcarry_v  OR o_fload>0 THEN
@@ -607,16 +622,17 @@ index a735e6b..b1d403c 100644
  					IF o_readlev<2 AND o_adrsb='1' THEN
 +						-- Request-boundary transition is observed externally.
  						lev_inc_v:='1';
-@@ -2129,6 +2458,7 @@ BEGIN
+ 						o_read_pre<=NOT o_read_pre;
+ 						o_state <=sWAITREAD;
+@@ -2127,6 +2527,7 @@ BEGIN
+ 					o_adrsa<='1';
+ 
  				WHEN sWAITREAD =>
 +					-- sWAITREAD is represented by the live state encoding.
  					IF o_readack='1' THEN
  						o_hbcpt<=o_hbcpt+1;
  						IF o_hbcpt<o_hburst-1 THEN
- 							-- If not finshed line, read more
- 							o_state<=sREAD;
-@@ -2141,6 +2471,7 @@ BEGIN
- 					END IF;
+@@ -2142,6 +2543,11 @@ BEGIN
  
  					--------------------------------------------------
  			END CASE;
@@ -628,7 +644,7 @@ index a735e6b..b1d403c 100644
  
  			o_read<=o_read_pre AND o_run;
  			o_rline<=o_vacpt(0); -- Even/Odd line for interlaced video
-@@ -2208,6 +2526,8 @@ BEGIN
+@@ -2208,6 +2614,8 @@ BEGIN
  						o_acpt<=0;
  						o_first<='1';
  						o_last<='0';
@@ -637,7 +653,7 @@ index a735e6b..b1d403c 100644
  					END IF;
  
  					IF o_bibv(0)='0' THEN
-@@ -2254,7 +2574,20 @@ BEGIN
+@@ -2254,7 +2662,20 @@ BEGIN
  						o_last <=to_std_logic(o_hacpt>=o_ihsizem);
  					END IF;
  
@@ -659,7 +675,7 @@ index a735e6b..b1d403c 100644
  						o_sh<='1';
  						o_acpt<=(o_acpt+1) MOD 16;
  
-@@ -2266,8 +2599,9 @@ BEGIN
+@@ -2266,8 +2687,9 @@ BEGIN
  							o_ad<=(o_ad+1) MOD (2*BLEN);
  						END IF;
  
@@ -672,7 +688,7 @@ index a735e6b..b1d403c 100644
  							lev_dec_v:='1';
  						END IF;
 diff --git a/sys/sys_top.v b/sys/sys_top.v
-index a416879..4d81fc6 100644
+index a416879..e356658 100644
 --- a/sys/sys_top.v
 +++ b/sys/sys_top.v
 @@ -351,6 +351,71 @@ reg [12:0] arc2x = 0;
@@ -747,7 +763,7 @@ index a416879..4d81fc6 100644
  always@(posedge clk_sys) begin
  	reg  [7:0] cmd;
  	reg        has_cmd;
-@@ -360,6 +424,19 @@ always@(posedge clk_sys) begin
+@@ -360,6 +425,19 @@ always@(posedge clk_sys) begin
  	reg  [7:0] fb_crc;
  	reg  [1:0] sl_r;
  
@@ -767,7 +783,7 @@ index a416879..4d81fc6 100644
  	coef_wr <= 0;
  	sl_r <= FB_EN ? 2'b00 : scanlines;
  
-@@ -407,6 +484,8 @@ always@(posedge clk_sys) begin
+@@ -407,6 +485,8 @@ always@(posedge clk_sys) begin
  			if(io_din[7:0] == 'h40) io_dout_sys <= fb_crc;
  `endif
  			if(io_din[7:0] == 'h42) io_dout_sys <= {1'b1, frame_cnt};
@@ -776,7 +792,7 @@ index a416879..4d81fc6 100644
  			if(io_din[7:0] == 'h44) io_dout_sys <= 1;
  		end
  		else begin
-@@ -462,6 +541,8 @@ always@(posedge clk_sys) begin
+@@ -462,6 +542,8 @@ always@(posedge clk_sys) begin
  					9: LFB_STRIDE      <= io_din[13:0];
  				endcase
  			end
@@ -785,32 +801,44 @@ index a416879..4d81fc6 100644
  			if(cmd == 'h25) {led_overtake, led_state} <= io_din;
  			if(cmd == 'h26) vol_att <= io_din[4:0];
  			if(cmd == 'h27) VSET <= io_din[11:0];
-@@ -825,6 +907,25 @@ wire         freeze;
+@@ -600,10 +682,13 @@ end
+ 
+ wire reset;
+ wire clk_100m;
++wire [5:0] magik_vbuf_evidence;
++wire [15:0] magik_return_state, magik_copy_state;
+ 
+ sysmem_lite sysmem
+ (
+ 	//Reset/Clock
++	.magik_vbuf_evidence(magik_vbuf_evidence),
+ 	.reset_core_req(reset_req),
+ 	.reset_out(reset),
+ 	.clock(clk_100m),
+@@ -826,8 +911,21 @@ wire         bob_deint;
+ 		.avl_address      (vbuf_address),
+ 		.avl_write        (vbuf_write),
+ 		.avl_read         (vbuf_read),
 -		.avl_byteenable   (vbuf_byteenable)
 +		.avl_byteenable   (vbuf_byteenable),
-+		.magik_fetch_state(magik_scaler_diag_state)
++		.magik_fetch_state(magik_scaler_diag_state),
++		.magik_return_state(magik_return_state),
++		.magik_copy_state(magik_copy_state)
  	);
 +
-+mister_magik_scaler_fetch_liveness_state magik_scaler_fetch_liveness_state
++mister_magik_scaler_causal_state magik_scaler_causal_state
 +(
-+	.clk_100m(clk_100m),
-+	.clk_sys(clk_sys),
-+	.scaler_clk(clk_hdmi),
-+	.reset_req(reset_req),
-+	.vbuf_address(vbuf_address),
-+	.vbuf_burstcount(vbuf_burstcount),
-+	.vbuf_waitrequest(vbuf_waitrequest),
-+	.vbuf_readdatavalid(vbuf_readdatavalid),
-+	.vbuf_read(vbuf_read),
-+	.scaler_diag_state(magik_scaler_diag_state),
-+	.io_uio(io_uio),
-+	.io_strobe(io_strobe),
-+	.io_din(io_din),
-+	.response_valid(magik_diag_response_valid),
-+	.response_data(magik_diag_response_data)
++ .clk_100m(clk_100m), .clk_sys(clk_sys), .scaler_clk(clk_hdmi),
++ .reset_req(reset_req), .upstream_read(vbuf_read), .upstream_wait(vbuf_waitrequest),
++ .upstream_return(vbuf_readdatavalid), .upstream_burst(vbuf_burstcount),
++ .physical_flags(magik_vbuf_evidence), .production_state(magik_return_state),
++ .output_state(magik_copy_state), .io_uio(io_uio), .io_strobe(io_strobe),
++ .io_din(io_din), .response_valid(magik_diag_response_valid), .response_data(magik_diag_response_data)
 +);
  `endif
-@@ -1380,15 +1477,30 @@ assign HDMI_TX_D  = hdmi_out_d;
+ 
+ reg        LFB_EN     = 0;
+@@ -1380,15 +1478,30 @@ assign HDMI_TX_D  = hdmi_out_d;
  
  wire [23:0] vga_data_sl;
  wire        vga_de_sl, vga_ce_sl, vga_vs_sl, vga_hs_sl;
@@ -845,3 +873,27 @@ index a416879..4d81fc6 100644
  	.ce_in(ce_pix),
  
  	.dout(vga_data_sl),
+diff --git a/sys/sysmem.sv b/sys/sysmem.sv
+index 8c17e86..80e1c7f 100644
+--- a/sys/sysmem.sv
++++ b/sys/sysmem.sv
+@@ -30,6 +30,7 @@ module sysmem_lite
+ 	input    [7:0] ram2_byteenable,
+ 	input          ram2_write,
+ 
++	output [5:0]   magik_vbuf_evidence,
+ 	input          vbuf_clk,
+ 	input   [27:0] vbuf_address,
+ 	input    [7:0] vbuf_burstcount,
+@@ -156,6 +157,11 @@ always @(posedge vbuf_clk) begin
+ 	vbuf_reset_1 <= vbuf_reset_0;
+ end
+ 
++// Passive physical-side taps; waitrequest and returned data are passed through.
++assign magik_vbuf_evidence = {reset_out, vbuf_reset_1, f2h_vbuf_read,
++ (f2h_vbuf_address == vbuf_address && f2h_vbuf_burstcount == vbuf_burstcount),
++ (f2h_vbuf_burstcount == 8'd128), f2h_vbuf_readdatavalid};
++
+ f2sdram_safe_terminator #(128, 8) f2sdram_safe_terminator_vbuf
+ (
+ 	.clk                      (vbuf_clk),

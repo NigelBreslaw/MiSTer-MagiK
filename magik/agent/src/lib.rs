@@ -6,6 +6,7 @@ mod capture;
 mod catalog_operations;
 mod desktop;
 mod device;
+mod fpga_evidence;
 mod device_identity;
 mod input_probe;
 mod main_control;
@@ -189,6 +190,7 @@ impl Agent {
             "status",
             "device-identity-v1",
             "device-control-v1",
+            "fpga-evidence-v1",
             "input-probe-v1",
             "input-probe-runtime-v1",
             "input-probe-passive-v1",

@@ -16,6 +16,7 @@ pub const OPERATIONS: &[&str] = &[
     "device-recover",
     "media-operation",
     "device-evidence",
+    "fpga-evidence",
     "launcher-restart",
     "launcher-return",
     "display-status",
@@ -230,6 +231,7 @@ impl Agent {
                 }
                 "media-operation" => crate::media::run(&request.fields),
                 "device-evidence" => Ok(evidence()),
+                "fpga-evidence" => crate::fpga_evidence::capture(),
                 "display-status" => {
                     Ok(json!({"reply":main_control::request("mister_magik_display_get_v1\n")?}))
                 }

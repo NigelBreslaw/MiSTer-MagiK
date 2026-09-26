@@ -206,6 +206,92 @@ EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH = {
 }
 
 
+EXPERIMENTAL_CAUSAL_METASTABILITY_CHAINS = {
+    "capture": {
+        "source": "mister_magik_scaler_causal_state:magik_scaler_causal_state|capture_request",
+        "synchronization_node": "mister_magik_scaler_causal_state:magik_scaler_causal_state|capture_meta",
+        "allow_source_duplicate": False,
+        "registers": (
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|capture_meta",
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|capture_sync",
+        ),
+    },
+    "response": {
+        "source": "mister_magik_scaler_causal_state:magik_scaler_causal_state|response_toggle",
+        "synchronization_node": "mister_magik_scaler_causal_state:magik_scaler_causal_state|response_meta",
+        "allow_source_duplicate": False,
+        "registers": (
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|response_meta",
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|response_sync",
+        ),
+    },
+    "output_request": {
+        "source": "mister_magik_scaler_causal_state:magik_scaler_causal_state|output_request",
+        "synchronization_node": "mister_magik_scaler_causal_state:magik_scaler_causal_state|output_request_meta",
+        "allow_source_duplicate": False,
+        "registers": (
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|output_request_meta",
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|output_request_sync",
+        ),
+    },
+    "output_response": {
+        "source": "mister_magik_scaler_causal_state:magik_scaler_causal_state|output_response",
+        "synchronization_node": "mister_magik_scaler_causal_state:magik_scaler_causal_state|output_response_meta",
+        "allow_source_duplicate": False,
+        "registers": (
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|output_response_meta",
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|output_response_sync",
+        ),
+    },
+    "reset": {
+        "source": "reset_req",
+        "synchronization_node": "mister_magik_scaler_causal_state:magik_scaler_causal_state|reset_meta",
+        "allow_source_duplicate": False,
+        "registers": (
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|reset_meta",
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|reset_sync",
+        ),
+    },
+}
+EXPERIMENTAL_CAUSAL_NET_DELAY_PATHS = {
+    "causal_capture": re.compile(
+        r"capture_request\s*;[^\n]*capture_meta\s*;", re.IGNORECASE
+    ),
+    "causal_response": re.compile(
+        r"response_toggle\s*;[^\n]*response_meta\s*;", re.IGNORECASE
+    ),
+    "causal_output_request": re.compile(
+        r"output_request\s*;[^\n]*output_request_meta\s*;", re.IGNORECASE
+    ),
+    "causal_output_response": re.compile(
+        r"output_response\s*;[^\n]*output_response_meta\s*;", re.IGNORECASE
+    ),
+    "causal_reset": re.compile(r"reset_req\s*;[^\n]*reset_meta\s*;", re.IGNORECASE),
+    "causal_selector_data": re.compile(
+        r"select_first\s*;[^\n]*snapshot\[", re.IGNORECASE
+    ),
+    "causal_bank_data": re.compile(
+        r"snapshot\[\d+\]\s*;[^\n]*io_dout_sys\[", re.IGNORECASE
+    ),
+    "causal_output_data": re.compile(
+        r"output_hold\[\d+\]\s*;[^\n]*io_dout_sys\[", re.IGNORECASE
+    ),
+    "causal_crc_data": re.compile(
+        r"crc_work\[\d+\]\s*;[^\n]*io_dout_sys\[", re.IGNORECASE
+    ),
+    "causal_output_crc": re.compile(
+        r"output_hold\[\d+\]\s*;[^\n]*crc_work\[", re.IGNORECASE
+    ),
+}
+CAUSAL_PATH_COUNTS = {
+    "causal_selector_data": 31,
+    "causal_bank_data": 16,
+    "causal_output_data": 16,
+    "causal_output_crc": 3,
+    "causal_crc_data": 16,
+}
+
+
 def normalize_space(value: str) -> str:
     value = re.sub(r"\s+File:\s+\S+\s+Line:\s+\d+\s*$", "", value, flags=re.IGNORECASE)
     value = re.sub(
@@ -515,6 +601,7 @@ def validate_diagnostic_reports(
     analysis_labels: Counter[str],
     experimental_diagnostic: bool,
     experimental_scaler_fetch: bool,
+    experimental_scaler_causal: bool = False,
 ) -> tuple[list[str], dict[str, object]]:
     reasons: list[str] = []
     missing_reports = sorted(DIAGNOSTIC_REPORT_NAMES - reports.keys())
@@ -541,6 +628,11 @@ def validate_diagnostic_reports(
         expected_report_analyses["menu.magik-diagnostic-cdc-net-delay.rpt"] = (
             "set_net_delay",
             6,
+        )
+    if experimental_scaler_causal:
+        expected_report_analyses["menu.magik-diagnostic-cdc-net-delay.rpt"] = (
+            "set_net_delay",
+            12,
         )
     for name, (command, expected_count) in expected_report_analyses.items():
         text = reports.get(name, "")
@@ -578,8 +670,12 @@ def validate_diagnostic_reports(
                 expected_net_delay_paths.update(
                     EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH
                 )
+            if experimental_scaler_causal:
+                expected_net_delay_paths.update(EXPERIMENTAL_CAUSAL_NET_DELAY_PATHS)
             expected_identity_counts = {
-                label: 9 if label == "scheduler_snapshot_data" else 1
+                label: CAUSAL_PATH_COUNTS.get(
+                    label, 9 if label == "scheduler_snapshot_data" else 1
+                )
                 for label in expected_net_delay_paths
             }
             if len(detailed_rows) != sum(expected_identity_counts.values()):
@@ -612,6 +708,8 @@ def validate_diagnostic_reports(
         expected_metastability_chains.update(
             EXPERIMENTAL_SCALER_FETCH_METASTABILITY_CHAIN
         )
+    if experimental_scaler_causal:
+        expected_metastability_chains.update(EXPERIMENTAL_CAUSAL_METASTABILITY_CHAINS)
     custom_mtbf_years, missing_metastability_chains = (
         parse_expected_metastability_chains(
             metastability, expected_metastability_chains
@@ -671,9 +769,14 @@ def compare(
     patched: dict[str, object],
     experimental_diagnostic: bool = False,
     experimental_scaler_fetch: bool = False,
+    experimental_scaler_causal: bool = False,
 ) -> tuple[list[str], dict[str, object]]:
     reasons: list[str] = []
-    experimental = experimental_diagnostic or experimental_scaler_fetch
+    experimental = (
+        experimental_diagnostic
+        or experimental_scaler_fetch
+        or experimental_scaler_causal
+    )
     policy_details: dict[str, dict[str, dict[str, int]]] = {}
     for flavour, report in (
         ("stock", stock),
@@ -890,6 +993,9 @@ def compare(
                 "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_sync",
             )
         )
+    if experimental_scaler_causal:
+        for chain in EXPERIMENTAL_CAUSAL_METASTABILITY_CHAINS.values():
+            expected_sync_assignment_suffixes.extend(chain["registers"])
     missing_sync_assignments = [
         suffix
         for suffix in expected_sync_assignment_suffixes
@@ -914,7 +1020,15 @@ def compare(
         and patched_calculable_chains
         == baseline_calculable_chains
         + EXPECTED_ADDED_CALCULABLE_COMPLETION_SYNCHRONIZER_CHAINS
-        + (4 if experimental_scaler_fetch else 1 if experimental_diagnostic else 0)
+        + (
+            5
+            if experimental_scaler_causal
+            else 4
+            if experimental_scaler_fetch
+            else 1
+            if experimental_diagnostic
+            else 0
+        )
     )
     if not custom_assignment_seen:
         reasons.append("custom_synchronizer_missing")
@@ -929,6 +1043,7 @@ def compare(
         analysis_labels,
         experimental_diagnostic,
         experimental_scaler_fetch,
+        experimental_scaler_causal,
     )
     reasons.extend(diagnostic_reasons)
 
@@ -936,7 +1051,9 @@ def compare(
     assert isinstance(stock_output_paths, list)
     details = {
         "signoff_profile": (
-            "experimental_scaler_fetch"
+            "experimental_scaler_causal"
+            if experimental_scaler_causal
+            else "experimental_scaler_fetch"
             if experimental_scaler_fetch
             else "experimental_raw_scaler"
             if experimental_diagnostic
@@ -1030,8 +1147,22 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="use the bounded attended scaler-fetch diagnostic timing profile",
     )
+    parser.add_argument(
+        "--experimental-scaler-causal",
+        action="store_true",
+        help="use the bounded causal-boundary observer profile",
+    )
     args = parser.parse_args(argv)
-    if args.experimental_diagnostic and args.experimental_scaler_fetch:
+    if (
+        sum(
+            (
+                args.experimental_diagnostic,
+                args.experimental_scaler_fetch,
+                args.experimental_scaler_causal,
+            )
+        )
+        > 1
+    ):
         parser.error("experimental diagnostic profiles are mutually exclusive")
 
     try:
@@ -1058,6 +1189,7 @@ def main(argv: list[str] | None = None) -> int:
         patched,
         experimental_diagnostic=args.experimental_diagnostic,
         experimental_scaler_fetch=args.experimental_scaler_fetch,
+        experimental_scaler_causal=args.experimental_scaler_causal,
     )
     valid = not reasons
     result = {

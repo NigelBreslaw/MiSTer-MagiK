@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 mod generated;
+pub mod video_evidence;
 
 pub use generated::*;
 

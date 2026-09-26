@@ -264,6 +264,70 @@ SCALER_FETCH_DIAGNOSTIC_REPORTS = {
 }
 
 
+CAUSAL_HIERARCHY = "mister_magik_scaler_causal_state:magik_scaler_causal_state"
+CAUSAL_CHAINS = [
+    ("capture_request", "capture_meta", "capture_sync"),
+    ("response_toggle", "response_meta", "response_sync"),
+    ("output_request", "output_request_meta", "output_request_sync"),
+    ("output_response", "output_response_meta", "output_response_sync"),
+    ("reset_req", "reset_meta", "reset_sync"),
+]
+CAUSAL_SYNC = (
+    SYNC_ASSIGNMENTS
+    + quartus_assignment_section(
+        CAUSAL_HIERARCHY,
+        tuple(name for _, meta, sync in CAUSAL_CHAINS for name in (meta, sync)),
+    )
+    + """
+Info (332114): Report Metastability: Found 12 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.333333
+Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
+"""
+)
+
+
+def causal_reports():
+    result = dict(VALID_DIAGNOSTIC_REPORTS)
+    delay = result["menu.magik-diagnostic-cdc-net-delay.rpt"]
+    metastability = result["menu.magik-diagnostic-metastability.rpt"]
+    summary = (
+        "; set_net_delay ; 1.000 ; 10.000 ; 9.000 ; sources ; destinations ; max ;\n"
+    )
+    for index, (source, meta, sync) in enumerate(CAUSAL_CHAINS, 3):
+        source = source if source == "reset_req" else CAUSAL_HIERARCHY + "|" + source
+        meta, sync = (CAUSAL_HIERARCHY + "|" + name for name in (meta, sync))
+        delay += summary + net_delay_detail(source, meta)
+        metastability += metastability_chain(index, source, meta, (meta, sync))
+    for sources, targets in [
+        (["select_first"] * 31, [f"snapshot[{n}]" for n in range(32) if n != 14]),
+        (
+            [f"snapshot[{n}]" for n in range(16)],
+            [f"io_dout_sys[{n}]" for n in range(16)],
+        ),
+        (
+            [f"output_hold[{n}]" for n in range(16)],
+            [f"io_dout_sys[{n}]" for n in range(16)],
+        ),
+        (
+            [f"crc_work[{n}]" for n in range(16)],
+            [f"io_dout_sys[{n}]" for n in range(16)],
+        ),
+        (["output_hold[0]"] * 3, [f"crc_work[{n}]" for n in (0, 5, 12)]),
+    ]:
+        delay += summary + "".join(
+            net_delay_detail(
+                CAUSAL_HIERARCHY + "|" + source,
+                target
+                if target.startswith("io_dout")
+                else CAUSAL_HIERARCHY + "|" + target,
+            )
+            for source, target in zip(sources, targets)
+        )
+    result["menu.magik-diagnostic-cdc-net-delay.rpt"] = delay
+    result["menu.magik-diagnostic-metastability.rpt"] = metastability
+    return result
+
+
 def bootstrap_black_warnings(copies: int) -> str:
     return (
         "Warning (332125): Found combinational loop of 6 nodes\n" * copies
@@ -289,6 +353,7 @@ class QuartusDeltaTest(unittest.TestCase):
         diagnostic_reports: dict[str, str] | None = None,
         experimental_diagnostic: bool = False,
         experimental_scaler_fetch: bool = False,
+        experimental_scaler_causal: bool = False,
     ) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -311,6 +376,8 @@ class QuartusDeltaTest(unittest.TestCase):
             ]
             if experimental_diagnostic:
                 command.append("--experimental-diagnostic")
+            if experimental_scaler_causal:
+                command.append("--experimental-scaler-causal")
             if experimental_scaler_fetch:
                 command.append("--experimental-scaler-fetch")
             reports = (
@@ -337,6 +404,46 @@ class QuartusDeltaTest(unittest.TestCase):
                 capture_output=True,
             )
             return result, json.loads(result.stdout)
+
+    def test_causal_profile_requires_exact_control_and_payload_paths(self):
+        result, payload = self.run_check(
+            BASE,
+            BASE + CAUSAL_SYNC,
+            diagnostic_reports=causal_reports(),
+            experimental_scaler_causal=True,
+        )
+        self.assertEqual(result.returncode, 0, payload)
+        self.assertEqual(payload["invalid_reason"], "ok")
+        for before, after in [
+            ("snapshot[31]", "wrong[31]"),
+            ("output_response_meta", "wrong_meta"),
+            ("crc_work[12]", "wrong_crc[12]"),
+        ]:
+            with self.subTest(endpoint=before):
+                reports = {
+                    name: text.replace(before, after)
+                    for name, text in causal_reports().items()
+                }
+                result, payload = self.run_check(
+                    BASE,
+                    BASE + CAUSAL_SYNC,
+                    diagnostic_reports=reports,
+                    experimental_scaler_causal=True,
+                )
+                self.assertEqual(result.returncode, 1, payload)
+
+    def test_causal_profile_preserves_numeric_timing_gate(self):
+        patched = (BASE + CAUSAL_SYNC).replace(
+            "setup slack is 0.500", "setup slack is 0.349"
+        )
+        result, payload = self.run_check(
+            BASE,
+            patched,
+            diagnostic_reports=causal_reports(),
+            experimental_scaler_causal=True,
+        )
+        self.assertEqual(result.returncode, 1, payload)
+        self.assertIn("setup", payload["invalid_reason"])
 
     def test_matching_baseline_and_clean_custom_timing_pass(self) -> None:
         result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC)
@@ -1005,7 +1112,7 @@ class QuartusDeltaTest(unittest.TestCase):
             / "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics.sdc"
         ).read_text(encoding="utf-8")
         self.assertIn("get_registers -nowarn -no_duplicates", sdc)
-        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 6)
+        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 12)
         self.assertNotIn("set_max_skew", sdc)
         self.assertNotIn("set_false_path", sdc)
 

@@ -72,6 +72,11 @@ def add_commands(commands):
     probe.add_argument("--event", action="append", default=[])
     commands.add_parser("status")
     commands.add_parser("diagnostics")
+    evidence = commands.add_parser("fpga-evidence")
+    evidence.add_argument("--framebuffer", action="store_true")
+    evidence.add_argument("--poll-count", type=int, choices=range(1, 3601), default=1)
+    evidence.add_argument("--poll-interval", type=int, choices=range(1, 61), default=5)
+    evidence.add_argument("--usb-seconds", type=int, choices=range(1, 61))
     commands.add_parser("logs")
     launcher = commands.add_parser("launcher").add_subparsers(
         dest="action", required=True
@@ -98,6 +103,11 @@ def run_device(arguments, run):
     if group == "catalog":
         return run_catalog(arguments, run)
     fields = {}
+    if group == "fpga-evidence":
+        agent, status = connect_agent(run, {"fpga-evidence-v1"}, allow_repair=False)
+        from .fpga_evidence import collect
+
+        return collect(agent, status, run, arguments)
     if group == "input-probe":
         operation = "input-probe"
         fields = {"seconds": arguments.seconds, "events": arguments.event}

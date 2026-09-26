@@ -39,3 +39,5 @@ pub mod vt;
 #[allow(dead_code)]
 #[path = "../c_build_support.rs"]
 mod c_build_support;
+
+pub mod video_evidence;

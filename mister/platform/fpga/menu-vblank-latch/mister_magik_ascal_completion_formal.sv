@@ -72,6 +72,7 @@ module mister_magik_ascal_completion_formal;
 	wire ack_sync;
 	wire [1:0] read_pending;
 	wire read_active;
+	wire read_reset_seen;
 	wire read_accepted;
 	wire [1:0] readlev;
 	wire [1:0] copylev;
@@ -131,6 +132,7 @@ module mister_magik_ascal_completion_formal;
 		.ack_sync_o(ack_sync),
 		.read_pending_o(read_pending),
 		.read_active_o(read_active),
+		.read_reset_seen_o(read_reset_seen),
 		.read_accepted_o(read_accepted),
 		.readlev_o(readlev),
 		.copylev_o(copylev)
@@ -192,7 +194,10 @@ module mister_magik_ascal_completion_formal;
 			assert(unseen_completions == 0);
 		if (return_drain) begin
 			assert(unseen_completions == 0);
-			assert(!read_active);
+			// An old wait-stalled request is retained during reset.
+			assert(!read_assert_event);
+			assert(!read_active || read_reset_seen);
+			if (read_active && !read_accepted) assert(return_credits <= 1);
 			assert(!request_toggle && !completion_pending);
 			assert(!request_meta && !request_sync && !completion_pulse);
 			assert(copylev == 0);

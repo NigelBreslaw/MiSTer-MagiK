@@ -60,6 +60,8 @@ ENTITY mister_magik_scaler_completion_formal_dut IS
 		ack_sync_o           : OUT std_logic;
 		read_pending_o       : OUT natural RANGE 0 TO 2;
 		read_active_o        : OUT std_logic;
+		read_request_o       : OUT std_logic;
+		read_reset_seen_o    : OUT std_logic;
 		read_accepted_o      : OUT std_logic;
 		readlev_o            : OUT natural RANGE 0 TO 2;
 		copylev_o            : OUT natural RANGE 0 TO 2
@@ -156,7 +158,10 @@ BEGIN
 	ack_meta_o<=ack_meta;
 	ack_sync_o<=ack_sync;
 	read_pending_o<=read_pending;
+	read_reset_seen_o<=read_reset_seen;
 	read_active_o<=read_active;
+	read_request_o<=read_active AND NOT read_accepted
+		WHEN avl_reset_n='0' OR read_reset_seen='0' ELSE '0';
 	read_accepted_o<=read_accepted;
 	readlev_o<=readlev;
 	copylev_o<=copylev;
@@ -200,7 +205,7 @@ BEGIN
 				ack_meta<='0';
 				ack_sync<='0';
 				read_reset_seen<='1';
-				read_active<='0';
+				-- Production avl_read_i is retained during asynchronous reset.
 		ELSIF rising_edge(clk) THEN
 			-- Destination-domain scheduler and exact legacy credit truth tables.
 			IF o_reset_n='0' THEN
@@ -259,7 +264,7 @@ BEGIN
 				ack_meta<='0';
 				ack_sync<='0';
 				read_reset_seen<='1';
-				read_active<='0';
+				-- Production avl_read_i is retained during asynchronous reset.
 			ELSIF avl_step='1' THEN
 				ack_meta<=request_sync;
 				ack_sync<=ack_meta;

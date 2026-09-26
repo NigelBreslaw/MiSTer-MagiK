@@ -24,8 +24,9 @@ The default reusable root is the primary checkout's
 patched variants are bound to their source inputs, pinned
 revisions, Quartus seed and date, preparation-script identity, reports,
 metadata, and RBF hashes. Hidden `.VARIANT.building` directories are incomplete
-staging and never cache hits. Do not edit cached reports, copy evidence between
-variants, or use `--rebuild` speculatively.
+staging and never cache hits. Do not edit cached reports or copy evidence between variants. The typed runner
+creates a unique run under `runs/` and preserves incomplete stages. It currently
+performs fresh matched builds; it does not infer cache hits from old reports.
 
 Signoff builds `refs/heads/main^{commit}`. Commit the frozen candidate and move
 local `main` before synthesis. Preserve the root commit and patched-source,
@@ -95,3 +96,24 @@ A local signoff pass makes an RBF eligible only for an attended Dev install.
 Production requires CI reconstruction and the physical frame-evidence, stress,
 long-latch, and canary gates. Fail closed on black, stale, partial, banded,
 corrupt, or indefinitely blank physical output.
+
+## Local recovery and frozen candidate
+
+Already downloaded official installers can be supplied without another network
+transfer by setting `QUARTUS_17_0_RUN_URL=file:///absolute/path/to/QuartusLiteSetup-17.0.0.595-linux.run`
+and `QUARTUS_17_0_CYCLONEV_QDZ_URL=file:///absolute/path/to/cyclonev-17.0.0.595.qdz`
+for the typed setup command. Both published hashes remain mandatory.
+
+Local signoff accepts `--local-root /absolute/cache` and optionally
+`--menu-source /absolute/pinned/Menu/checkout`. It refuses dirty source or a
+HEAD different from committed local main. It snapshots the candidate, pinned
+baseline and Menu sources; runs frozen-source proofs before synthesis; and
+uses four-CPU Apple-container wrappers for Quartus 17.0 Build 595. The old
+baseline driver's invocation guard alone is adapted, with the resulting driver
+hash recorded. No RTL or fitter policy is adapted.
+
+Each completed variant retains its RBF, metadata, reports, prepared source and
+file hashes. A final `signoff.json` is emitted only after the matched delta check
+passes and binds the input tuple, proof files and variant manifests. Explicit
+`--stock/--baseline/--patched` report arguments retain offline auditing but do
+not synthesize or create a build certificate.
