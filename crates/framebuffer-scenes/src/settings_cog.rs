@@ -271,6 +271,7 @@ pub fn render_settings_cog_transition_into(
     let cog_s = lerp(c0, 1 << 16);
     let cog_at_rest = cog_p >= 1 << 16;
     let inv_s = (1i64 << 32) / cog_s.max(1); // Q16 reciprocal
+    let inv_z = (1i64 << 32) / z.max(1); // Q16 reciprocal
     let cog_x0 = (cog_x >> 16).max(0) as usize;
     let cog_x1 = (((cog_x + COG_ASSET_WIDTH as i64 * cog_s) >> 16) + 1).clamp(0, W as i64) as usize;
     let cog_y0 = (cog_y >> 16).max(0) as usize;
@@ -313,24 +314,24 @@ pub fn render_settings_cog_transition_into(
                 }
             } else {
                 let v = (((((y as i64) << 16) + (1 << 15) - cog_y) * inv_s) >> 16) - (1 << 15);
-                for (x, pixel) in out.iter_mut().enumerate().take(x1).skip(x0) {
-                    let u = (((((x as i64) << 16) + (1 << 15) - cog_x) * inv_s) >> 16) - (1 << 15);
+                let mut u = (((((x0 as i64) << 16) + (1 << 15) - cog_x) * inv_s) >> 16) - (1 << 15);
+                for pixel in out.iter_mut().take(x1).skip(x0) {
                     *pixel = Rgb565Pixel(sample_cog(cog, u, v));
+                    u += inv_s;
                 }
             }
         }
         if span.is_some() && face_alpha > 0 {
             // The launcher's own card pixels, scaled with the window.
-            let inv_z = (1i64 << 32) / z;
             let sy = CARD_CY as i64
                 + ((((((y as i64) << 16) + (1 << 15)) - (i64::from(CARD_CY) << 16)) * inv_z) >> 32);
             if (CARD_Y as i64..(CARD_Y + CARD_H) as i64).contains(&sy) {
                 let face_row = sy as usize * W;
-                for (x, pixel) in out.iter_mut().enumerate().take(in1).skip(in0) {
-                    let sx = CARD_CX as i64
-                        + ((((((x as i64) << 16) + (1 << 15)) - (i64::from(CARD_CX) << 16))
-                            * inv_z)
-                            >> 32);
+                let mut sx_q16 = (i64::from(CARD_CX) << 16)
+                    + (((((in0 as i64) << 16) + (1 << 15) - (i64::from(CARD_CX) << 16)) * inv_z)
+                        >> 16);
+                for pixel in out.iter_mut().take(in1).skip(in0) {
+                    let sx = sx_q16 >> 16;
                     if (CARD_X as i64..(CARD_X + CARD_W) as i64).contains(&sx) {
                         *pixel = Rgb565Pixel(blend(
                             pixel.0,
@@ -338,6 +339,7 @@ pub fn render_settings_cog_transition_into(
                             face_alpha,
                         ));
                     }
+                    sx_q16 += inv_z;
                 }
             }
         }
