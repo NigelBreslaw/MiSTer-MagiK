@@ -17,7 +17,6 @@ use std::fs;
 use std::path::Path;
 
 const DEVELOPMENT_VERMAGIC: &str = "6.18.38-MiSTer SMP mod_unload ARMv7 p2v8 ";
-const KERNEL_NOTES: &str = "/sys/kernel/notes";
 const MODULE_BUILD_ID_NOTE: &str =
     "/sys/module/mister_magik_scanout_slots/notes/.note.gnu.build-id";
 
@@ -35,7 +34,6 @@ fn resolve_installed(
         kernel_release,
         layout,
         paths,
-        Path::new(KERNEL_NOTES),
         Path::new(MODULE_BUILD_ID_NOTE),
     )
 }
@@ -44,7 +42,6 @@ fn resolve_installed_with_runtime(
     kernel_release: &str,
     layout: Layout,
     paths: &DevicePaths,
-    kernel_notes: &Path,
     module_build_id_note: &Path,
 ) -> Result<PlatformProfile, String> {
     if kernel_release == LEGACY_KERNEL_RELEASE {
@@ -122,29 +119,24 @@ fn resolve_installed_with_runtime(
             .required("platform_contract_sha256")
             .map_err(|error| error.to_string())?,
     )?;
-    verify_runtime_identity(&metadata, kernel_notes, module_build_id_note)?;
+    verify_runtime_identity(&metadata, module_build_id_note)?;
 
     Ok(DEVELOPMENT_PROFILE)
 }
 
 fn verify_runtime_identity(
     metadata: &BTreeMap<String, String>,
-    kernel_notes: &Path,
     module_build_id_note: &Path,
 ) -> Result<(), String> {
-    for (field, path) in [
-        ("kernel_build_id", kernel_notes),
-        ("module_build_id", module_build_id_note),
-    ] {
-        let expected = metadata
-            .get(field)
-            .ok_or_else(|| format!("scanout metadata missing {field}"))?;
-        let observed = gnu_build_id(path)?;
-        if &observed != expected {
-            return Err(format!(
-                "running {field} mismatch: observed={observed} expected={expected}"
-            ));
-        }
+    let field = "module_build_id";
+    let expected = metadata
+        .get(field)
+        .ok_or_else(|| format!("scanout metadata missing {field}"))?;
+    let observed = gnu_build_id(module_build_id_note)?;
+    if &observed != expected {
+        return Err(format!(
+            "running {field} mismatch: observed={observed} expected={expected}"
+        ));
     }
     Ok(())
 }
@@ -277,7 +269,6 @@ mod tests {
             DEVELOPMENT_KERNEL_RELEASE,
             Layout::Development,
             paths,
-            &root.join("kernel.notes"),
             &root.join("module.note.gnu.build-id"),
         )
     }
@@ -450,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn development_tuple_requires_running_kernel_and_module_build_ids() {
+    fn development_tuple_requires_loaded_module_identity_not_whole_kernel_identity() {
         let root = std::env::temp_dir().join(format!(
             "mister-magik-scanout-runtime-mixed-{}",
             std::process::id()
@@ -463,12 +454,7 @@ mod tests {
                 .contains("running module_build_id mismatch")
         );
         fs::write(root.join("module.note.gnu.build-id"), build_id_note(0x22)).unwrap();
-        fs::write(root.join("kernel.notes"), build_id_note(0x44)).unwrap();
-        assert!(
-            resolve_development(&root, &paths)
-                .unwrap_err()
-                .contains("running kernel_build_id mismatch")
-        );
+        assert_eq!(resolve_development(&root, &paths), Ok(DEVELOPMENT_PROFILE));
         fs::remove_dir_all(root).unwrap();
     }
 
