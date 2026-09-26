@@ -182,22 +182,22 @@ pub fn run(fields: &Map<String, Value>) -> Result<Value, String> {
     let deadline = Instant::now() + Duration::from_secs(seconds);
     let mut events = Vec::new();
     let mut truncated = false;
+    let mut poll: Vec<_> = readers
+        .iter()
+        .map(|(_, file)| libc::pollfd {
+            fd: file.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        })
+        .collect();
     'capture: while !readers.is_empty() && Instant::now() < deadline {
-        let mut poll: Vec<_> = readers
-            .iter()
-            .map(|(_, file)| libc::pollfd {
-                fd: file.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            })
-            .collect();
         if unsafe { libc::poll(poll.as_mut_ptr(), poll.len() as libc::nfds_t, 20) } < 0 {
             if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
                 continue;
             }
             return Err(std::io::Error::last_os_error().to_string());
         }
-        for ((device, file), ready) in readers.iter_mut().zip(poll) {
+        for ((device, file), ready) in readers.iter_mut().zip(&poll) {
             if ready.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
                 return Err(format!(
                     "input device {} disconnected or faulted",
@@ -212,7 +212,9 @@ pub fn run(fields: &Map<String, Value>) -> Result<Value, String> {
                 match file.read(&mut bytes) {
                     Ok(EVENT_SIZE) => {
                         let (kernel_us, kind, code, value) = parse(&bytes);
-                        if kind == 1 || kind == 3 || (kind == 0 && code == 3) {
+                        if kernel_us >= started_at_us
+                            && (kind == 1 || kind == 3 || (kind == 0 && code == 3))
+                        {
                             events.push(json!({"device":*device,"kernel_us":kernel_us,"read_us":clock_us(),"type":kind,"code":code,"value":value}));
                             if events.len() == MAX_EVENTS {
                                 truncated = true;

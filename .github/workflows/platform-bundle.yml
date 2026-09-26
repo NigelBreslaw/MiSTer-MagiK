@@ -9,7 +9,6 @@ on:
       main_revision:
         description: Exact maintained Main fork SHA (reuse the qualified candidate SHA when publishing)
         required: true
-        default: c1056a9e98e9bfa38b959e41b91cdc8542d99a67
         type: string
       publish:
         description: Promote the verified candidate as the next platform release

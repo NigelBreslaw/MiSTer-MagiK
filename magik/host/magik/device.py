@@ -131,7 +131,7 @@ def run_device(arguments, run):
     else:
         operation = "device-evidence"
     required = (
-        {"input-probe-runtime-v1", "input-probe-passive-v1"}
+        {"input-probe-passive-v1"}
         if group == "input-probe"
         else {"device-control-v1"}
     )
