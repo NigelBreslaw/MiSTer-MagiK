@@ -118,18 +118,18 @@ fn zoom_q16(p: i64) -> i64 {
     (frac << whole).min(ZOOM_MAX_Q16)
 }
 
+/// Interpolate two RGB565 pixels with a five-bit fraction. The red/blue
+/// lanes have enough separation to share the same multiply without carrying
+/// into one another; green is handled independently.
 #[inline]
-fn unpack(p: u16) -> (u32, u32, u32) {
-    (
-        u32::from(p >> 11),
-        u32::from((p >> 5) & 0x3f),
-        u32::from(p & 0x1f),
-    )
-}
-
-#[inline]
-fn pack(r: u32, g: u32, b: u32) -> u16 {
-    ((r.min(31) << 11) | (g.min(63) << 5) | b.min(31)) as u16
+fn lerp_rgb565(a: u16, b: u16, fraction: u32) -> u16 {
+    let fraction = fraction.min(32);
+    let inverse = 32 - fraction;
+    let a = u32::from(a);
+    let b = u32::from(b);
+    let red_blue = ((((a & 0xf81f) * inverse) + ((b & 0xf81f) * fraction)) >> 5) & 0xf81f;
+    let green = ((((a & 0x07e0) * inverse) + ((b & 0x07e0) * fraction)) >> 5) & 0x07e0;
+    (red_blue | green) as u16
 }
 
 /// `over` on top of `under` with alpha in 0..=256.
@@ -141,14 +141,7 @@ fn blend(under: u16, over: u16, alpha: u32) -> u16 {
     if alpha == 0 {
         return under;
     }
-    let (ur, ug, ub) = unpack(under);
-    let (or, og, ob) = unpack(over);
-    let inv = 256 - alpha;
-    pack(
-        (or * alpha + ur * inv) >> 8,
-        (og * alpha + ug * inv) >> 8,
-        (ob * alpha + ub * inv) >> 8,
-    )
+    lerp_rgb565(under, over, (alpha + 4) >> 3)
 }
 
 fn alpha_of(q16: i64) -> u32 {
@@ -187,23 +180,19 @@ fn rounded_span(y: i32, x: i64, top: i64, w: i64, h: i64, radius: i64) -> Option
 #[inline]
 fn sample_cog(cog: &[Rgb565Pixel], u: i64, v: i64) -> u16 {
     let (x, y) = ((u >> 16) as i32, (v >> 16) as i32);
-    let (fx, fy) = (((u >> 8) & 0xff) as u32, ((v >> 8) & 0xff) as u32);
-    let at = |x: i32, y: i32| -> (u32, u32, u32) {
+    let (fx, fy) = (
+        (((u >> 8) & 0xff) as u32 + 4) >> 3,
+        (((v >> 8) & 0xff) as u32 + 4) >> 3,
+    );
+    let at = |x: i32, y: i32| -> u16 {
         if x < 0 || y < 0 || x >= COG_ASSET_WIDTH as i32 || y >= COG_ASSET_HEIGHT as i32 {
-            (0, 0, 0)
+            0
         } else {
-            unpack(cog[y as usize * COG_ASSET_WIDTH + x as usize].0)
+            cog[y as usize * COG_ASSET_WIDTH + x as usize].0
         }
     };
     let (a, b, c, d) = (at(x, y), at(x + 1, y), at(x, y + 1), at(x + 1, y + 1));
-    let lerp = |p: u32, q: u32, f: u32| p * (256 - f) + q * f;
-    let row0 = (lerp(a.0, b.0, fx), lerp(a.1, b.1, fx), lerp(a.2, b.2, fx));
-    let row1 = (lerp(c.0, d.0, fx), lerp(c.1, d.1, fx), lerp(c.2, d.2, fx));
-    pack(
-        (row0.0 * (256 - fy) + row1.0 * fy + 32768) >> 16,
-        (row0.1 * (256 - fy) + row1.1 * fy + 32768) >> 16,
-        (row0.2 * (256 - fy) + row1.2 * fy + 32768) >> 16,
-    )
+    lerp_rgb565(lerp_rgb565(a, b, fx), lerp_rgb565(c, d, fx), fy)
 }
 
 /// Render the Home -> Settings timeline at `t_ms` into `output`.
@@ -409,6 +398,13 @@ mod tests {
         (0..COG_ASSET_WIDTH * COG_ASSET_HEIGHT)
             .map(|i| Rgb565Pixel(((i * 2654435761) >> 7) as u16 | 0x0821))
             .collect()
+    }
+
+    #[test]
+    fn packed_rgb565_interpolation_preserves_endpoints_and_lanes() {
+        assert_eq!(lerp_rgb565(0x1234, 0xabcd, 0), 0x1234);
+        assert_eq!(lerp_rgb565(0x1234, 0xabcd, 32), 0xabcd);
+        assert_eq!(lerp_rgb565(0x0000, 0xffff, 16), 0x7bef);
     }
 
     #[test]
