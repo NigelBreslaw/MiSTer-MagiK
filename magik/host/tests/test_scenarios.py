@@ -117,18 +117,45 @@ def test_navigation_returns_from_settings_when_capture_fails(monkeypatch, tmp_pa
     assert keys[-1] == "\x1b"
 
 
-def test_settings_is_opened_from_the_sixth_home_card(monkeypatch):
+@pytest.mark.parametrize("initial", [0, 2, 5])
+def test_settings_navigation_observes_selection_and_retries_unaccepted_keys(
+    monkeypatch, initial
+):
     keys = []
+    cards = ["Arcade", "Consoles", "Computers", "Handhelds", "Favourites", "Settings"]
+    selected = initial
+    attempts = 0
 
     def press(_, key):
+        nonlocal selected, attempts
         keys.append(key)
+        if key == "\uf703":
+            attempts += 1
+            if attempts > 1:  # First input arrived while the spring was settling.
+                selected = (selected + 1) % len(cards)
+        if key == "\n":
+            assert selected == 5
 
     monkeypatch.setattr(actions, "_press_key", press)
     monkeypatch.setattr(actions, "_settings_open", lambda _: False)
+    monkeypatch.setattr(actions, "_selected_labels", lambda _: [cards[selected]])
     monkeypatch.setattr(actions.time, "sleep", lambda _: None)
     actions._open_settings_card(object())
+    assert keys[0] == "\uf729"
+    assert keys[-1] == "\n"
+    assert selected == 5
 
-    assert keys == ["\uf729", *("\uf703" for _ in range(5)), "\n"]
+
+def test_settings_navigation_is_bounded_when_input_never_advances(monkeypatch):
+    keys = []
+    monkeypatch.setattr(actions, "_press_key", lambda _, key: keys.append(key))
+    monkeypatch.setattr(actions, "_settings_open", lambda _: False)
+    monkeypatch.setattr(actions, "_selected_labels", lambda _: ["Arcade"])
+    monkeypatch.setattr(actions.time, "sleep", lambda _: None)
+    with pytest.raises(AssertionError, match="within 12 attempts"):
+        actions._open_settings_card(object())
+    assert keys.count("\uf703") == 12
+    assert "\n" not in keys
 
 
 def test_settings_button_is_not_mistaken_for_the_open_screen():

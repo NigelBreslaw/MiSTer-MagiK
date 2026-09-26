@@ -45,6 +45,7 @@ def test_setting_restores_original_after_capture_failure(
     monkeypatch.setattr(actions, "_press_key", press)
     monkeypatch.setattr(actions, "_focus_label", lambda *_: None)
     monkeypatch.setattr(actions, "_settings_open", lambda _: state["open"])
+    monkeypatch.setattr(actions, "_selected_labels", lambda _: ["Settings"])
     monkeypatch.setattr(
         actions,
         "one_element",

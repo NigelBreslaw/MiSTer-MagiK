@@ -182,9 +182,15 @@ def _settings_open(application):
 def _open_settings_card(application):
     _press_key(application, "\uf729")  # Slint Key.Home
     _wait(lambda: not _settings_open(application), "Home did not close Settings")
-    for _ in range(5):
+    # Home can preserve the selected card, and a key during spring settling
+    # can be ignored. Observe the native card model instead of counting keys.
+    for _ in range(12):
+        if "Settings" in _selected_labels(application):
+            break
         _press_key(application, "\uf703")  # Slint Key.RightArrow
-        time.sleep(0.7)  # Each card transition is intentionally allowed to finish.
+        time.sleep(1)  # Allow the carousel's spring to settle before retrying.
+    else:
+        raise AssertionError("Settings card was not selectable within 12 attempts")
     _press_key(application, "\n")  # Slint Key.Return
 
 

@@ -347,3 +347,56 @@ fn each_start_and_end_matches_the_accepted_card_geometry() {
         }
     }
 }
+
+#[test]
+fn responsive_routes_keep_chrome_stable_and_animation_allocation_free() {
+    for scene in [
+        LauncherScene::new(540, 960),
+        LauncherScene::new(720, 1280),
+        LauncherScene::crt(640, 240),
+        LauncherScene::crt(240, 640),
+        LauncherScene::crt(640, 288),
+        LauncherScene::crt(288, 640),
+        LauncherScene::crt(640, 480),
+        LauncherScene::crt(480, 640),
+        LauncherScene::crt(640, 512),
+        LauncherScene::crt(512, 640),
+        LauncherScene::crt(640, 576),
+        LauncherScene::crt(576, 640),
+    ] {
+        let mut prepared = scene.prepare(data(0));
+        let first = prepared.pixels().to_vec();
+        assert_eq!(first.len(), scene.width * scene.height);
+        for direction in [BrowseDirection::Left, BrowseDirection::Right] {
+            for progress in [1, 115, 230, 345, 459, 460] {
+                let frame = moving(0, direction, progress);
+                ALLOCATIONS.with(|count| count.set(0));
+                WATCH_ALLOCATIONS.with(|watch| watch.set(true));
+                prepared.render_frame(frame);
+                WATCH_ALLOCATIONS.with(|watch| watch.set(false));
+                assert_eq!(ALLOCATIONS.with(Cell::get), 0, "{scene:?}");
+                let header = scene.width * (scene.height * 5 / 100 + 10);
+                let footer = scene.width * (scene.height - scene.height * 5 / 100 - 8);
+                assert_eq!(
+                    &first[..header],
+                    &prepared.pixels()[..header],
+                    "header: {scene:?}"
+                );
+                assert_eq!(
+                    &first[footer..],
+                    &prepared.pixels()[footer..],
+                    "footer: {scene:?}"
+                );
+            }
+        }
+        prepared.render_frame(BrowseFrame {
+            selected: 0,
+            target: 0,
+            phase: BrowsePhase::Settled,
+            direction: None,
+            progress_millis: 0,
+            duration_millis: 0,
+        });
+        assert_eq!(first, prepared.pixels(), "resting frame: {scene:?}");
+    }
+}

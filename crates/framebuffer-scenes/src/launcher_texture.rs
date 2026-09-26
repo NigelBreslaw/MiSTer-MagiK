@@ -566,6 +566,19 @@ impl Texture {
         Self::from_base(base, width, height)
     }
 
+    pub fn with_alpha(pixels: &[Rgb565Pixel], alpha: &[u8], width: usize, height: usize) -> Self {
+        assert_eq!(pixels.len(), width * height);
+        assert_eq!(alpha.len(), pixels.len());
+        let mut base = vec![0; (width + 2) * height];
+        for y in 0..height {
+            for x in 0..width {
+                base[(x + 1) * height + y] =
+                    rgba(pixels[y * width + x], u32::from(alpha[y * width + x]));
+            }
+        }
+        Self::from_base(base, width, height)
+    }
+
     fn from_base(base: Vec<u32>, width: usize, height: usize) -> Self {
         let mut levels = vec![Level {
             pixels: base,
