@@ -39,6 +39,9 @@ updates:
       rust-crates:
         patterns:
           - "*"
+        exclude-patterns:
+          - "cc"
+          - "slint"
     ignore:
       - dependency-name: "ffmpeg-next"
 
