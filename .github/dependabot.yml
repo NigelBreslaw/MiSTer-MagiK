@@ -28,6 +28,7 @@ updates:
           - "*"
 
   - package-ecosystem: "cargo"
+    versioning-strategy: "increase"
     directories:
       - "**/*"
     schedule:
@@ -39,9 +40,6 @@ updates:
       rust-crates:
         patterns:
           - "*"
-        exclude-patterns:
-          - "cc"
-          - "slint"
     ignore:
       - dependency-name: "ffmpeg-next"
 
