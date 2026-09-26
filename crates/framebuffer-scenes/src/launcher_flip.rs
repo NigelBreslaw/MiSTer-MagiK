@@ -193,6 +193,17 @@ fn diffuse_light(cosine: i64) -> u32 {
     (116 + (140 * cosine.abs() + ONE / 2) / ONE) as u32
 }
 
+/// Signed integer quotient through the hardware floating-point divider.
+/// Launcher geometry remains below f64's exact-integer range, and the cast
+/// back to i64 has the same truncate-towards-zero contract as integer
+/// division. On hard-float ARM this avoids the software 64-bit divide helper
+/// in the per-column perspective loop.
+#[inline]
+fn geometry_quotient(numerator: i64, denominator: i64) -> i64 {
+    debug_assert_ne!(denominator, 0);
+    (numerator as f64 / denominator as f64) as i64
+}
+
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 pub(super) fn draw<F: Fn(u16, usize, usize) -> u16>(
@@ -381,7 +392,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
             let local = if flat {
                 offset
             } else {
-                offset * camera / denominator
+                geometry_quotient(offset * camera, denominator)
             };
             if local < -half - ONE || local > half + ONE {
                 continue;
@@ -394,21 +405,25 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
             if depth <= 0 {
                 continue;
             }
-            let sxq = (local + half) * face.width as i64 * ONE / pose.width - ONE / 2;
+            let sxq =
+                geometry_quotient((local + half) * face.width as i64 * ONE, pose.width) - ONE / 2;
             let next_offset = offset + ONE;
             let next_denominator = camera * projected_cosine / ONE - next_offset * sine / ONE;
             let next_local = if flat {
                 next_offset
             } else if next_denominator.abs() >= 4 {
-                next_offset * camera / next_denominator
+                geometry_quotient(next_offset * camera, next_denominator)
             } else {
                 local
             };
             let footprint = if flat {
                 flat_footprint
             } else {
-                ((next_local - local).abs() * face.width as i64 * ONE / pose.width)
-                    .clamp(ONE, i64::from(u32::MAX)) as u32
+                geometry_quotient(
+                    (next_local - local).abs() * face.width as i64 * ONE,
+                    pose.width,
+                )
+                .clamp(ONE, i64::from(u32::MAX)) as u32
             };
             let sxq = if cosine < 0 {
                 (face.width - 1) as i64 * ONE - sxq
@@ -418,7 +433,7 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
             let step = if flat {
                 flat_step
             } else {
-                depth * face.height as i64 * ONE / pose.height
+                geometry_quotient(depth * face.height as i64 * ONE, pose.height)
             };
             let zero = if flat {
                 flat_zero
@@ -430,13 +445,13 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
             let top = if flat {
                 flat_top
             } else {
-                ((-ONE - zero + step - 1) / step).clamp(clip_top as i64, body_bottom as i64)
-                    as usize
+                geometry_quotient(-ONE - zero + step - 1, step)
+                    .clamp(clip_top as i64, body_bottom as i64) as usize
             };
             let bottom = if flat {
                 flat_bottom
             } else {
-                ((face.height as i64 * ONE - zero) / step)
+                geometry_quotient(face.height as i64 * ONE - zero, step)
                     .clamp(clip_top as i64, body_bottom as i64 - 1) as usize
             };
             if top > bottom {
@@ -454,7 +469,9 @@ fn render<F: Fn(u16, usize, usize) -> u16>(
                 reflection_y: if flat {
                     flat_reflection
                 } else {
-                    ((face.height as i64 * ONE - ONE / 2 - zero) * ONE / step + ONE / 2 + 3 * ONE)
+                    (geometry_quotient((face.height as i64 * ONE - ONE / 2 - zero) * ONE, step)
+                        + ONE / 2
+                        + 3 * ONE)
                         .clamp(clip_top as i64 * ONE, reflection_bottom as i64 * ONE)
                 },
             };
@@ -801,6 +818,29 @@ fn reflected_texel(body: &[u32], row: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hardware_geometry_quotient_matches_integer_truncation() {
+        let denominators = [4, 17, 65_535, 1_048_573, 47_185_919, 96_468_991];
+        let quotients = [-32_000_000_i64, -65_537, -1, 0, 1, 65_537, 32_000_000];
+        for denominator in denominators {
+            for quotient in quotients {
+                for remainder in [0, 1, denominator / 2, denominator - 1] {
+                    for numerator in [
+                        quotient * denominator + remainder,
+                        quotient * denominator - remainder,
+                    ] {
+                        assert_eq!(
+                            geometry_quotient(numerator, denominator),
+                            numerator / denominator,
+                            "{numerator} / {denominator}",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn light_tracks_angle_symmetrically_without_a_face_swap_flash() {
         assert_eq!(diffuse_light(sin_cos(0).1), 256);
