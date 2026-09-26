@@ -9429,6 +9429,7 @@ pub(super) fn run_launcher_loop(
             .set_custom_home_base(custom_home_active);
         if custom_home_active {
             if let Some(session) = launcher_card_home.as_mut() {
+                session.set_target_vblank(pacer.hits().saturating_add(1));
                 session.update(
                     super::launcher_card_home::scene_for_display(ui, layout),
                     crate::launcher_home::LauncherHomeSnapshot::from_runtime(&nav, &catalog),
@@ -9892,6 +9893,7 @@ pub(super) fn run_launcher_loop(
                                 copy.copy_us,
                                 request.render.timestamp_us,
                                 request.render.generation,
+                                request.target_vblank,
                                 now_us.saturating_sub(request.render.timestamp_us),
                             ));
                         }
@@ -9938,6 +9940,7 @@ pub(super) fn run_launcher_loop(
                                 copy.copy_us,
                                 request.render.timestamp_us,
                                 request.render.generation,
+                                request.target_vblank,
                                 now_us.saturating_sub(request.render.timestamp_us),
                             ));
                         }
@@ -12220,8 +12223,13 @@ pub(super) fn run_launcher_loop(
                         .saturating_duration_since(frame_t1)
                         .as_micros()
                         as u64;
-                    if let Some((copy_us, source_timestamp_us, source_generation, age_us)) =
-                        card_direct_measurement.take()
+                    if let Some((
+                        copy_us,
+                        source_timestamp_us,
+                        source_generation,
+                        target_vblank,
+                        age_us,
+                    )) = card_direct_measurement.take()
                     {
                         metrics.counters.card_hidden_copy_us =
                             metrics.counters.card_hidden_copy_us.saturating_add(copy_us);
@@ -12235,6 +12243,7 @@ pub(super) fn run_launcher_loop(
                             metrics.counters.card_redisplayed_presentations += 1;
                         }
                         metrics.last_card_source_generation = source_generation;
+                        metrics.note_card_target_vblank(target_vblank, pacer.hits());
                         if let Some(card_session) = launcher_card_home.as_mut() {
                             let delta = card_session.pipeline_counter_delta();
                             metrics.counters.card_producer_total_us += delta.producer_total_us;

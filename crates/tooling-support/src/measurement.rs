@@ -19,6 +19,9 @@ pub struct Counters {
     pub card_stale: u64,
     pub card_unique_presentations: u64,
     pub card_redisplayed_presentations: u64,
+    pub card_target_vblank_misses: u64,
+    pub card_target_vblank_repeats: u64,
+    pub card_target_vblank_skips: u64,
     pub card_synchronous_presentations: u64,
     pub card_producer_total_us: u64,
     pub card_primary_tile_us: u64,
@@ -51,8 +54,35 @@ pub struct PresentationMetrics {
     pub error: Option<String>,
     pub last_card_source_timestamp_us: u64,
     pub last_card_source_generation: u64,
+    pub last_card_target_vblank: u64,
+    pub last_card_actual_vblank: u64,
 }
 impl PresentationMetrics {
+    pub fn note_card_target_vblank(&mut self, target_vblank: u64, actual_vblank: u64) {
+        if target_vblank == 0 {
+            return;
+        }
+        if actual_vblank != target_vblank {
+            self.counters.card_target_vblank_misses =
+                self.counters.card_target_vblank_misses.saturating_add(1);
+        }
+        if self.last_card_target_vblank != 0 {
+            if target_vblank == self.last_card_target_vblank {
+                self.counters.card_target_vblank_repeats =
+                    self.counters.card_target_vblank_repeats.saturating_add(1);
+            } else if target_vblank > self.last_card_target_vblank.saturating_add(1) {
+                self.counters.card_target_vblank_skips =
+                    self.counters.card_target_vblank_skips.saturating_add(
+                        target_vblank
+                            .saturating_sub(self.last_card_target_vblank)
+                            .saturating_sub(1),
+                    );
+            }
+        }
+        self.last_card_target_vblank = target_vblank;
+        self.last_card_actual_vblank = actual_vblank;
+    }
+
     pub fn finish_window(&mut self, end_ms: u64, width: usize, height: usize, instrumented: bool) {
         let (start_ms, baseline) = self.window_start.as_ref().expect("measurement started");
         let c = &self.counters;
@@ -96,6 +126,20 @@ impl PresentationMetrics {
             "evidence_error":self.error,"drop_baseline_available":self.last_physical_drop_count.is_some()}),
         );
         let window = self.window.as_mut().unwrap();
+        window["card_target_vblank_misses"] = json!(
+            c.card_target_vblank_misses
+                .saturating_sub(baseline.card_target_vblank_misses)
+        );
+        window["card_target_vblank_repeats"] = json!(
+            c.card_target_vblank_repeats
+                .saturating_sub(baseline.card_target_vblank_repeats)
+        );
+        window["card_target_vblank_skips"] = json!(
+            c.card_target_vblank_skips
+                .saturating_sub(baseline.card_target_vblank_skips)
+        );
+        window["last_card_target_vblank"] = json!(self.last_card_target_vblank);
+        window["last_card_actual_vblank"] = json!(self.last_card_actual_vblank);
         window["process_cpu_us"] = json!(cpu_us);
         for (index, name) in ["render", "transfer", "frame_to_present"]
             .into_iter()
@@ -144,6 +188,9 @@ impl PresentationMetrics {
             "card_superseded":self.counters.card_superseded,"card_stale":self.counters.card_stale,
             "card_unique_presentations":self.counters.card_unique_presentations,
             "card_redisplayed_presentations":self.counters.card_redisplayed_presentations,
+            "card_target_vblank_misses":self.counters.card_target_vblank_misses,
+            "card_target_vblank_repeats":self.counters.card_target_vblank_repeats,
+            "card_target_vblank_skips":self.counters.card_target_vblank_skips,
             "card_producer_total_us":self.counters.card_producer_total_us,
             "card_primary_tile_us":self.counters.card_primary_tile_us,
             "card_secondary_tile_us":self.counters.card_secondary_tile_us,
@@ -153,6 +200,8 @@ impl PresentationMetrics {
             "card_source_age_us":self.counters.card_source_age_us,
             "last_card_source_timestamp_us":self.last_card_source_timestamp_us,
             "last_card_source_generation":self.last_card_source_generation,
+            "last_card_target_vblank":self.last_card_target_vblank,
+            "last_card_actual_vblank":self.last_card_actual_vblank,
             "motion_started_ms":self.motion_started_ms,"window":self.window,"evidence_error":self.error})
     }
 }
@@ -231,5 +280,19 @@ mod tests {
         ] {
             assert_eq!(window[key], 0);
         }
+    }
+
+    #[test]
+    fn card_target_vblank_evidence_counts_misses_repeats_and_skips() {
+        let mut metrics = PresentationMetrics::default();
+        metrics.note_card_target_vblank(10, 10);
+        metrics.note_card_target_vblank(10, 11);
+        metrics.note_card_target_vblank(13, 13);
+
+        assert_eq!(metrics.counters.card_target_vblank_misses, 1);
+        assert_eq!(metrics.counters.card_target_vblank_repeats, 1);
+        assert_eq!(metrics.counters.card_target_vblank_skips, 2);
+        assert_eq!(metrics.last_card_target_vblank, 13);
+        assert_eq!(metrics.last_card_actual_vblank, 13);
     }
 }
