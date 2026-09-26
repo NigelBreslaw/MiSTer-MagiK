@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
     inputs:
       main_revision:
-        description: Exact maintained Main fork SHA (reuse the qualified candidate SHA when publishing)
-        required: true
+        description: Optional Main fork SHA override (blank uses latest mister-magik commit)
+        required: false
         type: string
       publish:
         description: Promote the verified candidate as the next platform release
@@ -87,10 +87,13 @@ jobs:
           MAIN_REVISION: ${{ inputs.main_revision }}
         run: |
           set -euo pipefail
-          main_revision="$MAIN_REVISION"
-          [[ "$main_revision" =~ ^[0-9a-f]{40}$ ]]
           git clone --no-checkout --single-branch --branch "$MAIN_BRANCH" \
             "https://github.com/$MAIN_REPOSITORY.git" build/main-source-validation
+          main_revision="$MAIN_REVISION"
+          if [[ -z "$main_revision" ]]; then
+            main_revision="$(git -C build/main-source-validation rev-parse "origin/$MAIN_BRANCH")"
+          fi
+          [[ "$main_revision" =~ ^[0-9a-f]{40}$ ]]
           git -C build/main-source-validation merge-base --is-ancestor "$main_revision" "origin/$MAIN_BRANCH"
           python3 scripts/release/platform/main-component.py verify-source \
             --checkout build/main-source-validation --revision "$main_revision" \
