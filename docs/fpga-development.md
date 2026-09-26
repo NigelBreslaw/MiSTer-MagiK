@@ -25,8 +25,11 @@ patched variants are bound to their source inputs, pinned
 revisions, Quartus seed and date, preparation-script identity, reports,
 metadata, and RBF hashes. Hidden `.VARIANT.building` directories are incomplete
 staging and never cache hits. Do not edit cached reports or copy evidence between variants. The typed runner
-creates a unique run under `runs/` and preserves incomplete stages. It currently
-performs fresh matched builds; it does not infer cache hits from old reports.
+creates a unique run under `runs/` and preserves incomplete stages. Use `--reuse-comparisons /absolute/path/to/prior/run` to reuse completed stock
+and baseline builds after their source inputs, toolchain, seed/date, driver and
+every saved file hash have been verified. The new run links the original evidence
+and records its provenance; it never rewrites old metadata. The diagnostic
+candidate is always rebuilt. Without that option all three builds are fresh.
 
 Signoff builds `refs/heads/main^{commit}`. Commit the frozen candidate and move
 local `main` before synthesis. Preserve the root commit and patched-source,

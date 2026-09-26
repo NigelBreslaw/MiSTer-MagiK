@@ -18,6 +18,7 @@ def main(root: Path, argv: list[str]) -> int:
     signoff = commands.add_parser("signoff")
     signoff.add_argument("--local-root", type=Path)
     signoff.add_argument("--menu-source", type=Path)
+    signoff.add_argument("--reuse-comparisons", type=Path)
     for variant in ("stock", "baseline", "patched"):
         signoff.add_argument("--" + variant, type=Path, action="append")
     args = parser.parse_args(argv)
@@ -39,7 +40,10 @@ def main(root: Path, argv: list[str]) -> int:
         ):
             try:
                 return fpga_local.signoff(
-                    root, fpga_local.local_root(root, args.local_root), args.menu_source
+                    root,
+                    fpga_local.local_root(root, args.local_root),
+                    args.menu_source,
+                    args.reuse_comparisons,
                 )
             except ValueError as error:
                 parser.error(str(error))

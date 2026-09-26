@@ -100,7 +100,69 @@ def clone_at(source, destination, revision, cwd):
     run(["git", "checkout", "--detach", revision], cwd=destination)
 
 
-def signoff(root: Path, cache: Path, menu_source: Path | None = None) -> int:
+def verify_comparison(
+    previous: Path, variant: str, frozen, source: Path, driver: Path
+) -> Path:
+    """Reuse only complete comparison builds with identical synthesis inputs."""
+    if variant not in {"stock", "baseline"}:
+        raise ValueError("only comparison variants can be reused")
+    completed = previous.resolve() / variant
+    manifest = json.loads((completed / "completed.json").read_text())
+    if manifest["variant"] != variant:
+        raise ValueError("comparison variant mismatch")
+    for key in (
+        "menu",
+        "baseline",
+        "seed",
+        "date",
+        "prepare_sha256",
+        "quartus_version",
+        "container_image",
+    ):
+        if manifest["inputs"][key] != frozen[key]:
+            raise ValueError("comparison input mismatch: " + key)
+    if manifest["driver_sha256"] != sha(driver):
+        raise ValueError("comparison driver mismatch")
+    if variant == "stock":
+        # Stock omits all diagnostic RTL and SDC. These are the candidate-owned
+        # files it reads for synthesis, reporting, and platform/protocol identity.
+        for name in (
+            "scripts/build-fpga-vblank-latch-core.sh",
+            "mister/platform/fpga/menu-vblank-latch/report_top_timing.tcl",
+            "mister/platform/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh",
+            "mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h",
+        ):
+            old = run(
+                ["git", "rev-parse", manifest["inputs"]["commit"] + ":" + name],
+                cwd=source,
+            )
+            new = run(["git", "rev-parse", frozen["commit"] + ":" + name], cwd=source)
+            if old != new:
+                raise ValueError("stock synthesis input changed: " + name)
+    files = manifest["files"]
+    if (
+        "menu-magik-vblank-latch.rbf" not in files
+        or "menu-magik-vblank-latch.metadata.txt" not in files
+    ):
+        raise ValueError("comparison manifest is incomplete")
+    for name, digest in files.items():
+        path = completed / name
+        if (
+            Path(name).is_absolute()
+            or ".." in Path(name).parts
+            or not path.is_file()
+            or sha(path) != digest
+        ):
+            raise ValueError("comparison evidence mismatch: " + name)
+    return completed
+
+
+def signoff(
+    root: Path,
+    cache: Path,
+    menu_source: Path | None = None,
+    reuse_comparisons: Path | None = None,
+) -> int:
     frozen = identity(root)
     install = cache / "quartus-lite-17.0/apple-intelFPGA_lite"
     image = os.environ.get(
@@ -251,7 +313,6 @@ def signoff(root: Path, cache: Path, menu_source: Path | None = None) -> int:
         ("patched", candidate, "1"),
     ]:
         stage = output / ("." + variant + ".building")
-        stage.mkdir()
         driver = source / "scripts/build-fpga-vblank-latch-core.sh"
         if variant == "baseline":
             # Only adapt the old driver's invocation guard. Its RTL, constraints,
@@ -268,6 +329,32 @@ def signoff(root: Path, cache: Path, menu_source: Path | None = None) -> int:
                 )
             )
             driver = adapter
+        if reuse_comparisons and variant in {"stock", "baseline"}:
+            previous = verify_comparison(
+                reuse_comparisons, variant, frozen, source, driver
+            )
+            completed = output / variant
+            completed.symlink_to(previous, target_is_directory=True)
+            (output / (variant + "-reuse.json")).write_text(
+                json.dumps(
+                    {
+                        "original_directory": str(previous),
+                        "original_manifest_sha256": sha(previous / "completed.json"),
+                        "reason": "identical comparison synthesis inputs; original metadata preserved",
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
+            reports[variant] = sorted(
+                p
+                for folder in (completed, completed / "reports")
+                for p in folder.glob("*")
+                if p.is_file() and p.suffix in {".log", ".rpt", ".summary"}
+            )
+            print(f"Verified and reused {variant}: {previous}", flush=True)
+            continue
+        stage.mkdir()
         variant_env = dict(
             env,
             MISTER_FPGA_APPLY_PATCH=patched,
@@ -323,6 +410,7 @@ def signoff(root: Path, cache: Path, menu_source: Path | None = None) -> int:
         "result": "pass",
         "inputs": frozen,
         "delta_sha256": sha(output / "quartus-delta.json"),
+        "reused_comparisons": {p.name: sha(p) for p in output.glob("*-reuse.json")},
         "variants": {v: sha(output / v / "completed.json") for v in reports},
         "proof_files": {
             str(p.relative_to(proofs)): sha(p) for p in proofs.rglob("*") if p.is_file()

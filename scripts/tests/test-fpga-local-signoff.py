@@ -44,6 +44,93 @@ class LocalSignoff(unittest.TestCase):
                 run.assert_not_called()
             self.assertEqual(json.loads(report.read_text()), {"saved": True})
 
+    def comparison_fixture(self, root):
+        completed = root / "baseline"
+        completed.mkdir()
+        driver = root / "driver"
+        driver.write_text("driver")
+        files = {}
+        for name in (
+            "menu-magik-vblank-latch.rbf",
+            "menu-magik-vblank-latch.metadata.txt",
+        ):
+            (completed / name).write_text(name)
+            files[name] = fpga_local.sha(completed / name)
+        frozen = {
+            key: "fixed"
+            for key in (
+                "menu",
+                "baseline",
+                "seed",
+                "date",
+                "prepare_sha256",
+                "quartus_version",
+                "container_image",
+            )
+        }
+        manifest = {
+            "variant": "baseline",
+            "inputs": frozen,
+            "files": files,
+            "driver_sha256": fpga_local.sha(driver),
+        }
+        (completed / "completed.json").write_text(json.dumps(manifest))
+        return frozen, driver, completed
+
+    def test_verified_reuse_preserves_original_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            frozen, driver, completed = self.comparison_fixture(root)
+            before = (completed / "completed.json").read_bytes()
+            self.assertEqual(
+                fpga_local.verify_comparison(root, "baseline", frozen, root, driver),
+                completed.resolve(),
+            )
+            self.assertEqual((completed / "completed.json").read_bytes(), before)
+
+    def test_reuse_rejects_changed_seed_driver_and_artifact(self):
+        for change in ("seed", "driver", "artifact"):
+            with (
+                self.subTest(change=change),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                frozen, driver, completed = self.comparison_fixture(root)
+                if change == "seed":
+                    frozen = dict(frozen, seed="other")
+                elif change == "driver":
+                    driver.write_text("changed")
+                else:
+                    (completed / "menu-magik-vblank-latch.rbf").write_text("changed")
+                with self.assertRaisesRegex(ValueError, "mismatch"):
+                    fpga_local.verify_comparison(root, "baseline", frozen, root, driver)
+
+    def test_stock_reuse_rejects_changed_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            frozen, driver, completed = self.comparison_fixture(root)
+            manifest = json.loads((completed / "completed.json").read_text())
+            manifest["variant"] = "stock"
+            manifest["inputs"]["commit"] = "old"
+            (completed / "completed.json").write_text(json.dumps(manifest))
+            completed.rename(root / "stock")
+            frozen = dict(frozen, commit="new")
+            with patch.object(fpga_local, "run", side_effect=["old-blob", "new-blob"]):
+                with self.assertRaisesRegex(
+                    ValueError, "stock synthesis input changed"
+                ):
+                    fpga_local.verify_comparison(root, "stock", frozen, root, driver)
+
+    def test_candidate_cannot_be_reused(self):
+        with self.assertRaisesRegex(ValueError, "only comparison"):
+            fpga_local.verify_comparison(
+                Path("/fixture"),
+                "patched",
+                {},
+                Path("/fixture"),
+                Path("/fixture/driver"),
+            )
+
     def test_relative_cache_override_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "absolute"):
             fpga_local.local_root(Path("/fixture"), Path("relative"))

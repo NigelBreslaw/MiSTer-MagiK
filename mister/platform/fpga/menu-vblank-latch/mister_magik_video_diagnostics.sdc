@@ -53,7 +53,7 @@ set_net_delay -max 10.0 -from $magik_causal_output_request_source -to $magik_cau
 set magik_causal_output_response_source [magik_require_registers causal_output_response_source {*mister_magik_scaler_causal_state:magik_scaler_causal_state|output_response} 1]
 set magik_causal_output_response_destination [magik_require_registers causal_output_response_destination {*mister_magik_scaler_causal_state:magik_scaler_causal_state|output_response_meta} 1]
 set_net_delay -max 10.0 -from $magik_causal_output_response_source -to $magik_causal_output_response_destination
-set magik_causal_reset_source [magik_require_registers causal_reset_source {*|reset_req} 1]
+set magik_causal_reset_source [magik_require_registers causal_reset_source {reset_req} 1]
 set magik_causal_reset_destination [magik_require_registers causal_reset_destination {*mister_magik_scaler_causal_state:magik_scaler_causal_state|reset_meta} 1]
 set_net_delay -max 10.0 -from $magik_causal_reset_source -to $magik_causal_reset_destination
 set magik_causal_bank [magik_require_registers causal_bank \
@@ -64,7 +64,7 @@ set magik_causal_selector [magik_require_registers causal_selector \
  {*mister_magik_scaler_causal_state:magik_scaler_causal_state|select_first} 1]
 set magik_causal_crc [magik_require_registers causal_crc \
  {*mister_magik_scaler_causal_state:magik_scaler_causal_state|crc_work*} 16]
-set magik_causal_uio [magik_require_registers causal_uio {*|io_dout_sys*} 16]
+set magik_causal_uio [magik_require_registers causal_uio {io_dout_sys*} 16]
 set_net_delay -max 10.0 -from $magik_causal_selector -to $magik_causal_bank
 set_net_delay -max 10.0 -from $magik_causal_bank -to $magik_causal_uio
 set_net_delay -max 10.0 -from $magik_causal_output -to $magik_causal_uio
