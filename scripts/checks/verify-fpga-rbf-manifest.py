@@ -25,6 +25,7 @@ LEGACY_SCHEMA14_RBF_SHA256 = (
     "ef1920500c925d35b23808792f0930954446a6030b33d3e92c0f4feccd23106e"
 )
 DIAGNOSTIC_ARCHITECTURES = {
+    "scaler-memory-boundary-v1",
     "scaler-fetch-liveness-first-stall-v1",
     "scaler-fetch-no-request-gates-v1",
     "scaler-output-scheduler-gates-v1",
