@@ -6,11 +6,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import json
+import re
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / "checks/check-fpga-quartus-delta.py"
 
@@ -1180,6 +1184,145 @@ class QuartusDeltaTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertEqual(timing_report.count("-nworst 100"), 1)
         self.assertNotIn("-nworst 50", timing_report)
+
+
+class CausalLedExceptionTest(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("quartus_delta", SCRIPT)
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+        self.source = self.module.CAUSAL_LED_SOURCE
+        self.clock = self.module.CAUSAL_LED_CLOCK
+        self.canonical = [
+            (self.source, port, self.clock) for port in ("LED[0]", "LED[4]")
+        ] + [(f"source[{i}]", f"port[{i}]", "clk") for i in range(156)]
+        self.extra = [
+            (self.source + "~DUPLICATE", port, self.clock)
+            for port in ("LED[0]", "LED[4]")
+        ]
+        # Synthetic inventory replaces only the pinned identity, never validation.
+        digest = hashlib.sha256(
+            json.dumps(sorted(self.canonical), separators=(",", ":")).encode()
+        ).hexdigest()
+        self.override = patch.object(
+            self.module, "CAUSAL_LED_CANONICAL_PATHS_SHA256", digest
+        )
+        self.override.start()
+        self.addCleanup(self.override.stop)
+        self.fitter = (
+            f"; {self.source} ; Duplicated ; "
+            "Router Logic Cell Insertion and Logic Duplication ; "
+            f"Routability optimization ; ; ; {self.source}~DUPLICATE ; ; ;\n"
+        )
+
+    def table(self, kind, paths=None):
+        if paths is None:
+            paths = self.canonical + self.extra
+        return (
+            f"; {kind} Analysis ;\n; Unconstrained Output Port Paths ;\n"
+            "; From ; To ; From Clocks ;\n"
+            + "".join("; " + " ; ".join(row) + " ;\n" for row in paths)
+            + "\n"
+        )
+
+    def evidence(self):
+        return self.fitter + self.table("Setup") + self.table("Hold")
+
+    def test_exact_two_led_copies_require_both_complete_tables(self):
+        result = self.module.validate_causal_led_exception(self.evidence())
+        self.assertTrue(result["valid"], result)
+        self.assertEqual(result["fitter_duplication_records"], 1)
+        self.assertEqual(result["allowed_extra_paths"], sorted(self.extra))
+
+    def test_rejects_missing_or_ambiguous_fitter_evidence(self):
+        for fitter in ("", self.fitter * 2, self.fitter.replace("Duplicated", "Moved")):
+            with self.subTest(fitter=fitter):
+                result = self.module.validate_causal_led_exception(
+                    fitter + self.table("Setup") + self.table("Hold")
+                )
+                self.assertFalse(result["valid"], result)
+
+    def test_rejects_missing_duplicate_or_malformed_table(self):
+        for text in (
+            self.fitter + self.table("Setup"),
+            self.evidence() + self.table("Hold"),
+            self.evidence().replace("; From ; To ; From Clocks ;", ""),
+            self.evidence().replace("; source[0] ;", "; source[0] ; extra ;"),
+        ):
+            with self.subTest(text=text[:60]):
+                self.assertFalse(
+                    self.module.validate_causal_led_exception(text)["valid"]
+                )
+
+    def test_rejects_other_endpoint_clock_or_canonical_path(self):
+        for old, new in (
+            ("LED[4]", "LED[5]"),
+            ("act_cnt[20]~DUPLICATE", "act_cnt[21]~DUPLICATE"),
+            (self.clock, "other_clock"),
+            ("source[0]", "other_source"),
+            ("port[0]", "other_port"),
+        ):
+            with self.subTest(old=old):
+                self.assertFalse(
+                    self.module.validate_causal_led_exception(
+                        self.evidence().replace(old, new)
+                    )["valid"]
+                )
+
+    def test_rejects_missing_original_extra_path_or_repeated_row(self):
+        valid = self.canonical + self.extra
+        for paths in (valid[1:], valid + [("new", "port", "clk")], valid + [valid[0]]):
+            with self.subTest(count=len(paths)):
+                result = self.module.validate_causal_led_exception(
+                    self.fitter + self.table("Setup", paths) + self.table("Hold")
+                )
+                self.assertFalse(result["valid"], result)
+
+    def compare(self, *, causal=True, extra="", count=160):
+        baseline = self.module.parse_report(
+            BASE
+            + self.table("Setup", self.canonical)
+            + self.table("Hold", self.canonical),
+            re.compile("magik"),
+        )
+        candidate = self.module.parse_report(
+            BASE.replace("158 ; 158", f"{count} ; {count}")
+            + CAUSAL_SYNC
+            + self.evidence()
+            + extra,
+            re.compile("magik"),
+        )
+        baseline["diagnostic_reports"] = VALID_DIAGNOSTIC_REPORTS
+        candidate["diagnostic_reports"] = causal_reports()
+        return self.module.compare(
+            baseline, baseline, candidate, experimental_scaler_causal=causal
+        )
+
+    def test_exception_is_causal_only_and_keeps_raw_count(self):
+        reasons, details = self.compare()
+        self.assertEqual(reasons, [], details)
+        self.assertTrue(details["causal_led_output_paths_exception"])
+        self.assertEqual(details["patched_unconstrained_output_paths"], 160)
+        reasons, details = self.compare(causal=False)
+        self.assertIn("unconstrained_output_paths_mismatch", reasons)
+        self.assertFalse(details["causal_led_output_paths_exception"])
+        reasons, details = self.compare(count=161)
+        self.assertIn("unconstrained_output_paths_mismatch", reasons)
+
+    def test_exception_cannot_hide_timing_failure_or_conflicting_summary(self):
+        reasons, details = self.compare(extra="Worst-case setup slack is 0.100\n")
+        self.assertTrue(reasons, details)
+        self.assertTrue(details["causal_led_output_paths_exception"])
+        reasons, details = self.compare(
+            extra="; Unconstrained Output Port Paths ; 161 ; 161 ;\n"
+        )
+        self.assertIn("unconstrained_output_paths_mismatch", reasons)
+        self.assertFalse(details["causal_led_output_paths_exception"])
+        reasons, details = self.compare(
+            extra="; Unconstrained Output Port Paths ; 160 ; 161 ;\n"
+        )
+        self.assertIn("unconstrained_output_paths_mismatch", reasons)
+        self.assertFalse(details["causal_led_output_paths_exception"])
 
 
 if __name__ == "__main__":

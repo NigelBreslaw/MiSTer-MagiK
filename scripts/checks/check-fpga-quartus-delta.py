@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -405,6 +406,107 @@ def parse_expected_metastability_chains(
     return mtbf_years, sorted(set(missing))
 
 
+# Approved 2026-09-26: only the act_cnt[20] copies driving LED[0]/LED[4].
+# Canonical 158-row inventory audited in candidate 31edb466a3a6; hash is over
+# sorted [source, destination, source-clock] rows, compact JSON, UTF-8. Retaining
+# this identity prevents the exception from hiding another changed endpoint.
+CAUSAL_LED_CANONICAL_PATHS_SHA256 = (
+    "728ad6fc7c9d6b7250c62a317359ba26c4f3debf2e01922d20c6caa950486b8a"
+)
+CAUSAL_LED_SOURCE = "emu:emu|act_cnt[20]"
+CAUSAL_LED_CLOCK = (
+    "emu|pll|pll_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk"
+)
+
+
+def validate_causal_led_exception(text: str) -> dict[str, object]:
+    """Fail closed unless both full path tables prove the approved LED copies."""
+    sections: dict[str, list[list[tuple[str, ...]]]] = {"Setup": [], "Hold": []}
+    analysis = ""
+    rows: list[tuple[str, ...]] | None = None
+    header = False
+    duplication_count = 0
+    errors: list[str] = []
+    for line in text.splitlines() + [""]:
+        cells = [cell.strip() for cell in line.split(";")]
+        if cells == [
+            "",
+            CAUSAL_LED_SOURCE,
+            "Duplicated",
+            "Router Logic Cell Insertion and Logic Duplication",
+            "Routability optimization",
+            "",
+            "",
+            CAUSAL_LED_SOURCE + "~DUPLICATE",
+            "",
+            "",
+            "",
+        ]:
+            duplication_count += 1
+        if len(cells) == 3 and cells[1] in ("Setup Analysis", "Hold Analysis"):
+            analysis = cells[1].split()[0]
+        if (
+            len(cells) == 5
+            and cells[1] == "Unconstrained Output Port Paths"
+            and cells[2:4] != ["160", "160"]
+        ):
+            errors.append("conflicting_path_summary")
+        if cells == ["", "Unconstrained Output Port Paths", ""]:
+            if rows is not None:
+                errors.append("unterminated_path_table")
+            rows = []
+            header = False
+        elif rows is not None:
+            if cells == ["", "From", "To", "From Clocks", ""]:
+                header = True
+            elif len(cells) == 5 and cells[0] == cells[-1] == "":
+                rows.append(tuple(cells[1:4]))
+            elif line.lstrip().startswith(";"):
+                errors.append("malformed_path_row")
+            elif not line.strip():
+                if analysis not in sections or not header:
+                    errors.append("path_table_header")
+                else:
+                    sections[analysis].append(rows)
+                rows = None
+    if duplication_count != 1:
+        errors.append("fitter_duplication_evidence")
+    expected_extra = {
+        (CAUSAL_LED_SOURCE + "~DUPLICATE", port, CAUSAL_LED_CLOCK)
+        for port in ("LED[0]", "LED[4]")
+    }
+    expected_original = {
+        (CAUSAL_LED_SOURCE, port, CAUSAL_LED_CLOCK) for port in ("LED[0]", "LED[4]")
+    }
+    hashes = {}
+    for kind, tables in sections.items():
+        if len(tables) != 1:
+            errors.append(kind + "_table_count")
+            continue
+        paths = tables[0]
+        unique = set(paths)
+        if len(paths) != 160 or len(unique) != 160:
+            errors.append(kind + "_path_count")
+        if not expected_extra | expected_original <= unique:
+            errors.append(kind + "_led_identity")
+        canonical = sorted(unique - expected_extra)
+        digest = hashlib.sha256(
+            json.dumps(canonical, separators=(",", ":")).encode()
+        ).hexdigest()
+        hashes[kind] = digest
+        if digest != CAUSAL_LED_CANONICAL_PATHS_SHA256:
+            errors.append(kind + "_canonical_path_identity")
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "expected_raw_path_count": 160,
+        "expected_canonical_path_count": 158,
+        "canonical_sha256": hashes,
+        "allowed_extra_paths": sorted(expected_extra),
+        "fitter_duplication_records": duplication_count,
+    }
+
+
 def parse_report(
     text: str,
     synchronizer_re: re.Pattern[str],
@@ -537,6 +639,7 @@ def parse_report(
         "diagnostic_analysis_labels": diagnostic_analysis_labels,
         "uncalculated_fractions": uncalculated_fractions,
         "unconstrained_output_paths": unconstrained_output_paths,
+        "causal_led_output_path_evidence": validate_causal_led_exception(text),
         "quartus_policy": quartus_policy,
         "quartus_processor_use": quartus_processor_use,
     }
@@ -921,6 +1024,9 @@ def compare(
         patched_output_paths, list
     )
     diagnostic_output_paths_exception = False
+    causal_led_exception = False
+    led_evidence = patched["causal_led_output_path_evidence"]
+    assert isinstance(led_evidence, dict)
     if not baseline_output_paths or not patched_output_paths:
         reasons.append("unconstrained_output_summary_missing")
     else:
@@ -930,17 +1036,24 @@ def compare(
             and max(patched_output_paths)
             == EXPECTED_DIAGNOSTIC_UNCONSTRAINED_OUTPUT_PATHS
         )
+    if experimental_scaler_causal and baseline_output_paths and patched_output_paths:
+        causal_led_exception = (
+            set(baseline_output_paths) == {EXPECTED_UNCONSTRAINED_OUTPUT_PATHS}
+            and set(patched_output_paths) == {160}
+            and led_evidence["valid"] is True
+        )
+    output_paths_exception = diagnostic_output_paths_exception or causal_led_exception
     if (
         baseline_output_paths
         and patched_output_paths
         and max(patched_output_paths) != max(baseline_output_paths)
-        and not diagnostic_output_paths_exception
+        and not output_paths_exception
     ):
         reasons.append("unconstrained_output_paths_mismatch")
     elif (
         patched_output_paths
         and max(patched_output_paths) != EXPECTED_UNCONSTRAINED_OUTPUT_PATHS
-        and not diagnostic_output_paths_exception
+        and not output_paths_exception
     ):
         reasons.append("unconstrained_output_paths_not_canonical")
 
@@ -1171,6 +1284,10 @@ def compare(
         "baseline_unconstrained_output_paths": max(baseline_output_paths, default=None),
         "patched_unconstrained_output_paths": max(patched_output_paths, default=None),
         "diagnostic_unconstrained_output_paths_exception": diagnostic_output_paths_exception,
+        "causal_led_output_paths_exception": causal_led_exception,
+        "causal_led_output_path_evidence": led_evidence
+        if experimental_scaler_causal
+        else None,
         "stock_resources": stock["resources"],
         "baseline_resources": baseline_resources,
         "patched_resources": patched["resources"],

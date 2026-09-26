@@ -52,6 +52,17 @@ cuts do not suppress this analysis. Missing/duplicate paths, wrong corners,
 non-finite delays, or an exceeded bound fail signoff. This adds no false paths,
 changes no fitter settings, and retains the original numerical payload bound.
 
+The causal profile has one explicitly approved output-path count exception
+(2026-09-26): 160 raw paths are allowed only for the fitter-created duplicate
+of `emu:emu|act_cnt[20]` driving `LED[0]` and `LED[4]`. Both complete setup and
+hold tables must contain those copies and their original paths with the exact
+clock, and the fitter must report the exact duplication. After removing just
+those two rows, all 158 remaining source/destination/clock tuples must match the
+pinned inventory hash audited from candidate `31edb466a3a6`. The checker retains
+the raw count and exception evidence, rejects other changes, and applies every
+existing area, timing and CDC gate. This exception does not apply to other
+profiles or authorize RTL, seed, constraint or fitter changes.
+
 ## Development sequence
 
 1. State the causal failure and invariants; distinguish known RTL causes from
