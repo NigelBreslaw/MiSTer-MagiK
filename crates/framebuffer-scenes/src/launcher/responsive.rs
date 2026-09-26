@@ -5,6 +5,26 @@
 //! baked at the selected card's exact output dimensions, never screen-scaled.
 use super::*;
 use crate::bitmap_text::BitmapGlyph;
+use std::borrow::Cow;
+
+// CRT roles share one scaled font; HDMI borrows the supplied role fonts.
+pub(super) enum Fonts<'a> {
+    Uniform(Cow<'a, BitmapFont>),
+    Roles(LauncherTypography<'a>),
+}
+
+impl Fonts<'_> {
+    fn get(&self, role: TextRole) -> &BitmapFont {
+        match self {
+            Self::Uniform(font) => font,
+            Self::Roles(fonts) => match role {
+                TextRole::Heading => fonts.heading,
+                TextRole::Number => fonts.number,
+                TextRole::Metadata => fonts.metadata,
+            },
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct Layout {
@@ -84,34 +104,24 @@ impl Layout {
         })
     }
 
-    fn font(&self, typography: Option<LauncherTypography<'_>>, role: TextRole) -> BitmapFont {
-        let fallback = legacy_font();
-        let source = typography
-            .map(|fonts| {
-                if self.crt {
-                    fonts.fallback
-                } else {
-                    match role {
-                        TextRole::Heading => fonts.heading,
-                        TextRole::Number => fonts.number,
-                        TextRole::Metadata => fonts.metadata,
-                    }
-                }
-            })
-            .unwrap_or(&fallback);
-        scale_font(source, self.sx, self.sy)
+    pub fn fonts<'a>(&self, typography: Option<LauncherTypography<'a>>) -> Fonts<'a> {
+        if let Some(fonts) = typography.filter(|_| !self.crt) {
+            return Fonts::Roles(fonts);
+        }
+        let font = typography
+            .map(|fonts| Cow::Borrowed(fonts.fallback))
+            .unwrap_or_else(|| Cow::Owned(legacy_font()));
+        Fonts::Uniform(if (self.sx, self.sy) == (1, 1) {
+            font
+        } else {
+            Cow::Owned(scale_font(&font, self.sx, self.sy))
+        })
     }
 
-    pub fn chrome(
-        &self,
-        pixels: &mut [Rgb565Pixel],
-        data: LauncherData<'_>,
-        typography: Option<LauncherTypography<'_>>,
-    ) {
+    pub fn chrome(&self, pixels: &mut [Rgb565Pixel], data: LauncherData<'_>, fonts: &Fonts<'_>) {
         pixels.fill(Rgb565Pixel(BACKGROUND));
-        let heading = self.font(typography, TextRole::Heading);
-        let metadata = self.font(typography, TextRole::Metadata);
-        let number = self.font(typography, TextRole::Number);
+        let heading = fonts.get(TextRole::Heading);
+        let metadata = fonts.get(TextRole::Metadata);
         let left = self.margin_x;
         let right = self.width.saturating_sub(left);
         let draw = |pixels: &mut [Rgb565Pixel],
@@ -130,10 +140,10 @@ impl Layout {
                 colour,
             );
         };
-        draw(pixels, &heading, left, self.margin_y, "MISTER MAGIK", CREAM);
+        draw(pixels, heading, left, self.margin_y, "MISTER MAGIK", CREAM);
         draw(
             pixels,
-            &heading,
+            heading,
             right.saturating_sub(heading.measure(data.clock)),
             self.margin_y,
             data.clock,
@@ -143,7 +153,7 @@ impl Layout {
         self.rule(pixels, header_bottom);
         draw(
             pixels,
-            &metadata,
+            metadata,
             left,
             header_bottom + 8 * self.sy,
             "COLLECTIONS",
@@ -153,7 +163,7 @@ impl Layout {
         self.rule(pixels, footer_rule);
         draw(
             pixels,
-            &metadata,
+            metadata,
             left,
             footer_rule + 5 * self.sy,
             "A OPEN",
@@ -161,7 +171,7 @@ impl Layout {
         );
         draw(
             pixels,
-            &metadata,
+            metadata,
             left + metadata.measure("A OPEN") + 18 * self.sx,
             footer_rule + 5 * self.sy,
             "B BACK",
@@ -172,7 +182,7 @@ impl Layout {
         let browse = "<  BROWSE CARDS  >";
         draw(
             pixels,
-            &metadata,
+            metadata,
             self.width.saturating_sub(metadata.measure(browse)) / 2,
             self.bottom + 3 * self.sy,
             browse,
@@ -181,30 +191,24 @@ impl Layout {
         if self.crt {
             return;
         }
+        let number = fonts.get(TextRole::Number);
         self.rule(pixels, self.library_y);
         let y = self.library_y + 24;
-        draw(pixels, &metadata, left, y, "YOUR LIBRARY", MUTED);
+        draw(pixels, metadata, left, y, "YOUR LIBRARY", MUTED);
         draw(
             pixels,
-            &number,
+            number,
             left,
             y + 38,
             &data.library_games.to_string(),
             CREAM,
         );
-        draw(
-            pixels,
-            &metadata,
-            left,
-            y + 90,
-            "GAMES READY TO PLAY",
-            MUTED,
-        );
+        draw(pixels, metadata, left, y + 90, "GAMES READY TO PLAY", MUTED);
         let counts_y = y + (footer_rule.saturating_sub(y) * 48 / 100);
         self.rule(pixels, counts_y - 16);
         draw(
             pixels,
-            &number,
+            number,
             left,
             counts_y,
             &data.collections.to_string(),
@@ -212,16 +216,16 @@ impl Layout {
         );
         draw(
             pixels,
-            &number,
+            number,
             self.width / 2,
             counts_y,
             &data.favourites.to_string(),
             CREAM,
         );
-        draw(pixels, &metadata, left, counts_y + 48, "COLLECTIONS", MUTED);
+        draw(pixels, metadata, left, counts_y + 48, "COLLECTIONS", MUTED);
         draw(
             pixels,
-            &metadata,
+            metadata,
             self.width / 2,
             counts_y + 48,
             "FAVOURITES",
@@ -252,16 +256,11 @@ impl Layout {
         }
     }
 
-    pub fn face(
-        &self,
-        card: &PreparedCard,
-        detail: bool,
-        typography: Option<LauncherTypography<'_>>,
-    ) -> crate::launcher_flip::Face {
+    pub fn faces(&self, card: &PreparedCard<'_>, fonts: &Fonts<'_>) -> CardFaces {
         let (w, h) = (self.card_w, self.card_h);
         let (mut pixels, alpha) = artwork::native_surface(card, w, h);
-        let title = self.font(typography, TextRole::Heading);
-        let metadata = self.font(typography, TextRole::Metadata);
+        let title = fonts.get(TextRole::Heading);
+        let metadata = fonts.get(TextRole::Metadata);
         let detail_y = if self.crt {
             (h * 86 / 100).min(h.saturating_sub(14 * self.sy))
         } else {
@@ -278,10 +277,11 @@ impl Layout {
             h,
             (w / 2) as i32,
             title_y as i32,
-            &card.name,
+            card.name,
             CREAM,
         );
-        if detail && let Some(count) = card.games {
+        let compact = crate::launcher_flip::Face::with_alpha(pixels.clone(), &alpha, w, h);
+        if let Some(count) = card.games {
             metadata.draw_centered(
                 &mut pixels,
                 w,
@@ -292,7 +292,10 @@ impl Layout {
                 CREAM,
             );
         }
-        crate::launcher_flip::Face::with_alpha(pixels, &alpha, w, h)
+        CardFaces {
+            compact,
+            detail: crate::launcher_flip::Face::with_alpha(pixels, &alpha, w, h),
+        }
     }
 
     pub fn render(
@@ -431,7 +434,8 @@ mod tests {
             assert!(layout.top < layout.centre_y - layout.card_h / 2);
             assert!(layout.centre_y + layout.card_h / 2 < layout.bottom);
             // Every selected label has an unbroken 1:1 bitmap projection.
-            let font = layout.font(None, TextRole::Heading);
+            let fonts = layout.fonts(None);
+            let font = fonts.get(TextRole::Heading);
             for title in [
                 "ARCADE",
                 "CONSOLES",

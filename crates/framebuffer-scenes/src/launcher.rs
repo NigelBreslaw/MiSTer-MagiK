@@ -157,16 +157,7 @@ impl LauncherScene {
     /// `finish` retains the runtime's staged-entry contract; prepared textures
     /// and scratch buffers now cover all fractional sizes without a scale bank.
     pub fn prepare_initial(self, data: LauncherData<'_>) -> InitialLauncher {
-        let mut prepared = PreparedLauncher::new(self, data, None, None);
-        prepared.render_frame(BrowseFrame {
-            selected: data.selected,
-            target: data.selected,
-            phase: crate::launcher_navigation::BrowsePhase::Settled,
-            direction: None,
-            progress_millis: 0,
-            duration_millis: 0,
-        });
-        InitialLauncher { prepared }
+        self.initial(data, None, None)
     }
 
     /// Prepare card faces from caller-owned 5:7 RGB565 artwork. The source is
@@ -177,16 +168,7 @@ impl LauncherScene {
         data: LauncherData<'_>,
         artwork: &[&[Rgb565Pixel]],
     ) -> InitialLauncher {
-        let mut prepared = PreparedLauncher::new(self, data, Some(Artwork::Rgb565(artwork)), None);
-        prepared.render_frame(BrowseFrame {
-            selected: data.selected,
-            target: data.selected,
-            phase: crate::launcher_navigation::BrowsePhase::Settled,
-            direction: None,
-            progress_millis: 0,
-            duration_millis: 0,
-        });
-        InitialLauncher { prepared }
+        self.initial(data, Some(Artwork::Rgb565(artwork)), None)
     }
 
     /// Prepare production chrome and card faces with the application's bitmap
@@ -197,18 +179,9 @@ impl LauncherScene {
         artwork: &[&[Rgb565Pixel]],
         typography: LauncherTypography<'_>,
     ) -> InitialLauncher {
-        let mut prepared =
-            PreparedLauncher::new(self, data, Some(Artwork::Rgb565(artwork)), Some(typography));
-        prepared.render_frame(BrowseFrame {
-            selected: data.selected,
-            target: data.selected,
-            phase: crate::launcher_navigation::BrowsePhase::Settled,
-            direction: None,
-            progress_millis: 0,
-            duration_millis: 0,
-        });
-        InitialLauncher { prepared }
+        self.initial(data, Some(Artwork::Rgb565(artwork)), Some(typography))
     }
+
     /// Prepare native responsive faces from 360x504 RGB888 source artwork.
     /// Quantise only after destination-size filtering; scanout remains RGB565.
     pub fn prepare_initial_with_rgb888_artwork_and_typography(
@@ -217,8 +190,16 @@ impl LauncherScene {
         artwork: &[&[u8]],
         typography: LauncherTypography<'_>,
     ) -> InitialLauncher {
-        let mut prepared =
-            PreparedLauncher::new(self, data, Some(Artwork::Rgb888(artwork)), Some(typography));
+        self.initial(data, Some(Artwork::Rgb888(artwork)), Some(typography))
+    }
+
+    fn initial(
+        self,
+        data: LauncherData<'_>,
+        artwork: Option<Artwork<'_>>,
+        typography: Option<LauncherTypography<'_>>,
+    ) -> InitialLauncher {
+        let mut prepared = PreparedLauncher::new(self, data, artwork, typography);
         prepared.render_frame(BrowseFrame {
             selected: data.selected,
             target: data.selected,
@@ -468,7 +449,7 @@ impl LauncherFramePreparer {
 }
 
 fn bake_face(
-    card: &PreparedCard,
+    card: &PreparedCard<'_>,
     width: usize,
     selected: bool,
     typography: Option<LauncherTypography<'_>>,
@@ -476,15 +457,15 @@ fn bake_face(
     artwork::face(card, width, selected, typography)
 }
 
-struct PreparedCard {
+struct PreparedCard<'a> {
     id: LauncherCardId,
-    name: String,
+    name: &'a str,
     games: Option<u32>,
     colour: u16,
     name_mask: Vec<[u8; 7]>,
     games_mask: Vec<[u8; 7]>,
-    artwork: Option<Vec<Rgb565Pixel>>,
-    rgb888: Option<Vec<u8>>,
+    artwork: Option<&'a [Rgb565Pixel]>,
+    rgb888: Option<&'a [u8]>,
 }
 
 impl PreparedLauncher {
@@ -496,7 +477,7 @@ impl PreparedLauncher {
         typography: Option<LauncherTypography<'_>>,
     ) {
         if let Some(layout) = &self.responsive {
-            layout.chrome(&mut self.logical, data, typography);
+            layout.chrome(&mut self.logical, data, &layout.fonts(typography));
         } else {
             render_logical(&mut self.logical, data, typography);
         }
@@ -545,13 +526,13 @@ impl PreparedLauncher {
         artwork: Option<Artwork<'_>>,
         typography: Option<LauncherTypography<'_>>,
     ) -> Self {
-        let cards: Vec<_> = data
+        let cards = data
             .cards
             .iter()
             .enumerate()
             .map(|(index, card)| PreparedCard {
                 id: card.id,
-                name: card.name.to_owned(),
+                name: card.name,
                 games: card.games,
                 colour: card.colour,
                 name_mask: text_mask(card.name),
@@ -564,57 +545,36 @@ impl PreparedLauncher {
                         Artwork::Rgb888(_) => None,
                     })
                     .filter(|pixels| pixels.len() == 180 * card_height(180))
-                    .map(|pixels| pixels.to_vec()),
+                    .copied(),
                 rgb888: artwork
                     .and_then(|items| match items {
                         Artwork::Rgb888(items) => items.get(index),
                         Artwork::Rgb565(_) => None,
                     })
                     .filter(|pixels| pixels.len() == 360 * 504 * 3)
-                    .map(|pixels| pixels.to_vec()),
-            })
-            .collect();
-        let borrowed: Vec<_> = cards
-            .iter()
-            .map(|card| LauncherCard {
-                id: card.id,
-                name: &card.name,
-                games: card.games,
-                colour: card.colour,
-            })
-            .collect();
-        let source = LauncherData {
-            cards: &borrowed,
-            selected: data.selected,
-            library_games: data.library_games,
-            collections: data.collections,
-            favourites: data.favourites,
-            clock: data.clock,
-        };
+                    .copied(),
+            });
         let responsive = responsive::Layout::for_scene(scene);
+        let fonts = responsive.map(|layout| layout.fonts(typography));
         let pixel_count = if responsive.is_some() {
             scene.width * scene.height
         } else {
             LOGICAL_WIDTH * LOGICAL_HEIGHT
         };
         let mut chrome = vec![Rgb565Pixel(BACKGROUND); pixel_count];
-        if let Some(layout) = &responsive {
-            layout.chrome(&mut chrome, source, typography);
+        if let Some((layout, fonts)) = responsive.as_ref().zip(fonts.as_ref()) {
+            layout.chrome(&mut chrome, data, fonts);
         } else {
-            render_logical(&mut chrome, source, typography);
+            render_logical(&mut chrome, data, typography);
         }
         let faces: Vec<_> = cards
-            .iter()
             .map(|card| {
-                if let Some(layout) = &responsive {
-                    CardFaces {
-                        compact: layout.face(card, false, typography),
-                        detail: layout.face(card, true, typography),
-                    }
+                if let Some((layout, fonts)) = responsive.as_ref().zip(fonts.as_ref()) {
+                    layout.faces(&card, fonts)
                 } else {
                     CardFaces {
-                        compact: bake_face(card, 180, false, typography),
-                        detail: bake_face(card, 180, true, typography),
+                        compact: bake_face(&card, 180, false, typography),
+                        detail: bake_face(&card, 180, true, typography),
                     }
                 }
             })

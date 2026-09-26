@@ -12,7 +12,7 @@ struct Raster {
     opaque: Vec<(u16, u16)>,
 }
 pub(super) fn face(
-    card: &PreparedCard,
+    card: &PreparedCard<'_>,
     width: usize,
     detail: bool,
     typography: Option<LauncherTypography<'_>>,
@@ -25,7 +25,7 @@ pub(super) fn face(
 }
 
 pub(super) fn surface(
-    card: &PreparedCard,
+    card: &PreparedCard<'_>,
     width: usize,
     detail: bool,
     typography: Option<LauncherTypography<'_>>,
@@ -96,13 +96,13 @@ pub(super) fn surface(
     if !labels {
         // Responsive faces add native-size bitmap labels after artwork resampling.
     } else if let Some(fonts) = typography {
-        fonts.font_for(TextRole::Heading, &card.name).draw_centered(
+        fonts.font_for(TextRole::Heading, card.name).draw_centered(
             &mut canvas,
             LOGICAL_WIDTH,
             LOGICAL_HEIGHT,
             (width / 2) as i32,
             (height * 73 / 100) as i32,
-            &card.name,
+            card.name,
             ink,
         );
         if detail && let Some(game_count) = card.games {
@@ -164,7 +164,7 @@ fn inside_inset(x: usize, y: usize, width: usize, height: usize, inset: usize) -
 }
 
 fn framed_surface(
-    card: &PreparedCard,
+    card: &PreparedCard<'_>,
     base: u16,
     trim: u16,
     width: usize,
@@ -196,7 +196,7 @@ fn framed_surface(
 }
 
 fn framed_sample(
-    card: &PreparedCard,
+    card: &PreparedCard<'_>,
     base: u16,
     trim: u16,
     width: usize,
@@ -343,20 +343,21 @@ fn surface_sample(base: u16, width: usize, x: usize, y: usize) -> u16 {
 /// Native face preparation uses one destination-space silhouette for both
 /// colour and alpha. Never rescale a baked black/rounded edge and mask it again.
 pub(super) fn native_surface(
-    card: &PreparedCard,
+    card: &PreparedCard<'_>,
     width: usize,
     height: usize,
 ) -> (Vec<Rgb565Pixel>, Vec<u8>) {
     let fallback;
-    let (source_w, source_h, rgb888, rgb565) = if let Some(rgb) = &card.rgb888 {
-        (360, 504, Some(rgb.as_slice()), None)
+    let (source_w, source_h, rgb888, rgb565) = if let Some(rgb) = card.rgb888 {
+        (360, 504, Some(rgb), None)
     } else {
-        fallback = if let Some(rgb) = &card.artwork {
-            rgb.clone()
+        let pixels = if let Some(rgb) = card.artwork {
+            rgb
         } else {
-            surface(card, 180, true, None, false)
+            fallback = surface(card, 180, true, None, false);
+            &fallback
         };
-        (180, 252, None, Some(fallback.as_slice()))
+        (180, 252, None, Some(pixels))
     };
     // Decode before the area filter; retain fractional sRGB until final 565
     // quantisation. A fixed spatial threshold avoids temporal sparkle.
@@ -496,10 +497,10 @@ mod tests {
         }
     }
 
-    fn test_card(colour: u16) -> PreparedCard {
+    fn test_card<'a>(colour: u16) -> PreparedCard<'a> {
         PreparedCard {
             id: LauncherCardId::Handhelds,
-            name: "HANDHELDS".into(),
+            name: "HANDHELDS",
             games: Some(126),
             colour,
             name_mask: text_mask("HANDHELDS"),
@@ -512,7 +513,8 @@ mod tests {
     #[test]
     fn native_corners_share_symmetric_coverage_and_full_colour_edges() {
         let mut card = test_card(0xf800);
-        card.rgb888 = Some(vec![128; 360 * 504 * 3]);
+        let source = vec![128; 360 * 504 * 3];
+        card.rgb888 = Some(&source);
         for (w, h) in [(160, 112), (72, 200), (160, 134)] {
             let (pixels, alpha) = native_surface(&card, w, h);
             assert_eq!(alpha[0], 0);
@@ -610,7 +612,8 @@ mod tests {
     fn compact_artwork_and_keyline_keep_their_colours() {
         let source = rgb(220, 34, 78);
         let mut card = test_card(rgb(32, 112, 238));
-        card.artwork = Some(vec![Rgb565Pixel(source); 180 * 252]);
+        let pixels = vec![Rgb565Pixel(source); 180 * 252];
+        card.artwork = Some(&pixels);
         let compact = face(&card, 180, false, None);
         let detail = face(&card, 180, true, None);
         let centre = 100 * 180 + 90;
@@ -626,7 +629,7 @@ mod tests {
     fn settings_heading_stays_light_across_compact_and_detail_faces() {
         let card = PreparedCard {
             id: LauncherCardId::Settings,
-            name: "SETTINGS".into(),
+            name: "SETTINGS",
             games: None,
             colour: 0x8b7f,
             name_mask: text_mask("SETTINGS"),
