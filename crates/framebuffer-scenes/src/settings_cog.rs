@@ -132,16 +132,6 @@ fn pack(r: u32, g: u32, b: u32) -> u16 {
     ((r.min(31) << 11) | (g.min(63) << 5) | b.min(31)) as u16
 }
 
-/// Scale by alpha in 0..=256.
-#[inline]
-fn scale(p: u16, alpha: u32) -> u16 {
-    if alpha >= 256 {
-        return p;
-    }
-    let (r, g, b) = unpack(p);
-    pack((r * alpha) >> 8, (g * alpha) >> 8, (b * alpha) >> 8)
-}
-
 /// `over` on top of `under` with alpha in 0..=256.
 #[inline]
 fn blend(under: u16, over: u16, alpha: u32) -> u16 {
@@ -159,13 +149,6 @@ fn blend(under: u16, over: u16, alpha: u32) -> u16 {
         (og * alpha + ug * inv) >> 8,
         (ob * alpha + ub * inv) >> 8,
     )
-}
-
-#[inline]
-fn add(a: u16, b: u16) -> u16 {
-    let (ar, ag, ab) = unpack(a);
-    let (br, bg, bb) = unpack(b);
-    pack(ar + br, ag + bg, ab + bb)
 }
 
 fn alpha_of(q16: i64) -> u32 {
@@ -256,18 +239,17 @@ pub fn render_settings_cog_transition_into(
     const W: usize = SETTINGS_COG_WIDTH;
 
     // Timeline (ms): the outline zooms 0-760, the cog travels 80-840, the
-    // card face fades 60-260, the launcher fades 120-480, the footer
-    // crossfades, and list bands slide in from 560 with a 30 ms stagger.
+    // card face fades 60-260, and list bands slide in from 560 with a 30 ms
+    // stagger. The launcher remains still behind the expanding opaque card;
+    // the card itself occludes the carousel instead of forcing a full-screen
+    // fade every frame.
     let zoom_p = ease_in_out(window_q16(t, 0, 760));
     let cog_p = ease_in_out(window_q16(t, 80, 760));
     let z = zoom_q16(zoom_p);
-    let launcher_alpha = 256 - alpha_of(window_q16(t, 120, 360));
     let face_alpha = 256 - alpha_of(window_q16(t, 60, 200));
     // The outline fades as it leaves the screen: 1 - 1.25 p^2.
     let outline_p = window_q16(t, 0, 760);
     let outline_alpha = alpha_of((1 << 16) - ((outline_p * outline_p) >> 16) * 5 / 4);
-    let footer_out = 256 - alpha_of(window_q16(t, 80, 160));
-    let footer_in = alpha_of(window_q16(t, 640, 220));
 
     // Window (the zoomed card) in Q16 screen pixels.
     let win_w = i64::from(CARD_W) * z;
@@ -294,28 +276,22 @@ pub fn render_settings_cog_transition_into(
     let cog_y0 = (cog_y >> 16).max(0) as usize;
     let cog_y1 = (((cog_y + COG_ASSET_HEIGHT as i64 * cog_s) >> 16) + 1).max(0) as usize;
 
-    // Chrome: the header and rules are identical; the footer crossfades.
+    // Begin with the still launcher. Header and rule pixels come from the
+    // destination because they are identical in production; keeping this
+    // explicit also preserves the pure renderer's endpoint contract.
+    output.copy_from_slice(launcher);
     output[..CONTENT_TOP * W].copy_from_slice(&settings[..CONTENT_TOP * W]);
     output[CONTENT_BOTTOM * W..FOOTER_TOP * W]
         .copy_from_slice(&settings[CONTENT_BOTTOM * W..FOOTER_TOP * W]);
-    for index in FOOTER_TOP * W..output.len() {
-        output[index] = Rgb565Pixel(add(
-            scale(launcher[index].0, footer_out),
-            scale(settings[index].0, footer_in),
-        ));
+    if t >= 860 {
+        output[FOOTER_TOP * W..].copy_from_slice(&settings[FOOTER_TOP * W..]);
     }
 
     for y in CONTENT_TOP..CONTENT_BOTTOM {
         let row = y * W;
         let out = &mut output[row..row + W];
-        let src = &launcher[row..row + W];
         let span = rounded_span(y as i32, win_x, win_y, win_w, win_h, win_r);
         let (in0, in1) = span.unwrap_or((W, W));
-
-        // Launcher outside the window, faded toward black.
-        for x in (0..in0).chain(in1..W) {
-            out[x] = Rgb565Pixel(scale(src[x].0, launcher_alpha));
-        }
 
         // Inside the window: black, then the cog, then the fading card face.
         if span.is_some() {
@@ -395,6 +371,14 @@ pub fn render_settings_cog_transition_into(
         let offset = ((i64::from(BAND_TRAVEL) * ((1 << 16) - k) + (1 << 15)) >> 16) as usize;
         for y in top..bottom {
             let row = y * W;
+            if alpha >= 256 {
+                let len = (LIST_RIGHT - LIST_LEFT).min(W.saturating_sub(LIST_LEFT + offset));
+                if len > 0 {
+                    output[row + LIST_LEFT + offset..row + LIST_LEFT + offset + len]
+                        .copy_from_slice(&settings[row + LIST_LEFT..row + LIST_LEFT + len]);
+                }
+                continue;
+            }
             for x in LIST_LEFT..LIST_RIGHT {
                 let destination = x + offset;
                 if destination >= W {
@@ -480,6 +464,24 @@ mod tests {
                 assert_eq!(output[index], settings[index], "pixel ({x}, {y})");
             }
         }
+    }
+
+    #[test]
+    fn launcher_stays_unchanged_outside_the_expanding_card() {
+        let launcher = frame(0x7bef);
+        let settings = frame(0);
+        let cog = vec![Rgb565Pixel(0); COG_ASSET_WIDTH * COG_ASSET_HEIGHT];
+        let mut output = frame(0);
+
+        assert!(render_settings_cog_transition_into(
+            &launcher,
+            &settings,
+            &cog,
+            240,
+            &mut output,
+        ));
+        assert_eq!(output[200 * SETTINGS_COG_WIDTH + 100], Rgb565Pixel(0x7bef));
+        assert_eq!(output[520 * SETTINGS_COG_WIDTH + 100], Rgb565Pixel(0x7bef));
     }
 
     #[test]
