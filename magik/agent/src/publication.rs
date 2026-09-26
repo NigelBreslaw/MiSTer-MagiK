@@ -334,6 +334,22 @@ fn restore_stage(root: &Path) -> Result<(), String> {
     fs::remove_dir_all(root).map_err(|e| e.to_string())
 }
 
+fn restore_requires_main_handoff(state: &Value) -> Result<bool, String> {
+    let launcher_active = state["launcher_active"]
+        .as_bool()
+        .ok_or("Main launcher activity is unavailable")?;
+    let launcher_pid = state["launcher_pid"]
+        .as_u64()
+        .ok_or("Main launcher PID is unavailable")?;
+    if launcher_active || launcher_pid > 0 {
+        return Ok(true);
+    }
+    if state["launcher_state"] == "Unconfigured" && state["fpga_owner"] == "main" {
+        return Ok(false);
+    }
+    Err("Main launcher state is ambiguous; restoration refused".into())
+}
+
 fn reload_healthy(previous: &Value, expected: &str) -> Result<(), String> {
     // Main accepts supervised reload only while its Dev launcher is active.
     crate::main_control::handoff("mister_magik_resume\n")?;
@@ -523,12 +539,20 @@ impl crate::Agent {
                 }
                 Some("restore") => {
                     self.stop_owned_process()?;
-                    if let Err(error) = crate::main_control::handoff("mister_magik_suspend\n") {
+                    let handoff_required =
+                        restore_requires_main_handoff(&crate::device::status()?)?;
+                    if handoff_required
+                        && let Err(error) = crate::main_control::handoff("mister_magik_suspend\n")
+                    {
                         let restored = crate::main_control::handoff("mister_magik_resume\n");
                         return Err(format!("{error}; Main restoration: {restored:?}"));
                     }
                     let restored = restore_stage(&root);
-                    let resumed = crate::main_control::handoff("mister_magik_resume\n");
+                    let resumed = if handoff_required {
+                        crate::main_control::handoff("mister_magik_resume\n")
+                    } else {
+                        Ok(())
+                    };
                     restored?;
                     resumed?;
                     Ok(json!({"restored":true,"requires_explicit_reboot":true}))
@@ -838,5 +862,33 @@ mod tests {
         assert!(!unapplied.exists());
         assert_eq!(fs::read(destination).unwrap(), b"old");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restore_skips_handoff_only_after_failed_launcher_returned_ownership() {
+        assert_eq!(
+            restore_requires_main_handoff(&json!({
+                "launcher_active": false,
+                "launcher_pid": 0,
+                "launcher_state": "Unconfigured",
+                "fpga_owner": "main"
+            })),
+            Ok(false)
+        );
+        assert_eq!(
+            restore_requires_main_handoff(&json!({
+                "launcher_active": true,
+                "launcher_pid": 42,
+                "launcher_state": "LauncherActive",
+                "fpga_owner": "magik"
+            })),
+            Ok(true)
+        );
+        for state in [
+            json!({"launcher_active":false,"launcher_pid":0,"launcher_state":"LauncherSuspended","fpga_owner":"main"}),
+            json!({"launcher_active":false,"launcher_pid":0,"launcher_state":"Unconfigured","fpga_owner":"magik"}),
+        ] {
+            assert!(restore_requires_main_handoff(&state).is_err());
+        }
     }
 }
