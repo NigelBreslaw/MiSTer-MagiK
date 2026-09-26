@@ -71,7 +71,7 @@ const LIST_BANDS: [(usize, usize); 9] = [
 ];
 const BAND_START_MS: u32 = 560;
 const BAND_STAGGER_MS: u32 = 30;
-const BAND_DURATION_MS: u32 = 320;
+const BAND_DURATION_MS: u32 = 200;
 const BAND_TRAVEL: i32 = 40;
 
 const fn rgb565(r: u16, g: u16, b: u16) -> u16 {
@@ -513,5 +513,23 @@ mod tests {
         let lit: Vec<_> = (0..SETTINGS_COG_WIDTH).filter(|&x| row[x].0 != 0).collect();
         assert_eq!(lit.len(), 1, "one whole-pixel copy, no smear: {lit:?}");
         assert!(lit[0] > LIST_LEFT && lit[0] <= LIST_LEFT + BAND_TRAVEL as usize);
+    }
+
+    #[test]
+    fn final_list_band_is_settled_before_the_exact_endpoint() {
+        let launcher = frame(0);
+        let mut settings = frame(0);
+        settings[390 * SETTINGS_COG_WIDTH + LIST_LEFT] = Rgb565Pixel(0xffff);
+        let cog = vec![Rgb565Pixel(0); COG_ASSET_WIDTH * COG_ASSET_HEIGHT];
+        let mut output = frame(0);
+
+        assert!(render_settings_cog_transition_into(
+            &launcher,
+            &settings,
+            &cog,
+            SETTINGS_COG_DURATION_MS - 1,
+            &mut output,
+        ));
+        assert_eq!(output, settings);
     }
 }

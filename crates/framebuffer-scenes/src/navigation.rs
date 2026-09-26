@@ -610,6 +610,14 @@ impl NavigationTransitionRequest {
         matches!(self.renderer, NavigationTransitionRenderer::SuperScaler)
     }
 
+    pub const fn renderer_label(self) -> &'static str {
+        match self.renderer {
+            NavigationTransitionRenderer::SuperScaler => "super-scaler",
+            NavigationTransitionRenderer::SettingsPage => "settings-page",
+            NavigationTransitionRenderer::SettingsCog => "settings-cog",
+        }
+    }
+
     const fn is_settings_cog(self) -> bool {
         matches!(self.renderer, NavigationTransitionRenderer::SettingsCog)
     }
@@ -702,8 +710,15 @@ pub const fn request_cover_progress_q16(request: NavigationTransitionRequest) ->
 }
 
 pub fn forward_progress_q16_at_elapsed(total_us: u64, elapsed_us: u64) -> u16 {
+    forward_progress_q16_at_elapsed_with_cover(total_us, elapsed_us, SUPER_SCALER_COVER_PROGRESS)
+}
+
+pub fn forward_progress_q16_at_elapsed_with_cover(
+    total_us: u64,
+    elapsed_us: u64,
+    cover_progress: u16,
+) -> u16 {
     let total_us = total_us.max(1);
-    let cover_progress = SUPER_SCALER_COVER_PROGRESS;
     let cover_us = total_us.saturating_mul(cover_progress as u64) / PROGRESS_MAX as u64;
     let elapsed_us = elapsed_us.min(total_us);
     if elapsed_us <= cover_us {

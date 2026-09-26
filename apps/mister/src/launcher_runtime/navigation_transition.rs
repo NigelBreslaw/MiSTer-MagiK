@@ -13,7 +13,7 @@ pub use mister_magik_framebuffer_scenes::navigation::{
     hdmi_navigation_geometry,
 };
 use mister_magik_framebuffer_scenes::navigation::{
-    PROGRESS_MAX, SUPER_SCALER_COVER_PROGRESS, forward_progress_q16_at_elapsed,
+    PROGRESS_MAX, SUPER_SCALER_COVER_PROGRESS, forward_progress_q16_at_elapsed_with_cover,
     render_navigation_transition, render_settings_page_transition_into, request_cover_progress_q16,
     scale_progress, warm_navigation_transition_rasterizer,
 };
@@ -53,18 +53,6 @@ impl NavigationTransitionRoute {
             Self::AboutToInfo => "about-info",
             Self::AboutToLicenses => "about-licenses",
             Self::NestedToHome => "nested-home",
-        }
-    }
-
-    pub const fn renderer(self) -> &'static str {
-        match self {
-            Self::HomeToSettings
-            | Self::SettingsToScreensaver
-            | Self::SettingsToAbout
-            | Self::AboutToInfo
-            | Self::AboutToLicenses
-            | Self::NestedToHome => "settings-page",
-            Self::HomeToConsoles | Self::HomeToArcade | Self::ConsolesToSystem => "super-scaler",
         }
     }
 
@@ -158,8 +146,12 @@ impl NavigationTransitionController {
         };
         let total_us = request.duration_us.max(1);
         let cover_progress = request_cover_progress_q16(request);
+        let forward_cover_progress = match request.direction {
+            NavigationTransitionDirection::Forward => cover_progress,
+            NavigationTransitionDirection::Reverse => PROGRESS_MAX.saturating_sub(cover_progress),
+        };
         let forward_cover_us =
-            total_us.saturating_mul(SUPER_SCALER_COVER_PROGRESS as u64) / PROGRESS_MAX as u64;
+            total_us.saturating_mul(forward_cover_progress as u64) / PROGRESS_MAX as u64;
         let cover_us = match request.direction {
             NavigationTransitionDirection::Forward => forward_cover_us,
             NavigationTransitionDirection::Reverse => total_us.saturating_sub(forward_cover_us),
@@ -172,9 +164,10 @@ impl NavigationTransitionController {
                     scale_progress(elapsed, cover_us, cover_progress)
                 }
                 NavigationTransitionDirection::Reverse => {
-                    PROGRESS_MAX.saturating_sub(forward_progress_q16_at_elapsed(
+                    PROGRESS_MAX.saturating_sub(forward_progress_q16_at_elapsed_with_cover(
                         total_us,
                         total_us.saturating_sub(elapsed.min(cover_us)),
+                        forward_cover_progress,
                     ))
                 }
             };
@@ -221,9 +214,10 @@ impl NavigationTransitionController {
                 }
                 NavigationTransitionDirection::Reverse => {
                     let reverse_elapsed = cover_us.saturating_add(elapsed.min(reveal_us));
-                    PROGRESS_MAX.saturating_sub(forward_progress_q16_at_elapsed(
+                    PROGRESS_MAX.saturating_sub(forward_progress_q16_at_elapsed_with_cover(
                         total_us,
                         total_us.saturating_sub(reverse_elapsed),
+                        forward_cover_progress,
                     ))
                 }
             };
@@ -1263,6 +1257,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn reverse_settings_cog_progress_is_continuous_at_the_cover_boundary() {
+        let mut request =
+            NavigationTransitionRequest::settings_cog(NavigationTransitionDirection::Reverse);
+        request.duration_us = 1_000_000;
+        let cover_progress = request_cover_progress_q16(request);
+        let forward_cover_progress = PROGRESS_MAX - cover_progress;
+        let forward_cover_us =
+            request.duration_us * u64::from(forward_cover_progress) / u64::from(PROGRESS_MAX);
+        let reverse_cover_us = request.duration_us - forward_cover_us;
+        let mut controller = NavigationTransitionController::default();
+        assert!(controller.begin(request, 0));
+        assert!(controller.captured(0, 0));
+
+        let before = controller.tick(reverse_cover_us - 1, true);
+        let covered = controller.tick(reverse_cover_us, true);
+
+        assert!(covered.progress_q16 >= before.progress_q16);
+        assert_eq!(covered.progress_q16, cover_progress);
     }
 
     #[test]

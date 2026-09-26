@@ -543,7 +543,7 @@ fn write_settings_navigation_benchmark_completion(
                 "leg": index + 1,
                 "orientation": record.orientation.id(),
                 "route": record.leg.route.label(),
-                "renderer": record.leg.route.renderer(),
+                "renderer": record.renderer,
                 "direction": record.leg.direction.label(),
                 "source": screen_label(record.leg.source),
                 "destination": screen_label(record.leg.destination),
@@ -1069,6 +1069,22 @@ fn settings_page_transition(
             NavigationTransitionDirection::Reverse
         },
     ))
+}
+
+fn settings_cog_transition_eligible(
+    route: NavigationTransitionRoute,
+    card_home_settled: bool,
+    portrait: bool,
+    render_width: usize,
+    render_height: usize,
+    reduce_motion: bool,
+) -> bool {
+    route == NavigationTransitionRoute::HomeToSettings
+        && card_home_settled
+        && !portrait
+        && render_width == 960
+        && render_height == 540
+        && !reduce_motion
 }
 
 const fn settings_page_depth(screen: Screen) -> Option<u8> {
@@ -7959,12 +7975,17 @@ pub(super) fn run_launcher_loop(
                                 // The card zoom exists only for the native
                                 // 960x540 landscape card launcher; Reduce
                                 // motion and every other route keep the slide.
-                                let card_zoom = route == NavigationTransitionRoute::HomeToSettings
-                                    && launcher_card_home.is_some()
-                                    && !layout.is_portrait()
-                                    && ui.render_w() == 960
-                                    && ui.render_h() == 540
-                                    && !nav.settings.reduce_motion;
+                                let card_home_settled = launcher_card_home
+                                    .as_ref()
+                                    .is_some_and(|session| !session.is_animating());
+                                let card_zoom = settings_cog_transition_eligible(
+                                    route,
+                                    card_home_settled,
+                                    layout.is_portrait(),
+                                    ui.render_w(),
+                                    ui.render_h(),
+                                    nav.settings.reduce_motion,
+                                );
                                 let started = if card_zoom {
                                     let cog = settings_cog_backdrop_rgb565();
                                     navigation_transition.begin_settings_cog_physical(
@@ -7996,6 +8017,10 @@ pub(super) fn run_launcher_loop(
                                     settings_navigation_benchmark.note_started(
                                         route,
                                         direction,
+                                        navigation_transition.request().map_or(
+                                            "",
+                                            NavigationTransitionRequest::renderer_label,
+                                        ),
                                         source_screen,
                                         nav.screen,
                                         frames,
@@ -10699,7 +10724,11 @@ pub(super) fn run_launcher_loop(
                 .route()
                 .zip(navigation_transition.request())
                 .map_or(("", "", ""), |(route, request)| {
-                    (route.label(), request.direction.label(), route.renderer())
+                    (
+                        route.label(),
+                        request.direction.label(),
+                        request.renderer_label(),
+                    )
                 })
         } else {
             ("", "", "")
@@ -14488,6 +14517,26 @@ fn apply_home_selected(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_cog_zoom_requires_a_settled_native_landscape_card() {
+        assert!(settings_cog_transition_eligible(
+            NavigationTransitionRoute::HomeToSettings,
+            true,
+            false,
+            960,
+            540,
+            false,
+        ));
+        assert!(!settings_cog_transition_eligible(
+            NavigationTransitionRoute::HomeToSettings,
+            false,
+            false,
+            960,
+            540,
+            false,
+        ));
+    }
 
     fn eligible_card_direct_input() -> CardDirectEligibility {
         CardDirectEligibility {
