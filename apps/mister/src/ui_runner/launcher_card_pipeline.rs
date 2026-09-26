@@ -18,7 +18,7 @@ const WIDTH: usize = 960;
 #[cfg(test)]
 const HEIGHT: usize = 540;
 const CAROUSEL_LEFT: usize = 296;
-const CAROUSEL_SPLIT: usize = 615;
+pub(super) const CAROUSEL_SPLIT: usize = 629;
 const CAROUSEL_RIGHT: usize = 934;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

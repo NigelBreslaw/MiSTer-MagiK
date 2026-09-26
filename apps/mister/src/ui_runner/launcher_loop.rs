@@ -56,11 +56,11 @@ const CARD_DIRECT_TILE_DAMAGE: [DirtyRect; 2] = [
     DirtyRect {
         x0: 296,
         y0: 120,
-        x1: 615,
+        x1: super::launcher_card_pipeline::CAROUSEL_SPLIT,
         y1: 495,
     },
     DirtyRect {
-        x0: 615,
+        x0: super::launcher_card_pipeline::CAROUSEL_SPLIT,
         y0: 120,
         x1: 934,
         y1: 495,
