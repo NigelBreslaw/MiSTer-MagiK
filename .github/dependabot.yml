@@ -45,6 +45,10 @@ updates:
           - "*"
     ignore:
       - dependency-name: "ffmpeg-next"
+      # Maintain these Git dependencies manually. Dependabot can treat their
+      # commit hashes as package versions when updating transitive dependencies.
+      - dependency-name: "pprof"
+      - dependency-name: "hotpath"
 
   - package-ecosystem: "npm"
     directory: "/documentation"
