@@ -28,6 +28,7 @@ updates:
           - "*"
 
   - package-ecosystem: "cargo"
+    versioning-strategy: "increase"
     directories:
       - "**/*"
     schedule:
