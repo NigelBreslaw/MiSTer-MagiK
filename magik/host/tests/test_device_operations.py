@@ -74,9 +74,7 @@ def test_input_probe_requests_only_passive_fields(monkeypatch, tmp_path):
     device.run_device(
         parser().parse_args("input-probe --seconds 20 --event event0".split()), tmp_path
     )
-    connect.assert_called_once_with(
-        tmp_path, {"input-probe-runtime-v1", "input-probe-passive-v1"}
-    )
+    connect.assert_called_once_with(tmp_path, {"input-probe-passive-v1"})
     agent.device_operation.assert_called_once_with(
         "input-probe", {"seconds": 20, "events": ["event0"]}
     )
