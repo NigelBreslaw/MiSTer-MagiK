@@ -11,6 +11,7 @@ updates:
       day: "friday"
       time: "08:00"
       timezone: "Europe/Helsinki"
+    open-pull-requests-limit: 20
     groups:
       python-projects:
         patterns:
@@ -22,6 +23,7 @@ updates:
       day: "friday"
       time: "08:00"
       timezone: "Europe/Helsinki"
+    open-pull-requests-limit: 20
     groups:
       python-host-projects:
         patterns:
@@ -36,6 +38,7 @@ updates:
       day: "friday"
       time: "08:00"
       timezone: "Europe/Helsinki"
+    open-pull-requests-limit: 20
     groups:
       rust-crates:
         patterns:
@@ -50,6 +53,7 @@ updates:
       day: "friday"
       time: "08:00"
       timezone: "Europe/Helsinki"
+    open-pull-requests-limit: 20
     groups:
       documentation:
         patterns:
@@ -62,6 +66,7 @@ updates:
       day: "friday"
       time: "08:00"
       timezone: "Europe/Helsinki"
+    open-pull-requests-limit: 20
     groups:
       github-actions:
         patterns:
@@ -74,6 +79,7 @@ updates:
       day: "friday"
       time: "08:00"
       timezone: "Europe/Helsinki"
+    open-pull-requests-limit: 20
     groups:
       rust-toolchain:
         patterns:
