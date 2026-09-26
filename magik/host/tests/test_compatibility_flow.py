@@ -264,3 +264,45 @@ def test_fresh_worktrees_retrieve_token_without_replacing_compatible_agent(
             == "other-branch"
         )
     assert seen == ["retrieve"]
+
+
+@pytest.mark.parametrize("reply", [status("old", set()), OSError("unavailable")])
+def test_incident_capture_never_repairs_missing_support(monkeypatch, tmp_path, reply):
+    configure_native(monkeypatch, tmp_path, [reply])
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("incident capture attempted build or bootstrap")
+
+    monkeypatch.setattr(cli, "agent_binary_path", forbidden)
+    monkeypatch.setattr(cli, "SshBootstrap", forbidden)
+    with pytest.raises(RuntimeError, match="no repair or replacement"):
+        cli.connect_agent(
+            create_run(tmp_path / "runs", "incident", {}),
+            {"fpga-evidence-v1"},
+            allow_repair=False,
+        )
+
+
+def test_incident_capture_ignores_repair_environment(monkeypatch, tmp_path):
+    configure_native(monkeypatch, tmp_path, [status("current", {"fpga-evidence-v1"})])
+    monkeypatch.setenv("MISTER_MAGIK2_REPAIR", "1")
+    monkeypatch.setattr(cli, "agent_binary_path", lambda: pytest.fail("must not build"))
+    _, current = cli.connect_agent(
+        create_run(tmp_path / "runs", "incident", {}),
+        {"fpga-evidence-v1"},
+        allow_repair=False,
+    )
+    assert current.supports({"fpga-evidence-v1"})
+
+
+def test_incident_capture_without_token_never_bootstraps(monkeypatch, tmp_path):
+    monkeypatch.setenv("MISTER_MAGIK2_STATE", str(tmp_path / "empty"))
+    monkeypatch.setattr(
+        cli, "SshBootstrap", lambda *args: pytest.fail("must not bootstrap")
+    )
+    with pytest.raises(RuntimeError, match="no bootstrap"):
+        cli.connect_agent(
+            create_run(tmp_path / "runs", "incident", {}),
+            {"fpga-evidence-v1"},
+            allow_repair=False,
+        )

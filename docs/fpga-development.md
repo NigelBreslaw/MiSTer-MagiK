@@ -24,12 +24,44 @@ The default reusable root is the primary checkout's
 patched variants are bound to their source inputs, pinned
 revisions, Quartus seed and date, preparation-script identity, reports,
 metadata, and RBF hashes. Hidden `.VARIANT.building` directories are incomplete
-staging and never cache hits. Do not edit cached reports, copy evidence between
-variants, or use `--rebuild` speculatively.
+staging and never cache hits. Do not edit cached reports or copy evidence between variants. The typed runner
+creates a unique run under `runs/` and preserves incomplete stages. Use `--reuse-comparisons /absolute/path/to/prior/run` to reuse completed stock
+and baseline builds after their source inputs, toolchain, seed/date, driver and
+every saved file hash have been verified. The new run links the original evidence
+and records its provenance; it never rewrites old metadata. The diagnostic
+candidate is always rebuilt. Changed comparison driver or source inputs trigger
+a fresh comparison build; damaged evidence is rejected. Without that option all
+three builds are fresh.
 
 Signoff builds `refs/heads/main^{commit}`. Commit the frozen candidate and move
 local `main` before synthesis. Preserve the root commit and patched-source,
 RBF, metadata, and delta-report SHA-256 values as one identity.
+
+For read-only toolchain diagnosis, `fpga tool-help` prints the installed timing
+command reference. `fpga inspect-cdc --variant /absolute/completed/variant`
+measures a disposable copy of a completed fit, verifies its RBF hash, and writes
+separate inspection evidence. Neither command synthesizes or modifies saved builds.
+
+The causal observer's seven control crossings use direct 10 ns net-delay
+constraints. Its five payload crossings contain combinational logic, which
+Quartus 17 cannot constrain with `set_net_delay`. The post-fit report uses
+`get_path -pairs_only -npaths 0` to measure the longest path for every connected
+register pair at all four device timing corners. Signoff requires exact endpoint
+coverage (632 paths in total) and a maximum complete-path delay of 10 ns; clock
+cuts do not suppress this analysis. Missing/duplicate paths, wrong corners,
+non-finite delays, or an exceeded bound fail signoff. This adds no false paths,
+changes no fitter settings, and retains the original numerical payload bound.
+
+The causal profile has one explicitly approved output-path count exception
+(2026-09-26): 160 raw paths are allowed only for the fitter-created duplicate
+of `emu:emu|act_cnt[20]` driving `LED[0]` and `LED[4]`. Both complete setup and
+hold tables must contain those copies and their original paths with the exact
+clock, and the fitter must report the exact duplication. After removing just
+those two rows, all 158 remaining source/destination/clock tuples must match the
+pinned inventory hash audited from candidate `31edb466a3a6`. The checker retains
+the raw count and exception evidence, rejects other changes, and applies every
+existing area, timing and CDC gate. This exception does not apply to other
+profiles or authorize RTL, seed, constraint or fitter changes.
 
 ## Development sequence
 
@@ -95,3 +127,24 @@ A local signoff pass makes an RBF eligible only for an attended Dev install.
 Production requires CI reconstruction and the physical frame-evidence, stress,
 long-latch, and canary gates. Fail closed on black, stale, partial, banded,
 corrupt, or indefinitely blank physical output.
+
+## Local recovery and frozen candidate
+
+Already downloaded official installers can be supplied without another network
+transfer by setting `QUARTUS_17_0_RUN_URL=file:///absolute/path/to/QuartusLiteSetup-17.0.0.595-linux.run`
+and `QUARTUS_17_0_CYCLONEV_QDZ_URL=file:///absolute/path/to/cyclonev-17.0.0.595.qdz`
+for the typed setup command. Both published hashes remain mandatory.
+
+Local signoff accepts `--local-root /absolute/cache` and optionally
+`--menu-source /absolute/pinned/Menu/checkout`. It refuses dirty source or a
+HEAD different from committed local main. It snapshots the candidate, pinned
+baseline and Menu sources; runs frozen-source proofs before synthesis; and
+uses four-CPU Apple-container wrappers for Quartus 17.0 Build 595. The old
+baseline driver's invocation guard alone is adapted, with the resulting driver
+hash recorded. No RTL or fitter policy is adapted.
+
+Each completed variant retains its RBF, metadata, reports, prepared source and
+file hashes. A final `signoff.json` is emitted only after the matched delta check
+passes and binds the input tuple, proof files and variant manifests. Explicit
+`--stock/--baseline/--patched` report arguments retain offline auditing but do
+not synthesize or create a build certificate.

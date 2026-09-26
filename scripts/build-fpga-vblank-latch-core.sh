@@ -10,6 +10,7 @@ LATCH_RTL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latc
 LATCH_BRIDGE="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_latch_sys_top_bridge.sv"
 BOOTSTRAP_BLACK_RTL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_bootstrap_black.sv"
 LATCH_PROTOCOL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh"
+CAUSAL_RTL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_scaler_causal_state.sv"
 VIDEO_DIAGNOSTICS_CONTROL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_control.sv"
 VIDEO_DIAGNOSTICS_AVALON="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_avalon.sv"
 VIDEO_DIAGNOSTICS_OUTPUT="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_output.sv"
@@ -53,8 +54,8 @@ Builds the production Menu_MiSTer RBF with the MiSTer MagiK vblank-latched
 framebuffer patch. Set MISTER_MENU_DIR to override the source checkout. The
 source checkout is copied to a disposable build workdir before patching.
 
-RBF synthesis is supported only inside the repository's GitHub Actions
-workflow. Local invocation is rejected before any output directory is created.
+RBF synthesis uses the GitHub workflow or the typed local Apple signoff command.
+For local builds use scripts/magik-platform fpga signoff.
 EOF
 }
 
@@ -72,8 +73,8 @@ case "${1:-}" in
     ;;
 esac
 
-if [[ "${GITHUB_ACTIONS:-}" != "true" ]]; then
-  echo "RBF builds are GitHub Actions only; run the Build MiSTer MagiK Platform workflow" >&2
+if [[ "${GITHUB_ACTIONS:-}" != "true" && "${MISTER_FPGA_LOCAL_SIGNOFF:-}" != "1" ]]; then
+  echo "use scripts/magik-platform fpga signoff or the GitHub platform workflow" >&2
   exit 1
 fi
 
@@ -113,6 +114,14 @@ if [[ ! -f "$MENU_ABS/menu.qsf" || ! -f "$MENU_ABS/sys/sys_top.v" ]]; then
   exit 1
 fi
 
+if [[ "${MISTER_FPGA_LOCAL_SIGNOFF:-}" = "1" ]]; then
+  for tool in quartus_sh quartus_sta; do
+    if [[ "$(command -v "$tool" || true)" != "${MISTER_FPGA_APPLE_WRAPPER_DIR:?}/$tool" ]]; then
+      echo "local signoff requires the typed Apple container wrappers" >&2
+      exit 1
+    fi
+  done
+fi
 QUARTUS_MODE=local
 if command -v quartus_sh >/dev/null 2>&1; then
   QUARTUS_CMD="$(command -v quartus_sh)"
@@ -142,6 +151,7 @@ rsync -a --delete \
   "$MENU_ABS"/ "$WORK_DIR"/
 git -C "$WORK_DIR" init -q
 cp "$TIMING_REPORT_TCL" "$WORK_DIR/mister_magik_report_top_timing.tcl"
+cp "$ROOT/mister/platform/fpga/menu-vblank-latch/report_causal_payload.tcl" "$WORK_DIR/mister_magik_report_causal_payload.tcl"
 
 case "$APPLY_PATCH" in
   0|false|False|FALSE|no|No|NO)
@@ -160,12 +170,13 @@ case "$APPLY_PATCH" in
     cp "$LATCH_BRIDGE" "$WORK_DIR/sys/mister_magik_latch_sys_top_bridge.sv"
     cp "$BOOTSTRAP_BLACK_RTL" "$WORK_DIR/sys/mister_magik_bootstrap_black.sv"
     cp "$LATCH_PROTOCOL" "$WORK_DIR/sys/mister_magik_latch_protocol.svh"
+    cp "$CAUSAL_RTL" "$WORK_DIR/sys/mister_magik_scaler_causal_state.sv"
     cp "$VIDEO_DIAGNOSTICS_CONTROL" "$WORK_DIR/sys/mister_magik_video_diagnostics_control.sv"
     cp "$VIDEO_DIAGNOSTICS_AVALON" "$WORK_DIR/sys/mister_magik_video_diagnostics_avalon.sv"
     cp "$VIDEO_DIAGNOSTICS_OUTPUT" "$WORK_DIR/sys/mister_magik_video_diagnostics_output.sv"
     cp "$VIDEO_DIAGNOSTICS_PROTOCOL" "$WORK_DIR/sys/mister_magik_video_diagnostics_protocol.svh"
 	cp "$VIDEO_DIAGNOSTICS_SDC" "$WORK_DIR/sys/mister_magik_video_diagnostics.sdc"
-    printf '\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_latch_sys_top_bridge.sv\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_bootstrap_black.sv\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_control.sv\n' >> "$WORK_DIR/menu.qsf"
+    printf '\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_latch_sys_top_bridge.sv\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_bootstrap_black.sv\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_control.sv\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_scaler_causal_state.sv\n' >> "$WORK_DIR/menu.qsf"
 	printf 'set_global_assignment -name SDC_FILE sys/mister_magik_video_diagnostics.sdc\n' >> "$WORK_DIR/menu.qsf"
     ;;
 esac
@@ -253,7 +264,7 @@ PY
   python3 -c 'import re,sys; source=open(sys.argv[1]).read(); match=re.search(r"MAGIK_FBUF_PROTOCOL_VERSION\s*=\s*16.d(\d+)", source); assert match; print("latch_protocol_version=" + match.group(1))' "$LATCH_PROTOCOL"
   python3 -c 'import re,sys; source=open(sys.argv[1]).read(); match=re.search(r"MAGIK_FBUF_CAPS_FLAGS\s*=\s*16.h([0-9A-Fa-f]+)", source); assert match; print("latch_capability_mask=0x" + match.group(1).lower())' "$LATCH_PROTOCOL"
   if [[ "$APPLY_PATCH" = "1" ]]; then
-    python3 -c 'import json,sys; protocol=json.load(open(sys.argv[1])); print("diagnostic_architecture=" + protocol["scaler_fetch_liveness_state"]["architecture"])' "$VIDEO_DIAGNOSTICS_PROTOCOL_JSON"
+    python3 -c 'import json,sys; protocol=json.load(open(sys.argv[1])); print("diagnostic_architecture=" + protocol["causal_boundary_state"]["architecture"])' "$VIDEO_DIAGNOSTICS_PROTOCOL_JSON"
   else
     echo "diagnostic_architecture=stock-uninstrumented-v1"
   fi

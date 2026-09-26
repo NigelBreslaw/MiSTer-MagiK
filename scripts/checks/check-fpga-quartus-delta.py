@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -206,6 +207,70 @@ EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH = {
 }
 
 
+EXPERIMENTAL_CAUSAL_METASTABILITY_CHAINS = {
+    "capture": {
+        "source": "mister_magik_scaler_causal_state:magik_scaler_causal_state|capture_request",
+        "synchronization_node": "mister_magik_scaler_causal_state:magik_scaler_causal_state|capture_meta",
+        "allow_source_duplicate": False,
+        "registers": (
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|capture_meta",
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|capture_sync",
+        ),
+    },
+    "response": {
+        "source": "mister_magik_scaler_causal_state:magik_scaler_causal_state|response_toggle",
+        "synchronization_node": "mister_magik_scaler_causal_state:magik_scaler_causal_state|response_meta",
+        "allow_source_duplicate": False,
+        "registers": (
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|response_meta",
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|response_sync",
+        ),
+    },
+    "output_request": {
+        "source": "mister_magik_scaler_causal_state:magik_scaler_causal_state|output_request",
+        "synchronization_node": "mister_magik_scaler_causal_state:magik_scaler_causal_state|output_request_meta",
+        "allow_source_duplicate": False,
+        "registers": (
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|output_request_meta",
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|output_request_sync",
+        ),
+    },
+    "output_response": {
+        "source": "mister_magik_scaler_causal_state:magik_scaler_causal_state|output_response",
+        "synchronization_node": "mister_magik_scaler_causal_state:magik_scaler_causal_state|output_response_meta",
+        "allow_source_duplicate": False,
+        "registers": (
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|output_response_meta",
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|output_response_sync",
+        ),
+    },
+    "reset": {
+        "source": "reset_req",
+        "synchronization_node": "mister_magik_scaler_causal_state:magik_scaler_causal_state|reset_meta",
+        "allow_source_duplicate": False,
+        "registers": (
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|reset_meta",
+            "mister_magik_scaler_causal_state:magik_scaler_causal_state|reset_sync",
+        ),
+    },
+}
+EXPERIMENTAL_CAUSAL_NET_DELAY_PATHS = {
+    "causal_capture": re.compile(
+        r"capture_request\s*;[^\n]*capture_meta\s*;", re.IGNORECASE
+    ),
+    "causal_response": re.compile(
+        r"response_toggle\s*;[^\n]*response_meta\s*;", re.IGNORECASE
+    ),
+    "causal_output_request": re.compile(
+        r"output_request\s*;[^\n]*output_request_meta\s*;", re.IGNORECASE
+    ),
+    "causal_output_response": re.compile(
+        r"output_response\s*;[^\n]*output_response_meta\s*;", re.IGNORECASE
+    ),
+    "causal_reset": re.compile(r"reset_req\s*;[^\n]*reset_meta\s*;", re.IGNORECASE),
+}
+
+
 def normalize_space(value: str) -> str:
     value = re.sub(r"\s+File:\s+\S+\s+Line:\s+\d+\s*$", "", value, flags=re.IGNORECASE)
     value = re.sub(
@@ -251,7 +316,10 @@ def read_inputs(paths: Iterable[Path]) -> tuple[str, str | None, dict[str, str]]
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError as error:
             raise ValueError(f"cannot read {path}: {error}") from error
-        if path.name in DIAGNOSTIC_REPORT_NAMES:
+        if (
+            path.name in DIAGNOSTIC_REPORT_NAMES
+            or path.name == "menu.magik-causal-payload.rpt"
+        ):
             if path.name in diagnostic_reports:
                 raise ValueError(f"duplicate diagnostic timing report: {path.name}")
             diagnostic_reports[path.name] = text
@@ -336,6 +404,107 @@ def parse_expected_metastability_chains(
         )
         mtbf_years[label] = parse_mtbf_years(mtbf.group(1)) if mtbf else None
     return mtbf_years, sorted(set(missing))
+
+
+# Approved 2026-09-26: only the act_cnt[20] copies driving LED[0]/LED[4].
+# Canonical 158-row inventory audited in candidate 31edb466a3a6; hash is over
+# sorted [source, destination, source-clock] rows, compact JSON, UTF-8. Retaining
+# this identity prevents the exception from hiding another changed endpoint.
+CAUSAL_LED_CANONICAL_PATHS_SHA256 = (
+    "728ad6fc7c9d6b7250c62a317359ba26c4f3debf2e01922d20c6caa950486b8a"
+)
+CAUSAL_LED_SOURCE = "emu:emu|act_cnt[20]"
+CAUSAL_LED_CLOCK = (
+    "emu|pll|pll_inst|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk"
+)
+
+
+def validate_causal_led_exception(text: str) -> dict[str, object]:
+    """Fail closed unless both full path tables prove the approved LED copies."""
+    sections: dict[str, list[list[tuple[str, ...]]]] = {"Setup": [], "Hold": []}
+    analysis = ""
+    rows: list[tuple[str, ...]] | None = None
+    header = False
+    duplication_count = 0
+    errors: list[str] = []
+    for line in text.splitlines() + [""]:
+        cells = [cell.strip() for cell in line.split(";")]
+        if cells == [
+            "",
+            CAUSAL_LED_SOURCE,
+            "Duplicated",
+            "Router Logic Cell Insertion and Logic Duplication",
+            "Routability optimization",
+            "",
+            "",
+            CAUSAL_LED_SOURCE + "~DUPLICATE",
+            "",
+            "",
+            "",
+        ]:
+            duplication_count += 1
+        if len(cells) == 3 and cells[1] in ("Setup Analysis", "Hold Analysis"):
+            analysis = cells[1].split()[0]
+        if (
+            len(cells) == 5
+            and cells[1] == "Unconstrained Output Port Paths"
+            and cells[2:4] != ["160", "160"]
+        ):
+            errors.append("conflicting_path_summary")
+        if cells == ["", "Unconstrained Output Port Paths", ""]:
+            if rows is not None:
+                errors.append("unterminated_path_table")
+            rows = []
+            header = False
+        elif rows is not None:
+            if cells == ["", "From", "To", "From Clocks", ""]:
+                header = True
+            elif len(cells) == 5 and cells[0] == cells[-1] == "":
+                rows.append(tuple(cells[1:4]))
+            elif line.lstrip().startswith(";"):
+                errors.append("malformed_path_row")
+            elif not line.strip():
+                if analysis not in sections or not header:
+                    errors.append("path_table_header")
+                else:
+                    sections[analysis].append(rows)
+                rows = None
+    if duplication_count != 1:
+        errors.append("fitter_duplication_evidence")
+    expected_extra = {
+        (CAUSAL_LED_SOURCE + "~DUPLICATE", port, CAUSAL_LED_CLOCK)
+        for port in ("LED[0]", "LED[4]")
+    }
+    expected_original = {
+        (CAUSAL_LED_SOURCE, port, CAUSAL_LED_CLOCK) for port in ("LED[0]", "LED[4]")
+    }
+    hashes = {}
+    for kind, tables in sections.items():
+        if len(tables) != 1:
+            errors.append(kind + "_table_count")
+            continue
+        paths = tables[0]
+        unique = set(paths)
+        if len(paths) != 160 or len(unique) != 160:
+            errors.append(kind + "_path_count")
+        if not expected_extra | expected_original <= unique:
+            errors.append(kind + "_led_identity")
+        canonical = sorted(unique - expected_extra)
+        digest = hashlib.sha256(
+            json.dumps(canonical, separators=(",", ":")).encode()
+        ).hexdigest()
+        hashes[kind] = digest
+        if digest != CAUSAL_LED_CANONICAL_PATHS_SHA256:
+            errors.append(kind + "_canonical_path_identity")
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "expected_raw_path_count": 160,
+        "expected_canonical_path_count": 158,
+        "canonical_sha256": hashes,
+        "allowed_extra_paths": sorted(expected_extra),
+        "fitter_duplication_records": duplication_count,
+    }
 
 
 def parse_report(
@@ -470,6 +639,7 @@ def parse_report(
         "diagnostic_analysis_labels": diagnostic_analysis_labels,
         "uncalculated_fractions": uncalculated_fractions,
         "unconstrained_output_paths": unconstrained_output_paths,
+        "causal_led_output_path_evidence": validate_causal_led_exception(text),
         "quartus_policy": quartus_policy,
         "quartus_processor_use": quartus_processor_use,
     }
@@ -510,15 +680,121 @@ def estimated_calculable_chains(
     return math.floor(total * (1.0 - uncalculated_fraction) + 0.5)
 
 
+def causal_payload_pairs():
+    prefix = "mister_magik_scaler_causal_state:magik_scaler_causal_state|"
+
+    def reg(name, bit):
+        return prefix + f"{name}[{bit}]"
+
+    def output(bit):
+        return f"io_dout_sys[{bit}]"
+
+    return {
+        "selector": (
+            1,
+            32,
+            {
+                (prefix + "select_first", reg("snapshot", n))
+                for n in range(32)
+                if n != 14
+            },
+        ),
+        "bank": (
+            32,
+            16,
+            {(reg("snapshot", n), output(n % 16)) for n in range(32)}
+            | {(reg("snapshot", 14), output(n)) for n in range(16)},
+        ),
+        "output": (16, 16, {(reg("output_hold", n), output(n)) for n in range(16)}),
+        "output_crc": (
+            16,
+            16,
+            {
+                (reg("output_hold", n), reg("crc_work", b))
+                for n in range(16)
+                for b in (0, 5, 12)
+            },
+        ),
+        "crc": (16, 16, {(reg("crc_work", n), output(n)) for n in range(16)}),
+    }
+
+
+def validate_causal_payload(text):
+    expected = causal_payload_pairs()
+    corners, groups, paths = {}, {}, {}
+    reasons = []
+    total = None
+    try:
+        lines = text.splitlines()
+        if not lines or lines[0] != "MagiK causal payload delay bound 10.000 ns":
+            raise ValueError("header")
+        for line in lines[1:]:
+            fields = line.split()
+            if fields[0] == "CORNER" and len(fields) == 5:
+                _, number, model, voltage, temperature = fields
+                if number in corners:
+                    raise ValueError("duplicate corner")
+                corners[number] = (model, int(voltage), int(temperature))
+            elif fields[0] == "GROUP" and len(fields) == 6:
+                _, number, label, source_count, destination_count, count = fields
+                key = (number, label)
+                if key in groups:
+                    raise ValueError("duplicate group")
+                groups[key] = (int(source_count), int(destination_count), int(count))
+            elif fields[0] == "PATH" and len(fields) == 6:
+                _, number, label, delay, source, destination = fields
+                key = (number, label)
+                pair = (source, destination)
+                delay_value = finite_number(delay)
+                if delay_value is None or delay_value < 0 or delay_value > 10.0:
+                    reasons.append("causal_payload_delay")
+                if pair in paths.setdefault(key, {}):
+                    raise ValueError("duplicate pair")
+                paths[key][pair] = delay_value
+            elif fields[0] == "CORNERS" and len(fields) == 2 and total is None:
+                total = int(fields[1])
+            else:
+                raise ValueError("invalid row")
+        required_corners = {
+            (model, 1100, temperature)
+            for model in ("slow", "fast")
+            for temperature in (-40, 100)
+        }
+        if total != 4 or len(corners) != 4 or set(corners.values()) != required_corners:
+            raise ValueError("corners")
+        expected_groups = {(number, label) for number in corners for label in expected}
+        if set(groups) != expected_groups or set(paths) != expected_groups:
+            raise ValueError("groups")
+        for (number, label), counts in groups.items():
+            sources, destinations, pairs = expected[label]
+            if (
+                counts != (sources, destinations, len(pairs))
+                or set(paths[(number, label)]) != pairs
+            ):
+                raise ValueError("path identities")
+    except (ValueError, IndexError, KeyError):
+        reasons.append("causal_payload_coverage")
+    delays = [v for pairs in paths.values() for v in pairs.values() if v is not None]
+    return sorted(set(reasons)), {
+        "corners": corners,
+        "path_count": len(delays),
+        "maximum_delay_ns": max(delays, default=None),
+    }
+
+
 def validate_diagnostic_reports(
     reports: dict[str, str],
     analysis_labels: Counter[str],
     experimental_diagnostic: bool,
     experimental_scaler_fetch: bool,
+    experimental_scaler_causal: bool = False,
 ) -> tuple[list[str], dict[str, object]]:
     reasons: list[str] = []
-    missing_reports = sorted(DIAGNOSTIC_REPORT_NAMES - reports.keys())
-    unexpected_reports = sorted(reports.keys() - DIAGNOSTIC_REPORT_NAMES)
+    required_reports = set(DIAGNOSTIC_REPORT_NAMES)
+    if experimental_scaler_causal:
+        required_reports.add("menu.magik-causal-payload.rpt")
+    missing_reports = sorted(required_reports - reports.keys())
+    unexpected_reports = sorted(reports.keys() - required_reports)
     if missing_reports or unexpected_reports:
         reasons.append("diagnostic_cdc_report_missing")
 
@@ -541,6 +817,11 @@ def validate_diagnostic_reports(
         expected_report_analyses["menu.magik-diagnostic-cdc-net-delay.rpt"] = (
             "set_net_delay",
             6,
+        )
+    if experimental_scaler_causal:
+        expected_report_analyses["menu.magik-diagnostic-cdc-net-delay.rpt"] = (
+            "set_net_delay",
+            7,
         )
     for name, (command, expected_count) in expected_report_analyses.items():
         text = reports.get(name, "")
@@ -578,6 +859,8 @@ def validate_diagnostic_reports(
                 expected_net_delay_paths.update(
                     EXPERIMENTAL_SCALER_FETCH_NET_DELAY_PATH
                 )
+            if experimental_scaler_causal:
+                expected_net_delay_paths.update(EXPERIMENTAL_CAUSAL_NET_DELAY_PATHS)
             expected_identity_counts = {
                 label: 9 if label == "scheduler_snapshot_data" else 1
                 for label in expected_net_delay_paths
@@ -602,6 +885,12 @@ def validate_diagnostic_reports(
             if any(value is not None and value < 0 for value in detailed_slacks):
                 reasons.append("diagnostic_cdc_slack_negative")
 
+    payload_details = {}
+    if experimental_scaler_causal:
+        payload_reasons, payload_details = validate_causal_payload(
+            reports.get("menu.magik-causal-payload.rpt", "")
+        )
+        reasons.extend(payload_reasons)
     metastability = reports.get("menu.magik-diagnostic-metastability.rpt", "")
     expected_metastability_chains = dict(EXPECTED_METASTABILITY_CHAINS)
     if experimental_diagnostic:
@@ -612,6 +901,8 @@ def validate_diagnostic_reports(
         expected_metastability_chains.update(
             EXPERIMENTAL_SCALER_FETCH_METASTABILITY_CHAIN
         )
+    if experimental_scaler_causal:
+        expected_metastability_chains.update(EXPERIMENTAL_CAUSAL_METASTABILITY_CHAINS)
     custom_mtbf_years, missing_metastability_chains = (
         parse_expected_metastability_chains(
             metastability, expected_metastability_chains
@@ -649,6 +940,7 @@ def validate_diagnostic_reports(
 
     return sorted(set(reasons)), {
         "diagnostic_cdc_reports": sorted(reports),
+        "causal_payload": payload_details,
         "diagnostic_cdc_analysis_labels": dict(sorted(analysis_labels.items())),
         "diagnostic_cdc_analysis_counts": analysis_counts,
         "diagnostic_cdc_detailed_path_counts": detailed_path_counts,
@@ -671,9 +963,14 @@ def compare(
     patched: dict[str, object],
     experimental_diagnostic: bool = False,
     experimental_scaler_fetch: bool = False,
+    experimental_scaler_causal: bool = False,
 ) -> tuple[list[str], dict[str, object]]:
     reasons: list[str] = []
-    experimental = experimental_diagnostic or experimental_scaler_fetch
+    experimental = (
+        experimental_diagnostic
+        or experimental_scaler_fetch
+        or experimental_scaler_causal
+    )
     policy_details: dict[str, dict[str, dict[str, int]]] = {}
     for flavour, report in (
         ("stock", stock),
@@ -727,6 +1024,9 @@ def compare(
         patched_output_paths, list
     )
     diagnostic_output_paths_exception = False
+    causal_led_exception = False
+    led_evidence = patched["causal_led_output_path_evidence"]
+    assert isinstance(led_evidence, dict)
     if not baseline_output_paths or not patched_output_paths:
         reasons.append("unconstrained_output_summary_missing")
     else:
@@ -736,17 +1036,24 @@ def compare(
             and max(patched_output_paths)
             == EXPECTED_DIAGNOSTIC_UNCONSTRAINED_OUTPUT_PATHS
         )
+    if experimental_scaler_causal and baseline_output_paths and patched_output_paths:
+        causal_led_exception = (
+            set(baseline_output_paths) == {EXPECTED_UNCONSTRAINED_OUTPUT_PATHS}
+            and set(patched_output_paths) == {160}
+            and led_evidence["valid"] is True
+        )
+    output_paths_exception = diagnostic_output_paths_exception or causal_led_exception
     if (
         baseline_output_paths
         and patched_output_paths
         and max(patched_output_paths) != max(baseline_output_paths)
-        and not diagnostic_output_paths_exception
+        and not output_paths_exception
     ):
         reasons.append("unconstrained_output_paths_mismatch")
     elif (
         patched_output_paths
         and max(patched_output_paths) != EXPECTED_UNCONSTRAINED_OUTPUT_PATHS
-        and not diagnostic_output_paths_exception
+        and not output_paths_exception
     ):
         reasons.append("unconstrained_output_paths_not_canonical")
 
@@ -890,6 +1197,9 @@ def compare(
                 "mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_sync",
             )
         )
+    if experimental_scaler_causal:
+        for chain in EXPERIMENTAL_CAUSAL_METASTABILITY_CHAINS.values():
+            expected_sync_assignment_suffixes.extend(chain["registers"])
     missing_sync_assignments = [
         suffix
         for suffix in expected_sync_assignment_suffixes
@@ -914,7 +1224,15 @@ def compare(
         and patched_calculable_chains
         == baseline_calculable_chains
         + EXPECTED_ADDED_CALCULABLE_COMPLETION_SYNCHRONIZER_CHAINS
-        + (4 if experimental_scaler_fetch else 1 if experimental_diagnostic else 0)
+        + (
+            5
+            if experimental_scaler_causal
+            else 4
+            if experimental_scaler_fetch
+            else 1
+            if experimental_diagnostic
+            else 0
+        )
     )
     if not custom_assignment_seen:
         reasons.append("custom_synchronizer_missing")
@@ -929,6 +1247,7 @@ def compare(
         analysis_labels,
         experimental_diagnostic,
         experimental_scaler_fetch,
+        experimental_scaler_causal,
     )
     reasons.extend(diagnostic_reasons)
 
@@ -936,7 +1255,9 @@ def compare(
     assert isinstance(stock_output_paths, list)
     details = {
         "signoff_profile": (
-            "experimental_scaler_fetch"
+            "experimental_scaler_causal"
+            if experimental_scaler_causal
+            else "experimental_scaler_fetch"
             if experimental_scaler_fetch
             else "experimental_raw_scaler"
             if experimental_diagnostic
@@ -963,6 +1284,10 @@ def compare(
         "baseline_unconstrained_output_paths": max(baseline_output_paths, default=None),
         "patched_unconstrained_output_paths": max(patched_output_paths, default=None),
         "diagnostic_unconstrained_output_paths_exception": diagnostic_output_paths_exception,
+        "causal_led_output_paths_exception": causal_led_exception,
+        "causal_led_output_path_evidence": led_evidence
+        if experimental_scaler_causal
+        else None,
         "stock_resources": stock["resources"],
         "baseline_resources": baseline_resources,
         "patched_resources": patched["resources"],
@@ -1030,8 +1355,22 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="use the bounded attended scaler-fetch diagnostic timing profile",
     )
+    parser.add_argument(
+        "--experimental-scaler-causal",
+        action="store_true",
+        help="use the bounded causal-boundary observer profile",
+    )
     args = parser.parse_args(argv)
-    if args.experimental_diagnostic and args.experimental_scaler_fetch:
+    if (
+        sum(
+            (
+                args.experimental_diagnostic,
+                args.experimental_scaler_fetch,
+                args.experimental_scaler_causal,
+            )
+        )
+        > 1
+    ):
         parser.error("experimental diagnostic profiles are mutually exclusive")
 
     try:
@@ -1058,6 +1397,7 @@ def main(argv: list[str] | None = None) -> int:
         patched,
         experimental_diagnostic=args.experimental_diagnostic,
         experimental_scaler_fetch=args.experimental_scaler_fetch,
+        experimental_scaler_causal=args.experimental_scaler_causal,
     )
     valid = not reasons
     result = {

@@ -747,6 +747,9 @@ jobs:
             experimental_raw_scaler-v1)
               args+=(--experimental-diagnostic)
               ;;
+            experimental_scaler_causal-v1)
+              args+=(--experimental-scaler-causal)
+              ;;
             experimental_scaler_fetch-v1)
               args+=(--experimental-scaler-fetch)
               ;;

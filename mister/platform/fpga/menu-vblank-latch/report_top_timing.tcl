@@ -39,5 +39,12 @@ report_metastability \
 report_exceptions \
 	-file output_files/menu.timing-exceptions.rpt
 
+# Full payload paths contain combinational logic, so net-delay constraints do
+# not cover them. This check reports every pair at every device timing corner.
+if {[file exists mister_magik_report_causal_payload.tcl] &&
+    [get_collection_size [get_registers -nowarn {*mister_magik_scaler_causal_state:magik_scaler_causal_state|snapshot*}]] != 0} {
+ source mister_magik_report_causal_payload.tcl
+}
+
 delete_timing_netlist
 project_close

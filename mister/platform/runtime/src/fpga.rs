@@ -361,6 +361,38 @@ impl Fpga {
         }))
     }
 
+    /// Bounded acquisition for incident readout: never wait behind a hung owner.
+    pub fn lock_evidence_transaction(&self) -> io::Result<Option<FpgaUioGuard>> {
+        let Some(lock) = self.uio_lock.as_ref() else {
+            return Ok(None);
+        };
+        let fd = lock.as_raw_fd();
+        let started = Instant::now();
+        while self.uio_lock_depth.get() == 0 {
+            // SAFETY: fd belongs to the open lock file; flock does not access memory.
+            if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                break;
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::WouldBlock {
+                return Err(error);
+            }
+            if started.elapsed() >= std::time::Duration::from_millis(100) {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "FPGA evidence lock busy",
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        self.uio_lock_depth
+            .set(self.uio_lock_depth.get().saturating_add(1));
+        Ok(Some(FpgaUioGuard {
+            fd,
+            depth: Rc::clone(&self.uio_lock_depth),
+        }))
+    }
+
     pub fn lock_latch_transaction(&self) -> io::Result<Option<FpgaUioGuard>> {
         self.lock_uio_transaction()
     }
@@ -1579,6 +1611,31 @@ mod tests {
             .filter(|pair| pair[1] == pair[0] | STROBE)
             .map(|pair| pair[0] as u16)
             .collect()
+    }
+
+    #[test]
+    fn evidence_legacy_capture_preserves_both_ack_phases() {
+        let mut pairs = vec![(0, 0), (0x4d58, 0x4d58)];
+        pairs.extend([23, 75, 2409, 15306].map(|word| (word, word)));
+        let (mut fpga, registers) = scripted(&pairs);
+        let evidence = crate::video_evidence::capture(&mut fpga, true).unwrap();
+        assert_eq!(evidence["decoded"]["physical_phase"], 45);
+        assert_eq!(evidence["decoded"]["attribution"], "observer_invalid");
+        assert_eq!(evidence["raw_ack_high"], evidence["raw_ack_low"]);
+        assert_eq!(registers.borrow().writes.last(), Some(&BIT31));
+    }
+
+    #[test]
+    fn evidence_bad_crc_remains_raw_and_releases_bus() {
+        let words = [24, 0xf502, 0x5b2d, 0x531a, 0x41df];
+        let mut pairs = vec![(0x4d59, 0x4d59), (0x4d5a, 0x4d5a)];
+        pairs.extend(words.map(|word| (word, word)));
+        let (mut fpga, registers) = scripted(&pairs);
+        let evidence = crate::video_evidence::capture(&mut fpga, false).unwrap();
+        assert!(evidence.get("decoded").is_none());
+        assert_eq!(evidence["decode_error"], "evidence CRC mismatch");
+        assert_eq!(evidence["raw_ack_high"], serde_json::json!(words));
+        assert_eq!(registers.borrow().writes.last(), Some(&BIT31));
     }
 
     #[test]

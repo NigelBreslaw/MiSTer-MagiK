@@ -555,7 +555,10 @@ def record_agent(run: Path, status: AgentStatus) -> None:
 
 
 def connect_agent(
-    run: Path, required: set[str] = REQUIRED_AGENT_CAPABILITIES
+    run: Path,
+    required: set[str] = REQUIRED_AGENT_CAPABILITIES,
+    *,
+    allow_repair: bool = True,
 ) -> tuple[NativeAgent, AgentStatus]:
     resolved = resolve_device()
     device = resolved.address
@@ -566,6 +569,10 @@ def connect_agent(
         return SshBootstrap(device, resolved.username, resolved.password())
 
     token = store.load()
+    if not token and not allow_repair:
+        raise RuntimeError(
+            "Read-only incident capture requires an existing native token; no bootstrap performed"
+        )
     if not token:
         token = bootstrap().native_token()
         if token:
@@ -580,9 +587,17 @@ def connect_agent(
         except (OSError, RuntimeError):
             pass
     repair = os.environ.get("MISTER_MAGIK2_REPAIR") == "1"
-    if status is not None and status.supports(required) and not repair:
+    if (
+        status is not None
+        and status.supports(required)
+        and (not repair or not allow_repair)
+    ):
         record_agent(run, status)
         return agent, status
+    if not allow_repair:
+        raise RuntimeError(
+            "Installed service lacks incident capture support; no repair or replacement performed"
+        )
     binary = (
         agent_binary_path()
     )  # Build only after proving installed support is insufficient.

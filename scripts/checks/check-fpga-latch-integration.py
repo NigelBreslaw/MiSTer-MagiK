@@ -195,6 +195,7 @@ def main() -> None:
     bootstrap_black = source_dir / "mister_magik_bootstrap_black.sv"
     protocol = source_dir / "mister_magik_latch_protocol.svh"
     diagnostics_control = source_dir / "mister_magik_video_diagnostics_control.sv"
+    causal_control = source_dir / "mister_magik_scaler_causal_state.sv"
     diagnostics_avalon = source_dir / "mister_magik_video_diagnostics_avalon.sv"
     diagnostics_output = source_dir / "mister_magik_video_diagnostics_output.sv"
     diagnostics_protocol = source_dir / "mister_magik_video_diagnostics_protocol.svh"
@@ -301,7 +302,7 @@ def main() -> None:
     control_source = diagnostics_control.read_text()
     avalon_source = diagnostics_avalon.read_text()
     output_source = diagnostics_output.read_text()
-    if local_signoff_profile.read_text().strip() != "experimental_scaler_fetch-v1":
+    if local_signoff_profile.read_text().strip() != "experimental_scaler_causal-v1":
         fail("scaler-fetch candidate lacks its exact local signoff profile identity")
     if control_source.count("module mister_magik_scaler_fetch_liveness_state #(") != 1:
         fail("scaler-fetch liveness observer design unit is missing or ambiguous")
@@ -559,15 +560,27 @@ def main() -> None:
     )
     if timing_report_text.count(diagnostic_net_delay_report) != 1:
         fail("completion net-delay report is missing or ambiguous")
+    payload_report = (timing_report.parent / "report_causal_payload.tcl").read_text()
+    for fragment in (
+        "get_available_operating_conditions",
+        "get_path -from $sources -to $destinations -pairs_only -npaths 0",
+        "get_path_info -arrival_time $path",
+        "get_operating_conditions_info $op -temperature",
+        "10.000 ns",
+    ):
+        if fragment not in payload_report:
+            fail("full causal payload analysis is incomplete: " + fragment)
+    if "source mister_magik_report_causal_payload.tcl" not in timing_report_text:
+        fail("full payload analysis is not included in fitted timing reports")
     if "-nworst 50" in timing_report_text:
         fail("diagnostic net-delay report retains the truncated schema-4 depth")
     timing_commands = re.findall(
         r"(?m)^\s*(set_[A-Za-z0-9_]+\b[^\n]*)$", diagnostics_sdc_text
     )
-    if timing_commands != ["set_net_delay -max 10.0 \\"] * 6:
-        fail(
-            "diagnostic SDC must contain completion, terminal-record, and snapshot bounds"
-        )
+    if len(timing_commands) != 7 or any(
+        not line.startswith("set_net_delay -max 10.0 ") for line in timing_commands
+    ):
+        fail("diagnostic SDC must contain the seven direct control-net bounds")
     for fragment in (
         "{*ascal:ascal|avl_readdataack} 1",
         "{*ascal:ascal|o_readdataack_sync} 1",
@@ -577,23 +590,18 @@ def main() -> None:
         "-to $magik_scaler_completion_request_meta",
         "-from $magik_scaler_completion_ack_route",
         "-to $magik_scaler_completion_ack_meta",
-        "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|record_ready} 1",
-        "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|record_ready_meta} 1",
-        "-from $magik_fetch_record_ready",
-        "-to $magik_fetch_record_ready_meta",
-        "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_request_toggle} 1",
-        "{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|request_meta} 1",
-        "-from $magik_scheduler_snapshot_request",
-        "-to $magik_scheduler_snapshot_request_meta",
-        "{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|response_handoff_bit} 1",
-        "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|snapshot_response_meta} 1",
-        "-from $magik_scheduler_snapshot_response",
-        "-to $magik_scheduler_snapshot_response_meta",
-        "{*mister_magik_scaler_scheduler_snapshot:scheduler_snapshot|semantic_evidence*} 9",
-        "{*mister_magik_scaler_fetch_liveness_state:magik_scaler_fetch_liveness_state|scheduler_snapshot_capture*} 9",
-        "-from $magik_scheduler_snapshot_data",
-        "-to $magik_scheduler_snapshot_destination",
-        "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail scaler_fetch_terminal_record scheduler_snapshot_request_response_data reset_observed",
+        "{*mister_magik_scaler_causal_state:magik_scaler_causal_state|capture_request} 1",
+        "{*mister_magik_scaler_causal_state:magik_scaler_causal_state|capture_meta} 1",
+        "{*mister_magik_scaler_causal_state:magik_scaler_causal_state|response_toggle} 1",
+        "{*mister_magik_scaler_causal_state:magik_scaler_causal_state|response_meta} 1",
+        "{*mister_magik_scaler_causal_state:magik_scaler_causal_state|output_request} 1",
+        "{*mister_magik_scaler_causal_state:magik_scaler_causal_state|output_request_meta} 1",
+        "{*mister_magik_scaler_causal_state:magik_scaler_causal_state|output_response} 1",
+        "{*mister_magik_scaler_causal_state:magik_scaler_causal_state|output_response_meta} 1",
+        "{reset_req} 1",
+        "{io_dout_sys*} 16",
+        "{*mister_magik_scaler_causal_state:magik_scaler_causal_state|reset_meta} 1",
+        "causal_snapshot_request_response_data",
         "*ascal:ascal|o_readdataack_sync2*",
         "scaler_copy_tail",
     ):
@@ -644,6 +652,7 @@ def main() -> None:
             bootstrap_black,
             protocol,
             diagnostics_control,
+            causal_control,
             diagnostics_avalon,
             diagnostics_output,
             diagnostics_protocol,
@@ -660,6 +669,8 @@ def main() -> None:
                 "sys/mister_magik_bootstrap_black.sv\n"
                 "set_global_assignment -name SYSTEMVERILOG_FILE "
                 "sys/mister_magik_video_diagnostics_control.sv\n"
+                "set_global_assignment -name SYSTEMVERILOG_FILE "
+                "sys/mister_magik_scaler_causal_state.sv\n"
                 "set_global_assignment -name SDC_FILE "
                 "sys/mister_magik_video_diagnostics.sdc\n"
             )
@@ -679,7 +690,7 @@ def main() -> None:
             "mister_magik_video_diagnostics_control magik_video_diagnostics": 0,
             "mister_magik_video_diagnostics_avalon magik_video_diagnostics_avalon": 0,
             "mister_magik_video_diagnostics_output magik_video_diagnostics_output": 0,
-            "mister_magik_scaler_fetch_liveness_state magik_scaler_fetch_liveness_state": 1,
+            "mister_magik_scaler_causal_state magik_scaler_causal_state": 1,
             "magik_diag_response_valid": 4,
             "magik_diag_response_data": 4,
         }
@@ -693,13 +704,13 @@ def main() -> None:
         required_observer_bindings = {
             ".reset_req(reset_req)": 1,
             # One production ascal binding plus one passive observer binding.
-            ".vbuf_address(vbuf_address)": 2,
-            ".vbuf_burstcount(vbuf_burstcount)": 2,
-            ".vbuf_waitrequest(vbuf_waitrequest)": 2,
+            ".vbuf_address(vbuf_address)": 1,
+            ".vbuf_burstcount(vbuf_burstcount)": 1,
+            ".vbuf_waitrequest(vbuf_waitrequest)": 1,
             # One production ascal binding plus one passive observer binding.
             ".vbuf_readdata(vbuf_readdata)": 1,
-            ".vbuf_readdatavalid(vbuf_readdatavalid)": 2,
-            ".vbuf_read(vbuf_read)": 2,
+            ".vbuf_readdatavalid(vbuf_readdatavalid)": 1,
+            ".vbuf_read(vbuf_read)": 1,
         }
         for binding, expected_count in required_observer_bindings.items():
             if patched.count(binding) != expected_count:
@@ -708,22 +719,40 @@ def main() -> None:
                     f"{binding} expected {expected_count}, found {patched.count(binding)}"
                 )
         observer_mapping = re.compile(
-            r"mister_magik_scaler_fetch_liveness_state\s+"
-            r"magik_scaler_fetch_liveness_state\s*\(.*?"
+            r"mister_magik_scaler_causal_state\s+magik_scaler_causal_state\s*\(.*?"
             r"\.clk_100m\(clk_100m\).*?\.clk_sys\(clk_sys\).*?"
-            r"\.scaler_clk\(clk_hdmi\).*?"
-            r"\.reset_req\(reset_req\).*?\.vbuf_address\(vbuf_address\).*?"
-            r"\.vbuf_burstcount\(vbuf_burstcount\).*?"
-            r"\.vbuf_waitrequest\(vbuf_waitrequest\).*?"
-            r"\.vbuf_readdatavalid\(vbuf_readdatavalid\).*?"
-            r"\.vbuf_read\(vbuf_read\).*?"
-            r"\.scaler_diag_state\(magik_scaler_diag_state\).*?"
-            r"\.response_valid\(magik_diag_response_valid\).*?"
-            r"\.response_data\(magik_diag_response_data\).*?\);",
+            r"\.scaler_clk\(clk_hdmi\).*?\.reset_req\(reset_req\).*?"
+            r"\.upstream_read\(vbuf_read\).*?\.upstream_wait\(vbuf_waitrequest\).*?"
+            r"\.upstream_return\(vbuf_readdatavalid\).*?\.upstream_burst\(vbuf_burstcount\).*?"
+            r"\.physical_flags\(magik_vbuf_evidence\).*?\.production_state\(magik_return_state\).*?"
+            r"\.output_state\(magik_copy_state\).*?"
+            r"\.response_valid\(magik_diag_response_valid\).*?\.response_data\(magik_diag_response_data\).*?\);",
             re.DOTALL,
         )
         if len(observer_mapping.findall(patched)) != 1:
             fail("scaler-fetch liveness observer mapping is missing or ambiguous")
+        # These buses may only leave production modules as passive outputs.
+        for name, expected in (
+            ("magik_return_state", 4),
+            ("magik_copy_state", 4),
+            ("magik_vbuf_evidence", 4),
+        ):
+            if len(re.findall(r"\b" + name + r"\b", patched)) != expected:
+                fail("unexpected fanout of passive observation bus: " + name)
+        if "assign waitrequest_slave   = waitrequest_master;" not in patched_terminator:
+            fail("physical acceptance must use the unchanged common waitrequest")
+        causal_text = causal_control.read_text()
+        if "(* preserve, dont_replicate *) reg [15:0] crc_work = 0;" not in causal_text:
+            fail("causal CRC mailbox must preserve its exact constrained register bank")
+        ports = causal_text.split(");", 1)[0]
+        if re.findall(r"output\s+(?:wire|reg)\s+(?:\[[^]]+\]\s*)?(\w+)", ports) != [
+            "response_valid",
+            "response_data",
+        ]:
+            fail("causal observer acquired a functional output")
+        for command in ("68", "69", "6a"):
+            if re.search(r"8'[hH]0?" + command + r"\s*:", patched, re.I):
+                fail("diagnostic opcode collides with the production command decoder")
         for retired_binding in (
             "magik_scaler_copy_state",
             ".magik_diag_state",
@@ -989,7 +1018,9 @@ def main() -> None:
             (".reset_na   (~reset_req)", patched),
             (".avl_readdatavalid(vbuf_readdatavalid)", patched),
             (".magik_fetch_state(magik_scaler_diag_state)", patched),
-            (".scaler_diag_state(magik_scaler_diag_state)", patched),
+            (".production_state(magik_return_state)", patched),
+            (".physical_flags(magik_vbuf_evidence)", patched),
+            (".output_state(magik_copy_state)", patched),
             (
                 "assign reset_out = ~init_reset_n | ~hps_h2f_reset_n | reset_core_req;",
                 patched_sysmem,

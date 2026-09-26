@@ -72,7 +72,10 @@ mkdir -p "$CACHE_DIR" "$INSTALL_ROOT"
 download() {
   local destination="$1"
   local url="$2"
-  [[ -f "$destination" ]] || curl --fail --location --retry 5 --output "$destination" "$url"
+  if [[ ! -f "$destination" ]]; then
+    curl --fail --location --retry 5 --output "$destination.partial" "$url"
+    mv "$destination.partial" "$destination"
+  fi
 }
 
 verify_sha1() {
@@ -105,27 +108,34 @@ if ! container volume inspect "$INSTALLER_VOLUME" >/dev/null 2>&1; then
   container volume create "$INSTALLER_VOLUME"
 fi
 
-container run --rm \
+container run --rm --cap-add CAP_SYS_ADMIN --read-only-path NONE \
   --mount "type=volume,source=$INSTALLER_VOLUME,target=/qemu-root" \
   "$INSTALLER_IMAGE" sh -lc '
     set -eu
-    if [ ! -f /qemu-root/etc/os-release ]; then
+    update-binfmts --enable qemu-x86_64
+    grep -q "^flags:.*F" /proc/sys/fs/binfmt_misc/qemu-x86_64
+    if [ ! -f /qemu-root/debootstrap/debootstrap ] && [ ! -f /qemu-root/.magik-debootstrap-complete ]; then
       debootstrap --arch=amd64 --foreign bionic /qemu-root http://archive.ubuntu.com/ubuntu
-      cp /usr/bin/qemu-x86_64-static /qemu-root/usr/bin/qemu-x86_64-static
+    fi
+    cp /usr/bin/qemu-x86_64-static /qemu-root/usr/bin/qemu-x86_64-static
+    if [ ! -f /qemu-root/.magik-debootstrap-complete ]; then
       chroot /qemu-root /usr/bin/qemu-x86_64-static \
         /bin/sh /debootstrap/debootstrap --second-stage
+      touch /qemu-root/.magik-debootstrap-complete
     fi
     test "$(sed -n "s/^VERSION_ID=//p" /qemu-root/etc/os-release | tr -d "\"")" = 18.04
     test -x /qemu-root/usr/bin/qemu-x86_64-static
   '
 
 if [[ ! -x "$INSTALL_ROOT/17.0/quartus/bin/quartus_sh" ]]; then
-  container run --rm \
+  container run --rm --cap-add CAP_SYS_ADMIN --read-only-path NONE \
     --mount "type=volume,source=$INSTALLER_VOLUME,target=/qemu-root" \
     --mount "type=bind,source=$CACHE_DIR,target=/qemu-root/quartus-cache" \
     --mount "type=bind,source=$INSTALL_ROOT,target=/qemu-root/opt/intelFPGA_lite" \
     "$INSTALLER_IMAGE" sh -lc '
       set -eu
+      update-binfmts --enable qemu-x86_64
+      grep -q "^flags:.*F" /proc/sys/fs/binfmt_misc/qemu-x86_64
       chmod +x /qemu-root/quartus-cache/QuartusLiteSetup-17.0.0.595-linux.run
       chroot /qemu-root /usr/bin/qemu-x86_64-static /bin/bash -lc \
         "/quartus-cache/QuartusLiteSetup-17.0.0.595-linux.run --mode unattended --unattendedmodeui minimal --installdir /opt/intelFPGA_lite/17.0"
