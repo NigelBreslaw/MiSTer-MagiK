@@ -67,6 +67,9 @@ def add_commands(commands):
     recover.add_argument("--attended", action="store_true", required=True)
     reboot = commands.add_parser("reboot")
     reboot.add_argument("--attended", action="store_true", required=True)
+    probe = commands.add_parser("input-probe")
+    probe.add_argument("--seconds", type=int, choices=range(31), default=0)
+    probe.add_argument("--event", action="append", default=[])
     commands.add_parser("status")
     commands.add_parser("diagnostics")
     commands.add_parser("logs")
@@ -95,7 +98,10 @@ def run_device(arguments, run):
     if group == "catalog":
         return run_catalog(arguments, run)
     fields = {}
-    if group == "recover":
+    if group == "input-probe":
+        operation = "input-probe"
+        fields = {"seconds": arguments.seconds, "events": arguments.event}
+    elif group == "recover":
         operation = "device-recover"
         fields = {"attended": arguments.attended}
     elif group == "media":
@@ -124,7 +130,12 @@ def run_device(arguments, run):
                 fields["acknowledge_31khz"] = True
     else:
         operation = "device-evidence"
-    agent, _ = connect_agent(run, {"device-control-v1"})
+    required = (
+        {"input-probe-runtime-v1", "input-probe-passive-v1"}
+        if group == "input-probe"
+        else {"device-control-v1"}
+    )
+    agent, _ = connect_agent(run, required)
     report = agent.device_operation(operation, fields)
     path = run / "device-operation.json"
     path.write_text(json.dumps(report, indent=2) + "\n")

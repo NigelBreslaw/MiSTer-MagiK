@@ -6,6 +6,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "release/platform/main-component.py"
@@ -50,6 +51,27 @@ class MainComponentTests(unittest.TestCase):
             component.component_id(self.revision),
             "a9ead23864010064528bde4fa70a84567058ea6009026089af7f6783a7fad36d",
         )
+
+    def test_source_gate_checks_exact_revision_and_release(self):
+        with patch.object(component.subprocess, "run") as run:
+            run.return_value.returncode = 0
+            evidence = component.verify_source(self.root, self.revision)
+            self.assertEqual(evidence["upstream_release"], component.UPSTREAM_RELEASE)
+            self.assertEqual(
+                run.call_args.args[0][-2:], [component.UPSTREAM_RELEASE, self.revision]
+            )
+            run.return_value.returncode = 1
+            with self.assertRaisesRegex(
+                component.MainComponentError, "required upstream release"
+            ):
+                component.verify_source(self.root, self.revision)
+
+    def test_source_gate_rejects_refs_instead_of_exact_sha(self):
+        for revision in ["mister-magik", "HEAD", "-invalid", "a" * 39]:
+            with self.assertRaisesRegex(
+                component.MainComponentError, "invalid source_revision"
+            ):
+                component.verify_source(self.root, revision)
 
     def test_verify_accepts_exact_artifact(self):
         self.assertEqual(

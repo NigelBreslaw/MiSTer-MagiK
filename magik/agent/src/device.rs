@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 const MAIN_STATUS: &str = "/tmp/mister-magik/main-status.json";
 pub const OPERATIONS: &[&str] = &[
     "device-status",
+    "input-probe",
     "mode-status",
     "mode-set",
     "device-reboot",
@@ -200,7 +201,8 @@ impl Agent {
             if !body.is_empty()
                 || (!matches!(
                     request.op.as_str(),
-                    "display-set"
+                    "input-probe"
+                        | "display-set"
                         | "media-operation"
                         | "mode-set"
                         | "device-reboot"
@@ -211,6 +213,7 @@ impl Agent {
             }
             match request.op.as_str() {
                 "device-status" => status(),
+                "input-probe" => crate::input_probe::run(&request.fields),
                 "mode-status" => crate::mode::status(),
                 "mode-set" => crate::mode::set(&request.fields),
                 "device-reboot" => crate::mode::reboot(&request.fields),

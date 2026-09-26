@@ -6,6 +6,11 @@ name: Build MiSTer MagiK Platform
 on:
   workflow_dispatch:
     inputs:
+      main_revision:
+        description: Exact maintained Main fork SHA (reuse the qualified candidate SHA when publishing)
+        required: true
+        default: c1056a9e98e9bfa38b959e41b91cdc8542d99a67
+        type: string
       publish:
         description: Promote the verified candidate as the next platform release
         required: false
@@ -79,16 +84,32 @@ jobs:
 
       - name: Capture desired component identities
         id: identity
+        env:
+          MAIN_REVISION: ${{ inputs.main_revision }}
         run: |
           set -euo pipefail
-          main_revision="$(git ls-remote "https://github.com/$MAIN_REPOSITORY.git" "refs/heads/$MAIN_BRANCH" | awk '{print $1}')"
+          main_revision="$MAIN_REVISION"
           [[ "$main_revision" =~ ^[0-9a-f]{40}$ ]]
+          git clone --no-checkout --single-branch --branch "$MAIN_BRANCH" \
+            "https://github.com/$MAIN_REPOSITORY.git" build/main-source-validation
+          git -C build/main-source-validation merge-base --is-ancestor "$main_revision" "origin/$MAIN_BRANCH"
+          python3 scripts/release/platform/main-component.py verify-source \
+            --checkout build/main-source-validation --revision "$main_revision" \
+            | tee build/main-source-verification.json
           main_id="$(python3 scripts/release/platform/main-component.py identity --revision "$main_revision")"
           fpga_id="$(python3 scripts/release/platform/platform-component-id.py component fpga)"
           fpga_synthesis_id="$(python3 scripts/release/platform/platform-component-id.py component fpga-synthesis)"
           kernel_id="$(python3 scripts/release/platform/platform-component-id.py component kernel)"
           printf 'main_revision=%s\nmain_id=%s\nfpga_id=%s\nfpga_synthesis_id=%s\nkernel_id=%s\n' \
             "$main_revision" "$main_id" "$fpga_id" "$fpga_synthesis_id" "$kernel_id" >> "$GITHUB_OUTPUT"
+
+      - name: Retain Main release ancestry evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: main-source-verification
+          path: build/main-source-verification.json
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Inspect latest platform release
         id: current

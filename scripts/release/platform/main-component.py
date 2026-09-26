@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -18,6 +19,7 @@ BRANCH = "mister-magik"
 TOOLCHAIN = "gcc-arm-10.2-2020.11-x86_64-arm-none-linux-gnueabihf"
 HEX40 = 40
 HEX64 = 64
+UPSTREAM_RELEASE = "47221c18987e101f50caafeb3b615f53b62722ca"
 
 
 class MainComponentError(ValueError):
@@ -46,6 +48,30 @@ def component_id(revision: str, toolchain: str = TOOLCHAIN) -> str:
         f"source_revision={revision}\ntoolchain={toolchain}\n"
     )
     return hashlib.sha256(material.encode()).hexdigest()
+
+
+def verify_source(checkout: Path, revision: str) -> dict[str, str]:
+    """Gate both fresh builds and cached binaries on the required release ancestry."""
+    require_hex("source_revision", revision, HEX40)
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(checkout),
+            "merge-base",
+            "--is-ancestor",
+            UPSTREAM_RELEASE,
+            revision,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode:
+        raise MainComponentError(
+            "Main source does not contain required upstream release " + UPSTREAM_RELEASE
+        )
+    return {"source_revision": revision, "upstream_release": UPSTREAM_RELEASE}
 
 
 def verify(root: Path, revision: str | None = None) -> dict[str, object]:
@@ -103,10 +129,17 @@ def main() -> int:
     verify_parser = commands.add_parser("verify")
     verify_parser.add_argument("--artifact", type=Path, required=True)
     verify_parser.add_argument("--revision")
+    source = commands.add_parser("verify-source")
+    source.add_argument("--checkout", type=Path, required=True)
+    source.add_argument("--revision", required=True)
     try:
         args = parser.parse_args()
         if args.command == "identity":
             print(component_id(args.revision))
+        elif args.command == "verify-source":
+            print(
+                json.dumps(verify_source(args.checkout, args.revision), sort_keys=True)
+            )
         else:
             print(json.dumps(verify(args.artifact, args.revision), sort_keys=True))
     except (MainComponentError, json.JSONDecodeError, OSError) as error:
