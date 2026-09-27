@@ -1133,6 +1133,19 @@ fn settings_cog_transition_eligible(
         && !reduce_motion
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SettingsCogSource {
+    SettledCardHome,
+    LiveSettingsRaster,
+}
+
+const fn settings_cog_source(direction: NavigationTransitionDirection) -> SettingsCogSource {
+    match direction {
+        NavigationTransitionDirection::Forward => SettingsCogSource::SettledCardHome,
+        NavigationTransitionDirection::Reverse => SettingsCogSource::LiveSettingsRaster,
+    }
+}
+
 fn settings_cog_home_endpoint_is_live(
     route: Option<NavigationTransitionRoute>,
     request: Option<NavigationTransitionRequest>,
@@ -8061,16 +8074,26 @@ pub(super) fn run_launcher_loop(
                                 );
                                 let started = if card_zoom {
                                     let cog = settings_cog_backdrop_rgb565();
-                                    // Card motion presents directly into scanout slots, so
-                                    // the generic cached target may still contain the
-                                    // neighbouring card. Render the settled card session
-                                    // itself as the cog transition's exact source frame.
-                                    let source = card_pixels_as_slint(
-                                        launcher_card_home
-                                            .as_mut()
-                                            .expect("card zoom eligibility requires a card session")
-                                            .render(),
-                                    );
+                                    let source = match settings_cog_source(direction) {
+                                        SettingsCogSource::SettledCardHome => {
+                                            // Card motion presents directly into scanout slots,
+                                            // so the generic cache may still contain a neighbour.
+                                            // Render the settled Settings card as the exact source.
+                                            card_pixels_as_slint(
+                                                launcher_card_home
+                                                    .as_mut()
+                                                    .expect(
+                                                        "card zoom eligibility requires a card session",
+                                                    )
+                                                    .render(),
+                                            )
+                                        }
+                                        SettingsCogSource::LiveSettingsRaster => {
+                                            // Reverse starts from the live Settings page. Home is
+                                            // rendered later and captured as the destination.
+                                            target.cached_565()
+                                        }
+                                    };
                                     navigation_transition.begin_settings_cog_physical(
                                         direction,
                                         ui.render_w(),
@@ -14767,6 +14790,18 @@ mod tests {
             540,
             false,
         ));
+    }
+
+    #[test]
+    fn settings_cog_source_is_directional() {
+        assert_eq!(
+            settings_cog_source(NavigationTransitionDirection::Forward),
+            SettingsCogSource::SettledCardHome,
+        );
+        assert_eq!(
+            settings_cog_source(NavigationTransitionDirection::Reverse),
+            SettingsCogSource::LiveSettingsRaster,
+        );
     }
 
     fn eligible_card_direct_input() -> CardDirectEligibility {
