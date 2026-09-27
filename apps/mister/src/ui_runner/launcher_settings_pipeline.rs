@@ -12,8 +12,8 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 const FRAME_PIXELS: usize = 960 * 540;
-const WORKER_COUNT: usize = 2;
-const BUFFER_COUNT: usize = 5;
+const WORKER_COUNT: usize = 1;
+const BUFFER_COUNT: usize = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct SettingsFrameRequest {
@@ -271,7 +271,7 @@ mod tests {
     }
 
     #[test]
-    fn workers_preserve_consecutive_target_frames() {
+    fn duplicate_target_is_only_queued_once() {
         let launcher = vec![Rgb565Pixel(0x1234); FRAME_PIXELS];
         let settings = vec![Rgb565Pixel(0x4321); FRAME_PIXELS];
         let cog = Box::leak(
@@ -292,12 +292,11 @@ mod tests {
         });
         pipeline.submit(SettingsFrameRequest {
             sequence: 2,
-            target_vblank: 22,
+            target_vblank: 21,
             t_ms: 417,
         });
         let first = take(&mut pipeline, 21);
-        let second = take(&mut pipeline, 22);
         assert_eq!(first.request().sequence, 1);
-        assert_eq!(second.request().sequence, 2);
+        assert!(pipeline.take_for_vblank(21).is_none());
     }
 }

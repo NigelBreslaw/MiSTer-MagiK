@@ -10926,7 +10926,7 @@ pub(super) fn run_launcher_loop(
                     ) {
                         settings_cog_render_sequence =
                             settings_cog_render_sequence.wrapping_add(1).max(1);
-                        const SETTINGS_RENDER_LEAD_VBLANKS: u64 = 4;
+                        const SETTINGS_RENDER_LEAD_VBLANKS: u64 = 2;
                         let lead_ms = pacer
                             .period_us()
                             .saturating_mul(SETTINGS_RENDER_LEAD_VBLANKS)
