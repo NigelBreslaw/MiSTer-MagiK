@@ -3,7 +3,6 @@
 
 import { SettingsView } from "../../api.slint";
 import { CrtPageChrome, CrtPageMetrics } from "../../components/crt_page_chrome.slint";
-import { CrtSettingsBackdrop } from "../../components/crt_settings_page.slint";
 import { PageTheme } from "../../components/page_chrome.slint";
 import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
 import { MisterUi } from "../../mister_window.slint";
@@ -25,9 +24,7 @@ export component LicenseTextScreen inherits Rectangle {
 
     accessible-role: main;
     accessible-label: "License text";
-    background: #000000;
-
-    CrtSettingsBackdrop { }
+    background: transparent;
     CrtPageChrome {
         section: "LICENSES / " + SettingsView.license-titles[SettingsView.selected-license-index].to-uppercase();
         hint-a: "B BACK";

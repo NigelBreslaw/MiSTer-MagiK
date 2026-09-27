@@ -13,7 +13,7 @@ import {
     SettingsView,
 } from "../../api.slint";
 import { CrtPageChrome, CrtPageMetrics } from "../../components/crt_page_chrome.slint";
-import { CrtGroupRule, CrtSettingsBackdrop, CrtSettingsRow } from "../../components/crt_settings_page.slint";
+import { CrtGroupRule, CrtSettingsRow } from "../../components/crt_settings_page.slint";
 import { MisterUi } from "../../mister_window.slint";
 
 export component SettingsScreen inherits Rectangle {
@@ -30,9 +30,8 @@ export component SettingsScreen inherits Rectangle {
     accessible-role: main;
     accessible-label: "Settings";
     accessible-description: NavigationView.transition-state == NavigationTransitionState.idle ? "Ready" : "Transitioning";
-    background: #000000;
+    background: transparent;
 
-    CrtSettingsBackdrop { opacity: root.overlay-active ? 0.18 : 0.3; }
     CrtPageChrome {
         section: "SETTINGS";
         hint-a: root.overlay-active ? "A SELECT" : "A CHANGE";

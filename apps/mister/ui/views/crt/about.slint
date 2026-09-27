@@ -3,7 +3,7 @@
 
 import { FeedbackView, InformationView } from "../../api.slint";
 import { CrtLauncherText, CrtPageChrome, CrtPageMetrics } from "../../components/crt_page_chrome.slint";
-import { CrtGroupRule, CrtSettingsBackdrop, CrtSettingsRow } from "../../components/crt_settings_page.slint";
+import { CrtGroupRule, CrtSettingsRow } from "../../components/crt_settings_page.slint";
 import { PageTheme } from "../../components/page_chrome.slint";
 import { MisterUi } from "../../mister_window.slint";
 
@@ -18,9 +18,8 @@ export component AboutScreen inherits Rectangle {
     accessible-role: main;
     accessible-label: "About screen";
     accessible-enabled: true;
-    background: #000000;
+    background: transparent;
 
-    CrtSettingsBackdrop { }
     CrtPageChrome { section: "SETTINGS / ABOUT"; hint-a: "A OPEN"; hint-b: "B BACK"; }
 
     Rectangle {

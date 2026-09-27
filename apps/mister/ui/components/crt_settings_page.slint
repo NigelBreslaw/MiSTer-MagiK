@@ -11,8 +11,8 @@ import { PageTheme, SettingsFocusHighlight } from "page_chrome.slint";
 // monitor rotation without introducing a second portrait design.
 export component CrtSettingsBackdrop inherits Image {
     source: SettingsView.cog-backdrop;
-    x: CrtPageMetrics.px-x(MisterUi.window-width - 150 * CrtPageMetrics.sx + 6 * CrtPageMetrics.sx);
-    y: CrtPageMetrics.px-y(CrtPageMetrics.header-bottom + 20 * CrtPageMetrics.sy);
+    x: (MisterUi.window-width - 150 * CrtPageMetrics.sx + 6 * CrtPageMetrics.sx) * 1px;
+    y: (CrtPageMetrics.header-bottom + 20 * CrtPageMetrics.sy) * 1px;
     width: CrtPageMetrics.len-x(150);
     height: CrtPageMetrics.len-y(150);
     image-fit: fill;

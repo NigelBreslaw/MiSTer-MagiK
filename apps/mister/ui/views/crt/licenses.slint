@@ -3,7 +3,7 @@
 
 import { FeedbackView, SettingsView } from "../../api.slint";
 import { CrtPageChrome, CrtPageMetrics } from "../../components/crt_page_chrome.slint";
-import { CrtSettingsBackdrop, CrtSettingsRow } from "../../components/crt_settings_page.slint";
+import { CrtSettingsRow } from "../../components/crt_settings_page.slint";
 import { MisterUi } from "../../mister_window.slint";
 
 export component LicensesScreen inherits Rectangle {
@@ -21,9 +21,7 @@ export component LicensesScreen inherits Rectangle {
     accessible-role: main;
     accessible-label: "Licenses screen";
     accessible-enabled: true;
-    background: #000000;
-
-    CrtSettingsBackdrop { }
+    background: transparent;
 
     Rectangle {
         x: root.list-x;
