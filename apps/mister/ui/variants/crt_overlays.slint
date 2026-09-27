@@ -5,8 +5,10 @@ import { Spleen6x12, Spleen6x12Size } from "../components/spleen_6x12.slint";
 import { Jersey25 } from "../components/jersey_25.slint";
 
 import { MisterUi } from "../mister_window.slint";
-import { CatalogView, DialogChoice, FeedbackView, MediaPackRow, MediaPackState, MediaView, OverlayView } from "../api.slint";
+import { CatalogView, ConfirmationKind, DialogChoice, FeedbackView, MediaPackRow, MediaPackState, MediaView, OverlayView, ScreenOrientation, SettingsView } from "../api.slint";
 import { CrtTheme } from "../components/crt_ui.slint";
+import { CrtLauncherText, CrtPageMetrics } from "../components/crt_page_chrome.slint";
+import { PageTheme, SettingsFocusHighlight } from "../components/page_chrome.slint";
 
 component CrtProgressRow inherits Rectangle {
     in property <MediaPackRow> pack;
@@ -194,11 +196,49 @@ component CompactDialogButton inherits Rectangle {
     }
 }
 
+component CrtInlineConfirmButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> focused;
+
+    height: CrtPageMetrics.len-y(13);
+    background: root.focused ? #302455 : #171223;
+    border-width: 1px;
+    border-color: root.focused ? PageTheme.settings-accent : #4a3d73;
+
+    if root.focused : SettingsFocusHighlight {
+        source: SettingsView.focus-highlight-crt-menu;
+        width: parent.width;
+        height: parent.height;
+    }
+    CrtLauncherText {
+        x: (parent.width - self.preferred-width) / 2;
+        y: CrtPageMetrics.len-y(1);
+        text: root.label.to-uppercase();
+        text-color: root.focused ? PageTheme.cream : PageTheme.muted;
+    }
+}
+
 export component ConfirmDialog inherits Rectangle {
     property <bool> narrow-portrait: MisterUi.portrait-layout && MisterUi.window-width < 400;
-    background: #000000b0;
+    property <bool> settings-inline: OverlayView.confirmation-kind == ConfirmationKind.display-resolution
+        || OverlayView.confirmation-kind == ConfirmationKind.screen-orientation;
+    property <bool> orientation-confirm: OverlayView.confirmation-kind == ConfirmationKind.screen-orientation;
+    property <int> left: CrtPageMetrics.margin-x;
+    property <int> right: MisterUi.window-width - CrtPageMetrics.margin-x;
+    property <int> row-y: CrtPageMetrics.header-bottom + 26 * CrtPageMetrics.sy
+        + (root.orientation-confirm ? 16 * CrtPageMetrics.sy : 0);
+    property <int> panel-w: Math.min(300 * CrtPageMetrics.sx, root.right - root.left);
+    property <int> panel-h: 50 * CrtPageMetrics.sy;
+    property <int> below-y: root.row-y + 16 * CrtPageMetrics.sy + CrtPageMetrics.sy;
+    property <int> panel-y: root.below-y + root.panel-h < CrtPageMetrics.footer-rule
+        ? root.below-y : Math.max(CrtPageMetrics.header-bottom + CrtPageMetrics.sy, root.row-y - CrtPageMetrics.sy - root.panel-h);
+    property <string> chosen-label: root.orientation-confirm
+        ? SettingsView.selected-orientation == ScreenOrientation.normal ? "NORMAL"
+        : SettingsView.selected-orientation == ScreenOrientation.monitor-clockwise ? "MONITOR RIGHT" : "MONITOR LEFT"
+        : SettingsView.selected-display.label.to-uppercase();
+    background: root.settings-inline ? transparent : #000000b0;
 
-    Rectangle {
+    if !root.settings-inline : Rectangle {
         width: parent.width - 16px;
         height: min(224px, parent.height - 16px);
         x: (parent.width - self.width) / 2;
@@ -254,6 +294,44 @@ export component ConfirmDialog inherits Rectangle {
                     acknowledged: FeedbackView.acknowledged("", "right", FeedbackView.revision);
                 }
             }
+        }
+    }
+
+    if root.settings-inline : Rectangle {
+        x: CrtPageMetrics.px-x(root.right - root.panel-w);
+        y: CrtPageMetrics.px-y(root.panel-y);
+        width: root.panel-w * 1px;
+        height: root.panel-h * 1px;
+        background: #0b0913;
+        border-width: 1px;
+        border-color: #4a3d73;
+        clip: true;
+
+        Rectangle { width: parent.width; height: 1px; background: PageTheme.settings-accent; }
+        CrtLauncherText {
+            x: CrtPageMetrics.len-x(4);
+            y: CrtPageMetrics.len-y(2);
+            text: root.orientation-confirm ? "KEEP ORIENTATION?" : "KEEP THIS MODE?";
+        }
+        CrtLauncherText {
+            x: CrtPageMetrics.len-x(4);
+            y: CrtPageMetrics.len-y(16);
+            text: root.chosen-label;
+            text-color: PageTheme.settings-accent;
+        }
+        CrtInlineConfirmButton {
+            x: CrtPageMetrics.len-x(4);
+            y: CrtPageMetrics.len-y(33);
+            width: (parent.width - CrtPageMetrics.len-x(12)) / 2;
+            label: OverlayView.confirm-label;
+            focused: OverlayView.selected-choice == DialogChoice.confirm;
+        }
+        CrtInlineConfirmButton {
+            x: parent.width / 2 + CrtPageMetrics.len-x(2);
+            y: CrtPageMetrics.len-y(33);
+            width: (parent.width - CrtPageMetrics.len-x(12)) / 2;
+            label: OverlayView.cancel-label;
+            focused: OverlayView.selected-choice == DialogChoice.cancel;
         }
     }
 }

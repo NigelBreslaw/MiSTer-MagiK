@@ -642,7 +642,7 @@ impl NavigationTransitionRuntime {
         if !route.is_settings_page() {
             return Ok(false);
         }
-        let request = if route.uses_segmented_settings_motion() {
+        let mut request = if route.uses_segmented_settings_motion() {
             NavigationTransitionRequest::settings_page_segmented_on_axis_with_content_x(
                 direction,
                 axis,
@@ -651,11 +651,15 @@ impl NavigationTransitionRuntime {
         } else {
             NavigationTransitionRequest::settings_page_on_axis(direction, axis)
         };
+        if mister_magik_framebuffer_scenes::settings_cog::supports_dimensions(width, height)
+            && (width, height) != (960, 540)
+        {
+            request.duration_us = 520_000;
+        }
         self.begin_settings_physical(route, request, width, height, source, now_us)
     }
 
-    /// Home <-> Settings card zoom. Only valid for the 960x540 landscape card
-    /// launcher, where logical and physical geometry are identical.
+    /// Home <-> Settings card zoom in physical HDMI or native CRT space.
     pub fn begin_settings_cog_physical(
         &mut self,
         direction: NavigationTransitionDirection,
@@ -666,7 +670,12 @@ impl NavigationTransitionRuntime {
         now_us: u64,
     ) -> Result<bool, NavigationTransitionFailure> {
         self.buffers.set_settings_cog_asset(cog);
-        let request = NavigationTransitionRequest::settings_cog(direction);
+        let mut request = NavigationTransitionRequest::settings_cog(direction);
+        if mister_magik_framebuffer_scenes::settings_cog::supports_dimensions(width, height)
+            && (width, height) != (960, 540)
+        {
+            request.duration_us = 800_000;
+        }
         let route = NavigationTransitionRoute::HomeToSettings;
         self.begin_settings_physical(route, request, width, height, source, now_us)
     }
@@ -1905,6 +1914,45 @@ mod tests {
             (runtime.buffers.width(), runtime.buffers.height()),
             (16, 12)
         );
+    }
+
+    #[test]
+    fn native_crt_settings_timings_match_the_product_motion_spec() {
+        let mut runtime = NavigationTransitionRuntime::new(640, 240, true);
+        let frame = vec![Rgb565Pixel(0); 640 * 240];
+        runtime
+            .begin_settings_page_physical(
+                NavigationTransitionRoute::SettingsToAbout,
+                NavigationTransitionDirection::Forward,
+                SettingsPageTransitionAxis::Horizontal,
+                640,
+                240,
+                &frame,
+                0,
+            )
+            .unwrap();
+        assert_eq!(runtime.request().unwrap().duration_us, 520_000);
+
+        let mut runtime = NavigationTransitionRuntime::new(640, 240, true);
+        let cog = Box::leak(
+            vec![
+                SharedRgb565Pixel(0);
+                mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_WIDTH
+                    * mister_magik_framebuffer_scenes::settings_cog::COG_ASSET_HEIGHT
+            ]
+            .into_boxed_slice(),
+        );
+        runtime
+            .begin_settings_cog_physical(
+                NavigationTransitionDirection::Forward,
+                640,
+                240,
+                &frame,
+                cog,
+                0,
+            )
+            .unwrap();
+        assert_eq!(runtime.request().unwrap().duration_us, 800_000);
     }
 
     #[test]

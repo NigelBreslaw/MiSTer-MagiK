@@ -3469,7 +3469,9 @@ impl LauncherNav {
             self.screen = Screen::Licenses;
             return None;
         }
-        let count = crate::licenses::max_scroll_line(self.licenses_selected) + 1;
+        let count =
+            crate::licenses::max_scroll_line_for(self.licenses_selected, self.uses_crt_layout())
+                + 1;
         if tick_continuous {
             let previous_dir = self.licenses_scroll.scroll.held_dir;
             self.licenses_scroll.handle_direction_input(

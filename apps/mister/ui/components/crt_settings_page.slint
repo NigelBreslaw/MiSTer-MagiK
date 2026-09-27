@@ -1,0 +1,84 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { FeedbackView, SettingsView } from "../api.slint";
+import { MisterUi } from "../mister_window.slint";
+import { CrtLauncherText, CrtPageMetrics } from "crt_page_chrome.slint";
+import { PageTheme, SettingsFocusHighlight } from "page_chrome.slint";
+
+// Shared CRT Settings-family backdrop. Its raw dimensions follow the CRT
+// sample axes, so the cog keeps the same displayed proportions after a
+// monitor rotation without introducing a second portrait design.
+export component CrtSettingsBackdrop inherits Image {
+    source: SettingsView.cog-backdrop;
+    x: CrtPageMetrics.px-x(MisterUi.window-width - 150 * CrtPageMetrics.sx + 6 * CrtPageMetrics.sx);
+    y: CrtPageMetrics.px-y(CrtPageMetrics.header-bottom + 20 * CrtPageMetrics.sy);
+    width: CrtPageMetrics.len-x(150);
+    height: CrtPageMetrics.len-y(150);
+    image-fit: fill;
+    image-rendering: pixelated;
+    opacity: 0.3;
+    accessible-role: none;
+}
+
+// One row used by Settings, About and Licenses. The focus texture is produced
+// at this route's exact RGB565 dimensions and remains a 1:1 image.
+export component CrtSettingsRow inherits Rectangle {
+    in property <string> label;
+    in property <string> accessible-name: root.label;
+    in property <string> detail;
+    in property <string> value;
+    in property <bool> value-accent;
+    in property <bool> focused;
+    in property <bool> acknowledged;
+    in property <bool> link;
+
+    accessible-role: list-item;
+    accessible-label: root.accessible-name;
+    accessible-description: root.detail;
+    accessible-item-selected: root.focused;
+    accessible-enabled: true;
+    height: CrtPageMetrics.len-y(16);
+
+    if root.focused : SettingsFocusHighlight {
+        source: SettingsView.focus-highlight-crt-row;
+        width: root.width;
+        height: root.height;
+        Rectangle {
+            x: 0px;
+            width: CrtPageMetrics.len-x(2);
+            background: PageTheme.settings-accent;
+        }
+    }
+
+    label-text := CrtLauncherText {
+        x: CrtPageMetrics.len-x(4);
+        y: CrtPageMetrics.len-y(2);
+        text: root.label;
+        text-color: root.focused ? PageTheme.settings-accent
+            : root.acknowledged ? PageTheme.settings-accent-deep : PageTheme.cream;
+    }
+
+    if root.value != "" : CrtLauncherText {
+        x: Math.max(root.width - CrtPageMetrics.len-x(root.link ? 18 : 4) - self.preferred-width,
+            label-text.x + label-text.preferred-width + CrtPageMetrics.len-x(4));
+        y: CrtPageMetrics.len-y(2);
+        width: root.width - CrtPageMetrics.len-x(4) - self.x;
+        text: root.value;
+        text-color: root.value-accent ? PageTheme.settings-accent
+            : root.focused ? PageTheme.cream : PageTheme.muted;
+    }
+
+    if root.link : CrtLauncherText {
+        x: root.width - CrtPageMetrics.len-x(10);
+        y: CrtPageMetrics.len-y(2);
+        text: ">";
+        text-color: root.focused ? PageTheme.settings-accent : PageTheme.muted;
+    }
+}
+
+export component CrtGroupRule inherits Rectangle {
+    x: CrtPageMetrics.len-x(4);
+    height: 1px;
+    background: PageTheme.rule;
+}

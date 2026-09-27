@@ -1,126 +1,107 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Spleen6x12, Spleen6x12Size } from "spleen_6x12.slint";
-
-import { MisterUi } from "../mister_window.slint";
 import { FeedbackView, ScreenOrientation, SettingsPopup, SettingsView } from "../api.slint";
-import { CrtTheme, CrtHeader, CrtFooter } from "crt_ui.slint";
+import { MisterUi } from "../mister_window.slint";
+import { CrtLauncherText, CrtPageMetrics } from "crt_page_chrome.slint";
+import { PageTheme, SettingsFocusHighlight } from "page_chrome.slint";
 
-component CrtResolutionRow inherits Rectangle {
+component CrtChoiceRow inherits Rectangle {
     in property <string> label;
-    in property <string> detail;
+    in property <bool> selected;
     in property <bool> focused;
     in property <bool> acknowledged;
+
     accessible-role: list-item;
     accessible-label: root.label;
-    accessible-description: root.detail;
+    accessible-description: root.selected ? "Selected" : "";
     accessible-item-selected: root.focused;
     accessible-enabled: true;
+    height: CrtPageMetrics.len-y(12);
 
-    background: root.focused ? CrtTheme.accent : CrtTheme.panel-alt;
-    border-width: MisterUi.border;
-    border-color: root.focused ? CrtTheme.accent
-        : root.acknowledged ? #4e8f80 : CrtTheme.border;
-
-    if !MisterUi.portrait-layout : HorizontalLayout {
-        padding-left: MisterUi.grid-x * 2;
-        padding-right: MisterUi.grid-x * 2;
-        spacing: MisterUi.grid-x;
-        cross-axis-alignment: center;
-
-        Spleen6x12 {
-            width: MisterUi.body-font;
-            text: root.focused ? ">" : "";
-            color: CrtTheme.accent-text;
-            size: MisterUi.crt-body-font;
-        }
-        Spleen6x12 {
-            text: root.label;
-            color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
-            size: MisterUi.crt-body-font;
-            overflow: elide;
-            horizontal-stretch: 1;
-        }
-        Spleen6x12 {
-            text: root.detail;
-            color: root.focused ? CrtTheme.accent-text : CrtTheme.muted;
-            size: MisterUi.crt-body-font;
-            horizontal-alignment: right;
-        }
+    if root.focused : SettingsFocusHighlight {
+        source: SettingsView.focus-highlight-crt-menu;
+        width: root.width;
+        height: root.height;
+        Rectangle { width: CrtPageMetrics.len-x(2); background: PageTheme.settings-accent; }
     }
-
-    if MisterUi.portrait-layout : VerticalLayout {
-        padding-left: MisterUi.grid-x;
-        padding-right: MisterUi.grid-x;
-        padding-top: MisterUi.grid-y;
-        padding-bottom: MisterUi.grid-y;
-        spacing: MisterUi.grid-y;
-        alignment: center;
-
-        Spleen6x12 {
-            text: root.label;
-            color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
-            size: Spleen6x12Size.px8;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-        }
-        if root.detail != "" : Spleen6x12 {
-            text: root.detail;
-            color: root.focused ? CrtTheme.accent-text : CrtTheme.muted;
-            size: Spleen6x12Size.px8;
-            horizontal-alignment: center;
-        }
+    CrtLauncherText {
+        x: CrtPageMetrics.len-x(4);
+        text: root.label.to-uppercase();
+        text-color: root.focused ? PageTheme.cream
+            : root.acknowledged ? PageTheme.settings-accent-deep : PageTheme.muted;
+    }
+    if root.selected : Rectangle {
+        x: root.width - CrtPageMetrics.len-x(7);
+        y: CrtPageMetrics.len-y(5);
+        width: CrtPageMetrics.len-x(2);
+        height: CrtPageMetrics.len-y(2);
+        background: PageTheme.settings-accent;
     }
 }
 
 export component CrtComboBoxOverlay inherits Rectangle {
     property <bool> orientation: SettingsView.popup == SettingsPopup.screen-orientation;
-    property <string> selected-id: orientation
+    property <string> selected-id: root.orientation
         ? SettingsView.selected-orientation == ScreenOrientation.normal ? "normal"
         : SettingsView.selected-orientation == ScreenOrientation.monitor-clockwise ? "monitor-clockwise"
         : "monitor-counterclockwise"
         : SettingsView.selected-display.id;
-    property <string> highlighted-id: orientation
+    property <string> highlighted-id: root.orientation
         ? SettingsView.highlighted-orientation == ScreenOrientation.normal ? "normal"
         : SettingsView.highlighted-orientation == ScreenOrientation.monitor-clockwise ? "monitor-clockwise"
         : "monitor-counterclockwise"
         : SettingsView.highlighted-display.id;
+    property <int> left: CrtPageMetrics.margin-x;
+    property <int> right: MisterUi.window-width - CrtPageMetrics.margin-x;
+    property <int> list-top: CrtPageMetrics.header-bottom + 26 * CrtPageMetrics.sy;
+    property <int> row-h: 16 * CrtPageMetrics.sy;
+    property <int> option-h: 12 * CrtPageMetrics.sy;
+    property <int> separator-h: root.orientation ? 0 : 3 * CrtPageMetrics.sy;
+    property <int> option-count: root.orientation
+        ? SettingsView.orientation-options.length : SettingsView.display-options.length;
+    property <int> panel-w: Math.min(240 * CrtPageMetrics.sx, root.right - root.left);
+    property <int> panel-h: 4 * CrtPageMetrics.sy + root.option-count * root.option-h + root.separator-h;
+    property <int> anchor-y: root.list-top + (root.orientation ? root.row-h : 0);
+    property <int> below-y: root.anchor-y + root.row-h + CrtPageMetrics.sy;
+    property <int> panel-y: root.below-y + root.panel-h < CrtPageMetrics.footer-rule
+        ? root.below-y : Math.max(root.list-top, root.anchor-y - CrtPageMetrics.sy - root.panel-h);
+
     accessible-role: region;
     accessible-label: root.orientation ? "Screen orientation choices" : "Display resolution choices";
     accessible-description: root.highlighted-id;
     accessible-enabled: true;
-    background: CrtTheme.background;
+    background: transparent;
 
-    VerticalLayout {
-        padding-left: MisterUi.grid-x * 2;
-        padding-right: MisterUi.grid-x * 2;
-        padding-top: MisterUi.grid-y * 2;
-        padding-bottom: MisterUi.grid-y * 2;
-        spacing: MisterUi.grid-y;
+    Rectangle {
+        x: CrtPageMetrics.px-x(root.right - root.panel-w);
+        y: CrtPageMetrics.px-y(root.panel-y);
+        width: root.panel-w * 1px;
+        height: root.panel-h * 1px;
+        background: #0b0913;
+        border-width: 1px;
+        border-color: #4a3d73;
+        clip: true;
 
-        CrtHeader { title: root.orientation ? "Orientation" : "Resolution"; subtitle: ""; status: ""; }
+        Rectangle { width: parent.width; height: 1px; background: PageTheme.settings-accent; }
 
-        Rectangle {
-            vertical-stretch: 1;
-            background: CrtTheme.background;
-            clip: true;
-            VerticalLayout {
-                spacing: 0px;
-                for option[index] in root.orientation ? SettingsView.orientation-options : SettingsView.display-options : CrtResolutionRow {
-                    vertical-stretch: 1;
-                    label: option.label;
-                    detail: option.id == root.selected-id ? "Selected" : "";
-                    focused: option.id == root.highlighted-id;
-                    acknowledged: FeedbackView.acknowledged(
-                        "", "option:" + index, FeedbackView.revision);
-                }
-            }
+        for option[index] in root.orientation ? SettingsView.orientation-options : SettingsView.display-options : CrtChoiceRow {
+            x: CrtPageMetrics.len-x(1);
+            y: (2 * CrtPageMetrics.sy + index * root.option-h
+                + (!root.orientation && index >= 6 ? root.separator-h : 0)) * 1px;
+            width: parent.width - CrtPageMetrics.len-x(2);
+            label: option.label;
+            selected: option.id == root.selected-id;
+            focused: option.id == root.highlighted-id;
+            acknowledged: FeedbackView.acknowledged("", "option:" + index, FeedbackView.revision);
         }
 
-        CrtFooter {
-            left-hint: MisterUi.portrait-layout ? "UP/DN Choose A Apply" : "UP/DOWN Choose   A Apply";
-            right-hint: "B Cancel";
+        if !root.orientation : Rectangle {
+            x: CrtPageMetrics.len-x(4);
+            y: (2 * CrtPageMetrics.sy + 6 * root.option-h + CrtPageMetrics.sy) * 1px;
+            width: parent.width - CrtPageMetrics.len-x(8);
+            height: 1px;
+            background: PageTheme.rule;
         }
     }
 }

@@ -65,11 +65,17 @@ export component CrtPageChrome inherits Rectangle {
     in property <string> section;
     in property <string> hint-a;
     in property <string> hint-b;
+    width: 100%;
+    height: 100%;
 
     property <int> left: CrtPageMetrics.margin-x;
     property <int> right: MisterUi.window-width - CrtPageMetrics.margin-x;
 
-    CrtLauncherText { x: CrtPageMetrics.px-x(root.left); y: CrtPageMetrics.px-y(CrtPageMetrics.margin-y); text: "MISTER MAGIK"; }
+    CrtLauncherText {
+        x: CrtPageMetrics.px-x(root.left);
+        y: CrtPageMetrics.px-y(CrtPageMetrics.margin-y);
+        text: "MISTER MAGIK";
+    }
     CrtLauncherText {
         x: CrtPageMetrics.px-x(root.right) - self.preferred-width;
         y: CrtPageMetrics.px-y(CrtPageMetrics.margin-y);

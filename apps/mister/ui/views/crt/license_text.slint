@@ -1,42 +1,70 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Spleen6x12 } from "../../components/spleen_6x12.slint";
-import { Jersey25 } from "../../components/jersey_25.slint";
 import { SettingsView } from "../../api.slint";
+import { CrtPageChrome, CrtPageMetrics } from "../../components/crt_page_chrome.slint";
+import { CrtSettingsBackdrop } from "../../components/crt_settings_page.slint";
+import { PageTheme } from "../../components/page_chrome.slint";
+import { Spleen6x12, Spleen6x12Size } from "../../components/spleen_6x12.slint";
 import { MisterUi } from "../../mister_window.slint";
-import { CrtTheme, CrtHeader, CrtFooter } from "../../components/crt_ui.slint";
 
 export component LicenseTextScreen inherits Rectangle {
+    property <int> left: CrtPageMetrics.margin-x;
+    property <int> right: MisterUi.window-width - CrtPageMetrics.margin-x;
+    property <int> content-top: CrtPageMetrics.header-bottom + 26 * CrtPageMetrics.sy;
+    property <int> line-h: 12 * CrtPageMetrics.sy;
+    property <int> viewport-h: CrtPageMetrics.footer-rule - root.content-top;
+    property <int> content-h: Math.max(root.line-h, SettingsView.license-lines.length * root.line-h);
+    // Navigation owns an 18 px logical line. Convert it to this route's native
+    // 12 px Spleen line while retaining its smooth held-scroll interpolation.
+    property <int> scroll-y: SettingsView.license-scroll-y * 2 * CrtPageMetrics.sy / 3;
+    property <int> thumb-h: Math.max(6 * CrtPageMetrics.sy,
+        root.viewport-h * root.viewport-h / root.content-h);
+    property <int> thumb-y: root.content-h <= root.viewport-h ? 0
+        : root.scroll-y * (root.viewport-h - root.thumb-h) / (root.content-h - root.viewport-h);
+
     accessible-role: main;
     accessible-label: "License text";
-    background: CrtTheme.background;
+    background: #000000;
 
-    VerticalLayout {
-        padding-left: MisterUi.grid-x * 2;
-        padding-right: MisterUi.grid-x * 2;
-        padding-top: MisterUi.grid-y * 2;
-        padding-bottom: MisterUi.grid-y * 2;
-        spacing: MisterUi.grid-y;
-        CrtHeader {
-            title: SettingsView.license-titles[SettingsView.selected-license-index];
-            subtitle: SettingsView.license-kinds[SettingsView.selected-license-index];
-            status: "";
+    CrtSettingsBackdrop { }
+    CrtPageChrome {
+        section: "LICENSES / " + SettingsView.license-titles[SettingsView.selected-license-index].to-uppercase();
+        hint-a: "B BACK";
+        hint-b: "UP DOWN SCROLL";
+    }
+
+    Rectangle {
+        x: CrtPageMetrics.px-x(root.left + 4 * CrtPageMetrics.sx);
+        y: CrtPageMetrics.px-y(root.content-top);
+        width: (root.right - root.left - 10 * CrtPageMetrics.sx) * 1px;
+        height: root.viewport-h * 1px;
+        clip: true;
+
+        for line[index] in SettingsView.license-lines : Spleen6x12 {
+            y: (index * root.line-h - root.scroll-y) * 1px;
+            width: parent.width;
+            height: root.line-h * 1px;
+            text: line;
+            color: #d8d2c2;
+            size: CrtPageMetrics.sy == 2 ? Spleen6x12Size.px24 : Spleen6x12Size.px8;
+            overflow: clip;
+            vertical-alignment: top;
         }
+    }
+
+    Rectangle {
+        x: CrtPageMetrics.px-x(root.right + 2 * CrtPageMetrics.sx);
+        y: CrtPageMetrics.px-y(root.content-top);
+        width: CrtPageMetrics.len-x(1);
+        height: root.viewport-h * 1px;
+        background: #1c1826;
         Rectangle {
-            vertical-stretch: 1;
-            clip: true;
-            for line[index] in SettingsView.license-lines : Spleen6x12 {
-                y: index * MisterUi.body-font - SettingsView.license-scroll-y * 1px;
-                width: parent.width;
-                height: MisterUi.body-font;
-                text: line;
-                color: CrtTheme.text;
-                size: MisterUi.crt-body-font;
-                overflow: clip;
-                vertical-alignment: top;
-            }
+            x: -CrtPageMetrics.len-x(1);
+            y: root.thumb-y * 1px;
+            width: CrtPageMetrics.len-x(3);
+            height: root.thumb-h * 1px;
+            background: PageTheme.settings-accent;
         }
-        CrtFooter { left-hint: "UP/DOWN Scroll"; right-hint: "A/B Back"; }
     }
 }

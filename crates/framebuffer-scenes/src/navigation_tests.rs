@@ -226,6 +226,72 @@ fn segmented_settings_motion_does_not_mark_pixels_left_of_destination_content() 
 }
 
 #[test]
+fn crt_segmented_settings_keeps_shared_cog_pixels_stationary() {
+    let (width, height) = (640, 240);
+    let mut source = vec![Rgb565Pixel(0); width * height];
+    let mut destination = source.clone();
+    for y in 55..190 {
+        for x in 350..630 {
+            let pixel = Rgb565Pixel(((x + y * 3) as u16) | 0x0821);
+            source[y * width + x] = pixel;
+            destination[y * width + x] = pixel;
+        }
+    }
+    source[80 * width + 50] = Rgb565Pixel(0xffff);
+    destination[96 * width + 100] = Rgb565Pixel(0xf81f);
+
+    let mut buffers = NavigationTransitionBuffers::new(width, height);
+    buffers.capture_source(&source).unwrap();
+    buffers.capture_destination(&destination).unwrap();
+    render_settings_page_push(
+        &mut buffers,
+        NavigationTransitionRequest::settings_page_segmented(
+            NavigationTransitionDirection::Forward,
+        ),
+        NavigationTransitionFrame {
+            progress_q16: 32_768,
+            ..NavigationTransitionFrame::default()
+        },
+    )
+    .unwrap();
+
+    for (x, y) in [(350, 55), (480, 120), (629, 189)] {
+        assert_eq!(
+            buffers.working()[y * width + x],
+            source[y * width + x],
+            "shared cog pixel moved at ({x}, {y})"
+        );
+    }
+}
+
+#[test]
+fn crt_segmented_settings_has_exact_endpoints_in_portrait_space() {
+    let (width, height) = (240, 640);
+    let source = vec![Rgb565Pixel(0x1234); width * height];
+    let destination = vec![Rgb565Pixel(0x4321); width * height];
+    let mut buffers = NavigationTransitionBuffers::new(width, height);
+    buffers.capture_source(&source).unwrap();
+    buffers.capture_destination(&destination).unwrap();
+    let request = NavigationTransitionRequest::settings_page_segmented_on_axis(
+        NavigationTransitionDirection::Forward,
+        SettingsPageTransitionAxis::Vertical,
+    );
+
+    for (progress_q16, expected) in [(0, &source), (PROGRESS_MAX, &destination)] {
+        render_settings_page_push(
+            &mut buffers,
+            request,
+            NavigationTransitionFrame {
+                progress_q16,
+                ..NavigationTransitionFrame::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(buffers.working(), expected);
+    }
+}
+
+#[test]
 fn portrait_settings_page_push_stays_horizontal_in_both_directions() {
     let width = 8;
     let height = 16;
@@ -406,13 +472,9 @@ fn settings_page_pair_blit_matches_overdraw_reference_for_every_axis_and_directi
                     ..NavigationTransitionFrame::default()
                 };
                 let mut optimized = vec![Rgb565Pixel(0x55aa); width * height];
-                let stats = render_settings_page_transition_into(
-                    &buffers,
-                    request,
-                    frame,
-                    &mut optimized,
-                )
-                .unwrap();
+                let stats =
+                    render_settings_page_transition_into(&buffers, request, frame, &mut optimized)
+                        .unwrap();
 
                 let travel_q16 = spring_ease_q16(progress_q16) as isize;
                 let extent = match axis {
@@ -443,13 +505,7 @@ fn settings_page_pair_blit_matches_overdraw_reference_for_every_axis_and_directi
                 let mut reference = vec![Rgb565Pixel(0x55aa); width * height];
                 match axis {
                     SettingsPageTransitionAxis::Horizontal => {
-                        blit_snapshot_x(
-                            &mut reference,
-                            first,
-                            width,
-                            height,
-                            offset(first_offset),
-                        );
+                        blit_snapshot_x(&mut reference, first, width, height, offset(first_offset));
                         blit_snapshot_x(
                             &mut reference,
                             second,
@@ -460,13 +516,7 @@ fn settings_page_pair_blit_matches_overdraw_reference_for_every_axis_and_directi
                     }
                     SettingsPageTransitionAxis::Vertical
                     | SettingsPageTransitionAxis::VerticalReversed => {
-                        blit_snapshot_y(
-                            &mut reference,
-                            first,
-                            width,
-                            height,
-                            offset(first_offset),
-                        );
+                        blit_snapshot_y(&mut reference, first, width, height, offset(first_offset));
                         blit_snapshot_y(
                             &mut reference,
                             second,
@@ -476,7 +526,10 @@ fn settings_page_pair_blit_matches_overdraw_reference_for_every_axis_and_directi
                         );
                     }
                 }
-                assert_eq!(optimized, reference, "axis={axis:?} direction={direction:?}");
+                assert_eq!(
+                    optimized, reference,
+                    "axis={axis:?} direction={direction:?}"
+                );
                 assert!(stats.copied_pixels <= (width * height) as u64);
             }
         }

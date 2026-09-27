@@ -2,28 +2,57 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { FeedbackView, SettingsView } from "../../api.slint";
+import { CrtPageChrome, CrtPageMetrics } from "../../components/crt_page_chrome.slint";
+import { CrtSettingsBackdrop, CrtSettingsRow } from "../../components/crt_settings_page.slint";
 import { MisterUi } from "../../mister_window.slint";
-import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
 
 export component LicensesScreen inherits Rectangle {
+    property <int> left: CrtPageMetrics.margin-x;
+    property <int> top: CrtPageMetrics.header-bottom + 26 * CrtPageMetrics.sy;
+    property <int> row-h: 16 * CrtPageMetrics.sy;
+    property <int> visible-count: Math.max(1, Math.floor((CrtPageMetrics.footer-rule - root.top) / root.row-h));
+    property <int> license-count: SettingsView.license-titles.length;
+    property <int> first-visible: Math.max(0, Math.min(
+        SettingsView.selected-license-index - root.visible-count + 1,
+        root.license-count - root.visible-count));
+    property <length> list-x: CrtPageMetrics.px-x(root.left);
+    property <length> list-width: (MisterUi.window-width - 2 * root.left) * 1px;
+
     accessible-role: main;
     accessible-label: "Licenses screen";
     accessible-enabled: true;
-    background: CrtTheme.background;
+    background: #000000;
 
-    VerticalLayout {
-        padding-left: MisterUi.grid-x * 2;
-        padding-right: MisterUi.grid-x * 2;
-        padding-top: MisterUi.grid-y * 2;
-        padding-bottom: MisterUi.grid-y * 2;
-        spacing: MisterUi.grid-y;
-        CrtHeader { title: "Licenses"; subtitle: "Open source software"; status: ""; }
-        for title[index] in SettingsView.license-titles : CrtMenuRow {
-            label: title;
-            detail: SettingsView.license-kinds[index] + "  >";
-            focused: SettingsView.selected-license-index == index;
-            acknowledged: FeedbackView.acknowledged("licenses", "license:" + index, FeedbackView.revision);
+    CrtSettingsBackdrop { }
+
+    Rectangle {
+        x: root.list-x;
+        y: CrtPageMetrics.px-y(root.top);
+        width: root.list-width;
+        height: CrtPageMetrics.px-y(CrtPageMetrics.footer-rule) - self.y;
+        clip: true;
+        accessible-role: list;
+        accessible-label: "Licenses";
+
+        for slot in root.visible-count : CrtSettingsRow {
+            property <int> model-index: root.first-visible + slot;
+            y: slot * root.row-h * 1px;
+            width: parent.width;
+            visible: self.model-index < root.license-count;
+            label: SettingsView.license-titles[self.model-index].to-uppercase();
+            accessible-name: SettingsView.license-titles[self.model-index];
+            detail: SettingsView.license-kinds[self.model-index];
+            value: SettingsView.license-kinds[self.model-index].to-uppercase() + "  >";
+            link: false;
+            focused: SettingsView.selected-license-index == self.model-index;
+            acknowledged: FeedbackView.acknowledged("licenses", "license:" + self.model-index, FeedbackView.revision);
         }
-        CrtFooter { left-hint: "A Read   B Back"; right-hint: "HOME Launcher"; }
+    }
+
+    // Keep shared chrome above the clipped scrolling list. This also ensures
+    // the header is never occluded when the list window advances.
+    CrtPageChrome {
+        x: 0px; y: 0px; width: 100%; height: 100%;
+        section: "ABOUT / LICENSES"; hint-a: "A READ"; hint-b: "B BACK";
     }
 }

@@ -1,52 +1,80 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Spleen6x12 } from "../../components/spleen_6x12.slint";
-
-import { MisterUi } from "../../mister_window.slint";
 import { FeedbackView, InformationView } from "../../api.slint";
-import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
+import { CrtLauncherText, CrtPageChrome, CrtPageMetrics } from "../../components/crt_page_chrome.slint";
+import { CrtGroupRule, CrtSettingsBackdrop, CrtSettingsRow } from "../../components/crt_settings_page.slint";
+import { PageTheme } from "../../components/page_chrome.slint";
+import { MisterUi } from "../../mister_window.slint";
 
 export component AboutScreen inherits Rectangle {
+    property <int> left: CrtPageMetrics.margin-x;
+    property <int> top: CrtPageMetrics.header-bottom + 26 * CrtPageMetrics.sy;
+    property <int> row-h: 16 * CrtPageMetrics.sy;
+    property <int> gap: 6 * CrtPageMetrics.sy;
+    property <length> list-x: CrtPageMetrics.px-x(root.left);
+    property <length> list-width: (MisterUi.window-width - 2 * root.left) * 1px;
+
     accessible-role: main;
     accessible-label: "About screen";
     accessible-enabled: true;
-    background: CrtTheme.background;
+    background: #000000;
 
-    VerticalLayout {
-        padding-left: MisterUi.grid-x * 2;
-        padding-right: MisterUi.grid-x * 2;
-        padding-top: MisterUi.grid-y * 2;
-        padding-bottom: MisterUi.grid-y * 2;
-        spacing: MisterUi.grid-y;
+    CrtSettingsBackdrop { }
+    CrtPageChrome { section: "SETTINGS / ABOUT"; hint-a: "A OPEN"; hint-b: "B BACK"; }
 
-        CrtHeader { title: "About"; subtitle: InformationView.version-label; status: ""; }
+    Rectangle {
+        x: root.list-x;
+        y: CrtPageMetrics.px-y(root.top);
+        width: root.list-width;
+        height: CrtPageMetrics.px-y(CrtPageMetrics.footer-rule) - self.y;
+        accessible-role: list;
+        accessible-label: "About";
 
-        Spleen6x12 {
-            text: "An Unintuitive.com production, crafted in Finland by Nigel Breslaw.";
-            color: CrtTheme.text;
-            size: MisterUi.crt-body-font;
-            wrap: word-wrap;
-            horizontal-alignment: center;
+        CrtSettingsRow {
+            y: 0px; width: parent.width;
+            label: "BUILD";
+            value: InformationView.build-label.to-uppercase();
+            detail: InformationView.build-label;
         }
-        Spleen6x12 {
-            text: "Thanks to the MiSTer project. Made with Slint.";
-            color: CrtTheme.muted;
-            size: MisterUi.crt-body-font;
-            wrap: word-wrap;
-            horizontal-alignment: center;
+        CrtSettingsRow {
+            y: root.row-h * 1px; width: parent.width;
+            label: "GAME DATABASE";
+            value: InformationView.database-build.to-uppercase();
+            detail: InformationView.database-build;
         }
-
-        Spleen6x12 { text: "Build: " + InformationView.build-label; color: CrtTheme.muted; size: MisterUi.crt-body-font; }
-        Spleen6x12 { text: "Database: " + InformationView.database-build; color: CrtTheme.muted; size: MisterUi.crt-body-font; }
-        Spleen6x12 { text: "Kernel: " + InformationView.kernel-version; color: CrtTheme.muted; size: MisterUi.crt-body-font; }
-        CrtMenuRow {
-            vertical-stretch: 1;
-            label: "Licenses";
-            detail: "Open source licenses  >";
+        CrtSettingsRow {
+            y: 2 * root.row-h * 1px; width: parent.width;
+            label: "KERNEL";
+            value: InformationView.kernel-version.to-uppercase();
+            detail: InformationView.kernel-version;
+        }
+        CrtGroupRule { y: (3 * root.row-h + root.gap / 2 - 1) * 1px; width: parent.width - self.x; }
+        CrtSettingsRow {
+            y: (3 * root.row-h + root.gap) * 1px; width: parent.width;
+            label: "LICENSES";
+            accessible-name: "Licenses";
+            detail: "Open source licenses";
+            link: true;
             focused: true;
             acknowledged: FeedbackView.acknowledged("about", "licenses", FeedbackView.revision);
         }
-        CrtFooter { left-hint: "A Open   B Back"; right-hint: "HOME Launcher"; }
+
+        CrtLauncherText {
+            x: CrtPageMetrics.len-x(4); y: CrtPageMetrics.len-y(84);
+            text: "AN UNINTUITIVE.COM PRODUCTION"; text-color: PageTheme.cream;
+        }
+        CrtLauncherText {
+            x: CrtPageMetrics.len-x(4); y: CrtPageMetrics.len-y(98);
+            text: "CRAFTED IN FINLAND BY NIGEL BRESLAW"; text-color: #c9c3b3;
+        }
+        CrtLauncherText {
+            x: CrtPageMetrics.len-x(4); y: CrtPageMetrics.len-y(112);
+            text: "THANKS TO THE MISTER PROJECT"; text-color: PageTheme.muted;
+        }
+        CrtLauncherText {
+            x: CrtPageMetrics.len-x(4); y: CrtPageMetrics.len-y(126);
+            text: "MADE WITH SLINT"; text-color: PageTheme.muted;
+        }
     }
 }

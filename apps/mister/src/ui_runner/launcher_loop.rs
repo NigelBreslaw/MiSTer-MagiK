@@ -1062,16 +1062,17 @@ fn navigation_transition_for_intent(
 fn settings_cog_transition_eligible(
     route: NavigationTransitionRoute,
     card_home_settled: bool,
-    portrait: bool,
+    _portrait: bool,
     render_width: usize,
     render_height: usize,
     reduce_motion: bool,
 ) -> bool {
     route == NavigationTransitionRoute::HomeToSettings
         && card_home_settled
-        && !portrait
-        && render_width == 960
-        && render_height == 540
+        && mister_magik_framebuffer_scenes::settings_cog::supports_dimensions(
+            render_width,
+            render_height,
+        )
         && !reduce_motion
 }
 
@@ -7974,9 +7975,9 @@ pub(super) fn run_launcher_loop(
                                         SettingsPageTransitionAxis::VerticalReversed
                                     }
                                 };
-                                // The card zoom exists only for the native
-                                // 960x540 landscape card launcher; Reduce
-                                // motion and every other route keep the slide.
+                                // The card zoom runs in the physical raster for
+                                // HDMI landscape and native CRT modes in either
+                                // orientation. Reduce motion keeps the slide.
                                 let card_home_settled = launcher_card_home
                                     .as_ref()
                                     .is_some_and(|session| !session.is_animating());
@@ -14689,7 +14690,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_cog_zoom_requires_a_settled_native_landscape_card() {
+    fn settings_cog_zoom_requires_a_settled_native_card() {
         assert!(settings_cog_transition_eligible(
             NavigationTransitionRoute::HomeToSettings,
             true,
@@ -14704,6 +14705,22 @@ mod tests {
             false,
             960,
             540,
+            false,
+        ));
+        assert!(settings_cog_transition_eligible(
+            NavigationTransitionRoute::HomeToSettings,
+            true,
+            true,
+            240,
+            640,
+            false,
+        ));
+        assert!(!settings_cog_transition_eligible(
+            NavigationTransitionRoute::HomeToSettings,
+            true,
+            false,
+            800,
+            600,
             false,
         ));
     }

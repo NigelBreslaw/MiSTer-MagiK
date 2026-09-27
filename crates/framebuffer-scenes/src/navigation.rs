@@ -1398,6 +1398,23 @@ pub fn render_settings_page_transition_into(
     {
         return render_segmented_settings_page(source, destination, request, frame, output);
     }
+    if request.settings_style == SettingsPageTransitionStyle::Segmented
+        && buffers.width.max(buffers.height) == 640
+        && matches!(
+            buffers.width.min(buffers.height),
+            240 | 288 | 480 | 512 | 576
+        )
+    {
+        return render_crt_segmented_settings_page(
+            source,
+            destination,
+            buffers.width,
+            buffers.height,
+            request,
+            frame,
+            output,
+        );
+    }
 
     let travel_q16 = spring_ease_q16(frame.progress_q16) as isize;
     let extent = match request.settings_axis {
@@ -1432,6 +1449,178 @@ pub fn render_settings_page_transition_into(
     );
     stats.settings_blit_us = elapsed_us(blit_started);
     Ok(stats)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_crt_segmented_settings_page(
+    source: &[Rgb565Pixel],
+    destination: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    request: NavigationTransitionRequest,
+    frame: NavigationTransitionFrame,
+    output: &mut [Rgb565Pixel],
+) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
+    if source.len() != width.saturating_mul(height)
+        || destination.len() != source.len()
+        || output.len() != source.len()
+    {
+        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+    }
+
+    let started = Instant::now();
+    let mut stats = NavigationTransitionRenderStats::default();
+    let narrow = width.min(height);
+    let sy = if narrow <= 288 && height > width || narrow >= 400 {
+        2
+    } else {
+        1
+    };
+    let margin_y = (height * 5 / 100).max(6 * sy);
+    let body_top = (margin_y + 18 * sy + 1).min(height);
+    let body_bottom = height.saturating_sub(margin_y + 20 * sy).max(body_top);
+
+    // Build the unmoving layer from pixels shared by both pages. The cog,
+    // rules and black field are identical and therefore stay pinned; changed
+    // glyphs and focus art are the only pixels admitted to the moving layers.
+    for (out, (&from, &to)) in output.iter_mut().zip(source.iter().zip(destination)) {
+        *out = if from == to { to } else { Rgb565Pixel(0) };
+    }
+    stats.copied_pixels = output.len() as u64;
+
+    let header_progress = spring_ease_q16(window_q16(frame.progress_q16, 12_743, 29_127));
+    copy_crossfaded_rect(
+        output,
+        source,
+        destination,
+        width,
+        height,
+        NavigationTransitionRect {
+            x: 0,
+            y: 0,
+            width: width as u16,
+            height: body_top as u16,
+        },
+        header_progress,
+        &mut stats,
+    );
+    copy_crossfaded_rect(
+        output,
+        source,
+        destination,
+        width,
+        height,
+        NavigationTransitionRect {
+            x: 0,
+            y: body_bottom as u16,
+            width: width as u16,
+            height: height.saturating_sub(body_bottom) as u16,
+        },
+        header_progress,
+        &mut stats,
+    );
+
+    let source_progress = spring_ease_q16(window_q16(frame.progress_q16, 0, 18_204));
+    let source_opacity = PROGRESS_MAX.saturating_sub(source_progress);
+    let destination_sign = match request.direction {
+        NavigationTransitionDirection::Forward => 1,
+        NavigationTransitionDirection::Reverse => -1,
+    };
+    let source_sign = -destination_sign;
+    let travel = 12isize
+        * if request.settings_axis == SettingsPageTransitionAxis::Horizontal {
+            if narrow <= 288 && width > height || narrow >= 400 {
+                2
+            } else {
+                1
+            }
+        } else {
+            sy
+        } as isize;
+    let source_offset = source_sign * travel * source_progress as isize / PROGRESS_MAX as isize;
+    copy_changed_pixels_at_offset(
+        output,
+        source,
+        destination,
+        width,
+        height,
+        body_top,
+        body_bottom,
+        source_offset,
+        request.settings_axis,
+        source_opacity,
+        &mut stats,
+    );
+
+    let band_height = (16 * sy).max(1);
+    for (band, top) in (body_top..body_bottom).step_by(band_height).enumerate() {
+        let bottom = (top + band_height).min(body_bottom);
+        let start = 12_743u16.saturating_add((band as u16).saturating_mul(2_549));
+        let progress = spring_ease_q16(window_q16(
+            frame.progress_q16,
+            start,
+            start.saturating_add(29_127),
+        ));
+        let offset =
+            destination_sign * travel * (PROGRESS_MAX - progress) as isize / PROGRESS_MAX as isize;
+        copy_changed_pixels_at_offset(
+            output,
+            destination,
+            source,
+            width,
+            height,
+            top,
+            bottom,
+            offset,
+            request.settings_axis,
+            progress,
+            &mut stats,
+        );
+    }
+    stats.settings_blit_us = elapsed_us(started);
+    Ok(stats)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn copy_changed_pixels_at_offset(
+    output: &mut [Rgb565Pixel],
+    moving: &[Rgb565Pixel],
+    other: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    top: usize,
+    bottom: usize,
+    offset: isize,
+    axis: SettingsPageTransitionAxis,
+    opacity_q16: u16,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    if opacity_q16 == 0 {
+        return;
+    }
+    let (offset_x, offset_y) = match axis {
+        SettingsPageTransitionAxis::Horizontal => (offset, 0),
+        SettingsPageTransitionAxis::Vertical => (0, offset),
+        SettingsPageTransitionAxis::VerticalReversed => (0, -offset),
+    };
+    for y in top..bottom {
+        for x in 0..width {
+            let source_index = y * width + x;
+            let pixel = moving[source_index];
+            if pixel == other[source_index] {
+                continue;
+            }
+            let target_x = x as isize + offset_x;
+            let target_y = y as isize + offset_y;
+            if !(0..width as isize).contains(&target_x) || !(0..height as isize).contains(&target_y)
+            {
+                continue;
+            }
+            let target = target_y as usize * width + target_x as usize;
+            output[target] = rgb565_mix(output[target], pixel, opacity_q16);
+            stats.copied_pixels = stats.copied_pixels.saturating_add(1);
+        }
+    }
 }
 
 fn render_segmented_settings_page(
@@ -1600,8 +1789,14 @@ fn render_settings_cog_into(
         NavigationTransitionDirection::Reverse => (destination, source, duration - elapsed),
     };
     let started = Instant::now();
-    if !crate::settings_cog::render_settings_cog_transition_into(
-        launcher, settings, cog, t_ms, output,
+    if !crate::settings_cog::render_settings_cog_transition_for_dimensions_into(
+        buffers.width,
+        buffers.height,
+        launcher,
+        settings,
+        cog,
+        t_ms,
+        output,
     ) {
         return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
     }

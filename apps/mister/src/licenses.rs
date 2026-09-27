@@ -31,8 +31,10 @@ const JERSEY: &str = include_str!("../licenses/JERSEY.txt");
 const TERMINUS_FONT: &str = include_str!("../licenses/TERMINUS-FONT.txt");
 const SPLEEN: &str = include_str!("../licenses/SPLEEN.txt");
 const RUST_LIBRARIES: &str = include_str!("../licenses/RUST-LIBRARIES.txt");
-const LICENSE_LINE_COLUMNS: usize = 105;
-const LICENSE_VISIBLE_ROWS: usize = 21;
+const HDMI_LINE_COLUMNS: usize = 105;
+const HDMI_VISIBLE_ROWS: usize = 21;
+const CRT_LINE_COLUMNS: usize = 43;
+const CRT_VISIBLE_ROWS: usize = 12;
 
 pub fn text(index: usize) -> &'static str {
     match index {
@@ -49,12 +51,22 @@ pub fn text(index: usize) -> &'static str {
 }
 
 pub fn wrapped_lines(index: usize) -> &'static [String] {
-    static LINES: [OnceLock<Vec<String>>; 11] = [const { OnceLock::new() }; 11];
-    let index = index.min(LICENSE_TITLES.len() - 1);
-    LINES[index].get_or_init(|| wrap_text(index))
+    wrapped_lines_for(index, false)
 }
 
-fn wrap_text(index: usize) -> Vec<String> {
+pub fn wrapped_lines_for(index: usize, crt: bool) -> &'static [String] {
+    static HDMI_LINES: [OnceLock<Vec<String>>; 11] = [const { OnceLock::new() }; 11];
+    static CRT_LINES: [OnceLock<Vec<String>>; 11] = [const { OnceLock::new() }; 11];
+    let index = index.min(LICENSE_TITLES.len() - 1);
+    let (lines, columns) = if crt {
+        (&CRT_LINES, CRT_LINE_COLUMNS)
+    } else {
+        (&HDMI_LINES, HDMI_LINE_COLUMNS)
+    };
+    lines[index].get_or_init(|| wrap_text(index, columns))
+}
+
+fn wrap_text(index: usize, columns: usize) -> Vec<String> {
     let mut result = Vec::new();
     for source_line in text(index).lines() {
         if source_line.trim().is_empty() {
@@ -64,15 +76,15 @@ fn wrap_text(index: usize) -> Vec<String> {
         let mut line = String::new();
         for word in source_line.split_whitespace() {
             let word_len = word.chars().count();
-            if !line.is_empty() && line.chars().count() + 1 + word_len > LICENSE_LINE_COLUMNS {
+            if !line.is_empty() && line.chars().count() + 1 + word_len > columns {
                 result.push(std::mem::take(&mut line));
             }
-            if word_len > LICENSE_LINE_COLUMNS {
+            if word_len > columns {
                 if !line.is_empty() {
                     result.push(std::mem::take(&mut line));
                 }
                 let chars = word.chars().collect::<Vec<_>>();
-                for chunk in chars.chunks(LICENSE_LINE_COLUMNS) {
+                for chunk in chars.chunks(columns) {
                     result.push(chunk.iter().collect());
                 }
             } else {
@@ -90,9 +102,18 @@ fn wrap_text(index: usize) -> Vec<String> {
 }
 
 pub fn max_scroll_line(index: usize) -> usize {
-    wrapped_lines(index)
+    max_scroll_line_for(index, false)
+}
+
+pub fn max_scroll_line_for(index: usize, crt: bool) -> usize {
+    let visible_rows = if crt {
+        CRT_VISIBLE_ROWS
+    } else {
+        HDMI_VISIBLE_ROWS
+    };
+    wrapped_lines_for(index, crt)
         .len()
-        .saturating_sub(LICENSE_VISIBLE_ROWS)
+        .saturating_sub(visible_rows)
 }
 
 #[cfg(test)]
@@ -146,5 +167,24 @@ mod tests {
         assert!(TERMINUS_FONT.contains("Reserved Font Name \"Terminus Font\""));
         assert!(SPLEEN.contains("Redistribution and use in source and binary forms"));
         assert!(RUST_LIBRARIES.contains("zlib License"));
+    }
+
+    #[test]
+    fn crt_lines_fit_the_native_spleen_viewport_and_scroll_to_the_end() {
+        for index in 0..LICENSE_TITLES.len() {
+            assert!(
+                wrapped_lines_for(index, true)
+                    .iter()
+                    .all(|line| line.chars().count() <= CRT_LINE_COLUMNS),
+                "{}",
+                LICENSE_TITLES[index]
+            );
+            assert_eq!(
+                max_scroll_line_for(index, true),
+                wrapped_lines_for(index, true)
+                    .len()
+                    .saturating_sub(CRT_VISIBLE_ROWS)
+            );
+        }
     }
 }
