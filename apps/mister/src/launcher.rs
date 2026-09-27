@@ -101,7 +101,6 @@ const SETTINGS_EXIT_SELECTED: usize = 5;
 const SETTINGS_REFRESH_SELECTED: usize = 6;
 const SETTINGS_ABOUT_SELECTED: usize = 7;
 const SETTINGS_MAX_SELECTED: usize = SETTINGS_ABOUT_SELECTED;
-const SCREENSAVER_SETTINGS_MAX_SELECTED: usize = 2;
 const LICENSES_MAX_SELECTED: usize = crate::licenses::LICENSE_TITLES.len() - 1;
 const LICENSE_SCROLL_LINE_PX: f64 = 18.0;
 const SETTINGS_DISPLAY_ORDER: [usize; 10] = [0, 1, 2, 3, 4, 5, 6, 8, 7, 9];
@@ -310,11 +309,9 @@ pub enum Screen {
     Controller,
     Arcade,
     Settings,
-    Screensaver,
     About,
     Licenses,
     LicenseText,
-    Info,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -989,7 +986,6 @@ pub struct LauncherNav {
     pub system_hub_selected: usize,
     pub scroll_x: i32,
     pub settings_selected: usize,
-    pub about_selected: usize,
     pub display_combo_open: bool,
     pub display_selected: usize,
     pub display_highlighted: usize,
@@ -1002,10 +998,8 @@ pub struct LauncherNav {
     pub orientation_confirm_remaining: u8,
     pub orientation_confirm_busy: bool,
     pub orientation_error: Option<String>,
-    pub screensaver_selected: usize,
     pub settings: MagikSettings,
     pub licenses_selected: usize,
-    pub licenses_expanded: bool,
     licenses_scroll: ArcadeNav,
     pub confirm_action: Option<ConfirmAction>,
     pub confirm_selected: usize,
@@ -1087,7 +1081,6 @@ pub struct NavigationTransitionState {
     system_hub_selected: usize,
     scroll_x: i32,
     settings_selected: usize,
-    about_selected: usize,
     display_combo_open: bool,
     display_selected: usize,
     display_highlighted: usize,
@@ -1100,9 +1093,7 @@ pub struct NavigationTransitionState {
     orientation_confirm_remaining: u8,
     orientation_confirm_busy: bool,
     orientation_error: Option<String>,
-    screensaver_selected: usize,
     licenses_selected: usize,
-    licenses_expanded: bool,
     licenses_scroll: ArcadeNav,
     confirm_action: Option<ConfirmAction>,
     confirm_selected: usize,
@@ -1453,7 +1444,6 @@ impl LauncherNav {
             system_hub_selected: 0,
             scroll_x: 0,
             settings_selected: 0,
-            about_selected: 0,
             display_combo_open: false,
             display_selected: usize::MAX,
             display_highlighted: 0,
@@ -1466,10 +1456,8 @@ impl LauncherNav {
             orientation_confirm_remaining: 0,
             orientation_confirm_busy: false,
             orientation_error: None,
-            screensaver_selected: 0,
             settings: MagikSettings::default(),
             licenses_selected: 0,
-            licenses_expanded: false,
             licenses_scroll: ArcadeNav::with_row_height_and_step(LICENSE_SCROLL_LINE_PX as i32, 3),
             confirm_action: None,
             confirm_selected: 0,
@@ -2183,7 +2171,6 @@ impl LauncherNav {
             system_hub_selected: self.system_hub_selected,
             scroll_x: self.scroll_x,
             settings_selected: self.settings_selected,
-            about_selected: self.about_selected,
             display_combo_open: self.display_combo_open,
             display_selected: self.display_selected,
             display_highlighted: self.display_highlighted,
@@ -2196,9 +2183,7 @@ impl LauncherNav {
             orientation_confirm_remaining: self.orientation_confirm_remaining,
             orientation_confirm_busy: self.orientation_confirm_busy,
             orientation_error: self.orientation_error.clone(),
-            screensaver_selected: self.screensaver_selected,
             licenses_selected: self.licenses_selected,
-            licenses_expanded: self.licenses_expanded,
             licenses_scroll: self.licenses_scroll.clone(),
             confirm_action: self.confirm_action,
             confirm_selected: self.confirm_selected,
@@ -2233,7 +2218,6 @@ impl LauncherNav {
         self.system_hub_selected = state.system_hub_selected;
         self.scroll_x = state.scroll_x;
         self.settings_selected = state.settings_selected;
-        self.about_selected = state.about_selected;
         self.display_combo_open = state.display_combo_open;
         self.display_selected = state.display_selected;
         self.display_highlighted = state.display_highlighted;
@@ -2246,9 +2230,7 @@ impl LauncherNav {
         self.orientation_confirm_remaining = state.orientation_confirm_remaining;
         self.orientation_confirm_busy = state.orientation_confirm_busy;
         self.orientation_error = state.orientation_error;
-        self.screensaver_selected = state.screensaver_selected;
         self.licenses_selected = state.licenses_selected;
-        self.licenses_expanded = state.licenses_expanded;
         self.licenses_scroll = state.licenses_scroll;
         self.confirm_action = state.confirm_action;
         self.confirm_selected = state.confirm_selected;
@@ -2622,12 +2604,7 @@ impl LauncherNav {
                 }
                 Screen::Arcade => self.handle_arcade(input, catalog, emit_navigation_intents),
                 Screen::Settings => self.handle_settings(pressed),
-                Screen::Screensaver => self.handle_screensaver_settings(pressed),
                 Screen::About => self.handle_about(pressed),
-                Screen::Info => {
-                    self.handle_settings_subscreen(pressed);
-                    None
-                }
                 Screen::Licenses => self.handle_licenses(pressed, held, tick_continuous, frame_now),
                 Screen::LicenseText => {
                     self.handle_license_text(pressed, held, tick_continuous, frame_now)
@@ -3374,7 +3351,6 @@ impl LauncherNav {
                 });
             }
             if self.settings_selected == SETTINGS_ABOUT_SELECTED {
-                self.about_selected = 0;
                 self.screen = Screen::About;
                 return None;
             }
@@ -3434,52 +3410,10 @@ impl LauncherNav {
         }
         if pressed.btn_a {
             self.licenses_selected = 0;
-            self.licenses_expanded = false;
             self.licenses_scroll.reset();
             self.screen = Screen::Licenses;
         }
         None
-    }
-
-    fn handle_screensaver_settings(&mut self, pressed: &PadState) -> Option<LauncherEvent> {
-        if pressed.btn_home {
-            self.go_root();
-            return None;
-        }
-        if pressed.btn_b {
-            self.screen = Screen::Settings;
-            return None;
-        }
-        if pressed.dpad_down && self.screensaver_selected < SCREENSAVER_SETTINGS_MAX_SELECTED {
-            self.screensaver_selected += 1;
-        }
-        if pressed.dpad_up && self.screensaver_selected > 0 {
-            self.screensaver_selected -= 1;
-        }
-        if !pressed.btn_a {
-            return None;
-        }
-        if self.screensaver_selected == 2 {
-            return Some(LauncherEvent {
-                action: LauncherAction::PreviewScreensaver,
-                path: None,
-                settings: None,
-            });
-        }
-        let mut next = self.settings.clone();
-        if self.screensaver_selected == 0 {
-            next.screensaver_enabled = !next.screensaver_enabled;
-        } else if next.screensaver_enabled {
-            next.screensaver_delay_minutes = next.screensaver_delay_minutes % 10 + 1;
-        } else {
-            return None;
-        }
-        self.settings = next.clone();
-        Some(LauncherEvent {
-            action: LauncherAction::PersistSettings,
-            path: None,
-            settings: Some(next),
-        })
     }
 
     fn handle_licenses(
@@ -3490,7 +3424,6 @@ impl LauncherNav {
         _frame_now: Instant,
     ) -> Option<LauncherEvent> {
         if pressed.btn_home {
-            self.licenses_expanded = false;
             self.licenses_scroll.reset();
             self.go_root();
             return None;
@@ -3548,14 +3481,6 @@ impl LauncherNav {
             self.licenses_scroll.tick(count, frame_now);
         }
         None
-    }
-
-    fn handle_settings_subscreen(&mut self, pressed: &PadState) {
-        if pressed.btn_home {
-            self.go_root();
-        } else if pressed.btn_b {
-            self.screen = Screen::About;
-        }
     }
 
     pub fn licenses_scroll_y(&self) -> i32 {
@@ -8845,7 +8770,6 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::About;
-        nav.about_selected = 1;
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
         assert_eq!(nav.screen, Screen::Licenses);

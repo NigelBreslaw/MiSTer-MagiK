@@ -25,12 +25,10 @@ pub enum LauncherUiAction {
     SelectSettingsSection(slint_ui::launcher::SettingsSection),
     SelectDisplayOption(String),
     SelectOrientation(slint_ui::launcher::ScreenOrientation),
-    SelectScreensaverSetting(slint_ui::launcher::ScreensaverSetting),
     SetScreensaverEnabled(bool),
     SetScreensaverDelay(i32),
     SetReduceMotion(bool),
     SetSimpleJoystickHandling(bool),
-    SelectAboutSection(slint_ui::launcher::AboutSection),
     SelectLicense(usize),
     SelectArcadeGame(String),
     SelectArcadeSearchPane(slint_ui::launcher::ArcadeSearchPane),
@@ -216,14 +214,6 @@ pub fn apply_navigation_action(
                 settings: None,
             })
         }
-        LauncherUiAction::SelectScreensaverSetting(setting) => {
-            nav.screensaver_selected = match setting {
-                slint_ui::launcher::ScreensaverSetting::Enabled => 0,
-                slint_ui::launcher::ScreensaverSetting::Delay => 1,
-                slint_ui::launcher::ScreensaverSetting::Preview => 2,
-            };
-            None
-        }
         LauncherUiAction::SetScreensaverEnabled(enabled) => {
             persist_settings(nav, |settings| settings.screensaver_enabled = enabled)
         }
@@ -236,13 +226,6 @@ pub fn apply_navigation_action(
         LauncherUiAction::SetSimpleJoystickHandling(enabled) => persist_settings(nav, |settings| {
             settings.simple_joystick_handling = enabled;
         }),
-        LauncherUiAction::SelectAboutSection(section) => {
-            nav.about_selected = match section {
-                slint_ui::launcher::AboutSection::Information => 0,
-                slint_ui::launcher::AboutSection::Licenses => 1,
-            };
-            None
-        }
         LauncherUiAction::SelectLicense(index) => {
             nav.licenses_selected = index;
             None
@@ -363,10 +346,6 @@ fn bind_simple_action(
         enqueue(&queue, LauncherUiAction::SelectOrientation(orientation));
     });
     let queue = state.clone();
-    actions.on_select_screensaver_setting(move |setting| {
-        enqueue(&queue, LauncherUiAction::SelectScreensaverSetting(setting));
-    });
-    let queue = state.clone();
     actions.on_set_screensaver_enabled(move |enabled| {
         enqueue(&queue, LauncherUiAction::SetScreensaverEnabled(enabled));
     });
@@ -377,10 +356,6 @@ fn bind_simple_action(
     let queue = state.clone();
     actions.on_set_simple_joystick_handling(move |enabled| {
         enqueue(&queue, LauncherUiAction::SetSimpleJoystickHandling(enabled));
-    });
-    let queue = state.clone();
-    actions.on_select_about_section(move |section| {
-        enqueue(&queue, LauncherUiAction::SelectAboutSection(section));
     });
     let queue = state.clone();
     actions.on_select_arcade_search_pane(move |pane| {

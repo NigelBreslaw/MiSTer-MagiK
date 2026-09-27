@@ -3,6 +3,7 @@
 
 //! Host-neutral navigation-transition state and RGB565 frame ownership.
 
+use crate::launcher::Screen;
 use mister_magik_framebuffer_scenes::Rgb565Pixel as SharedRgb565Pixel;
 pub use mister_magik_framebuffer_scenes::navigation::{
     CrtNavigationLayout, NavigationTransitionBuffers, NavigationTransitionCompletion,
@@ -34,9 +35,7 @@ pub enum NavigationTransitionRoute {
     HomeToArcade,
     ConsolesToSystem,
     HomeToSettings,
-    SettingsToScreensaver,
     SettingsToAbout,
-    AboutToInfo,
     AboutToLicenses,
     LicensesToLicenseText,
     NestedToHome,
@@ -64,9 +63,7 @@ impl NavigationTransitionRoute {
             Self::HomeToArcade => "home-arcade",
             Self::ConsolesToSystem => "consoles-system",
             Self::HomeToSettings => "home-settings",
-            Self::SettingsToScreensaver => "settings-screensaver",
             Self::SettingsToAbout => "settings-about",
-            Self::AboutToInfo => "about-info",
             Self::AboutToLicenses => "about-licenses",
             Self::LicensesToLicenseText => "licenses-license-text",
             Self::NestedToHome => "nested-home",
@@ -77,13 +74,54 @@ impl NavigationTransitionRoute {
         matches!(
             self,
             Self::HomeToSettings
-                | Self::SettingsToScreensaver
                 | Self::SettingsToAbout
-                | Self::AboutToInfo
                 | Self::AboutToLicenses
                 | Self::LicensesToLicenseText
                 | Self::NestedToHome
         )
+    }
+}
+
+pub fn settings_page_transition(
+    source: Screen,
+    destination: Screen,
+) -> Option<(NavigationTransitionRoute, NavigationTransitionDirection)> {
+    let source_depth = settings_page_depth(source)?;
+    let destination_depth = settings_page_depth(destination)?;
+    let route = match (source, destination) {
+        (Screen::Home, Screen::Settings) | (Screen::Settings, Screen::Home) => {
+            NavigationTransitionRoute::HomeToSettings
+        }
+        (Screen::Settings, Screen::About) | (Screen::About, Screen::Settings) => {
+            NavigationTransitionRoute::SettingsToAbout
+        }
+        (Screen::About, Screen::Licenses) | (Screen::Licenses, Screen::About) => {
+            NavigationTransitionRoute::AboutToLicenses
+        }
+        (Screen::Licenses, Screen::LicenseText) | (Screen::LicenseText, Screen::Licenses) => {
+            NavigationTransitionRoute::LicensesToLicenseText
+        }
+        (source, Screen::Home) if source != Screen::Home => NavigationTransitionRoute::NestedToHome,
+        _ => return None,
+    };
+    Some((
+        route,
+        if destination_depth > source_depth {
+            NavigationTransitionDirection::Forward
+        } else {
+            NavigationTransitionDirection::Reverse
+        },
+    ))
+}
+
+const fn settings_page_depth(screen: Screen) -> Option<u8> {
+    match screen {
+        Screen::Home => Some(0),
+        Screen::Settings => Some(1),
+        Screen::About => Some(2),
+        Screen::Licenses => Some(3),
+        Screen::LicenseText => Some(4),
+        Screen::Controller | Screen::Arcade | Screen::SystemHub => None,
     }
 }
 

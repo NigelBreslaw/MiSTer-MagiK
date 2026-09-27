@@ -348,20 +348,7 @@ fn nav_selection_feedback_target(nav: &LauncherNav) -> Option<SelectionFeedbackT
             .copied()
             .unwrap_or("unknown"),
         )),
-        Screen::Screensaver => Some(SelectionFeedbackTarget::new(
-            "screensaver-settings",
-            ["enabled", "delay", "preview"]
-                .get(nav.screensaver_selected)
-                .copied()
-                .unwrap_or("unknown"),
-        )),
-        Screen::About => Some(SelectionFeedbackTarget::new(
-            "about",
-            ["info", "licenses"]
-                .get(nav.about_selected)
-                .copied()
-                .unwrap_or("unknown"),
-        )),
+        Screen::About => Some(SelectionFeedbackTarget::new("about", "licenses")),
         Screen::Licenses => Some(SelectionFeedbackTarget::new(
             "licenses",
             [
@@ -397,7 +384,7 @@ fn nav_selection_feedback_target(nav: &LauncherNav) -> Option<SelectionFeedbackT
         // The game list and search results are fixed-selector velocity surfaces.
         // Their press-to-first-motion response remains latency-critical, but
         // continuous crossings do not create discrete acknowledgement pulses.
-        Screen::Arcade | Screen::Controller | Screen::Info | Screen::LicenseText => None,
+        Screen::Arcade | Screen::Controller | Screen::LicenseText => None,
     }
 }
 const ORIENTATION_TRANSITION_BENCHMARK_EVIDENCE_ENV: &str =
@@ -412,10 +399,8 @@ fn launcher_screen_input_focus(nav: &LauncherNav) -> FocusRequest {
         Screen::Arcade if nav.arcade_uses_menu_repeat() => (4, DirectionalPolicy::MenuRepeat),
         Screen::Arcade => (4, DirectionalPolicy::ArcadeContinuous),
         Screen::Settings => (5, DirectionalPolicy::MenuRepeat),
-        Screen::Screensaver => (6, DirectionalPolicy::EdgeOnly),
         Screen::About => (7, DirectionalPolicy::MenuRepeat),
         Screen::Licenses => (8, DirectionalPolicy::MenuRepeat),
-        Screen::Info => (9, DirectionalPolicy::MenuRepeat),
         Screen::LicenseText => (10, DirectionalPolicy::MenuRepeat),
     };
     FocusRequest {
@@ -1074,58 +1059,6 @@ fn navigation_transition_for_intent(
     }
 }
 
-fn settings_page_transition(
-    source: Screen,
-    destination: Screen,
-) -> Option<(NavigationTransitionRoute, NavigationTransitionDirection)> {
-    let source_depth = settings_page_depth(source)?;
-    let destination_depth = settings_page_depth(destination)?;
-    let route = match (source, destination) {
-        (Screen::Home, Screen::Settings) | (Screen::Settings, Screen::Home) => {
-            Some(NavigationTransitionRoute::HomeToSettings)
-        }
-        (Screen::Settings, Screen::Screensaver) | (Screen::Screensaver, Screen::Settings) => {
-            Some(NavigationTransitionRoute::SettingsToScreensaver)
-        }
-        (Screen::Settings, Screen::About) | (Screen::About, Screen::Settings) => {
-            Some(NavigationTransitionRoute::SettingsToAbout)
-        }
-        (Screen::About, Screen::Info) | (Screen::Info, Screen::About) => {
-            Some(NavigationTransitionRoute::AboutToInfo)
-        }
-        (Screen::About, Screen::Licenses) | (Screen::Licenses, Screen::About) => {
-            Some(NavigationTransitionRoute::AboutToLicenses)
-        }
-        (Screen::Licenses, Screen::LicenseText) | (Screen::LicenseText, Screen::Licenses) => {
-            Some(NavigationTransitionRoute::LicensesToLicenseText)
-        }
-        (source, Screen::Home) if source != Screen::Home => {
-            Some(NavigationTransitionRoute::NestedToHome)
-        }
-        _ => None,
-    }?;
-    let adjacent = matches!(
-        (source, destination),
-        (Screen::Home, Screen::Settings)
-            | (Screen::Settings, Screen::Home)
-            | (Screen::Settings, Screen::Screensaver | Screen::About)
-            | (Screen::Screensaver | Screen::About, Screen::Settings)
-            | (Screen::About, Screen::Info | Screen::Licenses)
-            | (Screen::Info | Screen::Licenses, Screen::About)
-            | (Screen::Licenses, Screen::LicenseText)
-            | (Screen::LicenseText, Screen::Licenses)
-    );
-    let direct_home = source != Screen::Home && destination == Screen::Home;
-    (adjacent || direct_home).then_some((
-        route,
-        if destination_depth > source_depth {
-            NavigationTransitionDirection::Forward
-        } else {
-            NavigationTransitionDirection::Reverse
-        },
-    ))
-}
-
 fn settings_cog_transition_eligible(
     route: NavigationTransitionRoute,
     card_home_settled: bool,
@@ -1155,17 +1088,6 @@ fn settings_cog_home_endpoint_is_live(
         && endpoint == Some(NavigationTransitionEndpoint::Destination)
 }
 
-const fn settings_page_depth(screen: Screen) -> Option<u8> {
-    match screen {
-        Screen::Home => Some(0),
-        Screen::Settings => Some(1),
-        Screen::Screensaver | Screen::About => Some(2),
-        Screen::Info | Screen::Licenses => Some(3),
-        Screen::LicenseText => Some(4),
-        Screen::Controller | Screen::Arcade | Screen::SystemHub => None,
-    }
-}
-
 fn settings_navigation_input_candidate(
     screen: Screen,
     event: Option<&crate::input_event::InputEvent>,
@@ -1179,12 +1101,9 @@ fn settings_navigation_input_candidate(
     let went_home = event.action == crate::input_event::LogicalAction::Home;
     match screen {
         Screen::Home => activated || went_home,
-        Screen::Settings
-        | Screen::Screensaver
-        | Screen::About
-        | Screen::Info
-        | Screen::Licenses
-        | Screen::LicenseText => activated || backed || went_home,
+        Screen::Settings | Screen::About | Screen::Licenses | Screen::LicenseText => {
+            activated || backed || went_home
+        }
         Screen::Controller | Screen::Arcade | Screen::SystemHub => false,
     }
 }
@@ -2057,8 +1976,7 @@ impl LauncherResponseState {
                 Screen::Arcade => nav.arcade.selected,
                 Screen::SystemHub => nav.system_hub_selected,
                 Screen::Settings => nav.settings_selected,
-                Screen::Screensaver => nav.screensaver_selected,
-                Screen::About => nav.about_selected,
+                Screen::About => 0,
                 Screen::Licenses => nav.licenses_selected,
                 _ => nav.selected,
             },
@@ -15153,18 +15071,7 @@ mod tests {
         );
         nav.display_combo_open = false;
 
-        nav.screen = Screen::Screensaver;
-        nav.screensaver_selected = 2;
-        assert_eq!(
-            nav_selection_feedback_target(&nav),
-            Some(SelectionFeedbackTarget::new(
-                "screensaver-settings",
-                "preview"
-            ))
-        );
-
         nav.screen = Screen::About;
-        nav.about_selected = 1;
         assert_eq!(
             nav_selection_feedback_target(&nav),
             Some(SelectionFeedbackTarget::new("about", "licenses"))
@@ -15176,14 +15083,7 @@ mod tests {
             nav_selection_feedback_target(&nav),
             Some(SelectionFeedbackTarget::new("licenses", "slint"))
         );
-        nav.licenses_expanded = true;
-        assert_eq!(
-            nav_selection_feedback_target(&nav),
-            Some(SelectionFeedbackTarget::new("licenses", "slint"))
-        );
-
         nav.screen = Screen::Arcade;
-        nav.licenses_expanded = false;
         assert_eq!(nav_selection_feedback_target(&nav), None);
         nav.arcade_filter.drawer_open = true;
         nav.arcade_filter.selected = 3;
@@ -15203,7 +15103,7 @@ mod tests {
 
         nav.screen = Screen::Controller;
         assert_eq!(nav_selection_feedback_target(&nav), None);
-        nav.screen = Screen::Info;
+        nav.screen = Screen::LicenseText;
         assert_eq!(nav_selection_feedback_target(&nav), None);
     }
 
@@ -16091,7 +15991,7 @@ mod tests {
             ))
         );
         assert_eq!(
-            settings_page_transition(Screen::Screensaver, Screen::Home),
+            settings_page_transition(Screen::LicenseText, Screen::Home),
             Some((
                 NavigationTransitionRoute::NestedToHome,
                 NavigationTransitionDirection::Reverse
@@ -16099,7 +15999,7 @@ mod tests {
         );
         assert_eq!(settings_page_transition(Screen::Home, Screen::Arcade), None);
         assert_eq!(
-            settings_page_transition(Screen::Screensaver, Screen::About),
+            settings_page_transition(Screen::Settings, Screen::LicenseText),
             None
         );
     }
@@ -18441,11 +18341,9 @@ mod tests {
             Screen::Home,
             Screen::Controller,
             Screen::Settings,
-            Screen::Screensaver,
             Screen::About,
             Screen::Licenses,
             Screen::LicenseText,
-            Screen::Info,
         ] {
             let mut preview = PreviewState::new();
             preview.set_route(PreviewRoute::Unavailable);

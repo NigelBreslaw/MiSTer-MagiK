@@ -1483,7 +1483,7 @@ fn render_segmented_settings_page(
         NavigationTransitionRect {
             x: 0,
             y: BODY_TOP,
-            width: PANEL_WIDTH,
+            width: WIDTH as u16,
             height: body_height,
         },
         source_offset,
@@ -1491,28 +1491,6 @@ fn render_segmented_settings_page(
         source_opacity,
         &mut stats,
     );
-    for band in 0..11u16 {
-        let y = BODY_TOP + band * BAND_HEIGHT;
-        if y >= BODY_BOTTOM {
-            break;
-        }
-        copy_rect_at_offset_with_opacity(
-            output,
-            source,
-            WIDTH,
-            HEIGHT,
-            NavigationTransitionRect {
-                x: PANEL_WIDTH,
-                y,
-                width: WIDTH as u16 - PANEL_WIDTH,
-                height: BAND_HEIGHT.min(BODY_BOTTOM - y),
-            },
-            source_offset,
-            0,
-            source_opacity,
-            &mut stats,
-        );
-    }
 
     let panel_progress = spring_ease_q16(window_q16(frame.progress_q16, 12_743, 41_870));
     copy_rect_at_offset_with_opacity(

@@ -58,11 +58,9 @@ pub const fn launcher_screen(value: Screen) -> view::LauncherScreen {
         Screen::Controller => view::LauncherScreen::Controller,
         Screen::Arcade => view::LauncherScreen::Arcade,
         Screen::Settings => view::LauncherScreen::Settings,
-        Screen::Screensaver => view::LauncherScreen::ScreensaverSettings,
         Screen::About => view::LauncherScreen::About,
         Screen::Licenses => view::LauncherScreen::Licenses,
         Screen::LicenseText => view::LauncherScreen::LicenseText,
-        Screen::Info => view::LauncherScreen::Info,
     }
 }
 
@@ -122,23 +120,6 @@ pub const fn settings_popup(display_open: bool, orientation_open: bool) -> view:
         (true, false) => view::SettingsPopup::DisplayResolution,
         (false, true) => view::SettingsPopup::ScreenOrientation,
         (true, true) => panic!("settings popups are mutually exclusive"),
-    }
-}
-
-pub const fn screensaver_setting(index: usize) -> view::ScreensaverSetting {
-    match index {
-        0 => view::ScreensaverSetting::Enabled,
-        1 => view::ScreensaverSetting::Delay,
-        2 => view::ScreensaverSetting::Preview,
-        _ => panic!("screensaver selection is outside its finite domain"),
-    }
-}
-
-pub const fn about_section(index: usize) -> view::AboutSection {
-    match index {
-        0 => view::AboutSection::Information,
-        1 => view::AboutSection::Licenses,
-        _ => panic!("about selection is outside its finite domain"),
     }
 }
 

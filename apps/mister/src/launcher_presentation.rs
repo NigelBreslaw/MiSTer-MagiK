@@ -10,11 +10,10 @@ use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameView};
 use crate::launcher::{CatalogMenuItemStatus, DisplayTransactionPhase, LauncherNav, Screen};
 use crate::launcher_taxonomy::{LauncherMenuItemKind, ROOT_MENU_ID};
 use crate::launcher_view_types::{
-    about_section, active_display_choice, arcade_list_mode, arcade_search_pane,
-    arcade_search_status, display_transaction_state, home_scroll_phase, launcher_screen,
-    menu_hierarchy, orientation_at, screen_orientation, screensaver_setting,
-    selected_display_choice, settings_display_choice, settings_popup, settings_section,
-    system_hub_section,
+    active_display_choice, arcade_list_mode, arcade_search_pane, arcade_search_status,
+    display_transaction_state, home_scroll_phase, launcher_screen, menu_hierarchy, orientation_at,
+    screen_orientation, selected_display_choice, settings_display_choice, settings_popup,
+    settings_section, system_hub_section,
 };
 use mister_magik_framebuffer_scenes::Rgb565Pixel;
 use mister_magik_framebuffer_scenes::settings_cog::{COG_ASSET_HEIGHT, COG_ASSET_WIDTH};
@@ -702,12 +701,6 @@ impl LauncherViewPresenters {
         );
         set_if_changed!(
             settings,
-            get_screensaver_setting,
-            set_screensaver_setting,
-            screensaver_setting(nav.screensaver_selected)
-        );
-        set_if_changed!(
-            settings,
             get_screensaver_enabled,
             set_screensaver_enabled,
             nav.settings.screensaver_enabled
@@ -720,21 +713,9 @@ impl LauncherViewPresenters {
         );
         set_if_changed!(
             settings,
-            get_about_section,
-            set_about_section,
-            about_section(nav.about_selected)
-        );
-        set_if_changed!(
-            settings,
             get_selected_license_index,
             set_selected_license_index,
             nav.licenses_selected as i32
-        );
-        set_if_changed!(
-            settings,
-            get_license_expanded,
-            set_license_expanded,
-            nav.licenses_expanded
         );
         set_if_changed!(
             settings,

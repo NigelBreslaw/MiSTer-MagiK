@@ -162,18 +162,11 @@ pub(super) fn sync_settings_bridge(
     settings.set_orientation_confirm_remaining(nav.orientation_confirm_remaining as i32);
     settings.set_simple_joystick_handling(nav.settings.simple_joystick_handling);
     settings.set_reduce_motion(nav.settings.reduce_motion);
-    settings.set_screensaver_setting(crate::launcher_view_types::screensaver_setting(
-        nav.screensaver_selected,
-    ));
     settings.set_screensaver_enabled(nav.settings.screensaver_enabled);
     settings.set_screensaver_delay_minutes(nav.settings.screensaver_delay_minutes as i32);
-    settings.set_about_section(crate::launcher_view_types::about_section(
-        nav.about_selected,
-    ));
     settings.set_selected_license_index(nav.licenses_selected as i32);
-    settings.set_license_expanded(nav.licenses_expanded);
     settings.set_license_scroll_y(nav.licenses_scroll_y());
-    if matches!(nav.screen, Screen::Settings | Screen::Screensaver)
+    if nav.screen == Screen::Settings
         || matches!(
             nav.confirm_action,
             Some(
@@ -1007,7 +1000,6 @@ pub(super) struct LauncherProjectionKey {
     home_scroll_repeat_active: bool,
     home_scroll_held: bool,
     licenses_selected: usize,
-    licenses_expanded: bool,
     licenses_scroll_y: i32,
     confirm_action: Option<launcher::ConfirmAction>,
     confirm_selected: usize,
@@ -1036,7 +1028,6 @@ impl LauncherProjectionKey {
             home_scroll_repeat_active: nav.home_horizontal_repeat_active(),
             home_scroll_held: nav.home_horizontal_held(),
             licenses_selected: nav.licenses_selected,
-            licenses_expanded: nav.licenses_expanded,
             licenses_scroll_y: nav.licenses_scroll_y(),
             confirm_action: nav.confirm_action,
             confirm_selected: nav.confirm_selected,
@@ -1596,14 +1587,13 @@ mod tests {
         init_test_slint_platform();
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");
         let mut nav = LauncherNav::new();
-        nav.screen = Screen::Screensaver;
+        nav.screen = Screen::Settings;
         let before = LauncherProjectionKey::from_nav(&nav);
 
         nav.settings_selected = 2;
         nav.display_combo_open = true;
         nav.display_selected = 1;
         nav.display_highlighted = 2;
-        nav.screensaver_selected = 1;
         nav.settings.screensaver_enabled = !nav.settings.screensaver_enabled;
         nav.settings.screensaver_delay_minutes += 1;
         nav.settings.simple_joystick_handling = true;
@@ -1624,7 +1614,7 @@ mod tests {
         assert_eq!(
             app.global::<slint_ui::launcher::NavigationView>()
                 .get_screen(),
-            slint_ui::launcher::LauncherScreen::ScreensaverSettings
+            slint_ui::launcher::LauncherScreen::Settings
         );
         assert_eq!(
             settings.get_section(),
@@ -1645,10 +1635,6 @@ mod tests {
             launcher::settings_display_resolution(2)
                 .expect("highlighted display")
                 .id
-        );
-        assert_eq!(
-            settings.get_screensaver_setting(),
-            slint_ui::launcher::ScreensaverSetting::Delay
         );
         assert_eq!(
             settings.get_screensaver_enabled(),
@@ -2090,10 +2076,9 @@ mod tests {
             Screen::Home,
             Screen::Controller,
             Screen::Settings,
-            Screen::Screensaver,
             Screen::About,
             Screen::Licenses,
-            Screen::Info,
+            Screen::LicenseText,
         ]
         .into_iter()
         .enumerate()

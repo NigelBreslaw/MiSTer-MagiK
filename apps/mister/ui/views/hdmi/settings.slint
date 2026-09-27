@@ -6,7 +6,7 @@ import { Xerxes10, Xerxes10Size } from "../../components/xerxes_10.slint";
 import { LandscapePageChrome, PageTheme, PortraitPageChrome, PageRule } from "../../components/page_chrome.slint";
 import { MisterUi } from "../../mister_window.slint";
 
-import { ConfirmationKind, FeedbackView, OverlayView, ScreenOrientation, SettingsPopup, SettingsSection, SettingsView } from "../../api.slint";
+import { ConfirmationKind, FeedbackView, NavigationTransitionState, NavigationView, OverlayView, ScreenOrientation, SettingsPopup, SettingsSection, SettingsView } from "../../api.slint";
 
 enum SettingsRowTrailing { value, link, toggle, stepper }
 
@@ -254,6 +254,7 @@ export component SettingsScreen inherits Rectangle {
         || OverlayView.confirmation-kind == ConfirmationKind.screen-orientation;
     accessible-role: main;
     accessible-label: "Settings";
+    accessible-description: NavigationView.transition-state == NavigationTransitionState.idle ? "Ready" : "Transitioning";
     background: PageTheme.background;
 
     if !MisterUi.portrait-layout : Rectangle {

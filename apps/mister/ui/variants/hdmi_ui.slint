@@ -8,11 +8,9 @@ import { SetupOverlay } from "hdmi_setup.slint";
 import { ArcadeListScreen } from "../views/hdmi/arcade_list.slint";
 import { HomeGrid } from "../views/hdmi/home.slint";
 import { SettingsScreen } from "../views/hdmi/settings.slint";
-import { ScreensaverSettingsScreen } from "../views/hdmi/screensaver_settings.slint";
 import { LicensesScreen } from "../views/hdmi/licenses.slint";
 import { LicenseTextScreen } from "../views/hdmi/license_text.slint";
 import { AboutScreen } from "../views/hdmi/about.slint";
-import { InfoScreen } from "../views/hdmi/info.slint";
 import { SystemHubScreen } from "../views/hdmi/system_hub.slint";
 import { ComboBoxOverlay } from "../components/combo_box.slint";
 import {
@@ -32,8 +30,6 @@ export component HdmiLauncherUi inherits Rectangle {
     if NavigationView.screen == LauncherScreen.about : AboutScreen { }
     if NavigationView.screen == LauncherScreen.licenses : LicensesScreen { }
     if NavigationView.screen == LauncherScreen.license-text : LicenseTextScreen { }
-    if NavigationView.screen == LauncherScreen.info : InfoScreen { }
-    if NavigationView.screen == LauncherScreen.screensaver-settings : ScreensaverSettingsScreen { }
     if NavigationView.screen == LauncherScreen.system-hub : SystemHubScreen { }
 
     if CatalogView.background-activity-visible : BackgroundScanBadge { }

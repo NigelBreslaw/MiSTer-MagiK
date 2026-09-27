@@ -9,11 +9,9 @@ import { SetupOverlay } from "crt_setup.slint";
 import { ArcadeListScreen } from "../views/crt/arcade_list.slint";
 import { HomeGrid } from "../views/crt/home.slint";
 import { SettingsScreen } from "../views/crt/settings.slint";
-import { ScreensaverSettingsScreen } from "../views/crt/screensaver_settings.slint";
 import { LicensesScreen } from "../views/crt/licenses.slint";
 import { LicenseTextScreen } from "../views/crt/license_text.slint";
 import { AboutScreen } from "../views/crt/about.slint";
-import { InfoScreen } from "../views/crt/info.slint";
 import { SystemHubScreen } from "../views/crt/system_hub.slint";
 import { CrtComboBoxOverlay } from "../components/crt_combo_box.slint";
 import {
@@ -42,8 +40,6 @@ export component CrtLauncherUi inherits Rectangle {
         if NavigationView.screen == LauncherScreen.about : AboutScreen { }
         if NavigationView.screen == LauncherScreen.licenses : LicensesScreen { }
         if NavigationView.screen == LauncherScreen.license-text : LicenseTextScreen { }
-        if NavigationView.screen == LauncherScreen.info : InfoScreen { }
-        if NavigationView.screen == LauncherScreen.screensaver-settings : ScreensaverSettingsScreen { }
         if NavigationView.screen == LauncherScreen.system-hub : SystemHubScreen { }
 
         if CatalogView.background-activity-visible : BackgroundScanBadge { }
