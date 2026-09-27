@@ -10926,9 +10926,10 @@ pub(super) fn run_launcher_loop(
                     ) {
                         settings_cog_render_sequence =
                             settings_cog_render_sequence.wrapping_add(1).max(1);
+                        const SETTINGS_RENDER_LEAD_VBLANKS: u64 = 3;
                         let lead_ms = pacer
                             .period_us()
-                            .saturating_mul(2)
+                            .saturating_mul(SETTINGS_RENDER_LEAD_VBLANKS)
                             .saturating_add(999)
                             .saturating_div(1_000)
                             .min(u64::from(u32::MAX)) as u32;
@@ -10943,7 +10944,9 @@ pub(super) fn run_launcher_loop(
                         };
                         pipeline.submit(SettingsFrameRequest {
                             sequence: settings_cog_render_sequence,
-                            target_vblank: pacer.hits().saturating_add(2),
+                            target_vblank: pacer
+                                .hits()
+                                .saturating_add(SETTINGS_RENDER_LEAD_VBLANKS),
                             t_ms,
                         });
                     }
